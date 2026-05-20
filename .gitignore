@@ -1,0 +1,14 @@
+# Build outputs
+/devm
+/dist/
+
+# Go test cache
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
