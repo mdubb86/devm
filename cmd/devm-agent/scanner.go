@@ -30,24 +30,24 @@ var sessionProcNames = map[string]struct{}{
 	"tmux":   {},
 }
 
-// ProcScanner walks a /proc-style filesystem rooted at ProcRoot and counts
+// ProcScanner walks a /proc-style filesystem rooted at procRoot and counts
 // processes whose comm is in sessionProcNames AND which have a controlling
 // terminal (tty_nr != 0 in /proc/<pid>/stat).
 type ProcScanner struct {
-	ProcRoot string
+	procRoot string
 }
 
 // NewProcScanner returns a scanner reading from procRoot. Pass "/proc" in
 // production; tests pass a t.TempDir() populated with a fake layout.
 func NewProcScanner(procRoot string) *ProcScanner {
-	return &ProcScanner{ProcRoot: procRoot}
+	return &ProcScanner{procRoot: procRoot}
 }
 
 // Sessions returns the count of user-session processes. Errors reading
 // individual PID directories are skipped (a process can disappear between
 // our enumerating and reading it).
 func (s *ProcScanner) Sessions() int {
-	entries, err := os.ReadDir(s.ProcRoot)
+	entries, err := os.ReadDir(s.procRoot)
 	if err != nil {
 		return 0
 	}
@@ -59,7 +59,7 @@ func (s *ProcScanner) Sessions() int {
 		if _, err := strconv.Atoi(e.Name()); err != nil {
 			continue // not a PID dir
 		}
-		if isSessionProc(filepath.Join(s.ProcRoot, e.Name())) {
+		if isSessionProc(filepath.Join(s.procRoot, e.Name())) {
 			count++
 		}
 	}

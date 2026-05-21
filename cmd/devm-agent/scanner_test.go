@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,31 +19,8 @@ func writeFakeProc(t *testing.T, root, pid, comm string, ttyNr int) {
 	require.NoError(t, os.MkdirAll(pidDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "comm"), []byte(comm+"\n"), 0o644))
 	// pid (comm) state ppid pgrp session tty_nr tpgid ...
-	stat := pid + " (" + comm + ") S 1 1 1 " + itoaStat(ttyNr) + " -1 0 0 0 0 0 0 0 0 20 0 1 0 0\n"
+	stat := pid + " (" + comm + ") S 1 1 1 " + strconv.Itoa(ttyNr) + " -1 0 0 0 0 0 0 0 0 20 0 1 0 0\n"
 	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "stat"), []byte(stat), 0o644))
-}
-
-func itoaStat(n int) string {
-	// Local helper so we don't depend on strconv here.
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }
 
 func TestProcScannerEmpty(t *testing.T) {
@@ -97,4 +75,36 @@ func TestTTYFromStatHandlesParensInComm(t *testing.T) {
 	tty, ok := ttyFromStat(line)
 	require.True(t, ok)
 	assert.Equal(t, 34816, tty)
+}
+
+func TestProcScannerHandlesMissingComm(t *testing.T) {
+	root := t.TempDir()
+	// PID dir with stat but no comm.
+	pidDir := filepath.Join(root, "100")
+	require.NoError(t, os.MkdirAll(pidDir, 0o755))
+	stat := "100 (bash) S 1 1 1 34816 -1 0 0 0 0 0 0 0 0 20 0 1 0 0\n"
+	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "stat"), []byte(stat), 0o644))
+	s := NewProcScanner(root)
+	assert.Equal(t, 0, s.Sessions())
+}
+
+func TestProcScannerHandlesMissingStat(t *testing.T) {
+	root := t.TempDir()
+	// PID dir with comm but no stat.
+	pidDir := filepath.Join(root, "100")
+	require.NoError(t, os.MkdirAll(pidDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "comm"), []byte("bash\n"), 0o644))
+	s := NewProcScanner(root)
+	assert.Equal(t, 0, s.Sessions())
+}
+
+func TestProcScannerHandlesEmptyComm(t *testing.T) {
+	root := t.TempDir()
+	pidDir := filepath.Join(root, "100")
+	require.NoError(t, os.MkdirAll(pidDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "comm"), []byte(""), 0o644))
+	stat := "100 () S 1 1 1 34816 -1 0 0 0 0 0 0 0 0 20 0 1 0 0\n"
+	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "stat"), []byte(stat), 0o644))
+	s := NewProcScanner(root)
+	assert.Equal(t, 0, s.Sessions())
 }

@@ -48,6 +48,17 @@ func runAgent(t *testing.T) (string, func()) {
 	return "", nil
 }
 
+// agentTempDir returns a temp dir whose path is short enough for a Unix
+// domain socket on macOS (sun_path limit: 104 bytes). Normal t.TempDir
+// produces TestName-derived paths that can exceed the limit.
+func agentTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "dag-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func roundtrip(t *testing.T, sock, req string) string {
 	t.Helper()
 	conn, err := net.Dial("unix", sock)
@@ -97,11 +108,7 @@ func TestAgentShutdown(t *testing.T) {
 }
 
 func TestAgentStatusReportsScannerSessions(t *testing.T) {
-	// Use os.MkdirTemp with a short prefix to stay within macOS's 104-byte
-	// sun_path limit for Unix domain sockets.
-	dir, err := os.MkdirTemp("", "dag-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := agentTempDir(t)
 	sock := filepath.Join(dir, "devm-agent.sock")
 	ag := NewAgent(sock, 200*time.Millisecond, stubScanner{3})
 	done := make(chan struct{})
@@ -112,12 +119,17 @@ func TestAgentStatusReportsScannerSessions(t *testing.T) {
 	}()
 	// Wait for socket.
 	upDeadline := time.Now().Add(2 * time.Second)
+	up := false
 	for time.Now().Before(upDeadline) {
 		if c, err := net.Dial("unix", sock); err == nil {
 			c.Close()
+			up = true
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if !up {
+		t.Fatalf("agent socket %s never came up", sock)
 	}
 	// Wait for at least one scanner tick (idleTimeout/10 = 20ms, floored to 1s).
 	time.Sleep(1100 * time.Millisecond)
@@ -126,11 +138,7 @@ func TestAgentStatusReportsScannerSessions(t *testing.T) {
 }
 
 func TestAgentDoesNotShutDownWhenIdle(t *testing.T) {
-	// Use os.MkdirTemp with a short prefix to stay within macOS's 104-byte
-	// sun_path limit for Unix domain sockets.
-	dir, err := os.MkdirTemp("", "dag-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := agentTempDir(t)
 	sock := filepath.Join(dir, "devm-agent.sock")
 	// Scanner returns 0 — agent sees no activity. With the OLD design this
 	// would have shut down after 200ms. The new design intentionally does
@@ -145,12 +153,17 @@ func TestAgentDoesNotShutDownWhenIdle(t *testing.T) {
 	}()
 	// Wait for socket.
 	upDeadline := time.Now().Add(2 * time.Second)
+	up := false
 	for time.Now().Before(upDeadline) {
 		if c, err := net.Dial("unix", sock); err == nil {
 			c.Close()
+			up = true
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if !up {
+		t.Fatalf("agent socket %s never came up", sock)
 	}
 	// Wait well past the old idle window.
 	time.Sleep(500 * time.Millisecond)
