@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -48,3 +49,24 @@ func (s *Sandbox) State() string {
 
 func (s *Sandbox) Exists() bool    { return s.State() != "" }
 func (s *Sandbox) IsRunning() bool { return s.State() == "running" }
+
+// Create creates a new sandbox from kitDir for repoRoot. Caller has already
+// rendered .devm/spec.yaml etc.
+func (s *Sandbox) Create(kitDir, repoRoot string) error {
+	cmd := exec.Command("sbx", "create", "--quiet",
+		"--kit", kitDir,
+		s.Name,
+		repoRoot,
+		"--name", s.Name)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func (s *Sandbox) Stop() error {
+	return exec.Command("sbx", "stop", s.Name).Run()
+}
+
+func (s *Sandbox) Remove() error {
+	return exec.Command("sbx", "rm", s.Name).Run()
+}
