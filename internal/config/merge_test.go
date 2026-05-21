@@ -39,3 +39,38 @@ func TestMergeOverridesService(t *testing.T) {
 	assert.Equal(t, "custom.local", merged.Services["webapp"].Hostname)
 	assert.Equal(t, 3000, merged.Services["webapp"].Canonical, "non-overridden field preserved")
 }
+
+func TestMergeServiceEnvPreservesBaseWhenOverrideAbsent(t *testing.T) {
+	base := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p-sbx", HostnameApex: "p.local"},
+		Services: map[string]schema.Service{
+			"webapp": {Canonical: 3000, Env: map[string]string{"LOG_LEVEL": "debug"}},
+		},
+	}
+	override := schema.ConfigOverride{
+		Services: map[string]schema.ServiceOverride{
+			"webapp": {}, // no Env — base should pass through
+		},
+	}
+	merged, err := Merge(base, override)
+	assert.NoError(t, err)
+	assert.Equal(t, "debug", merged.Services["webapp"].Env["LOG_LEVEL"])
+}
+
+func TestMergeServiceEnvMergesKeys(t *testing.T) {
+	base := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p-sbx", HostnameApex: "p.local"},
+		Services: map[string]schema.Service{
+			"webapp": {Canonical: 3000, Env: map[string]string{"LOG_LEVEL": "debug"}},
+		},
+	}
+	override := schema.ConfigOverride{
+		Services: map[string]schema.ServiceOverride{
+			"webapp": {Env: map[string]string{"API_URL": "http://api.local"}},
+		},
+	}
+	merged, err := Merge(base, override)
+	assert.NoError(t, err)
+	assert.Equal(t, "debug", merged.Services["webapp"].Env["LOG_LEVEL"], "base key preserved")
+	assert.Equal(t, "http://api.local", merged.Services["webapp"].Env["API_URL"], "override key added")
+}

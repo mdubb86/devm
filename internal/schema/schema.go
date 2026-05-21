@@ -1,6 +1,9 @@
 package schema
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 type Mask struct {
 	Path string `yaml:"path"`
@@ -105,9 +108,15 @@ func (c Config) Validate() error {
 	if err := c.Project.Validate(); err != nil {
 		return err
 	}
+	names := make([]string, 0, len(c.Services))
+	for name := range c.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	seenHosts := make(map[string]string)
 	seenPorts := make(map[int]string)
-	for name, svc := range c.Services {
+	for _, name := range names {
+		svc := c.Services[name]
 		if err := svc.Validate(); err != nil {
 			return fmt.Errorf("services.%s: %w", name, err)
 		}
