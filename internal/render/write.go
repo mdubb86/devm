@@ -19,11 +19,11 @@ func WriteDevmDir(cfg schema.Config, repoRoot string) error {
 	}
 
 	files := map[string]string{
-		filepath.Join(devmDir, "Caddyfile"):              Caddyfile(cfg),
-		filepath.Join(devmDir, "spec.yaml"):              SpecYAML(cfg, repoRoot),
-		filepath.Join(scriptsDir, "provision.sh"):        scripts.Provision,
-		filepath.Join(scriptsDir, "init-volumes.sh"):     scripts.InitVolumes,
-		filepath.Join(scriptsDir, "devm-exec.sh"):        scripts.DevmExec,
+		filepath.Join(devmDir, "Caddyfile"):          Caddyfile(cfg),
+		filepath.Join(devmDir, "spec.yaml"):          SpecYAML(cfg, repoRoot),
+		filepath.Join(scriptsDir, "provision.sh"):    scripts.Provision,
+		filepath.Join(scriptsDir, "init-volumes.sh"): scripts.InitVolumes,
+		filepath.Join(scriptsDir, "devm-exec.sh"):    scripts.DevmExec,
 	}
 	for path, content := range files {
 		mode := os.FileMode(0o644)
