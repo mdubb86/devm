@@ -50,3 +50,25 @@ func TestSpecYAMLShellOnly(t *testing.T) {
 	assert.Contains(t, out, "shell-only")
 	assert.NotContains(t, out, "shell-docker")
 }
+
+func minimalConfig(t *testing.T) schema.Config {
+	t.Helper()
+	return schema.Config{
+		Project:   schema.Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		BaseImage: schema.BaseImage{Docker: false},
+	}
+}
+
+func TestSpecYAMLIncludesAgentInstallStep(t *testing.T) {
+	cfg := minimalConfig(t)
+	out := SpecYAML(cfg, "/tmp/repo")
+	assert.Contains(t, out, `install -m 0755 "$WORKSPACE_DIR/.devm/devm-agent" /usr/local/bin/devm-agent`)
+	assert.Contains(t, out, `user: "0"`)
+}
+
+func TestSpecYAMLIncludesAgentStartupStep(t *testing.T) {
+	cfg := minimalConfig(t)
+	out := SpecYAML(cfg, "/tmp/repo")
+	assert.Contains(t, out, `nohup /usr/local/bin/devm-agent`)
+	assert.Contains(t, out, `Start devm-agent`)
+}
