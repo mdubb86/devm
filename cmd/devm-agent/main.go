@@ -52,6 +52,8 @@ func (a *Agent) Serve() error {
 	a.listener = l
 	a.mu.Unlock()
 
+	a.startIdleWatcher()
+
 	// Accept loop runs until listener is closed (by Shutdown).
 	for {
 		conn, err := l.Accept()
@@ -120,6 +122,31 @@ func (a *Agent) handleConn(conn net.Conn) {
 	default:
 		fmt.Fprintln(conn, "ERR unknown command")
 	}
+}
+
+func (a *Agent) startIdleWatcher() {
+	tick := a.idleTimeout / 4
+	if tick < 100*time.Millisecond {
+		tick = 100 * time.Millisecond
+	}
+	ticker := time.NewTicker(tick)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-a.shutdownCh:
+				return
+			case <-ticker.C:
+				a.mu.Lock()
+				stale := time.Since(a.lastHeartbeat) > a.idleTimeout
+				a.mu.Unlock()
+				if stale {
+					a.Shutdown()
+					return
+				}
+			}
+		}
+	}()
 }
 
 // idleTimeoutFromEnv parses DEVM_AGENT_IDLE_TIMEOUT (e.g. "30m", "5s")

@@ -83,3 +83,22 @@ func TestAgentShutdown(t *testing.T) {
 	t.Fatalf("agent did not shut down after SHUTDOWN")
 }
 
+func TestAgentAutoIdle(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "devm-agent.sock")
+	// idleTimeout much shorter than the test's deadline.
+	ag := NewAgent(sock, 200*time.Millisecond)
+	go func() { _ = ag.Serve() }()
+	// Wait for it to come up.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := net.Dial("unix", sock); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Send nothing; wait > idleTimeout.
+	time.Sleep(500 * time.Millisecond)
+	// Now the socket should be gone.
+	_, err := net.Dial("unix", sock)
+	assert.Error(t, err, "agent should have self-exited after idle timeout")
+}
