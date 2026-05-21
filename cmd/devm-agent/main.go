@@ -16,22 +16,30 @@ import (
 type Agent struct {
 	socketPath  string
 	idleTimeout time.Duration
+	scanner     Scanner
 
-	mu         sync.Mutex
-	listener   net.Listener
-	startTime  time.Time
-	shutdownCh chan struct{}
+	mu           sync.Mutex
+	listener     net.Listener
+	startTime    time.Time
+	lastActivity time.Time
+	lastSessions int
+	shutdownCh   chan struct{}
 }
 
-// NewAgent constructs an agent that will listen on socketPath with the
-// given idleTimeout. socketPath's parent dir must exist (or be creatable).
-func NewAgent(socketPath string, idleTimeout time.Duration) *Agent {
+// NewAgent constructs an agent that will listen on socketPath, periodically
+// poll scanner for active sessions, and update its activity timestamp when
+// any sessions are seen. The idleTimeout field is recorded for future use
+// but does NOT trigger shutdown in the current implementation — see
+// startActivityWatcher.
+func NewAgent(socketPath string, idleTimeout time.Duration, scanner Scanner) *Agent {
 	now := time.Now()
 	return &Agent{
-		socketPath:  socketPath,
-		idleTimeout: idleTimeout,
-		startTime:   now,
-		shutdownCh:  make(chan struct{}),
+		socketPath:   socketPath,
+		idleTimeout:  idleTimeout,
+		scanner:      scanner,
+		startTime:    now,
+		lastActivity: now,
+		shutdownCh:   make(chan struct{}),
 	}
 }
 
@@ -48,6 +56,8 @@ func (a *Agent) Serve() error {
 	a.mu.Lock()
 	a.listener = l
 	a.mu.Unlock()
+
+	a.startActivityWatcher()
 
 	// Accept loop runs until listener is closed (by Shutdown).
 	for {
@@ -95,8 +105,10 @@ func (a *Agent) handleConn(conn net.Conn) {
 	case "STATUS":
 		a.mu.Lock()
 		uptime := int(time.Since(a.startTime).Seconds())
+		idle := int(time.Since(a.lastActivity).Seconds())
+		sessions := a.lastSessions
 		a.mu.Unlock()
-		fmt.Fprintf(conn, "OK uptime=%d\n", uptime)
+		fmt.Fprintf(conn, "OK uptime=%d idle=%d sessions=%d\n", uptime, idle, sessions)
 	case "SHUTDOWN":
 		fmt.Fprintln(conn, "BYE")
 		// Schedule shutdown so the response actually flushes.
@@ -107,6 +119,42 @@ func (a *Agent) handleConn(conn net.Conn) {
 	default:
 		fmt.Fprintln(conn, "ERR unknown command")
 	}
+}
+
+// startActivityWatcher launches a background goroutine that polls the
+// scanner. When any sessions are seen the activity timestamp is bumped.
+//
+// IMPORTANT: this watcher does NOT call Shutdown. The intent of this
+// implementation phase is to observe what the scanner reports without
+// risking a sandbox killing itself during development. Once we can drive
+// real interactive sessions through the agent we will add the staleness
+// check + Shutdown call here.
+func (a *Agent) startActivityWatcher() {
+	if a.scanner == nil {
+		return
+	}
+	tick := a.idleTimeout / 10
+	if tick < time.Second {
+		tick = time.Second
+	}
+	ticker := time.NewTicker(tick)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-a.shutdownCh:
+				return
+			case <-ticker.C:
+				n := a.scanner.Sessions()
+				a.mu.Lock()
+				a.lastSessions = n
+				if n > 0 {
+					a.lastActivity = time.Now()
+				}
+				a.mu.Unlock()
+			}
+		}
+	}()
 }
 
 // idleTimeoutFromEnv parses DEVM_AGENT_IDLE_TIMEOUT (e.g. "30m", "5s")
@@ -125,7 +173,11 @@ func main() {
 	if s := os.Getenv("DEVM_AGENT_SOCKET"); s != "" {
 		socket = s
 	}
-	a := NewAgent(socket, idleTimeoutFromEnv())
+	procRoot := "/proc"
+	if p := os.Getenv("DEVM_AGENT_PROC"); p != "" {
+		procRoot = p
+	}
+	a := NewAgent(socket, idleTimeoutFromEnv(), NewProcScanner(procRoot))
 	if err := a.Serve(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
