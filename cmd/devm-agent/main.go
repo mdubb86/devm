@@ -12,17 +12,15 @@ import (
 )
 
 // Agent is the in-VM devm daemon. It accepts line-based commands over a
-// Unix domain socket and stays alive until it receives SHUTDOWN or its
-// idle timer fires.
+// Unix domain socket and stays alive until it receives SHUTDOWN.
 type Agent struct {
 	socketPath  string
 	idleTimeout time.Duration
 
-	mu            sync.Mutex
-	listener      net.Listener
-	startTime     time.Time
-	lastHeartbeat time.Time
-	shutdownCh    chan struct{}
+	mu         sync.Mutex
+	listener   net.Listener
+	startTime  time.Time
+	shutdownCh chan struct{}
 }
 
 // NewAgent constructs an agent that will listen on socketPath with the
@@ -30,11 +28,10 @@ type Agent struct {
 func NewAgent(socketPath string, idleTimeout time.Duration) *Agent {
 	now := time.Now()
 	return &Agent{
-		socketPath:    socketPath,
-		idleTimeout:   idleTimeout,
-		startTime:     now,
-		lastHeartbeat: now,
-		shutdownCh:    make(chan struct{}),
+		socketPath:  socketPath,
+		idleTimeout: idleTimeout,
+		startTime:   now,
+		shutdownCh:  make(chan struct{}),
 	}
 }
 
@@ -52,8 +49,6 @@ func (a *Agent) Serve() error {
 	a.listener = l
 	a.mu.Unlock()
 
-	a.startIdleWatcher()
-
 	// Accept loop runs until listener is closed (by Shutdown).
 	for {
 		conn, err := l.Accept()
@@ -70,8 +65,8 @@ func (a *Agent) Serve() error {
 	}
 }
 
-// Shutdown closes the listener, removes the socket, signals the idle
-// goroutine (if running). Safe to call multiple times.
+// Shutdown closes the listener, removes the socket, signals any background
+// goroutines. Safe to call multiple times.
 func (a *Agent) Shutdown() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -87,12 +82,6 @@ func (a *Agent) Shutdown() {
 	_ = os.Remove(a.socketPath)
 }
 
-func (a *Agent) bump() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.lastHeartbeat = time.Now()
-}
-
 func (a *Agent) handleConn(conn net.Conn) {
 	defer conn.Close()
 	line, err := bufio.NewReader(conn).ReadString('\n')
@@ -100,18 +89,14 @@ func (a *Agent) handleConn(conn net.Conn) {
 		return
 	}
 	cmd := strings.TrimSpace(line)
-	a.bump() // any command bumps the activity timestamp
 	switch cmd {
 	case "PING":
 		fmt.Fprintln(conn, "PONG")
 	case "STATUS":
 		a.mu.Lock()
 		uptime := int(time.Since(a.startTime).Seconds())
-		idle := int(time.Since(a.lastHeartbeat).Seconds())
 		a.mu.Unlock()
-		fmt.Fprintf(conn, "OK uptime=%d idle=%d\n", uptime, idle)
-	case "HEARTBEAT":
-		fmt.Fprintln(conn, "OK")
+		fmt.Fprintf(conn, "OK uptime=%d\n", uptime)
 	case "SHUTDOWN":
 		fmt.Fprintln(conn, "BYE")
 		// Schedule shutdown so the response actually flushes.
@@ -122,31 +107,6 @@ func (a *Agent) handleConn(conn net.Conn) {
 	default:
 		fmt.Fprintln(conn, "ERR unknown command")
 	}
-}
-
-func (a *Agent) startIdleWatcher() {
-	tick := a.idleTimeout / 4
-	if tick < 100*time.Millisecond {
-		tick = 100 * time.Millisecond
-	}
-	ticker := time.NewTicker(tick)
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-a.shutdownCh:
-				return
-			case <-ticker.C:
-				a.mu.Lock()
-				stale := time.Since(a.lastHeartbeat) > a.idleTimeout
-				a.mu.Unlock()
-				if stale {
-					a.Shutdown()
-					return
-				}
-			}
-		}
-	}()
 }
 
 // idleTimeoutFromEnv parses DEVM_AGENT_IDLE_TIMEOUT (e.g. "30m", "5s")
