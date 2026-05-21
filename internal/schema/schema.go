@@ -64,3 +64,65 @@ func (s Service) Validate() error {
 	}
 	return nil
 }
+
+type Project struct {
+	ID           string `yaml:"id"`
+	SandboxName  string `yaml:"sandbox_name"`
+	HostnameApex string `yaml:"hostname_apex"`
+	PortOffset   int    `yaml:"port_offset,omitempty"`
+}
+
+func (p Project) Validate() error {
+	if p.ID == "" {
+		return fmt.Errorf("project.id is required")
+	}
+	if p.SandboxName == "" {
+		return fmt.Errorf("project.sandbox_name is required")
+	}
+	if p.HostnameApex == "" {
+		return fmt.Errorf("project.hostname_apex is required")
+	}
+	return nil
+}
+
+type BaseImage struct {
+	Docker bool `yaml:"docker"`
+}
+
+type Network struct {
+	AllowedDomains []string `yaml:"allowed_domains,omitempty"`
+}
+
+type Config struct {
+	Project   Project            `yaml:"project"`
+	BaseImage BaseImage          `yaml:"base_image"`
+	Network   Network            `yaml:"network,omitempty"`
+	Env       map[string]string  `yaml:"env,omitempty"`
+	Services  map[string]Service `yaml:"services,omitempty"`
+}
+
+func (c Config) Validate() error {
+	if err := c.Project.Validate(); err != nil {
+		return err
+	}
+	seenHosts := make(map[string]string)
+	seenPorts := make(map[int]string)
+	for name, svc := range c.Services {
+		if err := svc.Validate(); err != nil {
+			return fmt.Errorf("services.%s: %w", name, err)
+		}
+		if svc.Hostname != "" {
+			if prev, ok := seenHosts[svc.Hostname]; ok {
+				return fmt.Errorf("duplicate hostname %q in services %s and %s", svc.Hostname, prev, name)
+			}
+			seenHosts[svc.Hostname] = name
+		}
+		if svc.Canonical != 0 {
+			if prev, ok := seenPorts[svc.Canonical]; ok {
+				return fmt.Errorf("duplicate canonical port %d in services %s and %s", svc.Canonical, prev, name)
+			}
+			seenPorts[svc.Canonical] = name
+		}
+	}
+	return nil
+}

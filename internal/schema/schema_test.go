@@ -37,3 +37,44 @@ func TestServiceValidate(t *testing.T) {
 	emptyWorkspace := Service{}
 	assert.Error(t, emptyWorkspace.Validate(), "service must have canonical or at least one mask")
 }
+
+func TestConfigValidate(t *testing.T) {
+	c := Config{
+		Project: Project{
+			ID:           "test",
+			SandboxName:  "test-sbx",
+			HostnameApex: "test.local",
+		},
+		BaseImage: BaseImage{Docker: true},
+		Network:   Network{AllowedDomains: []string{"github.com"}},
+		Services: map[string]Service{
+			"webapp": {Canonical: 3000, Hostname: "test.local"},
+		},
+	}
+	assert.NoError(t, c.Validate())
+
+	// Hostname collision across services
+	dup := c
+	dup.Services = map[string]Service{
+		"webapp": {Canonical: 3000, Hostname: "test.local"},
+		"api":    {Canonical: 8080, Hostname: "test.local"},
+	}
+	assert.Error(t, dup.Validate(), "duplicate hostname")
+
+	// Port collision across services
+	dup2 := Config{
+		Project:   c.Project,
+		BaseImage: c.BaseImage,
+		Network:   c.Network,
+		Services: map[string]Service{
+			"a": {Canonical: 3000},
+			"b": {Canonical: 3000},
+		},
+	}
+	assert.Error(t, dup2.Validate(), "duplicate canonical port")
+
+	// Missing required project fields
+	bad := c
+	bad.Project.ID = ""
+	assert.Error(t, bad.Validate(), "project.id required")
+}
