@@ -16,4 +16,5 @@ test:
 
 clean:
 	rm -f devm
-	rm -f internal/agent/bin/devm-agent-linux-*
+	# NOTE: internal/agent/bin/devm-agent-linux-* are checked in.
+	# Use `make embed-agent` to regenerate them if needed.

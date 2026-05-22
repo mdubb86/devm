@@ -9,6 +9,12 @@ import (
 func TestEmbeddedBinariesNonEmpty(t *testing.T) {
 	assert.NotEmpty(t, BinaryAMD64, "linux/amd64 binary should be embedded")
 	assert.NotEmpty(t, BinaryARM64, "linux/arm64 binary should be embedded")
+	if len(BinaryAMD64) >= 4 {
+		assert.Equal(t, []byte{0x7f, 'E', 'L', 'F'}, BinaryAMD64[:4], "amd64 binary missing ELF magic")
+	}
+	if len(BinaryARM64) >= 4 {
+		assert.Equal(t, []byte{0x7f, 'E', 'L', 'F'}, BinaryARM64[:4], "arm64 binary missing ELF magic")
+	}
 }
 
 func TestPickForVMSupportedArches(t *testing.T) {

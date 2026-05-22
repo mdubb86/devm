@@ -75,7 +75,7 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	sb.WriteString("      description: Claim ext4 volume mounts for agent user\n")
 	sb.WriteString("    - command: ['bash', '-c', 'nohup /usr/local/bin/devm-agent >/tmp/devm-agent.log 2>&1 &']\n")
 	sb.WriteString("      user: \"1000\"\n")
-	sb.WriteString("      description: Start devm-agent\n")
+	sb.WriteString("      description: Start devm-agent\n\n")
 
 	return sb.String()
 }
