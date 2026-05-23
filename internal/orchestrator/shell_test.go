@@ -42,13 +42,18 @@ func (s *stubSpawner) Start(name string, args ...string) (SpawnedCmd, error) {
 
 type stubCmd struct {
 	waitErr chan error
+	exitRC  int // exit code returned alongside waitErr
 	killed  bool
 	pid     int
 }
 
-func (c *stubCmd) Wait() error { return <-c.waitErr }
+func (c *stubCmd) Wait() (int, error) {
+	err := <-c.waitErr
+	return c.exitRC, err
+}
 func (c *stubCmd) Kill() error {
 	c.killed = true
+	c.exitRC = -1
 	// Non-blocking send so Kill is idempotent / safe to call multiple times.
 	select {
 	case c.waitErr <- errors.New("killed"):
@@ -76,7 +81,8 @@ func (r *stateRunner) Output(name string, args ...string) ([]byte, error) {
 	joined := strings.Join(all, " ")
 	switch {
 	case strings.Contains(joined, "sbx ls"):
-		return []byte("SANDBOX  STATUS\nx-sbx    " + r.lsStatus + "\n"), nil
+		// State() expects columns: NAME IMAGE STATUS ...
+		return []byte("SANDBOX  IMAGE  STATUS\nx-sbx    img    " + r.lsStatus + "\n"), nil
 	case strings.Contains(joined, "ports") && strings.Contains(joined, "--json"):
 		if r.portsOut != "" {
 			return []byte(r.portsOut), nil
@@ -107,9 +113,10 @@ func TestRunShellAlreadyRunningTakesShortcut(t *testing.T) {
 	spawner.cmdQueue = []*stubCmd{userCmd}
 
 	deps := ShellDeps{
-		Spawner:  spawner,
-		Runner:   runner,
-		LockPath: filepath.Join(repoRoot, ".devm/lock"),
+		AnchorSpawner: spawner,
+		UserSpawner:   spawner,
+		Runner:        runner,
+		LockPath:      filepath.Join(repoRoot, ".devm/lock"),
 	}
 	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
 	require.NoError(t, err)
@@ -153,7 +160,8 @@ func TestRunShellColdStartHappyPath(t *testing.T) {
 	}()
 
 	deps := ShellDeps{
-		Spawner:        spawner,
+		AnchorSpawner:  spawner,
+		UserSpawner:    spawner,
 		Runner:         runner,
 		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
 		WaitForRunning: 2 * time.Second,
@@ -179,7 +187,8 @@ func TestRunShellWaitForRunningTimesOut(t *testing.T) {
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd}}
 
 	deps := ShellDeps{
-		Spawner:        spawner,
+		AnchorSpawner:  spawner,
+		UserSpawner:    spawner,
 		Runner:         runner,
 		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
 		WaitForRunning: 100 * time.Millisecond,

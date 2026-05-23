@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/mtwaage/devm/internal/lock"
@@ -15,8 +14,15 @@ import (
 // ShellDeps wires the orchestrator's collaborators. Production callers
 // build one via DefaultShellDeps; tests substitute stubs.
 type ShellDeps struct {
-	Spawner Spawner
-	Runner  sandbox.Runner
+	// AnchorSpawner runs the `sbx run` subprocess that holds the
+	// sandbox alive during bootstrap. Non-interactive: stdin=/dev/null,
+	// stdout/stderr typically discarded or logged.
+	AnchorSpawner Spawner
+	// UserSpawner runs the user's interactive shell via sbx exec -it.
+	// Must inherit the host's stdin/stdout/stderr so the user sees
+	// their shell.
+	UserSpawner Spawner
+	Runner      sandbox.Runner
 
 	LockPath       string
 	WaitForRunning time.Duration // default 60s
@@ -24,12 +30,11 @@ type ShellDeps struct {
 	PollInterval   time.Duration // default 250ms
 }
 
-// DefaultShellDeps returns deps wired for production. The Spawner is
-// configured for non-interactive use (the sbx run anchor subprocess);
-// the user shell uses its own ExecSpawner internally.
+// DefaultShellDeps returns deps wired for production.
 func DefaultShellDeps(repoRoot string) ShellDeps {
 	return ShellDeps{
-		Spawner:        &ExecSpawner{Interactive: false},
+		AnchorSpawner:  &ExecSpawner{Interactive: false},
+		UserSpawner:    &ExecSpawner{Interactive: true},
 		Runner:         sandbox.DefaultRunner{},
 		LockPath:       filepath.Join(repoRoot, ".devm", "lock"),
 		WaitForRunning: 60 * time.Second,
@@ -39,9 +44,9 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 }
 
 // RunShell implements `devm shell`. Returns the user shell's exit code
-// (0 on clean exit, 1 on non-zero) and a non-nil error only when an
-// orchestration step itself failed (lock acquire, sbx run timeout,
-// port reconcile error, user shell spawn error).
+// and a non-nil error only when an orchestration step itself failed
+// (lock acquire, sbx run timeout, port reconcile error, user shell
+// spawn error).
 func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, sandboxName, cmdName string, cmdArgs []string) (int, error) {
 	applyDefaults(&d)
 
@@ -58,8 +63,8 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 
 	sb := &sandbox.Sandbox{Name: sandboxName, Runner: d.Runner}
 
-	if isRunning(sb, d.Runner) {
-		// Shortcut: just attach via the configured spawner.
+	if sb.IsRunning() {
+		// Shortcut: just attach via the user spawner.
 		_ = lk.Release()
 		released = true
 		return runUserShell(d, sandboxName, cmdName, cmdArgs)
@@ -67,12 +72,15 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 
 	// Cold start.
 	runArgs := []string{"run", "--kit", filepath.Join(repoRoot, ".devm"), sandboxName, repoRoot}
-	runCmd, err := d.Spawner.Start("sbx", runArgs...)
+	runCmd, err := d.AnchorSpawner.Start("sbx", runArgs...)
 	if err != nil {
 		return -1, fmt.Errorf("spawn sbx run: %w", err)
 	}
 	runDone := make(chan error, 1)
-	go func() { runDone <- runCmd.Wait() }()
+	go func() {
+		_, err := runCmd.Wait()
+		runDone <- err
+	}()
 
 	// Cleanup helper for failure paths.
 	killRun := func() {
@@ -83,7 +91,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		}
 	}
 
-	if err := waitForRunning(ctx, sb, d.Runner, d.WaitForRunning, d.PollInterval); err != nil {
+	if err := waitForRunning(ctx, sb, runDone, d.WaitForRunning, d.PollInterval); err != nil {
 		killRun()
 		return -1, err
 	}
@@ -93,21 +101,33 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		return -1, err
 	}
 
-	// Spawn user's interactive shell via the same Spawner. Production
-	// callers pass a Spawner that ignores the Interactive flag set at
-	// construction; for the user shell we want terminal inheritance.
-	// We achieve that by always going through d.Spawner here — in tests
-	// the stub doesn't care; in production the caller arranges the
-	// right spawner for this call site (see cmd/devm/shell.go).
+	// Spawn the user's interactive shell. The UserSpawner is configured
+	// to inherit the host terminal's stdin/stdout/stderr.
 	execArgs := append([]string{"exec", "-it", sandboxName, cmdName}, cmdArgs...)
-	userCmd, err := d.Spawner.Start("sbx", execArgs...)
+	userCmd, err := d.UserSpawner.Start("sbx", execArgs...)
 	if err != nil {
 		killRun()
 		return -1, fmt.Errorf("spawn user shell: %w", err)
 	}
 
-	if err := waitForUserPty(ctx, sb, d.Runner, d.WaitForPty, d.PollInterval); err != nil {
+	// Reap userCmd in the background so a failure during waitForUserPty
+	// (or anywhere before the final wait) doesn't leak the process.
+	type userResult struct {
+		rc  int
+		err error
+	}
+	userDone := make(chan userResult, 1)
+	go func() {
+		rc, err := userCmd.Wait()
+		userDone <- userResult{rc: rc, err: err}
+	}()
+
+	if err := waitForUserPty(ctx, sb, runDone, d.WaitForPty, d.PollInterval); err != nil {
 		_ = userCmd.Kill()
+		select {
+		case <-userDone:
+		case <-time.After(3 * time.Second):
+		}
 		killRun()
 		return -1, err
 	}
@@ -118,10 +138,11 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	_ = lk.Release()
 	released = true
 
-	if err := userCmd.Wait(); err != nil {
-		return 1, nil
+	res := <-userDone
+	if res.err != nil {
+		return -1, fmt.Errorf("user shell wait: %w", res.err)
 	}
-	return 0, nil
+	return res.rc, nil
 }
 
 func applyDefaults(d *ShellDeps) {
@@ -136,62 +157,70 @@ func applyDefaults(d *ShellDeps) {
 	}
 }
 
-// isRunning returns true when `sbx ls` reports the sandbox in running
-// state. Tolerant of unknown output formats: returns false on parse
-// failure or any unrelated content.
-func isRunning(sb *sandbox.Sandbox, r sandbox.Runner) bool {
-	out, err := r.Output("sbx", "ls")
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == sb.Name && strings.Contains(line, "running") {
-			return true
-		}
-	}
-	return false
-}
-
-func waitForRunning(ctx context.Context, sb *sandbox.Sandbox, r sandbox.Runner, timeout, poll time.Duration) error {
+func waitForRunning(ctx context.Context, sb *sandbox.Sandbox, runDone <-chan error, timeout, poll time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if isRunning(sb, r) {
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		if sb.IsRunning() {
 			return nil
 		}
-		time.Sleep(poll)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-runDone:
+			if err != nil {
+				return fmt.Errorf("sbx run exited before sandbox became running: %w", err)
+			}
+			return fmt.Errorf("sbx run exited before sandbox became running")
+		case <-ticker.C:
+			if time.Now().After(deadline) {
+				return fmt.Errorf("sandbox %s never reached running within %s", sb.Name, timeout)
+			}
+		}
 	}
-	return fmt.Errorf("sandbox %s never reached running within %s", sb.Name, timeout)
 }
 
-func waitForUserPty(ctx context.Context, sb *sandbox.Sandbox, r sandbox.Runner, timeout, poll time.Duration) error {
+func waitForUserPty(ctx context.Context, sb *sandbox.Sandbox, runDone <-chan error, timeout, poll time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		sessions, err := sb.SessionsWithRunner(r)
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		sessions, err := sb.Sessions()
 		if err == nil && len(sessions) > 0 {
 			return nil
 		}
-		time.Sleep(poll)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-runDone:
+			if err != nil {
+				return fmt.Errorf("sbx run exited before user pty appeared: %w", err)
+			}
+			return fmt.Errorf("sbx run exited before user pty appeared")
+		case <-ticker.C:
+			if time.Now().After(deadline) {
+				return fmt.Errorf("user shell pty never appeared within %s", timeout)
+			}
+		}
 	}
-	return fmt.Errorf("user shell pty never appeared within %s", timeout)
 }
 
-// runUserShell is the already-running shortcut: just spawn the user
-// shell via the configured spawner and wait.
+// runUserShell is the already-running shortcut: just attach to the
+// existing sandbox. We deliberately skip port reconcile here because
+// the sandbox came up via an earlier devm shell that already ran
+// reconcile; rerunning would be cheap but adds a noticeable startup
+// delay for the common case. If devm.yaml ports have changed since
+// the last cold start, the user must `devm stop` and re-shell.
 func runUserShell(d ShellDeps, sandboxName, cmdName string, cmdArgs []string) (int, error) {
 	args := append([]string{"exec", "-it", sandboxName, cmdName}, cmdArgs...)
-	cmd, err := d.Spawner.Start("sbx", args...)
+	cmd, err := d.UserSpawner.Start("sbx", args...)
 	if err != nil {
 		return -1, err
 	}
-	if err := cmd.Wait(); err != nil {
-		return 1, nil
+	rc, err := cmd.Wait()
+	if err != nil {
+		return -1, fmt.Errorf("user shell wait: %w", err)
 	}
-	return 0, nil
+	return rc, nil
 }

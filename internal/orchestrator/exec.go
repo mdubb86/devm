@@ -15,7 +15,12 @@ type Spawner interface {
 
 // SpawnedCmd is the subset of *exec.Cmd the orchestrator needs.
 type SpawnedCmd interface {
-	Wait() error
+	// Wait blocks until the process exits and returns its exit code
+	// alongside any error. A non-zero exit code is reported via the
+	// int return without an accompanying error; the error return is
+	// reserved for unexpected failures (process killed by signal,
+	// I/O errors during reap, etc.).
+	Wait() (int, error)
 	Kill() error
 	Pid() int
 }
@@ -50,7 +55,17 @@ func (s *ExecSpawner) Start(name string, args ...string) (SpawnedCmd, error) {
 
 type execCmd struct{ c *exec.Cmd }
 
-func (e *execCmd) Wait() error { return e.c.Wait() }
+func (e *execCmd) Wait() (int, error) {
+	err := e.c.Wait()
+	if err == nil {
+		return 0, nil
+	}
+	// Non-zero exit code is reported via the return value, not as an error.
+	if exit, ok := err.(*exec.ExitError); ok {
+		return exit.ExitCode(), nil
+	}
+	return -1, err
+}
 func (e *execCmd) Kill() error {
 	if e.c.Process == nil {
 		return nil
