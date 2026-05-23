@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 
-	"github.com/mtwaage/devm/internal/agent"
 	"github.com/mtwaage/devm/internal/schema"
 	"github.com/mtwaage/devm/internal/scripts"
 )
@@ -18,15 +16,6 @@ func WriteDevmDir(cfg schema.Config, repoRoot string) error {
 	scriptsDir := filepath.Join(devmDir, "scripts")
 	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir .devm/scripts: %w", err)
-	}
-
-	agentBin, err := agent.PickForVM(runtime.GOARCH)
-	if err != nil {
-		return fmt.Errorf("pick agent binary: %w", err)
-	}
-	agentPath := filepath.Join(devmDir, "devm-agent")
-	if err := os.WriteFile(agentPath, agentBin, 0o755); err != nil {
-		return fmt.Errorf("write agent: %w", err)
 	}
 
 	files := map[string]string{

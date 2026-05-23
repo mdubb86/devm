@@ -34,17 +34,13 @@ func TestWriteDevmDir(t *testing.T) {
 	}
 }
 
-func TestWriteDevmDirIncludesAgentBinary(t *testing.T) {
+func TestWriteDevmDirDoesNotIncludeAgentBinary(t *testing.T) {
 	tmp := t.TempDir()
-	cfg := schema.Config{
-		Project:   schema.Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
-		BaseImage: schema.BaseImage{Docker: false},
-	}
+	cfg := minimalConfig(t)
 	require.NoError(t, WriteDevmDir(cfg, tmp))
 
 	agentPath := filepath.Join(tmp, ".devm", "devm-agent")
-	info, err := os.Stat(agentPath)
-	require.NoError(t, err)
-	assert.Greater(t, info.Size(), int64(0), "embedded agent binary should be non-empty")
-	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(), "agent binary must be executable")
+	_, err := os.Stat(agentPath)
+	assert.True(t, os.IsNotExist(err),
+		".devm/devm-agent must not be written; binary removed from design")
 }

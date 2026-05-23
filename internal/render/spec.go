@@ -11,7 +11,7 @@ import (
 // SpecYAML generates the sbx kit spec.yaml from the validated config.
 // repoRoot is the project's absolute path; used in volume mount paths.
 func SpecYAML(cfg schema.Config, repoRoot string) string {
-	image := "docker/sandbox-templates:shell-only"
+	image := "docker/sandbox-templates:shell"
 	if cfg.BaseImage.Docker {
 		image = "docker/sandbox-templates:shell-docker"
 	}
@@ -25,7 +25,9 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	sb.WriteString("agent:\n")
 	sb.WriteString(fmt.Sprintf("  image: %s\n", image))
 	sb.WriteString("  aiFilename: CLAUDE.md\n")
-	sb.WriteString("  persistence: persistent\n\n")
+	sb.WriteString("  persistence: persistent\n")
+	sb.WriteString("  entrypoint:\n")
+	sb.WriteString("    run: [\"sleep\", \"infinity\"]\n\n")
 
 	if len(cfg.Network.AllowedDomains) > 0 {
 		sb.WriteString("network:\n  allowedDomains:\n")
@@ -63,19 +65,13 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 
 	sb.WriteString("commands:\n")
 	sb.WriteString("  install:\n")
-	sb.WriteString("    - command: 'install -m 0755 \"$WORKSPACE_DIR/.devm/devm-agent\" /usr/local/bin/devm-agent'\n")
-	sb.WriteString("      user: \"0\"\n")
-	sb.WriteString("      description: Install devm-agent binary\n")
 	sb.WriteString("    - command: 'bash \"$WORKSPACE_DIR/.devm/scripts/provision.sh\"'\n")
 	sb.WriteString("      user: \"1000\"\n")
 	sb.WriteString("      description: Provision devm dev toolchain\n\n")
 	sb.WriteString("  startup:\n")
 	sb.WriteString("    - command: ['bash', '-c', 'exec bash \"$WORKSPACE_DIR/.devm/scripts/init-volumes.sh\"']\n")
 	sb.WriteString("      user: \"1000\"\n")
-	sb.WriteString("      description: Claim ext4 volume mounts for agent user\n")
-	sb.WriteString("    - command: ['bash', '-c', 'nohup /usr/local/bin/devm-agent >/tmp/devm-agent.log 2>&1 &']\n")
-	sb.WriteString("      user: \"1000\"\n")
-	sb.WriteString("      description: Start devm-agent\n\n")
+	sb.WriteString("      description: Claim ext4 volume mounts for agent user\n\n")
 
 	return sb.String()
 }
