@@ -35,6 +35,38 @@ func (t Template) Validate() error {
 	return nil
 }
 
+type InstallCommand struct {
+	Command     string `yaml:"command"`
+	User        string `yaml:"user,omitempty"`
+	Description string `yaml:"description,omitempty"`
+}
+
+func (c InstallCommand) Validate() error {
+	if c.Command == "" {
+		return fmt.Errorf("install.command is required")
+	}
+	return nil
+}
+
+type StartupCommand struct {
+	Command     []string `yaml:"command"`
+	User        string   `yaml:"user,omitempty"`
+	Background  bool     `yaml:"background,omitempty"`
+	Description string   `yaml:"description,omitempty"`
+}
+
+func (c StartupCommand) Validate() error {
+	if len(c.Command) == 0 {
+		return fmt.Errorf("startup.command must be a non-empty array")
+	}
+	for i, arg := range c.Command {
+		if arg == "" {
+			return fmt.Errorf("startup.command[%d] must not be empty", i)
+		}
+	}
+	return nil
+}
+
 type Service struct {
 	Canonical int               `yaml:"canonical,omitempty"`
 	Hostname  string            `yaml:"hostname,omitempty"`
@@ -43,6 +75,7 @@ type Service struct {
 	Env       map[string]string `yaml:"env,omitempty"`
 	Masks     []Mask            `yaml:"masks,omitempty"`
 	Templates []Template        `yaml:"templates,omitempty"`
+	Startup   []StartupCommand  `yaml:"startup,omitempty"`
 }
 
 func (s Service) Validate() error {
@@ -52,8 +85,8 @@ func (s Service) Validate() error {
 	if s.EnvInject && s.Canonical == 0 {
 		return fmt.Errorf("env_inject requires canonical port")
 	}
-	if s.Canonical == 0 && len(s.Masks) == 0 {
-		return fmt.Errorf("service must define a canonical port or at least one mask")
+	if s.Canonical == 0 && len(s.Masks) == 0 && len(s.Startup) == 0 {
+		return fmt.Errorf("service must define a canonical port, at least one mask, or at least one startup command")
 	}
 	for i, m := range s.Masks {
 		if err := m.Validate(); err != nil {
@@ -63,6 +96,11 @@ func (s Service) Validate() error {
 	for i, t := range s.Templates {
 		if err := t.Validate(); err != nil {
 			return fmt.Errorf("templates[%d]: %w", i, err)
+		}
+	}
+	for i, c := range s.Startup {
+		if err := c.Validate(); err != nil {
+			return fmt.Errorf("startup[%d]: %w", i, err)
 		}
 	}
 	return nil
@@ -102,11 +140,17 @@ type Config struct {
 	Network   Network            `yaml:"network,omitempty"`
 	Env       map[string]string  `yaml:"env,omitempty"`
 	Services  map[string]Service `yaml:"services,omitempty"`
+	Install   []InstallCommand   `yaml:"install,omitempty"`
 }
 
 func (c Config) Validate() error {
 	if err := c.Project.Validate(); err != nil {
 		return err
+	}
+	for i, ic := range c.Install {
+		if err := ic.Validate(); err != nil {
+			return fmt.Errorf("install[%d]: %w", i, err)
+		}
 	}
 	names := make([]string, 0, len(c.Services))
 	for name := range c.Services {

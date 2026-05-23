@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMaskRequiredFields(t *testing.T) {
@@ -77,4 +78,65 @@ func TestConfigValidate(t *testing.T) {
 	bad := c
 	bad.Project.ID = ""
 	assert.Error(t, bad.Validate(), "project.id required")
+}
+
+func TestInstallCommandRequiresCommand(t *testing.T) {
+	err := InstallCommand{}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command")
+
+	err = InstallCommand{Command: "apt-get install -y jq"}.Validate()
+	assert.NoError(t, err)
+}
+
+func TestStartupCommandRequiresNonEmptyCommand(t *testing.T) {
+	err := StartupCommand{}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command")
+
+	err = StartupCommand{Command: []string{}}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command")
+
+	err = StartupCommand{Command: []string{""}}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command")
+
+	err = StartupCommand{Command: []string{"pg_ctl", "start"}}.Validate()
+	assert.NoError(t, err)
+}
+
+func TestConfigValidatesInstallSteps(t *testing.T) {
+	cfg := Config{
+		Project:   Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		BaseImage: BaseImage{Docker: false},
+		Install: []InstallCommand{
+			{Command: ""}, // invalid
+		},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "install[0]")
+}
+
+func TestServiceValidatesStartupSteps(t *testing.T) {
+	svc := Service{
+		Startup: []StartupCommand{
+			{Command: []string{}}, // invalid
+		},
+	}
+	err := svc.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "startup[0]")
+}
+
+func TestServiceMayHaveOnlyStartup(t *testing.T) {
+	// A daemon-style service: no canonical port, no masks, but startup.
+	svc := Service{
+		Startup: []StartupCommand{
+			{Command: []string{"my-daemon"}},
+		},
+	}
+	err := svc.Validate()
+	assert.NoError(t, err, "a service with only startup commands should be valid")
 }
