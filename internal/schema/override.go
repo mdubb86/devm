@@ -23,6 +23,7 @@ type ServiceOverride struct {
 	Env       map[string]string `yaml:"env,omitempty"`
 	Masks     *[]Mask           `yaml:"masks,omitempty"`
 	Templates *[]Template       `yaml:"templates,omitempty"`
+	Startup   *[]StartupCommand `yaml:"startup,omitempty"`
 }
 
 type ConfigOverride struct {
@@ -31,4 +32,5 @@ type ConfigOverride struct {
 	Network   *NetworkOverride           `yaml:"network,omitempty"`
 	Env       map[string]string          `yaml:"env,omitempty"`
 	Services  map[string]ServiceOverride `yaml:"services,omitempty"`
+	Install   *[]InstallCommand          `yaml:"install,omitempty"`
 }

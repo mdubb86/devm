@@ -5,6 +5,7 @@ import (
 
 	"github.com/mtwaage/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMergeOverridesProjectPortOffset(t *testing.T) {
@@ -73,4 +74,50 @@ func TestMergeServiceEnvMergesKeys(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "debug", merged.Services["webapp"].Env["LOG_LEVEL"], "base key preserved")
 	assert.Equal(t, "http://api.local", merged.Services["webapp"].Env["API_URL"], "override key added")
+}
+
+func TestConfigOverrideInstallReplacement(t *testing.T) {
+	base := schema.Config{
+		Install: []schema.InstallCommand{
+			{Command: "apt-get install -y jq", User: "0"},
+		},
+	}
+	replacement := []schema.InstallCommand{
+		{Command: "npm install -g typescript", User: "1000"},
+	}
+	override := schema.ConfigOverride{
+		Install: &replacement,
+	}
+	merged, err := Merge(base, override)
+	require.NoError(t, err)
+	require.Len(t, merged.Install, 1)
+	assert.Equal(t, "npm install -g typescript", merged.Install[0].Command)
+}
+
+func TestServiceOverrideStartupReplacement(t *testing.T) {
+	base := schema.Config{
+		Services: map[string]schema.Service{
+			"postgres": {
+				Canonical: 5432,
+				Startup: []schema.StartupCommand{
+					{Command: []string{"old-cmd"}},
+				},
+			},
+		},
+	}
+	replacement := []schema.StartupCommand{
+		{Command: []string{"new-cmd", "--flag"}, Background: true},
+	}
+	override := schema.ConfigOverride{
+		Services: map[string]schema.ServiceOverride{
+			"postgres": {
+				Startup: &replacement,
+			},
+		},
+	}
+	merged, err := Merge(base, override)
+	require.NoError(t, err)
+	require.Len(t, merged.Services["postgres"].Startup, 1)
+	assert.Equal(t, []string{"new-cmd", "--flag"}, merged.Services["postgres"].Startup[0].Command)
+	assert.True(t, merged.Services["postgres"].Startup[0].Background)
 }
