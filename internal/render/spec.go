@@ -64,14 +64,36 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	sb.WriteString("environment:\n  variables:\n    IS_SANDBOX: \"1\"\n\n")
 
 	sb.WriteString("commands:\n")
-	sb.WriteString("  install:\n")
-	sb.WriteString("    - command: 'bash \"$WORKSPACE_DIR/.devm/scripts/provision.sh\"'\n")
-	sb.WriteString("      user: \"1000\"\n")
-	sb.WriteString("      description: Provision devm dev toolchain\n\n")
+
+	// install: emit only if user defined any install steps.
+	if len(cfg.Install) > 0 {
+		sb.WriteString("  install:\n")
+		for _, step := range cfg.Install {
+			writeInstallStep(&sb, step)
+		}
+		sb.WriteString("\n")
+	}
+
+	// startup: built-in init-volumes (always first). Task 4 will append
+	// per-service startup commands here.
 	sb.WriteString("  startup:\n")
 	sb.WriteString("    - command: ['bash', '-c', 'exec bash \"$WORKSPACE_DIR/.devm/scripts/init-volumes.sh\"']\n")
 	sb.WriteString("      user: \"1000\"\n")
 	sb.WriteString("      description: Claim ext4 volume mounts for agent user\n\n")
 
 	return sb.String()
+}
+
+// writeInstallStep emits one install step entry. User defaults to "0" (root)
+// per the kit spec when not set in devm.yaml.
+func writeInstallStep(sb *strings.Builder, step schema.InstallCommand) {
+	user := step.User
+	if user == "" {
+		user = "0"
+	}
+	sb.WriteString(fmt.Sprintf("    - command: '%s'\n", step.Command))
+	sb.WriteString(fmt.Sprintf("      user: %q\n", user))
+	if step.Description != "" {
+		sb.WriteString(fmt.Sprintf("      description: %s\n", step.Description))
+	}
 }

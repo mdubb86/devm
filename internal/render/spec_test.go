@@ -1,6 +1,7 @@
 package render
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mtwaage/devm/internal/schema"
@@ -79,9 +80,42 @@ func TestSpecYAMLEntrypointIsSleepInfinity(t *testing.T) {
 func TestSpecYAMLDoesNotInstallAgentBinary(t *testing.T) {
 	cfg := minimalConfig(t)
 	out := SpecYAML(cfg, "/tmp/repo")
-	// commands.install no longer copies a devm-agent binary into /usr/local/bin.
 	assert.NotContains(t, out, "/usr/local/bin/devm-agent")
 	assert.NotContains(t, out, ".devm/devm-agent")
-	// provision.sh install step remains.
-	assert.Contains(t, out, `bash "$WORKSPACE_DIR/.devm/scripts/provision.sh"`)
+	// provision.sh is gone too; install block is empty when no user steps.
+	assert.NotContains(t, out, "provision.sh")
+}
+
+func TestSpecYAMLOmitsInstallWhenEmpty(t *testing.T) {
+	cfg := minimalConfig(t)
+	out := SpecYAML(cfg, "/tmp/repo")
+	// No install commands → no `install:` block in spec.yaml.
+	assert.NotContains(t, out, "install:")
+	// commands.startup still present (init-volumes lives there).
+	assert.Contains(t, out, "startup:")
+}
+
+func TestSpecYAMLRendersUserInstallSteps(t *testing.T) {
+	cfg := minimalConfig(t)
+	cfg.Install = []schema.InstallCommand{
+		{Command: "apt-get update && apt-get install -y jq", User: "0", Description: "Install jq"},
+		{Command: "npm install -g typescript", User: "1000", Description: "Install TypeScript"},
+	}
+	out := SpecYAML(cfg, "/tmp/repo")
+
+	assert.Contains(t, out, "install:")
+	assert.Contains(t, out, "apt-get update && apt-get install -y jq")
+	assert.Contains(t, out, `user: "0"`)
+	assert.Contains(t, out, "Install jq")
+	assert.Contains(t, out, "npm install -g typescript")
+	assert.Contains(t, out, `user: "1000"`)
+	assert.Contains(t, out, "Install TypeScript")
+
+	// Verify declaration order.
+	jqIdx := strings.Index(out, "Install jq")
+	tsIdx := strings.Index(out, "Install TypeScript")
+	assert.Greater(t, tsIdx, jqIdx, "install steps must render in declaration order")
+
+	// Verify provision.sh is NOT referenced anywhere.
+	assert.NotContains(t, out, "provision.sh")
 }
