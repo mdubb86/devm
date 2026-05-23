@@ -29,6 +29,11 @@ type portMapping struct {
 // Each service whose Canonical port is non-zero contributes one
 // desired mapping: hostPort = cfg.Project.PortOffset + svc.Canonical,
 // sandboxPort = svc.Canonical, protocol = tcp.
+//
+// All desired mappings bind 127.0.0.1; sbx normalizes its --json
+// output to the same. Manual sbx ports --publish to other host IPs
+// (e.g. 0.0.0.0) is not part of the devm.yaml model — such mappings
+// will appear as "removes" on every reconcile.
 func ReconcilePorts(sb *sandbox.Sandbox, cfg schema.Config) error {
 	return ReconcilePortsWithRunner(sb, cfg, sandbox.DefaultRunner{})
 }

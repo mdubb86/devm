@@ -133,12 +133,71 @@ func TestReconcilePortsHandlesMultipleServicesDeterministically(t *testing.T) {
 func TestReconcilePortsBubblesListError(t *testing.T) {
 	cfg := cfgWith(map[string]schema.Service{}, 60000)
 	runner := &scriptedRunner{
-		failOn: map[string]error{"ports": errors.New("boom")},
+		failOn: map[string]error{"--json": errors.New("boom")},
 	}
 	sb := &sandbox.Sandbox{Name: "x-sbx"}
 	err := ReconcilePortsWithRunner(sb, cfg, runner)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "boom")
+	assert.Contains(t, err.Error(), "list ports", "error should originate from the list step, not publish/unpublish")
+}
+
+func TestReconcilePortsMixedAddRemoveKeep(t *testing.T) {
+	// Desired: api(8080), web(3000). Current: api(8080) — keep,
+	// db(5432) — remove. Expect 1 publish (web) and 1 unpublish (db),
+	// nothing for api.
+	cfg := cfgWith(map[string]schema.Service{
+		"api": {Canonical: 8080},
+		"web": {Canonical: 3000},
+	}, 60000)
+	runner := &scriptedRunner{
+		listJSON: `[` +
+			`{"host_ip":"127.0.0.1","host_port":68080,"sandbox_port":8080,"protocol":"tcp"},` +
+			`{"host_ip":"127.0.0.1","host_port":65432,"sandbox_port":5432,"protocol":"tcp"}` +
+			`]`,
+	}
+	sb := &sandbox.Sandbox{Name: "x-sbx"}
+	require.NoError(t, ReconcilePortsWithRunner(sb, cfg, runner))
+
+	var publishes, unpublishes []string
+	for _, c := range runner.calls {
+		joined := strings.Join(c, " ")
+		switch {
+		case hasFlag(c, "--publish"):
+			publishes = append(publishes, joined)
+		case hasFlag(c, "--unpublish"):
+			unpublishes = append(unpublishes, joined)
+		}
+	}
+	require.Len(t, publishes, 1, "expected exactly one publish for the new service")
+	assert.Contains(t, publishes[0], "63000:3000")
+
+	require.Len(t, unpublishes, 1, "expected exactly one unpublish for the removed service")
+	assert.Contains(t, unpublishes[0], "65432:5432")
+}
+
+func TestReconcilePortsBubblesPublishError(t *testing.T) {
+	cfg := cfgWith(map[string]schema.Service{
+		"api": {Canonical: 8080},
+	}, 60000)
+	runner := &scriptedRunner{
+		listJSON: "[]",
+		failOn:   map[string]error{"--publish": errors.New("publish boom")},
+	}
+	sb := &sandbox.Sandbox{Name: "x-sbx"}
+	err := ReconcilePortsWithRunner(sb, cfg, runner)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publish boom")
+	assert.Contains(t, err.Error(), "publish 68080:8080", "error should mention the failing spec")
+}
+
+func TestReconcilePortsBubblesParseError(t *testing.T) {
+	cfg := cfgWith(map[string]schema.Service{}, 60000)
+	runner := &scriptedRunner{listJSON: "not-json"}
+	sb := &sandbox.Sandbox{Name: "x-sbx"}
+	err := ReconcilePortsWithRunner(sb, cfg, runner)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse ports JSON")
 }
 
 func hasFlag(args []string, flag string) bool {
