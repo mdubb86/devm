@@ -39,6 +39,13 @@ type StopDeps struct {
 // `devm teardown` (mode=StopDestroy). autoApprove skips the
 // interactive prompt. Return code: 0 on success or already-stopped
 // no-op; 1 on user refusal.
+//
+// The ctx parameter is currently advisory — it is accepted for
+// signature consistency with RunShell, but none of the underlying
+// primitives (lock acquire, sbx state checks, the interactive
+// prompt) observe cancellation. The interactive prompt in particular
+// will block on stdin indefinitely; users cancel by ctrl-c at the
+// terminal, which kills the devm process.
 func RunStop(ctx context.Context, d StopDeps, sandboxName string, mode Destructiveness, autoApprove bool) (int, error) {
 	if d.In == nil {
 		d.In = os.Stdin
@@ -46,6 +53,7 @@ func RunStop(ctx context.Context, d StopDeps, sandboxName string, mode Destructi
 	if d.Out == nil {
 		d.Out = os.Stderr
 	}
+	_ = ctx // accepted for signature parity with RunShell; see comment above.
 
 	lk, err := lock.Acquire(d.LockPath)
 	if err != nil {
