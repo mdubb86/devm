@@ -25,7 +25,6 @@ func TestWriteDevmDir(t *testing.T) {
 	for _, p := range []string{
 		".devm/Caddyfile",
 		".devm/spec.yaml",
-		".devm/scripts/provision.sh",
 		".devm/scripts/init-volumes.sh",
 		".devm/scripts/devm-exec.sh",
 	} {
@@ -43,4 +42,24 @@ func TestWriteDevmDirDoesNotIncludeAgentBinary(t *testing.T) {
 	_, err := os.Stat(agentPath)
 	assert.True(t, os.IsNotExist(err),
 		".devm/devm-agent must not be written; binary removed from design")
+}
+
+func TestWriteDevmDirDoesNotWriteProvisionScript(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := minimalConfig(t)
+	require.NoError(t, WriteDevmDir(cfg, tmp))
+
+	provisionPath := filepath.Join(tmp, ".devm", "scripts", "provision.sh")
+	_, err := os.Stat(provisionPath)
+	assert.True(t, os.IsNotExist(err),
+		".devm/scripts/provision.sh must not be written; provision.sh removed from design")
+
+	// Sibling scripts we still keep:
+	initVolumesPath := filepath.Join(tmp, ".devm", "scripts", "init-volumes.sh")
+	_, err = os.Stat(initVolumesPath)
+	assert.NoError(t, err, "init-volumes.sh must still be written")
+
+	devmExecPath := filepath.Join(tmp, ".devm", "scripts", "devm-exec.sh")
+	_, err = os.Stat(devmExecPath)
+	assert.NoError(t, err, "devm-exec.sh must still be written")
 }
