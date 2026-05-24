@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -uo pipefail
+cd "$(dirname "$0")"
+
+# --- two-layer cleanup: registry + EXIT trap ---
+export E2E_REGISTRY="$(mktemp -t devm-e2e-registry.XXXX)"
+sweep_registry() {
+    local exit_code=$?
+    if [ -s "$E2E_REGISTRY" ]; then
+        echo ""
+        echo "=== sweep_registry: cleaning leaked sandboxes/workspaces ==="
+        while IFS=$'\t' read -r sb ws; do
+            [ -z "$sb" ] && continue
+            echo "  sbx rm $sb  +  rm -rf $ws"
+            sbx rm "$sb" >/dev/null 2>&1 || true
+            rm -rf "$ws"   >/dev/null 2>&1 || true
+        done < "$E2E_REGISTRY"
+    fi
+    rm -f "$E2E_REGISTRY"
+    exit $exit_code
+}
+trap sweep_registry EXIT INT TERM
+
+# --- build devm binary into a temp location ---
+DEVM_BIN="${DEVM_BIN:-$(mktemp -d)/devm}"
+if ! (cd ../.. && go build -o "$DEVM_BIN" ./cmd/devm); then
+    echo "BUILD FAILED"
+    exit 1
+fi
+export DEVM_BIN
+
+# --- run tests serially (VM-bound; no parallelism in v1) ---
+fail_count=0
+pass_count=0
+declare -a failed
+
+for script in $(ls -1 [0-9]*.exp 2>/dev/null | sort); do
+    printf "=== %s ===\n" "$script"
+    if expect "$script"; then
+        pass_count=$((pass_count + 1))
+    else
+        fail_count=$((fail_count + 1))
+        failed+=("$script")
+    fi
+    echo ""
+done
+
+# --- report ---
+echo "==============================================="
+printf "Results: %d passed, %d failed\n" "$pass_count" "$fail_count"
+if [ $fail_count -gt 0 ]; then
+    printf "Failed:\n"
+    for f in "${failed[@]}"; do
+        printf "  - %s\n" "$f"
+    done
+    exit 1
+fi
+# sweep_registry fires on EXIT, with code 0 if we get here.
