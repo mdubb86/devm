@@ -69,6 +69,7 @@ type stateRunner struct {
 	mu       sync.Mutex
 	calls    [][]string
 	lsStatus string
+	lsAbsent bool
 	probeOut string
 	portsOut string
 }
@@ -82,6 +83,9 @@ func (r *stateRunner) Output(name string, args ...string) ([]byte, error) {
 	switch {
 	case strings.Contains(joined, "sbx ls"):
 		// State() expects columns: NAME IMAGE STATUS ...
+		if r.lsAbsent {
+			return []byte("SANDBOX  IMAGE  STATUS\n"), nil
+		}
 		return []byte("SANDBOX  IMAGE  STATUS\nx-sbx    img    " + r.lsStatus + "\n"), nil
 	case strings.Contains(joined, "ports") && strings.Contains(joined, "--json"):
 		if r.portsOut != "" {
@@ -139,7 +143,7 @@ func TestRunShellColdStartHappyPath(t *testing.T) {
 	repoRoot := t.TempDir()
 
 	runner := &stateRunner{
-		lsStatus: "stopped",
+		lsAbsent: true,                    // sandbox doesn't exist initially
 		probeOut: "27 bash pts/1 agent\n", // pty appears for the user shell
 	}
 
@@ -155,6 +159,7 @@ func TestRunShellColdStartHappyPath(t *testing.T) {
 	go func() {
 		time.Sleep(40 * time.Millisecond)
 		runner.mu.Lock()
+		runner.lsAbsent = false
 		runner.lsStatus = "running"
 		runner.mu.Unlock()
 	}()
@@ -185,6 +190,51 @@ func TestRunShellColdStartHappyPath(t *testing.T) {
 
 	// runCmd must have been killed after the user shell came up.
 	assert.True(t, runCmd.killed, "sbx run subprocess should have been killed once user shell came up")
+}
+
+func TestRunShellRestartUsesBareName(t *testing.T) {
+	repoRoot := t.TempDir()
+
+	// Sandbox already exists in stopped state (lsAbsent=false, lsStatus="stopped").
+	runner := &stateRunner{
+		lsStatus: "stopped",
+		probeOut: "27 bash pts/1 agent\n",
+	}
+
+	runCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd, userCmd}}
+
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		runner.mu.Lock()
+		runner.lsStatus = "running"
+		runner.mu.Unlock()
+	}()
+
+	deps := ShellDeps{
+		AnchorSpawner:  spawner,
+		UserSpawner:    spawner,
+		Runner:         runner,
+		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
+		WaitForRunning: 2 * time.Second,
+		WaitForPty:     2 * time.Second,
+		PollInterval:   20 * time.Millisecond,
+	}
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	// Restart path: bare `sbx run x-sbx`, no --kit, no --name.
+	runArgsJoined := strings.Join(spawner.started[0], " ")
+	assert.Contains(t, runArgsJoined, "sbx run x-sbx",
+		"restart path must use bare `sbx run <name>` form")
+	assert.NotContains(t, runArgsJoined, "--name",
+		"restart path must NOT pass --name (sbx rejects it for existing sandboxes)")
+	assert.NotContains(t, runArgsJoined, "--kit",
+		"restart path must NOT pass --kit (sbx rejects it for existing sandboxes)")
 }
 
 func TestRunShellWaitForRunningTimesOut(t *testing.T) {

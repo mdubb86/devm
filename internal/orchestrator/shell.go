@@ -71,16 +71,26 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	}
 
 	// Cold start.
-	// sbx run takes the kit's agent name as positional. --name forces sbx
-	// to use our sandbox name instead of its default <agent>-<workdir>
-	// naming, so our subsequent state checks find the sandbox by the name
-	// we expect.
-	runArgs := []string{
-		"run",
-		"--kit", filepath.Join(repoRoot, ".devm"),
-		"--name", sandboxName,
-		cfg.Project.ID,
-		repoRoot,
+	// sbx run's invocation differs depending on whether the sandbox
+	// already exists.
+	//
+	//   Create: sbx run --kit <dir> --name <name> <agent> <workspace>
+	//   Restart: sbx run <name>  (no flags — sbx rejects --name and
+	//     --kit for an existing sandbox)
+	//
+	// We branch on Exists() since IsRunning() was already false above
+	// (we wouldn't reach this code path if the sandbox were running).
+	var runArgs []string
+	if sb.Exists() {
+		runArgs = []string{"run", sandboxName}
+	} else {
+		runArgs = []string{
+			"run",
+			"--kit", filepath.Join(repoRoot, ".devm"),
+			"--name", sandboxName,
+			cfg.Project.ID,
+			repoRoot,
+		}
 	}
 	runCmd, err := d.AnchorSpawner.Start("sbx", runArgs...)
 	if err != nil {
