@@ -84,6 +84,13 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	return sb.String()
 }
 
+// yamlSingleQuoted wraps s in single quotes, escaping any inner single
+// quotes by doubling them. This is YAML's escape rule for single-quoted
+// scalars.
+func yamlSingleQuoted(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
 // writeInstallStep emits one install step entry. User defaults to "0" (root)
 // per the kit spec when not set in devm.yaml.
 func writeInstallStep(sb *strings.Builder, step schema.InstallCommand) {
@@ -91,9 +98,9 @@ func writeInstallStep(sb *strings.Builder, step schema.InstallCommand) {
 	if user == "" {
 		user = "0"
 	}
-	sb.WriteString(fmt.Sprintf("    - command: '%s'\n", step.Command))
+	sb.WriteString(fmt.Sprintf("    - command: %s\n", yamlSingleQuoted(step.Command)))
 	sb.WriteString(fmt.Sprintf("      user: %q\n", user))
 	if step.Description != "" {
-		sb.WriteString(fmt.Sprintf("      description: %s\n", step.Description))
+		sb.WriteString(fmt.Sprintf("      description: %s\n", yamlSingleQuoted(step.Description)))
 	}
 }

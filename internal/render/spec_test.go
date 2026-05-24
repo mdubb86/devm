@@ -119,3 +119,26 @@ func TestSpecYAMLRendersUserInstallSteps(t *testing.T) {
 	// Verify provision.sh is NOT referenced anywhere.
 	assert.NotContains(t, out, "provision.sh")
 }
+
+func TestSpecYAMLInstallCommandEscapesSingleQuote(t *testing.T) {
+	cfg := minimalConfig(t)
+	cfg.Install = []schema.InstallCommand{
+		{Command: `echo 'hello world'`, Description: `Prints a 'greeting'`},
+	}
+	out := SpecYAML(cfg, "/tmp/repo")
+	// Single quotes inside single-quoted YAML scalars are doubled.
+	assert.Contains(t, out, `command: 'echo ''hello world'''`)
+	assert.Contains(t, out, `description: 'Prints a ''greeting'''`)
+}
+
+func TestSpecYAMLInstallDescriptionWithColonStaysSafe(t *testing.T) {
+	// A description with ": " would otherwise be parsed as a YAML mapping.
+	cfg := minimalConfig(t)
+	cfg.Install = []schema.InstallCommand{
+		{Command: "true", Description: "Install jq: pretty printer"},
+	}
+	out := SpecYAML(cfg, "/tmp/repo")
+	// Wrapping in single quotes is sufficient (no inner single quotes
+	// to escape).
+	assert.Contains(t, out, `description: 'Install jq: pretty printer'`)
+}
