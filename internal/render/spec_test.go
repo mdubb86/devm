@@ -6,6 +6,7 @@ import (
 
 	"github.com/mtwaage/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSpecYAMLBasic(t *testing.T) {
@@ -141,4 +142,105 @@ func TestSpecYAMLInstallDescriptionWithColonStaysSafe(t *testing.T) {
 	// Wrapping in single quotes is sufficient (no inner single quotes
 	// to escape).
 	assert.Contains(t, out, `description: 'Install jq: pretty printer'`)
+}
+
+func TestSpecYAMLStartupOnlyInitVolumesWhenNoServiceStartup(t *testing.T) {
+	cfg := minimalConfig(t)
+	out := SpecYAML(cfg, "/tmp/repo")
+	assert.Contains(t, out, "init-volumes.sh")
+	startupSection := extractStartupSection(t, out)
+	// Only one startup step (the init-volumes one).
+	assert.Equal(t, 1, strings.Count(startupSection, "- command:"))
+}
+
+func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
+	cfg := minimalConfig(t)
+	cfg.Services = map[string]schema.Service{
+		"redis": {
+			Canonical: 6379,
+			Startup: []schema.StartupCommand{
+				{Command: []string{"redis-server", "/etc/redis.conf"}, Background: true, Description: "Start redis"},
+			},
+		},
+		"postgres": {
+			Canonical: 5432,
+			Startup: []schema.StartupCommand{
+				{Command: []string{"pg_ctl", "start"}, User: "postgres", Background: true, Description: "Start postgres step 1"},
+				{Command: []string{"pg_isready"}, Description: "Wait for postgres"},
+			},
+		},
+	}
+	out := SpecYAML(cfg, "/tmp/repo")
+	startupSection := extractStartupSection(t, out)
+
+	// 1 init-volumes + 2 postgres + 1 redis = 4 steps.
+	assert.Equal(t, 4, strings.Count(startupSection, "- command:"))
+
+	// Service sort order is alphabetical: postgres before redis.
+	pgIdx := strings.Index(startupSection, "Start postgres step 1")
+	pgWaitIdx := strings.Index(startupSection, "Wait for postgres")
+	redisIdx := strings.Index(startupSection, "Start redis")
+
+	require.Positive(t, pgIdx)
+	require.Positive(t, pgWaitIdx)
+	require.Positive(t, redisIdx)
+	assert.Less(t, pgIdx, pgWaitIdx, "postgres steps in declaration order within service")
+	assert.Less(t, pgWaitIdx, redisIdx, "postgres service comes before redis")
+
+	// Verify rendered shape includes background and the right user.
+	assert.Contains(t, startupSection, "background: true")
+	assert.Contains(t, startupSection, `user: "postgres"`)
+}
+
+func TestSpecYAMLStartupCommandArrayFormatting(t *testing.T) {
+	cfg := minimalConfig(t)
+	cfg.Services = map[string]schema.Service{
+		"web": {
+			Canonical: 3000,
+			Startup: []schema.StartupCommand{
+				{Command: []string{"node", "server.js", "--port", "3000"}},
+			},
+		},
+	}
+	out := SpecYAML(cfg, "/tmp/repo")
+	// Argv array as YAML flow sequence with single-quoted elements.
+	assert.Contains(t, out, `- command: ['node', 'server.js', '--port', '3000']`)
+}
+
+func TestSpecYAMLStartupDescriptionEscapesSingleQuote(t *testing.T) {
+	cfg := minimalConfig(t)
+	cfg.Services = map[string]schema.Service{
+		"worker": {
+			Startup: []schema.StartupCommand{
+				{Command: []string{"worker"}, Description: `Run 'background' worker`},
+			},
+		},
+	}
+	out := SpecYAML(cfg, "/tmp/repo")
+	assert.Contains(t, out, `description: 'Run ''background'' worker'`)
+}
+
+// extractStartupSection returns the contents of commands.startup (from
+// the "  startup:" line through end of that indented section).
+func extractStartupSection(t *testing.T, out string) string {
+	t.Helper()
+	startIdx := strings.Index(out, "  startup:")
+	require.NotEqual(t, -1, startIdx, "spec.yaml has no startup block")
+	rest := out[startIdx:]
+	lines := strings.Split(rest, "\n")
+	end := len(rest)
+	col := 0
+	for i, l := range lines {
+		if i == 0 {
+			col += len(l) + 1
+			continue
+		}
+		// Top-level YAML key starts with no whitespace.
+		if len(l) > 0 && l[0] != ' ' && l[0] != '\t' {
+			end = col
+			break
+		}
+		col += len(l) + 1
+	}
+	return rest[:end]
 }

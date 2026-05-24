@@ -74,12 +74,23 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 		sb.WriteString("\n")
 	}
 
-	// startup: built-in init-volumes (always first). Task 4 will append
-	// per-service startup commands here.
+	// startup: built-in init-volumes (always first), then per-service
+	// startup commands in service-sorted order. Declaration order is
+	// preserved within each service.
 	sb.WriteString("  startup:\n")
 	sb.WriteString("    - command: ['bash', '-c', 'exec bash \"$WORKSPACE_DIR/.devm/scripts/init-volumes.sh\"']\n")
 	sb.WriteString("      user: \"1000\"\n")
-	sb.WriteString("      description: Claim ext4 volume mounts for agent user\n\n")
+	sb.WriteString("      description: Claim ext4 volume mounts for agent user\n")
+
+	// Aggregate per-service startup steps in service-name-sorted order.
+	// `names` is the sorted service-names slice defined earlier in
+	// SpecYAML for the masks loop.
+	for _, name := range names {
+		for _, step := range cfg.Services[name].Startup {
+			writeStartupStep(&sb, step)
+		}
+	}
+	sb.WriteString("\n")
 
 	return sb.String()
 }
@@ -100,6 +111,30 @@ func writeInstallStep(sb *strings.Builder, step schema.InstallCommand) {
 	}
 	sb.WriteString(fmt.Sprintf("    - command: %s\n", yamlSingleQuoted(step.Command)))
 	sb.WriteString(fmt.Sprintf("      user: %q\n", user))
+	if step.Description != "" {
+		sb.WriteString(fmt.Sprintf("      description: %s\n", yamlSingleQuoted(step.Description)))
+	}
+}
+
+// writeStartupStep emits one startup step entry. Command is rendered as
+// a YAML flow sequence: ['arg0', 'arg1', ...]. User defaults to "1000"
+// per the kit spec.
+func writeStartupStep(sb *strings.Builder, step schema.StartupCommand) {
+	user := step.User
+	if user == "" {
+		user = "1000"
+	}
+	// Render argv as single-quoted flow sequence. Each element is
+	// escape-safe via yamlSingleQuoted.
+	quoted := make([]string, len(step.Command))
+	for i, a := range step.Command {
+		quoted[i] = yamlSingleQuoted(a)
+	}
+	sb.WriteString(fmt.Sprintf("    - command: [%s]\n", strings.Join(quoted, ", ")))
+	sb.WriteString(fmt.Sprintf("      user: %q\n", user))
+	if step.Background {
+		sb.WriteString("      background: true\n")
+	}
 	if step.Description != "" {
 		sb.WriteString(fmt.Sprintf("      description: %s\n", yamlSingleQuoted(step.Description)))
 	}
