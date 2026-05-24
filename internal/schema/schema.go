@@ -35,24 +35,9 @@ func (t Template) Validate() error {
 	return nil
 }
 
-type InstallCommand struct {
-	Command     string `yaml:"command"`
-	User        string `yaml:"user,omitempty"`
-	Description string `yaml:"description,omitempty"`
-}
-
-func (c InstallCommand) Validate() error {
-	if c.Command == "" {
-		return fmt.Errorf("install.command is required")
-	}
-	return nil
-}
-
 type StartupCommand struct {
-	Command     []string `yaml:"command"`
-	User        string   `yaml:"user,omitempty"`
-	Background  bool     `yaml:"background,omitempty"`
-	Description string   `yaml:"description,omitempty"`
+	Command    []string `yaml:"command"`
+	Background bool     `yaml:"background,omitempty"`
 }
 
 func (c StartupCommand) Validate() error {
@@ -140,7 +125,7 @@ type Config struct {
 	Network   Network            `yaml:"network,omitempty"`
 	Env       map[string]string  `yaml:"env,omitempty"`
 	Services  map[string]Service `yaml:"services,omitempty"`
-	Install   []InstallCommand   `yaml:"install,omitempty"`
+	Install   []string           `yaml:"install,omitempty"`
 }
 
 func (c Config) Validate() error {
@@ -148,8 +133,8 @@ func (c Config) Validate() error {
 		return err
 	}
 	for i, ic := range c.Install {
-		if err := ic.Validate(); err != nil {
-			return fmt.Errorf("install[%d]: %w", i, err)
+		if ic == "" {
+			return fmt.Errorf("install[%d] must not be empty", i)
 		}
 	}
 	names := make([]string, 0, len(c.Services))

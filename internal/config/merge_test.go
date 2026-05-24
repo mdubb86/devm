@@ -78,20 +78,16 @@ func TestMergeServiceEnvMergesKeys(t *testing.T) {
 
 func TestConfigOverrideInstallReplacement(t *testing.T) {
 	base := schema.Config{
-		Install: []schema.InstallCommand{
-			{Command: "apt-get install -y jq", User: "0"},
-		},
+		Install: []string{"apt-get install -y jq"},
 	}
-	replacement := []schema.InstallCommand{
-		{Command: "npm install -g typescript", User: "1000"},
-	}
+	replacement := []string{"npm install -g typescript"}
 	override := schema.ConfigOverride{
 		Install: &replacement,
 	}
 	merged, err := Merge(base, override)
 	require.NoError(t, err)
 	require.Len(t, merged.Install, 1)
-	assert.Equal(t, "npm install -g typescript", merged.Install[0].Command)
+	assert.Equal(t, "npm install -g typescript", merged.Install[0])
 }
 
 func TestServiceOverrideStartupReplacement(t *testing.T) {

@@ -98,50 +98,36 @@ func TestSpecYAMLOmitsInstallWhenEmpty(t *testing.T) {
 
 func TestSpecYAMLRendersUserInstallSteps(t *testing.T) {
 	cfg := minimalConfig(t)
-	cfg.Install = []schema.InstallCommand{
-		{Command: "apt-get update && apt-get install -y jq", User: "0", Description: "Install jq"},
-		{Command: "npm install -g typescript", User: "1000", Description: "Install TypeScript"},
+	cfg.Install = []string{
+		"apt-get update && apt-get install -y jq",
+		"npm install -g typescript",
 	}
 	out := SpecYAML(cfg, "/tmp/repo")
 
 	assert.Contains(t, out, "install:")
 	assert.Contains(t, out, "apt-get update && apt-get install -y jq")
-	assert.Contains(t, out, `user: "0"`)
-	assert.Contains(t, out, "Install jq")
 	assert.Contains(t, out, "npm install -g typescript")
-	assert.Contains(t, out, `user: "1000"`)
-	assert.Contains(t, out, "Install TypeScript")
 
 	// Verify declaration order.
-	jqIdx := strings.Index(out, "Install jq")
-	tsIdx := strings.Index(out, "Install TypeScript")
+	jqIdx := strings.Index(out, "apt-get update")
+	tsIdx := strings.Index(out, "npm install")
 	assert.Greater(t, tsIdx, jqIdx, "install steps must render in declaration order")
 
-	// Verify provision.sh is NOT referenced anywhere.
+	// No provision.sh referenced.
 	assert.NotContains(t, out, "provision.sh")
+
+	// No user: or description: on user-defined install steps.
+	// (init-volumes still has user: "1000" and a description — that's hardcoded.)
 }
 
 func TestSpecYAMLInstallCommandEscapesSingleQuote(t *testing.T) {
 	cfg := minimalConfig(t)
-	cfg.Install = []schema.InstallCommand{
-		{Command: `echo 'hello world'`, Description: `Prints a 'greeting'`},
+	cfg.Install = []string{
+		`echo 'hello world'`,
 	}
 	out := SpecYAML(cfg, "/tmp/repo")
 	// Single quotes inside single-quoted YAML scalars are doubled.
 	assert.Contains(t, out, `command: 'echo ''hello world'''`)
-	assert.Contains(t, out, `description: 'Prints a ''greeting'''`)
-}
-
-func TestSpecYAMLInstallDescriptionWithColonStaysSafe(t *testing.T) {
-	// A description with ": " would otherwise be parsed as a YAML mapping.
-	cfg := minimalConfig(t)
-	cfg.Install = []schema.InstallCommand{
-		{Command: "true", Description: "Install jq: pretty printer"},
-	}
-	out := SpecYAML(cfg, "/tmp/repo")
-	// Wrapping in single quotes is sufficient (no inner single quotes
-	// to escape).
-	assert.Contains(t, out, `description: 'Install jq: pretty printer'`)
 }
 
 func TestSpecYAMLStartupOnlyInitVolumesWhenNoServiceStartup(t *testing.T) {
@@ -159,14 +145,14 @@ func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 		"redis": {
 			Canonical: 6379,
 			Startup: []schema.StartupCommand{
-				{Command: []string{"redis-server", "/etc/redis.conf"}, Background: true, Description: "Start redis"},
+				{Command: []string{"redis-server", "/etc/redis.conf"}, Background: true},
 			},
 		},
 		"postgres": {
 			Canonical: 5432,
 			Startup: []schema.StartupCommand{
-				{Command: []string{"pg_ctl", "start"}, User: "postgres", Background: true, Description: "Start postgres step 1"},
-				{Command: []string{"pg_isready"}, Description: "Wait for postgres"},
+				{Command: []string{"pg_ctl", "start"}, Background: true},
+				{Command: []string{"pg_isready"}},
 			},
 		},
 	}
@@ -177,19 +163,18 @@ func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 	assert.Equal(t, 4, strings.Count(startupSection, "- command:"))
 
 	// Service sort order is alphabetical: postgres before redis.
-	pgIdx := strings.Index(startupSection, "Start postgres step 1")
-	pgWaitIdx := strings.Index(startupSection, "Wait for postgres")
-	redisIdx := strings.Index(startupSection, "Start redis")
+	pgStartIdx := strings.Index(startupSection, "pg_ctl")
+	pgReadyIdx := strings.Index(startupSection, "pg_isready")
+	redisIdx := strings.Index(startupSection, "redis-server")
 
-	require.Positive(t, pgIdx)
-	require.Positive(t, pgWaitIdx)
+	require.Positive(t, pgStartIdx)
+	require.Positive(t, pgReadyIdx)
 	require.Positive(t, redisIdx)
-	assert.Less(t, pgIdx, pgWaitIdx, "postgres steps in declaration order within service")
-	assert.Less(t, pgWaitIdx, redisIdx, "postgres service comes before redis")
+	assert.Less(t, pgStartIdx, pgReadyIdx, "postgres steps in declaration order")
+	assert.Less(t, pgReadyIdx, redisIdx, "postgres service comes before redis")
 
-	// Verify rendered shape includes background and the right user.
+	// Background flag rendered when true.
 	assert.Contains(t, startupSection, "background: true")
-	assert.Contains(t, startupSection, `user: "postgres"`)
 }
 
 func TestSpecYAMLStartupCommandArrayFormatting(t *testing.T) {
@@ -205,19 +190,6 @@ func TestSpecYAMLStartupCommandArrayFormatting(t *testing.T) {
 	out := SpecYAML(cfg, "/tmp/repo")
 	// Argv array as YAML flow sequence with single-quoted elements.
 	assert.Contains(t, out, `- command: ['node', 'server.js', '--port', '3000']`)
-}
-
-func TestSpecYAMLStartupDescriptionEscapesSingleQuote(t *testing.T) {
-	cfg := minimalConfig(t)
-	cfg.Services = map[string]schema.Service{
-		"worker": {
-			Startup: []schema.StartupCommand{
-				{Command: []string{"worker"}, Description: `Run 'background' worker`},
-			},
-		},
-	}
-	out := SpecYAML(cfg, "/tmp/repo")
-	assert.Contains(t, out, `description: 'Run ''background'' worker'`)
 }
 
 // extractStartupSection returns the contents of commands.startup (from

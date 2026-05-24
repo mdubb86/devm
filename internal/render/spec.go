@@ -68,8 +68,8 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	// install: emit only if user defined any install steps.
 	if len(cfg.Install) > 0 {
 		sb.WriteString("  install:\n")
-		for _, step := range cfg.Install {
-			writeInstallStep(&sb, step)
+		for _, cmd := range cfg.Install {
+			sb.WriteString(fmt.Sprintf("    - command: %s\n", yamlSingleQuoted(cmd)))
 		}
 		sb.WriteString("\n")
 	}
@@ -102,28 +102,9 @@ func yamlSingleQuoted(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
-// writeInstallStep emits one install step entry. User defaults to "0" (root)
-// per the kit spec when not set in devm.yaml.
-func writeInstallStep(sb *strings.Builder, step schema.InstallCommand) {
-	user := step.User
-	if user == "" {
-		user = "0"
-	}
-	sb.WriteString(fmt.Sprintf("    - command: %s\n", yamlSingleQuoted(step.Command)))
-	sb.WriteString(fmt.Sprintf("      user: %q\n", user))
-	if step.Description != "" {
-		sb.WriteString(fmt.Sprintf("      description: %s\n", yamlSingleQuoted(step.Description)))
-	}
-}
-
 // writeStartupStep emits one startup step entry. Command is rendered as
-// a YAML flow sequence: ['arg0', 'arg1', ...]. User defaults to "1000"
-// per the kit spec.
+// a YAML flow sequence: ['arg0', 'arg1', ...].
 func writeStartupStep(sb *strings.Builder, step schema.StartupCommand) {
-	user := step.User
-	if user == "" {
-		user = "1000"
-	}
 	// Render argv as single-quoted flow sequence. Each element is
 	// escape-safe via yamlSingleQuoted.
 	quoted := make([]string, len(step.Command))
@@ -131,11 +112,7 @@ func writeStartupStep(sb *strings.Builder, step schema.StartupCommand) {
 		quoted[i] = yamlSingleQuoted(a)
 	}
 	sb.WriteString(fmt.Sprintf("    - command: [%s]\n", strings.Join(quoted, ", ")))
-	sb.WriteString(fmt.Sprintf("      user: %q\n", user))
 	if step.Background {
 		sb.WriteString("      background: true\n")
-	}
-	if step.Description != "" {
-		sb.WriteString(fmt.Sprintf("      description: %s\n", yamlSingleQuoted(step.Description)))
 	}
 }

@@ -32,5 +32,5 @@ type ConfigOverride struct {
 	Network   *NetworkOverride           `yaml:"network,omitempty"`
 	Env       map[string]string          `yaml:"env,omitempty"`
 	Services  map[string]ServiceOverride `yaml:"services,omitempty"`
-	Install   *[]InstallCommand          `yaml:"install,omitempty"`
+	Install   *[]string                  `yaml:"install,omitempty"`
 }

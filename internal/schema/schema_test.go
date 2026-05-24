@@ -80,15 +80,6 @@ func TestConfigValidate(t *testing.T) {
 	assert.Error(t, bad.Validate(), "project.id required")
 }
 
-func TestInstallCommandRequiresCommand(t *testing.T) {
-	err := InstallCommand{}.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "command")
-
-	err = InstallCommand{Command: "apt-get install -y jq"}.Validate()
-	assert.NoError(t, err)
-}
-
 func TestStartupCommandRequiresNonEmptyCommand(t *testing.T) {
 	err := StartupCommand{}.Validate()
 	require.Error(t, err)
@@ -110,8 +101,8 @@ func TestConfigValidatesInstallSteps(t *testing.T) {
 	cfg := Config{
 		Project:   Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
 		BaseImage: BaseImage{Docker: false},
-		Install: []InstallCommand{
-			{Command: ""}, // invalid
+		Install: []string{
+			"", // invalid
 		},
 	}
 	err := cfg.Validate()
