@@ -22,6 +22,21 @@ proc e2e_devm_path {} {
 # All tests reference $::e2e_prompt_re instead of hardcoding the regex.
 set ::e2e_prompt_re {agent@\S+:\S+\$ ?}
 
+# Default expect timeout and global fallback handlers. Individual
+# `expect { ... }` blocks with explicit timeout/eof clauses override
+# these for that block; this block catches the "test author forgot
+# to write handlers" case so a missing pattern fails loudly instead
+# of silently passing.
+set timeout 30
+expect_after {
+    timeout {
+        e2e_fail "expect" "global timeout — no explicit timeout handler in expect block"
+    }
+    eof {
+        e2e_fail "expect" "global eof — no explicit eof handler in expect block"
+    }
+}
+
 # Append a registry entry: <sandbox>\t<workspace>\n
 proc _e2e_registry_add {sb ws} {
     if {![info exists ::env(E2E_REGISTRY)]} {
@@ -80,9 +95,7 @@ proc e2e_setup_workspace {slug {yaml_extra ""}} {
     # Set up Tcl exit handler for the per-test happy path.
     set ::e2e_active_sandbox $sandbox
     set ::e2e_active_workspace $workspace
-    # Tcl's `rename ... ""` can't intercept `exit`, so we use a global
-    # variable + an explicit cleanup call before normal exits.
-    # The exit trap is via the `exit` proc override below.
+    # Tracked in globals so the overridden 'exit' (below) can invoke cleanup.
 
     # Build workspace + minimal devm.yaml.
     exec mkdir -p $workspace
@@ -91,19 +104,10 @@ proc e2e_setup_workspace {slug {yaml_extra ""}} {
     puts -nonewline $fd $yaml
     close $fd
 
-    # Render .devm/.
+    # Render .devm/. devm reconcile reads cwd, so we cd in first.
+    cd $workspace
     if {[catch {exec [e2e_devm_path] reconcile} err]} {
-        # cd is required because devm reads cwd
-        if {[catch {
-            cd $workspace
-            exec [e2e_devm_path] reconcile
-        } err2]} {
-            e2e_fail "setup" "devm reconcile failed: $err2"
-        }
-    } else {
-        # Need to cd to workspace before reconcile; redo.
-        cd $workspace
-        exec [e2e_devm_path] reconcile
+        e2e_fail "setup" "devm reconcile failed: $err"
     }
 
     return [list $sandbox $workspace]
