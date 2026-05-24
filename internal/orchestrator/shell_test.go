@@ -191,19 +191,17 @@ func TestRunShellColdStartHappyPath(t *testing.T) {
 	// runCmd must have been killed after the user shell came up.
 	assert.True(t, runCmd.killed, "sbx run subprocess should have been killed once user shell came up")
 
-	// Verify the anchor-kill sbx exec was issued.
-	var sawAnchorKill bool
-	for _, c := range runner.calls {
-		joined := strings.Join(c, " ")
-		if strings.Contains(joined, "sbx exec") &&
-			strings.Contains(joined, "devm-anchor.pid") &&
-			strings.Contains(joined, "kill") {
-			sawAnchorKill = true
-			break
-		}
-	}
-	assert.True(t, sawAnchorKill,
-		"orchestrator must signal the in-VM anchor via the pidfile before killing the host run subprocess")
+	// Safety invariant: user shell must be spawned (anchor #2 added)
+	// before sbx run subprocess is killed (anchor #1 removed). Verify
+	// by checking spawner.started ordering and the killed flag.
+	require.GreaterOrEqual(t, len(spawner.started), 2,
+		"both anchors must be spawned (sbx run then sbx exec)")
+	assert.Contains(t, strings.Join(spawner.started[0], " "), "sbx run",
+		"anchor #1 (sbx run) must be spawned first")
+	assert.Contains(t, strings.Join(spawner.started[1], " "), "sbx exec",
+		"anchor #2 (sbx exec) must be spawned second, before killing anchor #1")
+	assert.True(t, runCmd.killed,
+		"anchor #1 must have been killed by end of orchestration")
 }
 
 func TestRunShellRestartUsesKitName(t *testing.T) {
@@ -258,19 +256,6 @@ func TestRunShellRestartUsesKitName(t *testing.T) {
 	expectedArgs := []string{"sbx", "run", "--kit", filepath.Join(repoRoot, ".devm"), "x-sbx"}
 	assert.Equal(t, expectedArgs, spawner.started[0],
 		"restart path argv should be exactly: sbx run --kit <kitdir> <sandbox-name>")
-
-	// Restart path also kills the anchor.
-	var sawAnchorKill bool
-	for _, c := range runner.calls {
-		joined := strings.Join(c, " ")
-		if strings.Contains(joined, "sbx exec") &&
-			strings.Contains(joined, "devm-anchor.pid") &&
-			strings.Contains(joined, "kill") {
-			sawAnchorKill = true
-			break
-		}
-	}
-	assert.True(t, sawAnchorKill, "restart path must also signal the in-VM anchor")
 }
 
 func TestRunShellWaitForRunningTimesOut(t *testing.T) {
@@ -291,6 +276,99 @@ func TestRunShellWaitForRunningTimesOut(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "never reached running")
 	assert.True(t, runCmd.killed, "run subprocess must be killed on failure")
+}
+
+// killHookCmd wraps stubCmd to run a side-effect when Kill is called,
+// letting tests deterministically tie state changes to the orchestrator
+// killing the anchor (avoids racy polling of stubCmd.killed).
+type killHookCmd struct {
+	*stubCmd
+	onKill func()
+}
+
+func (c *killHookCmd) Kill() error {
+	if c.onKill != nil {
+		c.onKill()
+	}
+	return c.stubCmd.Kill()
+}
+
+// TestRunShellSafetyInvariantViolation models the failure case where
+// sbx reports the sandbox as stopped right after the orchestrator
+// kills the sbx run anchor. The orchestrator must detect this and
+// return a clear error.
+func TestRunShellSafetyInvariantViolation(t *testing.T) {
+	repoRoot := t.TempDir()
+
+	runner := &stateRunner{
+		lsAbsent: true,
+		probeOut: "27 bash pts/1 agent\n",
+	}
+
+	runStub := &stubCmd{waitErr: make(chan error, 1)}
+	// Wrap so killRun() synchronously flips the sandbox to stopped,
+	// modeling the failure where the user session was lost during the
+	// anchor handoff.
+	runCmd := &killHookCmd{
+		stubCmd: runStub,
+		onKill: func() {
+			runner.mu.Lock()
+			runner.lsStatus = "stopped"
+			runner.mu.Unlock()
+		},
+	}
+	// userCmd blocks on Wait until killed by the orchestrator's invariant
+	// failure path. We do NOT pre-send to waitErr; the channel send from
+	// Kill() is what unblocks Wait and provides the happens-before
+	// ordering needed for the race-free exitRC read.
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+
+	// stubSpawner.cmdQueue holds *stubCmd; we hand out runCmd directly
+	// via a small custom spawner so we can return the wrapper.
+	spawner := &recordingSpawner{queue: []SpawnedCmd{runCmd, userCmd}}
+
+	// Flip state to running so cold start can complete.
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		runner.mu.Lock()
+		runner.lsAbsent = false
+		runner.lsStatus = "running"
+		runner.mu.Unlock()
+	}()
+
+	deps := ShellDeps{
+		AnchorSpawner:  spawner,
+		UserSpawner:    spawner,
+		Runner:         runner,
+		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
+		WaitForRunning: 2 * time.Second,
+		WaitForPty:     2 * time.Second,
+		PollInterval:   20 * time.Millisecond,
+	}
+	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "safety invariant violated",
+		"orchestrator must surface the invariant violation when sandbox stops during handoff")
+}
+
+// recordingSpawner is a minimal Spawner that hands out a pre-built
+// queue of SpawnedCmds (allowing wrappers like killHookCmd). Concurrency-safe.
+type recordingSpawner struct {
+	mu      sync.Mutex
+	started [][]string
+	queue   []SpawnedCmd
+}
+
+func (s *recordingSpawner) Start(name string, args ...string) (SpawnedCmd, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.started = append(s.started, append([]string{name}, args...))
+	if len(s.queue) == 0 {
+		return &stubCmd{waitErr: make(chan error, 1)}, nil
+	}
+	c := s.queue[0]
+	s.queue = s.queue[1:]
+	return c, nil
 }
 
 // Compile-time guards (so accidental refactors that delete a symbol

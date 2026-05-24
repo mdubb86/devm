@@ -27,13 +27,13 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	sb.WriteString("  aiFilename: CLAUDE.md\n")
 	sb.WriteString("  persistence: persistent\n")
 	sb.WriteString("  entrypoint:\n")
-	// The anchor writes its PID to /tmp/devm-anchor.pid so the host
-	// orchestrator can signal it to exit cleanly via:
-	//   sbx exec <name> sh -c 'kill "$(cat /tmp/devm-anchor.pid)"'
-	// `exec sleep infinity` replaces sh with sleep, so sleep inherits
-	// sh's PID — the value written to the pidfile remains valid for the
-	// lifetime of the anchor process.
-	sb.WriteString("    run: [\"sh\", \"-c\", \"echo $$ > /tmp/devm-anchor.pid; exec sleep infinity\"]\n\n")
+	// Entrypoint is shell-wrapped sleep infinity. The sh -c wrapping is
+	// load-bearing: empirically, sbx daemon propagates session-end cleanup
+	// to the in-VM process correctly for shell-wrapped entrypoints but
+	// not for bare commands (the bare ["sleep", "infinity"] form leaves
+	// the sleep lingering after killRun). exec replaces sh with sleep so
+	// no extra process is spawned.
+	sb.WriteString("    run: [\"sh\", \"-c\", \"exec sleep infinity\"]\n\n")
 
 	if len(cfg.Network.AllowedDomains) > 0 {
 		sb.WriteString("network:\n  allowedDomains:\n")

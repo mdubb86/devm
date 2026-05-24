@@ -64,14 +64,17 @@ func minimalConfig(t *testing.T) schema.Config {
 	}
 }
 
-func TestSpecYAMLEntrypointIsPidfileWrappedSleep(t *testing.T) {
+func TestSpecYAMLEntrypointIsShellWrappedSleep(t *testing.T) {
 	cfg := minimalConfig(t)
 	out := SpecYAML(cfg, "/tmp/repo")
-	// The entrypoint wraps sleep infinity in a sh -c that writes the
-	// anchor's PID to a known path. The orchestrator uses that pidfile
-	// to cleanly signal the anchor when bootstrap is done.
+	// The entrypoint wraps sleep infinity in `sh -c "exec ..."`. The
+	// shell-wrapping is required for sbx daemon to clean up the in-VM
+	// process when the host sbx run subprocess dies (bare commands
+	// leave the process lingering). exec means no extra sh process
+	// is spawned beyond startup.
 	assert.Contains(t, out, "entrypoint:")
-	assert.Contains(t, out, `run: ["sh", "-c", "echo $$ > /tmp/devm-anchor.pid; exec sleep infinity"]`)
+	assert.Contains(t, out, `run: ["sh", "-c", "exec sleep infinity"]`)
+	assert.NotContains(t, out, "devm-anchor.pid", "pidfile mechanism was dropped — it was a no-op")
 	assert.NotContains(t, out, "/usr/local/bin/devm-agent", "no devm-agent binary in this design")
 	assert.NotContains(t, out, "background: true", "no background daemons in this design")
 }

@@ -43,6 +43,33 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 	}
 }
 
+// SAFETY INVARIANT — anchor handoff
+//
+// sbx's "sandbox is running" state is driven by its session count
+// (the number of attached pty sessions: sbx run + sbx exec -it). When
+// the count drops to 0, sbx stops the container — killing all
+// in-VM processes, including the user's shell.
+//
+// On cold start we use TWO sessions transiently:
+//   1. sbx run subprocess (the anchor) — gives us a session while we
+//      do setup (waitForRunning, port reconcile).
+//   2. sbx exec -it bash — the user's actual shell.
+//
+// We MUST add session #2 BEFORE removing session #1. The orchestrator
+// does this in order:
+//   a. Spawn sbx run subprocess.
+//   b. Wait for sandbox running.
+//   c. Port reconcile.
+//   d. Spawn sbx exec -it bash (user shell).
+//   e. waitForUserPty: poll sb.Sessions() until user pty exists.
+//   f. killRun: kill the sbx run subprocess on host.
+//   g. Post-handoff check: confirm sandbox is still running (user
+//      session must be holding it alive). If not, the handoff failed.
+//
+// Between (a) and (f) the session count is ≥ 1. Between (d) and (f)
+// it is 2. After (f) it is 1 (user shell only). Sessions never reach 0
+// until the user exits.
+
 // RunShell implements `devm shell`. Returns the user shell's exit code
 // and a non-nil error only when an orchestration step itself failed
 // (lock acquire, sbx run timeout, port reconcile error, user shell
@@ -161,17 +188,24 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		return -1, err
 	}
 
-	// Anchor's job is done. Signal the in-VM anchor process to exit
-	// cleanly via the pidfile that the entrypoint wrapper wrote at
-	// startup. This frees pts/0 in the VM so subsequent Sessions()
-	// probes don't see a phantom session.
-	//
-	// Best-effort: ignore errors. killRun() below still runs as a
-	// host-side safety net in case the in-VM kill failed.
-	_, _ = d.Runner.Output("sbx", "exec", sandboxName, "sh", "-c",
-		"kill \"$(cat /tmp/devm-anchor.pid 2>/dev/null)\" 2>/dev/null")
-
+	// Anchor's job is done. Killing the sbx run subprocess causes sbx
+	// daemon to clean up the in-VM entrypoint process (shell-wrapped
+	// entrypoint is required for this cleanup to actually propagate;
+	// see internal/render/spec.go entrypoint comment).
 	killRun()
+
+	// Safety invariant: with sbx run anchor gone, the user shell's pty
+	// must be the only thing keeping the sandbox alive. If the sandbox
+	// is NOT running here, the handoff failed (session count dropped to
+	// 0). The user's shell session would also be dead at this point.
+	if !sb.IsRunning() {
+		_ = userCmd.Kill()
+		select {
+		case <-userDone:
+		case <-time.After(3 * time.Second):
+		}
+		return -1, fmt.Errorf("safety invariant violated: sandbox stopped during anchor cleanup; user session not preserved")
+	}
 
 	_ = lk.Release()
 	released = true
