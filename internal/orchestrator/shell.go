@@ -74,15 +74,24 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// sbx run's invocation differs depending on whether the sandbox
 	// already exists.
 	//
-	//   Create: sbx run --kit <dir> --name <name> <agent> <workspace>
-	//   Restart: sbx run <name>  (no flags — sbx rejects --name and
-	//     --kit for an existing sandbox)
+	//   Create:  sbx run --kit <dir> --name <name> <agent> <workspace>
+	//   Restart: sbx run --kit <dir> <name>  (--kit so sbx can resolve
+	//     our custom agent definition; sbx doesn't remember it across
+	//     restarts. NO --name — sbx rejects it for existing sandboxes.)
 	//
 	// We branch on Exists() since IsRunning() was already false above
 	// (we wouldn't reach this code path if the sandbox were running).
 	var runArgs []string
 	if sb.Exists() {
-		runArgs = []string{"run", sandboxName}
+		// Restart of existing sandbox: include --kit so sbx can resolve
+		// our custom kit's agent definition (sbx doesn't remember it
+		// across restarts). DO NOT pass --name here; sbx rejects it for
+		// existing sandboxes.
+		runArgs = []string{
+			"run",
+			"--kit", filepath.Join(repoRoot, ".devm"),
+			sandboxName,
+		}
 	} else {
 		runArgs = []string{
 			"run",

@@ -192,7 +192,7 @@ func TestRunShellColdStartHappyPath(t *testing.T) {
 	assert.True(t, runCmd.killed, "sbx run subprocess should have been killed once user shell came up")
 }
 
-func TestRunShellRestartUsesBareName(t *testing.T) {
+func TestRunShellRestartUsesKitName(t *testing.T) {
 	repoRoot := t.TempDir()
 
 	// Sandbox already exists in stopped state (lsAbsent=false, lsStatus="stopped").
@@ -227,14 +227,23 @@ func TestRunShellRestartUsesBareName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 
-	// Restart path: bare `sbx run x-sbx`, no --kit, no --name.
+	// Restart path: `sbx run --kit <dir> <sandbox-name>` — kit provides
+	// the agent definition (sbx doesn't remember across restarts); no
+	// --name (sbx rejects it for existing sandboxes).
 	runArgsJoined := strings.Join(spawner.started[0], " ")
-	assert.Contains(t, runArgsJoined, "sbx run x-sbx",
-		"restart path must use bare `sbx run <name>` form")
+	assert.Contains(t, runArgsJoined, "sbx run --kit",
+		"restart path must pass --kit so sbx can resolve the custom agent")
+	assert.Contains(t, runArgsJoined, "x-sbx",
+		"restart path must include the sandbox name as positional")
 	assert.NotContains(t, runArgsJoined, "--name",
 		"restart path must NOT pass --name (sbx rejects it for existing sandboxes)")
-	assert.NotContains(t, runArgsJoined, "--kit",
-		"restart path must NOT pass --kit (sbx rejects it for existing sandboxes)")
+	// Also: agent positional and workspace positional are NOT passed on
+	// restart — sbx infers them from the sandbox name + loaded kit.
+	// We can't easily assert their absence without false positives, but
+	// asserting the exact arg count is a clean substitute:
+	expectedArgs := []string{"sbx", "run", "--kit", filepath.Join(repoRoot, ".devm"), "x-sbx"}
+	assert.Equal(t, expectedArgs, spawner.started[0],
+		"restart path argv should be exactly: sbx run --kit <kitdir> <sandbox-name>")
 }
 
 func TestRunShellWaitForRunningTimesOut(t *testing.T) {
