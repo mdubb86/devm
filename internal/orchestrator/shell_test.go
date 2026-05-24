@@ -176,6 +176,13 @@ func TestRunShellColdStartHappyPath(t *testing.T) {
 	assert.Contains(t, strings.Join(spawner.started[0], " "), "sbx run")
 	assert.Contains(t, strings.Join(spawner.started[1], " "), "sbx exec")
 
+	// Verify --name flag is passed with the expected sandbox name.
+	runArgsJoined := strings.Join(spawner.started[0], " ")
+	assert.Contains(t, runArgsJoined, "--name x-sbx",
+		"sbx run must use --name so the actual sandbox name matches what we look up later")
+	assert.Contains(t, runArgsJoined, " x ", // agent positional (project.ID from minimalCfg)
+		"agent positional must be cfg.Project.ID")
+
 	// runCmd must have been killed after the user shell came up.
 	assert.True(t, runCmd.killed, "sbx run subprocess should have been killed once user shell came up")
 }

@@ -71,7 +71,17 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	}
 
 	// Cold start.
-	runArgs := []string{"run", "--kit", filepath.Join(repoRoot, ".devm"), sandboxName, repoRoot}
+	// sbx run takes the kit's agent name as positional. --name forces sbx
+	// to use our sandbox name instead of its default <agent>-<workdir>
+	// naming, so our subsequent state checks find the sandbox by the name
+	// we expect.
+	runArgs := []string{
+		"run",
+		"--kit", filepath.Join(repoRoot, ".devm"),
+		"--name", sandboxName,
+		cfg.Project.ID,
+		repoRoot,
+	}
 	runCmd, err := d.AnchorSpawner.Start("sbx", runArgs...)
 	if err != nil {
 		return -1, fmt.Errorf("spawn sbx run: %w", err)
