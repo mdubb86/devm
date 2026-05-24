@@ -27,7 +27,13 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	sb.WriteString("  aiFilename: CLAUDE.md\n")
 	sb.WriteString("  persistence: persistent\n")
 	sb.WriteString("  entrypoint:\n")
-	sb.WriteString("    run: [\"sleep\", \"infinity\"]\n\n")
+	// The anchor writes its PID to /tmp/devm-anchor.pid so the host
+	// orchestrator can signal it to exit cleanly via:
+	//   sbx exec <name> sh -c 'kill "$(cat /tmp/devm-anchor.pid)"'
+	// `exec sleep infinity` replaces sh with sleep, so sleep inherits
+	// sh's PID — the value written to the pidfile remains valid for the
+	// lifetime of the anchor process.
+	sb.WriteString("    run: [\"sh\", \"-c\", \"echo $$ > /tmp/devm-anchor.pid; exec sleep infinity\"]\n\n")
 
 	if len(cfg.Network.AllowedDomains) > 0 {
 		sb.WriteString("network:\n  allowedDomains:\n")

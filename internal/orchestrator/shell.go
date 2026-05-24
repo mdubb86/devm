@@ -161,7 +161,16 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		return -1, err
 	}
 
-	// Anchor's job is done — kill it. User pty keeps the sandbox alive.
+	// Anchor's job is done. Signal the in-VM anchor process to exit
+	// cleanly via the pidfile that the entrypoint wrapper wrote at
+	// startup. This frees pts/0 in the VM so subsequent Sessions()
+	// probes don't see a phantom session.
+	//
+	// Best-effort: ignore errors. killRun() below still runs as a
+	// host-side safety net in case the in-VM kill failed.
+	_, _ = d.Runner.Output("sbx", "exec", sandboxName, "sh", "-c",
+		"kill \"$(cat /tmp/devm-anchor.pid 2>/dev/null)\" 2>/dev/null")
+
 	killRun()
 
 	_ = lk.Release()

@@ -190,6 +190,20 @@ func TestRunShellColdStartHappyPath(t *testing.T) {
 
 	// runCmd must have been killed after the user shell came up.
 	assert.True(t, runCmd.killed, "sbx run subprocess should have been killed once user shell came up")
+
+	// Verify the anchor-kill sbx exec was issued.
+	var sawAnchorKill bool
+	for _, c := range runner.calls {
+		joined := strings.Join(c, " ")
+		if strings.Contains(joined, "sbx exec") &&
+			strings.Contains(joined, "devm-anchor.pid") &&
+			strings.Contains(joined, "kill") {
+			sawAnchorKill = true
+			break
+		}
+	}
+	assert.True(t, sawAnchorKill,
+		"orchestrator must signal the in-VM anchor via the pidfile before killing the host run subprocess")
 }
 
 func TestRunShellRestartUsesKitName(t *testing.T) {
@@ -244,6 +258,19 @@ func TestRunShellRestartUsesKitName(t *testing.T) {
 	expectedArgs := []string{"sbx", "run", "--kit", filepath.Join(repoRoot, ".devm"), "x-sbx"}
 	assert.Equal(t, expectedArgs, spawner.started[0],
 		"restart path argv should be exactly: sbx run --kit <kitdir> <sandbox-name>")
+
+	// Restart path also kills the anchor.
+	var sawAnchorKill bool
+	for _, c := range runner.calls {
+		joined := strings.Join(c, " ")
+		if strings.Contains(joined, "sbx exec") &&
+			strings.Contains(joined, "devm-anchor.pid") &&
+			strings.Contains(joined, "kill") {
+			sawAnchorKill = true
+			break
+		}
+	}
+	assert.True(t, sawAnchorKill, "restart path must also signal the in-VM anchor")
 }
 
 func TestRunShellWaitForRunningTimesOut(t *testing.T) {

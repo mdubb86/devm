@@ -64,18 +64,16 @@ func minimalConfig(t *testing.T) schema.Config {
 	}
 }
 
-func TestSpecYAMLEntrypointIsSleepInfinity(t *testing.T) {
+func TestSpecYAMLEntrypointIsPidfileWrappedSleep(t *testing.T) {
 	cfg := minimalConfig(t)
 	out := SpecYAML(cfg, "/tmp/repo")
-	// agent.entrypoint.run holds the sbx run session's pty open while
-	// the host orchestrator does setup. sleep ignores stdin so the
-	// process survives stdin redirection from our subprocess.
+	// The entrypoint wraps sleep infinity in a sh -c that writes the
+	// anchor's PID to a known path. The orchestrator uses that pidfile
+	// to cleanly signal the anchor when bootstrap is done.
 	assert.Contains(t, out, "entrypoint:")
-	assert.Contains(t, out, `run: ["sleep", "infinity"]`)
-	assert.NotContains(t, out, "/usr/local/bin/devm-agent",
-		"the devm-agent binary has been removed; entrypoint must be sleep infinity")
-	assert.NotContains(t, out, "background: true",
-		"no background daemons in this design")
+	assert.Contains(t, out, `run: ["sh", "-c", "echo $$ > /tmp/devm-anchor.pid; exec sleep infinity"]`)
+	assert.NotContains(t, out, "/usr/local/bin/devm-agent", "no devm-agent binary in this design")
+	assert.NotContains(t, out, "background: true", "no background daemons in this design")
 }
 
 func TestSpecYAMLDoesNotInstallAgentBinary(t *testing.T) {
