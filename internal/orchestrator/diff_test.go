@@ -85,6 +85,33 @@ func TestComputePortChanges_Deterministic(t *testing.T) {
 	assert.Equal(t, "zeta", c[1].Service)
 }
 
+func TestComputeNetworkChanges_Add(t *testing.T) {
+	old := schema.Config{Network: schema.Network{AllowedDomains: []string{"a.com"}}}
+	new := schema.Config{Network: schema.Network{AllowedDomains: []string{"a.com", "b.com"}}}
+	changes := ComputeNetworkChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindNetworkAdd, changes[0].Kind)
+	assert.Equal(t, "b.com", changes[0].Key)
+}
+
+func TestComputeNetworkChanges_Remove(t *testing.T) {
+	old := schema.Config{Network: schema.Network{AllowedDomains: []string{"a.com", "b.com"}}}
+	new := schema.Config{Network: schema.Network{AllowedDomains: []string{"a.com"}}}
+	changes := ComputeNetworkChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindNetworkRemove, changes[0].Kind)
+	assert.Equal(t, "b.com", changes[0].Key)
+}
+
+func TestComputeNetworkChanges_Deterministic(t *testing.T) {
+	old := schema.Config{}
+	new := schema.Config{Network: schema.Network{AllowedDomains: []string{"z.com", "a.com"}}}
+	c := ComputeNetworkChanges(old, new)
+	assert.Len(t, c, 2)
+	assert.Equal(t, "a.com", c[0].Key)
+	assert.Equal(t, "z.com", c[1].Key)
+}
+
 func TestRecreateFlavorPickMax(t *testing.T) {
 	// No changes → live only
 	assert.Equal(t, FlavorLiveOnly, RecreateFlavor(nil))
