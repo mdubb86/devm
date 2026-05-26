@@ -3,8 +3,13 @@ package orchestrator
 import (
 	"testing"
 
+	"github.com/mtwaage/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 )
+
+func cfgWithServices(svcs map[string]schema.Service) schema.Config {
+	return schema.Config{Services: svcs}
+}
 
 func TestBucketStrings(t *testing.T) {
 	assert.Equal(t, "live", BucketLive.String())
@@ -31,6 +36,53 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketTeardownShell, KindMaskChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindImageChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindIdentityChange.Bucket())
+}
+
+func TestComputePortChanges_Add(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{})
+	new := cfgWithServices(map[string]schema.Service{"api": {Canonical: 8080}})
+	changes := ComputePortChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindPortAdd, changes[0].Kind)
+	assert.Equal(t, "api", changes[0].Service)
+	assert.Equal(t, "8080", changes[0].Key)
+	assert.Equal(t, "", changes[0].Old)
+	assert.Equal(t, "8080", changes[0].New)
+}
+
+func TestComputePortChanges_Remove(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{"api": {Canonical: 8080}})
+	new := cfgWithServices(map[string]schema.Service{})
+	changes := ComputePortChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindPortRemove, changes[0].Kind)
+}
+
+func TestComputePortChanges_Change(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{"api": {Canonical: 8080}})
+	new := cfgWithServices(map[string]schema.Service{"api": {Canonical: 9090}})
+	changes := ComputePortChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindPortChange, changes[0].Kind)
+	assert.Equal(t, "8080", changes[0].Old)
+	assert.Equal(t, "9090", changes[0].New)
+}
+
+func TestComputePortChanges_NoOp(t *testing.T) {
+	cfg := cfgWithServices(map[string]schema.Service{"api": {Canonical: 8080}})
+	assert.Empty(t, ComputePortChanges(cfg, cfg))
+}
+
+func TestComputePortChanges_Deterministic(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{})
+	new := cfgWithServices(map[string]schema.Service{
+		"zeta":  {Canonical: 3000},
+		"alpha": {Canonical: 4000},
+	})
+	c := ComputePortChanges(old, new)
+	assert.Len(t, c, 2)
+	assert.Equal(t, "alpha", c[0].Service)
+	assert.Equal(t, "zeta", c[1].Service)
 }
 
 func TestRecreateFlavorPickMax(t *testing.T) {

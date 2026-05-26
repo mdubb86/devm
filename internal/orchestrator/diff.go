@@ -1,5 +1,12 @@
 package orchestrator
 
+import (
+	"sort"
+	"strconv"
+
+	"github.com/mtwaage/devm/internal/schema"
+)
+
 // Bucket categorises how invasive a change is to apply.
 type Bucket int
 
@@ -97,4 +104,53 @@ func RecreateFlavor(changes []Change) FlavorKind {
 		}
 	}
 	return max
+}
+
+// ComputePortChanges returns diffs for service canonical ports between
+// old and new configs, sorted by service name for determinism.
+func ComputePortChanges(old, new schema.Config) []Change {
+	names := unionServiceNames(old.Services, new.Services)
+	var changes []Change
+	for _, name := range names {
+		oldPort := old.Services[name].Canonical
+		newPort := new.Services[name].Canonical
+		if oldPort == newPort {
+			continue
+		}
+		switch {
+		case oldPort == 0 && newPort != 0:
+			changes = append(changes, Change{
+				Kind: KindPortAdd, Service: name,
+				Key: strconv.Itoa(newPort), New: strconv.Itoa(newPort),
+			})
+		case oldPort != 0 && newPort == 0:
+			changes = append(changes, Change{
+				Kind: KindPortRemove, Service: name,
+				Key: strconv.Itoa(oldPort), Old: strconv.Itoa(oldPort),
+			})
+		default:
+			changes = append(changes, Change{
+				Kind: KindPortChange, Service: name,
+				Key: strconv.Itoa(newPort),
+				Old: strconv.Itoa(oldPort), New: strconv.Itoa(newPort),
+			})
+		}
+	}
+	return changes
+}
+
+func unionServiceNames(a, b map[string]schema.Service) []string {
+	set := make(map[string]struct{})
+	for k := range a {
+		set[k] = struct{}{}
+	}
+	for k := range b {
+		set[k] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
