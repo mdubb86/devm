@@ -1,0 +1,65 @@
+#!/usr/bin/env expect -f
+source [file dirname [info script]]/lib/common.exp
+
+set timeout 120
+set test_name "01_cold_start"
+
+# Workspace with one install step that touches a marker file.
+set yaml_extra "install:\n  - \"touch /tmp/install-marker\"\n"
+lassign [e2e_setup_workspace "cold-start" $yaml_extra] sb ws
+
+# devm reads cwd; ensure we're in the workspace.
+cd $ws
+
+# Spawn `devm shell`. Cold create → bash prompt.
+spawn [e2e_devm_path] shell
+
+# Wait for bash prompt — sbx-templates:shell produces `agent@<host>:<dir>$`.
+expect {
+    -re $::e2e_prompt_re {
+        # OK
+    }
+    timeout {
+        e2e_fail $test_name "never saw bash prompt within $timeout s"
+    }
+    eof {
+        e2e_fail $test_name "spawn exited before bash prompt appeared"
+    }
+}
+
+# Verify the install marker exists (proves install ran).
+send "ls /tmp/install-marker\r"
+expect {
+    -re {/tmp/install-marker\r} {
+        # OK — echo of the path means the file exists
+    }
+    -re {No such file} {
+        e2e_fail $test_name "install marker missing"
+    }
+    timeout {
+        e2e_fail $test_name "no response to ls"
+    }
+}
+
+# Wait for next prompt.
+expect {
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "no prompt after ls" }
+    eof { e2e_fail $test_name "shell died after ls" }
+}
+
+# Exit bash. devm shell should return.
+send "exit\r"
+expect {
+    eof {
+        # OK
+    }
+    timeout {
+        e2e_fail $test_name "devm shell did not exit within $timeout s"
+    }
+}
+
+# Verify sandbox transitions to stopped within ~10s.
+e2e_assert_sandbox_state $sb "stopped"
+
+e2e_pass $test_name
