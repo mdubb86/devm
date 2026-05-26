@@ -34,6 +34,20 @@ func (s *scriptedRunner) Output(name string, args ...string) ([]byte, error) {
 	}
 	return []byte(""), nil
 }
+func (s *scriptedRunner) Run(name string, args ...string) error {
+	all := append([]string{name}, args...)
+	s.calls = append(s.calls, all)
+	joined := strings.Join(all, " ")
+	for sub, e := range s.failOn {
+		if strings.Contains(joined, sub) {
+			return e
+		}
+	}
+	return nil
+}
+func (s *scriptedRunner) RunStdin(stdin, name string, args ...string) error {
+	return s.Run(name, args...)
+}
 
 func cfgWith(services map[string]schema.Service, portOffset int) schema.Config {
 	return schema.Config{

@@ -10,6 +10,8 @@ import (
 // can mock subprocess output.
 type Runner interface {
 	Output(name string, args ...string) ([]byte, error)
+	Run(name string, args ...string) error
+	RunStdin(stdin, name string, args ...string) error
 }
 
 // DefaultRunner runs commands via os/exec.
@@ -17,6 +19,16 @@ type DefaultRunner struct{}
 
 func (DefaultRunner) Output(name string, args ...string) ([]byte, error) {
 	return exec.Command(name, args...).Output()
+}
+
+func (DefaultRunner) Run(name string, args ...string) error {
+	return exec.Command(name, args...).Run()
+}
+
+func (DefaultRunner) RunStdin(stdin, name string, args ...string) error {
+	c := exec.Command(name, args...)
+	c.Stdin = strings.NewReader(stdin)
+	return c.Run()
 }
 
 // Sandbox is a thin wrapper around the `sbx` CLI scoped to one sandbox name.

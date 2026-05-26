@@ -14,6 +14,8 @@ type mockRunner struct {
 func (m mockRunner) Output(name string, args ...string) ([]byte, error) {
 	return []byte(m.output), m.err
 }
+func (m mockRunner) Run(name string, args ...string) error             { return nil }
+func (m mockRunner) RunStdin(stdin, name string, args ...string) error { return nil }
 
 func TestStateRunning(t *testing.T) {
 	s := &Sandbox{

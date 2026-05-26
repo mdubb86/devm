@@ -98,6 +98,15 @@ func (r *stateRunner) Output(name string, args ...string) ([]byte, error) {
 	}
 	return []byte(""), nil
 }
+func (r *stateRunner) Run(name string, args ...string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, append([]string{name}, args...))
+	return nil
+}
+func (r *stateRunner) RunStdin(stdin, name string, args ...string) error {
+	return r.Run(name, args...)
+}
 
 func minimalCfg() schema.Config {
 	return schema.Config{

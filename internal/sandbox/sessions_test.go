@@ -20,6 +20,8 @@ func (a *alwaysRunner) Output(name string, args ...string) ([]byte, error) {
 	}
 	return a.out, nil
 }
+func (a *alwaysRunner) Run(name string, args ...string) error             { return nil }
+func (a *alwaysRunner) RunStdin(stdin, name string, args ...string) error { return nil }
 
 func TestSessionsParsesMultiplePts(t *testing.T) {
 	probeOutput := "" +
