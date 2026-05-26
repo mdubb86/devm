@@ -1,0 +1,38 @@
+#!/usr/bin/env expect -f
+source [file dirname [info script]]/lib/common.exp
+
+set timeout 120
+set test_name "06_teardown_with_yes"
+
+lassign [e2e_setup_workspace "teardown-yes"] sb ws
+cd $ws
+
+spawn [e2e_devm_path] shell
+set shell_id $spawn_id
+expect {
+    -i $shell_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "shell never reached prompt" }
+    eof { e2e_fail $test_name "shell exited before prompt" }
+}
+
+spawn [e2e_devm_path] teardown --yes
+set td_id $spawn_id
+
+expect {
+    -i $td_id
+    -re "\\\[y/N\\\]:" {
+        e2e_fail $test_name "teardown --yes incorrectly prompted"
+    }
+    eof { }
+    timeout { e2e_fail $test_name "teardown --yes did not exit" }
+}
+
+expect {
+    -i $shell_id
+    eof { }
+    timeout { e2e_fail $test_name "user shell did not exit after teardown --yes" }
+}
+e2e_assert_sandbox_absent $sb
+
+e2e_pass $test_name
