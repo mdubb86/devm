@@ -61,7 +61,8 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 //   b. Wait for sandbox running.
 //   c. Port reconcile.
 //   d. Spawn sbx exec -it bash (user shell).
-//   e. waitForUserPty: poll sb.Sessions() until user pty exists.
+//   e. Brief settle delay so the host-side sbx exec has time to
+//      register its session with the sbx daemon.
 //   f. killRun: kill the sbx run subprocess on host.
 //   g. Post-handoff check: confirm sandbox is still running (user
 //      session must be holding it alive). If not, the handoff failed.
@@ -166,8 +167,8 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		return -1, fmt.Errorf("spawn user shell: %w", err)
 	}
 
-	// Reap userCmd in the background so a failure during waitForUserPty
-	// (or anywhere before the final wait) doesn't leak the process.
+	// Reap userCmd in the background so a failure during the settle
+	// delay or post-killRun safety check doesn't leak the process.
 	type userResult struct {
 		rc  int
 		err error
@@ -258,47 +259,6 @@ func waitForRunning(ctx context.Context, sb *sandbox.Sandbox, runDone <-chan err
 		case <-ticker.C:
 			if time.Now().After(deadline) {
 				return fmt.Errorf("sandbox %s never reached running within %s", sb.Name, timeout)
-			}
-		}
-	}
-}
-
-// waitForUserPty was the original gate before killRun. It polled
-// sb.Sessions() and returned as soon as ANY pty session was visible
-// in-VM. With the previous entrypoint shape (sleep with pts/0 fd0),
-// it always returned immediately on the anchor sleep — a false
-// positive. Once the entrypoint redirect was added the sleep no
-// longer satisfies the probe, and the user's bash takes long enough
-// to appear in /proc that this would consistently time out.
-//
-// Replaced by a fixed settle delay inline in RunShell: the host-side
-// sbx exec registers a session with the daemon almost instantly, so
-// a short delay is enough to safely run killRun. The post-killRun
-// sb.IsRunning() check is the actual safety gate; if userCmd hasn't
-// registered by then, sandbox stops and we report the failure.
-//
-// Kept as a no-op dead reference for one release to make the
-// behaviour change easy to find in git log; remove after.
-func waitForUserPty(ctx context.Context, sb *sandbox.Sandbox, runDone <-chan error, timeout, poll time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(poll)
-	defer ticker.Stop()
-	for {
-		sessions, err := sb.Sessions()
-		if err == nil && len(sessions) > 0 {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case err := <-runDone:
-			if err != nil {
-				return fmt.Errorf("sbx run exited before user pty appeared: %w", err)
-			}
-			return fmt.Errorf("sbx run exited before user pty appeared")
-		case <-ticker.C:
-			if time.Now().After(deadline) {
-				return fmt.Errorf("user shell pty never appeared within %s", timeout)
 			}
 		}
 	}
