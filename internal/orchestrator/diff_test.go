@@ -112,6 +112,83 @@ func TestComputeNetworkChanges_Deterministic(t *testing.T) {
 	assert.Equal(t, "z.com", c[1].Key)
 }
 
+func TestComputeEnvChanges(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {Env: map[string]string{"LOG_LEVEL": "info", "STALE": "1"}},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {Env: map[string]string{"LOG_LEVEL": "debug", "NEW": "yes"}},
+	})
+	changes := ComputeAllChanges(old, new)
+	var kinds []ChangeKind
+	for _, c := range changes {
+		kinds = append(kinds, c.Kind)
+	}
+	assert.Contains(t, kinds, KindEnvAdd)
+	assert.Contains(t, kinds, KindEnvRemove)
+	assert.Contains(t, kinds, KindEnvChange)
+}
+
+func TestComputeStartupChanges(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {Startup: []schema.StartupCommand{{Command: []string{"echo", "a"}}}},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {Startup: []schema.StartupCommand{{Command: []string{"echo", "b"}}}},
+	})
+	changes := ComputeAllChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindStartupChange, changes[0].Kind)
+}
+
+func TestComputeInstallChanges(t *testing.T) {
+	old := schema.Config{Install: []string{"apt-get install -y jq"}}
+	new := schema.Config{Install: []string{"apt-get install -y jq curl"}}
+	changes := ComputeAllChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindInstallChange, changes[0].Kind)
+}
+
+func TestComputeMaskChanges(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"db": {Masks: []schema.Mask{{Path: "data", Size: "10G"}}},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"db": {Masks: []schema.Mask{{Path: "data", Size: "20G"}}},
+	})
+	changes := ComputeAllChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindMaskChange, changes[0].Kind)
+}
+
+func TestComputeImageChange(t *testing.T) {
+	old := schema.Config{BaseImage: schema.BaseImage{Docker: false}}
+	new := schema.Config{BaseImage: schema.BaseImage{Docker: true}}
+	changes := ComputeAllChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindImageChange, changes[0].Kind)
+}
+
+func TestComputeIdentityChange(t *testing.T) {
+	old := schema.Config{Project: schema.Project{ID: "p1", SandboxName: "s1"}}
+	new := schema.Config{Project: schema.Project{ID: "p2", SandboxName: "s1"}}
+	changes := ComputeAllChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindIdentityChange, changes[0].Kind)
+}
+
+func TestComputeAllChanges_NoOp(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Services: map[string]schema.Service{
+			"api": {Canonical: 8080, Env: map[string]string{"X": "y"}},
+		},
+		Network: schema.Network{AllowedDomains: []string{"a.com"}},
+		Install: []string{"true"},
+	}
+	assert.Empty(t, ComputeAllChanges(cfg, cfg))
+}
+
 func TestRecreateFlavorPickMax(t *testing.T) {
 	// No changes → live only
 	assert.Equal(t, FlavorLiveOnly, RecreateFlavor(nil))

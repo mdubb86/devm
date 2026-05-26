@@ -171,6 +171,147 @@ func ComputeNetworkChanges(old, new schema.Config) []Change {
 	return changes
 }
 
+// ComputeAllChanges returns the full set of diffs between old and new
+// configs. Order: ports, network, env (per service), startup (per service),
+// install, masks (per service), image, identity. Within each section,
+// service names are sorted alphabetically for determinism.
+func ComputeAllChanges(old, new schema.Config) []Change {
+	var out []Change
+	out = append(out, ComputePortChanges(old, new)...)
+	out = append(out, ComputeNetworkChanges(old, new)...)
+	out = append(out, computeEnvChanges(old, new)...)
+	out = append(out, computeStartupChanges(old, new)...)
+	out = append(out, computeInstallChanges(old, new)...)
+	out = append(out, computeMaskChanges(old, new)...)
+	out = append(out, computeImageChange(old, new)...)
+	out = append(out, computeIdentityChange(old, new)...)
+	return out
+}
+
+func computeEnvChanges(old, new schema.Config) []Change {
+	var out []Change
+	for _, svc := range unionServiceNames(old.Services, new.Services) {
+		oEnv := envOf(old.Services[svc])
+		nEnv := envOf(new.Services[svc])
+		for _, k := range unionStringKeys(oEnv, nEnv) {
+			oVal, oOk := oEnv[k]
+			nVal, nOk := nEnv[k]
+			switch {
+			case !oOk && nOk:
+				out = append(out, Change{Kind: KindEnvAdd, Service: svc, Key: k, New: nVal})
+			case oOk && !nOk:
+				out = append(out, Change{Kind: KindEnvRemove, Service: svc, Key: k, Old: oVal})
+			case oOk && nOk && oVal != nVal:
+				out = append(out, Change{Kind: KindEnvChange, Service: svc, Key: k, Old: oVal, New: nVal})
+			}
+		}
+	}
+	return out
+}
+
+func computeStartupChanges(old, new schema.Config) []Change {
+	var out []Change
+	for _, svc := range unionServiceNames(old.Services, new.Services) {
+		if !startupsEqual(old.Services[svc].Startup, new.Services[svc].Startup) {
+			out = append(out, Change{Kind: KindStartupChange, Service: svc})
+		}
+	}
+	return out
+}
+
+func startupsEqual(a, b []schema.StartupCommand) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !stringSliceEqual(a[i].Command, b[i].Command) {
+			return false
+		}
+		if a[i].Background != b[i].Background {
+			return false
+		}
+	}
+	return true
+}
+
+func computeInstallChanges(old, new schema.Config) []Change {
+	if stringSliceEqual(old.Install, new.Install) {
+		return nil
+	}
+	return []Change{{Kind: KindInstallChange}}
+}
+
+func computeMaskChanges(old, new schema.Config) []Change {
+	var out []Change
+	for _, svc := range unionServiceNames(old.Services, new.Services) {
+		if !masksEqual(old.Services[svc].Masks, new.Services[svc].Masks) {
+			out = append(out, Change{Kind: KindMaskChange, Service: svc})
+		}
+	}
+	return out
+}
+
+func masksEqual(a, b []schema.Mask) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func computeImageChange(old, new schema.Config) []Change {
+	if old.BaseImage == new.BaseImage {
+		return nil
+	}
+	return []Change{{Kind: KindImageChange}}
+}
+
+func computeIdentityChange(old, new schema.Config) []Change {
+	if old.Project == new.Project {
+		return nil
+	}
+	return []Change{{Kind: KindIdentityChange}}
+}
+
+func envOf(s schema.Service) map[string]string {
+	if s.Env == nil {
+		return map[string]string{}
+	}
+	return s.Env
+}
+
+func unionStringKeys(a, b map[string]string) []string {
+	set := make(map[string]struct{})
+	for k := range a {
+		set[k] = struct{}{}
+	}
+	for k := range b {
+		set[k] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func setFromSlice(ss []string) map[string]struct{} {
 	out := make(map[string]struct{}, len(ss))
 	for _, s := range ss {
