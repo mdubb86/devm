@@ -1,0 +1,46 @@
+#!/usr/bin/env expect -f
+source [file dirname [info script]]/lib/common.exp
+
+set timeout 120
+set test_name "05_teardown_with_prompt"
+
+lassign [e2e_setup_workspace "teardown-prompt"] sb ws
+cd $ws
+
+spawn [e2e_devm_path] shell
+set shell_id $spawn_id
+expect {
+    -i $shell_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "shell never reached prompt" }
+    eof { e2e_fail $test_name "shell exited before prompt" }
+}
+
+# Spawn devm teardown.
+spawn [e2e_devm_path] teardown
+set td_id $spawn_id
+
+# Expect the teardown confirmation (different wording from stop).
+expect {
+    -i $td_id
+    -re "Tear down sandbox $sb\\?.+\\\[y/N\\\]: " { }
+    timeout { e2e_fail $test_name "teardown never produced prompt" }
+    eof { e2e_fail $test_name "teardown exited before prompt" }
+}
+
+send -i $td_id "y\r"
+expect {
+    -i $td_id
+    eof { }
+    timeout { e2e_fail $test_name "teardown did not exit after approval" }
+}
+
+# User shell dies; sandbox is GONE (not just stopped).
+expect {
+    -i $shell_id
+    eof { }
+    timeout { e2e_fail $test_name "user shell did not exit after teardown" }
+}
+e2e_assert_sandbox_absent $sb
+
+e2e_pass $test_name
