@@ -1,0 +1,62 @@
+#!/usr/bin/env expect -f
+source [file dirname [info script]]/lib/common.exp
+
+set timeout 180
+set test_name "07_invariant_happy_path"
+
+# devm.yaml with a service that has a canonical port, plus a worker
+# startup command. port_offset 51000 + canonical 8080 = host port 59080.
+set yaml_extra {install:
+  - "touch /tmp/install-marker"
+
+services:
+  api:
+    canonical: 8080
+  worker:
+    startup:
+      - command: ["sh", "-c", "while true; do sleep 60; done"]
+        background: true
+}
+lassign [e2e_setup_workspace "invariant" $yaml_extra] sb ws
+cd $ws
+
+spawn [e2e_devm_path] shell
+set shell_id $spawn_id
+expect {
+    -i $shell_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "shell never reached prompt" }
+    eof { e2e_fail $test_name "shell exited before prompt — possible invariant violation" }
+}
+
+# Install marker should exist (proves install ran).
+if {[catch {exec sbx exec $sb ls /tmp/install-marker} _]} {
+    e2e_fail $test_name "install marker missing"
+}
+
+# Port 8080 should be published on host port 59080 (51000 + 8080).
+if {[catch {exec sbx ports $sb --json} ports_json]} {
+    e2e_fail $test_name "sbx ports query failed: $ports_json"
+}
+if {[string first "8080" $ports_json] < 0} {
+    e2e_fail $test_name "sandbox port 8080 not in published list (got: $ports_json)"
+}
+if {[string first "59080" $ports_json] < 0} {
+    e2e_fail $test_name "host port 59080 missing (got: $ports_json)"
+}
+
+# Worker daemon must be running (background startup command).
+if {[catch {exec sbx exec $sb sh -c "pgrep -f 'while true; do sleep 60'"} worker_pid]} {
+    e2e_fail $test_name "worker daemon not found (pgrep: $worker_pid)"
+}
+
+# Exit cleanly.
+send -i $shell_id "exit\r"
+expect {
+    -i $shell_id
+    eof { }
+    timeout { e2e_fail $test_name "shell did not exit cleanly" }
+}
+e2e_assert_sandbox_state $sb "stopped"
+
+e2e_pass $test_name
