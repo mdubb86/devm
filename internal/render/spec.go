@@ -27,13 +27,21 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	sb.WriteString("  aiFilename: CLAUDE.md\n")
 	sb.WriteString("  persistence: persistent\n")
 	sb.WriteString("  entrypoint:\n")
-	// Entrypoint is shell-wrapped sleep infinity. The sh -c wrapping is
-	// load-bearing: empirically, sbx daemon propagates session-end cleanup
-	// to the in-VM process correctly for shell-wrapped entrypoints but
-	// not for bare commands (the bare ["sleep", "infinity"] form leaves
-	// the sleep lingering after killRun). exec replaces sh with sleep so
-	// no extra process is spawned.
-	sb.WriteString("    run: [\"sh\", \"-c\", \"exec sleep infinity\"]\n\n")
+	// Entrypoint is shell-wrapped sleep infinity with stdin redirected
+	// from /dev/null. Two load-bearing pieces:
+	//   1. sh -c wrapping: sbx daemon propagates session-end cleanup
+	//      to the in-VM process for shell-wrapped entrypoints but not
+	//      bare commands. exec replaces sh with sleep so no extra
+	//      process lingers.
+	//   2. </dev/null redirect: detaches sleep's fd 0 from the pty
+	//      that sbx run allocates for the anchor. Without it the
+	//      sleep keeps an open fd to /dev/pts/0 even after killRun(),
+	//      making it appear as a phantom session in devm stop's
+	//      session listing (sessions.go walks /proc for pts/* fd0
+	//      holders). The redirect is purely cosmetic for lifecycle
+	//      (sbx daemon's session count is independent of this) but
+	//      makes the "Active sessions" listing truthful.
+	sb.WriteString("    run: [\"sh\", \"-c\", \"exec sleep infinity </dev/null\"]\n\n")
 
 	if len(cfg.Network.AllowedDomains) > 0 {
 		sb.WriteString("network:\n  allowedDomains:\n")

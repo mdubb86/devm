@@ -26,7 +26,7 @@ type ShellDeps struct {
 
 	LockPath       string
 	WaitForRunning time.Duration // default 60s
-	WaitForPty     time.Duration // default 5s
+	WaitForPty     time.Duration // settle delay after spawning userCmd before killRun; default 500ms
 	PollInterval   time.Duration // default 250ms
 }
 
@@ -38,7 +38,7 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 		Runner:         sandbox.DefaultRunner{},
 		LockPath:       filepath.Join(repoRoot, ".devm", "lock"),
 		WaitForRunning: 60 * time.Second,
-		WaitForPty:     5 * time.Second,
+		WaitForPty:     500 * time.Millisecond,
 		PollInterval:   250 * time.Millisecond,
 	}
 }
@@ -178,20 +178,30 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		userDone <- userResult{rc: rc, err: err}
 	}()
 
-	if err := waitForUserPty(ctx, sb, runDone, d.WaitForPty, d.PollInterval); err != nil {
+	// Settle period: let userCmd's `sbx exec` register its session
+	// with the sbx daemon before we kill the anchor. The host-side
+	// exec process needs only to connect to the daemon socket — it
+	// does NOT need the in-VM bash to be visible in /proc. Half a
+	// second is plenty in practice. If userCmd hasn't registered yet,
+	// the post-killRun safety check below will catch it.
+	select {
+	case <-time.After(d.WaitForPty):
+	case <-ctx.Done():
 		_ = userCmd.Kill()
-		select {
-		case <-userDone:
-		case <-time.After(3 * time.Second):
-		}
 		killRun()
-		return -1, err
+		return -1, ctx.Err()
+	case err := <-runDone:
+		_ = userCmd.Kill()
+		if err != nil {
+			return -1, fmt.Errorf("sbx run exited during handoff: %w", err)
+		}
+		return -1, fmt.Errorf("sbx run exited during handoff")
 	}
 
-	// Anchor's job is done. Killing the sbx run subprocess causes sbx
-	// daemon to clean up the in-VM entrypoint process (shell-wrapped
-	// entrypoint is required for this cleanup to actually propagate;
-	// see internal/render/spec.go entrypoint comment).
+	// Anchor's job is done. Killing the sbx run subprocess detaches
+	// sbx daemon's anchor session. The user session (added by userCmd)
+	// must already be holding the daemon's session count > 0 or the
+	// sandbox will stop. The check below verifies that.
 	killRun()
 
 	// Safety invariant: with sbx run anchor gone, the user shell's pty
@@ -222,7 +232,7 @@ func applyDefaults(d *ShellDeps) {
 		d.WaitForRunning = 60 * time.Second
 	}
 	if d.WaitForPty == 0 {
-		d.WaitForPty = 5 * time.Second
+		d.WaitForPty = 500 * time.Millisecond
 	}
 	if d.PollInterval == 0 {
 		d.PollInterval = 250 * time.Millisecond
@@ -253,6 +263,22 @@ func waitForRunning(ctx context.Context, sb *sandbox.Sandbox, runDone <-chan err
 	}
 }
 
+// waitForUserPty was the original gate before killRun. It polled
+// sb.Sessions() and returned as soon as ANY pty session was visible
+// in-VM. With the previous entrypoint shape (sleep with pts/0 fd0),
+// it always returned immediately on the anchor sleep — a false
+// positive. Once the entrypoint redirect was added the sleep no
+// longer satisfies the probe, and the user's bash takes long enough
+// to appear in /proc that this would consistently time out.
+//
+// Replaced by a fixed settle delay inline in RunShell: the host-side
+// sbx exec registers a session with the daemon almost instantly, so
+// a short delay is enough to safely run killRun. The post-killRun
+// sb.IsRunning() check is the actual safety gate; if userCmd hasn't
+// registered by then, sandbox stops and we report the failure.
+//
+// Kept as a no-op dead reference for one release to make the
+// behaviour change easy to find in git log; remove after.
 func waitForUserPty(ctx context.Context, sb *sandbox.Sandbox, runDone <-chan error, timeout, poll time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(poll)

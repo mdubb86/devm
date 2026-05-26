@@ -67,13 +67,14 @@ func minimalConfig(t *testing.T) schema.Config {
 func TestSpecYAMLEntrypointIsShellWrappedSleep(t *testing.T) {
 	cfg := minimalConfig(t)
 	out := SpecYAML(cfg, "/tmp/repo")
-	// The entrypoint wraps sleep infinity in `sh -c "exec ..."`. The
-	// shell-wrapping is required for sbx daemon to clean up the in-VM
-	// process when the host sbx run subprocess dies (bare commands
-	// leave the process lingering). exec means no extra sh process
-	// is spawned beyond startup.
+	// The entrypoint wraps sleep infinity in `sh -c "exec ... </dev/null"`.
+	// The shell wrapping is required for sbx session-end cleanup
+	// propagation; the </dev/null redirect detaches sleep from the
+	// pty sbx allocates for the anchor, so it doesn't appear as a
+	// phantom session in devm stop's session listing. See the comment
+	// in spec.go for the full rationale.
 	assert.Contains(t, out, "entrypoint:")
-	assert.Contains(t, out, `run: ["sh", "-c", "exec sleep infinity"]`)
+	assert.Contains(t, out, `run: ["sh", "-c", "exec sleep infinity </dev/null"]`)
 	assert.NotContains(t, out, "devm-anchor.pid", "pidfile mechanism was dropped — it was a no-op")
 	assert.NotContains(t, out, "/usr/local/bin/devm-agent", "no devm-agent binary in this design")
 	assert.NotContains(t, out, "background: true", "no background daemons in this design")
