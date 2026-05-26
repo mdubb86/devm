@@ -1,0 +1,92 @@
+package orchestrator
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/mtwaage/devm/internal/sandbox"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestFormatStatusText_RunningInSync(t *testing.T) {
+	out := FormatStatusText(StatusResult{
+		Sandbox: "x", State: "running",
+		Sessions:    []sandbox.Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+		PendingLive: 0, PendingRecreate: 0,
+	})
+	assert.Contains(t, out, "Sandbox: x")
+	assert.Contains(t, out, "State:   running")
+	assert.Contains(t, out, "pts/1: bash (PID 27, owner agent)")
+	assert.Contains(t, out, "In sync.")
+}
+
+func TestFormatStatusText_RunningWithPending(t *testing.T) {
+	out := FormatStatusText(StatusResult{
+		Sandbox: "x", State: "running",
+		PendingLive: 2, PendingRecreate: 1,
+	})
+	assert.Contains(t, out, "Pending changes: 2 live, 1 require recreate")
+	assert.Contains(t, out, "Run `devm reconcile` to apply.")
+}
+
+func TestFormatStatusText_Stopped(t *testing.T) {
+	out := FormatStatusText(StatusResult{Sandbox: "x", State: "stopped"})
+	assert.Contains(t, out, "Sandbox stopped; config changes will apply on next `devm shell`.")
+	assert.NotContains(t, out, "Active sessions")
+}
+
+func TestFormatReconcileText_LiveOnly(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		Applied: []Change{{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
+	})
+	assert.Contains(t, out, "Applied 1 live change")
+	assert.Contains(t, out, "+ port 8080 (api)")
+}
+
+func TestFormatReconcileText_RecreatePending(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		Applied: []Change{{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
+		RecreateRequired: []Change{
+			{Kind: KindEnvChange, Service: "api", Key: "LOG_LEVEL", Old: "info", New: "debug"},
+		},
+		Flavor:   FlavorStopShell,
+		Sessions: []sandbox.Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+	})
+	assert.Contains(t, out, "Applied 1 live change")
+	assert.Contains(t, out, "1 change(s) require recreate")
+	assert.Contains(t, out, `env: api.LOG_LEVEL: "info" → "debug"`)
+	assert.Contains(t, out, "Restart sandbox to apply")
+	assert.Contains(t, out, "Will hang up 1 active session")
+}
+
+func TestFormatStatusJSON(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{
+		Sandbox: "x", State: "running",
+		Sessions:    []sandbox.Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+		PendingLive: 2, PendingRecreate: 1,
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	assert.Equal(t, "x", parsed["sandbox"])
+	assert.Equal(t, "running", parsed["state"])
+	pending := parsed["pending_changes"].(map[string]any)
+	assert.Equal(t, float64(2), pending["live"])
+	assert.Equal(t, float64(1), pending["recreate"])
+}
+
+func TestFormatReconcileJSON(t *testing.T) {
+	js := FormatReconcileJSON(ReconcileResult{
+		Rendered: true, SandboxState: "running",
+		Applied:          []Change{{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
+		RecreateRequired: []Change{{Kind: KindEnvChange, Service: "api", Key: "LOG_LEVEL", Old: "info", New: "debug"}},
+		Flavor:           FlavorStopShell,
+		Sessions:         []sandbox.Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+		NextAction:       "needs_approval",
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	assert.Equal(t, true, parsed["rendered"])
+	assert.Equal(t, "needs_approval", parsed["next_action"])
+	rec := parsed["recreate_required"].(map[string]any)
+	assert.Equal(t, "stop_shell", rec["flavor"])
+}
