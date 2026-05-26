@@ -1,0 +1,58 @@
+#!/usr/bin/env expect -f
+source [file dirname [info script]]/lib/common.exp
+
+set timeout 120
+set test_name "02_shortcut_path"
+
+lassign [e2e_setup_workspace "shortcut"] sb ws
+cd $ws
+
+# Spawn first devm shell (cold create).
+spawn [e2e_devm_path] shell
+set first_id $spawn_id
+expect {
+    -i $first_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "first shell never reached prompt" }
+    eof { e2e_fail $test_name "first shell exited before prompt" }
+}
+
+# Spawn second devm shell (shortcut path — sandbox is already running).
+spawn [e2e_devm_path] shell
+set second_id $spawn_id
+expect {
+    -i $second_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "second shell never reached prompt (shortcut failed?)" }
+    eof { e2e_fail $test_name "second shell exited before prompt" }
+}
+
+# Verify externally: BOTH bashes should exist on different pts/N.
+set pscount 0
+if {[catch {exec sbx exec $sb bash -c "ps -eo comm,tty | grep -c '^bash *pts/'"} pscount]} {
+    e2e_fail $test_name "ps count failed: $pscount"
+}
+if {$pscount < 2} {
+    e2e_fail $test_name "expected >=2 bash on pts/N, got $pscount"
+}
+
+# Exit second shell.
+send -i $second_id "exit\r"
+expect {
+    -i $second_id
+    eof { }
+    timeout { e2e_fail $test_name "second shell did not exit" }
+}
+
+# Exit first shell.
+send -i $first_id "exit\r"
+expect {
+    -i $first_id
+    eof { }
+    timeout { e2e_fail $test_name "first shell did not exit" }
+}
+
+# Sandbox should stop after both bashes exit.
+e2e_assert_sandbox_state $sb "stopped"
+
+e2e_pass $test_name
