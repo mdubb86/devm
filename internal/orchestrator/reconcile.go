@@ -1,8 +1,14 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 
+	"github.com/mtwaage/devm/internal/lock"
+	"github.com/mtwaage/devm/internal/render"
 	"github.com/mtwaage/devm/internal/sandbox"
 	"github.com/mtwaage/devm/internal/schema"
 	"gopkg.in/yaml.v3"
@@ -91,4 +97,162 @@ func RunReconcileInner(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) 
 		res.NextAction = "nothing_to_do"
 	}
 	return res, nil
+}
+
+// ReconcileOptions controls the outer state machine behaviour.
+type ReconcileOptions struct {
+	DryRun         bool
+	Yes            bool
+	NonInteractive bool      // true when stdin is not a TTY (set by CLI)
+	JSON           bool      // affects only CLI output formatting; outer doesn't print directly
+	Stdout         io.Writer // optional; defaults to os.Stdout for interactive prompt
+	Stdin          io.Reader // optional; defaults to os.Stdin for prompt response
+}
+
+// RunReconcile is the lock-acquiring outer of the reconcile state
+// machine. Always renders .devm/ first so file-only consumers see the
+// latest output; if the sandbox is running, runs the diff/apply state
+// machine; handles --dry-run, --yes, and non-TTY contexts; executes
+// recreate (without relaunching a shell) on approval.
+//
+// Locking discipline: this function acquires .devm/lock for the
+// diff/apply phase and RELEASES it before invoking RunStop (which
+// acquires its own lock). The user runs `devm shell` themselves to
+// re-enter; we do not relaunch.
+//
+// Exit codes:
+//
+//	 0  — clean (applied / nothing_to_do)
+//	 1  — user refused at prompt
+//	 2  — non-TTY context with recreate-required pending (no --yes)
+//	-1  — operational error (lock fail, render fail, RunStop fail)
+func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts ReconcileOptions) (int, ReconcileResult, error) {
+	res := ReconcileResult{}
+
+	// 1. Always render .devm/ first.
+	if err := render.WriteDevmDir(cfg, repoRoot); err != nil {
+		return -1, res, fmt.Errorf("render devm dir: %w", err)
+	}
+	res.Rendered = true
+
+	// 2. Acquire lock.
+	lockPath := filepath.Join(repoRoot, ".devm", "lock")
+	lk, err := lock.Acquire(lockPath)
+	if err != nil {
+		return -1, res, fmt.Errorf("acquire lock: %w", err)
+	}
+	released := false
+	releaseLock := func() {
+		if !released {
+			_ = lk.Release()
+			released = true
+		}
+	}
+	defer releaseLock()
+
+	// 3. Sandbox state check.
+	if !sb.IsRunning() {
+		res.SandboxState = "stopped"
+		res.NextAction = "nothing_to_do"
+		return 0, res, nil
+	}
+	res.SandboxState = "running"
+
+	// 4. Dry-run branch: compute diff without applying or writing snapshot.
+	if opts.DryRun {
+		snapStr, err := ReadSnapshot(sb)
+		if err != nil {
+			return -1, res, fmt.Errorf("read snapshot: %w", err)
+		}
+		var snapCfg schema.Config
+		if snapStr == "" {
+			snapCfg = cfg
+		} else {
+			if err := yaml.Unmarshal([]byte(snapStr), &snapCfg); err != nil {
+				return -1, res, fmt.Errorf("parse snapshot: %w", err)
+			}
+		}
+		changes := ComputeAllChanges(snapCfg, cfg)
+		for _, c := range changes {
+			if c.Bucket() == BucketLive {
+				res.Applied = append(res.Applied, c)
+			} else {
+				res.RecreateRequired = append(res.RecreateRequired, c)
+			}
+		}
+		res.Flavor = RecreateFlavor(changes)
+		switch {
+		case len(res.RecreateRequired) > 0:
+			res.NextAction = "needs_approval"
+		case len(res.Applied) > 0:
+			res.NextAction = "applied"
+		default:
+			res.NextAction = "nothing_to_do"
+		}
+		return 0, res, nil
+	}
+
+	// 5. Real apply via Inner.
+	inner, err := RunReconcileInner(cfg, sb, repoRoot)
+	if err != nil {
+		// Surface whatever partial state Inner gathered.
+		res.Applied = inner.Applied
+		res.RecreateRequired = inner.RecreateRequired
+		res.Flavor = inner.Flavor
+		res.Sessions = inner.Sessions
+		res.NextAction = inner.NextAction
+		return -1, res, err
+	}
+	res.Applied = inner.Applied
+	res.RecreateRequired = inner.RecreateRequired
+	res.Flavor = inner.Flavor
+	res.Sessions = inner.Sessions
+	res.NextAction = inner.NextAction
+
+	// 6. No recreate? Done.
+	if len(res.RecreateRequired) == 0 {
+		return 0, res, nil
+	}
+
+	// 7. Recreate-required path: handle approval.
+	if !opts.Yes {
+		if opts.NonInteractive {
+			return 2, res, nil
+		}
+		// Interactive prompt.
+		stdout := opts.Stdout
+		if stdout == nil {
+			stdout = os.Stdout
+		}
+		stdin := opts.Stdin
+		if stdin == nil {
+			stdin = os.Stdin
+		}
+		fmt.Fprint(stdout, FormatReconcileText(res))
+		fmt.Fprint(stdout, "[y/N]: ")
+		var resp string
+		_, _ = fmt.Fscanln(stdin, &resp)
+		if resp != "y" && resp != "Y" {
+			res.NextAction = "user_refused"
+			return 1, res, nil
+		}
+	}
+
+	// 8. Execute recreate. Release our lock first so RunStop can acquire.
+	releaseLock()
+
+	stopDeps := StopDeps{
+		Runner:   sb.Runner,
+		LockPath: lockPath,
+	}
+	mode := StopPreserve
+	if res.Flavor == FlavorTeardownShell {
+		mode = StopDestroy
+	}
+	if _, err := RunStop(context.Background(), stopDeps, sb.Name, mode, true); err != nil {
+		return -1, res, fmt.Errorf("recreate (%s): %w", res.Flavor, err)
+	}
+
+	res.NextAction = "applied"
+	return 0, res, nil
 }

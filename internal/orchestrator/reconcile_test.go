@@ -1,6 +1,9 @@
 package orchestrator
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mtwaage/devm/internal/sandbox"
@@ -108,4 +111,74 @@ func TestRunReconcileInner_RecreatePending_DoesNotWriteSnapshot(t *testing.T) {
 	_, err := RunReconcileInner(newCfg, sb, "/tmp/fake-repo-root")
 	assert.NoError(t, err)
 	assert.Empty(t, r.runStdinSeen, "snapshot must NOT be written when recreate is pending")
+}
+
+// ---------------------------------------------------------------------------
+// RunReconcile (outer state machine) tests.
+// ---------------------------------------------------------------------------
+
+func TestRunReconcile_StoppedSandboxRendersAndExits0(t *testing.T) {
+	// Sandbox absent — sbx ls returns no row for "x".
+	r := &stateRunner{lsAbsent: true}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	cfg := reconcileMinimalCfg()
+	opts := ReconcileOptions{}
+	repoRoot := t.TempDir()
+	rc, res, err := RunReconcile(cfg, sb, repoRoot, opts)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	assert.Equal(t, "nothing_to_do", res.NextAction)
+	// .devm/spec.yaml should exist after the render step.
+	_, statErr := os.Stat(filepath.Join(repoRoot, ".devm", "spec.yaml"))
+	assert.NoError(t, statErr, ".devm/spec.yaml must be rendered even when sandbox is absent")
+}
+
+func TestRunReconcile_NonTTYRecreateExits2(t *testing.T) {
+	// Snapshot has install A; new cfg has install B → recreate required.
+	// Non-TTY, no --yes → exit code 2, NextAction needs_approval.
+	snapCfg := reconcileMinimalCfg()
+	snapCfg.Install = []string{"old"}
+	snapYAML, _ := yaml.Marshal(snapCfg)
+	r := &stateRunner{
+		lsStatus: "running",
+		catOut:   string(snapYAML),
+	}
+	sb := &sandbox.Sandbox{Name: "x-sbx", Runner: r}
+	newCfg := reconcileMinimalCfg()
+	newCfg.Project.SandboxName = "x-sbx"
+	newCfg.Install = []string{"new"}
+	opts := ReconcileOptions{NonInteractive: true}
+	rc, res, err := RunReconcile(newCfg, sb, t.TempDir(), opts)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, rc)
+	assert.Equal(t, "needs_approval", res.NextAction)
+}
+
+func TestRunReconcile_DryRunDoesNotApply(t *testing.T) {
+	snapCfg := reconcileMinimalCfg()
+	snapCfg.Project.SandboxName = "x-sbx"
+	snapYAML, _ := yaml.Marshal(snapCfg)
+	r := &stateRunner{
+		lsStatus: "running",
+		catOut:   string(snapYAML),
+	}
+	sb := &sandbox.Sandbox{Name: "x-sbx", Runner: r}
+	newCfg := reconcileMinimalCfg()
+	newCfg.Project.SandboxName = "x-sbx"
+	newCfg.Services = map[string]schema.Service{"api": {Canonical: 8080}}
+	opts := ReconcileOptions{DryRun: true}
+	rc, res, err := RunReconcile(newCfg, sb, t.TempDir(), opts)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	// Dry-run computes diff but does NOT call sbx ports --publish.
+	sawPublish := false
+	for _, call := range r.calls {
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "--publish") {
+			sawPublish = true
+		}
+	}
+	assert.False(t, sawPublish, "dry-run must not call sbx ports --publish")
+	assert.Len(t, res.Applied, 1, "diff should still be computed for dry-run")
+	assert.Equal(t, KindPortAdd, res.Applied[0].Kind)
 }

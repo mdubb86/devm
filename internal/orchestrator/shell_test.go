@@ -72,6 +72,7 @@ type stateRunner struct {
 	lsAbsent bool
 	probeOut string
 	portsOut string
+	catOut   string // stdout returned for `sbx exec <name> cat <path>` (snapshot reads)
 }
 
 func (r *stateRunner) Output(name string, args ...string) ([]byte, error) {
@@ -93,8 +94,13 @@ func (r *stateRunner) Output(name string, args ...string) ([]byte, error) {
 		}
 		return []byte("[]"), nil
 	case strings.Contains(joined, "sh") && strings.Contains(joined, "-c"):
-		// Sessions probe script.
+		// Sessions probe script (and also matches WriteSnapshot's
+		// `sh -c "... cat > ..."` invocation, which is fine — we don't
+		// care about that case's return value in these tests).
 		return []byte(r.probeOut), nil
+	case strings.Contains(joined, "exec") && strings.Contains(joined, "cat "):
+		// Snapshot read: `sbx exec <name> cat /home/agent/.devm/applied.yaml`.
+		return []byte(r.catOut), nil
 	}
 	return []byte(""), nil
 }

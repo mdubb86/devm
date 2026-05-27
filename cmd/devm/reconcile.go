@@ -4,31 +4,60 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/mattn/go-isatty"
 	"github.com/mtwaage/devm/internal/config"
-	"github.com/mtwaage/devm/internal/render"
+	"github.com/mtwaage/devm/internal/orchestrator"
+	"github.com/mtwaage/devm/internal/sandbox"
 	"github.com/spf13/cobra"
+)
+
+var (
+	reconcileDryRun bool
+	reconcileYes    bool
+	reconcileJSON   bool
 )
 
 var reconcileCmd = &cobra.Command{
 	Use:   "reconcile",
-	Short: "Regenerate .devm/ cache (sbx kit assets + Caddyfile + scripts)",
+	Short: "Render devm.yaml -> .devm/, diff against running sandbox, apply or prompt",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		wd, err := os.Getwd()
+		repoRoot, err := os.Getwd()
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(wd)
+		cfg, err := config.Load(repoRoot)
 		if err != nil {
 			return err
 		}
-		if err := render.WriteDevmDir(cfg, wd); err != nil {
+		sb := &sandbox.Sandbox{Name: cfg.Project.SandboxName, Runner: sandbox.DefaultRunner{}}
+		opts := orchestrator.ReconcileOptions{
+			DryRun:         reconcileDryRun,
+			Yes:            reconcileYes,
+			JSON:           reconcileJSON,
+			NonInteractive: !isatty.IsTerminal(os.Stdin.Fd()),
+		}
+		rc, res, err := orchestrator.RunReconcile(cfg, sb, repoRoot, opts)
+		if err != nil {
 			return err
 		}
-		fmt.Println("OK — .devm/ regenerated")
+		if reconcileJSON {
+			fmt.Println(orchestrator.FormatReconcileJSON(res))
+		} else {
+			fmt.Print(orchestrator.FormatReconcileText(res))
+			if res.NextAction == "nothing_to_do" && res.SandboxState == "stopped" {
+				fmt.Println("Sandbox stopped; config changes will apply on next `devm shell`.")
+			}
+		}
+		if rc != 0 {
+			os.Exit(rc)
+		}
 		return nil
 	},
 }
 
 func init() {
+	reconcileCmd.Flags().BoolVar(&reconcileDryRun, "dry-run", false, "Print diff without applying")
+	reconcileCmd.Flags().BoolVarP(&reconcileYes, "yes", "y", false, "Skip the recreate confirmation prompt")
+	reconcileCmd.Flags().BoolVar(&reconcileJSON, "json", false, "Emit JSON output")
 	rootCmd.AddCommand(reconcileCmd)
 }
