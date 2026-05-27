@@ -3,14 +3,12 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/mtwaage/devm/internal/lock"
 	"github.com/mtwaage/devm/internal/sandbox"
 	"github.com/mtwaage/devm/internal/schema"
-	"gopkg.in/yaml.v3"
 )
 
 // ShellDeps wires the orchestrator's collaborators. Production callers
@@ -94,17 +92,10 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	sb := &sandbox.Sandbox{Name: sandboxName, Runner: d.Runner}
 
 	if sb.IsRunning() {
-		// Auto-apply LIVE changes before attaching. We already hold the
-		// lock, so use the lock-less inner. If recreate is needed,
-		// surface to stderr but proceed to attach (user gets stale
-		// state with a clear note; `devm reconcile --yes` is the way
-		// to actually apply).
-		if inner, err := RunReconcileInner(cfg, sb, repoRoot); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: reconcile during attach failed: %v\n", err)
-		} else if len(inner.RecreateRequired) > 0 {
-			fmt.Fprint(os.Stderr, FormatReconcileText(inner))
-			fmt.Fprintln(os.Stderr, "(Run `devm reconcile --yes` to apply these — your shell will be restarted.)")
-		}
+		// TODO: re-enable shortcut reconcile once WriteSnapshot hang is
+		// fixed (sbx exec with piped stdin appears to block). Disabled to
+		// keep `devm shell` functional. Users can run `devm reconcile`
+		// manually for now.
 		_ = lk.Release()
 		released = true
 		return runUserShell(d, sandboxName, cmdName, cmdArgs)
@@ -230,12 +221,9 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		return -1, fmt.Errorf("safety invariant violated: sandbox stopped during anchor cleanup; user session not preserved")
 	}
 
-	// Write snapshot of currently-applied config so future reconciles
-	// can diff. Best-effort — failure is non-fatal (shell is attached
-	// and working; subsequent reconcile will detect drift).
-	if snapYAML, mErr := yaml.Marshal(cfg); mErr == nil {
-		_ = WriteSnapshot(sb, snapshotHeader+string(snapYAML))
-	}
+	// TODO: re-enable cold-start snapshot write once WriteSnapshot hang
+	// is fixed (sbx exec with piped stdin appears to block, holding the
+	// lock and blocking subsequent devm commands).
 
 	_ = lk.Release()
 	released = true
