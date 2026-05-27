@@ -177,6 +177,26 @@ proc e2e_assert_sandbox_absent {sb} {
     e2e_fail "assert_absent" "sandbox $sb still listed by sbx ls after 5s"
 }
 
+# Poll `sbx ports <sb> --json` for up to 5s waiting for $needle to
+# appear in the output. The sbx daemon's publish/list state can lag
+# briefly behind a successful `sbx ports --publish`, so a single
+# point-query is flaky. Fails the test if the needle never appears.
+proc e2e_assert_ports_contain {sb needle} {
+    set deadline [expr {[clock milliseconds] + 5000}]
+    set last ""
+    while {[clock milliseconds] < $deadline} {
+        if {[catch {exec sbx ports $sb --json} out]} {
+            set out ""
+        }
+        set last $out
+        if {[string first $needle $out] >= 0} {
+            return
+        }
+        after 250
+    }
+    e2e_fail "assert_ports" "port mapping containing '$needle' not seen within 5s (last: $last)"
+}
+
 proc e2e_pass {name} {
     puts "PASS: $name"
     exit 0
