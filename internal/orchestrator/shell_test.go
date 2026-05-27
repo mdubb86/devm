@@ -392,7 +392,6 @@ func (s *recordingSpawner) Start(name string, args ...string) (SpawnedCmd, error
 var _ = sandbox.DefaultRunner{}
 
 func TestRunShellColdStartWritesSnapshot(t *testing.T) {
-	t.Skip("integration disabled — WriteSnapshot via sbx exec stdin hangs; re-enable after fix")
 	repoRoot := t.TempDir()
 
 	runner := &stateRunner{
@@ -442,7 +441,6 @@ func TestRunShellColdStartWritesSnapshot(t *testing.T) {
 }
 
 func TestRunShellShortcutInvokesReconcileInner(t *testing.T) {
-	t.Skip("integration disabled — shortcut reconcile uses WriteSnapshot which hangs; re-enable after fix")
 	// Shortcut path with a snapshot that matches cfg → reconcile inner
 	// finds no diff → no recreate surface, no LIVE applies → user shell
 	// attaches normally.

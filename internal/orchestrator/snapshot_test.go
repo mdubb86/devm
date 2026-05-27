@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
@@ -62,9 +63,13 @@ func TestWriteSnapshot(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	err := WriteSnapshot(sb, "rendered: yes\n")
 	assert.NoError(t, err)
-	assert.Equal(t, "rendered: yes\n", r.runStdinSeen)
 	cmd := strings.Join(r.lastArgs[0], " ")
 	assert.Contains(t, cmd, "sbx exec x sh -c")
 	assert.Contains(t, cmd, "applied.yaml.tmp")
 	assert.Contains(t, cmd, "mv ")
+	// Content is base64-encoded on the command line (no stdin pipe).
+	assert.Contains(t, cmd, "base64 -d", "content must be passed base64-encoded inline")
+	encoded := base64.StdEncoding.EncodeToString([]byte("rendered: yes\n"))
+	assert.Contains(t, cmd, encoded, "encoded content must appear in argv")
+	assert.Empty(t, r.runStdinSeen, "no stdin should be piped (avoids Go exec hang)")
 }

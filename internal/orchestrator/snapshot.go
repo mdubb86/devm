@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"encoding/base64"
+	"fmt"
 	"strings"
 
 	"github.com/mtwaage/devm/internal/sandbox"
@@ -30,9 +32,21 @@ func ReadSnapshot(sb *sandbox.Sandbox) (string, error) {
 // WriteSnapshot atomically writes content to SnapshotPath inside the VM:
 // mkdir -p the directory, write to .tmp, then rename. The rename is the
 // atomic step so a reader never sees a partially-written snapshot.
+// WriteSnapshot writes content atomically to the in-VM snapshot path.
+// Encodes content as base64 on the command line rather than piping via
+// stdin: empirically, `sbx exec <name> sh -c "cat > ..."` invoked from
+// Go's exec.Cmd with a strings.NewReader stdin can hang indefinitely
+// (the cmd.Wait() goroutine never returns even though the same call
+// in a shell completes in <2s). Base64-on-cmdline sidesteps the issue
+// — the whole content is in the argv and no stdin pipe is involved.
+//
+// Snapshots are small (a few KB of YAML); macOS ARG_MAX (~1MB) is
+// orders of magnitude larger than what we need.
 func WriteSnapshot(sb *sandbox.Sandbox, content string) error {
-	cmd := "mkdir -p /home/agent/.devm && " +
-		"cat > /home/agent/.devm/applied.yaml.tmp && " +
-		"mv /home/agent/.devm/applied.yaml.tmp /home/agent/.devm/applied.yaml"
-	return sb.Runner.RunStdin(content, "sbx", "exec", sb.Name, "sh", "-c", cmd)
+	encoded := base64.StdEncoding.EncodeToString([]byte(content))
+	cmd := fmt.Sprintf("mkdir -p /home/agent/.devm && "+
+		"echo %s | base64 -d > /home/agent/.devm/applied.yaml.tmp && "+
+		"mv /home/agent/.devm/applied.yaml.tmp /home/agent/.devm/applied.yaml",
+		encoded)
+	return sb.Runner.Run("sbx", "exec", sb.Name, "sh", "-c", cmd)
 }

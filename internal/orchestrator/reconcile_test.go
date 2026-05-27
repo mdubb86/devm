@@ -79,9 +79,8 @@ func TestRunReconcileInner_EmptySnapshotIsIdentityWithNew(t *testing.T) {
 	assert.Empty(t, res.Applied)
 	assert.Empty(t, res.RecreateRequired)
 	assert.Equal(t, "nothing_to_do", res.NextAction)
-	// Snapshot SHOULD have been written.
-	assert.NotEmpty(t, r.runStdinSeen, "snapshot should be written when no recreate pending")
-	assert.Contains(t, r.runStdinSeen, "devm snapshot")
+	// Snapshot SHOULD have been written (content embedded in argv).
+	assert.True(t, sawSnapshotWriteCall(r), "snapshot should be written when no recreate pending")
 }
 
 func TestRunReconcileInner_LiveOnly_WritesSnapshot(t *testing.T) {
@@ -95,7 +94,7 @@ func TestRunReconcileInner_LiveOnly_WritesSnapshot(t *testing.T) {
 
 	_, err := RunReconcileInner(newCfg, sb, "/tmp/fake-repo-root")
 	assert.NoError(t, err)
-	assert.NotEmpty(t, r.runStdinSeen, "snapshot must be written after successful LIVE apply")
+	assert.True(t, sawSnapshotWriteCall(r), "snapshot must be written after successful LIVE apply")
 }
 
 func TestRunReconcileInner_RecreatePending_DoesNotWriteSnapshot(t *testing.T) {
@@ -110,7 +109,22 @@ func TestRunReconcileInner_RecreatePending_DoesNotWriteSnapshot(t *testing.T) {
 
 	_, err := RunReconcileInner(newCfg, sb, "/tmp/fake-repo-root")
 	assert.NoError(t, err)
-	assert.Empty(t, r.runStdinSeen, "snapshot must NOT be written when recreate is pending")
+	assert.False(t, sawSnapshotWriteCall(r), "snapshot must NOT be written when recreate is pending")
+}
+
+// sawSnapshotWriteCall returns true if the runner observed a
+// WriteSnapshot invocation. Identifies the write by its distinctive
+// argv shape (`base64 -d` + `mv ... applied.yaml.tmp` chain). Read
+// calls also mention applied.yaml but use a plain `cat`, so this
+// avoids false positives.
+func sawSnapshotWriteCall(r *stubRunner) bool {
+	for _, args := range r.lastArgs {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "base64 -d") && strings.Contains(joined, "applied.yaml.tmp") {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
