@@ -13,6 +13,7 @@ import (
 	"github.com/mtwaage/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // stubSpawner records Start calls and hands out scripted SpawnedCmds
@@ -389,3 +390,92 @@ func (s *recordingSpawner) Start(name string, args ...string) (SpawnedCmd, error
 // Compile-time guards (so accidental refactors that delete a symbol
 // fail at build time rather than at runtime). Unused locals are fine.
 var _ = sandbox.DefaultRunner{}
+
+func TestRunShellColdStartWritesSnapshot(t *testing.T) {
+	repoRoot := t.TempDir()
+
+	runner := &stateRunner{
+		lsAbsent: true,
+		probeOut: "27 bash pts/1 agent\n",
+	}
+	runCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd, userCmd}}
+
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		runner.mu.Lock()
+		runner.lsAbsent = false
+		runner.lsStatus = "running"
+		runner.mu.Unlock()
+	}()
+
+	deps := ShellDeps{
+		AnchorSpawner:  spawner,
+		UserSpawner:    spawner,
+		Runner:         runner,
+		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
+		WaitForRunning: 2 * time.Second,
+		WaitForPty:     20 * time.Millisecond, // short settle for tests
+		PollInterval:   20 * time.Millisecond,
+	}
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	// Verify the snapshot was written: look for any runner call whose
+	// args contain "applied.yaml" (the snapshot path or the .tmp form).
+	sawSnapshotWrite := false
+	runner.mu.Lock()
+	for _, c := range runner.calls {
+		joined := strings.Join(c, " ")
+		if strings.Contains(joined, "applied.yaml") {
+			sawSnapshotWrite = true
+			break
+		}
+	}
+	runner.mu.Unlock()
+	assert.True(t, sawSnapshotWrite, "cold-start must write snapshot via sbx exec ... applied.yaml")
+}
+
+func TestRunShellShortcutInvokesReconcileInner(t *testing.T) {
+	// Shortcut path with a snapshot that matches cfg → reconcile inner
+	// finds no diff → no recreate surface, no LIVE applies → user shell
+	// attaches normally.
+	repoRoot := t.TempDir()
+	cfg := minimalCfg()
+	snapYAML, _ := yaml.Marshal(cfg)
+	runner := &stateRunner{
+		lsStatus: "running",
+		catOut:   string(snapYAML),
+	}
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		AnchorSpawner: spawner,
+		UserSpawner:   spawner,
+		Runner:        runner,
+		LockPath:      filepath.Join(repoRoot, ".devm/lock"),
+	}
+	rc, err := RunShell(context.Background(), deps, cfg, repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	// Reconcile-inner ran (visible via the snapshot read call).
+	sawCat := false
+	runner.mu.Lock()
+	for _, c := range runner.calls {
+		joined := strings.Join(c, " ")
+		if strings.Contains(joined, "cat ") && strings.Contains(joined, "applied.yaml") {
+			sawCat = true
+			break
+		}
+	}
+	runner.mu.Unlock()
+	assert.True(t, sawCat, "shortcut path must invoke RunReconcileInner which reads the snapshot")
+}
