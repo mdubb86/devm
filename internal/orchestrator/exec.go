@@ -26,9 +26,11 @@ type SpawnedCmd interface {
 }
 
 // ExecSpawner is the production Spawner. If Interactive is true, the
-// spawned process inherits the host terminal's stdin/stdout/stderr;
-// otherwise stdin is /dev/null and stdout/stderr are routed to
-// LogWriter (or discarded if LogWriter is nil).
+// spawned process inherits the host terminal's stdin/stdout/stderr.
+// Otherwise stdin is /dev/null and stdout/stderr go to LogWriter; if
+// LogWriter is nil, stderr defaults to os.Stderr (so failure messages
+// from non-interactive subprocesses still reach the user) and stdout
+// is discarded.
 type ExecSpawner struct {
 	Interactive bool
 	LogWriter   io.Writer
@@ -45,6 +47,10 @@ func (s *ExecSpawner) Start(name string, args ...string) (SpawnedCmd, error) {
 		if s.LogWriter != nil {
 			c.Stdout = s.LogWriter
 			c.Stderr = s.LogWriter
+		} else {
+			// stdout intentionally discarded; stderr routed to the host
+			// terminal so the user sees subprocess failures.
+			c.Stderr = os.Stderr
 		}
 	}
 	if err := c.Start(); err != nil {
