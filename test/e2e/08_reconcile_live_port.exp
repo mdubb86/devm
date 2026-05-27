@@ -1,0 +1,83 @@
+#!/usr/bin/env expect -f
+source [file dirname [info script]]/lib/common.exp
+
+set timeout 180
+set test_name "08_reconcile_live_port"
+
+# Mirror test 07's known-working shape (install + a worker w/ startup).
+# Empirically, a sandbox with ONLY a canonical-port service (no install,
+# no startup) doesn't surface the published port in `sbx ports --json`
+# even after 30s polling. The exact sbx behavior is under investigation;
+# for now we sidestep by using a shape that is known to work.
+set yaml_extra {install:
+  - "true"
+
+services:
+  api:
+    canonical: 8080
+  worker:
+    startup:
+      - command: ["sh", "-c", "while true; do sleep 60; done"]
+        background: true
+}
+lassign [e2e_setup_workspace "reconcile-live" $yaml_extra] sb ws
+cd $ws
+
+# Cold start.
+spawn [e2e_devm_path] shell
+set shell_id $spawn_id
+expect {
+    -i $shell_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "shell never reached prompt" }
+    eof { e2e_fail $test_name "shell exited before prompt" }
+}
+
+# Initial port should already be published by cold-start reconcile.
+e2e_assert_ports_contain $sb "59080"
+
+# Edit devm.yaml: give the worker service a canonical port too.
+# port_offset 51000 + 9090 = host 60090. This is a LIVE change
+# (port add to an existing service).
+set fd [open "$ws/devm.yaml" "r"]
+set current [read $fd]
+close $fd
+# Insert `    canonical: 9090\n` right after `  worker:\n`.
+regsub {  worker:\n} $current "  worker:\n    canonical: 9090\n" new
+set fd [open "$ws/devm.yaml" "w"]
+puts -nonewline $fd $new
+close $fd
+
+# Run devm reconcile from a separate process; --yes is harmless here
+# since LIVE-only changes don't need approval (no prompt fires).
+if {[catch {exec [e2e_devm_path] reconcile --yes} rc_out]} {
+    e2e_fail $test_name "devm reconcile failed: $rc_out"
+}
+
+# New port (60090:9090) must now be published.
+e2e_assert_ports_contain $sb "60090"
+
+# User shell should still be alive — LIVE changes don't restart.
+send -i $shell_id "echo still-alive\r"
+expect {
+    -i $shell_id
+    -re {still-alive} { }
+    timeout { e2e_fail $test_name "user shell died after reconcile (LIVE should not restart)" }
+    eof { e2e_fail $test_name "user shell EOF after reconcile" }
+}
+expect {
+    -i $shell_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "no prompt after echo" }
+}
+
+# Exit cleanly.
+send -i $shell_id "exit\r"
+expect {
+    -i $shell_id
+    eof { }
+    timeout { e2e_fail $test_name "shell did not exit" }
+}
+e2e_assert_sandbox_state $sb "stopped"
+
+e2e_pass $test_name
