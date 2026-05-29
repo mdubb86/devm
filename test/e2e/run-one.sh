@@ -29,12 +29,17 @@ sweep_registry() {
     local exit_code=$?
     if [ -s "$E2E_REGISTRY" ]; then
         echo ""
-        echo "=== sweep_registry: cleaning leaked sandboxes/workspaces ==="
-        while IFS=$'\t' read -r sb ws; do
-            [ -z "$sb" ] && continue
-            echo "  sbx rm $sb  +  rm -rf $ws"
-            sbx rm "$sb" >/dev/null 2>&1 || true
-            rm -rf "$ws"   >/dev/null 2>&1 || true
+        echo "=== sweep_registry: cleaning leaked sandboxes/workspaces/policies ==="
+        while IFS=$'\t' read -r a b; do
+            [ -z "$a" ] && continue
+            if [ "$a" = "policy" ]; then
+                echo "  sbx policy rm network --resource $b"
+                sbx policy rm network --resource "$b" >/dev/null 2>&1 || true
+            else
+                echo "  sbx rm $a  +  rm -rf $b"
+                sbx rm "$a" >/dev/null 2>&1 || true
+                rm -rf "$b"  >/dev/null 2>&1 || true
+            fi
         done < "$E2E_REGISTRY"
     fi
     rm -f "$E2E_REGISTRY"

@@ -125,11 +125,31 @@ proc exit {{code 0}} {
     _e2e_original_exit $code
 }
 
-# Run sbx rm + remove workspace dir + unregister from registry.
-# Best-effort; never fails.
+# Register a global network policy (added via reconcile) for cleanup.
+# sbx policies are GLOBAL and persist across sandboxes / sbx rm, so a
+# test that adds one must remove it or it leaks into every future
+# sandbox. Tracked both in a Tcl global (normal-exit cleanup) and in
+# the bash registry (crash/SIGKILL sweep). $domain is the resource
+# string passed to `sbx policy allow network`.
+proc e2e_register_policy {domain} {
+    lappend ::e2e_cleanup_policies $domain
+    if {[info exists ::env(E2E_REGISTRY)]} {
+        set fd [open $::env(E2E_REGISTRY) "a"]
+        puts $fd "policy\t$domain"
+        close $fd
+    }
+}
+
+# Run sbx rm + remove workspace dir + remove any registered global
+# policies + unregister from registry. Best-effort; never fails.
 proc e2e_cleanup {sb ws} {
     catch {exec sbx rm $sb}
     catch {exec rm -rf $ws}
+    if {[info exists ::e2e_cleanup_policies]} {
+        foreach domain $::e2e_cleanup_policies {
+            catch {exec sbx policy rm network --resource $domain}
+        }
+    }
     _e2e_registry_remove $sb
 }
 

@@ -1,0 +1,90 @@
+#!/usr/bin/env expect -f
+source [file dirname [info script]]/lib/common.exp
+
+set timeout 180
+set test_name "13_network_add"
+
+# worker daemon for a reliable cold-start shape; no network rules
+# initially. We add a domain via reconcile (LIVE: sbx policy allow).
+set yaml_extra {services:
+  worker:
+    startup:
+      - command: ["sh", "-c", "while true; do sleep 60; done"]
+        background: true
+}
+lassign [e2e_setup_workspace "netadd" $yaml_extra] sb ws
+cd $ws
+
+# Unique-per-run domain in the reserved .invalid TLD so it can't
+# collide with real rules. Register it for cleanup NOW (before adding)
+# so a crash still removes the global policy.
+set domain "$sb.example.invalid"
+e2e_register_policy $domain
+
+# Cold start; keep the shell open so reconcile is a LIVE op.
+spawn [e2e_devm_path] shell
+set shell_id $spawn_id
+expect {
+    -i $shell_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "shell never reached prompt" }
+    eof { e2e_fail $test_name "shell exited before prompt" }
+}
+
+# Edit devm.yaml: add a network allow rule for $domain. Prepend a
+# top-level `network:` block (string map onto the base_image line).
+set fd [open "$ws/devm.yaml" "r"]
+set current [read $fd]
+close $fd
+set current [string map [list \
+    "base_image:\n  docker: false\n" "base_image:\n  docker: false\nnetwork:\n  allowed_domains:\n    - $domain\n" \
+] $current]
+set fd [open "$ws/devm.yaml" "w"]
+puts -nonewline $fd $current
+close $fd
+
+# Reconcile (LIVE: sbx policy allow network $domain).
+if {[catch {exec [e2e_devm_path] reconcile --yes} rc_out]} {
+    e2e_fail $test_name "devm reconcile failed: $rc_out"
+}
+
+# Verify the domain now appears in sbx policy ls (poll briefly).
+set deadline [expr {[clock milliseconds] + 10000}]
+set seen 0
+while {[clock milliseconds] < $deadline} {
+    if {![catch {exec sbx policy ls --type network} pol]} {
+        if {[string first $domain $pol] >= 0} {
+            set seen 1
+            break
+        }
+    }
+    after 250
+}
+if {!$seen} {
+    e2e_fail $test_name "domain $domain not in sbx policy ls after reconcile add"
+}
+
+# User shell still alive (network add is LIVE).
+send -i $shell_id "echo still-alive\r"
+expect {
+    -i $shell_id
+    -re {still-alive} { }
+    timeout { e2e_fail $test_name "user shell died after LIVE network add" }
+    eof { e2e_fail $test_name "user shell EOF after network add" }
+}
+expect {
+    -i $shell_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "no prompt after echo" }
+}
+
+send -i $shell_id "exit\r"
+expect {
+    -i $shell_id
+    eof { }
+    timeout { e2e_fail $test_name "shell did not exit" }
+}
+e2e_assert_sandbox_state $sb "stopped"
+
+# e2e_cleanup (via exit) removes the registered policy.
+e2e_pass $test_name
