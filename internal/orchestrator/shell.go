@@ -117,7 +117,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		}
 		_ = lk.Release()
 		released = true
-		return runUserShell(d, sandboxName, cmdName, cmdArgs)
+		return runUserShell(d, cfg, sandboxName, cmdName, cmdArgs)
 	}
 
 	// Cold start.
@@ -190,8 +190,12 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// stick.
 
 	// Spawn the user's interactive shell. The UserSpawner is configured
-	// to inherit the host terminal's stdin/stdout/stderr.
-	execArgs := append([]string{"exec", "-it", sandboxName, cmdName}, cmdArgs...)
+	// to inherit the host terminal's stdin/stdout/stderr. EnvArgs injects
+	// service env (NAME_KEY), env_inject port vars, and project-wide env.
+	execArgs := []string{"exec", "-it"}
+	execArgs = append(execArgs, sandbox.EnvArgs(cfg)...)
+	execArgs = append(execArgs, sandboxName, cmdName)
+	execArgs = append(execArgs, cmdArgs...)
 	userCmd, err := d.UserSpawner.Start("sbx", execArgs...)
 	if err != nil {
 		killRun()
@@ -317,8 +321,11 @@ func waitForRunning(ctx context.Context, sb *sandbox.Sandbox, runDone <-chan err
 // reconcile; rerunning would be cheap but adds a noticeable startup
 // delay for the common case. If devm.yaml ports have changed since
 // the last cold start, the user must `devm stop` and re-shell.
-func runUserShell(d ShellDeps, sandboxName, cmdName string, cmdArgs []string) (int, error) {
-	args := append([]string{"exec", "-it", sandboxName, cmdName}, cmdArgs...)
+func runUserShell(d ShellDeps, cfg schema.Config, sandboxName, cmdName string, cmdArgs []string) (int, error) {
+	args := []string{"exec", "-it"}
+	args = append(args, sandbox.EnvArgs(cfg)...)
+	args = append(args, sandboxName, cmdName)
+	args = append(args, cmdArgs...)
 	cmd, err := d.UserSpawner.Start("sbx", args...)
 	if err != nil {
 		return -1, err

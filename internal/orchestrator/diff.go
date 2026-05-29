@@ -56,10 +56,13 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindPortChange:     BucketLive,
 	KindNetworkAdd:     BucketLive,
 	KindNetworkRemove:  BucketStopShell,
-	KindEnvAdd:         BucketStopShell,
-	KindEnvRemove:      BucketStopShell,
-	KindEnvChange:      BucketStopShell,
-	KindStartupChange:  BucketStopShell,
+	// Env is injected at each `sbx exec` (see EnvArgs), so a changed
+	// value is picked up by the next `devm shell` with no recreate —
+	// hence LIVE. ApplyLive takes no sbx action for env kinds.
+	KindEnvAdd:        BucketLive,
+	KindEnvRemove:     BucketLive,
+	KindEnvChange:     BucketLive,
+	KindStartupChange: BucketStopShell,
 	KindInstallChange:  BucketTeardownShell,
 	KindMaskChange:     BucketTeardownShell,
 	KindImageChange:    BucketTeardownShell,

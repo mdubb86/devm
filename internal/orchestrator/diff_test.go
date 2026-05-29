@@ -18,17 +18,17 @@ func TestBucketStrings(t *testing.T) {
 }
 
 func TestChangeKindBuckets(t *testing.T) {
-	// Live: ports (add/remove/change) + network add
+	// Live: ports (add/remove/change), network add, env (add/remove/change)
 	assert.Equal(t, BucketLive, KindPortAdd.Bucket())
 	assert.Equal(t, BucketLive, KindPortRemove.Bucket())
 	assert.Equal(t, BucketLive, KindPortChange.Bucket())
 	assert.Equal(t, BucketLive, KindNetworkAdd.Bucket())
+	assert.Equal(t, BucketLive, KindEnvAdd.Bucket())
+	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
+	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
 
-	// Stop+shell: network removes, env, startup
+	// Stop+shell: network removes, startup
 	assert.Equal(t, BucketStopShell, KindNetworkRemove.Bucket())
-	assert.Equal(t, BucketStopShell, KindEnvAdd.Bucket())
-	assert.Equal(t, BucketStopShell, KindEnvRemove.Bucket())
-	assert.Equal(t, BucketStopShell, KindEnvChange.Bucket())
 	assert.Equal(t, BucketStopShell, KindStartupChange.Bucket())
 
 	// Teardown+shell: install, masks, image, identity
@@ -194,16 +194,16 @@ func TestRecreateFlavorPickMax(t *testing.T) {
 	assert.Equal(t, FlavorLiveOnly, RecreateFlavor(nil))
 	assert.Equal(t, FlavorLiveOnly, RecreateFlavor([]Change{{Kind: KindPortAdd}}))
 
-	// Mix of live + stop → stop wins
+	// Mix of live + stop → stop wins (startup is STOP+SHELL)
 	assert.Equal(t, FlavorStopShell, RecreateFlavor([]Change{
 		{Kind: KindPortAdd},
-		{Kind: KindEnvChange},
+		{Kind: KindStartupChange},
 	}))
 
 	// Any teardown wins
 	assert.Equal(t, FlavorTeardownShell, RecreateFlavor([]Change{
 		{Kind: KindPortAdd},
-		{Kind: KindEnvChange},
+		{Kind: KindStartupChange},
 		{Kind: KindInstallChange},
 	}))
 }

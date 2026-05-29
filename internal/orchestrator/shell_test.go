@@ -155,6 +155,37 @@ func TestRunShellAlreadyRunningTakesShortcut(t *testing.T) {
 	}
 }
 
+func TestRunShellInjectsServiceEnv(t *testing.T) {
+	repoRoot := t.TempDir()
+	spawner := &stubSpawner{}
+	runner := &stateRunner{lsStatus: "running"}
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner.cmdQueue = []*stubCmd{userCmd}
+
+	cfg := minimalCfg()
+	cfg.Services = map[string]schema.Service{
+		"api": {Canonical: 8080, Env: map[string]string{"LOG_LEVEL": "info"}},
+	}
+
+	deps := ShellDeps{
+		AnchorSpawner: spawner,
+		UserSpawner:   spawner,
+		Runner:        runner,
+		LockPath:      filepath.Join(repoRoot, ".devm/lock"),
+	}
+	rc, err := RunShell(context.Background(), deps, cfg, repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	// The user shell's sbx exec args must include the injected service
+	// env var (uppercased service-name prefix).
+	require.Len(t, spawner.started, 1)
+	joined := strings.Join(spawner.started[0], " ")
+	assert.Contains(t, joined, "API_LOG_LEVEL=info", "service env must be injected into the shell")
+}
+
 func TestRunShellColdStartHappyPath(t *testing.T) {
 	repoRoot := t.TempDir()
 

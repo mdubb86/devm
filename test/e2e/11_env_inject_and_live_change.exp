@@ -1,0 +1,98 @@
+#!/usr/bin/env expect -f
+source [file dirname [info script]]/lib/common.exp
+
+set timeout 180
+set test_name "11_env_inject_and_live_change"
+
+# Project-wide env (PROJECT_VAR) + service env (api.LOG_LEVEL ->
+# API_LOG_LEVEL). worker daemon keeps the cold-start shape reliable.
+set yaml_extra {env:
+  PROJECT_VAR: "projhello"
+
+services:
+  api:
+    canonical: 8080
+    env:
+      LOG_LEVEL: "info"
+  worker:
+    startup:
+      - command: ["sh", "-c", "while true; do sleep 60; done"]
+        background: true
+}
+lassign [e2e_setup_workspace "env-live" $yaml_extra] sb ws
+cd $ws
+
+# Shell #1 (cold start). Verify both env vars are injected.
+spawn [e2e_devm_path] shell
+set first_id $spawn_id
+expect {
+    -i $first_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "first shell never reached prompt" }
+    eof { e2e_fail $test_name "first shell exited before prompt" }
+}
+
+send -i $first_id "echo \"GOT_API=\$API_LOG_LEVEL GOT_PROJ=\$PROJECT_VAR\"\r"
+expect {
+    -i $first_id
+    -re {GOT_API=info GOT_PROJ=projhello} { }
+    timeout { e2e_fail $test_name "service/project env not injected into first shell" }
+    eof { e2e_fail $test_name "first shell died during env check" }
+}
+expect {
+    -i $first_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "no prompt after env echo" }
+}
+
+# Edit devm.yaml: LOG_LEVEL info -> debug. Env is a LIVE change; the
+# next shell loads fresh cfg and injects the new value (no recreate).
+set fd [open "$ws/devm.yaml" "r"]
+set current [read $fd]
+close $fd
+regsub {LOG_LEVEL: "info"} $current {LOG_LEVEL: "debug"} new
+set fd [open "$ws/devm.yaml" "w"]
+puts -nonewline $fd $new
+close $fd
+
+# Shell #2 (shortcut path — sandbox still running). Must see the new
+# value. This exercises both reconcile-inner (env LIVE, no recreate)
+# and fresh env injection.
+spawn [e2e_devm_path] shell
+set second_id $spawn_id
+expect {
+    -i $second_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "second shell never reached prompt" }
+    eof { e2e_fail $test_name "second shell exited before prompt" }
+}
+send -i $second_id "echo \"GOT_API=\$API_LOG_LEVEL\"\r"
+expect {
+    -i $second_id
+    -re {GOT_API=debug} { }
+    -re {GOT_API=info} { e2e_fail $test_name "second shell still sees old env value (live change not picked up)" }
+    timeout { e2e_fail $test_name "env not present in second shell" }
+    eof { e2e_fail $test_name "second shell died during env check" }
+}
+expect {
+    -i $second_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "no prompt after second env echo" }
+}
+
+# Exit both shells.
+send -i $second_id "exit\r"
+expect {
+    -i $second_id
+    eof { }
+    timeout { e2e_fail $test_name "second shell did not exit" }
+}
+send -i $first_id "exit\r"
+expect {
+    -i $first_id
+    eof { }
+    timeout { e2e_fail $test_name "first shell did not exit" }
+}
+e2e_assert_sandbox_state $sb "stopped"
+
+e2e_pass $test_name
