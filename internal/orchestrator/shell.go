@@ -165,10 +165,19 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		return -1, err
 	}
 
-	if err := ReconcilePortsWithRunner(sb, cfg, d.Runner); err != nil {
+	// sbx `status: running` precedes the daemon being fully responsive
+	// to exec/port-publish. Gate on actual exec readiness before the
+	// handoff, otherwise downstream exec/publish calls can be dropped.
+	if err := waitForExecReady(sb, d.Runner, 30*time.Second); err != nil {
 		killRun()
-		return -1, err
+		return -1, fmt.Errorf("sandbox readiness: %w", err)
 	}
+
+	// NOTE: port reconcile is deliberately deferred until AFTER the
+	// anchor is killed (see below). Ports published while the sbx run
+	// anchor holds the session get torn down when that session ends;
+	// publishing in the steady state (user session only) makes them
+	// stick.
 
 	// Spawn the user's interactive shell. The UserSpawner is configured
 	// to inherit the host terminal's stdin/stdout/stderr.
@@ -228,6 +237,15 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		case <-time.After(3 * time.Second):
 		}
 		return -1, fmt.Errorf("safety invariant violated: sandbox stopped during anchor cleanup; user session not preserved")
+	}
+
+	// Reconcile ports now that we're in the steady state: anchor gone,
+	// only the user's session holds the sandbox. Ports published here
+	// are not tied to the anchor session, so they survive. A failure
+	// here is non-fatal to the shell (the user is already attached);
+	// surface it to stderr and continue.
+	if err := ReconcilePortsWithRunner(sb, cfg, d.Runner); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: port reconcile failed: %v\n", err)
 	}
 
 	// Write snapshot of currently-applied config so future reconciles

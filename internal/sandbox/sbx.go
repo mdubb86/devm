@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -18,7 +19,17 @@ type Runner interface {
 type DefaultRunner struct{}
 
 func (DefaultRunner) Output(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
+	out, err := exec.Command(name, args...).Output()
+	// exec.Cmd.Output() returns *exec.ExitError whose Error() is just
+	// "exit status N" — the real message is on stderr, captured in
+	// ExitError.Stderr. Fold it into the returned error so callers
+	// (and string-matching on specific failures) see the actual text.
+	if ee, ok := err.(*exec.ExitError); ok {
+		if msg := strings.TrimSpace(string(ee.Stderr)); msg != "" {
+			return out, fmt.Errorf("%w: %s", err, msg)
+		}
+	}
+	return out, err
 }
 
 func (DefaultRunner) Run(name string, args ...string) error {

@@ -4,21 +4,10 @@ source [file dirname [info script]]/lib/common.exp
 set timeout 180
 set test_name "08_reconcile_live_port"
 
-# Mirror test 07's known-working shape (install + a worker w/ startup).
-# Empirically, a sandbox with ONLY a canonical-port service (no install,
-# no startup) doesn't surface the published port in `sbx ports --json`
-# even after 30s polling. The exact sbx behavior is under investigation;
-# for now we sidestep by using a shape that is known to work.
-set yaml_extra {install:
-  - "true"
-
-services:
+# Start with one service (api on 8080). port_offset 51000 → host 59080.
+set yaml_extra {services:
   api:
     canonical: 8080
-  worker:
-    startup:
-      - command: ["sh", "-c", "while true; do sleep 60; done"]
-        background: true
 }
 lassign [e2e_setup_workspace "reconcile-live" $yaml_extra] sb ws
 cd $ws
@@ -36,14 +25,12 @@ expect {
 # Initial port should already be published by cold-start reconcile.
 e2e_assert_ports_contain $sb "59080"
 
-# Edit devm.yaml: give the worker service a canonical port too.
-# port_offset 51000 + 9090 = host 60090. This is a LIVE change
-# (port add to an existing service).
+# Edit devm.yaml: add a second service `worker` on canonical 9090.
+# This is a LIVE change (port add). port_offset 51000 + 9090 = host 60090.
 set fd [open "$ws/devm.yaml" "r"]
 set current [read $fd]
 close $fd
-# Insert `    canonical: 9090\n` right after `  worker:\n`.
-regsub {  worker:\n} $current "  worker:\n    canonical: 9090\n" new
+set new "$current  worker:\n    canonical: 9090\n"
 set fd [open "$ws/devm.yaml" "w"]
 puts -nonewline $fd $new
 close $fd

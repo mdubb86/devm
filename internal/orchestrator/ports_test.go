@@ -1,7 +1,9 @@
 package orchestrator
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -32,7 +34,63 @@ func (s *scriptedRunner) Output(name string, args ...string) ([]byte, error) {
 	if strings.Contains(joined, "ports") && strings.Contains(joined, "--json") {
 		return []byte(s.listJSON), nil
 	}
+	// Stateful stub: when the orchestrator publishes/unpublishes a
+	// port, update listJSON so verify-after-publish polling sees the
+	// new state. Mirrors how the real sbx daemon would behave.
+	if i := indexOf(args, "--publish"); i >= 0 && i+1 < len(args) {
+		s.applyPublish(args[i+1])
+	}
+	if i := indexOf(args, "--unpublish"); i >= 0 && i+1 < len(args) {
+		s.applyUnpublish(args[i+1])
+	}
 	return []byte(""), nil
+}
+
+func indexOf(ss []string, target string) int {
+	for i, s := range ss {
+		if s == target {
+			return i
+		}
+	}
+	return -1
+}
+
+// applyPublish parses "HOST:SBX" and appends a portMapping to listJSON.
+func (s *scriptedRunner) applyPublish(spec string) {
+	var host, sbx int
+	if n, _ := fmt.Sscanf(spec, "%d:%d", &host, &sbx); n != 2 {
+		return
+	}
+	var current []portMapping
+	if s.listJSON != "" && s.listJSON != "[]" {
+		_ = json.Unmarshal([]byte(s.listJSON), &current)
+	}
+	current = append(current, portMapping{
+		HostIP: "127.0.0.1", HostPort: host, SandboxPort: sbx, Protocol: "tcp",
+	})
+	out, _ := json.Marshal(current)
+	s.listJSON = string(out)
+}
+
+// applyUnpublish parses "HOST:SBX" and removes the matching entry.
+func (s *scriptedRunner) applyUnpublish(spec string) {
+	var host, sbx int
+	if n, _ := fmt.Sscanf(spec, "%d:%d", &host, &sbx); n != 2 {
+		return
+	}
+	var current []portMapping
+	if s.listJSON != "" && s.listJSON != "[]" {
+		_ = json.Unmarshal([]byte(s.listJSON), &current)
+	}
+	out := make([]portMapping, 0, len(current))
+	for _, m := range current {
+		if m.HostPort == host && m.SandboxPort == sbx {
+			continue
+		}
+		out = append(out, m)
+	}
+	js, _ := json.Marshal(out)
+	s.listJSON = string(js)
 }
 func (s *scriptedRunner) Run(name string, args ...string) error {
 	all := append([]string{name}, args...)
