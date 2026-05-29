@@ -80,6 +80,7 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 // spawn error).
 func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, sandboxName, cmdName string, cmdArgs []string) (int, error) {
 	applyDefaults(&d)
+	tm := newTimer("shell")
 
 	lk, err := lock.Acquire(d.LockPath)
 	if err != nil {
@@ -100,6 +101,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	if err := render.WriteDevmDir(cfg, repoRoot); err != nil {
 		return -1, fmt.Errorf("render devm dir: %w", err)
 	}
+	tm.mark("lock+render")
 
 	sb := &sandbox.Sandbox{Name: sandboxName, Runner: d.Runner}
 
@@ -151,6 +153,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 			repoRoot,
 		}
 	}
+	tm.mark("pre-sbx-run")
 	runCmd, err := d.AnchorSpawner.Start("sbx", runArgs...)
 	if err != nil {
 		return -1, fmt.Errorf("spawn sbx run: %w", err)
@@ -174,6 +177,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		killRun()
 		return -1, err
 	}
+	tm.mark("waitForRunning")
 
 	// sbx `status: running` precedes the daemon being fully responsive
 	// to exec/port-publish. Gate on actual exec readiness before the
@@ -182,6 +186,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		killRun()
 		return -1, fmt.Errorf("sandbox readiness: %w", err)
 	}
+	tm.mark("waitForExecReady")
 
 	// NOTE: port reconcile is deliberately deferred until AFTER the
 	// anchor is killed (see below). Ports published while the sbx run
@@ -234,11 +239,14 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		return -1, fmt.Errorf("sbx run exited during handoff")
 	}
 
+	tm.mark("userCmd+settle")
+
 	// Anchor's job is done. Killing the sbx run subprocess detaches
 	// sbx daemon's anchor session. The user session (added by userCmd)
 	// must already be holding the daemon's session count > 0 or the
 	// sandbox will stop. The check below verifies that.
 	killRun()
+	tm.mark("killRun")
 
 	// Safety invariant: with sbx run anchor gone, the user shell's pty
 	// must be the only thing keeping the sandbox alive. If the sandbox
@@ -261,6 +269,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	if err := ReconcilePortsWithRunner(sb, cfg, d.Runner); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: port reconcile failed: %v\n", err)
 	}
+	tm.mark("reconcilePorts")
 
 	// Write snapshot of currently-applied config so future reconciles
 	// can diff. Best-effort — failure is non-fatal (shell is attached
@@ -268,6 +277,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	if snapYAML, mErr := yaml.Marshal(cfg); mErr == nil {
 		_ = WriteSnapshot(sb, snapshotHeader+string(snapYAML))
 	}
+	tm.mark("writeSnapshot")
 
 	_ = lk.Release()
 	released = true
