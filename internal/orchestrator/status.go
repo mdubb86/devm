@@ -50,10 +50,77 @@ func RunStatus(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (StatusR
 	return res, nil
 }
 
-// RunStatusLive is RunStatus + live drift queries. v1 stub: returns
-// plain status with empty Drift. The live cross-checks (sbx ports
-// --json, sbx policy ls, etc.) land in a follow-up task — the surface
-// is here so the CLI flag wires through without breakage.
+// RunStatusLive is RunStatus plus a live cross-check of actual sbx
+// state against the last-applied snapshot, reporting drift. v1 covers
+// PORT drift (the common "someone manually sbx ports --unpublish'd a
+// mapping" case). Network/env/mount/image drift are not yet checked —
+// they need per-field live queries and kit-var filtering; tracked as
+// follow-ups. Port drift alone catches the most frequent real-world
+// divergence.
 func RunStatusLive(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (StatusResult, error) {
-	return RunStatus(cfg, sb, repoRoot)
+	res, err := RunStatus(cfg, sb, repoRoot)
+	if err != nil {
+		return res, err
+	}
+	if res.State != "running" {
+		return res, nil // nothing live to compare against
+	}
+
+	// Baseline = last-applied snapshot (what we believe is deployed).
+	snapStr, err := ReadSnapshot(sb)
+	if err != nil {
+		return res, fmt.Errorf("read snapshot: %w", err)
+	}
+	var snapCfg schema.Config
+	if snapStr == "" {
+		snapCfg = cfg
+	} else {
+		if err := yaml.Unmarshal([]byte(snapStr), &snapCfg); err != nil {
+			return res, fmt.Errorf("parse snapshot: %w", err)
+		}
+	}
+
+	res.Drift = append(res.Drift, portDrift(snapCfg, sb)...)
+	return res, nil
+}
+
+// portDrift compares the ports the snapshot expects against the ports
+// sbx actually reports live. Returns a DriftItem for each mapping that
+// is expected-but-missing or live-but-unexpected.
+func portDrift(snapCfg schema.Config, sb *sandbox.Sandbox) []DriftItem {
+	desired := desiredMappings(snapCfg)
+	live, err := currentMappings(sb, sb.Runner)
+	if err != nil {
+		// Can't query live ports — report as a drift-check failure
+		// rather than silently claiming "in sync".
+		return []DriftItem{{Kind: "port_check_failed", Detail: err.Error()}}
+	}
+
+	liveSet := make(map[int]int) // sandboxPort -> hostPort
+	for _, m := range live {
+		liveSet[m.SandboxPort] = m.HostPort
+	}
+	desiredSet := make(map[int]int)
+	for _, m := range desired {
+		desiredSet[m.SandboxPort] = m.HostPort
+	}
+
+	var drift []DriftItem
+	for _, m := range desired {
+		if _, ok := liveSet[m.SandboxPort]; !ok {
+			drift = append(drift, DriftItem{
+				Kind:   "port_missing",
+				Detail: fmt.Sprintf("expected %d->%d not published live", m.HostPort, m.SandboxPort),
+			})
+		}
+	}
+	for _, m := range live {
+		if _, ok := desiredSet[m.SandboxPort]; !ok {
+			drift = append(drift, DriftItem{
+				Kind:   "port_extra",
+				Detail: fmt.Sprintf("live %d->%d not in last-applied config", m.HostPort, m.SandboxPort),
+			})
+		}
+	}
+	return drift
 }
