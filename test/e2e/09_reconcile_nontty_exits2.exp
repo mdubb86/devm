@@ -1,0 +1,79 @@
+#!/usr/bin/env expect -f
+source [file dirname [info script]]/lib/common.exp
+
+set timeout 180
+set test_name "09_reconcile_nontty_exits2"
+
+# Cold start with an install step (TEARDOWN-bucket field). Include a
+# worker daemon so the sandbox shape matches the reliable cold-start
+# pattern.
+set yaml_extra {install:
+  - "touch /tmp/install-marker"
+
+services:
+  worker:
+    startup:
+      - command: ["sh", "-c", "while true; do sleep 60; done"]
+        background: true
+}
+lassign [e2e_setup_workspace "rec-nontty" $yaml_extra] sb ws
+cd $ws
+
+# Bring the sandbox up so reconcile has a snapshot to diff against
+# (cold-start writes /home/agent/.devm/applied.yaml).
+spawn [e2e_devm_path] shell
+set shell_id $spawn_id
+expect {
+    -i $shell_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "shell never reached prompt" }
+    eof { e2e_fail $test_name "shell exited before prompt" }
+}
+
+# Edit devm.yaml: change the install command. install is a TEARDOWN
+# bucket change → recreate-required.
+set fd [open "$ws/devm.yaml" "r"]
+set current [read $fd]
+close $fd
+regsub {touch /tmp/install-marker} $current {touch /tmp/different-marker} new
+set fd [open "$ws/devm.yaml" "w"]
+puts -nonewline $fd $new
+close $fd
+
+# Run reconcile with stdin from /dev/null (non-TTY) and --json.
+# Expect exit code 2 and JSON containing next_action=needs_approval.
+set rc 0
+if {[catch {exec sh -c "[e2e_devm_path] reconcile --json < /dev/null"} out opts]} {
+    set rc [lindex [dict get $opts -errorcode] 2]
+}
+if {$rc != 2} {
+    e2e_fail $test_name "expected exit code 2 from non-TTY recreate, got rc=$rc; output: $out"
+}
+if {[string first "needs_approval" $out] < 0} {
+    e2e_fail $test_name "expected next_action=needs_approval in JSON; got: $out"
+}
+
+# The user shell should still be alive (reconcile didn't recreate).
+send -i $shell_id "echo still-here\r"
+expect {
+    -i $shell_id
+    -re {still-here} { }
+    timeout { e2e_fail $test_name "user shell died after non-TTY reconcile (should not recreate)" }
+    eof { e2e_fail $test_name "user shell EOF after non-TTY reconcile" }
+}
+expect {
+    -i $shell_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "no prompt after echo" }
+}
+
+# Exit cleanly.
+send -i $shell_id "exit\r"
+expect {
+    -i $shell_id
+    eof { }
+    timeout { e2e_fail $test_name "shell did not exit" }
+}
+e2e_assert_sandbox_state $sb "stopped"
+
+e2e_pass $test_name
