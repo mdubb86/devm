@@ -17,6 +17,7 @@ services:
 }
 lassign [e2e_setup_workspace "install-rc" $yaml_extra] sb ws
 cd $ws
+e2e_phase "setup"
 
 # Cold start 1: install runs at create → marker-a present.
 spawn [e2e_devm_path] shell
@@ -39,6 +40,7 @@ expect {
     -re $::e2e_prompt_re { }
     timeout { e2e_fail $test_name "no prompt after initial check" }
 }
+e2e_phase "cold-start-1"
 
 # Edit install: marker-a -> marker-b (TEARDOWN-bucket change).
 set fd [open "$ws/devm.yaml" "r"]
@@ -57,6 +59,7 @@ expect {
     timeout { e2e_fail $test_name "user shell did not die after teardown recreate" }
 }
 e2e_assert_sandbox_absent $sb
+e2e_phase "reconcile-teardown"
 
 # Cold start 2 (fresh create) re-runs the NEW install. In ONE fresh
 # shell, verify marker-b present (new install ran) AND marker-a absent
@@ -99,4 +102,5 @@ expect {
 }
 
 e2e_assert_sandbox_state $sb "stopped"
+e2e_phase "cold-start-2+verify"
 e2e_pass $test_name

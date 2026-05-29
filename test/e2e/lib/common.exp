@@ -230,6 +230,23 @@ proc e2e_assert_ports_absent {sb needle} {
     e2e_fail "assert_ports_absent" "port mapping containing '$needle' still present after 30s (last: $last)"
 }
 
+# Print the wall-clock delta since the previous e2e_phase call (and
+# since the first), to stdout. Lets a test break its total runtime
+# into named phases (cold start, reconcile, fresh shell, ...) so we
+# can see where the time goes. Pure Tcl clock — no devm/stderr, so it
+# can't trip Tcl's exec strictness.
+proc e2e_phase {label} {
+    set now [clock milliseconds]
+    if {![info exists ::e2e_phase_start]} {
+        set ::e2e_phase_start $now
+        set ::e2e_phase_last $now
+    }
+    set delta [expr {($now - $::e2e_phase_last) / 1000.0}]
+    set total [expr {($now - $::e2e_phase_start) / 1000.0}]
+    puts [format "\[phase\] %-24s %6.1fs   (total %.1fs)" $label $delta $total]
+    set ::e2e_phase_last $now
+}
+
 # Spawn a fresh `devm shell`, wait for the prompt, run one command,
 # assert want_re appears before the next prompt, then exit the shell
 # cleanly. Used by recreate-and-verify tests to inspect the new
