@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mtwaage/devm/internal/lock"
+	"github.com/mtwaage/devm/internal/render"
 	"github.com/mtwaage/devm/internal/sandbox"
 	"github.com/mtwaage/devm/internal/schema"
 	"gopkg.in/yaml.v3"
@@ -90,6 +91,15 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 			_ = lk.Release()
 		}
 	}()
+
+	// Render .devm/ from the current devm.yaml before doing anything.
+	// Cold start feeds .devm/spec.yaml to `sbx run`, so a stale cache
+	// would silently launch the sandbox with old config. Rendering here
+	// removes the "edit devm.yaml then devm shell uses old config unless
+	// you reconcile first" foot-gun. Cheap and idempotent.
+	if err := render.WriteDevmDir(cfg, repoRoot); err != nil {
+		return -1, fmt.Errorf("render devm dir: %w", err)
+	}
 
 	sb := &sandbox.Sandbox{Name: sandboxName, Runner: d.Runner}
 
