@@ -37,21 +37,32 @@ export DEVM_BIN
 # --- run tests serially (VM-bound; no parallelism in v1) ---
 fail_count=0
 pass_count=0
+suite_start=$(date +%s)
 declare -a failed
+declare -a timings
 
 for script in $(ls -1 [0-9]*.exp 2>/dev/null | sort); do
     printf "=== %s ===\n" "$script"
+    t_start=$(date +%s)
     if expect "$script"; then
         pass_count=$((pass_count + 1))
     else
         fail_count=$((fail_count + 1))
         failed+=("$script")
     fi
-    echo ""
+    t_elapsed=$(( $(date +%s) - t_start ))
+    timings+=("$(printf '%-40s %3ds' "$script" "$t_elapsed")")
+    printf -- "--- %s: %ds ---\n\n" "$script" "$t_elapsed"
 done
+suite_elapsed=$(( $(date +%s) - suite_start ))
 
 # --- report ---
 echo "==============================================="
+printf "Per-test timing:\n"
+for t in "${timings[@]}"; do
+    printf "  %s\n" "$t"
+done
+printf "Total: %ds\n" "$suite_elapsed"
 printf "Results: %d passed, %d failed\n" "$pass_count" "$fail_count"
 if [ $fail_count -gt 0 ]; then
     printf "Failed:\n"

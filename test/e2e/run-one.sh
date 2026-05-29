@@ -47,5 +47,10 @@ sweep_registry() {
 }
 trap sweep_registry EXIT INT TERM
 
-# Run the one test.
+# Run the one test, reporting wall-clock duration.
+_start=$(date +%s)
 expect "$TEST"
+_rc=$?
+_elapsed=$(( $(date +%s) - _start ))
+printf '\n--- %s: %ds ---\n' "$(basename "$TEST")" "$_elapsed"
+exit $_rc
