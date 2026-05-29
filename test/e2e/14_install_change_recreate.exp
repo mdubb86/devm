@@ -1,0 +1,102 @@
+#!/usr/bin/env expect -f
+source [file dirname [info script]]/lib/common.exp
+
+set timeout 240
+set test_name "14_install_change_recreate"
+
+# install touches marker-a in /home/agent (persists across sbx stop,
+# wiped by teardown) at create. worker daemon for reliable shape.
+set yaml_extra {install:
+  - "touch /home/agent/marker-a"
+
+services:
+  worker:
+    startup:
+      - command: ["sh", "-c", "while true; do sleep 60; done"]
+        background: true
+}
+lassign [e2e_setup_workspace "install-rc" $yaml_extra] sb ws
+cd $ws
+
+# Cold start 1: install runs at create → marker-a present.
+spawn [e2e_devm_path] shell
+set shell_id $spawn_id
+expect {
+    -i $shell_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "shell never reached prompt" }
+    eof { e2e_fail $test_name "shell exited before prompt" }
+}
+send -i $shell_id "test -e /home/agent/marker-a; echo \"INIT=\$?\"\r"
+expect {
+    -i $shell_id
+    -re {INIT=0} { }
+    -re {INIT=1} { e2e_fail $test_name "marker-a missing after initial install" }
+    timeout { e2e_fail $test_name "no response to initial marker-a check" }
+}
+expect {
+    -i $shell_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "no prompt after initial check" }
+}
+
+# Edit install: marker-a -> marker-b (TEARDOWN-bucket change).
+set fd [open "$ws/devm.yaml" "r"]
+set current [read $fd]
+close $fd
+set current [string map [list "/home/agent/marker-a" "/home/agent/marker-b"] $current]
+set fd [open "$ws/devm.yaml" "w"]
+puts -nonewline $fd $current
+close $fd
+
+# reconcile --yes → TEARDOWN recreate (sbx rm). User shell dies.
+catch {exec [e2e_devm_path] reconcile --yes} _
+expect {
+    -i $shell_id
+    eof { }
+    timeout { e2e_fail $test_name "user shell did not die after teardown recreate" }
+}
+e2e_assert_sandbox_absent $sb
+
+# Cold start 2 (fresh create) re-runs the NEW install. In ONE fresh
+# shell, verify marker-b present (new install ran) AND marker-a absent
+# (teardown wiped the old home dir — proves real re-provision, not a
+# stale restart).
+spawn [e2e_devm_path] shell
+set fresh_id $spawn_id
+expect {
+    -i $fresh_id
+    -re $::e2e_prompt_re { }
+    timeout { e2e_fail $test_name "fresh shell never reached prompt" }
+    eof { e2e_fail $test_name "fresh shell exited before prompt" }
+}
+# Verify via `test -e <path>; echo "TAG=$?"`. The matched value (=0 /
+# =1) does NOT appear in the command text, so expect can't match the
+# echoed command by mistake (matching the literal output token would).
+# marker-b must exist (TAG=0 = new install ran); marker-a must be gone
+# (TAG=1 = teardown wiped state).
+send -i $fresh_id "test -e /home/agent/marker-b; echo \"BCHECK=\$?\"\r"
+expect {
+    -i $fresh_id
+    -re {BCHECK=0} { }
+    -re {BCHECK=1} { e2e_fail $test_name "marker-b missing — new install did not run on recreate" }
+    timeout { e2e_fail $test_name "no response to marker-b check" }
+}
+expect { -i $fresh_id -re $::e2e_prompt_re { } timeout { e2e_fail $test_name "no prompt after marker-b check" } }
+send -i $fresh_id "test -e /home/agent/marker-a; echo \"ACHECK=\$?\"\r"
+expect {
+    -i $fresh_id
+    -re {ACHECK=1} { }
+    -re {ACHECK=0} { e2e_fail $test_name "marker-a still present — teardown did not wipe state" }
+    timeout { e2e_fail $test_name "no response to marker-a check" }
+}
+expect { -i $fresh_id -re $::e2e_prompt_re { } timeout { e2e_fail $test_name "no prompt after marker-a check" } }
+send -i $fresh_id "exit\r"
+expect {
+    -i $fresh_id
+    eof { }
+    timeout { e2e_fail $test_name "fresh shell did not exit" }
+}
+
+e2e_assert_sandbox_state $sb "stopped"
+e2e_pass $test_name

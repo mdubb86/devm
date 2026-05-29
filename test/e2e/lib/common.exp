@@ -22,20 +22,14 @@ proc e2e_devm_path {} {
 # All tests reference $::e2e_prompt_re instead of hardcoding the regex.
 set ::e2e_prompt_re {agent@\S+:\S+\$ ?}
 
-# Default expect timeout and global fallback handlers. Individual
-# `expect { ... }` blocks with explicit timeout/eof clauses override
-# these for that block; this block catches the "test author forgot
-# to write handlers" case so a missing pattern fails loudly instead
-# of silently passing.
+# Default expect timeout. We deliberately do NOT install a global
+# expect_after timeout/eof net: expect_after binds its patterns to the
+# spawn_id active at definition time (the original stdin, exp0), not
+# the test's later `spawn`ed processes. With multiple spawns it fires
+# spuriously and masks the real per-block failure (and the message is
+# unhelpful). Every test's `expect` blocks MUST therefore include
+# explicit `timeout` and `eof` clauses that call e2e_fail.
 set timeout 30
-expect_after {
-    timeout {
-        e2e_fail "expect" "global timeout — no explicit timeout handler in expect block"
-    }
-    eof {
-        e2e_fail "expect" "global eof — no explicit eof handler in expect block"
-    }
-}
 
 # Append a registry entry: <sandbox>\t<workspace>\n
 proc _e2e_registry_add {sb ws} {
@@ -234,6 +228,40 @@ proc e2e_assert_ports_absent {sb needle} {
         after 250
     }
     e2e_fail "assert_ports_absent" "port mapping containing '$needle' still present after 30s (last: $last)"
+}
+
+# Spawn a fresh `devm shell`, wait for the prompt, run one command,
+# assert want_re appears before the next prompt, then exit the shell
+# cleanly. Used by recreate-and-verify tests to inspect the new
+# sandbox state after a teardown/stop recreate. test_name + label go
+# into failure messages. Leaves the sandbox stopped on exit.
+proc e2e_run_in_fresh_shell {test_name label devm command want_re} {
+    spawn $devm shell
+    set sid $spawn_id
+    expect {
+        -i $sid
+        -re $::e2e_prompt_re { }
+        timeout { e2e_fail $test_name "$label: fresh shell never reached prompt" }
+        eof { e2e_fail $test_name "$label: fresh shell exited before prompt" }
+    }
+    send -i $sid "$command\r"
+    expect {
+        -i $sid
+        -re $want_re { }
+        timeout { e2e_fail $test_name "$label: did not see /$want_re/ after: $command" }
+        eof { e2e_fail $test_name "$label: shell died running: $command" }
+    }
+    expect {
+        -i $sid
+        -re $::e2e_prompt_re { }
+        timeout { e2e_fail $test_name "$label: no prompt after: $command" }
+    }
+    send -i $sid "exit\r"
+    expect {
+        -i $sid
+        eof { }
+        timeout { e2e_fail $test_name "$label: fresh shell did not exit" }
+    }
 }
 
 proc e2e_pass {name} {
