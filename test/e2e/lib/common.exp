@@ -197,6 +197,25 @@ proc e2e_assert_ports_contain {sb needle} {
     e2e_fail "assert_ports" "port mapping containing '$needle' not seen within 30s (last: $last)"
 }
 
+# Poll `sbx ports <sb> --json` for up to 30s waiting for $needle to
+# DISAPPEAR (used to verify an unpublish took effect). Fails if the
+# needle is still present after the budget.
+proc e2e_assert_ports_absent {sb needle} {
+    set deadline [expr {[clock milliseconds] + 30000}]
+    set last ""
+    while {[clock milliseconds] < $deadline} {
+        if {[catch {exec sbx ports $sb --json} out]} {
+            set out ""
+        }
+        set last $out
+        if {[string first $needle $out] < 0} {
+            return
+        }
+        after 250
+    }
+    e2e_fail "assert_ports_absent" "port mapping containing '$needle' still present after 30s (last: $last)"
+}
+
 proc e2e_pass {name} {
     puts "PASS: $name"
     exit 0
