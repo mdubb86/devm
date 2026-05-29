@@ -156,6 +156,14 @@ func (c Config) Validate() error {
 			seenHosts[svc.Hostname] = name
 		}
 		if svc.Canonical != 0 {
+			if svc.Canonical < 1 || svc.Canonical > 65535 {
+				return fmt.Errorf("services.%s: canonical port %d out of range (1-65535)", name, svc.Canonical)
+			}
+			host := c.Project.PortOffset + svc.Canonical
+			if host > 65535 {
+				return fmt.Errorf("services.%s: port_offset %d + canonical %d = %d exceeds max TCP port 65535",
+					name, c.Project.PortOffset, svc.Canonical, host)
+			}
 			if prev, ok := seenPorts[svc.Canonical]; ok {
 				return fmt.Errorf("duplicate canonical port %d in services %s and %s", svc.Canonical, prev, name)
 			}

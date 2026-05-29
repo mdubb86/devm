@@ -80,6 +80,37 @@ func TestConfigValidate(t *testing.T) {
 	assert.Error(t, bad.Validate(), "project.id required")
 }
 
+func TestConfigValidatesPortRange(t *testing.T) {
+	base := Config{
+		Project: Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+	}
+
+	// port_offset + canonical exceeds 65535 → error.
+	over := base
+	over.Project.PortOffset = 70000
+	over.Services = map[string]Service{"api": {Canonical: 8080}}
+	err := over.Validate()
+	require.Error(t, err, "offset+canonical over 65535 must error")
+	assert.Contains(t, err.Error(), "65535")
+
+	// canonical out of range (negative / too large) → error.
+	bigCanon := base
+	bigCanon.Services = map[string]Service{"api": {Canonical: 70000}}
+	assert.Error(t, bigCanon.Validate(), "canonical over 65535 must error")
+
+	// Valid combination → no error.
+	ok := base
+	ok.Project.PortOffset = 51000
+	ok.Services = map[string]Service{"api": {Canonical: 8080}} // 59080, fine
+	assert.NoError(t, ok.Validate())
+
+	// Exactly at the boundary is allowed.
+	boundary := base
+	boundary.Project.PortOffset = 60000
+	boundary.Services = map[string]Service{"api": {Canonical: 5535}} // 65535
+	assert.NoError(t, boundary.Validate())
+}
+
 func TestStartupCommandRequiresNonEmptyCommand(t *testing.T) {
 	err := StartupCommand{}.Validate()
 	require.Error(t, err)
