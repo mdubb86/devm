@@ -128,12 +128,14 @@ type ReconcileOptions struct {
 //	-1  — operational error (lock fail, render fail, RunStop fail)
 func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts ReconcileOptions) (int, ReconcileResult, error) {
 	res := ReconcileResult{}
+	tm := newTimer("reconcile")
 
 	// 1. Always render .devm/ first.
 	if err := render.WriteDevmDir(cfg, repoRoot); err != nil {
 		return -1, res, fmt.Errorf("render devm dir: %w", err)
 	}
 	res.Rendered = true
+	tm.mark("render")
 
 	// 2. Acquire lock.
 	lockPath := filepath.Join(repoRoot, ".devm", "lock")
@@ -193,7 +195,9 @@ func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts 
 	}
 
 	// 5. Real apply via Inner.
+	tm.mark("pre-inner")
 	inner, err := RunReconcileInner(cfg, sb, repoRoot)
+	tm.mark("inner")
 	if err != nil {
 		// Surface whatever partial state Inner gathered.
 		res.Applied = inner.Applied
@@ -249,9 +253,11 @@ func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts 
 	if res.Flavor == FlavorTeardownShell {
 		mode = StopDestroy
 	}
+	tm.mark("pre-recreate")
 	if _, err := RunStop(context.Background(), stopDeps, sb.Name, mode, true); err != nil {
 		return -1, res, fmt.Errorf("recreate (%s): %w", res.Flavor, err)
 	}
+	tm.mark("recreate(RunStop)")
 
 	res.NextAction = "applied"
 	return 0, res, nil
