@@ -47,7 +47,7 @@ var statusCmd = &cobra.Command{
 }
 
 func init() {
-	statusCmd.Flags().BoolVar(&statusLive, "live", false, "Cross-check against live sbx state (slower; v1 stub returns same as plain status)")
+	statusCmd.Flags().BoolVar(&statusLive, "live", false, "Cross-check against live sbx state and report drift (slower; v1 checks port mappings)")
 	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "Emit JSON output")
 	rootCmd.AddCommand(statusCmd)
 }
