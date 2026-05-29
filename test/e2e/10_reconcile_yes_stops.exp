@@ -4,14 +4,11 @@ source [file dirname [info script]]/lib/common.exp
 set timeout 180
 set test_name "10_reconcile_yes_stops"
 
-# Cold start with a service carrying an env var (env change is a
-# STOP+SHELL bucket change) plus a worker daemon for a reliable
-# cold-start shape.
+# Cold start with a worker whose startup command we will change.
+# A startup change is a STOP+SHELL bucket change — the trigger we need
+# to exercise reconcile --yes performing a recreate. (Env is LIVE now,
+# so it would NOT force a recreate.)
 set yaml_extra {services:
-  api:
-    canonical: 8080
-    env:
-      LOG_LEVEL: "info"
   worker:
     startup:
       - command: ["sh", "-c", "while true; do sleep 60; done"]
@@ -30,13 +27,15 @@ expect {
     eof { e2e_fail $test_name "shell exited before prompt" }
 }
 
-# Edit env LOG_LEVEL info → debug. This is a STOP+SHELL change.
+# Edit the worker's startup command (sleep 60 -> sleep 90). A startup
+# change is STOP+SHELL → forces a recreate. string map (literal, real
+# newlines) avoids regsub replacement-escaping pitfalls.
 set fd [open "$ws/devm.yaml" "r"]
 set current [read $fd]
 close $fd
-regsub {LOG_LEVEL: "info"} $current {LOG_LEVEL: "debug"} new
+set current [string map [list "while true; do sleep 60; done" "while true; do sleep 90; done"] $current]
 set fd [open "$ws/devm.yaml" "w"]
-puts -nonewline $fd $new
+puts -nonewline $fd $current
 close $fd
 
 # Run reconcile --yes from a separate process. It should execute the
