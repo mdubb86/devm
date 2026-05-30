@@ -1,0 +1,18 @@
+[project]
+name = "devm-e2e"
+version = "0.1.0"
+description = "End-to-end tests for devm (pytest + pexpect)"
+requires-python = ">=3.14"
+dependencies = [
+    "pytest>=8.0",
+    "pytest-xdist>=3.6",
+    "pytest-timeout>=2.3",
+    "pexpect>=4.9",
+    "pyyaml>=6.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "-n 2 --durations=20 -ra -v"
+timeout = 120
+testpaths = ["."]
+python_files = "test_*.py"
