@@ -1,0 +1,46 @@
+"""Workspace helper: tempdir + devm.yaml builder/patcher.
+
+A test workspace is a directory containing a freshly-rendered
+devm.yaml. The Workspace knows how to write a minimal config and
+how to patch named sections without breaking YAML.
+"""
+from __future__ import annotations
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+class Workspace:
+    def __init__(self, path: Path, slug: str, sandbox_name: str, port_offset: int = 51000):
+        self.path = Path(path)
+        self.slug = slug
+        self.sandbox_name = sandbox_name
+        self.port_offset = port_offset
+
+    @property
+    def devmyaml_path(self) -> Path:
+        return self.path / "devm.yaml"
+
+    def write_devmyaml(self, **sections: Any) -> None:
+        """Write a fresh devm.yaml. Extra sections (install, services, env,
+        network, base_image) are merged into the project skeleton."""
+        cfg: dict[str, Any] = {
+            "project": {
+                "id": self.slug,
+                "sandbox_name": self.sandbox_name,
+                "hostname_apex": f"{self.slug}.local",
+                "port_offset": self.port_offset,
+            },
+            "base_image": {"docker": False},
+        }
+        for k, v in sections.items():
+            cfg[k] = v
+        self.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+
+    def patch_devmyaml(self, **sections: Any) -> None:
+        """Update named top-level sections in the existing devm.yaml."""
+        cfg = yaml.safe_load(self.devmyaml_path.read_text()) or {}
+        for k, v in sections.items():
+            cfg[k] = v
+        self.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
