@@ -23,12 +23,24 @@ from helpers import Devm, Workspace, registry, sbx
 # --- session ---
 
 @pytest.fixture(scope="session")
-def devm() -> Devm:
-    """Built devm binary (run.sh exports DEVM_BIN)."""
-    return Devm.from_env()
+def devm_path() -> str:
+    """Path to the freshly-built devm binary (run.sh exports DEVM_BIN)."""
+    p = os.environ.get("DEVM_BIN")
+    if not p:
+        raise RuntimeError("DEVM_BIN not set (run.sh sets it; check the wrapper)")
+    return p
 
 
 # --- per-test ---
+
+# (workspace is below; declared as a forward-ref dependency of `devm`.)
+@pytest.fixture
+def devm(devm_path, workspace) -> Devm:
+    """Devm CLI wrapper bound to the test's workspace as cwd, so
+    `devm.reconcile()` / `stop()` / `teardown()` read the test's
+    devm.yaml (not e2e/'s)."""
+    return Devm(devm_path, cwd=str(workspace.path))
+
 
 def _slug_from_node(name: str) -> str:
     """`test_01_cold_start` -> `cold-start` (within 20 chars, alnum + hyphens)."""
