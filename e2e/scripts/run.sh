@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # run.sh — uv sync + pytest with crash-safe cleanup + signal escalation.
 set -uo pipefail
-cd "$(dirname "$0")/.."   # cd into e2e/
+
+# Resolve script dir BEFORE cd so we can source sweep.sh by absolute path.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/.."   # cd into e2e/
 
 # Shared registry sweep used by EXIT trap.
 # shellcheck source=./sweep.sh
-source "$(dirname "$0")/sweep.sh"
+source "$SCRIPT_DIR/sweep.sh"
 
 export E2E_REGISTRY="$(mktemp -t devm-e2e-reg.XXXX)"
 
