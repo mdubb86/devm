@@ -8,6 +8,7 @@ from unittest.mock import patch
 import yaml
 
 from helpers import registry, sbx
+from helpers.devm import Devm, DevmError
 from helpers.workspace import Workspace
 
 
@@ -100,3 +101,43 @@ def test_sbx_ports_parses_json():
     with patch("subprocess.run", return_value=fake):
         ports = sbx.ports("foo")
     assert ports == [{"host_ip": "127.0.0.1", "host_port": 59080, "sandbox_port": 8080, "protocol": "tcp"}]
+
+
+# --- devm ---
+
+def test_devm_path_uses_env(monkeypatch, tmp_path):
+    binary = tmp_path / "devm"
+    binary.write_text("")
+    monkeypatch.setenv("DEVM_BIN", str(binary))
+    assert Devm.from_env().path == str(binary)
+
+
+def test_devm_reconcile_invokes_subprocess(monkeypatch, tmp_path):
+    binary = tmp_path / "devm"
+    binary.write_text("")
+    binary.chmod(0o755)
+    captured: dict[str, list[str]] = {}
+    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"OK", stderr=b"")
+
+    def fake_run(args, **kw):
+        captured["args"] = args
+        return fake
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    Devm(str(binary), cwd=str(tmp_path)).reconcile(yes=True)
+    assert captured["args"] == [str(binary), "reconcile", "--yes"]
+
+
+def test_devm_reconcile_raises_on_nonzero(monkeypatch, tmp_path):
+    binary = tmp_path / "devm"
+    binary.write_text("")
+    binary.chmod(0o755)
+    fake = subprocess.CompletedProcess(args=[], returncode=2, stdout=b"", stderr=b"boom")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake)
+    try:
+        Devm(str(binary), cwd=str(tmp_path)).reconcile()
+    except DevmError as e:
+        assert e.returncode == 2
+        assert "boom" in str(e)
+    else:
+        raise AssertionError("expected DevmError")
