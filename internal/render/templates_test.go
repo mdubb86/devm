@@ -109,6 +109,31 @@ func TestRenderTemplates_PathTraversal_Rejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "outside project root")
 }
 
+func TestRenderTemplates_Deterministic(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.tmpl"), []byte("a {{.Project.ID}}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.tmpl"), []byte("b {{.Project.ID}}\n"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Services: map[string]schema.Service{
+			"zeta":  {Canonical: 9000, Templates: []schema.Template{{Source: "b.tmpl", Output: "/b"}}},
+			"alpha": {Canonical: 8000, Templates: []schema.Template{{Source: "a.tmpl", Output: "/a"}}},
+		},
+	}
+	r1, err := RenderTemplates(cfg, dir)
+	require.NoError(t, err)
+	r2, err := RenderTemplates(cfg, dir)
+	require.NoError(t, err)
+	assert.Equal(t, r1, r2)
+
+	// alpha sorts before zeta -> indices 00 (alpha) and 01 (zeta).
+	_, hasAlpha := r1[filepath.Join(dir, ".devm/templates/00-alpha-a.sh")]
+	_, hasZeta := r1[filepath.Join(dir, ".devm/templates/01-zeta-b.sh")]
+	assert.True(t, hasAlpha, "expected 00-alpha-a.sh; keys: %v", mapKeys(r1))
+	assert.True(t, hasZeta, "expected 01-zeta-b.sh; keys: %v", mapKeys(r1))
+}
+
 // mapKeys is a tiny test helper used in error messages.
 func mapKeys[K comparable, V any](m map[K]V) []K {
 	ks := make([]K, 0, len(m))
