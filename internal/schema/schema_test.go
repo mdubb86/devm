@@ -162,3 +162,31 @@ func TestServiceMayHaveOnlyStartup(t *testing.T) {
 	err := svc.Validate()
 	assert.NoError(t, err, "a service with only startup commands should be valid")
 }
+
+func TestTemplateValidate(t *testing.T) {
+	// Valid.
+	ok := Template{Source: "configs/foo.tmpl", Output: "/etc/foo"}
+	assert.NoError(t, ok.Validate())
+
+	// Missing source.
+	assert.Error(t, Template{Output: "/etc/foo"}.Validate())
+
+	// Missing output.
+	assert.Error(t, Template{Source: "foo.tmpl"}.Validate())
+
+	// Path traversal in source — rejected.
+	bad := Template{Source: "../etc/passwd", Output: "/etc/foo"}
+	err := bad.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+
+	// Cleaned form still escapes — rejected.
+	bad2 := Template{Source: "configs/../../etc/passwd", Output: "/etc/foo"}
+	assert.Error(t, bad2.Validate())
+
+	// Output must be absolute.
+	rel := Template{Source: "foo.tmpl", Output: "etc/foo"}
+	err = rel.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "absolute")
+}
