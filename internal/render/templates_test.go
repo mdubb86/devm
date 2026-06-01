@@ -40,3 +40,42 @@ func TestRenderTemplates_SymlinkEscape_Rejected(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outside project root")
 }
+
+func TestRenderTemplates_Simple(t *testing.T) {
+	dir := t.TempDir()
+	// Source file.
+	tmplPath := filepath.Join(dir, "hello.tmpl")
+	require.NoError(t, os.WriteFile(tmplPath, []byte("hello {{.Project.ID}} at {{.Service.api.HostPort}}\n"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "myapp", SandboxName: "myapp-sbx", HostnameApex: "myapp.local", PortOffset: 50000},
+		Services: map[string]schema.Service{
+			"api": {Canonical: 8080, Templates: []schema.Template{{Source: "hello.tmpl", Output: "/etc/hello"}}},
+		},
+	}
+	got, err := RenderTemplates(cfg, dir)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	// Single installer at .devm/templates/00-api-hello.sh.
+	expectPath := filepath.Join(dir, ".devm", "templates", "00-api-hello.sh")
+	script, ok := got[expectPath]
+	require.True(t, ok, "expected installer at %s; got keys: %v", expectPath, mapKeys(got))
+
+	// The rendered body must appear inside the heredoc.
+	assert.Contains(t, script, "hello myapp at 58080\n")
+	// Destination set correctly.
+	assert.Contains(t, script, "DEST='/etc/hello'\n")
+	// Atomic write pattern.
+	assert.Contains(t, script, "TMP=")
+	assert.Contains(t, script, "mv \"$TMP\" \"$DEST\"")
+}
+
+// mapKeys is a tiny test helper used in error messages.
+func mapKeys[K comparable, V any](m map[K]V) []K {
+	ks := make([]K, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
+}
