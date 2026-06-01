@@ -87,6 +87,28 @@ func TestRenderTemplates_MissingVar_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "nope")
 }
 
+func TestRenderTemplates_PathTraversal_Rejected(t *testing.T) {
+	root := t.TempDir()
+	// Create a file outside the root.
+	outside := filepath.Join(filepath.Dir(root), "outside.tmpl")
+	require.NoError(t, os.WriteFile(outside, []byte("x"), 0o644))
+	t.Cleanup(func() { _ = os.Remove(outside) })
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "x", SandboxName: "x", HostnameApex: "x.local"},
+		Services: map[string]schema.Service{
+			"a": {Canonical: 1, Templates: []schema.Template{
+				// Skip schema.Validate (which already rejects this) and hit
+				// the render-time guard directly.
+				{Source: "../outside.tmpl", Output: "/x"},
+			}},
+		},
+	}
+	_, err := RenderTemplates(cfg, root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside project root")
+}
+
 // mapKeys is a tiny test helper used in error messages.
 func mapKeys[K comparable, V any](m map[K]V) []K {
 	ks := make([]K, 0, len(m))
