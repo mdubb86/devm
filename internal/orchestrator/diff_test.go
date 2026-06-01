@@ -1,10 +1,14 @@
 package orchestrator
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/mtwaage/devm/internal/render"
 	"github.com/mtwaage/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func cfgWithServices(svcs map[string]schema.Service) schema.Config {
@@ -210,4 +214,90 @@ func TestRecreateFlavorPickMax(t *testing.T) {
 
 func TestKindTemplateChange_BucketIsLive(t *testing.T) {
 	assert.Equal(t, BucketLive, KindTemplateChange.Bucket())
+}
+
+func TestComputeTemplateChanges_NewTemplate(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x {{.Project.ID}}\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".devm/templates"), 0o755))
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Services: map[string]schema.Service{
+			"a": {Canonical: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		},
+	}
+	got, err := ComputeTemplateChanges(cfg, dir)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, KindTemplateChange, got[0].Kind)
+	assert.Equal(t, "a", got[0].Service)
+	assert.Equal(t, "/etc/foo", got[0].Detail)
+	assert.Equal(t, "", got[0].Old) // new, not removed
+}
+
+func TestComputeTemplateChanges_NoChanges(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x {{.Project.ID}}\n"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Services: map[string]schema.Service{
+			"a": {Canonical: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		},
+	}
+	// Materialise the installer that WriteDevmDir would have produced.
+	require.NoError(t, render.WriteDevmDir(cfg, dir))
+
+	got, err := ComputeTemplateChanges(cfg, dir)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestComputeTemplateChanges_ContentChanged(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "foo.tmpl")
+	require.NoError(t, os.WriteFile(src, []byte("v1 {{.Project.ID}}\n"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Services: map[string]schema.Service{
+			"a": {Canonical: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		},
+	}
+	require.NoError(t, render.WriteDevmDir(cfg, dir)) // baseline on-disk
+	// Mutate the source.
+	require.NoError(t, os.WriteFile(src, []byte("v2 {{.Project.ID}}\n"), 0o644))
+
+	got, err := ComputeTemplateChanges(cfg, dir)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, KindTemplateChange, got[0].Kind)
+	assert.Equal(t, "a", got[0].Service)
+	assert.Equal(t, "/etc/foo", got[0].Detail)
+}
+
+func TestComputeTemplateChanges_Removed(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x"), 0o644))
+
+	cfg1 := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Services: map[string]schema.Service{
+			"a": {Canonical: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		},
+	}
+	require.NoError(t, render.WriteDevmDir(cfg1, dir))
+
+	// New config drops the template.
+	cfg2 := schema.Config{
+		Project:  cfg1.Project,
+		Services: map[string]schema.Service{"a": {Canonical: 1}},
+	}
+	got, err := ComputeTemplateChanges(cfg2, dir)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, KindTemplateChange, got[0].Kind)
+	// Removal: Old set, New empty, Detail names the output.
+	assert.NotEmpty(t, got[0].Old)
 }

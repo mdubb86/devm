@@ -1,9 +1,13 @@
 package orchestrator
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 
+	"github.com/mtwaage/devm/internal/render"
 	"github.com/mtwaage/devm/internal/schema"
 )
 
@@ -339,4 +343,89 @@ func unionServiceNames(a, b map[string]schema.Service) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ComputeTemplateChanges diffs the installer scripts that would be
+// produced from `new` against those currently present on disk under
+// `.devm/templates/`. The on-disk scripts ARE the snapshot of last-applied
+// template state — we don't need a separate snapshot field.
+//
+// Emits a Change per template that would differ from its on-disk
+// installer (including newly-added templates) and a Change per on-disk
+// installer that is no longer in the new config (removal).
+func ComputeTemplateChanges(new schema.Config, repoRoot string) ([]Change, error) {
+	desired, err := render.RenderTemplates(new, repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("compute templates: %w", err)
+	}
+
+	// Map basename -> service+output for the new set (so we can recover
+	// detail when reporting). Walk the cfg again deterministically.
+	type meta struct{ Service, Output string }
+	desiredMeta := map[string]meta{}
+	svcNames := make([]string, 0, len(new.Services))
+	for n := range new.Services {
+		svcNames = append(svcNames, n)
+	}
+	sort.Strings(svcNames)
+	idx := 0
+	for _, svc := range svcNames {
+		for _, tmpl := range new.Services[svc].Templates {
+			base := fmt.Sprintf("%02d-%s-%s.sh", idx, svc, filepath.Base(tmpl.Output))
+			desiredMeta[base] = meta{Service: svc, Output: tmpl.Output}
+			idx++
+		}
+	}
+
+	templatesDir := filepath.Join(repoRoot, ".devm", "templates")
+	entries, err := os.ReadDir(templatesDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("compute templates: readdir: %w", err)
+	}
+	onDisk := map[string][]byte{}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".sh" {
+			continue
+		}
+		b, rErr := os.ReadFile(filepath.Join(templatesDir, e.Name()))
+		if rErr != nil {
+			return nil, fmt.Errorf("compute templates: read %s: %w", e.Name(), rErr)
+		}
+		onDisk[e.Name()] = b
+	}
+
+	var out []Change
+	// Additions + changes.
+	for path, content := range desired {
+		base := filepath.Base(path)
+		m := desiredMeta[base]
+		existing, ok := onDisk[base]
+		if !ok {
+			out = append(out, Change{
+				Kind: KindTemplateChange, Service: m.Service, Detail: m.Output,
+				New: "installed",
+			})
+			continue
+		}
+		if string(existing) != content {
+			out = append(out, Change{
+				Kind: KindTemplateChange, Service: m.Service, Detail: m.Output,
+				Old: "previous", New: "updated",
+			})
+		}
+	}
+	// Removals.
+	for base := range onDisk {
+		if _, ok := desired[filepath.Join(templatesDir, base)]; ok {
+			continue
+		}
+		out = append(out, Change{
+			Kind: KindTemplateChange, Service: "", Detail: base,
+			Old: "previous",
+		})
+	}
+
+	// Deterministic ordering by detail (output path / basename).
+	sort.Slice(out, func(i, j int) bool { return out[i].Detail < out[j].Detail })
+	return out, nil
 }
