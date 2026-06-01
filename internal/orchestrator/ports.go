@@ -78,33 +78,48 @@ func ReconcilePortsWithRunner(sb *sandbox.Sandbox, cfg schema.Config, r sandbox.
 // be a no-op would then surface as a hard error).
 const errAlreadyPublished = "already published"
 
-// publishWithVerify publishes a port mapping and confirms it actually
-// becomes visible in `sbx ports --json`. sbx sometimes reports a
-// successful publish ("Published ...") without the mapping appearing
-// in the listing — particularly right after a minimal sandbox starts.
-// Empirically, re-issuing the publish is what makes it surface.
+// publishWithVerify publishes a port mapping and confirms the mapping
+// is *durably* applied — not just that `sbx ports --json` briefly shows
+// it. sbx has two failure modes we have to defend against:
 //
-// We loop within a budget: publish, then poll the listing. A publish
-// error is fatal UNLESS it's the benign "already published" case (the
-// first publish took effect; we're just re-issuing to nudge the list).
+//  1. Brief visibility lag: a successful publish doesn't appear in
+//     --json for a few hundred ms. We handle this by re-issuing publish
+//     in a loop until --json shows the mapping (`verifyMappingVisible`).
+//
+//  2. Phantom publish: right after the cold-start anchor session is
+//     killed, the first `sbx ports --publish` returns "Published ..."
+//     AND the mapping briefly appears in --json — but it never durably
+//     applies; the listing returns to [] within a second or two. The
+//     second publish, by contrast, applies durably. Empirically about
+//     5/6 cold starts trigger this on first publish. Documented in
+//     docs/sbx-port-investigation.md.
+//
+// To survive (2), we don't trust a single verify-true. After
+// `verifyMappingVisible` returns true, we hold and re-check. If the
+// mapping is still there after the hold, it's real. If it disappeared,
+// it was a phantom and we loop to re-publish.
+const verifyHoldDuration = 500 * time.Millisecond
+
 func publishWithVerify(sb *sandbox.Sandbox, m portMapping, r sandbox.Runner) error {
 	spec := fmt.Sprintf("%d:%d", m.HostPort, m.SandboxPort)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := r.Output("sbx", "ports", sb.Name, "--publish", spec); err != nil {
-			// Only the "already published" error is benign — it means a
-			// prior attempt took effect and we're just nudging the list.
-			// Any other error is a real failure (bad spec, port conflict
-			// with another sandbox, sandbox gone) and must surface now.
 			if !strings.Contains(err.Error(), errAlreadyPublished) {
 				return fmt.Errorf("sbx ports --publish %s: %w", spec, err)
 			}
 		}
-		if verifyMappingVisible(sb, m, r, 3*time.Second) {
+		if !verifyMappingVisible(sb, m, r, 3*time.Second) {
+			continue
+		}
+		// Phantom defense: hold briefly and confirm the mapping is still
+		// there. If it disappeared, we saw a phantom — loop and re-publish.
+		time.Sleep(verifyHoldDuration)
+		if verifyMappingVisible(sb, m, r, 250*time.Millisecond) {
 			return nil
 		}
 	}
-	return fmt.Errorf("published %s but never visible in sbx ports --json within 30s", spec)
+	return fmt.Errorf("published %s but never durably visible in sbx ports --json within 30s", spec)
 }
 
 // verifyMappingVisible polls sbx ports --json for up to `timeout`
