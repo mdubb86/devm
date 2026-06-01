@@ -66,3 +66,24 @@ func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, r.lastArgs, "non-LIVE changes must be ignored by ApplyLive")
 }
+
+func TestApplyLive_TemplateChange_InvokesDispatcher(t *testing.T) {
+	r := &stubRunner{}
+	sb := &sandbox.Sandbox{Name: "x-sbx", Runner: r}
+
+	changes := []Change{
+		{Kind: KindTemplateChange, Service: "web", Detail: "/etc/foo", New: "installed"},
+		{Kind: KindTemplateChange, Service: "api", Detail: "/etc/bar", New: "installed"},
+	}
+	assert.NoError(t, ApplyLive(sb, changes, 50000))
+
+	// One single sbx exec invocation regardless of how many templates changed.
+	dispatchCalls := 0
+	for _, args := range r.lastArgs {
+		c := strings.Join(args, " ")
+		if strings.Contains(c, "install-templates.sh") {
+			dispatchCalls++
+		}
+	}
+	assert.Equal(t, 1, dispatchCalls, "expected exactly one dispatcher invocation; saw lastArgs: %v", r.lastArgs)
+}

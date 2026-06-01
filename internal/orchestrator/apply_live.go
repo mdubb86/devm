@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/mtwaage/devm/internal/sandbox"
@@ -13,9 +14,16 @@ import (
 // project's port_offset, used to compute the host port for each
 // canonical port (host = offset + canonical).
 //
+// Template changes are coalesced — any number of KindTemplateChange
+// entries trigger a SINGLE invocation of the in-sandbox dispatcher,
+// which re-runs every installer (cheap; identical content is an
+// idempotent atomic rewrite). For each changed template, this function
+// logs a "consuming services may need restart" line to stderr.
+//
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
 func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int) error {
+	var templateChanges []Change
 	for _, c := range changes {
 		if c.Bucket() != BucketLive {
 			continue
@@ -60,6 +68,33 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int) error {
 			if err := sb.Runner.Run("sbx", "policy", "allow", "network", c.Key); err != nil {
 				return fmt.Errorf("apply_live: sbx policy allow network %s: %w", c.Key, err)
 			}
+		case KindTemplateChange:
+			templateChanges = append(templateChanges, c)
+		}
+	}
+
+	if len(templateChanges) > 0 {
+		// Single dispatcher invocation re-runs all installers.
+		if err := sb.Runner.Run("sbx", "exec", sb.Name, "bash", "-c",
+			`exec bash "$WORKSPACE_DIR/.devm/scripts/install-templates.sh"`); err != nil {
+			return fmt.Errorf("apply_live: install-templates: %w", err)
+		}
+		// User-facing "you might need to restart your service" hint.
+		for _, c := range templateChanges {
+			action := "updated"
+			if c.New == "installed" && c.Old == "" {
+				action = "installed"
+			}
+			if c.Old != "" && c.New == "" {
+				// removed: the on-disk artifact in the sandbox persists.
+				fmt.Fprintf(os.Stderr,
+					"template %s removed from config; sandbox file persists until recreate.\n",
+					c.Detail)
+				continue
+			}
+			fmt.Fprintf(os.Stderr,
+				"template %s (service %s) %s; restart consuming services in the shell if needed.\n",
+				c.Detail, c.Service, action)
 		}
 	}
 	return nil
