@@ -120,8 +120,6 @@ func buildTemplateData(cfg schema.Config) TemplateData {
 
 func renderOne(repoRoot, svc string, tmpl schema.Template, data TemplateData) (string, error) {
 	srcAbs := filepath.Join(repoRoot, tmpl.Source)
-	// Defense in depth — schema.Validate already rejects traversal in
-	// the string form. This is the runtime check on the cleaned join.
 	cleaned, err := filepath.Abs(srcAbs)
 	if err != nil {
 		return "", fmt.Errorf("template %s/%s: abs(%s): %w", svc, tmpl.Output, srcAbs, err)
@@ -130,10 +128,22 @@ func renderOne(repoRoot, svc string, tmpl schema.Template, data TemplateData) (s
 	if err != nil {
 		return "", fmt.Errorf("template %s/%s: abs(repoRoot): %w", svc, tmpl.Output, err)
 	}
-	if !strings.HasPrefix(cleaned, rootAbs+string(filepath.Separator)) && cleaned != rootAbs {
+	// Resolve symlinks on BOTH sides so the containment check is on
+	// the real filesystem path. filepath.Abs alone won't catch a
+	// symlink at the source whose target lives outside the project
+	// (or a project root that is itself a symlink, like /tmp on macOS).
+	resolvedRoot, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return "", fmt.Errorf("template %s/%s: eval symlinks for repoRoot %q: %w", svc, tmpl.Output, repoRoot, err)
+	}
+	resolvedSrc, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("template %s/%s: source %q: %w", svc, tmpl.Output, tmpl.Source, err)
+	}
+	if !strings.HasPrefix(resolvedSrc, resolvedRoot+string(filepath.Separator)) && resolvedSrc != resolvedRoot {
 		return "", fmt.Errorf("template %s/%s: source %q resolves outside project root", svc, tmpl.Output, tmpl.Source)
 	}
-	raw, err := os.ReadFile(cleaned)
+	raw, err := os.ReadFile(resolvedSrc)
 	if err != nil {
 		return "", fmt.Errorf("template %s/%s: read source %q: %w", svc, tmpl.Output, tmpl.Source, err)
 	}
