@@ -81,16 +81,20 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int) error {
 		}
 		// User-facing "you might need to restart your service" hint.
 		for _, c := range templateChanges {
-			action := "updated"
-			if c.New == "installed" && c.Old == "" {
-				action = "installed"
-			}
-			if c.Old != "" && c.New == "" {
+			// Structural invariants (same as the rest of the Change contract):
+			//   add    -> Old == "" && New != ""
+			//   change -> Old != "" && New != ""
+			//   remove -> Old != "" && New == ""
+			if c.New == "" {
 				// removed: the on-disk artifact in the sandbox persists.
 				fmt.Fprintf(os.Stderr,
 					"template %s removed from config; sandbox file persists until recreate.\n",
 					c.Detail)
 				continue
+			}
+			action := "updated"
+			if c.Old == "" {
+				action = "installed"
 			}
 			fmt.Fprintf(os.Stderr,
 				"template %s (service %s) %s; restart consuming services in the shell if needed.\n",
