@@ -27,6 +27,7 @@ func TestWriteDevmDir(t *testing.T) {
 		".devm/spec.yaml",
 		".devm/scripts/init-volumes.sh",
 		".devm/scripts/devm-exec.sh",
+		".devm/scripts/install-templates.sh",
 	} {
 		_, err := os.Stat(filepath.Join(dir, p))
 		assert.NoError(t, err, "missing %s", p)
