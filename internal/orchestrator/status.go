@@ -40,7 +40,11 @@ func RunStatus(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (StatusR
 			return res, fmt.Errorf("parse snapshot: %w", err)
 		}
 	}
-	for _, c := range ComputeAllChanges(snapCfg, cfg) {
+	statusChanges, err := ComputeAllChanges(snapCfg, cfg, repoRoot)
+	if err != nil {
+		return res, fmt.Errorf("compute changes: %w", err)
+	}
+	for _, c := range statusChanges {
 		if c.Bucket() == BucketLive {
 			res.PendingLive++
 		} else {

@@ -182,9 +182,12 @@ func ComputeNetworkChanges(old, new schema.Config) []Change {
 
 // ComputeAllChanges returns the full set of diffs between old and new
 // configs. Order: ports, network, env (per service), startup (per service),
-// install, masks (per service), image, identity. Within each section,
-// service names are sorted alphabetically for determinism.
-func ComputeAllChanges(old, new schema.Config) []Change {
+// install, masks (per service), image, identity, templates. Within each
+// section, service names are sorted alphabetically for determinism.
+//
+// `repoRoot` is required by the templates diff which reads on-disk
+// installer scripts.
+func ComputeAllChanges(old, new schema.Config, repoRoot string) ([]Change, error) {
 	var out []Change
 	out = append(out, ComputePortChanges(old, new)...)
 	out = append(out, ComputeNetworkChanges(old, new)...)
@@ -194,7 +197,12 @@ func ComputeAllChanges(old, new schema.Config) []Change {
 	out = append(out, computeMaskChanges(old, new)...)
 	out = append(out, computeImageChange(old, new)...)
 	out = append(out, computeIdentityChange(old, new)...)
-	return out
+	tmplChanges, err := ComputeTemplateChanges(new, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, tmplChanges...)
+	return out, nil
 }
 
 func computeEnvChanges(old, new schema.Config) []Change {

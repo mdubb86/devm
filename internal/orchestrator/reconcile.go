@@ -56,7 +56,10 @@ func RunReconcileInner(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) 
 		}
 	}
 
-	changes := ComputeAllChanges(snapCfg, cfg)
+	changes, err := ComputeAllChanges(snapCfg, cfg, repoRoot)
+	if err != nil {
+		return res, fmt.Errorf("compute changes: %w", err)
+	}
 	for _, c := range changes {
 		if c.Bucket() == BucketLive {
 			res.Applied = append(res.Applied, c)
@@ -172,7 +175,10 @@ func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts 
 				return -1, res, fmt.Errorf("parse snapshot: %w", err)
 			}
 		}
-		changes := ComputeAllChanges(snapCfg, cfg)
+		changes, err := ComputeAllChanges(snapCfg, cfg, repoRoot)
+		if err != nil {
+			return -1, res, fmt.Errorf("compute changes: %w", err)
+		}
 		for _, c := range changes {
 			if c.Bucket() == BucketLive {
 				res.Applied = append(res.Applied, c)

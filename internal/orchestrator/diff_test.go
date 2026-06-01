@@ -123,7 +123,8 @@ func TestComputeEnvChanges(t *testing.T) {
 	new := cfgWithServices(map[string]schema.Service{
 		"api": {Env: map[string]string{"LOG_LEVEL": "debug", "NEW": "yes"}},
 	})
-	changes := ComputeAllChanges(old, new)
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
 	var kinds []ChangeKind
 	for _, c := range changes {
 		kinds = append(kinds, c.Kind)
@@ -140,7 +141,8 @@ func TestComputeStartupChanges(t *testing.T) {
 	new := cfgWithServices(map[string]schema.Service{
 		"api": {Startup: []schema.StartupCommand{{Command: []string{"echo", "b"}}}},
 	})
-	changes := ComputeAllChanges(old, new)
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindStartupChange, changes[0].Kind)
 }
@@ -148,7 +150,8 @@ func TestComputeStartupChanges(t *testing.T) {
 func TestComputeInstallChanges(t *testing.T) {
 	old := schema.Config{Install: []string{"apt-get install -y jq"}}
 	new := schema.Config{Install: []string{"apt-get install -y jq curl"}}
-	changes := ComputeAllChanges(old, new)
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindInstallChange, changes[0].Kind)
 }
@@ -160,7 +163,8 @@ func TestComputeMaskChanges(t *testing.T) {
 	new := cfgWithServices(map[string]schema.Service{
 		"db": {Masks: []schema.Mask{{Path: "data", Size: "20G"}}},
 	})
-	changes := ComputeAllChanges(old, new)
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindMaskChange, changes[0].Kind)
 }
@@ -168,7 +172,8 @@ func TestComputeMaskChanges(t *testing.T) {
 func TestComputeImageChange(t *testing.T) {
 	old := schema.Config{BaseImage: schema.BaseImage{Docker: false}}
 	new := schema.Config{BaseImage: schema.BaseImage{Docker: true}}
-	changes := ComputeAllChanges(old, new)
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindImageChange, changes[0].Kind)
 }
@@ -176,7 +181,8 @@ func TestComputeImageChange(t *testing.T) {
 func TestComputeIdentityChange(t *testing.T) {
 	old := schema.Config{Project: schema.Project{ID: "p1", SandboxName: "s1"}}
 	new := schema.Config{Project: schema.Project{ID: "p2", SandboxName: "s1"}}
-	changes := ComputeAllChanges(old, new)
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindIdentityChange, changes[0].Kind)
 }
@@ -190,7 +196,9 @@ func TestComputeAllChanges_NoOp(t *testing.T) {
 		Network: schema.Network{AllowedDomains: []string{"a.com"}},
 		Install: []string{"true"},
 	}
-	assert.Empty(t, ComputeAllChanges(cfg, cfg))
+	changes, err := ComputeAllChanges(cfg, cfg, t.TempDir())
+	require.NoError(t, err)
+	assert.Empty(t, changes)
 }
 
 func TestRecreateFlavorPickMax(t *testing.T) {
@@ -300,4 +308,27 @@ func TestComputeTemplateChanges_Removed(t *testing.T) {
 	assert.Equal(t, KindTemplateChange, got[0].Kind)
 	// Removal: Old set, New empty, Detail names the output.
 	assert.NotEmpty(t, got[0].Old)
+}
+
+func TestComputeAllChanges_IncludesTemplates(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"),
+		[]byte("hello {{.Project.ID}}\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".devm/templates"), 0o755))
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Services: map[string]schema.Service{
+			"a": {Canonical: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		},
+	}
+	changes, err := ComputeAllChanges(schema.Config{}, cfg, dir)
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindTemplateChange {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected KindTemplateChange in ComputeAllChanges output")
 }
