@@ -34,16 +34,12 @@ func (t Template) Validate() error {
 	if t.Output == "" {
 		return fmt.Errorf("template.output is required")
 	}
-	// Source must stay inside the project root. Reject any path that,
-	// after cleaning, starts with ".." or contains a ".." segment.
+	// Source must stay inside the project root. After filepath.Clean,
+	// any traversal manifests as a leading "..". An absolute source
+	// path also escapes the project root.
 	cleaned := filepath.Clean(t.Source)
 	if cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") {
 		return fmt.Errorf("template.source %q: path traversal or absolute path not allowed", t.Source)
-	}
-	for _, seg := range strings.Split(cleaned, string(filepath.Separator)) {
-		if seg == ".." {
-			return fmt.Errorf("template.source %q: path traversal not allowed", t.Source)
-		}
 	}
 	// Output must be absolute (lands inside the sandbox).
 	if !filepath.IsAbs(t.Output) {
