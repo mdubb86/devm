@@ -45,6 +45,7 @@ const (
 	KindMaskChange
 	KindImageChange
 	KindIdentityChange
+	KindTemplateChange
 )
 
 // changeBucket is the single source of truth that maps each ChangeKind
@@ -67,6 +68,7 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindMaskChange:     BucketTeardownShell,
 	KindImageChange:    BucketTeardownShell,
 	KindIdentityChange: BucketTeardownShell,
+	KindTemplateChange: BucketLive,
 }
 
 // Bucket returns the bucket this ChangeKind belongs to.

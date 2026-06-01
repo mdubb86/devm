@@ -207,3 +207,7 @@ func TestRecreateFlavorPickMax(t *testing.T) {
 		{Kind: KindInstallChange},
 	}))
 }
+
+func TestKindTemplateChange_BucketIsLive(t *testing.T) {
+	assert.Equal(t, BucketLive, KindTemplateChange.Bucket())
+}
