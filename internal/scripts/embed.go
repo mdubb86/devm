@@ -7,3 +7,6 @@ var InitVolumes string
 
 //go:embed devm-exec.sh
 var DevmExec string
+
+//go:embed install-templates.sh
+var InstallTemplates string
