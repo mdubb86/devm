@@ -64,22 +64,34 @@ def sandbox_name(request) -> Iterator[str]:
         registry.remove("sandbox", name)
 
 
+def _port_offset_from_file(filename: str) -> int:
+    """Derive a deterministic, collision-free port_offset from the test
+    file's NN_ prefix (e.g., `test_08_reconcile_live_port.py` -> 50800).
+
+    Hash-of-sandbox-name with 70 buckets has a ~73% chance of collision
+    across 14 parallel tests (birthday paradox), which makes the suite
+    flaky. Using the test number from the filename gives every test its
+    own bucket. Canonical ports we use are all coprime-mod-100 with each
+    other (3000, 8080, 8081, 9090) so 100-port spacing rules out cross-
+    canonical host-port collisions too.
+
+    Note: take the filename, not request.node.name — the latter is the
+    function name (e.g., `test_reconcile_live_port`), which has no digits.
+    """
+    m = re.match(r"^test_(\d+)_", filename)
+    if not m:
+        return 50000
+    return 50000 + int(m.group(1)) * 100
+
+
 @pytest.fixture
 def workspace(request, sandbox_name) -> Iterator[Workspace]:
-    """Temp workspace dir bound to the test's sandbox_name.
-
-    Derives a per-test `port_offset` from the sandbox name's random
-    suffix so parallel tests can't collide on host ports. With
-    canonical ports ≤ ~10000, 100-port buckets in [50000, 57000]
-    give ~70 disjoint slots — plenty of room for our ~14 tests.
-    """
+    """Temp workspace dir bound to the test's sandbox_name."""
     slug = _slug_from_node(request.node.name)
     path = Path(tempfile.mkdtemp(prefix=f"devm-e2e-{slug}-"))
     registry.append("workspace", str(path))
     try:
-        # sandbox_name shape: "e2e-<slug>-<rand4hex>"; last 4 hex chars are the suffix.
-        suffix_hex = sandbox_name.rsplit("-", 1)[-1]
-        port_offset = 50000 + (int(suffix_hex, 16) % 70) * 100
+        port_offset = _port_offset_from_file(Path(request.node.fspath).name)
         ws = Workspace(path, slug=slug, sandbox_name=sandbox_name, port_offset=port_offset)
         ws.write_devmyaml()  # minimal config; tests can call write_devmyaml again with extras
         yield ws
