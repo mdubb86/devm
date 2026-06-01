@@ -28,39 +28,44 @@ stdin pipe, no hang. Snapshots are small (~1KB) so ARG_MAX is irrelevant.
 **Not fully understood:** why Go's stdin-pipe goroutine never completes
 against `sbx exec` specifically. The base64 path sidesteps it entirely.
 
-## 2. Ports published while the `sbx run` anchor holds the session get torn down
+## 2. Port reconcile must happen AFTER the anchor handoff
 
-**Observed:** During cold start, devm published ports (`sbx ports
---publish`) *before* killing the `sbx run` anchor. The publish returned
-success ("Published 127.0.0.1:X -> Y/tcp") and was briefly visible, but
-once the anchor was killed during handoff the mapping vanished from
-`sbx ports --json`. Sandboxes with a background startup daemon happened
-to mask this; minimal single-port sandboxes exposed it (the port never
-appeared).
+**Observed:** During cold start, devm needs the `sbx run` anchor
+session alive long enough to bring the sandbox up, then hands off to
+the user's `sbx exec -it` session before killing the anchor. Empirically,
+running `sbx ports --publish` *while the anchor still holds the session*
+results in mappings that vanish when the anchor is killed.
 
-**Workaround:** `internal/orchestrator/shell.go` — port reconcile is
-deferred until *after* the anchor is killed and the safety check
-confirms the sandbox is still up (steady state, only the user session
-attached). Ports published in steady state are not tied to the anchor
-session and survive.
+**Workaround:** `internal/orchestrator/shell.go` defers port reconcile
+until after the anchor is killed and the safety check confirms the
+sandbox is still up on the user session.
 
-## 3. `sbx ports --publish` success can precede listing visibility
+## 3. First post-handoff `sbx ports --publish` is a phantom
 
-**Observed:** Right after a sandbox reaches `status: running`,
-`sbx ports --publish` may return success while the mapping doesn't yet
-appear in `sbx ports --json` — a brief readiness window.
+**Observed:** The first `sbx ports --publish` immediately after the
+anchor session is killed returns success ("Published 127.0.0.1:X ->
+Y/tcp" rc=0) AND the mapping briefly appears in `sbx ports --json` —
+but it never durably applies; nothing is listening on the host port.
+The SECOND publish is the one that actually sticks.
 
-**Workarounds (layered):**
-- `internal/orchestrator/shell.go` `waitForExecReady` — after sbx
-  reports `running`, poll `sbx exec <name> true` until it succeeds
-  before proceeding. sbx's running status precedes full readiness.
-- `internal/orchestrator/ports.go` `publishWithVerify` — after
-  publishing, poll `sbx ports --json` to confirm the mapping is live;
-  re-issue the publish if not, tolerating ONLY the specific
-  "already published" error.
+In bench tests, ~5/6 cold starts hit the phantom on the first publish.
+A bare retry loop that trusts the first verify-true silently believes
+the publish succeeded and stops — leaving the user with a port that's
+listed-then-gone.
 
-The "already published" error text (for matching) is:
+**Workaround:** `internal/orchestrator/ports.go` `publishWithVerify` —
+after `verifyMappingVisible` returns true, hold 500ms and re-verify.
+If the mapping is still there, real success; if gone, loop and
+re-publish.
+
+Layered with this is the visibility lag handling: after publish, poll
+`sbx ports --json` for up to 3s before re-issuing. Tolerate ONLY the
+specific "already published" error:
 `publish port: port 127.0.0.1:<host>/tcp is already published`.
+
+The full investigation log (including the four `e2e/test_sbx_*.py`
+tests that pin down sbx's actual behavior) is in
+[`docs/sbx-port-investigation.md`](sbx-port-investigation.md).
 
 ## 4. `exec.Cmd.Output()` discards the real error message
 
@@ -77,6 +82,6 @@ stderr text into the returned error so callers see the real message
 - Quirks 2 & 3 reproduce most reliably with a *minimal* sandbox: one
   service with a `canonical` port and no `install` or `startup`
   commands. Adding a background startup daemon masks them.
-- The e2e suite (`make e2e`) exercises the workarounds end-to-end;
-  `test/e2e/08_reconcile_live_port.exp` is the regression guard for
-  the port behaviors.
+- The e2e suite (`just e2e`) exercises the workarounds end-to-end.
+  `e2e/test_08_reconcile_live_port.py` is the regression guard for the
+  port behaviors; `e2e/test_sbx_*.py` isolate sbx's own semantics.
