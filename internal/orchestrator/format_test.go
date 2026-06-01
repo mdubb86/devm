@@ -90,3 +90,20 @@ func TestFormatReconcileJSON(t *testing.T) {
 	rec := parsed["recreate_required"].(map[string]any)
 	assert.Equal(t, "stop_shell", rec["flavor"])
 }
+
+func TestFormatChange_Template(t *testing.T) {
+	// Added template.
+	added := Change{Kind: KindTemplateChange, Service: "web", Detail: "/etc/caddy/Caddyfile", New: "installed"}
+	assert.Equal(t, "+ template: web → /etc/caddy/Caddyfile", formatChange(added))
+
+	// Changed template.
+	changed := Change{Kind: KindTemplateChange, Service: "web", Detail: "/etc/caddy/Caddyfile", Old: "previous", New: "updated"}
+	assert.Equal(t, "~ template: web → /etc/caddy/Caddyfile", formatChange(changed))
+
+	// Removed template.
+	removed := Change{Kind: KindTemplateChange, Service: "", Detail: "00-web-Caddyfile.sh", Old: "previous"}
+	assert.Equal(t, "- template: 00-web-Caddyfile.sh (sandbox file persists; recreate to wipe)", formatChange(removed))
+
+	// JSON mapping.
+	assert.Equal(t, "template_change", changeKindJSON(KindTemplateChange))
+}

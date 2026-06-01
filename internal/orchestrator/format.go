@@ -235,6 +235,8 @@ func changeKindJSON(k ChangeKind) string {
 		return "image_change"
 	case KindIdentityChange:
 		return "identity_change"
+	case KindTemplateChange:
+		return "template_change"
 	}
 	return "unknown"
 }
@@ -280,6 +282,15 @@ func formatChange(c Change) string {
 		return "~ base image"
 	case KindIdentityChange:
 		return "~ project identity"
+	case KindTemplateChange:
+		switch {
+		case c.Old == "" && c.New != "":
+			return fmt.Sprintf("+ template: %s → %s", c.Service, c.Detail)
+		case c.Old != "" && c.New == "":
+			return fmt.Sprintf("- template: %s (sandbox file persists; recreate to wipe)", c.Detail)
+		default:
+			return fmt.Sprintf("~ template: %s → %s", c.Service, c.Detail)
+		}
 	}
 	return "(unknown change)"
 }
