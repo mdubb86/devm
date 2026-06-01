@@ -1,5 +1,17 @@
 # justfile
 
+# Build the devm binary into ./devm.
+build:
+    go build -o devm ./cmd/devm
+
+# Run Go unit tests.
+test:
+    go test ./...
+
+# Remove build artifacts.
+clean:
+    rm -f devm
+
 # Run the full e2e suite in parallel (2 workers).
 e2e:
     @e2e/scripts/run.sh
