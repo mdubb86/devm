@@ -95,6 +95,9 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	sb.WriteString("    - command: ['bash', '-c', 'exec bash \"$WORKSPACE_DIR/.devm/scripts/init-volumes.sh\"']\n")
 	sb.WriteString("      user: \"1000\"\n")
 	sb.WriteString("      description: Claim ext4 volume mounts for agent user\n")
+	sb.WriteString("    - command: ['bash', '-c', 'exec bash \"$WORKSPACE_DIR/.devm/scripts/install-templates.sh\"']\n")
+	sb.WriteString("      user: \"0\"\n")
+	sb.WriteString("      description: Install rendered service templates\n")
 
 	// Aggregate per-service startup steps in service-name-sorted order.
 	// `names` is the sorted service-names slice defined earlier in

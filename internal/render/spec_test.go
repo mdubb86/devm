@@ -137,8 +137,8 @@ func TestSpecYAMLStartupOnlyInitVolumesWhenNoServiceStartup(t *testing.T) {
 	out := SpecYAML(cfg, "/tmp/repo")
 	assert.Contains(t, out, "init-volumes.sh")
 	startupSection := extractStartupSection(t, out)
-	// Only one startup step (the init-volumes one).
-	assert.Equal(t, 1, strings.Count(startupSection, "- command:"))
+	// Two built-in startup steps: init-volumes + install-templates.
+	assert.Equal(t, 2, strings.Count(startupSection, "- command:"))
 }
 
 func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
@@ -161,8 +161,8 @@ func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 	out := SpecYAML(cfg, "/tmp/repo")
 	startupSection := extractStartupSection(t, out)
 
-	// 1 init-volumes + 2 postgres + 1 redis = 4 steps.
-	assert.Equal(t, 4, strings.Count(startupSection, "- command:"))
+	// 2 built-in (init-volumes + install-templates) + 2 postgres + 1 redis = 5 steps.
+	assert.Equal(t, 5, strings.Count(startupSection, "- command:"))
 
 	// Service sort order is alphabetical: postgres before redis.
 	pgStartIdx := strings.Index(startupSection, "pg_ctl")
@@ -192,6 +192,28 @@ func TestSpecYAMLStartupCommandArrayFormatting(t *testing.T) {
 	out := SpecYAML(cfg, "/tmp/repo")
 	// Argv array as YAML flow sequence with single-quoted elements.
 	assert.Contains(t, out, `- command: ['node', 'server.js', '--port', '3000']`)
+}
+
+func TestSpecYAML_HasInstallTemplatesStartupStep(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+	}
+	out := SpecYAML(cfg, "/tmp")
+	require.Contains(t, out, "install-templates.sh")
+
+	// Must appear AFTER init-volumes.sh.
+	iv := strings.Index(out, "init-volumes.sh")
+	it := strings.Index(out, "install-templates.sh")
+	require.Greater(t, it, iv, "install-templates.sh must come after init-volumes.sh; got iv=%d it=%d", iv, it)
+
+	// Runs as root.
+	itLine := out[it : it+strings.Index(out[it:], "\n")]
+	end := it + 200
+	if end > len(out) {
+		end = len(out)
+	}
+	require.Contains(t, out[it:end], "user: \"0\"")
+	_ = itLine
 }
 
 // extractStartupSection returns the contents of commands.startup (from
