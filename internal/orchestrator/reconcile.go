@@ -70,7 +70,7 @@ func RunReconcileInner(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) 
 	res.Flavor = RecreateFlavor(changes)
 
 	if len(res.Applied) > 0 {
-		if err := ApplyLive(sb, res.Applied, cfg.Project.PortOffset); err != nil {
+		if err := ApplyLive(sb, res.Applied, cfg.Project.PortOffset, cfg, repoRoot); err != nil {
 			return res, fmt.Errorf("apply live: %w", err)
 		}
 	}
@@ -132,8 +132,13 @@ type ReconcileOptions struct {
 func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts ReconcileOptions) (int, ReconcileResult, error) {
 	res := ReconcileResult{}
 
-	// 1. Always render .devm/ first.
-	if err := render.WriteDevmDir(cfg, repoRoot); err != nil {
+	// 1. Always render .devm/ static files first (spec.yaml, Caddyfile,
+	// scripts/). We deliberately skip the per-template installer scripts
+	// here so that ComputeTemplateChanges can still compare the on-disk
+	// installers (the "last-applied" snapshot) against the newly-rendered
+	// content and detect changes. The installer scripts are written later
+	// by ApplyLive, immediately before the in-sandbox dispatcher runs.
+	if err := render.WriteDevmDirStaticOnly(cfg, repoRoot); err != nil {
 		return -1, res, fmt.Errorf("render devm dir: %w", err)
 	}
 	res.Rendered = true
@@ -155,6 +160,12 @@ func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts 
 
 	// 3. Sandbox state check.
 	if !sb.IsRunning() {
+		// Sandbox stopped: write the full .devm/ (including template
+		// installers) so the next `devm shell` cold start picks up
+		// everything. No diff or apply needed.
+		if err := render.WriteTemplateInstallers(cfg, repoRoot); err != nil {
+			return -1, res, fmt.Errorf("render template installers: %w", err)
+		}
 		res.SandboxState = "stopped"
 		res.NextAction = "nothing_to_do"
 		return 0, res, nil

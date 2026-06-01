@@ -18,6 +18,33 @@ import (
 // (otherwise removing a template from devm.yaml would leave its
 // installer behind and the dispatcher would keep running it).
 func WriteDevmDir(cfg schema.Config, repoRoot string) error {
+	if err := writeStaticFiles(cfg, repoRoot); err != nil {
+		return err
+	}
+	return writeTemplateInstallers(cfg, repoRoot)
+}
+
+// WriteDevmDirStaticOnly regenerates the static parts of .devm/ (spec.yaml,
+// Caddyfile, scripts/) without touching the per-template installer scripts
+// under .devm/templates/. This preserves the on-disk installers as the
+// "last-applied" snapshot so that a subsequent ComputeTemplateChanges call
+// can still detect source-file changes that haven't been applied yet.
+//
+// Use this in the reconcile pre-diff step for running sandboxes. Use
+// WriteDevmDir everywhere else (cold start, recreate, explicit re-render).
+func WriteDevmDirStaticOnly(cfg schema.Config, repoRoot string) error {
+	return writeStaticFiles(cfg, repoRoot)
+}
+
+// WriteTemplateInstallers writes (or re-writes) the per-template installer
+// scripts under .devm/templates/ and prunes stale ones. Called by ApplyLive
+// just before running the in-sandbox dispatcher so that the sandbox always
+// executes the latest rendered scripts.
+func WriteTemplateInstallers(cfg schema.Config, repoRoot string) error {
+	return writeTemplateInstallers(cfg, repoRoot)
+}
+
+func writeStaticFiles(cfg schema.Config, repoRoot string) error {
 	devmDir := filepath.Join(repoRoot, ".devm")
 	scriptsDir := filepath.Join(devmDir, "scripts")
 	templatesDir := filepath.Join(devmDir, "templates")
@@ -28,7 +55,6 @@ func WriteDevmDir(cfg schema.Config, repoRoot string) error {
 		return fmt.Errorf("mkdir .devm/templates: %w", err)
 	}
 
-	// 1. Static files (always emitted).
 	staticFiles := map[string]string{
 		filepath.Join(devmDir, "Caddyfile"):               Caddyfile(cfg),
 		filepath.Join(devmDir, "spec.yaml"):               SpecYAML(cfg, repoRoot),
@@ -41,8 +67,16 @@ func WriteDevmDir(cfg schema.Config, repoRoot string) error {
 			return err
 		}
 	}
+	return nil
+}
 
-	// 2. Per-template installers.
+func writeTemplateInstallers(cfg schema.Config, repoRoot string) error {
+	templatesDir := filepath.Join(repoRoot, ".devm", "templates")
+	if err := os.MkdirAll(templatesDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir .devm/templates: %w", err)
+	}
+
+	// Write per-template installers.
 	installers, err := RenderTemplates(cfg, repoRoot)
 	if err != nil {
 		return fmt.Errorf("render templates: %w", err)
@@ -55,7 +89,7 @@ func WriteDevmDir(cfg schema.Config, repoRoot string) error {
 		keep[filepath.Base(path)] = struct{}{}
 	}
 
-	// 3. Prune stale installers — anything in .devm/templates/*.sh that
+	// Prune stale installers — anything in .devm/templates/*.sh that
 	// the current render set didn't produce.
 	entries, err := os.ReadDir(templatesDir)
 	if err != nil {

@@ -3,9 +3,12 @@ package orchestrator
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
+	"github.com/mtwaage/devm/internal/render"
 	"github.com/mtwaage/devm/internal/sandbox"
+	"github.com/mtwaage/devm/internal/schema"
 )
 
 // ApplyLive runs every BucketLive change through the corresponding sbx
@@ -17,12 +20,15 @@ import (
 // Template changes are coalesced — any number of KindTemplateChange
 // entries trigger a SINGLE invocation of the in-sandbox dispatcher,
 // which re-runs every installer (cheap; identical content is an
-// idempotent atomic rewrite). For each changed template, this function
-// logs a "consuming services may need restart" line to stderr.
+// idempotent atomic rewrite). The installer scripts are written to
+// .devm/templates/ immediately before the dispatcher runs, so the
+// sandbox always executes the latest rendered content. For each
+// changed template, this function logs a "consuming services may need
+// restart" line to stderr.
 //
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
-func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int) error {
+func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema.Config, repoRoot string) error {
 	var templateChanges []Change
 	for _, c := range changes {
 		if c.Bucket() != BucketLive {
@@ -74,9 +80,28 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int) error {
 	}
 
 	if len(templateChanges) > 0 {
-		// Single dispatcher invocation re-runs all installers.
-		if err := sb.Runner.Run("sbx", "exec", sb.Name, "bash", "-c",
-			`exec bash "$WORKSPACE_DIR/.devm/scripts/install-templates.sh"`); err != nil {
+		// Write updated installer scripts before running the dispatcher so
+		// the sandbox executes the latest rendered content. This must happen
+		// here (not in the pre-diff WriteDevmDirStaticOnly call in RunReconcile)
+		// so the on-disk installers remain as the diff baseline until the
+		// change has been detected and we're committed to applying it.
+		if err := render.WriteTemplateInstallers(cfg, repoRoot); err != nil {
+			return fmt.Errorf("apply_live: write template installers: %w", err)
+		}
+		// Single dispatcher invocation re-runs all installers. Flags:
+		//   -u root: installers write to /etc/ and similar system paths;
+		//     root matches the "user: 0" in the spec.yaml startup step.
+		//   -e WORKSPACE_DIR=<repoRoot>: non-interactive sbx exec does not
+		//     set WORKSPACE_DIR automatically (only available in the sbx
+		//     daemon startup context); the dispatcher uses it to glob the
+		//     templates dir.
+		// Use Output (not Run) so any failure includes the sbx stderr text.
+		dispatcherPath := filepath.Join(repoRoot, ".devm", "scripts", "install-templates.sh")
+		if _, err := sb.Runner.Output("sbx", "exec",
+			"-u", "root",
+			"-e", "WORKSPACE_DIR="+repoRoot,
+			sb.Name,
+			"bash", dispatcherPath); err != nil {
 			return fmt.Errorf("apply_live: install-templates: %w", err)
 		}
 		// User-facing "you might need to restart your service" hint.
