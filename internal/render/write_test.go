@@ -63,3 +63,53 @@ func TestWriteDevmDirDoesNotWriteProvisionScript(t *testing.T) {
 	_, err = os.Stat(devmExecPath)
 	assert.NoError(t, err, "devm-exec.sh must still be written")
 }
+
+func TestWriteDevmDir_TemplatesDirPopulated(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"),
+		[]byte("hello {{.Project.ID}}\n"), 0o644))
+
+	cfg := schema.Config{
+		Project:   schema.Project{ID: "myproj", SandboxName: "myproj-sbx", HostnameApex: "myproj.local", PortOffset: 50000},
+		BaseImage: schema.BaseImage{Docker: false},
+		Services: map[string]schema.Service{
+			"web": {Canonical: 80, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		},
+	}
+	require.NoError(t, WriteDevmDir(cfg, dir))
+
+	// Dispatcher present.
+	dispatcher := filepath.Join(dir, ".devm/scripts/install-templates.sh")
+	bs, err := os.ReadFile(dispatcher)
+	require.NoError(t, err)
+	assert.Contains(t, string(bs), "install-templates")
+
+	// Per-template installer present.
+	installer := filepath.Join(dir, ".devm/templates/00-web-foo.sh")
+	bs2, err := os.ReadFile(installer)
+	require.NoError(t, err)
+	assert.Contains(t, string(bs2), "hello myproj")
+	assert.Contains(t, string(bs2), "DEST='/etc/foo'")
+}
+
+func TestWriteDevmDir_StaleTemplateRemoved(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "x", SandboxName: "x", HostnameApex: "x.local"},
+		Services: map[string]schema.Service{
+			"web": {Canonical: 80, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		},
+	}
+	require.NoError(t, WriteDevmDir(cfg, dir))
+
+	// Plant a stale installer that the new config wouldn't produce.
+	stale := filepath.Join(dir, ".devm/templates/99-stale-foo.sh")
+	require.NoError(t, os.WriteFile(stale, []byte("# stale"), 0o755))
+
+	require.NoError(t, WriteDevmDir(cfg, dir))
+
+	_, err := os.Stat(stale)
+	assert.True(t, os.IsNotExist(err), "expected stale installer to be removed")
+}
