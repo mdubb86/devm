@@ -71,6 +71,22 @@ func TestRenderTemplates_Simple(t *testing.T) {
 	assert.Contains(t, script, "mv \"$TMP\" \"$DEST\"")
 }
 
+func TestRenderTemplates_MissingVar_Error(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bad.tmpl"),
+		[]byte("port {{.Service.nope.HostPort}}\n"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "x", SandboxName: "x", HostnameApex: "x.local"},
+		Services: map[string]schema.Service{
+			"a": {Canonical: 1, Templates: []schema.Template{{Source: "bad.tmpl", Output: "/x"}}},
+		},
+	}
+	_, err := RenderTemplates(cfg, dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nope")
+}
+
 // mapKeys is a tiny test helper used in error messages.
 func mapKeys[K comparable, V any](m map[K]V) []K {
 	ks := make([]K, 0, len(m))
