@@ -47,29 +47,33 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 	}
 }
 
-// Cold-start flow (anchor-alive architecture)
+// SAFETY INVARIANT — anchor handoff
 //
-// sbx's "sandbox is running" state is driven by its session count.
-// The orchestrator keeps exactly ONE long-lived anchor session for
-// the sandbox's lifetime — the `nohup sbx run` subprocess. The user
-// shell (`sbx exec -it`) attaches as a second session, but the
-// anchor's session is what guarantees the sandbox stays up while the
-// user is away, and what lets `devm shell` reattach without rerunning
-// expensive bootstrap.
+// sbx's "sandbox is running" state is driven by its session count
+// (the number of attached pty sessions: sbx run + sbx exec -it). When
+// the count drops to 0, sbx stops the container — killing all
+// in-VM processes, including the user's shell.
 //
-// Order on cold start:
-//   1. Spawn nohup-wrapped `sbx run` (the anchor).
-//   2. Wait for sandbox running.
-//   3. Wait for exec readiness.
-//   4. Port reconcile — publish/unpublish under the live anchor
-//      session (publishes stick; see e2e/test_sbx_anchor_05).
-//   5. Write the applied-config snapshot.
-//   6. Spawn the user's `sbx exec -it` shell.
-//   7. Block on user shell exit; return rc.
+// On cold start we use TWO sessions transiently:
+//   1. sbx run subprocess (the anchor) — gives us a session while we
+//      do setup (waitForRunning, port reconcile).
+//   2. sbx exec -it bash — the user's actual shell.
 //
-// The anchor is never killed on the normal path. It is reaped by
-// `sbx stop NAME` (RunStop). Failure paths within steps 2-6 still
-// call killAnchor() to avoid leaking the subprocess.
+// We MUST add session #2 BEFORE removing session #1. The orchestrator
+// does this in order:
+//   a. Spawn sbx run subprocess.
+//   b. Wait for sandbox running.
+//   c. Port reconcile.
+//   d. Spawn sbx exec -it bash (user shell).
+//   e. Brief settle delay so the host-side sbx exec has time to
+//      register its session with the sbx daemon.
+//   f. killRun: kill the sbx run subprocess on host.
+//   g. Post-handoff check: confirm sandbox is still running (user
+//      session must be holding it alive). If not, the handoff failed.
+//
+// Between (a) and (f) the session count is ≥ 1. Between (d) and (f)
+// it is 2. After (f) it is 1 (user shell only). Sessions never reach 0
+// until the user exits.
 
 // RunShell implements `devm shell`. Returns the user shell's exit code
 // and a non-nil error only when an orchestration step itself failed
