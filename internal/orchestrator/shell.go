@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mtwaage/devm/internal/debuglog"
 	"github.com/mtwaage/devm/internal/lock"
 	"github.com/mtwaage/devm/internal/render"
 	"github.com/mtwaage/devm/internal/sandbox"
@@ -151,10 +152,12 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 			repoRoot,
 		}
 	}
+	debuglog.Logf("shell", "cold-start: spawning anchor: sbx %v", runArgs)
 	runCmd, err := d.AnchorSpawner.Start("sbx", runArgs...)
 	if err != nil {
 		return -1, fmt.Errorf("spawn sbx run: %w", err)
 	}
+	debuglog.Logf("shell", "cold-start: anchor spawned pid=%d", runCmd.Pid())
 	runDone := make(chan error, 1)
 	go func() {
 		_, err := runCmd.Wait()
@@ -163,10 +166,13 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 
 	// Cleanup helper for failure paths.
 	killRun := func() {
+		debuglog.Logf("shell", "killRun: signaling anchor pid=%d", runCmd.Pid())
 		_ = runCmd.Kill()
 		select {
 		case <-runDone:
+			debuglog.Logf("shell", "killRun: anchor reaped")
 		case <-time.After(3 * time.Second):
+			debuglog.Logf("shell", "killRun: timed out waiting for anchor reap")
 		}
 	}
 
@@ -174,6 +180,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		killRun()
 		return -1, err
 	}
+	debuglog.Logf("shell", "cold-start: sandbox status=running")
 
 	// sbx `status: running` precedes the daemon being fully responsive
 	// to exec/port-publish. Gate on actual exec readiness before the
@@ -182,6 +189,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		killRun()
 		return -1, fmt.Errorf("sandbox readiness: %w", err)
 	}
+	debuglog.Logf("shell", "cold-start: exec-ready")
 
 	// NOTE: port reconcile is deliberately deferred until AFTER the
 	// anchor is killed (see below). Ports published while the sbx run
@@ -196,11 +204,13 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	execArgs = append(execArgs, sandbox.EnvArgs(cfg)...)
 	execArgs = append(execArgs, sandboxName, cmdName)
 	execArgs = append(execArgs, cmdArgs...)
+	debuglog.Logf("shell", "spawning user shell: sbx %v", execArgs)
 	userCmd, err := d.UserSpawner.Start("sbx", execArgs...)
 	if err != nil {
 		killRun()
 		return -1, fmt.Errorf("spawn user shell: %w", err)
 	}
+	debuglog.Logf("shell", "user shell spawned pid=%d", userCmd.Pid())
 
 	// Reap userCmd in the background so a failure during the settle
 	// delay or post-killRun safety check doesn't leak the process.
@@ -220,8 +230,10 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// does NOT need the in-VM bash to be visible in /proc. Half a
 	// second is plenty in practice. If userCmd hasn't registered yet,
 	// the post-killRun safety check below will catch it.
+	debuglog.Logf("shell", "settle: waiting %s for user session to register", d.WaitForPty)
 	select {
 	case <-time.After(d.WaitForPty):
+		debuglog.Logf("shell", "settle: done")
 	case <-ctx.Done():
 		_ = userCmd.Kill()
 		killRun()
@@ -238,7 +250,9 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// sbx daemon's anchor session. The user session (added by userCmd)
 	// must already be holding the daemon's session count > 0 or the
 	// sandbox will stop. The check below verifies that.
+	debuglog.Logf("shell", "killRun: about to kill anchor")
 	killRun()
+	debuglog.Logf("shell", "killRun: done")
 
 	// Safety invariant: with sbx run anchor gone, the user shell's pty
 	// must be the only thing keeping the sandbox alive. If the sandbox
@@ -258,16 +272,20 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// are not tied to the anchor session, so they survive. A failure
 	// here is non-fatal to the shell (the user is already attached);
 	// surface it to stderr and continue.
+	debuglog.Logf("shell", "port-reconcile: starting")
 	if err := ReconcilePortsWithRunner(sb, cfg, d.Runner); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: port reconcile failed: %v\n", err)
 	}
+	debuglog.Logf("shell", "port-reconcile: done")
 
 	// Write snapshot of currently-applied config so future reconciles
 	// can diff. Best-effort — failure is non-fatal (shell is attached
 	// and working; subsequent reconcile will detect drift).
+	debuglog.Logf("shell", "snapshot: writing")
 	if snapYAML, mErr := yaml.Marshal(cfg); mErr == nil {
 		_ = WriteSnapshot(sb, snapshotHeader+string(snapYAML))
 	}
+	debuglog.Logf("shell", "snapshot: done; handing off to user (blocking on userDone)")
 
 	_ = lk.Release()
 	released = true
