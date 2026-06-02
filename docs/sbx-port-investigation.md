@@ -29,7 +29,7 @@ reproducible devm probe.
 |---|---|---|
 | `test_sbx_01_port_survives_session_swap.py` | Built-in `shell` agent. Anchor (sbx run) via pexpect → publish → spawn `sbx exec -it bash` → kill anchor → check port at +3s AND +33s, end-to-end TCP each time. | **5/5 PASS** |
 | `test_sbx_02_custom_kit_port_survives.py` | Same as sbx-01 but with a hardcoded minimal custom kit (sleep-infinity entrypoint, derived from `internal/render/spec.go` shape). | **5/5 PASS** |
-| `test_sbx_03_devm_sequence_replay.py` | Pure-CLI replay of devm cold-start: anchor via `subprocess.Popen` (pipes, no pty), user shell via pexpect, 500ms settle, SIGKILL anchor, then publish-with-verify, WriteSnapshot equivalent. Checks port at +3s and +33s. | **4/4 PASS** |
+| ~~`test_sbx_03_devm_sequence_replay.py`~~ | *(Deleted 2026-06-02. Replayed the OLD cold-start sequence; superseded by the anchor-alive design — see `e2e/test_sbx_anchor_*.py`.)* | — |
 
 | Devm probe | Configuration | Result |
 |---|---|---|
