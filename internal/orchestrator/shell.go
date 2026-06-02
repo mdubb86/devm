@@ -73,7 +73,7 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 // Failure paths still call killAnchor() for cleanup, but the
 // normal path returns with the anchor running.
 //
-// See docs/sbx-quirks.md "Quirk #5" for the empirical backing on
+// See docs/sbx-quirks.md section 5 for the empirical backing on
 // why anchor-alive is required (the 5s daemon kill triggered by
 // anchor death) and "Refinement: anchor must ignore SIGHUP" for
 // the terminal-close cascade.
