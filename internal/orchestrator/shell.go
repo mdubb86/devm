@@ -219,7 +219,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// terminal's stdin/stdout/stderr, so the user shell ends up in the
 	// same session as devm (which is in the same session as the
 	// anchor — Go exec.Cmd default). Same-session is required for
-	// daemon survival under sbx (see Quirk #5).
+	// daemon survival under sbx (see docs/sbx-quirks.md section 5).
 	execArgs := []string{"exec", "-it"}
 	execArgs = append(execArgs, sandbox.EnvArgs(cfg)...)
 	execArgs = append(execArgs, sandboxName, cmdName)
