@@ -30,7 +30,7 @@ type ShellDeps struct {
 
 	LockPath       string
 	WaitForRunning time.Duration // default 60s
-	WaitForPty     time.Duration // settle delay after spawning userCmd before killRun; default 500ms
+	WaitForPty     time.Duration // legacy settle delay; unused on the anchor-alive path. default 500ms
 	PollInterval   time.Duration // default 250ms
 }
 
@@ -47,33 +47,29 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 	}
 }
 
-// SAFETY INVARIANT — anchor handoff
+// Cold-start flow (anchor-alive architecture)
 //
-// sbx's "sandbox is running" state is driven by its session count
-// (the number of attached pty sessions: sbx run + sbx exec -it). When
-// the count drops to 0, sbx stops the container — killing all
-// in-VM processes, including the user's shell.
+// sbx's "sandbox is running" state is driven by its session count.
+// The orchestrator keeps exactly ONE long-lived anchor session for
+// the sandbox's lifetime — the `nohup sbx run` subprocess. The user
+// shell (`sbx exec -it`) attaches as a second session, but the
+// anchor's session is what guarantees the sandbox stays up while the
+// user is away, and what lets `devm shell` reattach without rerunning
+// expensive bootstrap.
 //
-// On cold start we use TWO sessions transiently:
-//   1. sbx run subprocess (the anchor) — gives us a session while we
-//      do setup (waitForRunning, port reconcile).
-//   2. sbx exec -it bash — the user's actual shell.
+// Order on cold start:
+//   1. Spawn nohup-wrapped `sbx run` (the anchor).
+//   2. Wait for sandbox running.
+//   3. Wait for exec readiness.
+//   4. Port reconcile — publish/unpublish under the live anchor
+//      session (publishes stick; see e2e/test_sbx_anchor_05).
+//   5. Write the applied-config snapshot.
+//   6. Spawn the user's `sbx exec -it` shell.
+//   7. Block on user shell exit; return rc.
 //
-// We MUST add session #2 BEFORE removing session #1. The orchestrator
-// does this in order:
-//   a. Spawn sbx run subprocess.
-//   b. Wait for sandbox running.
-//   c. Port reconcile.
-//   d. Spawn sbx exec -it bash (user shell).
-//   e. Brief settle delay so the host-side sbx exec has time to
-//      register its session with the sbx daemon.
-//   f. killRun: kill the sbx run subprocess on host.
-//   g. Post-handoff check: confirm sandbox is still running (user
-//      session must be holding it alive). If not, the handoff failed.
-//
-// Between (a) and (f) the session count is ≥ 1. Between (d) and (f)
-// it is 2. After (f) it is 1 (user shell only). Sessions never reach 0
-// until the user exits.
+// The anchor is never killed on the normal path. It is reaped by
+// `sbx stop NAME` (RunStop). Failure paths within steps 2-6 still
+// call killAnchor() to avoid leaking the subprocess.
 
 // RunShell implements `devm shell`. Returns the user shell's exit code
 // and a non-nil error only when an orchestration step itself failed
@@ -172,42 +168,51 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		runDone <- err
 	}()
 
-	// Cleanup helper for failure paths.
-	killRun := func() {
-		debuglog.Logf("shell", "killRun: signaling anchor pid=%d", runCmd.Pid())
+	// Cleanup helper for failure paths. The normal path never calls this.
+	killAnchor := func() {
+		debuglog.Logf("shell", "cleanup: killing anchor pid=%d", runCmd.Pid())
 		_ = runCmd.Kill()
 		select {
 		case <-runDone:
-			debuglog.Logf("shell", "killRun: anchor reaped")
 		case <-time.After(3 * time.Second):
-			debuglog.Logf("shell", "killRun: timed out waiting for anchor reap")
 		}
 	}
 
 	if err := waitForRunning(ctx, sb, runDone, d.WaitForRunning, d.PollInterval); err != nil {
-		killRun()
+		killAnchor()
 		return -1, err
 	}
 	debuglog.Logf("shell", "cold-start: sandbox status=running")
 
-	// sbx `status: running` precedes the daemon being fully responsive
-	// to exec/port-publish. Gate on actual exec readiness before the
-	// handoff, otherwise downstream exec/publish calls can be dropped.
 	if err := waitForExecReady(sb, d.Runner, 30*time.Second); err != nil {
-		killRun()
+		killAnchor()
 		return -1, fmt.Errorf("sandbox readiness: %w", err)
 	}
 	debuglog.Logf("shell", "cold-start: exec-ready")
 
-	// NOTE: port reconcile is deliberately deferred until AFTER the
-	// anchor is killed (see below). Ports published while the sbx run
-	// anchor holds the session get torn down when that session ends;
-	// publishing in the steady state (user session only) makes them
-	// stick.
+	// Port reconcile and snapshot BEFORE user shell. The anchor is
+	// alive, holding the session — publishes stick immediately and
+	// without the phantom/vanish dance the old flow had to defend
+	// against (Quirk #2, #3 in docs/sbx-quirks.md). Pinned by
+	// e2e/test_sbx_anchor_05_publish_sticks.py and
+	// e2e/test_sbx_anchor_09_port_cycle.py.
+	debuglog.Logf("shell", "port-reconcile: starting")
+	if err := ReconcilePortsWithRunner(sb, cfg, d.Runner); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: port reconcile failed: %v\n", err)
+	}
+	debuglog.Logf("shell", "port-reconcile: done")
 
-	// Spawn the user's interactive shell. The UserSpawner is configured
-	// to inherit the host terminal's stdin/stdout/stderr. EnvArgs injects
-	// service env (NAME_KEY), env_inject port vars, and project-wide env.
+	debuglog.Logf("shell", "snapshot: writing")
+	if snapYAML, mErr := yaml.Marshal(cfg); mErr == nil {
+		_ = WriteSnapshot(sb, snapshotHeader+string(snapYAML))
+	}
+	debuglog.Logf("shell", "snapshot: done")
+
+	// Spawn the user's interactive shell. UserSpawner inherits the host
+	// terminal's stdin/stdout/stderr, so the user shell ends up in the
+	// same session as devm (which is in the same session as the
+	// anchor — Go exec.Cmd default). Same-session is required for
+	// daemon survival under sbx (see Quirk #5).
 	execArgs := []string{"exec", "-it"}
 	execArgs = append(execArgs, sandbox.EnvArgs(cfg)...)
 	execArgs = append(execArgs, sandboxName, cmdName)
@@ -215,94 +220,20 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	debuglog.Logf("shell", "spawning user shell: sbx %v", execArgs)
 	userCmd, err := d.UserSpawner.Start("sbx", execArgs...)
 	if err != nil {
-		killRun()
+		killAnchor()
 		return -1, fmt.Errorf("spawn user shell: %w", err)
 	}
 	debuglog.Logf("shell", "user shell spawned pid=%d", userCmd.Pid())
 
-	// Reap userCmd in the background so a failure during the settle
-	// delay or post-killRun safety check doesn't leak the process.
-	type userResult struct {
-		rc  int
-		err error
-	}
-	userDone := make(chan userResult, 1)
-	go func() {
-		rc, err := userCmd.Wait()
-		userDone <- userResult{rc: rc, err: err}
-	}()
-
-	// Settle period: let userCmd's `sbx exec` register its session
-	// with the sbx daemon before we kill the anchor. The host-side
-	// exec process needs only to connect to the daemon socket — it
-	// does NOT need the in-VM bash to be visible in /proc. Half a
-	// second is plenty in practice. If userCmd hasn't registered yet,
-	// the post-killRun safety check below will catch it.
-	debuglog.Logf("shell", "settle: waiting %s for user session to register", d.WaitForPty)
-	select {
-	case <-time.After(d.WaitForPty):
-		debuglog.Logf("shell", "settle: done")
-	case <-ctx.Done():
-		_ = userCmd.Kill()
-		killRun()
-		return -1, ctx.Err()
-	case err := <-runDone:
-		_ = userCmd.Kill()
-		if err != nil {
-			return -1, fmt.Errorf("sbx run exited during handoff: %w", err)
-		}
-		return -1, fmt.Errorf("sbx run exited during handoff")
-	}
-
-	// Anchor's job is done. Killing the sbx run subprocess detaches
-	// sbx daemon's anchor session. The user session (added by userCmd)
-	// must already be holding the daemon's session count > 0 or the
-	// sandbox will stop. The check below verifies that.
-	debuglog.Logf("shell", "killRun: about to kill anchor")
-	killRun()
-	debuglog.Logf("shell", "killRun: done")
-
-	// Safety invariant: with sbx run anchor gone, the user shell's pty
-	// must be the only thing keeping the sandbox alive. If the sandbox
-	// is NOT running here, the handoff failed (session count dropped to
-	// 0). The user's shell session would also be dead at this point.
-	if !sb.IsRunning() {
-		_ = userCmd.Kill()
-		select {
-		case <-userDone:
-		case <-time.After(3 * time.Second):
-		}
-		return -1, fmt.Errorf("safety invariant violated: sandbox stopped during anchor cleanup; user session not preserved")
-	}
-
-	// Reconcile ports now that we're in the steady state: anchor gone,
-	// only the user's session holds the sandbox. Ports published here
-	// are not tied to the anchor session, so they survive. A failure
-	// here is non-fatal to the shell (the user is already attached);
-	// surface it to stderr and continue.
-	debuglog.Logf("shell", "port-reconcile: starting")
-	if err := ReconcilePortsWithRunner(sb, cfg, d.Runner); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: port reconcile failed: %v\n", err)
-	}
-	debuglog.Logf("shell", "port-reconcile: done")
-
-	// Write snapshot of currently-applied config so future reconciles
-	// can diff. Best-effort — failure is non-fatal (shell is attached
-	// and working; subsequent reconcile will detect drift).
-	debuglog.Logf("shell", "snapshot: writing")
-	if snapYAML, mErr := yaml.Marshal(cfg); mErr == nil {
-		_ = WriteSnapshot(sb, snapshotHeader+string(snapYAML))
-	}
-	debuglog.Logf("shell", "snapshot: done; handing off to user (blocking on userDone)")
-
 	_ = lk.Release()
 	released = true
 
-	res := <-userDone
-	if res.err != nil {
-		return -1, fmt.Errorf("user shell wait: %w", res.err)
+	rc, err := userCmd.Wait()
+	if err != nil {
+		return -1, fmt.Errorf("user shell wait: %w", err)
 	}
-	return res.rc, nil
+	debuglog.Logf("shell", "user shell exited rc=%d; leaving anchor pid=%d alive", rc, runCmd.Pid())
+	return rc, nil
 }
 
 func applyDefaults(d *ShellDeps) {
