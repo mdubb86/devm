@@ -132,6 +132,14 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	//
 	// We branch on Exists() since IsRunning() was already false above
 	// (we wouldn't reach this code path if the sandbox were running).
+	// Anchor must ignore SIGHUP so the sandbox survives when the user's
+	// terminal closes (kernel sends SIGHUP to processes holding the
+	// closing PTY as their controlling tty; default action is
+	// terminate). Wrapping in `nohup` is the portable way to get the
+	// child to inherit SIG_IGN through the exec. POSIX nohup execvps
+	// its argument list, so runCmd.Pid() points to the resulting
+	// `sbx run` process (not `nohup`). Pinned empirically by
+	// e2e/test_sbx_anchor_10_terminal_close.py shape `ignhup_only`.
 	var runArgs []string
 	if sb.Exists() {
 		// Restart of existing sandbox: include --kit so sbx can resolve
@@ -139,21 +147,21 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		// across restarts). DO NOT pass --name here; sbx rejects it for
 		// existing sandboxes.
 		runArgs = []string{
-			"run",
+			"sbx", "run",
 			"--kit", filepath.Join(repoRoot, ".devm"),
 			sandboxName,
 		}
 	} else {
 		runArgs = []string{
-			"run",
+			"sbx", "run",
 			"--kit", filepath.Join(repoRoot, ".devm"),
 			"--name", sandboxName,
 			cfg.Project.ID,
 			repoRoot,
 		}
 	}
-	debuglog.Logf("shell", "cold-start: spawning anchor: sbx %v", runArgs)
-	runCmd, err := d.AnchorSpawner.Start("sbx", runArgs...)
+	debuglog.Logf("shell", "cold-start: spawning anchor: nohup %v", runArgs)
+	runCmd, err := d.AnchorSpawner.Start("nohup", runArgs...)
 	if err != nil {
 		return -1, fmt.Errorf("spawn sbx run: %w", err)
 	}

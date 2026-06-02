@@ -225,8 +225,17 @@ func TestRunShellColdStartHappyPath(t *testing.T) {
 	assert.Equal(t, 0, rc)
 
 	require.GreaterOrEqual(t, len(spawner.started), 2)
-	assert.Contains(t, strings.Join(spawner.started[0], " "), "sbx run")
-	assert.Contains(t, strings.Join(spawner.started[1], " "), "sbx exec")
+	// Anchor must be wrapped in nohup so it inherits SIGHUP=SIG_IGN
+	// across the exec — sandbox survives terminal-close cascades.
+	// Pinned by e2e/test_sbx_anchor_10_terminal_close.py (ignhup_only).
+	assert.Equal(t, "nohup", spawner.started[0][0],
+		"anchor argv[0] must be `nohup` so it ignores SIGHUP")
+	assert.Equal(t, "sbx", spawner.started[0][1],
+		"argv[1] must be `sbx` (nohup execvps into it)")
+	assert.Equal(t, "run", spawner.started[0][2],
+		"argv[2] must be `run`")
+	assert.Contains(t, strings.Join(spawner.started[1], " "), "sbx exec",
+		"user shell stays plain `sbx exec ...`")
 
 	// Verify --name flag is passed with the expected sandbox name.
 	runArgsJoined := strings.Join(spawner.started[0], " ")
@@ -300,9 +309,9 @@ func TestRunShellRestartUsesKitName(t *testing.T) {
 	// restart — sbx infers them from the sandbox name + loaded kit.
 	// We can't easily assert their absence without false positives, but
 	// asserting the exact arg count is a clean substitute:
-	expectedArgs := []string{"sbx", "run", "--kit", filepath.Join(repoRoot, ".devm"), "x-sbx"}
+	expectedArgs := []string{"nohup", "sbx", "run", "--kit", filepath.Join(repoRoot, ".devm"), "x-sbx"}
 	assert.Equal(t, expectedArgs, spawner.started[0],
-		"restart path argv should be exactly: sbx run --kit <kitdir> <sandbox-name>")
+		"restart path argv should be exactly: nohup sbx run --kit <kitdir> <sandbox-name>")
 }
 
 func TestRunShellWaitForRunningTimesOut(t *testing.T) {
