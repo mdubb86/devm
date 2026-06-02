@@ -103,8 +103,8 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	// `names` is the sorted service-names slice defined earlier in
 	// SpecYAML for the masks loop.
 	for _, name := range names {
-		for _, step := range cfg.Services[name].Startup {
-			writeStartupStep(&sb, step)
+		for idx, step := range cfg.Services[name].Startup {
+			writeStartupStep(&sb, step, name, idx)
 		}
 	}
 	sb.WriteString("\n")
@@ -119,17 +119,49 @@ func yamlSingleQuoted(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
-// writeStartupStep emits one startup step entry. Command is rendered as
-// a YAML flow sequence: ['arg0', 'arg1', ...].
-func writeStartupStep(sb *strings.Builder, step schema.StartupCommand) {
-	// Render argv as single-quoted flow sequence. Each element is
-	// escape-safe via yamlSingleQuoted.
-	quoted := make([]string, len(step.Command))
-	for i, a := range step.Command {
+// writeStartupStep emits one startup step entry. When the user sets
+// `background: true` in devm.yaml, we render a FOREGROUND sbx kit step
+// (no `background: true` in the kit YAML) whose command is wrapped with
+// shell-level `nohup ... &`. This matches the pattern used by the real
+// docker/sbx-kits-contrib kits (e.g. code-server).
+//
+// Why not the kit's own `background: true` field? Empirically the kit
+// flag is for short-lived setup steps and the process is killed ~5s
+// after launch. For long-running services (the actual use case for
+// `services.<name>.startup`) the only working pattern is foreground +
+// shell `nohup ... &`. See docs/sbx-quirks.md quirk #5 and the
+// regression guard at e2e/test_sbx_13_background_daemon_lifetime.py.
+func writeStartupStep(sb *strings.Builder, step schema.StartupCommand, service string, idx int) {
+	argv := step.Command
+	if step.Background {
+		argv = backgroundWrap(step.Command, service, idx)
+	}
+	quoted := make([]string, len(argv))
+	for i, a := range argv {
 		quoted[i] = yamlSingleQuoted(a)
 	}
 	sb.WriteString(fmt.Sprintf("    - command: [%s]\n", strings.Join(quoted, ", ")))
 	if step.Background {
-		sb.WriteString("      background: true\n")
+		sb.WriteString("      user: \"1000\"\n")
+		sb.WriteString(fmt.Sprintf("      description: %s\n",
+			yamlSingleQuoted(fmt.Sprintf("%s startup daemon", service))))
+		// NOTE: intentionally NOT emitting `background: true` here —
+		// the shell-level `&` in backgroundWrap handles backgrounding,
+		// and the kit's `background: true` flag has a ~5s kill timer.
 	}
+}
+
+// backgroundWrap wraps user argv as ['sh', '-c', 'nohup <args> > <log> 2>&1 &'].
+// The shell-level `&` returns immediately (so the startup step finishes
+// without blocking), and `nohup` detaches the child so it survives the
+// parent shell exit.
+func backgroundWrap(userArgv []string, service string, idx int) []string {
+	quoted := make([]string, len(userArgv))
+	for i, a := range userArgv {
+		quoted[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+	}
+	logPath := fmt.Sprintf("/tmp/devm-startup-%s-%d.log", service, idx)
+	cmd := fmt.Sprintf("nohup %s > '%s' 2>&1 &",
+		strings.Join(quoted, " "), logPath)
+	return []string{"sh", "-c", cmd}
 }

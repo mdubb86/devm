@@ -175,8 +175,12 @@ func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 	assert.Less(t, pgStartIdx, pgReadyIdx, "postgres steps in declaration order")
 	assert.Less(t, pgReadyIdx, redisIdx, "postgres service comes before redis")
 
-	// Background flag rendered when true.
-	assert.Contains(t, startupSection, "background: true")
+	// Background daemons are rendered as foreground sbx kit steps wrapped
+	// with shell-level `nohup ... &`. The kit's own `background: true`
+	// flag is NOT used (it kills the process after ~5s — see
+	// docs/sbx-quirks.md quirk #5).
+	assert.Contains(t, startupSection, "nohup")
+	assert.NotContains(t, startupSection, "background: true")
 }
 
 func TestSpecYAMLStartupCommandArrayFormatting(t *testing.T) {
