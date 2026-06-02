@@ -34,10 +34,14 @@ def test_invariant_happy_path(workspace, devm, sandbox_name):
             host_port=workspace.port_offset + 8080, timeout=30,
         )
 
-        # Worker daemon is running.
+        # Worker daemon is running. Filter the pgrep self-match: the
+        # sh process running `pgrep -af MARKER` has MARKER in its own
+        # argv and would otherwise return a false positive. `grep -v
+        # pgrep` drops that line. Without this filter the assertion
+        # passes regardless of whether a real daemon is alive.
         out = subprocess.run(
             ["sbx", "exec", sandbox_name, "sh", "-c",
-             "pgrep -f 'while true; do sleep 60' >/dev/null && echo OK || echo MISS"],
+             "pgrep -af 'while true.*sleep 60' 2>/dev/null | grep -v pgrep | grep -q . && echo OK || echo MISS"],
             capture_output=True, timeout=15, check=True,
         ).stdout.decode().strip()
         assert out == "OK", f"worker daemon not found: {out!r}"
