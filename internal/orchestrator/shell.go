@@ -30,7 +30,6 @@ type ShellDeps struct {
 
 	LockPath       string
 	WaitForRunning time.Duration // default 60s
-	WaitForPty     time.Duration // legacy settle delay; unused on the anchor-alive path. default 500ms
 	PollInterval   time.Duration // default 250ms
 }
 
@@ -42,7 +41,6 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 		Runner:         sandbox.DefaultRunner{},
 		LockPath:       filepath.Join(repoRoot, ".devm", "lock"),
 		WaitForRunning: 60 * time.Second,
-		WaitForPty:     500 * time.Millisecond,
 		PollInterval:   250 * time.Millisecond,
 	}
 }
@@ -243,9 +241,6 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 func applyDefaults(d *ShellDeps) {
 	if d.WaitForRunning == 0 {
 		d.WaitForRunning = 60 * time.Second
-	}
-	if d.WaitForPty == 0 {
-		d.WaitForPty = 500 * time.Millisecond
 	}
 	if d.PollInterval == 0 {
 		d.PollInterval = 250 * time.Millisecond

@@ -217,7 +217,6 @@ func TestRunShellColdStartHappyPath(t *testing.T) {
 		Runner:         runner,
 		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
 		WaitForRunning: 2 * time.Second,
-		WaitForPty:     2 * time.Second,
 		PollInterval:   20 * time.Millisecond,
 	}
 	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
@@ -285,7 +284,6 @@ func TestRunShellRestartUsesKitName(t *testing.T) {
 		Runner:         runner,
 		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
 		WaitForRunning: 2 * time.Second,
-		WaitForPty:     2 * time.Second,
 		PollInterval:   20 * time.Millisecond,
 	}
 	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
@@ -362,7 +360,6 @@ func TestRunShellColdStartWritesSnapshot(t *testing.T) {
 		Runner:         runner,
 		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
 		WaitForRunning: 2 * time.Second,
-		WaitForPty:     20 * time.Millisecond, // short settle for tests
 		PollInterval:   20 * time.Millisecond,
 	}
 	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)

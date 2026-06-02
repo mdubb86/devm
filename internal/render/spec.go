@@ -35,12 +35,13 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	//      process lingers.
 	//   2. </dev/null redirect: detaches sleep's fd 0 from the pty
 	//      that sbx run allocates for the anchor. Without it the
-	//      sleep keeps an open fd to /dev/pts/0 even after killRun(),
-	//      making it appear as a phantom session in devm stop's
-	//      session listing (sessions.go walks /proc for pts/* fd0
-	//      holders). The redirect is purely cosmetic for lifecycle
-	//      (sbx daemon's session count is independent of this) but
-	//      makes the "Active sessions" listing truthful.
+	//      sleep keeps an open fd to /dev/pts/0 for the sandbox's
+	//      lifetime under the live anchor, making it appear as a
+	//      phantom session in devm stop's session listing
+	//      (sessions.go walks /proc for pts/* fd0 holders). The
+	//      redirect is purely cosmetic for lifecycle (sbx daemon's
+	//      session count is independent of this) but makes the
+	//      "Active sessions" listing truthful.
 	sb.WriteString("    run: [\"sh\", \"-c\", \"exec sleep infinity </dev/null\"]\n\n")
 
 	if len(cfg.Network.AllowedDomains) > 0 {
