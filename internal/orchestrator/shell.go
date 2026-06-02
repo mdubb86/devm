@@ -45,33 +45,38 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 	}
 }
 
-// SAFETY INVARIANT — anchor handoff
+// ANCHOR LIFECYCLE (anchor-alive design)
 //
-// sbx's "sandbox is running" state is driven by its session count
-// (the number of attached pty sessions: sbx run + sbx exec -it). When
-// the count drops to 0, sbx stops the container — killing all
-// in-VM processes, including the user's shell.
+// `sbx run` is the anchor: a host-side process that holds an open
+// sbx daemon session for the sandbox. As long as the anchor is
+// alive, the sandbox stays running.
 //
-// On cold start we use TWO sessions transiently:
-//   1. sbx run subprocess (the anchor) — gives us a session while we
-//      do setup (waitForRunning, port reconcile).
-//   2. sbx exec -it bash — the user's actual shell.
+// devm spawns the anchor once at cold-start, wrapped in `nohup` so
+// it inherits SIGHUP=SIG_IGN through nohup's execvp (POSIX). That
+// lets the sandbox survive a terminal-close cascade — the kernel
+// sends SIGHUP to processes whose controlling tty was the closing
+// PTY, but the anchor ignores it. The next `devm shell` from a new
+// terminal warm-paths into the still-running sandbox.
 //
-// We MUST add session #2 BEFORE removing session #1. The orchestrator
-// does this in order:
-//   a. Spawn sbx run subprocess.
-//   b. Wait for sandbox running.
-//   c. Port reconcile.
-//   d. Spawn sbx exec -it bash (user shell).
-//   e. Brief settle delay so the host-side sbx exec has time to
-//      register its session with the sbx daemon.
-//   f. killRun: kill the sbx run subprocess on host.
-//   g. Post-handoff check: confirm sandbox is still running (user
-//      session must be holding it alive). If not, the handoff failed.
+// devm NEVER kills the anchor on the normal path. The anchor exits
+// on its own when:
+//   * `devm stop` / `devm teardown` run `sbx stop NAME` / `sbx rm NAME`.
+//     Verified by e2e/test_sbx_anchor_04_sbx_stop_reaps_anchor.py.
+//   * The user runs `sbx stop NAME` directly.
 //
-// Between (a) and (f) the session count is ≥ 1. Between (d) and (f)
-// it is 2. After (f) it is 1 (user shell only). Sessions never reach 0
-// until the user exits.
+// All of the orchestration order this code used to gate on (settle
+// delay, killRun, post-kill safety check, "port reconcile must wait
+// for anchor death") is gone. Port reconcile and snapshot happen
+// any time while the anchor is alive; publish sticks under the
+// live session (e2e/test_sbx_anchor_05_publish_sticks.py).
+//
+// Failure paths still call killAnchor() for cleanup, but the
+// normal path returns with the anchor running.
+//
+// See docs/sbx-quirks.md "Quirk #5" for the empirical backing on
+// why anchor-alive is required (the 5s daemon kill triggered by
+// anchor death) and "Refinement: anchor must ignore SIGHUP" for
+// the terminal-close cascade.
 
 // RunShell implements `devm shell`. Returns the user shell's exit code
 // and a non-nil error only when an orchestration step itself failed
