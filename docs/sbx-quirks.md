@@ -240,8 +240,6 @@ e2e/test_sbx_anchor_10_terminal_close.py — the `must_survive`
 shapes (`ignhup_only`, `setpgid_ignhup`) are asserted; the `flaky`
 shapes (`default`, `setpgid`) are merely recorded.
 
-### Pgrep-self-match guidance
-
 ### Pgrep-self-match guidance (testing convenience)
 
 When writing tests that check whether a process matching a marker
@@ -256,3 +254,66 @@ line which always self-matches. Without that filter, every check
 returns OK regardless of whether a real process is running — and
 several earlier devm tests turned out to have been passing only
 because of this false positive.
+
+## 6. devm port-reconcile destabilizes the sandbox endpoint (OPEN)
+
+**Observed (2026-06-02):** Under the anchor-alive architecture,
+`devm shell` cold-start consistently fails to durably publish
+canonical ports. The orchestrator's `publishWithVerify` correctly
+detects the phantom (`vanished during hold — loop`), but the
+first publish itself appears to tear down the sandbox's port
+endpoint, after which all subsequent publishes get:
+
+```
+ERROR: publish port: failed to resolve endpoint:
+       no container endpoint with IP address found
+```
+
+…for the full 30s `publishWithVerify` deadline, then return an
+error. devm continues without the port. test_07 fails 5/5.
+
+**Pure-sbx is NOT affected.** A bisection probe (`e2e/probes/
+probe-publish/main.go`, exercised by
+`e2e/test_sbx_anchor_12_go_probe_publish.py`) does literally
+everything devm's `RunShell` does — spawn nohup-wrapped anchor,
+wait running, wait exec-ready, list ports, publish, tight-poll
+verify, 500ms hold, reverify, snapshot-style `sbx exec`, user-shell
+spawn, 10+s observation — and produces a durable mapping on
+**every** run, with both `--nohup` and plain anchor. So:
+
+  - The `sbx` CLI behavior is fine (pure-sbx tests + probe agree).
+  - Go's `exec.Cmd` is fine (the probe is a Go binary).
+  - The kit content is fine (probe uses the same `materialize_kit`
+    spec; also verified earlier with the actual devm-rendered kit).
+  - The nested-vs-separate kit/workspace structure is fine.
+  - The user-shell spawn (`sbx exec -it`) is fine.
+  - Tight-poll verify cadence (250ms) is fine.
+
+What's left in devm's flow that the probe DOESN'T have:
+file-lock (`flock` on `.devm/lock`), `render.WriteDevmDir` (which
+overwrites the kit before anchor spawn), and the `runDone`
+goroutine that calls `runCmd.Wait()` on the anchor. None of these
+should plausibly affect sbx daemon state — but **something** in
+devm's larger orchestrator is the active ingredient.
+
+**Status:** OPEN. Will be approached on a disposable branch by
+incrementally stripping behavior from `internal/orchestrator/shell.go`
+until the bug disappears, then re-adding pieces until it returns.
+
+**Pinned by:**
+
+- `e2e/test_sbx_anchor_12_go_probe_publish.py` — Go binary works
+  reliably (both nohup and plain) when invoked via pexpect
+- `e2e/test_sbx_anchor_13_publish_stability.py` — pure-sbx
+  publish stability under multiple patterns; pins that subsequent
+  republishes correctly return `already published` (NOT `no
+  container endpoint`)
+- `e2e/test_07_invariant_happy_path.py` — the end-to-end devm
+  failure; this is what flips green when Quirk #6 is resolved
+
+**Workaround in `publishWithVerify`:** retry on the documented
+`no container endpoint` transient with 500ms backoff inside the
+30s deadline. Pinned by
+`TestPublishWithVerifyRetriesOnEndpointNotReady`. **This is
+necessary but not sufficient** — the underlying endpoint loss
+prevents recovery within the deadline window.
