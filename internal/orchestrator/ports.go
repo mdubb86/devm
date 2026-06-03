@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mtwaage/devm/internal/debuglog"
 	"github.com/mtwaage/devm/internal/sandbox"
 	"github.com/mtwaage/devm/internal/schema"
 )
@@ -78,6 +79,21 @@ func ReconcilePortsWithRunner(sb *sandbox.Sandbox, cfg schema.Config, r sandbox.
 // be a no-op would then surface as a hard error).
 const errAlreadyPublished = "already published"
 
+// errNoContainerEndpoint matches sbx's error when we try to publish
+// before the sandbox's container endpoint has been assigned an IP.
+// Reproducible right after exec-ready under the anchor-alive cold-start
+// flow: `sbx ls` says running, `sbx exec NAME true` succeeds, but the
+// network endpoint isn't ready for ~hundreds of ms. Treated as
+// transient — `publishWithVerify` backs off and retries until the
+// endpoint comes up or the 30s deadline elapses. Pinned by
+// TestPublishWithVerifyRetriesOnEndpointNotReady in ports_test.go.
+const errNoContainerEndpoint = "no container endpoint with IP address found"
+
+// publishBackoff is the sleep between retries on transient publish
+// errors. Short enough to feel snappy on the happy path, long enough
+// not to spin.
+const publishBackoff = 500 * time.Millisecond
+
 // publishWithVerify publishes a port mapping and confirms the mapping
 // is *durably* applied — not just that `sbx ports --json` briefly shows
 // it. sbx has two failure modes we have to defend against:
@@ -103,21 +119,36 @@ const verifyHoldDuration = 500 * time.Millisecond
 func publishWithVerify(sb *sandbox.Sandbox, m portMapping, r sandbox.Runner) error {
 	spec := fmt.Sprintf("%d:%d", m.HostPort, m.SandboxPort)
 	deadline := time.Now().Add(30 * time.Second)
+	attempt := 0
 	for time.Now().Before(deadline) {
+		attempt++
 		if _, err := r.Output("sbx", "ports", sb.Name, "--publish", spec); err != nil {
-			if !strings.Contains(err.Error(), errAlreadyPublished) {
+			msg := err.Error()
+			switch {
+			case strings.Contains(msg, errAlreadyPublished):
+				debuglog.Logf("ports", "publish %s attempt=%d: already-published (fall through to verify)", spec, attempt)
+			case strings.Contains(msg, errNoContainerEndpoint):
+				debuglog.Logf("ports", "publish %s attempt=%d: endpoint not ready, backoff %s", spec, attempt, publishBackoff)
+				time.Sleep(publishBackoff)
+				continue
+			default:
+				debuglog.Logf("ports", "publish %s attempt=%d: hard error %v", spec, attempt, err)
 				return fmt.Errorf("sbx ports --publish %s: %w", spec, err)
 			}
+		} else {
+			debuglog.Logf("ports", "publish %s attempt=%d: rc=0", spec, attempt)
 		}
 		if !verifyMappingVisible(sb, m, r, 3*time.Second) {
+			debuglog.Logf("ports", "publish %s attempt=%d: NOT visible within 3s, loop", spec, attempt)
 			continue
 		}
-		// Phantom defense: hold briefly and confirm the mapping is still
-		// there. If it disappeared, we saw a phantom — loop and re-publish.
+		debuglog.Logf("ports", "publish %s attempt=%d: visible, holding %s", spec, attempt, verifyHoldDuration)
 		time.Sleep(verifyHoldDuration)
 		if verifyMappingVisible(sb, m, r, 250*time.Millisecond) {
+			debuglog.Logf("ports", "publish %s attempt=%d: still visible after hold — SUCCESS", spec, attempt)
 			return nil
 		}
+		debuglog.Logf("ports", "publish %s attempt=%d: vanished during hold (phantom) — loop", spec, attempt)
 	}
 	return fmt.Errorf("published %s but never durably visible in sbx ports --json within 30s", spec)
 }

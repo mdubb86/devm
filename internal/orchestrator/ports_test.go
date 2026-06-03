@@ -272,6 +272,59 @@ func TestReconcilePortsBubblesParseError(t *testing.T) {
 	assert.Contains(t, err.Error(), "parse ports JSON")
 }
 
+// flakeyRunner wraps scriptedRunner: returns publishErr for the first
+// failTimes --publish calls, then delegates to the inner runner (which
+// will succeed and update its listJSON). Lets us simulate sbx's
+// "endpoint not ready yet" transient.
+type flakeyRunner struct {
+	inner        *scriptedRunner
+	publishErr   error
+	failTimes    int
+	publishCalls int
+}
+
+func (f *flakeyRunner) Output(name string, args ...string) ([]byte, error) {
+	if indexOf(args, "--publish") >= 0 && f.publishCalls < f.failTimes {
+		f.publishCalls++
+		// Still record the call on the inner runner so test assertions
+		// can introspect them.
+		f.inner.calls = append(f.inner.calls, append([]string{name}, args...))
+		return nil, f.publishErr
+	}
+	return f.inner.Output(name, args...)
+}
+func (f *flakeyRunner) Run(name string, args ...string) error {
+	return f.inner.Run(name, args...)
+}
+func (f *flakeyRunner) RunStdin(stdin, name string, args ...string) error {
+	return f.inner.RunStdin(stdin, name, args...)
+}
+
+func TestPublishWithVerifyRetriesOnEndpointNotReady(t *testing.T) {
+	// sbx returns this error when the sandbox is "running" but its
+	// container endpoint hasn't been assigned an IP yet. Under the
+	// new anchor-alive flow, port reconcile runs immediately after
+	// exec-ready, which is a race with endpoint allocation.
+	endpointErr := errors.New(
+		"sbx ports --publish 68080:8080: exit status 1: " +
+			"ERROR: publish port: failed to resolve endpoint: " +
+			"no container endpoint with IP address found")
+
+	cfg := cfgWith(map[string]schema.Service{
+		"api": {Canonical: 8080},
+	}, 60000)
+	runner := &flakeyRunner{
+		inner:      &scriptedRunner{listJSON: "[]"},
+		publishErr: endpointErr,
+		failTimes:  2, // fail twice, succeed on third attempt
+	}
+	sb := &sandbox.Sandbox{Name: "x-sbx"}
+	err := ReconcilePortsWithRunner(sb, cfg, runner)
+	require.NoError(t, err, "publishWithVerify should retry through transient endpoint-not-ready")
+	assert.Equal(t, 2, runner.publishCalls,
+		"should have hit the transient error exactly failTimes times before succeeding")
+}
+
 func hasFlag(args []string, flag string) bool {
 	for _, a := range args {
 		if a == flag {
