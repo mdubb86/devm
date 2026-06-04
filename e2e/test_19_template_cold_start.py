@@ -52,6 +52,8 @@ def test_template_cold_start(workspace, devm, sandbox_name):
 
         sh.exit(timeout=30)
 
+    # Anchor-alive: explicitly stop after shell exit.
+    devm.stop(yes=True)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if sbx.sandbox_state(sandbox_name) == "stopped":

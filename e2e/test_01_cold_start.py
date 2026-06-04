@@ -16,7 +16,9 @@ def test_cold_start(workspace, devm, sandbox_name):
         sh.run_check("test -e /tmp/install-marker", expect_zero=True, timeout=30)
         sh.exit(timeout=30)
 
-    # After the user's shell exits, sandbox should stop within ~15s.
+    # Anchor-alive: shell exit no longer auto-stops the sandbox.
+    # Explicitly stop and verify it reaches 'stopped' within ~15s.
+    devm.stop(yes=True)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if sbx.sandbox_state(sandbox_name) == "stopped":

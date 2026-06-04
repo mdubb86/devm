@@ -26,7 +26,8 @@ def test_shortcut_path(workspace, devm, sandbox_name):
             second.exit(timeout=30)
         first.exit(timeout=30)
 
-    # After both exit, sandbox stops.
+    # Anchor-alive: explicitly stop after both shells exit.
+    devm.stop(yes=True)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if sbx.sandbox_state(sandbox_name) == "stopped":

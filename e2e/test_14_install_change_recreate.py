@@ -55,6 +55,8 @@ def test_install_change_recreate(workspace, devm, sandbox_name, phase):
         fresh.run_check("test -e /home/agent/marker-a", expect_zero=False, timeout=15)
         fresh.exit(timeout=30)
 
+    # Anchor-alive: explicitly stop after shell exit.
+    devm.stop(yes=True)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if sbx.sandbox_state(sandbox_name) == "stopped":
