@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"time"
 
@@ -18,9 +19,16 @@ import (
 // ShellDeps wires the orchestrator's collaborators. Production callers
 // build one via DefaultShellDeps; tests substitute stubs.
 type ShellDeps struct {
-	// AnchorSpawner runs the `sbx run` subprocess that holds the
-	// sandbox alive during bootstrap. Non-interactive: stdin=/dev/null,
-	// stdout/stderr typically discarded or logged.
+	// AnchorSpawner is an OPTIONAL hook for tests to intercept anchor
+	// (`nohup sbx run …`) spawning. Production code leaves this nil
+	// and goes through a raw *exec.Cmd path inline in RunShell — the
+	// SpawnedCmd interface indirection on the anchor (combined with
+	// the ticker+select waitForRunning loop) was Quirk #6: it
+	// destabilized the sandbox endpoint and caused the subsequent
+	// port publish to phantom in ~80% of cold starts. See
+	// docs/sbx-quirks.md section 6 and e2e/test_sbx_anchor_14_*.py
+	// for the pin. Test injects a stubSpawner here to verify
+	// orchestration behavior without spawning real subprocesses.
 	AnchorSpawner Spawner
 	// UserSpawner runs the user's interactive shell via sbx exec -it.
 	// Must inherit the host's stdin/stdout/stderr so the user sees
@@ -33,10 +41,12 @@ type ShellDeps struct {
 	PollInterval   time.Duration // default 250ms
 }
 
-// DefaultShellDeps returns deps wired for production.
+// DefaultShellDeps returns deps wired for production. AnchorSpawner is
+// left nil so RunShell takes the raw-*exec.Cmd anchor path (see Quirk
+// #6 in docs/sbx-quirks.md).
 func DefaultShellDeps(repoRoot string) ShellDeps {
 	return ShellDeps{
-		AnchorSpawner:  &ExecSpawner{Interactive: false},
+		AnchorSpawner:  nil,
 		UserSpawner:    &ExecSpawner{Interactive: true},
 		Runner:         sandbox.DefaultRunner{},
 		LockPath:       filepath.Join(repoRoot, ".devm", "lock"),
@@ -163,31 +173,107 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 			repoRoot,
 		}
 	}
-	debuglog.Logf("shell", "cold-start: spawning anchor: nohup %v", runArgs)
-	runCmd, err := d.AnchorSpawner.Start("nohup", runArgs...)
-	if err != nil {
-		return -1, fmt.Errorf("spawn sbx run: %w", err)
+	// Spawn the anchor.
+	//
+	// PRODUCTION PATH: d.AnchorSpawner is nil (see DefaultShellDeps).
+	// We use a raw *exec.Cmd inline. The SpawnedCmd interface
+	// indirection — combined with the ticker+select loop in the old
+	// waitForRunning helper — was Quirk #6: the sandbox endpoint
+	// became unstable and the subsequent port publish phantomed in
+	// ~80% of cold starts. Empirically 10/10 publish-OK with the
+	// raw-osexec + inline-poll combination (vs 8/10 with only inline-
+	// poll and ~2/10 baseline). See docs/sbx-quirks.md section 6 and
+	// e2e/test_sbx_anchor_14_*.py for the pin.
+	//
+	// TEST PATH: d.AnchorSpawner is a stub; tests use it to verify
+	// orchestration without spawning real subprocesses. The stub is
+	// not subject to Quirk #6 (it doesn't create real *exec.Cmd).
+	var (
+		runCmd     *osexec.Cmd      // production path only
+		stubAnchor SpawnedCmd       // test path only
+		anchorPid  int
+		runDone    = make(chan error, 1)
+	)
+	if d.AnchorSpawner != nil {
+		debuglog.Logf("shell", "cold-start: spawning anchor (via AnchorSpawner — TEST PATH): nohup %v", runArgs)
+		sc, err := d.AnchorSpawner.Start("nohup", runArgs...)
+		if err != nil {
+			return -1, fmt.Errorf("spawn sbx run: %w", err)
+		}
+		stubAnchor = sc
+		anchorPid = sc.Pid()
+		go func() {
+			_, err := sc.Wait()
+			runDone <- err
+		}()
+	} else {
+		debuglog.Logf("shell", "cold-start: spawning anchor (raw osexec — production path): nohup %v", runArgs)
+		runCmd = osexec.Command("nohup", runArgs...)
+		runCmd.Stdin = nil
+		runCmd.Stdout = nil
+		runCmd.Stderr = os.Stderr
+		if err := runCmd.Start(); err != nil {
+			return -1, fmt.Errorf("spawn sbx run: %w", err)
+		}
+		if runCmd.Process != nil {
+			anchorPid = runCmd.Process.Pid
+		}
+		go func() {
+			runDone <- runCmd.Wait()
+		}()
 	}
-	debuglog.Logf("shell", "cold-start: anchor spawned pid=%d", runCmd.Pid())
-	runDone := make(chan error, 1)
-	go func() {
-		_, err := runCmd.Wait()
-		runDone <- err
-	}()
+	debuglog.Logf("shell", "cold-start: anchor spawned pid=%d", anchorPid)
 
 	// Cleanup helper for failure paths. The normal path never calls this.
 	killAnchor := func() {
-		debuglog.Logf("shell", "cleanup: killing anchor pid=%d", runCmd.Pid())
-		_ = runCmd.Kill()
+		debuglog.Logf("shell", "cleanup: killing anchor pid=%d", anchorPid)
+		switch {
+		case runCmd != nil && runCmd.Process != nil:
+			_ = runCmd.Process.Kill()
+		case stubAnchor != nil:
+			_ = stubAnchor.Kill()
+		}
 		select {
 		case <-runDone:
 		case <-time.After(3 * time.Second):
 		}
 	}
 
-	if err := waitForRunning(ctx, sb, runDone, d.WaitForRunning, d.PollInterval); err != nil {
-		killAnchor()
-		return -1, err
+	// Inline poll for "running" — DO NOT extract into a helper that
+	// uses `time.NewTicker(poll)` + `select { ctx.Done / runDone /
+	// ticker.C }`. That blocking multi-channel select shape was load-
+	// bearing on Quirk #6: with it, the first sbx ports --publish
+	// after exec-ready phantomed and the endpoint got torn down for
+	// the full deadline window. With the inline sleep loop here,
+	// publish sticks. See docs/sbx-quirks.md section 6.
+	{
+		deadline := time.Now().Add(d.WaitForRunning)
+		running := false
+		for time.Now().Before(deadline) {
+			if sb.IsRunning() {
+				running = true
+				break
+			}
+			// Non-blocking check: detect anchor death and ctx cancellation
+			// without re-introducing the blocking-select-with-ticker
+			// shape that triggers Quirk #6.
+			select {
+			case err := <-runDone:
+				if err != nil {
+					return -1, fmt.Errorf("sbx run exited before sandbox became running: %w", err)
+				}
+				return -1, fmt.Errorf("sbx run exited before sandbox became running")
+			case <-ctx.Done():
+				killAnchor()
+				return -1, ctx.Err()
+			default:
+			}
+			time.Sleep(d.PollInterval)
+		}
+		if !running {
+			killAnchor()
+			return -1, fmt.Errorf("sandbox %s never reached running within %s", sandboxName, d.WaitForRunning)
+		}
 	}
 	debuglog.Logf("shell", "cold-start: sandbox status=running")
 
@@ -239,7 +325,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	if err != nil {
 		return -1, fmt.Errorf("user shell wait: %w", err)
 	}
-	debuglog.Logf("shell", "user shell exited rc=%d; leaving anchor pid=%d alive", rc, runCmd.Pid())
+	debuglog.Logf("shell", "user shell exited rc=%d; leaving anchor pid=%d alive", rc, anchorPid)
 	return rc, nil
 }
 
@@ -249,30 +335,6 @@ func applyDefaults(d *ShellDeps) {
 	}
 	if d.PollInterval == 0 {
 		d.PollInterval = 250 * time.Millisecond
-	}
-}
-
-func waitForRunning(ctx context.Context, sb *sandbox.Sandbox, runDone <-chan error, timeout, poll time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(poll)
-	defer ticker.Stop()
-	for {
-		if sb.IsRunning() {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case err := <-runDone:
-			if err != nil {
-				return fmt.Errorf("sbx run exited before sandbox became running: %w", err)
-			}
-			return fmt.Errorf("sbx run exited before sandbox became running")
-		case <-ticker.C:
-			if time.Now().After(deadline) {
-				return fmt.Errorf("sandbox %s never reached running within %s", sb.Name, timeout)
-			}
-		}
 	}
 }
 

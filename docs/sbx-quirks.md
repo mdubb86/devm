@@ -255,14 +255,69 @@ returns OK regardless of whether a real process is running — and
 several earlier devm tests turned out to have been passing only
 because of this false positive.
 
-## 6. devm port-reconcile destabilizes the sandbox endpoint (OPEN)
+## 6. devm port-reconcile destabilizes the sandbox endpoint (RESOLVED 2026-06-04)
 
-**Observed (2026-06-02):** Under the anchor-alive architecture,
-`devm shell` cold-start consistently fails to durably publish
-canonical ports. The orchestrator's `publishWithVerify` correctly
-detects the phantom (`vanished during hold — loop`), but the
-first publish itself appears to tear down the sandbox's port
-endpoint, after which all subsequent publishes get:
+**Root cause:** Two structural choices in `internal/orchestrator/
+shell.go` together destabilized the sandbox endpoint at cold-
+start, making the first `sbx ports --publish` phantom in ~80% of
+runs:
+
+  1. The `waitForRunning` helper used a `time.NewTicker(poll)` +
+     `select { ctx.Done / runDone / ticker.C }` loop, parking the
+     goroutine on a blocking multi-channel select between every
+     `sbx ls` poll.
+  2. The anchor (`nohup sbx run …`) was spawned through the
+     `Spawner` / `SpawnedCmd` interface (`ExecSpawner.Start`),
+     wrapping `*exec.Cmd` in `&execCmd{c: c}` and escaping it
+     through interface return.
+
+Either alone is insufficient — bisection scored strip-with-(1)-
+fixed-only at 8/9 publish-OK. The pair together hit 10/10. The
+empirical mechanism is unclear (the SpawnedCmd indirection and
+the ticker+select loop are both behaviorally equivalent at the
+syscall level to the probe's inline raw-`*exec.Cmd` + plain
+`for { check(); time.Sleep(250ms) }`), but the bisection is
+decisive: bypassing both produces a stable endpoint, anything
+less produces the phantom.
+
+**Fix:** In `RunShell` —
+
+  - Spawn the anchor inline as a raw `*exec.Cmd` (no Spawner
+    indirection). `ShellDeps.AnchorSpawner` is now nil in
+    `DefaultShellDeps`; tests that inject a stub still go
+    through the interface path (which doesn't trigger the bug
+    because tests don't create real `*exec.Cmd` for the anchor).
+  - Replace the `waitForRunning` helper call with an inline
+    `for { check(); time.Sleep(d.PollInterval) }` loop. A
+    non-blocking `select { case <-runDone: …; case <-ctx.Done():
+    …; default: }` preserves anchor-death and ctx-cancellation
+    detection without re-introducing the blocking multi-channel
+    select. The standalone `waitForRunning` function is deleted
+    so future code can't pull it back in.
+
+**Pinned by:**
+
+  - `e2e/test_07_invariant_happy_path.py` — green
+  - `e2e/test_sbx_anchor_14_publish_trigger_pin.py` — a probe
+    binary (`probe-publish-triggered`) that re-applies both
+    trigger pieces around the same sbx flow and FAILS the
+    publish/observe assertion with high probability, pinning
+    the trigger so a future devm refactor can't quietly
+    reintroduce it.
+
+The previous OPEN write-up + bisection log is preserved below
+for archaeology.
+
+---
+
+### Original report (OPEN — 2026-06-02)
+
+**Observed:** Under the anchor-alive architecture, `devm shell`
+cold-start consistently fails to durably publish canonical
+ports. The orchestrator's `publishWithVerify` correctly detects
+the phantom (`vanished during hold — loop`), but the first
+publish itself appears to tear down the sandbox's port endpoint,
+after which all subsequent publishes get:
 
 ```
 ERROR: publish port: failed to resolve endpoint:
@@ -296,9 +351,88 @@ goroutine that calls `runCmd.Wait()` on the anchor. None of these
 should plausibly affect sbx daemon state — but **something** in
 devm's larger orchestrator is the active ingredient.
 
-**Status:** OPEN. Will be approached on a disposable branch by
-incrementally stripping behavior from `internal/orchestrator/shell.go`
-until the bug disappears, then re-adding pieces until it returns.
+### Bisection findings (2026-06-03/04)
+
+Worked the disposable `strip-devm-publish` branch. Ruled out as
+*the* cause (each tested in isolation, bug still reproduces):
+
+  - `lock.Acquire` / lock release (stripped)
+  - `render.WriteDevmDir` (stripped, test pre-renders)
+  - `runDone` goroutine + `runCmd.Wait()` (stripped, replaced
+    with a never-firing channel)
+  - `ReconcilePortsWithRunner` complexity (replaced with single
+    direct `exec.Command("sbx", "ports", ... --publish ...)`)
+  - `WriteSnapshot` (stripped)
+  - `signal.NotifyContext(SIGINT)` in `cmd/devm/shell.go`
+    (replaced with bare `context.Background()`)
+  - cobra command framework (verified by building a *cobra-
+    wrapped probe* — same flow as `e2e/probes/probe-publish`
+    but driven via cobra+`signal.NotifyContext`; passes 5/5)
+  - Kit content / project ID / agent name / cwd of the anchor
+    (verified by building a probe variant that uses devm's
+    rendered `.devm/spec.yaml`, devm's `cfg.Project.ID` as
+    agent name, and cwd=workspace; passes 10/10)
+
+**Pure-sbx (Python `subprocess.Popen` with inherited PTY for
+`sbx exec -it`, *no delay* between `sbx ports --publish` and
+`sbx exec -it`) PASSES 5/5** with both the minimal anchortest
+kit and the devm-rendered kit. The bug does **not** reproduce in
+pure-sbx at the publish-then-exec sequence level. The
+regression-guard test hoped for in the original handoff is not
+constructible from pure-sbx.
+
+`lsof` on the anchor *did* show devm's anchor holds an extra
+established TCP to `*.compute-1.amazonaws.com:https` plus a ctl
+socket and unix-domain socket that the probe's anchor doesn't.
+**That difference is symptomatic, not causal** — the
+probe-with-devm-kit variant lacks those fds and still publishes
+reliably; the fds correlate with which sandbox name / kit
+combination triggers `sandboxes-auth` to keep a connection warm,
+but they don't cause the publish to fail.
+
+**Mixed signal on timing fixes** (each row is 10 runs of
+test_07; "pass-publish" = port appeared within
+`wait_for_port_published`'s 30s window, regardless of the
+unrelated "never reached stopped" anchor-alive test artifact):
+
+| Variant | pass-publish |
+|---|---|
+| strip baseline (no fix) | 1/10 |
+| strip + 200ms sleep *before* `waitForRunning` | 4/5 |
+| strip + 1000ms sleep *before* `waitForRunning` | 1/5 |
+| strip + 1.5s sleep *after* publish, before user shell | 2/10 |
+| strip + inline `waitFor` + bypass `ExecSpawner` for anchor + 500ms post-publish | 10/10 |
+| main + single direct publish + 500ms post-publish | 1/5 |
+| main + 500ms sleep before user shell only | 3/10 |
+
+The only configuration that hit 10/10 was a *combined* refactor
+on strip: inline polling loops + bypassing `ExecSpawner` for the
+anchor + 500ms post-publish settle. Individual changes are
+within noise of the ~20% baseline. So the bug is **diffuse**:
+several layers conspire; no single piece is load-bearing on its
+own.
+
+**Still untested as the trigger** (the structural items that
+remain in stripped-devm but aren't in the working probe):
+
+  - `sandbox.Sandbox` struct's `IsRunning()`/`Exists()` (parse
+    `sbx ls` output) instead of probe's inline check
+  - `waitForRunning` helper (uses `time.NewTicker` + `select`
+    with the `runDone` channel) instead of probe's inline
+    `for { check(); time.Sleep(250ms) }`
+  - `waitForExecReady` helper (similar shape)
+  - `ExecSpawner.Start` indirection (returns a `SpawnedCmd`
+    interface) instead of probe's direct `exec.Cmd.Start()`
+  - `userCmd.Wait()` blocking at the end of `RunShell` instead
+    of the probe's observation loop
+
+**Status:** RESOLVED 2026-06-04 by the combined refactor
+hinted at in the previous paragraph. The 500ms post-publish
+settle turned out to be a red herring: inline `waitForRunning`
++ bypass `ExecSpawner` alone scored 10/10 publish-OK on
+test_07 with NO sleep, beating the partial fixes by ~10
+percentage points and the baseline by 80. See top of section
+for the current write-up.
 
 **Pinned by:**
 
