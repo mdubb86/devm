@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestMaskRequiredFields(t *testing.T) {
@@ -202,48 +203,81 @@ func TestResolveMountErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "host path is empty")
 }
 
-func TestServiceBindValid(t *testing.T) {
+// TestServicePortPolymorphicUnmarshal exercises the single-field `port:`
+// polymorphic decode that accepts either an int (just sandbox port) or
+// a "IP:PORT" string (interface + sandbox port).
+func TestServicePortPolymorphicUnmarshal(t *testing.T) {
 	cases := []struct {
-		name string
-		svc  Service
+		name      string
+		yaml      string
+		wantPort  int
+		wantBind  string
 	}{
-		{"empty_bind_ok", Service{Port: 80}},
-		{"localhost_explicit", Service{Port: 80, Bind: "127.0.0.1:80"}},
-		{"all_interfaces", Service{Port: 8080, Bind: "0.0.0.0:8080"}},
-		{"specific_ip", Service{Port: 5432, Bind: "192.168.1.10:5432"}},
+		{"int_form", "port: 80", 80, ""},
+		{"string_localhost", `port: "127.0.0.1:80"`, 80, "127.0.0.1"},
+		{"string_all_interfaces", `port: "0.0.0.0:8080"`, 8080, "0.0.0.0"},
+		{"string_specific_ip", `port: "192.168.1.10:5432"`, 5432, "192.168.1.10"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.NoError(t, tc.svc.Validate())
+			var s Service
+			require.NoError(t, yaml.Unmarshal([]byte(tc.yaml), &s))
+			assert.Equal(t, tc.wantPort, s.Port)
+			assert.Equal(t, tc.wantBind, s.BindIP)
 		})
 	}
 }
 
-func TestServiceBindInvalid(t *testing.T) {
+// TestServicePortPolymorphicUnmarshalErrors checks rejected forms.
+func TestServicePortPolymorphicUnmarshalErrors(t *testing.T) {
 	cases := []struct {
 		name      string
-		svc       Service
+		yaml      string
 		wantInErr string
 	}{
-		{"bind_without_port", Service{Bind: "0.0.0.0:80"}, "bind requires port"},
-		{"bind_port_mismatch", Service{Port: 80, Bind: "0.0.0.0:8080"}, "does not match service.port"},
-		{"bind_bad_ip", Service{Port: 80, Bind: "not-an-ip:80"}, "valid IP"},
-		{"bind_no_colon", Service{Port: 80, Bind: "0.0.0.0"}, "IP:PORT"},
-		{"bind_non_numeric_port", Service{Port: 80, Bind: "0.0.0.0:eighty"}, "not an integer"},
+		{"bad_ip", `port: "not-an-ip:80"`, "valid IP"},
+		{"no_colon_string", `port: "abc"`, "IP:PORT"},
+		{"non_numeric_port", `port: "0.0.0.0:eighty"`, "not an integer"},
+		{"list_form_rejected", "port: [1, 2]", "integer or"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.svc.Validate()
+			var s Service
+			err := yaml.Unmarshal([]byte(tc.yaml), &s)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantInErr)
 		})
 	}
 }
 
+// TestServiceMarshalRoundTrip pins that a Service with a bound IP
+// round-trips through YAML in the polymorphic string form, while a
+// bare port round-trips as an int. Snapshot diff requires this.
+func TestServiceMarshalRoundTrip(t *testing.T) {
+	bound := Service{Port: 80, BindIP: "0.0.0.0"}
+	out, err := yaml.Marshal(bound)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), `port: 0.0.0.0:80`)
+
+	bare := Service{Port: 8080}
+	out, err = yaml.Marshal(bare)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), `port: 8080`)
+	assert.NotContains(t, string(out), `bind`)
+}
+
+func TestServiceValidatePortBindCoupling(t *testing.T) {
+	// BindIP without Port is invalid.
+	bad := Service{BindIP: "0.0.0.0"}
+	err := bad.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bind interface requires")
+}
+
 func TestServiceResolveBind(t *testing.T) {
 	assert.Equal(t, "127.0.0.1", Service{Port: 80}.ResolveBind())
-	assert.Equal(t, "0.0.0.0", Service{Port: 80, Bind: "0.0.0.0:80"}.ResolveBind())
-	assert.Equal(t, "192.168.1.10", Service{Port: 5432, Bind: "192.168.1.10:5432"}.ResolveBind())
+	assert.Equal(t, "0.0.0.0", Service{Port: 80, BindIP: "0.0.0.0"}.ResolveBind())
+	assert.Equal(t, "192.168.1.10", Service{Port: 5432, BindIP: "192.168.1.10"}.ResolveBind())
 }
 
 func TestConfigValidateRejectsEmptyMountEntry(t *testing.T) {

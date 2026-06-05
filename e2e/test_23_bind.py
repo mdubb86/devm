@@ -20,14 +20,11 @@ from helpers import Shell, sbx
 def test_bind_exposes_on_specified_interface(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
         services={
-            "web": {
-                "port": 8080,
-                "bind": "0.0.0.0:8080",
-            },
-            # Control: another service with no bind → must still default to 127.0.0.1.
-            "api": {
-                "port": 8081,
-            },
+            # Polymorphic port: string form encodes the bind interface in
+            # the SAME `port` field that normally takes a bare integer.
+            "web": {"port": "0.0.0.0:8080"},
+            # Control: another service with bare-int port → still defaults to 127.0.0.1.
+            "api": {"port": 8081},
         },
     )
 

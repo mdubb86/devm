@@ -40,8 +40,15 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 		}
 		for name, soverride := range override.Services {
 			svc := out.Services[name]
-			if soverride.Port != nil {
-				svc.Port = *soverride.Port
+			if soverride.PortIsSet {
+				if soverride.Port != nil {
+					svc.Port = *soverride.Port
+				}
+				if soverride.BindIP != nil {
+					svc.BindIP = *soverride.BindIP
+				} else {
+					svc.BindIP = ""
+				}
 			}
 			if soverride.Hostname != nil {
 				svc.Hostname = *soverride.Hostname
@@ -68,9 +75,6 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 			}
 			if soverride.Startup != nil {
 				svc.Startup = *soverride.Startup
-			}
-			if soverride.Bind != nil {
-				svc.Bind = *soverride.Bind
 			}
 			out.Services[name] = svc
 		}

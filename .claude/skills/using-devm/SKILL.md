@@ -44,11 +44,19 @@ install:
 services:
   api:
     port: 8080            # in-VM listen port; host port = 51000 + 8080 = 59080
-                          # by default the mapping binds to 127.0.0.1 (localhost-only).
-                          # To expose on the LAN: add `bind: "0.0.0.0:8080"`. The port
-                          # in `bind` must match `port`; the host port is still
-                          # port_offset + port (devm guarantees that — bind only
-                          # controls the host interface).
+                          # By default the mapping binds to 127.0.0.1
+                          # (localhost-only). To expose on the LAN, write the
+                          # SAME field as a string with the bind interface
+                          # prefix: `port: "0.0.0.0:8080"`. The trailing port
+                          # in the string must equal the sandbox port; the host
+                          # port is still port_offset + port — devm guarantees
+                          # that, and the bind portion controls only the
+                          # interface.
+                          #
+                          # Examples:
+                          #   port: 8080                  → 127.0.0.1:59080:8080
+                          #   port: "0.0.0.0:8080"        → 0.0.0.0:59080:8080
+                          #   port: "192.168.1.10:8080"   → 192.168.1.10:59080:8080
     env:                  # service env vars; exposed as API_KEY=...
       LOG_LEVEL: info
     env_inject: true      # also inject API_PORT and API_HOST

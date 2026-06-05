@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Mask struct {
@@ -69,7 +71,25 @@ func (c StartupCommand) Validate() error {
 }
 
 type Service struct {
-	Port      int               `yaml:"port,omitempty"`
+	// Port is the sandbox-side listen port. Set via `port: 80` in
+	// devm.yaml. Polymorphic with BindIP via custom YAML
+	// (un)marshaling: writing `port: "0.0.0.0:80"` populates both
+	// Port=80 AND BindIP="0.0.0.0" from a single field.
+	Port int `yaml:"-"`
+
+	// BindIP is the host-side interface for this service's port
+	// mapping. Populated from the IP component of `port: "IP:PORT"`
+	// in devm.yaml. When empty, the mapping binds to 127.0.0.1
+	// (default; localhost-only). Setting "0.0.0.0" exposes the port
+	// on all host interfaces — useful when other devices on the LAN
+	// need to reach the service.
+	//
+	// The host port is NOT overridable. devm guarantees
+	// `host_port = port_offset + port` for every service. The bind
+	// portion of `port: "IP:N"` controls only the interface; the
+	// trailing N must equal the sandbox port.
+	BindIP string `yaml:"-"`
+
 	Hostname  string            `yaml:"hostname,omitempty"`
 	EnvInject bool              `yaml:"env_inject,omitempty"`
 	EnvHost   string            `yaml:"env_host,omitempty"`
@@ -77,33 +97,111 @@ type Service struct {
 	Masks     []Mask            `yaml:"masks,omitempty"`
 	Templates []Template        `yaml:"templates,omitempty"`
 	Startup   []StartupCommand  `yaml:"startup,omitempty"`
-
-	// Bind overrides the host-side interface for this service's port
-	// mapping. Format: "IP:SANDBOX_PORT" where IP is parsed via
-	// net.ParseIP and SANDBOX_PORT must equal Port. When unset,
-	// the port binds to 127.0.0.1 (default; localhost-only). Setting
-	// "0.0.0.0:80" (for a service with Port=80) exposes the port
-	// on all host interfaces so other devices on the LAN can reach it.
-	//
-	// The host port is NOT overridable here — by design, devm
-	// guarantees `host_port = port_offset + port` for every
-	// service. Bind controls only the interface.
-	Bind string `yaml:"bind,omitempty"`
 }
 
-// ResolveBind parses Service.Bind and returns the host bind IP. Returns
-// "127.0.0.1" when Bind is empty. Caller is responsible for having
-// already validated the service (this function returns the default on
-// any malformed input rather than re-validating).
-func (s Service) ResolveBind() string {
-	if s.Bind == "" {
-		return "127.0.0.1"
+// serviceYAML is the on-the-wire shape. `port` is a yaml.Node so we
+// can decode it as either int or string and populate both Service.Port
+// and Service.BindIP from a single field.
+type serviceYAML struct {
+	Port      yaml.Node         `yaml:"port,omitempty"`
+	Hostname  string            `yaml:"hostname,omitempty"`
+	EnvInject bool              `yaml:"env_inject,omitempty"`
+	EnvHost   string            `yaml:"env_host,omitempty"`
+	Env       map[string]string `yaml:"env,omitempty"`
+	Masks     []Mask            `yaml:"masks,omitempty"`
+	Templates []Template        `yaml:"templates,omitempty"`
+	Startup   []StartupCommand  `yaml:"startup,omitempty"`
+}
+
+// UnmarshalYAML implements polymorphic decoding for the `port` field:
+//   - int form: `port: 80` → Port=80, BindIP=""
+//   - string form: `port: "0.0.0.0:80"` → Port=80, BindIP="0.0.0.0"
+func (s *Service) UnmarshalYAML(node *yaml.Node) error {
+	var raw serviceYAML
+	if err := node.Decode(&raw); err != nil {
+		return err
 	}
-	ip, _, ok := strings.Cut(s.Bind, ":")
+	s.Hostname = raw.Hostname
+	s.EnvInject = raw.EnvInject
+	s.EnvHost = raw.EnvHost
+	s.Env = raw.Env
+	s.Masks = raw.Masks
+	s.Templates = raw.Templates
+	s.Startup = raw.Startup
+	return s.decodePortNode(raw.Port)
+}
+
+func (s *Service) decodePortNode(n yaml.Node) error {
+	if n.Kind == 0 {
+		return nil // no port set
+	}
+	// Try int decode first (the common case).
+	var asInt int
+	if err := n.Decode(&asInt); err == nil {
+		s.Port = asInt
+		return nil
+	}
+	// Fall back to string "IP:PORT".
+	var asStr string
+	if err := n.Decode(&asStr); err != nil {
+		return fmt.Errorf("port: must be an integer or an \"IP:PORT\" string")
+	}
+	ip, portStr, ok := strings.Cut(asStr, ":")
 	if !ok {
+		return fmt.Errorf("port %q: string form must be \"IP:PORT\"", asStr)
+	}
+	if net.ParseIP(ip) == nil {
+		return fmt.Errorf("port %q: %q is not a valid IP address (note: IPv6 not currently supported — use IPv4)", asStr, ip)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return fmt.Errorf("port %q: %q is not an integer", asStr, portStr)
+	}
+	s.Port = port
+	s.BindIP = ip
+	return nil
+}
+
+// MarshalYAML round-trips Service back to its polymorphic on-the-wire
+// shape: emits `port: N` (int) when BindIP is empty, `port: "IP:N"`
+// (string) when BindIP is set. Snapshots must round-trip so the diff
+// machinery sees the same shape the user wrote.
+func (s Service) MarshalYAML() (interface{}, error) {
+	out := struct {
+		Port      interface{}       `yaml:"port,omitempty"`
+		Hostname  string            `yaml:"hostname,omitempty"`
+		EnvInject bool              `yaml:"env_inject,omitempty"`
+		EnvHost   string            `yaml:"env_host,omitempty"`
+		Env       map[string]string `yaml:"env,omitempty"`
+		Masks     []Mask            `yaml:"masks,omitempty"`
+		Templates []Template        `yaml:"templates,omitempty"`
+		Startup   []StartupCommand  `yaml:"startup,omitempty"`
+	}{
+		Hostname:  s.Hostname,
+		EnvInject: s.EnvInject,
+		EnvHost:   s.EnvHost,
+		Env:       s.Env,
+		Masks:     s.Masks,
+		Templates: s.Templates,
+		Startup:   s.Startup,
+	}
+	if s.Port != 0 {
+		if s.BindIP == "" {
+			out.Port = s.Port
+		} else {
+			out.Port = fmt.Sprintf("%s:%d", s.BindIP, s.Port)
+		}
+	}
+	return out, nil
+}
+
+// ResolveBind returns the host bind IP for this service's port mapping.
+// Returns "127.0.0.1" when no bind was specified (default).
+func (s Service) ResolveBind() string {
+	if s.BindIP == "" {
 		return "127.0.0.1"
 	}
-	return ip
+	return s.BindIP
 }
 
 func (s Service) Validate() error {
@@ -113,27 +211,8 @@ func (s Service) Validate() error {
 	if s.EnvInject && s.Port == 0 {
 		return fmt.Errorf("env_inject requires port")
 	}
-	if s.Bind != "" {
-		// Bind preconditions and parsing run before the catch-all so
-		// "Bind without Port" surfaces as a focused error rather than
-		// the generic "service must define ..." message.
-		if s.Port == 0 {
-			return fmt.Errorf("bind requires port")
-		}
-		ip, portStr, ok := strings.Cut(s.Bind, ":")
-		if !ok {
-			return fmt.Errorf("bind %q: expected format IP:PORT", s.Bind)
-		}
-		if net.ParseIP(ip) == nil {
-			return fmt.Errorf("bind %q: %q is not a valid IP address (note: IPv6 not currently supported — use IPv4)", s.Bind, ip)
-		}
-		bindPort, err := strconv.Atoi(portStr)
-		if err != nil {
-			return fmt.Errorf("bind %q: port %q is not an integer", s.Bind, portStr)
-		}
-		if bindPort != s.Port {
-			return fmt.Errorf("bind %q: port %d does not match service.port %d", s.Bind, bindPort, s.Port)
-		}
+	if s.BindIP != "" && s.Port == 0 {
+		return fmt.Errorf("port bind interface requires a sandbox port")
 	}
 	if s.Port == 0 && len(s.Masks) == 0 && len(s.Startup) == 0 {
 		return fmt.Errorf("service must define a port, at least one mask, or at least one startup command")
