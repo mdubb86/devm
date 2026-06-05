@@ -7,7 +7,40 @@ import (
 	"github.com/mtwaage/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
+
+// parsedSpec is a minimal mirror of the rendered kit spec, sufficient
+// for structural test assertions. Tests parse the marshaled output back
+// through yaml.Unmarshal rather than substring-matching specific
+// quoting styles, which let us swap the renderer from string-builder
+// to yaml.Marshal without rewriting every assertion against the new
+// quoting.
+type parsedSpec struct {
+	SchemaVersion string `yaml:"schemaVersion"`
+	Agent         struct {
+		Entrypoint struct {
+			Run []string `yaml:"run"`
+		} `yaml:"entrypoint"`
+	} `yaml:"agent"`
+	Commands struct {
+		Install []struct {
+			Command string `yaml:"command"`
+		} `yaml:"install"`
+		Startup []struct {
+			Command     []string `yaml:"command"`
+			User        string   `yaml:"user"`
+			Description string   `yaml:"description"`
+		} `yaml:"startup"`
+	} `yaml:"commands"`
+}
+
+func parseSpec(t *testing.T, raw string) parsedSpec {
+	t.Helper()
+	var p parsedSpec
+	require.NoError(t, yaml.Unmarshal([]byte(raw), &p), "rendered spec.yaml must parse: %s", raw)
+	return p
+}
 
 func TestSpecYAMLBasic(t *testing.T) {
 	cfg := schema.Config{
@@ -73,8 +106,11 @@ func TestSpecYAMLEntrypointIsShellWrappedSleep(t *testing.T) {
 	// pty sbx allocates for the anchor, so it doesn't appear as a
 	// phantom session in devm stop's session listing. See the comment
 	// in spec.go for the full rationale.
-	assert.Contains(t, out, "entrypoint:")
-	assert.Contains(t, out, `run: ["sh", "-c", "exec sleep infinity </dev/null"]`)
+	parsed := parseSpec(t, out)
+	assert.Equal(t,
+		[]string{"sh", "-c", "exec sleep infinity </dev/null"},
+		parsed.Agent.Entrypoint.Run,
+	)
 	assert.NotContains(t, out, "devm-anchor.pid", "pidfile mechanism was dropped — it was a no-op")
 	assert.NotContains(t, out, "/usr/local/bin/devm-agent", "no devm-agent binary in this design")
 	assert.NotContains(t, out, "background: true", "no background daemons in this design")
@@ -122,14 +158,17 @@ func TestSpecYAMLRendersUserInstallSteps(t *testing.T) {
 	// (init-volumes still has user: "1000" and a description — that's hardcoded.)
 }
 
-func TestSpecYAMLInstallCommandEscapesSingleQuote(t *testing.T) {
+func TestSpecYAMLInstallCommandPreservesSingleQuotes(t *testing.T) {
 	cfg := minimalConfig(t)
 	cfg.Install = []string{
 		`echo 'hello world'`,
 	}
 	out := SpecYAML(cfg, "/tmp/repo")
-	// Single quotes inside single-quoted YAML scalars are doubled.
-	assert.Contains(t, out, `command: 'echo ''hello world'''`)
+	// Round-trip parse: whatever quoting style yaml.v3 chooses, the
+	// install command must come back exactly as the user wrote it.
+	parsed := parseSpec(t, out)
+	require.Len(t, parsed.Commands.Install, 1)
+	assert.Equal(t, `echo 'hello world'`, parsed.Commands.Install[0].Command)
 }
 
 func TestSpecYAMLStartupOnlyInitVolumesWhenNoServiceStartup(t *testing.T) {
@@ -183,7 +222,7 @@ func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 	assert.NotContains(t, startupSection, "background: true")
 }
 
-func TestSpecYAMLStartupCommandArrayFormatting(t *testing.T) {
+func TestSpecYAMLStartupCommandArrayRoundTrips(t *testing.T) {
 	cfg := minimalConfig(t)
 	cfg.Services = map[string]schema.Service{
 		"web": {
@@ -194,8 +233,20 @@ func TestSpecYAMLStartupCommandArrayFormatting(t *testing.T) {
 		},
 	}
 	out := SpecYAML(cfg, "/tmp/repo")
-	// Argv array as YAML flow sequence with single-quoted elements.
-	assert.Contains(t, out, `- command: ['node', 'server.js', '--port', '3000']`)
+	// Belt: the rendered command argv parses back to the exact argv,
+	// including the "3000" string (yaml.v3 quotes it on output to
+	// preserve the type — verifying via round-trip is what we care
+	// about, not the specific output quoting style).
+	parsed := parseSpec(t, out)
+	require.GreaterOrEqual(t, len(parsed.Commands.Startup), 3, "need at least built-ins + web step")
+	webStep := parsed.Commands.Startup[len(parsed.Commands.Startup)-1]
+	assert.Equal(t,
+		[]string{"node", "server.js", "--port", "3000"},
+		webStep.Command,
+	)
+	// Suspenders: flow style still gets emitted (sbx kits use it). A
+	// regression to block style would make spec.yaml much noisier.
+	assert.Contains(t, out, "- command: [node, server.js, --port,")
 }
 
 func TestSpecYAML_HasInstallTemplatesStartupStep(t *testing.T) {
