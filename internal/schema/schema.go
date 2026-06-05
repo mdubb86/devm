@@ -2,9 +2,11 @@ package schema
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -67,7 +69,7 @@ func (c StartupCommand) Validate() error {
 }
 
 type Service struct {
-	Port int               `yaml:"port,omitempty"`
+	Port      int               `yaml:"port,omitempty"`
 	Hostname  string            `yaml:"hostname,omitempty"`
 	EnvInject bool              `yaml:"env_inject,omitempty"`
 	EnvHost   string            `yaml:"env_host,omitempty"`
@@ -75,6 +77,33 @@ type Service struct {
 	Masks     []Mask            `yaml:"masks,omitempty"`
 	Templates []Template        `yaml:"templates,omitempty"`
 	Startup   []StartupCommand  `yaml:"startup,omitempty"`
+
+	// Bind overrides the host-side interface for this service's port
+	// mapping. Format: "IP:SANDBOX_PORT" where IP is parsed via
+	// net.ParseIP and SANDBOX_PORT must equal Port. When unset,
+	// the port binds to 127.0.0.1 (default; localhost-only). Setting
+	// "0.0.0.0:80" (for a service with Port=80) exposes the port
+	// on all host interfaces so other devices on the LAN can reach it.
+	//
+	// The host port is NOT overridable here — by design, devm
+	// guarantees `host_port = port_offset + port` for every
+	// service. Bind controls only the interface.
+	Bind string `yaml:"bind,omitempty"`
+}
+
+// ResolveBind parses Service.Bind and returns the host bind IP. Returns
+// "127.0.0.1" when Bind is empty. Caller is responsible for having
+// already validated the service (this function returns the default on
+// any malformed input rather than re-validating).
+func (s Service) ResolveBind() string {
+	if s.Bind == "" {
+		return "127.0.0.1"
+	}
+	ip, _, ok := strings.Cut(s.Bind, ":")
+	if !ok {
+		return "127.0.0.1"
+	}
+	return ip
 }
 
 func (s Service) Validate() error {
@@ -83,6 +112,28 @@ func (s Service) Validate() error {
 	}
 	if s.EnvInject && s.Port == 0 {
 		return fmt.Errorf("env_inject requires port")
+	}
+	if s.Bind != "" {
+		// Bind preconditions and parsing run before the catch-all so
+		// "Bind without Port" surfaces as a focused error rather than
+		// the generic "service must define ..." message.
+		if s.Port == 0 {
+			return fmt.Errorf("bind requires port")
+		}
+		ip, portStr, ok := strings.Cut(s.Bind, ":")
+		if !ok {
+			return fmt.Errorf("bind %q: expected format IP:PORT", s.Bind)
+		}
+		if net.ParseIP(ip) == nil {
+			return fmt.Errorf("bind %q: %q is not a valid IP address (note: IPv6 not currently supported — use IPv4)", s.Bind, ip)
+		}
+		bindPort, err := strconv.Atoi(portStr)
+		if err != nil {
+			return fmt.Errorf("bind %q: port %q is not an integer", s.Bind, portStr)
+		}
+		if bindPort != s.Port {
+			return fmt.Errorf("bind %q: port %d does not match service.port %d", s.Bind, bindPort, s.Port)
+		}
 	}
 	if s.Port == 0 && len(s.Masks) == 0 && len(s.Startup) == 0 {
 		return fmt.Errorf("service must define a port, at least one mask, or at least one startup command")

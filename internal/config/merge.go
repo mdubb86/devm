@@ -69,6 +69,9 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 			if soverride.Startup != nil {
 				svc.Startup = *soverride.Startup
 			}
+			if soverride.Bind != nil {
+				svc.Bind = *soverride.Bind
+			}
 			out.Services[name] = svc
 		}
 	}

@@ -44,6 +44,11 @@ install:
 services:
   api:
     port: 8080            # in-VM listen port; host port = 51000 + 8080 = 59080
+                          # by default the mapping binds to 127.0.0.1 (localhost-only).
+                          # To expose on the LAN: add `bind: "0.0.0.0:8080"`. The port
+                          # in `bind` must match `port`; the host port is still
+                          # port_offset + port (devm guarantees that — bind only
+                          # controls the host interface).
     env:                  # service env vars; exposed as API_KEY=...
       LOG_LEVEL: info
     env_inject: true      # also inject API_PORT and API_HOST

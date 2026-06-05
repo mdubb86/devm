@@ -24,6 +24,7 @@ type ServiceOverride struct {
 	Masks     *[]Mask           `yaml:"masks,omitempty"`
 	Templates *[]Template       `yaml:"templates,omitempty"`
 	Startup   *[]StartupCommand `yaml:"startup,omitempty"`
+	Bind      *string           `yaml:"bind,omitempty"`
 }
 
 type ConfigOverride struct {

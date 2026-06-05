@@ -96,9 +96,9 @@ func TestConfigValidatesPortRange(t *testing.T) {
 	assert.Contains(t, err.Error(), "65535")
 
 	// canonical out of range (negative / too large) → error.
-	bigCanon := base
-	bigCanon.Services = map[string]Service{"api": {Port: 70000}}
-	assert.Error(t, bigCanon.Validate(), "canonical over 65535 must error")
+	bigPort := base
+	bigPort.Services = map[string]Service{"api": {Port: 70000}}
+	assert.Error(t, bigPort.Validate(), "canonical over 65535 must error")
 
 	// Valid combination → no error.
 	ok := base
@@ -200,6 +200,50 @@ func TestResolveMountErrors(t *testing.T) {
 	_, err = ResolveMount(":ro", "/proj")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "host path is empty")
+}
+
+func TestServiceBindValid(t *testing.T) {
+	cases := []struct {
+		name string
+		svc  Service
+	}{
+		{"empty_bind_ok", Service{Port: 80}},
+		{"localhost_explicit", Service{Port: 80, Bind: "127.0.0.1:80"}},
+		{"all_interfaces", Service{Port: 8080, Bind: "0.0.0.0:8080"}},
+		{"specific_ip", Service{Port: 5432, Bind: "192.168.1.10:5432"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, tc.svc.Validate())
+		})
+	}
+}
+
+func TestServiceBindInvalid(t *testing.T) {
+	cases := []struct {
+		name      string
+		svc       Service
+		wantInErr string
+	}{
+		{"bind_without_port", Service{Bind: "0.0.0.0:80"}, "bind requires port"},
+		{"bind_port_mismatch", Service{Port: 80, Bind: "0.0.0.0:8080"}, "does not match service.port"},
+		{"bind_bad_ip", Service{Port: 80, Bind: "not-an-ip:80"}, "valid IP"},
+		{"bind_no_colon", Service{Port: 80, Bind: "0.0.0.0"}, "IP:PORT"},
+		{"bind_non_numeric_port", Service{Port: 80, Bind: "0.0.0.0:eighty"}, "not an integer"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.svc.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantInErr)
+		})
+	}
+}
+
+func TestServiceResolveBind(t *testing.T) {
+	assert.Equal(t, "127.0.0.1", Service{Port: 80}.ResolveBind())
+	assert.Equal(t, "0.0.0.0", Service{Port: 80, Bind: "0.0.0.0:80"}.ResolveBind())
+	assert.Equal(t, "192.168.1.10", Service{Port: 5432, Bind: "192.168.1.10:5432"}.ResolveBind())
 }
 
 func TestConfigValidateRejectsEmptyMountEntry(t *testing.T) {

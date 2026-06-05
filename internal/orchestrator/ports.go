@@ -61,11 +61,11 @@ func ReconcilePortsWithRunner(sb *sandbox.Sandbox, cfg schema.Config, r sandbox.
 
 	for _, m := range adds {
 		if err := publishWithVerify(sb, m, r); err != nil {
-			return fmt.Errorf("reconcile: publish %d:%d: %w", m.HostPort, m.SandboxPort, err)
+			return fmt.Errorf("reconcile: publish %s: %w", publishSpec(m), err)
 		}
 	}
 	for _, m := range removes {
-		spec := fmt.Sprintf("%d:%d", m.HostPort, m.SandboxPort)
+		spec := publishSpec(m)
 		if _, err := r.Output("sbx", "ports", sb.Name, "--unpublish", spec); err != nil {
 			return fmt.Errorf("reconcile: unpublish %s: %w", spec, err)
 		}
@@ -117,7 +117,7 @@ const publishBackoff = 500 * time.Millisecond
 const verifyHoldDuration = 500 * time.Millisecond
 
 func publishWithVerify(sb *sandbox.Sandbox, m portMapping, r sandbox.Runner) error {
-	spec := fmt.Sprintf("%d:%d", m.HostPort, m.SandboxPort)
+	spec := publishSpec(m)
 	deadline := time.Now().Add(30 * time.Second)
 	attempt := 0
 	for time.Now().Before(deadline) {
@@ -161,7 +161,7 @@ func verifyMappingVisible(sb *sandbox.Sandbox, want portMapping, r sandbox.Runne
 		current, err := currentMappings(sb, r)
 		if err == nil {
 			for _, m := range current {
-				if m.HostPort == want.HostPort && m.SandboxPort == want.SandboxPort {
+				if m.HostIP == want.HostIP && m.HostPort == want.HostPort && m.SandboxPort == want.SandboxPort {
 					return true
 				}
 			}
@@ -194,6 +194,10 @@ func waitForExecReady(sb *sandbox.Sandbox, r sandbox.Runner, timeout time.Durati
 // desiredMappings builds the desired set from the config. Services
 // without a port are skipped. Result is sorted by sandbox
 // port for deterministic apply order.
+//
+// HostIP comes from svc.ResolveBind() — "127.0.0.1" by default, or the
+// IP the user set via `services.X.bind: "IP:PORT"`. Setting a non-
+// default bind (e.g. "0.0.0.0") exposes the mapping on the LAN.
 func desiredMappings(cfg schema.Config) []portMapping {
 	var out []portMapping
 	for _, svc := range cfg.Services {
@@ -201,7 +205,7 @@ func desiredMappings(cfg schema.Config) []portMapping {
 			continue
 		}
 		out = append(out, portMapping{
-			HostIP:      "127.0.0.1",
+			HostIP:      svc.ResolveBind(),
 			HostPort:    cfg.Project.PortOffset + svc.Port,
 			SandboxPort: svc.Port,
 			Protocol:    "tcp",
@@ -209,6 +213,17 @@ func desiredMappings(cfg schema.Config) []portMapping {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].SandboxPort < out[j].SandboxPort })
 	return out
+}
+
+// publishSpec formats the [IP:]HOST:SANDBOX spec for sbx ports publish.
+// IP prefix is included only when non-default — preserves the existing
+// "HOST:SANDBOX" wire form for the common 127.0.0.1 case so debug logs
+// and tests don't churn.
+func publishSpec(m portMapping) string {
+	if m.HostIP == "" || m.HostIP == "127.0.0.1" {
+		return fmt.Sprintf("%d:%d", m.HostPort, m.SandboxPort)
+	}
+	return fmt.Sprintf("%s:%d:%d", m.HostIP, m.HostPort, m.SandboxPort)
 }
 
 // currentMappings reads `sbx ports <name> --json` and parses it.
@@ -228,11 +243,17 @@ func currentMappings(sb *sandbox.Sandbox, r sandbox.Runner) ([]portMapping, erro
 }
 
 // diff returns mappings to add and to remove. Two mappings match when
-// HostPort + SandboxPort + Protocol match (HostIP treated as stable
-// 127.0.0.1; sbx normalizes that anyway).
+// HostIP + HostPort + SandboxPort + Protocol match. HostIP is part of
+// the key so a change to `services.X.bind` produces a real port-change
+// (unpublish old binding + publish new) rather than silently keeping
+// the old binding alive.
 func diff(desired, current []portMapping) (adds, removes []portMapping) {
 	key := func(m portMapping) string {
-		return fmt.Sprintf("%d:%d/%s", m.HostPort, m.SandboxPort, m.Protocol)
+		ip := m.HostIP
+		if ip == "" {
+			ip = "127.0.0.1"
+		}
+		return fmt.Sprintf("%s/%d:%d/%s", ip, m.HostPort, m.SandboxPort, m.Protocol)
 	}
 	desiredSet := map[string]portMapping{}
 	for _, m := range desired {
