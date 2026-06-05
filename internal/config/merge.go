@@ -75,5 +75,8 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 	if override.Install != nil {
 		out.Install = *override.Install
 	}
+	if override.Mounts != nil {
+		out.Mounts = *override.Mounts
+	}
 	return out, nil
 }

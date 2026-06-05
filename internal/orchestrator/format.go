@@ -237,6 +237,8 @@ func changeKindJSON(k ChangeKind) string {
 		return "identity_change"
 	case KindTemplateChange:
 		return "template_change"
+	case KindMountsChange:
+		return "mounts_change"
 	}
 	return "unknown"
 }
@@ -276,6 +278,8 @@ func formatChange(c Change) string {
 		return fmt.Sprintf("~ startup: %s", c.Service)
 	case KindInstallChange:
 		return "~ install commands"
+	case KindMountsChange:
+		return "~ mounts"
 	case KindMaskChange:
 		return fmt.Sprintf("~ volumes: %s", c.Service)
 	case KindImageChange:

@@ -2,6 +2,7 @@ package schema
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -139,6 +140,84 @@ type Config struct {
 	Env       map[string]string  `yaml:"env,omitempty"`
 	Services  map[string]Service `yaml:"services,omitempty"`
 	Install   []string           `yaml:"install,omitempty"`
+
+	// Mounts are additional host paths mounted into the sandbox at
+	// the same path inside the VM (sbx's "mirrored path" mode). Each
+	// entry is a string of the form `HOST_PATH[:ro]`. HOST_PATH may
+	// be absolute, relative to the project root, or start with `~`
+	// for home-directory expansion. The optional `:ro` suffix is
+	// passed through to sbx verbatim and makes the mount read-only.
+	//
+	// Changing this field is in the TEARDOWN bucket: sbx run's
+	// positional workspaces are baked at create time and the sandbox
+	// must be removed and re-created to apply.
+	Mounts []string `yaml:"mounts,omitempty"`
+}
+
+// ResolveMount expands and absolute-resolves a single mounts[] entry
+// against the given project root. Returns the canonical form
+// `ABS_HOST_PATH[:ro]` ready to pass as a positional to `sbx run`.
+//
+// Rules (matching sbx's own CLI parsing):
+//   - Optional `:ro` suffix is preserved.
+//   - A leading `~/` is expanded to the host user's home directory.
+//   - Relative paths are joined to projectRoot.
+//   - `filepath.Clean` is applied so `..` segments are resolved.
+//
+// Returns an error if entry is empty or if `~` expansion fails.
+// Does NOT check whether the resolved host path exists — that's a
+// separate concern (Validate does the existence check).
+func ResolveMount(entry, projectRoot string) (string, error) {
+	if entry == "" {
+		return "", fmt.Errorf("mount entry must not be empty")
+	}
+	path, ro := strings.CutSuffix(entry, ":ro")
+	if path == "" {
+		return "", fmt.Errorf("mount entry %q: host path is empty", entry)
+	}
+	switch {
+	case path == "~":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("mount entry %q: expand ~: %w", entry, err)
+		}
+		path = home
+	case strings.HasPrefix(path, "~/"):
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("mount entry %q: expand ~/: %w", entry, err)
+		}
+		path = filepath.Join(home, path[2:])
+	case !filepath.IsAbs(path):
+		path = filepath.Join(projectRoot, path)
+	}
+	path = filepath.Clean(path)
+	if ro {
+		path += ":ro"
+	}
+	return path, nil
+}
+
+// ValidateWithRoot is like Validate but additionally checks the
+// `mounts:` entries resolve cleanly and the resolved host paths
+// exist. Callers that have the project root (devm's config loader)
+// should prefer ValidateWithRoot; the parameter-free Validate skips
+// path-existence checks.
+func (c Config) ValidateWithRoot(projectRoot string) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	for i, entry := range c.Mounts {
+		resolved, err := ResolveMount(entry, projectRoot)
+		if err != nil {
+			return fmt.Errorf("mounts[%d]: %w", i, err)
+		}
+		hostPath, _ := strings.CutSuffix(resolved, ":ro")
+		if _, err := os.Stat(hostPath); err != nil {
+			return fmt.Errorf("mounts[%d]: host path %q: %w", i, hostPath, err)
+		}
+	}
+	return nil
 }
 
 func (c Config) Validate() error {
@@ -148,6 +227,11 @@ func (c Config) Validate() error {
 	for i, ic := range c.Install {
 		if ic == "" {
 			return fmt.Errorf("install[%d] must not be empty", i)
+		}
+	}
+	for i, entry := range c.Mounts {
+		if entry == "" {
+			return fmt.Errorf("mounts[%d] must not be empty", i)
 		}
 	}
 	names := make([]string, 0, len(c.Services))

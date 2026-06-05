@@ -1,6 +1,8 @@
 package schema
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -150,6 +152,90 @@ func TestServiceValidatesStartupSteps(t *testing.T) {
 	err := svc.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "startup[0]")
+}
+
+func TestResolveMount(t *testing.T) {
+	root := "/proj"
+	cases := []struct {
+		name, entry, want string
+	}{
+		{"absolute", "/etc/hosts", "/etc/hosts"},
+		{"absolute_ro", "/etc/hosts:ro", "/etc/hosts:ro"},
+		{"relative", "configs/extra", "/proj/configs/extra"},
+		{"relative_ro", "configs/extra:ro", "/proj/configs/extra:ro"},
+		{"dotdot", "../sibling", "/sibling"},
+		{"clean_doubleslash", "/etc//hosts", "/etc/hosts"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResolveMount(tc.entry, root)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestResolveMountTildeExpansion(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	got, err := ResolveMount("~/.ssh", "/proj")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, ".ssh"), got)
+
+	gotRO, err := ResolveMount("~/.ssh:ro", "/proj")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, ".ssh")+":ro", gotRO)
+
+	gotBare, err := ResolveMount("~", "/proj")
+	require.NoError(t, err)
+	assert.Equal(t, home, gotBare)
+}
+
+func TestResolveMountErrors(t *testing.T) {
+	_, err := ResolveMount("", "/proj")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty")
+
+	_, err = ResolveMount(":ro", "/proj")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "host path is empty")
+}
+
+func TestConfigValidateRejectsEmptyMountEntry(t *testing.T) {
+	cfg := Config{
+		Project: Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Mounts:  []string{"/etc/hosts", ""},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mounts[1]")
+}
+
+func TestConfigValidateWithRootChecksExistence(t *testing.T) {
+	tmp := t.TempDir()
+	existing := filepath.Join(tmp, "real")
+	require.NoError(t, os.MkdirAll(existing, 0o755))
+
+	// Existing path passes.
+	cfg := Config{
+		Project: Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Mounts:  []string{existing + ":ro"},
+	}
+	require.NoError(t, cfg.ValidateWithRoot(tmp))
+
+	// Missing path fails.
+	cfg.Mounts = []string{filepath.Join(tmp, "does-not-exist")}
+	err := cfg.ValidateWithRoot(tmp)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mounts[0]")
+
+	// Relative path resolves against projectRoot.
+	relCfg := Config{
+		Project: Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Mounts:  []string{"real:ro"},
+	}
+	require.NoError(t, relCfg.ValidateWithRoot(tmp))
 }
 
 func TestServiceMayHaveOnlyStartup(t *testing.T) {

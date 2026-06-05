@@ -50,6 +50,7 @@ const (
 	KindImageChange
 	KindIdentityChange
 	KindTemplateChange
+	KindMountsChange
 )
 
 // changeBucket is the single source of truth that maps each ChangeKind
@@ -73,6 +74,10 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindImageChange:    BucketTeardownShell,
 	KindIdentityChange: BucketTeardownShell,
 	KindTemplateChange: BucketLive,
+	// Mounts: sbx run's positional workspaces are baked at create
+	// time. Adding/removing/changing a mount requires `sbx rm` and
+	// re-create.
+	KindMountsChange: BucketTeardownShell,
 }
 
 // Bucket returns the bucket this ChangeKind belongs to.
@@ -194,6 +199,7 @@ func ComputeAllChanges(old, new schema.Config, repoRoot string) ([]Change, error
 	out = append(out, computeEnvChanges(old, new)...)
 	out = append(out, computeStartupChanges(old, new)...)
 	out = append(out, computeInstallChanges(old, new)...)
+	out = append(out, computeMountsChanges(old, new)...)
 	out = append(out, computeMaskChanges(old, new)...)
 	out = append(out, computeImageChange(old, new)...)
 	out = append(out, computeIdentityChange(old, new)...)
@@ -256,6 +262,13 @@ func computeInstallChanges(old, new schema.Config) []Change {
 		return nil
 	}
 	return []Change{{Kind: KindInstallChange}}
+}
+
+func computeMountsChanges(old, new schema.Config) []Change {
+	if stringSliceEqual(old.Mounts, new.Mounts) {
+		return nil
+	}
+	return []Change{{Kind: KindMountsChange}}
 }
 
 func computeMaskChanges(old, new schema.Config) []Change {

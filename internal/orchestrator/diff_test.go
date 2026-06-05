@@ -35,11 +35,26 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketStopShell, KindNetworkRemove.Bucket())
 	assert.Equal(t, BucketStopShell, KindStartupChange.Bucket())
 
-	// Teardown+shell: install, masks, image, identity
+	// Teardown+shell: install, masks, image, identity, mounts
 	assert.Equal(t, BucketTeardownShell, KindInstallChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindMaskChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindImageChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindIdentityChange.Bucket())
+	assert.Equal(t, BucketTeardownShell, KindMountsChange.Bucket())
+}
+
+func TestComputeMountsChanges(t *testing.T) {
+	old := cfgWith(map[string]schema.Service{}, 0)
+	old.Mounts = []string{"/etc/hosts:ro"}
+	new := cfgWith(map[string]schema.Service{}, 0)
+	new.Mounts = []string{"/etc/hosts:ro", "/tmp:ro"}
+
+	changes := computeMountsChanges(old, new)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindMountsChange, changes[0].Kind)
+
+	// Same list → no change.
+	assert.Empty(t, computeMountsChanges(old, old))
 }
 
 func TestComputePortChanges_Add(t *testing.T) {

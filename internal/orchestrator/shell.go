@@ -172,6 +172,20 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 			cfg.Project.ID,
 			repoRoot,
 		}
+		// Append additional mounts from cfg.Mounts. Each entry is
+		// resolved to an absolute path (with ~ expansion and projectRoot
+		// for relatives), preserving the optional :ro suffix. Sbx mounts
+		// each at the same path inside the VM ("mirrored path" mode).
+		// Mount changes are TEARDOWN-bucket: positional workspaces are
+		// baked at create time and the sandbox must be rm'd to apply a
+		// changed mounts list.
+		for i, entry := range cfg.Mounts {
+			resolved, err := schema.ResolveMount(entry, repoRoot)
+			if err != nil {
+				return -1, fmt.Errorf("mounts[%d]: %w", i, err)
+			}
+			runArgs = append(runArgs, resolved)
+		}
 	}
 	// Spawn the anchor.
 	//
