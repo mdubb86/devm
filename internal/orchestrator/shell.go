@@ -321,7 +321,16 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// e2e/test_sbx_anchor_09_port_cycle.py.
 	debuglog.Logf("shell", "port-reconcile: starting")
 	if err := ReconcilePortsWithRunner(sb, cfg, d.Runner); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: port reconcile failed: %v\n", err)
+		// Port reconcile failures during cold start MUST be fatal —
+		// dropping the user into a shell with half-published ports
+		// (e.g. one bind-address conflict masking an otherwise fine
+		// service mapping) silently hides a real problem the user
+		// needs to fix on the host (free the port, change the bind,
+		// etc.). Tear down the anchor so the next `devm shell` is a
+		// clean cold start rather than a warm attach over partial
+		// state.
+		killAnchor()
+		return -1, fmt.Errorf("port reconcile failed: %w", err)
 	}
 	debuglog.Logf("shell", "port-reconcile: done")
 
