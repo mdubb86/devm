@@ -124,9 +124,17 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		// surface to stderr but proceed to attach (stdout is reserved
 		// for the user shell). `devm reconcile --yes` is the channel
 		// for actually applying recreate-required changes.
-		if inner, err := RunReconcileInner(cfg, sb, repoRoot); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: reconcile during attach failed: %v\n", err)
-		} else if len(inner.RecreateRequired) > 0 {
+		//
+		// Reconcile failure is FATAL here too — silently dropping into
+		// a shell with half-applied LIVE changes hides whatever is
+		// actually wrong with the user's devm.yaml. We don't kill the
+		// anchor: it's from a previous session and config bugs
+		// shouldn't cost the user their running sandbox.
+		inner, err := RunReconcileInner(cfg, sb, repoRoot)
+		if err != nil {
+			return -1, fmt.Errorf("reconcile during attach failed: %w", err)
+		}
+		if len(inner.RecreateRequired) > 0 {
 			fmt.Fprint(os.Stderr, FormatReconcileText(inner))
 			fmt.Fprintln(os.Stderr, "(Run `devm reconcile --yes` to apply these — your shell will be restarted.)")
 		}
@@ -335,8 +343,20 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	debuglog.Logf("shell", "port-reconcile: done")
 
 	debuglog.Logf("shell", "snapshot: writing")
-	if snapYAML, mErr := yaml.Marshal(cfg); mErr == nil {
-		_ = WriteSnapshot(sb, snapshotHeader+string(snapYAML))
+	// Snapshot is the persisted "last-applied" config that the next
+	// reconcile diffs against. Silently dropping it on failure makes
+	// the next reconcile show false-positive diffs (it has no idea
+	// what's already running). Surface the failure and tear down so
+	// the user sees the error and the next cold start writes a clean
+	// snapshot.
+	snapYAML, mErr := yaml.Marshal(cfg)
+	if mErr != nil {
+		killAnchor()
+		return -1, fmt.Errorf("marshal snapshot: %w", mErr)
+	}
+	if err := WriteSnapshot(sb, snapshotHeader+string(snapYAML)); err != nil {
+		killAnchor()
+		return -1, fmt.Errorf("write snapshot: %w", err)
 	}
 	debuglog.Logf("shell", "snapshot: done")
 
