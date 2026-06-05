@@ -258,8 +258,16 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	}
 	debuglog.Logf("shell", "cold-start: anchor spawned pid=%d", anchorPid)
 
-	// Cleanup helper for failure paths. The normal path never calls this.
-	killAnchor := func() {
+	// Single failure-cleanup point. Any error between "anchor started"
+	// and "user shell handed off" should tear down the anchor and
+	// return — no half-state sandboxes left running. Instead of calling
+	// killAnchor() at every error site, we install one defer that
+	// fires unless `handedOff` flips true at the final hand-off.
+	handedOff := false
+	defer func() {
+		if handedOff {
+			return
+		}
 		debuglog.Logf("shell", "cleanup: killing anchor pid=%d", anchorPid)
 		switch {
 		case runCmd != nil && runCmd.Process != nil:
@@ -271,7 +279,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		case <-runDone:
 		case <-time.After(3 * time.Second):
 		}
-	}
+	}()
 
 	// Inline poll for "running" — DO NOT extract into a helper that
 	// uses `time.NewTicker(poll)` + `select { ctx.Done / runDone /
@@ -293,30 +301,33 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 			// shape that triggers Quirk #6.
 			select {
 			case err := <-runDone:
-				// Surface the anchor's captured stdout/stderr so the user
-				// can SEE why sbx exited — otherwise they just get a bare
-				// "sbx run exited" with no clue what went wrong.
+				// Anchor died on its own — defer's Kill is a no-op,
+				// but its drain of runDone would block forever on the
+				// already-consumed channel. Flip handedOff so the
+				// defer skips cleanup entirely; we're done.
+				handedOff = true
+				// Surface the anchor's captured stdout/stderr so the
+				// user can SEE why sbx exited — otherwise they just
+				// get a bare "sbx run exited" with no clue what went
+				// wrong.
 				tail := formatAnchorOutput(anchorOut)
 				if err != nil {
 					return -1, fmt.Errorf("sbx run exited before sandbox became running: %w%s", err, tail)
 				}
 				return -1, fmt.Errorf("sbx run exited before sandbox became running%s", tail)
 			case <-ctx.Done():
-				killAnchor()
 				return -1, ctx.Err()
 			default:
 			}
 			time.Sleep(d.PollInterval)
 		}
 		if !running {
-			killAnchor()
 			return -1, fmt.Errorf("sandbox %s never reached running within %s", sandboxName, d.WaitForRunning)
 		}
 	}
 	debuglog.Logf("shell", "cold-start: sandbox status=running")
 
 	if err := waitForExecReady(sb, d.Runner, 30*time.Second); err != nil {
-		killAnchor()
 		return -1, fmt.Errorf("sandbox readiness: %w", err)
 	}
 	debuglog.Logf("shell", "cold-start: exec-ready")
@@ -329,33 +340,20 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// e2e/test_sbx_anchor_09_port_cycle.py.
 	debuglog.Logf("shell", "port-reconcile: starting")
 	if err := ReconcilePortsWithRunner(sb, cfg, d.Runner); err != nil {
-		// Port reconcile failures during cold start MUST be fatal —
-		// dropping the user into a shell with half-published ports
-		// (e.g. one bind-address conflict masking an otherwise fine
-		// service mapping) silently hides a real problem the user
-		// needs to fix on the host (free the port, change the bind,
-		// etc.). Tear down the anchor so the next `devm shell` is a
-		// clean cold start rather than a warm attach over partial
-		// state.
-		killAnchor()
 		return -1, fmt.Errorf("port reconcile failed: %w", err)
 	}
 	debuglog.Logf("shell", "port-reconcile: done")
 
 	debuglog.Logf("shell", "snapshot: writing")
 	// Snapshot is the persisted "last-applied" config that the next
-	// reconcile diffs against. Silently dropping it on failure makes
-	// the next reconcile show false-positive diffs (it has no idea
-	// what's already running). Surface the failure and tear down so
-	// the user sees the error and the next cold start writes a clean
-	// snapshot.
+	// reconcile diffs against. Dropping it silently produces a sandbox
+	// whose next reconcile shows false-positive diffs — surface and
+	// let the defer tear down.
 	snapYAML, mErr := yaml.Marshal(cfg)
 	if mErr != nil {
-		killAnchor()
 		return -1, fmt.Errorf("marshal snapshot: %w", mErr)
 	}
 	if err := WriteSnapshot(sb, snapshotHeader+string(snapYAML)); err != nil {
-		killAnchor()
 		return -1, fmt.Errorf("write snapshot: %w", err)
 	}
 	debuglog.Logf("shell", "snapshot: done")
@@ -372,9 +370,12 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	debuglog.Logf("shell", "spawning user shell: sbx %v", execArgs)
 	userCmd, err := d.UserSpawner.Start("sbx", execArgs...)
 	if err != nil {
-		killAnchor()
 		return -1, fmt.Errorf("spawn user shell: %w", err)
 	}
+	// Hand-off complete — anchor now belongs to the lifecycle the
+	// user shell holds (anchor-alive contract). The defer above stops
+	// being a kill-anchor on the success path.
+	handedOff = true
 	debuglog.Logf("shell", "user shell spawned pid=%d", userCmd.Pid())
 
 	_ = lk.Release()
