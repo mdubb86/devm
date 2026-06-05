@@ -6,9 +6,11 @@
 # Kit install steps already run as root, so no sudo is needed (and
 # sudo may not be on PATH this early in bringup on minimal bases).
 #
-# Add anything that should be present in every devm sandbox out of
-# the box. Keep this list minimal; project-specific installs belong in
-# the user's devm.yaml `install:` block.
+# apt-get is reachable at install time regardless of the project's
+# network.allowed_domains (locked by e2e/test_sbx_04_install_network_
+# policy_pin.py). This script fails strict — any failure here means
+# something genuinely wrong (apt mirror down, package missing, etc.)
+# and the user needs to see it, not a best-effort skip.
 set -euo pipefail
 
 # ncurses-term: ships terminfo for hundreds of modern terminals

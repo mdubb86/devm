@@ -75,7 +75,12 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 
 	// commands.install: prepend devm's built-in bootstrap (one-time
 	// apt installs every sandbox should have — currently ncurses-term
-	// for modern terminfo), then user-defined install steps.
+	// for modern terminfo), then user-defined install steps. The
+	// $WORKSPACE_DIR form is locked by test_sbx_03_install_env_and_workspace
+	// (install: context has WORKSPACE_DIR set and the workspace mount
+	// visible). apt-get availability at install time is locked by
+	// test_sbx_04_install_network_policy_pin (sbx allows apt traffic
+	// regardless of allowedDomains).
 	spec.Commands.Install = append(spec.Commands.Install,
 		kitInstallCommand{Command: `bash "$WORKSPACE_DIR/.devm/scripts/bootstrap.sh"`},
 	)
