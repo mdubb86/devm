@@ -45,6 +45,14 @@ func WriteTemplateInstallers(cfg schema.Config, repoRoot string) error {
 }
 
 func writeStaticFiles(cfg schema.Config, repoRoot string) error {
+	// Fail fast if the rendered spec.yaml isn't valid YAML. Beats
+	// writing a broken file and discovering it only when sbx run tries
+	// to load it (or the user runs `devm shell` and gets a cryptic
+	// "did not find expected alphabetic or numeric character" from the
+	// sbx kit loader).
+	if err := LintRenderedSpec(cfg, repoRoot); err != nil {
+		return err
+	}
 	devmDir := filepath.Join(repoRoot, ".devm")
 	scriptsDir := filepath.Join(devmDir, "scripts")
 	templatesDir := filepath.Join(devmDir, "templates")

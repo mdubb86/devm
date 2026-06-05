@@ -47,7 +47,11 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	if len(cfg.Network.AllowedDomains) > 0 {
 		sb.WriteString("network:\n  allowedDomains:\n")
 		for _, d := range cfg.Network.AllowedDomains {
-			sb.WriteString(fmt.Sprintf("    - %s\n", d))
+			// Quote: leading '*' (wildcards like *.openai.com) would
+			// otherwise be parsed as a YAML alias reference and the
+			// kit loader rejects spec.yaml with "did not find expected
+			// alphabetic or numeric character".
+			sb.WriteString(fmt.Sprintf("    - %s\n", yamlSingleQuoted(d)))
 		}
 		sb.WriteString("\n")
 	}
