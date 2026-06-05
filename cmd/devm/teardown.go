@@ -24,6 +24,7 @@ installed state. Use --yes (-y) to skip the prompt. The kit
 definition under .devm/ is not touched; devm shell will rebuild
 the sandbox from scratch.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)

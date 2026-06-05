@@ -21,6 +21,7 @@ var reconcileCmd = &cobra.Command{
 	Use:   "reconcile",
 	Short: "Render devm.yaml -> .devm/, diff against running sandbox, apply or prompt",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return err

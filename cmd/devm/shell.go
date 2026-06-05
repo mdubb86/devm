@@ -21,6 +21,8 @@ The sandbox auto-stops when the shell exits.
 If the sandbox is already running, devm shell skips bootstrap and
 attaches immediately. Port reconcile only runs on cold start.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Past arg parsing — errors from here on are runtime, not usage.
+		cmd.SilenceUsage = true
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)

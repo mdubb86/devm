@@ -19,6 +19,7 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show sandbox state, sessions, and pending config changes",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return err

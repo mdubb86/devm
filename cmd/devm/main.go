@@ -13,13 +13,15 @@ var rootCmd = &cobra.Command{
 	Use:     "devm",
 	Short:   "Mac+VM dev sandbox tool",
 	Version: Version,
-	// SilenceUsage: don't dump --help after a runtime error. Cobra's
-	// default behavior treats any RunE error as a usage problem, which
-	// is wrong for things like "sbx run exited" — the user already
-	// invoked the command correctly; printing help is noise.
 	// SilenceErrors: we print the error ourselves in main() so cobra's
 	// default "Error: ..." prefix doesn't double up.
-	SilenceUsage:  true,
+	//
+	// SilenceUsage is intentionally left at its default (false). That
+	// way cobra still prints --help on REAL usage errors (bad flag,
+	// missing required arg, unknown subcommand) — those fire before
+	// RunE runs. Each RunE handler flips SilenceUsage=true on its own
+	// command at the top, so once we're past arg validation, runtime
+	// errors don't trigger the help dump.
 	SilenceErrors: true,
 }
 

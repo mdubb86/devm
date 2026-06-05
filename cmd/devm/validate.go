@@ -12,6 +12,7 @@ var validateCmd = &cobra.Command{
 	Use:   "validate",
 	Short: "Validate devm.yaml (and devm.me.yaml if present)",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		wd, err := os.Getwd()
 		if err != nil {
 			return err

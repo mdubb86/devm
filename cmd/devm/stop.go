@@ -23,6 +23,7 @@ before issuing sbx stop. Use --yes (-y) to skip the prompt. The
 sandbox's filesystem and installed tools persist; only the running
 state is discarded. Re-launch with devm shell.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)

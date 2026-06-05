@@ -206,6 +206,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	var (
 		runCmd     *osexec.Cmd      // production path only
 		stubAnchor SpawnedCmd       // test path only
+		anchorOut  *lineRingBuffer  // production path only — capture for diagnostics
 		anchorPid  int
 		runDone    = make(chan error, 1)
 	)
@@ -225,28 +226,21 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		debuglog.Logf("shell", "cold-start: spawning anchor (raw osexec — production path): nohup %v", runArgs)
 		runCmd = osexec.Command("nohup", runArgs...)
 		runCmd.Stdin = nil
-		// CRITICAL: stdout/stderr go to .devm/anchor.log, NOT the user's
-		// terminal. macOS nohup redirects stderr → stdout when stderr is
-		// a tty, and our default stdout is /dev/null — so the anchor's
-		// errors would silently vanish (we hit this 2026-06-05 trying to
-		// dogfood: `devm shell` failed with "sbx run exited" and the
-		// user couldn't see why). Writing to a file (not a tty) makes
-		// nohup leave the descriptors alone, the real sbx error lands
-		// in the log, and the waitForRunning failure path surfaces the
-		// tail in the returned error.
-		logPath := filepath.Join(repoRoot, ".devm", "anchor.log")
-		logFile, lerr := os.Create(logPath) // truncates if existing
-		if lerr != nil {
-			return -1, fmt.Errorf("create %s: %w", logPath, lerr)
-		}
-		runCmd.Stdout = logFile
-		runCmd.Stderr = logFile
+		// CRITICAL: route stdout AND stderr to an in-memory ring buffer.
+		// macOS nohup redirects stderr → stdout when stderr is a tty
+		// (per its man page), so leaving Stderr = os.Stderr (user's tty)
+		// causes nohup to send sbx's real error message into stdout —
+		// which we'd set to /dev/null — silently dropping the diagnostic.
+		// Both descriptors connected to a pipe (not a tty) make nohup
+		// leave them alone. The ring buffer keeps the last 200 lines
+		// for the lifetime of the devm process; failure paths surface
+		// the contents in the returned error.
+		anchorOut = newLineRingBuffer(200)
+		runCmd.Stdout = anchorOut
+		runCmd.Stderr = anchorOut
 		if err := runCmd.Start(); err != nil {
-			_ = logFile.Close()
 			return -1, fmt.Errorf("spawn sbx run: %w", err)
 		}
-		// Don't close logFile here — sbx keeps writing to it for the
-		// life of the anchor. fd is closed when devm exits.
 		if runCmd.Process != nil {
 			anchorPid = runCmd.Process.Pid
 		}
@@ -291,14 +285,14 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 			// shape that triggers Quirk #6.
 			select {
 			case err := <-runDone:
-				// Surface what the anchor wrote to .devm/anchor.log so the
-				// user can SEE why sbx exited rather than getting a bare
-				// "sbx run exited" with no detail.
-				logTail := anchorLogTail(repoRoot, 4096)
+				// Surface the anchor's captured stdout/stderr so the user
+				// can SEE why sbx exited — otherwise they just get a bare
+				// "sbx run exited" with no clue what went wrong.
+				tail := formatAnchorOutput(anchorOut)
 				if err != nil {
-					return -1, fmt.Errorf("sbx run exited before sandbox became running: %w%s", err, logTail)
+					return -1, fmt.Errorf("sbx run exited before sandbox became running: %w%s", err, tail)
 				}
-				return -1, fmt.Errorf("sbx run exited before sandbox became running%s", logTail)
+				return -1, fmt.Errorf("sbx run exited before sandbox became running%s", tail)
 			case <-ctx.Done():
 				killAnchor()
 				return -1, ctx.Err()
@@ -365,19 +359,14 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	return rc, nil
 }
 
-// anchorLogTail reads the last n bytes of .devm/anchor.log and formats
-// it for inclusion in an error message. Returns "" when the log is
-// empty or missing (no extra noise).
-func anchorLogTail(repoRoot string, n int) string {
-	path := filepath.Join(repoRoot, ".devm", "anchor.log")
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
+// formatAnchorOutput returns the captured anchor stdout/stderr formatted
+// for inclusion in an error message. Returns "" when nothing was captured
+// (so the error message stays clean in the normal case).
+func formatAnchorOutput(buf *lineRingBuffer) string {
+	if buf == nil || buf.IsEmpty() {
 		return ""
 	}
-	if len(data) > n {
-		data = data[len(data)-n:]
-	}
-	return "\n--- anchor output (" + path + ") ---\n" + strings.TrimRight(string(data), "\n") + "\n---"
+	return "\n--- anchor output ---\n" + strings.TrimRight(buf.String(), "\n") + "\n---"
 }
 
 func applyDefaults(d *ShellDeps) {
