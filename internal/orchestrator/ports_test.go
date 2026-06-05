@@ -121,7 +121,7 @@ func cfgWith(services map[string]schema.Service, portOffset int) schema.Config {
 
 func TestReconcilePortsAddsMissing(t *testing.T) {
 	cfg := cfgWith(map[string]schema.Service{
-		"api": {Canonical: 8080},
+		"api": {Port: 8080},
 	}, 60000)
 	runner := &scriptedRunner{listJSON: "[]"} // nothing currently published
 
@@ -162,7 +162,7 @@ func TestReconcilePortsRemovesExtra(t *testing.T) {
 
 func TestReconcilePortsNoOpWhenMatching(t *testing.T) {
 	cfg := cfgWith(map[string]schema.Service{
-		"api": {Canonical: 8080},
+		"api": {Port: 8080},
 	}, 60000)
 	runner := &scriptedRunner{
 		listJSON: `[{"host_ip":"127.0.0.1","host_port":68080,"sandbox_port":8080,"protocol":"tcp"}]`,
@@ -180,9 +180,9 @@ func TestReconcilePortsNoOpWhenMatching(t *testing.T) {
 
 func TestReconcilePortsHandlesMultipleServicesDeterministically(t *testing.T) {
 	cfg := cfgWith(map[string]schema.Service{
-		"api": {Canonical: 8080},
-		"db":  {Canonical: 5432},
-		"web": {Canonical: 3000},
+		"api": {Port: 8080},
+		"db":  {Port: 5432},
+		"web": {Port: 3000},
 	}, 60000)
 	runner := &scriptedRunner{listJSON: "[]"}
 	sb := &sandbox.Sandbox{Name: "x-sbx"}
@@ -219,8 +219,8 @@ func TestReconcilePortsMixedAddRemoveKeep(t *testing.T) {
 	// db(5432) — remove. Expect 1 publish (web) and 1 unpublish (db),
 	// nothing for api.
 	cfg := cfgWith(map[string]schema.Service{
-		"api": {Canonical: 8080},
-		"web": {Canonical: 3000},
+		"api": {Port: 8080},
+		"web": {Port: 3000},
 	}, 60000)
 	runner := &scriptedRunner{
 		listJSON: `[` +
@@ -250,7 +250,7 @@ func TestReconcilePortsMixedAddRemoveKeep(t *testing.T) {
 
 func TestReconcilePortsBubblesPublishError(t *testing.T) {
 	cfg := cfgWith(map[string]schema.Service{
-		"api": {Canonical: 8080},
+		"api": {Port: 8080},
 	}, 60000)
 	runner := &scriptedRunner{
 		listJSON: "[]",
@@ -311,7 +311,7 @@ func TestPublishWithVerifyRetriesOnEndpointNotReady(t *testing.T) {
 			"no container endpoint with IP address found")
 
 	cfg := cfgWith(map[string]schema.Service{
-		"api": {Canonical: 8080},
+		"api": {Port: 8080},
 	}, 60000)
 	runner := &flakeyRunner{
 		inner:      &scriptedRunner{listJSON: "[]"},

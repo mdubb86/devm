@@ -11,7 +11,7 @@ from helpers import Shell, sbx
 @pytest.mark.timeout(90)
 def test_service_add_remove(workspace, devm, sandbox_name):
     # Start with a single service "api" on canonical 8080.
-    workspace.write_devmyaml(services={"api": {"canonical": 8080}})
+    workspace.write_devmyaml(services={"api": {"port": 8080}})
     api_host = workspace.port_offset + 8080
     web_host = workspace.port_offset + 3000
 
@@ -24,8 +24,8 @@ def test_service_add_remove(workspace, devm, sandbox_name):
 
         # Add a NEW service "web" with canonical 3000.
         workspace.patch_devmyaml(services={
-            "api": {"canonical": 8080},
-            "web": {"canonical": 3000},
+            "api": {"port": 8080},
+            "web": {"port": 3000},
         })
         devm.reconcile(yes=True, timeout=60)
 
@@ -38,7 +38,7 @@ def test_service_add_remove(workspace, devm, sandbox_name):
 
         # Remove "web" entirely.
         workspace.patch_devmyaml(services={
-            "api": {"canonical": 8080},
+            "api": {"port": 8080},
         })
         devm.reconcile(yes=True, timeout=60)
 

@@ -79,8 +79,8 @@ func TestApplyLive_TemplateChange_InvokesDispatcher(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
 		Services: map[string]schema.Service{
-			"web": {Canonical: 80, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
-			"api": {Canonical: 81, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/bar"}}},
+			"web": {Port: 80, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+			"api": {Port: 81, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/bar"}}},
 		},
 	}
 

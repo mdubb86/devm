@@ -19,7 +19,7 @@ func Caddyfile(cfg schema.Config) string {
 	// Sort service names so output is deterministic.
 	names := make([]string, 0, len(cfg.Services))
 	for name := range cfg.Services {
-		if cfg.Services[name].Hostname != "" && cfg.Services[name].Canonical != 0 {
+		if cfg.Services[name].Hostname != "" && cfg.Services[name].Port != 0 {
 			names = append(names, name)
 		}
 	}
@@ -27,7 +27,7 @@ func Caddyfile(cfg schema.Config) string {
 
 	for _, name := range names {
 		svc := cfg.Services[name]
-		bind := config.BindPort(cfg, svc.Canonical)
+		bind := config.BindPort(cfg, svc.Port)
 		sb.WriteString(fmt.Sprintf("http://%s {\n\treverse_proxy localhost:%d\n}\n\n", svc.Hostname, bind))
 	}
 	return sb.String()

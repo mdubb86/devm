@@ -25,14 +25,14 @@ base_image:
   docker: true
 services:
   webapp:
-    canonical: 3000
+    port: 3000
     hostname: test.local
 `)
 
 	cfg, err := Load(dir)
 	assert.NoError(t, err)
 	assert.Equal(t, "test", cfg.Project.ID)
-	assert.Equal(t, 3000, cfg.Services["webapp"].Canonical)
+	assert.Equal(t, 3000, cfg.Services["webapp"].Port)
 }
 
 func TestLoadWithOverride(t *testing.T) {

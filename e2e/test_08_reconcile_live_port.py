@@ -8,7 +8,7 @@ from helpers import Shell, sbx
 
 @pytest.mark.timeout(90)
 def test_reconcile_live_port(workspace, devm, sandbox_name):
-    workspace.write_devmyaml(services={"api": {"canonical": 8080}})
+    workspace.write_devmyaml(services={"api": {"port": 8080}})
 
     with Shell(devm, cwd=str(workspace.path)) as sh:
         sh.expect_prompt(timeout=60)
@@ -21,8 +21,8 @@ def test_reconcile_live_port(workspace, devm, sandbox_name):
 
         # Live-add a second service: api + worker.
         workspace.patch_devmyaml(services={
-            "api": {"canonical": 8080},
-            "worker": {"canonical": 9090},
+            "api": {"port": 8080},
+            "worker": {"port": 9090},
         })
         devm.reconcile(yes=True, timeout=60)
 

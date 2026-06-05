@@ -26,7 +26,7 @@ func TestEnvArgsInjectsServicePorts(t *testing.T) {
 		Project: schema.Project{PortOffset: 10},
 		Services: map[string]schema.Service{
 			"brainstorm": {
-				Canonical: 52345,
+				Port: 52345,
 				EnvInject: true,
 				EnvHost:   "0.0.0.0",
 			},
@@ -42,7 +42,7 @@ func TestEnvArgsRejectsSupabasePrefix(t *testing.T) {
 		Project: schema.Project{PortOffset: 10},
 		Services: map[string]schema.Service{
 			"supabase_api": {
-				Canonical: 54321,
+				Port: 54321,
 				EnvInject: true,
 			},
 		},

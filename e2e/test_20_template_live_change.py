@@ -22,7 +22,7 @@ def test_template_live_change(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
         services={
             "probe": {
-                "canonical": 8080,
+                "port": 8080,
                 "templates": [
                     {"source": "configs/msg.tmpl", "output": "/etc/msg"},
                 ],

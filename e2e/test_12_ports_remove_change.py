@@ -9,8 +9,8 @@ from helpers import Shell, sbx
 @pytest.mark.timeout(90)
 def test_ports_remove_change(workspace, devm, sandbox_name):
     workspace.write_devmyaml(services={
-        "api": {"canonical": 8080},
-        "web": {"canonical": 3000},
+        "api": {"port": 8080},
+        "web": {"port": 3000},
         "worker": {
             "startup": [
                 {"command": ["sh", "-c", "while true; do sleep 60; done"],
@@ -32,7 +32,7 @@ def test_ports_remove_change(workspace, devm, sandbox_name):
 
         # Remove `web`, change api 8080 -> 8081.
         workspace.patch_devmyaml(services={
-            "api": {"canonical": 8081},
+            "api": {"port": 8081},
             "worker": {
                 "startup": [
                     {"command": ["sh", "-c", "while true; do sleep 60; done"],

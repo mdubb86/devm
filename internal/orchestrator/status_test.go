@@ -64,7 +64,7 @@ func TestRunStatus_RunningPendingMixed(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x-sbx", Runner: r}
 	newCfg := statusMinimalCfg()
 	newCfg.Install = []string{"new"}
-	newCfg.Services = map[string]schema.Service{"api": {Canonical: 8080}}
+	newCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
 	res, err := RunStatus(newCfg, sb, "/tmp/fake")
 	assert.NoError(t, err)
 	assert.Equal(t, 1, res.PendingLive)     // port_add
@@ -80,7 +80,7 @@ func TestRunStatus_RunningEmptySnapshotIsInSync(t *testing.T) {
 	}
 	sb := &sandbox.Sandbox{Name: "x-sbx", Runner: r}
 	cfg := statusMinimalCfg()
-	cfg.Services = map[string]schema.Service{"api": {Canonical: 8080}}
+	cfg.Services = map[string]schema.Service{"api": {Port: 8080}}
 	res, err := RunStatus(cfg, sb, "/tmp/fake")
 	assert.NoError(t, err)
 	assert.Equal(t, "running", res.State)
@@ -101,7 +101,7 @@ func TestRunStatusLive_PortMissingDrift(t *testing.T) {
 	// Snapshot expects api on 8080 (host 58080), but live ports are
 	// empty → port_missing drift.
 	snapCfg := statusMinimalCfg()
-	snapCfg.Services = map[string]schema.Service{"api": {Canonical: 8080}}
+	snapCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
 	snapYAML, _ := yaml.Marshal(snapCfg)
 	r := &stateRunner{
 		lsStatus: "running",
@@ -137,7 +137,7 @@ func TestRunStatusLive_PortExtraDrift(t *testing.T) {
 func TestRunStatusLive_InSyncNoDrift(t *testing.T) {
 	// Snapshot expects api 8080 (host 58080) and live has exactly that.
 	snapCfg := statusMinimalCfg()
-	snapCfg.Services = map[string]schema.Service{"api": {Canonical: 8080}}
+	snapCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
 	snapYAML, _ := yaml.Marshal(snapCfg)
 	r := &stateRunner{
 		lsStatus: "running",

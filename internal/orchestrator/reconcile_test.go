@@ -37,7 +37,7 @@ func TestRunReconcileInner_LivePortAdd(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 
 	newCfg := reconcileMinimalCfg()
-	newCfg.Services = map[string]schema.Service{"api": {Canonical: 8080}}
+	newCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
 
 	res, err := RunReconcileInner(newCfg, sb, "/tmp/fake-repo-root")
 	assert.NoError(t, err)
@@ -72,7 +72,7 @@ func TestRunReconcileInner_EmptySnapshotIsIdentityWithNew(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 
 	cfg := reconcileMinimalCfg()
-	cfg.Services = map[string]schema.Service{"api": {Canonical: 8080}}
+	cfg.Services = map[string]schema.Service{"api": {Port: 8080}}
 
 	res, err := RunReconcileInner(cfg, sb, "/tmp/fake-repo-root")
 	assert.NoError(t, err)
@@ -90,7 +90,7 @@ func TestRunReconcileInner_LiveOnly_WritesSnapshot(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 
 	newCfg := reconcileMinimalCfg()
-	newCfg.Services = map[string]schema.Service{"api": {Canonical: 8080}}
+	newCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
 
 	_, err := RunReconcileInner(newCfg, sb, "/tmp/fake-repo-root")
 	assert.NoError(t, err)
@@ -179,7 +179,7 @@ func TestRunReconcile_DryRunDoesNotApply(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x-sbx", Runner: r}
 	newCfg := reconcileMinimalCfg()
 	newCfg.Project.SandboxName = "x-sbx"
-	newCfg.Services = map[string]schema.Service{"api": {Canonical: 8080}}
+	newCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
 	opts := ReconcileOptions{DryRun: true}
 	rc, res, err := RunReconcile(newCfg, sb, t.TempDir(), opts)
 	assert.NoError(t, err)

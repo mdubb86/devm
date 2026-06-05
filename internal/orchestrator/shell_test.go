@@ -166,7 +166,7 @@ func TestRunShellInjectsServiceEnv(t *testing.T) {
 
 	cfg := minimalCfg()
 	cfg.Services = map[string]schema.Service{
-		"api": {Canonical: 8080, Env: map[string]string{"LOG_LEVEL": "info"}},
+		"api": {Port: 8080, Env: map[string]string{"LOG_LEVEL": "info"}},
 	}
 
 	deps := ShellDeps{

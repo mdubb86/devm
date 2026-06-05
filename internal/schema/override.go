@@ -16,7 +16,7 @@ type NetworkOverride struct {
 }
 
 type ServiceOverride struct {
-	Canonical *int              `yaml:"canonical,omitempty"`
+	Port *int              `yaml:"port,omitempty"`
 	Hostname  *string           `yaml:"hostname,omitempty"`
 	EnvInject *bool             `yaml:"env_inject,omitempty"`
 	EnvHost   *string           `yaml:"env_host,omitempty"`

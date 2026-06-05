@@ -12,7 +12,7 @@ def test_invariant_happy_path(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
         install=["touch /tmp/install-marker"],
         services={
-            "api": {"canonical": 8080},
+            "api": {"port": 8080},
             "worker": {
                 "startup": [
                     {"command": ["sh", "-c", "while true; do sleep 60; done"],

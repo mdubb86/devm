@@ -26,7 +26,7 @@ func TestMergeOverridesService(t *testing.T) {
 	base := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p-sbx", HostnameApex: "p.local"},
 		Services: map[string]schema.Service{
-			"webapp": {Canonical: 3000, Hostname: "p.local"},
+			"webapp": {Port: 3000, Hostname: "p.local"},
 		},
 	}
 	host := "custom.local"
@@ -38,14 +38,14 @@ func TestMergeOverridesService(t *testing.T) {
 	merged, err := Merge(base, override)
 	assert.NoError(t, err)
 	assert.Equal(t, "custom.local", merged.Services["webapp"].Hostname)
-	assert.Equal(t, 3000, merged.Services["webapp"].Canonical, "non-overridden field preserved")
+	assert.Equal(t, 3000, merged.Services["webapp"].Port, "non-overridden field preserved")
 }
 
 func TestMergeServiceEnvPreservesBaseWhenOverrideAbsent(t *testing.T) {
 	base := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p-sbx", HostnameApex: "p.local"},
 		Services: map[string]schema.Service{
-			"webapp": {Canonical: 3000, Env: map[string]string{"LOG_LEVEL": "debug"}},
+			"webapp": {Port: 3000, Env: map[string]string{"LOG_LEVEL": "debug"}},
 		},
 	}
 	override := schema.ConfigOverride{
@@ -62,7 +62,7 @@ func TestMergeServiceEnvMergesKeys(t *testing.T) {
 	base := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p-sbx", HostnameApex: "p.local"},
 		Services: map[string]schema.Service{
-			"webapp": {Canonical: 3000, Env: map[string]string{"LOG_LEVEL": "debug"}},
+			"webapp": {Port: 3000, Env: map[string]string{"LOG_LEVEL": "debug"}},
 		},
 	}
 	override := schema.ConfigOverride{
@@ -94,7 +94,7 @@ func TestServiceOverrideStartupReplacement(t *testing.T) {
 	base := schema.Config{
 		Services: map[string]schema.Service{
 			"postgres": {
-				Canonical: 5432,
+				Port: 5432,
 				Startup: []schema.StartupCommand{
 					{Command: []string{"old-cmd"}},
 				},

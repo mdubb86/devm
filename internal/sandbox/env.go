@@ -45,8 +45,8 @@ func EnvArgs(cfg schema.Config) []string {
 		upper := strings.ToUpper(name)
 		isSupabasePrefix := strings.HasPrefix(strings.ToLower(name), "supabase")
 
-		if svc.EnvInject && svc.Canonical != 0 && !isSupabasePrefix {
-			args = append(args, "-e", fmt.Sprintf("%s_PORT=%d", upper, config.BindPort(cfg, svc.Canonical)))
+		if svc.EnvInject && svc.Port != 0 && !isSupabasePrefix {
+			args = append(args, "-e", fmt.Sprintf("%s_PORT=%d", upper, config.BindPort(cfg, svc.Port)))
 			if svc.EnvHost != "" {
 				args = append(args, "-e", fmt.Sprintf("%s_HOST=%s", upper, svc.EnvHost))
 			}

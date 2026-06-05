@@ -33,7 +33,7 @@ project:
                                # {{.Project.HostnameApex}}. NOT used by
                                # Caddy or anywhere else in devm — just a
                                # template variable. Convention: <id>.local.
-  port_offset: 51000      # canonical_port + port_offset = host_port
+  port_offset: 51000      # port + port_offset = host_port
 
 base_image:
   docker: false           # true → docker-in-docker base
@@ -43,7 +43,7 @@ install:
 
 services:
   api:
-    canonical: 8080       # in-VM listen port; host port = 51000 + 8080 = 59080
+    port: 8080            # in-VM listen port; host port = 51000 + 8080 = 59080
     env:                  # service env vars; exposed as API_KEY=...
       LOG_LEVEL: info
     env_inject: true      # also inject API_PORT and API_HOST
@@ -85,7 +85,7 @@ If you spin up `devm shell`, then close the terminal, then open a new terminal a
 Knowing the bucket tells you whether changing a field needs a full recreate.
 
 **LIVE (no restart):**
-- Service `canonical` add/remove/change (port reconcile)
+- Service `port` add/remove/change (port reconcile)
 - Service `env`, project `env` add/remove/change (picked up by next `devm shell`)
 - `network.allowed_domains` ADD (sbx policy is global; remove is STOP-bucket)
 - Template content (`services.*.templates`) — re-renders + re-installs in-VM

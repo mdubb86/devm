@@ -55,11 +55,11 @@ def test_workspace_write_with_services_install(tmp_path):
     ws = Workspace(tmp_path, slug="x", sandbox_name="e2e-x-aaaa")
     ws.write_devmyaml(
         install=["touch /tmp/m"],
-        services={"api": {"canonical": 8080}},
+        services={"api": {"port": 8080}},
     )
     cfg = yaml.safe_load((tmp_path / "devm.yaml").read_text())
     assert cfg["install"] == ["touch /tmp/m"]
-    assert cfg["services"]["api"]["canonical"] == 8080
+    assert cfg["services"]["api"]["port"] == 8080
 
 
 def test_workspace_patch_devmyaml(tmp_path):

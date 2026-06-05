@@ -31,7 +31,7 @@ func TestRenderTemplates_SymlinkEscape_Rejected(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "x", SandboxName: "x", HostnameApex: "x.local"},
 		Services: map[string]schema.Service{
-			"a": {Canonical: 1, Templates: []schema.Template{
+			"a": {Port: 1, Templates: []schema.Template{
 				{Source: "leak.tmpl", Output: "/x"},
 			}},
 		},
@@ -50,7 +50,7 @@ func TestRenderTemplates_Simple(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "myapp", SandboxName: "myapp-sbx", HostnameApex: "myapp.local", PortOffset: 50000},
 		Services: map[string]schema.Service{
-			"api": {Canonical: 8080, Templates: []schema.Template{{Source: "hello.tmpl", Output: "/etc/hello"}}},
+			"api": {Port: 8080, Templates: []schema.Template{{Source: "hello.tmpl", Output: "/etc/hello"}}},
 		},
 	}
 	got, err := RenderTemplates(cfg, dir)
@@ -79,7 +79,7 @@ func TestRenderTemplates_MissingVar_Error(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "x", SandboxName: "x", HostnameApex: "x.local"},
 		Services: map[string]schema.Service{
-			"a": {Canonical: 1, Templates: []schema.Template{{Source: "bad.tmpl", Output: "/x"}}},
+			"a": {Port: 1, Templates: []schema.Template{{Source: "bad.tmpl", Output: "/x"}}},
 		},
 	}
 	_, err := RenderTemplates(cfg, dir)
@@ -97,7 +97,7 @@ func TestRenderTemplates_PathTraversal_Rejected(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "x", SandboxName: "x", HostnameApex: "x.local"},
 		Services: map[string]schema.Service{
-			"a": {Canonical: 1, Templates: []schema.Template{
+			"a": {Port: 1, Templates: []schema.Template{
 				// Skip schema.Validate (which already rejects this) and hit
 				// the render-time guard directly.
 				{Source: "../outside.tmpl", Output: "/x"},
@@ -117,8 +117,8 @@ func TestRenderTemplates_Deterministic(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
 		Services: map[string]schema.Service{
-			"zeta":  {Canonical: 9000, Templates: []schema.Template{{Source: "b.tmpl", Output: "/b"}}},
-			"alpha": {Canonical: 8000, Templates: []schema.Template{{Source: "a.tmpl", Output: "/a"}}},
+			"zeta":  {Port: 9000, Templates: []schema.Template{{Source: "b.tmpl", Output: "/b"}}},
+			"alpha": {Port: 8000, Templates: []schema.Template{{Source: "a.tmpl", Output: "/a"}}},
 		},
 	}
 	r1, err := RenderTemplates(cfg, dir)

@@ -29,9 +29,9 @@ type portMapping struct {
 // and applies the difference via sbx ports --publish / --unpublish.
 // The sandbox must be running.
 //
-// Each service whose Canonical port is non-zero contributes one
-// desired mapping: hostPort = cfg.Project.PortOffset + svc.Canonical,
-// sandboxPort = svc.Canonical, protocol = tcp.
+// Each service whose Port port is non-zero contributes one
+// desired mapping: hostPort = cfg.Project.PortOffset + svc.Port,
+// sandboxPort = svc.Port, protocol = tcp.
 //
 // All desired mappings bind 127.0.0.1; sbx normalizes its --json
 // output to the same. Manual sbx ports --publish to other host IPs
@@ -192,18 +192,18 @@ func waitForExecReady(sb *sandbox.Sandbox, r sandbox.Runner, timeout time.Durati
 }
 
 // desiredMappings builds the desired set from the config. Services
-// without a canonical port are skipped. Result is sorted by sandbox
+// without a port are skipped. Result is sorted by sandbox
 // port for deterministic apply order.
 func desiredMappings(cfg schema.Config) []portMapping {
 	var out []portMapping
 	for _, svc := range cfg.Services {
-		if svc.Canonical == 0 {
+		if svc.Port == 0 {
 			continue
 		}
 		out = append(out, portMapping{
 			HostIP:      "127.0.0.1",
-			HostPort:    cfg.Project.PortOffset + svc.Canonical,
-			SandboxPort: svc.Canonical,
+			HostPort:    cfg.Project.PortOffset + svc.Port,
+			SandboxPort: svc.Port,
 			Protocol:    "tcp",
 		})
 	}

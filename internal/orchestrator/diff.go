@@ -126,8 +126,8 @@ func ComputePortChanges(old, new schema.Config) []Change {
 	names := unionServiceNames(old.Services, new.Services)
 	var changes []Change
 	for _, name := range names {
-		oldPort := old.Services[name].Canonical
-		newPort := new.Services[name].Canonical
+		oldPort := old.Services[name].Port
+		newPort := new.Services[name].Port
 		if oldPort == newPort {
 			continue
 		}

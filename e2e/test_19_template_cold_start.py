@@ -22,7 +22,7 @@ def test_template_cold_start(workspace, devm, sandbox_name):
     tmpl_dir = workspace.path / "configs"
     tmpl_dir.mkdir()
     (tmpl_dir / "probe.conf.tmpl").write_text(
-        "PORT={{.Service.probe.Canonical}}\n"
+        "PORT={{.Service.probe.Port}}\n"
         "HOSTPORT={{.Service.probe.HostPort}}\n"
         "PROJECT={{.Project.ID}}\n"
     )
@@ -30,7 +30,7 @@ def test_template_cold_start(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
         services={
             "probe": {
-                "canonical": 8080,
+                "port": 8080,
                 "templates": [
                     {"source": "configs/probe.conf.tmpl",
                      "output": "/etc/probe.conf"},

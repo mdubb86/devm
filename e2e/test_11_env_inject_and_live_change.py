@@ -11,7 +11,7 @@ def test_env_inject_and_live_change(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
         env={"PROJECT_VAR": "projhello"},
         services={
-            "api": {"canonical": 8080, "env": {"LOG_LEVEL": "info"}},
+            "api": {"port": 8080, "env": {"LOG_LEVEL": "info"}},
             "worker": {
                 "startup": [
                     {"command": ["sh", "-c", "while true; do sleep 60; done"],
@@ -34,7 +34,7 @@ def test_env_inject_and_live_change(workspace, devm, sandbox_name):
         workspace.patch_devmyaml(
             env={"PROJECT_VAR": "projhello"},
             services={
-                "api": {"canonical": 8080, "env": {"LOG_LEVEL": "debug"}},
+                "api": {"port": 8080, "env": {"LOG_LEVEL": "debug"}},
                 "worker": {
                     "startup": [
                         {"command": ["sh", "-c", "while true; do sleep 60; done"],

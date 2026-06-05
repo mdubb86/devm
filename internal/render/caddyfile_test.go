@@ -12,9 +12,9 @@ func TestCaddyfileWithHostnamedServices(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{PortOffset: 10},
 		Services: map[string]schema.Service{
-			"webapp": {Canonical: 3000, Hostname: "test.local"},
-			"api":    {Canonical: 54321, Hostname: "api.test.local"},
-			"db":     {Canonical: 54322}, // no hostname — should be omitted
+			"webapp": {Port: 3000, Hostname: "test.local"},
+			"api":    {Port: 54321, Hostname: "api.test.local"},
+			"db":     {Port: 54322}, // no hostname — should be omitted
 		},
 	}
 	out := Caddyfile(cfg)

@@ -33,9 +33,9 @@ type ProjectData struct {
 }
 
 // ServiceData mirrors schema.Service fields useful to templates plus
-// the computed HostPort = PortOffset + Canonical (0 if Canonical == 0).
+// the computed HostPort = PortOffset + Port (0 if Port == 0).
 type ServiceData struct {
-	Canonical int
+	Port int
 	HostPort  int
 	Hostname  string
 	EnvInject bool
@@ -86,15 +86,15 @@ func buildTemplateData(cfg schema.Config) TemplateData {
 	svcData := make(map[string]ServiceData, len(cfg.Services))
 	for name, s := range cfg.Services {
 		hostPort := 0
-		if s.Canonical != 0 {
-			hostPort = cfg.Project.PortOffset + s.Canonical
+		if s.Port != 0 {
+			hostPort = cfg.Project.PortOffset + s.Port
 		}
 		env := s.Env
 		if env == nil {
 			env = map[string]string{}
 		}
 		svcData[name] = ServiceData{
-			Canonical: s.Canonical,
+			Port: s.Port,
 			HostPort:  hostPort,
 			Hostname:  s.Hostname,
 			EnvInject: s.EnvInject,

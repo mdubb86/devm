@@ -26,7 +26,7 @@ func TestSpecYAMLBasic(t *testing.T) {
 				},
 			},
 			"webapp": {
-				Canonical: 3000,
+				Port: 3000,
 				Hostname:  "test.local",
 				Masks: []schema.Mask{
 					{Path: "apps/web/node_modules", Size: "500M"},
@@ -145,13 +145,13 @@ func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 	cfg := minimalConfig(t)
 	cfg.Services = map[string]schema.Service{
 		"redis": {
-			Canonical: 6379,
+			Port: 6379,
 			Startup: []schema.StartupCommand{
 				{Command: []string{"redis-server", "/etc/redis.conf"}, Background: true},
 			},
 		},
 		"postgres": {
-			Canonical: 5432,
+			Port: 5432,
 			Startup: []schema.StartupCommand{
 				{Command: []string{"pg_ctl", "start"}, Background: true},
 				{Command: []string{"pg_isready"}},
@@ -187,7 +187,7 @@ func TestSpecYAMLStartupCommandArrayFormatting(t *testing.T) {
 	cfg := minimalConfig(t)
 	cfg.Services = map[string]schema.Service{
 		"web": {
-			Canonical: 3000,
+			Port: 3000,
 			Startup: []schema.StartupCommand{
 				{Command: []string{"node", "server.js", "--port", "3000"}},
 			},

@@ -40,8 +40,8 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 		}
 		for name, soverride := range override.Services {
 			svc := out.Services[name]
-			if soverride.Canonical != nil {
-				svc.Canonical = *soverride.Canonical
+			if soverride.Port != nil {
+				svc.Port = *soverride.Port
 			}
 			if soverride.Hostname != nil {
 				svc.Hostname = *soverride.Hostname

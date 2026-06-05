@@ -59,7 +59,7 @@ func TestComputeMountsChanges(t *testing.T) {
 
 func TestComputePortChanges_Add(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{})
-	new := cfgWithServices(map[string]schema.Service{"api": {Canonical: 8080}})
+	new := cfgWithServices(map[string]schema.Service{"api": {Port: 8080}})
 	changes := ComputePortChanges(old, new)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindPortAdd, changes[0].Kind)
@@ -70,7 +70,7 @@ func TestComputePortChanges_Add(t *testing.T) {
 }
 
 func TestComputePortChanges_Remove(t *testing.T) {
-	old := cfgWithServices(map[string]schema.Service{"api": {Canonical: 8080}})
+	old := cfgWithServices(map[string]schema.Service{"api": {Port: 8080}})
 	new := cfgWithServices(map[string]schema.Service{})
 	changes := ComputePortChanges(old, new)
 	assert.Len(t, changes, 1)
@@ -78,8 +78,8 @@ func TestComputePortChanges_Remove(t *testing.T) {
 }
 
 func TestComputePortChanges_Change(t *testing.T) {
-	old := cfgWithServices(map[string]schema.Service{"api": {Canonical: 8080}})
-	new := cfgWithServices(map[string]schema.Service{"api": {Canonical: 9090}})
+	old := cfgWithServices(map[string]schema.Service{"api": {Port: 8080}})
+	new := cfgWithServices(map[string]schema.Service{"api": {Port: 9090}})
 	changes := ComputePortChanges(old, new)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindPortChange, changes[0].Kind)
@@ -88,15 +88,15 @@ func TestComputePortChanges_Change(t *testing.T) {
 }
 
 func TestComputePortChanges_NoOp(t *testing.T) {
-	cfg := cfgWithServices(map[string]schema.Service{"api": {Canonical: 8080}})
+	cfg := cfgWithServices(map[string]schema.Service{"api": {Port: 8080}})
 	assert.Empty(t, ComputePortChanges(cfg, cfg))
 }
 
 func TestComputePortChanges_Deterministic(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{})
 	new := cfgWithServices(map[string]schema.Service{
-		"zeta":  {Canonical: 3000},
-		"alpha": {Canonical: 4000},
+		"zeta":  {Port: 3000},
+		"alpha": {Port: 4000},
 	})
 	c := ComputePortChanges(old, new)
 	assert.Len(t, c, 2)
@@ -206,7 +206,7 @@ func TestComputeAllChanges_NoOp(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
 		Services: map[string]schema.Service{
-			"api": {Canonical: 8080, Env: map[string]string{"X": "y"}},
+			"api": {Port: 8080, Env: map[string]string{"X": "y"}},
 		},
 		Network: schema.Network{AllowedDomains: []string{"a.com"}},
 		Install: []string{"true"},
@@ -247,7 +247,7 @@ func TestComputeTemplateChanges_NewTemplate(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
 		Services: map[string]schema.Service{
-			"a": {Canonical: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
 	}
 	got, err := ComputeTemplateChanges(cfg, dir)
@@ -266,7 +266,7 @@ func TestComputeTemplateChanges_NoChanges(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
 		Services: map[string]schema.Service{
-			"a": {Canonical: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
 	}
 	// Materialise the installer that WriteDevmDir would have produced.
@@ -285,7 +285,7 @@ func TestComputeTemplateChanges_ContentChanged(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
 		Services: map[string]schema.Service{
-			"a": {Canonical: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
 	}
 	require.NoError(t, render.WriteDevmDir(cfg, dir)) // baseline on-disk
@@ -307,7 +307,7 @@ func TestComputeTemplateChanges_Removed(t *testing.T) {
 	cfg1 := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
 		Services: map[string]schema.Service{
-			"a": {Canonical: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
 	}
 	require.NoError(t, render.WriteDevmDir(cfg1, dir))
@@ -315,7 +315,7 @@ func TestComputeTemplateChanges_Removed(t *testing.T) {
 	// New config drops the template.
 	cfg2 := schema.Config{
 		Project:  cfg1.Project,
-		Services: map[string]schema.Service{"a": {Canonical: 1}},
+		Services: map[string]schema.Service{"a": {Port: 1}},
 	}
 	got, err := ComputeTemplateChanges(cfg2, dir)
 	require.NoError(t, err)
@@ -334,7 +334,7 @@ func TestComputeAllChanges_IncludesTemplates(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
 		Services: map[string]schema.Service{
-			"a": {Canonical: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
 	}
 	changes, err := ComputeAllChanges(schema.Config{}, cfg, dir)

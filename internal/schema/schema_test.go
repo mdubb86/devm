@@ -22,11 +22,11 @@ func TestMaskRequiredFields(t *testing.T) {
 
 func TestServiceValidate(t *testing.T) {
 	// Minimum valid: just canonical
-	s := Service{Canonical: 3000}
+	s := Service{Port: 3000}
 	assert.NoError(t, s.Validate())
 
 	// env_host without env_inject is a misconfiguration
-	bad := Service{Canonical: 3000, EnvHost: "0.0.0.0"}
+	bad := Service{Port: 3000, EnvHost: "0.0.0.0"}
 	assert.Error(t, bad.Validate(), "env_host requires env_inject=true")
 
 	// env_inject without canonical port has nothing to inject
@@ -51,7 +51,7 @@ func TestConfigValidate(t *testing.T) {
 		BaseImage: BaseImage{Docker: true},
 		Network:   Network{AllowedDomains: []string{"github.com"}},
 		Services: map[string]Service{
-			"webapp": {Canonical: 3000, Hostname: "test.local"},
+			"webapp": {Port: 3000, Hostname: "test.local"},
 		},
 	}
 	assert.NoError(t, c.Validate())
@@ -59,8 +59,8 @@ func TestConfigValidate(t *testing.T) {
 	// Hostname collision across services
 	dup := c
 	dup.Services = map[string]Service{
-		"webapp": {Canonical: 3000, Hostname: "test.local"},
-		"api":    {Canonical: 8080, Hostname: "test.local"},
+		"webapp": {Port: 3000, Hostname: "test.local"},
+		"api":    {Port: 8080, Hostname: "test.local"},
 	}
 	assert.Error(t, dup.Validate(), "duplicate hostname")
 
@@ -70,8 +70,8 @@ func TestConfigValidate(t *testing.T) {
 		BaseImage: c.BaseImage,
 		Network:   c.Network,
 		Services: map[string]Service{
-			"a": {Canonical: 3000},
-			"b": {Canonical: 3000},
+			"a": {Port: 3000},
+			"b": {Port: 3000},
 		},
 	}
 	assert.Error(t, dup2.Validate(), "duplicate canonical port")
@@ -90,26 +90,26 @@ func TestConfigValidatesPortRange(t *testing.T) {
 	// port_offset + canonical exceeds 65535 → error.
 	over := base
 	over.Project.PortOffset = 70000
-	over.Services = map[string]Service{"api": {Canonical: 8080}}
+	over.Services = map[string]Service{"api": {Port: 8080}}
 	err := over.Validate()
 	require.Error(t, err, "offset+canonical over 65535 must error")
 	assert.Contains(t, err.Error(), "65535")
 
 	// canonical out of range (negative / too large) → error.
 	bigCanon := base
-	bigCanon.Services = map[string]Service{"api": {Canonical: 70000}}
+	bigCanon.Services = map[string]Service{"api": {Port: 70000}}
 	assert.Error(t, bigCanon.Validate(), "canonical over 65535 must error")
 
 	// Valid combination → no error.
 	ok := base
 	ok.Project.PortOffset = 51000
-	ok.Services = map[string]Service{"api": {Canonical: 8080}} // 59080, fine
+	ok.Services = map[string]Service{"api": {Port: 8080}} // 59080, fine
 	assert.NoError(t, ok.Validate())
 
 	// Exactly at the boundary is allowed.
 	boundary := base
 	boundary.Project.PortOffset = 60000
-	boundary.Services = map[string]Service{"api": {Canonical: 5535}} // 65535
+	boundary.Services = map[string]Service{"api": {Port: 5535}} // 65535
 	assert.NoError(t, boundary.Validate())
 }
 

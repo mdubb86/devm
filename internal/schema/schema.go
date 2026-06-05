@@ -67,7 +67,7 @@ func (c StartupCommand) Validate() error {
 }
 
 type Service struct {
-	Canonical int               `yaml:"canonical,omitempty"`
+	Port int               `yaml:"port,omitempty"`
 	Hostname  string            `yaml:"hostname,omitempty"`
 	EnvInject bool              `yaml:"env_inject,omitempty"`
 	EnvHost   string            `yaml:"env_host,omitempty"`
@@ -81,11 +81,11 @@ func (s Service) Validate() error {
 	if s.EnvHost != "" && !s.EnvInject {
 		return fmt.Errorf("env_host requires env_inject: true")
 	}
-	if s.EnvInject && s.Canonical == 0 {
-		return fmt.Errorf("env_inject requires canonical port")
+	if s.EnvInject && s.Port == 0 {
+		return fmt.Errorf("env_inject requires port")
 	}
-	if s.Canonical == 0 && len(s.Masks) == 0 && len(s.Startup) == 0 {
-		return fmt.Errorf("service must define a canonical port, at least one mask, or at least one startup command")
+	if s.Port == 0 && len(s.Masks) == 0 && len(s.Startup) == 0 {
+		return fmt.Errorf("service must define a port, at least one mask, or at least one startup command")
 	}
 	for i, m := range s.Masks {
 		if err := m.Validate(); err != nil {
@@ -252,19 +252,19 @@ func (c Config) Validate() error {
 			}
 			seenHosts[svc.Hostname] = name
 		}
-		if svc.Canonical != 0 {
-			if svc.Canonical < 1 || svc.Canonical > 65535 {
-				return fmt.Errorf("services.%s: canonical port %d out of range (1-65535)", name, svc.Canonical)
+		if svc.Port != 0 {
+			if svc.Port < 1 || svc.Port > 65535 {
+				return fmt.Errorf("services.%s: port %d out of range (1-65535)", name, svc.Port)
 			}
-			host := c.Project.PortOffset + svc.Canonical
+			host := c.Project.PortOffset + svc.Port
 			if host > 65535 {
 				return fmt.Errorf("services.%s: port_offset %d + canonical %d = %d exceeds max TCP port 65535",
-					name, c.Project.PortOffset, svc.Canonical, host)
+					name, c.Project.PortOffset, svc.Port, host)
 			}
-			if prev, ok := seenPorts[svc.Canonical]; ok {
-				return fmt.Errorf("duplicate canonical port %d in services %s and %s", svc.Canonical, prev, name)
+			if prev, ok := seenPorts[svc.Port]; ok {
+				return fmt.Errorf("duplicate port %d in services %s and %s", svc.Port, prev, name)
 			}
-			seenPorts[svc.Canonical] = name
+			seenPorts[svc.Port] = name
 		}
 	}
 	return nil
