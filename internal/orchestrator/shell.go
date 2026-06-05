@@ -6,6 +6,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mtwaage/devm/internal/debuglog"
@@ -224,11 +225,28 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		debuglog.Logf("shell", "cold-start: spawning anchor (raw osexec — production path): nohup %v", runArgs)
 		runCmd = osexec.Command("nohup", runArgs...)
 		runCmd.Stdin = nil
-		runCmd.Stdout = nil
-		runCmd.Stderr = os.Stderr
+		// CRITICAL: stdout/stderr go to .devm/anchor.log, NOT the user's
+		// terminal. macOS nohup redirects stderr → stdout when stderr is
+		// a tty, and our default stdout is /dev/null — so the anchor's
+		// errors would silently vanish (we hit this 2026-06-05 trying to
+		// dogfood: `devm shell` failed with "sbx run exited" and the
+		// user couldn't see why). Writing to a file (not a tty) makes
+		// nohup leave the descriptors alone, the real sbx error lands
+		// in the log, and the waitForRunning failure path surfaces the
+		// tail in the returned error.
+		logPath := filepath.Join(repoRoot, ".devm", "anchor.log")
+		logFile, lerr := os.Create(logPath) // truncates if existing
+		if lerr != nil {
+			return -1, fmt.Errorf("create %s: %w", logPath, lerr)
+		}
+		runCmd.Stdout = logFile
+		runCmd.Stderr = logFile
 		if err := runCmd.Start(); err != nil {
+			_ = logFile.Close()
 			return -1, fmt.Errorf("spawn sbx run: %w", err)
 		}
+		// Don't close logFile here — sbx keeps writing to it for the
+		// life of the anchor. fd is closed when devm exits.
 		if runCmd.Process != nil {
 			anchorPid = runCmd.Process.Pid
 		}
@@ -273,10 +291,14 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 			// shape that triggers Quirk #6.
 			select {
 			case err := <-runDone:
+				// Surface what the anchor wrote to .devm/anchor.log so the
+				// user can SEE why sbx exited rather than getting a bare
+				// "sbx run exited" with no detail.
+				logTail := anchorLogTail(repoRoot, 4096)
 				if err != nil {
-					return -1, fmt.Errorf("sbx run exited before sandbox became running: %w", err)
+					return -1, fmt.Errorf("sbx run exited before sandbox became running: %w%s", err, logTail)
 				}
-				return -1, fmt.Errorf("sbx run exited before sandbox became running")
+				return -1, fmt.Errorf("sbx run exited before sandbox became running%s", logTail)
 			case <-ctx.Done():
 				killAnchor()
 				return -1, ctx.Err()
@@ -341,6 +363,21 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	}
 	debuglog.Logf("shell", "user shell exited rc=%d; leaving anchor pid=%d alive", rc, anchorPid)
 	return rc, nil
+}
+
+// anchorLogTail reads the last n bytes of .devm/anchor.log and formats
+// it for inclusion in an error message. Returns "" when the log is
+// empty or missing (no extra noise).
+func anchorLogTail(repoRoot string, n int) string {
+	path := filepath.Join(repoRoot, ".devm", "anchor.log")
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	if len(data) > n {
+		data = data[len(data)-n:]
+	}
+	return "\n--- anchor output (" + path + ") ---\n" + strings.TrimRight(string(data), "\n") + "\n---"
 }
 
 func applyDefaults(d *ShellDeps) {
