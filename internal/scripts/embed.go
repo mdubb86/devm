@@ -10,3 +10,6 @@ var DevmExec string
 
 //go:embed install-templates.sh
 var InstallTemplates string
+
+//go:embed bootstrap.sh
+var Bootstrap string

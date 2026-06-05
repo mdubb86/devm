@@ -66,6 +66,7 @@ func writeStaticFiles(cfg schema.Config, repoRoot string) error {
 	staticFiles := map[string]string{
 		filepath.Join(devmDir, "Caddyfile"):               Caddyfile(cfg),
 		filepath.Join(devmDir, "spec.yaml"):               SpecYAML(cfg, repoRoot),
+		filepath.Join(scriptsDir, "bootstrap.sh"):         scripts.Bootstrap,
 		filepath.Join(scriptsDir, "init-volumes.sh"):      scripts.InitVolumes,
 		filepath.Join(scriptsDir, "devm-exec.sh"):         scripts.DevmExec,
 		filepath.Join(scriptsDir, "install-templates.sh"): scripts.InstallTemplates,

@@ -125,13 +125,19 @@ func TestSpecYAMLDoesNotInstallAgentBinary(t *testing.T) {
 	assert.NotContains(t, out, "provision.sh")
 }
 
-func TestSpecYAMLOmitsInstallWhenEmpty(t *testing.T) {
+func TestSpecYAMLAlwaysIncludesBootstrapInstall(t *testing.T) {
 	cfg := minimalConfig(t)
 	out := SpecYAML(cfg, "/tmp/repo")
-	// No install commands → no `install:` block in spec.yaml.
-	assert.NotContains(t, out, "install:")
-	// commands.startup still present (init-volumes lives there).
-	assert.Contains(t, out, "startup:")
+	// devm's built-in bootstrap.sh runs ncurses-term install at sandbox
+	// create time so every sandbox boots with full modern terminfo. It
+	// must appear in commands.install regardless of whether the user
+	// defined their own install steps.
+	parsed := parseSpec(t, out)
+	require.NotEmpty(t, parsed.Commands.Install, "bootstrap.sh install step must always render")
+	assert.Equal(t,
+		`bash "$WORKSPACE_DIR/.devm/scripts/bootstrap.sh"`,
+		parsed.Commands.Install[0].Command,
+		"bootstrap.sh must be the first install step (prepended before user install)")
 }
 
 func TestSpecYAMLRendersUserInstallSteps(t *testing.T) {
@@ -166,9 +172,11 @@ func TestSpecYAMLInstallCommandPreservesSingleQuotes(t *testing.T) {
 	out := SpecYAML(cfg, "/tmp/repo")
 	// Round-trip parse: whatever quoting style yaml.v3 chooses, the
 	// install command must come back exactly as the user wrote it.
+	// User install steps render AFTER the built-in bootstrap (index 0),
+	// so the user command lives at index 1.
 	parsed := parseSpec(t, out)
-	require.Len(t, parsed.Commands.Install, 1)
-	assert.Equal(t, `echo 'hello world'`, parsed.Commands.Install[0].Command)
+	require.Len(t, parsed.Commands.Install, 2, "bootstrap + user step")
+	assert.Equal(t, `echo 'hello world'`, parsed.Commands.Install[1].Command)
 }
 
 func TestSpecYAMLStartupOnlyInitVolumesWhenNoServiceStartup(t *testing.T) {

@@ -73,7 +73,12 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 		}
 	}
 
-	// commands.install: emit only if user defined any install steps.
+	// commands.install: prepend devm's built-in bootstrap (one-time
+	// apt installs every sandbox should have — currently ncurses-term
+	// for modern terminfo), then user-defined install steps.
+	spec.Commands.Install = append(spec.Commands.Install,
+		kitInstallCommand{Command: `bash "$WORKSPACE_DIR/.devm/scripts/bootstrap.sh"`},
+	)
 	for _, cmd := range cfg.Install {
 		spec.Commands.Install = append(spec.Commands.Install, kitInstallCommand{Command: cmd})
 	}
