@@ -93,7 +93,7 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 // and a non-nil error only when an orchestration step itself failed
 // (lock acquire, sbx run timeout, port reconcile error, user shell
 // spawn error).
-func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, sandboxName, cmdName string, cmdArgs []string) (int, error) {
+func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, sandboxName, cmdName string, cmdArgs []string) (rc int, retErr error) {
 	applyDefaults(&d)
 
 	lk, err := lock.Acquire(d.LockPath)
@@ -263,6 +263,15 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// return — no half-state sandboxes left running. Instead of calling
 	// killAnchor() at every error site, we install one defer that
 	// fires unless `handedOff` flips true at the final hand-off.
+	//
+	// The defer also augments the returned error with the anchor's
+	// captured stdout/stderr (last 200 lines from the ring buffer).
+	// That makes EVERY cold-start failure — port reconcile, snapshot,
+	// user-shell-spawn — surface what sbx was actually doing/failing
+	// at, not just devm's wrapper text. Previously the anchor tail
+	// was only included on the runDone-died path, which left genuine
+	// diagnostic gaps (the 2026-06-05 dogfood "no sandbox named
+	// 'everstone'" failures gave us zero clue what install: was up to).
 	handedOff := false
 	defer func() {
 		if handedOff {
@@ -278,6 +287,15 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		select {
 		case <-runDone:
 		case <-time.After(3 * time.Second):
+		}
+		// Decorate the returned error with the anchor's captured
+		// output. Named return `retErr` is mutable from inside this
+		// defer, so subsequent error sites don't need to remember to
+		// fold the tail in themselves.
+		if retErr != nil && anchorOut != nil {
+			if tail := formatAnchorOutput(anchorOut); tail != "" {
+				retErr = fmt.Errorf("%w%s", retErr, tail)
+			}
 		}
 	}()
 
@@ -305,11 +323,11 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 				// but its drain of runDone would block forever on the
 				// already-consumed channel. Flip handedOff so the
 				// defer skips cleanup entirely; we're done.
+				// (The defer's error-decoration won't run either when
+				// handedOff is true, so fold the anchor tail in here
+				// manually — that's the load-bearing diagnostic for
+				// this specific failure shape.)
 				handedOff = true
-				// Surface the anchor's captured stdout/stderr so the
-				// user can SEE why sbx exited — otherwise they just
-				// get a bare "sbx run exited" with no clue what went
-				// wrong.
 				tail := formatAnchorOutput(anchorOut)
 				if err != nil {
 					return -1, fmt.Errorf("sbx run exited before sandbox became running: %w%s", err, tail)
@@ -381,9 +399,10 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	_ = lk.Release()
 	released = true
 
-	rc, err := userCmd.Wait()
-	if err != nil {
-		return -1, fmt.Errorf("user shell wait: %w", err)
+	var waitErr error
+	rc, waitErr = userCmd.Wait()
+	if waitErr != nil {
+		return -1, fmt.Errorf("user shell wait: %w", waitErr)
 	}
 	debuglog.Logf("shell", "user shell exited rc=%d; leaving anchor pid=%d alive", rc, anchorPid)
 	return rc, nil
