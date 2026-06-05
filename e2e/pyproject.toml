@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-n 2 --durations=20 -ra -v"
+addopts = "-n 0 --durations=20 -ra -v"
 timeout = 120
 testpaths = ["."]
 python_files = "test_*.py"
