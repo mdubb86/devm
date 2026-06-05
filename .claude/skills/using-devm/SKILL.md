@@ -9,7 +9,7 @@ devm wraps Docker Sandboxes (`sbx`) with a declarative `devm.yaml`. The file des
 
 ## Binary
 
-`devm` should be on PATH (symlinked from `/opt/homebrew/bin/devm` → `/Users/michael/workspace/devm/devm`). If `devm --help` fails, fall back to invoking the absolute path. `which devm` to check.
+Assume `devm` is on PATH. Verify with `devm --help` (or `which devm`). If it's missing, the user installs it; this skill doesn't cover devm's own install path.
 
 ## Commands
 

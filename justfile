@@ -1,8 +1,15 @@
 # justfile
 
-# Build the devm binary into ./devm.
+# Build the devm binary into ./devm (for local testing).
 build:
     go build -o devm ./cmd/devm
+
+# Install the devm binary the canonical Go way → $GOBIN (or $GOPATH/bin).
+# Typically lands at ~/go/bin/devm; add ~/go/bin to PATH if not already.
+install:
+    go install ./cmd/devm
+    @bin="$(go env GOBIN)"; [ -n "$bin" ] || bin="$(go env GOPATH)/bin"; echo "installed to $bin/devm"
+    @command -v devm >/dev/null || echo "(reminder: add $(go env GOPATH)/bin to PATH to invoke 'devm' directly)"
 
 # Run Go unit tests.
 test:
