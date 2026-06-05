@@ -33,13 +33,33 @@ func (DefaultRunner) Output(name string, args ...string) ([]byte, error) {
 }
 
 func (DefaultRunner) Run(name string, args ...string) error {
-	return exec.Command(name, args...).Run()
+	// Match Output's stderr-folding: exec.Cmd.Run by default discards
+	// stderr, so callers get a bare "exit status N" with no clue what
+	// failed. Capture stderr explicitly and fold into the error.
+	c := exec.Command(name, args...)
+	var stderr strings.Builder
+	c.Stderr = &stderr
+	err := c.Run()
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+	}
+	return err
 }
 
 func (DefaultRunner) RunStdin(stdin, name string, args ...string) error {
 	c := exec.Command(name, args...)
 	c.Stdin = strings.NewReader(stdin)
-	return c.Run()
+	var stderr strings.Builder
+	c.Stderr = &stderr
+	err := c.Run()
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+	}
+	return err
 }
 
 // Sandbox is a thin wrapper around the `sbx` CLI scoped to one sandbox name.
