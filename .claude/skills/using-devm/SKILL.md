@@ -29,7 +29,10 @@ Assume `devm` is on PATH. Verify with `devm --help` (or `which devm`). If it's m
 project:
   id: myproj              # required, used as agent name
   sandbox_name: myproj-sbx # required, the sbx sandbox name
-  hostname_apex: myproj.local
+  hostname_apex: myproj.local  # required field, exposed to templates as
+                               # {{.Project.HostnameApex}}. NOT used by
+                               # Caddy or anywhere else in devm — just a
+                               # template variable. Convention: <id>.local.
   port_offset: 51000      # canonical_port + port_offset = host_port
 
 base_image:
