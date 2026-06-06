@@ -1,4 +1,30 @@
-"""14: editing install forces TEARDOWN recreate — new install runs, old state gone."""
+"""14: editing `install` forces TEARDOWN recreate; new install runs, old state wiped.
+
+A project's first install creates `marker-a`. After cold-start, the
+user edits `install` to create `marker-b` instead and runs reconcile.
+Because `install` is a TEARDOWN-bucket field, devm removes the
+sandbox (anchor + state gone): the pre-existing user shell hits EOF,
+and `sbx exists` returns false. A second cold-start then runs the NEW
+install — a fresh shell sees `marker-b` present AND `marker-a` absent,
+proving the recreate ran the edited install and that the prior
+container state was discarded (not preserved across teardown).
+
+What this pins:
+  - First cold-start runs the declared install (marker-a present).
+  - Editing `install` is a TEARDOWN-bucket change: reconcile rms the
+    sandbox; the open user shell hits EOF, `sandbox_exists` is false.
+  - The next cold-start re-runs the NEW install (marker-b present).
+  - Teardown wipes prior container state — old marker-a is gone in the
+    fresh sandbox.
+
+What it doesn't cover (tested elsewhere):
+  - LIVE-bucket changes that don't recreate -> test_08, test_11,
+    test_12, test_13.
+  - Reconcile prompt+yes UX -> test_09.
+  - Standalone teardown prompt+yes -> test_05.
+  - Stop (preserves state) vs teardown (destroys state) contrast ->
+    test_03, test_sbx_contract_03, test_sbx_contract_04.
+"""
 import pytest
 
 from helpers import Shell, sbx, stop_and_wait_stopped
