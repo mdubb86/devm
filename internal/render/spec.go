@@ -98,7 +98,7 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	// is fixed (likely: snapshot moves to host-side, or readiness gate
 	// waits for install marker file).
 	for _, cmd := range cfg.Install {
-		spec.Commands.Install = append(spec.Commands.Install, kitInstallCommand{Command: cmd})
+		spec.Commands.Install = append(spec.Commands.Install, kitInstallCommand{Command: wrapInstallWithDotenvSource(cmd)})
 	}
 
 	// commands.startup: two built-in steps (init-volumes, install-templates)
@@ -117,7 +117,9 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	)
 	for _, name := range names {
 		for idx, step := range cfg.Services[name].Startup {
-			spec.Commands.Startup = append(spec.Commands.Startup, buildStartupStep(step, name, idx))
+			wrapped := step
+			wrapped.Command = wrapStartupWithDotenvSource(step.Command)
+			spec.Commands.Startup = append(spec.Commands.Startup, buildStartupStep(wrapped, name, idx))
 		}
 	}
 
@@ -216,4 +218,43 @@ func buildStartupStep(step schema.StartupCommand, service string, _ int) kitStar
 		Description: fmt.Sprintf("%s startup daemon", service),
 		Background:  true,
 	}
+}
+
+// dotenvSourcePrefix is the shell snippet that sources .devm/.env if it
+// exists. Idempotent and safe to run early (the [ -f ] guard handles the
+// case where the file isn't on disk yet, e.g., the very first install
+// step before the workspace mount has been claimed).
+//
+// $WORKSPACE_DIR is set by sbx in every consumer that runs install:,
+// startup:, and any sbx exec — pinned by
+// e2e/test_sbx_contract_17_install_workspace_dir_and_mount.py and
+// e2e/test_sbx_contract_23_env_workspace_dir_set_by_sbx.py.
+const dotenvSourcePrefix = `[ -f "$WORKSPACE_DIR/.devm/.env" ] && . "$WORKSPACE_DIR/.devm/.env"`
+
+// wrapInstallWithDotenvSource wraps a user install command string so it
+// runs after sourcing .devm/.env. The kit install: form is a single
+// string sbx hands to sh -c, so we just prepend the source as another
+// statement — no nested shell, no quoting dance on the user's text.
+func wrapInstallWithDotenvSource(userCmd string) string {
+	return dotenvSourcePrefix + "; " + userCmd
+}
+
+// wrapStartupWithDotenvSource wraps a user startup command argv so it
+// runs after sourcing .devm/.env. The kit startup: form is an argv
+// array, so we use the standard POSIX shell idiom:
+//
+//	sh -c '<source>; exec "$@"' _ <original argv...>
+//
+// The "_" is a dummy $0; the original argv becomes $@. exec replaces
+// the shell so background: true still tracks the user's process.
+func wrapStartupWithDotenvSource(userCmd []string) []string {
+	if len(userCmd) == 0 {
+		return userCmd
+	}
+	wrapped := []string{
+		"sh", "-c",
+		dotenvSourcePrefix + `; exec "$@"`,
+		"_",
+	}
+	return append(wrapped, userCmd...)
 }
