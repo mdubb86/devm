@@ -23,27 +23,22 @@ clean:
 e2e:
     @e2e/scripts/run.sh
 
-# Three test groups (auto-classified in e2e/conftest.py by filename).
-# Pick a group when you only care about one slice of the suite:
-#   - devm: tests that drive `devm` (test_NN_*.py — the user-facing CLI flow)
-#   - sbx:  pure-sbx behavior pins (test_sbx_NN_*.py — no devm in the loop)
-#   - probes: probe + anchor + sbx-quirk tests (test_sbx_anchor_*.py,
-#             test_sbx_quirk_*.py — sbx-internal behavior, often driven by
-#             Go probes under e2e/probes/)
+# Test groups by pytest marker. Pick one when you only care about a slice:
+#   - devm:      tests that drive `devm` (the user-facing CLI flow)
+#   - contract:  declarative sbx invariants devm depends on
+#   - tripwire:  'broken' sbx behaviors devm works around (red = upstream fixed)
+#   - probes:    Go-probe-driven async/timing sanity
 e2e-devm:
     @e2e/scripts/run.sh -m devm
-
-e2e-sbx:
-    @e2e/scripts/run.sh -m sbx
-
-e2e-probes:
-    @e2e/scripts/run.sh -m probe
 
 e2e-contract:
     @e2e/scripts/run.sh -m sbx_contract
 
 e2e-tripwire:
     @e2e/scripts/run.sh -m sbx_tripwire
+
+e2e-probes:
+    @e2e/scripts/run.sh -m probe
 
 # Run a single test by name (matches pytest -k pattern). Foreground (no -n).
 # Quote multi-word patterns: `just e2e-one "test_a or test_b"`.
