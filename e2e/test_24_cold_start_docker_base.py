@@ -19,11 +19,9 @@ Asserts: cold start with base_image.docker: true brings up a shell and
 regression instead of letting it surface only when a real project
 (like everstone) tries to use docker:true.
 """
-import time
-
 import pytest
 
-from helpers import Shell, sbx
+from helpers import Shell, stop_and_wait_stopped
 
 pytestmark = pytest.mark.devm
 
@@ -49,10 +47,4 @@ def test_cold_start_docker_base_brings_up_shell(workspace, devm, sandbox_name):
         sh.exit(timeout=30)
 
     # Anchor-alive: explicit stop after shell exit, then confirm reaped.
-    devm.stop(yes=True)
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if sbx.sandbox_state(sandbox_name) == "stopped":
-            return
-        time.sleep(0.5)
-    pytest.fail(f"sandbox {sandbox_name} never reached 'stopped'")
+    stop_and_wait_stopped(devm, sandbox_name)

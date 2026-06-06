@@ -1,11 +1,10 @@
 """09: non-TTY reconcile of a recreate-required change exits 2, no recreate."""
 import json
 import subprocess
-import time
 
 import pytest
 
-from helpers import Shell, sbx
+from helpers import Shell, stop_and_wait_stopped
 
 pytestmark = pytest.mark.devm
 
@@ -55,10 +54,4 @@ def test_reconcile_nontty_exits2(workspace, devm, sandbox_name):
         sh.exit(timeout=30)
 
     # Anchor-alive: explicitly stop after shell exit.
-    devm.stop(yes=True)
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if sbx.sandbox_state(sandbox_name) == "stopped":
-            return
-        time.sleep(0.5)
-    pytest.fail(f"sandbox {sandbox_name} never reached 'stopped'")
+    stop_and_wait_stopped(devm, sandbox_name)

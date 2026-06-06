@@ -11,11 +11,9 @@ Setting `services.X: {port: "0.0.0.0:N"}` publishes to 0.0.0.0
 This test asserts that the host_ip field in `sbx ports NAME --json`
 reflects the user's bind choice end-to-end.
 """
-import time
-
 import pytest
 
-from helpers import Shell, sbx
+from helpers import Shell, sbx, stop_and_wait_stopped
 
 pytestmark = pytest.mark.devm
 
@@ -66,10 +64,4 @@ def test_bind_exposes_on_specified_interface(workspace, devm, sandbox_name):
         sh.exit(timeout=30)
 
     # Anchor-alive: explicitly stop after shell exit.
-    devm.stop(yes=True)
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if sbx.sandbox_state(sandbox_name) == "stopped":
-            return
-        time.sleep(0.5)
-    pytest.fail(f"sandbox {sandbox_name} never reached 'stopped'")
+    stop_and_wait_stopped(devm, sandbox_name)
