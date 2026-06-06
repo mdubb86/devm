@@ -5,6 +5,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(90)
 def test_reconcile_live_port(workspace, devm, sandbox_name):

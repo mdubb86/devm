@@ -33,6 +33,8 @@ from helpers.sbx_kit import (
     wait_running,
 )
 
+pytestmark = pytest.mark.sbx
+
 
 SPAWNER_SCRIPT = textwrap.dedent("""\
     #!/usr/bin/env python3

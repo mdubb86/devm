@@ -37,6 +37,8 @@ import pytest
 
 from helpers import sbx
 
+pytestmark = pytest.mark.sbx
+
 
 # Canonical Ubuntu apt repository domains (Ubuntu 26.04 base — what
 # docker/sandbox-templates:shell currently ships). Update this list if

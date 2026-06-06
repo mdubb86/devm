@@ -27,6 +27,8 @@ import textwrap
 
 import pytest
 
+pytestmark = pytest.mark.sbx
+
 
 def _kit_dir_with_spec(spec: str) -> str:
     d = tempfile.mkdtemp(prefix="sbx06-kit-")

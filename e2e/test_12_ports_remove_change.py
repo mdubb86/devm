@@ -5,6 +5,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(90)
 def test_ports_remove_change(workspace, devm, sandbox_name):

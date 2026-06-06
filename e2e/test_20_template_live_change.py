@@ -11,6 +11,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(60)
 def test_template_live_change(workspace, devm, sandbox_name):

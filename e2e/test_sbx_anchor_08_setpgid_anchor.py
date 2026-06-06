@@ -30,6 +30,8 @@ from helpers.sbx_kit import (
     read_daemon_lifetime,
 )
 
+pytestmark = pytest.mark.sbx
+
 
 WRAPPER = textwrap.dedent("""\
     #!/usr/bin/env python3

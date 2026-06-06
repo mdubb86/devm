@@ -21,6 +21,8 @@ from helpers.sbx_kit import (
     materialize_kit,
 )
 
+pytestmark = pytest.mark.sbx
+
 
 SANDBOX_PORT = 8080
 HOST_PORT = 50200  # arbitrary; just outside the ranges used by other tests

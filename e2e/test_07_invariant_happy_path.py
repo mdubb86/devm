@@ -6,6 +6,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(60)
 def test_invariant_happy_path(workspace, devm, sandbox_name):

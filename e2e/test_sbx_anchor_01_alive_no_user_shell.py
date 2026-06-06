@@ -24,6 +24,8 @@ from helpers.sbx_kit import (
     read_daemon_lifetime,
 )
 
+pytestmark = pytest.mark.sbx
+
 
 @pytest.mark.timeout(120)
 def test_anchor_alive_no_user_shell_keeps_daemon(sandbox_name):

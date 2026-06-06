@@ -16,6 +16,8 @@ import pytest
 from helpers import sbx
 from helpers.sbx_kit import bring_up_anchored, materialize_kit
 
+pytestmark = pytest.mark.sbx
+
 
 SANDBOX_PORT = 8090
 HOST_PORT = 50210

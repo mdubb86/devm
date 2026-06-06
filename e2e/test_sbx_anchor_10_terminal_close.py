@@ -59,6 +59,8 @@ import pytest
 from helpers import sbx
 from helpers.sbx_kit import materialize_kit
 
+pytestmark = pytest.mark.sbx
+
 
 def _pid_alive(pid: int) -> bool:
     try:

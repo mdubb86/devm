@@ -29,6 +29,8 @@ from helpers.sbx_kit import (
     read_daemon_lifetime,
 )
 
+pytestmark = pytest.mark.sbx
+
 
 @pytest.mark.timeout(120)
 def test_anchor_kill_plus_no_pty_user_shell_kills_daemon(sandbox_name):

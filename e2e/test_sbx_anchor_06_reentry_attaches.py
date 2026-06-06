@@ -20,6 +20,8 @@ from helpers.sbx_kit import (
     materialize_kit,
 )
 
+pytestmark = pytest.mark.sbx
+
 
 def _attach_and_run_marker(sandbox_name: str, marker: str) -> None:
     """Run a single command via `sbx exec NAME bash -c "echo MARKER"`.

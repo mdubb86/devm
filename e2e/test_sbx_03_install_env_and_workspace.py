@@ -41,6 +41,8 @@ from helpers.sbx_kit import (
     wait_exec_ready,
 )
 
+pytestmark = pytest.mark.sbx
+
 
 # Plant two probe files at /tmp/* — chosen because /tmp is universally
 # writable in the install context regardless of whether the workspace

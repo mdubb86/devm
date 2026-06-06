@@ -20,6 +20,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(90)
 def test_mounts_mirrored_path_and_readonly(workspace, devm, sandbox_name, tmp_path):

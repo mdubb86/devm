@@ -5,6 +5,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(75)
 def test_network_add(workspace, devm, sandbox_name, policy_registrar):

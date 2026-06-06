@@ -41,6 +41,8 @@ import pytest
 
 from helpers import sbx
 
+pytestmark = pytest.mark.sbx
+
 
 # Anchor uses sleep-infinity entrypoint — no shell. We don't expect a
 # prompt from it; we poll exec readiness instead.

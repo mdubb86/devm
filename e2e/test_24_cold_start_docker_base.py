@@ -25,6 +25,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(240)
 def test_cold_start_docker_base_brings_up_shell(workspace, devm, sandbox_name):

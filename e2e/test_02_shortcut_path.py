@@ -6,6 +6,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(90)
 def test_shortcut_path(workspace, devm, sandbox_name):

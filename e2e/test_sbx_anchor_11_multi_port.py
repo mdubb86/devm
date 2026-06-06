@@ -15,6 +15,8 @@ import pytest
 from helpers import sbx
 from helpers.sbx_kit import bring_up_anchored, materialize_kit
 
+pytestmark = pytest.mark.sbx
+
 
 MAPPINGS = [
     (50220, 8080),

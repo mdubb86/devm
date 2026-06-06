@@ -35,6 +35,8 @@ import pytest
 
 from helpers import sbx
 
+pytestmark = pytest.mark.sbx
+
 
 # The sbx `shell` agent uses an `agent@...` bash prompt under the hood.
 PROMPT_RE = r"\$ ?\r?\n?$|agent@\S+:\S+\$ ?"

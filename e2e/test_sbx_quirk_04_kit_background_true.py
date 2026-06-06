@@ -24,6 +24,8 @@ import pytest
 
 from helpers import sbx
 
+pytestmark = pytest.mark.sbx
+
 
 # A kit with one `background: true` startup step. We use a heartbeat
 # pattern so we can measure lifetime; the upstream quirk should kill

@@ -17,6 +17,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(90)
 def test_bind_exposes_on_specified_interface(workspace, devm, sandbox_name):

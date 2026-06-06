@@ -28,6 +28,8 @@ import pytest
 
 from helpers import sbx
 
+pytestmark = pytest.mark.sbx
+
 
 def _kit_spec(devm_shape: bool = False) -> str:
     if not devm_shape:

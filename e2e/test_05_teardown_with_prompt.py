@@ -7,6 +7,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(90)
 def test_teardown_with_prompt(workspace, devm, sandbox_name):

@@ -20,29 +20,6 @@ import pytest
 from helpers import Devm, Workspace, registry, sbx
 
 
-# --- group autoclassification ---
-#
-# Three groups based on filename prefix so `just e2e-{devm,sbx,probes}`
-# can target them via `-m <mark>`. New tests are auto-classified by
-# their filename — no manual marker decoration needed:
-#
-#   test_sbx_anchor_*.py / test_sbx_quirk_*.py  → probe   (sbx internal
-#                                                          behavior +
-#                                                          architecture)
-#   test_sbx_NN_*.py                            → sbx     (pure-sbx
-#                                                          property pins)
-#   test_NN_*.py                                → devm    (drives devm)
-#   tests/test_helpers_smoke.py                 → (unmarked)
-
-def pytest_collection_modifyitems(config, items):
-    for item in items:
-        basename = os.path.basename(str(item.fspath))
-        if basename.startswith("test_sbx_anchor_") or basename.startswith("test_sbx_quirk_"):
-            item.add_marker(pytest.mark.probe)
-        elif basename.startswith("test_sbx_"):
-            item.add_marker(pytest.mark.sbx)
-        elif basename.startswith("test_") and basename != "test_helpers_smoke.py":
-            item.add_marker(pytest.mark.devm)
 
 
 # --- session ---

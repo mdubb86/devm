@@ -31,6 +31,8 @@ import pytest
 from helpers import sbx
 from helpers.sbx_kit import materialize_kit
 
+pytestmark = pytest.mark.probe
+
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROBE_SRC = os.path.join(REPO_ROOT, "e2e", "probes", "probe-publish")

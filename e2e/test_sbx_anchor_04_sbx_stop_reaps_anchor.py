@@ -23,6 +23,8 @@ from helpers.sbx_kit import (
     materialize_kit,
 )
 
+pytestmark = pytest.mark.sbx
+
 
 @pytest.mark.timeout(120)
 def test_sbx_stop_reaps_anchor(sandbox_name):

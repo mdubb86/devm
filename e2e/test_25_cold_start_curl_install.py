@@ -18,6 +18,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(180)
 def test_cold_start_with_curl_install(workspace, devm, sandbox_name):

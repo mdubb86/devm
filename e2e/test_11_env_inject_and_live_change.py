@@ -5,6 +5,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(75)
 def test_env_inject_and_live_change(workspace, devm, sandbox_name):

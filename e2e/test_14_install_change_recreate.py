@@ -5,6 +5,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(120)
 def test_install_change_recreate(workspace, devm, sandbox_name, phase):

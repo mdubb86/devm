@@ -5,6 +5,8 @@ import pytest
 
 from helpers import Shell, sbx
 
+pytestmark = pytest.mark.devm
+
 
 @pytest.mark.timeout(75)
 def test_reconcile_yes_stops(workspace, devm, sandbox_name):
