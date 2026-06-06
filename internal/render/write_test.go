@@ -93,6 +93,36 @@ func TestWriteDevmDir_TemplatesDirPopulated(t *testing.T) {
 	assert.Contains(t, string(bs2), "DEST='/etc/foo'")
 }
 
+func TestWriteDevmDirWritesWrapperAtExpectedPathAndMode(t *testing.T) {
+	dir := t.TempDir()
+	cfg := minimalConfig(t)
+	require.NoError(t, WriteDevmDir(cfg, dir))
+
+	wrapper := filepath.Join(dir, ".devm", "scripts", "with-devm-env")
+	info, err := os.Stat(wrapper)
+	require.NoError(t, err, ".devm/scripts/with-devm-env must be written (no .sh extension)")
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(), "wrapper must be executable")
+
+	bs, err := os.ReadFile(wrapper)
+	require.NoError(t, err)
+	assert.Contains(t, string(bs), `[ -f "$dir/.env" ] && . "$dir/.env"`,
+		"wrapper must source sibling .env")
+	assert.Contains(t, string(bs), `exec "$@"`,
+		"wrapper must exec the rest of argv")
+}
+
+func TestWriteDevmDirWritesDotenv(t *testing.T) {
+	dir := t.TempDir()
+	cfg := minimalConfig(t)
+	cfg.Env = map[string]string{"FOO": "bar"}
+	require.NoError(t, WriteDevmDir(cfg, dir))
+
+	bs, err := os.ReadFile(filepath.Join(dir, ".devm", ".env"))
+	require.NoError(t, err, ".devm/.env must be written")
+	assert.Contains(t, string(bs), `export FOO='bar'`)
+	assert.Contains(t, string(bs), `export PATH="$WORKSPACE/.devm/scripts:$PATH"`)
+}
+
 func TestWriteDevmDir_StaleTemplateRemoved(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x"), 0o644))

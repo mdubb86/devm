@@ -56,6 +56,48 @@ project:
 	assert.Equal(t, 25, cfg.Project.PortOffset)
 }
 
+func TestLoadResolvesEnvAndInjectsWorkspaceAndIsSandbox(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  id: test
+  sandbox_name: test-sbx
+  hostname_apex: test.local
+base_image:
+  docker: true
+env:
+  CLAUDE_CONFIG_DIR: $WORKSPACE/.claude
+`)
+
+	cfg, err := Load(dir)
+	assert.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, ".claude"), cfg.Env["CLAUDE_CONFIG_DIR"],
+		"$WORKSPACE must be expanded by Load via ResolveEnv")
+	assert.Equal(t, dir, cfg.Env["WORKSPACE"],
+		"WORKSPACE must be injected by Load via ResolveEnv")
+	assert.Equal(t, "1", cfg.Env["IS_SANDBOX"],
+		"IS_SANDBOX must be injected by Load via ResolveEnv")
+}
+
+func TestLoadReportsReservedEnvKeyError(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  id: test
+  sandbox_name: test-sbx
+  hostname_apex: test.local
+base_image:
+  docker: true
+env:
+  WORKSPACE: /tmp/sneaky
+`)
+
+	_, err := Load(dir)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "WORKSPACE")
+	assert.Contains(t, err.Error(), "reserved")
+}
+
 func TestLoadStrictFailsOnMissingRequiredField(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `

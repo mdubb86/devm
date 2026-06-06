@@ -30,6 +30,7 @@ import (
 // after a failure so the snapshot stays coherent on retry.
 func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema.Config, repoRoot string) error {
 	var templateChanges []Change
+	var envChanged bool
 	for _, c := range changes {
 		if c.Bucket() != BucketLive {
 			continue
@@ -87,6 +88,18 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema
 			}
 		case KindTemplateChange:
 			templateChanges = append(templateChanges, c)
+		case KindEnvAdd, KindEnvRemove, KindEnvChange:
+			envChanged = true
+		}
+	}
+
+	if envChanged {
+		// Rewrite .devm/.env on the host. The workspace mount surfaces
+		// the change inside the VM instantly; with-devm-env sources the
+		// new file on every subsequent sbx exec. Running shells keep
+		// their old env until they re-exec — hence BucketLive.
+		if err := render.WriteDevmEnv(cfg, repoRoot); err != nil {
+			return fmt.Errorf("apply_live: write .devm/.env: %w", err)
 		}
 	}
 

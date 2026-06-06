@@ -47,5 +47,12 @@ func Load(dir string) (schema.Config, error) {
 	if err := merged.ValidateWithRoot(dir); err != nil {
 		return schema.Config{}, fmt.Errorf("merged config: %w", err)
 	}
+	// ResolveEnv: expand $WORKSPACE in cfg.Env + services[*].env values,
+	// reject reserved keys and unknown $VAR references, inject WORKSPACE
+	// + IS_SANDBOX. All downstream consumers (templates, EnvArgs,
+	// PersistentEnv, kit-env render) read the resolved cfg.Env.
+	if err := schema.ResolveEnv(&merged, dir); err != nil {
+		return schema.Config{}, fmt.Errorf("resolve env: %w", err)
+	}
 	return merged, nil
 }

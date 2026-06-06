@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -179,11 +180,21 @@ func TestRunShellInjectsServiceEnv(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 
-	// The user shell's sbx exec args must include the injected service
-	// env var (uppercased service-name prefix).
 	require.Len(t, spawner.started, 1)
 	joined := strings.Join(spawner.started[0], " ")
-	assert.Contains(t, joined, "API_LOG_LEVEL=info", "service env must be injected into the shell")
+
+	// New contract: persistent project + service env lives in /.devm/.env,
+	// sourced by the with-devm-env wrapper. Verify the wrapper is in argv
+	// AND the rendered .env contains the flattened service env.
+	assert.Contains(t, joined, filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env"),
+		"sbx exec must invoke via the with-devm-env wrapper")
+	assert.NotContains(t, joined, "API_LOG_LEVEL=info",
+		"service env must NOT ride on -e flags anymore; it lives in .devm/.env")
+
+	bs, err := os.ReadFile(filepath.Join(repoRoot, ".devm", ".env"))
+	require.NoError(t, err)
+	assert.Contains(t, string(bs), `export API_LOG_LEVEL='info'`,
+		"service env must be flattened into .devm/.env (NAME_KEY)")
 }
 
 func TestRunShellColdStartHappyPath(t *testing.T) {

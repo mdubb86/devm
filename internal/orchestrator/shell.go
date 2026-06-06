@@ -142,7 +142,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		}
 		_ = lk.Release()
 		released = true
-		return runUserShell(d, cfg, sandboxName, cmdName, cmdArgs)
+		return runUserShell(d, cfg, repoRoot, sandboxName, cmdName, cmdArgs)
 	}
 
 	// Cold start.
@@ -378,9 +378,14 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// same session as devm (which is in the same session as the
 	// anchor — Go exec.Cmd default). Same-session is required for
 	// daemon survival under sbx (see docs/sbx-quirks.md section 5).
+	// Prepend the with-devm-env wrapper so persistent project + service
+	// env (and the devm-injected WORKSPACE/IS_SANDBOX) reach the user
+	// shell via /.devm/.env. EnvArgs still rides on -e flags for the
+	// host-forwarded TERM/COLORTERM/etc. — those vary per terminal.
+	wrapper := filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env")
 	execArgs := []string{"exec", "-it"}
 	execArgs = append(execArgs, sandbox.EnvArgs(cfg)...)
-	execArgs = append(execArgs, sandboxName, cmdName)
+	execArgs = append(execArgs, sandboxName, wrapper, cmdName)
 	execArgs = append(execArgs, cmdArgs...)
 	debuglog.Logf("shell", "spawning user shell: sbx %v", execArgs)
 	userCmd, err := d.UserSpawner.Start("sbx", execArgs...)
@@ -430,10 +435,11 @@ func applyDefaults(d *ShellDeps) {
 // reconcile; rerunning would be cheap but adds a noticeable startup
 // delay for the common case. If devm.yaml ports have changed since
 // the last cold start, the user must `devm stop` and re-shell.
-func runUserShell(d ShellDeps, cfg schema.Config, sandboxName, cmdName string, cmdArgs []string) (int, error) {
+func runUserShell(d ShellDeps, cfg schema.Config, repoRoot, sandboxName, cmdName string, cmdArgs []string) (int, error) {
+	wrapper := filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env")
 	args := []string{"exec", "-it"}
 	args = append(args, sandbox.EnvArgs(cfg)...)
-	args = append(args, sandboxName, cmdName)
+	args = append(args, sandboxName, wrapper, cmdName)
 	args = append(args, cmdArgs...)
 	cmd, err := d.UserSpawner.Start("sbx", args...)
 	if err != nil {

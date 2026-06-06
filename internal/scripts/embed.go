@@ -13,3 +13,6 @@ var InstallTemplates string
 
 //go:embed bootstrap.sh
 var Bootstrap string
+
+//go:embed with-devm-env.sh
+var WithDevmEnv string

@@ -76,6 +76,23 @@ func writeStaticFiles(cfg schema.Config, repoRoot string) error {
 			return err
 		}
 	}
+
+	// with-devm-env wrapper: name has no .sh extension so users inside
+	// the sandbox can type `with-devm-env <cmd>` (PATH-prepended via
+	// .devm/.env). Mode must be set explicitly since writeFile's
+	// extension-based detection returns 0644 for an extensionless file.
+	wrapperPath := filepath.Join(scriptsDir, "with-devm-env")
+	if err := os.WriteFile(wrapperPath, []byte(scripts.WithDevmEnv), 0o755); err != nil {
+		return fmt.Errorf("write %s: %w", wrapperPath, err)
+	}
+
+	// .devm/.env: persistent project + service env file sourced by the
+	// wrapper. Tmpfile-then-rename so a concurrent source can't observe
+	// a half-written file.
+	if err := WriteDevmEnv(cfg, repoRoot); err != nil {
+		return err
+	}
+
 	return nil
 }
 

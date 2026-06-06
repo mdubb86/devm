@@ -42,6 +42,19 @@ func parseSpec(t *testing.T, raw string) parsedSpec {
 	return p
 }
 
+func TestSpecYAMLKitEnvDoesNotContainIsSandbox(t *testing.T) {
+	cfg := schema.Config{
+		Project:   schema.Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		BaseImage: schema.BaseImage{Docker: true},
+	}
+	out := SpecYAML(cfg, "/tmp/x")
+	// IS_SANDBOX moves to .devm/.env via PersistentEnv. Kit env.variables
+	// stays empty so user cfg.Env changes can be BucketLive (kit env
+	// requires teardown to update; .devm/.env doesn't).
+	assert.NotContains(t, out, "IS_SANDBOX",
+		"IS_SANDBOX must NOT appear in kit env; it lives in .devm/.env")
+}
+
 func TestSpecYAMLBasic(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{

@@ -75,6 +75,69 @@ func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
 	assert.Empty(t, r.lastArgs, "non-LIVE changes must be ignored by ApplyLive")
 }
 
+func TestApplyLive_EnvChange_WritesDevmEnv(t *testing.T) {
+	dir := t.TempDir()
+	r := &stubRunner{}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	cfg := schema.Config{Env: map[string]string{"FOO": "bar"}}
+
+	err := ApplyLive(sb, []Change{
+		{Kind: KindEnvChange, Key: "FOO", Old: "old", New: "bar"},
+	}, 0, cfg, dir)
+	require.NoError(t, err)
+	assert.Empty(t, r.lastArgs, "env changes must not trigger any sbx exec from apply_live (mount surfaces the file)")
+
+	bs, err := os.ReadFile(filepath.Join(dir, ".devm", ".env"))
+	require.NoError(t, err)
+	assert.Contains(t, string(bs), `export FOO='bar'`)
+}
+
+func TestApplyLive_EnvAddAndRemove_AlsoWriteDevmEnv(t *testing.T) {
+	for _, kind := range []ChangeKind{KindEnvAdd, KindEnvRemove} {
+		dir := t.TempDir()
+		r := &stubRunner{}
+		sb := &sandbox.Sandbox{Name: "x", Runner: r}
+		cfg := schema.Config{Env: map[string]string{"K": "v"}}
+		err := ApplyLive(sb, []Change{
+			{Kind: kind, Key: "K", New: "v"},
+		}, 0, cfg, dir)
+		require.NoError(t, err, "kind=%v", kind)
+		_, err = os.Stat(filepath.Join(dir, ".devm", ".env"))
+		require.NoError(t, err, ".devm/.env must be written for kind=%v", kind)
+	}
+}
+
+func TestApplyLive_MultipleEnvChanges_SingleWrite(t *testing.T) {
+	dir := t.TempDir()
+	r := &stubRunner{}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	cfg := schema.Config{Env: map[string]string{"A": "1", "B": "2", "C": "3"}}
+	err := ApplyLive(sb, []Change{
+		{Kind: KindEnvAdd, Key: "A", New: "1"},
+		{Kind: KindEnvChange, Key: "B", Old: "x", New: "2"},
+		{Kind: KindEnvAdd, Key: "C", New: "3"},
+	}, 0, cfg, dir)
+	require.NoError(t, err)
+	bs, err := os.ReadFile(filepath.Join(dir, ".devm", ".env"))
+	require.NoError(t, err)
+	// All three present; PersistentEnv determinism guarantees content shape.
+	assert.Contains(t, string(bs), `export A='1'`)
+	assert.Contains(t, string(bs), `export B='2'`)
+	assert.Contains(t, string(bs), `export C='3'`)
+}
+
+func TestApplyLive_NoEnvChange_DoesNotWriteDevmEnv(t *testing.T) {
+	dir := t.TempDir()
+	r := &stubRunner{}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	err := ApplyLive(sb, []Change{
+		{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"},
+	}, 50000, schema.Config{}, dir)
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(dir, ".devm", ".env"))
+	assert.True(t, os.IsNotExist(err), "apply_live should not touch .devm/.env when there's no env change")
+}
+
 func TestApplyLive_TemplateChange_InvokesDispatcher(t *testing.T) {
 	dir := t.TempDir()
 	// Provide the source template file so WriteTemplateInstallers succeeds.

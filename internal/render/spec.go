@@ -49,8 +49,13 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 				Run: []string{"sh", "-c", "exec sleep infinity </dev/null"},
 			},
 		},
+		// Kit env.variables stays empty. Persistent project + service
+		// env (including the devm-owned WORKSPACE and IS_SANDBOX) lives
+		// in .devm/.env, sourced by with-devm-env on every sbx exec.
+		// Putting cfg.Env in kit env would make every env edit a
+		// teardown — incompatible with BucketLive semantics.
 		Environment: kitEnvironment{
-			Variables: map[string]string{"IS_SANDBOX": "1"},
+			Variables: map[string]string{},
 		},
 	}
 
