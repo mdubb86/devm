@@ -1,4 +1,28 @@
-"""11: env injection — project + service vars; LIVE change picked up by next shell."""
+"""11: env injection — project + service vars; LIVE change picked up by next shell.
+
+A project declares a top-level `env:` map and a service with its own
+`env:` map. The first shell sees both injected: project vars verbatim
+(`PROJECT_VAR`) and service vars namespaced and uppercased
+(`<SERVICE>_LOG_LEVEL`). devm.yaml is then edited live to change
+`LOG_LEVEL` from info to debug; a second shell on the same running
+sandbox sees the new value, confirming live env change is picked up at
+shell-attach time.
+
+What this pins:
+  - Top-level `env:` values are injected into the shell verbatim.
+  - Per-service `env:` values are injected as `<SERVICE>_<VAR>` (upper-
+    cased service name + var name).
+  - A live edit to a service env value is picked up by a NEW shell
+    against the same running sandbox (no recreate required).
+  - Second-shell shortcut (attach to running sandbox) works.
+
+What it doesn't cover (tested elsewhere):
+  - Whether the FIRST (already-attached) shell observes the new value
+    in-place — not pinned; only the next shell is checked.
+  - Warm-attach concurrent shells sharing a sandbox -> test_02.
+  - Live port add via reconcile -> test_08.
+  - Install-change forcing recreate -> test_14.
+"""
 import pytest
 
 from helpers import Shell, stop_and_wait_stopped
