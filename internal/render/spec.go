@@ -149,14 +149,8 @@ type kitSpec struct {
 }
 
 type kitAgent struct {
-	Image      string `yaml:"image"`
-	AIFilename string `yaml:"aiFilename"`
-	// `persistence` field intentionally absent: sbx 0.31.3 rejects it
-	// with "field persistence not found in type spec.agentBlock" even
-	// though Docker's published docs still document `agent.persistence`.
-	// Pinned by e2e/test_sbx_06_spec_schema_0_31.py. If sbx restores
-	// the field (or names it something new for the same behavior),
-	// that test will start failing and tell us.
+	Image      string        `yaml:"image"`
+	AIFilename string        `yaml:"aiFilename"`
 	Entrypoint kitEntrypoint `yaml:"entrypoint"`
 }
 
