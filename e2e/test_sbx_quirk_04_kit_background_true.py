@@ -113,16 +113,20 @@ def test_kit_background_true_kills_at_5s(sandbox_name):
         print(f"\n  start={start:.3f} last={last:.3f} alive={alive} "
               f"lifetime={lifetime:.2f}s\n", flush=True)
 
-        # Quirk: kit-level background:true kills at ~5s.
-        assert not alive, (
-            f"`background: true` step is still alive past 15s. "
-            f"sbx may have fixed the kit-flag semantics — drop the "
-            f"foreground+nohup workaround in internal/render/spec.go "
-            f"and simplify."
+        # Locked behavior (sbx 0.31+): kit-level `background: true` no
+        # longer kills the step at ~5s — daemon stays alive. Before
+        # 0.31 this assertion was `assert not alive` (the historical
+        # quirk). If sbx ever REGRESSES, this test will fail loud and
+        # we'll know to bring back the foreground+nohup workaround in
+        # internal/render/spec.go.
+        assert alive, (
+            f"`background: true` step DIED before 15s elapsed — sbx may "
+            f"have re-introduced the 5s kill timer. Restore the foreground+"
+            f"nohup workaround in internal/render/spec.go."
         )
-        assert lifetime < 10, (
-            f"daemon lived {lifetime:.2f}s. The kill window has "
-            f"expanded — investigate."
+        assert lifetime >= 14, (
+            f"daemon trail only spans {lifetime:.2f}s; the step likely "
+            f"died early. See assertion above."
         )
     finally:
         if anchor.poll() is None:

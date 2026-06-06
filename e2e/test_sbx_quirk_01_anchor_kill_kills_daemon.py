@@ -65,19 +65,21 @@ def test_anchor_kill_plus_no_pty_user_shell_kills_daemon(sandbox_name):
         print(f"\n  start={start:.3f} last={last:.3f} count={count} "
               f"alive={alive} lifetime={lifetime:.2f}s\n", flush=True)
 
-        # Quirk guard: this SHOULD die at ~5s. If sbx fixes it (daemon
-        # stays alive past 10s), this assertion FAILS loudly and we
-        # can drop the anchor-stays-alive workaround entirely.
-        assert not alive, (
-            f"daemon is still alive after anchor kill + no-PTY user "
-            f"shell. sbx may have fixed the 5s kill timer — "
-            f"update docs/sbx-quirks.md quirk #5 and consider "
-            f"whether the anchor-alive architecture is still needed."
+        # Locked behavior (sbx 0.31+): the 5s daemon-kill-after-anchor
+        # quirk is FIXED. Killing the anchor no longer kills the daemon
+        # session — it stays alive past 15s. Before 0.31 the assertion
+        # was `assert not alive` (the historical quirk that drove the
+        # anchor-alive architecture). If sbx regresses, this test fails
+        # loud and we know to re-evaluate.
+        assert alive, (
+            f"daemon DIED within 15s of anchor kill — sbx may have "
+            f"re-introduced the 5s kill timer. The anchor-alive "
+            f"architecture in devm's cold-start is the workaround; "
+            f"re-evaluate docs/sbx-quirks.md quirk #5."
         )
-        assert lifetime < 10, (
-            f"daemon lived {lifetime:.2f}s before dying. The 5s kill "
-            f"window may have expanded — investigate before relying "
-            f"on quirk-based timing."
+        assert lifetime >= 14, (
+            f"daemon trail only spans {lifetime:.2f}s; daemon likely "
+            f"died early. See assertion above."
         )
     finally:
         if us is not None:

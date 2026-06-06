@@ -87,11 +87,16 @@ def _run_triggered_once(binpath: str, sandbox_name: str) -> tuple[int, str]:
 
 @pytest.mark.timeout(420)
 def test_triggered_probe_fails_reliably(sandbox_name):
-    """Run the triggered probe 3 times; assert at least 1 fails.
+    """Run the triggered probe 3 times; assert ALL 3 PASS.
 
-    See module docstring for why "at least 1 of 3" is the right
-    assertion: with the bisected ~20% publish-OK baseline,
-    P(all 3 pass) ≈ 0.8%, so this is ~99.2% reliable.
+    Locked behavior (sbx 0.31+): Quirk #6 (publish phantom) is FIXED.
+    The trigger pieces still exist in the probe (Spawner interface
+    wrapping + ticker+select waitForRunning), but they no longer
+    destabilize publishes — 3/3 stable across runs. Before 0.31 the
+    assertion was `assert failures` (~99.2% chance ≥1 of 3 failed).
+    If sbx regresses, this test fails loud and we know to bring back
+    the inline-poll-no-ticker workaround documented in
+    docs/sbx-quirks.md section 6.
     """
     binpath = _build_triggered_probe()
     results = []  # list of (rc, output_tail)
@@ -109,12 +114,10 @@ def test_triggered_probe_fails_reliably(sandbox_name):
     print("=== END ===\n", flush=True)
 
     failures = [(i, rc) for i, (rc, _) in enumerate(results) if rc != 0]
-    assert failures, (
-        "probe-publish-triggered passed 3/3 — Quirk #6's trigger no "
-        "longer reproduces. Either sbx's behavior has shifted (good "
-        "news; re-examine docs/sbx-quirks.md section 6 and possibly "
-        "delete this test) or the trigger pieces in the probe aren't "
-        "actually triggering anymore (see e2e/probes/probe-publish-"
-        "triggered/main.go for the two pieces — Spawner interface "
-        "wrapping and ticker+select waitForRunning)."
+    assert not failures, (
+        f"probe-publish-triggered now sees publish phantoms again "
+        f"({len(failures)}/3 runs failed) — Quirk #6 may have "
+        f"regressed in sbx. Re-evaluate the inline-poll workaround in "
+        f"internal/orchestrator/shell.go's cold-start path against "
+        f"docs/sbx-quirks.md section 6."
     )
