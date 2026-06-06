@@ -1,5 +1,20 @@
-"""21: adding a new service to devm.yaml + reconcile = port published live.
-    Then removing it + reconcile = port unpublished live. Shell survives both.
+"""21: adding then removing a service via reconcile is LIVE on both edges.
+
+User starts with one service ("api"), then patches devm.yaml to add a
+second service ("web"), reconciles, and observes the new host port
+published. Then removes "web" from devm.yaml, reconciles, and observes
+the host port unpublished. User shell survives both reconciles.
+
+What this pins:
+  - Adding a service entry + reconcile publishes its host port live.
+  - Removing a service entry + reconcile unpublishes its host port live.
+  - The pre-existing service ("api") port stays published across both.
+  - The user shell remains alive across both reconciles (LIVE bucket).
+
+What it doesn't cover (tested elsewhere):
+  - LIVE port ADD on an existing service (test_08).
+  - LIVE port REMOVE/CHANGE on an existing service (test_12).
+  - Reconcile prompt+yes flow under recreate (test_09).
 """
 from __future__ import annotations
 import pytest
