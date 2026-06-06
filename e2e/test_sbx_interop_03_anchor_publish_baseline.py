@@ -6,7 +6,7 @@ spawn) using plain exec.Command (no interface wrappers, no
 ticker+select). Locks the baseline Go-primitive ↔ sbx combination
 devm orchestrates with.
 
-Counterpart: test_sbx_interop_02_publish_triggered.py — same shape
+Counterpart: test_sbx_interop_04_anchor_spawner_ticker.py — same shape
 PLUS a Spawner-interface wrapper + ticker+select waitForRunning.
 That pair historically reproduced Quirk #6's publish phantom; sbx
 0.31 fixed it. Both probes stay green; if only baseline stays green

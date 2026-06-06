@@ -21,8 +21,8 @@
 // with one fix → 10/10 with both fixed.
 //
 // The clean probe (e2e/probes/probe-publish/) is pinned by
-// test_sbx_interop_01_publish_baseline.py. This triggered probe is
-// pinned by test_sbx_interop_02_publish_triggered.py. Under sbx 0.31+
+// test_sbx_interop_03_anchor_publish_baseline.py. This triggered probe is
+// pinned by test_sbx_interop_04_anchor_spawner_ticker.py. Under sbx 0.31+
 // the publish phantom is fixed, so both stay green. If sbx ever
 // regresses, the asymmetry (baseline green / triggered red)
 // pins the cause to the upstream — preventing a future refactor

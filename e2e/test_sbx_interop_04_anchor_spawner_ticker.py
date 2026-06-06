@@ -17,7 +17,7 @@ this test fires and we know to:
      waitForRunning shape in internal/orchestrator/shell.go until
      sbx is fixed again.
 
-Counterpart: test_sbx_interop_01_publish_baseline.py — same probe
+Counterpart: test_sbx_interop_03_anchor_publish_baseline.py — same probe
 shape without the trigger pieces. If only baseline stays green and
 triggered goes red, that's the upstream regression signal.
 

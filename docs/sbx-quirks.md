@@ -298,7 +298,7 @@ less produces the phantom.
 **Pinned by:**
 
   - `e2e/test_07_invariant_happy_path.py` — green
-  - `e2e/test_sbx_interop_02_publish_triggered.py` — a probe
+  - `e2e/test_sbx_interop_04_anchor_spawner_ticker.py` — a probe
     binary (`probe-publish-triggered`) that re-applies both
     trigger pieces around the same sbx flow and FAILS the
     publish/observe assertion with high probability, pinning
@@ -329,7 +329,7 @@ error. devm continues without the port. test_07 fails 5/5.
 
 **Pure-sbx is NOT affected.** A bisection probe (`e2e/probes/
 probe-publish/main.go`, exercised by
-`e2e/test_sbx_interop_01_publish_baseline.py`) does literally
+`e2e/test_sbx_interop_03_anchor_publish_baseline.py`) does literally
 everything devm's `RunShell` does — spawn nohup-wrapped anchor,
 wait running, wait exec-ready, list ports, publish, tight-poll
 verify, 500ms hold, reverify, snapshot-style `sbx exec`, user-shell
@@ -436,7 +436,7 @@ for the current write-up.
 
 **Pinned by:**
 
-- `e2e/test_sbx_interop_01_publish_baseline.py` — Go binary works
+- `e2e/test_sbx_interop_03_anchor_publish_baseline.py` — Go binary works
   reliably (both nohup and plain) when invoked via pexpect
 - (test_sbx_anchor_13_publish_stability retired in the contract
   cohort cleanup — coverage now provided by
