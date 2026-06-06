@@ -219,12 +219,14 @@ func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 	assert.Less(t, pgStartIdx, pgReadyIdx, "postgres steps in declaration order")
 	assert.Less(t, pgReadyIdx, redisIdx, "postgres service comes before redis")
 
-	// Background daemons are rendered as foreground sbx kit steps wrapped
-	// with shell-level `nohup ... &`. The kit's own `background: true`
-	// flag is NOT used (it kills the process after ~5s — see
-	// docs/sbx-quirks.md quirk #5).
-	assert.Contains(t, startupSection, "nohup")
-	assert.NotContains(t, startupSection, "background: true")
+	// Background daemons emit the kit-native `background: true` field.
+	// The pre-sbx-0.31 workaround that wrapped them in shell-level
+	// `nohup ... &` is gone — quirk #4 (kit-flag 5s-kill) is fixed,
+	// pinned by e2e/test_sbx_quirk_04_kit_background_true.py.
+	assert.NotContains(t, startupSection, "nohup",
+		"shell-level nohup wrap should be gone post-0.31 simplification")
+	assert.Contains(t, startupSection, "background: true",
+		"background daemons should emit the kit-native flag")
 }
 
 func TestSpecYAMLStartupCommandArrayRoundTrips(t *testing.T) {

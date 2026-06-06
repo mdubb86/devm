@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/mtwaage/devm/internal/schema"
 	"gopkg.in/yaml.v3"
@@ -186,6 +185,7 @@ type kitStartupCommand struct {
 	Command     []string `yaml:"command,flow"`
 	User        string   `yaml:"user,omitempty"`
 	Description string   `yaml:"description,omitempty"`
+	Background  bool     `yaml:"background,omitempty"`
 }
 
 func sortedServiceNames(services map[string]schema.Service) []string {
@@ -199,45 +199,22 @@ func sortedServiceNames(services map[string]schema.Service) []string {
 
 // buildStartupStep builds the kit startup step for a user-defined
 // service startup command. When `background: true` is set in
-// devm.yaml, we render a FOREGROUND sbx kit step (no `background: true`
-// in the kit YAML) whose command is wrapped with shell-level
-// `nohup ... &`. This matches the pattern used by the real
-// docker/sbx-kits-contrib kits (e.g. code-server).
+// devm.yaml, we emit the kit-native `background: true` field directly.
 //
-// Why not the kit's own `background: true` field? Empirically the kit
-// flag is for short-lived setup steps and the process is killed ~5s
-// after launch. For long-running services (the actual use case for
-// `services.<name>.startup`) the only working pattern is foreground +
-// shell `nohup ... &`. See docs/sbx-quirks.md quirk #5 and the
-// regression guard at e2e/test_sbx_13_background_daemon_lifetime.py.
-func buildStartupStep(step schema.StartupCommand, service string, idx int) kitStartupCommand {
+// History: pre-sbx-0.31 this was a foreground step wrapped at the
+// shell level with `nohup <argv> > <log> 2>&1 &` to dodge a quirk
+// where kit-level `background: true` steps were killed ~5s after
+// launch (docs/sbx-quirks.md quirk #4). sbx 0.31 fixed that — the
+// daemon now stays alive past 15s, pinned by
+// e2e/test_sbx_quirk_04_kit_background_true.py.
+func buildStartupStep(step schema.StartupCommand, service string, _ int) kitStartupCommand {
 	if !step.Background {
 		return kitStartupCommand{Command: step.Command}
 	}
 	return kitStartupCommand{
-		Command:     backgroundWrap(step.Command, service, idx),
+		Command:     step.Command,
 		User:        "1000",
 		Description: fmt.Sprintf("%s startup daemon", service),
+		Background:  true,
 	}
-}
-
-// backgroundWrap wraps user argv as ['sh', '-c', 'nohup <args> > <log> 2>&1 &'].
-// The shell-level `&` returns immediately (so the startup step finishes
-// without blocking), and `nohup` detaches the child so it survives the
-// parent shell exit. Per-arg single-quotes are escaped via POSIX
-// '\''-style so the wrapping shell sees the literal argv.
-func backgroundWrap(userArgv []string, service string, idx int) []string {
-	quoted := make([]string, len(userArgv))
-	for i, a := range userArgv {
-		quoted[i] = "'" + shellSingleQuoteEscape(a) + "'"
-	}
-	logPath := fmt.Sprintf("/tmp/devm-startup-%s-%d.log", service, idx)
-	cmd := fmt.Sprintf("nohup %s > '%s' 2>&1 &", strings.Join(quoted, " "), logPath)
-	return []string{"sh", "-c", cmd}
-}
-
-// shellSingleQuoteEscape replaces every single quote with '\'' (POSIX
-// close/escaped/open) so the result is safe to wrap in single quotes.
-func shellSingleQuoteEscape(s string) string {
-	return strings.ReplaceAll(s, "'", `'\''`)
 }
