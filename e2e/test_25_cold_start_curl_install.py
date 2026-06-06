@@ -1,16 +1,28 @@
-"""25: cold start with a curl|bash style install step.
+"""25: cold start where install: shells out to curl over the network produces a sandbox with the fetched artifact in place.
 
-Locks the install lifecycle when install: includes a remote-fetched
-script — the pattern many real projects use (rustup, nvm, claude.ai/
-install.sh, etc.). Until this test landed (2026-06-05) no e2e test
-exercised an install step that does a network curl; all our install:
-fixtures used local-only commands like `touch /home/agent/marker`.
+User declares an `install:` step that curls a small known-stable
+URL into /tmp inside the sandbox, plus `network.allowed_domains`
+covering the host. Cold-start, then assert the downloaded file
+exists and has plausible content.
 
-That gap meant we couldn't tell whether install steps that do real
-network work survive devm's cold-start orchestration timing (the
-read-loop / waitForExecReady gating, ring-buffer pipe handling, etc.).
-This test installs nothing destructive: it curls a tiny known-stable
-URL and asserts the downloaded file landed.
+What this pins:
+  - install: steps that hit the network during cold-start survive
+    devm's spawn/orchestration shape (nohup + DEVNULL + ring-buf
+    pipe, read-loop, waitForExecReady).
+  - The fetched file lands at the expected path inside the sandbox
+    with non-zero size.
+  - File content is non-empty AND contains expected substring
+    ("Hello") — guards against silent partial-success where curl
+    didn't trip set -e.
+
+What it doesn't cover (tested elsewhere):
+  - install failure surfacing loud (non-zero install exit):
+    test_sbx_contract_02_lifecycle_install_failure_surfaces_loud.
+  - Install-phase network policy semantics:
+    test_sbx_contract_10_network_install_phase_unrestricted.
+  - Install-change recreate: test_14_install_change_recreate.
+  - install: that pipes the curl output directly into a shell
+    (true `curl|bash`, not curl-to-file): not yet pinned.
 """
 import pytest
 
