@@ -1,4 +1,24 @@
-"""08: live port add via devm reconcile — no shell restart."""
+"""08: live port add via devm reconcile — no shell restart.
+
+A project starts with a single service `api:8080` and a live shell
+attached. The user edits devm.yaml to add a second service
+`worker:9090` and runs `devm reconcile --yes`. The new canonical port
+becomes published to the host without recreating the sandbox, and the
+existing shell stays alive across the reconcile.
+
+What this pins:
+  - Cold-start already publishes the initial canonical port
+    (8080 -> port_offset + 8080).
+  - `devm reconcile --yes` on a port-only addition publishes the new
+    canonical port (9090 -> port_offset + 9090) live.
+  - The user's interactive shell survives the reconcile (a post-
+    reconcile `echo` still returns exit 0 in the same shell).
+
+What it doesn't cover (tested elsewhere):
+  - Reconcile prompt-flow under recreate -> test_09.
+  - Install-change forcing recreate -> test_14.
+  - Service add/remove churn -> test_21.
+"""
 import pytest
 
 from helpers import Shell, sbx, stop_and_wait_stopped
