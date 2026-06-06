@@ -16,3 +16,8 @@ addopts = "-n 0 --durations=20 -ra -v"
 timeout = 120
 testpaths = ["."]
 python_files = "test_*.py"
+markers = [
+    "devm: drives `devm` as the system under test (test_NN_*.py)",
+    "sbx: pure-sbx behavior pin (no devm — test_sbx_NN_*.py)",
+    "probe: probe-driven anchor architecture / sbx quirk test (test_sbx_anchor_*.py, test_sbx_quirk_*.py)",
+]

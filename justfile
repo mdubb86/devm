@@ -19,9 +19,25 @@ test:
 clean:
     rm -f devm
 
-# Run the full e2e suite in parallel (2 workers).
+# Run the full e2e suite.
 e2e:
     @e2e/scripts/run.sh
+
+# Three test groups (auto-classified in e2e/conftest.py by filename).
+# Pick a group when you only care about one slice of the suite:
+#   - devm: tests that drive `devm` (test_NN_*.py — the user-facing CLI flow)
+#   - sbx:  pure-sbx behavior pins (test_sbx_NN_*.py — no devm in the loop)
+#   - probes: probe + anchor + sbx-quirk tests (test_sbx_anchor_*.py,
+#             test_sbx_quirk_*.py — sbx-internal behavior, often driven by
+#             Go probes under e2e/probes/)
+e2e-devm:
+    @e2e/scripts/run.sh -m devm
+
+e2e-sbx:
+    @e2e/scripts/run.sh -m sbx
+
+e2e-probes:
+    @e2e/scripts/run.sh -m probe
 
 # Run a single test by name (matches pytest -k pattern). Foreground (no -n).
 # Quote multi-word patterns: `just e2e-one "test_a or test_b"`.
