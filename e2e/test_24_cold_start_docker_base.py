@@ -1,23 +1,24 @@
-"""24: cold start with base_image.docker: true (the DinD shell-docker base).
+"""24: cold start under base_image.docker: true (shell-docker DinD base) reaches an exec-ready shell with a working inner docker.
 
-Locks the previously-untested branch of base_image selection. Until
-this test landed (2026-06-05) every e2e test inherited workspace.py's
-default base_image={'docker': False} and exercised only the plain
-'shell' sbx template — meaning the 'shell-docker' (docker-in-docker)
-base was 0% covered.
+User sets `base_image: {docker: true}` and runs `devm shell`. The
+DinD shell-docker base completes its "Configuring Docker" setup
+under devm's nohup + DEVNULL-stdin + ring-buffer-pipe spawn shape,
+the shell prompts, and `docker --version` succeeds inside the
+sandbox.
 
-That gap let a regression slip: under devm's cold-start spawn shape
-(nohup + Stdin=DEVNULL + Stdout/Stderr → ring buffer pipe), the
-shell-docker base's "Configuring Docker" hook breaks; the inner
-container exits before sbx can run its started-hook (CLAUDE.md write,
-exec readiness, etc.). The same `sbx run` args invoked directly from
-a terminal (tty stdio) work fine — so the bug is at the
-devm-spawn-shape × DinD intersection.
+What this pins:
+  - base_image.docker:true selects the shell-docker sbx template
+    (the only differing knob vs the default cold-start fixture).
+  - Cold-start prompt arrives within the docker-base budget (180s).
+  - Inner docker daemon is usable: `docker --version` returns 0.
 
-Asserts: cold start with base_image.docker: true brings up a shell and
-`docker --version` works inside the sandbox. Failure pins the
-regression instead of letting it surface only when a real project
-(like everstone) tries to use docker:true.
+What it doesn't cover (tested elsewhere):
+  - Plain (non-docker) cold start: test_01_cold_start.
+  - sbx-layer lifecycle / install / exec contracts:
+    test_sbx_contract_01..07.
+  - Live edits or recreate under docker:true: not yet pinned.
+  - Running a real container with `docker run` inside the sandbox
+    (only the daemon CLI is probed): not yet pinned.
 """
 import pytest
 
