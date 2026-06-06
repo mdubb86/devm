@@ -1,4 +1,27 @@
-"""07: full happy path — install ran, canonical port published, worker daemon up."""
+"""07: full happy path — install ran, canonical port published, worker daemon up.
+
+A project with an install: step, a service that declares a canonical
+port, and a service with a background startup command is cold-started
+via `devm shell`. The interactive shell reaches a prompt, the install
+marker is present, the canonical port is mapped to the expected host
+port (port_offset + canonical), and the worker's background process is
+alive inside the sandbox.
+
+What this pins:
+  - install: step ran at cold-create (marker file present).
+  - Canonical service port 8080 is published to host port
+    port_offset + 8080 (canonical-port mapping invariant).
+  - A service `startup:` entry with `background: True` actually leaves
+    a long-lived process running inside the sandbox after cold-start,
+    detected via pgrep with a self-match filter.
+  - Interactive shell reaches a prompt and survives until exit.
+
+What it doesn't cover (tested elsewhere):
+  - Cold-start basic (install + shell + stop) -> test_01.
+  - Live port add via reconcile -> test_08.
+  - Env injection (project + service vars) -> test_11.
+  - Service add/remove churn -> test_21.
+"""
 import subprocess
 
 import pytest
