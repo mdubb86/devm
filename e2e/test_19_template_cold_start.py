@@ -1,11 +1,21 @@
-"""19: template lands at output BEFORE service startup runs.
+"""19: template lands at output path on cold start with rendered values.
 
-A `socat -d -d` invocation in the service's startup is the only thing
-allowed to bind the canonical port. The socat command line is generated
-into /etc/probe.conf via a template. If the template doesn't land before
-startup, socat starts with no config and the service's data path fails.
+User declares a `templates:` entry on a service pointing a source file
+into a sandbox path. On cold start, the template renders against the
+project + service context and lands inside the sandbox before the user
+shell attaches — `cat`-able with substituted values.
 
-End-to-end success = template rendered correctly + service used it.
+What this pins:
+  - Template output file exists inside the sandbox at the declared path.
+  - `{{.Service.<svc>.Port}}` renders to the canonical port.
+  - `{{.Service.<svc>.HostPort}}` renders to port_offset + canonical.
+  - `{{.Project.ID}}` renders to the workspace slug.
+  - Render happens cold (no reconcile invoked).
+
+What it doesn't cover (tested elsewhere):
+  - Template LIVE re-render on source edit (test_20).
+  - Strict pre-startup ordering vs service entrypoint (not yet pinned —
+    test verifies post-attach visibility, not startup-script ordering).
 """
 from __future__ import annotations
 
