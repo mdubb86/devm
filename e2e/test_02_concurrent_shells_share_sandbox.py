@@ -1,4 +1,23 @@
-"""02: two concurrent devm shells share a running sandbox."""
+"""02: two concurrent devm shells attach to the same running sandbox.
+
+The user opens a `devm shell`, then opens a second `devm shell` in
+the same project from another terminal while the first is still
+alive. Both invocations should land inside the SAME sandbox -- the
+second must warm-attach rather than cold-create a parallel one.
+
+What this pins:
+  - Second `devm shell` on a project with an already-running sandbox
+    warm-attaches instead of spinning up a separate sandbox.
+  - Both shells reach a prompt concurrently.
+  - Both pty bashes live inside one sandbox simultaneously (>=2
+    pts/N bash processes visible via `sbx exec` into sandbox_name).
+  - After both shells exit, the sandbox stays running (anchor-alive)
+    until `devm stop --yes` brings it to 'stopped'.
+
+What it doesn't cover (tested elsewhere):
+  - Concurrent reconcile from two shells (not yet pinned -- gap candidate).
+  - Cold-create + install marker -> test_01.
+"""
 import subprocess
 
 import pytest
