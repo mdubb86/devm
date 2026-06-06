@@ -234,15 +234,6 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		debuglog.Logf("shell", "cold-start: spawning anchor (raw osexec — production path): nohup %v", runArgs)
 		runCmd = osexec.Command("nohup", runArgs...)
 		runCmd.Stdin = nil
-		// CRITICAL: route stdout AND stderr to an in-memory ring buffer.
-		// macOS nohup redirects stderr → stdout when stderr is a tty
-		// (per its man page), so leaving Stderr = os.Stderr (user's tty)
-		// causes nohup to send sbx's real error message into stdout —
-		// which we'd set to /dev/null — silently dropping the diagnostic.
-		// Both descriptors connected to a pipe (not a tty) make nohup
-		// leave them alone. The ring buffer keeps the last 200 lines
-		// for the lifetime of the devm process; failure paths surface
-		// the contents in the returned error.
 		anchorOut = newLineRingBuffer(200)
 		runCmd.Stdout = anchorOut
 		runCmd.Stderr = anchorOut

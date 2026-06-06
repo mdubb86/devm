@@ -33,9 +33,8 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 		DisplayName:   cfg.Project.ID + " dev",
 		Description:   "devm-managed dev sandbox for " + cfg.Project.ID,
 		Agent: kitAgent{
-			Image:       image,
-			AIFilename:  "CLAUDE.md",
-			Persistence: "persistent",
+			Image:      image,
+			AIFilename: "CLAUDE.md",
 			// Entrypoint is shell-wrapped `sleep infinity </dev/null`. Two
 			// load-bearing pieces:
 			//   1. sh -c wrapping: sbx daemon propagates session-end cleanup
@@ -151,10 +150,15 @@ type kitSpec struct {
 }
 
 type kitAgent struct {
-	Image       string        `yaml:"image"`
-	AIFilename  string        `yaml:"aiFilename"`
-	Persistence string        `yaml:"persistence"`
-	Entrypoint  kitEntrypoint `yaml:"entrypoint"`
+	Image      string `yaml:"image"`
+	AIFilename string `yaml:"aiFilename"`
+	// `persistence` field intentionally absent: sbx 0.31.3 rejects it
+	// with "field persistence not found in type spec.agentBlock" even
+	// though Docker's published docs still document `agent.persistence`.
+	// Pinned by e2e/test_sbx_06_spec_schema_0_31.py. If sbx restores
+	// the field (or names it something new for the same behavior),
+	// that test will start failing and tell us.
+	Entrypoint kitEntrypoint `yaml:"entrypoint"`
 }
 
 type kitEntrypoint struct {
