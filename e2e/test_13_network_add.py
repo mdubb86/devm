@@ -1,4 +1,28 @@
-"""13: network add via reconcile — domain registered with sbx policy, LIVE."""
+"""13: adding a network allow rule via reconcile registers the domain LIVE.
+
+A project with no network rules cold-starts; the user edits devm.yaml
+to add a single `network.allowed_domains` entry, then runs
+`devm reconcile`. Within a short deadline, the added domain shows up
+in the global `sbx policy ls` network output, proving devm forwarded
+the rule to the sbx network policy. The pre-existing user shell stays
+alive across the reconcile (LIVE bucket — network-add does not
+recreate the sandbox).
+
+What this pins:
+  - A new `allowed_domains` entry is propagated to the sbx global
+    network policy after `devm reconcile`.
+  - The propagation is observable via `sbx.policy_list_network()`
+    within the 10s deadline.
+  - Network-add is a LIVE-bucket change: the existing user shell
+    survives reconcile (`echo still-alive` runs).
+  - The `.invalid` test domain is used so the rule is safe to leak if
+    the cleanup fixture fails.
+
+What it doesn't cover (tested elsewhere):
+  - Cold-start network policy registration -> sbx contract tests.
+  - Sandbox-scoping of the allow list -> test_sbx_contract_11.
+  - Removing a network rule via reconcile -> not yet pinned.
+"""
 import time
 
 import pytest
