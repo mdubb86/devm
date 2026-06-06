@@ -1,4 +1,4 @@
-"""sbx characterization: agent.persistence is REJECTED in sbx 0.31+.
+"""agent.persistence field is REJECTED by sbx 0.31+.
 
 After upgrading from sbx 0.28.3 to 0.31.3 (2026-06-05), all devm e2e
 tests started failing with:
@@ -8,17 +8,17 @@ tests started failing with:
       line 10: field persistence not found in type spec.agentBlock
 
 The Docker docs still document `agent.persistence: persistent|ephemeral`
-but the binary rejects it. This characterization test materializes
-minimal kits with different agent-block shapes and pins which sbx 0.31
-actually accepts. internal/render/spec.go was updated based on this
-evidence to drop the field.
+but the binary rejects it. This test materializes minimal kits with
+different agent-block shapes and pins which sbx 0.31 actually accepts.
+internal/render/spec.go was updated based on this evidence to drop
+the field.
 
 Variants tested:
-  1. baseline_with_persistence   — pre-0.31 devm shape (must FAIL)
+  1. baseline_with_persistence    — pre-0.31 devm shape (must FAIL)
   2. baseline_without_persistence — current devm shape (must PASS)
 
 If sbx un-rejects `persistence` in a future release, variant 1 starts
-passing, and the test signals we can revisit the render.
+passing, and we can revisit the render.
 """
 from __future__ import annotations
 import os
