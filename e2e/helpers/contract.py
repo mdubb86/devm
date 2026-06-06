@@ -101,7 +101,17 @@ def minimal_kit(
     if network_allowed:
         spec["network"] = {"allowedDomains": list(network_allowed)}
     if volumes:
-        spec["volumes"] = dict(volumes)
+        # sbx 0.31 requires volumes: as a list of {path, size} MountSpec
+        # entries. Accept the ergonomic {path: size} dict form and
+        # translate. The map form (sbx <0.30) is REJECTED with
+        # "cannot unmarshal !!map into []spec.MountSpec".
+        items = []
+        for path, size_str in volumes.items():
+            # size_str is either "size=100M" (legacy devm render form) or
+            # just "100M". Strip the legacy prefix.
+            sz = size_str.removeprefix("size=") if isinstance(size_str, str) else size_str
+            items.append({"path": path, "size": sz})
+        spec["volumes"] = items
     return yaml.safe_dump(spec, sort_keys=False, default_flow_style=False)
 
 
