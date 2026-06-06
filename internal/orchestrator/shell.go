@@ -23,7 +23,7 @@ import (
 // build one via DefaultShellDeps; tests substitute stubs.
 type ShellDeps struct {
 	// AnchorSpawner is an OPTIONAL hook for tests to intercept anchor
-	// (`nohup sbx run …`) spawning. Production code leaves this nil
+	// (`sbx run …`) spawning. Production code leaves this nil
 	// and goes through a raw *exec.Cmd path inline in RunShell — the
 	// SpawnedCmd interface indirection on the anchor (combined with
 	// the ticker+select waitForRunning loop) was Quirk #6: it
@@ -64,12 +64,14 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 // sbx daemon session for the sandbox. As long as the anchor is
 // alive, the sandbox stays running.
 //
-// devm spawns the anchor once at cold-start, wrapped in `nohup` so
-// it inherits SIGHUP=SIG_IGN through nohup's execvp (POSIX). That
-// lets the sandbox survive a terminal-close cascade — the kernel
-// sends SIGHUP to processes whose controlling tty was the closing
-// PTY, but the anchor ignores it. The next `devm shell` from a new
-// terminal warm-paths into the still-running sandbox.
+// devm spawns the anchor once at cold-start under a PTY (via
+// pty.StartWithSize). sbx 0.31 ignores SIGHUP when running with a
+// controlling TTY (TUI-style signal handling), so the sandbox
+// survives a terminal-close cascade — devm exiting closes the PTY
+// master, but the anchor absorbs the resulting SIGHUP. The next
+// `devm shell` from a new terminal warm-paths into the still-
+// running sandbox. Pinned by
+// e2e/test_sbx_interop_02_anchor_master_close_lifetime.py.
 //
 // devm NEVER kills the anchor on the normal path. The anchor exits
 // on its own when:
@@ -156,14 +158,11 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	//
 	// We branch on Exists() since IsRunning() was already false above
 	// (we wouldn't reach this code path if the sandbox were running).
-	// Anchor must ignore SIGHUP so the sandbox survives when the user's
-	// terminal closes (kernel sends SIGHUP to processes holding the
-	// closing PTY as their controlling tty; default action is
-	// terminate). Wrapping in `nohup` is the portable way to get the
-	// child to inherit SIG_IGN through the exec. POSIX nohup execvps
-	// its argument list, so runCmd.Pid() points to the resulting
-	// `sbx run` process (not `nohup`). Pinned empirically by
-	// e2e/test_sbx_anchor_10_terminal_close.py shape `ignhup_only`.
+	//
+	// No nohup wrap: sbx 0.31 (post Tier 1c PTY) ignores SIGHUP when
+	// running under a controlling TTY. Closing the PTY master from
+	// devm doesn't kill the anchor. Pinned by
+	// e2e/test_sbx_interop_02_anchor_master_close_lifetime.py.
 	var runArgs []string
 	if sb.Exists() {
 		// Restart of existing sandbox: include --kit so sbx can resolve
@@ -221,8 +220,8 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		runDone    = make(chan error, 1)
 	)
 	if d.AnchorSpawner != nil {
-		debuglog.Logf("shell", "cold-start: spawning anchor (via AnchorSpawner — TEST PATH): nohup %v", runArgs)
-		sc, err := d.AnchorSpawner.Start("nohup", runArgs...)
+		debuglog.Logf("shell", "cold-start: spawning anchor (via AnchorSpawner — TEST PATH): %v", runArgs)
+		sc, err := d.AnchorSpawner.Start(runArgs[0], runArgs[1:]...)
 		if err != nil {
 			return -1, fmt.Errorf("spawn sbx run: %w", err)
 		}
@@ -233,8 +232,8 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 			runDone <- err
 		}()
 	} else {
-		debuglog.Logf("shell", "cold-start: spawning anchor (PTY — production path): nohup %v", runArgs)
-		runCmd = osexec.Command("nohup", runArgs...)
+		debuglog.Logf("shell", "cold-start: spawning anchor (PTY — production path): %v", runArgs)
+		runCmd = osexec.Command(runArgs[0], runArgs[1:]...)
 		anchorOut = newLineRingBuffer(200)
 		// PTY anchor: sbx writes diagnostic output only under TTY. By giving
 		// sbx run a PTY for its stdio, the anchor ring buffer captures the
