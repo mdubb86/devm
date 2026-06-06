@@ -1,13 +1,15 @@
-"""sbx probe: triggered — Go probe binary that re-applies the two
-structural pieces (Spawner / SpawnedCmd interface wrapping for the
-anchor + ticker+select waitForRunning) which historically triggered
-Quirk #6's publish phantom on the pre-0.31 sbx daemon.
+"""interop: Spawner-interface + ticker+select Go shapes work against sbx.
+
+Go probe that re-applies two structural pieces (Spawner / SpawnedCmd
+interface wrapping for the anchor + time.NewTicker + select for
+waitForRunning) which historically triggered Quirk #6's publish
+phantom on the pre-0.31 sbx daemon.
 
 Under sbx 0.31+ (where Quirk #6 is fixed), this probe runs 3/3
 stably — the trigger pieces no longer destabilize publishes. The
 test asserts 3/3 PASS. This is the sentinel: if sbx ever regresses
-such that the trigger pieces re-introduce the publish phantom, this
-test fires and we know to:
+such that those Go primitives re-introduce the publish phantom,
+this test fires and we know to:
 
   1. Re-read docs/sbx-quirks.md section 6 and the 2026-06-04
      bisection findings.
@@ -15,10 +17,9 @@ test fires and we know to:
      waitForRunning shape in internal/orchestrator/shell.go until
      sbx is fixed again.
 
-Counterpart: test_sbx_probe_publish_baseline.py — same probe binary
-shape without the trigger pieces. Both should stay green; if only
-baseline stays green and triggered goes red, that's the sbx
-regression signal.
+Counterpart: test_sbx_interop_01_publish_baseline.py — same probe
+shape without the trigger pieces. If only baseline stays green and
+triggered goes red, that's the upstream regression signal.
 
 The probe binary lives at e2e/probes/probe-publish-triggered/main.go.
 """
@@ -33,7 +34,7 @@ import pytest
 from helpers import sbx
 from helpers.sbx_kit import materialize_kit
 
-pytestmark = pytest.mark.probe
+pytestmark = pytest.mark.sbx_interop
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -1,22 +1,24 @@
-"""sbx probe: baseline — a stand-alone Go binary that mirrors devm's
-port-reconcile sequence (spawn anchor -> wait -> publish -> verify ->
-snapshot -> user-shell spawn) succeeds reliably under both `nohup` and
-plain `sbx run` anchor wrappings, when invoked via pexpect (production
-PTY shape).
+"""interop: Go exec.Command + sbx run/publish/verify polling works.
 
-Counterpart: test_sbx_probe_publish_triggered.py, which re-applies the
-two structural pieces (Spawner interface wrapping + ticker+select
-waitForRunning) that historically reproduced Quirk #6's publish
-phantom. Both probes are now stable under sbx 0.31; this baseline
-remains as a smoke-test of the sbx runtime itself. If a future
-investigation needs to ask "is sbx healthy?", run this probe.
+Stand-alone Go binary that mirrors devm's port-reconcile sequence
+(spawn anchor -> wait -> publish -> verify -> snapshot -> user-shell
+spawn) using plain exec.Command (no interface wrappers, no
+ticker+select). Locks the baseline Go-primitive ↔ sbx combination
+devm orchestrates with.
+
+Counterpart: test_sbx_interop_02_publish_triggered.py — same shape
+PLUS a Spawner-interface wrapper + ticker+select waitForRunning.
+That pair historically reproduced Quirk #6's publish phantom; sbx
+0.31 fixed it. Both probes stay green; if only baseline stays green
+and triggered goes red, that's the sbx regression signal.
 
 The probe binary itself lives at e2e/probes/probe-publish/main.go.
 We build it inline in this test rather than checking the binary into
 git.
 
-If sbx ever regresses such that pure-Go-orchestration-of-sbx breaks,
-this test fires loud — signaling the bug is in sbx, not in devm.
+If this baseline goes red, the Go-primitive layer (exec.Command +
+nohup + sbx CLI surface) has broken against sbx — signals the bug
+is in sbx, not in devm's higher-level orchestration.
 """
 from __future__ import annotations
 import os
@@ -29,7 +31,7 @@ import pytest
 from helpers import sbx
 from helpers.sbx_kit import materialize_kit
 
-pytestmark = pytest.mark.probe
+pytestmark = pytest.mark.sbx_interop
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
