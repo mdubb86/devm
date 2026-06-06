@@ -23,6 +23,12 @@ PROMPT_RE = re.compile(r"agent@\S+:\S+\$ ?")
 
 
 @pytest.mark.timeout(90)
+# pexpect.spawn calls os.forkpty() while contract_sandbox's anchor-drain
+# thread is alive. Python 3.14 warns about potential deadlock; in
+# practice the drain thread only does os.read on the anchor master, no
+# lock-holding work, and the fork has been deadlock-free across this
+# test's history. Suppress the noise without papering over a real risk.
+@pytest.mark.filterwarnings("ignore:.*forkpty.*:DeprecationWarning")
 def test_exec_dash_it_gives_interactive_bash(sandbox_name):
     with contract_sandbox(minimal_kit(), sandbox_name):
         child = pexpect.spawn(
