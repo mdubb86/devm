@@ -215,15 +215,21 @@ func desiredMappings(cfg schema.Config) []portMapping {
 	return out
 }
 
-// publishSpec formats the [IP:]HOST:SANDBOX spec for sbx ports publish.
-// IP prefix is included only when non-default — preserves the existing
-// "HOST:SANDBOX" wire form for the common 127.0.0.1 case so debug logs
-// and tests don't churn.
+// publishSpec formats the IP:HOST:SANDBOX spec for sbx ports publish.
+// We ALWAYS include the IP prefix (defaulting to 127.0.0.1) — never
+// the bare HOST:SANDBOX form. sbx 0.30 added "Bind both loopback
+// stacks by default when publishing ports", so a bare publish creates
+// two mappings (127.0.0.1 + ::1). Devm's contract has always been
+// "localhost-accessible by default", which 127.0.0.1 alone satisfies;
+// the v6 stack is surface area no one asked for, and it breaks the
+// publish↔unpublish symmetry (a bare unpublish removes BOTH stacks,
+// an IP-prefixed unpublish removes only the matching family).
 func publishSpec(m portMapping) string {
-	if m.HostIP == "" || m.HostIP == "127.0.0.1" {
-		return fmt.Sprintf("%d:%d", m.HostPort, m.SandboxPort)
+	ip := m.HostIP
+	if ip == "" {
+		ip = "127.0.0.1"
 	}
-	return fmt.Sprintf("%s:%d:%d", m.HostIP, m.HostPort, m.SandboxPort)
+	return fmt.Sprintf("%s:%d:%d", ip, m.HostPort, m.SandboxPort)
 }
 
 // currentMappings reads `sbx ports <name> --json` and parses it.

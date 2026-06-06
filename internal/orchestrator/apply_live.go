@@ -40,14 +40,12 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema
 			if err != nil {
 				return fmt.Errorf("apply_live: port_add: bad sandbox port %q: %w", c.Key, err)
 			}
-			// Bare HOST:SANDBOX form (no IP prefix). sbx 0.30+ binds
-			// BOTH loopback stacks (127.0.0.1 AND ::1) per publish when
-			// no IP is specified ("Bind both loopback stacks by default
-			// when publishing ports" — v0.30.0 release notes). Symmetric:
-			// unpublish with a bare HOST:SANDBOX removes BOTH. Prefixing
-			// with 127.0.0.1: only removes the v4 mapping and leaves
-			// the v6 orphan, which is the test_12 failure shape.
-			spec := fmt.Sprintf("%d:%d", portOffset+sandboxPort, sandboxPort)
+			// ALWAYS prefix with 127.0.0.1 — see internal/orchestrator/
+			// ports.go publishSpec for the rationale. tl;dr: sbx 0.30
+			// bare publish creates v4+v6 mappings; explicit 127.0.0.1
+			// keeps it to one localhost mapping and makes
+			// publish↔unpublish symmetric.
+			spec := fmt.Sprintf("127.0.0.1:%d:%d", portOffset+sandboxPort, sandboxPort)
 			if err := sb.Runner.Run("sbx", "ports", sb.Name, "--publish", spec); err != nil {
 				return fmt.Errorf("apply_live: sbx ports --publish %s: %w", spec, err)
 			}
@@ -56,7 +54,7 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema
 			if err != nil {
 				return fmt.Errorf("apply_live: port_remove: bad sandbox port %q: %w", c.Key, err)
 			}
-			spec := fmt.Sprintf("%d:%d", portOffset+sandboxPort, sandboxPort)
+			spec := fmt.Sprintf("127.0.0.1:%d:%d", portOffset+sandboxPort, sandboxPort)
 			if err := sb.Runner.Run("sbx", "ports", sb.Name, "--unpublish", spec); err != nil {
 				return fmt.Errorf("apply_live: sbx ports --unpublish %s: %w", spec, err)
 			}
@@ -69,8 +67,8 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema
 			if err != nil {
 				return fmt.Errorf("apply_live: port_change: bad new port %q: %w", c.New, err)
 			}
-			oldSpec := fmt.Sprintf("%d:%d", portOffset+oldP, oldP)
-			newSpec := fmt.Sprintf("%d:%d", portOffset+newP, newP)
+			oldSpec := fmt.Sprintf("127.0.0.1:%d:%d", portOffset+oldP, oldP)
+			newSpec := fmt.Sprintf("127.0.0.1:%d:%d", portOffset+newP, newP)
 			if err := sb.Runner.Run("sbx", "ports", sb.Name, "--unpublish", oldSpec); err != nil {
 				return fmt.Errorf("apply_live: port_change: unpublish %s: %w", oldSpec, err)
 			}

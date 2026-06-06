@@ -20,11 +20,9 @@ func TestApplyLive_PortAdd(t *testing.T) {
 	}, 50000, schema.Config{}, t.TempDir())
 	assert.NoError(t, err)
 	cmd := strings.Join(r.lastArgs[0], " ")
-	// Bare HOST:SANDBOX form (no 127.0.0.1: prefix). sbx 0.30+ binds
-	// both loopback stacks (v4 + v6) per publish; the bare form
-	// unpublishes both. The 127.0.0.1: prefix would only target v4
-	// and leave the v6 orphan.
-	assert.Contains(t, cmd, "sbx ports x --publish 58080:8080")
+	// Explicit 127.0.0.1: prefix — see publishSpec in ports.go for why
+	// we don't use the bare HOST:SANDBOX form anymore.
+	assert.Contains(t, cmd, "sbx ports x --publish 127.0.0.1:58080:8080")
 }
 
 func TestApplyLive_PortRemove(t *testing.T) {
@@ -35,7 +33,7 @@ func TestApplyLive_PortRemove(t *testing.T) {
 	}, 50000, schema.Config{}, t.TempDir())
 	assert.NoError(t, err)
 	cmd := strings.Join(r.lastArgs[0], " ")
-	assert.Contains(t, cmd, "sbx ports x --unpublish 58080:8080")
+	assert.Contains(t, cmd, "sbx ports x --unpublish 127.0.0.1:58080:8080")
 }
 
 func TestApplyLive_PortChange(t *testing.T) {
@@ -48,8 +46,8 @@ func TestApplyLive_PortChange(t *testing.T) {
 	assert.Len(t, r.lastArgs, 2, "port_change should be 2 calls: unpublish then publish")
 	c0 := strings.Join(r.lastArgs[0], " ")
 	c1 := strings.Join(r.lastArgs[1], " ")
-	assert.Contains(t, c0, "--unpublish 58080:8080")
-	assert.Contains(t, c1, "--publish 59090:9090")
+	assert.Contains(t, c0, "--unpublish 127.0.0.1:58080:8080")
+	assert.Contains(t, c1, "--publish 127.0.0.1:59090:9090")
 }
 
 func TestApplyLive_NetworkAdd(t *testing.T) {

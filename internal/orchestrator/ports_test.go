@@ -55,10 +55,28 @@ func indexOf(ss []string, target string) int {
 	return -1
 }
 
-// applyPublish parses "HOST:SBX" and appends a portMapping to listJSON.
+// parsePublishSpec splits "[IP:]HOST:SBX" into (ip, host, sbx).
+// IP defaults to "127.0.0.1" when absent. Matches the wire forms devm
+// emits: bare "H:S" or prefixed "IP:H:S".
+func parsePublishSpec(spec string) (ip string, host, sbx int, ok bool) {
+	ip = "127.0.0.1"
+	if n, _ := fmt.Sscanf(spec, "%d:%d", &host, &sbx); n == 2 {
+		return ip, host, sbx, true
+	}
+	parts := strings.SplitN(spec, ":", 3)
+	if len(parts) != 3 {
+		return "", 0, 0, false
+	}
+	if n, _ := fmt.Sscanf(parts[1]+":"+parts[2], "%d:%d", &host, &sbx); n != 2 {
+		return "", 0, 0, false
+	}
+	return parts[0], host, sbx, true
+}
+
+// applyPublish parses "[IP:]HOST:SBX" and appends a portMapping to listJSON.
 func (s *scriptedRunner) applyPublish(spec string) {
-	var host, sbx int
-	if n, _ := fmt.Sscanf(spec, "%d:%d", &host, &sbx); n != 2 {
+	ip, host, sbx, ok := parsePublishSpec(spec)
+	if !ok {
 		return
 	}
 	var current []portMapping
@@ -66,16 +84,16 @@ func (s *scriptedRunner) applyPublish(spec string) {
 		_ = json.Unmarshal([]byte(s.listJSON), &current)
 	}
 	current = append(current, portMapping{
-		HostIP: "127.0.0.1", HostPort: host, SandboxPort: sbx, Protocol: "tcp",
+		HostIP: ip, HostPort: host, SandboxPort: sbx, Protocol: "tcp",
 	})
 	out, _ := json.Marshal(current)
 	s.listJSON = string(out)
 }
 
-// applyUnpublish parses "HOST:SBX" and removes the matching entry.
+// applyUnpublish parses "[IP:]HOST:SBX" and removes the matching entry.
 func (s *scriptedRunner) applyUnpublish(spec string) {
-	var host, sbx int
-	if n, _ := fmt.Sscanf(spec, "%d:%d", &host, &sbx); n != 2 {
+	ip, host, sbx, ok := parsePublishSpec(spec)
+	if !ok {
 		return
 	}
 	var current []portMapping
@@ -84,7 +102,7 @@ func (s *scriptedRunner) applyUnpublish(spec string) {
 	}
 	out := make([]portMapping, 0, len(current))
 	for _, m := range current {
-		if m.HostPort == host && m.SandboxPort == sbx {
+		if m.HostPort == host && m.SandboxPort == sbx && m.HostIP == ip {
 			continue
 		}
 		out = append(out, m)
@@ -260,7 +278,7 @@ func TestReconcilePortsBubblesPublishError(t *testing.T) {
 	err := ReconcilePortsWithRunner(sb, cfg, runner)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publish boom")
-	assert.Contains(t, err.Error(), "publish 68080:8080", "error should mention the failing spec")
+	assert.Contains(t, err.Error(), "publish 127.0.0.1:68080:8080", "error should mention the failing spec")
 }
 
 func TestReconcilePortsBubblesParseError(t *testing.T) {

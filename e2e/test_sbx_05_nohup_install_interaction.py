@@ -31,26 +31,28 @@ from helpers import sbx
 
 def _kit_spec(devm_shape: bool = False) -> str:
     if not devm_shape:
-        startup_block = textwrap.dedent("""\
-              startup:
-                - command: ['sh', '-c', 'true']
-                  user: "1000"
-                  description: noop
+        startup = textwrap.dedent("""\
+            - command: ['sh', '-c', 'true']
+              user: "1000"
+              description: noop
         """).rstrip()
     else:
         # Exact same shape devm renders today (init-volumes + install-
         # templates), and importantly: BARE flow-style strings (no
         # single-quotes around the array elements) matching yaml.v3's
         # output.
-        startup_block = textwrap.dedent("""\
-              startup:
-                - command: [bash, -c, exec bash "$WORKSPACE_DIR/.devm/scripts/init-volumes.sh"]
-                  user: "1000"
-                  description: Claim ext4 volume mounts for agent user
-                - command: [bash, -c, exec bash "$WORKSPACE_DIR/.devm/scripts/install-templates.sh"]
-                  user: "0"
-                  description: Install rendered service templates
+        startup = textwrap.dedent("""\
+            - command: [bash, -c, exec bash "$WORKSPACE_DIR/.devm/scripts/init-volumes.sh"]
+              user: "1000"
+              description: Claim ext4 volume mounts for agent user
+            - command: [bash, -c, exec bash "$WORKSPACE_DIR/.devm/scripts/install-templates.sh"]
+              user: "0"
+              description: Install rendered service templates
         """).rstrip()
+    # Indent the startup steps by 4 spaces so they land under
+    # `commands.startup:` (rather than at top-level — sbx 0.31's
+    # stricter schema rejects unknown top-level keys).
+    startup_indented = textwrap.indent(startup, "    ")
     return textwrap.dedent("""\
         schemaVersion: "1"
         kind: agent
@@ -69,7 +71,8 @@ def _kit_spec(devm_shape: bool = False) -> str:
           install:
             - command: apt-get update
             - command: touch /home/agent/marker-a
-        """) + startup_block + "\n"
+          startup:
+        """) + startup_indented + "\n"
 
 
 def _materialize_kit(*, devm_shape: bool = False, kit_inside_ws: bool = False) -> tuple[str, str]:

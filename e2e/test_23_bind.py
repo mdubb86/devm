@@ -1,9 +1,10 @@
 """23: services.X.bind exposes the port mapping on a non-default host
 interface.
 
-Default behavior: `services.X: {port: N}` publishes to BOTH loopback
-stacks (127.0.0.1 AND ::1) under sbx 0.30+ ("Bind both loopback
-stacks by default when publishing ports" — v0.30.0 release notes).
+Default behavior: `services.X: {port: N}` publishes to 127.0.0.1 only
+(devm always passes the explicit `127.0.0.1:` prefix — see
+internal/orchestrator/ports.go publishSpec for why we don't use the
+bare form that would also bind ::1 under sbx 0.30+).
 Setting `services.X: {port: "0.0.0.0:N"}` publishes to 0.0.0.0
 — visible to LAN devices.
 
@@ -24,8 +25,8 @@ def test_bind_exposes_on_specified_interface(workspace, devm, sandbox_name):
             # Polymorphic port: string form encodes the bind interface in
             # the SAME `port` field that normally takes a bare integer.
             "web": {"port": "0.0.0.0:8080"},
-            # Control: another service with bare-int port → default-binds to
-            # BOTH 127.0.0.1 and ::1 under sbx 0.30+.
+            # Control: another service with bare-int port → still defaults
+            # to 127.0.0.1 only (devm emits the explicit prefix).
             "api": {"port": 8081},
         },
     )
@@ -45,24 +46,19 @@ def test_bind_exposes_on_specified_interface(workspace, devm, sandbox_name):
         )
 
         mappings = sbx.ports(sandbox_name)
-        # Group by host_port — there may be MULTIPLE entries per host_port
-        # since sbx 0.30 binds both v4 and v6 stacks on default publish.
         ips_by_host_port: dict[int, set[str]] = {}
         for m in mappings:
             ips_by_host_port.setdefault(m["host_port"], set()).add(m["host_ip"])
 
-        # web: explicit 0.0.0.0 → single mapping on 0.0.0.0 (no v6 stack
-        # added because the user named an explicit IP).
         assert ips_by_host_port.get(web_host_port) == {"0.0.0.0"}, (
             f"web should bind 0.0.0.0 only; got "
             f"{ips_by_host_port.get(web_host_port)!r}"
         )
 
-        # api: default port → BOTH loopback stacks (v0.30 behavior).
-        api_ips = ips_by_host_port.get(api_host_port, set())
-        assert api_ips == {"127.0.0.1", "::1"}, (
-            f"api default-bind should be on both v4 and v6 loopback "
-            f"(sbx 0.30+); got {api_ips!r}"
+        assert ips_by_host_port.get(api_host_port) == {"127.0.0.1"}, (
+            f"api should default-bind to 127.0.0.1 only (devm passes the "
+            f"explicit prefix to suppress 0.30+'s auto-v6); got "
+            f"{ips_by_host_port.get(api_host_port)!r}"
         )
 
         sh.exit(timeout=30)
