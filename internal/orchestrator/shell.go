@@ -290,34 +290,29 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		}
 	}()
 
-	// Inline poll for "running" — DO NOT extract into a helper that
-	// uses `time.NewTicker(poll)` + `select { ctx.Done / runDone /
-	// ticker.C }`. That blocking multi-channel select shape was load-
-	// bearing on Quirk #6: with it, the first sbx ports --publish
-	// after exec-ready phantomed and the endpoint got torn down for
-	// the full deadline window. With the inline sleep loop here,
-	// publish sticks. See docs/sbx-quirks.md section 6.
+	// Wait for the sandbox to reach "running" via an idiomatic
+	// ticker+select loop. Pre-sbx-0.31 this needed the inline poll +
+	// non-blocking default shape to dodge Quirk #6 (publish phantom
+	// triggered by the blocking-select-with-ticker pattern around the
+	// anchor spawn). sbx 0.31 fixed Quirk #6, pinned by
+	// e2e/test_sbx_anchor_14_publish_trigger_pin.py.
 	{
-		deadline := time.Now().Add(d.WaitForRunning)
-		running := false
-		for time.Now().Before(deadline) {
+		ticker := time.NewTicker(d.PollInterval)
+		defer ticker.Stop()
+		deadline := time.After(d.WaitForRunning)
+	wait:
+		for {
 			if sb.IsRunning() {
-				running = true
-				break
+				break wait
 			}
-			// Non-blocking check: detect anchor death and ctx cancellation
-			// without re-introducing the blocking-select-with-ticker
-			// shape that triggers Quirk #6.
 			select {
 			case err := <-runDone:
 				// Anchor died on its own — defer's Kill is a no-op,
 				// but its drain of runDone would block forever on the
 				// already-consumed channel. Flip handedOff so the
-				// defer skips cleanup entirely; we're done.
-				// (The defer's error-decoration won't run either when
-				// handedOff is true, so fold the anchor tail in here
-				// manually — that's the load-bearing diagnostic for
-				// this specific failure shape.)
+				// defer skips cleanup entirely. (The defer's
+				// error-decoration won't run either when handedOff is
+				// true, so fold the anchor tail in here manually.)
 				handedOff = true
 				tail := formatAnchorOutput(anchorOut)
 				if err != nil {
@@ -326,12 +321,10 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 				return -1, fmt.Errorf("sbx run exited before sandbox became running%s", tail)
 			case <-ctx.Done():
 				return -1, ctx.Err()
-			default:
+			case <-deadline:
+				return -1, fmt.Errorf("sandbox %s never reached running within %s", sandboxName, d.WaitForRunning)
+			case <-ticker.C:
 			}
-			time.Sleep(d.PollInterval)
-		}
-		if !running {
-			return -1, fmt.Errorf("sandbox %s never reached running within %s", sandboxName, d.WaitForRunning)
 		}
 	}
 	debuglog.Logf("shell", "cold-start: sandbox status=running")
