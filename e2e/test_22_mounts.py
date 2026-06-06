@@ -1,17 +1,23 @@
-"""22: mounts — additional host paths mirror into the sandbox.
+"""22: devm.yaml mounts: entries mirror host paths into the sandbox at the same absolute path, honoring the :ro suffix.
 
-devm.yaml `mounts:` is a list of `HOST_PATH[:ro]` entries that get
-passed to `sbx run` as positional workspaces. sbx mounts each at
-the same path inside the VM (mirrored). The optional `:ro` suffix
-makes the mount read-only.
+User configures `mounts: [<host_path>:ro]` and cold-starts via
+`devm shell`. The host path appears inside the sandbox at the same
+absolute path, file contents are readable, and write attempts fail
+because the entry was declared read-only.
 
-This test:
-  1. Creates a host tempdir with a marker file.
-  2. Configures devm.yaml mounts: [<tempdir>:ro].
-  3. Cold-starts via devm shell.
-  4. Verifies the marker file is readable inside the sandbox at the
-     SAME absolute host path.
-  5. Verifies a write attempt fails (because :ro).
+What this pins:
+  - Marker file under the mounted host dir is readable inside the
+    sandbox at the identical absolute path.
+  - File content read via `sbx exec cat` matches the host-written
+    content byte-for-byte.
+  - A `touch` inside the read-only mount returns non-zero.
+
+What it doesn't cover (tested elsewhere):
+  - sbx-level mirror + :ro semantics in isolation:
+    test_sbx_contract_19_mounts_mirrored_at_same_path and
+    test_sbx_contract_20_mounts_ro_suffix_read_only.
+  - Live mounts: change (add/remove a mounts entry on a running
+    sandbox): not yet pinned.
 """
 import subprocess
 import tempfile
