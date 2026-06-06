@@ -8,26 +8,40 @@ Provides:
 
   * contract_sandbox(spec_yaml, name, *, workspace=None,
                      extra_positionals=None) — context manager that
-    materializes a kit + workspace, spawns `sbx run`, waits until
-    `sbx ls` reports running AND `sbx exec NAME true` succeeds, yields,
-    then tears down sandbox + cleans up tmpdirs. Use for tests where
-    the sandbox must come up.
+    materializes a kit + workspace, spawns `sbx run` UNDER A PTY,
+    waits until `sbx ls` reports running AND `sbx exec NAME true`
+    succeeds, yields a SandboxContext (with .captured() to read sbx's
+    PTY output), then tears down sandbox + cleans up tmpdirs.
 
-  * sbx_run_until_exit(spec_yaml, name, *, timeout=90) → (rc, stderr) —
-    spawns `sbx run` and waits for it to exit (without expecting
-    success). Use for failure-mode tests (L2, L3).
+  * sbx_run_until_exit(spec_yaml, name, *, timeout=90) →
+    (rc, captured_output) — spawns `sbx run` under a PTY and waits
+    for it to exit (without expecting success). Returns sbx's PTY
+    output for inspection. Use for failure-mode tests where sbx run
+    DOES exit (e.g. install failure).
 
   * sbx_exec(name, *args, timeout=30) → CompletedProcess — small wrapper
     around `subprocess.run(["sbx", "exec", name, *args])`.
+
+PTY rationale: sbx 0.31 only emits diagnostic output (ERROR lines,
+progress, status) when stdio is a TTY. devm's anchor spawn also uses
+PTY (internal/orchestrator/shell.go, Tier 1c), so the cohort matches
+production. The PTY is fixed at 24x80 so sbx doesn't see 0x0 and
+degrade.
 
 Agent name is hardcoded to "probe" and image to docker/sandbox-
 templates:shell so tests are fast and consistent.
 """
 from __future__ import annotations
+import errno
+import fcntl
 import os
+import pty
 import shutil
+import struct
 import subprocess
 import tempfile
+import termios
+import threading
 import time
 from contextlib import contextmanager
 from typing import Iterator
@@ -35,6 +49,10 @@ from typing import Iterator
 import yaml
 
 from helpers import sbx as sbx_helper
+
+
+PTY_ROWS = 24
+PTY_COLS = 80
 
 
 def minimal_kit(
@@ -108,6 +126,70 @@ def _wait_exec_ready(name: str, timeout: float) -> None:
     raise AssertionError(f"sandbox {name} not exec-ready within {timeout}s")
 
 
+def _spawn_pty(argv: list[str]) -> tuple[subprocess.Popen, int, bytearray, threading.Event, threading.Thread]:
+    """Spawn argv under a PTY (24x80). Returns (proc, master_fd, buf,
+    stop_event, drain_thread). The drain thread copies bytes from
+    master_fd into buf until stop_event is set or EOF.
+
+    Caller is responsible for setting stop_event and joining the thread
+    on cleanup (then closing master_fd).
+    """
+    master_fd, slave_fd = pty.openpty()
+    # Set the PTY size to 24x80 so sbx doesn't see 0x0 and degrade.
+    winsize = struct.pack("HHHH", PTY_ROWS, PTY_COLS, 0, 0)
+    fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+
+    proc = subprocess.Popen(
+        argv,
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        close_fds=True,
+    )
+    # The child has its own copy of slave_fd now; we don't need ours.
+    os.close(slave_fd)
+
+    buf = bytearray()
+    stop = threading.Event()
+
+    def _drain():
+        while not stop.is_set():
+            try:
+                data = os.read(master_fd, 4096)
+                if not data:
+                    return
+                buf.extend(data)
+            except OSError as e:
+                if e.errno in (errno.EIO, errno.EBADF):
+                    return
+                raise
+
+    drain = threading.Thread(target=_drain, daemon=True)
+    drain.start()
+    return proc, master_fd, buf, stop, drain
+
+
+def _stop_drain(master_fd: int, stop: threading.Event, drain: threading.Thread) -> None:
+    """Tell the drain thread to stop, close the master fd, join."""
+    stop.set()
+    try:
+        os.close(master_fd)
+    except Exception:
+        pass
+    drain.join(timeout=2)
+
+
+class SandboxContext:
+    """Yielded by contract_sandbox. Lets tests read what sbx printed on
+    the PTY (use ``ctx.captured()`` for a snapshot of bytes-decoded-so-far).
+    """
+    def __init__(self, buf: bytearray):
+        self._buf = buf
+
+    def captured(self) -> str:
+        return bytes(self._buf).decode(errors="replace")
+
+
 @contextmanager
 def contract_sandbox(
     spec_yaml: str,
@@ -115,13 +197,13 @@ def contract_sandbox(
     *,
     workspace: str | None = None,
     extra_positionals: list[str] | None = None,
-) -> Iterator[None]:
-    """Materialize a kit, spawn sbx run, wait until exec-ready, yield,
-    clean up on exit (stop+rm the sandbox, remove tmpdirs).
+) -> Iterator[SandboxContext]:
+    """Materialize a kit, spawn sbx run under a PTY, wait until exec-
+    ready, yield a SandboxContext (with .captured() for the sbx output),
+    clean up on exit.
 
     `extra_positionals` are additional workspace paths appended after
-    the primary workspace argument — used by the mount contract tests
-    (M1, M2).
+    the primary workspace argument — used by the mount contract tests.
     """
     kit_dir = tempfile.mkdtemp(prefix="contract-kit-")
     cleanup_ws = workspace is None
@@ -132,16 +214,11 @@ def contract_sandbox(
     argv = ["sbx", "run", "--kit", kit_dir, "--name", name, "probe", ws]
     if extra_positionals:
         argv.extend(extra_positionals)
-    proc = subprocess.Popen(
-        argv,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
+    proc, master_fd, buf, stop, drain = _spawn_pty(argv)
     try:
         _wait_running(name, timeout=90)
         _wait_exec_ready(name, timeout=30)
-        yield
+        yield SandboxContext(buf)
     finally:
         subprocess.run(["sbx", "stop", name], capture_output=True, timeout=15)
         subprocess.run(["sbx", "rm", "-f", name], capture_output=True, timeout=15)
@@ -150,6 +227,7 @@ def contract_sandbox(
             proc.wait(timeout=5)
         except Exception:
             pass
+        _stop_drain(master_fd, stop, drain)
         shutil.rmtree(kit_dir, ignore_errors=True)
         if cleanup_ws:
             shutil.rmtree(ws, ignore_errors=True)
@@ -161,27 +239,33 @@ def sbx_run_until_exit(
     *,
     timeout: float = 90.0,
 ) -> tuple[int, str]:
-    """Spawn `sbx run` and wait until it exits. Returns (rc, stderr).
+    """Spawn `sbx run` under a PTY and wait until it exits. Returns
+    (rc, captured_pty_output).
 
-    Use for failure-mode tests (L2, L3) where the sandbox is NOT
-    expected to come up. Cleans up tmpdirs and force-removes any
-    stray sandbox name afterward.
+    Use for failure-mode tests where sbx run is expected to exit
+    (e.g. L2 — install failure). Cleans up tmpdirs and force-removes
+    any stray sandbox name afterward.
     """
     kit_dir = tempfile.mkdtemp(prefix="contract-kit-")
     ws = tempfile.mkdtemp(prefix="contract-ws-")
     with open(os.path.join(kit_dir, "spec.yaml"), "w") as f:
         f.write(spec_yaml)
+
+    argv = ["sbx", "run", "--kit", kit_dir, "--name", name, "probe", ws]
+    proc, master_fd, buf, stop, drain = _spawn_pty(argv)
     try:
-        p = subprocess.run(
-            ["sbx", "run", "--kit", kit_dir, "--name", name, "probe", ws],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-        )
-        return p.returncode, p.stderr.decode()
+        proc.wait(timeout=timeout)
+        rc = proc.returncode
+        # Let the drain thread catch any final bytes.
+        time.sleep(0.5)
+        return rc, bytes(buf).decode(errors="replace")
     finally:
         subprocess.run(["sbx", "rm", "-f", name], capture_output=True, timeout=15)
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        _stop_drain(master_fd, stop, drain)
         shutil.rmtree(kit_dir, ignore_errors=True)
         shutil.rmtree(ws, ignore_errors=True)
 

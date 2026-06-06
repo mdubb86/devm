@@ -3,12 +3,14 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/mtwaage/devm/internal/debuglog"
 	"github.com/mtwaage/devm/internal/lock"
 	"github.com/mtwaage/devm/internal/render"
@@ -231,15 +233,26 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 			runDone <- err
 		}()
 	} else {
-		debuglog.Logf("shell", "cold-start: spawning anchor (raw osexec — production path): nohup %v", runArgs)
+		debuglog.Logf("shell", "cold-start: spawning anchor (PTY — production path): nohup %v", runArgs)
 		runCmd = osexec.Command("nohup", runArgs...)
-		runCmd.Stdin = nil
 		anchorOut = newLineRingBuffer(200)
-		runCmd.Stdout = anchorOut
-		runCmd.Stderr = anchorOut
-		if err := runCmd.Start(); err != nil {
-			return -1, fmt.Errorf("spawn sbx run: %w", err)
+		// PTY anchor: sbx writes diagnostic output only under TTY. By giving
+		// sbx run a PTY for its stdio, the anchor ring buffer captures the
+		// sbx output a user would see in a terminal — error messages,
+		// progress, status — and the existing failure-path decorator
+		// (formatAnchorOutput) surfaces it on cold-start errors.
+		//
+		// Size is set to 24x80 explicitly so sbx doesn't see a 0x0 PTY
+		// (some CLIs degrade silently in that case).
+		ptmx, err := pty.StartWithSize(runCmd, &pty.Winsize{Rows: 24, Cols: 80})
+		if err != nil {
+			return -1, fmt.Errorf("spawn sbx run (PTY): %w", err)
 		}
+		// Drain the PTY master into the ring buffer until sbx exits.
+		go func() {
+			_, _ = io.Copy(anchorOut, ptmx)
+			_ = ptmx.Close()
+		}()
 		if runCmd.Process != nil {
 			anchorPid = runCmd.Process.Pid
 		}
