@@ -1,4 +1,4 @@
-"""characterization: `sbx exec NAME ...` with piped stdin hangs.
+"""tripwire: `sbx exec NAME ...` with piped stdin hangs.
 
 `sbx exec NAME sh -c "cat > FILE"` with stdin piped from a Python
 subprocess.Popen (mirrors Go's `exec.Cmd.Stdin = pipeReader`) does
@@ -11,9 +11,9 @@ sidesteps it by base64-encoding the content on the command line:
 `sbx exec NAME sh -c "echo <b64> | base64 -d > FILE"`. No stdin pipe,
 no hang.
 
-This characterization test runs the broken pattern with a short
-timeout. If it completes within the timeout, sbx fixed the hang —
-and we can drop the base64 workaround in snapshot.go.
+Tripwire: this test runs the broken pattern with a short timeout. If
+it completes within the timeout, sbx fixed the hang — and we can drop
+the base64 workaround in snapshot.go.
 """
 from __future__ import annotations
 import subprocess
@@ -27,7 +27,7 @@ from helpers.sbx_kit import (
     materialize_kit,
 )
 
-pytestmark = pytest.mark.sbx
+pytestmark = pytest.mark.sbx_tripwire
 
 
 @pytest.mark.timeout(120)

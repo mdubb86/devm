@@ -1,4 +1,4 @@
-"""characterization: agent.persistence field is REJECTED by sbx 0.31+.
+"""tripwire: agent.persistence field is REJECTED by sbx 0.31+.
 
 After upgrading from sbx 0.28.3 to 0.31.3 (2026-06-05), all devm e2e
 tests started failing with:
@@ -8,18 +8,16 @@ tests started failing with:
       line 10: field persistence not found in type spec.agentBlock
 
 The Docker docs still document `agent.persistence: persistent|ephemeral`
-but the binary rejects it. This characterization test materializes
-minimal kits with different agent-block shapes and pins which sbx 0.31
-actually accepts. internal/render/spec.go was updated based on this
-evidence to drop the field.
+but the binary rejects it. internal/render/spec.go was updated to drop
+the field based on this evidence.
 
 Variants tested:
   1. baseline_with_persistence    — pre-0.31 devm shape (must FAIL)
   2. baseline_without_persistence — current devm shape (must PASS)
 
-If sbx un-rejects `persistence` in a future release, variant 1 starts
-passing, and the test signals we can revisit the render — i.e., the
-"broken" upstream behavior has been fixed.
+Tripwire: if sbx un-rejects `persistence` in a future release, variant
+1 starts passing — the upstream broken behavior is fixed and we can
+restore the field in spec.go.
 """
 from __future__ import annotations
 import os
@@ -29,7 +27,7 @@ import textwrap
 
 import pytest
 
-pytestmark = pytest.mark.sbx
+pytestmark = pytest.mark.sbx_tripwire
 
 
 def _kit_dir_with_spec(spec: str) -> str:

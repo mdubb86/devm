@@ -42,6 +42,9 @@ e2e-probes:
 e2e-contract:
     @e2e/scripts/run.sh -m sbx_contract
 
+e2e-tripwire:
+    @e2e/scripts/run.sh -m sbx_tripwire
+
 # Run a single test by name (matches pytest -k pattern). Foreground (no -n).
 # Quote multi-word patterns: `just e2e-one "test_a or test_b"`.
 e2e-one NAME:
