@@ -75,15 +75,25 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 
 	// commands.install: prepend devm's built-in bootstrap (one-time
 	// apt installs every sandbox should have — currently ncurses-term
-	// for modern terminfo), then user-defined install steps. The
-	// $WORKSPACE_DIR form is locked by test_sbx_03_install_env_and_workspace
-	// (install: context has WORKSPACE_DIR set and the workspace mount
-	// visible). apt-get availability at install time is locked by
-	// test_sbx_04_install_network_policy_pin (sbx allows apt traffic
-	// regardless of allowedDomains).
-	spec.Commands.Install = append(spec.Commands.Install,
-		kitInstallCommand{Command: `bash "$WORKSPACE_DIR/.devm/scripts/bootstrap.sh"`},
-	)
+	// for modern terminfo), then user-defined install steps.
+	// commands.install: user-defined install steps only. The bootstrap.sh
+	// auto-prepend was reverted 2026-06-05 — it extended install time
+	// enough to expose a latent race in our cold-start flow: the
+	// runtime dies asynchronously DURING install while our waitFor-
+	// ExecReady + port reconcile + snapshot sequence races against it.
+	// `bash -c true` and `true` as prepends didn't trigger it (install
+	// completes instantly); apt-get update / bash <file> did. The
+	// async-runtime-death pattern existed before bootstrap.sh too —
+	// the prepend just made it deterministic for the common case.
+	//
+	// Pinned by:
+	//   - test_24_cold_start_docker_base (xfail — DinD base)
+	//   - test_sbx_05 fleet (proves the kit + nohup + apt-get + snapshot
+	//     exec all work under pure sbx — only devm's full flow triggers)
+	// scripts/bootstrap.sh + embed/write plumbing remain in place;
+	// re-enabling is a one-line change once the async-death root cause
+	// is fixed (likely: snapshot moves to host-side, or readiness gate
+	// waits for install marker file).
 	for _, cmd := range cfg.Install {
 		spec.Commands.Install = append(spec.Commands.Install, kitInstallCommand{Command: cmd})
 	}
