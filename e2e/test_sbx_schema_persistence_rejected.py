@@ -1,4 +1,4 @@
-"""sbx-06: pin which agent spec.yaml fields sbx 0.31+ accepts.
+"""sbx characterization: agent.persistence is REJECTED in sbx 0.31+.
 
 After upgrading from sbx 0.28.3 to 0.31.3 (2026-06-05), all devm e2e
 tests started failing with:
@@ -8,16 +8,17 @@ tests started failing with:
       line 10: field persistence not found in type spec.agentBlock
 
 The Docker docs still document `agent.persistence: persistent|ephemeral`
-but the binary rejects it. This test materializes minimal kits with
-different agent-block shapes and reports which sbx 0.31 actually
-accepts — so we can update render/spec.go from evidence, not guesses.
+but the binary rejects it. This characterization test materializes
+minimal kits with different agent-block shapes and pins which sbx 0.31
+actually accepts. internal/render/spec.go was updated based on this
+evidence to drop the field.
 
 Variants tested:
-  1. baseline_with_persistence   — current devm shape (broken in 0.31)
-  2. baseline_without_persistence — drop the field entirely
-  3. (extend with renamed-field guesses as we learn more)
+  1. baseline_with_persistence   — pre-0.31 devm shape (must FAIL)
+  2. baseline_without_persistence — current devm shape (must PASS)
 
-The test reads sbx run's stderr and asserts whether spec.yaml parsed.
+If sbx un-rejects `persistence` in a future release, variant 1 starts
+passing, and the test signals we can revisit the render.
 """
 from __future__ import annotations
 import os
@@ -31,7 +32,7 @@ pytestmark = pytest.mark.sbx
 
 
 def _kit_dir_with_spec(spec: str) -> str:
-    d = tempfile.mkdtemp(prefix="sbx06-kit-")
+    d = tempfile.mkdtemp(prefix="sbx-schema-kit-")
     with open(os.path.join(d, "spec.yaml"), "w") as f:
         f.write(spec)
     return d
