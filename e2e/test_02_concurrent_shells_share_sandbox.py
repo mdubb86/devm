@@ -28,7 +28,7 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(90)
-def test_shortcut_path(workspace, devm, sandbox_name):
+def test_concurrent_shells_share_sandbox(workspace, devm, sandbox_name):
     workspace.write_devmyaml()
 
     with Shell(devm, cwd=str(workspace.path)) as first:
