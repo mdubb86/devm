@@ -1,4 +1,28 @@
-"""12: LIVE port remove + change via reconcile; no shell restart."""
+"""12: LIVE port remove + port change via reconcile leave user shell intact.
+
+A project starts with two published services (`api:8080`, `web:3000`)
+plus a background `worker`. devm.yaml is then edited to drop `web`
+entirely and remap `api` from 8080 to 8081. A single `devm reconcile`
+applies both changes against the running sandbox; both the dropped
+port and the old api port disappear from the published set, the new
+api port appears, and the user shell that was open before the edit is
+still alive afterward.
+
+What this pins:
+  - Initial cold-start publishes both declared service ports on the
+    host (`api` at offset+8080, `web` at offset+3000).
+  - A single reconcile that both removes a service and changes another
+    service's port succeeds without recreate (LIVE bucket).
+  - After reconcile: new api port is published, old api port is gone,
+    `web` port is gone.
+  - The pre-existing user shell survives the port reconcile (no anchor
+    restart, `echo still-alive` runs).
+
+What it doesn't cover (tested elsewhere):
+  - Live port ADD via reconcile -> test_08.
+  - Reconcile prompt+yes UX under recreate -> test_09.
+  - Service add/remove in isolation -> test_21.
+"""
 import pytest
 
 from helpers import Shell, sbx, stop_and_wait_stopped
