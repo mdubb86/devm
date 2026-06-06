@@ -39,6 +39,9 @@ e2e-sbx:
 e2e-probes:
     @e2e/scripts/run.sh -m probe
 
+e2e-contract:
+    @e2e/scripts/run.sh -m sbx_contract
+
 # Run a single test by name (matches pytest -k pattern). Foreground (no -n).
 # Quote multi-word patterns: `just e2e-one "test_a or test_b"`.
 e2e-one NAME:

@@ -20,4 +20,5 @@ markers = [
     "devm: drives `devm` as the system under test (test_NN_*.py)",
     "sbx: pure-sbx behavior (no devm — all other test_sbx_*.py)",
     "probe: drives a Go probe binary from e2e/probes/ (explicit list in conftest.py)",
+    "sbx_contract: focused contract test asserting one sbx behavior devm depends on (test_sbx_contract_NN_*.py)",
 ]
