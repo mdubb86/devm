@@ -88,11 +88,21 @@ func RunStop(ctx context.Context, d StopDeps, sandboxName string, mode Destructi
 		}
 	}
 
+	// sbx 0.29 added a confirmation prompt to `sbx rm` ("Require
+	// confirmation for `sbx rm <name>` to prevent accidental deletion"
+	// in the v0.29.0 release notes). devm runs this non-interactively,
+	// so we MUST pass `-f` to skip the prompt — without it sbx hangs
+	// waiting for stdin and the sandbox is never removed, leaving the
+	// user's `sbx exec -it` session alive (test_05/06 failure shape).
+	// `sbx stop` does not have an equivalent prompt; no flag needed.
+	args := []string{}
 	verb := "stop"
 	if mode == StopDestroy {
 		verb = "rm"
+		args = append(args, "-f")
 	}
-	if _, err := d.Runner.Output("sbx", verb, sandboxName); err != nil {
+	args = append(args, sandboxName)
+	if _, err := d.Runner.Output("sbx", append([]string{verb}, args...)...); err != nil {
 		return -1, fmt.Errorf("sbx %s: %w", verb, err)
 	}
 	return 0, nil

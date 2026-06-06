@@ -55,11 +55,12 @@ func TestRunStopDestroyCallsSbxRm(t *testing.T) {
 
 	var sawRm bool
 	for _, c := range runner.calls {
-		if strings.Join(c, " ") == "sbx rm x-sbx" {
+		// sbx 0.29+ added a confirmation prompt; devm passes -f to skip it.
+		if strings.Join(c, " ") == "sbx rm -f x-sbx" {
 			sawRm = true
 		}
 	}
-	assert.True(t, sawRm, "expected `sbx rm x-sbx` call; got: %v", runner.calls)
+	assert.True(t, sawRm, "expected `sbx rm -f x-sbx` call; got: %v", runner.calls)
 }
 
 func TestRunStopDestroyPromptText(t *testing.T) {
@@ -174,7 +175,8 @@ func TestRunStopAlreadyStoppedStillDestroysForTeardown(t *testing.T) {
 
 	var sawRm bool
 	for _, c := range runner.calls {
-		if strings.Join(c, " ") == "sbx rm x-sbx" {
+		// sbx 0.29+ added a confirmation prompt; devm passes -f to skip it.
+		if strings.Join(c, " ") == "sbx rm -f x-sbx" {
 			sawRm = true
 		}
 	}

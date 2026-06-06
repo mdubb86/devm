@@ -81,8 +81,13 @@ def policy_remove(domain: str, *, timeout: float = 10.0) -> None:
 
 
 def sandbox_rm(name: str, *, timeout: float = 30.0) -> None:
-    """Best-effort: ignore non-zero (sandbox may not exist)."""
-    _run(["rm", name], timeout=timeout)
+    """Best-effort: ignore non-zero (sandbox may not exist).
+
+    `-f` skips the confirmation prompt sbx 0.29+ added. Without it,
+    rm hangs waiting for stdin (we pass DEVNULL) and orphaned
+    sandboxes accumulate across the suite.
+    """
+    _run(["rm", "-f", name], timeout=timeout)
 
 
 def wait_for_port_published(
