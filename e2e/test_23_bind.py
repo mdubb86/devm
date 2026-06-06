@@ -1,15 +1,25 @@
-"""23: services.X.bind exposes the port mapping on a non-default host
-interface.
+"""23: services.X.port string-form encodes the host bind interface, overriding the 127.0.0.1 default.
 
-Default behavior: `services.X: {port: N}` publishes to 127.0.0.1 only
-(devm always passes the explicit `127.0.0.1:` prefix — see
-internal/orchestrator/ports.go publishSpec for why we don't use the
-bare form that would also bind ::1 under sbx 0.30+).
-Setting `services.X: {port: "0.0.0.0:N"}` publishes to 0.0.0.0
-— visible to LAN devices.
+User declares two services: one with `port: "0.0.0.0:8080"` (LAN-
+visible) and one with bare integer `port: 8081` (default). Cold-
+start, then assert that `sbx ports --json` shows each mapping
+bound to the user-requested interface and nothing else.
 
-This test asserts that the host_ip field in `sbx ports NAME --json`
-reflects the user's bind choice end-to-end.
+What this pins:
+  - String-form `port: "0.0.0.0:N"` publishes that service on
+    0.0.0.0 only.
+  - Bare-int `port: N` publishes on 127.0.0.1 only (devm passes the
+    explicit prefix to suppress sbx 0.30+'s implicit ::1 dual-bind).
+  - Both mappings appear at the expected host_port (port_offset +
+    sandbox_port).
+
+What it doesn't cover (tested elsewhere):
+  - sbx-layer interface-publish matrix:
+    test_sbx_contract_12_ports_publish_interface_matrix.
+  - Reachability of the published mapping over the wire:
+    test_sbx_contract_14_ports_round_trip_reachable.
+  - Live bind change (changing the interface on a running service):
+    not yet pinned.
 """
 import pytest
 
