@@ -1,7 +1,21 @@
-"""20: editing a template source + reconcile = LIVE update (no recreate).
+"""20: editing a template source + reconcile re-renders LIVE (no recreate).
 
-The user shell survives, the output file inside the sandbox shows the
-new rendered content, and devm reports `~ template: <svc> → <output>`.
+User edits the template source file on the host then runs reconcile.
+The output file inside the sandbox reflects the new content, the user
+shell survives (proving LIVE bucket, not teardown/recreate), and devm
+reports the template diff line on stdout.
+
+What this pins:
+  - Template source edit is classified into the LIVE bucket.
+  - Reconcile stdout includes `~ template: <svc> -> <output>`.
+  - The pre-existing user shell remains alive across the reconcile.
+  - The rendered file inside the sandbox shows the new content.
+
+What it doesn't cover (tested elsewhere):
+  - Cold-start template render (test_19).
+  - Reconcile prompt+yes mechanics under recreate (test_09).
+  - Other LIVE-bucket diffs: ports (test_08, test_12), env (test_11),
+    networks (test_13).
 """
 from __future__ import annotations
 import subprocess
