@@ -60,7 +60,9 @@ func TestApplyLive_NetworkAdd(t *testing.T) {
 	}, 50000, schema.Config{}, t.TempDir())
 	assert.NoError(t, err)
 	cmd := strings.Join(r.lastArgs[0], " ")
-	assert.Contains(t, cmd, "sbx policy allow network newdomain.example.com")
+	// sbx 0.29+ requires scope: SANDBOX before RESOURCES. devm uses
+	// the sandbox name (per-project network policy).
+	assert.Contains(t, cmd, "sbx policy allow network x newdomain.example.com")
 }
 
 func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
