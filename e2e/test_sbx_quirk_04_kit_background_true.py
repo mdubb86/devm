@@ -36,7 +36,6 @@ KIT_SPEC = textwrap.dedent("""\
     agent:
       image: docker/sandbox-templates:shell
       aiFilename: CLAUDE.md
-      persistence: persistent
       entrypoint:
         run: ["sh", "-c", "exec sleep infinity </dev/null"]
     environment:

@@ -55,7 +55,6 @@ KIT_SPEC = textwrap.dedent("""\
     description: pure-sbx port behavior probe
     agent:
       image: docker/sandbox-templates:shell
-      persistence: persistent
       entrypoint:
         run: ["sh", "-c", "exec sleep infinity </dev/null"]
     environment:
