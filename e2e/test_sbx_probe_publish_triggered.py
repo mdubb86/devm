@@ -1,37 +1,26 @@
-"""sbx-anchor 14: pin Quirk #6's trigger — a Go probe binary that
-re-applies the two structural pieces RunShell used to have around
-the anchor spawn (Spawner / SpawnedCmd interface wrapping for the
-anchor + ticker+select waitForRunning) FAILS to publish reliably,
-even though the otherwise-identical clean probe (test_sbx_anchor_
-12_go_probe_publish.py) succeeds 10/10.
+"""sbx probe: triggered — Go probe binary that re-applies the two
+structural pieces (Spawner / SpawnedCmd interface wrapping for the
+anchor + ticker+select waitForRunning) which historically triggered
+Quirk #6's publish phantom on the pre-0.31 sbx daemon.
 
-The asymmetry between the clean probe and this triggered probe
-**positively pins the trigger** for Quirk #6. If a future refactor
-of `internal/orchestrator/shell.go` quietly puts either trigger
-piece back around the anchor spawn, three things should happen
-together:
+Under sbx 0.31+ (where Quirk #6 is fixed), this probe runs 3/3
+stably — the trigger pieces no longer destabilize publishes. The
+test asserts 3/3 PASS. This is the sentinel: if sbx ever regresses
+such that the trigger pieces re-introduce the publish phantom, this
+test fires and we know to:
 
-  1. test_07_invariant_happy_path.py goes red (the real bug).
-  2. THIS test stays green (the trigger still reproduces in the
-     probe).
-  3. test_sbx_anchor_12_go_probe_publish.py stays green (the
-     clean probe still passes — pins that sbx itself is fine).
+  1. Re-read docs/sbx-quirks.md section 6 and the 2026-06-04
+     bisection findings.
+  2. Avoid the Spawner-interface-wrapping + ticker+select
+     waitForRunning shape in internal/orchestrator/shell.go until
+     sbx is fixed again.
 
-If THIS test goes red (probe stops failing), that's a sign sbx's
-behavior has shifted and Quirk #6's resolution should be
-re-examined: see docs/sbx-quirks.md section 6 and revisit the
-2026-06-04 bisection findings.
+Counterpart: test_sbx_probe_publish_baseline.py — same probe binary
+shape without the trigger pieces. Both should stay green; if only
+baseline stays green and triggered goes red, that's the sbx
+regression signal.
 
-The probe binary lives at e2e/probes/probe-publish-triggered/
-main.go.
-
-Cadence note: at the bisected baseline (~20% publish-OK on the
-strip branch), the probability of all 3 runs accidentally passing
-is ~0.8%, so "at least 1 of 3 FAIL" is a high-confidence assertion
-(~99.2% reliability) of the trigger being live. If sbx ever speeds
-up enough that the trigger's race window closes (a real and
-welcome regression of the bug), this test will start flaking — at
-which point delete it and Quirk #6 along with it.
+The probe binary lives at e2e/probes/probe-publish-triggered/main.go.
 """
 from __future__ import annotations
 import os

@@ -21,12 +21,13 @@
 // with one fix → 10/10 with both fixed.
 //
 // The clean probe (e2e/probes/probe-publish/) is pinned by
-// test_sbx_anchor_12_go_probe_publish.py to PASS reliably. This
-// triggered probe is pinned by
-// test_sbx_anchor_14_publish_trigger_pin.py to FAIL with high
-// probability. The asymmetry pins the trigger so a future
-// refactor of `internal/orchestrator/shell.go` can't quietly
-// reintroduce either pattern around the anchor spawn without
+// test_sbx_probe_publish_baseline.py. This triggered probe is
+// pinned by test_sbx_probe_publish_triggered.py. Under sbx 0.31+
+// the publish phantom is fixed, so both stay green. If sbx ever
+// regresses, the asymmetry (baseline green / triggered red)
+// pins the cause to the upstream — preventing a future refactor
+// of internal/orchestrator/shell.go from quietly reintroducing
+// either pattern around the anchor spawn without
 // the regression test catching it (via test_07 going red and
 // the trigger test going green).
 //

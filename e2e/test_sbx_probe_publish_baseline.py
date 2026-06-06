@@ -1,24 +1,22 @@
-"""sbx-anchor 12: a stand-alone Go binary that mirrors devm's port-
-reconcile sequence (spawn anchor → wait → publish → verify → snapshot
-→ user-shell spawn) succeeds reliably under both `nohup` and plain
-`sbx run` anchor wrappings, when invoked via pexpect (production
+"""sbx probe: baseline — a stand-alone Go binary that mirrors devm's
+port-reconcile sequence (spawn anchor -> wait -> publish -> verify ->
+snapshot -> user-shell spawn) succeeds reliably under both `nohup` and
+plain `sbx run` anchor wrappings, when invoked via pexpect (production
 PTY shape).
 
-This pins the negative finding from the 2026-06-02 test_07 debugging:
-**Go itself, exec.Cmd, sbx's CLI surface, and the publish/verify
-sequence are NOT the cause of devm's test_07 port phantom.** Pure-sbx
-tests confirm sbx works. This test confirms a Go binary doing the
-same flow works. devm's larger orchestrator does something extra
-that destabilizes the port endpoint — see docs/sbx-quirks.md "Quirk
-#6" (added 2026-06-02) for the open investigation.
-
-If devm's test_07 starts passing AND this test starts failing, the
-upstream behavior may have shifted in a way that affects both — re-
-read the trace and update Quirk #6.
+Counterpart: test_sbx_probe_publish_triggered.py, which re-applies the
+two structural pieces (Spawner interface wrapping + ticker+select
+waitForRunning) that historically reproduced Quirk #6's publish
+phantom. Both probes are now stable under sbx 0.31; this baseline
+remains as a smoke-test of the sbx runtime itself. If a future
+investigation needs to ask "is sbx healthy?", run this probe.
 
 The probe binary itself lives at e2e/probes/probe-publish/main.go.
 We build it inline in this test rather than checking the binary into
 git.
+
+If sbx ever regresses such that pure-Go-orchestration-of-sbx breaks,
+this test fires loud — signaling the bug is in sbx, not in devm.
 """
 from __future__ import annotations
 import os
