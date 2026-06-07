@@ -269,7 +269,24 @@ type Config struct {
 	Network   Network            `yaml:"network,omitempty"`
 	Env       map[string]string  `yaml:"env,omitempty"`
 	Services  map[string]Service `yaml:"services,omitempty"`
-	Install   []string           `yaml:"install,omitempty"`
+
+	// Install is the list of shell commands run ONCE at sandbox create
+	// time, in declaration order, as root. Each entry is wrapped by
+	// .devm/scripts/wrap-fg.sh so its stdout+stderr is captured to
+	// /tmp/.devm-install/install-<N>/current and an exit-code marker
+	// is written. The supervision design surfaces failures with the
+	// captured output via the install gate in `devm shell`.
+	//
+	// Affordances provided by devm's bootstrap step (runs FIRST, before
+	// any user install entry):
+	//   * `apt-get update` has already run, so user install entries can
+	//     `apt-get install -y <pkg>` directly without a preceding update.
+	//   * The `s6` and `ncurses-term` packages are installed; `s6-log`
+	//     is on PATH (used by wrap-bg.sh for rotated daemon logs).
+	//
+	// Reserved arg-separator: `--` in a user command's argv is consumed
+	// by the wrapper. Quote it or split into multiple steps.
+	Install []string `yaml:"install,omitempty"`
 
 	// Mounts are additional host paths mounted into the sandbox at
 	// the same path inside the VM (sbx's "mirrored path" mode). Each

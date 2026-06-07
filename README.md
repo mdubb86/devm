@@ -19,4 +19,17 @@ devm reconcile    # regenerate .devm/ kit assets
 devm shell        # drop into the sandbox
 ```
 
+## devm.yaml affordances
+
+A few things devm does so your `devm.yaml` doesn't have to:
+
+* **`apt-get update` already ran.** Devm's bootstrap step runs `apt-get update`
+  before any of your `install:` entries, so they can `apt-get install -y <pkg>`
+  directly.
+* **Failures surface with captured output.** Each `install:` and `startup:` step
+  is wrapped: stdout+stderr is captured, exit codes are tracked, and `devm shell`
+  prints a structured error showing which step failed and what it printed.
+  Logs persist at `/tmp/.devm-install/install-<N>/current` and
+  `/tmp/.devm-startup/startup-<N>/current` inside the sandbox.
+
 (More docs as the project matures.)
