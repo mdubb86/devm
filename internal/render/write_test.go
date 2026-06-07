@@ -144,3 +144,39 @@ func TestWriteDevmDir_StaleTemplateRemoved(t *testing.T) {
 	_, err := os.Stat(stale)
 	assert.True(t, os.IsNotExist(err), "expected stale installer to be removed")
 }
+
+func TestWriteDevmDirWritesWrapFGAtExpectedPathAndMode(t *testing.T) {
+	dir := t.TempDir()
+	cfg := minimalConfig(t)
+	require.NoError(t, WriteDevmDir(cfg, dir))
+
+	wrapper := filepath.Join(dir, ".devm", "scripts", "wrap-fg.sh")
+	info, err := os.Stat(wrapper)
+	require.NoError(t, err, ".devm/scripts/wrap-fg.sh must be written")
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(),
+		"wrap-fg.sh must be executable")
+
+	bs, err := os.ReadFile(wrapper)
+	require.NoError(t, err)
+	assert.Contains(t, string(bs), "PIPESTATUS[0]",
+		"wrap-fg.sh must capture user cmd rc via PIPESTATUS[0]")
+	assert.Contains(t, string(bs), "s6-log",
+		"wrap-fg.sh must pipe through s6-log")
+}
+
+func TestWriteDevmDirWritesWrapBGAtExpectedPathAndMode(t *testing.T) {
+	dir := t.TempDir()
+	cfg := minimalConfig(t)
+	require.NoError(t, WriteDevmDir(cfg, dir))
+
+	wrapper := filepath.Join(dir, ".devm", "scripts", "wrap-bg.sh")
+	info, err := os.Stat(wrapper)
+	require.NoError(t, err, ".devm/scripts/wrap-bg.sh must be written")
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(),
+		"wrap-bg.sh must be executable")
+
+	bs, err := os.ReadFile(wrapper)
+	require.NoError(t, err)
+	assert.Contains(t, string(bs), "spawned",
+		"wrap-bg.sh must write .spawned marker")
+}

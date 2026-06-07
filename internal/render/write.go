@@ -86,6 +86,22 @@ func writeStaticFiles(cfg schema.Config, repoRoot string) error {
 		return fmt.Errorf("write %s: %w", wrapperPath, err)
 	}
 
+	// wrap-fg.sh / wrap-bg.sh: bash wrappers that capture per-step
+	// stdout/stderr through s6-log and write rc + marker files under
+	// /tmp/.devm/. spec.go renders user install:/startup: steps through
+	// these. Mode 0755 like the rest; .sh extension preserved so write-
+	// File's extension-based mode detection works. (Naming differs from
+	// with-devm-env because users don't invoke these directly — they're
+	// internal-to-render machinery.)
+	wrapFGPath := filepath.Join(scriptsDir, "wrap-fg.sh")
+	if err := os.WriteFile(wrapFGPath, []byte(scripts.WrapFG), 0o755); err != nil {
+		return fmt.Errorf("write %s: %w", wrapFGPath, err)
+	}
+	wrapBGPath := filepath.Join(scriptsDir, "wrap-bg.sh")
+	if err := os.WriteFile(wrapBGPath, []byte(scripts.WrapBG), 0o755); err != nil {
+		return fmt.Errorf("write %s: %w", wrapBGPath, err)
+	}
+
 	// .devm/.env: persistent project + service env file sourced by the
 	// wrapper. Tmpfile-then-rename so a concurrent source can't observe
 	// a half-written file.
