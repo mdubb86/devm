@@ -140,15 +140,15 @@ func TestSpecYAMLDoesNotInstallAgentBinary(t *testing.T) {
 }
 
 func TestSpecYAMLOmitsInstallWhenEmpty(t *testing.T) {
-	// With no user-defined install steps, the rendered spec has no
-	// commands.install block. (The bootstrap.sh auto-prepend was
-	// reverted 2026-06-05 pending fix of the async-runtime-death race
-	// it exposed — see spec.go for details.)
+	// With no user-defined install steps, the rendered spec still has
+	// the three framework steps: cleanup (0), bootstrap (1), sentinel (2).
+	// Bootstrap is re-enabled as of 2026-06-07 now that the install
+	// marker scheme closes the async-runtime-death race.
 	cfg := minimalConfig(t)
 	out := SpecYAML(cfg, "/tmp/repo")
 	parsed := parseSpec(t, out)
-	assert.Empty(t, parsed.Commands.Install,
-		"empty cfg.Install must produce no install steps")
+	assert.Equal(t, 3, len(parsed.Commands.Install),
+		"empty cfg.Install must produce cleanup + bootstrap + sentinel = 3 steps")
 	// commands.startup still present (init-volumes lives there).
 	assert.Contains(t, out, "startup:")
 }
@@ -177,38 +177,71 @@ func TestSpecYAMLRendersUserInstallSteps(t *testing.T) {
 	// (init-volumes still has user: "1000" and a description — that's hardcoded.)
 }
 
-func TestSpecYAMLInstallCommandPreservesSingleQuotes(t *testing.T) {
+func TestSpecYAMLInstallStep0IsCleanup(t *testing.T) {
 	cfg := minimalConfig(t)
-	cfg.Install = []string{
-		`echo 'hello world'`,
-	}
 	out := SpecYAML(cfg, "/tmp/repo")
-	// Round-trip parse: whatever quoting style yaml.v3 chooses, the
-	// install command must come back containing the user's original
-	// text intact (after our .devm/.env source prefix).
 	parsed := parseSpec(t, out)
-	require.Len(t, parsed.Commands.Install, 1)
-	assert.Contains(t, parsed.Commands.Install[0].Command, `echo 'hello world'`,
-		"user's command (with its quotes) must appear verbatim after the source prefix")
+	require.GreaterOrEqual(t, len(parsed.Commands.Install), 1)
+	assert.Contains(t, parsed.Commands.Install[0].Command,
+		"rm -rf /tmp/.devm",
+		"install step 0 must wipe /tmp/.devm for marker freshness")
+	assert.Contains(t, parsed.Commands.Install[0].Command,
+		"mkdir -p /tmp/.devm",
+		"install step 0 must recreate /tmp/.devm")
 }
 
-func TestSpecYAMLInstallWrapsWithDotenvSource(t *testing.T) {
+func TestSpecYAMLInstallStep1IsWrappedBootstrap(t *testing.T) {
+	cfg := minimalConfig(t)
+	out := SpecYAML(cfg, "/tmp/repo")
+	parsed := parseSpec(t, out)
+	require.GreaterOrEqual(t, len(parsed.Commands.Install), 2)
+	got := parsed.Commands.Install[1].Command
+	assert.Contains(t, got, "wrap-fg.sh", "step 1 must invoke wrap-fg.sh")
+	assert.Contains(t, got, "install 1", "step 1 must pass phase=install N=1")
+	assert.Contains(t, got, "bootstrap.sh",
+		"step 1's wrapped argv must invoke bootstrap.sh")
+}
+
+func TestSpecYAMLInstallUserStepWrapped(t *testing.T) {
 	cfg := minimalConfig(t)
 	cfg.Install = []string{"echo hello"}
 	out := SpecYAML(cfg, "/tmp/repo")
 	parsed := parseSpec(t, out)
-	require.Len(t, parsed.Commands.Install, 1)
-	got := parsed.Commands.Install[0].Command
-	// The wrapper sources .devm/.env (via $WORKSPACE_DIR, sbx-set
-	// everywhere per test_sbx_contract_23) before executing the user's
-	// command. Guarded with [ -f ] so very early install (before .env
-	// exists) doesn't blow up.
-	assert.Contains(t, got, `[ -f "$WORKSPACE_DIR/.devm/.env" ]`,
-		"install must guard the source against missing .env")
-	assert.Contains(t, got, `. "$WORKSPACE_DIR/.devm/.env"`,
-		"install must source .devm/.env so cfg.Env reaches install commands")
-	assert.True(t, strings.HasSuffix(got, "echo hello"),
-		"user's command must run after the source: got %q", got)
+	// Steps: 0 cleanup, 1 bootstrap, 2 user, 3 sentinel = 4 total.
+	require.Equal(t, 4, len(parsed.Commands.Install),
+		"expected cleanup + bootstrap + 1 user + sentinel = 4")
+	user := parsed.Commands.Install[2].Command
+	assert.Contains(t, user, "wrap-fg.sh", "user step must invoke wrap-fg.sh")
+	assert.Contains(t, user, "install 2", "user step must be index 2")
+	assert.Contains(t, user, "echo hello",
+		"user step must contain the user's command verbatim")
+}
+
+func TestSpecYAMLInstallSentinelLast(t *testing.T) {
+	cfg := minimalConfig(t)
+	cfg.Install = []string{"echo a", "echo b"}
+	out := SpecYAML(cfg, "/tmp/repo")
+	parsed := parseSpec(t, out)
+	last := parsed.Commands.Install[len(parsed.Commands.Install)-1].Command
+	assert.Contains(t, last, "touch /tmp/.devm/install-all-ok",
+		"last install step must be the install-all-ok sentinel")
+}
+
+func TestSpecYAMLInstallPreservesUserSingleQuotes(t *testing.T) {
+	cfg := minimalConfig(t)
+	cfg.Install = []string{`echo 'hello world'`}
+	out := SpecYAML(cfg, "/tmp/repo")
+	parsed := parseSpec(t, out)
+	require.Equal(t, 4, len(parsed.Commands.Install))
+	user := parsed.Commands.Install[2].Command
+	// The wrapFGInstall function uses the '\'' shell escape to embed
+	// single quotes inside a single-quoted sh -c argument. The literal
+	// text "echo 'hello world'" becomes "echo '\''hello world'\''".
+	// We verify both that the user's command text is present (echo +
+	// hello world) and that the wrap-fg.sh wrapper is applied.
+	assert.Contains(t, user, "echo", "user command must be present in wrapped step")
+	assert.Contains(t, user, "hello world", "user argument must survive the wrap-fg.sh argv embedding")
+	assert.Contains(t, user, "wrap-fg.sh", "user step must invoke wrap-fg.sh")
 }
 
 func TestSpecYAMLUserStartupWrapsWithDotenvSource(t *testing.T) {

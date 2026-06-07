@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/mtwaage/devm/internal/schema"
 	"gopkg.in/yaml.v3"
@@ -76,30 +77,24 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 		}
 	}
 
-	// commands.install: prepend devm's built-in bootstrap (one-time
-	// apt installs every sandbox should have — currently ncurses-term
-	// for modern terminfo), then user-defined install steps.
-	// commands.install: user-defined install steps only. The bootstrap.sh
-	// auto-prepend was reverted 2026-06-05 — it extended install time
-	// enough to expose a latent race in our cold-start flow: the
-	// runtime dies asynchronously DURING install while our waitFor-
-	// ExecReady + port reconcile + snapshot sequence races against it.
-	// `bash -c true` and `true` as prepends didn't trigger it (install
-	// completes instantly); apt-get update / bash <file> did. The
-	// async-runtime-death pattern existed before bootstrap.sh too —
-	// the prepend just made it deterministic for the common case.
+	// commands.install:
+	//   step 0: cleanup (unwrapped — wipes its own potential markers)
+	//   step 1: bootstrap.sh (wrapped — devm-managed)
+	//   step 2..N+1: user cfg.Install[0..N-1] (each wrapped)
+	//   step N+2: sentinel
 	//
-	// Pinned by:
-	//   - test_24_cold_start_docker_base (xfail — DinD base)
-	//   - test_sbx_05 fleet (proves the kit + nohup + apt-get + snapshot
-	//     exec all work under pure sbx — only devm's full flow triggers)
-	// scripts/bootstrap.sh + embed/write plumbing remain in place;
-	// re-enabling is a one-line change once the async-death root cause
-	// is fixed (likely: snapshot moves to host-side, or readiness gate
-	// waits for install marker file).
-	for _, cmd := range cfg.Install {
-		spec.Commands.Install = append(spec.Commands.Install, kitInstallCommand{Command: wrapInstallWithDotenvSource(cmd)})
+	// Per the supervision design (2026-06-07), bootstrap.sh auto-prepend
+	// is re-enabled. The install marker scheme makes it safe — the
+	// 2026-06-05 race is closed by RunShell's install gate.
+	spec.Commands.Install = append(spec.Commands.Install,
+		kitInstallCommand{Command: installCleanupCmd},
+		kitInstallCommand{Command: bootstrapInstallCmd},
+	)
+	for i, cmd := range cfg.Install {
+		stepN := i + 2 // user step indexing starts at 2 (cleanup=0, bootstrap=1)
+		spec.Commands.Install = append(spec.Commands.Install, kitInstallCommand{Command: wrapFGInstall(stepN, cmd)})
 	}
+	spec.Commands.Install = append(spec.Commands.Install, kitInstallCommand{Command: installSentinelCmd})
 
 	// commands.startup: two built-in steps (init-volumes, install-templates)
 	// then per-service startup in service-sorted order.
@@ -231,14 +226,6 @@ func buildStartupStep(step schema.StartupCommand, service string, _ int) kitStar
 // e2e/test_sbx_contract_23_env_workspace_dir_set_by_sbx.py.
 const dotenvSourcePrefix = `[ -f "$WORKSPACE_DIR/.devm/.env" ] && . "$WORKSPACE_DIR/.devm/.env"`
 
-// wrapInstallWithDotenvSource wraps a user install command string so it
-// runs after sourcing .devm/.env. The kit install: form is a single
-// string sbx hands to sh -c, so we just prepend the source as another
-// statement — no nested shell, no quoting dance on the user's text.
-func wrapInstallWithDotenvSource(userCmd string) string {
-	return dotenvSourcePrefix + "; " + userCmd
-}
-
 // wrapStartupWithDotenvSource wraps a user startup command argv so it
 // runs after sourcing .devm/.env. The kit startup: form is an argv
 // array, so we use the standard POSIX shell idiom:
@@ -258,3 +245,32 @@ func wrapStartupWithDotenvSource(userCmd []string) []string {
 	}
 	return append(wrapped, userCmd...)
 }
+
+// installCleanupCmd is install step #0: wipes /tmp/.devm for marker
+// freshness, then recreates the dir with mode 777 so wrappers running
+// as different users (root for install-templates, 1000 for agent
+// steps) can all write per-step subdirs. Unwrapped (it would erase
+// its own markers if wrapped).
+const installCleanupCmd = `sh -c 'rm -rf /tmp/.devm && mkdir -p /tmp/.devm && chmod 777 /tmp/.devm'`
+
+// installSentinelCmd is the terminal install step: marks the entire
+// install phase complete. The install gate in RunShell polls for
+// /tmp/.devm/install-all-ok to know install has finished.
+const installSentinelCmd = `sh -c 'touch /tmp/.devm/install-all-ok'`
+
+// wrapFGInstall renders a single install: command string as
+//
+//	bash $WORKSPACE_DIR/.devm/scripts/wrap-fg.sh install <N> -- sh -c '<single-quoted user cmd>'
+//
+// using the same single-quote escape dance as sandbox.PersistentEnv.
+func wrapFGInstall(stepN int, userCmd string) string {
+	quoted := "'" + strings.ReplaceAll(userCmd, "'", `'\''`) + "'"
+	return fmt.Sprintf(
+		`bash $WORKSPACE_DIR/.devm/scripts/wrap-fg.sh install %d -- sh -c %s`,
+		stepN, quoted,
+	)
+}
+
+// bootstrapInstallCmd renders install step #1: bootstrap.sh wrapped
+// by wrap-fg.sh.
+const bootstrapInstallCmd = `bash $WORKSPACE_DIR/.devm/scripts/wrap-fg.sh install 1 -- bash $WORKSPACE_DIR/.devm/scripts/bootstrap.sh`
