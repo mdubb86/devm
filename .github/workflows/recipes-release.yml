@@ -37,24 +37,34 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Verify recipes/ changed since previous recipes release
-        if: ${{ github.event.inputs.force != 'true' }}
+        id: guard
         run: |
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            echo "force=true — bypassing guard"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           TAG="${{ steps.resolve.outputs.tag }}"
           PREV=$(git tag --list 'recipes-v*' --sort=-version:refname | grep -v "^$TAG$" | head -1)
           if [ -z "$PREV" ]; then
             echo "no prior recipes-v* tag — first release; proceeding"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if git diff --quiet "$PREV" HEAD -- recipes/; then
             echo "no recipes/ changes since $PREV — skipping release"
-            exit 78
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: actions/setup-go@v5
+        if: steps.guard.outputs.skip != 'true'
         with:
           go-version-file: go.mod
 
       - name: Build recipes.db
+        if: steps.guard.outputs.skip != 'true'
         run: |
           go run ./tools/build-recipes-db \
             -src recipes \
@@ -62,6 +72,7 @@ jobs:
             -version "${{ steps.resolve.outputs.tag }}"
 
       - name: Create release
+        if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

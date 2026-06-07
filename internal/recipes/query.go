@@ -81,6 +81,9 @@ func (q *Query) List(category string) ([]Recipe, error) {
 		r.Since = since.String
 		out = append(out, r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -113,6 +116,9 @@ func (q *Query) Search(term string, limit int) ([]Recipe, error) {
 		}
 		r.Since = since.String
 		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

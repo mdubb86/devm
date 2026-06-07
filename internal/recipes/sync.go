@@ -186,12 +186,21 @@ func (s *Syncer) downloadAndReplace(ctx context.Context, url string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+	// 50 MB hard ceiling. A misbehaving releases endpoint shouldn't be
+	// able to exhaust disk through this code path. LimitReader+1 lets
+	// us detect oversize bodies after the copy.
+	const maxRecipesDB = 50 * 1024 * 1024
+	n, err := io.Copy(tmp, io.LimitReader(resp.Body, maxRecipesDB+1))
+	if err != nil {
 		tmp.Close()
 		_ = os.Remove(tmpPath)
 		return err
 	}
 	tmp.Close()
+	if n > maxRecipesDB {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("recipes sync: downloaded db exceeds %d-byte ceiling", maxRecipesDB)
+	}
 
 	// Validate by opening + version-checking.
 	q, err := Open(tmpPath)
