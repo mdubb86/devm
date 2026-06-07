@@ -244,81 +244,6 @@ func TestSpecYAMLInstallPreservesUserSingleQuotes(t *testing.T) {
 	assert.Contains(t, user, "wrap-fg.sh", "user step must invoke wrap-fg.sh")
 }
 
-func TestSpecYAMLUserStartupWrapsWithDotenvSource(t *testing.T) {
-	cfg := minimalConfig(t)
-	cfg.Services = map[string]schema.Service{
-		"web": {Port: 80, Startup: []schema.StartupCommand{
-			{Command: []string{"my-server", "--flag", "value"}},
-		}},
-	}
-	out := SpecYAML(cfg, "/tmp/repo")
-	parsed := parseSpec(t, out)
-
-	// Built-in steps stay unwrapped (init-volumes, install-templates).
-	// User step is wrapped: sh -c '... ; exec "$@"' _ <orig args...>
-	var userCmd []string
-	for _, step := range parsed.Commands.Startup {
-		if strings.Contains(strings.Join(step.Command, " "), "my-server") {
-			userCmd = step.Command
-			break
-		}
-	}
-	require.NotNil(t, userCmd, "user startup command must appear in rendered spec")
-	require.GreaterOrEqual(t, len(userCmd), 4, "wrapped form has shell + flag + script + dummy $0 + args")
-	assert.Equal(t, "sh", userCmd[0])
-	assert.Equal(t, "-c", userCmd[1])
-	assert.Contains(t, userCmd[2], `. "$WORKSPACE_DIR/.devm/.env"`,
-		"wrapper script must source .devm/.env")
-	assert.Contains(t, userCmd[2], `exec "$@"`,
-		"wrapper script must exec original argv")
-	assert.Equal(t, "_", userCmd[3], "dummy $0 to consume the script's name slot")
-	assert.Equal(t, []string{"my-server", "--flag", "value"}, userCmd[4:],
-		"original argv must be passed as $@")
-}
-
-func TestSpecYAMLBuiltInStartupStepsNotWrapped(t *testing.T) {
-	cfg := minimalConfig(t)
-	out := SpecYAML(cfg, "/tmp/repo")
-	parsed := parseSpec(t, out)
-	// init-volumes and install-templates already reference $WORKSPACE_DIR
-	// directly and don't need cfg.Env. Wrapping them would just add noise.
-	for _, step := range parsed.Commands.Startup {
-		joined := strings.Join(step.Command, " ")
-		if strings.Contains(joined, "init-volumes.sh") || strings.Contains(joined, "install-templates.sh") {
-			assert.NotContains(t, joined, `. "$WORKSPACE_DIR/.devm/.env"`,
-				"built-in startup step %q should not be wrapped with the env source", joined)
-		}
-	}
-}
-
-func TestSpecYAMLUserStartupPreservesBackground(t *testing.T) {
-	cfg := minimalConfig(t)
-	cfg.Services = map[string]schema.Service{
-		"daemon": {Port: 9000, Startup: []schema.StartupCommand{
-			{Command: []string{"my-daemon"}, Background: true},
-		}},
-	}
-	out := SpecYAML(cfg, "/tmp/repo")
-	parsed := parseSpec(t, out)
-	var found bool
-	for _, step := range parsed.Commands.Startup {
-		if strings.Contains(strings.Join(step.Command, " "), "my-daemon") {
-			assert.True(t, step.Background, "background: true must be preserved through the wrapper")
-			found = true
-			break
-		}
-	}
-	require.True(t, found, "user startup command must appear in rendered spec")
-}
-
-func TestSpecYAMLStartupOnlyInitVolumesWhenNoServiceStartup(t *testing.T) {
-	cfg := minimalConfig(t)
-	out := SpecYAML(cfg, "/tmp/repo")
-	assert.Contains(t, out, "init-volumes.sh")
-	startupSection := extractStartupSection(t, out)
-	// Two built-in startup steps: init-volumes + install-templates.
-	assert.Equal(t, 2, strings.Count(startupSection, "- command:"))
-}
 
 func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 	cfg := minimalConfig(t)
@@ -340,8 +265,8 @@ func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 	out := SpecYAML(cfg, "/tmp/repo")
 	startupSection := extractStartupSection(t, out)
 
-	// 2 built-in (init-volumes + install-templates) + 2 postgres + 1 redis = 5 steps.
-	assert.Equal(t, 5, strings.Count(startupSection, "- command:"))
+	// cleanup(0) + init-volumes(1) + install-templates(2) + 2 postgres + 1 redis + sentinel = 7 steps.
+	assert.Equal(t, 7, strings.Count(startupSection, "- command:"))
 
 	// Service sort order is alphabetical: postgres before redis.
 	pgStartIdx := strings.Index(startupSection, "pg_ctl")
@@ -364,34 +289,6 @@ func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 		"background daemons should emit the kit-native flag")
 }
 
-func TestSpecYAMLStartupCommandArrayRoundTrips(t *testing.T) {
-	cfg := minimalConfig(t)
-	cfg.Services = map[string]schema.Service{
-		"web": {
-			Port: 3000,
-			Startup: []schema.StartupCommand{
-				{Command: []string{"node", "server.js", "--port", "3000"}},
-			},
-		},
-	}
-	out := SpecYAML(cfg, "/tmp/repo")
-	// Belt: the user's original argv parses back exactly — the env-source
-	// wrapper prepends [sh, -c, '<source>; exec "$@"', _], so the user's
-	// args appear as the trailing slice. "3000" stays as a string after
-	// round-trip (yaml.v3 quotes integer-like values to preserve type).
-	parsed := parseSpec(t, out)
-	require.GreaterOrEqual(t, len(parsed.Commands.Startup), 3, "need at least built-ins + web step")
-	webStep := parsed.Commands.Startup[len(parsed.Commands.Startup)-1]
-	require.GreaterOrEqual(t, len(webStep.Command), 4, "wrapper prefix + dummy $0 + user argv")
-	assert.Equal(t,
-		[]string{"node", "server.js", "--port", "3000"},
-		webStep.Command[4:],
-		"user argv after wrapper prefix [sh, -c, '<source>; exec \"$@\"', _]",
-	)
-	// Suspenders: flow style still gets emitted (sbx kits use it). A
-	// regression to block style would make spec.yaml much noisier.
-	assert.Contains(t, out, "- command: [sh, -c, ")
-}
 
 func TestSpecYAML_HasInstallTemplatesStartupStep(t *testing.T) {
 	cfg := schema.Config{
@@ -413,6 +310,101 @@ func TestSpecYAML_HasInstallTemplatesStartupStep(t *testing.T) {
 	}
 	require.Contains(t, out[it:end], "user: \"0\"")
 	_ = itLine
+}
+
+func TestSpecYAMLStartupStep0IsCleanup(t *testing.T) {
+	cfg := minimalConfig(t)
+	out := SpecYAML(cfg, "/tmp/repo")
+	parsed := parseSpec(t, out)
+	require.GreaterOrEqual(t, len(parsed.Commands.Startup), 1)
+	joined := strings.Join(parsed.Commands.Startup[0].Command, " ")
+	assert.Contains(t, joined, "rm -rf /tmp/.devm",
+		"startup step 0 must wipe /tmp/.devm for marker freshness")
+}
+
+func TestSpecYAMLStartupStep1IsWrappedInitVolumes(t *testing.T) {
+	cfg := minimalConfig(t)
+	out := SpecYAML(cfg, "/tmp/repo")
+	parsed := parseSpec(t, out)
+	require.GreaterOrEqual(t, len(parsed.Commands.Startup), 2)
+	cmd := parsed.Commands.Startup[1].Command
+	require.GreaterOrEqual(t, len(cmd), 6, "wrap-fg.sh argv form expected")
+	assert.Equal(t, "bash", cmd[0])
+	assert.Contains(t, cmd[1], "wrap-fg.sh")
+	assert.Equal(t, "startup", cmd[2])
+	assert.Equal(t, "1", cmd[3])
+	assert.Equal(t, "--", cmd[4])
+	// Trailing argv invokes init-volumes.sh.
+	tail := strings.Join(cmd[5:], " ")
+	assert.Contains(t, tail, "init-volumes.sh")
+}
+
+func TestSpecYAMLStartupStep2IsWrappedInstallTemplates(t *testing.T) {
+	cfg := minimalConfig(t)
+	out := SpecYAML(cfg, "/tmp/repo")
+	parsed := parseSpec(t, out)
+	require.GreaterOrEqual(t, len(parsed.Commands.Startup), 3)
+	cmd := parsed.Commands.Startup[2].Command
+	assert.Equal(t, "startup", cmd[2])
+	assert.Equal(t, "2", cmd[3])
+	tail := strings.Join(cmd[5:], " ")
+	assert.Contains(t, tail, "install-templates.sh")
+}
+
+func TestSpecYAMLStartupUserFGStepWrapped(t *testing.T) {
+	cfg := minimalConfig(t)
+	cfg.Services = map[string]schema.Service{
+		"web": {Port: 80, Startup: []schema.StartupCommand{
+			{Command: []string{"node", "server.js"}},
+		}},
+	}
+	out := SpecYAML(cfg, "/tmp/repo")
+	parsed := parseSpec(t, out)
+	// Steps: 0 cleanup, 1 init-volumes, 2 install-templates, 3 user, 4 sentinel
+	require.Equal(t, 5, len(parsed.Commands.Startup))
+	cmd := parsed.Commands.Startup[3].Command
+	assert.Contains(t, cmd[1], "wrap-fg.sh",
+		"foreground user step must invoke wrap-fg.sh")
+	assert.Equal(t, "3", cmd[3], "user step index starts at 3")
+	assert.Equal(t, []string{"node", "server.js"}, cmd[5:],
+		"user argv must be the trailing slice")
+}
+
+func TestSpecYAMLStartupUserBGStepUsesWrapBG(t *testing.T) {
+	cfg := minimalConfig(t)
+	cfg.Services = map[string]schema.Service{
+		"daemon": {Port: 9000, Startup: []schema.StartupCommand{
+			{Command: []string{"my-daemon"}, Background: true},
+		}},
+	}
+	out := SpecYAML(cfg, "/tmp/repo")
+	parsed := parseSpec(t, out)
+	cmd := parsed.Commands.Startup[3].Command
+	assert.Contains(t, cmd[1], "wrap-bg.sh",
+		"background user step must invoke wrap-bg.sh")
+}
+
+func TestSpecYAMLStartupUserBGPreservesBackgroundField(t *testing.T) {
+	cfg := minimalConfig(t)
+	cfg.Services = map[string]schema.Service{
+		"daemon": {Port: 9000, Startup: []schema.StartupCommand{
+			{Command: []string{"my-daemon"}, Background: true},
+		}},
+	}
+	out := SpecYAML(cfg, "/tmp/repo")
+	parsed := parseSpec(t, out)
+	assert.True(t, parsed.Commands.Startup[3].Background,
+		"Background: true must be preserved on the wrapped kit step")
+}
+
+func TestSpecYAMLStartupSentinelLast(t *testing.T) {
+	cfg := minimalConfig(t)
+	out := SpecYAML(cfg, "/tmp/repo")
+	parsed := parseSpec(t, out)
+	last := parsed.Commands.Startup[len(parsed.Commands.Startup)-1].Command
+	joined := strings.Join(last, " ")
+	assert.Contains(t, joined, "touch /tmp/.devm/startup-all-ok",
+		"last startup step must be the startup-all-ok sentinel")
 }
 
 // extractStartupSection returns the contents of commands.startup (from
