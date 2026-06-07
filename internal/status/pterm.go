@@ -3,6 +3,7 @@ package status
 import (
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -131,6 +132,20 @@ func (r *PtermReporter) Stop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.finalizeLocked()
+}
+
+// Clear emits ANSI escape codes to clear the visible terminal region
+// and home the cursor. Scrollback is preserved (use \033[3J if you
+// ever want to wipe scrollback too).
+//
+//	\033[H — cursor home
+//	\033[2J — erase entire display (visible region)
+func (r *PtermReporter) Clear() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.finalizeLocked()
+	// Write directly; pterm doesn't expose a "clear" helper.
+	fmt.Fprint(os.Stderr, "\033[H\033[2J")
 }
 
 // formatElapsed renders a duration in the format we want for the UX:

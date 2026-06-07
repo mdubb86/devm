@@ -10,3 +10,4 @@ func (NoOpReporter) Step(string, bool)    {}
 func (NoOpReporter) Fail()                {}
 func (NoOpReporter) Info(string)          {}
 func (NoOpReporter) Stop()                {}
+func (NoOpReporter) Clear()               {}

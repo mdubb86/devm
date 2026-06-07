@@ -52,6 +52,9 @@ func main() {
 		time.Sleep(scale + scale/2)
 		r.Step("ready", false)
 		r.Stop()
+		time.Sleep(scale / 2)
+		r.Clear()
+		fmt.Println("$ (this is where the user's shell prompt would appear)")
 		return
 	}
 
@@ -90,6 +93,12 @@ func main() {
 
 	r.Step("ready", false)
 	r.Stop()
+
+	// Simulate the brief pause before PTY hand-off, then clear so the
+	// "user shell prompt drops into a clean screen" UX is visible.
+	time.Sleep(scale / 2)
+	r.Clear()
+	fmt.Println("$ (this is where the user's shell prompt would appear)")
 }
 
 // doStep runs a counted (user) step under the reporter. If failStep

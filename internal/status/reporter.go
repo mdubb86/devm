@@ -40,6 +40,13 @@ type Reporter interface {
 	Fail()
 	Info(msg string)
 	Stop()
+
+	// Clear wipes the visible terminal region so the user's shell
+	// prompt drops in on a clean screen. Scrollback is preserved.
+	// Called by the caller on the SUCCESS path right before PTY
+	// hand-off; NOT on failure (the error block must stay visible).
+	// PlainReporter and NoOpReporter implement Clear as a no-op.
+	Clear()
 }
 
 // New returns a Reporter appropriate for out. If out is a TTY, a
@@ -88,4 +95,5 @@ func (r *PlainReporter) Info(msg string) {
 	fmt.Fprintf(r.Out, "[devm] %s\n", msg)
 }
 
-func (r *PlainReporter) Stop() {}
+func (r *PlainReporter) Stop()  {}
+func (r *PlainReporter) Clear() {} // no-op: plain transcripts shouldn't be wiped
