@@ -18,5 +18,9 @@ set -euo pipefail
 # only knows ~9 entries (xterm, vt100, etc.) and tools that resolve
 # the host TERM (vim, less, fzf, htop, etc.) fall back to dumb-mode
 # or render glitches whenever the user is on anything modern.
+#
+# s6: provides s6-log (used by wrap-fg.sh / wrap-bg.sh to capture
+# per-step stdout/stderr into /tmp/.devm/<phase>-<N>/ with rotation).
+# Pinned by e2e/test_sbx_contract_25_install_apt_s6_log_works.py.
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ncurses-term
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ncurses-term s6
