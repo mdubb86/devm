@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pterm/pterm"
+
 	"github.com/mtwaage/devm/internal/sandbox"
 	"github.com/mtwaage/devm/internal/schema"
 )
@@ -199,17 +201,20 @@ func resolveUserCmdText(phase string, stepN int, cfg schema.Config) string {
 // formatFailureReport renders a FailureReport as the user-facing
 // error message body. The shape is intentionally plain — no
 // prescriptive "fix this" or "investigate with X" hints. Just the
-// facts.
+// facts. The "error:" header line is colored red on TTY (pterm
+// auto-detects and degrades to plain on non-TTY / NO_COLOR).
 func formatFailureReport(r *FailureReport) string {
 	var b strings.Builder
 	if r.Hung {
-		b.WriteString(fmt.Sprintf(
-			"error: %s did not complete\n", r.Phase))
+		b.WriteString(pterm.FgRed.Sprintf(
+			"error: %s did not complete", r.Phase))
+		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf(
 			"  step %d (%s) still running or hung\n", r.StepN, r.UserCmd))
 	} else {
-		b.WriteString(fmt.Sprintf(
-			"error: %s step %d failed (rc=%d)\n", r.Phase, r.StepN, r.RC))
+		b.WriteString(pterm.FgRed.Sprintf(
+			"error: %s step %d failed (rc=%d)", r.Phase, r.StepN, r.RC))
+		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf(
 			"  command: %s\n", r.UserCmd))
 	}

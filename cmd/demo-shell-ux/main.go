@@ -17,6 +17,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/pterm/pterm"
+
 	"github.com/mtwaage/devm/internal/status"
 )
 
@@ -116,10 +118,11 @@ func doStep(r status.Reporter, out io.Writer, idx int, desc string, dur time.Dur
 }
 
 // showFailureBlock emits a supervision-style failure block to mimic
-// what formatFailureReport produces in the real path.
+// what formatFailureReport produces in the real path. The "error:"
+// header is red on TTY (pterm auto-strips on non-TTY / NO_COLOR).
 func showFailureBlock(out io.Writer, idx int, cmd, captured string) {
 	fmt.Fprintln(out)
-	fmt.Fprintf(out, "error: step %d failed (rc=1)\n", idx)
+	fmt.Fprintln(out, pterm.FgRed.Sprintf("error: step %d failed (rc=1)", idx))
 	fmt.Fprintf(out, "  command: %s\n", cmd)
 	fmt.Fprintf(out, "  output (last %d bytes):\n", len(captured))
 	for _, line := range splitLines(captured) {
