@@ -93,14 +93,26 @@ func (r *PlainReporter) PhaseStart(phase string, total int) {
 }
 
 func (r *PlainReporter) StepStart(phase string, n int, desc string) {
+	if phase == "" {
+		fmt.Fprintf(r.Out, "[devm] %s: starting\n", desc)
+		return
+	}
 	fmt.Fprintf(r.Out, "[devm] %s [%d] %s: starting\n", phase, n, desc)
 }
 
 func (r *PlainReporter) StepDone(phase string, n int, elapsed time.Duration) {
+	if phase == "" {
+		fmt.Fprintf(r.Out, "[devm] done (%s)\n", formatElapsed(elapsed))
+		return
+	}
 	fmt.Fprintf(r.Out, "[devm] %s [%d]: done (%s)\n", phase, n, formatElapsed(elapsed))
 }
 
 func (r *PlainReporter) StepFail(phase string, n int, elapsed time.Duration) {
+	if phase == "" {
+		fmt.Fprintf(r.Out, "[devm] FAILED (%s)\n", formatElapsed(elapsed))
+		return
+	}
 	fmt.Fprintf(r.Out, "[devm] %s [%d]: FAILED (%s)\n", phase, n, formatElapsed(elapsed))
 }
 

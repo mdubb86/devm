@@ -49,22 +49,24 @@ func main() {
 	// INSTANT spinner — show liveness before we know anything else.
 	r.Start("starting up")
 
-	// Brief "are we cold or warm" beat.
+	// Brief "are we cold or warm" beat (devm checks IsRunning).
 	time.Sleep(scale / 2)
 
 	if *warm {
-		// Warm path: just connecting. Same spinner, updated text, then ready.
-		r.Start("connecting to running sandbox")
-		time.Sleep(scale)
-		r.Start("attaching shell")
-		time.Sleep(scale / 2)
-		r.Info("ready (1.5s)")
+		// Warm path: just attaching to the running sandbox.
+		r.StepStart("", 0, "attaching to running sandbox")
+		time.Sleep(scale + scale/2)
+		r.StepDone("", 0, scale+scale/2)
+		r.StepStart("", 0, "ready")
+		r.StepDone("", 0, 0)
 		r.Stop()
 		return
 	}
 
-	// Cold path
-	r.Info("starting sandbox")
+	// Cold path: each transition is its own labeled step.
+	r.StepStart("", 0, "spawning sandbox")
+	time.Sleep(scale / 2)
+	r.StepDone("", 0, scale/2)
 
 	// Phase: install (bootstrap.sh + 2 user steps + sentinel — display 3 steps)
 	r.PhaseStart("install", 3)
@@ -82,8 +84,10 @@ func main() {
 		"npm ERR! code E404\nnpm ERR! 404 Not Found - GET https://registry.npmjs.org/typescript-nonexistent")
 
 	r.PhaseDone("install", 21*scale+600*time.Millisecond)
-	r.Info("reconciling ports")
+
+	r.StepStart("", 0, "reconciling ports")
 	time.Sleep(scale / 4)
+	r.StepDone("", 0, scale/4)
 
 	// Phase: startup
 	r.PhaseStart("startup", 2)
@@ -97,7 +101,9 @@ func main() {
 		"Error: bind EADDRINUSE 0.0.0.0:8080")
 
 	r.PhaseDone("startup", 800*time.Millisecond)
-	r.Info(fmt.Sprintf("ready (%s)", formatElapsed(22*scale+800*time.Millisecond)))
+
+	r.StepStart("", 0, "ready")
+	r.StepDone("", 0, 22*scale+800*time.Millisecond)
 	r.Stop()
 }
 

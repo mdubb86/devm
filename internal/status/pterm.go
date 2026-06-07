@@ -66,7 +66,7 @@ func (r *PtermReporter) StepStart(phase string, n int, desc string) {
 	r.stopSpinnerLocked()
 	r.curN = n
 	r.curDesc = desc
-	label := fmt.Sprintf("%s [%d/%d] %s", phase, n, r.curTotal, desc)
+	label := stepLabel(phase, n, r.curTotal, desc)
 	sp, _ := pterm.DefaultSpinner.
 		WithRemoveWhenDone(false).
 		WithShowTimer(true).
@@ -75,11 +75,26 @@ func (r *PtermReporter) StepStart(phase string, n int, desc string) {
 	r.spinner = sp
 }
 
+// stepLabel renders the line head as:
+//
+//	"phase [N/M] desc"  when phase != "" and total > 0
+//	"phase desc"        when phase != "" but no count (rare)
+//	"desc"              when phase == "" (label-only step)
+func stepLabel(phase string, n, total int, desc string) string {
+	if phase == "" {
+		return desc
+	}
+	if total > 0 {
+		return fmt.Sprintf("%s [%d/%d] %s", phase, n, total, desc)
+	}
+	return fmt.Sprintf("%s %s", phase, desc)
+}
+
 func (r *PtermReporter) StepDone(phase string, n int, elapsed time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	final := fmt.Sprintf("%s [%d/%d] %s %s",
-		phase, n, r.curTotal, r.curDesc, pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed)))
+	final := stepLabel(phase, n, r.curTotal, r.curDesc) + " " +
+		pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed))
 	if r.spinner != nil {
 		r.spinner.Success(final)
 		r.spinner = nil
@@ -91,8 +106,8 @@ func (r *PtermReporter) StepDone(phase string, n int, elapsed time.Duration) {
 func (r *PtermReporter) StepFail(phase string, n int, elapsed time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	final := fmt.Sprintf("%s [%d/%d] %s %s",
-		phase, n, r.curTotal, r.curDesc, pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed)))
+	final := stepLabel(phase, n, r.curTotal, r.curDesc) + " " +
+		pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed))
 	if r.spinner != nil {
 		r.spinner.Fail(final)
 		r.spinner = nil
