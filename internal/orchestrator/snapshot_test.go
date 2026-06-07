@@ -64,7 +64,7 @@ func TestWriteSnapshot(t *testing.T) {
 	err := WriteSnapshot(sb, "rendered: yes\n")
 	assert.NoError(t, err)
 	cmd := strings.Join(r.lastArgs[0], " ")
-	assert.Contains(t, cmd, "sbx exec x sh -c")
+	assert.Contains(t, cmd, "sbx exec x bash -c")
 	assert.Contains(t, cmd, "applied.yaml.tmp")
 	assert.Contains(t, cmd, "mv ")
 	// Content is base64-encoded on the command line (no stdin pipe).

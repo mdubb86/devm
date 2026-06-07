@@ -34,7 +34,7 @@ func ReadSnapshot(sb *sandbox.Sandbox) (string, error) {
 // atomic step so a reader never sees a partially-written snapshot.
 // WriteSnapshot writes content atomically to the in-VM snapshot path.
 // Encodes content as base64 on the command line rather than piping via
-// stdin: empirically, `sbx exec <name> sh -c "cat > ..."` invoked from
+// stdin: empirically, `sbx exec <name> bash -c "cat > ..."` invoked from
 // Go's exec.Cmd with a strings.NewReader stdin can hang indefinitely
 // (the cmd.Wait() goroutine never returns even though the same call
 // in a shell completes in <2s). Base64-on-cmdline sidesteps the issue
@@ -48,5 +48,5 @@ func WriteSnapshot(sb *sandbox.Sandbox, content string) error {
 		"echo %s | base64 -d > /home/agent/.devm/applied.yaml.tmp && "+
 		"mv /home/agent/.devm/applied.yaml.tmp /home/agent/.devm/applied.yaml",
 		encoded)
-	return sb.Runner.Run("sbx", "exec", sb.Name, "sh", "-c", cmd)
+	return sb.Runner.Run("sbx", "exec", sb.Name, "bash", "-c", cmd)
 }

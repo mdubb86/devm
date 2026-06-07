@@ -37,9 +37,9 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 			AIFilename: "CLAUDE.md",
 			// Entrypoint is shell-wrapped `sleep infinity </dev/null`. Two
 			// load-bearing pieces:
-			//   1. sh -c wrapping: sbx daemon propagates session-end cleanup
+			//   1. bash -c wrapping: sbx daemon propagates session-end cleanup
 			//      to the in-VM process for shell-wrapped entrypoints but
-			//      not bare commands. exec replaces sh with sleep so no
+			//      not bare commands. exec replaces bash with sleep so no
 			//      extra process lingers.
 			//   2. </dev/null redirect: detaches sleep's fd 0 from the pty
 			//      sbx run allocates for the anchor. Without it the sleep
@@ -47,7 +47,7 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 			//      lifetime under the live anchor, making it appear as a
 			//      phantom session in devm stop's session listing.
 			Entrypoint: kitEntrypoint{
-				Run: []string{"sh", "-c", "exec sleep infinity </dev/null"},
+				Run: []string{"bash", "-c", "exec sleep infinity </dev/null"},
 			},
 		},
 		// Kit env.variables stays empty. Persistent project + service
@@ -229,7 +229,7 @@ func buildStartupStep(step schema.StartupCommand, service string, _ int) kitStar
 // installSentinelCmd is the terminal install step: marks the entire
 // install phase complete. The install gate in RunShell polls for
 // /tmp/.devm-install/install-all-ok to know install has finished.
-const installSentinelCmd = `sh -c 'touch /tmp/.devm-install/install-all-ok'`
+const installSentinelCmd = `bash -c 'touch /tmp/.devm-install/install-all-ok'`
 
 // bootstrapInstallCmd renders install step #1: bootstrap.sh wrapped
 // by wrap-fg.sh. Paths absolute at render time (the workspace mount
@@ -242,11 +242,14 @@ func bootstrapInstallCmd(repoRoot string) string {
 }
 
 // wrapFGInstall renders a single install: command string with the
-// wrapper path absolutized (no $WORKSPACE_DIR).
+// wrapper path absolutized (no $WORKSPACE_DIR). The user's command
+// string runs under `bash -o pipefail -c` so pipelines fail loud (a
+// `curl ... | bash` whose curl 404s correctly returns non-zero,
+// instead of dash dropping the failed curl on the floor).
 func wrapFGInstall(repoRoot string, stepN int, userCmd string) string {
 	quoted := "'" + strings.ReplaceAll(userCmd, "'", `'\''`) + "'"
 	return fmt.Sprintf(
-		`bash %s/.devm/scripts/wrap-fg.sh install %d -- sh -c %s`,
+		`bash %s/.devm/scripts/wrap-fg.sh install %d -- bash -o pipefail -c %s`,
 		repoRoot, stepN, quoted,
 	)
 }
@@ -254,12 +257,12 @@ func wrapFGInstall(repoRoot string, stepN int, userCmd string) string {
 // startupCleanupCmd is startup step #0: wipes /tmp/.devm-startup so this
 // sbx run's markers are fresh (per contract_26, /tmp survives
 // stop/restart so we MUST clean explicitly). Runs as default UID 1000.
-var startupCleanupCmd = []string{"sh", "-c", "rm -rf /tmp/.devm-startup; mkdir -p /tmp/.devm-startup"}
+var startupCleanupCmd = []string{"bash", "-c", "rm -rf /tmp/.devm-startup; mkdir -p /tmp/.devm-startup"}
 
 // startupSentinelCmd is the terminal startup step: marks all startup
 // steps complete. RunShell's startup gate polls for
 // /tmp/.devm-startup/startup-all-ok.
-var startupSentinelCmd = []string{"sh", "-c", "touch /tmp/.devm-startup/startup-all-ok"}
+var startupSentinelCmd = []string{"bash", "-c", "touch /tmp/.devm-startup/startup-all-ok"}
 
 // wrapFGStartup renders a startup argv as wrap-fg.sh's call form.
 func wrapFGStartup(repoRoot string, stepN int, userArgv []string) []string {

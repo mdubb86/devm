@@ -27,6 +27,22 @@ since: recipes-v1.0.0 (optional)
 ---
 ```
 
+## What devm guarantees for every `install:` entry
+
+You can assume all of the following — no need to rewrite for
+robustness:
+
+- **Runs under `bash -o pipefail -c`.** A failing pipeline stage fails
+  the whole step. Write `curl ... | bash` directly; you don't need to
+  split it into download-then-bash.
+- **All persistent env is exported.** Project-wide `env:` plus injected
+  `WORKSPACE` and `IS_SANDBOX` are available, both at install time and
+  in every later shell session. Use `$WORKSPACE` freely in commands.
+- **`apt-get update` already ran.** User entries can `apt-get install
+  -y <pkg>` directly. Don't repeat the update.
+- **Each step's stdout+stderr is captured per-step.** A failure surfaces
+  with a structured error block (see `devm skills get errors`).
+
 ## Style rules
 
 - **Be terse.** Every recipe loaded by the agent costs context tokens.

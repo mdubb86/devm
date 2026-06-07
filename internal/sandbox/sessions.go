@@ -20,8 +20,8 @@ type Session struct {
 
 // probeScript walks /proc in the sandbox and prints one line per
 // process whose fd 0 (stdin) is a /dev/pts/N device. Output format is
-// space-separated: "<pid> <comm> <pts/N> <user>". The script is kept
-// POSIX-y so it works under /bin/sh in any reasonable image.
+// space-separated: "<pid> <comm> <pts/N> <user>". Runs under bash,
+// which contract_27 pins is present on the base image.
 const probeScript = `for d in /proc/[0-9]*; do
   pid="${d#/proc/}"
   [ -r "$d/comm" ] || continue
@@ -47,9 +47,9 @@ func (s *Sandbox) Sessions() ([]Session, error) {
 }
 
 // SessionsWithRunner is the testable inner. The runner's Output is
-// invoked with `sbx exec <name> sh -c <probeScript>`.
+// invoked with `sbx exec <name> bash -c <probeScript>`.
 func (s *Sandbox) SessionsWithRunner(r Runner) ([]Session, error) {
-	out, err := r.Output("sbx", "exec", s.Name, "sh", "-c", probeScript)
+	out, err := r.Output("sbx", "exec", s.Name, "bash", "-c", probeScript)
 	if err != nil {
 		return nil, fmt.Errorf("sessions: sbx exec: %w", err)
 	}

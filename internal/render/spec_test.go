@@ -114,7 +114,7 @@ func minimalConfig(t *testing.T) schema.Config {
 func TestSpecYAMLEntrypointIsShellWrappedSleep(t *testing.T) {
 	cfg := minimalConfig(t)
 	out := SpecYAML(cfg, "/tmp/repo")
-	// The entrypoint wraps sleep infinity in `sh -c "exec ... </dev/null"`.
+	// The entrypoint wraps sleep infinity in `bash -c "exec ... </dev/null"`.
 	// The shell wrapping is required for sbx session-end cleanup
 	// propagation; the </dev/null redirect detaches sleep from the
 	// pty sbx allocates for the anchor, so it doesn't appear as a
@@ -122,7 +122,7 @@ func TestSpecYAMLEntrypointIsShellWrappedSleep(t *testing.T) {
 	// in spec.go for the full rationale.
 	parsed := parseSpec(t, out)
 	assert.Equal(t,
-		[]string{"sh", "-c", "exec sleep infinity </dev/null"},
+		[]string{"bash", "-c", "exec sleep infinity </dev/null"},
 		parsed.Agent.Entrypoint.Run,
 	)
 	assert.NotContains(t, out, "devm-anchor.pid", "pidfile mechanism was dropped — it was a no-op")
@@ -222,7 +222,7 @@ func TestSpecYAMLInstallPreservesUserSingleQuotes(t *testing.T) {
 	require.Equal(t, 3, len(parsed.Commands.Install))
 	user := parsed.Commands.Install[1].Command
 	// The wrapFGInstall function uses the '\'' shell escape to embed
-	// single quotes inside a single-quoted sh -c argument. The literal
+	// single quotes inside a single-quoted bash -c argument. The literal
 	// text "echo 'hello world'" becomes "echo '\''hello world'\''".
 	// We verify both that the user's command text is present (echo +
 	// hello world) and that the wrap-fg.sh wrapper is applied.

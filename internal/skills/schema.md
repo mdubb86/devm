@@ -15,7 +15,7 @@ Top-level fields (all optional unless noted):
 | `network` | object | `allowed_domains: [string]` — domain allowlist |
 | `env` | map[string]string | Project-wide env vars. Substitution: `$WORKSPACE` expands to repo root. Reserved keys: `WORKSPACE`, `IS_SANDBOX`. |
 | `services` | map[string]Service | Named service definitions. See Service fields below. |
-| `install` | []string | Shell commands run ONCE at sandbox create as root. Wrapped by wrap-fg.sh. `apt-get update` already ran via bootstrap. |
+| `install` | []string | Shell commands run ONCE at sandbox create as root. Each runs under `bash -o pipefail -c` (so pipelines fail loud). Wrapped by wrap-fg.sh. `apt-get update` already ran via bootstrap. |
 | `mounts` | []string | Host paths mirrored into the sandbox at the same absolute path. Format: `HOST_PATH[:ro]`. |
 
 ## Service fields
