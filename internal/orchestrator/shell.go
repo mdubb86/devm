@@ -346,6 +346,19 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	}
 	debuglog.Logf("shell", "cold-start: exec-ready")
 
+	// Install gate: poll for /tmp/.devm/install-all-ok. Closes the
+	// async-runtime-death race (the 2026-06-05 bootstrap.sh revert).
+	// Sbx reports status=running before install: finishes; the
+	// sentinel only appears AFTER all install steps complete.
+	installTimeout := gateTimeoutFromEnv("install", defaultInstallGateTimeout)
+	if err := waitForPhaseSentinel(sb, "install", installTimeout, defaultGatePollInterval); err != nil {
+		report, rerr := readPhaseFailure(sb, "install", cfg)
+		if rerr != nil || report == nil {
+			return -1, fmt.Errorf("%w\n  (failed to read failure details: %v)", err, rerr)
+		}
+		return -1, fmt.Errorf("%s", formatFailureReport(report))
+	}
+
 	// Port reconcile and snapshot BEFORE user shell. The anchor is
 	// alive, holding the session — publishes stick immediately and
 	// without the phantom/vanish dance the old flow had to defend
@@ -371,6 +384,19 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		return -1, fmt.Errorf("write snapshot: %w", err)
 	}
 	debuglog.Logf("shell", "snapshot: done")
+
+	// Startup gate: poll for /tmp/.devm/startup-all-ok. Closes the
+	// silent-startup-failure gap (contract_24). Per contract_29, sbx
+	// halts at the first failing startup step but doesn't surface it
+	// — the sentinel is the only signal devm has.
+	startupTimeout := gateTimeoutFromEnv("startup", defaultStartupGateTimeout)
+	if err := waitForPhaseSentinel(sb, "startup", startupTimeout, defaultGatePollInterval); err != nil {
+		report, rerr := readPhaseFailure(sb, "startup", cfg)
+		if rerr != nil || report == nil {
+			return -1, fmt.Errorf("%w\n  (failed to read failure details: %v)", err, rerr)
+		}
+		return -1, fmt.Errorf("%s", formatFailureReport(report))
+	}
 
 	// Spawn the user's interactive shell. UserSpawner inherits the host
 	// terminal's stdin/stdout/stderr, so the user shell ends up in the
