@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"fmt"
 	"io/fs"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -42,11 +43,7 @@ func List() ([]Skill, error) {
 		out = append(out, s)
 	}
 	// Sort alphabetically by name for stable list output.
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].Name < out[j-1].Name; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
