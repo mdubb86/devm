@@ -26,19 +26,19 @@ type FailureReport struct {
 }
 
 // captureTailBytes is the max bytes of captured output included in
-// FailureReport.CapturedTail. The full log lives in /tmp/.devm/<dir>.
+// FailureReport.CapturedTail. The full log lives in /tmp/.devm-<phase>/<phase>-<N>/.
 const captureTailBytes = 4 * 1024
 
-// readPhaseFailure walks /tmp/.devm/<phase>-* marker files via sbx
+// readPhaseFailure walks /tmp/.devm-<phase>/ marker files via sbx
 // exec to identify the first failing step and pull its captured log.
 // Returns nil report if everything looks ok (shouldn't happen — the
 // caller only invokes this on missing sentinel — but defensively
 // returns nil to signal "couldn't find a specific cause").
 func readPhaseFailure(sb *sandbox.Sandbox, phase string, cfg schema.Config) (*FailureReport, error) {
 	// List markers.
-	lsOut, err := sb.Runner.Output("sbx", "exec", sb.Name, "ls", "/tmp/.devm/")
+	lsOut, err := sb.Runner.Output("sbx", "exec", sb.Name, "ls", fmt.Sprintf("/tmp/.devm-%s/", phase))
 	if err != nil {
-		return nil, fmt.Errorf("readPhaseFailure: ls /tmp/.devm/: %w", err)
+		return nil, fmt.Errorf("readPhaseFailure: ls /tmp/.devm-%s/: %w", phase, err)
 	}
 	entries := strings.Split(strings.TrimSpace(string(lsOut)), "\n")
 	okSet := make(map[int]bool)
@@ -107,7 +107,7 @@ func readPhaseFailure(sb *sandbox.Sandbox, phase string, cfg schema.Config) (*Fa
 	if rcSet[failN] {
 		// Step ran to completion with non-zero rc.
 		rcRaw, err := sb.Runner.Output("sbx", "exec", sb.Name, "cat",
-			fmt.Sprintf("/tmp/.devm/%s-%d.rc", phase, failN))
+			fmt.Sprintf("/tmp/.devm-%s/%s-%d.rc", phase, phase, failN))
 		if err != nil {
 			return nil, fmt.Errorf("readPhaseFailure: cat .rc for step %d: %w", failN, err)
 		}
@@ -124,7 +124,7 @@ func readPhaseFailure(sb *sandbox.Sandbox, phase string, cfg schema.Config) (*Fa
 
 	// Pull captured tail.
 	curRaw, err := sb.Runner.Output("sbx", "exec", sb.Name, "cat",
-		fmt.Sprintf("/tmp/.devm/%s-%d/current", phase, failN))
+		fmt.Sprintf("/tmp/.devm-%s/%s-%d/current", phase, phase, failN))
 	if err == nil {
 		full := string(curRaw)
 		if len(full) > captureTailBytes {
@@ -145,19 +145,16 @@ func readPhaseFailure(sb *sandbox.Sandbox, phase string, cfg schema.Config) (*Fa
 // command, indexing into cfg.Install (install phase) or service startup
 // commands (startup phase), accounting for the built-in step offsets:
 //
-//	install:   step 0 = cleanup, 1 = bootstrap.sh, 2..N+1 = user[0..N-1]
+//	install:   step 1 = bootstrap.sh, 2..N+1 = user[0..N-1]
 //	startup:   step 0 = cleanup, 1 = init-volumes, 2 = install-templates,
 //	           3..M+2 = user (across services in sorted-name + decl order)
 func resolveUserCmdText(phase string, stepN int, cfg schema.Config) string {
 	if phase == "install" {
-		switch stepN {
-		case 0:
-			return "(cleanup)"
-		case 1:
+		if stepN == 1 {
 			return "bootstrap.sh"
 		}
 		// step N corresponds to cfg.Install[N-2] per the render:
-		// step 0 = cleanup, step 1 = bootstrap.sh, step 2..N+1 = user.
+		// step 1 = bootstrap.sh, step 2..N+1 = user.
 		userIdx := stepN - 2
 		if userIdx >= 0 && userIdx < len(cfg.Install) {
 			return cfg.Install[userIdx]
@@ -210,16 +207,16 @@ func formatFailureReport(r *FailureReport) string {
 			"  command: %s\n", r.UserCmd))
 	}
 	b.WriteString(fmt.Sprintf(
-		"  output (last %d bytes of /tmp/.devm/%s-%d/current):\n",
-		len(r.CapturedTail), r.Phase, r.StepN))
+		"  output (last %d bytes of /tmp/.devm-%s/%s-%d/current):\n",
+		len(r.CapturedTail), r.Phase, r.Phase, r.StepN))
 	for _, line := range strings.Split(strings.TrimRight(r.CapturedTail, "\n"), "\n") {
 		b.WriteString("    ")
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
 	if r.Truncated {
-		b.WriteString("  (output truncated; full log in /tmp/.devm/" +
-			r.Phase + "-" + strconv.Itoa(r.StepN) + "/current)\n")
+		b.WriteString("  (output truncated; full log in /tmp/.devm-" +
+			r.Phase + "/" + r.Phase + "-" + strconv.Itoa(r.StepN) + "/current)\n")
 	}
 	return b.String()
 }
@@ -232,11 +229,11 @@ const (
 	defaultGatePollInterval   = 1 * time.Second
 )
 
-// waitForPhaseSentinel polls /tmp/.devm/<phase>-all-ok via sbx exec
+// waitForPhaseSentinel polls /tmp/.devm-<phase>/<phase>-all-ok via sbx exec
 // until present or timeout. Returns a wrapped error on timeout
 // (caller pairs it with readPhaseFailure to surface what happened).
 func waitForPhaseSentinel(sb *sandbox.Sandbox, phase string, timeout, poll time.Duration) error {
-	sentinel := fmt.Sprintf("/tmp/.devm/%s-all-ok", phase)
+	sentinel := fmt.Sprintf("/tmp/.devm-%s/%s-all-ok", phase, phase)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if _, err := sb.Runner.Output("sbx", "exec", sb.Name, "test", "-f", sentinel); err == nil {

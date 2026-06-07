@@ -158,10 +158,12 @@ func TestWriteDevmDirWritesWrapFGAtExpectedPathAndMode(t *testing.T) {
 
 	bs, err := os.ReadFile(wrapper)
 	require.NoError(t, err)
-	assert.Contains(t, string(bs), "PIPESTATUS[0]",
-		"wrap-fg.sh must capture user cmd rc via PIPESTATUS[0]")
-	assert.Contains(t, string(bs), "s6-log",
-		"wrap-fg.sh must pipe through s6-log")
+	// New design: plain file redirect (no s6-log pipe), so rc is captured
+	// from $? directly rather than PIPESTATUS[0].
+	assert.Contains(t, string(bs), "rc=$?",
+		"wrap-fg.sh must capture user cmd rc via $?")
+	assert.Contains(t, string(bs), "> \"$dir/current\" 2>&1",
+		"wrap-fg.sh must redirect stdout+stderr to $dir/current")
 }
 
 func TestWriteDevmDirWritesWrapBGAtExpectedPathAndMode(t *testing.T) {

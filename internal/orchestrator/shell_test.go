@@ -468,7 +468,7 @@ func (r *stubRunnerForFailureReader) RunStdin(stdin, name string, args ...string
 }
 
 func TestReadPhaseFailure_IdentifiesFirstFailingFGStep(t *testing.T) {
-	// Render index: cleanup(0), bootstrap(1), cfg.Install[0]=step 2,
+	// Render index: bootstrap(1), cfg.Install[0]=step 2,
 	// cfg.Install[1]=step 3. In this scenario bootstrap + step 2 succeed;
 	// step 3 (cfg.Install[1] = "apt-get install -y foo") fails with rc=7.
 	r := &stubRunnerForFailureReader{
@@ -477,14 +477,14 @@ func TestReadPhaseFailure_IdentifiesFirstFailingFGStep(t *testing.T) {
 			out []byte
 			err error
 		}{
-			"ls /tmp/.devm/": {out: []byte(
+			"ls /tmp/.devm-install/": {out: []byte(
 				"install-1.ok\ninstall-1.rc\n" +
 					"install-2.ok\ninstall-2.rc\n" +
 					"install-3.rc\n"), err: nil},
-			"cat /tmp/.devm/install-1.rc": {out: []byte("0\n"), err: nil},
-			"cat /tmp/.devm/install-2.rc": {out: []byte("0\n"), err: nil},
-			"cat /tmp/.devm/install-3.rc": {out: []byte("7\n"), err: nil},
-			"cat /tmp/.devm/install-3/current": {out: []byte(
+			"cat /tmp/.devm-install/install-1.rc": {out: []byte("0\n"), err: nil},
+			"cat /tmp/.devm-install/install-2.rc": {out: []byte("0\n"), err: nil},
+			"cat /tmp/.devm-install/install-3.rc": {out: []byte("7\n"), err: nil},
+			"cat /tmp/.devm-install/install-3/current": {out: []byte(
 				"@4000000067432a1b0d2f8e4c Reading package lists...\n" +
 					"@4000000067432a1c12a4b7d3 E: Unable to locate package foo\n"), err: nil},
 		},
@@ -511,12 +511,12 @@ func TestReadPhaseFailure_HungStep(t *testing.T) {
 			out []byte
 			err error
 		}{
-			"ls /tmp/.devm/": {out: []byte(
+			"ls /tmp/.devm-install/": {out: []byte(
 				"install-1.ok\ninstall-1.rc\n" +
 					"install-2.ok\ninstall-2.rc\n"), err: nil},
-			"cat /tmp/.devm/install-1.rc": {out: []byte("0\n"), err: nil},
-			"cat /tmp/.devm/install-2.rc": {out: []byte("0\n"), err: nil},
-			"cat /tmp/.devm/install-3/current": {out: []byte("partial output\n"), err: nil},
+			"cat /tmp/.devm-install/install-1.rc": {out: []byte("0\n"), err: nil},
+			"cat /tmp/.devm-install/install-2.rc": {out: []byte("0\n"), err: nil},
+			"cat /tmp/.devm-install/install-3/current": {out: []byte("partial output\n"), err: nil},
 		},
 	}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
@@ -543,7 +543,7 @@ func TestFormatFailureReport_StepFailure(t *testing.T) {
 	out := formatFailureReport(r)
 	assert.Contains(t, out, "error: install step 3 failed (rc=1)")
 	assert.Contains(t, out, "command: apt-get install -y nonexistent-pkg")
-	assert.Contains(t, out, "/tmp/.devm/install-3/current")
+	assert.Contains(t, out, "/tmp/.devm-install/install-3/current")
 	assert.Contains(t, out, "Unable to locate package nonexistent-pkg")
 }
 
@@ -583,7 +583,7 @@ func TestWaitForPhaseSentinel_SentinelPresent(t *testing.T) {
 			out []byte
 			err error
 		}{
-			"test -f /tmp/.devm/install-all-ok": {out: []byte(""), err: nil},
+			"test -f /tmp/.devm-install/install-all-ok": {out: []byte(""), err: nil},
 		},
 	}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
@@ -598,7 +598,7 @@ func TestWaitForPhaseSentinel_TimesOut(t *testing.T) {
 			out []byte
 			err error
 		}{
-			"test -f /tmp/.devm/install-all-ok": {out: []byte(""), err: errors.New("exit 1")},
+			"test -f /tmp/.devm-install/install-all-ok": {out: []byte(""), err: errors.New("exit 1")},
 		},
 	}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}

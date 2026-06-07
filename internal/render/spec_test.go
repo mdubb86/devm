@@ -141,14 +141,13 @@ func TestSpecYAMLDoesNotInstallAgentBinary(t *testing.T) {
 
 func TestSpecYAMLOmitsInstallWhenEmpty(t *testing.T) {
 	// With no user-defined install steps, the rendered spec still has
-	// the three framework steps: cleanup (0), bootstrap (1), sentinel (2).
-	// Bootstrap is re-enabled as of 2026-06-07 now that the install
-	// marker scheme closes the async-runtime-death race.
+	// the two framework steps: bootstrap (0), sentinel (1).
+	// No cleanup step — install runs once on fresh /tmp at sandbox create.
 	cfg := minimalConfig(t)
 	out := SpecYAML(cfg, "/tmp/repo")
 	parsed := parseSpec(t, out)
-	assert.Equal(t, 3, len(parsed.Commands.Install),
-		"empty cfg.Install must produce cleanup + bootstrap + sentinel = 3 steps")
+	assert.Equal(t, 2, len(parsed.Commands.Install),
+		"empty cfg.Install must produce bootstrap + sentinel = 2 steps")
 	// commands.startup still present (init-volumes lives there).
 	assert.Contains(t, out, "startup:")
 }
@@ -177,29 +176,17 @@ func TestSpecYAMLRendersUserInstallSteps(t *testing.T) {
 	// (init-volumes still has user: "1000" and a description — that's hardcoded.)
 }
 
-func TestSpecYAMLInstallStep0IsCleanup(t *testing.T) {
+func TestSpecYAMLInstallStep0IsWrappedBootstrap(t *testing.T) {
+	// No install cleanup step — bootstrap is now at index 0.
 	cfg := minimalConfig(t)
 	out := SpecYAML(cfg, "/tmp/repo")
 	parsed := parseSpec(t, out)
 	require.GreaterOrEqual(t, len(parsed.Commands.Install), 1)
-	assert.Contains(t, parsed.Commands.Install[0].Command,
-		"rm -rf /tmp/.devm",
-		"install step 0 must wipe /tmp/.devm for marker freshness")
-	assert.Contains(t, parsed.Commands.Install[0].Command,
-		"mkdir -p /tmp/.devm",
-		"install step 0 must recreate /tmp/.devm")
-}
-
-func TestSpecYAMLInstallStep1IsWrappedBootstrap(t *testing.T) {
-	cfg := minimalConfig(t)
-	out := SpecYAML(cfg, "/tmp/repo")
-	parsed := parseSpec(t, out)
-	require.GreaterOrEqual(t, len(parsed.Commands.Install), 2)
-	got := parsed.Commands.Install[1].Command
-	assert.Contains(t, got, "wrap-fg.sh", "step 1 must invoke wrap-fg.sh")
-	assert.Contains(t, got, "install 1", "step 1 must pass phase=install N=1")
+	got := parsed.Commands.Install[0].Command
+	assert.Contains(t, got, "wrap-fg.sh", "step 0 must invoke wrap-fg.sh")
+	assert.Contains(t, got, "install 1", "step 0 must pass phase=install N=1")
 	assert.Contains(t, got, "bootstrap.sh",
-		"step 1's wrapped argv must invoke bootstrap.sh")
+		"step 0's wrapped argv must invoke bootstrap.sh")
 }
 
 func TestSpecYAMLInstallUserStepWrapped(t *testing.T) {
@@ -207,10 +194,10 @@ func TestSpecYAMLInstallUserStepWrapped(t *testing.T) {
 	cfg.Install = []string{"echo hello"}
 	out := SpecYAML(cfg, "/tmp/repo")
 	parsed := parseSpec(t, out)
-	// Steps: 0 cleanup, 1 bootstrap, 2 user, 3 sentinel = 4 total.
-	require.Equal(t, 4, len(parsed.Commands.Install),
-		"expected cleanup + bootstrap + 1 user + sentinel = 4")
-	user := parsed.Commands.Install[2].Command
+	// Steps: 0 bootstrap, 1 user, 2 sentinel = 3 total.
+	require.Equal(t, 3, len(parsed.Commands.Install),
+		"expected bootstrap + 1 user + sentinel = 3")
+	user := parsed.Commands.Install[1].Command
 	assert.Contains(t, user, "wrap-fg.sh", "user step must invoke wrap-fg.sh")
 	assert.Contains(t, user, "install 2", "user step must be index 2")
 	assert.Contains(t, user, "echo hello",
@@ -223,7 +210,7 @@ func TestSpecYAMLInstallSentinelLast(t *testing.T) {
 	out := SpecYAML(cfg, "/tmp/repo")
 	parsed := parseSpec(t, out)
 	last := parsed.Commands.Install[len(parsed.Commands.Install)-1].Command
-	assert.Contains(t, last, "touch /tmp/.devm/install-all-ok",
+	assert.Contains(t, last, "touch /tmp/.devm-install/install-all-ok",
 		"last install step must be the install-all-ok sentinel")
 }
 
@@ -232,8 +219,8 @@ func TestSpecYAMLInstallPreservesUserSingleQuotes(t *testing.T) {
 	cfg.Install = []string{`echo 'hello world'`}
 	out := SpecYAML(cfg, "/tmp/repo")
 	parsed := parseSpec(t, out)
-	require.Equal(t, 4, len(parsed.Commands.Install))
-	user := parsed.Commands.Install[2].Command
+	require.Equal(t, 3, len(parsed.Commands.Install))
+	user := parsed.Commands.Install[1].Command
 	// The wrapFGInstall function uses the '\'' shell escape to embed
 	// single quotes inside a single-quoted sh -c argument. The literal
 	// text "echo 'hello world'" becomes "echo '\''hello world'\''".
@@ -318,8 +305,8 @@ func TestSpecYAMLStartupStep0IsCleanup(t *testing.T) {
 	parsed := parseSpec(t, out)
 	require.GreaterOrEqual(t, len(parsed.Commands.Startup), 1)
 	joined := strings.Join(parsed.Commands.Startup[0].Command, " ")
-	assert.Contains(t, joined, "rm -rf /tmp/.devm",
-		"startup step 0 must wipe /tmp/.devm for marker freshness")
+	assert.Contains(t, joined, "rm -rf /tmp/.devm-startup",
+		"startup step 0 must wipe /tmp/.devm-startup for marker freshness")
 }
 
 func TestSpecYAMLStartupStep1IsWrappedInitVolumes(t *testing.T) {
@@ -403,7 +390,7 @@ func TestSpecYAMLStartupSentinelLast(t *testing.T) {
 	parsed := parseSpec(t, out)
 	last := parsed.Commands.Startup[len(parsed.Commands.Startup)-1].Command
 	joined := strings.Join(last, " ")
-	assert.Contains(t, joined, "touch /tmp/.devm/startup-all-ok",
+	assert.Contains(t, joined, "touch /tmp/.devm-startup/startup-all-ok",
 		"last startup step must be the startup-all-ok sentinel")
 }
 

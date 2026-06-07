@@ -78,21 +78,18 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	}
 
 	// commands.install:
-	//   step 0: cleanup (unwrapped — wipes its own potential markers)
 	//   step 1: bootstrap.sh (wrapped — devm-managed)
 	//   step 2..N+1: user cfg.Install[0..N-1] (each wrapped)
 	//   step N+2: sentinel
 	//
-	// Per the supervision design (2026-06-07), bootstrap.sh auto-prepend
-	// is re-enabled. The install marker scheme makes it safe — the
-	// 2026-06-05 race is closed by RunShell's install gate.
+	// No cleanup step — install runs once at sandbox create on fresh /tmp.
+	// /tmp/.devm-install is implicitly created by the wrapper's mkdir -p.
 	spec.Commands.Install = append(spec.Commands.Install,
-		kitInstallCommand{Command: installCleanupCmd},
-		kitInstallCommand{Command: bootstrapInstallCmd},
+		kitInstallCommand{Command: bootstrapInstallCmd(repoRoot)},
 	)
 	for i, cmd := range cfg.Install {
-		stepN := i + 2 // user step indexing starts at 2 (cleanup=0, bootstrap=1)
-		spec.Commands.Install = append(spec.Commands.Install, kitInstallCommand{Command: wrapFGInstall(stepN, cmd)})
+		stepN := i + 2 // user step indexing starts at 2 (bootstrap=1)
+		spec.Commands.Install = append(spec.Commands.Install, kitInstallCommand{Command: wrapFGInstall(repoRoot, stepN, cmd)})
 	}
 	spec.Commands.Install = append(spec.Commands.Install, kitInstallCommand{Command: installSentinelCmd})
 
@@ -105,12 +102,12 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	spec.Commands.Startup = append(spec.Commands.Startup,
 		kitStartupCommand{Command: startupCleanupCmd},
 		kitStartupCommand{
-			Command:     wrapFGStartup(1, builtinInitVolumesArgv),
+			Command:     wrapFGStartup(repoRoot, 1, builtinInitVolumesArgv(repoRoot)),
 			User:        "1000",
 			Description: "Claim ext4 volume mounts for agent user",
 		},
 		kitStartupCommand{
-			Command:     wrapFGStartup(2, builtinInstallTemplatesArgv),
+			Command:     wrapFGStartup(repoRoot, 2, builtinInstallTemplatesArgv(repoRoot)),
 			User:        "0",
 			Description: "Install rendered service templates",
 		},
@@ -120,9 +117,9 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 		for idx, step := range cfg.Services[name].Startup {
 			var wrappedArgv []string
 			if step.Background {
-				wrappedArgv = wrapBGStartup(stepN, step.Command)
+				wrappedArgv = wrapBGStartup(repoRoot, stepN, step.Command)
 			} else {
-				wrappedArgv = wrapFGStartup(stepN, step.Command)
+				wrappedArgv = wrapFGStartup(repoRoot, stepN, step.Command)
 			}
 			stepCopy := step
 			stepCopy.Command = wrappedArgv
@@ -229,52 +226,46 @@ func buildStartupStep(step schema.StartupCommand, service string, _ int) kitStar
 	}
 }
 
-// installCleanupCmd is install step #0: wipes /tmp/.devm for marker
-// freshness, then recreates the dir with mode 777 so wrappers running
-// as different users (root for install-templates, 1000 for agent
-// steps) can all write per-step subdirs. Unwrapped (it would erase
-// its own markers if wrapped).
-const installCleanupCmd = `sh -c 'rm -rf /tmp/.devm && mkdir -p /tmp/.devm && chmod 777 /tmp/.devm'`
-
 // installSentinelCmd is the terminal install step: marks the entire
 // install phase complete. The install gate in RunShell polls for
-// /tmp/.devm/install-all-ok to know install has finished.
-const installSentinelCmd = `sh -c 'touch /tmp/.devm/install-all-ok'`
+// /tmp/.devm-install/install-all-ok to know install has finished.
+const installSentinelCmd = `sh -c 'touch /tmp/.devm-install/install-all-ok'`
 
-// wrapFGInstall renders a single install: command string as
-//
-//	bash $WORKSPACE_DIR/.devm/scripts/wrap-fg.sh install <N> -- sh -c '<single-quoted user cmd>'
-//
-// using the same single-quote escape dance as sandbox.PersistentEnv.
-func wrapFGInstall(stepN int, userCmd string) string {
-	quoted := "'" + strings.ReplaceAll(userCmd, "'", `'\''`) + "'"
+// bootstrapInstallCmd renders install step #1: bootstrap.sh wrapped
+// by wrap-fg.sh. Paths absolute at render time (the workspace mount
+// mirrors host->VM, so the host path resolves inside sbx).
+func bootstrapInstallCmd(repoRoot string) string {
 	return fmt.Sprintf(
-		`bash $WORKSPACE_DIR/.devm/scripts/wrap-fg.sh install %d -- sh -c %s`,
-		stepN, quoted,
+		`bash %s/.devm/scripts/wrap-fg.sh install 1 -- bash %s/.devm/scripts/bootstrap.sh`,
+		repoRoot, repoRoot,
 	)
 }
 
-// bootstrapInstallCmd renders install step #1: bootstrap.sh wrapped
-// by wrap-fg.sh.
-const bootstrapInstallCmd = `bash $WORKSPACE_DIR/.devm/scripts/wrap-fg.sh install 1 -- bash $WORKSPACE_DIR/.devm/scripts/bootstrap.sh`
+// wrapFGInstall renders a single install: command string with the
+// wrapper path absolutized (no $WORKSPACE_DIR).
+func wrapFGInstall(repoRoot string, stepN int, userCmd string) string {
+	quoted := "'" + strings.ReplaceAll(userCmd, "'", `'\''`) + "'"
+	return fmt.Sprintf(
+		`bash %s/.devm/scripts/wrap-fg.sh install %d -- sh -c %s`,
+		repoRoot, stepN, quoted,
+	)
+}
 
-// startupCleanupCmd is startup step #0: wipes /tmp/.devm so this
+// startupCleanupCmd is startup step #0: wipes /tmp/.devm-startup so this
 // sbx run's markers are fresh (per contract_26, /tmp survives
-// stop/restart so we MUST clean explicitly). chmod 777 so wrappers
-// running as different users (root for install-templates, 1000 for
-// agent steps) can all write per-step subdirs.
-var startupCleanupCmd = []string{"sh", "-c", "rm -rf /tmp/.devm && mkdir -p /tmp/.devm && chmod 777 /tmp/.devm"}
+// stop/restart so we MUST clean explicitly). Runs as default UID 1000.
+var startupCleanupCmd = []string{"sh", "-c", "rm -rf /tmp/.devm-startup; mkdir -p /tmp/.devm-startup"}
 
 // startupSentinelCmd is the terminal startup step: marks all startup
 // steps complete. RunShell's startup gate polls for
-// /tmp/.devm/startup-all-ok.
-var startupSentinelCmd = []string{"sh", "-c", "touch /tmp/.devm/startup-all-ok"}
+// /tmp/.devm-startup/startup-all-ok.
+var startupSentinelCmd = []string{"sh", "-c", "touch /tmp/.devm-startup/startup-all-ok"}
 
 // wrapFGStartup renders a startup argv as wrap-fg.sh's call form.
-func wrapFGStartup(stepN int, userArgv []string) []string {
+func wrapFGStartup(repoRoot string, stepN int, userArgv []string) []string {
 	wrapped := []string{
 		"bash",
-		"$WORKSPACE_DIR/.devm/scripts/wrap-fg.sh",
+		fmt.Sprintf("%s/.devm/scripts/wrap-fg.sh", repoRoot),
 		"startup",
 		fmt.Sprintf("%d", stepN),
 		"--",
@@ -283,10 +274,10 @@ func wrapFGStartup(stepN int, userArgv []string) []string {
 }
 
 // wrapBGStartup is the analog for background steps.
-func wrapBGStartup(stepN int, userArgv []string) []string {
+func wrapBGStartup(repoRoot string, stepN int, userArgv []string) []string {
 	wrapped := []string{
 		"bash",
-		"$WORKSPACE_DIR/.devm/scripts/wrap-bg.sh",
+		fmt.Sprintf("%s/.devm/scripts/wrap-bg.sh", repoRoot),
 		"startup",
 		fmt.Sprintf("%d", stepN),
 		"--",
@@ -294,9 +285,13 @@ func wrapBGStartup(stepN int, userArgv []string) []string {
 	return append(wrapped, userArgv...)
 }
 
-// builtinInitVolumesArgv is the argv that invokes init-volumes.sh.
+// builtinInitVolumesArgv returns the argv that invokes init-volumes.sh.
 // Used as the user argv passed to wrap-fg.sh for startup step 1.
-var builtinInitVolumesArgv = []string{"bash", "$WORKSPACE_DIR/.devm/scripts/init-volumes.sh"}
+func builtinInitVolumesArgv(repoRoot string) []string {
+	return []string{"bash", fmt.Sprintf("%s/.devm/scripts/init-volumes.sh", repoRoot)}
+}
 
-// builtinInstallTemplatesArgv invokes install-templates.sh. Step 2.
-var builtinInstallTemplatesArgv = []string{"bash", "$WORKSPACE_DIR/.devm/scripts/install-templates.sh"}
+// builtinInstallTemplatesArgv returns the argv for install-templates.sh. Step 2.
+func builtinInstallTemplatesArgv(repoRoot string) []string {
+	return []string{"bash", fmt.Sprintf("%s/.devm/scripts/install-templates.sh", repoRoot)}
+}
