@@ -14,6 +14,7 @@ import (
 
 	"github.com/mtwaage/devm/internal/sandbox"
 	"github.com/mtwaage/devm/internal/schema"
+	"github.com/mtwaage/devm/internal/status"
 )
 
 // ErrAnchorDied signals that the anchor process exited during a phase
@@ -245,11 +246,22 @@ const (
 // until present or timeout. Returns ErrAnchorDied if runDone fires before
 // the sentinel appears. Returns a wrapped timeout error otherwise.
 // runDone may be nil — in that case anchor-death detection is skipped.
-func waitForPhaseSentinel(sb *sandbox.Sandbox, phase string, runDone <-chan struct{}, timeout, poll time.Duration) error {
+// reporter and cfg drive per-step progress announcements; pass nil reporter
+// to disable (e.g. in tests that don't care about UX).
+func waitForPhaseSentinel(
+	sb *sandbox.Sandbox, phase string, runDone <-chan struct{},
+	timeout, poll time.Duration,
+	reporter status.Reporter, cfg schema.Config,
+) error {
 	sentinel := fmt.Sprintf("/tmp/.devm-%s/%s-all-ok", phase, phase)
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
+
+	// Announce step 1 of the phase immediately.
+	announceStep(reporter, phase, 1, cfg)
+	lastAnnouncedN := 1
+
 	for {
 		// Non-blocking check for anchor death.
 		if runDone != nil {
@@ -261,6 +273,15 @@ func waitForPhaseSentinel(sb *sandbox.Sandbox, phase string, runDone <-chan stru
 		}
 		if _, err := sb.Runner.Output("sbx", "exec", sb.Name, "test", "-f", sentinel); err == nil {
 			return nil
+		}
+		// Detect newly-completed steps via .ok markers and announce the next step.
+		if reporter != nil {
+			highestOk := detectHighestOk(sb, phase)
+			if highestOk >= lastAnnouncedN {
+				nextN := highestOk + 1
+				announceStep(reporter, phase, nextN, cfg)
+				lastAnnouncedN = nextN
+			}
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s did not complete within %s", phase, timeout)
@@ -276,6 +297,67 @@ func waitForPhaseSentinel(sb *sandbox.Sandbox, phase string, runDone <-chan stru
 			<-ticker.C
 		}
 	}
+}
+
+// announceStep calls reporter.Step with the right desc + counted flag
+// for the (phase, stepN) combination. resolveUserCmdText gives us the
+// human-readable description; isCountedStep tells us whether it's a
+// user step. Empty descriptions (e.g. cleanup at stepN==0) are skipped.
+func announceStep(reporter status.Reporter, phase string, stepN int, cfg schema.Config) {
+	if reporter == nil {
+		return
+	}
+	desc := resolveUserCmdText(phase, stepN, cfg)
+	if desc == "" {
+		return
+	}
+	reporter.Step(desc, isCountedStep(phase, stepN))
+}
+
+// isCountedStep reports whether step N of phase is a user-defined step
+// (counted toward [K/Total]) or devm-internal (uncounted).
+//
+//	install:   step 1     = bootstrap (uncounted)
+//	           step 2..N+1 = user (counted)
+//	startup:   step 0 = cleanup (not displayed)
+//	           step 1 = init-volumes (uncounted)
+//	           step 2 = install-templates (uncounted)
+//	           step 3..M+2 = user (counted)
+func isCountedStep(phase string, stepN int) bool {
+	if phase == "install" {
+		return stepN >= 2
+	}
+	if phase == "startup" {
+		return stepN >= 3
+	}
+	return false
+}
+
+// detectHighestOk lists /tmp/.devm-<phase>/ and returns the highest N
+// for which <phase>-N.ok exists, or 0 if none. Best-effort: returns 0
+// on any error (next poll cycle will try again).
+func detectHighestOk(sb *sandbox.Sandbox, phase string) int {
+	out, err := sb.Runner.Output("sbx", "exec", sb.Name, "ls", fmt.Sprintf("/tmp/.devm-%s/", phase))
+	if err != nil {
+		return 0
+	}
+	prefix := phase + "-"
+	maxN := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, ".ok") {
+			continue
+		}
+		body := strings.TrimSuffix(strings.TrimPrefix(line, prefix), ".ok")
+		var n int
+		if _, err := fmt.Sscanf(body, "%d", &n); err != nil {
+			continue
+		}
+		if n > maxN {
+			maxN = n
+		}
+	}
+	return maxN
 }
 
 // gateTimeoutFromEnv returns the timeout for the given phase, honoring

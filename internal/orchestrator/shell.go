@@ -17,6 +17,7 @@ import (
 	"github.com/mtwaage/devm/internal/render"
 	"github.com/mtwaage/devm/internal/sandbox"
 	"github.com/mtwaage/devm/internal/schema"
+	"github.com/mtwaage/devm/internal/status"
 	"gopkg.in/yaml.v3"
 )
 
@@ -101,6 +102,10 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, sandboxName, cmdName string, cmdArgs []string) (rc int, retErr error) {
 	applyDefaults(&d)
 
+	reporter := status.New(os.Stderr)
+	defer reporter.Stop()
+	reporter.Start("starting up")
+
 	lk, err := lock.Acquire(d.LockPath)
 	if err != nil {
 		return -1, fmt.Errorf("acquire lock: %w", err)
@@ -135,6 +140,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		// actually wrong with the user's devm.yaml. We don't kill the
 		// anchor: it's from a previous session and config bugs
 		// shouldn't cost the user their running sandbox.
+		reporter.Step("attaching to running sandbox", false)
 		inner, err := RunReconcileInner(cfg, sb, repoRoot)
 		if err != nil {
 			return -1, fmt.Errorf("reconcile during attach failed: %w", err)
@@ -145,10 +151,21 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		}
 		_ = lk.Release()
 		released = true
+		reporter.Step("ready", false)
+		reporter.Stop()
+		reporter.Clear()
 		return runUserShell(d, cfg, repoRoot, sandboxName, cmdName, cmdArgs)
 	}
 
 	// Cold start.
+	// Compute total user steps and begin the cold-start reporter sequence.
+	userTotal := len(cfg.Install)
+	for _, svc := range cfg.Services {
+		userTotal += len(svc.Startup)
+	}
+	reporter.SetTotal(userTotal)
+	reporter.Step("spawning sandbox", false)
+
 	// sbx run's invocation differs depending on whether the sandbox
 	// already exists.
 	//
@@ -357,7 +374,8 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// On anchor death (sbx tears sandbox down per c02), switch to the
 	// host-side failure mirror written by wrap-fg.sh (pinned by c32-c34).
 	installTimeout := gateTimeoutFromEnv("install", defaultInstallGateTimeout)
-	if err := waitForPhaseSentinel(sb, "install", anchorDead, installTimeout, defaultGatePollInterval); err != nil {
+	if err := waitForPhaseSentinel(sb, "install", anchorDead, installTimeout, defaultGatePollInterval, reporter, cfg); err != nil {
+		reporter.Fail()
 		var report *FailureReport
 		if errors.Is(err, ErrAnchorDied) {
 			report, _ = readPhaseFailureFromHost(repoRoot, "install", cfg)
@@ -376,6 +394,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// against (Quirk #2, #3 in docs/sbx-quirks.md). Pinned by
 	// e2e/test_sbx_anchor_05_publish_sticks.py and
 	// e2e/test_sbx_anchor_09_port_cycle.py.
+	reporter.Step("reconciling ports", false)
 	debuglog.Logf("shell", "port-reconcile: starting")
 	if err := ReconcilePortsWithRunner(sb, cfg, d.Runner); err != nil {
 		return -1, fmt.Errorf("port reconcile failed: %w", err)
@@ -402,7 +421,8 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// — the sentinel is the only signal devm has.
 	// On anchor death, switch to the host-side failure mirror (c32-c34).
 	startupTimeout := gateTimeoutFromEnv("startup", defaultStartupGateTimeout)
-	if err := waitForPhaseSentinel(sb, "startup", anchorDead, startupTimeout, defaultGatePollInterval); err != nil {
+	if err := waitForPhaseSentinel(sb, "startup", anchorDead, startupTimeout, defaultGatePollInterval, reporter, cfg); err != nil {
+		reporter.Fail()
 		var report *FailureReport
 		if errors.Is(err, ErrAnchorDied) {
 			report, _ = readPhaseFailureFromHost(repoRoot, "startup", cfg)
@@ -414,6 +434,13 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		}
 		return -1, fmt.Errorf("%s", formatFailureReport(report))
 	}
+
+	// Signal success and clear the terminal before handing off to the
+	// user's interactive shell. Stop+Clear MUST happen here — the user's
+	// shell takes over stderr after this point.
+	reporter.Step("ready", false)
+	reporter.Stop()
+	reporter.Clear()
 
 	// Spawn the user's interactive shell. UserSpawner inherits the host
 	// terminal's stdin/stdout/stderr, so the user shell ends up in the

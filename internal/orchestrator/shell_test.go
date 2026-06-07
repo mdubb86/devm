@@ -13,6 +13,7 @@ import (
 
 	"github.com/mtwaage/devm/internal/sandbox"
 	"github.com/mtwaage/devm/internal/schema"
+	"github.com/mtwaage/devm/internal/status"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -584,10 +585,11 @@ func TestWaitForPhaseSentinel_SentinelPresent(t *testing.T) {
 			err error
 		}{
 			"test -f /tmp/.devm-install/install-all-ok": {out: []byte(""), err: nil},
+			"ls /tmp/.devm-install/":                    {out: []byte(""), err: nil},
 		},
 	}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
-	err := waitForPhaseSentinel(sb, "install", nil, 5*time.Second, 50*time.Millisecond)
+	err := waitForPhaseSentinel(sb, "install", nil, 5*time.Second, 50*time.Millisecond, &status.NoOpReporter{}, schema.Config{})
 	assert.NoError(t, err)
 }
 
@@ -599,11 +601,12 @@ func TestWaitForPhaseSentinel_TimesOut(t *testing.T) {
 			err error
 		}{
 			"test -f /tmp/.devm-install/install-all-ok": {out: []byte(""), err: errors.New("exit 1")},
+			"ls /tmp/.devm-install/":                    {out: []byte(""), err: nil},
 		},
 	}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	start := time.Now()
-	err := waitForPhaseSentinel(sb, "install", nil, 300*time.Millisecond, 50*time.Millisecond)
+	err := waitForPhaseSentinel(sb, "install", nil, 300*time.Millisecond, 50*time.Millisecond, &status.NoOpReporter{}, schema.Config{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "did not complete")
 	assert.GreaterOrEqual(t, time.Since(start), 300*time.Millisecond,
@@ -618,13 +621,14 @@ func TestWaitForPhaseSentinel_AnchorDied(t *testing.T) {
 			err error
 		}{
 			"test -f /tmp/.devm-install/install-all-ok": {out: []byte(""), err: errors.New("exit 1")},
+			"ls /tmp/.devm-install/":                    {out: []byte(""), err: nil},
 		},
 	}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	runDone := make(chan struct{})
 	close(runDone) // anchor already dead
 
-	err := waitForPhaseSentinel(sb, "install", runDone, 5*time.Second, 50*time.Millisecond)
+	err := waitForPhaseSentinel(sb, "install", runDone, 5*time.Second, 50*time.Millisecond, &status.NoOpReporter{}, schema.Config{})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrAnchorDied), "must report anchor death, not timeout")
 }
@@ -655,4 +659,141 @@ func TestReadPhaseFailureFromHost_NoFailuresDir(t *testing.T) {
 	report, err := readPhaseFailureFromHost(dir, "install", schema.Config{})
 	require.NoError(t, err)
 	assert.Nil(t, report)
+}
+
+// recordingReporter captures reporter calls for assertions in tests that
+// want to verify the step announcement behavior of waitForPhaseSentinel.
+type recordingReporter struct {
+	steps []struct {
+		desc    string
+		counted bool
+	}
+	stops  int
+	clears int
+	failed bool
+}
+
+func (r *recordingReporter) Start(string)              {}
+func (r *recordingReporter) SetTotal(int)              {}
+func (r *recordingReporter) Step(desc string, counted bool) {
+	r.steps = append(r.steps, struct {
+		desc    string
+		counted bool
+	}{desc, counted})
+}
+func (r *recordingReporter) Fail()       { r.failed = true }
+func (r *recordingReporter) Info(string) {}
+func (r *recordingReporter) Stop()       { r.stops++ }
+func (r *recordingReporter) Clear()      { r.clears++ }
+
+func TestWaitForPhaseSentinel_SentinelPresent_AnnouncesStep1(t *testing.T) {
+	// Sentinel already exists — gate returns immediately after announcing step 1.
+	r := &stubRunnerForFailureReader{
+		t: t,
+		scripted: map[string]struct {
+			out []byte
+			err error
+		}{
+			"test -f /tmp/.devm-install/install-all-ok": {out: []byte(""), err: nil},
+			"ls /tmp/.devm-install/":                    {out: []byte(""), err: nil},
+		},
+	}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	rec := &recordingReporter{}
+	err := waitForPhaseSentinel(sb, "install", nil, 5*time.Second, 50*time.Millisecond, rec, schema.Config{})
+	require.NoError(t, err)
+	// Step 1 of install = bootstrap.sh (uncounted devm-internal step).
+	require.Len(t, rec.steps, 1, "exactly one Step call when sentinel is immediately present")
+	assert.Equal(t, "bootstrap.sh", rec.steps[0].desc)
+	assert.False(t, rec.steps[0].counted, "bootstrap is not a counted (user) step")
+}
+
+func TestWaitForPhaseSentinel_AnnouncesUserStep(t *testing.T) {
+	// First poll: sentinel absent, install-1.ok present → announce step 2 (first user step).
+	// Second poll: sentinel present → return.
+	callCount := 0
+	r := &stubRunnerForFailureReader{
+		t: t,
+		scripted: map[string]struct {
+			out []byte
+			err error
+		}{
+			// sentinel: first call fails, second succeeds
+			"test -f /tmp/.devm-install/install-all-ok": {out: []byte(""), err: nil},
+			// ls: returns install-1.ok on first call
+			"ls /tmp/.devm-install/": {out: []byte("install-1.ok\n"), err: nil},
+		},
+	}
+	// Override Output to toggle sentinel on second call.
+	type callKey struct{}
+	_ = callKey{}
+
+	// Use a stateful runner for this test.
+	stateful := &statefulStubRunner{
+		sentinelKey: "test -f /tmp/.devm-install/install-all-ok",
+		lsKey:       "ls /tmp/.devm-install/",
+		lsOut:       "install-1.ok\n",
+		failFirst:   true,
+		callCount:   &callCount,
+	}
+	_ = r // replaced by stateful
+	sb := &sandbox.Sandbox{Name: "x", Runner: stateful}
+
+	cfg := schema.Config{Install: []string{"apt-get install -y jq"}}
+	rec := &recordingReporter{}
+	err := waitForPhaseSentinel(sb, "install", nil, 5*time.Second, 50*time.Millisecond, rec, cfg)
+	require.NoError(t, err)
+
+	// Should have step 1 (bootstrap.sh) announced initially, then step 2 (user step).
+	var descs []string
+	for _, s := range rec.steps {
+		descs = append(descs, s.desc)
+	}
+	assert.Contains(t, descs, "bootstrap.sh", "step 1 must be announced")
+	assert.Contains(t, descs, "apt-get install -y jq", "step 2 (user step) must be announced")
+	// The user step must be counted.
+	for _, s := range rec.steps {
+		if s.desc == "apt-get install -y jq" {
+			assert.True(t, s.counted, "user install step must be counted")
+		}
+	}
+}
+
+// statefulStubRunner is a test runner that returns an error on the first
+// sentinel check and success on subsequent ones, simulating a step completing.
+type statefulStubRunner struct {
+	mu          sync.Mutex
+	sentinelKey string
+	lsKey       string
+	lsOut       string
+	failFirst   bool
+	callCount   *int
+	calls       [][]string
+}
+
+func (r *statefulStubRunner) Output(name string, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	full := strings.Join(append([]string{name}, args...), " ")
+	r.calls = append(r.calls, append([]string{name}, args...))
+	if strings.Contains(full, r.sentinelKey) {
+		*r.callCount++
+		if r.failFirst && *r.callCount == 1 {
+			return nil, errors.New("exit 1")
+		}
+		return []byte(""), nil
+	}
+	if strings.Contains(full, r.lsKey) {
+		return []byte(r.lsOut), nil
+	}
+	return []byte(""), nil
+}
+
+func (r *statefulStubRunner) Run(name string, args ...string) error {
+	_, err := r.Output(name, args...)
+	return err
+}
+
+func (r *statefulStubRunner) RunStdin(stdin, name string, args ...string) error {
+	return r.Run(name, args...)
 }
