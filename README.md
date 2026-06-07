@@ -31,5 +31,8 @@ A few things devm does so your `devm.yaml` doesn't have to:
   prints a structured error showing which step failed and what it printed.
   Logs persist at `/tmp/.devm-install/install-<N>/current` and
   `/tmp/.devm-startup/startup-<N>/current` inside the sandbox.
+* **The `ncurses-term` package is installed** (modern terminfo for TUIs).
+  Devm also embeds and drops a static `s6-log` binary at `.devm/scripts/s6-log`
+  for `wrap-bg.sh` to use without any apt step.
 
 (More docs as the project matures.)

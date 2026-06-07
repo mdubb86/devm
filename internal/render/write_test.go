@@ -182,3 +182,24 @@ func TestWriteDevmDirWritesWrapBGAtExpectedPathAndMode(t *testing.T) {
 	assert.Contains(t, string(bs), "spawned",
 		"wrap-bg.sh must write .spawned marker")
 }
+
+func TestWriteDevmDirWritesS6LogAtExpectedPathAndMode(t *testing.T) {
+	dir := t.TempDir()
+	cfg := minimalConfig(t)
+	require.NoError(t, WriteDevmDir(cfg, dir))
+
+	s6logPath := filepath.Join(dir, ".devm", "scripts", "s6-log")
+	info, err := os.Stat(s6logPath)
+	require.NoError(t, err, ".devm/scripts/s6-log must be written")
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(),
+		"s6-log must be executable")
+	assert.Greater(t, info.Size(), int64(50000),
+		"s6-log binary should be at least 50KB (sanity check on the static binary)")
+
+	// Verify it's an ELF file (the binary, not a shell script).
+	bs, err := os.ReadFile(s6logPath)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(bs), 4)
+	assert.Equal(t, []byte{0x7f, 'E', 'L', 'F'}, bs[:4],
+		"s6-log must be an ELF binary (the embedded static s6-log)")
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/mtwaage/devm/internal/schema"
 	"github.com/mtwaage/devm/internal/scripts"
@@ -109,6 +110,25 @@ func writeStaticFiles(cfg schema.Config, repoRoot string) error {
 	wrapBGPath := filepath.Join(scriptsDir, "wrap-bg.sh")
 	if err := os.WriteFile(wrapBGPath, []byte(scripts.WrapBG), 0o755); err != nil {
 		return fmt.Errorf("write %s: %w", wrapBGPath, err)
+	}
+
+	// s6-log: statically-linked binary embedded by devm (from s6-overlay v3.2.0.2,
+	// ISC licensed). Used by wrap-bg.sh for rotated capture of background daemons.
+	// Drop the binary matching the host arch — sbx on macOS+Docker runs containers
+	// of the host's native arch by default. (Cross-arch via Rosetta/qemu would need
+	// a runtime arch probe; out of scope.)
+	s6LogPath := filepath.Join(scriptsDir, "s6-log")
+	var s6LogBinary []byte
+	switch runtime.GOARCH {
+	case "arm64":
+		s6LogBinary = scripts.S6LogLinuxARM64
+	case "amd64":
+		s6LogBinary = scripts.S6LogLinuxAMD64
+	default:
+		return fmt.Errorf("write s6-log: unsupported host arch %q (only arm64 and amd64 are embedded)", runtime.GOARCH)
+	}
+	if err := os.WriteFile(s6LogPath, s6LogBinary, 0o755); err != nil {
+		return fmt.Errorf("write %s: %w", s6LogPath, err)
 	}
 
 	// .devm/.env: persistent project + service env file sourced by the

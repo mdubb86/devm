@@ -22,3 +22,9 @@ var WrapFG string
 
 //go:embed wrap-bg.sh
 var WrapBG string
+
+//go:embed s6-log.linux-arm64
+var S6LogLinuxARM64 []byte
+
+//go:embed s6-log.linux-amd64
+var S6LogLinuxAMD64 []byte

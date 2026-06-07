@@ -281,8 +281,9 @@ type Config struct {
 	// any user install entry):
 	//   * `apt-get update` has already run, so user install entries can
 	//     `apt-get install -y <pkg>` directly without a preceding update.
-	//   * The `s6` and `ncurses-term` packages are installed; `s6-log`
-	//     is on PATH (used by wrap-bg.sh for rotated daemon logs).
+	//   * The `ncurses-term` package is installed (modern terminfo for TUIs).
+	//     Devm embeds a static `s6-log` at `.devm/scripts/s6-log` (used by
+	//     wrap-bg.sh for rotated background daemon logs — no apt step needed).
 	//
 	// Reserved arg-separator: `--` in a user command's argv is consumed
 	// by the wrapper. Quote it or split into multiple steps.
