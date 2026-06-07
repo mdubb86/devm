@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,6 +13,11 @@ import (
 	"github.com/mtwaage/devm/internal/sandbox"
 	"github.com/mtwaage/devm/internal/schema"
 )
+
+// ErrAnchorDied signals that the anchor process exited during a phase
+// gate's poll. The caller should switch to readPhaseFailureFromHost
+// (the host-side mirror that wrap-fg.sh wrote before the wrapper exited).
+var ErrAnchorDied = errors.New("anchor died during phase gate")
 
 // FailureReport describes the first failing step in a phase
 // (install or startup). Produced by readPhaseFailure when a phase
@@ -230,18 +237,40 @@ const (
 )
 
 // waitForPhaseSentinel polls /tmp/.devm-<phase>/<phase>-all-ok via sbx exec
-// until present or timeout. Returns a wrapped error on timeout
-// (caller pairs it with readPhaseFailure to surface what happened).
-func waitForPhaseSentinel(sb *sandbox.Sandbox, phase string, timeout, poll time.Duration) error {
+// until present or timeout. Returns ErrAnchorDied if runDone fires before
+// the sentinel appears. Returns a wrapped timeout error otherwise.
+// runDone may be nil — in that case anchor-death detection is skipped.
+func waitForPhaseSentinel(sb *sandbox.Sandbox, phase string, runDone <-chan struct{}, timeout, poll time.Duration) error {
 	sentinel := fmt.Sprintf("/tmp/.devm-%s/%s-all-ok", phase, phase)
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		// Non-blocking check for anchor death.
+		if runDone != nil {
+			select {
+			case <-runDone:
+				return ErrAnchorDied
+			default:
+			}
+		}
 		if _, err := sb.Runner.Output("sbx", "exec", sb.Name, "test", "-f", sentinel); err == nil {
 			return nil
 		}
-		time.Sleep(poll)
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s did not complete within %s", phase, timeout)
+		}
+		// Sleep until next poll tick or anchor death.
+		if runDone != nil {
+			select {
+			case <-ticker.C:
+			case <-runDone:
+				return ErrAnchorDied
+			}
+		} else {
+			<-ticker.C
+		}
 	}
-	return fmt.Errorf("%s did not complete within %s", phase, timeout)
 }
 
 // gateTimeoutFromEnv returns the timeout for the given phase, honoring
@@ -254,4 +283,76 @@ func gateTimeoutFromEnv(phase string, defaultD time.Duration) time.Duration {
 		}
 	}
 	return defaultD
+}
+
+// readPhaseFailureFromHost is the host-side analog of readPhaseFailure,
+// used when the anchor died (sbx torn down per c02) and the in-VM
+// /tmp/.devm-<phase>/ is gone. wrap-fg.sh mirrors failure records to
+// <repoRoot>/.devm/failures/<phase>-<N>.{current,rc} for exactly this
+// case (pinned by c32-c34). Returns nil if no failure files found.
+//
+// Walks failure files for the given phase, identifies the LOWEST N
+// (the first failing step), returns a FailureReport. Note: only files
+// written by FAILING steps appear in .devm/failures/ — successful steps
+// don't mirror, so any file in there is by definition a failure.
+func readPhaseFailureFromHost(repoRoot, phase string, cfg schema.Config) (*FailureReport, error) {
+	failuresDir := filepath.Join(repoRoot, ".devm", "failures")
+	entries, err := os.ReadDir(failuresDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No failure mirrored — caller falls back.
+		}
+		return nil, fmt.Errorf("readPhaseFailureFromHost: read %s: %w", failuresDir, err)
+	}
+
+	prefix := phase + "-"
+	rcN := -1
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".rc") {
+			continue
+		}
+		// Parse <phase>-<N>.rc
+		body := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".rc")
+		var n int
+		if _, err := fmt.Sscanf(body, "%d", &n); err != nil {
+			continue
+		}
+		if rcN < 0 || n < rcN {
+			rcN = n
+		}
+	}
+	if rcN < 0 {
+		return nil, nil
+	}
+
+	rcPath := filepath.Join(failuresDir, fmt.Sprintf("%s-%d.rc", phase, rcN))
+	rcRaw, err := os.ReadFile(rcPath)
+	if err != nil {
+		return nil, fmt.Errorf("readPhaseFailureFromHost: read %s: %w", rcPath, err)
+	}
+	rc, perr := strconv.Atoi(strings.TrimSpace(string(rcRaw)))
+	if perr != nil {
+		return nil, fmt.Errorf("readPhaseFailureFromHost: parse rc %q: %w", rcRaw, perr)
+	}
+
+	report := &FailureReport{
+		Phase:   phase,
+		StepN:   rcN,
+		RC:      rc,
+		UserCmd: resolveUserCmdText(phase, rcN, cfg),
+	}
+
+	curPath := filepath.Join(failuresDir, fmt.Sprintf("%s-%d.current", phase, rcN))
+	if curRaw, err := os.ReadFile(curPath); err == nil {
+		full := string(curRaw)
+		if len(full) > captureTailBytes {
+			report.CapturedTail = full[len(full)-captureTailBytes:]
+			report.Truncated = true
+		} else {
+			report.CapturedTail = full
+		}
+	}
+
+	return report, nil
 }

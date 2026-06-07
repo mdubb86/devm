@@ -587,7 +587,7 @@ func TestWaitForPhaseSentinel_SentinelPresent(t *testing.T) {
 		},
 	}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
-	err := waitForPhaseSentinel(sb, "install", 5*time.Second, 50*time.Millisecond)
+	err := waitForPhaseSentinel(sb, "install", nil, 5*time.Second, 50*time.Millisecond)
 	assert.NoError(t, err)
 }
 
@@ -603,9 +603,56 @@ func TestWaitForPhaseSentinel_TimesOut(t *testing.T) {
 	}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	start := time.Now()
-	err := waitForPhaseSentinel(sb, "install", 300*time.Millisecond, 50*time.Millisecond)
+	err := waitForPhaseSentinel(sb, "install", nil, 300*time.Millisecond, 50*time.Millisecond)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "did not complete")
 	assert.GreaterOrEqual(t, time.Since(start), 300*time.Millisecond,
 		"must respect timeout")
+}
+
+func TestWaitForPhaseSentinel_AnchorDied(t *testing.T) {
+	r := &stubRunnerForFailureReader{
+		t: t,
+		scripted: map[string]struct {
+			out []byte
+			err error
+		}{
+			"test -f /tmp/.devm-install/install-all-ok": {out: []byte(""), err: errors.New("exit 1")},
+		},
+	}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	runDone := make(chan struct{})
+	close(runDone) // anchor already dead
+
+	err := waitForPhaseSentinel(sb, "install", runDone, 5*time.Second, 50*time.Millisecond)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrAnchorDied), "must report anchor death, not timeout")
+}
+
+func TestReadPhaseFailureFromHost_FindsLowestN(t *testing.T) {
+	dir := t.TempDir()
+	failuresDir := filepath.Join(dir, ".devm", "failures")
+	require.NoError(t, os.MkdirAll(failuresDir, 0o755))
+
+	// step 3 failed (rc=7); also leave a stray step 5 to confirm "lowest N wins"
+	require.NoError(t, os.WriteFile(filepath.Join(failuresDir, "install-3.rc"), []byte("7\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(failuresDir, "install-3.current"), []byte("E: bad package\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(failuresDir, "install-5.rc"), []byte("1\n"), 0o644))
+
+	cfg := schema.Config{Install: []string{"apt-get update", "apt-get install -y foo", "apt-get install -y bar"}}
+	report, err := readPhaseFailureFromHost(dir, "install", cfg)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, 3, report.StepN, "must return lowest N")
+	assert.Equal(t, 7, report.RC)
+	assert.Contains(t, report.CapturedTail, "E: bad package")
+	// Step 3 = cfg.Install[1] per the render index (bootstrap=1, user[0]=2, user[1]=3).
+	assert.Equal(t, "apt-get install -y foo", report.UserCmd)
+}
+
+func TestReadPhaseFailureFromHost_NoFailuresDir(t *testing.T) {
+	dir := t.TempDir()
+	report, err := readPhaseFailureFromHost(dir, "install", schema.Config{})
+	require.NoError(t, err)
+	assert.Nil(t, report)
 }

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -218,6 +219,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		anchorOut  *lineRingBuffer  // production path only — capture for diagnostics
 		anchorPid  int
 		runDone    = make(chan error, 1)
+		anchorDead = make(chan struct{}) // closed when anchor exits; passed to gate pollers
 	)
 	if d.AnchorSpawner != nil {
 		debuglog.Logf("shell", "cold-start: spawning anchor (via AnchorSpawner — TEST PATH): %v", runArgs)
@@ -230,6 +232,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		go func() {
 			_, err := sc.Wait()
 			runDone <- err
+			close(anchorDead)
 		}()
 	} else {
 		debuglog.Logf("shell", "cold-start: spawning anchor (PTY — production path): %v", runArgs)
@@ -257,6 +260,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		}
 		go func() {
 			runDone <- runCmd.Wait()
+			close(anchorDead)
 		}()
 	}
 	debuglog.Logf("shell", "cold-start: anchor spawned pid=%d", anchorPid)
@@ -346,15 +350,22 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	}
 	debuglog.Logf("shell", "cold-start: exec-ready")
 
-	// Install gate: poll for /tmp/.devm/install-all-ok. Closes the
-	// async-runtime-death race (the 2026-06-05 bootstrap.sh revert).
-	// Sbx reports status=running before install: finishes; the
-	// sentinel only appears AFTER all install steps complete.
+	// Install gate: poll for /tmp/.devm-install/install-all-ok. Closes
+	// the async-runtime-death race (the 2026-06-05 bootstrap.sh revert).
+	// Sbx reports status=running before install: finishes; the sentinel
+	// only appears AFTER all install steps complete.
+	// On anchor death (sbx tears sandbox down per c02), switch to the
+	// host-side failure mirror written by wrap-fg.sh (pinned by c32-c34).
 	installTimeout := gateTimeoutFromEnv("install", defaultInstallGateTimeout)
-	if err := waitForPhaseSentinel(sb, "install", installTimeout, defaultGatePollInterval); err != nil {
-		report, rerr := readPhaseFailure(sb, "install", cfg)
-		if rerr != nil || report == nil {
-			return -1, fmt.Errorf("%w\n  (failed to read failure details: %v)", err, rerr)
+	if err := waitForPhaseSentinel(sb, "install", anchorDead, installTimeout, defaultGatePollInterval); err != nil {
+		var report *FailureReport
+		if errors.Is(err, ErrAnchorDied) {
+			report, _ = readPhaseFailureFromHost(repoRoot, "install", cfg)
+		} else {
+			report, _ = readPhaseFailure(sb, "install", cfg)
+		}
+		if report == nil {
+			return -1, fmt.Errorf("%w", err)
 		}
 		return -1, fmt.Errorf("%s", formatFailureReport(report))
 	}
@@ -385,15 +396,21 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	}
 	debuglog.Logf("shell", "snapshot: done")
 
-	// Startup gate: poll for /tmp/.devm/startup-all-ok. Closes the
-	// silent-startup-failure gap (contract_24). Per contract_29, sbx
+	// Startup gate: poll for /tmp/.devm-startup/startup-all-ok. Closes
+	// the silent-startup-failure gap (contract_24). Per contract_29, sbx
 	// halts at the first failing startup step but doesn't surface it
 	// — the sentinel is the only signal devm has.
+	// On anchor death, switch to the host-side failure mirror (c32-c34).
 	startupTimeout := gateTimeoutFromEnv("startup", defaultStartupGateTimeout)
-	if err := waitForPhaseSentinel(sb, "startup", startupTimeout, defaultGatePollInterval); err != nil {
-		report, rerr := readPhaseFailure(sb, "startup", cfg)
-		if rerr != nil || report == nil {
-			return -1, fmt.Errorf("%w\n  (failed to read failure details: %v)", err, rerr)
+	if err := waitForPhaseSentinel(sb, "startup", anchorDead, startupTimeout, defaultGatePollInterval); err != nil {
+		var report *FailureReport
+		if errors.Is(err, ErrAnchorDied) {
+			report, _ = readPhaseFailureFromHost(repoRoot, "startup", cfg)
+		} else {
+			report, _ = readPhaseFailure(sb, "startup", cfg)
+		}
+		if report == nil {
+			return -1, fmt.Errorf("%w", err)
 		}
 		return -1, fmt.Errorf("%s", formatFailureReport(report))
 	}

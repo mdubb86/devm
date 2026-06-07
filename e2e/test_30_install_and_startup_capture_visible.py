@@ -36,7 +36,7 @@ def test_install_and_startup_capture_visible(workspace, devm, sandbox_name):
 
         # Install step 2 (user install[0]) — its stdout is in current.
         r = subprocess.run(
-            ["sbx", "exec", sandbox_name, "cat", "/tmp/.devm/install-2/current"],
+            ["sbx", "exec", sandbox_name, "cat", "/tmp/.devm-install/install-2/current"],
             capture_output=True, timeout=10, check=True,
         ).stdout.decode()
         assert "install-step-2-stdout" in r, (
@@ -44,9 +44,9 @@ def test_install_and_startup_capture_visible(workspace, devm, sandbox_name):
         )
 
         # Install step 3 (user install[1]) — its stderr is in current
-        # (both streams merge via 2>&1 | s6-log).
+        # (both streams merge via 2>&1).
         r = subprocess.run(
-            ["sbx", "exec", sandbox_name, "cat", "/tmp/.devm/install-3/current"],
+            ["sbx", "exec", sandbox_name, "cat", "/tmp/.devm-install/install-3/current"],
             capture_output=True, timeout=10, check=True,
         ).stdout.decode()
         assert "install-step-3-stderr" in r, (
@@ -56,7 +56,7 @@ def test_install_and_startup_capture_visible(workspace, devm, sandbox_name):
         # Startup step 3 (first user startup) — its stdout is in current.
         # Note: cleanup=0, init-volumes=1, install-templates=2, user=3.
         r = subprocess.run(
-            ["sbx", "exec", sandbox_name, "cat", "/tmp/.devm/startup-3/current"],
+            ["sbx", "exec", sandbox_name, "cat", "/tmp/.devm-startup/startup-3/current"],
             capture_output=True, timeout=10, check=True,
         ).stdout.decode()
         assert "startup-user-stdout" in r, (

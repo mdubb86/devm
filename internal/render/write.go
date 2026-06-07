@@ -45,6 +45,15 @@ func WriteTemplateInstallers(cfg schema.Config, repoRoot string) error {
 }
 
 func writeStaticFiles(cfg schema.Config, repoRoot string) error {
+	// Wipe .devm/failures/ — populated by wrap-fg.sh on a previous
+	// run's failed install/startup step, read by devm to surface
+	// errors after anchor death (per the supervision design). Stale
+	// files would either persist forever or confuse next-run diagnostics.
+	failuresDir := filepath.Join(repoRoot, ".devm", "failures")
+	if err := os.RemoveAll(failuresDir); err != nil {
+		return fmt.Errorf("wipe .devm/failures: %w", err)
+	}
+
 	// Fail fast if the rendered spec.yaml isn't valid YAML. Beats
 	// writing a broken file and discovering it only when sbx run tries
 	// to load it (or the user runs `devm shell` and gets a cryptic
