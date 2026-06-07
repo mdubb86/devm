@@ -16,127 +16,132 @@ type PtermReporter struct {
 
 	mu       sync.Mutex
 	spinner  *pterm.SpinnerPrinter
-	curPhase string
-	curN     int
-	curTotal int
-	curDesc  string
+	curLabel string    // label of the active spinner (for finalize)
+	curStart time.Time // when the active spinner began
+	total    int       // total counted steps (set via SetTotal)
+	count    int       // index of the most recent counted step
 }
 
 func newPtermReporter(out io.Writer) *PtermReporter {
-	// pterm's default writers are stdout/stderr-bound. We let pterm
-	// drive the TTY natively rather than redirecting via Out — the
-	// terminal control chars need a real fd to land correctly.
 	return &PtermReporter{out: out}
+}
+
+var (
+	successPrefix = pterm.PrefixPrinter{
+		MessageStyle: pterm.NewStyle(pterm.FgDefault),
+		Prefix: pterm.Prefix{
+			Style: pterm.NewStyle(pterm.FgGreen),
+			Text:  " ✓",
+		},
+	}
+	failPrefix = pterm.PrefixPrinter{
+		MessageStyle: pterm.NewStyle(pterm.FgDefault),
+		Prefix: pterm.Prefix{
+			Style: pterm.NewStyle(pterm.FgRed),
+			Text:  " ✗",
+		},
+	}
+)
+
+var spinnerSequence = []string{" ⠋", " ⠙", " ⠹", " ⠸", " ⠼", " ⠴", " ⠦", " ⠧", " ⠇", " ⠏"}
+
+func newSpinner(text string) *pterm.SpinnerPrinter {
+	sp, _ := pterm.DefaultSpinner.
+		WithRemoveWhenDone(false).
+		WithShowTimer(true).
+		WithSequence(spinnerSequence...).
+		WithStyle(pterm.NewStyle(pterm.FgCyan)).
+		WithText(text).
+		Start()
+	sp.SuccessPrinter = &successPrefix
+	sp.FailPrinter = &failPrefix
+	return sp
+}
+
+// finalizeLocked resolves the active spinner as ✓ with elapsed time.
+func (r *PtermReporter) finalizeLocked() {
+	if r.spinner == nil {
+		return
+	}
+	elapsed := time.Since(r.curStart)
+	final := r.curLabel + " " + pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed))
+	r.spinner.Success(final)
+	r.spinner = nil
+}
+
+// startSpinnerLocked finalizes any active spinner with ✓ and starts a new one.
+func (r *PtermReporter) startSpinnerLocked(label string) {
+	r.finalizeLocked()
+	r.curLabel = label
+	r.curStart = time.Now()
+	r.spinner = newSpinner(label)
 }
 
 func (r *PtermReporter) Start(msg string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.spinner != nil {
-		// Already running — just update text.
+		// Already running — just update text. Timer keeps ticking.
+		r.curLabel = msg
 		r.spinner.UpdateText(msg)
 		return
 	}
-	sp, _ := pterm.DefaultSpinner.
-		WithRemoveWhenDone(false).
-		WithShowTimer(true).
-		WithText(msg).
-		Start()
-	r.spinner = sp
+	r.startSpinnerLocked(msg)
+}
+
+func (r *PtermReporter) SetTotal(total int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.total = total
+}
+
+func (r *PtermReporter) Step(desc string, counted bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var label string
+	if counted {
+		r.count++
+		label = fmt.Sprintf("[%d/%d] %s", r.count, r.total, desc)
+	} else {
+		label = desc
+	}
+	r.startSpinnerLocked(label)
+}
+
+func (r *PtermReporter) Fail() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.spinner == nil {
+		return
+	}
+	elapsed := time.Since(r.curStart)
+	final := r.curLabel + " " + pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed))
+	r.spinner.Fail(final)
+	r.spinner = nil
 }
 
 func (r *PtermReporter) Info(msg string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.stopSpinnerLocked()
+	r.finalizeLocked()
 	pterm.FgGray.Println("[devm] " + msg)
-}
-
-func (r *PtermReporter) PhaseStart(phase string, total int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.curPhase = phase
-	r.curTotal = total
-	r.curN = 0
-}
-
-func (r *PtermReporter) StepStart(phase string, n int, desc string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.stopSpinnerLocked()
-	r.curN = n
-	r.curDesc = desc
-	label := stepLabel(phase, n, r.curTotal, desc)
-	sp, _ := pterm.DefaultSpinner.
-		WithRemoveWhenDone(false).
-		WithShowTimer(true).
-		WithText(label).
-		Start()
-	r.spinner = sp
-}
-
-// stepLabel renders the line head as:
-//
-//	"phase [N/M] desc"  when phase != "" and total > 0
-//	"phase desc"        when phase != "" but no count (rare)
-//	"desc"              when phase == "" (label-only step)
-func stepLabel(phase string, n, total int, desc string) string {
-	if phase == "" {
-		return desc
-	}
-	if total > 0 {
-		return fmt.Sprintf("%s [%d/%d] %s", phase, n, total, desc)
-	}
-	return fmt.Sprintf("%s %s", phase, desc)
-}
-
-func (r *PtermReporter) StepDone(phase string, n int, elapsed time.Duration) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	final := stepLabel(phase, n, r.curTotal, r.curDesc) + " " +
-		pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed))
-	if r.spinner != nil {
-		r.spinner.Success(final)
-		r.spinner = nil
-	} else {
-		pterm.Success.Println(final)
-	}
-}
-
-func (r *PtermReporter) StepFail(phase string, n int, elapsed time.Duration) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	final := stepLabel(phase, n, r.curTotal, r.curDesc) + " " +
-		pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed))
-	if r.spinner != nil {
-		r.spinner.Fail(final)
-		r.spinner = nil
-	} else {
-		pterm.Error.Println(final)
-	}
-}
-
-func (r *PtermReporter) PhaseDone(phase string, elapsed time.Duration) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	// Phase-level done line is intentionally subtle — the per-step ✓ lines
-	// already conveyed completion. We skip a noisy "phase done" line.
-	_ = phase
-	_ = elapsed
 }
 
 func (r *PtermReporter) Stop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.stopSpinnerLocked()
+	r.finalizeLocked()
 }
 
-func (r *PtermReporter) stopSpinnerLocked() {
-	if r.spinner == nil {
-		return
+// formatElapsed renders a duration in the format we want for the UX:
+//
+//	< 60s  → "12.3s"
+//	>= 60s → "1m23s"
+func formatElapsed(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
 	}
-	// Spinner was active and we're stopping without success/fail —
-	// treat as cancellation; leave a neutral marker.
-	_ = r.spinner.Stop()
-	r.spinner = nil
+	m := int(d / time.Minute)
+	s := int((d % time.Minute) / time.Second)
+	return fmt.Sprintf("%dm%02ds", m, s)
 }
