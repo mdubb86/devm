@@ -17,7 +17,7 @@ survives `devm teardown`.
 
 ```yaml
 install:
-  - curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh && bash /tmp/claude-install.sh
+  - curl -fsSL https://claude.ai/install.sh | bash
 
 env:
   CLAUDE_CONFIG_DIR: $WORKSPACE/.devm/.claude
@@ -39,8 +39,6 @@ env:
   outside its own scripts directory.
 - **Network:** install fetches from `claude.ai`. If you've narrowed
   `network.allowed_domains`, include it.
-- **Download-then-bash** (not `curl | bash`): a failed fetch fails loud
-  instead of silently piping nothing into `bash`.
 - If the project ALSO needs Node for other reasons, install Node
   separately via the Node recipe — Claude Code's native installer
   doesn't need it.
