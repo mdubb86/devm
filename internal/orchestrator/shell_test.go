@@ -531,3 +531,47 @@ func TestReadPhaseFailure_HungStep(t *testing.T) {
 	assert.Equal(t, "sleep 200", report.UserCmd)
 	assert.Contains(t, report.CapturedTail, "partial output")
 }
+
+func TestFormatFailureReport_StepFailure(t *testing.T) {
+	r := &FailureReport{
+		Phase:        "install",
+		StepN:        3,
+		RC:           1,
+		UserCmd:      "apt-get install -y nonexistent-pkg",
+		CapturedTail: "E: Unable to locate package nonexistent-pkg\n",
+	}
+	out := formatFailureReport(r)
+	assert.Contains(t, out, "error: install step 3 failed (rc=1)")
+	assert.Contains(t, out, "command: apt-get install -y nonexistent-pkg")
+	assert.Contains(t, out, "/tmp/.devm/install-3/current")
+	assert.Contains(t, out, "Unable to locate package nonexistent-pkg")
+}
+
+func TestFormatFailureReport_HungStep(t *testing.T) {
+	r := &FailureReport{
+		Phase:        "install",
+		StepN:        2,
+		RC:           -1,
+		Hung:         true,
+		UserCmd:      "apt-get install -y mongodb-org",
+		CapturedTail: "partial output\n",
+	}
+	out := formatFailureReport(r)
+	assert.Contains(t, out, "still running or hung")
+	assert.Contains(t, out, "step 2")
+	assert.Contains(t, out, "apt-get install -y mongodb-org")
+	assert.Contains(t, out, "partial output")
+}
+
+func TestFormatFailureReport_TruncationNoted(t *testing.T) {
+	r := &FailureReport{
+		Phase:        "install",
+		StepN:        2,
+		RC:           1,
+		UserCmd:      "bigcmd",
+		CapturedTail: strings.Repeat("x", 100),
+		Truncated:    true,
+	}
+	out := formatFailureReport(r)
+	assert.Contains(t, out, "truncated")
+}

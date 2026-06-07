@@ -189,3 +189,35 @@ func resolveUserCmdText(phase string, stepN int, cfg schema.Config) string {
 	}
 	return fmt.Sprintf("(unknown startup step %d)", stepN)
 }
+
+// formatFailureReport renders a FailureReport as the user-facing
+// error message body. The shape is intentionally plain — no
+// prescriptive "fix this" or "investigate with X" hints. Just the
+// facts.
+func formatFailureReport(r *FailureReport) string {
+	var b strings.Builder
+	if r.Hung {
+		b.WriteString(fmt.Sprintf(
+			"error: %s did not complete\n", r.Phase))
+		b.WriteString(fmt.Sprintf(
+			"  step %d (%s) still running or hung\n", r.StepN, r.UserCmd))
+	} else {
+		b.WriteString(fmt.Sprintf(
+			"error: %s step %d failed (rc=%d)\n", r.Phase, r.StepN, r.RC))
+		b.WriteString(fmt.Sprintf(
+			"  command: %s\n", r.UserCmd))
+	}
+	b.WriteString(fmt.Sprintf(
+		"  output (last %d bytes of /tmp/.devm/%s-%d/current):\n",
+		len(r.CapturedTail), r.Phase, r.StepN))
+	for _, line := range strings.Split(strings.TrimRight(r.CapturedTail, "\n"), "\n") {
+		b.WriteString("    ")
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	if r.Truncated {
+		b.WriteString("  (output truncated; full log in /tmp/.devm/" +
+			r.Phase + "-" + strconv.Itoa(r.StepN) + "/current)\n")
+	}
+	return b.String()
+}
