@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"gopkg.in/yaml.v3"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -87,10 +87,11 @@ func build(srcDir, outPath, version string) error {
 	}
 	defer tx.Rollback()
 
+	builtAt := time.Now().Unix()
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO meta (key, value) VALUES (?, ?), (?, ?), (?, ?)",
 		"version", version,
-		"built_at", fmt.Sprintf("%d", time.Now().Unix()),
+		"built_at", fmt.Sprintf("%d", builtAt),
 		"recipe_count", fmt.Sprintf("%d", len(recipes)),
 	); err != nil {
 		return err
@@ -102,7 +103,7 @@ func build(srcDir, outPath, version string) error {
 			   (name, category, display_name, description, keywords, content, since, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			r.Name, r.Category, r.DisplayName, r.Description, r.Keywords, r.Content, r.Since,
-			time.Now().Unix(),
+			builtAt,
 		)
 		if err != nil {
 			return fmt.Errorf("insert %s: %w", r.Name, err)
@@ -154,7 +155,9 @@ func parseRecipe(srcDir, path string) (recipe, error) {
 	if err != nil {
 		return recipe{}, err
 	}
-	text := string(raw)
+	// Normalize CRLF → LF so Windows checkouts without core.autocrlf
+	// don't confuse the frontmatter parser.
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
 	if !strings.HasPrefix(text, "---\n") {
 		return recipe{}, fmt.Errorf("missing frontmatter")
 	}
