@@ -2,29 +2,45 @@
 name: tool/ai/claude
 category: ai
 display_name: Claude Code
-description: Install Claude Code CLI; persist conversations across teardowns.
+description: Install Claude Code CLI; persist OAuth login + conversation history across teardowns.
 keywords: claude anthropic claude-code ai
 since: recipes-v1.0.0
 ---
 
 # Claude Code
 
+Uses the official native installer (no Node dependency) and relocates
+all `~/.claude` state onto the host-side workspace bind-mount so it
+survives `devm teardown`.
+
 ## devm.yaml additions
 
 ```yaml
 install:
-  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  - apt-get install -y nodejs
-  - npm install -g @anthropic-ai/claude-code
+  - curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh && bash /tmp/claude-install.sh
 
 env:
-  CLAUDE_CONFIG_DIR: $WORKSPACE/.claude
+  CLAUDE_CONFIG_DIR: $WORKSPACE/.devm/.claude
 ```
 
 ## Notes
 
-- `CLAUDE_CONFIG_DIR` on the workspace mount → conversations persist
-  across `devm teardown && devm shell`.
-- Add `.claude/` to `.gitignore`.
-- If the project ALSO needs Node for other reasons, the Node lines
-  collapse into the Node recipe (only install once).
+- **Binary** lands at `~/.local/bin/claude` inside the sandbox. That path
+  is ephemeral — the installer re-runs on every cold-start. No state
+  there.
+- **State** is everything Claude stores under `~/.claude`: the OAuth
+  credentials at `.credentials.json`, conversation transcripts under
+  `projects/<repo>/<session>.jsonl`, memory, history, settings.
+  `CLAUDE_CONFIG_DIR` relocates all of it to `$WORKSPACE/.devm/.claude`.
+- **Why `.devm/.claude` (not `.claude`):** `.devm/` is already gitignored
+  by devm convention, so OAuth tokens stay off git automatically. `.devm/`
+  also lives on the workspace bind-mount, so it's host-side and survives
+  sandbox teardown. devm itself never prunes anything under `.devm/`
+  outside its own scripts directory.
+- **Network:** install fetches from `claude.ai`. If you've narrowed
+  `network.allowed_domains`, include it.
+- **Download-then-bash** (not `curl | bash`): a failed fetch fails loud
+  instead of silently piping nothing into `bash`.
+- If the project ALSO needs Node for other reasons, install Node
+  separately via the Node recipe — Claude Code's native installer
+  doesn't need it.
