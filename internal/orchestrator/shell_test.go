@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -429,4 +430,104 @@ func TestRunShellShortcutInvokesReconcileInner(t *testing.T) {
 	}
 	runner.mu.Unlock()
 	assert.True(t, sawCat, "shortcut path must invoke RunReconcileInner which reads the snapshot")
+}
+
+// stubRunnerForFailureReader returns scripted outputs for the sbx exec
+// calls readPhaseFailure makes. The map key is a substring of the joined
+// command string; value is (stdout, error). First substring match wins.
+type stubRunnerForFailureReader struct {
+	t        *testing.T
+	mu       sync.Mutex
+	scripted map[string]struct {
+		out []byte
+		err error
+	}
+	calls [][]string
+}
+
+func (r *stubRunnerForFailureReader) Output(name string, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, append([]string{name}, args...))
+	full := strings.Join(append([]string{name}, args...), " ")
+	for prefix, scripted := range r.scripted {
+		if strings.Contains(full, prefix) {
+			return scripted.out, scripted.err
+		}
+	}
+	return nil, fmt.Errorf("stubRunnerForFailureReader: no scripted response for %q", full)
+}
+
+func (r *stubRunnerForFailureReader) Run(name string, args ...string) error {
+	_, err := r.Output(name, args...)
+	return err
+}
+
+func (r *stubRunnerForFailureReader) RunStdin(stdin, name string, args ...string) error {
+	return r.Run(name, args...)
+}
+
+func TestReadPhaseFailure_IdentifiesFirstFailingFGStep(t *testing.T) {
+	// Render index: cleanup(0), bootstrap(1), cfg.Install[0]=step 2,
+	// cfg.Install[1]=step 3. In this scenario bootstrap + step 2 succeed;
+	// step 3 (cfg.Install[1] = "apt-get install -y foo") fails with rc=7.
+	r := &stubRunnerForFailureReader{
+		t: t,
+		scripted: map[string]struct {
+			out []byte
+			err error
+		}{
+			"ls /tmp/.devm/": {out: []byte(
+				"install-1.ok\ninstall-1.rc\n" +
+					"install-2.ok\ninstall-2.rc\n" +
+					"install-3.rc\n"), err: nil},
+			"cat /tmp/.devm/install-1.rc": {out: []byte("0\n"), err: nil},
+			"cat /tmp/.devm/install-2.rc": {out: []byte("0\n"), err: nil},
+			"cat /tmp/.devm/install-3.rc": {out: []byte("7\n"), err: nil},
+			"cat /tmp/.devm/install-3/current": {out: []byte(
+				"@4000000067432a1b0d2f8e4c Reading package lists...\n" +
+					"@4000000067432a1c12a4b7d3 E: Unable to locate package foo\n"), err: nil},
+		},
+	}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	cfg := schema.Config{Install: []string{"apt-get update", "apt-get install -y foo"}}
+
+	report, err := readPhaseFailure(sb, "install", cfg)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, "install", report.Phase)
+	assert.Equal(t, 3, report.StepN)
+	assert.Equal(t, 7, report.RC)
+	assert.False(t, report.Hung)
+	assert.Equal(t, "apt-get install -y foo", report.UserCmd)
+	assert.Contains(t, report.CapturedTail, "Unable to locate package foo")
+}
+
+func TestReadPhaseFailure_HungStep(t *testing.T) {
+	// bootstrap + step 2 succeed; step 3 hung (no .rc, no .ok).
+	r := &stubRunnerForFailureReader{
+		t: t,
+		scripted: map[string]struct {
+			out []byte
+			err error
+		}{
+			"ls /tmp/.devm/": {out: []byte(
+				"install-1.ok\ninstall-1.rc\n" +
+					"install-2.ok\ninstall-2.rc\n"), err: nil},
+			"cat /tmp/.devm/install-1.rc": {out: []byte("0\n"), err: nil},
+			"cat /tmp/.devm/install-2.rc": {out: []byte("0\n"), err: nil},
+			"cat /tmp/.devm/install-3/current": {out: []byte("partial output\n"), err: nil},
+		},
+	}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	cfg := schema.Config{Install: []string{"apt-get update", "sleep 200"}}
+
+	report, err := readPhaseFailure(sb, "install", cfg)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, 3, report.StepN)
+	assert.True(t, report.Hung)
+	assert.Equal(t, -1, report.RC)
+	assert.Equal(t, "sleep 200", report.UserCmd)
+	assert.Contains(t, report.CapturedTail, "partial output")
 }
