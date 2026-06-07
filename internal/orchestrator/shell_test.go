@@ -575,3 +575,37 @@ func TestFormatFailureReport_TruncationNoted(t *testing.T) {
 	out := formatFailureReport(r)
 	assert.Contains(t, out, "truncated")
 }
+
+func TestWaitForPhaseSentinel_SentinelPresent(t *testing.T) {
+	r := &stubRunnerForFailureReader{
+		t: t,
+		scripted: map[string]struct {
+			out []byte
+			err error
+		}{
+			"test -f /tmp/.devm/install-all-ok": {out: []byte(""), err: nil},
+		},
+	}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	err := waitForPhaseSentinel(sb, "install", 5*time.Second, 50*time.Millisecond)
+	assert.NoError(t, err)
+}
+
+func TestWaitForPhaseSentinel_TimesOut(t *testing.T) {
+	r := &stubRunnerForFailureReader{
+		t: t,
+		scripted: map[string]struct {
+			out []byte
+			err error
+		}{
+			"test -f /tmp/.devm/install-all-ok": {out: []byte(""), err: errors.New("exit 1")},
+		},
+	}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	start := time.Now()
+	err := waitForPhaseSentinel(sb, "install", 300*time.Millisecond, 50*time.Millisecond)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "did not complete")
+	assert.GreaterOrEqual(t, time.Since(start), 300*time.Millisecond,
+		"must respect timeout")
+}

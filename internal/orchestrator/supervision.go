@@ -2,9 +2,11 @@ package orchestrator
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mtwaage/devm/internal/sandbox"
 	"github.com/mtwaage/devm/internal/schema"
@@ -220,4 +222,39 @@ func formatFailureReport(r *FailureReport) string {
 			r.Phase + "-" + strconv.Itoa(r.StepN) + "/current)\n")
 	}
 	return b.String()
+}
+
+// Default phase-gate timeouts. Test overrides via
+// DEVM_INSTALL_GATE_TIMEOUT_S and DEVM_STARTUP_GATE_TIMEOUT_S.
+const (
+	defaultInstallGateTimeout = 120 * time.Second
+	defaultStartupGateTimeout = 30 * time.Second
+	defaultGatePollInterval   = 1 * time.Second
+)
+
+// waitForPhaseSentinel polls /tmp/.devm/<phase>-all-ok via sbx exec
+// until present or timeout. Returns a wrapped error on timeout
+// (caller pairs it with readPhaseFailure to surface what happened).
+func waitForPhaseSentinel(sb *sandbox.Sandbox, phase string, timeout, poll time.Duration) error {
+	sentinel := fmt.Sprintf("/tmp/.devm/%s-all-ok", phase)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := sb.Runner.Output("sbx", "exec", sb.Name, "test", "-f", sentinel); err == nil {
+			return nil
+		}
+		time.Sleep(poll)
+	}
+	return fmt.Errorf("%s did not complete within %s", phase, timeout)
+}
+
+// gateTimeoutFromEnv returns the timeout for the given phase, honoring
+// the DEVM_<PHASE>_GATE_TIMEOUT_S env var override if set (test hook).
+func gateTimeoutFromEnv(phase string, defaultD time.Duration) time.Duration {
+	key := "DEVM_" + strings.ToUpper(phase) + "_GATE_TIMEOUT_S"
+	if v := os.Getenv(key); v != "" {
+		if s, err := strconv.Atoi(v); err == nil {
+			return time.Duration(s) * time.Second
+		}
+	}
+	return defaultD
 }
