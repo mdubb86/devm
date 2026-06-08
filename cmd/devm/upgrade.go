@@ -26,12 +26,13 @@ var upgradeCmd = &cobra.Command{
 			return fmt.Errorf("resolving symlinks: %w", err)
 		}
 
-		if release.Classify(execPath) == release.SourceBrew {
+		ctx := cmd.Context()
+
+		if release.Classify(ctx, execPath, release.DefaultBrewLister()) == release.SourceBrew {
 			fmt.Fprintf(os.Stderr, "devm is installed via Homebrew:\n  %s\n\nTo upgrade, run:\n  brew upgrade mdubb86/tap/devm\n\n(Refusing to self-update — would create a brew/binary version mismatch.)\n", execPath)
 			os.Exit(1)
 		}
 
-		ctx := cmd.Context()
 		updater, err := newUpdater()
 		if err != nil {
 			return fmt.Errorf("creating updater: %w", err)
