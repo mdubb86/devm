@@ -1,0 +1,78 @@
+version: 2
+
+project_name: devm
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: devm
+    main: ./cmd/devm
+    binary: devm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - arm64
+      - amd64
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.Commit={{.ShortCommit}}
+      - -X main.Date={{.Date}}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_v{{ .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??:.+$'
+      order: 1
+    - title: Refactors
+      regexp: '^.*?refactor(\(.+\))??:.+$'
+      order: 2
+    - title: Documentation
+      regexp: '^.*?docs(\(.+\))??:.+$'
+      order: 3
+    - title: Tests
+      regexp: '^.*?test(\(.+\))??:.+$'
+      order: 4
+    - title: Other
+      order: 999
+
+release:
+  github:
+    owner: mdubb86
+    name: devm
+  draft: false
+  prerelease: auto
+
+homebrew_casks:
+  - name: devm
+    description: "Mac dev sandbox tool (wraps Docker Sandboxes)"
+    homepage: "https://github.com/mdubb86/devm"
+    repository:
+      owner: mdubb86
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    binaries:
+      - devm
