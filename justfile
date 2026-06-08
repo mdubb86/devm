@@ -52,3 +52,17 @@ e2e-list:
 # Safety-net manual sweep of anything earlier runs left behind.
 e2e-clean:
     @e2e/scripts/sweep-leftovers.sh
+
+# Cut a release: interactive picker (patch/minor/major), runs all
+# pre-tag guards, tags + pushes. CI takes over from there.
+release:
+    @scripts/release.sh
+
+# Same as `release` but skips the e2e suite. Use for hotfixes.
+release-no-e2e:
+    @SKIP_E2E=1 scripts/release.sh
+
+# Run goreleaser locally in dry-run mode against the current commit.
+# Useful for validating .goreleaser.yaml without cutting a real release.
+release-dry:
+    goreleaser release --snapshot --clean --skip=publish
