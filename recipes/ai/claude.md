@@ -18,7 +18,10 @@ sbx's host-global ai-services defaults).
 
 ```yaml
 install:
-  - curl -fsSL https://claude.ai/install.sh | bash
+  # The installer drops the binary at /root/.local/share/claude/versions/*
+  # (install runs as root). That path isn't on the agent user's PATH,
+  # so relocate it to /usr/local/bin which is.
+  - curl -fsSL https://claude.ai/install.sh | bash && install -m 755 /root/.local/share/claude/versions/* /usr/local/bin/claude
 
 env:
   CLAUDE_CONFIG_DIR: $WORKSPACE/.devm/.claude
@@ -35,8 +38,9 @@ network:
 
 ## Notes
 
-- **Binary** lands at `~/.local/bin/claude`. Ephemeral — the installer
-  re-runs on every cold-start.
+- **Binary** lands at `/usr/local/bin/claude` after the relocate step.
+  Ephemeral — the installer re-runs on every cold-start (`install:`
+  runs once per sandbox lifetime).
 - **State** is everything Claude stores under `~/.claude`: OAuth at
   `.credentials.json`, conversation transcripts under
   `projects/<repo>/<session>.jsonl`, memory, history, settings.
