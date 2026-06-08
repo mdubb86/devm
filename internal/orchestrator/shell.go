@@ -452,7 +452,10 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// shell via /.devm/.env. EnvArgs still rides on -e flags for the
 	// host-forwarded TERM/COLORTERM/etc. — those vary per terminal.
 	wrapper := filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env")
-	execArgs := []string{"exec", "-it"}
+	// `-w repoRoot` lands the user in the workspace dir on shell entry.
+	// sbx's mirrored-path mount makes the host repoRoot resolve to the
+	// same path inside the sandbox, so passing it verbatim is correct.
+	execArgs := []string{"exec", "-it", "-w", repoRoot}
 	execArgs = append(execArgs, sandbox.EnvArgs(cfg)...)
 	execArgs = append(execArgs, sandboxName, wrapper, cmdName)
 	execArgs = append(execArgs, cmdArgs...)
