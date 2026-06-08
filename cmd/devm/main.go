@@ -7,12 +7,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var Version = "dev" // set via -ldflags at release time
+// Build-time injected via -ldflags. Default values are used during
+// `go run` / development; goreleaser overrides them on release builds.
+var (
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+)
 
 var rootCmd = &cobra.Command{
-	Use:     "devm",
-	Short:   "Mac+VM dev sandbox tool",
-	Version: Version,
+	Use:   "devm",
+	Short: "Mac+VM dev sandbox tool",
 	// SilenceErrors: we print the error ourselves in main() so cobra's
 	// default "Error: ..." prefix doesn't double up.
 	//
