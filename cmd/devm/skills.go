@@ -19,7 +19,11 @@ var skillsCmd = &cobra.Command{
 The recommended way to wire devm into Claude Code is the skills.sh
 meta-installer:
 
-  npx skills add -g --agent claude-code mdubb86/devm
+  npx skills add mdubb86/devm -g --agent claude-code
+
+(The 'add' subcommand requires the source argument BEFORE the flags;
+putting the flags first errors with 'Missing required argument:
+source'.)
 
 That drops two skills under ~/.claude/skills/: a small discovery
 stub (devm) and a reference card (using-devm). Claude Code

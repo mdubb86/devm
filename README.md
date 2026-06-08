@@ -27,8 +27,12 @@ devm upgrade                    # if you installed via curl or manually
 Once devm is on your PATH, install the Claude Code skill stubs:
 
 ```bash
-npx skills add -g --agent claude-code mdubb86/devm
+npx skills add mdubb86/devm -g --agent claude-code
 ```
+
+> Note the argument order: `skills add` wants the source *before* the
+> flags. Putting the flags first errors with "Missing required argument:
+> source".
 
 That drops two skills under `~/.claude/skills/`: a small discovery
 stub (`devm`) and a reference card (`using-devm`). Claude Code
