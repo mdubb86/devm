@@ -5,7 +5,7 @@ description: Use when working in a project that uses devm. Tells you what devm.y
 
 # Using devm
 
-devm wraps Docker Sandboxes (`sbx`) with a declarative `devm.yaml`. The file describes a sandbox; devm renders it to an sbx kit and orchestrates the lifecycle. Source of truth for behavior is `/Users/michael/workspace/devm/internal/`.
+devm wraps Docker Sandboxes (`sbx`) with a declarative `devm.yaml`. The file describes a sandbox; devm renders it to an sbx kit and orchestrates the lifecycle. Source of truth for behavior is the repo's `internal/` directory.
 
 ## Binary
 
@@ -79,7 +79,7 @@ network:
     - api.openai.com
 
 mounts:                   # additional host paths, mounted at the same path in VM
-  - ~/.aws:ro             # mirrored to /Users/michael/.aws inside the VM
+  - ~/.aws:ro             # mirrored to the same path inside the VM (sbx mirrored-path mode)
   - ../sibling-project    # rel paths resolve against devm.yaml dir
 ```
 
