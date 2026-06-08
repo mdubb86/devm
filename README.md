@@ -5,10 +5,22 @@ A Mac+VM dev sandbox tool. Single Go binary + Claude Code plugin.
 ## Install
 
 ```bash
+# Homebrew (recommended for Mac):
 brew install mdubb86/tap/devm
-# or
-go install github.com/mdubb86/devm/cmd/devm@latest
+
+# Curl one-liner:
+curl -fsSL https://raw.githubusercontent.com/mdubb86/devm/main/scripts/install.sh | bash
 ```
+
+Both paths drop devm on your PATH and ship the same binary
+(darwin/arm64 + darwin/amd64). To upgrade later:
+
+```bash
+brew upgrade mdubb86/tap/devm   # if you installed via brew
+devm upgrade                    # if you installed via curl or manually
+```
+
+`devm version` prints the installed version + commit + build date.
 
 ## Quickstart
 
@@ -17,6 +29,8 @@ cd ~/your-project
 devm validate     # check devm.yaml
 devm reconcile    # regenerate .devm/ kit assets
 devm shell        # drop into the sandbox
+devm version      # current version + build info
+devm upgrade      # self-update (no-op for brew installs)
 ```
 
 ## devm.yaml affordances
