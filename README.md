@@ -24,17 +24,22 @@ devm upgrade                    # if you installed via curl or manually
 
 ### Wire into Claude Code
 
-Once devm is on your PATH, install the Claude Code skill stub:
+Once devm is on your PATH, install the Claude Code skill stubs:
 
 ```bash
-npx skills add mdubb86/devm
+npx skills add -g --agent claude-code mdubb86/devm
 ```
 
-That drops a discovery stub at `.claude/skills/devm/SKILL.md`. Claude
-Code auto-activates the skill when you work with `devm.yaml`, then
-fetches workflow and reference content directly from the binary via
-`devm skills list` / `devm skills get <name>` — so the docs stay
-version-locked to whatever devm you have installed.
+That drops two skills under `~/.claude/skills/`: a small discovery
+stub (`devm`) and a reference card (`using-devm`). Claude Code
+auto-activates them when working with `devm.yaml`, then the stub
+calls `devm skills list` / `devm skills get <name>` to fetch the
+workflow content from this binary (so it stays version-locked).
+
+For project-local install drop `-g`; for other agents swap
+`--agent claude-code` for `--agent '*'` (or your agent of choice).
+The `--agent claude-code` flag is the critical bit — without it the
+installer drops to `.agents/skills/…` and Claude Code won't see it.
 
 ## Quickstart
 

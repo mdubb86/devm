@@ -19,12 +19,19 @@ var skillsCmd = &cobra.Command{
 The recommended way to wire devm into Claude Code is the skills.sh
 meta-installer:
 
-  npx skills add mdubb86/devm
+  npx skills add -g --agent claude-code mdubb86/devm
 
-That drops a small discovery stub at .claude/skills/devm/SKILL.md.
-Claude Code auto-activates the skill when working with devm.yaml,
-then calls 'devm skills list' / 'devm skills get <name>' to fetch
-the actual content from this binary (so it stays version-locked).
+That drops two skills under ~/.claude/skills/: a small discovery
+stub (devm) and a reference card (using-devm). Claude Code
+auto-activates them when working with devm.yaml, then the stub
+calls 'devm skills list' / 'devm skills get <name>' to fetch the
+workflow content from this binary (so it stays version-locked).
+
+For project-local install drop -g; for other agents swap
+--agent claude-code for --agent '*' (or your agent of choice).
+Without --agent claude-code the installer drops to
+.agents/skills/… instead of .claude/skills/…, and Claude Code
+won't see it.
 
 Use the subcommands below if you want to read the embedded content
 directly (or to bootstrap installs that don't go through skills.sh).`,
