@@ -22,7 +22,7 @@ func TestClassify_BrewPrefixes(t *testing.T) {
 
 func TestClassify_ManualPaths(t *testing.T) {
 	cases := []string{
-		"/Users/michael/go/bin/devm",
+		"/Users/dev/go/bin/devm",
 		"/usr/local/bin/devm",
 		"/tmp/devm-test",
 		"/home/agent/.local/bin/devm",
