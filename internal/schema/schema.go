@@ -300,6 +300,25 @@ type Config struct {
 	// positional workspaces are baked at create time and the sandbox
 	// must be removed and re-created to apply.
 	Mounts []string `yaml:"mounts,omitempty"`
+
+	// Path is a list of directories prepended to PATH inside the
+	// sandbox. Reaches all four executable entrypoints (install,
+	// startup foreground, startup background, interactive shell) via
+	// the same .devm/.env fan-out as cfg.Env.
+	//
+	// Final PATH shape inside the sandbox:
+	//   <Path[0]>:<Path[1]>:...:$WORKSPACE/.devm/scripts:$PATH
+	//
+	// User entries win precedence over devm-internal scripts AND over
+	// container defaults. Substitution: $WORKSPACE (or ${WORKSPACE})
+	// expands to repoRoot at config load time. $$ → literal $. Any
+	// other $VAR reference is an error. Entries must be absolute
+	// (start with / or $WORKSPACE); empty entries and `~` expansion
+	// are rejected.
+	//
+	// Bucket: LIVE — same as cfg.Env. New shells pick up the new
+	// PATH on next `devm shell`; running shells don't.
+	Path []string `yaml:"path,omitempty"`
 }
 
 // ResolveMount expands and absolute-resolves a single mounts[] entry

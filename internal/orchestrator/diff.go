@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/schema"
@@ -51,6 +52,7 @@ const (
 	KindIdentityChange
 	KindTemplateChange
 	KindMountsChange
+	KindPathChange
 )
 
 // changeBucket is the single source of truth that maps each ChangeKind
@@ -80,6 +82,8 @@ var changeBucket = map[ChangeKind]Bucket{
 	// time. Adding/removing/changing a mount requires `sbx rm` and
 	// re-create.
 	KindMountsChange: BucketTeardownShell,
+	// Path is materialized in .devm/.env (same fan-out as Env) — live.
+	KindPathChange: BucketLive,
 }
 
 // Bucket returns the bucket this ChangeKind belongs to.
@@ -205,12 +209,36 @@ func ComputeAllChanges(old, new schema.Config, repoRoot string) ([]Change, error
 	out = append(out, computeMaskChanges(old, new)...)
 	out = append(out, computeImageChange(old, new)...)
 	out = append(out, computeIdentityChange(old, new)...)
+	out = append(out, computePathChange(old, new)...)
 	tmplChanges, err := ComputeTemplateChanges(new, repoRoot)
 	if err != nil {
 		return nil, err
 	}
 	out = append(out, tmplChanges...)
 	return out, nil
+}
+
+func computePathChange(old, new schema.Config) []Change {
+	if pathEqual(old.Path, new.Path) {
+		return nil
+	}
+	return []Change{{
+		Kind: KindPathChange,
+		Old:  strings.Join(old.Path, ":"),
+		New:  strings.Join(new.Path, ":"),
+	}}
+}
+
+func pathEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func computeEnvChanges(old, new schema.Config) []Change {

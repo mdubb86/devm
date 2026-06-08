@@ -41,6 +41,30 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketTeardownShell, KindImageChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindIdentityChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindMountsChange.Bucket())
+
+	// Live: path (same fan-out as env via .devm/.env)
+	assert.Equal(t, BucketLive, KindPathChange.Bucket())
+}
+
+func TestComputePathChange(t *testing.T) {
+	old := cfgWith(map[string]schema.Service{}, 0)
+	old.Path = []string{"/r/.cargo/bin"}
+	new := cfgWith(map[string]schema.Service{}, 0)
+	new.Path = []string{"/r/.cargo/bin", "/r/node_modules/.bin"}
+
+	changes := computePathChange(old, new)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindPathChange, changes[0].Kind)
+	assert.Equal(t, "/r/.cargo/bin", changes[0].Old)
+	assert.Equal(t, "/r/.cargo/bin:/r/node_modules/.bin", changes[0].New)
+
+	// Same list → no change.
+	assert.Empty(t, computePathChange(old, old))
+
+	// Reorder is also a change.
+	reordered := cfgWith(map[string]schema.Service{}, 0)
+	reordered.Path = []string{"/r/node_modules/.bin", "/r/.cargo/bin"}
+	assert.Len(t, computePathChange(new, reordered), 1, "reorder must produce a change")
 }
 
 func TestComputeMountsChanges(t *testing.T) {

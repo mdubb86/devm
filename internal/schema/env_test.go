@@ -121,3 +121,46 @@ func TestResolveEnvErrorMentionsFileLine_TBD(t *testing.T) {
 	// Today: contains field path. Future: also contains "devm.yaml:NN".
 	assert.True(t, strings.Contains(err.Error(), "env.X"))
 }
+
+// ---------- Path field tests ----------
+
+func TestResolveEnvExpandsWorkspaceInPath(t *testing.T) {
+	cfg := Config{Path: []string{"$WORKSPACE/.cargo/bin", "${WORKSPACE}/node_modules/.bin", "/opt/extra/bin"}}
+	require.NoError(t, ResolveEnv(&cfg, "/r"))
+	assert.Equal(t, []string{
+		"/r/.cargo/bin",
+		"/r/node_modules/.bin",
+		"/opt/extra/bin",
+	}, cfg.Path)
+}
+
+func TestResolveEnvPathEmptyEntryRejected(t *testing.T) {
+	cfg := Config{Path: []string{"/usr/local/bin", ""}}
+	err := ResolveEnv(&cfg, "/r")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path[1]")
+	assert.Contains(t, err.Error(), "empty")
+}
+
+func TestResolveEnvPathTildeRejected(t *testing.T) {
+	cfg := Config{Path: []string{"~/bin"}}
+	err := ResolveEnv(&cfg, "/r")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path[0]")
+	assert.Contains(t, err.Error(), "~")
+}
+
+func TestResolveEnvPathRelativeRejected(t *testing.T) {
+	cfg := Config{Path: []string{"bin"}}
+	err := ResolveEnv(&cfg, "/r")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path[0]")
+	assert.Contains(t, err.Error(), "absolute")
+}
+
+func TestResolveEnvPathUnknownVarRejected(t *testing.T) {
+	cfg := Config{Path: []string{"$NOPE/bin"}}
+	err := ResolveEnv(&cfg, "/r")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path[0]")
+}

@@ -58,6 +58,29 @@ func TestPersistentEnvEmptyConfigStillHasPathLine(t *testing.T) {
 	assert.True(t, strings.HasSuffix(strings.TrimRight(out, "\n"), `export PATH="$WORKSPACE/.devm/scripts:$PATH"`))
 }
 
+func TestPersistentEnvUserPathEntriesPrependedInOrder(t *testing.T) {
+	// cfg.Path comes from schema.ResolveEnv already $WORKSPACE-expanded.
+	// PersistentEnv just joins them with the existing PATH line, in
+	// declaration order, before $WORKSPACE/.devm/scripts (so user
+	// entries win precedence over devm-internal scripts).
+	cfg := schema.Config{Path: []string{
+		"/r/.cargo/bin",
+		"/r/node_modules/.bin",
+		"/opt/extra/bin",
+	}}
+	out := PersistentEnv(cfg)
+	assert.Contains(t, out,
+		`export PATH="/r/.cargo/bin:/r/node_modules/.bin:/opt/extra/bin:$WORKSPACE/.devm/scripts:$PATH"`)
+}
+
+func TestPersistentEnvEmptyPathFallsBackToBaseline(t *testing.T) {
+	// Nil Path is treated as empty — output identical to legacy form.
+	cfg := schema.Config{}
+	out := PersistentEnv(cfg)
+	assert.Contains(t, out, `export PATH="$WORKSPACE/.devm/scripts:$PATH"`)
+	assert.NotContains(t, out, `::`)
+}
+
 func TestPersistentEnvExportsCfgEnvSorted(t *testing.T) {
 	cfg := schema.Config{Env: map[string]string{
 		"BBB": "two",

@@ -42,9 +42,14 @@ func EnvArgs(cfg schema.Config) []string {
 //     with "supabase" (collides with the supabase CLI's env prefix).
 //
 // Trailing line, emitted unsorted at the end so $WORKSPACE has been
-// exported above it:
+// exported above it. cfg.Path entries (already validated + $WORKSPACE-
+// expanded by schema.ResolveEnv) prepend devm's internal scripts dir
+// AND the container default $PATH:
 //
-//	export PATH="$WORKSPACE/.devm/scripts:$PATH"
+//	export PATH="<cfg.Path[0]>:<cfg.Path[1]>:...:$WORKSPACE/.devm/scripts:$PATH"
+//
+// When cfg.Path is empty the line collapses to the original
+// "$WORKSPACE/.devm/scripts:$PATH" form.
 func PersistentEnv(cfg schema.Config) string {
 	merged := make(map[string]string, len(cfg.Env)*2)
 
@@ -93,7 +98,12 @@ func PersistentEnv(cfg schema.Config) string {
 		b.WriteString(shellSingleQuote(merged[k]))
 		b.WriteByte('\n')
 	}
-	b.WriteString(`export PATH="$WORKSPACE/.devm/scripts:$PATH"`)
+	b.WriteString(`export PATH="`)
+	for _, p := range cfg.Path {
+		b.WriteString(p)
+		b.WriteByte(':')
+	}
+	b.WriteString(`$WORKSPACE/.devm/scripts:$PATH"`)
 	b.WriteByte('\n')
 	return b.String()
 }

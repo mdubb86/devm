@@ -38,6 +38,25 @@ func ResolveEnv(cfg *Config, repoRoot string) error {
 		}
 	}
 
+	// Validate + expand cfg.Path into a side buffer.
+	resolvedPath := make([]string, 0, len(cfg.Path))
+	for i, p := range cfg.Path {
+		out, err := expandWorkspace(p, repoRoot)
+		if err != nil {
+			return fmt.Errorf("path[%d]: %w", i, err)
+		}
+		if out == "" {
+			return fmt.Errorf("path[%d]: empty entry not allowed", i)
+		}
+		if strings.HasPrefix(out, "~") {
+			return fmt.Errorf("path[%d] %q: leading ~ not supported; use $WORKSPACE or an absolute path", i, p)
+		}
+		if !strings.HasPrefix(out, "/") {
+			return fmt.Errorf("path[%d] %q: must be absolute (start with / or $WORKSPACE)", i, p)
+		}
+		resolvedPath = append(resolvedPath, out)
+	}
+
 	// Expand into a side buffer; only commit if all succeed.
 	resolved := make(map[string]string, len(cfg.Env)+2)
 	for k, v := range cfg.Env {
@@ -77,6 +96,7 @@ func ResolveEnv(cfg *Config, repoRoot string) error {
 	resolved["WORKSPACE"] = repoRoot
 	resolved["IS_SANDBOX"] = "1"
 	cfg.Env = resolved
+	cfg.Path = resolvedPath
 	for _, e := range svcEdits {
 		svc := cfg.Services[e.name]
 		svc.Env = e.env

@@ -17,6 +17,7 @@ Top-level fields (all optional unless noted):
 | `services` | map[string]Service | Named service definitions. See Service fields below. |
 | `install` | []string | Shell commands run ONCE at sandbox create as root. Each runs under `bash -o pipefail -c` (so pipelines fail loud). Wrapped by wrap-fg.sh. `apt-get update` already ran via bootstrap. |
 | `mounts` | []string | Host paths mirrored into the sandbox at the same absolute path. Format: `HOST_PATH[:ro]`. |
+| `path` | []string | Directories prepended to `$PATH` inside the sandbox. Final shape: `path[0]:path[1]:...:$WORKSPACE/.devm/scripts:$PATH`. Substitution: `$WORKSPACE` expands at load time. Entries must be absolute (start with `/` or `$WORKSPACE`); empty entries and `~` rejected. Reaches install, startup foreground, startup background, and the interactive shell via `.devm/.env`. **Bucket: live.** |
 
 ## Service fields
 
