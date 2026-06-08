@@ -1,21 +1,24 @@
-"""32: under base_image.docker: true, the inner dockerd can actually pull and run a container.
+"""contract: sbx's shell-docker template ships a working dockerd that pulls and runs containers.
 
-Complements test_24 (which only checks `docker --version`). The gap
-test_24's docstring explicitly calls out — "Running a real container
-with `docker run` inside the sandbox (only the daemon CLI is probed):
-not yet pinned" — is closed here.
+Devm depends on this: setting `base_image.docker: true` switches the
+sbx kit to the `docker/sandbox-templates:shell-docker` template, and
+devm's promise to the user is that the resulting sandbox can run
+containers. If this test goes red, sbx's docker template broke.
+
+Complements test_24 (which only probes `docker --version` — CLI
+presence, not daemon functionality). test_24's own docstring flags
+this gap: "Running a real container with `docker run` inside the
+sandbox (only the daemon CLI is probed): not yet pinned."
 
 What this pins:
-  - Inner dockerd (under base_image.docker:true) actually accepts
-    `docker run`, pulls an image from Docker Hub through sbx's
-    network policy, and runs the container to a clean rc=0.
+  - Inner dockerd accepts `docker run`, pulls an image from Docker
+    Hub through sbx's network policy, runs the container to rc=0.
   - The `*.docker.io` / `*.docker.com` allowed_domains entries are
     sufficient for inner-dockerd to reach the registry.
 
 What it doesn't cover:
-  - Live reconcile under docker:true (env changes, etc): not yet
-    pinned, low risk.
-  - Recreate cycle under docker:true: not yet pinned.
+  - Live reconcile under docker:true (env changes, etc).
+  - Recreate cycle under docker:true.
 
 If this fails with a "Blocked by network policy" body in the output,
 the allowed_domains list needs expansion for the network the inner
@@ -25,7 +28,7 @@ import pytest
 
 from helpers import Shell, stop_and_wait_stopped
 
-pytestmark = pytest.mark.devm
+pytestmark = pytest.mark.sbx_contract
 
 
 @pytest.mark.timeout(300)
