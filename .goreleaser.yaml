@@ -76,10 +76,15 @@ homebrew_casks:
       email: bot@goreleaser.com
     binaries:
       - devm
-    # The binary is unsigned. Without no_quarantine, macOS Gatekeeper
-    # blocks first-run with a "could not verify" dialog (SIGKILL the
-    # process). Skip the com.apple.quarantine xattr — standard pattern
-    # for unsigned OSS CLIs distributed via Homebrew tap until proper
-    # signing+notarization is in place.
+    # The binary is unsigned. macOS Gatekeeper blocks first-run with
+    # a "could not verify" dialog (SIGKILL, exit 137) on quarantined
+    # files. Homebrew applies com.apple.quarantine to all cask
+    # artifacts; no_quarantine was removed from the Cask DSL. Strip
+    # the xattr in a postflight hook so the binary runs cleanly.
+    # Standard pattern for unsigned OSS CLIs distributed via tap
+    # until proper signing + notarization is in place.
     custom_block: |
-      no_quarantine
+      postflight do
+        system_command "/usr/bin/xattr",
+                       args: ["-rd", "com.apple.quarantine", staged_path]
+      end
