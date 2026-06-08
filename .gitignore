@@ -12,3 +12,6 @@
 
 # OS
 .DS_Store
+
+# Internal brainstorming + plans — not part of the public repo
+docs/superpowers/
