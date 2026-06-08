@@ -5,7 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/mtwaage/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // Exec runs `sbx exec [-it] [-w workdir] -e ... NAME with-devm-env args...`.

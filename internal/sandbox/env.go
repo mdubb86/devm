@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mtwaage/devm/internal/config"
-	"github.com/mtwaage/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // ForwardEnv is the host env vars we propagate into every interactive

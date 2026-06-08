@@ -12,7 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/mtwaage/devm/internal/recipes"
+	"github.com/mdubb86/devm/internal/recipes"
 )
 
 var recipesCmd = &cobra.Command{

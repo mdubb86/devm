@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mtwaage/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 )
 

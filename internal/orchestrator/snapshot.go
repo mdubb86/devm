@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mtwaage/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/sandbox"
 )
 
 // SnapshotPath is the in-VM location of the last-applied spec snapshot.

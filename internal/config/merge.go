@@ -1,6 +1,6 @@
 package config
 
-import "github.com/mtwaage/devm/internal/schema"
+import "github.com/mdubb86/devm/internal/schema"
 
 // Merge applies override on top of base. Only non-nil/non-empty fields in
 // override take effect. Returns a new Config.

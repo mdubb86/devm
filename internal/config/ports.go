@@ -1,6 +1,6 @@
 package config
 
-import "github.com/mtwaage/devm/internal/schema"
+import "github.com/mdubb86/devm/internal/schema"
 
 // VMPortOffset is a fixed constant: how much we shift host-published ports
 // above their VM-internal counterparts so canonicals stay free on the Mac.

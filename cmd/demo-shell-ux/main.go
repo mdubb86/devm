@@ -19,7 +19,7 @@ import (
 
 	"github.com/pterm/pterm"
 
-	"github.com/mtwaage/devm/internal/status"
+	"github.com/mdubb86/devm/internal/status"
 )
 
 func main() {

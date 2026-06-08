@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mtwaage/devm/internal/config"
-	"github.com/mtwaage/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // Caddyfile generates the VM-side Caddyfile from the validated config.

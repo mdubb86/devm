@@ -6,8 +6,8 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/mtwaage/devm/internal/config"
-	"github.com/mtwaage/devm/internal/orchestrator"
+	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/orchestrator"
 	"github.com/spf13/cobra"
 )
 

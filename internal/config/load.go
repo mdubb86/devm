@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mtwaage/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/schema"
 	"gopkg.in/yaml.v3"
 )
 

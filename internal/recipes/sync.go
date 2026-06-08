@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultReleasesURL = "https://api.github.com/repos/mtwaage/devm/releases"
+	defaultReleasesURL = "https://api.github.com/repos/mdubb86/devm/releases"
 
 	lazyTimeout     = 5 * time.Second
 	explicitTimeout = 30 * time.Second

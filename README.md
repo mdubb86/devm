@@ -5,9 +5,9 @@ A Mac+VM dev sandbox tool. Single Go binary + Claude Code plugin.
 ## Install
 
 ```bash
-brew install mtwaage/tap/devm
+brew install mdubb86/tap/devm
 # or
-go install github.com/mtwaage/devm/cmd/devm@latest
+go install github.com/mdubb86/devm/cmd/devm@latest
 ```
 
 ## Quickstart

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/mtwaage/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // TemplateData is the data context exposed to user templates.

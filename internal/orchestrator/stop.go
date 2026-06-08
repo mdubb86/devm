@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mtwaage/devm/internal/lock"
-	"github.com/mtwaage/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/lock"
+	"github.com/mdubb86/devm/internal/sandbox"
 )
 
 // Destructiveness selects between preserving the VM (sbx stop) and

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mtwaage/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/sandbox"
 )
 
 // StatusResult is what `devm status` produces. Drift is non-empty only

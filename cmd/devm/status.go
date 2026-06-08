@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mtwaage/devm/internal/config"
-	"github.com/mtwaage/devm/internal/orchestrator"
-	"github.com/mtwaage/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/orchestrator"
+	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/spf13/cobra"
 )
 

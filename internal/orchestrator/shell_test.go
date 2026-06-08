@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mtwaage/devm/internal/sandbox"
-	"github.com/mtwaage/devm/internal/schema"
-	"github.com/mtwaage/devm/internal/status"
+	"github.com/mdubb86/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/status"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/mtwaage/devm/internal/schema"
-	"github.com/mtwaage/devm/internal/scripts"
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/scripts"
 )
 
 // WriteDevmDir regenerates the .devm/ cache in repoRoot with current

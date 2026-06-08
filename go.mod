@@ -1,4 +1,4 @@
-module github.com/mtwaage/devm
+module github.com/mdubb86/devm
 
 go 1.25.0
 

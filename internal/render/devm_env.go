@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mtwaage/devm/internal/sandbox"
-	"github.com/mtwaage/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // WriteDevmEnv renders cfg into repoRoot/.devm/.env via tmpfile +

@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/mtwaage/devm/internal/render"
-	"github.com/mtwaage/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/render"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // Bucket categorises how invasive a change is to apply.

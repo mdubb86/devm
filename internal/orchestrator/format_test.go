@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/mtwaage/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/stretchr/testify/assert"
 )
 

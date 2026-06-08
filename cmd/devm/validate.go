@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mtwaage/devm/internal/config"
-	"github.com/mtwaage/devm/internal/render"
+	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/render"
 	"github.com/spf13/cobra"
 )
 
