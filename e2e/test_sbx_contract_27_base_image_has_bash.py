@@ -5,8 +5,7 @@ devm-rendered shell wrappers can use bash-isms (pipefail, process
 substitution `> >(...)`, `set -euo pipefail`) without an explicit
 apt-install bash dependency.
 
-Devm dependency: docs/superpowers/specs/2026-06-07-startup-
-supervision-design.md uses bash for the wrap-step.sh wrapper (per-step
+Devm dependency: internal design notes uses bash for the wrap-step.sh wrapper (per-step
 stdout/stderr split via `> >(s6-log ...)`). If bash were missing,
 either the wrapper would need to bootstrap bash itself (chicken-and-
 egg with install:) or fall back to POSIX sh + fifos.

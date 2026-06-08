@@ -294,8 +294,8 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// user-shell-spawn — surface what sbx was actually doing/failing
 	// at, not just devm's wrapper text. Previously the anchor tail
 	// was only included on the runDone-died path, which left genuine
-	// diagnostic gaps (the 2026-06-05 dogfood "no sandbox named
-	// 'everstone'" failures gave us zero clue what install: was up to).
+	// diagnostic gaps (cold-start "no sandbox named <name>" failures
+	// gave us zero clue what install: was up to).
 	handedOff := false
 	defer func() {
 		if handedOff {

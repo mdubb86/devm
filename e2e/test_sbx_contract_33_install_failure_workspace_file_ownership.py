@@ -14,8 +14,7 @@ the chown is needed.
 
 The probe: same as c32 but inspects host-side ownership + write perms.
 
-Devm dependency: docs/superpowers/specs/2026-06-07-startup-supervision-
-design.md (refinement after R1) needs to know whether wrap-fg.sh must
+Devm dependency: internal design notes (refinement after R1) needs to know whether wrap-fg.sh must
 chown its host-mirrored failure record. This contract resolves it.
 """
 from __future__ import annotations

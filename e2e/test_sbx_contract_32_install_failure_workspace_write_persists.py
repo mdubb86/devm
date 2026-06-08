@@ -15,8 +15,7 @@ down the sandbox. After sbx run exits, we read the file on the host
 side at <workspace>/probe.out. If "HELLO" is there, the inversion is
 viable.
 
-Devm dependency: docs/superpowers/specs/2026-06-07-startup-supervision-
-design.md (refinement after R1) plans to have wrap-fg.sh mirror failure
+Devm dependency: internal design notes (refinement after R1) plans to have wrap-fg.sh mirror failure
 records to $WORKSPACE_DIR/.devm/failures/ before exiting with the user's
 rc, so devm can read them post-teardown on the host. This contract
 locks in the foundational property.

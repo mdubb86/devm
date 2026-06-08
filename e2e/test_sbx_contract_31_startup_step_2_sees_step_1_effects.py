@@ -17,8 +17,7 @@ Per contract_24, sbx is silent on startup failure, so a failing step 2
 wouldn't manifest as a sbx-level error. The probe relies on observing
 the marker, not on sbx's reaction.
 
-Devm dependency: docs/superpowers/specs/2026-06-07-startup-
-supervision-design.md treats startup: as ordered with completion
+Devm dependency: internal design notes treats startup: as ordered with completion
 semantics. Combined with contract_29 (fail-fast halt) and contract_24
 (silent failure), contract_31 locks the property the supervision
 wrapper depends on: ordered execution with side-effect visibility.

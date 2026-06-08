@@ -15,8 +15,7 @@ a failing install: step makes sbx run exit non-zero and leaves no
 sandbox — so the success of contract_sandbox (which waits for
 running + exec-ready) itself proves both steps completed in order.
 
-Devm dependency: docs/superpowers/specs/2026-06-07-startup-
-supervision-design.md treats install: as ordered + fail-fast and lets
+Devm dependency: internal design notes treats install: as ordered + fail-fast and lets
 users put step dependencies in declaration order. If sbx ever changes
 this, contract_30 fires.
 

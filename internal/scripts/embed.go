@@ -23,6 +23,11 @@ var WrapFG string
 //go:embed wrap-bg.sh
 var WrapBG string
 
+// s6-log binaries: extracted from s6-overlay v3.2.0.2 (ISC licensed).
+// Used by wrap-bg.sh for rotated capture of background daemon output.
+// See THIRD_PARTY_NOTICES.md and internal/render/write.go for the
+// ISC attribution shipped alongside the binary at install time.
+//
 //go:embed s6-log.linux-arm64
 var S6LogLinuxARM64 []byte
 

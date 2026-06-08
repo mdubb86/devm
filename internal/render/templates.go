@@ -1,7 +1,7 @@
 // Package render — template renderer for services.<name>.templates.
 // Produces self-contained bash installer scripts (one per template)
 // that write the rendered content into the sandbox at the configured
-// output path. See docs/superpowers/specs/2026-06-01-templates-design.md.
+// output path. See internal design notes.
 package render
 
 import (

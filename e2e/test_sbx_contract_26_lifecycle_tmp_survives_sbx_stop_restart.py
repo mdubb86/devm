@@ -7,7 +7,7 @@ This means `sbx stop`/`run` is not a fresh-tmpfs-on-resume operation
 filesystem state preserved end-to-end, including /tmp.
 
 Devm dependency: the startup-supervision design
-(docs/superpowers/specs/2026-06-07-startup-supervision-design.md)
+(internal design notes)
 needs marker freshness per `sbx run`. Since /tmp does NOT give us
 free freshness, the design MUST add an explicit cleanup step at the
 head of startup: that wipes /tmp/.devm/ before any user step runs:

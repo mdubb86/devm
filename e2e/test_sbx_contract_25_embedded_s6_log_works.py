@@ -1,7 +1,7 @@
 """install: the embedded static s6-log binary executes on the shell base.
 
 Pins the building block for devm's startup-supervision feature
-(docs/superpowers/specs/2026-06-07-startup-supervision-design.md):
+(internal design notes):
 
   - The s6-log binary from s6-overlay v3.2.0.2 (statically linked,
     embedded by devm at .devm/scripts/s6-log via go:embed) is

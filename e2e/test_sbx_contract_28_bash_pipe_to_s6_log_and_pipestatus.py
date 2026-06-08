@@ -1,7 +1,7 @@
 """bash: `"$@" 2>&1 | s6-log <dir>` captures both streams, PIPESTATUS gives user rc.
 
 Pins the two bash primitives the startup-supervision wrapper depends
-on (docs/superpowers/specs/2026-06-07-startup-supervision-design.md):
+on (internal design notes):
 
   1. `cmd 2>&1 | s6-log <dir>` writes BOTH stdout and stderr from cmd
      into <dir>/current. Confirms that fd-dup at exec time + the pipe

@@ -17,8 +17,7 @@ Combined with contract_24, the full sbx startup semantics are:
   - BUT sandbox status flips to "running" anyway and exec works.
   - sbx run output: no error message about the failure.
 
-Devm dependency: docs/superpowers/specs/2026-06-07-startup-
-supervision-design.md uses this to decide wrapper shape:
+Devm dependency: internal design notes uses this to decide wrapper shape:
   - Sbx provides ordering+fail-fast for free; wrap-fg.sh does NOT
     need a precheck of the prior step's .ok marker.
   - Devm's startup-supervision still NEEDS its own marker scheme

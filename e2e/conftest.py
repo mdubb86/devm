@@ -3,7 +3,7 @@
 The fixtures register cleanup intent in the env-shared registry file
 BEFORE creating any resource. If a fixture's finalizer doesn't run
 (pytest SIGKILL, wedged worker), the bash wrapper's EXIT trap sweeps
-the registry. See docs/superpowers/specs/2026-05-30-e2e-pexpect-rewrite-design.md.
+the registry. See internal design notes.
 """
 from __future__ import annotations
 import os
