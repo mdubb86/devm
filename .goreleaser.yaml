@@ -76,3 +76,10 @@ homebrew_casks:
       email: bot@goreleaser.com
     binaries:
       - devm
+    # The binary is unsigned. Without no_quarantine, macOS Gatekeeper
+    # blocks first-run with a "could not verify" dialog (SIGKILL the
+    # process). Skip the com.apple.quarantine xattr — standard pattern
+    # for unsigned OSS CLIs distributed via Homebrew tap until proper
+    # signing+notarization is in place.
+    custom_block: |
+      no_quarantine
