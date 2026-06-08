@@ -51,8 +51,9 @@ VERSION="${DEVM_INSTALL_VERSION:-}"
 if [ -z "$VERSION" ]; then
     VERSION="$(echo "$RELEASES_JSON" | jq -r \
         '[.[] | select(.tag_name | test("^v[0-9]+(\\.[0-9]+){0,2}$"))] | first | .tag_name')"
-    [ -n "$VERSION" ] && [ "$VERSION" != null ] \
-        || die "no v* releases found at $RELEASES_URL"
+    if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+        die "no v* releases found at $RELEASES_URL"
+    fi
 fi
 log "version: $VERSION"
 
@@ -64,10 +65,12 @@ CHECKSUMS_URL="$(echo "$RELEASES_JSON" | jq -r \
     --arg tag "$VERSION" \
     '.[] | select(.tag_name == $tag) | .assets[] | select(.name == "checksums.txt") | .browser_download_url')"
 
-[ -n "$ARCHIVE_URL" ] && [ "$ARCHIVE_URL" != null ] \
-    || die "no archive $ARCHIVE_NAME in release $VERSION"
-[ -n "$CHECKSUMS_URL" ] && [ "$CHECKSUMS_URL" != null ] \
-    || die "no checksums.txt in release $VERSION"
+if [ -z "$ARCHIVE_URL" ] || [ "$ARCHIVE_URL" = "null" ]; then
+    die "no archive $ARCHIVE_NAME in release $VERSION"
+fi
+if [ -z "$CHECKSUMS_URL" ] || [ "$CHECKSUMS_URL" = "null" ]; then
+    die "no checksums.txt in release $VERSION"
+fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
