@@ -11,7 +11,8 @@ since: recipes-v1.0.0
 
 Uses the official native installer (no Node dependency) and relocates
 all `~/.claude` state onto the host-side workspace bind-mount so it
-survives `devm teardown`.
+survives `devm teardown`. Self-contained allowlist (doesn't rely on
+sbx's host-global ai-services defaults).
 
 ## devm.yaml additions
 
@@ -21,24 +22,34 @@ install:
 
 env:
   CLAUDE_CONFIG_DIR: $WORKSPACE/.devm/.claude
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+
+network:
+  allowed_domains:
+    - api.anthropic.com         # Claude API (core)
+    - claude.ai                 # OAuth login + install.sh
+    - platform.claude.com       # Console account auth
+    - downloads.claude.ai       # native installer + plugin downloads
+    - raw.githubusercontent.com # plugin marketplace + /release-notes
 ```
 
 ## Notes
 
-- **Binary** lands at `~/.local/bin/claude` inside the sandbox. That path
-  is ephemeral — the installer re-runs on every cold-start. No state
-  there.
-- **State** is everything Claude stores under `~/.claude`: the OAuth
-  credentials at `.credentials.json`, conversation transcripts under
+- **Binary** lands at `~/.local/bin/claude`. Ephemeral — the installer
+  re-runs on every cold-start.
+- **State** is everything Claude stores under `~/.claude`: OAuth at
+  `.credentials.json`, conversation transcripts under
   `projects/<repo>/<session>.jsonl`, memory, history, settings.
   `CLAUDE_CONFIG_DIR` relocates all of it to `$WORKSPACE/.devm/.claude`.
-- **Why `.devm/.claude` (not `.claude`):** `.devm/` is already gitignored
-  by devm convention, so OAuth tokens stay off git automatically. `.devm/`
-  also lives on the workspace bind-mount, so it's host-side and survives
-  sandbox teardown. devm itself never prunes anything under `.devm/`
-  outside its own scripts directory.
-- **Network:** install fetches from `claude.ai`. If you've narrowed
-  `network.allowed_domains`, include it.
-- If the project ALSO needs Node for other reasons, install Node
-  separately via the Node recipe — Claude Code's native installer
-  doesn't need it.
+- **Why `.devm/.claude`:** `.devm/` is gitignored by devm convention,
+  so OAuth tokens stay off git automatically. `.devm/` lives on the
+  workspace bind-mount → host-side → survives `devm teardown`. devm
+  never prunes anything under `.devm/` outside its own scripts dir.
+- **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`** kills Sentry error
+  reporting + telemetry. Cleaner than allowlisting `*.sentry.io`.
+- **`raw.githubusercontent.com`** is needed for plugin marketplace
+  install counts and `/release-notes`. Drop it if you don't use those.
+- If you also need Node for other reasons, install Node via the Node
+  recipe — Claude Code's native installer doesn't depend on it.
+
+Upstream network docs: <https://code.claude.com/docs/en/network-config.md>
