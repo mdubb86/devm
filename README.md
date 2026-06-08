@@ -22,6 +22,20 @@ devm upgrade                    # if you installed via curl or manually
 
 `devm version` prints the installed version + commit + build date.
 
+### Wire into Claude Code
+
+Once devm is on your PATH, install the Claude Code skill stub:
+
+```bash
+npx skills add mdubb86/devm
+```
+
+That drops a discovery stub at `.claude/skills/devm/SKILL.md`. Claude
+Code auto-activates the skill when you work with `devm.yaml`, then
+fetches workflow and reference content directly from the binary via
+`devm skills list` / `devm skills get <name>` — so the docs stay
+version-locked to whatever devm you have installed.
+
 ## Quickstart
 
 ```bash

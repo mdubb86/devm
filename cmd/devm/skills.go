@@ -14,6 +14,20 @@ import (
 var skillsCmd = &cobra.Command{
 	Use:   "skills",
 	Short: "Embedded workflow and reference content for AI agents",
+	Long: `Embedded workflow and reference content for AI agents.
+
+The recommended way to wire devm into Claude Code is the skills.sh
+meta-installer:
+
+  npx skills add mdubb86/devm
+
+That drops a small discovery stub at .claude/skills/devm/SKILL.md.
+Claude Code auto-activates the skill when working with devm.yaml,
+then calls 'devm skills list' / 'devm skills get <name>' to fetch
+the actual content from this binary (so it stays version-locked).
+
+Use the subcommands below if you want to read the embedded content
+directly (or to bootstrap installs that don't go through skills.sh).`,
 }
 
 var skillsListCmd = &cobra.Command{
