@@ -1,15 +1,17 @@
 # justfile
 
-# Build the devm binary into ./devm (for local testing).
+# Build the devm-dev binary into ./devm-dev (for local testing).
+# Named devm-dev so it never collides with a brew-installed `devm`.
 build:
-    go build -o devm ./cmd/devm
+    go build -o devm-dev ./cmd/devm
 
-# Install the devm binary the canonical Go way → $GOBIN (or $GOPATH/bin).
-# Typically lands at ~/go/bin/devm; add ~/go/bin to PATH if not already.
+# Install the working-tree build as `devm-dev` in $GOBIN (or $GOPATH/bin).
+# The -dev suffix means it coexists with a brew-installed `devm` without
+# any PATH games: `devm` → prod (brew), `devm-dev` → working tree.
 install:
-    go install ./cmd/devm
-    @bin="$(go env GOBIN)"; [ -n "$bin" ] || bin="$(go env GOPATH)/bin"; echo "installed to $bin/devm"
-    @command -v devm >/dev/null || echo "(reminder: add $(go env GOPATH)/bin to PATH to invoke 'devm' directly)"
+    @bin="$(go env GOBIN)"; [ -n "$bin" ] || bin="$(go env GOPATH)/bin"; \
+        go build -o "$bin/devm-dev" ./cmd/devm && echo "installed $bin/devm-dev"
+    @command -v devm-dev >/dev/null || echo "(reminder: add $(go env GOPATH)/bin to PATH so 'devm-dev' resolves)"
 
 # Run Go unit tests.
 test:
@@ -17,7 +19,7 @@ test:
 
 # Remove build artifacts.
 clean:
-    rm -f devm
+    rm -f devm-dev
 
 # Run the full e2e suite.
 e2e:
