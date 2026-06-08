@@ -168,3 +168,43 @@ func TestSync_PicksFirstRecipesPrefixedTag(t *testing.T) {
 		"should pick the first recipes-prefixed release (SHA-tagged) over the legacy semver")
 	assert.True(t, res.Downloaded)
 }
+
+// TestSync_PicksNewestByPublishedAt pins the published_at-desc sort.
+// Empirically the GH /releases endpoint does NOT return entries
+// strictly ordered by published_at when different tag categories
+// (v* vs recipes-*) coexist: a newer recipes-* release can show up
+// AFTER an older one in iteration order. Without explicit sorting,
+// the sync picks the stale release.
+func TestSync_PicksNewestByPublishedAt(t *testing.T) {
+	cacheDir := t.TempDir()
+	srcDB := filepath.Join(t.TempDir(), "remote-recipes.db")
+	buildTinyDB(t, srcDB, "recipes-newer-sha")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases":
+			w.Header().Set("Content-Type", "application/json")
+			// Older release FIRST in the iteration order; newer release
+			// AFTER. Mirrors the real GitHub API quirk observed in
+			// production where recipes-9ae99a2 (newer) appeared after
+			// recipes-e154d0c (older) in the same response.
+			body := `[
+				{"tag_name":"recipes-older-sha","published_at":"2026-06-08T18:06:54Z","assets":[{"name":"recipes.db","browser_download_url":"http://` + r.Host + `/stale.db"}]},
+				{"tag_name":"recipes-newer-sha","published_at":"2026-06-08T22:36:41Z","assets":[{"name":"recipes.db","browser_download_url":"http://` + r.Host + `/recipes.db"}]}
+			]`
+			_, _ = w.Write([]byte(body))
+		case "/recipes.db":
+			http.ServeFile(w, r, srcDB)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	s := NewSyncer(cacheDir, srv.URL+"/releases")
+	res, err := s.Sync(context.Background(), false /*explicit*/)
+	require.NoError(t, err)
+	assert.Equal(t, "recipes-newer-sha", res.Version,
+		"must pick the newer release by published_at, regardless of iteration order")
+	assert.True(t, res.Downloaded)
+}

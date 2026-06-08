@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -129,8 +130,9 @@ func (s *Syncer) cachedVersion() string {
 }
 
 type ghRelease struct {
-	TagName string `json:"tag_name"`
-	Assets  []struct {
+	TagName     string `json:"tag_name"`
+	PublishedAt string `json:"published_at"`
+	Assets      []struct {
 		Name string `json:"name"`
 		URL  string `json:"browser_download_url"`
 	} `json:"assets"`
@@ -154,17 +156,44 @@ func (s *Syncer) fetchLatestReleaseInfo(ctx context.Context) (tag, assetURL stri
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 		return "", "", err
 	}
+	// Filter to recipes-* releases that actually have the asset.
+	// GitHub's /releases endpoint does NOT return entries strictly
+	// sorted by published_at — empirically a fresh recipes release
+	// can appear AFTER older recipes releases in the iteration order
+	// when the prior release was a different category (v*). Pick by
+	// published_at explicitly instead of trusting iteration order.
+	var candidates []ghRelease
 	for _, r := range releases {
 		if !strings.HasPrefix(r.TagName, "recipes-") {
 			continue
 		}
+		hasAsset := false
 		for _, a := range r.Assets {
 			if a.Name == "recipes.db" {
-				return r.TagName, a.URL, nil
+				hasAsset = true
+				break
 			}
 		}
+		if hasAsset {
+			candidates = append(candidates, r)
+		}
 	}
-	return "", "", errors.New("recipes sync: no recipes-* release with recipes.db asset found")
+	if len(candidates) == 0 {
+		return "", "", errors.New("recipes sync: no recipes-* release with recipes.db asset found")
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		// Lexicographic on RFC3339 timestamps gives the right ordering
+		// (newest first). Empty PublishedAt sorts last.
+		return candidates[i].PublishedAt > candidates[j].PublishedAt
+	})
+	winner := candidates[0]
+	for _, a := range winner.Assets {
+		if a.Name == "recipes.db" {
+			return winner.TagName, a.URL, nil
+		}
+	}
+	// Shouldn't reach — we already filtered for the asset.
+	return "", "", errors.New("recipes sync: winning release lost its recipes.db asset")
 }
 
 func (s *Syncer) downloadAndReplace(ctx context.Context, url string) error {
