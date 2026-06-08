@@ -155,7 +155,7 @@ func (s *Syncer) fetchLatestReleaseInfo(ctx context.Context) (tag, assetURL stri
 		return "", "", err
 	}
 	for _, r := range releases {
-		if !strings.HasPrefix(r.TagName, "recipes-v") {
+		if !strings.HasPrefix(r.TagName, "recipes-") {
 			continue
 		}
 		for _, a := range r.Assets {
@@ -164,7 +164,7 @@ func (s *Syncer) fetchLatestReleaseInfo(ctx context.Context) (tag, assetURL stri
 			}
 		}
 	}
-	return "", "", errors.New("recipes sync: no recipes-v* release with recipes.db asset found")
+	return "", "", errors.New("recipes sync: no recipes-* release with recipes.db asset found")
 }
 
 func (s *Syncer) downloadAndReplace(ctx context.Context, url string) error {

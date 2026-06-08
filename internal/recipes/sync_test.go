@@ -134,3 +134,37 @@ func TestSync_ExplicitNetworkFailurePropagates(t *testing.T) {
 	_, err := s.Sync(context.Background(), false /*explicit*/)
 	require.Error(t, err)
 }
+
+// TestSync_PicksFirstRecipesPrefixedTag pins the recipes-* (not just
+// recipes-v*) prefix change: GH releases API returns newest-first, so
+// a SHA-tagged release ahead of a legacy semver-tagged release must
+// win — the first match in iteration order is the freshest.
+func TestSync_PicksFirstRecipesPrefixedTag(t *testing.T) {
+	cacheDir := t.TempDir()
+	srcDB := filepath.Join(t.TempDir(), "remote-recipes.db")
+	buildTinyDB(t, srcDB, "recipes-abc1234")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases":
+			w.Header().Set("Content-Type", "application/json")
+			body := `[
+				{"tag_name":"recipes-abc1234","assets":[{"name":"recipes.db","browser_download_url":"http://` + r.Host + `/recipes.db"}]},
+				{"tag_name":"recipes-v0.9.9","assets":[{"name":"recipes.db","browser_download_url":"http://` + r.Host + `/legacy.db"}]}
+			]`
+			_, _ = w.Write([]byte(body))
+		case "/recipes.db":
+			http.ServeFile(w, r, srcDB)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	s := NewSyncer(cacheDir, srv.URL+"/releases")
+	res, err := s.Sync(context.Background(), false /*explicit*/)
+	require.NoError(t, err)
+	assert.Equal(t, "recipes-abc1234", res.Version,
+		"should pick the first recipes-prefixed release (SHA-tagged) over the legacy semver")
+	assert.True(t, res.Downloaded)
+}

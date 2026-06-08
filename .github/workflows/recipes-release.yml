@@ -2,81 +2,49 @@ name: recipes release
 
 on:
   push:
-    tags:
-      - 'recipes-v*'
+    branches: [main]
+    paths:
+      - 'recipes/**'
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Tag to release (e.g. recipes-v1.5.0). Required if not triggered by tag push.'
+      reason:
+        description: 'Why the manual re-cut (e.g. build-tool fix)'
         required: false
-      force:
-        description: 'Bypass the "recipes/ unchanged" guard'
-        required: false
-        type: boolean
-        default: false
+
+permissions:
+  contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Resolve target tag
-        id: resolve
+      - name: Compute SHA tag
+        id: tag
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          else
-            TAG="${{ github.event.inputs.version }}"
-            if [ -z "$TAG" ]; then echo "missing version input"; exit 1; fi
-          fi
+          TAG="recipes-$(git rev-parse --short HEAD)"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Verify recipes/ changed since previous recipes release
-        id: guard
-        run: |
-          if [ "${{ github.event.inputs.force }}" = "true" ]; then
-            echo "force=true — bypassing guard"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          TAG="${{ steps.resolve.outputs.tag }}"
-          PREV=$(git tag --list 'recipes-v*' --sort=-version:refname | grep -v "^$TAG$" | head -1)
-          if [ -z "$PREV" ]; then
-            echo "no prior recipes-v* tag — first release; proceeding"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if git diff --quiet "$PREV" HEAD -- recipes/; then
-            echo "no recipes/ changes since $PREV — skipping release"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "Computed tag: $TAG"
 
       - uses: actions/setup-go@v5
-        if: steps.guard.outputs.skip != 'true'
         with:
           go-version-file: go.mod
 
       - name: Build recipes.db
-        if: steps.guard.outputs.skip != 'true'
         run: |
           go run ./tools/build-recipes-db \
             -src recipes \
             -out recipes.db \
-            -version "${{ steps.resolve.outputs.tag }}"
+            -version "${{ steps.tag.outputs.tag }}"
 
       - name: Create release
-        if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.resolve.outputs.tag }}" \
-            --title "${{ steps.resolve.outputs.tag }}" \
-            --notes "Built from recipes/ at this tag." \
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --title "${{ steps.tag.outputs.tag }}" \
+            --notes "Built from recipes/ at $(git rev-parse HEAD)." \
             recipes.db
