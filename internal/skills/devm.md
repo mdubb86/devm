@@ -50,10 +50,23 @@ Check if `devm.yaml` exists in the cwd. If yes → edit flow. If no → init flo
 5. **Propose the minimal change.** Show a focused diff.
 6. **Apply the change.** Validate with `devm validate` if available.
 7. **Mention bucket impact:**
-   - `env:`, ports → live, picked up on next `devm shell`.
+   - `env:`, `path:`, ports → live, picked up on next `devm shell`.
    - `install:` → teardown bucket. Suggest `devm teardown && devm shell`.
    - `services[*].startup:` → stop bucket. Suggest re-shelling.
    (Fetch `devm skills get lifecycle` for the full table.)
+
+7. **PATH additions** for tool binaries the user wants on `$PATH`
+   (e.g. `~/.cargo/bin` for Rust, `node_modules/.bin` for Node)
+   belong in the top-level `path:` field, NOT prepended via `env: PATH`.
+   Devm assembles the final PATH from `path:` entries +
+   `$WORKSPACE/.devm/scripts` + the container's `$PATH`. Use
+   `$WORKSPACE`-relative entries when possible (workspace mount survives
+   teardown). Example:
+   ```yaml
+   path:
+     - $WORKSPACE/.cargo/bin
+     - /opt/custom-tool/bin
+   ```
 
 ## When something goes wrong
 

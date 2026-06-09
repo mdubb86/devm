@@ -19,7 +19,7 @@ hidden: true
 
 | Change | Bucket | Required action |
 |---|---|---|
-| `env`, ports, allowed_domains, templates | **Live** | `devm reconcile` (auto-applied on next `devm shell`) |
+| `env`, `path`, ports, allowed_domains, templates | **Live** | `devm reconcile` (auto-applied on next `devm shell`) |
 | Per-service `startup` | **Stop+shell** | Restart the shell (`exit` then `devm shell`) |
 | `install`, `base_image`, masks, mounts, identity | **Teardown+shell** | `devm teardown && devm shell` |
 
