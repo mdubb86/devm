@@ -797,3 +797,38 @@ func (r *statefulStubRunner) Run(name string, args ...string) error {
 func (r *statefulStubRunner) RunStdin(stdin, name string, args ...string) error {
 	return r.Run(name, args...)
 }
+
+// TestBuildShellExecArgs_Shape pins the shape both cold-start
+// (RunShell) and warm reattach (runUserShell) share. Both call
+// buildShellExecArgs; if either ever diverges, you'll see -w missing,
+// terminfo forwarding missing, or env args in the wrong slot — all
+// the bugs the consolidation was meant to prevent.
+func TestBuildShellExecArgs_Shape(t *testing.T) {
+	cfg := schema.Config{}
+	got := buildShellExecArgs(cfg, "/repo", "sbx-a", "bash", []string{"-l"})
+
+	// Required head shape: exec -it -w <repoRoot>
+	if len(got) < 4 || got[0] != "exec" || got[1] != "-it" || got[2] != "-w" || got[3] != "/repo" {
+		t.Fatalf("expected head [exec -it -w /repo], got %v", got[:4])
+	}
+
+	// Wrapper path appears (between any env args and cmdName).
+	wrapperFound := false
+	for _, a := range got {
+		if a == "/repo/.devm/scripts/with-devm-env" {
+			wrapperFound = true
+			break
+		}
+	}
+	if !wrapperFound {
+		t.Errorf("expected wrapper path in argv, got %v", got)
+	}
+
+	// Tail order: <sandbox> <wrapper> <cmd> <cmdArgs...>
+	if got[len(got)-1] != "-l" {
+		t.Errorf("expected last arg to be cmdArg '-l', got %q", got[len(got)-1])
+	}
+	if got[len(got)-2] != "bash" {
+		t.Errorf("expected second-to-last arg to be cmdName 'bash', got %q", got[len(got)-2])
+	}
+}

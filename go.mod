@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/creack/pty v1.1.24
+	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/mattn/go-isatty v0.0.22
 	github.com/pterm/pterm v0.12.83
 	github.com/spf13/cobra v1.8.0
@@ -22,7 +23,6 @@ require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/containerd/console v1.0.5 // indirect
-	github.com/creativeprojects/go-selfupdate v1.5.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

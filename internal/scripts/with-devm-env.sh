@@ -4,4 +4,20 @@
 # Sourcing a missing file is a no-op; we just exec without devm vars.
 dir=$(cd "$(dirname "$0")/.." && pwd)
 [ -f "$dir/.env" ] && . "$dir/.env"
+
+# Terminfo forwarding: install the host's terminfo entry for $TERM
+# when the sandbox's terminfo db doesn't already know it (Ghostty,
+# recent Wezterm builds, custom forks — anything not in ncurses-term).
+# Blob is base64-encoded `infocmp -x` output, passed via -e from
+# devm shell. Skips silently when the blob is absent, the entry is
+# already installed, or tic fails — same behavior as before in those
+# cases.
+if [ -n "$DEVM_TERMINFO_BLOB" ] && [ -n "$TERM" ]; then
+    if ! infocmp -x "$TERM" >/dev/null 2>&1; then
+        printf '%s' "$DEVM_TERMINFO_BLOB" | base64 -d 2>/dev/null \
+            | tic -x -o "$HOME/.terminfo" - >/dev/null 2>&1 || true
+    fi
+    unset DEVM_TERMINFO_BLOB
+fi
+
 exec "$@"

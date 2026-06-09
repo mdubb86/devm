@@ -447,18 +447,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// same session as devm (which is in the same session as the
 	// anchor — Go exec.Cmd default). Same-session is required for
 	// daemon survival under sbx (see docs/sbx-quirks.md section 5).
-	// Prepend the with-devm-env wrapper so persistent project + service
-	// env (and the devm-injected WORKSPACE/IS_SANDBOX) reach the user
-	// shell via /.devm/.env. EnvArgs still rides on -e flags for the
-	// host-forwarded TERM/COLORTERM/etc. — those vary per terminal.
-	wrapper := filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env")
-	// `-w repoRoot` lands the user in the workspace dir on shell entry.
-	// sbx's mirrored-path mount makes the host repoRoot resolve to the
-	// same path inside the sandbox, so passing it verbatim is correct.
-	execArgs := []string{"exec", "-it", "-w", repoRoot}
-	execArgs = append(execArgs, sandbox.EnvArgs(cfg)...)
-	execArgs = append(execArgs, sandboxName, wrapper, cmdName)
-	execArgs = append(execArgs, cmdArgs...)
+	execArgs := buildShellExecArgs(cfg, repoRoot, sandboxName, cmdName, cmdArgs)
 	debuglog.Logf("shell", "spawning user shell: sbx %v", execArgs)
 	userCmd, err := d.UserSpawner.Start("sbx", execArgs...)
 	if err != nil {
@@ -485,6 +474,38 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 // formatAnchorOutput returns the captured anchor stdout/stderr formatted
 // for inclusion in an error message. Returns "" when nothing was captured
 // (so the error message stays clean in the normal case).
+// buildShellExecArgs is the single source of truth for the `sbx exec`
+// argv used by both cold-start (RunShell) and warm reattach
+// (runUserShell). Anything added at the sbx-exec layer — flags, env
+// forwarding, terminfo forwarding — must go here so cold and warm
+// shells stay shape-identical. The shape:
+//
+//	sbx exec -it -w <repoRoot> <EnvArgs> [-e DEVM_TERMINFO_BLOB=...] \
+//	    <sandboxName> <wrapper> <cmdName> <cmdArgs...>
+//
+//	-w repoRoot   lands the user in $WORKSPACE on shell entry
+//	              (sbx's mirrored-path mount maps host == sandbox)
+//	EnvArgs       per-session host-forwarded terminal vars
+//	              (TERM/COLORTERM/LANG/LC_ALL/LC_CTYPE)
+//	DEVM_TERMINFO_BLOB
+//	              base64'd host infocmp output, decoded + installed
+//	              by the with-devm-env wrapper when missing in
+//	              the sandbox's terminfo db. Empty → no -e flag.
+//	wrapper       .devm/scripts/with-devm-env sources .devm/.env
+//	              and may install the forwarded terminfo entry.
+//
+// Cold/warm parity is pinned by TestBuildShellExecArgs_Shape.
+func buildShellExecArgs(cfg schema.Config, repoRoot, sandboxName, cmdName string, cmdArgs []string) []string {
+	wrapper := filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env")
+	args := []string{"exec", "-it", "-w", repoRoot}
+	args = append(args, sandbox.EnvArgs(cfg)...)
+	if blob := captureHostTerminfo(); blob != "" {
+		args = append(args, "-e", "DEVM_TERMINFO_BLOB="+blob)
+	}
+	args = append(args, sandboxName, wrapper, cmdName)
+	return append(args, cmdArgs...)
+}
+
 func formatAnchorOutput(buf *lineRingBuffer) string {
 	if buf == nil || buf.IsEmpty() {
 		return ""
@@ -508,11 +529,7 @@ func applyDefaults(d *ShellDeps) {
 // delay for the common case. If devm.yaml ports have changed since
 // the last cold start, the user must `devm stop` and re-shell.
 func runUserShell(d ShellDeps, cfg schema.Config, repoRoot, sandboxName, cmdName string, cmdArgs []string) (int, error) {
-	wrapper := filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env")
-	args := []string{"exec", "-it"}
-	args = append(args, sandbox.EnvArgs(cfg)...)
-	args = append(args, sandboxName, wrapper, cmdName)
-	args = append(args, cmdArgs...)
+	args := buildShellExecArgs(cfg, repoRoot, sandboxName, cmdName, cmdArgs)
 	cmd, err := d.UserSpawner.Start("sbx", args...)
 	if err != nil {
 		return -1, err
