@@ -140,12 +140,21 @@ func (r *PtermReporter) Stop() {
 //
 //	\033[H — cursor home
 //	\033[2J — erase entire display (visible region)
+//
+// Writes to os.Stdout (where pterm renders the spinner) rather than
+// os.Stderr — the kernel doesn't order writes across separate fds,
+// so emitting on the same stream pterm uses lets Go's stdout mutex
+// serialize Clear after any final spinner frame. A tiny drain sleep
+// gives pterm's goroutine a chance to flush its last queued tick
+// before we overwrite (without it, "⠋ ready (0s)" can land inline
+// with the next process's output — e.g. the shell prompt after a
+// PTY hand-off).
 func (r *PtermReporter) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.finalizeLocked()
-	// Write directly; pterm doesn't expose a "clear" helper.
-	fmt.Fprint(os.Stderr, "\033[H\033[2J")
+	time.Sleep(50 * time.Millisecond)
+	fmt.Fprint(os.Stdout, "\033[H\033[2J")
 }
 
 // formatElapsed renders a duration in the format we want for the UX:
