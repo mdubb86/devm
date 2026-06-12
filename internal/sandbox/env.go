@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/schema"
 )
 
@@ -68,7 +67,12 @@ func PersistentEnv(cfg schema.Config) string {
 		isSupabasePrefix := strings.HasPrefix(strings.ToLower(name), "supabase")
 
 		if svc.EnvInject && svc.Port != 0 && !isSupabasePrefix {
-			merged[upper+"_PORT"] = fmt.Sprintf("%d", config.BindPort(cfg, svc.Port))
+			// env_inject is for IN-VM consumers (one service talking to
+			// another via NAME_PORT). The target binds at svc.Port, NOT
+			// port + port_offset (that's the Mac-side mapping). Same
+			// reasoning + bug pattern as the Caddyfile reverse_proxy
+			// target. Fixed 2026-06-12.
+			merged[upper+"_PORT"] = fmt.Sprintf("%d", svc.Port)
 			if svc.EnvHost != "" {
 				merged[upper+"_HOST"] = svc.EnvHost
 			}

@@ -119,7 +119,11 @@ func TestPersistentEnvEnvInjectEmitsPortAndHost(t *testing.T) {
 		},
 	}
 	out := PersistentEnv(cfg)
-	assert.Contains(t, out, `export APP_PORT='3010'`)
+	// env_inject is for in-VM consumers; the target service binds at
+	// svc.Port (3000), not port+offset (3010, which is the Mac-side
+	// publish port). Same bug pattern + fix as the Caddyfile renderer.
+	assert.Contains(t, out, `export APP_PORT='3000'`)
+	assert.NotContains(t, out, `APP_PORT='3010'`, "must use in-VM listen port, not host bind")
 	assert.Contains(t, out, `export APP_HOST='0.0.0.0'`)
 }
 
@@ -131,8 +135,23 @@ func TestPersistentEnvEnvInjectOmitsHostWhenNotSet(t *testing.T) {
 		},
 	}
 	out := PersistentEnv(cfg)
-	assert.Contains(t, out, `export APP_PORT='3010'`)
+	assert.Contains(t, out, `export APP_PORT='3000'`)
 	assert.NotContains(t, out, "APP_HOST=", "omit when not set")
+}
+
+// TestPersistentEnvEnvInjectIgnoresPortOffset is a focused regression
+// pin for the 2026-06-12 fix where env_inject's NAME_PORT was wrongly
+// set to svc.Port + project.PortOffset instead of svc.Port.
+func TestPersistentEnvEnvInjectIgnoresPortOffset(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{PortOffset: 100},
+		Services: map[string]schema.Service{
+			"api": {Port: 8000, EnvInject: true},
+		},
+	}
+	out := PersistentEnv(cfg)
+	assert.Contains(t, out, `export API_PORT='8000'`)
+	assert.NotContains(t, out, "8100", "must NOT use host bind port (port + offset)")
 }
 
 func TestPersistentEnvSkipsSupabasePrefixForPortInject(t *testing.T) {
