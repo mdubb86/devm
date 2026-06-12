@@ -36,6 +36,16 @@ func useTempCacheDir(t *testing.T) string {
 	return dir
 }
 
+// clearSuppressionEnv unsets the env vars that suppress the nudge.
+// MUST be called by any test that expects the nudge to fire — CI
+// runners (GitHub Actions) set CI=true unconditionally, which would
+// otherwise short-circuit the test.
+func clearSuppressionEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("CI", "")
+	t.Setenv("DEVM_NO_UPDATE_CHECK", "")
+}
+
 func TestMaybeNudge_SuppressedByOptOutEnv(t *testing.T) {
 	t.Setenv("DEVM_NO_UPDATE_CHECK", "1")
 	pinCache(t, nudgeCache{CheckedAt: time.Now().Unix(), LatestTag: "9.9.9"})
@@ -55,6 +65,7 @@ func TestMaybeNudge_SuppressedByCIEnv(t *testing.T) {
 }
 
 func TestMaybeNudge_SuppressedByDevVersion(t *testing.T) {
+	clearSuppressionEnv(t)
 	pinCache(t, nudgeCache{CheckedAt: time.Now().Unix(), LatestTag: "9.9.9"})
 
 	var buf bytes.Buffer
@@ -63,6 +74,7 @@ func TestMaybeNudge_SuppressedByDevVersion(t *testing.T) {
 }
 
 func TestMaybeNudge_SuppressedByEmptyVersion(t *testing.T) {
+	clearSuppressionEnv(t)
 	pinCache(t, nudgeCache{CheckedAt: time.Now().Unix(), LatestTag: "9.9.9"})
 	var buf bytes.Buffer
 	MaybeNudge(context.Background(), &buf, "", nil, nil)
@@ -70,6 +82,7 @@ func TestMaybeNudge_SuppressedByEmptyVersion(t *testing.T) {
 }
 
 func TestMaybeNudge_PrintsWhenCacheFreshAndNewer(t *testing.T) {
+	clearSuppressionEnv(t)
 	pinCache(t, nudgeCache{CheckedAt: time.Now().Unix(), LatestTag: "0.2.0"})
 
 	var buf bytes.Buffer
@@ -80,6 +93,7 @@ func TestMaybeNudge_PrintsWhenCacheFreshAndNewer(t *testing.T) {
 }
 
 func TestMaybeNudge_SilentWhenCacheFreshAndCurrent(t *testing.T) {
+	clearSuppressionEnv(t)
 	pinCache(t, nudgeCache{CheckedAt: time.Now().Unix(), LatestTag: "0.1.0"})
 
 	var buf bytes.Buffer
@@ -88,6 +102,7 @@ func TestMaybeNudge_SilentWhenCacheFreshAndCurrent(t *testing.T) {
 }
 
 func TestMaybeNudge_StaleCacheFetchesSyncWithSpinnerAndWritesCache(t *testing.T) {
+	clearSuppressionEnv(t)
 	// Cache older than 7 days.
 	dir := useTempCacheDir(t)
 	require.NoError(t, writeNudgeCache(
@@ -119,6 +134,7 @@ func TestMaybeNudge_StaleCacheFetchesSyncWithSpinnerAndWritesCache(t *testing.T)
 }
 
 func TestMaybeNudge_StaleCacheSilentIfFetcherReturnsEmpty(t *testing.T) {
+	clearSuppressionEnv(t)
 	useTempCacheDir(t)
 	fetcher := func(ctx context.Context) string { return "" }
 
@@ -131,6 +147,7 @@ func TestMaybeNudge_StaleCacheSilentIfFetcherReturnsEmpty(t *testing.T) {
 }
 
 func TestMaybeNudge_StaleCacheSilentIfLatestMatchesCurrent(t *testing.T) {
+	clearSuppressionEnv(t)
 	useTempCacheDir(t)
 	fetcher := func(ctx context.Context) string { return "0.1.0" }
 
@@ -142,6 +159,7 @@ func TestMaybeNudge_StaleCacheSilentIfLatestMatchesCurrent(t *testing.T) {
 }
 
 func TestMaybeNudge_StaleCacheWithNilFetcherIsNoop(t *testing.T) {
+	clearSuppressionEnv(t)
 	pinCache(t, nudgeCache{
 		CheckedAt: time.Now().Add(-30 * 24 * time.Hour).Unix(),
 		LatestTag: "0.0.9",
@@ -153,6 +171,7 @@ func TestMaybeNudge_StaleCacheWithNilFetcherIsNoop(t *testing.T) {
 }
 
 func TestMaybeNudge_MissingCacheTriggersSyncFetch(t *testing.T) {
+	clearSuppressionEnv(t)
 	useTempCacheDir(t)
 	fetcher := func(ctx context.Context) string { return "0.5.0" }
 
