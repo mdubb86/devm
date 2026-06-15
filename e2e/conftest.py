@@ -90,7 +90,14 @@ def _port_offset_from_file(filename: str) -> int:
 def workspace(request, sandbox_name) -> Iterator[Workspace]:
     """Temp workspace dir bound to the test's sandbox_name."""
     slug = _slug_from_node(request.node.name)
-    path = Path(tempfile.mkdtemp(prefix=f"devm-e2e-{slug}-"))
+    # Resolve symlinks so the path matches what devm (Go) sees inside
+    # the spawned shell. On macOS, tempfile.mkdtemp returns
+    # `/var/folders/...` but pexpect.spawn(cwd=...) → chdir → Go
+    # os.Getwd surfaces the canonical `/private/var/folders/...`. If we
+    # yield the unresolved form, every test that compares against
+    # workspace.path (CLAUDE_CONFIG_DIR, $WORKSPACE, …) trips on the
+    # symlink. Linux is a no-op (mkdtemp already canonical).
+    path = Path(tempfile.mkdtemp(prefix=f"devm-e2e-{slug}-")).resolve()
     registry.append("workspace", str(path))
     try:
         port_offset = _port_offset_from_file(Path(request.node.fspath).name)

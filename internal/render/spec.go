@@ -95,16 +95,16 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 
 	// Startup:
 	//   step 0: cleanup (unwrapped)
-	//   step 1: init-volumes wrapped (User: "1000")
+	//   step 1: devm-startup wrapped (User: "1000")
 	//   step 2: install-templates wrapped (User: "0")
 	//   step 3..M: user services[*].startup steps wrapped (fg or bg)
 	//   step M+1: sentinel
 	spec.Commands.Startup = append(spec.Commands.Startup,
 		kitStartupCommand{Command: startupCleanupCmd},
 		kitStartupCommand{
-			Command:     wrapFGStartup(repoRoot, 1, builtinInitVolumesArgv(repoRoot)),
+			Command:     wrapFGStartup(repoRoot, 1, builtinDevmStartupArgv(repoRoot)),
 			User:        "1000",
-			Description: "Claim ext4 volume mounts for agent user",
+			Description: "Per-startup setup: claim volumes, sync Caddyfile + /etc/hosts",
 		},
 		kitStartupCommand{
 			Command:     wrapFGStartup(repoRoot, 2, builtinInstallTemplatesArgv(repoRoot)),
@@ -288,10 +288,13 @@ func wrapBGStartup(repoRoot string, stepN int, userArgv []string) []string {
 	return append(wrapped, userArgv...)
 }
 
-// builtinInitVolumesArgv returns the argv that invokes init-volumes.sh.
-// Used as the user argv passed to wrap-fg.sh for startup step 1.
-func builtinInitVolumesArgv(repoRoot string) []string {
-	return []string{"bash", fmt.Sprintf("%s/.devm/scripts/init-volumes.sh", repoRoot)}
+// builtinDevmStartupArgv returns the argv that invokes devm-startup.sh
+// — devm's single per-sandbox-startup script. It claims VM-native
+// volumes for agent, syncs Caddyfile + restarts/reloads caddy, and
+// splices the rendered hosts.fragment into /etc/hosts. Used as the
+// user argv passed to wrap-fg.sh for startup step 1.
+func builtinDevmStartupArgv(repoRoot string) []string {
+	return []string{"bash", fmt.Sprintf("%s/.devm/scripts/devm-startup.sh", repoRoot)}
 }
 
 // builtinInstallTemplatesArgv returns the argv for install-templates.sh. Step 2.

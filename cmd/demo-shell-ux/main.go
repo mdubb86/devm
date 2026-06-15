@@ -61,7 +61,7 @@ func main() {
 	}
 
 	// Cold path. Three user-counted steps total: two from `install:`,
-	// one from `services[*].startup:`. Bootstrap, init-volumes,
+	// one from `services[*].startup:`. Bootstrap, devm-startup,
 	// install-templates, ports, etc. are devm-internal — not counted.
 	userTotal := 2 + 1
 	r.SetTotal(userTotal)
@@ -83,7 +83,7 @@ func main() {
 	r.Step("reconciling ports", false)
 	time.Sleep(scale / 4)
 
-	r.Step("init-volumes", false)
+	r.Step("devm-startup", false)
 	time.Sleep(300 * time.Millisecond)
 
 	r.Step("install service templates", false)

@@ -148,7 +148,7 @@ func TestSpecYAMLOmitsInstallWhenEmpty(t *testing.T) {
 	parsed := parseSpec(t, out)
 	assert.Equal(t, 2, len(parsed.Commands.Install),
 		"empty cfg.Install must produce bootstrap + sentinel = 2 steps")
-	// commands.startup still present (init-volumes lives there).
+	// commands.startup still present (devm-startup lives there).
 	assert.Contains(t, out, "startup:")
 }
 
@@ -173,7 +173,7 @@ func TestSpecYAMLRendersUserInstallSteps(t *testing.T) {
 	assert.NotContains(t, out, "provision.sh")
 
 	// No user: or description: on user-defined install steps.
-	// (init-volumes still has user: "1000" and a description — that's hardcoded.)
+	// (devm-startup still has user: "1000" and a description — that's hardcoded.)
 }
 
 func TestSpecYAMLInstallStep0IsWrappedBootstrap(t *testing.T) {
@@ -252,7 +252,7 @@ func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 	out := SpecYAML(cfg, "/tmp/repo")
 	startupSection := extractStartupSection(t, out)
 
-	// cleanup(0) + init-volumes(1) + install-templates(2) + 2 postgres + 1 redis + sentinel = 7 steps.
+	// cleanup(0) + devm-startup(1) + install-templates(2) + 2 postgres + 1 redis + sentinel = 7 steps.
 	assert.Equal(t, 7, strings.Count(startupSection, "- command:"))
 
 	// Service sort order is alphabetical: postgres before redis.
@@ -284,10 +284,10 @@ func TestSpecYAML_HasInstallTemplatesStartupStep(t *testing.T) {
 	out := SpecYAML(cfg, "/tmp")
 	require.Contains(t, out, "install-templates.sh")
 
-	// Must appear AFTER init-volumes.sh.
-	iv := strings.Index(out, "init-volumes.sh")
+	// Must appear AFTER devm-startup.sh.
+	iv := strings.Index(out, "devm-startup.sh")
 	it := strings.Index(out, "install-templates.sh")
-	require.Greater(t, it, iv, "install-templates.sh must come after init-volumes.sh; got iv=%d it=%d", iv, it)
+	require.Greater(t, it, iv, "install-templates.sh must come after devm-startup.sh; got iv=%d it=%d", iv, it)
 
 	// Runs as root.
 	itLine := out[it : it+strings.Index(out[it:], "\n")]
@@ -309,7 +309,7 @@ func TestSpecYAMLStartupStep0IsCleanup(t *testing.T) {
 		"startup step 0 must wipe /tmp/.devm-startup for marker freshness")
 }
 
-func TestSpecYAMLStartupStep1IsWrappedInitVolumes(t *testing.T) {
+func TestSpecYAMLStartupStep1IsWrappedDevmStartup(t *testing.T) {
 	cfg := minimalConfig(t)
 	out := SpecYAML(cfg, "/tmp/repo")
 	parsed := parseSpec(t, out)
@@ -321,9 +321,9 @@ func TestSpecYAMLStartupStep1IsWrappedInitVolumes(t *testing.T) {
 	assert.Equal(t, "startup", cmd[2])
 	assert.Equal(t, "1", cmd[3])
 	assert.Equal(t, "--", cmd[4])
-	// Trailing argv invokes init-volumes.sh.
+	// Trailing argv invokes devm-startup.sh.
 	tail := strings.Join(cmd[5:], " ")
-	assert.Contains(t, tail, "init-volumes.sh")
+	assert.Contains(t, tail, "devm-startup.sh")
 }
 
 func TestSpecYAMLStartupStep2IsWrappedInstallTemplates(t *testing.T) {
@@ -347,7 +347,7 @@ func TestSpecYAMLStartupUserFGStepWrapped(t *testing.T) {
 	}
 	out := SpecYAML(cfg, "/tmp/repo")
 	parsed := parseSpec(t, out)
-	// Steps: 0 cleanup, 1 init-volumes, 2 install-templates, 3 user, 4 sentinel
+	// Steps: 0 cleanup, 1 devm-startup, 2 install-templates, 3 user, 4 sentinel
 	require.Equal(t, 5, len(parsed.Commands.Startup))
 	cmd := parsed.Commands.Startup[3].Command
 	assert.Contains(t, cmd[1], "wrap-fg.sh",

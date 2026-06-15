@@ -2,11 +2,8 @@ package scripts
 
 import _ "embed"
 
-//go:embed init-volumes.sh
-var InitVolumes string
-
-//go:embed devm-exec.sh
-var DevmExec string
+//go:embed devm-startup.sh
+var DevmStartup string
 
 //go:embed install-templates.sh
 var InstallTemplates string

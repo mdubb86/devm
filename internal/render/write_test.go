@@ -25,8 +25,7 @@ func TestWriteDevmDir(t *testing.T) {
 	for _, p := range []string{
 		".devm/Caddyfile",
 		".devm/spec.yaml",
-		".devm/scripts/init-volumes.sh",
-		".devm/scripts/devm-exec.sh",
+		".devm/scripts/devm-startup.sh",
 		".devm/scripts/install-templates.sh",
 	} {
 		_, err := os.Stat(filepath.Join(dir, p))
@@ -56,13 +55,9 @@ func TestWriteDevmDirDoesNotWriteProvisionScript(t *testing.T) {
 		".devm/scripts/provision.sh must not be written; provision.sh removed from design")
 
 	// Sibling scripts we still keep:
-	initVolumesPath := filepath.Join(tmp, ".devm", "scripts", "init-volumes.sh")
-	_, err = os.Stat(initVolumesPath)
-	assert.NoError(t, err, "init-volumes.sh must still be written")
-
-	devmExecPath := filepath.Join(tmp, ".devm", "scripts", "devm-exec.sh")
-	_, err = os.Stat(devmExecPath)
-	assert.NoError(t, err, "devm-exec.sh must still be written")
+	devmStartupPath := filepath.Join(tmp, ".devm", "scripts", "devm-startup.sh")
+	_, err = os.Stat(devmStartupPath)
+	assert.NoError(t, err, "devm-startup.sh must still be written")
 }
 
 func TestWriteDevmDir_TemplatesDirPopulated(t *testing.T) {
