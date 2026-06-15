@@ -24,6 +24,18 @@ func (m Mask) Validate() error {
 	if m.Size == "" {
 		return fmt.Errorf("mask.size is required")
 	}
+	// Mask paths overlay locations inside the workspace; the renderer
+	// prepends repoRoot. Reject anything that would silently produce
+	// a broken mount: absolute paths, unexpanded shell-style variables
+	// ($VAR, ${VAR}) and ~ (no expansion happens here), and traversal
+	// that escapes the repo root.
+	if filepath.IsAbs(m.Path) || strings.HasPrefix(m.Path, "~") || strings.HasPrefix(m.Path, "$") {
+		return fmt.Errorf("mask.path %q must be relative to the repo root (no leading /, ~, or $)", m.Path)
+	}
+	cleaned := filepath.Clean(m.Path)
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return fmt.Errorf("mask.path %q: path traversal outside the repo root is not allowed", m.Path)
+	}
 	return nil
 }
 

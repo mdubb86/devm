@@ -21,6 +21,72 @@ func TestMaskRequiredFields(t *testing.T) {
 	assert.Error(t, missingSize.Validate())
 }
 
+func TestMaskPathRejectsAbsolute(t *testing.T) {
+	// Masks live under the workspace; absolute paths escape it.
+	m := Mask{Path: "/etc/foo", Size: "1G"}
+	err := m.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "relative")
+}
+
+func TestMaskPathRejectsExpansionVariables(t *testing.T) {
+	// No $WORKSPACE expansion happens for mask paths (the renderer
+	// already prepends repoRoot). Silent acceptance produces a broken
+	// mount at <repoRoot>/$WORKSPACE/... — reject with a hint.
+	cases := []string{
+		"$WORKSPACE/ts/node_modules",
+		"${WORKSPACE}/ts/node_modules",
+		"$HOME/foo",
+	}
+	for _, p := range cases {
+		t.Run(p, func(t *testing.T) {
+			err := Mask{Path: p, Size: "1G"}.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "relative")
+		})
+	}
+}
+
+func TestMaskPathRejectsHomeShortcut(t *testing.T) {
+	// `~` isn't expanded for masks. Reject for the same reason as $.
+	err := Mask{Path: "~/foo", Size: "1G"}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "relative")
+}
+
+func TestMaskPathRejectsTraversal(t *testing.T) {
+	// `../escape` walks outside the repo root — masks must stay inside.
+	cases := []string{
+		"../escape",
+		"..",
+		"foo/../../escape",
+	}
+	for _, p := range cases {
+		t.Run(p, func(t *testing.T) {
+			err := Mask{Path: p, Size: "1G"}.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "traversal")
+		})
+	}
+}
+
+func TestMaskPathAllowsCleanRelative(t *testing.T) {
+	// Nested relative paths, dot-prefixed paths, and inert traversal
+	// (a/../b → b) all clean to valid repo-relative paths and must pass.
+	cases := []string{
+		"node_modules",
+		"ts/node_modules",
+		"./node_modules",
+		"py/.venv",
+		"a/../b",
+	}
+	for _, p := range cases {
+		t.Run(p, func(t *testing.T) {
+			assert.NoError(t, Mask{Path: p, Size: "1G"}.Validate())
+		})
+	}
+}
+
 func TestServiceValidate(t *testing.T) {
 	// Minimum valid: just canonical
 	s := Service{Port: 3000}
