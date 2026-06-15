@@ -15,3 +15,6 @@
 
 # Internal brainstorming + plans — not part of the public repo
 docs/superpowers/
+
+# Local scratch (notes, recipes, work-in-progress) — never committed
+.tmp/
