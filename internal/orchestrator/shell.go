@@ -181,6 +181,11 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// running under a controlling TTY. Closing the PTY master from
 	// devm doesn't kill the anchor. Pinned by
 	// e2e/test_sbx_interop_02_anchor_master_close_lifetime.py.
+	// freshlyCreated tracks whether this RunShell is creating the sandbox
+	// (vs restarting an existing one). On abort/error before handoff we
+	// only `sbx rm -f` when we created it — restarting a user's existing
+	// sandbox and failing mid-install must not destroy their state.
+	freshlyCreated := !sb.Exists()
 	var runArgs []string
 	if sb.Exists() {
 		// Restart of existing sandbox: include --kit so sbx can resolve
@@ -312,6 +317,17 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 		case <-runDone:
 		case <-time.After(3 * time.Second):
 		}
+		// Tear down a freshly-created, half-built sandbox. SIGKILL on
+		// the anchor doesn't give sbx a chance to clean up its sandbox
+		// state, so without an explicit `sbx rm -f` the user is left
+		// with a broken sandbox that the next `devm shell` will try to
+		// restart (and re-fail). Only do this for sandboxes WE created
+		// in this RunShell — restarting an existing sandbox and failing
+		// mid-install must not destroy the user's data.
+		if freshlyCreated {
+			debuglog.Logf("shell", "cleanup: sbx rm -f %s (freshly-created, abort)", sandboxName)
+			_, _ = d.Runner.Output("sbx", "rm", "-f", sandboxName)
+		}
 		// Decorate the returned error with the anchor's captured
 		// output. Named return `retErr` is mutable from inside this
 		// defer, so subsequent error sites don't need to remember to
@@ -353,6 +369,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 				}
 				return -1, fmt.Errorf("sbx run exited before sandbox became running%s", tail)
 			case <-ctx.Done():
+				reporter.Fail()
 				return -1, ctx.Err()
 			case <-deadline:
 				return -1, fmt.Errorf("sandbox %s never reached running within %s", sandboxName, d.WaitForRunning)
@@ -374,7 +391,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// On anchor death (sbx tears sandbox down per c02), switch to the
 	// host-side failure mirror written by wrap-fg.sh (pinned by c32-c34).
 	installTimeout := gateTimeoutFromEnv("install", defaultInstallGateTimeout)
-	if err := waitForPhaseSentinel(sb, "install", anchorDead, installTimeout, defaultGatePollInterval, reporter, cfg); err != nil {
+	if err := waitForPhaseSentinel(ctx, sb, "install", anchorDead, installTimeout, defaultGatePollInterval, reporter, cfg); err != nil {
 		reporter.Fail()
 		var report *FailureReport
 		if errors.Is(err, ErrAnchorDied) {
@@ -421,7 +438,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// — the sentinel is the only signal devm has.
 	// On anchor death, switch to the host-side failure mirror (c32-c34).
 	startupTimeout := gateTimeoutFromEnv("startup", defaultStartupGateTimeout)
-	if err := waitForPhaseSentinel(sb, "startup", anchorDead, startupTimeout, defaultGatePollInterval, reporter, cfg); err != nil {
+	if err := waitForPhaseSentinel(ctx, sb, "startup", anchorDead, startupTimeout, defaultGatePollInterval, reporter, cfg); err != nil {
 		reporter.Fail()
 		var report *FailureReport
 		if errors.Is(err, ErrAnchorDied) {

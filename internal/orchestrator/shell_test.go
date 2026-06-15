@@ -341,6 +341,67 @@ func TestRunShellWaitForRunningTimesOut(t *testing.T) {
 	assert.True(t, runCmd.killed, "run subprocess must be killed on failure")
 }
 
+func TestRunShellAbort_FreshlyCreated_RunsSbxRm(t *testing.T) {
+	// Cold-start path: sandbox doesn't exist initially, anchor spawned,
+	// but sandbox never reaches running (timeout). Cleanup defer MUST run
+	// `sbx rm -f <name>` so the half-built sandbox doesn't linger.
+	repoRoot := t.TempDir()
+	runner := &stateRunner{lsAbsent: true} // sandbox doesn't exist → freshlyCreated=true
+	runCmd := &stubCmd{waitErr: make(chan error, 1)}
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd}}
+
+	deps := ShellDeps{
+		AnchorSpawner:  spawner,
+		UserSpawner:    spawner,
+		Runner:         runner,
+		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
+		WaitForRunning: 100 * time.Millisecond,
+		PollInterval:   20 * time.Millisecond,
+	}
+	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.Error(t, err)
+
+	sawRm := false
+	runner.mu.Lock()
+	for _, c := range runner.calls {
+		if strings.Join(c, " ") == "sbx rm -f x-sbx" {
+			sawRm = true
+			break
+		}
+	}
+	runner.mu.Unlock()
+	assert.True(t, sawRm, "cold-start abort must `sbx rm -f` the half-built sandbox; got calls: %v", runner.calls)
+}
+
+func TestRunShellAbort_Restart_DoesNotRunSbxRm(t *testing.T) {
+	// Restart path: sandbox EXISTS initially but is stopped. RunShell will
+	// restart it. If install/startup fails, we must NOT `sbx rm -f` —
+	// that would destroy the user's existing sandbox data.
+	repoRoot := t.TempDir()
+	runner := &stateRunner{lsStatus: "stopped"} // exists, but not running; stays stopped
+	runCmd := &stubCmd{waitErr: make(chan error, 1)}
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd}}
+
+	deps := ShellDeps{
+		AnchorSpawner:  spawner,
+		UserSpawner:    spawner,
+		Runner:         runner,
+		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
+		WaitForRunning: 100 * time.Millisecond,
+		PollInterval:   20 * time.Millisecond,
+	}
+	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.Error(t, err)
+
+	runner.mu.Lock()
+	for _, c := range runner.calls {
+		joined := strings.Join(c, " ")
+		assert.NotEqual(t, "sbx rm -f x-sbx", joined,
+			"restart-path abort must NOT destroy an existing sandbox")
+	}
+	runner.mu.Unlock()
+}
+
 // Compile-time guards (so accidental refactors that delete a symbol
 // fail at build time rather than at runtime). Unused locals are fine.
 var _ = sandbox.DefaultRunner{}
@@ -589,7 +650,7 @@ func TestWaitForPhaseSentinel_SentinelPresent(t *testing.T) {
 		},
 	}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
-	err := waitForPhaseSentinel(sb, "install", nil, 5*time.Second, 50*time.Millisecond, &status.NoOpReporter{}, schema.Config{})
+	err := waitForPhaseSentinel(context.Background(), sb, "install", nil, 5*time.Second, 50*time.Millisecond, &status.NoOpReporter{}, schema.Config{})
 	assert.NoError(t, err)
 }
 
@@ -606,7 +667,7 @@ func TestWaitForPhaseSentinel_TimesOut(t *testing.T) {
 	}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	start := time.Now()
-	err := waitForPhaseSentinel(sb, "install", nil, 300*time.Millisecond, 50*time.Millisecond, &status.NoOpReporter{}, schema.Config{})
+	err := waitForPhaseSentinel(context.Background(), sb, "install", nil, 300*time.Millisecond, 50*time.Millisecond, &status.NoOpReporter{}, schema.Config{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "did not complete")
 	assert.GreaterOrEqual(t, time.Since(start), 300*time.Millisecond,
@@ -628,9 +689,37 @@ func TestWaitForPhaseSentinel_AnchorDied(t *testing.T) {
 	runDone := make(chan struct{})
 	close(runDone) // anchor already dead
 
-	err := waitForPhaseSentinel(sb, "install", runDone, 5*time.Second, 50*time.Millisecond, &status.NoOpReporter{}, schema.Config{})
+	err := waitForPhaseSentinel(context.Background(), sb, "install", runDone, 5*time.Second, 50*time.Millisecond, &status.NoOpReporter{}, schema.Config{})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrAnchorDied), "must report anchor death, not timeout")
+}
+
+func TestWaitForPhaseSentinel_CtxCanceled(t *testing.T) {
+	// SIGINT during install phase cancels ctx. Gate must abandon polling
+	// promptly with ctx.Err() so the surrounding RunShell defer can kill
+	// the anchor and tear down the half-built sandbox.
+	r := &stubRunnerForFailureReader{
+		t: t,
+		scripted: map[string]struct {
+			out []byte
+			err error
+		}{
+			"test -f /tmp/.devm-install/install-all-ok": {out: []byte(""), err: errors.New("exit 1")},
+			"ls /tmp/.devm-install/":                    {out: []byte(""), err: nil},
+		},
+	}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel after a short delay so the gate is mid-poll.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	err := waitForPhaseSentinel(ctx, sb, "install", nil, 10*time.Second, 50*time.Millisecond, &status.NoOpReporter{}, schema.Config{})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.Canceled), "must surface ctx cancel, got %v", err)
+	assert.Less(t, time.Since(start), 1*time.Second, "must abort promptly on ctx cancel, not wait for timeout")
 }
 
 func TestReadPhaseFailureFromHost_FindsLowestN(t *testing.T) {
@@ -700,7 +789,7 @@ func TestWaitForPhaseSentinel_SentinelPresent_AnnouncesStep1(t *testing.T) {
 	}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	rec := &recordingReporter{}
-	err := waitForPhaseSentinel(sb, "install", nil, 5*time.Second, 50*time.Millisecond, rec, schema.Config{})
+	err := waitForPhaseSentinel(context.Background(), sb, "install", nil, 5*time.Second, 50*time.Millisecond, rec, schema.Config{})
 	require.NoError(t, err)
 	// Step 1 of install = bootstrap.sh (uncounted devm-internal step).
 	require.Len(t, rec.steps, 1, "exactly one Step call when sentinel is immediately present")
@@ -741,7 +830,7 @@ func TestWaitForPhaseSentinel_AnnouncesUserStep(t *testing.T) {
 
 	cfg := schema.Config{Install: []string{"apt-get install -y jq"}}
 	rec := &recordingReporter{}
-	err := waitForPhaseSentinel(sb, "install", nil, 5*time.Second, 50*time.Millisecond, rec, cfg)
+	err := waitForPhaseSentinel(context.Background(), sb, "install", nil, 5*time.Second, 50*time.Millisecond, rec, cfg)
 	require.NoError(t, err)
 
 	// Should have step 1 (bootstrap.sh) announced initially, then step 2 (user step).

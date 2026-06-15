@@ -27,24 +27,46 @@ func newPtermReporter(out io.Writer) *PtermReporter {
 	return &PtermReporter{out: out}
 }
 
+// Prefix text is the bare glyph — no leading space. pterm's
+// PrefixPrinter wraps it with one space on each side ("  PREFIX  "),
+// which puts the glyph at the same column as the spinnerSequence char
+// (which itself has one leading space). With a leading space in the
+// prefix text, pterm rendered `  ✓  ` (5 chars) while the spinner
+// rendered ` ⠋ ` (3 chars) — labels visibly shifted between running
+// and finalized rows.
 var (
 	successPrefix = pterm.PrefixPrinter{
 		MessageStyle: pterm.NewStyle(pterm.FgDefault),
 		Prefix: pterm.Prefix{
 			Style: pterm.NewStyle(pterm.FgGreen),
-			Text:  " ✓",
+			Text:  "✓",
 		},
 	}
 	failPrefix = pterm.PrefixPrinter{
 		MessageStyle: pterm.NewStyle(pterm.FgDefault),
 		Prefix: pterm.Prefix{
 			Style: pterm.NewStyle(pterm.FgRed),
-			Text:  " ✗",
+			Text:  "✗",
 		},
 	}
 )
 
-var spinnerSequence = []string{" ⠋", " ⠙", " ⠹", " ⠸", " ⠼", " ⠴", " ⠦", " ⠧", " ⠇", " ⠏"}
+// One leading + one trailing space per spinner frame so BOTH the
+// glyph column AND the message column line up with what pterm's
+// PrefixPrinter emits on finalized rows.
+//
+// Pterm internals (verified against pterm@v0.12.83):
+//
+//   PrefixPrinter.Sprint   → " " + text + " " + " " + message
+//                            = " ✓  message"   (glyph col 2, msg col 5)
+//   SpinnerPrinter render  → seq + " " + message
+//
+// With seq " ⠋ ", spinner renders " ⠋ " + " " + message
+//                                = " ⠋  message"  (glyph col 2, msg col 5).
+//
+// Exact match: both glyph and message sit at the same column on every
+// row, so the running ⠋ doesn't visually jump as it resolves to ✓/✗.
+var spinnerSequence = []string{" ⠋ ", " ⠙ ", " ⠹ ", " ⠸ ", " ⠼ ", " ⠴ ", " ⠦ ", " ⠧ ", " ⠇ ", " ⠏ "}
 
 func newSpinner(text string) *pterm.SpinnerPrinter {
 	sp, _ := pterm.DefaultSpinner.

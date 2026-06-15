@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -156,7 +157,7 @@ func readPhaseFailure(sb *sandbox.Sandbox, phase string, cfg schema.Config) (*Fa
 // commands (startup phase), accounting for the built-in step offsets:
 //
 //	install:   step 1 = bootstrap.sh, 2..N+1 = user[0..N-1]
-//	startup:   step 0 = cleanup, 1 = init-volumes, 2 = install-templates,
+//	startup:   step 0 = cleanup, 1 = devm-startup, 2 = install-templates,
 //	           3..M+2 = user (across services in sorted-name + decl order)
 func resolveUserCmdText(phase string, stepN int, cfg schema.Config) string {
 	if phase == "install" {
@@ -176,7 +177,7 @@ func resolveUserCmdText(phase string, stepN int, cfg schema.Config) string {
 	case 0:
 		return "(cleanup)"
 	case 1:
-		return "init-volumes.sh"
+		return "devm-startup.sh"
 	case 2:
 		return "install-templates.sh"
 	}
@@ -249,6 +250,7 @@ const (
 // reporter and cfg drive per-step progress announcements; pass nil reporter
 // to disable (e.g. in tests that don't care about UX).
 func waitForPhaseSentinel(
+	ctx context.Context,
 	sb *sandbox.Sandbox, phase string, runDone <-chan struct{},
 	timeout, poll time.Duration,
 	reporter status.Reporter, cfg schema.Config,
@@ -263,7 +265,14 @@ func waitForPhaseSentinel(
 	lastAnnouncedN := 1
 
 	for {
-		// Non-blocking check for anchor death.
+		// Non-blocking checks for cancellation and anchor death. ctx cancel
+		// is the user pressing Ctrl-C — abandon the gate so the surrounding
+		// RunShell defer can kill the anchor and tear the sandbox down.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if runDone != nil {
 			select {
 			case <-runDone:
@@ -286,15 +295,21 @@ func waitForPhaseSentinel(
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s did not complete within %s", phase, timeout)
 		}
-		// Sleep until next poll tick or anchor death.
+		// Sleep until next poll tick, anchor death, or ctx cancel.
 		if runDone != nil {
 			select {
 			case <-ticker.C:
 			case <-runDone:
 				return ErrAnchorDied
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		} else {
-			<-ticker.C
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
 }
@@ -303,6 +318,12 @@ func waitForPhaseSentinel(
 // for the (phase, stepN) combination. resolveUserCmdText gives us the
 // human-readable description; isCountedStep tells us whether it's a
 // user step. Empty descriptions (e.g. cleanup at stepN==0) are skipped.
+//
+// The desc is normalized for spinner-friendliness (single line, capped
+// length) — multi-line install commands with `\` continuations were
+// causing pterm to redraw the entire block on every tick. The FULL,
+// unmodified command is still preserved in failure reports via
+// resolveUserCmdText's direct callers.
 func announceStep(reporter status.Reporter, phase string, stepN int, cfg schema.Config) {
 	if reporter == nil {
 		return
@@ -311,7 +332,24 @@ func announceStep(reporter status.Reporter, phase string, stepN int, cfg schema.
 	if desc == "" {
 		return
 	}
-	reporter.Step(desc, isCountedStep(phase, stepN))
+	reporter.Step(shortenForSpinner(desc, 100), isCountedStep(phase, stepN))
+}
+
+// shortenForSpinner collapses a possibly-multiline shell command into
+// a single-line label that pterm's spinner can render without
+// redrawing many lines per tick. Strips backslash-newline
+// continuations, replaces remaining newlines with spaces, collapses
+// whitespace runs, and truncates with an ellipsis if longer than max.
+func shortenForSpinner(desc string, max int) string {
+	desc = strings.ReplaceAll(desc, "\\\n", " ")
+	desc = strings.ReplaceAll(desc, "\n", " ")
+	desc = strings.Join(strings.Fields(desc), " ")
+	if max > 0 && len(desc) > max {
+		// "…" is 3 bytes in UTF-8 — reserve room so the final
+		// byte length stays at or below max.
+		desc = desc[:max-3] + "…"
+	}
+	return desc
 }
 
 // isCountedStep reports whether step N of phase is a user-defined step
@@ -320,7 +358,7 @@ func announceStep(reporter status.Reporter, phase string, stepN int, cfg schema.
 //	install:   step 1     = bootstrap (uncounted)
 //	           step 2..N+1 = user (counted)
 //	startup:   step 0 = cleanup (not displayed)
-//	           step 1 = init-volumes (uncounted)
+//	           step 1 = devm-startup (uncounted)
 //	           step 2 = install-templates (uncounted)
 //	           step 3..M+2 = user (counted)
 func isCountedStep(phase string, stepN int) bool {

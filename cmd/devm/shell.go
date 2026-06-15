@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -45,6 +46,14 @@ attaches immediately. Port reconcile only runs on cold start.`,
 		deps := orchestrator.DefaultShellDeps(repoRoot)
 		rc, err := orchestrator.RunShell(ctx, deps, cfg, repoRoot, cfg.Project.SandboxName, cmdName, cmdArgs)
 		if err != nil {
+			// SIGINT during cold start cancels ctx. RunShell's defer
+			// already killed the anchor (which tears the sandbox down
+			// per the anchor-alive contract). Suppress the noisy
+			// "context canceled" stack and exit 130 (SIGINT convention).
+			if errors.Is(err, context.Canceled) {
+				fmt.Fprintln(os.Stderr, "aborted")
+				os.Exit(130)
+			}
 			return err
 		}
 		if rc != 0 {
