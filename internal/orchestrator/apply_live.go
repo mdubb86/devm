@@ -112,18 +112,13 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema
 		if err := render.WriteTemplateInstallers(cfg, repoRoot); err != nil {
 			return fmt.Errorf("apply_live: write template installers: %w", err)
 		}
-		// Single dispatcher invocation re-runs all installers. Flags:
-		//   -u root: installers write to /etc/ and similar system paths;
-		//     root matches the "user: 0" in the spec.yaml startup step.
-		//   -e WORKSPACE_DIR=<repoRoot>: non-interactive sbx exec does not
-		//     set WORKSPACE_DIR automatically (only available in the sbx
-		//     daemon startup context); the dispatcher uses it to glob the
-		//     templates dir.
+		// Single dispatcher invocation re-runs all installers. -u root
+		// matches the "user: 0" in the spec.yaml startup step so the
+		// installers can write to /etc/ and similar system paths.
 		// Use Output (not Run) so any failure includes the sbx stderr text.
 		dispatcherPath := filepath.Join(repoRoot, ".devm", "scripts", "install-templates.sh")
 		if _, err := sb.Runner.Output("sbx", "exec",
 			"-u", "root",
-			"-e", "WORKSPACE_DIR="+repoRoot,
 			sb.Name,
 			"bash", dispatcherPath); err != nil {
 			return fmt.Errorf("apply_live: install-templates: %w", err)
