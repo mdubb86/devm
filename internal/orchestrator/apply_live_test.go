@@ -67,12 +67,23 @@ func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
 	r := &stubRunner{}
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	err := ApplyLive(sb, []Change{
-		{Kind: KindEnvChange, Service: "api", Key: "X", Old: "a", New: "b"},
 		{Kind: KindInstallChange},
-		{Kind: KindNetworkRemove, Key: "gone.com", Old: "gone.com"},
+		{Kind: KindMaskChange},
 	}, 50000, schema.Config{}, t.TempDir())
 	assert.NoError(t, err)
 	assert.Empty(t, r.lastArgs, "non-LIVE changes must be ignored by ApplyLive")
+}
+
+func TestApplyLive_NetworkRemove(t *testing.T) {
+	r := &stubRunner{}
+	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	err := ApplyLive(sb, []Change{
+		{Kind: KindNetworkRemove, Key: "gone.example.com", Old: "gone.example.com"},
+	}, 50000, schema.Config{}, t.TempDir())
+	assert.NoError(t, err)
+	require.NotEmpty(t, r.lastArgs)
+	cmd := strings.Join(r.lastArgs[0], " ")
+	assert.Contains(t, cmd, "sbx policy rm network x --resource gone.example.com")
 }
 
 func TestApplyLive_EnvChange_WritesDevmEnv(t *testing.T) {

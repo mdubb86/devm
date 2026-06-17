@@ -418,6 +418,12 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	}
 	debuglog.Logf("shell", "port-reconcile: done")
 
+	debuglog.Logf("shell", "network-reconcile: starting")
+	if err := ReconcileNetworkWithRunner(sb, cfg, d.Runner); err != nil {
+		return -1, fmt.Errorf("network reconcile failed: %w", err)
+	}
+	debuglog.Logf("shell", "network-reconcile: done")
+
 	debuglog.Logf("shell", "snapshot: writing")
 	// Snapshot is the persisted "last-applied" config that the next
 	// reconcile diffs against. Dropping it silently produces a sandbox

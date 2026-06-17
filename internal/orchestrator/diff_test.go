@@ -22,17 +22,17 @@ func TestBucketStrings(t *testing.T) {
 }
 
 func TestChangeKindBuckets(t *testing.T) {
-	// Live: ports (add/remove/change), network add, env (add/remove/change)
+	// Live: ports (add/remove/change), network (add/remove), env (add/remove/change)
 	assert.Equal(t, BucketLive, KindPortAdd.Bucket())
 	assert.Equal(t, BucketLive, KindPortRemove.Bucket())
 	assert.Equal(t, BucketLive, KindPortChange.Bucket())
 	assert.Equal(t, BucketLive, KindNetworkAdd.Bucket())
+	assert.Equal(t, BucketLive, KindNetworkRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvAdd.Bucket())
 	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
 
-	// Stop+shell: network removes, startup
-	assert.Equal(t, BucketStopShell, KindNetworkRemove.Bucket())
+	// Stop+shell: startup
 	assert.Equal(t, BucketStopShell, KindStartupChange.Bucket())
 
 	// Teardown+shell: install, masks, image, identity, mounts

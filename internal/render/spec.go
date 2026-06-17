@@ -60,9 +60,10 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 		},
 	}
 
-	if len(cfg.Network.AllowedDomains) > 0 {
-		spec.Network = &kitNetwork{AllowedDomains: cfg.Network.AllowedDomains}
-	}
+	// Network policies are applied at cold-start via
+	// orchestrator.ReconcileNetwork (runtime sbx policy allow), not
+	// baked into the kit. Kit-provenance rules can't be removed without
+	// recreating the sandbox; runtime ("local") rules can.
 
 	// Volumes: all masks across services, sorted by service name then
 	// declaration order. Sbx kit format is `path: size=N` where the
@@ -155,7 +156,6 @@ type kitSpec struct {
 	DisplayName   string            `yaml:"displayName"`
 	Description   string            `yaml:"description"`
 	Agent         kitAgent          `yaml:"agent"`
-	Network       *kitNetwork       `yaml:"network,omitempty"`
 	Volumes       map[string]string `yaml:"volumes,omitempty"`
 	Environment   kitEnvironment    `yaml:"environment"`
 	Commands      kitCommands       `yaml:"commands"`
@@ -171,9 +171,6 @@ type kitEntrypoint struct {
 	Run []string `yaml:"run,flow"`
 }
 
-type kitNetwork struct {
-	AllowedDomains []string `yaml:"allowedDomains"`
-}
 
 type kitEnvironment struct {
 	Variables map[string]string `yaml:"variables"`

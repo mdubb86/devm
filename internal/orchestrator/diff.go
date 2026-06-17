@@ -63,7 +63,7 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindPortRemove:     BucketLive,
 	KindPortChange:     BucketLive,
 	KindNetworkAdd:     BucketLive,
-	KindNetworkRemove:  BucketStopShell,
+	KindNetworkRemove:  BucketLive,
 	// Env is materialized in .devm/.env (mount-visible inside the VM)
 	// and re-sourced by the with-devm-env wrapper on every `sbx exec`.
 	// ApplyLive rewrites .devm/.env on the host; the next exec sees the

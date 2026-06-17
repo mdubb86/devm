@@ -84,7 +84,10 @@ func TestSpecYAMLBasic(t *testing.T) {
 	out := SpecYAML(cfg, "/Users/test/workspace/myproject")
 	assert.Contains(t, out, "shell-docker")
 	assert.Contains(t, out, "test")
-	assert.Contains(t, out, "github.com")
+	// Network policies are applied at cold-start via orchestrator.
+	// ReconcileNetwork, NOT baked into the kit.
+	assert.NotContains(t, out, "allowedDomains")
+	assert.NotContains(t, out, "github.com")
 	assert.Contains(t, out, "/Users/test/workspace/myproject/node_modules")
 	assert.Contains(t, out, "size=2G")
 	assert.Contains(t, out, "/Users/test/workspace/myproject/apps/web/node_modules")

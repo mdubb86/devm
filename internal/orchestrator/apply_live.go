@@ -77,14 +77,12 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema
 				return fmt.Errorf("apply_live: port_change: publish %s: %w", newSpec, err)
 			}
 		case KindNetworkAdd:
-			// sbx 0.29 added per-sandbox scoped network policies ("Support
-			// per-sandbox scoped network policies" — v0.29.0 release
-			// notes). Adds now require either `-g`/`--global` or a
-			// SANDBOX argument before the resources. We use the sandbox
-			// scope because devm.yaml's `allowed_domains` is per-project
-			// (kit-scoped at create; reconcile adds are kit-equivalent).
-			if err := sb.Runner.Run("sbx", "policy", "allow", "network", sb.Name, c.Key); err != nil {
-				return fmt.Errorf("apply_live: sbx policy allow network %s %s: %w", sb.Name, c.Key, err)
+			if err := applyNetworkAllow(sb.Runner, sb, c.Key); err != nil {
+				return fmt.Errorf("apply_live: %w", err)
+			}
+		case KindNetworkRemove:
+			if err := applyNetworkRm(sb.Runner, sb, c.Key); err != nil {
+				return fmt.Errorf("apply_live: %w", err)
 			}
 		case KindTemplateChange:
 			templateChanges = append(templateChanges, c)
