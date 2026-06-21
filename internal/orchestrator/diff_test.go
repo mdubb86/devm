@@ -32,11 +32,9 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
 
-	// Stop+shell: startup
-	assert.Equal(t, BucketStopShell, KindStartupChange.Bucket())
-
-	// Teardown+shell: install, masks, image, identity, mounts
+	// Teardown+shell: install, startup, masks, image, identity, mounts
 	assert.Equal(t, BucketTeardownShell, KindInstallChange.Bucket())
+	assert.Equal(t, BucketTeardownShell, KindStartupChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindMaskChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindImageChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindIdentityChange.Bucket())
@@ -245,17 +243,15 @@ func TestRecreateFlavorPickMax(t *testing.T) {
 	assert.Equal(t, FlavorLiveOnly, RecreateFlavor(nil))
 	assert.Equal(t, FlavorLiveOnly, RecreateFlavor([]Change{{Kind: KindPortAdd}}))
 
-	// Mix of live + stop → stop wins (startup is STOP+SHELL)
-	assert.Equal(t, FlavorStopShell, RecreateFlavor([]Change{
-		{Kind: KindPortAdd},
-		{Kind: KindStartupChange},
-	}))
-
 	// Any teardown wins
 	assert.Equal(t, FlavorTeardownShell, RecreateFlavor([]Change{
 		{Kind: KindPortAdd},
 		{Kind: KindStartupChange},
 		{Kind: KindInstallChange},
+	}))
+	// Single teardown change alone also picks teardown.
+	assert.Equal(t, FlavorTeardownShell, RecreateFlavor([]Change{
+		{Kind: KindStartupChange},
 	}))
 }
 

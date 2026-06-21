@@ -3,22 +3,22 @@
 When a devm.yaml change would force a sandbox recreate, devm prompts
 the user before tearing down. This pins two answers to that prompt:
   - non-tty: stdin isn't a tty -> devm exits 2 without recreating
-  - yes:     --yes flag bypasses prompt -> sandbox stops (caller can
-             then re-shell and trigger the recreate)
+  - yes:     --yes flag bypasses prompt -> sandbox is removed (caller
+             can then re-shell to trigger the recreate)
 
 What this pins:
   - non-tty path: exit code 2 with next_action=needs_approval, sandbox
     state unchanged (user shell still alive).
-  - --yes path: sandbox transitions to 'stopped' (user shell dies).
+  - --yes path: sandbox is removed (user shell dies).
 
 What it doesn't cover (tested elsewhere):
-  - The actual recreate flow -> test_14 (install-change forces recreate).
+  - The actual recreate flow -> test_14 (install-change forces recreate),
+    test_36 (startup-change forces recreate).
 """
 from __future__ import annotations
 
 import json
 import subprocess
-import time
 
 import pytest
 
@@ -42,10 +42,10 @@ def test_reconcile_prompt_flow(workspace, devm, sandbox_name, mode):
     with Shell(devm, cwd=str(workspace.path)) as sh:
         sh.expect_prompt(timeout=90)
 
-        # Edit the startup command: startup change is STOP+SHELL (recreate).
-        # We use startup (not install) so the --yes branch transitions the
-        # sandbox to 'stopped' rather than tearing it down (install is in
-        # the TEARDOWN bucket which would sbx-rm the sandbox entirely).
+        # Edit the startup command -> KindStartupChange is TEARDOWN+SHELL
+        # because sbx caches the kit at create-time and re-runs the
+        # cached startup on restart. New startup commands need sbx rm +
+        # recreate to take effect. Pinned by test_36.
         workspace.patch_devmyaml(services={
             "worker": {
                 "startup": [
@@ -88,15 +88,12 @@ def test_reconcile_prompt_flow(workspace, devm, sandbox_name, mode):
             # the resulting state, not on this call's exit code.
             devm.reconcile(yes=True, timeout=60, check=False)
 
-            # User shell dies because the sandbox was stopped under it.
+            # User shell dies because the sandbox is removed under it.
             sh.expect_eof(timeout=30)
 
-            # reconcile does NOT relaunch a shell -- sandbox should be stopped.
-            # Inline poll: reconcile-yes invokes the stop itself, so calling
-            # stop_and_wait_stopped here would double-stop.
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if sbx.sandbox_state(sandbox_name) == "stopped":
-                    return
-                time.sleep(0.5)
-            pytest.fail(f"sandbox {sandbox_name} never reached 'stopped'")
+            # reconcile does NOT relaunch a shell -- sandbox should be
+            # GONE (TEARDOWN bucket = sbx rm, not sbx stop).
+            assert not sbx.sandbox_exists(sandbox_name), (
+                f"sandbox {sandbox_name} still exists after reconcile "
+                f"--yes on a startup change (should have been removed)"
+            )

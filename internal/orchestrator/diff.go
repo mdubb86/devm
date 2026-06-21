@@ -72,8 +72,12 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindEnvAdd:        BucketLive,
 	KindEnvRemove:     BucketLive,
 	KindEnvChange:     BucketLive,
-	KindStartupChange: BucketStopShell,
-	KindInstallChange:  BucketTeardownShell,
+	// Startup commands are baked into the kit at sbx-create time and
+	// CACHED by sbx — restart re-runs the cached commands, NOT the
+	// freshly-rendered ones. A startup edit therefore needs `sbx rm`
+	// + re-create so the new kit takes effect. Pinned by test_36.
+	KindStartupChange: BucketTeardownShell,
+	KindInstallChange: BucketTeardownShell,
 	KindMaskChange:     BucketTeardownShell,
 	KindImageChange:    BucketTeardownShell,
 	KindIdentityChange: BucketTeardownShell,
