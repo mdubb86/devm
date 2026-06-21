@@ -14,11 +14,13 @@ What this pins:
     cased service name + var name).
   - A live edit to a service env value is picked up by a NEW shell
     against the same running sandbox (no recreate required).
+  - The FIRST (already-attached) shell keeps the OLD value — env
+    changes are LIVE-bucket but reach the env via with-devm-env
+    sourcing .devm/.env at exec time, so existing exec'd shells don't
+    re-source. (Same contract pinned for path: by test_35.)
   - Second-shell shortcut (attach to running sandbox) works.
 
 What it doesn't cover (tested elsewhere):
-  - Whether the FIRST (already-attached) shell observes the new value
-    in-place — not pinned; only the next shell is checked.
   - Warm-attach concurrent shells sharing a sandbox -> test_02.
   - Live port add via reconcile -> test_08.
   - Install-change forcing recreate -> test_14.
@@ -67,6 +69,12 @@ def test_env_inject_and_live_change(workspace, devm, sandbox_name):
                 },
             },
         )
+
+        # First shell still sees the OLD value — already-attached
+        # shells don't re-source .devm/.env mid-session.
+        first.send('echo "STILL_FIRST=$API_LOG_LEVEL"')
+        first.expect_text(r"STILL_FIRST=info", timeout=15)
+        first.expect_prompt(timeout=15)
 
         # Second shell on the running sandbox (shortcut path).
         with Shell(devm, cwd=str(workspace.path)) as second:
