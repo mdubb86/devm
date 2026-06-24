@@ -143,3 +143,27 @@ func TestServiceOverrideStartupReplacement(t *testing.T) {
 	assert.Equal(t, []string{"new-cmd", "--flag"}, merged.Services["postgres"].Startup[0].Command)
 	assert.True(t, merged.Services["postgres"].Startup[0].Background)
 }
+
+func TestMerge_OverridesPath(t *testing.T) {
+	base := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p"},
+		Path:    []string{"/r/.cargo/bin"},
+	}
+	devPath := []string{"/Users/dev/local/bin", "/r/.cargo/bin"}
+	override := schema.ConfigOverride{Path: &devPath}
+	out, err := Merge(base, override)
+	require.NoError(t, err)
+	assert.Equal(t, devPath, out.Path,
+		"path override should REPLACE the base list entirely")
+}
+
+func TestMerge_PreservesPathWhenOverrideNil(t *testing.T) {
+	base := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p"},
+		Path:    []string{"/r/.cargo/bin"},
+	}
+	override := schema.ConfigOverride{} // no Path override
+	out, err := Merge(base, override)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/r/.cargo/bin"}, out.Path)
+}

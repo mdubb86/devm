@@ -88,5 +88,8 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 	if override.Mounts != nil {
 		out.Mounts = *override.Mounts
 	}
+	if override.Path != nil {
+		out.Path = *override.Path
+	}
 	return out, nil
 }
