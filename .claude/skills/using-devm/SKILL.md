@@ -21,7 +21,8 @@ Assume `devm` is on PATH. Verify with `devm --help` (or `which devm`). If it's m
 | `devm stop` | Stop the sandbox (preserves VM state). Required to actually stop — shell exit alone won't. |
 | `devm stop --yes` | Skip the confirm prompt. |
 | `devm teardown` | `sbx rm` — destroys the VM and all installed state. |
-| `devm status` | Show sandbox state, mappings, etc. |
+| `devm status` | Show sandbox state, mappings, routing, etc. |
+| `devm route local | vm | down` | Mac-side hostname routing via Caddy. `local`: target Mac ports. `vm`: target sbx-published ports. `down`: remove. Independent of sandbox lifecycle. |
 
 ## devm.yaml — minimum viable
 
@@ -30,6 +31,9 @@ project:
   id: myproj              # required, used as agent name
   sandbox_name: myproj-sbx # required, the sbx sandbox name
   port_offset: 51000      # port + port_offset = host_port
+  # proxy: caddy          # default. Set to `none` to disable `devm route`.
+  # host_resolver: snippet # default. Set to `localias` to manage /etc/hosts
+                          # via a running localias daemon.
 
 base_image:
   docker: false           # true → docker-in-docker base

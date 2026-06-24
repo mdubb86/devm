@@ -10,7 +10,7 @@ Top-level fields (all optional unless noted):
 
 | Field | Type | Purpose |
 |---|---|---|
-| `project` | object (REQUIRED) | `id`, `sandbox_name`, optional `port_offset` |
+| `project` | object (REQUIRED) | `id`, `sandbox_name`, optional `port_offset`, `proxy`, `host_resolver` |
 | `base_image` | object | `docker: bool` — true for the docker-templates:shell-docker image |
 | `network` | object | `allowed_domains: [string]` — domain allowlist |
 | `env` | map[string]string | Project-wide env vars. Substitution: `$WORKSPACE` expands to repo root. Reserved keys: `WORKSPACE`, `IS_SANDBOX`. |
@@ -18,6 +18,16 @@ Top-level fields (all optional unless noted):
 | `install` | []string | Shell commands run ONCE at sandbox create as root. Each runs under `bash -o pipefail -c` (so pipelines fail loud). Wrapped by wrap-fg.sh. `apt-get update` already ran via bootstrap. |
 | `mounts` | []string | Host paths mirrored into the sandbox at the same absolute path. Format: `HOST_PATH[:ro]`. |
 | `path` | []string | Directories prepended to `$PATH` inside the sandbox. Final shape: `path[0]:path[1]:...:$WORKSPACE/.devm/scripts:$PATH`. Substitution: `$WORKSPACE` expands at load time. Entries must be absolute (start with `/` or `$WORKSPACE`); empty entries and `~` rejected. Reaches install, startup foreground, startup background, and the interactive shell via `.devm/.env`. **Bucket: live.** |
+
+## Project fields
+
+| Field | Type | Purpose |
+|---|---|---|
+| `id` | string (REQUIRED) | Project slug — used as the devm-owned namespace in shared resources (Caddy `@id`, etc.). |
+| `sandbox_name` | string (REQUIRED) | Sbx sandbox name. |
+| `port_offset` | int | Added to each service's canonical port for the host-side mapping. |
+| `proxy` | string | `caddy` (default) or `none`. Gates `devm route`. With `none`, route subcommands print a disabled message and exit 0. |
+| `host_resolver` | string | `snippet` (default) or `localias`. Selects how `/etc/hosts` is managed. `snippet` prints a copy-paste hint when hostnames don't resolve; `localias` talks to a running localias daemon. |
 
 ## Service fields
 
