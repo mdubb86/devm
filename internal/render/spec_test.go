@@ -88,8 +88,47 @@ func TestSpecYAMLBasic(t *testing.T) {
 	assert.NotContains(t, out, "allowedDomains")
 	assert.NotContains(t, out, "github.com")
 	assert.Contains(t, out, "/Users/test/workspace/myproject/node_modules")
-	assert.Contains(t, out, "size=2G")
+	assert.Contains(t, out, "size: 2G")
 	assert.Contains(t, out, "/Users/test/workspace/myproject/apps/web/node_modules")
+}
+
+func TestSpecYAMLVolumesEmitsList(t *testing.T) {
+	cfg := schema.Config{
+		Project:   schema.Project{ID: "x", SandboxName: "x-sbx"},
+		BaseImage: schema.BaseImage{Docker: false},
+		Services: map[string]schema.Service{
+			"web": {
+				Port: 8000,
+				Masks: []schema.Mask{
+					{Path: "node_modules", Size: "500M"},
+					{Path: ".cache", Size: "1G"},
+				},
+			},
+		},
+	}
+	out := SpecYAML(cfg, "/repo")
+
+	// Must NOT contain the legacy map shape (where path was the
+	// YAML key under volumes:). sbx 0.31+ rejects map-form with
+	// "cannot unmarshal !!map into []spec.MountSpec".
+	assert.NotContains(t, out, "volumes:\n  /repo/node_modules:",
+		"must not emit map-form volumes (sbx rejects it)")
+
+	// Must contain the list-form entries.
+	parsed := struct {
+		Volumes []struct {
+			Path string `yaml:"path"`
+			Size string `yaml:"size"`
+		} `yaml:"volumes"`
+	}{}
+	require.NoError(t, yaml.Unmarshal([]byte(out), &parsed))
+	require.Len(t, parsed.Volumes, 2)
+
+	// Order is sorted by service name, then mask declaration order.
+	assert.Equal(t, "/repo/node_modules", parsed.Volumes[0].Path)
+	assert.Equal(t, "500M", parsed.Volumes[0].Size)
+	assert.Equal(t, "/repo/.cache", parsed.Volumes[1].Path)
+	assert.Equal(t, "1G", parsed.Volumes[1].Size)
 }
 
 func TestSpecYAMLNonDockerBaseUsesShellTemplate(t *testing.T) {

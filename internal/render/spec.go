@@ -66,15 +66,15 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 	// recreating the sandbox; runtime ("local") rules can.
 
 	// Volumes: all masks across services, sorted by service name then
-	// declaration order. Sbx kit format is `path: size=N` where the
-	// path is the map key.
+	// declaration order. Sbx kit format is a list of {path, size}
+	// MountSpec entries.
 	names := sortedServiceNames(cfg.Services)
 	for _, name := range names {
 		for _, m := range cfg.Services[name].Masks {
-			if spec.Volumes == nil {
-				spec.Volumes = map[string]string{}
-			}
-			spec.Volumes[repoRoot+"/"+m.Path] = "size=" + m.Size
+			spec.Volumes = append(spec.Volumes, kitVolume{
+				Path: repoRoot + "/" + m.Path,
+				Size: m.Size,
+			})
 		}
 	}
 
@@ -150,15 +150,15 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 // element to be rendered in flow style (square brackets), which is what
 // sbx kits use for short string arrays like command argv.
 type kitSpec struct {
-	SchemaVersion string            `yaml:"schemaVersion"`
-	Kind          string            `yaml:"kind"`
-	Name          string            `yaml:"name"`
-	DisplayName   string            `yaml:"displayName"`
-	Description   string            `yaml:"description"`
-	Agent         kitAgent          `yaml:"agent"`
-	Volumes       map[string]string `yaml:"volumes,omitempty"`
-	Environment   kitEnvironment    `yaml:"environment"`
-	Commands      kitCommands       `yaml:"commands"`
+	SchemaVersion string         `yaml:"schemaVersion"`
+	Kind          string         `yaml:"kind"`
+	Name          string         `yaml:"name"`
+	DisplayName   string         `yaml:"displayName"`
+	Description   string         `yaml:"description"`
+	Agent         kitAgent       `yaml:"agent"`
+	Volumes       []kitVolume    `yaml:"volumes,omitempty"`
+	Environment   kitEnvironment `yaml:"environment"`
+	Commands      kitCommands    `yaml:"commands"`
 }
 
 type kitAgent struct {
@@ -171,6 +171,10 @@ type kitEntrypoint struct {
 	Run []string `yaml:"run,flow"`
 }
 
+type kitVolume struct {
+	Path string `yaml:"path"`
+	Size string `yaml:"size"`
+}
 
 type kitEnvironment struct {
 	Variables map[string]string `yaml:"variables"`
