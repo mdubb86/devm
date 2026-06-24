@@ -248,9 +248,11 @@ func (s Service) Validate() error {
 }
 
 type Project struct {
-	ID          string `yaml:"id"`
-	SandboxName string `yaml:"sandbox_name"`
-	PortOffset  int    `yaml:"port_offset,omitempty"`
+	ID           string `yaml:"id"`
+	SandboxName  string `yaml:"sandbox_name"`
+	PortOffset   int    `yaml:"port_offset,omitempty"`
+	Proxy        string `yaml:"proxy,omitempty"`         // "caddy" (default) or "none"
+	HostResolver string `yaml:"host_resolver,omitempty"` // "snippet" (default) or "localias"
 }
 
 func (p Project) Validate() error {
@@ -259,6 +261,16 @@ func (p Project) Validate() error {
 	}
 	if p.SandboxName == "" {
 		return fmt.Errorf("project.sandbox_name is required")
+	}
+	switch p.Proxy {
+	case "", "caddy", "none":
+	default:
+		return fmt.Errorf("project.proxy: must be empty, 'caddy', or 'none' (got %q)", p.Proxy)
+	}
+	switch p.HostResolver {
+	case "", "snippet", "localias":
+	default:
+		return fmt.Errorf("project.host_resolver: must be empty, 'snippet', or 'localias' (got %q)", p.HostResolver)
 	}
 	return nil
 }

@@ -22,6 +22,32 @@ func TestMergeOverridesProjectPortOffset(t *testing.T) {
 	assert.Equal(t, "p", merged.Project.ID, "non-overridden field preserved")
 }
 
+func TestMerge_OverridesProxy(t *testing.T) {
+	base := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p", Proxy: "caddy"},
+	}
+	proxy := "none"
+	override := schema.ConfigOverride{
+		Project: &schema.ProjectOverride{Proxy: &proxy},
+	}
+	out, err := Merge(base, override)
+	require.NoError(t, err)
+	assert.Equal(t, "none", out.Project.Proxy)
+}
+
+func TestMerge_OverridesHostResolver(t *testing.T) {
+	base := schema.Config{
+		Project: schema.Project{ID: "p", SandboxName: "p"},
+	}
+	hr := "localias"
+	override := schema.ConfigOverride{
+		Project: &schema.ProjectOverride{HostResolver: &hr},
+	}
+	out, err := Merge(base, override)
+	require.NoError(t, err)
+	assert.Equal(t, "localias", out.Project.HostResolver)
+}
+
 func TestMergeOverridesService(t *testing.T) {
 	base := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p-sbx"},

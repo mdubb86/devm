@@ -16,6 +16,12 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 		if override.Project.PortOffset != nil {
 			out.Project.PortOffset = *override.Project.PortOffset
 		}
+		if override.Project.Proxy != nil {
+			out.Project.Proxy = *override.Project.Proxy
+		}
+		if override.Project.HostResolver != nil {
+			out.Project.HostResolver = *override.Project.HostResolver
+		}
 	}
 	if override.BaseImage != nil && override.BaseImage.Docker != nil {
 		out.BaseImage.Docker = *override.BaseImage.Docker
