@@ -50,3 +50,44 @@ func TestClient_Unreachable_ErrorMessageGuides(t *testing.T) {
 	assert.Contains(t, err.Error(), "caddy admin API not reachable")
 	assert.Contains(t, err.Error(), "brew install caddy")
 }
+
+func TestEnsureServer_UsesExistingServerOn80(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/config/apps/http/servers" {
+			w.Write([]byte(`{"someoneelse":{"listen":[":80"]}}`))
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	c := NewWithURL(srv.URL)
+	name, err := c.EnsureServer()
+	require.NoError(t, err)
+	assert.Equal(t, "someoneelse", name)
+}
+
+func TestEnsureServer_CreatesDevmServerIfNoneOn80(t *testing.T) {
+	var puts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/config/apps/http/servers":
+			w.Write([]byte(`{"other":{"listen":[":8443"]}}`))
+		case r.Method == "PUT" && r.URL.Path == "/config/apps/http/servers/devm":
+			puts++
+			buf, _ := io.ReadAll(r.Body)
+			assert.Contains(t, string(buf), `"@id":"devm.server"`)
+			assert.Contains(t, string(buf), `":80"`)
+			w.WriteHeader(200)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewWithURL(srv.URL)
+	name, err := c.EnsureServer()
+	require.NoError(t, err)
+	assert.Equal(t, "devm", name)
+	assert.Equal(t, 1, puts)
+}

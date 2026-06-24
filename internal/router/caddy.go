@@ -14,6 +14,11 @@ import (
 // DefaultCaddyURL is where Caddy's admin API listens by default.
 const DefaultCaddyURL = "http://localhost:2019"
 
+// ServerID tags the Caddy HTTP server devm creates when no other
+// server is already bound to :80. Used as the @id so subsequent
+// runs know whether we own the server.
+const ServerID = "devm.server"
+
 // Client is a thin caddy admin-API client.
 type Client struct {
 	baseURL    string
@@ -56,4 +61,56 @@ func (c *Client) do(method, path string, body any) (int, string, error) {
 	defer resp.Body.Close()
 	bs, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(bs), nil
+}
+
+// EnsureServer returns the name of an HTTP server listening on :80.
+// If one exists already (any project, or the user's own setup), use
+// it. If none exists, create one tagged @id=devm.server.
+func (c *Client) EnsureServer() (string, error) {
+	status, body, err := c.do("GET", "/config/apps/http/servers", nil)
+	if err != nil {
+		return "", err
+	}
+	if status == 404 {
+		body = "{}" // apps.http missing entirely; we'll create devm anyway
+	} else if status >= 300 {
+		return "", fmt.Errorf("GET servers: %d %s", status, body)
+	}
+
+	var servers map[string]struct {
+		Listen []string `json:"listen"`
+	}
+	if body != "" {
+		if err := json.Unmarshal([]byte(body), &servers); err != nil {
+			return "", fmt.Errorf("parse servers: %w", err)
+		}
+	}
+	for name, srv := range servers {
+		for _, listen := range srv.Listen {
+			if listenMatchesPort80(listen) {
+				return name, nil
+			}
+		}
+	}
+
+	body2 := map[string]any{
+		"@id":             ServerID,
+		"listen":          []string{":80"},
+		"automatic_https": map[string]any{"disable": true},
+		"routes":          []any{},
+	}
+	status, text, err := c.do("PUT", "/config/apps/http/servers/devm", body2)
+	if err != nil {
+		return "", err
+	}
+	if status >= 300 {
+		return "", fmt.Errorf("PUT devm server: %d %s", status, text)
+	}
+	return "devm", nil
+}
+
+// listenMatchesPort80 returns true for any listen spec that binds :80,
+// including bare ":80", "0.0.0.0:80", "127.0.0.1:80", "[::]:80".
+func listenMatchesPort80(s string) bool {
+	return len(s) >= 3 && s[len(s)-3:] == ":80"
 }
