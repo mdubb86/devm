@@ -94,6 +94,45 @@ env:
 	assert.Contains(t, err.Error(), "reserved")
 }
 
+func TestLoad_RejectsLegacyHostnameApex_InBase(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  id: foo
+  sandbox_name: foo-sbx
+  hostname_apex: foo.local
+`)
+
+	_, err := Load(dir)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "hostname_apex is no longer supported")
+	assert.Contains(t, err.Error(), "HOSTNAME_APEX")
+	assert.Contains(t, err.Error(), "devm.yaml",
+		"error should identify which file is offending")
+}
+
+func TestLoad_RejectsLegacyHostnameApex_InOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  id: foo
+  sandbox_name: foo-sbx
+base_image:
+  docker: true
+`)
+	writeFile(t, dir, "devm.me.yaml", `
+project:
+  hostname_apex: foo.local
+`)
+
+	_, err := Load(dir)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "hostname_apex is no longer supported")
+	assert.Contains(t, err.Error(), "HOSTNAME_APEX")
+	assert.Contains(t, err.Error(), "devm.me.yaml",
+		"error should identify the override file as offending")
+}
+
 func TestLoadStrictFailsOnMissingRequiredField(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
