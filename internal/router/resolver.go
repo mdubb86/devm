@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // Resolver manages how *.PROJECT.local hostnames resolve on the Mac.
@@ -44,4 +46,15 @@ func (r *snippetResolver) Apply(_ context.Context, hostnames []string) error {
 
 func (r *snippetResolver) Remove(_ context.Context, _ []string) error {
 	return nil
+}
+
+// NewResolver dispatches on cfg.Project.HostResolver. Unknown values
+// would have failed schema validation, but we double-check defensively.
+func NewResolver(cfg schema.Config) (Resolver, error) {
+	switch cfg.Project.HostResolver {
+	case "", "snippet":
+		return newSnippetResolver(), nil
+	default:
+		return nil, fmt.Errorf("unknown project.host_resolver: %q", cfg.Project.HostResolver)
+	}
 }

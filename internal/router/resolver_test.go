@@ -3,8 +3,10 @@ package router
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,4 +42,31 @@ func TestSnippetResolver_Remove_NoOp(t *testing.T) {
 	err := r.Remove(context.Background(), []string{"a.foo.local"})
 	require.NoError(t, err)
 	assert.Empty(t, buf.String())
+}
+
+func TestNewResolver_DispatchesOnHostResolver(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"default (empty) is snippet", "", "*router.snippetResolver"},
+		{"snippet explicit", "snippet", "*router.snippetResolver"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := schema.Config{Project: schema.Project{HostResolver: c.value}}
+			r, err := NewResolver(cfg)
+			require.NoError(t, err)
+			assert.Equal(t, c.want, typeName(r))
+		})
+	}
+}
+
+func typeName(v any) string { return fmt.Sprintf("%T", v) }
+
+func TestNewResolver_RejectsUnknownValue(t *testing.T) {
+	cfg := schema.Config{Project: schema.Project{HostResolver: "dnsmasq"}}
+	_, err := NewResolver(cfg)
+	require.Error(t, err)
 }
