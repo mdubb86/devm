@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/router"
 	"github.com/mdubb86/devm/internal/sandbox"
 )
 
@@ -17,6 +18,7 @@ type StatusResult struct {
 	PendingLive     int
 	PendingRecreate int
 	Drift           []DriftItem
+	Routing         router.RoutingStatus
 }
 
 // DriftItem is one piece of mismatch between snapshot and live sbx state.

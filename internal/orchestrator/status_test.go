@@ -134,6 +134,20 @@ func TestRunStatusLive_PortExtraDrift(t *testing.T) {
 	assert.Contains(t, res.Drift[0].Detail, "9090")
 }
 
+func TestRunStatus_PopulatesRouting_ProxyNone(t *testing.T) {
+	// When project.proxy = "none", router.Inspect returns Proxy="none"
+	// and is short-circuit cheap. RunStatus must populate Routing even
+	// when the sandbox is absent.
+	cfg := statusMinimalCfg()
+	cfg.Project.Proxy = "none"
+	r := &stateRunner{lsAbsent: true}
+	sb := &sandbox.Sandbox{Name: "x-sbx", Runner: r}
+	res, err := RunStatus(cfg, sb, "/tmp/fake")
+	require.NoError(t, err)
+	assert.Equal(t, "absent", res.State)
+	assert.Equal(t, "none", res.Routing.Proxy)
+}
+
 func TestRunStatusLive_InSyncNoDrift(t *testing.T) {
 	// Snapshot expects api 8080 (host 58080) and live has exactly that.
 	snapCfg := statusMinimalCfg()

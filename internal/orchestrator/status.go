@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/mdubb86/devm/internal/router"
 	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/mdubb86/devm/internal/schema"
 	"gopkg.in/yaml.v3"
@@ -12,6 +14,16 @@ import (
 // detection is RunStatusLive's job (currently stubbed).
 func RunStatus(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (StatusResult, error) {
 	res := StatusResult{Sandbox: sb.Name}
+
+	// Routing status — cheap to fetch (one Caddy GET per service
+	// hostname, one DNS lookup per hostname). Runs unconditionally so
+	// users see it whenever they `devm status`. On error we leave
+	// Routing zero-valued; the format layer renders that as
+	// proxy-unreachable without breaking the rest of status.
+	if routing, err := router.Inspect(context.Background(), cfg); err == nil {
+		res.Routing = routing
+	}
+
 	state := sb.State()
 	if state == "" {
 		res.State = "absent"
