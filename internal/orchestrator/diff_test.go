@@ -226,7 +226,7 @@ func TestComputeIdentityChange(t *testing.T) {
 
 func TestComputeAllChanges_NoOp(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Project: schema.Project{ID: "p", SandboxName: "p"},
 		Services: map[string]schema.Service{
 			"api": {Port: 8080, Env: map[string]string{"X": "y"}},
 		},
@@ -265,7 +265,7 @@ func TestComputeTemplateChanges_NewTemplate(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".devm/templates"), 0o755))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Project: schema.Project{ID: "p", SandboxName: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -284,7 +284,7 @@ func TestComputeTemplateChanges_NoChanges(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x {{.Project.ID}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Project: schema.Project{ID: "p", SandboxName: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -303,7 +303,7 @@ func TestComputeTemplateChanges_ContentChanged(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("v1 {{.Project.ID}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Project: schema.Project{ID: "p", SandboxName: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -325,7 +325,7 @@ func TestComputeTemplateChanges_Removed(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x"), 0o644))
 
 	cfg1 := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Project: schema.Project{ID: "p", SandboxName: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -352,7 +352,7 @@ func TestComputeAllChanges_IncludesTemplates(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".devm/templates"), 0o755))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Project: schema.Project{ID: "p", SandboxName: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},

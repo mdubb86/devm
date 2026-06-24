@@ -12,7 +12,7 @@ import (
 
 func statusMinimalCfg() schema.Config {
 	return schema.Config{
-		Project: schema.Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local", PortOffset: 50000},
+		Project: schema.Project{ID: "x", SandboxName: "x-sbx", PortOffset: 50000},
 	}
 }
 

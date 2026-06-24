@@ -13,9 +13,6 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 		if override.Project.SandboxName != nil {
 			out.Project.SandboxName = *override.Project.SandboxName
 		}
-		if override.Project.HostnameApex != nil {
-			out.Project.HostnameApex = *override.Project.HostnameApex
-		}
 		if override.Project.PortOffset != nil {
 			out.Project.PortOffset = *override.Project.PortOffset
 		}

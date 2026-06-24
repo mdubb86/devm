@@ -20,7 +20,6 @@ func TestLoadBaseOnly(t *testing.T) {
 project:
   id: test
   sandbox_name: test-sbx
-  hostname_apex: test.local
 base_image:
   docker: true
 services:
@@ -41,7 +40,6 @@ func TestLoadWithOverride(t *testing.T) {
 project:
   id: test
   sandbox_name: test-sbx
-  hostname_apex: test.local
   port_offset: 0
 base_image:
   docker: true
@@ -62,7 +60,6 @@ func TestLoadResolvesEnvAndInjectsWorkspaceAndIsSandbox(t *testing.T) {
 project:
   id: test
   sandbox_name: test-sbx
-  hostname_apex: test.local
 base_image:
   docker: true
 env:
@@ -85,7 +82,6 @@ func TestLoadReportsReservedEnvKeyError(t *testing.T) {
 project:
   id: test
   sandbox_name: test-sbx
-  hostname_apex: test.local
 base_image:
   docker: true
 env:

@@ -29,7 +29,6 @@ class Workspace:
             "project": {
                 "id": self.slug,
                 "sandbox_name": self.sandbox_name,
-                "hostname_apex": f"{self.slug}.local",
                 "port_offset": self.port_offset,
             },
             "base_image": {"docker": False},

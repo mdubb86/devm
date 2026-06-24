@@ -10,7 +10,7 @@ import (
 
 func TestMergeOverridesProjectPortOffset(t *testing.T) {
 	base := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p-sbx", HostnameApex: "p.local", PortOffset: 0},
+		Project: schema.Project{ID: "p", SandboxName: "p-sbx", PortOffset: 0},
 	}
 	off := 50
 	override := schema.ConfigOverride{
@@ -24,7 +24,7 @@ func TestMergeOverridesProjectPortOffset(t *testing.T) {
 
 func TestMergeOverridesService(t *testing.T) {
 	base := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p-sbx", HostnameApex: "p.local"},
+		Project: schema.Project{ID: "p", SandboxName: "p-sbx"},
 		Services: map[string]schema.Service{
 			"webapp": {Port: 3000, Hostname: "p.local"},
 		},
@@ -43,7 +43,7 @@ func TestMergeOverridesService(t *testing.T) {
 
 func TestMergeServiceEnvPreservesBaseWhenOverrideAbsent(t *testing.T) {
 	base := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p-sbx", HostnameApex: "p.local"},
+		Project: schema.Project{ID: "p", SandboxName: "p-sbx"},
 		Services: map[string]schema.Service{
 			"webapp": {Port: 3000, Env: map[string]string{"LOG_LEVEL": "debug"}},
 		},
@@ -60,7 +60,7 @@ func TestMergeServiceEnvPreservesBaseWhenOverrideAbsent(t *testing.T) {
 
 func TestMergeServiceEnvMergesKeys(t *testing.T) {
 	base := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p-sbx", HostnameApex: "p.local"},
+		Project: schema.Project{ID: "p", SandboxName: "p-sbx"},
 		Services: map[string]schema.Service{
 			"webapp": {Port: 3000, Env: map[string]string{"LOG_LEVEL": "debug"}},
 		},

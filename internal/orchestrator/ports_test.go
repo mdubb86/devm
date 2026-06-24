@@ -128,10 +128,9 @@ func (s *scriptedRunner) RunStdin(stdin, name string, args ...string) error {
 func cfgWith(services map[string]schema.Service, portOffset int) schema.Config {
 	return schema.Config{
 		Project: schema.Project{
-			ID:           "x",
-			SandboxName:  "x-sbx",
-			HostnameApex: "x.local",
-			PortOffset:   portOffset,
+			ID:          "x",
+			SandboxName: "x-sbx",
+			PortOffset:  portOffset,
 		},
 		Services: services,
 	}

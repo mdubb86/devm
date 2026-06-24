@@ -10,7 +10,7 @@ Top-level fields (all optional unless noted):
 
 | Field | Type | Purpose |
 |---|---|---|
-| `project` | object (REQUIRED) | `id`, `sandbox_name`, `hostname_apex`, optional `port_offset` |
+| `project` | object (REQUIRED) | `id`, `sandbox_name`, optional `port_offset` |
 | `base_image` | object | `docker: bool` — true for the docker-templates:shell-docker image |
 | `network` | object | `allowed_domains: [string]` — domain allowlist |
 | `env` | map[string]string | Project-wide env vars. Substitution: `$WORKSPACE` expands to repo root. Reserved keys: `WORKSPACE`, `IS_SANDBOX`. |

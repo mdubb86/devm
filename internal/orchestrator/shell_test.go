@@ -120,7 +120,7 @@ func (r *stateRunner) RunStdin(stdin, name string, args ...string) error {
 
 func minimalCfg() schema.Config {
 	return schema.Config{
-		Project:  schema.Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local", PortOffset: 60000},
+		Project:  schema.Project{ID: "x", SandboxName: "x-sbx", PortOffset: 60000},
 		Services: map[string]schema.Service{},
 	}
 }

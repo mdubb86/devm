@@ -111,9 +111,8 @@ func TestServiceValidate(t *testing.T) {
 func TestConfigValidate(t *testing.T) {
 	c := Config{
 		Project: Project{
-			ID:           "test",
-			SandboxName:  "test-sbx",
-			HostnameApex: "test.local",
+			ID:          "test",
+			SandboxName: "test-sbx",
 		},
 		BaseImage: BaseImage{Docker: true},
 		Network:   Network{AllowedDomains: []string{"github.com"}},
@@ -151,7 +150,7 @@ func TestConfigValidate(t *testing.T) {
 
 func TestConfigValidatesPortRange(t *testing.T) {
 	base := Config{
-		Project: Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Project: Project{ID: "p", SandboxName: "p"},
 	}
 
 	// port_offset + canonical exceeds 65535 → error.
@@ -199,7 +198,7 @@ func TestStartupCommandRequiresNonEmptyCommand(t *testing.T) {
 
 func TestConfigValidatesInstallSteps(t *testing.T) {
 	cfg := Config{
-		Project:   Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Project:   Project{ID: "x", SandboxName: "x-sbx"},
 		BaseImage: BaseImage{Docker: false},
 		Install: []string{
 			"", // invalid
@@ -348,7 +347,7 @@ func TestServiceResolveBind(t *testing.T) {
 
 func TestConfigValidateRejectsEmptyMountEntry(t *testing.T) {
 	cfg := Config{
-		Project: Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Project: Project{ID: "x", SandboxName: "x-sbx"},
 		Mounts:  []string{"/etc/hosts", ""},
 	}
 	err := cfg.Validate()
@@ -363,7 +362,7 @@ func TestConfigValidateWithRootChecksExistence(t *testing.T) {
 
 	// Existing path passes.
 	cfg := Config{
-		Project: Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Project: Project{ID: "x", SandboxName: "x-sbx"},
 		Mounts:  []string{existing + ":ro"},
 	}
 	require.NoError(t, cfg.ValidateWithRoot(tmp))
@@ -376,7 +375,7 @@ func TestConfigValidateWithRootChecksExistence(t *testing.T) {
 
 	// Relative path resolves against projectRoot.
 	relCfg := Config{
-		Project: Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Project: Project{ID: "x", SandboxName: "x-sbx"},
 		Mounts:  []string{"real:ro"},
 	}
 	require.NoError(t, relCfg.ValidateWithRoot(tmp))
@@ -391,6 +390,19 @@ func TestServiceMayHaveOnlyStartup(t *testing.T) {
 	}
 	err := svc.Validate()
 	assert.NoError(t, err, "a service with only startup commands should be valid")
+}
+
+func TestProject_HostnameApex_MigrationError(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  id: foo
+  sandbox_name: foo-sbx
+  hostname_apex: foo.local
+`)
+	err := CheckLegacyKeys(yamlBlob)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hostname_apex is no longer supported")
+	assert.Contains(t, err.Error(), "HOSTNAME_APEX")
 }
 
 func TestTemplateValidate(t *testing.T) {

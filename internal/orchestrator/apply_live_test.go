@@ -155,7 +155,7 @@ func TestApplyLive_TemplateChange_InvokesDispatcher(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("hello\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p", HostnameApex: "p.local"},
+		Project: schema.Project{ID: "p", SandboxName: "p"},
 		Services: map[string]schema.Service{
 			"web": {Port: 80, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 			"api": {Port: 81, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/bar"}}},

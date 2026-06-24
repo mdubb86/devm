@@ -26,10 +26,9 @@ type TemplateData struct {
 
 // ProjectData mirrors schema.Project fields useful to templates.
 type ProjectData struct {
-	ID           string
-	SandboxName  string
-	HostnameApex string
-	PortOffset   int
+	ID          string
+	SandboxName string
+	PortOffset  int
 }
 
 // ServiceData mirrors schema.Service fields useful to templates plus
@@ -108,10 +107,9 @@ func buildTemplateData(cfg schema.Config) TemplateData {
 	}
 	return TemplateData{
 		Project: ProjectData{
-			ID:           cfg.Project.ID,
-			SandboxName:  cfg.Project.SandboxName,
-			HostnameApex: cfg.Project.HostnameApex,
-			PortOffset:   cfg.Project.PortOffset,
+			ID:          cfg.Project.ID,
+			SandboxName: cfg.Project.SandboxName,
+			PortOffset:  cfg.Project.PortOffset,
 		},
 		Service: svcData,
 		Env:     pEnv,

@@ -14,7 +14,7 @@ import (
 
 func reconcileMinimalCfg() schema.Config {
 	return schema.Config{
-		Project: schema.Project{ID: "x", SandboxName: "x", HostnameApex: "x.local", PortOffset: 50000},
+		Project: schema.Project{ID: "x", SandboxName: "x", PortOffset: 50000},
 	}
 }
 

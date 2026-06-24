@@ -3,10 +3,9 @@ package schema
 import "gopkg.in/yaml.v3"
 
 type ProjectOverride struct {
-	ID           *string `yaml:"id,omitempty"`
-	SandboxName  *string `yaml:"sandbox_name,omitempty"`
-	HostnameApex *string `yaml:"hostname_apex,omitempty"`
-	PortOffset   *int    `yaml:"port_offset,omitempty"`
+	ID          *string `yaml:"id,omitempty"`
+	SandboxName *string `yaml:"sandbox_name,omitempty"`
+	PortOffset  *int    `yaml:"port_offset,omitempty"`
 }
 
 type BaseImageOverride struct {

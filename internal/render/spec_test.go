@@ -45,7 +45,7 @@ func parseSpec(t *testing.T, raw string) parsedSpec {
 
 func TestSpecYAMLKitEnvDoesNotContainIsSandbox(t *testing.T) {
 	cfg := schema.Config{
-		Project:   schema.Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Project:   schema.Project{ID: "x", SandboxName: "x-sbx"},
 		BaseImage: schema.BaseImage{Docker: true},
 	}
 	out := SpecYAML(cfg, "/tmp/x")
@@ -59,9 +59,8 @@ func TestSpecYAMLKitEnvDoesNotContainIsSandbox(t *testing.T) {
 func TestSpecYAMLBasic(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{
-			ID:           "test",
-			SandboxName:  "test-sbx",
-			HostnameApex: "test.local",
+			ID:          "test",
+			SandboxName: "test-sbx",
 		},
 		BaseImage: schema.BaseImage{Docker: true},
 		Network:   schema.Network{AllowedDomains: []string{"github.com", "claude.ai"}},
@@ -95,7 +94,7 @@ func TestSpecYAMLBasic(t *testing.T) {
 
 func TestSpecYAMLNonDockerBaseUsesShellTemplate(t *testing.T) {
 	cfg := schema.Config{
-		Project:   schema.Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Project:   schema.Project{ID: "x", SandboxName: "x-sbx"},
 		BaseImage: schema.BaseImage{Docker: false},
 	}
 	out := SpecYAML(cfg, "/tmp/x")
@@ -109,7 +108,7 @@ func TestSpecYAMLNonDockerBaseUsesShellTemplate(t *testing.T) {
 func minimalConfig(t *testing.T) schema.Config {
 	t.Helper()
 	return schema.Config{
-		Project:   schema.Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Project:   schema.Project{ID: "x", SandboxName: "x-sbx"},
 		BaseImage: schema.BaseImage{Docker: false},
 	}
 }
@@ -282,7 +281,7 @@ func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
 
 func TestSpecYAML_HasInstallTemplatesStartupStep(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Project: schema.Project{ID: "x", SandboxName: "x-sbx"},
 	}
 	out := SpecYAML(cfg, "/tmp")
 	require.Contains(t, out, "install-templates.sh")

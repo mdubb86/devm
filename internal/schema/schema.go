@@ -248,10 +248,9 @@ func (s Service) Validate() error {
 }
 
 type Project struct {
-	ID           string `yaml:"id"`
-	SandboxName  string `yaml:"sandbox_name"`
-	HostnameApex string `yaml:"hostname_apex"`
-	PortOffset   int    `yaml:"port_offset,omitempty"`
+	ID          string `yaml:"id"`
+	SandboxName string `yaml:"sandbox_name"`
+	PortOffset  int    `yaml:"port_offset,omitempty"`
 }
 
 func (p Project) Validate() error {
@@ -261,8 +260,32 @@ func (p Project) Validate() error {
 	if p.SandboxName == "" {
 		return fmt.Errorf("project.sandbox_name is required")
 	}
-	if p.HostnameApex == "" {
-		return fmt.Errorf("project.hostname_apex is required")
+	return nil
+}
+
+// CheckLegacyKeys scans raw devm.yaml bytes for fields that were once
+// supported but have since been removed, returning a migration-pointer
+// error rather than letting yaml.Unmarshal silently drop the value.
+//
+// Run BEFORE the typed unmarshal so the user sees the migration message
+// instead of a downstream validation error.
+func CheckLegacyKeys(data []byte) error {
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		// Not a migration concern; let the typed parse surface the real
+		// syntax error.
+		return nil
+	}
+	proj, ok := raw["project"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, hasApex := proj["hostname_apex"]; hasApex {
+		return fmt.Errorf(
+			"project.hostname_apex is no longer supported. " +
+				"Move the value into env: HOSTNAME_APEX and update " +
+				"templates from {{.Project.HostnameApex}} to " +
+				"{{.Env.HOSTNAME_APEX}}.")
 	}
 	return nil
 }

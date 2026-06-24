@@ -13,7 +13,7 @@ import (
 func TestWriteDevmDir(t *testing.T) {
 	dir := t.TempDir()
 	cfg := schema.Config{
-		Project:   schema.Project{ID: "x", SandboxName: "x-sbx", HostnameApex: "x.local"},
+		Project:   schema.Project{ID: "x", SandboxName: "x-sbx"},
 		BaseImage: schema.BaseImage{Docker: true},
 		Services: map[string]schema.Service{
 			"webapp": {Port: 3000, Hostname: "x.local"},
@@ -66,7 +66,7 @@ func TestWriteDevmDir_TemplatesDirPopulated(t *testing.T) {
 		[]byte("hello {{.Project.ID}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project:   schema.Project{ID: "myproj", SandboxName: "myproj-sbx", HostnameApex: "myproj.local", PortOffset: 50000},
+		Project:   schema.Project{ID: "myproj", SandboxName: "myproj-sbx", PortOffset: 50000},
 		BaseImage: schema.BaseImage{Docker: false},
 		Services: map[string]schema.Service{
 			"web": {Port: 80, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
@@ -123,7 +123,7 @@ func TestWriteDevmDir_StaleTemplateRemoved(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "x", SandboxName: "x", HostnameApex: "x.local"},
+		Project: schema.Project{ID: "x", SandboxName: "x"},
 		Services: map[string]schema.Service{
 			"web": {Port: 80, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
