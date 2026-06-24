@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/router"
 	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/stretchr/testify/assert"
 )
@@ -89,6 +90,65 @@ func TestFormatReconcileJSON(t *testing.T) {
 	assert.Equal(t, "needs_approval", parsed["next_action"])
 	rec := parsed["recreate_required"].(map[string]any)
 	assert.Equal(t, "stop_shell", rec["flavor"])
+}
+
+func TestFormatStatusText_ProxyNone(t *testing.T) {
+	res := StatusResult{
+		Routing: router.RoutingStatus{Proxy: "none"},
+	}
+	text := FormatStatusText(res)
+	assert.Contains(t, text, "proxy: none (devm route disabled)")
+}
+
+func TestFormatStatusText_ProxyCaddyUnreachable(t *testing.T) {
+	res := StatusResult{
+		Routing: router.RoutingStatus{Proxy: "caddy", ProxyReachable: false},
+	}
+	text := FormatStatusText(res)
+	assert.Contains(t, text, "proxy: caddy (unreachable")
+}
+
+func TestFormatStatusText_NoRoutes(t *testing.T) {
+	res := StatusResult{
+		Routing: router.RoutingStatus{Proxy: "caddy", ProxyReachable: true, Mode: ""},
+	}
+	text := FormatStatusText(res)
+	assert.Contains(t, text, "mode: (no routes)")
+}
+
+func TestFormatStatusText_VMMode_WithRoutes(t *testing.T) {
+	res := StatusResult{
+		Routing: router.RoutingStatus{
+			Proxy: "caddy", ProxyReachable: true, Mode: "vm",
+			Routes: []router.RouteStatus{
+				{Hostname: "api.foo.local", Dial: "localhost:55432", Mode: "vm", Resolves: true},
+				{Hostname: "app.foo.local", Dial: "localhost:53000", Mode: "vm", Resolves: false},
+			},
+		},
+	}
+	text := FormatStatusText(res)
+	assert.Contains(t, text, "mode:")
+	assert.Contains(t, text, "vm")
+	assert.Contains(t, text, "api.foo.local")
+	assert.Contains(t, text, "localhost:55432")
+	assert.Contains(t, text, "✓ resolves")
+	assert.Contains(t, text, "✗ no resolution")
+}
+
+func TestFormatStatusText_MixedMode_TagsRoutes(t *testing.T) {
+	res := StatusResult{
+		Routing: router.RoutingStatus{
+			Proxy: "caddy", ProxyReachable: true, Mode: "mixed (drift)",
+			Routes: []router.RouteStatus{
+				{Hostname: "api.foo.local", Dial: "localhost:55432", Mode: "vm", Resolves: true},
+				{Hostname: "app.foo.local", Dial: "localhost:3000", Mode: "local", Resolves: true},
+			},
+		},
+	}
+	text := FormatStatusText(res)
+	assert.Contains(t, text, "mixed (drift)")
+	assert.Contains(t, text, "(vm)")
+	assert.Contains(t, text, "(local)")
 }
 
 func TestFormatChange_Template(t *testing.T) {

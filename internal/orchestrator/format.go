@@ -74,6 +74,40 @@ func FormatStatusText(r StatusResult) string {
 	for _, d := range r.Drift {
 		fmt.Fprintf(&b, "Drift: %s — %s\n", d.Kind, d.Detail)
 	}
+	b.WriteString(formatRouting(r.Routing))
+	return b.String()
+}
+
+func formatRouting(r router.RoutingStatus) string {
+	var b strings.Builder
+	b.WriteString("\nRouting:\n")
+	if r.Proxy == "none" {
+		b.WriteString("  proxy: none (devm route disabled)\n")
+		return b.String()
+	}
+	if !r.ProxyReachable {
+		b.WriteString("  proxy: caddy (unreachable at http://localhost:2019)\n")
+		return b.String()
+	}
+	b.WriteString("  proxy:   caddy\n")
+	if r.Mode == "" {
+		b.WriteString("  mode: (no routes)\n")
+		return b.String()
+	}
+	fmt.Fprintf(&b, "  mode:    %s\n", r.Mode)
+	b.WriteString("  routes:\n")
+	for _, route := range r.Routes {
+		resolveTag := "✓ resolves"
+		if !route.Resolves {
+			resolveTag = "✗ no resolution"
+		}
+		modeTag := ""
+		if r.Mode == "mixed (drift)" {
+			modeTag = fmt.Sprintf("  (%s)", route.Mode)
+		}
+		fmt.Fprintf(&b, "    %-25s → %-22s %s%s\n",
+			route.Hostname, route.Dial, resolveTag, modeTag)
+	}
 	return b.String()
 }
 
@@ -124,11 +158,12 @@ func FormatStatusJSON(r StatusResult) string {
 		Detail string `json:"detail"`
 	}
 	type body struct {
-		Sandbox        string  `json:"sandbox"`
-		State          string  `json:"state"`
-		Sessions       []sess  `json:"sessions"`
-		PendingChanges pending `json:"pending_changes"`
-		Drift          []drift `json:"drift"`
+		Sandbox        string               `json:"sandbox"`
+		State          string               `json:"state"`
+		Sessions       []sess               `json:"sessions"`
+		PendingChanges pending              `json:"pending_changes"`
+		Drift          []drift              `json:"drift"`
+		Routing        router.RoutingStatus `json:"routing"`
 	}
 	sessions := make([]sess, len(r.Sessions))
 	for i, s := range r.Sessions {
@@ -142,6 +177,7 @@ func FormatStatusJSON(r StatusResult) string {
 		Sandbox: r.Sandbox, State: r.State, Sessions: sessions,
 		PendingChanges: pending{Live: r.PendingLive, Recreate: r.PendingRecreate},
 		Drift:          drifts,
+		Routing:        r.Routing,
 	}
 	out, _ := json.MarshalIndent(b, "", "  ")
 	return string(out)
