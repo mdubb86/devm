@@ -114,3 +114,61 @@ func (c *Client) EnsureServer() (string, error) {
 func listenMatchesPort80(s string) bool {
 	return len(s) >= 3 && s[len(s)-3:] == ":80"
 }
+
+// HostMapping is a single hostname → dial-port mapping for Caddy.
+type HostMapping struct {
+	Hostname string
+	DialPort int
+}
+
+const routeIDPrefix = "devm" // full prefix is devm.<projectID>.route.<hostname>
+
+func routeID(projectID, hostname string) string {
+	return fmt.Sprintf("%s.%s.route.%s", routeIDPrefix, projectID, hostname)
+}
+
+// Apply registers the given hostname → dial-port mappings in the
+// named server's routes. For each mapping, if a route with the
+// matching @id already exists, PATCH it in place; otherwise POST a
+// new one to the server's routes array.
+func (c *Client) Apply(serverName, projectID string, mappings []HostMapping) error {
+	for _, m := range mappings {
+		id := routeID(projectID, m.Hostname)
+		body := map[string]any{
+			"@id":   id,
+			"match": []map[string]any{{"host": []string{m.Hostname}}},
+			"handle": []map[string]any{{
+				"handler": "reverse_proxy",
+				"upstreams": []map[string]any{
+					{"dial": fmt.Sprintf("localhost:%d", m.DialPort)},
+				},
+			}},
+			"terminal": true,
+		}
+		// Check existence by @id.
+		existsStatus, _, err := c.do("GET", "/id/"+id, nil)
+		if err != nil {
+			return err
+		}
+		if existsStatus < 300 {
+			status, text, err := c.do("PATCH", "/id/"+id, body)
+			if err != nil {
+				return err
+			}
+			if status >= 300 {
+				return fmt.Errorf("PATCH route %s: %d %s", id, status, text)
+			}
+			continue
+		}
+		// POST to append.
+		status, text, err := c.do("POST",
+			"/config/apps/http/servers/"+serverName+"/routes", body)
+		if err != nil {
+			return err
+		}
+		if status >= 300 {
+			return fmt.Errorf("POST route %s: %d %s", id, status, text)
+		}
+	}
+	return nil
+}

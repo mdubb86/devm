@@ -91,3 +91,55 @@ func TestEnsureServer_CreatesDevmServerIfNoneOn80(t *testing.T) {
 	assert.Equal(t, "devm", name)
 	assert.Equal(t, 1, puts)
 }
+
+func TestApply_POSTs_NewRoute(t *testing.T) {
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/id/"):
+			w.WriteHeader(404) // route doesn't exist yet
+		case r.Method == "POST" && r.URL.Path == "/config/apps/http/servers/devm/routes":
+			posts++
+			buf, _ := io.ReadAll(r.Body)
+			body := string(buf)
+			assert.Contains(t, body, `"@id":"devm.foo.route.api.foo.local"`)
+			assert.Contains(t, body, `"host":["api.foo.local"]`)
+			assert.Contains(t, body, `"dial":"localhost:55432"`)
+			w.WriteHeader(200)
+		default:
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewWithURL(srv.URL)
+	err := c.Apply("devm", "foo", []HostMapping{
+		{Hostname: "api.foo.local", DialPort: 55432},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, posts)
+}
+
+func TestApply_PATCHes_ExistingRoute(t *testing.T) {
+	var patches int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/id/devm.foo.route.api.foo.local":
+			w.WriteHeader(200) // exists
+			w.Write([]byte(`{}`))
+		case r.Method == "PATCH" && r.URL.Path == "/id/devm.foo.route.api.foo.local":
+			patches++
+			w.WriteHeader(200)
+		default:
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewWithURL(srv.URL)
+	err := c.Apply("devm", "foo", []HostMapping{
+		{Hostname: "api.foo.local", DialPort: 55432},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, patches)
+}
