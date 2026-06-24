@@ -275,6 +275,52 @@ func (p Project) Validate() error {
 	return nil
 }
 
+// CheckUnknownKeys scans raw devm.yaml bytes for keys that aren't
+// part of the schema and returns an error listing them. Catches the
+// silent-failure class where a user mistypes a key or pastes an
+// example from an old version. Run alongside CheckLegacyKeys before
+// the typed unmarshal.
+//
+// Checks top-level keys + project-block keys. Per-service shape has
+// more legitimate variation (kit-passthrough fields could grow) so
+// it's not validated here.
+func CheckUnknownKeys(data []byte) error {
+	knownTop := []string{
+		"project", "base_image", "network", "env",
+		"services", "install", "mounts", "path",
+	}
+	knownProject := []string{
+		"id", "sandbox_name", "port_offset", "proxy", "host_resolver",
+	}
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil // typed unmarshal will surface the parse error
+	}
+	if err := rejectUnknown(raw, knownTop, "top-level"); err != nil {
+		return err
+	}
+	if proj, ok := raw["project"].(map[string]any); ok {
+		if err := rejectUnknown(proj, knownProject, "project"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rejectUnknown(m map[string]any, known []string, scope string) error {
+	knownSet := make(map[string]bool, len(known))
+	for _, k := range known {
+		knownSet[k] = true
+	}
+	for k := range m {
+		if !knownSet[k] {
+			return fmt.Errorf("unknown field %q at %s — valid: %s",
+				k, scope, strings.Join(known, ", "))
+		}
+	}
+	return nil
+}
+
 // CheckLegacyKeys scans raw devm.yaml bytes for fields that were once
 // supported but have since been removed, returning a migration-pointer
 // error rather than letting yaml.Unmarshal silently drop the value.

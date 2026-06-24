@@ -453,6 +453,70 @@ project:
 	assert.Contains(t, err.Error(), "HOSTNAME_APEX")
 }
 
+func TestCheckUnknownKeys_TopLevel_Rejected(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  id: foo
+  sandbox_name: foo-sbx
+volumes:
+  /data: 1G
+`)
+	err := CheckUnknownKeys(yamlBlob)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown field`)
+	assert.Contains(t, err.Error(), `volumes`)
+	// Valid fields should be listed (so the user knows what IS allowed).
+	assert.Contains(t, err.Error(), `services`)
+}
+
+func TestCheckUnknownKeys_ProjectLevel_Rejected(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  id: foo
+  sandbox_name: foo-sbx
+  proxie: caddy
+`)
+	err := CheckUnknownKeys(yamlBlob)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown field`)
+	assert.Contains(t, err.Error(), `proxie`)
+}
+
+func TestCheckUnknownKeys_AllValidFields_Accepted(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  id: foo
+  sandbox_name: foo-sbx
+  port_offset: 50000
+  proxy: caddy
+  host_resolver: snippet
+base_image:
+  docker: false
+network:
+  allowed_domains: [github.com]
+env:
+  EDITOR: vim
+services:
+  api:
+    port: 8080
+install:
+  - true
+mounts:
+  - ~/.aws:ro
+path:
+  - $WORKSPACE/bin
+`)
+	require.NoError(t, CheckUnknownKeys(yamlBlob))
+}
+
+func TestCheckUnknownKeys_EmptyAndMinimal_Accepted(t *testing.T) {
+	require.NoError(t, CheckUnknownKeys([]byte("")))
+	require.NoError(t, CheckUnknownKeys([]byte(`project:
+  id: foo
+  sandbox_name: foo-sbx
+`)))
+}
+
 func TestTemplateValidate(t *testing.T) {
 	// Valid.
 	ok := Template{Source: "configs/foo.tmpl", Output: "/etc/foo"}

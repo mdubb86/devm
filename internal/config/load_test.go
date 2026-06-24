@@ -133,6 +133,44 @@ project:
 		"error should identify the override file as offending")
 }
 
+func TestLoad_RejectsUnknownTopLevelField_InBase(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  id: foo
+  sandbox_name: foo-sbx
+volumes:
+  /data: 1G
+`)
+
+	_, err := Load(dir)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown field`)
+	assert.Contains(t, err.Error(), `volumes`)
+	assert.Contains(t, err.Error(), `devm.yaml`,
+		"error should identify which file is offending")
+}
+
+func TestLoad_RejectsUnknownTopLevelField_InOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  id: foo
+  sandbox_name: foo-sbx
+base_image:
+  docker: true
+`)
+	writeFile(t, dir, "devm.me.yaml", `
+volumes:
+  /data: 1G
+`)
+
+	_, err := Load(dir)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown field`)
+	assert.Contains(t, err.Error(), `devm.me.yaml`)
+}
+
 func TestLoadStrictFailsOnMissingRequiredField(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `

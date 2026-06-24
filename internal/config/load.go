@@ -21,6 +21,9 @@ func Load(dir string) (schema.Config, error) {
 	if err := schema.CheckLegacyKeys(baseBytes); err != nil {
 		return schema.Config{}, fmt.Errorf("%s: %w", basePath, err)
 	}
+	if err := schema.CheckUnknownKeys(baseBytes); err != nil {
+		return schema.Config{}, fmt.Errorf("%s: %w", basePath, err)
+	}
 	var base schema.Config
 	if err := yaml.Unmarshal(baseBytes, &base); err != nil {
 		return schema.Config{}, fmt.Errorf("parse %s: %w", basePath, err)
@@ -37,6 +40,9 @@ func Load(dir string) (schema.Config, error) {
 			return schema.Config{}, fmt.Errorf("read %s: %w", overridePath, err)
 		}
 		if err := schema.CheckLegacyKeys(ovBytes); err != nil {
+			return schema.Config{}, fmt.Errorf("%s: %w", overridePath, err)
+		}
+		if err := schema.CheckUnknownKeys(ovBytes); err != nil {
 			return schema.Config{}, fmt.Errorf("%s: %w", overridePath, err)
 		}
 		if err := yaml.Unmarshal(ovBytes, &override); err != nil {
