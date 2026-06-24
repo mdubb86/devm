@@ -143,3 +143,62 @@ func TestApply_PATCHes_ExistingRoute(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, patches)
 }
+
+func TestRemove_DeletesProjectRoutes_KeepsServerIfOthers(t *testing.T) {
+	var deletes []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/id/devm.server":
+			w.WriteHeader(200)
+			w.Write([]byte(`{}`))
+		case r.Method == "DELETE":
+			deletes = append(deletes, r.URL.Path)
+			w.WriteHeader(200)
+		case r.Method == "GET" && r.URL.Path == "/config/apps/http/servers":
+			// devm.server still has another project's route, so we
+			// should NOT delete the server.
+			w.WriteHeader(200)
+			w.Write([]byte(`{"devm":{"routes":[{"@id":"devm.otherproj.route.x.local"}]}}`))
+		default:
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewWithURL(srv.URL)
+	hostnames := []string{"api.foo.local"}
+	err := c.Remove("foo", hostnames)
+	require.NoError(t, err)
+	assert.Contains(t, deletes, "/id/devm.foo.route.api.foo.local")
+	// devm.server NOT deleted because otherproj still has routes.
+	for _, d := range deletes {
+		assert.NotEqual(t, "/id/devm.server", d, "should not delete devm.server")
+	}
+}
+
+func TestRemove_DeletesServerIfWeOwnIt_AndNoOtherDevmRoutes(t *testing.T) {
+	var deletes []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/id/devm.server":
+			w.WriteHeader(200)
+			w.Write([]byte(`{}`))
+		case r.Method == "DELETE":
+			deletes = append(deletes, r.URL.Path)
+			w.WriteHeader(200)
+		case r.Method == "GET" && r.URL.Path == "/config/apps/http/servers":
+			// devm.server empty after removing foo's routes.
+			w.WriteHeader(200)
+			w.Write([]byte(`{"devm":{"routes":[]}}`))
+		default:
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewWithURL(srv.URL)
+	err := c.Remove("foo", []string{"api.foo.local"})
+	require.NoError(t, err)
+	assert.Contains(t, deletes, "/id/devm.foo.route.api.foo.local")
+	assert.Contains(t, deletes, "/id/devm.server")
+}

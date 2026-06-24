@@ -127,6 +127,46 @@ func routeID(projectID, hostname string) string {
 	return fmt.Sprintf("%s.%s.route.%s", routeIDPrefix, projectID, hostname)
 }
 
+// Remove deletes all devm-owned routes for the given projectID. If
+// devm.server exists and no devm-owned routes remain in any server,
+// also delete devm.server.
+func (c *Client) Remove(projectID string, hostnames []string) error {
+	for _, h := range hostnames {
+		id := routeID(projectID, h)
+		// Best-effort: tolerate 404 (already gone).
+		c.do("DELETE", "/id/"+id, nil)
+	}
+	// Check if we own devm.server.
+	ownStatus, _, _ := c.do("GET", "/id/"+ServerID, nil)
+	if ownStatus >= 300 {
+		return nil // we don't own the server
+	}
+	// We own it; check whether any devm.*.route.* @ids still exist
+	// across all servers.
+	_, body, err := c.do("GET", "/config/apps/http/servers", nil)
+	if err != nil {
+		return err
+	}
+	var servers map[string]struct {
+		Routes []struct {
+			ID string `json:"@id"`
+		} `json:"routes"`
+	}
+	if err := json.Unmarshal([]byte(body), &servers); err != nil {
+		return fmt.Errorf("parse servers for cleanup: %w", err)
+	}
+	for _, srv := range servers {
+		for _, r := range srv.Routes {
+			if r.ID != "" && len(r.ID) >= len(routeIDPrefix)+1 &&
+				r.ID[:len(routeIDPrefix)+1] == routeIDPrefix+"." {
+				return nil // a devm route still exists; keep the server
+			}
+		}
+	}
+	c.do("DELETE", "/id/"+ServerID, nil)
+	return nil
+}
+
 // Apply registers the given hostname → dial-port mappings in the
 // named server's routes. For each mapping, if a route with the
 // matching @id already exists, PATCH it in place; otherwise POST a
