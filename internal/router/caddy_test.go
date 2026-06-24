@@ -176,6 +176,32 @@ func TestRemove_DeletesProjectRoutes_KeepsServerIfOthers(t *testing.T) {
 	}
 }
 
+func TestInspect_ReturnsDevmOwnedRoutesForProject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/id/devm.foo.route.api.foo.local":
+			w.WriteHeader(200)
+			w.Write([]byte(`{
+                "@id":"devm.foo.route.api.foo.local",
+                "match":[{"host":["api.foo.local"]}],
+                "handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"localhost:55432"}]}]
+            }`))
+		case "/id/devm.foo.route.app.foo.local":
+			w.WriteHeader(404)
+		default:
+			t.Errorf("unexpected: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewWithURL(srv.URL)
+	entries, err := c.Inspect("foo", []string{"api.foo.local", "app.foo.local"})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "api.foo.local", entries[0].Hostname)
+	assert.Equal(t, "localhost:55432", entries[0].Dial)
+}
+
 func TestRemove_DeletesServerIfWeOwnIt_AndNoOtherDevmRoutes(t *testing.T) {
 	var deletes []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -167,6 +167,43 @@ func (c *Client) Remove(projectID string, hostnames []string) error {
 	return nil
 }
 
+// RouteEntry is a single observed devm-owned route.
+type RouteEntry struct {
+	Hostname string
+	Dial     string
+}
+
+// Inspect returns the devm-owned routes for the given projectID,
+// looked up by @id for each candidate hostname. Hostnames absent from
+// Caddy are simply not present in the result.
+func (c *Client) Inspect(projectID string, hostnames []string) ([]RouteEntry, error) {
+	var out []RouteEntry
+	for _, h := range hostnames {
+		id := routeID(projectID, h)
+		status, body, err := c.do("GET", "/id/"+id, nil)
+		if err != nil {
+			return nil, err
+		}
+		if status == 404 || status >= 300 {
+			continue
+		}
+		var route struct {
+			Handle []struct {
+				Upstreams []struct {
+					Dial string `json:"dial"`
+				} `json:"upstreams"`
+			} `json:"handle"`
+		}
+		if err := json.Unmarshal([]byte(body), &route); err != nil {
+			continue
+		}
+		if len(route.Handle) > 0 && len(route.Handle[0].Upstreams) > 0 {
+			out = append(out, RouteEntry{Hostname: h, Dial: route.Handle[0].Upstreams[0].Dial})
+		}
+	}
+	return out, nil
+}
+
 // Apply registers the given hostname → dial-port mappings in the
 // named server's routes. For each mapping, if a route with the
 // matching @id already exists, PATCH it in place; otherwise POST a
