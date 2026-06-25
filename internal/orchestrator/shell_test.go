@@ -406,6 +406,64 @@ func TestRunShellAbort_Restart_DoesNotRunSbxRm(t *testing.T) {
 // fail at build time rather than at runtime). Unused locals are fine.
 var _ = sandbox.DefaultRunner{}
 
+// Regression for the cold-start ordering bug: install steps fetch from
+// external mirrors (deb.nodesource.com, etc.). Sbx default-denies, so
+// `network.allowed_domains` must be granted via `sbx policy allow`
+// BEFORE the install-gate sentinel is polled, not after.
+func TestRunShellColdStart_AppliesNetworkBeforeInstallGate(t *testing.T) {
+	repoRoot := t.TempDir()
+
+	runner := &stateRunner{
+		lsAbsent: true,
+		probeOut: "27 bash pts/1 agent\n",
+	}
+	runCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd, userCmd}}
+
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		runner.mu.Lock()
+		runner.lsAbsent = false
+		runner.lsStatus = "running"
+		runner.mu.Unlock()
+	}()
+
+	cfg := minimalCfg()
+	cfg.Network = schema.Network{AllowedDomains: []string{"deb.nodesource.com"}}
+
+	deps := ShellDeps{
+		AnchorSpawner:  spawner,
+		UserSpawner:    spawner,
+		Runner:         runner,
+		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
+		WaitForRunning: 2 * time.Second,
+		PollInterval:   20 * time.Millisecond,
+	}
+	rc, err := RunShell(context.Background(), deps, cfg, repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	policyIdx, gateIdx := -1, -1
+	for i, c := range runner.calls {
+		joined := strings.Join(c, " ")
+		if policyIdx < 0 && strings.Contains(joined, "sbx policy allow network x-sbx deb.nodesource.com") {
+			policyIdx = i
+		}
+		if gateIdx < 0 && strings.Contains(joined, "test -f /tmp/.devm-install/install-all-ok") {
+			gateIdx = i
+		}
+	}
+	require.GreaterOrEqual(t, policyIdx, 0, "sbx policy allow must be called; calls=%v", runner.calls)
+	require.GreaterOrEqual(t, gateIdx, 0, "install-gate sentinel must be polled; calls=%v", runner.calls)
+	assert.Less(t, policyIdx, gateIdx,
+		"network policy allow (idx=%d) must precede install-gate poll (idx=%d): install steps fetching from allowed domains must see the policy in place",
+		policyIdx, gateIdx)
+}
+
 func TestRunShellColdStartWritesSnapshot(t *testing.T) {
 	repoRoot := t.TempDir()
 
