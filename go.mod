@@ -6,6 +6,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/creack/pty v1.1.24
 	github.com/creativeprojects/go-selfupdate v1.5.2
+	github.com/kardianos/service v1.2.4
 	github.com/mattn/go-isatty v0.0.22
 	github.com/mdubb86/localias v0.2.0
 	github.com/oklog/run v1.2.0
