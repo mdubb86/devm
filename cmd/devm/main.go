@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/mdubb86/devm/internal/release"
+	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 // nudgeForCommand fires the "newer version available" check before
@@ -42,16 +44,20 @@ var rootCmd = &cobra.Command{
 	// errors don't trigger the help dump.
 	SilenceErrors: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		if _, ok := nudgeForCommand[cmd.Name()]; !ok {
-			return
+		if _, ok := nudgeForCommand[cmd.Name()]; ok {
+			release.MaybeNudge(
+				cmd.Context(),
+				os.Stderr,
+				Version,
+				fetchLatestForCheck,
+				release.DefaultBrewLister(),
+			)
 		}
-		release.MaybeNudge(
-			cmd.Context(),
-			os.Stderr,
-			Version,
-			fetchLatestForCheck,
-			release.DefaultBrewLister(),
-		)
+
+		// Service version-skew warning. Cheap: ~1-2ms when service is
+		// running, returns immediately when not. Soft warning only; never
+		// blocks the command.
+		checkServiceVersionSkew(cmd.Context())
 	},
 }
 
@@ -59,5 +65,22 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+// checkServiceVersionSkew prints a one-line warning if the running
+// devm service reports a different version than this CLI binary.
+// Silent when the service isn't running (no install yet, expected).
+func checkServiceVersionSkew(ctx context.Context) {
+	c := serviceapi.NewClient()
+	serviceVer, err := c.Version(ctx)
+	if err != nil {
+		return // service down; not a warning case
+	}
+	if serviceVer != Version {
+		fmt.Fprintf(os.Stderr,
+			"warning: CLI is %s but devm service is %s — run `devm restart` to pick up the new binary\n",
+			Version, serviceVer,
+		)
 	}
 }
