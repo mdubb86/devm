@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/mdubb86/devm/internal/release"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +22,7 @@ var versionCmd = &cobra.Command{
 		var latest string
 		if check {
 			latest = fetchLatestForCheck(cmd.Context())
-			if latest == Version {
+			if !release.IsNewer(latest, Version) {
 				latest = ""
 			}
 		}

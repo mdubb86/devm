@@ -79,7 +79,7 @@ func MaybeNudge(ctx context.Context, w io.Writer, currentVersion string, fetchLa
 		time.Since(time.Unix(cache.CheckedAt, 0)) < nudgeMaxAge
 
 	if cacheFresh {
-		if cache.LatestTag != currentVersion {
+		if IsNewer(cache.LatestTag, currentVersion) {
 			fmt.Fprintf(w, "devm v%s available — run `devm upgrade`\n", cache.LatestTag)
 		}
 		return
@@ -107,7 +107,7 @@ func MaybeNudge(ctx context.Context, w io.Writer, currentVersion string, fetchLa
 		CheckedAt: time.Now().Unix(),
 		LatestTag: latest,
 	})
-	if latest != currentVersion {
+	if IsNewer(latest, currentVersion) {
 		fmt.Fprintf(w, "devm v%s available — run `devm upgrade`\n", latest)
 	}
 }

@@ -101,6 +101,17 @@ func TestMaybeNudge_SilentWhenCacheFreshAndCurrent(t *testing.T) {
 	assert.Empty(t, buf.String(), "matching version must not nudge")
 }
 
+// Regression: cache fresh from when an older tag was latest, user
+// has since upgraded. Plain != would suggest a downgrade.
+func TestMaybeNudge_SilentWhenCacheFreshAndCurrentNewerThanCached(t *testing.T) {
+	clearSuppressionEnv(t)
+	pinCache(t, nudgeCache{CheckedAt: time.Now().Unix(), LatestTag: "0.3.0"})
+
+	var buf bytes.Buffer
+	MaybeNudge(context.Background(), &buf, "0.3.1", nil, nil)
+	assert.Empty(t, buf.String(), "must not nudge when current > cached latest")
+}
+
 func TestMaybeNudge_StaleCacheFetchesSyncWithSpinnerAndWritesCache(t *testing.T) {
 	clearSuppressionEnv(t)
 	// Cache older than 7 days.
@@ -156,6 +167,17 @@ func TestMaybeNudge_StaleCacheSilentIfLatestMatchesCurrent(t *testing.T) {
 	got := buf.String()
 	assert.NotContains(t, got, "available",
 		"no nudge when latest == currentVersion")
+}
+
+func TestMaybeNudge_StaleCacheSilentIfCurrentNewerThanFetched(t *testing.T) {
+	clearSuppressionEnv(t)
+	useTempCacheDir(t)
+	fetcher := func(ctx context.Context) string { return "0.3.0" }
+
+	var buf bytes.Buffer
+	MaybeNudge(context.Background(), &buf, "0.3.1", fetcher, nil)
+	assert.NotContains(t, buf.String(), "available",
+		"no nudge when fetched latest < currentVersion")
 }
 
 func TestMaybeNudge_StaleCacheWithNilFetcherIsNoop(t *testing.T) {
