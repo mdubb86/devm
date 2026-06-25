@@ -1,0 +1,89 @@
+package serviceapi
+
+import (
+	"context"
+	"net"
+
+	"github.com/miekg/dns"
+
+	"github.com/mdubb86/devm/internal/debuglog"
+)
+
+const (
+	// DNSAddr is the UDP socket the daemon listens on for *.test
+	// queries. Forwarded here by /etc/resolver/test.
+	DNSAddr = "127.0.0.1:51153"
+
+	// testTLD is the only suffix we serve. miekg/dns expects the
+	// trailing dot.
+	testTLD = "test."
+)
+
+// DNSServer is the daemon's tiny *.test resolver. Answers A queries
+// with 127.0.0.1 and AAAA with ::1; everything else gets NODATA.
+type DNSServer struct {
+	server *dns.Server
+}
+
+// NewDNSServer builds a server bound to the production DNSAddr.
+func NewDNSServer() *DNSServer {
+	return newDNSServerAt(DNSAddr)
+}
+
+// newDNSServerAt is the testable inner — tests pass an ephemeral
+// address.
+func newDNSServerAt(addr string) *DNSServer {
+	mux := dns.NewServeMux()
+	s := &DNSServer{
+		server: &dns.Server{
+			Addr:    addr,
+			Net:     "udp",
+			Handler: mux,
+		},
+	}
+	mux.HandleFunc(testTLD, s.handleTest)
+	return s
+}
+
+// Serve binds and serves until ctx is cancelled. Returns nil on
+// graceful shutdown; returns a bind error if the port is taken.
+func (s *DNSServer) Serve(ctx context.Context) error {
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.server.ListenAndServe() }()
+
+	debuglog.Logf("serviceapi", "dns server listening on %s", s.server.Addr)
+
+	select {
+	case <-ctx.Done():
+		_ = s.server.Shutdown()
+		// Drain the goroutine; it returns nil on graceful shutdown.
+		<-errCh
+		return nil
+	case err := <-errCh:
+		return err
+	}
+}
+
+func (s *DNSServer) handleTest(w dns.ResponseWriter, r *dns.Msg) {
+	msg := new(dns.Msg)
+	msg.SetReply(r)
+	msg.Authoritative = true
+	for _, q := range r.Question {
+		switch q.Qtype {
+		case dns.TypeA:
+			msg.Answer = append(msg.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 60},
+				A:   net.IPv4(127, 0, 0, 1),
+			})
+		case dns.TypeAAAA:
+			msg.Answer = append(msg.Answer, &dns.AAAA{
+				Hdr:  dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 60},
+				AAAA: net.ParseIP("::1"),
+			})
+		}
+		// All other query types fall through; Answer stays empty —
+		// the client gets NOERROR + NODATA, which is what
+		// well-behaved resolvers expect for "no record of this type".
+	}
+	_ = w.WriteMsg(msg)
+}

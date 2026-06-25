@@ -8,6 +8,7 @@ require (
 	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/kardianos/service v1.2.4
 	github.com/mattn/go-isatty v0.0.22
+	github.com/miekg/dns v1.1.72
 	github.com/oklog/run v1.2.0
 	github.com/pterm/pterm v0.12.83
 	github.com/spf13/cobra v1.10.2
@@ -46,11 +47,15 @@ require (
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	gitlab.com/gitlab-org/api/client-go v1.9.1 // indirect
-	golang.org/x/crypto v0.46.0 // indirect
+	golang.org/x/crypto v0.48.0 // indirect
+	golang.org/x/mod v0.33.0 // indirect
+	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
+	golang.org/x/tools v0.42.0 // indirect
 	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
