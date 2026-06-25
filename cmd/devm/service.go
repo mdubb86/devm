@@ -99,7 +99,35 @@ var installCmd = &cobra.Command{
 		if err := svc.Start(); err != nil {
 			return fmt.Errorf("start after install: %w", err)
 		}
-		fmt.Println("devm service installed and started.")
+
+		// DNS resolver setup — sudo only when actually needed.
+		state, err := serviceapi.CheckResolverFile()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "note: could not check %s: %v\n",
+				serviceapi.ResolverFilePath, err)
+			fmt.Println("devm service installed and started.")
+			return nil
+		}
+		switch state {
+		case serviceapi.ResolverFileMatches:
+			fmt.Println("devm service installed; DNS resolver already configured.")
+			return nil
+		case serviceapi.ResolverFileMissing:
+			fmt.Println("devm service installed.")
+			fmt.Println("Setting up DNS resolver for .test (requires sudo)...")
+		case serviceapi.ResolverFileDiverged:
+			fmt.Println("devm service installed.")
+			fmt.Printf("note: %s exists but doesn't match — overwriting (requires sudo).\n",
+				serviceapi.ResolverFilePath)
+		}
+		if err := serviceapi.WriteResolverFile(); err != nil {
+			fmt.Fprintf(os.Stderr,
+				"note: DNS not configured (%v). Re-run `devm install` to retry.\n",
+				err,
+			)
+			return nil // exit 0 — partial install is recoverable
+		}
+		fmt.Println("DNS resolver configured.")
 		return nil
 	},
 }
@@ -121,6 +149,28 @@ var uninstallCmd = &cobra.Command{
 		// Clean up any leftover socket.
 		_ = os.Remove(serviceapi.SocketPath())
 		fmt.Println("devm service uninstalled.")
+
+		// DNS resolver teardown — sudo only when our file is present.
+		state, _ := serviceapi.CheckResolverFile()
+		switch state {
+		case serviceapi.ResolverFileMatches:
+			fmt.Println("Removing DNS resolver (requires sudo)...")
+			if err := serviceapi.RemoveResolverFile(); err != nil {
+				fmt.Fprintf(os.Stderr,
+					"note: %s remains (%v).\n",
+					serviceapi.ResolverFilePath, err,
+				)
+			} else {
+				fmt.Println("DNS resolver removed.")
+			}
+		case serviceapi.ResolverFileDiverged:
+			fmt.Fprintf(os.Stderr,
+				"note: %s exists but doesn't match devm's config — leaving it.\n",
+				serviceapi.ResolverFilePath,
+			)
+		case serviceapi.ResolverFileMissing:
+			// Nothing to do.
+		}
 		return nil
 	},
 }
