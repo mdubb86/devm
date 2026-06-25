@@ -8,7 +8,6 @@ require (
 	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/kardianos/service v1.2.4
 	github.com/mattn/go-isatty v0.0.22
-	github.com/mdubb86/localias v0.2.0
 	github.com/oklog/run v1.2.0
 	github.com/pterm/pterm v0.12.83
 	github.com/spf13/cobra v1.10.2

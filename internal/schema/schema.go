@@ -248,11 +248,10 @@ func (s Service) Validate() error {
 }
 
 type Project struct {
-	ID           string `yaml:"id"`
-	SandboxName  string `yaml:"sandbox_name"`
-	PortOffset   int    `yaml:"port_offset,omitempty"`
-	Proxy        string `yaml:"proxy,omitempty"`         // "caddy" (default) or "none"
-	HostResolver string `yaml:"host_resolver,omitempty"` // "snippet" (default) or "localias"
+	ID          string `yaml:"id"`
+	SandboxName string `yaml:"sandbox_name"`
+	PortOffset  int    `yaml:"port_offset,omitempty"`
+	Proxy       string `yaml:"proxy,omitempty"` // "caddy" (default) or "none"
 }
 
 func (p Project) Validate() error {
@@ -266,11 +265,6 @@ func (p Project) Validate() error {
 	case "", "caddy", "none":
 	default:
 		return fmt.Errorf("project.proxy: must be empty, 'caddy', or 'none' (got %q)", p.Proxy)
-	}
-	switch p.HostResolver {
-	case "", "snippet", "localias":
-	default:
-		return fmt.Errorf("project.host_resolver: must be empty, 'snippet', or 'localias' (got %q)", p.HostResolver)
 	}
 	return nil
 }
@@ -290,7 +284,7 @@ func CheckUnknownKeys(data []byte) error {
 		"services", "install", "mounts", "path",
 	}
 	knownProject := []string{
-		"id", "sandbox_name", "port_offset", "proxy", "host_resolver",
+		"id", "sandbox_name", "port_offset", "proxy",
 	}
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {

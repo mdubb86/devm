@@ -291,9 +291,8 @@ func wrapBGStartup(repoRoot string, stepN int, userArgv []string) []string {
 
 // builtinDevmStartupArgv returns the argv that invokes devm-startup.sh
 // — devm's single per-sandbox-startup script. It claims VM-native
-// volumes for agent, syncs Caddyfile + restarts/reloads caddy, and
-// splices the rendered hosts.fragment into /etc/hosts. Used as the
-// user argv passed to wrap-fg.sh for startup step 1.
+// volumes for agent, syncs Caddyfile + restarts/reloads caddy. Used as
+// the user argv passed to wrap-fg.sh for startup step 1.
 func builtinDevmStartupArgv(repoRoot string) []string {
 	return []string{"bash", fmt.Sprintf("%s/.devm/scripts/devm-startup.sh", repoRoot)}
 }

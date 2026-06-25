@@ -416,30 +416,6 @@ func TestProject_Proxy_Validation(t *testing.T) {
 	}
 }
 
-func TestProject_HostResolver_Validation(t *testing.T) {
-	cases := []struct {
-		name    string
-		value   string
-		wantErr bool
-	}{
-		{"empty defaults to snippet", "", false},
-		{"snippet is valid", "snippet", false},
-		{"localias is valid", "localias", false},
-		{"unknown is invalid", "dnsmasq", true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			p := Project{ID: "x", SandboxName: "x", HostResolver: c.value}
-			err := p.Validate()
-			if c.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
 func TestProject_HostnameApex_MigrationError(t *testing.T) {
 	yamlBlob := []byte(`
 project:
@@ -489,7 +465,6 @@ project:
   sandbox_name: foo-sbx
   port_offset: 50000
   proxy: caddy
-  host_resolver: snippet
 base_image:
   docker: false
 network:

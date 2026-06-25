@@ -42,15 +42,11 @@ type RouteStatus struct {
 
 // Apply is the production entry point for `devm route local|vm`.
 func Apply(ctx context.Context, cfg schema.Config, mode Mode) error {
-	resolver, err := NewResolver(cfg)
-	if err != nil {
-		return err
-	}
-	return apply(ctx, cfg, mode, New(), resolver)
+	return apply(ctx, cfg, mode, New())
 }
 
-// apply is the testable inner: caller injects client + resolver.
-func apply(ctx context.Context, cfg schema.Config, mode Mode, client *Client, resolver Resolver) error {
+// apply is the testable inner: caller injects client.
+func apply(ctx context.Context, cfg schema.Config, mode Mode, client *Client) error {
 	if proxy := proxyOf(cfg); proxy == "none" {
 		fmt.Println("proxy disabled in project config (project.proxy: none)")
 		return nil
@@ -71,23 +67,15 @@ func apply(ctx context.Context, cfg schema.Config, mode Mode, client *Client, re
 	for _, m := range mappings {
 		fmt.Printf("  http://%s → localhost:%d\n", m.Hostname, m.DialPort)
 	}
-	hostnames := make([]string, len(mappings))
-	for i, m := range mappings {
-		hostnames[i] = m.Hostname
-	}
-	return resolver.Apply(ctx, hostnames)
+	return nil
 }
 
 // Down removes devm-owned routes for the project.
 func Down(ctx context.Context, cfg schema.Config) error {
-	resolver, err := NewResolver(cfg)
-	if err != nil {
-		return err
-	}
-	return down(ctx, cfg, New(), resolver)
+	return down(ctx, cfg, New())
 }
 
-func down(ctx context.Context, cfg schema.Config, client *Client, resolver Resolver) error {
+func down(ctx context.Context, cfg schema.Config, client *Client) error {
 	if proxy := proxyOf(cfg); proxy == "none" {
 		fmt.Println("proxy disabled in project config (project.proxy: none)")
 		return nil
@@ -97,7 +85,7 @@ func down(ctx context.Context, cfg schema.Config, client *Client, resolver Resol
 		return err
 	}
 	fmt.Fprintf(os.Stdout, "Removed %d route(s) for %s.\n", len(hostnames), cfg.Project.ID)
-	return resolver.Remove(ctx, hostnames)
+	return nil
 }
 
 // Inspect returns the current routing state for use by `devm status`.
@@ -158,14 +146,6 @@ func Inspect(ctx context.Context, cfg schema.Config) (RoutingStatus, error) {
 		out.Mode = "mixed (drift)"
 	}
 
-	// DNS resolution check.
-	unresolved := map[string]bool{}
-	for _, h := range CheckResolution(hostnames) {
-		unresolved[h] = true
-	}
-	for i := range out.Routes {
-		out.Routes[i].Resolves = !unresolved[out.Routes[i].Hostname]
-	}
 	return out, nil
 }
 

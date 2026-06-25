@@ -1,5 +1,4 @@
-// Package router implements Mac-side hostname routing via the Caddy
-// admin API plus /etc/hosts resolution (snippet print or localias).
+// Package router implements Mac-side hostname routing via the Caddy admin API.
 package router
 
 import (

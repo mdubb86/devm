@@ -74,12 +74,11 @@ func writeStaticFiles(cfg schema.Config, repoRoot string) error {
 	}
 
 	staticFiles := map[string]string{
-		filepath.Join(devmDir, "Caddyfile"):               Caddyfile(cfg),
-		filepath.Join(devmDir, "hosts.fragment"):          HostsFragment(cfg),
-		filepath.Join(devmDir, "spec.yaml"):               SpecYAML(cfg, repoRoot),
-		filepath.Join(scriptsDir, "bootstrap.sh"):         scripts.Bootstrap,
-		filepath.Join(scriptsDir, "devm-startup.sh"):       scripts.DevmStartup,
-		filepath.Join(scriptsDir, "install-templates.sh"):  scripts.InstallTemplates,
+		filepath.Join(devmDir, "Caddyfile"):              Caddyfile(cfg),
+		filepath.Join(devmDir, "spec.yaml"):              SpecYAML(cfg, repoRoot),
+		filepath.Join(scriptsDir, "bootstrap.sh"):        scripts.Bootstrap,
+		filepath.Join(scriptsDir, "devm-startup.sh"):     scripts.DevmStartup,
+		filepath.Join(scriptsDir, "install-templates.sh"): scripts.InstallTemplates,
 	}
 	for path, content := range staticFiles {
 		if err := writeFile(path, content); err != nil {

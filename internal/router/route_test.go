@@ -56,10 +56,6 @@ func TestApply_ProxyNone_IsNoOp(t *testing.T) {
 
 	// Use a nil client — if Apply tries to dereference it, we'll see
 	// a panic, which proves the proxy-none path took the early exit.
-	err := apply(context.Background(), cfg, ModeVM, nil, &snippetResolver{out: discardWriter{}, check: CheckResolution})
+	err := apply(context.Background(), cfg, ModeVM, nil)
 	require.NoError(t, err)
 }
-
-type discardWriter struct{}
-
-func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
