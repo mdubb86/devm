@@ -33,6 +33,18 @@ func RunService(ctx context.Context, version string) error {
 		})
 	}
 
+	// DNS server actor (UDP, *.test). Bind failure brings the whole
+	// daemon down — DNS is foundational for hostname routing.
+	{
+		dnsCtx, cancel := context.WithCancel(ctx)
+		dnsServer := NewDNSServer()
+		g.Add(func() error {
+			return dnsServer.Serve(dnsCtx)
+		}, func(error) {
+			cancel()
+		})
+	}
+
 	// Context-cancel actor: when ctx is cancelled (parent signal),
 	// the group returns.
 	{
