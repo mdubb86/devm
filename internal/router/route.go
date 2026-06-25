@@ -37,7 +37,6 @@ type RouteStatus struct {
 	Hostname string `json:"hostname"`
 	Dial     string `json:"dial"`
 	Mode     string `json:"mode"` // "local" | "vm" | "unknown"
-	Resolves bool   `json:"resolves"`
 }
 
 // Apply is the production entry point for `devm route local|vm`.

@@ -121,8 +121,8 @@ func TestFormatStatusText_VMMode_WithRoutes(t *testing.T) {
 		Routing: router.RoutingStatus{
 			Proxy: "caddy", ProxyReachable: true, Mode: "vm",
 			Routes: []router.RouteStatus{
-				{Hostname: "api.foo.local", Dial: "localhost:55432", Mode: "vm", Resolves: true},
-				{Hostname: "app.foo.local", Dial: "localhost:53000", Mode: "vm", Resolves: false},
+				{Hostname: "api.foo.local", Dial: "localhost:55432", Mode: "vm"},
+				{Hostname: "app.foo.local", Dial: "localhost:53000", Mode: "vm"},
 			},
 		},
 	}
@@ -131,8 +131,7 @@ func TestFormatStatusText_VMMode_WithRoutes(t *testing.T) {
 	assert.Contains(t, text, "vm")
 	assert.Contains(t, text, "api.foo.local")
 	assert.Contains(t, text, "localhost:55432")
-	assert.Contains(t, text, "✓ resolves")
-	assert.Contains(t, text, "✗ no resolution")
+	assert.NotContains(t, text, "resolves")
 }
 
 func TestFormatStatusText_MixedMode_TagsRoutes(t *testing.T) {
@@ -140,8 +139,8 @@ func TestFormatStatusText_MixedMode_TagsRoutes(t *testing.T) {
 		Routing: router.RoutingStatus{
 			Proxy: "caddy", ProxyReachable: true, Mode: "mixed (drift)",
 			Routes: []router.RouteStatus{
-				{Hostname: "api.foo.local", Dial: "localhost:55432", Mode: "vm", Resolves: true},
-				{Hostname: "app.foo.local", Dial: "localhost:3000", Mode: "local", Resolves: true},
+				{Hostname: "api.foo.local", Dial: "localhost:55432", Mode: "vm"},
+				{Hostname: "app.foo.local", Dial: "localhost:3000", Mode: "local"},
 			},
 		},
 	}
@@ -149,6 +148,26 @@ func TestFormatStatusText_MixedMode_TagsRoutes(t *testing.T) {
 	assert.Contains(t, text, "mixed (drift)")
 	assert.Contains(t, text, "(vm)")
 	assert.Contains(t, text, "(local)")
+}
+
+func TestFormatStatusText_DNSLine_SilentWhenHealthy(t *testing.T) {
+	res := StatusResult{
+		Sandbox: "test", State: "running",
+		DNSHealthy: true,
+	}
+	out := FormatStatusText(res)
+	assert.NotContains(t, out, "dns:", "DNS line should be invisible when healthy")
+}
+
+func TestFormatStatusText_DNSLine_RedWhenUnhealthy(t *testing.T) {
+	res := StatusResult{
+		Sandbox: "test", State: "running",
+		DNSHealthy: false, DNSError: "resolving foo: timeout",
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "dns: NOT WORKING")
+	assert.Contains(t, out, "resolving foo: timeout")
+	assert.Contains(t, out, "devm install")
 }
 
 func TestFormatChange_Template(t *testing.T) {

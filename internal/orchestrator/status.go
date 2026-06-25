@@ -3,10 +3,12 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mdubb86/devm/internal/router"
 	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,6 +24,15 @@ func RunStatus(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (StatusR
 	// proxy-unreachable without breaking the rest of status.
 	if routing, err := router.Inspect(context.Background(), cfg); err == nil {
 		res.Routing = routing
+	}
+
+	dnsCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := serviceapi.CheckDNSHealth(dnsCtx); err == nil {
+		res.DNSHealthy = true
+	} else {
+		res.DNSHealthy = false
+		res.DNSError = err.Error()
 	}
 
 	state := sb.State()

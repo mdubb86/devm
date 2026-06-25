@@ -19,6 +19,12 @@ type StatusResult struct {
 	PendingRecreate int
 	Drift           []DriftItem
 	Routing         router.RoutingStatus
+
+	// DNSHealthy is true when the system resolver can reach the daemon's
+	// DNS server for *.test names. DNSError describes the failure when
+	// DNSHealthy is false. Both populated by RunStatus.
+	DNSHealthy bool
+	DNSError   string
 }
 
 // DriftItem is one piece of mismatch between snapshot and live sbx state.
@@ -75,6 +81,7 @@ func FormatStatusText(r StatusResult) string {
 		fmt.Fprintf(&b, "Drift: %s — %s\n", d.Kind, d.Detail)
 	}
 	b.WriteString(formatRouting(r.Routing))
+	b.WriteString(formatDNSHealth(r))
 	return b.String()
 }
 
@@ -97,17 +104,24 @@ func formatRouting(r router.RoutingStatus) string {
 	fmt.Fprintf(&b, "  mode:    %s\n", r.Mode)
 	b.WriteString("  routes:\n")
 	for _, route := range r.Routes {
-		resolveTag := "✓ resolves"
-		if !route.Resolves {
-			resolveTag = "✗ no resolution"
-		}
 		modeTag := ""
 		if r.Mode == "mixed (drift)" {
 			modeTag = fmt.Sprintf("  (%s)", route.Mode)
 		}
-		fmt.Fprintf(&b, "    %-25s → %-22s %s%s\n",
-			route.Hostname, route.Dial, resolveTag, modeTag)
+		fmt.Fprintf(&b, "    %-25s → %s%s\n",
+			route.Hostname, route.Dial, modeTag)
 	}
+	return b.String()
+}
+
+func formatDNSHealth(r StatusResult) string {
+	if r.DNSHealthy {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\ndns: NOT WORKING — %s\n", r.DNSError)
+	b.WriteString("     Run `devm install` to set up the resolver file, or `devm restart`\n")
+	b.WriteString("     if the daemon isn't responding.\n")
 	return b.String()
 }
 
@@ -164,6 +178,8 @@ func FormatStatusJSON(r StatusResult) string {
 		PendingChanges pending              `json:"pending_changes"`
 		Drift          []drift              `json:"drift"`
 		Routing        router.RoutingStatus `json:"routing"`
+		DNSHealthy     bool                 `json:"dns_healthy"`
+		DNSError       string               `json:"dns_error,omitempty"`
 	}
 	sessions := make([]sess, len(r.Sessions))
 	for i, s := range r.Sessions {
@@ -178,6 +194,8 @@ func FormatStatusJSON(r StatusResult) string {
 		PendingChanges: pending{Live: r.PendingLive, Recreate: r.PendingRecreate},
 		Drift:          drifts,
 		Routing:        r.Routing,
+		DNSHealthy:     r.DNSHealthy,
+		DNSError:       r.DNSError,
 	}
 	out, _ := json.MarshalIndent(b, "", "  ")
 	return string(out)
