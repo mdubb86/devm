@@ -87,4 +87,10 @@ homebrew_casks:
       postflight do
         system_command "/usr/bin/xattr",
                        args: ["-rd", "com.apple.quarantine", staged_path]
+        # If the devm service is installed, restart it so it picks up
+        # this newly-installed binary. Best-effort — silent when the
+        # service isn't registered (a fresh install) or isn't running.
+        system_command "#{HOMEBREW_PREFIX}/bin/devm",
+                       args: ["restart"],
+                       must_succeed: false
       end

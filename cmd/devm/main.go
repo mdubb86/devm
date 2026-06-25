@@ -54,10 +54,12 @@ var rootCmd = &cobra.Command{
 			)
 		}
 
-		// Service version-skew warning. Cheap: ~1-2ms when service is
-		// running, returns immediately when not. Soft warning only; never
-		// blocks the command.
-		checkServiceVersionSkew(cmd.Context())
+		// Drift auto-heal: if the running service is on an older
+		// version than this CLI (because the binary on disk has been
+		// upgraded since the service was last started), restart the
+		// service in-line before the user's command runs. No-op when
+		// the service is down or already in sync.
+		ensureDaemonInSync(cmd.Context(), cmd.Name())
 	},
 }
 
@@ -68,19 +70,40 @@ func main() {
 	}
 }
 
-// checkServiceVersionSkew prints a one-line warning if the running
-// devm service reports a different version than this CLI binary.
-// Silent when the service isn't running (no install yet, expected).
-func checkServiceVersionSkew(ctx context.Context) {
+// skipDriftHealCommands are the subcommands where auto-heal must NOT
+// run: lifecycle commands manage the service themselves (loops) and
+// `upgrade` will restart the service when it finishes.
+var skipDriftHealCommands = map[string]struct{}{
+	"install":        {},
+	"uninstall":      {},
+	"start":          {},
+	"stop-service":   {},
+	"restart":        {},
+	"service-status": {},
+	"serve":          {},
+	"upgrade":        {},
+}
+
+// ensureDaemonInSync detects drift between the CLI version and the
+// running daemon, and silently restarts the daemon when they disagree.
+// On dev builds (Version == "dev") we skip — restarting a tagged
+// daemon into a dev build would be a downgrade.
+func ensureDaemonInSync(ctx context.Context, cmdName string) {
+	if Version == "dev" {
+		return
+	}
+	if _, skip := skipDriftHealCommands[cmdName]; skip {
+		return
+	}
 	c := serviceapi.NewClient()
 	serviceVer, err := c.Version(ctx)
 	if err != nil {
-		return // service down; not a warning case
+		return // service down; nothing to heal
 	}
-	if serviceVer != Version {
-		fmt.Fprintf(os.Stderr,
-			"warning: CLI is %s but devm service is %s — run `devm restart` to pick up the new binary\n",
-			Version, serviceVer,
-		)
+	if serviceVer == Version {
+		return
+	}
+	if err := restartAndWait("stale daemon, was " + serviceVer); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 }

@@ -207,3 +207,32 @@ func init() {
 	// Suppress signal for the long-running serve when run interactively.
 	signal.Ignore(syscall.SIGPIPE)
 }
+
+// restartAndWait restarts the kardianos service and polls /health
+// until the new process is responsive. Prints a one-line stderr
+// notice. No-op when the service isn't installed or isn't running.
+// Used by `devm upgrade` post-install and by the PersistentPreRun
+// drift auto-heal.
+func restartAndWait(reason string) error {
+	svc, err := newKardianosService()
+	if err != nil {
+		return err
+	}
+	st, err := svc.Status()
+	if err != nil || st != service.StatusRunning {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "restarting devm service (%s)…\n", reason)
+	if err := svc.Restart(); err != nil {
+		return fmt.Errorf("restart: %w", err)
+	}
+	c := serviceapi.NewClient()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.Available(context.Background()) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("service did not become healthy within 5s after restart")
+}

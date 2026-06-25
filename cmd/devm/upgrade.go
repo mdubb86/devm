@@ -58,6 +58,12 @@ var upgradeCmd = &cobra.Command{
 		}
 
 		fmt.Printf("upgraded to %s\n", rel.Version())
+
+		// If the daemon is running, restart it to pick up the new
+		// binary. Best-effort — binary IS replaced either way.
+		if err := restartAndWait("upgraded to " + rel.Version()); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		}
 		return nil
 	},
 }
