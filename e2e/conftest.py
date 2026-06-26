@@ -19,6 +19,7 @@ from typing import Callable, Iterator
 import pytest
 
 from helpers import Devm, Workspace, registry
+from helpers.tart import TartSandbox
 
 
 
@@ -154,6 +155,27 @@ def sudo_capable():
         open("/dev/tty").close()
     except OSError:
         pytest.skip("no /dev/tty — sudo can't prompt, skipping interactive test")
+
+
+@pytest.fixture
+def tart_sandbox(devm, sandbox_name, workspace) -> TartSandbox:
+    """Cold-starts the project VM via `devm shell -- true` (a no-op command
+    that triggers cold-start + provisioning then exits).
+
+    Tests that need to run commands inside the VM use the returned
+    TartSandbox handle. Teardown is automatic via the existing
+    `sandbox_name` fixture's registry cleanup — but tests can also
+    call `devm.teardown(yes=True)` explicitly to verify teardown
+    behavior."""
+    subprocess.run(
+        [devm.path, "shell", "--", "true"],
+        capture_output=True, cwd=str(workspace.path), timeout=300,
+    )
+    # We don't fail on non-zero; some tests may want to assert on
+    # cold-start failures themselves. The fixture just gives them a
+    # handle to inspect state.
+
+    yield TartSandbox(name=sandbox_name)
 
 
 @pytest.fixture
