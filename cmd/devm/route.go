@@ -72,9 +72,6 @@ func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) []serviceapi.Rout
 			continue
 		}
 		backendPort := svc.Port
-		if mode == serviceapi.ModeVM {
-			backendPort = cfg.Project.PortOffset + svc.Port
-		}
 		out = append(out, serviceapi.Route{
 			Hostname:    svc.Hostname,
 			BackendPort: backendPort,

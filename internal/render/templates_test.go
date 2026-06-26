@@ -48,7 +48,7 @@ func TestRenderTemplates_Simple(t *testing.T) {
 	require.NoError(t, os.WriteFile(tmplPath, []byte("hello {{.Project.ID}} at {{.Service.api.HostPort}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "myapp", SandboxName: "myapp-sbx", PortOffset: 50000},
+		Project: schema.Project{ID: "myapp", SandboxName: "myapp-sbx"},
 		Services: map[string]schema.Service{
 			"api": {Port: 8080, Templates: []schema.Template{{Source: "hello.tmpl", Output: "/etc/hello"}}},
 		},
@@ -63,7 +63,8 @@ func TestRenderTemplates_Simple(t *testing.T) {
 	require.True(t, ok, "expected installer at %s; got keys: %v", expectPath, mapKeys(got))
 
 	// The rendered body must appear inside the heredoc.
-	assert.Contains(t, script, "hello myapp at 58080\n")
+	// Tart VMs: HostPort == Port (no offset).
+	assert.Contains(t, script, "hello myapp at 8080\n")
 	// Destination set correctly.
 	assert.Contains(t, script, "DEST='/etc/hello'\n")
 	// Atomic write pattern.

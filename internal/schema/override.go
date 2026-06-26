@@ -5,12 +5,7 @@ import "gopkg.in/yaml.v3"
 type ProjectOverride struct {
 	ID          *string `yaml:"id,omitempty"`
 	SandboxName *string `yaml:"sandbox_name,omitempty"`
-	PortOffset  *int    `yaml:"port_offset,omitempty"`
 	Proxy       *string `yaml:"proxy,omitempty"`
-}
-
-type BaseImageOverride struct {
-	Docker *bool `yaml:"docker,omitempty"`
 }
 
 type NetworkOverride struct {
@@ -27,23 +22,29 @@ type ServiceOverride struct {
 	PortIsSet bool    `yaml:"-"`
 
 	Hostname  *string           `yaml:"hostname,omitempty"`
-	EnvInject *bool             `yaml:"env_inject,omitempty"`
-	EnvHost   *string           `yaml:"env_host,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
 	Masks     *[]Mask           `yaml:"masks,omitempty"`
 	Templates *[]Template       `yaml:"templates,omitempty"`
-	Startup   *[]StartupCommand `yaml:"startup,omitempty"`
+	Exec      *[]string         `yaml:"exec,omitempty"`
+	WorkDir   *string           `yaml:"workdir,omitempty"`
+	Restart   *string           `yaml:"restart,omitempty"`
+	After     *[]string         `yaml:"after,omitempty"`
+	User      *string           `yaml:"user,omitempty"`
+	Systemd   *string           `yaml:"systemd,omitempty"`
 }
 
 type serviceOverrideYAML struct {
 	Port      yaml.Node         `yaml:"port,omitempty"`
 	Hostname  *string           `yaml:"hostname,omitempty"`
-	EnvInject *bool             `yaml:"env_inject,omitempty"`
-	EnvHost   *string           `yaml:"env_host,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
 	Masks     *[]Mask           `yaml:"masks,omitempty"`
 	Templates *[]Template       `yaml:"templates,omitempty"`
-	Startup   *[]StartupCommand `yaml:"startup,omitempty"`
+	Exec      *[]string         `yaml:"exec,omitempty"`
+	WorkDir   *string           `yaml:"workdir,omitempty"`
+	Restart   *string           `yaml:"restart,omitempty"`
+	After     *[]string         `yaml:"after,omitempty"`
+	User      *string           `yaml:"user,omitempty"`
+	Systemd   *string           `yaml:"systemd,omitempty"`
 }
 
 func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
@@ -52,12 +53,15 @@ func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
 		return err
 	}
 	o.Hostname = raw.Hostname
-	o.EnvInject = raw.EnvInject
-	o.EnvHost = raw.EnvHost
 	o.Env = raw.Env
 	o.Masks = raw.Masks
 	o.Templates = raw.Templates
-	o.Startup = raw.Startup
+	o.Exec = raw.Exec
+	o.WorkDir = raw.WorkDir
+	o.Restart = raw.Restart
+	o.After = raw.After
+	o.User = raw.User
+	o.Systemd = raw.Systemd
 	if raw.Port.Kind == 0 {
 		return nil
 	}
@@ -74,12 +78,12 @@ func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type ConfigOverride struct {
-	Project   *ProjectOverride           `yaml:"project,omitempty"`
-	BaseImage *BaseImageOverride         `yaml:"base_image,omitempty"`
-	Network   *NetworkOverride           `yaml:"network,omitempty"`
-	Env       map[string]string          `yaml:"env,omitempty"`
-	Services  map[string]ServiceOverride `yaml:"services,omitempty"`
-	Install   *[]string                  `yaml:"install,omitempty"`
-	Mounts    *[]string                  `yaml:"mounts,omitempty"`
-	Path      *[]string                  `yaml:"path,omitempty"`
+	Project  *ProjectOverride           `yaml:"project,omitempty"`
+	Network  *NetworkOverride           `yaml:"network,omitempty"`
+	Env      map[string]string          `yaml:"env,omitempty"`
+	Services map[string]ServiceOverride `yaml:"services,omitempty"`
+	Install  *[]string                  `yaml:"install,omitempty"`
+	Mounts   *[]string                  `yaml:"mounts,omitempty"`
+	Path     *[]string                  `yaml:"path,omitempty"`
+	Packages *[]string                  `yaml:"packages,omitempty"`
 }

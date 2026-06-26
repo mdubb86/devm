@@ -13,9 +13,7 @@ import (
 
 // ApplyLive runs every BucketLive change through the corresponding sbx
 // command. Non-LIVE changes in the slice are skipped silently (caller
-// is expected to handle them via the recreate path). portOffset is the
-// project's port_offset, used to compute the host port for each
-// canonical port (host = offset + canonical).
+// is expected to handle them via the recreate path).
 //
 // Template changes are coalesced — any number of KindTemplateChange
 // entries trigger a SINGLE invocation of the in-sandbox dispatcher,
@@ -28,7 +26,7 @@ import (
 //
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
-func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema.Config, repoRoot string) error {
+func ApplyLive(sb *sandbox.Sandbox, changes []Change, cfg schema.Config, repoRoot string) error {
 	var templateChanges []Change
 	var envChanged bool
 	for _, c := range changes {
@@ -46,7 +44,7 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema
 			// bare publish creates v4+v6 mappings; explicit 127.0.0.1
 			// keeps it to one localhost mapping and makes
 			// publish↔unpublish symmetric.
-			spec := fmt.Sprintf("127.0.0.1:%d:%d", portOffset+sandboxPort, sandboxPort)
+			spec := fmt.Sprintf("127.0.0.1:%d:%d", sandboxPort, sandboxPort)
 			if err := sb.Runner.Run("sbx", "ports", sb.Name, "--publish", spec); err != nil {
 				return fmt.Errorf("apply_live: sbx ports --publish %s: %w", spec, err)
 			}
@@ -55,7 +53,7 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema
 			if err != nil {
 				return fmt.Errorf("apply_live: port_remove: bad sandbox port %q: %w", c.Key, err)
 			}
-			spec := fmt.Sprintf("127.0.0.1:%d:%d", portOffset+sandboxPort, sandboxPort)
+			spec := fmt.Sprintf("127.0.0.1:%d:%d", sandboxPort, sandboxPort)
 			if err := sb.Runner.Run("sbx", "ports", sb.Name, "--unpublish", spec); err != nil {
 				return fmt.Errorf("apply_live: sbx ports --unpublish %s: %w", spec, err)
 			}
@@ -68,8 +66,8 @@ func ApplyLive(sb *sandbox.Sandbox, changes []Change, portOffset int, cfg schema
 			if err != nil {
 				return fmt.Errorf("apply_live: port_change: bad new port %q: %w", c.New, err)
 			}
-			oldSpec := fmt.Sprintf("127.0.0.1:%d:%d", portOffset+oldP, oldP)
-			newSpec := fmt.Sprintf("127.0.0.1:%d:%d", portOffset+newP, newP)
+			oldSpec := fmt.Sprintf("127.0.0.1:%d:%d", oldP, oldP)
+			newSpec := fmt.Sprintf("127.0.0.1:%d:%d", newP, newP)
 			if err := sb.Runner.Run("sbx", "ports", sb.Name, "--unpublish", oldSpec); err != nil {
 				return fmt.Errorf("apply_live: port_change: unpublish %s: %w", oldSpec, err)
 			}

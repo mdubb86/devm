@@ -65,23 +65,6 @@ func (t Template) Validate() error {
 	return nil
 }
 
-type StartupCommand struct {
-	Command    []string `yaml:"command"`
-	Background bool     `yaml:"background,omitempty"`
-}
-
-func (c StartupCommand) Validate() error {
-	if len(c.Command) == 0 {
-		return fmt.Errorf("startup.command must be a non-empty array")
-	}
-	for i, arg := range c.Command {
-		if arg == "" {
-			return fmt.Errorf("startup.command[%d] must not be empty", i)
-		}
-	}
-	return nil
-}
-
 type Service struct {
 	// Port is the sandbox-side listen port. Set via `port: 80` in
 	// devm.yaml. Polymorphic with BindIP via custom YAML
@@ -95,20 +78,21 @@ type Service struct {
 	// (default; localhost-only). Setting "0.0.0.0" exposes the port
 	// on all host interfaces — useful when other devices on the LAN
 	// need to reach the service.
-	//
-	// The host port is NOT overridable. devm guarantees
-	// `host_port = port_offset + port` for every service. The bind
-	// portion of `port: "IP:N"` controls only the interface; the
-	// trailing N must equal the sandbox port.
 	BindIP string `yaml:"-"`
 
 	Hostname  string            `yaml:"hostname,omitempty"`
-	EnvInject bool              `yaml:"env_inject,omitempty"`
-	EnvHost   string            `yaml:"env_host,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
 	Masks     []Mask            `yaml:"masks,omitempty"`
 	Templates []Template        `yaml:"templates,omitempty"`
-	Startup   []StartupCommand  `yaml:"startup,omitempty"`
+
+	// Tart-era service execution fields. Systemd is mutually exclusive
+	// with the declarative fields (Exec, Restart, After, WorkDir, User).
+	Exec    []string `yaml:"exec,omitempty"`
+	WorkDir string   `yaml:"workdir,omitempty"`
+	Restart string   `yaml:"restart,omitempty"`
+	After   []string `yaml:"after,omitempty"`
+	User    string   `yaml:"user,omitempty"`
+	Systemd string   `yaml:"systemd,omitempty"`
 }
 
 // serviceYAML is the on-the-wire shape. `port` is a yaml.Node so we
@@ -117,12 +101,15 @@ type Service struct {
 type serviceYAML struct {
 	Port      yaml.Node         `yaml:"port,omitempty"`
 	Hostname  string            `yaml:"hostname,omitempty"`
-	EnvInject bool              `yaml:"env_inject,omitempty"`
-	EnvHost   string            `yaml:"env_host,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
 	Masks     []Mask            `yaml:"masks,omitempty"`
 	Templates []Template        `yaml:"templates,omitempty"`
-	Startup   []StartupCommand  `yaml:"startup,omitempty"`
+	Exec      []string          `yaml:"exec,omitempty"`
+	WorkDir   string            `yaml:"workdir,omitempty"`
+	Restart   string            `yaml:"restart,omitempty"`
+	After     []string          `yaml:"after,omitempty"`
+	User      string            `yaml:"user,omitempty"`
+	Systemd   string            `yaml:"systemd,omitempty"`
 }
 
 // UnmarshalYAML implements polymorphic decoding for the `port` field:
@@ -134,12 +121,15 @@ func (s *Service) UnmarshalYAML(node *yaml.Node) error {
 		return err
 	}
 	s.Hostname = raw.Hostname
-	s.EnvInject = raw.EnvInject
-	s.EnvHost = raw.EnvHost
 	s.Env = raw.Env
 	s.Masks = raw.Masks
 	s.Templates = raw.Templates
-	s.Startup = raw.Startup
+	s.Exec = raw.Exec
+	s.WorkDir = raw.WorkDir
+	s.Restart = raw.Restart
+	s.After = raw.After
+	s.User = raw.User
+	s.Systemd = raw.Systemd
 	return s.decodePortNode(raw.Port)
 }
 
@@ -182,20 +172,26 @@ func (s Service) MarshalYAML() (interface{}, error) {
 	out := struct {
 		Port      interface{}       `yaml:"port,omitempty"`
 		Hostname  string            `yaml:"hostname,omitempty"`
-		EnvInject bool              `yaml:"env_inject,omitempty"`
-		EnvHost   string            `yaml:"env_host,omitempty"`
 		Env       map[string]string `yaml:"env,omitempty"`
 		Masks     []Mask            `yaml:"masks,omitempty"`
 		Templates []Template        `yaml:"templates,omitempty"`
-		Startup   []StartupCommand  `yaml:"startup,omitempty"`
+		Exec      []string          `yaml:"exec,omitempty"`
+		WorkDir   string            `yaml:"workdir,omitempty"`
+		Restart   string            `yaml:"restart,omitempty"`
+		After     []string          `yaml:"after,omitempty"`
+		User      string            `yaml:"user,omitempty"`
+		Systemd   string            `yaml:"systemd,omitempty"`
 	}{
 		Hostname:  s.Hostname,
-		EnvInject: s.EnvInject,
-		EnvHost:   s.EnvHost,
 		Env:       s.Env,
 		Masks:     s.Masks,
 		Templates: s.Templates,
-		Startup:   s.Startup,
+		Exec:      s.Exec,
+		WorkDir:   s.WorkDir,
+		Restart:   s.Restart,
+		After:     s.After,
+		User:      s.User,
+		Systemd:   s.Systemd,
 	}
 	if s.Port != 0 {
 		if s.BindIP == "" {
@@ -220,18 +216,29 @@ func (s Service) Validate() error {
 	if s.Hostname != "" && !strings.HasSuffix(s.Hostname, ".test") {
 		return fmt.Errorf("service.hostname: must end in .test (got %q)", s.Hostname)
 	}
-	if s.EnvHost != "" && !s.EnvInject {
-		return fmt.Errorf("env_host requires env_inject: true")
-	}
-	if s.EnvInject && s.Port == 0 {
-		return fmt.Errorf("env_inject requires port")
-	}
 	if s.BindIP != "" && s.Port == 0 {
 		return fmt.Errorf("port bind interface requires a sandbox port")
 	}
-	if s.Port == 0 && len(s.Masks) == 0 && len(s.Startup) == 0 {
-		return fmt.Errorf("service must define a port, at least one mask, or at least one startup command")
+	if s.Port == 0 && len(s.Masks) == 0 && len(s.Exec) == 0 && s.Systemd == "" {
+		return fmt.Errorf("service must define a port, at least one mask, exec, or systemd")
 	}
+
+	// systemd override is mutually exclusive with declarative fields.
+	if s.Systemd != "" {
+		if len(s.Exec) > 0 || s.Restart != "" || len(s.After) > 0 ||
+			s.WorkDir != "" || s.User != "" {
+			return fmt.Errorf("service.systemd is mutually exclusive with exec/restart/after/workdir/user")
+		}
+	}
+
+	// restart enum.
+	switch s.Restart {
+	case "", "no", "on-failure", "always":
+		// ok
+	default:
+		return fmt.Errorf("service.restart: must be one of: no, on-failure, always (got %q)", s.Restart)
+	}
+
 	for i, m := range s.Masks {
 		if err := m.Validate(); err != nil {
 			return fmt.Errorf("masks[%d]: %w", i, err)
@@ -242,18 +249,12 @@ func (s Service) Validate() error {
 			return fmt.Errorf("templates[%d]: %w", i, err)
 		}
 	}
-	for i, c := range s.Startup {
-		if err := c.Validate(); err != nil {
-			return fmt.Errorf("startup[%d]: %w", i, err)
-		}
-	}
 	return nil
 }
 
 type Project struct {
 	ID          string `yaml:"id"`
 	SandboxName string `yaml:"sandbox_name"`
-	PortOffset  int    `yaml:"port_offset,omitempty"`
 	Proxy       string `yaml:"proxy,omitempty"` // "caddy" (default) or "none"
 }
 
@@ -284,10 +285,10 @@ func (p Project) Validate() error {
 func CheckUnknownKeys(data []byte) error {
 	knownTop := []string{
 		"project", "base_image", "network", "env",
-		"services", "install", "mounts", "path",
+		"services", "install", "mounts", "path", "packages",
 	}
 	knownProject := []string{
-		"id", "sandbox_name", "port_offset", "proxy",
+		"id", "sandbox_name", "proxy",
 	}
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
@@ -345,9 +346,11 @@ func CheckLegacyKeys(data []byte) error {
 	return nil
 }
 
-type BaseImage struct {
-	Docker bool `yaml:"docker"`
-}
+// BaseImage is kept for YAML compatibility (the base_image: key is still
+// recognized so old configs don't get an "unknown field" error before the
+// user can migrate). It has no fields — Tart images are configured via
+// the image pipeline, not per-project YAML flags.
+type BaseImage struct{}
 
 type Network struct {
 	AllowedDomains []string `yaml:"allowed_domains,omitempty"`
@@ -355,10 +358,14 @@ type Network struct {
 
 type Config struct {
 	Project   Project            `yaml:"project"`
-	BaseImage BaseImage          `yaml:"base_image"`
+	BaseImage BaseImage          `yaml:"base_image,omitempty"`
 	Network   Network            `yaml:"network,omitempty"`
 	Env       map[string]string  `yaml:"env,omitempty"`
 	Services  map[string]Service `yaml:"services,omitempty"`
+
+	// Packages is a list of apt package names installed automatically
+	// via `apt-get install -y` during Tart VM provisioning.
+	Packages []string `yaml:"packages,omitempty"`
 
 	// Install is the list of shell commands run ONCE at sandbox create
 	// time, in declaration order, as root. Each entry is wrapped by
@@ -513,16 +520,57 @@ func (c Config) Validate() error {
 			if svc.Port < 1 || svc.Port > 65535 {
 				return fmt.Errorf("services.%s: port %d out of range (1-65535)", name, svc.Port)
 			}
-			host := c.Project.PortOffset + svc.Port
-			if host > 65535 {
-				return fmt.Errorf("services.%s: port_offset %d + canonical %d = %d exceeds max TCP port 65535",
-					name, c.Project.PortOffset, svc.Port, host)
-			}
 			if prev, ok := seenPorts[svc.Port]; ok {
 				return fmt.Errorf("duplicate port %d in services %s and %s", svc.Port, prev, name)
 			}
 			seenPorts[svc.Port] = name
 		}
 	}
+	// Mask paths must resolve inside a virtio-fs share — workspace or a
+	// configured mounts entry. Absolute paths must be under a mounts host
+	// path; relative paths are workspace-relative and always inside.
+	for name, svc := range c.Services {
+		for i, m := range svc.Masks {
+			if !maskPathInsideShare(m.Path, c) {
+				return fmt.Errorf("services.%s.masks[%d]: path %q is not inside any virtio-fs share (workspace or a mounts entry)", name, i, m.Path)
+			}
+		}
+	}
 	return nil
+}
+
+// maskPathInsideShare returns true if path resolves inside the
+// workspace (relative paths) or under a configured mounts entry
+// (absolute paths). Rejects paths that escape via "..".
+func maskPathInsideShare(path string, cfg Config) bool {
+	if path == "" {
+		return false
+	}
+	cleaned := filepath.Clean(path)
+	if strings.HasPrefix(cleaned, "..") {
+		return false
+	}
+	if !filepath.IsAbs(cleaned) {
+		// Relative paths are workspace-relative.
+		return true
+	}
+	// Absolute paths must be under a mounts entry's host path.
+	for _, m := range cfg.Mounts {
+		host := splitMountHost(m)
+		if host == "" {
+			continue
+		}
+		cleanedHost := filepath.Clean(host)
+		if cleaned == cleanedHost || strings.HasPrefix(cleaned, cleanedHost+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func splitMountHost(m string) string {
+	if idx := strings.Index(m, ":"); idx >= 0 {
+		return m[:idx]
+	}
+	return m
 }

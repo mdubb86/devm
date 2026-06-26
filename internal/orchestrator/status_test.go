@@ -12,7 +12,7 @@ import (
 
 func statusMinimalCfg() schema.Config {
 	return schema.Config{
-		Project: schema.Project{ID: "x", SandboxName: "x-sbx", PortOffset: 50000},
+		Project: schema.Project{ID: "x", SandboxName: "x-sbx"},
 	}
 }
 
@@ -98,8 +98,8 @@ func TestRunStatusLive_StoppedNoDrift(t *testing.T) {
 }
 
 func TestRunStatusLive_PortMissingDrift(t *testing.T) {
-	// Snapshot expects api on 8080 (host 58080), but live ports are
-	// empty → port_missing drift.
+	// Snapshot expects api on 8080, but live ports are empty → port_missing drift.
+	// Tart VMs: host port == sandbox port (no offset).
 	snapCfg := statusMinimalCfg()
 	snapCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
 	snapYAML, _ := yaml.Marshal(snapCfg)
@@ -113,7 +113,7 @@ func TestRunStatusLive_PortMissingDrift(t *testing.T) {
 	assert.NoError(t, err)
 	require.Len(t, res.Drift, 1)
 	assert.Equal(t, "port_missing", res.Drift[0].Kind)
-	assert.Contains(t, res.Drift[0].Detail, "58080")
+	assert.Contains(t, res.Drift[0].Detail, "8080")
 }
 
 func TestRunStatusLive_PortExtraDrift(t *testing.T) {

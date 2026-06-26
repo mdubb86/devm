@@ -36,9 +36,6 @@ func EnvArgs(cfg schema.Config) []string {
 //  1. cfg.Env entries (which by this point includes WORKSPACE and
 //     IS_SANDBOX, injected by schema.ResolveEnv).
 //  2. Per-service flattened env: NAME_KEY = VALUE.
-//  3. Per-service injected ports: NAME_PORT (and NAME_HOST when set)
-//     when svc.EnvInject is true and the service name does NOT begin
-//     with "supabase" (collides with the supabase CLI's env prefix).
 //
 // Trailing line, emitted unsorted at the end so $WORKSPACE has been
 // exported above it. cfg.Path entries (already validated + $WORKSPACE-
@@ -64,19 +61,7 @@ func PersistentEnv(cfg schema.Config) string {
 	for _, name := range svcNames {
 		svc := cfg.Services[name]
 		upper := strings.ToUpper(name)
-		isSupabasePrefix := strings.HasPrefix(strings.ToLower(name), "supabase")
 
-		if svc.EnvInject && svc.Port != 0 && !isSupabasePrefix {
-			// env_inject is for IN-VM consumers (one service talking to
-			// another via NAME_PORT). The target binds at svc.Port, NOT
-			// port + port_offset (that's the Mac-side mapping). Same
-			// reasoning + bug pattern as the Caddyfile reverse_proxy
-			// target. Fixed 2026-06-12.
-			merged[upper+"_PORT"] = fmt.Sprintf("%d", svc.Port)
-			if svc.EnvHost != "" {
-				merged[upper+"_HOST"] = svc.EnvHost
-			}
-		}
 		keys := make([]string, 0, len(svc.Env))
 		for k := range svc.Env {
 			keys = append(keys, k)

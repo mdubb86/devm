@@ -7,14 +7,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestConfigOverridePartial(t *testing.T) {
+func TestConfigOverridePartial_Proxy(t *testing.T) {
 	src := []byte(`
 project:
-  port_offset: 50
+  proxy: none
 `)
 	var o ConfigOverride
 	err := yaml.Unmarshal(src, &o)
 	assert.NoError(t, err)
 	assert.NotNil(t, o.Project)
-	assert.Equal(t, 50, *o.Project.PortOffset)
+	assert.Equal(t, "none", *o.Project.Proxy)
 }

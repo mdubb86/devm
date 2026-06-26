@@ -13,8 +13,7 @@ import (
 func TestWriteDevmDir(t *testing.T) {
 	dir := t.TempDir()
 	cfg := schema.Config{
-		Project:   schema.Project{ID: "x", SandboxName: "x-sbx"},
-		BaseImage: schema.BaseImage{Docker: true},
+		Project: schema.Project{ID: "x", SandboxName: "x-sbx"},
 		Services: map[string]schema.Service{
 			"webapp": {Port: 3000, Hostname: "x.test"},
 		},
@@ -66,8 +65,7 @@ func TestWriteDevmDir_TemplatesDirPopulated(t *testing.T) {
 		[]byte("hello {{.Project.ID}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project:   schema.Project{ID: "myproj", SandboxName: "myproj-sbx", PortOffset: 50000},
-		BaseImage: schema.BaseImage{Docker: false},
+		Project: schema.Project{ID: "myproj", SandboxName: "myproj-sbx"},
 		Services: map[string]schema.Service{
 			"web": {Port: 80, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},

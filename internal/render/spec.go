@@ -22,9 +22,6 @@ import (
 // leading-`*` wildcard (2026-06-05 dogfood failure).
 func SpecYAML(cfg schema.Config, repoRoot string) string {
 	image := "docker/sandbox-templates:shell"
-	if cfg.BaseImage.Docker {
-		image = "docker/sandbox-templates:shell-docker"
-	}
 
 	spec := kitSpec{
 		SchemaVersion: "1",
@@ -113,21 +110,6 @@ func SpecYAML(cfg schema.Config, repoRoot string) string {
 			Description: "Install rendered service templates",
 		},
 	)
-	stepN := 3
-	for _, name := range names {
-		for idx, step := range cfg.Services[name].Startup {
-			var wrappedArgv []string
-			if step.Background {
-				wrappedArgv = wrapBGStartup(repoRoot, stepN, step.Command)
-			} else {
-				wrappedArgv = wrapFGStartup(repoRoot, stepN, step.Command)
-			}
-			stepCopy := step
-			stepCopy.Command = wrappedArgv
-			spec.Commands.Startup = append(spec.Commands.Startup, buildStartupStep(stepCopy, name, idx))
-			stepN++
-		}
-	}
 	spec.Commands.Startup = append(spec.Commands.Startup, kitStartupCommand{Command: startupSentinelCmd})
 
 	var buf bytes.Buffer
@@ -203,28 +185,6 @@ func sortedServiceNames(services map[string]schema.Service) []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// buildStartupStep builds the kit startup step for a user-defined
-// service startup command. When `background: true` is set in
-// devm.yaml, we emit the kit-native `background: true` field directly.
-//
-// History: pre-sbx-0.31 this was a foreground step wrapped at the
-// shell level with `nohup <argv> > <log> 2>&1 &` to dodge a quirk
-// where kit-level `background: true` steps were killed ~5s after
-// launch (docs/sbx-quirks.md quirk #4). sbx 0.31 fixed that — the
-// daemon now stays alive past 15s, pinned by
-// e2e/test_sbx_quirk_04_kit_background_true.py.
-func buildStartupStep(step schema.StartupCommand, service string, _ int) kitStartupCommand {
-	if !step.Background {
-		return kitStartupCommand{Command: step.Command}
-	}
-	return kitStartupCommand{
-		Command:     step.Command,
-		User:        "1000",
-		Description: fmt.Sprintf("%s startup daemon", service),
-		Background:  true,
-	}
 }
 
 // installSentinelCmd is the terminal install step: marks the entire

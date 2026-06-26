@@ -8,20 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMergeOverridesProjectPortOffset(t *testing.T) {
-	base := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p-sbx", PortOffset: 0},
-	}
-	off := 50
-	override := schema.ConfigOverride{
-		Project: &schema.ProjectOverride{PortOffset: &off},
-	}
-	merged, err := Merge(base, override)
-	assert.NoError(t, err)
-	assert.Equal(t, 50, merged.Project.PortOffset)
-	assert.Equal(t, "p", merged.Project.ID, "non-overridden field preserved")
-}
-
 func TestMerge_OverridesProxy(t *testing.T) {
 	base := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p", Proxy: "caddy"},
@@ -103,32 +89,25 @@ func TestConfigOverrideInstallReplacement(t *testing.T) {
 	assert.Equal(t, "npm install -g typescript", merged.Install[0])
 }
 
-func TestServiceOverrideStartupReplacement(t *testing.T) {
+func TestServiceOverrideExecReplacement(t *testing.T) {
 	base := schema.Config{
 		Services: map[string]schema.Service{
-			"postgres": {
-				Port: 5432,
-				Startup: []schema.StartupCommand{
-					{Command: []string{"old-cmd"}},
-				},
+			"redis": {
+				Exec: []string{"redis-server", "/etc/redis.conf"},
 			},
 		},
 	}
-	replacement := []schema.StartupCommand{
-		{Command: []string{"new-cmd", "--flag"}, Background: true},
-	}
+	newExec := []string{"redis-server", "--save", ""}
 	override := schema.ConfigOverride{
 		Services: map[string]schema.ServiceOverride{
-			"postgres": {
-				Startup: &replacement,
+			"redis": {
+				Exec: &newExec,
 			},
 		},
 	}
 	merged, err := Merge(base, override)
 	require.NoError(t, err)
-	require.Len(t, merged.Services["postgres"].Startup, 1)
-	assert.Equal(t, []string{"new-cmd", "--flag"}, merged.Services["postgres"].Startup[0].Command)
-	assert.True(t, merged.Services["postgres"].Startup[0].Background)
+	assert.Equal(t, newExec, merged.Services["redis"].Exec)
 }
 
 func TestMerge_OverridesPath(t *testing.T) {

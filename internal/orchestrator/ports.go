@@ -206,7 +206,7 @@ func desiredMappings(cfg schema.Config) []portMapping {
 		}
 		out = append(out, portMapping{
 			HostIP:      svc.ResolveBind(),
-			HostPort:    cfg.Project.PortOffset + svc.Port,
+			HostPort:    svc.Port,
 			SandboxPort: svc.Port,
 			Protocol:    "tcp",
 		})

@@ -40,18 +40,14 @@ func TestOverrideMirrorsBase(t *testing.T) {
 			name:     "Config",
 			base:     reflect.TypeOf(schema.Config{}),
 			override: reflect.TypeOf(schema.ConfigOverride{}),
-			denylist: nil,
+			denylist: map[string]string{
+				"BaseImage": "empty struct (no fields); base_image: key is still parsed for YAML compat but nothing is overridable",
+			},
 		},
 		{
 			name:     "Project",
 			base:     reflect.TypeOf(schema.Project{}),
 			override: reflect.TypeOf(schema.ProjectOverride{}),
-			denylist: nil,
-		},
-		{
-			name:     "BaseImage",
-			base:     reflect.TypeOf(schema.BaseImage{}),
-			override: reflect.TypeOf(schema.BaseImageOverride{}),
 			denylist: nil,
 		},
 		{
@@ -160,10 +156,9 @@ func overrideTypeByName(name string) reflect.Type {
 	// Hard-coded lookup table because reflect doesn't enumerate
 	// package types. Add entries as new Override types are added.
 	table := map[string]reflect.Type{
-		"Project":   reflect.TypeOf(schema.ProjectOverride{}),
-		"BaseImage": reflect.TypeOf(schema.BaseImageOverride{}),
-		"Network":   reflect.TypeOf(schema.NetworkOverride{}),
-		"Service":   reflect.TypeOf(schema.ServiceOverride{}),
+		"Project": reflect.TypeOf(schema.ProjectOverride{}),
+		"Network": reflect.TypeOf(schema.NetworkOverride{}),
+		"Service": reflect.TypeOf(schema.ServiceOverride{}),
 	}
 	return table[name]
 }

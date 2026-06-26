@@ -45,8 +45,7 @@ func parseSpec(t *testing.T, raw string) parsedSpec {
 
 func TestSpecYAMLKitEnvDoesNotContainIsSandbox(t *testing.T) {
 	cfg := schema.Config{
-		Project:   schema.Project{ID: "x", SandboxName: "x-sbx"},
-		BaseImage: schema.BaseImage{Docker: true},
+		Project: schema.Project{ID: "x", SandboxName: "x-sbx"},
 	}
 	out := SpecYAML(cfg, "/tmp/x")
 	// IS_SANDBOX moves to .devm/.env via PersistentEnv. Kit env.variables
@@ -62,8 +61,7 @@ func TestSpecYAMLBasic(t *testing.T) {
 			ID:          "test",
 			SandboxName: "test-sbx",
 		},
-		BaseImage: schema.BaseImage{Docker: true},
-		Network:   schema.Network{AllowedDomains: []string{"github.com", "claude.ai"}},
+		Network: schema.Network{AllowedDomains: []string{"github.com", "claude.ai"}},
 		Services: map[string]schema.Service{
 			"workspace": {
 				Masks: []schema.Mask{
@@ -72,8 +70,8 @@ func TestSpecYAMLBasic(t *testing.T) {
 				},
 			},
 			"webapp": {
-				Port: 3000,
-				Hostname:  "test.test",
+				Port:     3000,
+				Hostname: "test.test",
 				Masks: []schema.Mask{
 					{Path: "apps/web/node_modules", Size: "500M"},
 				},
@@ -81,7 +79,7 @@ func TestSpecYAMLBasic(t *testing.T) {
 		},
 	}
 	out := SpecYAML(cfg, "/Users/test/workspace/myproject")
-	assert.Contains(t, out, "shell-docker")
+	assert.Contains(t, out, "shell")
 	assert.Contains(t, out, "test")
 	// Network policies are applied at cold-start via orchestrator.
 	// ReconcileNetwork, NOT baked into the kit.
@@ -94,8 +92,7 @@ func TestSpecYAMLBasic(t *testing.T) {
 
 func TestSpecYAMLVolumesEmitsList(t *testing.T) {
 	cfg := schema.Config{
-		Project:   schema.Project{ID: "x", SandboxName: "x-sbx"},
-		BaseImage: schema.BaseImage{Docker: false},
+		Project: schema.Project{ID: "x", SandboxName: "x-sbx"},
 		Services: map[string]schema.Service{
 			"web": {
 				Port: 8000,
@@ -131,14 +128,11 @@ func TestSpecYAMLVolumesEmitsList(t *testing.T) {
 	assert.Equal(t, "1G", parsed.Volumes[1].Size)
 }
 
-func TestSpecYAMLNonDockerBaseUsesShellTemplate(t *testing.T) {
+func TestSpecYAMLUsesShellTemplate(t *testing.T) {
 	cfg := schema.Config{
-		Project:   schema.Project{ID: "x", SandboxName: "x-sbx"},
-		BaseImage: schema.BaseImage{Docker: false},
+		Project: schema.Project{ID: "x", SandboxName: "x-sbx"},
 	}
 	out := SpecYAML(cfg, "/tmp/x")
-	// docker/sandbox-templates:shell is the published tag (shell-only
-	// does not exist on Docker Hub; confirmed empirically 2026-05-22).
 	assert.Contains(t, out, "docker/sandbox-templates:shell\n")
 	assert.NotContains(t, out, "shell-docker")
 	assert.NotContains(t, out, "shell-only")
@@ -147,8 +141,7 @@ func TestSpecYAMLNonDockerBaseUsesShellTemplate(t *testing.T) {
 func minimalConfig(t *testing.T) schema.Config {
 	t.Helper()
 	return schema.Config{
-		Project:   schema.Project{ID: "x", SandboxName: "x-sbx"},
-		BaseImage: schema.BaseImage{Docker: false},
+		Project: schema.Project{ID: "x", SandboxName: "x-sbx"},
 	}
 }
 
@@ -273,48 +266,14 @@ func TestSpecYAMLInstallPreservesUserSingleQuotes(t *testing.T) {
 }
 
 
-func TestSpecYAMLAggregatesServiceStartupInSortedOrder(t *testing.T) {
+func TestSpecYAMLStartupHasExactlyBuiltinSteps(t *testing.T) {
+	// With no user services, startup has exactly:
+	// step 0: cleanup, step 1: devm-startup, step 2: install-templates, step 3: sentinel = 4 total
 	cfg := minimalConfig(t)
-	cfg.Services = map[string]schema.Service{
-		"redis": {
-			Port: 6379,
-			Startup: []schema.StartupCommand{
-				{Command: []string{"redis-server", "/etc/redis.conf"}, Background: true},
-			},
-		},
-		"postgres": {
-			Port: 5432,
-			Startup: []schema.StartupCommand{
-				{Command: []string{"pg_ctl", "start"}, Background: true},
-				{Command: []string{"pg_isready"}},
-			},
-		},
-	}
 	out := SpecYAML(cfg, "/tmp/repo")
 	startupSection := extractStartupSection(t, out)
-
-	// cleanup(0) + devm-startup(1) + install-templates(2) + 2 postgres + 1 redis + sentinel = 7 steps.
-	assert.Equal(t, 7, strings.Count(startupSection, "- command:"))
-
-	// Service sort order is alphabetical: postgres before redis.
-	pgStartIdx := strings.Index(startupSection, "pg_ctl")
-	pgReadyIdx := strings.Index(startupSection, "pg_isready")
-	redisIdx := strings.Index(startupSection, "redis-server")
-
-	require.Positive(t, pgStartIdx)
-	require.Positive(t, pgReadyIdx)
-	require.Positive(t, redisIdx)
-	assert.Less(t, pgStartIdx, pgReadyIdx, "postgres steps in declaration order")
-	assert.Less(t, pgReadyIdx, redisIdx, "postgres service comes before redis")
-
-	// Background daemons emit the kit-native `background: true` field.
-	// The pre-sbx-0.31 workaround that wrapped them in shell-level
-	// `nohup ... &` is gone — quirk #4 (kit-flag 5s-kill) is fixed,
-	// pinned by e2e/test_sbx_quirk_04_kit_background_true.py.
-	assert.NotContains(t, startupSection, "nohup",
-		"shell-level nohup wrap should be gone post-0.31 simplification")
-	assert.Contains(t, startupSection, "background: true",
-		"background daemons should emit the kit-native flag")
+	assert.Equal(t, 4, strings.Count(startupSection, "- command:"),
+		"startup should have cleanup+devm-startup+install-templates+sentinel = 4 steps")
 }
 
 
@@ -377,52 +336,6 @@ func TestSpecYAMLStartupStep2IsWrappedInstallTemplates(t *testing.T) {
 	assert.Equal(t, "2", cmd[3])
 	tail := strings.Join(cmd[5:], " ")
 	assert.Contains(t, tail, "install-templates.sh")
-}
-
-func TestSpecYAMLStartupUserFGStepWrapped(t *testing.T) {
-	cfg := minimalConfig(t)
-	cfg.Services = map[string]schema.Service{
-		"web": {Port: 80, Startup: []schema.StartupCommand{
-			{Command: []string{"node", "server.js"}},
-		}},
-	}
-	out := SpecYAML(cfg, "/tmp/repo")
-	parsed := parseSpec(t, out)
-	// Steps: 0 cleanup, 1 devm-startup, 2 install-templates, 3 user, 4 sentinel
-	require.Equal(t, 5, len(parsed.Commands.Startup))
-	cmd := parsed.Commands.Startup[3].Command
-	assert.Contains(t, cmd[1], "wrap-fg.sh",
-		"foreground user step must invoke wrap-fg.sh")
-	assert.Equal(t, "3", cmd[3], "user step index starts at 3")
-	assert.Equal(t, []string{"node", "server.js"}, cmd[5:],
-		"user argv must be the trailing slice")
-}
-
-func TestSpecYAMLStartupUserBGStepUsesWrapBG(t *testing.T) {
-	cfg := minimalConfig(t)
-	cfg.Services = map[string]schema.Service{
-		"daemon": {Port: 9000, Startup: []schema.StartupCommand{
-			{Command: []string{"my-daemon"}, Background: true},
-		}},
-	}
-	out := SpecYAML(cfg, "/tmp/repo")
-	parsed := parseSpec(t, out)
-	cmd := parsed.Commands.Startup[3].Command
-	assert.Contains(t, cmd[1], "wrap-bg.sh",
-		"background user step must invoke wrap-bg.sh")
-}
-
-func TestSpecYAMLStartupUserBGPreservesBackgroundField(t *testing.T) {
-	cfg := minimalConfig(t)
-	cfg.Services = map[string]schema.Service{
-		"daemon": {Port: 9000, Startup: []schema.StartupCommand{
-			{Command: []string{"my-daemon"}, Background: true},
-		}},
-	}
-	out := SpecYAML(cfg, "/tmp/repo")
-	parsed := parseSpec(t, out)
-	assert.True(t, parsed.Commands.Startup[3].Background,
-		"Background: true must be preserved on the wrapped kit step")
 }
 
 func TestSpecYAMLStartupSentinelLast(t *testing.T) {

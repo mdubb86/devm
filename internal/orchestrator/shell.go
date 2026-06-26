@@ -160,9 +160,6 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, san
 	// Cold start.
 	// Compute total user steps and begin the cold-start reporter sequence.
 	userTotal := len(cfg.Install)
-	for _, svc := range cfg.Services {
-		userTotal += len(svc.Startup)
-	}
 	reporter.SetTotal(userTotal)
 	reporter.Step("spawning sandbox", false)
 

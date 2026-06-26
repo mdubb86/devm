@@ -153,12 +153,11 @@ func readPhaseFailure(sb *sandbox.Sandbox, phase string, cfg schema.Config) (*Fa
 }
 
 // resolveUserCmdText returns a human-friendly description of step N's
-// command, indexing into cfg.Install (install phase) or service startup
-// commands (startup phase), accounting for the built-in step offsets:
+// command, indexing into cfg.Install (install phase) or the built-in
+// startup steps (startup phase), accounting for the step offsets:
 //
 //	install:   step 1 = bootstrap.sh, 2..N+1 = user[0..N-1]
-//	startup:   step 0 = cleanup, 1 = devm-startup, 2 = install-templates,
-//	           3..M+2 = user (across services in sorted-name + decl order)
+//	startup:   step 0 = cleanup, 1 = devm-startup, 2 = install-templates
 func resolveUserCmdText(phase string, stepN int, cfg schema.Config) string {
 	if phase == "install" {
 		if stepN == 1 {
@@ -180,22 +179,6 @@ func resolveUserCmdText(phase string, stepN int, cfg schema.Config) string {
 		return "devm-startup.sh"
 	case 2:
 		return "install-templates.sh"
-	}
-	// User startup: walk services in sorted name order, decl order within.
-	userIdx := stepN - 3
-	names := make([]string, 0, len(cfg.Services))
-	for n := range cfg.Services {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	count := 0
-	for _, name := range names {
-		for _, s := range cfg.Services[name].Startup {
-			if count == userIdx {
-				return fmt.Sprintf("%s: %s", name, strings.Join(s.Command, " "))
-			}
-			count++
-		}
 	}
 	return fmt.Sprintf("(unknown startup step %d)", stepN)
 }

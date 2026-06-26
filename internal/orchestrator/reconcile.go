@@ -70,7 +70,7 @@ func RunReconcileInner(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) 
 	res.Flavor = RecreateFlavor(changes)
 
 	if len(res.Applied) > 0 {
-		if err := ApplyLive(sb, res.Applied, cfg.Project.PortOffset, cfg, repoRoot); err != nil {
+		if err := ApplyLive(sb, res.Applied, cfg, repoRoot); err != nil {
 			return res, fmt.Errorf("apply live: %w", err)
 		}
 	}

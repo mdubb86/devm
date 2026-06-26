@@ -13,15 +13,9 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 		if override.Project.SandboxName != nil {
 			out.Project.SandboxName = *override.Project.SandboxName
 		}
-		if override.Project.PortOffset != nil {
-			out.Project.PortOffset = *override.Project.PortOffset
-		}
 		if override.Project.Proxy != nil {
 			out.Project.Proxy = *override.Project.Proxy
 		}
-	}
-	if override.BaseImage != nil && override.BaseImage.Docker != nil {
-		out.BaseImage.Docker = *override.BaseImage.Docker
 	}
 	if override.Network != nil && override.Network.AllowedDomains != nil {
 		out.Network.AllowedDomains = *override.Network.AllowedDomains
@@ -53,12 +47,6 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 			if soverride.Hostname != nil {
 				svc.Hostname = *soverride.Hostname
 			}
-			if soverride.EnvInject != nil {
-				svc.EnvInject = *soverride.EnvInject
-			}
-			if soverride.EnvHost != nil {
-				svc.EnvHost = *soverride.EnvHost
-			}
 			if soverride.Env != nil {
 				if svc.Env == nil {
 					svc.Env = map[string]string{}
@@ -73,8 +61,23 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 			if soverride.Templates != nil {
 				svc.Templates = *soverride.Templates
 			}
-			if soverride.Startup != nil {
-				svc.Startup = *soverride.Startup
+			if soverride.Exec != nil {
+				svc.Exec = *soverride.Exec
+			}
+			if soverride.WorkDir != nil {
+				svc.WorkDir = *soverride.WorkDir
+			}
+			if soverride.Restart != nil {
+				svc.Restart = *soverride.Restart
+			}
+			if soverride.After != nil {
+				svc.After = *soverride.After
+			}
+			if soverride.User != nil {
+				svc.User = *soverride.User
+			}
+			if soverride.Systemd != nil {
+				svc.Systemd = *soverride.Systemd
 			}
 			out.Services[name] = svc
 		}
@@ -87,6 +90,9 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 	}
 	if override.Path != nil {
 		out.Path = *override.Path
+	}
+	if override.Packages != nil {
+		out.Packages = *override.Packages
 	}
 	return out, nil
 }

@@ -125,21 +125,21 @@ func (s *scriptedRunner) RunStdin(stdin, name string, args ...string) error {
 	return s.Run(name, args...)
 }
 
-func cfgWith(services map[string]schema.Service, portOffset int) schema.Config {
+func cfgWith(services map[string]schema.Service) schema.Config {
 	return schema.Config{
 		Project: schema.Project{
 			ID:          "x",
 			SandboxName: "x-sbx",
-			PortOffset:  portOffset,
 		},
 		Services: services,
 	}
 }
 
 func TestReconcilePortsAddsMissing(t *testing.T) {
+	// Tart VMs: hostPort == sandboxPort (no offset).
 	cfg := cfgWith(map[string]schema.Service{
 		"api": {Port: 8080},
-	}, 60000)
+	})
 	runner := &scriptedRunner{listJSON: "[]"} // nothing currently published
 
 	sb := &sandbox.Sandbox{Name: "x-sbx"}
@@ -154,13 +154,13 @@ func TestReconcilePortsAddsMissing(t *testing.T) {
 		}
 	}
 	require.Len(t, publishes, 1)
-	assert.Contains(t, strings.Join(publishes[0], " "), "68080:8080")
+	assert.Contains(t, strings.Join(publishes[0], " "), "8080:8080")
 }
 
 func TestReconcilePortsRemovesExtra(t *testing.T) {
-	cfg := cfgWith(map[string]schema.Service{}, 60000) // no services
+	cfg := cfgWith(map[string]schema.Service{}) // no services
 	runner := &scriptedRunner{
-		listJSON: `[{"host_ip":"127.0.0.1","host_port":68080,"sandbox_port":8080,"protocol":"tcp"}]`,
+		listJSON: `[{"host_ip":"127.0.0.1","host_port":8080,"sandbox_port":8080,"protocol":"tcp"}]`,
 	}
 
 	sb := &sandbox.Sandbox{Name: "x-sbx"}
@@ -174,15 +174,15 @@ func TestReconcilePortsRemovesExtra(t *testing.T) {
 		}
 	}
 	require.Len(t, unpublishes, 1)
-	assert.Contains(t, strings.Join(unpublishes[0], " "), "68080:8080")
+	assert.Contains(t, strings.Join(unpublishes[0], " "), "8080:8080")
 }
 
 func TestReconcilePortsNoOpWhenMatching(t *testing.T) {
 	cfg := cfgWith(map[string]schema.Service{
 		"api": {Port: 8080},
-	}, 60000)
+	})
 	runner := &scriptedRunner{
-		listJSON: `[{"host_ip":"127.0.0.1","host_port":68080,"sandbox_port":8080,"protocol":"tcp"}]`,
+		listJSON: `[{"host_ip":"127.0.0.1","host_port":8080,"sandbox_port":8080,"protocol":"tcp"}]`,
 	}
 
 	sb := &sandbox.Sandbox{Name: "x-sbx"}
@@ -200,7 +200,7 @@ func TestReconcilePortsHandlesMultipleServicesDeterministically(t *testing.T) {
 		"api": {Port: 8080},
 		"db":  {Port: 5432},
 		"web": {Port: 3000},
-	}, 60000)
+	})
 	runner := &scriptedRunner{listJSON: "[]"}
 	sb := &sandbox.Sandbox{Name: "x-sbx"}
 	require.NoError(t, ReconcilePortsWithRunner(sb, cfg, runner))
@@ -214,13 +214,13 @@ func TestReconcilePortsHandlesMultipleServicesDeterministically(t *testing.T) {
 	require.Len(t, seen, 3)
 	// Order must be deterministic — sort the slice and verify contents.
 	sort.Strings(seen)
-	assert.Contains(t, seen[0], "63000:3000")
-	assert.Contains(t, seen[1], "65432:5432")
-	assert.Contains(t, seen[2], "68080:8080")
+	assert.Contains(t, seen[0], "3000:3000")
+	assert.Contains(t, seen[1], "5432:5432")
+	assert.Contains(t, seen[2], "8080:8080")
 }
 
 func TestReconcilePortsBubblesListError(t *testing.T) {
-	cfg := cfgWith(map[string]schema.Service{}, 60000)
+	cfg := cfgWith(map[string]schema.Service{})
 	runner := &scriptedRunner{
 		failOn: map[string]error{"--json": errors.New("boom")},
 	}
@@ -238,11 +238,11 @@ func TestReconcilePortsMixedAddRemoveKeep(t *testing.T) {
 	cfg := cfgWith(map[string]schema.Service{
 		"api": {Port: 8080},
 		"web": {Port: 3000},
-	}, 60000)
+	})
 	runner := &scriptedRunner{
 		listJSON: `[` +
-			`{"host_ip":"127.0.0.1","host_port":68080,"sandbox_port":8080,"protocol":"tcp"},` +
-			`{"host_ip":"127.0.0.1","host_port":65432,"sandbox_port":5432,"protocol":"tcp"}` +
+			`{"host_ip":"127.0.0.1","host_port":8080,"sandbox_port":8080,"protocol":"tcp"},` +
+			`{"host_ip":"127.0.0.1","host_port":5432,"sandbox_port":5432,"protocol":"tcp"}` +
 			`]`,
 	}
 	sb := &sandbox.Sandbox{Name: "x-sbx"}
@@ -259,16 +259,16 @@ func TestReconcilePortsMixedAddRemoveKeep(t *testing.T) {
 		}
 	}
 	require.Len(t, publishes, 1, "expected exactly one publish for the new service")
-	assert.Contains(t, publishes[0], "63000:3000")
+	assert.Contains(t, publishes[0], "3000:3000")
 
 	require.Len(t, unpublishes, 1, "expected exactly one unpublish for the removed service")
-	assert.Contains(t, unpublishes[0], "65432:5432")
+	assert.Contains(t, unpublishes[0], "5432:5432")
 }
 
 func TestReconcilePortsBubblesPublishError(t *testing.T) {
 	cfg := cfgWith(map[string]schema.Service{
 		"api": {Port: 8080},
-	}, 60000)
+	})
 	runner := &scriptedRunner{
 		listJSON: "[]",
 		failOn:   map[string]error{"--publish": errors.New("publish boom")},
@@ -277,11 +277,11 @@ func TestReconcilePortsBubblesPublishError(t *testing.T) {
 	err := ReconcilePortsWithRunner(sb, cfg, runner)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publish boom")
-	assert.Contains(t, err.Error(), "publish 127.0.0.1:68080:8080", "error should mention the failing spec")
+	assert.Contains(t, err.Error(), "publish 127.0.0.1:8080:8080", "error should mention the failing spec")
 }
 
 func TestReconcilePortsBubblesParseError(t *testing.T) {
-	cfg := cfgWith(map[string]schema.Service{}, 60000)
+	cfg := cfgWith(map[string]schema.Service{})
 	runner := &scriptedRunner{listJSON: "not-json"}
 	sb := &sandbox.Sandbox{Name: "x-sbx"}
 	err := ReconcilePortsWithRunner(sb, cfg, runner)
@@ -323,13 +323,13 @@ func TestPublishWithVerifyRetriesOnEndpointNotReady(t *testing.T) {
 	// new anchor-alive flow, port reconcile runs immediately after
 	// exec-ready, which is a race with endpoint allocation.
 	endpointErr := errors.New(
-		"sbx ports --publish 68080:8080: exit status 1: " +
+		"sbx ports --publish 8080:8080: exit status 1: " +
 			"ERROR: publish port: failed to resolve endpoint: " +
 			"no container endpoint with IP address found")
 
 	cfg := cfgWith(map[string]schema.Service{
 		"api": {Port: 8080},
-	}, 60000)
+	})
 	runner := &flakeyRunner{
 		inner:      &scriptedRunner{listJSON: "[]"},
 		publishErr: endpointErr,

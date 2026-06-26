@@ -45,9 +45,9 @@ func TestChangeKindBuckets(t *testing.T) {
 }
 
 func TestComputePathChange(t *testing.T) {
-	old := cfgWith(map[string]schema.Service{}, 0)
+	old := cfgWith(map[string]schema.Service{})
 	old.Path = []string{"/r/.cargo/bin"}
-	new := cfgWith(map[string]schema.Service{}, 0)
+	new := cfgWith(map[string]schema.Service{})
 	new.Path = []string{"/r/.cargo/bin", "/r/node_modules/.bin"}
 
 	changes := computePathChange(old, new)
@@ -60,15 +60,15 @@ func TestComputePathChange(t *testing.T) {
 	assert.Empty(t, computePathChange(old, old))
 
 	// Reorder is also a change.
-	reordered := cfgWith(map[string]schema.Service{}, 0)
+	reordered := cfgWith(map[string]schema.Service{})
 	reordered.Path = []string{"/r/node_modules/.bin", "/r/.cargo/bin"}
 	assert.Len(t, computePathChange(new, reordered), 1, "reorder must produce a change")
 }
 
 func TestComputeMountsChanges(t *testing.T) {
-	old := cfgWith(map[string]schema.Service{}, 0)
+	old := cfgWith(map[string]schema.Service{})
 	old.Mounts = []string{"/etc/hosts:ro"}
-	new := cfgWith(map[string]schema.Service{}, 0)
+	new := cfgWith(map[string]schema.Service{})
 	new.Mounts = []string{"/etc/hosts:ro", "/tmp:ro"}
 
 	changes := computeMountsChanges(old, new)
@@ -173,10 +173,10 @@ func TestComputeEnvChanges(t *testing.T) {
 
 func TestComputeStartupChanges(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Startup: []schema.StartupCommand{{Command: []string{"echo", "a"}}}},
+		"api": {Exec: []string{"echo", "a"}},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Startup: []schema.StartupCommand{{Command: []string{"echo", "b"}}}},
+		"api": {Exec: []string{"echo", "b"}},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir())
 	require.NoError(t, err)
@@ -207,12 +207,16 @@ func TestComputeMaskChanges(t *testing.T) {
 }
 
 func TestComputeImageChange(t *testing.T) {
-	old := schema.Config{BaseImage: schema.BaseImage{Docker: false}}
-	new := schema.Config{BaseImage: schema.BaseImage{Docker: true}}
+	// BaseImage is now an empty struct; image changes are detected
+	// via identity change or install changes. Test that no KindImageChange
+	// is emitted for identical (empty) BaseImage structs.
+	old := schema.Config{Project: schema.Project{ID: "p", SandboxName: "p"}}
+	new := schema.Config{Project: schema.Project{ID: "p", SandboxName: "p"}}
 	changes, err := ComputeAllChanges(old, new, t.TempDir())
 	require.NoError(t, err)
-	assert.Len(t, changes, 1)
-	assert.Equal(t, KindImageChange, changes[0].Kind)
+	for _, c := range changes {
+		assert.NotEqual(t, KindImageChange, c.Kind, "no image change for identical config")
+	}
 }
 
 func TestComputeIdentityChange(t *testing.T) {

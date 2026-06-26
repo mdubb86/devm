@@ -17,12 +17,11 @@ func TestApplyLive_PortAdd(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	err := ApplyLive(sb, []Change{
 		{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"},
-	}, 50000, schema.Config{}, t.TempDir())
+	}, schema.Config{}, t.TempDir())
 	assert.NoError(t, err)
 	cmd := strings.Join(r.lastArgs[0], " ")
-	// Explicit 127.0.0.1: prefix — see publishSpec in ports.go for why
-	// we don't use the bare HOST:SANDBOX form anymore.
-	assert.Contains(t, cmd, "sbx ports x --publish 127.0.0.1:58080:8080")
+	// Tart VMs: host port == sandbox port (no offset).
+	assert.Contains(t, cmd, "sbx ports x --publish 127.0.0.1:8080:8080")
 }
 
 func TestApplyLive_PortRemove(t *testing.T) {
@@ -30,10 +29,10 @@ func TestApplyLive_PortRemove(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	err := ApplyLive(sb, []Change{
 		{Kind: KindPortRemove, Service: "api", Key: "8080", Old: "8080"},
-	}, 50000, schema.Config{}, t.TempDir())
+	}, schema.Config{}, t.TempDir())
 	assert.NoError(t, err)
 	cmd := strings.Join(r.lastArgs[0], " ")
-	assert.Contains(t, cmd, "sbx ports x --unpublish 127.0.0.1:58080:8080")
+	assert.Contains(t, cmd, "sbx ports x --unpublish 127.0.0.1:8080:8080")
 }
 
 func TestApplyLive_PortChange(t *testing.T) {
@@ -41,13 +40,13 @@ func TestApplyLive_PortChange(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	err := ApplyLive(sb, []Change{
 		{Kind: KindPortChange, Service: "api", Key: "9090", Old: "8080", New: "9090"},
-	}, 50000, schema.Config{}, t.TempDir())
+	}, schema.Config{}, t.TempDir())
 	assert.NoError(t, err)
 	assert.Len(t, r.lastArgs, 2, "port_change should be 2 calls: unpublish then publish")
 	c0 := strings.Join(r.lastArgs[0], " ")
 	c1 := strings.Join(r.lastArgs[1], " ")
-	assert.Contains(t, c0, "--unpublish 127.0.0.1:58080:8080")
-	assert.Contains(t, c1, "--publish 127.0.0.1:59090:9090")
+	assert.Contains(t, c0, "--unpublish 127.0.0.1:8080:8080")
+	assert.Contains(t, c1, "--publish 127.0.0.1:9090:9090")
 }
 
 func TestApplyLive_NetworkAdd(t *testing.T) {
@@ -55,7 +54,7 @@ func TestApplyLive_NetworkAdd(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	err := ApplyLive(sb, []Change{
 		{Kind: KindNetworkAdd, Key: "newdomain.example.com", New: "newdomain.example.com"},
-	}, 50000, schema.Config{}, t.TempDir())
+	}, schema.Config{}, t.TempDir())
 	assert.NoError(t, err)
 	cmd := strings.Join(r.lastArgs[0], " ")
 	// sbx 0.29+ requires scope: SANDBOX before RESOURCES. devm uses
@@ -69,7 +68,7 @@ func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
 	err := ApplyLive(sb, []Change{
 		{Kind: KindInstallChange},
 		{Kind: KindMaskChange},
-	}, 50000, schema.Config{}, t.TempDir())
+	}, schema.Config{}, t.TempDir())
 	assert.NoError(t, err)
 	assert.Empty(t, r.lastArgs, "non-LIVE changes must be ignored by ApplyLive")
 }
@@ -79,7 +78,7 @@ func TestApplyLive_NetworkRemove(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	err := ApplyLive(sb, []Change{
 		{Kind: KindNetworkRemove, Key: "gone.example.com", Old: "gone.example.com"},
-	}, 50000, schema.Config{}, t.TempDir())
+	}, schema.Config{}, t.TempDir())
 	assert.NoError(t, err)
 	require.NotEmpty(t, r.lastArgs)
 	cmd := strings.Join(r.lastArgs[0], " ")
@@ -94,7 +93,7 @@ func TestApplyLive_EnvChange_WritesDevmEnv(t *testing.T) {
 
 	err := ApplyLive(sb, []Change{
 		{Kind: KindEnvChange, Key: "FOO", Old: "old", New: "bar"},
-	}, 0, cfg, dir)
+	}, cfg, dir)
 	require.NoError(t, err)
 	assert.Empty(t, r.lastArgs, "env changes must not trigger any sbx exec from apply_live (mount surfaces the file)")
 
@@ -111,7 +110,7 @@ func TestApplyLive_EnvAddAndRemove_AlsoWriteDevmEnv(t *testing.T) {
 		cfg := schema.Config{Env: map[string]string{"K": "v"}}
 		err := ApplyLive(sb, []Change{
 			{Kind: kind, Key: "K", New: "v"},
-		}, 0, cfg, dir)
+		}, cfg, dir)
 		require.NoError(t, err, "kind=%v", kind)
 		_, err = os.Stat(filepath.Join(dir, ".devm", ".env"))
 		require.NoError(t, err, ".devm/.env must be written for kind=%v", kind)
@@ -127,7 +126,7 @@ func TestApplyLive_MultipleEnvChanges_SingleWrite(t *testing.T) {
 		{Kind: KindEnvAdd, Key: "A", New: "1"},
 		{Kind: KindEnvChange, Key: "B", Old: "x", New: "2"},
 		{Kind: KindEnvAdd, Key: "C", New: "3"},
-	}, 0, cfg, dir)
+	}, cfg, dir)
 	require.NoError(t, err)
 	bs, err := os.ReadFile(filepath.Join(dir, ".devm", ".env"))
 	require.NoError(t, err)
@@ -143,7 +142,7 @@ func TestApplyLive_NoEnvChange_DoesNotWriteDevmEnv(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	err := ApplyLive(sb, []Change{
 		{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"},
-	}, 50000, schema.Config{}, dir)
+	}, schema.Config{}, dir)
 	require.NoError(t, err)
 	_, err = os.Stat(filepath.Join(dir, ".devm", ".env"))
 	assert.True(t, os.IsNotExist(err), "apply_live should not touch .devm/.env when there's no env change")
@@ -169,7 +168,7 @@ func TestApplyLive_TemplateChange_InvokesDispatcher(t *testing.T) {
 		{Kind: KindTemplateChange, Service: "web", Detail: "/etc/foo", New: "installed"},
 		{Kind: KindTemplateChange, Service: "api", Detail: "/etc/bar", New: "installed"},
 	}
-	assert.NoError(t, ApplyLive(sb, changes, 50000, cfg, dir))
+	assert.NoError(t, ApplyLive(sb, changes, cfg, dir))
 
 	// One single sbx exec invocation regardless of how many templates changed.
 	dispatchCalls := 0

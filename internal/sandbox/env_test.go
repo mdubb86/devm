@@ -17,7 +17,7 @@ func TestEnvArgsForwardsHostTermVars(t *testing.T) {
 	defer os.Unsetenv("TERM")
 	defer os.Unsetenv("COLORTERM")
 
-	cfg := schema.Config{Project: schema.Project{PortOffset: 10}}
+	cfg := schema.Config{Project: schema.Project{ID: "x", SandboxName: "x-sbx"}}
 	args := EnvArgs(cfg)
 	assert.Contains(t, args, "-e")
 	assert.Contains(t, args, "TERM=xterm-ghostty")
@@ -32,18 +32,14 @@ func TestEnvArgsDoesNotEmitCfgEnv(t *testing.T) {
 	}
 }
 
-func TestEnvArgsDoesNotEmitServiceEnvOrInjectedPorts(t *testing.T) {
+func TestEnvArgsDoesNotEmitServiceEnv(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{PortOffset: 10},
 		Services: map[string]schema.Service{
-			"db": {Port: 5432, EnvInject: true, EnvHost: "0.0.0.0",
-				Env: map[string]string{"KEY": "val"}},
+			"db": {Port: 5432, Env: map[string]string{"KEY": "val"}},
 		},
 	}
 	args := EnvArgs(cfg)
 	for _, a := range args {
-		assert.NotContains(t, a, "DB_PORT=", "moved to PersistentEnv")
-		assert.NotContains(t, a, "DB_HOST=", "moved to PersistentEnv")
 		assert.NotContains(t, a, "DB_KEY=", "moved to PersistentEnv")
 	}
 }
@@ -51,7 +47,7 @@ func TestEnvArgsDoesNotEmitServiceEnvOrInjectedPorts(t *testing.T) {
 // ---- PersistentEnv: file contents ----
 
 func TestPersistentEnvEmptyConfigStillHasPathLine(t *testing.T) {
-	cfg := schema.Config{Project: schema.Project{PortOffset: 0}}
+	cfg := schema.Config{}
 	out := PersistentEnv(cfg)
 	assert.Contains(t, out, `export PATH="$WORKSPACE/.devm/scripts:$PATH"`)
 	// PATH line must be last so $WORKSPACE has been exported by an earlier line.
@@ -111,66 +107,12 @@ func TestPersistentEnvServiceEnvFlatPrefixed(t *testing.T) {
 	assert.Contains(t, out, `export CADDY_ROOT='/srv'`)
 }
 
-func TestPersistentEnvEnvInjectEmitsPortAndHost(t *testing.T) {
-	cfg := schema.Config{
-		Project: schema.Project{PortOffset: 10},
-		Services: map[string]schema.Service{
-			"app": {Port: 3000, EnvInject: true, EnvHost: "0.0.0.0"},
-		},
-	}
-	out := PersistentEnv(cfg)
-	// env_inject is for in-VM consumers; the target service binds at
-	// svc.Port (3000), not port+offset (3010, which is the Mac-side
-	// publish port). Same bug pattern + fix as the Caddyfile renderer.
-	assert.Contains(t, out, `export APP_PORT='3000'`)
-	assert.NotContains(t, out, `APP_PORT='3010'`, "must use in-VM listen port, not host bind")
-	assert.Contains(t, out, `export APP_HOST='0.0.0.0'`)
-}
-
-func TestPersistentEnvEnvInjectOmitsHostWhenNotSet(t *testing.T) {
-	cfg := schema.Config{
-		Project: schema.Project{PortOffset: 10},
-		Services: map[string]schema.Service{
-			"app": {Port: 3000, EnvInject: true},
-		},
-	}
-	out := PersistentEnv(cfg)
-	assert.Contains(t, out, `export APP_PORT='3000'`)
-	assert.NotContains(t, out, "APP_HOST=", "omit when not set")
-}
-
-// TestPersistentEnvEnvInjectIgnoresPortOffset is a focused regression
-// pin for the 2026-06-12 fix where env_inject's NAME_PORT was wrongly
-// set to svc.Port + project.PortOffset instead of svc.Port.
-func TestPersistentEnvEnvInjectIgnoresPortOffset(t *testing.T) {
-	cfg := schema.Config{
-		Project: schema.Project{PortOffset: 100},
-		Services: map[string]schema.Service{
-			"api": {Port: 8000, EnvInject: true},
-		},
-	}
-	out := PersistentEnv(cfg)
-	assert.Contains(t, out, `export API_PORT='8000'`)
-	assert.NotContains(t, out, "8100", "must NOT use host bind port (port + offset)")
-}
-
-func TestPersistentEnvSkipsSupabasePrefixForPortInject(t *testing.T) {
-	cfg := schema.Config{
-		Project: schema.Project{PortOffset: 10},
-		Services: map[string]schema.Service{
-			"supabase_api": {Port: 54321, EnvInject: true},
-		},
-	}
-	out := PersistentEnv(cfg)
-	assert.NotContains(t, out, "SUPABASE_API_PORT=", "supabase-prefix services must skip port injection")
-}
-
 func TestPersistentEnvDeterministicAcrossRuns(t *testing.T) {
 	cfg := schema.Config{
 		Env: map[string]string{"A": "1", "B": "2", "C": "3"},
 		Services: map[string]schema.Service{
-			"x": {Port: 1000, EnvInject: true, Env: map[string]string{"K": "v"}},
-			"y": {Port: 2000, EnvInject: true},
+			"x": {Port: 1000, Env: map[string]string{"K": "v"}},
+			"y": {Port: 2000},
 		},
 	}
 	a := PersistentEnv(cfg)

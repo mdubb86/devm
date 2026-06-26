@@ -276,24 +276,32 @@ func computeEnvChanges(old, new schema.Config) []Change {
 func computeStartupChanges(old, new schema.Config) []Change {
 	var out []Change
 	for _, svc := range unionServiceNames(old.Services, new.Services) {
-		if !startupsEqual(old.Services[svc].Startup, new.Services[svc].Startup) {
+		if !execConfigEqual(old.Services[svc], new.Services[svc]) {
 			out = append(out, Change{Kind: KindStartupChange, Service: svc})
 		}
 	}
 	return out
 }
 
-func startupsEqual(a, b []schema.StartupCommand) bool {
-	if len(a) != len(b) {
+// execConfigEqual compares the Tart-era exec/systemd service config fields.
+func execConfigEqual(a, b schema.Service) bool {
+	if !stringSliceEqual(a.Exec, b.Exec) {
 		return false
 	}
-	for i := range a {
-		if !stringSliceEqual(a[i].Command, b[i].Command) {
-			return false
-		}
-		if a[i].Background != b[i].Background {
-			return false
-		}
+	if a.WorkDir != b.WorkDir {
+		return false
+	}
+	if a.Restart != b.Restart {
+		return false
+	}
+	if !stringSliceEqual(a.After, b.After) {
+		return false
+	}
+	if a.User != b.User {
+		return false
+	}
+	if a.Systemd != b.Systemd {
+		return false
 	}
 	return true
 }

@@ -20,8 +20,6 @@ func TestLoadBaseOnly(t *testing.T) {
 project:
   id: test
   sandbox_name: test-sbx
-base_image:
-  docker: true
 services:
   webapp:
     port: 3000
@@ -34,24 +32,21 @@ services:
 	assert.Equal(t, 3000, cfg.Services["webapp"].Port)
 }
 
-func TestLoadWithOverride(t *testing.T) {
+func TestLoadWithOverride_Proxy(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
   id: test
   sandbox_name: test-sbx
-  port_offset: 0
-base_image:
-  docker: true
 `)
 	writeFile(t, dir, "devm.me.yaml", `
 project:
-  port_offset: 25
+  proxy: none
 `)
 
 	cfg, err := Load(dir)
 	assert.NoError(t, err)
-	assert.Equal(t, 25, cfg.Project.PortOffset)
+	assert.Equal(t, "none", cfg.Project.Proxy)
 }
 
 func TestLoadResolvesEnvAndInjectsWorkspaceAndIsSandbox(t *testing.T) {
@@ -60,8 +55,6 @@ func TestLoadResolvesEnvAndInjectsWorkspaceAndIsSandbox(t *testing.T) {
 project:
   id: test
   sandbox_name: test-sbx
-base_image:
-  docker: true
 env:
   CLAUDE_CONFIG_DIR: $WORKSPACE/.claude
 `)
@@ -82,8 +75,6 @@ func TestLoadReportsReservedEnvKeyError(t *testing.T) {
 project:
   id: test
   sandbox_name: test-sbx
-base_image:
-  docker: true
 env:
   WORKSPACE: /tmp/sneaky
 `)
@@ -117,8 +108,6 @@ func TestLoad_RejectsLegacyHostnameApex_InOverride(t *testing.T) {
 project:
   id: foo
   sandbox_name: foo-sbx
-base_image:
-  docker: true
 `)
 	writeFile(t, dir, "devm.me.yaml", `
 project:
@@ -157,8 +146,6 @@ func TestLoad_RejectsUnknownTopLevelField_InOverride(t *testing.T) {
 project:
   id: foo
   sandbox_name: foo-sbx
-base_image:
-  docker: true
 `)
 	writeFile(t, dir, "devm.me.yaml", `
 volumes:
@@ -177,8 +164,6 @@ func TestLoadStrictFailsOnMissingRequiredField(t *testing.T) {
 project:
   id: test
   # missing sandbox_name
-base_image:
-  docker: false
 `)
 
 	_, err := Load(dir)

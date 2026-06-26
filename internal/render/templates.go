@@ -28,18 +28,16 @@ type TemplateData struct {
 type ProjectData struct {
 	ID          string
 	SandboxName string
-	PortOffset  int
 }
 
 // ServiceData mirrors schema.Service fields useful to templates plus
-// the computed HostPort = PortOffset + Port (0 if Port == 0).
+// the computed HostPort = Port (Tart VMs have their own IP; canonical
+// port == host-visible port on the VM's IP).
 type ServiceData struct {
-	Port int
-	HostPort  int
-	Hostname  string
-	EnvInject bool
-	EnvHost   string
-	Env       map[string]string
+	Port     int
+	HostPort int
+	Hostname string
+	Env      map[string]string
 }
 
 // RenderTemplates renders every services.*.templates entry into a map
@@ -84,21 +82,16 @@ func RenderTemplates(cfg schema.Config, repoRoot string) (map[string]string, err
 func buildTemplateData(cfg schema.Config) TemplateData {
 	svcData := make(map[string]ServiceData, len(cfg.Services))
 	for name, s := range cfg.Services {
-		hostPort := 0
-		if s.Port != 0 {
-			hostPort = cfg.Project.PortOffset + s.Port
-		}
+		hostPort := s.Port // Tart VMs have their own IP; canonical == host-visible
 		env := s.Env
 		if env == nil {
 			env = map[string]string{}
 		}
 		svcData[name] = ServiceData{
-			Port: s.Port,
-			HostPort:  hostPort,
-			Hostname:  s.Hostname,
-			EnvInject: s.EnvInject,
-			EnvHost:   s.EnvHost,
-			Env:       env,
+			Port:     s.Port,
+			HostPort: hostPort,
+			Hostname: s.Hostname,
+			Env:      env,
 		}
 	}
 	pEnv := cfg.Env
@@ -109,7 +102,6 @@ func buildTemplateData(cfg schema.Config) TemplateData {
 		Project: ProjectData{
 			ID:          cfg.Project.ID,
 			SandboxName: cfg.Project.SandboxName,
-			PortOffset:  cfg.Project.PortOffset,
 		},
 		Service: svcData,
 		Env:     pEnv,

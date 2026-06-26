@@ -88,24 +88,20 @@ func TestMaskPathAllowsCleanRelative(t *testing.T) {
 }
 
 func TestServiceValidate(t *testing.T) {
-	// Minimum valid: just canonical
+	// Minimum valid: just canonical port
 	s := Service{Port: 3000}
 	assert.NoError(t, s.Validate())
-
-	// env_host without env_inject is a misconfiguration
-	bad := Service{Port: 3000, EnvHost: "0.0.0.0"}
-	assert.Error(t, bad.Validate(), "env_host requires env_inject=true")
-
-	// env_inject without canonical port has nothing to inject
-	noPort := Service{EnvInject: true}
-	assert.Error(t, noPort.Validate(), "env_inject requires canonical")
 
 	// Workspace pseudo-service: no port OK, but must have at least one mask
 	workspace := Service{Masks: []Mask{{Path: "node_modules", Size: "2G"}}}
 	assert.NoError(t, workspace.Validate())
 
+	// exec-only service: no port, no masks, just exec
+	execOnly := Service{Exec: []string{"/usr/bin/redis-server"}}
+	assert.NoError(t, execOnly.Validate())
+
 	emptyWorkspace := Service{}
-	assert.Error(t, emptyWorkspace.Validate(), "service must have canonical or at least one mask")
+	assert.Error(t, emptyWorkspace.Validate(), "service must have canonical, mask, exec, or systemd")
 }
 
 func TestServiceHostnameMustEndInDotTest(t *testing.T) {
@@ -143,8 +139,7 @@ func TestConfigValidate(t *testing.T) {
 			ID:          "test",
 			SandboxName: "test-sbx",
 		},
-		BaseImage: BaseImage{Docker: true},
-		Network:   Network{AllowedDomains: []string{"github.com"}},
+		Network: Network{AllowedDomains: []string{"github.com"}},
 		Services: map[string]Service{
 			"webapp": {Port: 3000, Hostname: "test.test"},
 		},
@@ -161,9 +156,8 @@ func TestConfigValidate(t *testing.T) {
 
 	// Port collision across services
 	dup2 := Config{
-		Project:   c.Project,
-		BaseImage: c.BaseImage,
-		Network:   c.Network,
+		Project: c.Project,
+		Network: c.Network,
 		Services: map[string]Service{
 			"a": {Port: 3000},
 			"b": {Port: 3000},
@@ -182,53 +176,20 @@ func TestConfigValidatesPortRange(t *testing.T) {
 		Project: Project{ID: "p", SandboxName: "p"},
 	}
 
-	// port_offset + canonical exceeds 65535 → error.
-	over := base
-	over.Project.PortOffset = 70000
-	over.Services = map[string]Service{"api": {Port: 8080}}
-	err := over.Validate()
-	require.Error(t, err, "offset+canonical over 65535 must error")
-	assert.Contains(t, err.Error(), "65535")
-
-	// canonical out of range (negative / too large) → error.
+	// canonical out of range (too large) → error.
 	bigPort := base
 	bigPort.Services = map[string]Service{"api": {Port: 70000}}
 	assert.Error(t, bigPort.Validate(), "canonical over 65535 must error")
 
-	// Valid combination → no error.
+	// Valid port → no error.
 	ok := base
-	ok.Project.PortOffset = 51000
-	ok.Services = map[string]Service{"api": {Port: 8080}} // 59080, fine
+	ok.Services = map[string]Service{"api": {Port: 8080}}
 	assert.NoError(t, ok.Validate())
-
-	// Exactly at the boundary is allowed.
-	boundary := base
-	boundary.Project.PortOffset = 60000
-	boundary.Services = map[string]Service{"api": {Port: 5535}} // 65535
-	assert.NoError(t, boundary.Validate())
-}
-
-func TestStartupCommandRequiresNonEmptyCommand(t *testing.T) {
-	err := StartupCommand{}.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "command")
-
-	err = StartupCommand{Command: []string{}}.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "command")
-
-	err = StartupCommand{Command: []string{""}}.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "command")
-
-	err = StartupCommand{Command: []string{"pg_ctl", "start"}}.Validate()
-	assert.NoError(t, err)
 }
 
 func TestConfigValidatesInstallSteps(t *testing.T) {
 	cfg := Config{
-		Project:   Project{ID: "x", SandboxName: "x-sbx"},
-		BaseImage: BaseImage{Docker: false},
+		Project: Project{ID: "x", SandboxName: "x-sbx"},
 		Install: []string{
 			"", // invalid
 		},
@@ -236,17 +197,6 @@ func TestConfigValidatesInstallSteps(t *testing.T) {
 	err := cfg.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "install[0]")
-}
-
-func TestServiceValidatesStartupSteps(t *testing.T) {
-	svc := Service{
-		Startup: []StartupCommand{
-			{Command: []string{}}, // invalid
-		},
-	}
-	err := svc.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "startup[0]")
 }
 
 func TestResolveMount(t *testing.T) {
@@ -410,17 +360,6 @@ func TestConfigValidateWithRootChecksExistence(t *testing.T) {
 	require.NoError(t, relCfg.ValidateWithRoot(tmp))
 }
 
-func TestServiceMayHaveOnlyStartup(t *testing.T) {
-	// A daemon-style service: no canonical port, no masks, but startup.
-	svc := Service{
-		Startup: []StartupCommand{
-			{Command: []string{"my-daemon"}},
-		},
-	}
-	err := svc.Validate()
-	assert.NoError(t, err, "a service with only startup commands should be valid")
-}
-
 func TestProject_Proxy_Validation(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -492,10 +431,8 @@ func TestCheckUnknownKeys_AllValidFields_Accepted(t *testing.T) {
 project:
   id: foo
   sandbox_name: foo-sbx
-  port_offset: 50000
   proxy: caddy
-base_image:
-  docker: false
+base_image: {}
 network:
   allowed_domains: [github.com]
 env:
@@ -509,6 +446,8 @@ mounts:
   - ~/.aws:ro
 path:
   - $WORKSPACE/bin
+packages:
+  - jq
 `)
 	require.NoError(t, CheckUnknownKeys(yamlBlob))
 }
@@ -547,4 +486,85 @@ func TestTemplateValidate(t *testing.T) {
 	err = rel.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "absolute")
+}
+
+func TestService_SystemdOverride_ExclusiveWithDeclarative(t *testing.T) {
+	s := Service{
+		Systemd: "[Unit]\n[Service]\nExecStart=/bin/true",
+		Exec:    []string{"/bin/true"},
+	}
+	err := s.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+func TestService_Restart_ValidValues(t *testing.T) {
+	cases := []struct {
+		val string
+		ok  bool
+	}{
+		{"", true},
+		{"no", true},
+		{"on-failure", true},
+		{"always", true},
+		{"yes", false},
+		{"sometimes", false},
+	}
+	for _, c := range cases {
+		t.Run(c.val, func(t *testing.T) {
+			s := Service{Exec: []string{"/bin/true"}, Restart: c.val}
+			err := s.Validate()
+			if c.ok {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "restart")
+			}
+		})
+	}
+}
+
+func TestConfig_MaskMustBeInsideShare(t *testing.T) {
+	cfg := Config{
+		Project: Project{ID: "x", SandboxName: "x-sbx"},
+		Services: map[string]Service{
+			"api": {
+				Exec:  []string{"/bin/true"},
+				Masks: []Mask{{Path: "node_modules", Size: "1G"}},
+			},
+		},
+	}
+	require.NoError(t, cfg.Validate(), "relative path is workspace-relative; should pass")
+
+	cfg.Services["api"] = Service{
+		Exec:  []string{"/bin/true"},
+		Masks: []Mask{{Path: "../escape", Size: "1G"}},
+	}
+	require.Error(t, cfg.Validate(), "../escape should be rejected")
+
+	cfg.Services["api"] = Service{
+		Exec:  []string{"/bin/true"},
+		Masks: []Mask{{Path: "/tmp/outside", Size: "1G"}},
+	}
+	require.Error(t, cfg.Validate(), "absolute path not under any mount should be rejected")
+}
+
+func TestPackages_TopLevelAccepted(t *testing.T) {
+	cfg := Config{
+		Project:  Project{ID: "x", SandboxName: "x-sbx"},
+		Packages: []string{"jq", "postgresql-client"},
+	}
+	require.NoError(t, cfg.Validate())
+}
+
+func TestCheckUnknownKeys_RejectsLegacyPortOffset(t *testing.T) {
+	yamlText := []byte(`
+project:
+  id: x
+  sandbox_name: x-sbx
+  port_offset: 51000
+`)
+	err := CheckUnknownKeys(yamlText)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "port_offset")
 }
