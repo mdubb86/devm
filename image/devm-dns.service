@@ -1,0 +1,15 @@
+[Unit]
+Description=devm in-VM DNS responder (dnsmasq for *.test)
+Documentation=https://github.com/mdubb86/devm
+After=network.target
+Wants=network.target
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/dnsmasq --conf-file=/etc/dnsmasq.conf
+ExecReload=/bin/kill -HUP $MAINPID
+PIDFile=/run/dnsmasq/dnsmasq.pid
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
