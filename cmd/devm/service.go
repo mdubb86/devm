@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -117,102 +118,114 @@ var installCmd = &cobra.Command{
 			return fmt.Errorf("start after install: %w", err)
 		}
 
-		// DNS resolver setup — sudo only when actually needed.
-		dnsOK := setupDNS()
-
-		// CA trust — sudo only when needed.
-		if dnsOK {
-			setupCATrust()
-		}
-
+		// All privileged setup (DNS resolver file + CA trust) runs
+		// under a single sudo invocation so the user sees exactly one
+		// password prompt when anything's actually needed.
+		runPrivilegedInstall()
 		return nil
 	},
 }
 
-// setupDNS configures the /etc/resolver/test file if needed.
-// Returns true if DNS setup succeeded or was already in place,
-// false if a fatal check error occurred (further setup is skipped).
-func setupDNS() bool {
-	state, err := serviceapi.CheckResolverFile()
+// runPrivilegedInstall consolidates DNS resolver setup and CA trust
+// install into one sudo call. Both checks (CheckResolverFile,
+// CheckCATrusted) are unprivileged; we only shell out to sudo when
+// at least one step actually needs to happen. Re-running install
+// after everything is in place produces zero sudo prompts.
+func runPrivilegedInstall() {
+	dnsState, err := serviceapi.CheckResolverFile()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "note: could not check %s: %v\n",
 			serviceapi.ResolverFilePath, err)
 		fmt.Println("devm service installed and started.")
-		return false
+		return
 	}
-	switch state {
-	case serviceapi.ResolverFileMatches:
-		fmt.Println("devm service installed; DNS resolver already configured.")
-	case serviceapi.ResolverFileMissing:
-		fmt.Println("devm service installed.")
-		fmt.Println("Setting up DNS resolver for .test (requires sudo)...")
-		if err := serviceapi.WriteResolverFile(); err != nil {
-			fmt.Fprintf(os.Stderr,
-				"note: DNS not configured (%v). Re-run `devm install` to retry.\n",
-				err,
-			)
-			return true // DNS partial failure is non-fatal; proceed to CA
-		}
-		fmt.Println("DNS resolver configured.")
-	case serviceapi.ResolverFileDiverged:
-		fmt.Println("devm service installed.")
-		fmt.Printf("note: %s exists but doesn't match — overwriting (requires sudo).\n",
-			serviceapi.ResolverFilePath)
-		if err := serviceapi.WriteResolverFile(); err != nil {
-			fmt.Fprintf(os.Stderr,
-				"note: DNS not configured (%v). Re-run `devm install` to retry.\n",
-				err,
-			)
-			return true // DNS partial failure is non-fatal; proceed to CA
-		}
-		fmt.Println("DNS resolver configured.")
-	}
-	return true
-}
+	needsDNS := dnsState != serviceapi.ResolverFileMatches
 
-// setupCATrust installs the devm CA root into the System Keychain if not
-// already present. Sudo is only prompted when the cert is absent.
-func setupCATrust() {
 	trusted, err := serviceapi.CheckCATrusted()
 	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"note: could not check CA trust state: %v\n", err)
-		return
+		fmt.Fprintf(os.Stderr, "note: could not check CA trust state: %v\n", err)
+		// Treat as trusted to avoid spurious sudo prompts when the
+		// check itself broke (e.g., `security` not on PATH).
+		trusted = true
 	}
-	if trusted {
-		fmt.Println("CA already trusted.")
+	needsCA := !trusted
+
+	if !needsDNS && !needsCA {
+		fmt.Println("devm service installed; DNS resolver and CA trust already configured.")
 		return
 	}
 
-	// Ensure the CA root is generated. Normally the daemon does this at
-	// startup; we trigger it here if it hasn't yet so install can
-	// immediately offer to trust it.
-	_, err = serviceapi.LoadOrGenerate()
-	if err != nil {
+	// CA generation is unprivileged (writes to ~/Library/Application
+	// Support/devm/ca/); do it before the sudo block so the script
+	// has a cert file to point at.
+	var rootCertPath string
+	if needsCA {
+		if _, err := serviceapi.LoadOrGenerate(); err != nil {
+			fmt.Fprintf(os.Stderr,
+				"note: could not generate CA: %v. Re-run `devm install`.\n", err)
+			return
+		}
+		runDir, err := serviceapi.EnsureRuntimeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "note: could not resolve CA cert path: %v\n", err)
+			return
+		}
+		rootCertPath = filepath.Join(runDir, "ca", "root.crt")
+	}
+
+	// Compose the shell script. set -e: bail if any step fails so
+	// partial state is obvious rather than silent.
+	var sb strings.Builder
+	sb.WriteString("set -e\n")
+	if needsDNS {
+		if dnsState == serviceapi.ResolverFileDiverged {
+			fmt.Printf("note: %s exists but doesn't match — overwriting.\n",
+				serviceapi.ResolverFilePath)
+		}
+		sb.WriteString("mkdir -p /etc/resolver\n")
+		// Single-quoted heredoc terminator so the content goes in
+		// verbatim with no shell interpolation.
+		fmt.Fprintf(&sb, "cat > %s <<'EOF'\n%sEOF\n",
+			serviceapi.ResolverFilePath, serviceapi.CanonicalResolverContents())
+	}
+	if needsCA {
+		fmt.Fprintf(&sb, "security add-trusted-cert -d -r trustRoot -k %s %s\n",
+			shellQuote(serviceapi.SystemKeychain), shellQuote(rootCertPath))
+	}
+
+	var todo []string
+	if needsDNS {
+		todo = append(todo, "DNS resolver")
+	}
+	if needsCA {
+		todo = append(todo, "CA trust")
+	}
+	fmt.Printf("devm service installed. Setting up %s (requires sudo)...\n",
+		strings.Join(todo, " + "))
+
+	scriptCmd := exec.Command("sudo", "sh", "-c", sb.String())
+	scriptCmd.Stdin = os.Stdin
+	scriptCmd.Stdout = os.Stdout
+	scriptCmd.Stderr = os.Stderr
+	if err := scriptCmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr,
-			"note: could not generate CA: %v. Re-run `devm install`.\n",
-			err,
-		)
+			"note: privileged setup failed (%v). Re-run `devm install`.\n", err)
 		return
 	}
 
-	runDir, err := serviceapi.EnsureRuntimeDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"note: could not resolve CA cert path: %v\n", err)
-		return
+	if needsDNS {
+		fmt.Println("DNS resolver configured.")
 	}
-	rootCertPath := filepath.Join(runDir, "ca", "root.crt")
+	if needsCA {
+		fmt.Println("CA trusted.")
+	}
+}
 
-	fmt.Println("Trusting devm Local CA (requires sudo)...")
-	if err := serviceapi.InstallCATrust(rootCertPath); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"note: CA not trusted (%v). HTTPS will show browser warnings until you re-run `devm install`.\n",
-			err,
-		)
-		return
-	}
-	fmt.Println("CA trusted.")
+// shellQuote wraps s in single quotes, escaping embedded quotes so
+// the value survives `sh -c`. Sufficient for absolute filesystem
+// paths and our fixed identifiers — no fancy chars expected.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 var uninstallCmd = &cobra.Command{
@@ -233,42 +246,73 @@ var uninstallCmd = &cobra.Command{
 		_ = os.Remove(serviceapi.SocketPath())
 		fmt.Println("devm service uninstalled.")
 
-		// DNS resolver teardown — sudo only when our file is present.
-		state, _ := serviceapi.CheckResolverFile()
-		switch state {
-		case serviceapi.ResolverFileMatches:
-			fmt.Println("Removing DNS resolver (requires sudo)...")
-			if err := serviceapi.RemoveResolverFile(); err != nil {
-				fmt.Fprintf(os.Stderr,
-					"note: %s remains (%v).\n",
-					serviceapi.ResolverFilePath, err,
-				)
-			} else {
-				fmt.Println("DNS resolver removed.")
-			}
-		case serviceapi.ResolverFileDiverged:
-			fmt.Fprintf(os.Stderr,
-				"note: %s exists but doesn't match devm's config — leaving it.\n",
-				serviceapi.ResolverFilePath,
-			)
-		case serviceapi.ResolverFileMissing:
-			// Nothing to do.
-		}
-
-		// CA trust removal — only if currently trusted.
-		trusted, _ := serviceapi.CheckCATrusted()
-		if trusted {
-			fmt.Println("Removing devm CA from System Keychain (requires sudo)...")
-			if err := serviceapi.UninstallCATrust(); err != nil {
-				fmt.Fprintf(os.Stderr,
-					"note: CA trust remains (%v).\n", err)
-			} else {
-				fmt.Println("CA trust removed.")
-			}
-		}
-
+		// All privileged teardown (DNS resolver file + CA trust)
+		// runs under a single sudo invocation. Symmetric with install.
+		runPrivilegedUninstall()
 		return nil
 	},
+}
+
+// runPrivilegedUninstall consolidates DNS resolver removal and CA
+// trust removal into one sudo call. Both checks are unprivileged;
+// we only shell out to sudo when at least one removal is actually
+// needed. A divergent resolver file is left alone (with a warning)
+// — it's not ours to touch.
+func runPrivilegedUninstall() {
+	dnsState, _ := serviceapi.CheckResolverFile()
+	dropsDNS := dnsState == serviceapi.ResolverFileMatches
+	if dnsState == serviceapi.ResolverFileDiverged {
+		fmt.Fprintf(os.Stderr,
+			"note: %s exists but doesn't match devm's config — leaving it.\n",
+			serviceapi.ResolverFilePath)
+	}
+
+	trusted, _ := serviceapi.CheckCATrusted()
+	dropsCA := trusted
+
+	if !dropsDNS && !dropsCA {
+		return
+	}
+
+	// Compose the shell script. set +e: don't fail the entire
+	// teardown if one piece is already gone or otherwise hiccups.
+	// We want best-effort removal of whatever's still there.
+	var sb strings.Builder
+	sb.WriteString("set +e\n")
+	if dropsDNS {
+		fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(serviceapi.ResolverFilePath))
+	}
+	if dropsCA {
+		fmt.Fprintf(&sb, "security delete-certificate -c %s -t %s\n",
+			shellQuote(serviceapi.CATrustCertCN),
+			shellQuote(serviceapi.SystemKeychain))
+	}
+
+	var todo []string
+	if dropsDNS {
+		todo = append(todo, "DNS resolver")
+	}
+	if dropsCA {
+		todo = append(todo, "CA trust")
+	}
+	fmt.Printf("Removing %s (requires sudo)...\n", strings.Join(todo, " + "))
+
+	scriptCmd := exec.Command("sudo", "sh", "-c", sb.String())
+	scriptCmd.Stdin = os.Stdin
+	scriptCmd.Stdout = os.Stdout
+	scriptCmd.Stderr = os.Stderr
+	if err := scriptCmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"note: privileged teardown had issues (%v). Some state may remain.\n", err)
+		return
+	}
+
+	if dropsDNS {
+		fmt.Println("DNS resolver removed.")
+	}
+	if dropsCA {
+		fmt.Println("CA trust removed.")
+	}
 }
 
 var serviceStartCmd = &cobra.Command{

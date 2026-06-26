@@ -2,13 +2,17 @@ package serviceapi
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 )
 
+// Constants exported so cmd/devm/service.go can build the
+// consolidated install/uninstall shell scripts. The sudo-bearing
+// `security add-trusted-cert` / `delete-certificate` invocations
+// live in cmd/devm/service.go directly so they share a single sudo
+// session with the DNS resolver setup.
 const (
-	caTrustCertCN  = "devm Local CA"
-	systemKeychain = "/Library/Keychains/System.keychain"
+	CATrustCertCN  = "devm Local CA"
+	SystemKeychain = "/Library/Keychains/System.keychain"
 )
 
 // CheckCATrusted returns true if a cert with our CN is present in
@@ -19,7 +23,7 @@ const (
 // world-readable.
 func CheckCATrusted() (bool, error) {
 	cmd := exec.Command("security", "find-certificate",
-		"-c", caTrustCertCN, systemKeychain)
+		"-c", CATrustCertCN, SystemKeychain)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return true, nil
@@ -31,42 +35,4 @@ func CheckCATrusted() (bool, error) {
 	}
 	return false, fmt.Errorf("security find-certificate: %w (output: %s)",
 		err, string(out))
-}
-
-// InstallCATrust shells out to `sudo security add-trusted-cert ...`
-// to install the CA root into the System Keychain as a trusted root
-// for TLS server auth. Inherits the user's TTY so sudo can prompt
-// for password.
-//
-// rootCertPath is the on-disk PEM file (typically
-// ~/Library/Application Support/devm/ca/root.crt).
-func InstallCATrust(rootCertPath string) error {
-	cmd := exec.Command("sudo", "security", "add-trusted-cert",
-		"-d", "-r", "trustRoot",
-		"-k", systemKeychain,
-		rootCertPath,
-	)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("sudo security add-trusted-cert: %w", err)
-	}
-	return nil
-}
-
-// UninstallCATrust removes the CA root from the System Keychain.
-func UninstallCATrust() error {
-	cmd := exec.Command("sudo", "security", "delete-certificate",
-		"-c", caTrustCertCN,
-		"-t",
-		systemKeychain,
-	)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("sudo security delete-certificate: %w", err)
-	}
-	return nil
 }

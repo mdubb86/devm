@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -129,6 +130,32 @@ def policy_registrar() -> Iterator[Callable[[str], None]]:
         for domain in added:
             sbx.policy_remove(domain)
             registry.remove("policy", domain)
+
+
+@pytest.fixture
+def sudo_capable():
+    """Skips the test if sudo can't realistically prompt the user.
+
+    Skipped conditions:
+      - non-macOS (sudo-required tests in this suite are macOS-only)
+      - /dev/tty unavailable (CI / no controlling terminal — sudo
+        would hang on a prompt it can't deliver)
+
+    If sudo IS capable but not cached, the test will trigger Touch ID
+    (or password) prompts naturally during its install/uninstall
+    calls — sudo opens /dev/tty directly for the prompt, independent
+    of pytest's capture of stdin/stdout. No priming machinery: on
+    macOS, Touch ID doesn't share the sudo timestamp cache anyway,
+    so priming just adds an extra interaction.
+    """
+    import platform as _platform
+
+    if _platform.system() != "Darwin":
+        pytest.skip("sudo-required test runs on macOS only")
+    try:
+        open("/dev/tty").close()
+    except OSError:
+        pytest.skip("no /dev/tty — sudo can't prompt, skipping interactive test")
 
 
 @pytest.fixture

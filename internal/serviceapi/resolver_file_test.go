@@ -10,7 +10,7 @@ import (
 )
 
 func TestCanonicalResolverContents_IsStable(t *testing.T) {
-	got := canonicalResolverContents()
+	got := CanonicalResolverContents()
 	assert.Equal(t, "nameserver 127.0.0.1\nport 51153\n", got,
 		"canonical contents changed — coordinate with any pinned consumers")
 }
@@ -26,7 +26,7 @@ func TestCheckResolverFileAt_Missing(t *testing.T) {
 func TestCheckResolverFileAt_Matches(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test")
-	require.NoError(t, os.WriteFile(path, []byte(canonicalResolverContents()), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(CanonicalResolverContents()), 0644))
 	state, err := checkResolverFileAt(path)
 	require.NoError(t, err)
 	assert.Equal(t, ResolverFileMatches, state)

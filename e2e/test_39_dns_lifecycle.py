@@ -28,23 +28,12 @@ def _resolver_file_path() -> str:
     return "/etc/resolver/test"
 
 
-def _sudo_available() -> bool:
-    """Returns True iff we can run sudo non-interactively (cached
-    timestamp or NOPASSWD)."""
-    r = subprocess.run(["sudo", "-n", "true"], capture_output=True, timeout=5)
-    return r.returncode == 0
-
-
 @pytest.mark.timeout(90)
-def test_dns_lifecycle(devm):
+def test_dns_lifecycle(devm, sudo_capable):
     if platform.system() != "Darwin":
         pytest.skip("devm DNS lifecycle test runs on macOS only")
     if not shutil.which("dig"):
         pytest.skip("dig not installed; cannot cross-check the DNS responder")
-    if not _sudo_available():
-        pytest.skip(
-            "non-interactive sudo unavailable. Run `sudo -v` before running this test"
-        )
 
     # Pre-clean: ignore any prior state.
     subprocess.run([devm.path, "uninstall"], capture_output=True, timeout=30)

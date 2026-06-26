@@ -21,12 +21,6 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
-def _sudo_available() -> bool:
-    return subprocess.run(
-        ["sudo", "-n", "true"], capture_output=True, timeout=5
-    ).returncode == 0
-
-
 def _alloc_port() -> int:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(("127.0.0.1", 0))
@@ -71,11 +65,9 @@ def _devm_yaml(workspace_path: str, project_id: str, hostname: str, port: int) -
 
 
 @pytest.mark.timeout(120)
-def test_https_reverse_proxy_lifecycle(devm, workspace):
+def test_https_reverse_proxy_lifecycle(devm, workspace, sudo_capable):
     if platform.system() != "Darwin":
         pytest.skip("HTTPS reverse proxy test runs on macOS only")
-    if not _sudo_available():
-        pytest.skip("non-interactive sudo unavailable. Run `sudo -v` before this test")
     if not shutil.which("python3"):
         pytest.skip("python3 not on PATH")
     if not shutil.which("curl"):
