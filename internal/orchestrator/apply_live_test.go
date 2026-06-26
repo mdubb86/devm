@@ -67,7 +67,7 @@ func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
 	sb := &sandbox.Sandbox{Name: "x", Runner: r}
 	err := ApplyLive(sb, []Change{
 		{Kind: KindInstallChange},
-		{Kind: KindMaskChange},
+		{Kind: KindMaskAddRemove},
 	}, schema.Config{}, t.TempDir())
 	assert.NoError(t, err)
 	assert.Empty(t, r.lastArgs, "non-LIVE changes must be ignored by ApplyLive")

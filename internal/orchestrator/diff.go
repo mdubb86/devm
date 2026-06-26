@@ -48,49 +48,61 @@ const (
 	KindEnvAdd
 	KindEnvRemove
 	KindEnvChange
-	KindStartupChange
 	KindInstallChange
-	KindMaskChange
+	KindPackagesChange
+	KindMaskAddRemove
 	KindImageChange
 	KindIdentityChange
 	KindTemplateChange
-	KindMountsChange
+	KindMountAddRemove
 	KindPathChange
+	KindServiceExecChange
+	KindServiceRestartChange
+	KindServiceAfterChange
+	KindServiceWorkdirChange
+	KindServiceUserChange
+	KindServiceSystemdOverrideChange
+	KindServiceHostnameChange
 )
 
 // changeBucket is the single source of truth that maps each ChangeKind
 // to its bucket. Bucket() and the diff/bucket table in the design spec
 // both reference this map.
 var changeBucket = map[ChangeKind]Bucket{
-	KindPortAdd:        BucketLive,
-	KindPortRemove:     BucketLive,
-	KindPortChange:     BucketLive,
-	KindNetworkAdd:     BucketLive,
-	KindNetworkRemove:  BucketLive,
-	// Env is materialized in .devm/.env (mount-visible inside the VM)
-	// and re-sourced by the with-devm-env wrapper on every `sbx exec`.
-	// ApplyLive rewrites .devm/.env on the host; the next exec sees the
-	// new values. Running shells keep their old env until they re-exec
-	// — hence LIVE.
-	KindEnvAdd:        BucketLive,
-	KindEnvRemove:     BucketLive,
-	KindEnvChange:     BucketLive,
-	// Startup commands are baked into the kit at sbx-create time and
-	// CACHED by sbx — restart re-runs the cached commands, NOT the
-	// freshly-rendered ones. A startup edit therefore needs `sbx rm`
-	// + re-create so the new kit takes effect. Pinned by test_36.
-	KindStartupChange: BucketTeardownShell,
+	KindPortAdd:       BucketLive,
+	KindPortRemove:    BucketLive,
+	KindPortChange:    BucketLive,
+	KindNetworkAdd:    BucketLive,
+	KindNetworkRemove: BucketLive,
+	// Env changes are applied by rewriting the unit file and restarting
+	// the service via tart exec — no VM recreate needed.
+	KindEnvAdd:    BucketLive,
+	KindEnvRemove: BucketLive,
+	KindEnvChange: BucketLive,
+	// install: commands happen on first boot; can't re-run cleanly on a
+	// half-installed VM.
 	KindInstallChange: BucketTeardownShell,
-	KindMaskChange:     BucketTeardownShell,
-	KindImageChange:    BucketTeardownShell,
+	// apt packages similarly — recreate is cleaner than diffing.
+	KindPackagesChange: BucketTeardownShell,
+	// virtio-fs mounts are set at tart run time; requires full recreate.
+	KindMountAddRemove: BucketTeardownShell,
+	// mount --bind masks are applied at boot; requires full recreate.
+	KindMaskAddRemove: BucketTeardownShell,
+	KindImageChange:   BucketTeardownShell,
 	KindIdentityChange: BucketTeardownShell,
 	KindTemplateChange: BucketLive,
-	// Mounts: sbx run's positional workspaces are baked at create
-	// time. Adding/removing/changing a mount requires `sbx rm` and
-	// re-create.
-	KindMountsChange: BucketTeardownShell,
 	// Path is materialized in .devm/.env (same fan-out as Env) — live.
 	KindPathChange: BucketLive,
+	// Service unit changes: re-render unit, daemon-reload, restart unit
+	// via tart exec — no VM recreate needed.
+	KindServiceExecChange:            BucketLive,
+	KindServiceRestartChange:         BucketLive,
+	KindServiceAfterChange:           BucketLive,
+	KindServiceWorkdirChange:         BucketLive,
+	KindServiceUserChange:            BucketLive,
+	KindServiceSystemdOverrideChange: BucketLive,
+	// Hostname: re-render Caddyfile, push to Mac proxy — live.
+	KindServiceHostnameChange: BucketLive,
 }
 
 // Bucket returns the bucket this ChangeKind belongs to.
@@ -203,9 +215,10 @@ func ComputeNetworkChanges(old, new schema.Config) []Change {
 }
 
 // ComputeAllChanges returns the full set of diffs between old and new
-// configs. Order: ports, network, env (per service), startup (per service),
-// install, masks (per service), image, identity, templates. Within each
-// section, service names are sorted alphabetically for determinism.
+// configs. Order: ports, network, env (per service), service unit fields
+// (per service), install, packages, mounts, masks (per service), image,
+// identity, templates, path. Within each section, service names are sorted
+// alphabetically for determinism.
 //
 // `repoRoot` is required by the templates diff which reads on-disk
 // installer scripts.
@@ -214,10 +227,12 @@ func ComputeAllChanges(old, new schema.Config, repoRoot string) ([]Change, error
 	out = append(out, ComputePortChanges(old, new)...)
 	out = append(out, ComputeNetworkChanges(old, new)...)
 	out = append(out, computeEnvChanges(old, new)...)
-	out = append(out, computeStartupChanges(old, new)...)
+	out = append(out, computeServiceUnitChanges(old, new)...)
+	out = append(out, computeHostnameChanges(old, new)...)
 	out = append(out, computeInstallChanges(old, new)...)
-	out = append(out, computeMountsChanges(old, new)...)
-	out = append(out, computeMaskChanges(old, new)...)
+	out = append(out, computePackagesChange(old, new)...)
+	out = append(out, computeMountAddRemove(old, new)...)
+	out = append(out, computeMaskAddRemove(old, new)...)
 	out = append(out, computeImageChange(old, new)...)
 	out = append(out, computeIdentityChange(old, new)...)
 	out = append(out, computePathChange(old, new)...)
@@ -273,37 +288,48 @@ func computeEnvChanges(old, new schema.Config) []Change {
 	return out
 }
 
-func computeStartupChanges(old, new schema.Config) []Change {
+// computeServiceUnitChanges emits per-field changes for the Tart-era
+// service unit fields (exec, restart, after, workdir, user, systemd).
+// Each field maps to its own ChangeKind so the bucket logic and formatter
+// can handle them individually.
+func computeServiceUnitChanges(old, new schema.Config) []Change {
 	var out []Change
 	for _, svc := range unionServiceNames(old.Services, new.Services) {
-		if !execConfigEqual(old.Services[svc], new.Services[svc]) {
-			out = append(out, Change{Kind: KindStartupChange, Service: svc})
+		o, n := old.Services[svc], new.Services[svc]
+		if !stringSliceEqual(o.Exec, n.Exec) {
+			out = append(out, Change{Kind: KindServiceExecChange, Service: svc})
+		}
+		if o.Restart != n.Restart {
+			out = append(out, Change{Kind: KindServiceRestartChange, Service: svc})
+		}
+		if !stringSliceEqual(o.After, n.After) {
+			out = append(out, Change{Kind: KindServiceAfterChange, Service: svc})
+		}
+		if o.WorkDir != n.WorkDir {
+			out = append(out, Change{Kind: KindServiceWorkdirChange, Service: svc})
+		}
+		if o.User != n.User {
+			out = append(out, Change{Kind: KindServiceUserChange, Service: svc})
+		}
+		if o.Systemd != n.Systemd {
+			out = append(out, Change{Kind: KindServiceSystemdOverrideChange, Service: svc})
 		}
 	}
 	return out
 }
 
-// execConfigEqual compares the Tart-era exec/systemd service config fields.
-func execConfigEqual(a, b schema.Service) bool {
-	if !stringSliceEqual(a.Exec, b.Exec) {
-		return false
+// computeHostnameChanges emits KindServiceHostnameChange for services whose
+// hostname field differs between old and new.
+func computeHostnameChanges(old, new schema.Config) []Change {
+	var out []Change
+	for _, svc := range unionServiceNames(old.Services, new.Services) {
+		o, n := old.Services[svc], new.Services[svc]
+		if o.Hostname != n.Hostname {
+			out = append(out, Change{Kind: KindServiceHostnameChange, Service: svc,
+				Old: o.Hostname, New: n.Hostname})
+		}
 	}
-	if a.WorkDir != b.WorkDir {
-		return false
-	}
-	if a.Restart != b.Restart {
-		return false
-	}
-	if !stringSliceEqual(a.After, b.After) {
-		return false
-	}
-	if a.User != b.User {
-		return false
-	}
-	if a.Systemd != b.Systemd {
-		return false
-	}
-	return true
+	return out
 }
 
 func computeInstallChanges(old, new schema.Config) []Change {
@@ -313,18 +339,25 @@ func computeInstallChanges(old, new schema.Config) []Change {
 	return []Change{{Kind: KindInstallChange}}
 }
 
-func computeMountsChanges(old, new schema.Config) []Change {
+func computePackagesChange(old, new schema.Config) []Change {
+	if stringSliceEqual(old.Packages, new.Packages) {
+		return nil
+	}
+	return []Change{{Kind: KindPackagesChange}}
+}
+
+func computeMountAddRemove(old, new schema.Config) []Change {
 	if stringSliceEqual(old.Mounts, new.Mounts) {
 		return nil
 	}
-	return []Change{{Kind: KindMountsChange}}
+	return []Change{{Kind: KindMountAddRemove}}
 }
 
-func computeMaskChanges(old, new schema.Config) []Change {
+func computeMaskAddRemove(old, new schema.Config) []Change {
 	var out []Change
 	for _, svc := range unionServiceNames(old.Services, new.Services) {
 		if !masksEqual(old.Services[svc].Masks, new.Services[svc].Masks) {
-			out = append(out, Change{Kind: KindMaskChange, Service: svc})
+			out = append(out, Change{Kind: KindMaskAddRemove, Service: svc})
 		}
 	}
 	return out

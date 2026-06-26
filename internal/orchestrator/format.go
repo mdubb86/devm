@@ -322,20 +322,34 @@ func changeKindJSON(k ChangeKind) string {
 		return "env_remove"
 	case KindEnvChange:
 		return "env_change"
-	case KindStartupChange:
-		return "startup_change"
 	case KindInstallChange:
 		return "install_change"
-	case KindMaskChange:
-		return "mask_change"
+	case KindPackagesChange:
+		return "packages_change"
+	case KindMaskAddRemove:
+		return "mask_add_remove"
 	case KindImageChange:
 		return "image_change"
 	case KindIdentityChange:
 		return "identity_change"
 	case KindTemplateChange:
 		return "template_change"
-	case KindMountsChange:
-		return "mounts_change"
+	case KindMountAddRemove:
+		return "mount_add_remove"
+	case KindServiceExecChange:
+		return "service_exec_change"
+	case KindServiceRestartChange:
+		return "service_restart_change"
+	case KindServiceAfterChange:
+		return "service_after_change"
+	case KindServiceWorkdirChange:
+		return "service_workdir_change"
+	case KindServiceUserChange:
+		return "service_user_change"
+	case KindServiceSystemdOverrideChange:
+		return "service_systemd_override_change"
+	case KindServiceHostnameChange:
+		return "service_hostname_change"
 	}
 	return "unknown"
 }
@@ -371,14 +385,28 @@ func formatChange(c Change) string {
 		return fmt.Sprintf("- env: %s.%s", c.Service, c.Key)
 	case KindEnvChange:
 		return fmt.Sprintf("~ env: %s.%s: %q → %q", c.Service, c.Key, c.Old, c.New)
-	case KindStartupChange:
-		return fmt.Sprintf("~ startup: %s", c.Service)
 	case KindInstallChange:
 		return "~ install commands"
-	case KindMountsChange:
+	case KindPackagesChange:
+		return "~ packages"
+	case KindMountAddRemove:
 		return "~ mounts"
-	case KindMaskChange:
+	case KindMaskAddRemove:
 		return fmt.Sprintf("~ volumes: %s", c.Service)
+	case KindServiceExecChange:
+		return fmt.Sprintf("~ service exec: %s", c.Service)
+	case KindServiceRestartChange:
+		return fmt.Sprintf("~ service restart: %s", c.Service)
+	case KindServiceAfterChange:
+		return fmt.Sprintf("~ service after: %s", c.Service)
+	case KindServiceWorkdirChange:
+		return fmt.Sprintf("~ service workdir: %s", c.Service)
+	case KindServiceUserChange:
+		return fmt.Sprintf("~ service user: %s", c.Service)
+	case KindServiceSystemdOverrideChange:
+		return fmt.Sprintf("~ service systemd override: %s", c.Service)
+	case KindServiceHostnameChange:
+		return fmt.Sprintf("~ service hostname: %s: %q → %q", c.Service, c.Old, c.New)
 	case KindImageChange:
 		return "~ base image"
 	case KindIdentityChange:

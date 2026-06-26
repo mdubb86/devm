@@ -32,13 +32,22 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
 
-	// Teardown+shell: install, startup, masks, image, identity, mounts
+	// Teardown+shell: install, packages, masks, mounts, image, identity
 	assert.Equal(t, BucketTeardownShell, KindInstallChange.Bucket())
-	assert.Equal(t, BucketTeardownShell, KindStartupChange.Bucket())
-	assert.Equal(t, BucketTeardownShell, KindMaskChange.Bucket())
+	assert.Equal(t, BucketTeardownShell, KindPackagesChange.Bucket())
+	assert.Equal(t, BucketTeardownShell, KindMaskAddRemove.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindImageChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindIdentityChange.Bucket())
-	assert.Equal(t, BucketTeardownShell, KindMountsChange.Bucket())
+	assert.Equal(t, BucketTeardownShell, KindMountAddRemove.Bucket())
+
+	// Live: service unit fields and hostname
+	assert.Equal(t, BucketLive, KindServiceExecChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceRestartChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceAfterChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceWorkdirChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceUserChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceSystemdOverrideChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceHostnameChange.Bucket())
 
 	// Live: path (same fan-out as env via .devm/.env)
 	assert.Equal(t, BucketLive, KindPathChange.Bucket())
@@ -65,18 +74,19 @@ func TestComputePathChange(t *testing.T) {
 	assert.Len(t, computePathChange(new, reordered), 1, "reorder must produce a change")
 }
 
-func TestComputeMountsChanges(t *testing.T) {
+func TestComputeMountAddRemove(t *testing.T) {
 	old := cfgWith(map[string]schema.Service{})
 	old.Mounts = []string{"/etc/hosts:ro"}
 	new := cfgWith(map[string]schema.Service{})
 	new.Mounts = []string{"/etc/hosts:ro", "/tmp:ro"}
 
-	changes := computeMountsChanges(old, new)
+	changes := computeMountAddRemove(old, new)
 	require.Len(t, changes, 1)
-	assert.Equal(t, KindMountsChange, changes[0].Kind)
+	assert.Equal(t, KindMountAddRemove, changes[0].Kind)
+	assert.Equal(t, BucketTeardownShell, changes[0].Bucket())
 
 	// Same list → no change.
-	assert.Empty(t, computeMountsChanges(old, old))
+	assert.Empty(t, computeMountAddRemove(old, old))
 }
 
 func TestComputePortChanges_Add(t *testing.T) {
@@ -171,17 +181,189 @@ func TestComputeEnvChanges(t *testing.T) {
 	assert.Contains(t, kinds, KindEnvChange)
 }
 
-func TestComputeStartupChanges(t *testing.T) {
+func TestDiff_ServiceExecChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"echo", "a"}},
+		"api": {Exec: []string{"old"}},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"echo", "b"}},
+		"api": {Exec: []string{"new"}},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir())
 	require.NoError(t, err)
-	assert.Len(t, changes, 1)
-	assert.Equal(t, KindStartupChange, changes[0].Kind)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceExecChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+			assert.Equal(t, "api", c.Service)
+		}
+	}
+	assert.True(t, found, "expected KindServiceExecChange")
+}
+
+func TestDiff_ServiceRestartChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {Exec: []string{"run"}, Restart: "no"},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {Exec: []string{"run"}, Restart: "always"},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceRestartChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindServiceRestartChange")
+}
+
+func TestDiff_ServiceAfterChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {Exec: []string{"run"}, After: []string{"network.target"}},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {Exec: []string{"run"}, After: []string{"network.target", "db.service"}},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceAfterChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindServiceAfterChange")
+}
+
+func TestDiff_ServiceWorkdirChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {Exec: []string{"run"}, WorkDir: "/old"},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {Exec: []string{"run"}, WorkDir: "/new"},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceWorkdirChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindServiceWorkdirChange")
+}
+
+func TestDiff_ServiceUserChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {Exec: []string{"run"}, User: "alice"},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {Exec: []string{"run"}, User: "bob"},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceUserChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindServiceUserChange")
+}
+
+func TestDiff_ServiceSystemdOverrideChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {Systemd: "old-unit-content"},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {Systemd: "new-unit-content"},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceSystemdOverrideChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindServiceSystemdOverrideChange")
+}
+
+func TestDiff_ServiceHostnameChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {Port: 8080, Hostname: "api.test"},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {Port: 8080, Hostname: "api2.test"},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceHostnameChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+			assert.Equal(t, "api.test", c.Old)
+			assert.Equal(t, "api2.test", c.New)
+		}
+	}
+	assert.True(t, found, "expected KindServiceHostnameChange")
+}
+
+func TestDiff_PackagesChange_IsBucketTeardownShell(t *testing.T) {
+	old := schema.Config{Packages: []string{"jq"}}
+	new := schema.Config{Packages: []string{"jq", "ripgrep"}}
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindPackagesChange {
+			found = true
+			assert.Equal(t, BucketTeardownShell, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindPackagesChange")
+}
+
+func TestDiff_MaskAddRemove_IsBucketTeardownShell(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"db": {Masks: []schema.Mask{{Path: "data", Size: "10G"}}},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"db": {Masks: []schema.Mask{{Path: "data", Size: "20G"}}},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindMaskAddRemove {
+			found = true
+			assert.Equal(t, BucketTeardownShell, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindMaskAddRemove")
+}
+
+func TestDiff_MountAddRemove_IsBucketTeardownShell(t *testing.T) {
+	old := schema.Config{Mounts: []string{"/etc/hosts:ro"}}
+	new := schema.Config{Mounts: []string{"/etc/hosts:ro", "/tmp:ro"}}
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindMountAddRemove {
+			found = true
+			assert.Equal(t, BucketTeardownShell, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindMountAddRemove")
 }
 
 func TestComputeInstallChanges(t *testing.T) {
@@ -193,7 +375,7 @@ func TestComputeInstallChanges(t *testing.T) {
 	assert.Equal(t, KindInstallChange, changes[0].Kind)
 }
 
-func TestComputeMaskChanges(t *testing.T) {
+func TestComputeMaskAddRemove(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
 		"db": {Masks: []schema.Mask{{Path: "data", Size: "10G"}}},
 	})
@@ -203,7 +385,7 @@ func TestComputeMaskChanges(t *testing.T) {
 	changes, err := ComputeAllChanges(old, new, t.TempDir())
 	require.NoError(t, err)
 	assert.Len(t, changes, 1)
-	assert.Equal(t, KindMaskChange, changes[0].Kind)
+	assert.Equal(t, KindMaskAddRemove, changes[0].Kind)
 }
 
 func TestComputeImageChange(t *testing.T) {
@@ -250,12 +432,12 @@ func TestRecreateFlavorPickMax(t *testing.T) {
 	// Any teardown wins
 	assert.Equal(t, FlavorTeardownShell, RecreateFlavor([]Change{
 		{Kind: KindPortAdd},
-		{Kind: KindStartupChange},
+		{Kind: KindPackagesChange},
 		{Kind: KindInstallChange},
 	}))
 	// Single teardown change alone also picks teardown.
 	assert.Equal(t, FlavorTeardownShell, RecreateFlavor([]Change{
-		{Kind: KindStartupChange},
+		{Kind: KindInstallChange},
 	}))
 }
 
