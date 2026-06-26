@@ -1,21 +1,19 @@
 """28: a failing startup: step makes devm shell exit non-zero with captured stderr.
 
 Pin for the supervision design's startup-failure UX. Before this
-work, sbx was silent on startup failure (contract_24); devm
-silently let the user into a half-broken shell. With supervision,
-devm catches the missing startup-all-ok sentinel and reports.
+work, devm silently let the user into a half-broken shell. With
+supervision, devm catches the missing startup-all-ok sentinel and
+reports the captured stderr from the failing step.
 """
 import subprocess
 
 import pytest
 
-from helpers import Shell, stop_and_wait_stopped
-
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(120)
-def test_startup_step_fails_loud(workspace, devm, sandbox_name):
+def test_startup_step_fails_loud(workspace, devm, tart_sandbox):
     workspace.write_devmyaml(
         services={
             "api": {

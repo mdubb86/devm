@@ -48,7 +48,7 @@ STARTUP_PROBE = (
 
 
 @pytest.mark.timeout(90)
-def test_template_renders_before_startup(workspace, devm, sandbox_name):
+def test_template_renders_before_startup(workspace, devm, tart_sandbox, sandbox_name):
     tmpl_dir = workspace.path / "configs"
     tmpl_dir.mkdir()
     (tmpl_dir / "probe.conf.tmpl").write_text(
@@ -65,7 +65,7 @@ def test_template_renders_before_startup(workspace, devm, sandbox_name):
                      "output": "/etc/probe.conf"},
                 ],
                 "startup": [
-                    # Foreground (no background: true) so sbx waits for
+                    # Foreground (no background: true) so devm waits for
                     # this to complete during sandbox bring-up. If the
                     # template hadn't been installed yet, the cat would
                     # find no file and the marker would record

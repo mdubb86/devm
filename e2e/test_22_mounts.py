@@ -8,20 +8,17 @@ because the entry was declared read-only.
 What this pins:
   - Marker file under the mounted host dir is readable inside the
     sandbox at the identical absolute path.
-  - File content read via `sbx exec cat` matches the host-written
+  - File content read via tart_sandbox.exec matches the host-written
     content byte-for-byte.
   - A `touch` inside the read-only mount returns non-zero.
 
 What it doesn't cover (tested elsewhere):
-  - sbx-level mirror + :ro semantics in isolation:
+  - virtio-fs mirror + :ro semantics in isolation:
     test_sbx_contract_19_mounts_mirrored_at_same_path and
     test_sbx_contract_20_mounts_ro_suffix_read_only.
   - Live mounts: change (add/remove a mounts entry on a running
     sandbox): not yet pinned.
 """
-import subprocess
-import tempfile
-
 import pytest
 
 from helpers import Shell, stop_and_wait_stopped
@@ -30,7 +27,7 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(90)
-def test_mounts_mirrored_path_and_readonly(workspace, devm, sandbox_name, tmp_path):
+def test_mounts_mirrored_path_and_readonly(workspace, devm, tart_sandbox, sandbox_name, tmp_path):
     # Host-side fixture: a directory with a marker file.
     mount_src = tmp_path / "extra-mount"
     mount_src.mkdir()
@@ -49,12 +46,12 @@ def test_mounts_mirrored_path_and_readonly(workspace, devm, sandbox_name, tmp_pa
             f"test -f {mount_src}/MARKER", expect_zero=True, timeout=15,
         )
 
-        # Content matches.
-        out = subprocess.run(
-            ["sbx", "exec", sandbox_name, "cat", f"{mount_src}/MARKER"],
-            capture_output=True, timeout=10, check=True,
-        ).stdout.decode().strip()
-        assert out == "hello-from-host", f"unexpected content: {out!r}"
+        # Content matches — verify via direct VM exec (no wrapper).
+        result = tart_sandbox.exec("cat", f"{mount_src}/MARKER")
+        assert result.ok, f"cat failed: {result.stderr!r}"
+        assert result.stdout.strip() == "hello-from-host", (
+            f"unexpected content: {result.stdout!r}"
+        )
 
         # Read-only enforcement: write attempt must fail.
         sh.run_check(

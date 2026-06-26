@@ -7,8 +7,7 @@ exists and has plausible content.
 
 What this pins:
   - install: steps that hit the network during cold-start survive
-    devm's spawn/orchestration shape (nohup + DEVNULL + ring-buf
-    pipe, read-loop, waitForExecReady).
+    devm's spawn/orchestration shape.
   - The fetched file lands at the expected path inside the sandbox
     with non-zero size.
   - File content is non-empty AND contains expected substring
@@ -32,7 +31,7 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(180)
-def test_cold_start_with_curl_install(workspace, devm, sandbox_name):
+def test_cold_start_with_curl_install(workspace, devm, tart_sandbox, sandbox_name):
     workspace.write_devmyaml(
         install=[
             # Tiny, stable: a single byte from a github-hosted file.
@@ -42,9 +41,8 @@ def test_cold_start_with_curl_install(workspace, devm, sandbox_name):
             "curl -fsSL https://raw.githubusercontent.com/octocat/Hello-World/master/README > /tmp/devm-e2e-fetch.txt",
         ],
         # Need github in the allowed_domains for curl during install:.
-        # (We're not certain whether sbx enforces this at install time —
-        # test_sbx_04_install_network_policy_pin says it doesn't — but
-        # set it anyway so the test doesn't depend on that subtlety.)
+        # (We're not certain whether the sandbox enforces this at install
+        # time, but set it anyway so the test doesn't depend on that.)
         network={
             "allowed_domains": ["github.com", "raw.githubusercontent.com"],
         },

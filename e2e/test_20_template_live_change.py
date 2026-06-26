@@ -18,7 +18,6 @@ What it doesn't cover (tested elsewhere):
     networks (test_13).
 """
 from __future__ import annotations
-import subprocess
 
 import pytest
 
@@ -28,7 +27,7 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(60)
-def test_template_live_change(workspace, devm, sandbox_name):
+def test_template_live_change(workspace, devm, tart_sandbox, sandbox_name):
     tmpl_dir = workspace.path / "configs"
     tmpl_dir.mkdir()
     tmpl_path = tmpl_dir / "msg.tmpl"

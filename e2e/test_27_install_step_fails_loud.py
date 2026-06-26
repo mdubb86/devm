@@ -1,8 +1,7 @@
 """27: a failing install: step makes devm shell exit non-zero with structured error.
 
 Pin for the supervision design's install-failure UX. Before this
-work, sbx surfaced install failures with rc != 0 (contract_02) but
-devm just dumped the captured anchor output. With supervision,
+work, devm just dumped the captured anchor output. With supervision,
 devm pulls the failing step's per-step capture from
 /tmp/.devm/install-<N>/current and formats a structured error.
 """
@@ -10,13 +9,11 @@ import subprocess
 
 import pytest
 
-from helpers import Shell, stop_and_wait_stopped
-
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(120)
-def test_install_step_fails_loud(workspace, devm, sandbox_name):
+def test_install_step_fails_loud(workspace, devm, tart_sandbox):
     workspace.write_devmyaml(
         install=["false"],
     )

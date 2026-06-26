@@ -27,7 +27,7 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(60)
-def test_template_cold_start(workspace, devm, sandbox_name):
+def test_template_cold_start(workspace, devm, tart_sandbox, sandbox_name):
     # The template renders the canonical port into a config file we
     # then verify from inside the sandbox.
     tmpl_dir = workspace.path / "configs"
