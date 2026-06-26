@@ -18,7 +18,7 @@ from typing import Callable, Iterator
 
 import pytest
 
-from helpers import Devm, Workspace, registry, sbx
+from helpers import Devm, Workspace, registry
 
 
 
@@ -63,7 +63,6 @@ def sandbox_name(request) -> Iterator[str]:
     try:
         yield name
     finally:
-        sbx.sandbox_rm(name)
         registry.remove("sandbox", name)
 
 
@@ -128,7 +127,6 @@ def policy_registrar() -> Iterator[Callable[[str], None]]:
         yield register
     finally:
         for domain in added:
-            sbx.policy_remove(domain)
             registry.remove("policy", domain)
 
 
