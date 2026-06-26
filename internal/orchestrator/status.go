@@ -7,15 +7,16 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"gopkg.in/yaml.v3"
 )
 
-// RunStatus collects read-only state for `devm status`. Live drift
-// detection is RunStatusLive's job (currently stubbed).
-func RunStatus(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (StatusResult, error) {
-	res := StatusResult{Sandbox: sb.Name}
+// RunStatus collects read-only state for `devm status`.
+func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot string) (StatusResult, error) {
+	vmName := cfg.Project.SandboxName
+	res := StatusResult{Sandbox: vmName}
 
 	// Routing status — query the daemon's /routes endpoint. Runs
 	// unconditionally so users see it whenever they `devm status`. On
@@ -50,23 +51,36 @@ func RunStatus(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (StatusR
 		res.ProxyError = err.Error()
 	}
 
-	state := sb.State()
-	if state == "" {
+	vms, err := tr.List(context.Background())
+	if err != nil {
+		// List failure: report absent; don't surface the error — the
+		// format layer handles absent gracefully and the user may be
+		// running status before tart is installed.
 		res.State = "absent"
 		return res, nil
 	}
+	state := "absent"
+	for _, vm := range vms {
+		if vm.Name == vmName {
+			if vm.Running {
+				state = "running"
+			} else {
+				state = "stopped"
+			}
+			break
+		}
+	}
 	res.State = state
+
 	if state != "running" {
 		return res, nil
 	}
 
-	// Sessions (best-effort).
-	if sessions, err := sb.Sessions(); err == nil {
-		res.Sessions = sessions
-	}
+	// Sessions (best-effort via tart exec).
+	res.Sessions = probeSessions(tr, vmName)
 
 	// Pending changes vs snapshot.
-	snapStr, err := ReadSnapshot(sb)
+	snapStr, err := ReadSnapshot(tr, vmName)
 	if err != nil {
 		return res, fmt.Errorf("read snapshot: %w", err)
 	}
@@ -92,77 +106,13 @@ func RunStatus(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (StatusR
 	return res, nil
 }
 
-// RunStatusLive is RunStatus plus a live cross-check of actual sbx
-// state against the last-applied snapshot, reporting drift. v1 covers
-// PORT drift (the common "someone manually sbx ports --unpublish'd a
-// mapping" case). Network/env/mount/image drift are not yet checked —
-// they need per-field live queries and kit-var filtering; tracked as
-// follow-ups. Port drift alone catches the most frequent real-world
-// divergence.
-func RunStatusLive(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (StatusResult, error) {
-	res, err := RunStatus(cfg, sb, repoRoot)
-	if err != nil {
-		return res, err
+// probeSessions returns active interactive pty sessions in the VM by
+// running the probe script via tart exec. Returns nil on any error —
+// callers treat sessions as best-effort.
+func probeSessions(tr *tart.Tart, vmName string) []sandbox.Session {
+	r := tr.Exec(context.Background(), vmName, []string{"bash", "-c", sandbox.ProbeScript})
+	if r.ExitCode != 0 {
+		return nil
 	}
-	if res.State != "running" {
-		return res, nil // nothing live to compare against
-	}
-
-	// Baseline = last-applied snapshot (what we believe is deployed).
-	snapStr, err := ReadSnapshot(sb)
-	if err != nil {
-		return res, fmt.Errorf("read snapshot: %w", err)
-	}
-	var snapCfg schema.Config
-	if snapStr == "" {
-		snapCfg = cfg
-	} else {
-		if err := yaml.Unmarshal([]byte(snapStr), &snapCfg); err != nil {
-			return res, fmt.Errorf("parse snapshot: %w", err)
-		}
-	}
-
-	res.Drift = append(res.Drift, portDrift(snapCfg, sb)...)
-	return res, nil
-}
-
-// portDrift compares the ports the snapshot expects against the ports
-// sbx actually reports live. Returns a DriftItem for each mapping that
-// is expected-but-missing or live-but-unexpected.
-func portDrift(snapCfg schema.Config, sb *sandbox.Sandbox) []DriftItem {
-	desired := desiredMappings(snapCfg)
-	live, err := currentMappings(sb, sb.Runner)
-	if err != nil {
-		// Can't query live ports — report as a drift-check failure
-		// rather than silently claiming "in sync".
-		return []DriftItem{{Kind: "port_check_failed", Detail: err.Error()}}
-	}
-
-	liveSet := make(map[int]int) // sandboxPort -> hostPort
-	for _, m := range live {
-		liveSet[m.SandboxPort] = m.HostPort
-	}
-	desiredSet := make(map[int]int)
-	for _, m := range desired {
-		desiredSet[m.SandboxPort] = m.HostPort
-	}
-
-	var drift []DriftItem
-	for _, m := range desired {
-		if _, ok := liveSet[m.SandboxPort]; !ok {
-			drift = append(drift, DriftItem{
-				Kind:   "port_missing",
-				Detail: fmt.Sprintf("expected %d->%d not published live", m.HostPort, m.SandboxPort),
-			})
-		}
-	}
-	for _, m := range live {
-		if _, ok := desiredSet[m.SandboxPort]; !ok {
-			drift = append(drift, DriftItem{
-				Kind:   "port_extra",
-				Detail: fmt.Sprintf("live %d->%d not in last-applied config", m.HostPort, m.SandboxPort),
-			})
-		}
-	}
-	return drift
+	return sandbox.ParseSessions(r.Stdout)
 }

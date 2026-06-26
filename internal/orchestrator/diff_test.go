@@ -15,6 +15,16 @@ func cfgWithServices(svcs map[string]schema.Service) schema.Config {
 	return schema.Config{Services: svcs}
 }
 
+func cfgWith(services map[string]schema.Service) schema.Config {
+	return schema.Config{
+		Project: schema.Project{
+			ID:          "x",
+			SandboxName: "x-sbx",
+		},
+		Services: services,
+	}
+}
+
 func TestBucketStrings(t *testing.T) {
 	assert.Equal(t, "live", BucketLive.String())
 	assert.Equal(t, "stop+shell", BucketStopShell.String())

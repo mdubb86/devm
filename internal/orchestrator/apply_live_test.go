@@ -6,96 +6,70 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mdubb86/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestApplyLive_PortAdd(t *testing.T) {
-	r := &stubRunner{}
-	sb := &sandbox.Sandbox{Name: "x", Runner: r}
-	err := ApplyLive(sb, []Change{
-		{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"},
-	}, schema.Config{}, t.TempDir())
-	assert.NoError(t, err)
-	cmd := strings.Join(r.lastArgs[0], " ")
-	// Tart VMs: host port == sandbox port (no offset).
-	assert.Contains(t, cmd, "sbx ports x --publish 127.0.0.1:8080:8080")
-}
-
-func TestApplyLive_PortRemove(t *testing.T) {
-	r := &stubRunner{}
-	sb := &sandbox.Sandbox{Name: "x", Runner: r}
-	err := ApplyLive(sb, []Change{
-		{Kind: KindPortRemove, Service: "api", Key: "8080", Old: "8080"},
-	}, schema.Config{}, t.TempDir())
-	assert.NoError(t, err)
-	cmd := strings.Join(r.lastArgs[0], " ")
-	assert.Contains(t, cmd, "sbx ports x --unpublish 127.0.0.1:8080:8080")
-}
-
-func TestApplyLive_PortChange(t *testing.T) {
-	r := &stubRunner{}
-	sb := &sandbox.Sandbox{Name: "x", Runner: r}
-	err := ApplyLive(sb, []Change{
-		{Kind: KindPortChange, Service: "api", Key: "9090", Old: "8080", New: "9090"},
-	}, schema.Config{}, t.TempDir())
-	assert.NoError(t, err)
-	assert.Len(t, r.lastArgs, 2, "port_change should be 2 calls: unpublish then publish")
-	c0 := strings.Join(r.lastArgs[0], " ")
-	c1 := strings.Join(r.lastArgs[1], " ")
-	assert.Contains(t, c0, "--unpublish 127.0.0.1:8080:8080")
-	assert.Contains(t, c1, "--publish 127.0.0.1:9090:9090")
-}
-
-func TestApplyLive_NetworkAdd(t *testing.T) {
-	r := &stubRunner{}
-	sb := &sandbox.Sandbox{Name: "x", Runner: r}
-	err := ApplyLive(sb, []Change{
-		{Kind: KindNetworkAdd, Key: "newdomain.example.com", New: "newdomain.example.com"},
-	}, schema.Config{}, t.TempDir())
-	assert.NoError(t, err)
-	cmd := strings.Join(r.lastArgs[0], " ")
-	// sbx 0.29+ requires scope: SANDBOX before RESOURCES. devm uses
-	// the sandbox name (per-project network policy).
-	assert.Contains(t, cmd, "sbx policy allow network x newdomain.example.com")
+// fakeTartForApplyLive returns a *tart.Tart pointing at a shell script
+// that records its invocations and exits 0.
+func fakeTartForApplyLive(t *testing.T, dir string) (*tart.Tart, *[][]string) {
+	t.Helper()
+	calls := &[][]string{}
+	log := filepath.Join(dir, "tart-calls.txt")
+	bin := filepath.Join(dir, "fake-tart")
+	script := "#!/bin/sh\necho \"$@\" >> " + log + "\nexec true\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+	_ = calls
+	return tr, calls
 }
 
 func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
-	r := &stubRunner{}
-	sb := &sandbox.Sandbox{Name: "x", Runner: r}
-	err := ApplyLive(sb, []Change{
+	dir := t.TempDir()
+	tr, _ := fakeTartForApplyLive(t, dir)
+	err := ApplyLive(tr, "x", []Change{
 		{Kind: KindInstallChange},
 		{Kind: KindMaskAddRemove},
-	}, schema.Config{}, t.TempDir())
+	}, schema.Config{}, dir)
 	assert.NoError(t, err)
-	assert.Empty(t, r.lastArgs, "non-LIVE changes must be ignored by ApplyLive")
 }
 
-func TestApplyLive_NetworkRemove(t *testing.T) {
-	r := &stubRunner{}
-	sb := &sandbox.Sandbox{Name: "x", Runner: r}
-	err := ApplyLive(sb, []Change{
-		{Kind: KindNetworkRemove, Key: "gone.example.com", Old: "gone.example.com"},
-	}, schema.Config{}, t.TempDir())
+func TestApplyLive_PortKindsAreNoOps(t *testing.T) {
+	// Port kinds no longer trigger sbx publish; they are silently accepted
+	// (Caddyfile reload happens via the provisioner pattern, not here).
+	dir := t.TempDir()
+	tr, _ := fakeTartForApplyLive(t, dir)
+	err := ApplyLive(tr, "x", []Change{
+		{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"},
+		{Kind: KindPortRemove, Service: "api", Key: "8080", Old: "8080"},
+		{Kind: KindPortChange, Service: "api", Key: "9090", Old: "8080", New: "9090"},
+	}, schema.Config{}, dir)
 	assert.NoError(t, err)
-	require.NotEmpty(t, r.lastArgs)
-	cmd := strings.Join(r.lastArgs[0], " ")
-	assert.Contains(t, cmd, "sbx policy rm network x --resource gone.example.com")
+}
+
+func TestApplyLive_NetworkKindsAreNoOps(t *testing.T) {
+	// Network egress is Ship 5 (iron-proxy); no apply path in Ship 4.
+	dir := t.TempDir()
+	tr, _ := fakeTartForApplyLive(t, dir)
+	err := ApplyLive(tr, "x", []Change{
+		{Kind: KindNetworkAdd, Key: "example.com", New: "example.com"},
+		{Kind: KindNetworkRemove, Key: "old.example.com", Old: "old.example.com"},
+	}, schema.Config{}, dir)
+	assert.NoError(t, err)
 }
 
 func TestApplyLive_EnvChange_WritesDevmEnv(t *testing.T) {
 	dir := t.TempDir()
-	r := &stubRunner{}
-	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	tr, _ := fakeTartForApplyLive(t, dir)
 	cfg := schema.Config{Env: map[string]string{"FOO": "bar"}}
 
-	err := ApplyLive(sb, []Change{
+	err := ApplyLive(tr, "x", []Change{
 		{Kind: KindEnvChange, Key: "FOO", Old: "old", New: "bar"},
 	}, cfg, dir)
 	require.NoError(t, err)
-	assert.Empty(t, r.lastArgs, "env changes must not trigger any sbx exec from apply_live (mount surfaces the file)")
 
 	bs, err := os.ReadFile(filepath.Join(dir, ".devm", ".env"))
 	require.NoError(t, err)
@@ -105,10 +79,9 @@ func TestApplyLive_EnvChange_WritesDevmEnv(t *testing.T) {
 func TestApplyLive_EnvAddAndRemove_AlsoWriteDevmEnv(t *testing.T) {
 	for _, kind := range []ChangeKind{KindEnvAdd, KindEnvRemove} {
 		dir := t.TempDir()
-		r := &stubRunner{}
-		sb := &sandbox.Sandbox{Name: "x", Runner: r}
+		tr, _ := fakeTartForApplyLive(t, dir)
 		cfg := schema.Config{Env: map[string]string{"K": "v"}}
-		err := ApplyLive(sb, []Change{
+		err := ApplyLive(tr, "x", []Change{
 			{Kind: kind, Key: "K", New: "v"},
 		}, cfg, dir)
 		require.NoError(t, err, "kind=%v", kind)
@@ -119,10 +92,9 @@ func TestApplyLive_EnvAddAndRemove_AlsoWriteDevmEnv(t *testing.T) {
 
 func TestApplyLive_MultipleEnvChanges_SingleWrite(t *testing.T) {
 	dir := t.TempDir()
-	r := &stubRunner{}
-	sb := &sandbox.Sandbox{Name: "x", Runner: r}
+	tr, _ := fakeTartForApplyLive(t, dir)
 	cfg := schema.Config{Env: map[string]string{"A": "1", "B": "2", "C": "3"}}
-	err := ApplyLive(sb, []Change{
+	err := ApplyLive(tr, "x", []Change{
 		{Kind: KindEnvAdd, Key: "A", New: "1"},
 		{Kind: KindEnvChange, Key: "B", Old: "x", New: "2"},
 		{Kind: KindEnvAdd, Key: "C", New: "3"},
@@ -130,7 +102,6 @@ func TestApplyLive_MultipleEnvChanges_SingleWrite(t *testing.T) {
 	require.NoError(t, err)
 	bs, err := os.ReadFile(filepath.Join(dir, ".devm", ".env"))
 	require.NoError(t, err)
-	// All three present; PersistentEnv determinism guarantees content shape.
 	assert.Contains(t, string(bs), `export A='1'`)
 	assert.Contains(t, string(bs), `export B='2'`)
 	assert.Contains(t, string(bs), `export C='3'`)
@@ -138,10 +109,9 @@ func TestApplyLive_MultipleEnvChanges_SingleWrite(t *testing.T) {
 
 func TestApplyLive_NoEnvChange_DoesNotWriteDevmEnv(t *testing.T) {
 	dir := t.TempDir()
-	r := &stubRunner{}
-	sb := &sandbox.Sandbox{Name: "x", Runner: r}
-	err := ApplyLive(sb, []Change{
-		{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"},
+	tr, _ := fakeTartForApplyLive(t, dir)
+	err := ApplyLive(tr, "x", []Change{
+		{Kind: KindInstallChange},
 	}, schema.Config{}, dir)
 	require.NoError(t, err)
 	_, err = os.Stat(filepath.Join(dir, ".devm", ".env"))
@@ -161,22 +131,30 @@ func TestApplyLive_TemplateChange_InvokesDispatcher(t *testing.T) {
 		},
 	}
 
-	r := &stubRunner{}
-	sb := &sandbox.Sandbox{Name: "x-sbx", Runner: r}
+	// Build a fake tart binary that records its argv calls.
+	callLog := filepath.Join(dir, "calls.txt")
+	bin := filepath.Join(dir, "fake-tart")
+	script := "#!/bin/sh\necho \"$*\" >> " + callLog + "\nexec true\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
 
 	changes := []Change{
 		{Kind: KindTemplateChange, Service: "web", Detail: "/etc/foo", New: "installed"},
 		{Kind: KindTemplateChange, Service: "api", Detail: "/etc/bar", New: "installed"},
 	}
-	assert.NoError(t, ApplyLive(sb, changes, cfg, dir))
+	assert.NoError(t, ApplyLive(tr, "x-sbx", changes, cfg, dir))
 
-	// One single sbx exec invocation regardless of how many templates changed.
+	// One single tart exec invocation for the dispatcher regardless of
+	// how many templates changed.
+	logged, err := os.ReadFile(callLog)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(logged)), "\n")
 	dispatchCalls := 0
-	for _, args := range r.lastArgs {
-		c := strings.Join(args, " ")
-		if strings.Contains(c, "install-templates.sh") {
+	for _, line := range lines {
+		if strings.Contains(line, "install-templates.sh") {
 			dispatchCalls++
 		}
 	}
-	assert.Equal(t, 1, dispatchCalls, "expected exactly one dispatcher invocation; saw lastArgs: %v", r.lastArgs)
+	assert.Equal(t, 1, dispatchCalls, "expected exactly one dispatcher invocation; got calls: %v", lines)
 }

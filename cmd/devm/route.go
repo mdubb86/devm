@@ -27,7 +27,7 @@ var routeLocalCmd = &cobra.Command{
 
 var routeVMCmd = &cobra.Command{
 	Use:   "vm",
-	Short: "Route hostnames to sbx-published ports (service in sandbox)",
+	Short: "Route hostnames to VM service ports (service in VM)",
 	RunE:  applyRoute(serviceapi.ModeVM),
 }
 

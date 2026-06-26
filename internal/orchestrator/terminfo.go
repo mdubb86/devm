@@ -10,10 +10,9 @@ import (
 )
 
 // captureHostTerminfo runs `infocmp -x "$TERM"` on the host and returns
-// the base64-encoded terminfo source so it can ride along on an
-// `sbx exec -e DEVM_TERMINFO_BLOB=<blob>` flag. The sandbox-side
-// with-devm-env wrapper decodes it and pipes to `tic` if the terminfo
-// entry is missing from the sandbox's db.
+// the base64-encoded terminfo source so it can ride along as an env var
+// on `tart exec`. The VM-side with-devm-env wrapper decodes it and
+// pipes to `tic` if the terminfo entry is missing from the VM's db.
 //
 // Returns "" on any failure (no $TERM, no host infocmp, unknown entry,
 // empty output, timeout). The caller treats the empty case as

@@ -9,8 +9,7 @@ import (
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
-// StatusResult is what `devm status` produces. Drift is non-empty only
-// for `--live` invocations.
+// StatusResult is what `devm status` produces.
 type StatusResult struct {
 	Sandbox         string
 	State           string // "running" | "stopped" | "absent"
@@ -39,7 +38,7 @@ type StatusResult struct {
 	ProxyError   string
 }
 
-// DriftItem is one piece of mismatch between snapshot and live sbx state.
+// DriftItem is one piece of mismatch between snapshot and live VM state.
 type DriftItem struct {
 	Kind   string
 	Detail string

@@ -17,11 +17,11 @@ type Bucket int
 
 const (
 	BucketLive Bucket = iota // applicable to a running sandbox without ending sessions
-	// BucketStopShell — requires sbx stop + cold start. No ChangeKind
+	// BucketStopShell — requires VM stop + cold start. No ChangeKind
 	// uses this bucket today; reserved for a future change type that
-	// needs to bounce the sandbox without rebuilding it from the kit.
+	// needs to bounce the VM without rebuilding it from scratch.
 	BucketStopShell
-	BucketTeardownShell // requires sbx rm + cold start (volumes/install rerun)
+	BucketTeardownShell // requires VM delete + cold start (volumes/install rerun)
 )
 
 func (b Bucket) String() string {
@@ -125,12 +125,12 @@ type FlavorKind int
 
 const (
 	FlavorLiveOnly FlavorKind = iota // no recreate, only live applies
-	// FlavorStopShell — requires sbx stop + cold start. Unreachable
+	// FlavorStopShell — requires VM stop + cold start. Unreachable
 	// today (no ChangeKind sits in BucketStopShell), kept paired with
 	// the bucket so adding a future BucketStopShell ChangeKind doesn't
 	// also need a flavor change.
 	FlavorStopShell
-	FlavorTeardownShell // requires sbx rm + cold start
+	FlavorTeardownShell // requires VM delete + cold start
 )
 
 // RecreateFlavor picks the max severity across all changes' buckets.

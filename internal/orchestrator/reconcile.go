@@ -9,7 +9,6 @@ import (
 
 	"github.com/mdubb86/devm/internal/lock"
 	"github.com/mdubb86/devm/internal/render"
-	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -20,13 +19,27 @@ import (
 // is self-identifying for humans grepping the VM.
 const snapshotHeader = "# devm snapshot — last-applied schema.Config\n"
 
+// vmIsRunning returns true when the named VM appears in tart list with
+// Running=true.
+func vmIsRunning(tr *tart.Tart, vmName string) bool {
+	vms, err := tr.List(context.Background())
+	if err != nil {
+		return false
+	}
+	for _, vm := range vms {
+		if vm.Name == vmName {
+			return vm.Running
+		}
+	}
+	return false
+}
+
 // RunReconcileInner is the lock-less inner of the reconcile state
 // machine. The caller MUST already hold .devm/lock and MUST have
-// confirmed the sandbox is running (sb.IsRunning()). This function
-// reads the in-VM snapshot (last-applied schema.Config), diffs the
-// new cfg against it, applies all BucketLive changes via ApplyLive,
-// and reports what remains (recreate-required) without prompting
-// or executing recreate.
+// confirmed the VM is running. This function reads the in-VM snapshot
+// (last-applied schema.Config), diffs the new cfg against it, applies
+// all BucketLive changes via ApplyLive, and reports what remains
+// (recreate-required) without prompting or executing recreate.
 //
 // Snapshot semantics:
 //   - Empty snapshot → no prior apply. Treat as identical to new cfg
@@ -37,13 +50,13 @@ const snapshotHeader = "# devm snapshot — last-applied schema.Config\n"
 //   - On partial success (recreate pending), leave old snapshot in
 //     place so subsequent reconciles re-detect everything. Live
 //     changes are idempotent so re-applying is harmless.
-func RunReconcileInner(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (ReconcileResult, error) {
+func RunReconcileInner(cfg schema.Config, tr *tart.Tart, vmName, repoRoot string) (ReconcileResult, error) {
 	res := ReconcileResult{
 		Rendered:     true,
 		SandboxState: "running",
 	}
 
-	snapStr, err := ReadSnapshot(sb)
+	snapStr, err := ReadSnapshot(tr, vmName)
 	if err != nil {
 		return res, fmt.Errorf("read snapshot: %w", err)
 	}
@@ -72,7 +85,7 @@ func RunReconcileInner(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) 
 	res.Flavor = RecreateFlavor(changes)
 
 	if len(res.Applied) > 0 {
-		if err := ApplyLive(sb, res.Applied, cfg, repoRoot); err != nil {
+		if err := ApplyLive(tr, vmName, res.Applied, cfg, repoRoot); err != nil {
 			return res, fmt.Errorf("apply live: %w", err)
 		}
 	}
@@ -81,9 +94,7 @@ func RunReconcileInner(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) 
 		res.NextAction = "needs_approval"
 		// Surface sessions so the caller can show them in the prompt
 		// / JSON output. Best-effort; failure here is non-fatal.
-		if sessions, sErr := sb.Sessions(); sErr == nil {
-			res.Sessions = sessions
-		}
+		res.Sessions = probeSessions(tr, vmName)
 		return res, nil
 	}
 
@@ -92,7 +103,7 @@ func RunReconcileInner(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) 
 	if err != nil {
 		return res, fmt.Errorf("marshal new snapshot: %w", err)
 	}
-	if err := WriteSnapshot(sb, snapshotHeader+string(newSnap)); err != nil {
+	if err := WriteSnapshot(tr, vmName, snapshotHeader+string(newSnap)); err != nil {
 		return res, fmt.Errorf("write snapshot: %w", err)
 	}
 
@@ -116,7 +127,7 @@ type ReconcileOptions struct {
 
 // RunReconcile is the lock-acquiring outer of the reconcile state
 // machine. Always renders .devm/ first so file-only consumers see the
-// latest output; if the sandbox is running, runs the diff/apply state
+// latest output; if the VM is running, runs the diff/apply state
 // machine; handles --dry-run, --yes, and non-TTY contexts; executes
 // recreate (without relaunching a shell) on approval.
 //
@@ -131,7 +142,8 @@ type ReconcileOptions struct {
 //	 1  — user refused at prompt
 //	 2  — non-TTY context with recreate-required pending (no --yes)
 //	-1  — operational error (lock fail, render fail, RunStop fail)
-func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts ReconcileOptions) (int, ReconcileResult, error) {
+func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts ReconcileOptions) (int, ReconcileResult, error) {
+	vmName := cfg.Project.SandboxName
 	res := ReconcileResult{}
 
 	// 1. Always render .devm/ static files first (spec.yaml, Caddyfile,
@@ -160,9 +172,9 @@ func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts 
 	}
 	defer releaseLock()
 
-	// 3. Sandbox state check.
-	if !sb.IsRunning() {
-		// Sandbox stopped: write the full .devm/ (including template
+	// 3. VM state check.
+	if !vmIsRunning(tr, vmName) {
+		// VM stopped: write the full .devm/ (including template
 		// installers) so the next `devm shell` cold start picks up
 		// everything. No diff or apply needed.
 		if err := render.WriteTemplateInstallers(cfg, repoRoot); err != nil {
@@ -176,7 +188,7 @@ func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts 
 
 	// 4. Dry-run branch: compute diff without applying or writing snapshot.
 	if opts.DryRun {
-		snapStr, err := ReadSnapshot(sb)
+		snapStr, err := ReadSnapshot(tr, vmName)
 		if err != nil {
 			return -1, res, fmt.Errorf("read snapshot: %w", err)
 		}
@@ -212,7 +224,7 @@ func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts 
 	}
 
 	// 5. Real apply via Inner.
-	inner, err := RunReconcileInner(cfg, sb, repoRoot)
+	inner, err := RunReconcileInner(cfg, tr, vmName, repoRoot)
 	if err != nil {
 		// Surface whatever partial state Inner gathered.
 		res.Applied = inner.Applied
@@ -261,7 +273,7 @@ func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts 
 	releaseLock()
 
 	stopDeps := StopDeps{
-		Tart:             tart.New(),
+		Tart:             tr,
 		ServiceAPIClient: serviceapi.NewClient(),
 		LockPath:         lockPath,
 	}
@@ -269,7 +281,7 @@ func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts 
 	if res.Flavor == FlavorTeardownShell {
 		mode = StopDestroy
 	}
-	if _, err := RunStop(context.Background(), stopDeps, cfg.Project.ID, sb.Name, mode, true); err != nil {
+	if _, err := RunStop(context.Background(), stopDeps, cfg.Project.ID, vmName, mode, true); err != nil {
 		return -1, res, fmt.Errorf("recreate (%s): %w", res.Flavor, err)
 	}
 

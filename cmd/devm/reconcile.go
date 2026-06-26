@@ -7,7 +7,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/orchestrator"
-	"github.com/mdubb86/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/spf13/cobra"
 )
 
@@ -30,14 +30,14 @@ var reconcileCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		sb := &sandbox.Sandbox{Name: cfg.Project.SandboxName, Runner: sandbox.DefaultRunner{}}
+		tr := tart.New()
 		opts := orchestrator.ReconcileOptions{
 			DryRun:         reconcileDryRun,
 			Yes:            reconcileYes,
 			JSON:           reconcileJSON,
 			NonInteractive: !isatty.IsTerminal(os.Stdin.Fd()),
 		}
-		rc, res, err := orchestrator.RunReconcile(cfg, sb, repoRoot, opts)
+		rc, res, err := orchestrator.RunReconcile(cfg, tr, repoRoot, opts)
 		if err != nil {
 			return err
 		}

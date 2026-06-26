@@ -18,11 +18,11 @@ type Session struct {
 	User string // resolved username from /proc/<pid>/status Uid line
 }
 
-// probeScript walks /proc in the sandbox and prints one line per
+// ProbeScript walks /proc in the sandbox and prints one line per
 // process whose fd 0 (stdin) is a /dev/pts/N device. Output format is
 // space-separated: "<pid> <comm> <pts/N> <user>". Runs under bash,
 // which contract_27 pins is present on the base image.
-const probeScript = `for d in /proc/[0-9]*; do
+const ProbeScript = `for d in /proc/[0-9]*; do
   pid="${d#/proc/}"
   [ -r "$d/comm" ] || continue
   comm=$(cat "$d/comm" 2>/dev/null) || continue
@@ -47,19 +47,19 @@ func (s *Sandbox) Sessions() ([]Session, error) {
 }
 
 // SessionsWithRunner is the testable inner. The runner's Output is
-// invoked with `sbx exec <name> bash -c <probeScript>`.
+// invoked with `sbx exec <name> bash -c <ProbeScript>`.
 func (s *Sandbox) SessionsWithRunner(r Runner) ([]Session, error) {
-	out, err := r.Output("sbx", "exec", s.Name, "bash", "-c", probeScript)
+	out, err := r.Output("sbx", "exec", s.Name, "bash", "-c", ProbeScript)
 	if err != nil {
 		return nil, fmt.Errorf("sessions: sbx exec: %w", err)
 	}
-	return parseSessions(string(out)), nil
+	return ParseSessions(string(out)), nil
 }
 
-// parseSessions extracts Session records from the probe output.
+// ParseSessions extracts Session records from the probe output.
 // Malformed lines are silently skipped — the script can race processes
 // that vanish mid-walk, producing partial lines.
-func parseSessions(out string) []Session {
+func ParseSessions(out string) []Session {
 	var sessions []Session
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if line == "" {

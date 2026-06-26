@@ -7,10 +7,10 @@ import (
 )
 
 // lineRingBuffer is a thread-safe io.Writer that retains the last N
-// lines of whatever's written to it. Used to capture the anchor's
-// stdout+stderr while it's running so a cold-start failure can surface
-// the actual sbx error message in the returned error — without
-// unbounded memory growth or a file on disk.
+// lines of whatever's written to it. Used to capture output from
+// background processes so failures can surface the relevant error
+// message in the returned error — without unbounded memory growth or a
+// file on disk.
 //
 // Bytes are buffered as they arrive and split on '\n'. A trailing
 // partial line (no terminating newline) is also retained and emitted

@@ -80,9 +80,8 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		// Warm attach: VM is already up. Auto-apply LIVE changes before
 		// attaching. We already hold the lock, so use the lock-less inner.
 		reporter.Step("attaching to running vm", false)
-		// RunReconcileInner expects a sandbox.Sandbox but that's sbx.
-		// For Ship 4 the warm path skips reconcile — the provisioner
-		// handled it on cold start. We just attach.
+		// Warm attach: reconcile is handled by the provisioner on cold start.
+		// For now the warm path just attaches directly.
 		_ = lk.Release()
 		released = true
 		reporter.Step("ready", false)
