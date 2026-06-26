@@ -152,3 +152,41 @@ func BuildBaseImage(ctx context.Context, imageDir string, w io.Writer) error {
 func ImageDirFromRepoRoot(repoRoot string) string {
 	return filepath.Join(repoRoot, "image")
 }
+
+// ImageDirFromExe returns the path to the image/ directory relative
+// to the running devm binary. Handles two layouts:
+//
+//  1. Brew / go install: binary at <prefix>/bin/devm, image at
+//     <prefix>/share/devm/image (set up by goreleaser).
+//  2. Dev: binary at workspace/devm or ./devm, image at
+//     workspace/image (next to the source).
+//
+// Returns the first candidate whose build.sh exists.
+func ImageDirFromExe() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+	exeDir := filepath.Dir(exe)
+
+	candidates := []string{
+		// Brew/installed layout: <prefix>/bin/devm → <prefix>/share/devm/image
+		filepath.Join(exeDir, "..", "share", "devm", "image"),
+		// Dev layout: ./devm → ./image
+		filepath.Join(exeDir, "image"),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(filepath.Join(c, "build.sh")); err == nil {
+			return c, nil
+		}
+	}
+	// Last resort: cwd/image (handy in dev when running from source root).
+	if cwd, err := os.Getwd(); err == nil {
+		c := filepath.Join(cwd, "image")
+		if _, err := os.Stat(filepath.Join(c, "build.sh")); err == nil {
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("image/ directory not found near devm binary")
+}

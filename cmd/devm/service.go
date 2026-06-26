@@ -14,6 +14,7 @@ import (
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 
+	"github.com/mdubb86/devm/internal/image"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
@@ -122,6 +123,28 @@ var installCmd = &cobra.Command{
 		// under a single sudo invocation so the user sees exactly one
 		// password prompt when anything's actually needed.
 		runPrivilegedInstall()
+
+		// Build base Tart image if needed.
+		imageDir, err := image.ImageDirFromExe()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "note: could not locate image directory: %v\n", err)
+			return nil
+		}
+		needs, _, err := image.NeedsBuild(imageDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "note: image hash check failed: %v\n", err)
+			return nil
+		}
+		if needs {
+			fmt.Println("Building devm-base Tart image (5-10 min)...")
+			if err := image.BuildBaseImage(cmd.Context(), imageDir, os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "note: base image build failed (%v). Re-run `devm install` to retry.\n", err)
+				return nil
+			}
+			fmt.Println("devm-base built.")
+		} else {
+			fmt.Println("devm-base is up to date.")
+		}
 		return nil
 	},
 }

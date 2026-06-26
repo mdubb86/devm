@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	selfupdate "github.com/creativeprojects/go-selfupdate"
+	"github.com/mdubb86/devm/internal/image"
 	"github.com/mdubb86/devm/internal/release"
 	"github.com/spf13/cobra"
 )
@@ -58,6 +59,19 @@ var upgradeCmd = &cobra.Command{
 		}
 
 		fmt.Printf("upgraded to %s\n", rel.Version())
+
+		// Rebuild base Tart image if the new binary ships updated
+		// image definition files. Best-effort — binary IS updated
+		// either way; run `devm install` to retry on failure.
+		if imageDir, err := image.ImageDirFromExe(); err == nil {
+			needs, _, _ := image.NeedsBuild(imageDir)
+			if needs {
+				fmt.Println("Rebuilding devm-base after binary upgrade...")
+				if err := image.BuildBaseImage(cmd.Context(), imageDir, os.Stdout); err != nil {
+					fmt.Fprintf(os.Stderr, "note: rebuild failed (%v). Run `devm install` to retry.\n", err)
+				}
+			}
+		}
 
 		// If the daemon is running, restart it to pick up the new
 		// binary. Best-effort — binary IS replaced either way.
