@@ -24,11 +24,10 @@ What it doesn't cover (tested elsewhere):
   - Non-tty + --yes prompt-flow halves -> test_09.
   - Install-change forces TEARDOWN (same bucket) -> test_14.
 """
-import subprocess
-
 import pytest
 
-from helpers import Shell, sbx, stop_and_wait_stopped
+from helpers import Shell, stop_and_wait_stopped
+from helpers.tart import TartSandbox
 
 pytestmark = pytest.mark.devm
 
@@ -45,17 +44,17 @@ def _config(marker_path: str) -> dict:
     }
 
 
-def _ls_markers(sandbox_name: str) -> str:
-    """Probe sbx directly for marker state — independent of any shell."""
-    return subprocess.run(
-        ["sbx", "exec", sandbox_name, "sh", "-c",
-         "ls /tmp/startup-marker-* 2>/dev/null || echo NONE"],
-        capture_output=True, timeout=15,
-    ).stdout.decode().strip()
+def _ls_markers(tart_sandbox: TartSandbox) -> str:
+    """Probe the VM directly for marker state — independent of any shell."""
+    r = tart_sandbox.exec_shell(
+        "ls /tmp/startup-marker-* 2>/dev/null || echo NONE",
+        timeout=15,
+    )
+    return r.stdout.strip()
 
 
 @pytest.mark.timeout(180)
-def test_startup_change_round_trip(workspace, devm, sandbox_name):
+def test_startup_change_round_trip(workspace, devm, tart_sandbox, sandbox_name):
     v1_marker = "/tmp/startup-marker-v1"
     v2_marker = "/tmp/startup-marker-v2"
 
@@ -75,8 +74,8 @@ def test_startup_change_round_trip(workspace, devm, sandbox_name):
         devm.reconcile(yes=True, timeout=60, check=False)
         sh.expect_eof(timeout=30)
 
-    # Sandbox should be GONE (teardown bucket = sbx rm, not stop).
-    assert not sbx.sandbox_exists(sandbox_name), (
+    # Sandbox should be GONE (teardown bucket = tart vm removed, not stopped).
+    assert tart_sandbox.state() == "absent", (
         f"sandbox {sandbox_name} still exists after reconcile --yes "
         f"(startup-change should be teardown-bucket)"
     )
@@ -85,7 +84,7 @@ def test_startup_change_round_trip(workspace, devm, sandbox_name):
     with Shell(devm, cwd=str(workspace.path)) as sh:
         sh.expect_prompt(timeout=90)
 
-        listing = _ls_markers(sandbox_name)
+        listing = _ls_markers(tart_sandbox)
         assert v2_marker in listing, (
             f"v2 startup did not run after recreate. Markers: {listing!r}"
         )

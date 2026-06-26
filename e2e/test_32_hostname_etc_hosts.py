@@ -19,8 +19,6 @@ What it doesn't cover:
   - Caddy reverse-proxy behavior — covered by Caddyfile unit tests in
     internal/render. We just confirm /etc/hosts here.
 """
-import subprocess
-
 import pytest
 
 from helpers import Shell, stop_and_wait_stopped
@@ -29,7 +27,7 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(90)
-def test_hostname_lands_in_etc_hosts(workspace, devm, sandbox_name):
+def test_hostname_lands_in_etc_hosts(workspace, devm, tart_sandbox, sandbox_name):
     hostname = f"{workspace.slug}-api.local"
     workspace.write_devmyaml(
         services={
@@ -48,10 +46,9 @@ def test_hostname_lands_in_etc_hosts(workspace, devm, sandbox_name):
         )
 
         # In-sandbox: /etc/hosts contains the BEGIN/END markers and the line.
-        etc_hosts = subprocess.run(
-            ["sbx", "exec", sandbox_name, "cat", "/etc/hosts"],
-            capture_output=True, timeout=10, check=True,
-        ).stdout.decode()
+        r = tart_sandbox.exec("cat", "/etc/hosts", timeout=10)
+        assert r.ok, f"cat /etc/hosts failed: {r.stderr!r}"
+        etc_hosts = r.stdout
         assert "# BEGIN devm hostnames" in etc_hosts, (
             f"missing BEGIN marker:\n{etc_hosts}"
         )
