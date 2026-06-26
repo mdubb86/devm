@@ -61,7 +61,8 @@ func newKardianosService() (service.Service, error) {
 		Executable:  exe,
 		Arguments:   []string{"serve"},
 		Option: service.KeyValue{
-			"UserService": true, // LaunchAgent, not LaunchDaemon
+			"UserService":   true, // LaunchAgent, not LaunchDaemon
+			"LaunchdConfig": serviceapi.LaunchdPlistTemplate,
 		},
 	}
 	return service.New(prog, cfg)
