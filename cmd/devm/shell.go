@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/orchestrator"
+	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
 )
 
@@ -42,6 +44,32 @@ attaches immediately. Port reconcile only runs on cold start.`,
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
+
+		// Auto-install routes in vm mode if the project doesn't have
+		// any yet. Best-effort: silent if the daemon is down. We
+		// don't overwrite an existing route set — the user may have
+		// explicitly chosen `devm route local`, and we respect that
+		// across stop/start cycles per the Ship 3 design.
+		go func() {
+			routes := buildRoutes(cfg, serviceapi.ModeVM)
+			if len(routes) == 0 {
+				return
+			}
+			rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer rcancel()
+			c := serviceapi.NewClient()
+			if !c.Available(rctx) {
+				return
+			}
+			existing, err := c.ListRoutes(rctx)
+			if err != nil {
+				return
+			}
+			if _, present := existing[cfg.Project.ID]; present {
+				return
+			}
+			_ = c.ApplyRoutes(rctx, cfg.Project.ID, routes)
+		}()
 
 		deps := orchestrator.DefaultShellDeps(repoRoot)
 		rc, err := orchestrator.RunShell(ctx, deps, cfg, repoRoot, cfg.Project.SandboxName, cmdName, cmdArgs)

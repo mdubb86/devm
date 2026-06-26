@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"time"
 
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/orchestrator"
 	"github.com/mdubb86/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
 )
 
@@ -35,6 +37,16 @@ the sandbox from scratch.`,
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
+
+		// Remove this project's routes from the daemon. Best-effort:
+		// silent if the daemon is down. The "I'm done with this
+		// project" signal per the Ship 3 design.
+		rctx, rcancel := context.WithTimeout(context.Background(), 2*time.Second)
+		c := serviceapi.NewClient()
+		if c.Available(rctx) {
+			_ = c.RemoveRoutes(rctx, cfg.Project.ID)
+		}
+		rcancel()
 
 		deps := orchestrator.StopDeps{
 			Runner:   sandbox.DefaultRunner{},
