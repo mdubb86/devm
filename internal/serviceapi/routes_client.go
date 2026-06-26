@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 )
 
 // ApplyRoutes pushes the project's routes to the daemon. Replaces
@@ -53,6 +54,56 @@ func (c *Client) RemoveRoutes(ctx context.Context, projectID string) error {
 		return fmt.Errorf("routes/remove: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// RoutingStatusFromDaemon queries the daemon's /routes endpoint and
+// composes a RoutingStatus suitable for `devm status` rendering.
+// The daemon being reachable implies the proxy is alive; we report
+// "proxy: devm" (instead of "caddy") and ProxyReachable: true.
+//
+// When the daemon is down or returns an error, the caller should
+// substitute a zero RoutingStatus (Proxy: "" + ProxyReachable: false)
+// — the formatRouting code handles that as "unreachable".
+func (c *Client) RoutingStatusFromDaemon(ctx context.Context) (RoutingStatus, error) {
+	routes, err := c.ListRoutes(ctx)
+	if err != nil {
+		return RoutingStatus{}, err
+	}
+	out := RoutingStatus{
+		Proxy:          "devm",
+		ProxyReachable: true,
+	}
+	// Flatten per-project routes into a single ordered slice; figure
+	// out the dominant mode for the "mode:" line. If routes mix
+	// modes across projects, label as "mixed (drift)".
+	modes := make(map[RouteMode]int)
+	// Collect project IDs for deterministic ordering.
+	projIDs := make([]string, 0, len(routes))
+	for id := range routes {
+		projIDs = append(projIDs, id)
+	}
+	sort.Strings(projIDs)
+	for _, projID := range projIDs {
+		for _, r := range routes[projID] {
+			modes[r.Mode]++
+			out.Routes = append(out.Routes, RouteStatus{
+				Hostname: r.Hostname,
+				Dial:     fmt.Sprintf("localhost:%d", r.BackendPort),
+				Mode:     r.Mode.String(),
+			})
+		}
+	}
+	switch {
+	case len(out.Routes) == 0:
+		out.Mode = ""
+	case len(modes) == 1:
+		for m := range modes {
+			out.Mode = m.String()
+		}
+	default:
+		out.Mode = "mixed (drift)"
+	}
+	return out, nil
 }
 
 // ListRoutes returns all routes the daemon knows about, keyed by

@@ -134,18 +134,18 @@ func TestRunStatusLive_PortExtraDrift(t *testing.T) {
 	assert.Contains(t, res.Drift[0].Detail, "9090")
 }
 
-func TestRunStatus_PopulatesRouting_ProxyNone(t *testing.T) {
-	// When project.proxy = "none", router.Inspect returns Proxy="none"
-	// and is short-circuit cheap. RunStatus must populate Routing even
-	// when the sandbox is absent.
+func TestRunStatus_RoutingZeroWhenDaemonUnreachable(t *testing.T) {
+	// When the daemon is not running, RoutingStatusFromDaemon fails and
+	// RunStatus leaves Routing zero-valued. RunStatus must not error out
+	// in this case — the format layer handles zero Routing as unreachable.
 	cfg := statusMinimalCfg()
-	cfg.Project.Proxy = "none"
 	r := &stateRunner{lsAbsent: true}
 	sb := &sandbox.Sandbox{Name: "x-sbx", Runner: r}
 	res, err := RunStatus(cfg, sb, "/tmp/fake")
 	require.NoError(t, err)
 	assert.Equal(t, "absent", res.State)
-	assert.Equal(t, "none", res.Routing.Proxy)
+	assert.Equal(t, "", res.Routing.Proxy)
+	assert.False(t, res.Routing.ProxyReachable)
 }
 
 func TestRunStatusLive_InSyncNoDrift(t *testing.T) {

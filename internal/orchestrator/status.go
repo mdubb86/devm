@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mdubb86/devm/internal/router"
 	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -17,12 +16,12 @@ import (
 func RunStatus(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (StatusResult, error) {
 	res := StatusResult{Sandbox: sb.Name}
 
-	// Routing status — cheap to fetch (one Caddy GET per service
-	// hostname, one DNS lookup per hostname). Runs unconditionally so
-	// users see it whenever they `devm status`. On error we leave
-	// Routing zero-valued; the format layer renders that as
-	// proxy-unreachable without breaking the rest of status.
-	if routing, err := router.Inspect(context.Background(), cfg); err == nil {
+	// Routing status — query the daemon's /routes endpoint. Runs
+	// unconditionally so users see it whenever they `devm status`. On
+	// error we leave Routing zero-valued; the format layer renders that
+	// as proxy-unreachable without breaking the rest of status.
+	c := serviceapi.NewClient()
+	if routing, err := c.RoutingStatusFromDaemon(context.Background()); err == nil {
 		res.Routing = routing
 	}
 

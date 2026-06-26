@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mdubb86/devm/internal/router"
 	"github.com/mdubb86/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 // StatusResult is what `devm status` produces. Drift is non-empty only
@@ -18,7 +18,7 @@ type StatusResult struct {
 	PendingLive     int
 	PendingRecreate int
 	Drift           []DriftItem
-	Routing         router.RoutingStatus
+	Routing         serviceapi.RoutingStatus
 
 	// DNSHealthy is true when the system resolver can reach the daemon's
 	// DNS server for *.test names. DNSError describes the failure when
@@ -85,7 +85,7 @@ func FormatStatusText(r StatusResult) string {
 	return b.String()
 }
 
-func formatRouting(r router.RoutingStatus) string {
+func formatRouting(r serviceapi.RoutingStatus) string {
 	var b strings.Builder
 	b.WriteString("\nRouting:\n")
 	if r.Proxy == "none" {
@@ -93,10 +93,10 @@ func formatRouting(r router.RoutingStatus) string {
 		return b.String()
 	}
 	if !r.ProxyReachable {
-		b.WriteString("  proxy: caddy (unreachable at http://localhost:2019)\n")
+		fmt.Fprintf(&b, "  proxy: %s (unreachable)\n", r.Proxy)
 		return b.String()
 	}
-	b.WriteString("  proxy:   caddy\n")
+	fmt.Fprintf(&b, "  proxy:   %s\n", r.Proxy)
 	if r.Mode == "" {
 		b.WriteString("  mode: (no routes)\n")
 		return b.String()
@@ -177,7 +177,7 @@ func FormatStatusJSON(r StatusResult) string {
 		Sessions       []sess               `json:"sessions"`
 		PendingChanges pending              `json:"pending_changes"`
 		Drift          []drift              `json:"drift"`
-		Routing        router.RoutingStatus `json:"routing"`
+		Routing        serviceapi.RoutingStatus `json:"routing"`
 		DNSHealthy     bool                 `json:"dns_healthy"`
 		DNSError       string               `json:"dns_error,omitempty"`
 	}

@@ -134,6 +134,22 @@ type RemoveRequest struct {
 	ProjectID string `json:"project_id"`
 }
 
+// RoutingStatus is what `devm status` displays for the Routing
+// section. Built by the orchestrator from /routes admin call.
+type RoutingStatus struct {
+	Proxy          string        `json:"proxy"`
+	ProxyReachable bool          `json:"proxy_reachable"`
+	Mode           string        `json:"mode"`
+	Routes         []RouteStatus `json:"routes"`
+}
+
+// RouteStatus is one row of the routing section in `devm status`.
+type RouteStatus struct {
+	Hostname string `json:"hostname"`
+	Dial     string `json:"dial"`
+	Mode     string `json:"mode"` // "local" | "vm" | "unknown"
+}
+
 // RegisterRoutesHandlers adds the three /routes endpoints to the
 // given server's mux. Called once from runner.go after the Routes
 // instance is created.

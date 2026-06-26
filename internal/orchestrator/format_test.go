@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/mdubb86/devm/internal/router"
 	"github.com/mdubb86/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -94,23 +94,23 @@ func TestFormatReconcileJSON(t *testing.T) {
 
 func TestFormatStatusText_ProxyNone(t *testing.T) {
 	res := StatusResult{
-		Routing: router.RoutingStatus{Proxy: "none"},
+		Routing: serviceapi.RoutingStatus{Proxy: "none"},
 	}
 	text := FormatStatusText(res)
 	assert.Contains(t, text, "proxy: none (devm route disabled)")
 }
 
-func TestFormatStatusText_ProxyCaddyUnreachable(t *testing.T) {
+func TestFormatStatusText_ProxyUnreachable(t *testing.T) {
 	res := StatusResult{
-		Routing: router.RoutingStatus{Proxy: "caddy", ProxyReachable: false},
+		Routing: serviceapi.RoutingStatus{Proxy: "devm", ProxyReachable: false},
 	}
 	text := FormatStatusText(res)
-	assert.Contains(t, text, "proxy: caddy (unreachable")
+	assert.Contains(t, text, "proxy: devm (unreachable)")
 }
 
 func TestFormatStatusText_NoRoutes(t *testing.T) {
 	res := StatusResult{
-		Routing: router.RoutingStatus{Proxy: "caddy", ProxyReachable: true, Mode: ""},
+		Routing: serviceapi.RoutingStatus{Proxy: "devm", ProxyReachable: true, Mode: ""},
 	}
 	text := FormatStatusText(res)
 	assert.Contains(t, text, "mode: (no routes)")
@@ -118,9 +118,9 @@ func TestFormatStatusText_NoRoutes(t *testing.T) {
 
 func TestFormatStatusText_VMMode_WithRoutes(t *testing.T) {
 	res := StatusResult{
-		Routing: router.RoutingStatus{
-			Proxy: "caddy", ProxyReachable: true, Mode: "vm",
-			Routes: []router.RouteStatus{
+		Routing: serviceapi.RoutingStatus{
+			Proxy: "devm", ProxyReachable: true, Mode: "vm",
+			Routes: []serviceapi.RouteStatus{
 				{Hostname: "api.foo.test", Dial: "localhost:55432", Mode: "vm"},
 				{Hostname: "app.foo.test", Dial: "localhost:53000", Mode: "vm"},
 			},
@@ -136,9 +136,9 @@ func TestFormatStatusText_VMMode_WithRoutes(t *testing.T) {
 
 func TestFormatStatusText_MixedMode_TagsRoutes(t *testing.T) {
 	res := StatusResult{
-		Routing: router.RoutingStatus{
-			Proxy: "caddy", ProxyReachable: true, Mode: "mixed (drift)",
-			Routes: []router.RouteStatus{
+		Routing: serviceapi.RoutingStatus{
+			Proxy: "devm", ProxyReachable: true, Mode: "mixed (drift)",
+			Routes: []serviceapi.RouteStatus{
 				{Hostname: "api.foo.test", Dial: "localhost:55432", Mode: "vm"},
 				{Hostname: "app.foo.test", Dial: "localhost:3000", Mode: "local"},
 			},
