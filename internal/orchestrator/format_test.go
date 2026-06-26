@@ -170,6 +170,44 @@ func TestFormatStatusText_DNSLine_RedWhenUnhealthy(t *testing.T) {
 	assert.Contains(t, out, "devm install")
 }
 
+func TestFormatStatusText_CALine_SilentWhenTrusted(t *testing.T) {
+	res := StatusResult{
+		Sandbox: "x", State: "running",
+		DNSHealthy: true, CATrusted: true, ProxyHealthy: true,
+	}
+	assert.NotContains(t, FormatStatusText(res), "ca:")
+}
+
+func TestFormatStatusText_CALine_RedWhenUntrusted(t *testing.T) {
+	res := StatusResult{
+		Sandbox: "x", State: "running",
+		DNSHealthy: true, CATrusted: false, ProxyHealthy: true,
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "ca: NOT TRUSTED")
+	assert.Contains(t, out, "devm install")
+}
+
+func TestFormatStatusText_ProxyLine_SilentWhenHealthy(t *testing.T) {
+	res := StatusResult{
+		Sandbox: "x", State: "running",
+		DNSHealthy: true, CATrusted: true, ProxyHealthy: true,
+	}
+	assert.NotContains(t, FormatStatusText(res), "proxy: NOT LISTENING")
+}
+
+func TestFormatStatusText_ProxyLine_RedWhenDown(t *testing.T) {
+	res := StatusResult{
+		Sandbox: "x", State: "running",
+		DNSHealthy: true, CATrusted: true,
+		ProxyHealthy: false,
+		ProxyError:   "dial tcp 127.0.0.1:443: connect: connection refused",
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "proxy: NOT LISTENING")
+	assert.Contains(t, out, "connection refused")
+}
+
 func TestFormatChange_Template(t *testing.T) {
 	// Added template.
 	added := Change{Kind: KindTemplateChange, Service: "web", Detail: "/etc/caddy/Caddyfile", New: "installed"}

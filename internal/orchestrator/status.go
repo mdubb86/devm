@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/mdubb86/devm/internal/sandbox"
@@ -32,6 +33,21 @@ func RunStatus(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string) (StatusR
 	} else {
 		res.DNSHealthy = false
 		res.DNSError = err.Error()
+	}
+
+	// CA trust state — read-only, no sudo.
+	trusted, _ := serviceapi.CheckCATrusted()
+	res.CATrusted = trusted
+
+	// Proxy health: TCP dial to localhost:443 within 500ms. If
+	// launchd handed off the socket and the daemon is up, this
+	// succeeds.
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:443", 500*time.Millisecond)
+	if err == nil {
+		res.ProxyHealthy = true
+		_ = conn.Close()
+	} else {
+		res.ProxyError = err.Error()
 	}
 
 	state := sb.State()

@@ -25,6 +25,18 @@ type StatusResult struct {
 	// DNSHealthy is false. Both populated by RunStatus.
 	DNSHealthy bool
 	DNSError   string
+
+	// CATrusted is true when devm's local CA root is installed in
+	// the System Keychain. False means HTTPS will produce browser
+	// warnings (devm install fixes this).
+	CATrusted bool
+
+	// ProxyHealthy is true when something is listening on :443.
+	// Populated by a 500ms TCP dial. False means the daemon isn't
+	// running or launchd's socket activation didn't hand off the
+	// listeners properly.
+	ProxyHealthy bool
+	ProxyError   string
 }
 
 // DriftItem is one piece of mismatch between snapshot and live sbx state.
@@ -82,6 +94,8 @@ func FormatStatusText(r StatusResult) string {
 	}
 	b.WriteString(formatRouting(r.Routing))
 	b.WriteString(formatDNSHealth(r))
+	b.WriteString(formatCAHealth(r))
+	b.WriteString(formatProxyHealth(r))
 	return b.String()
 }
 
@@ -122,6 +136,27 @@ func formatDNSHealth(r StatusResult) string {
 	fmt.Fprintf(&b, "\ndns: NOT WORKING — %s\n", r.DNSError)
 	b.WriteString("     Run `devm install` to set up the resolver file, or `devm restart`\n")
 	b.WriteString("     if the daemon isn't responding.\n")
+	return b.String()
+}
+
+func formatCAHealth(r StatusResult) string {
+	if r.CATrusted {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nca: NOT TRUSTED\n")
+	b.WriteString("     Run `devm install` to install the devm CA into your System Keychain.\n")
+	return b.String()
+}
+
+func formatProxyHealth(r StatusResult) string {
+	if r.ProxyHealthy {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\nproxy: NOT LISTENING (port 443) — %s\n", r.ProxyError)
+	b.WriteString("       Run `devm install` to register launchd's port binding,\n")
+	b.WriteString("       or `devm restart` if the daemon isn't responding.\n")
 	return b.String()
 }
 
@@ -172,14 +207,17 @@ func FormatStatusJSON(r StatusResult) string {
 		Detail string `json:"detail"`
 	}
 	type body struct {
-		Sandbox        string               `json:"sandbox"`
-		State          string               `json:"state"`
-		Sessions       []sess               `json:"sessions"`
-		PendingChanges pending              `json:"pending_changes"`
-		Drift          []drift              `json:"drift"`
+		Sandbox        string                   `json:"sandbox"`
+		State          string                   `json:"state"`
+		Sessions       []sess                   `json:"sessions"`
+		PendingChanges pending                  `json:"pending_changes"`
+		Drift          []drift                  `json:"drift"`
 		Routing        serviceapi.RoutingStatus `json:"routing"`
-		DNSHealthy     bool                 `json:"dns_healthy"`
-		DNSError       string               `json:"dns_error,omitempty"`
+		DNSHealthy     bool                     `json:"dns_healthy"`
+		DNSError       string                   `json:"dns_error,omitempty"`
+		CATrusted      bool                     `json:"ca_trusted"`
+		ProxyHealthy   bool                     `json:"proxy_healthy"`
+		ProxyError     string                   `json:"proxy_error,omitempty"`
 	}
 	sessions := make([]sess, len(r.Sessions))
 	for i, s := range r.Sessions {
@@ -196,6 +234,9 @@ func FormatStatusJSON(r StatusResult) string {
 		Routing:        r.Routing,
 		DNSHealthy:     r.DNSHealthy,
 		DNSError:       r.DNSError,
+		CATrusted:      r.CATrusted,
+		ProxyHealthy:   r.ProxyHealthy,
+		ProxyError:     r.ProxyError,
 	}
 	out, _ := json.MarshalIndent(b, "", "  ")
 	return string(out)
