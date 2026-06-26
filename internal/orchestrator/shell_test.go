@@ -12,12 +12,37 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/status"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
+
+// ---------- fakes for RunShell tests ----------
+
+// fakeVMAdmin is a fake VMAdminClient for unit-testing RunShell.
+type fakeVMAdmin struct {
+	mu          sync.Mutex
+	statusResp  serviceapi.VMStatusResponse
+	statusErr   error
+	startCalled int
+	startErr    error
+}
+
+func (f *fakeVMAdmin) VMStatus(_ context.Context, _, _ string) (serviceapi.VMStatusResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.statusResp, f.statusErr
+}
+
+func (f *fakeVMAdmin) StartVM(_ context.Context, _ serviceapi.VMStartRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startCalled++
+	return f.startErr
+}
 
 // stubSpawner records Start calls and hands out scripted SpawnedCmds
 // in FIFO order. If the queue is empty, returns a fresh stubCmd whose
@@ -66,6 +91,155 @@ func (c *stubCmd) Kill() error {
 	return nil
 }
 func (c *stubCmd) Pid() int { return c.pid }
+
+func minimalCfg() schema.Config {
+	return schema.Config{
+		Project:  schema.Project{ID: "x", SandboxName: "x-sbx"},
+		Services: map[string]schema.Service{},
+	}
+}
+
+// ---------- RunShell tests ----------
+
+// TestRunShellWarmPath_AttachesWithoutStart verifies that when the VM is
+// already running the daemon is NOT asked to start it again, and the
+// user shell is spawned via tart exec.
+func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: true, Running: true},
+	}
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		Tart:             tartPathNotNeeded(t),
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
+	}
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	admin.mu.Lock()
+	assert.Equal(t, 0, admin.startCalled, "StartVM must NOT be called on the warm path")
+	admin.mu.Unlock()
+}
+
+// TestRunShellColdPath_CallsStartAndProvisions verifies the cold-start
+// sequence: StartVM is called, then waitVMReady polls exec, then the
+// provisioner runs (here exercised as a no-op because tart is fake).
+//
+// We use a tart binary that succeeds immediately so waitVMReady returns
+// right away; the provision step runs against a tart that exec's `true`
+// successfully. The test only checks orchestration order, not provision
+// output.
+func TestRunShellColdPath_CallsStartVM(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+	}
+
+	// Write a fake CA so ReadFile succeeds.
+	caDir := filepath.Join(repoRoot, "ca")
+	require.NoError(t, os.MkdirAll(caDir, 0o755))
+
+	// Use a tart binary that always returns exit 0 so waitVMReady and
+	// provision exec calls all succeed immediately.
+	tartBin := fakeTartBin(t, repoRoot)
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
+	}
+
+	// Point caStorageDir at our temp dir by overriding HOME.
+	t.Setenv("HOME", repoRoot)
+	// Write the CA root in the place caStorageDir() will look.
+	caPath := filepath.Join(repoRoot, "Library", "Application Support", "devm", "ca")
+	require.NoError(t, os.MkdirAll(caPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(caPath, "root.crt"), []byte("FAKE-CA"), 0o644))
+
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	admin.mu.Lock()
+	assert.Equal(t, 1, admin.startCalled, "StartVM must be called exactly once on cold start")
+	admin.mu.Unlock()
+}
+
+// TestRunShellWarmPath_VMStatusError verifies that a daemon error on
+// VMStatus surfaces as a RunShell error.
+func TestRunShellWarmPath_VMStatusError(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusErr: fmt.Errorf("daemon down"),
+	}
+
+	deps := ShellDeps{
+		Tart:             tartPathNotNeeded(t),
+		ServiceAPIClient: admin,
+		UserSpawner:      &stubSpawner{},
+		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
+	}
+	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "query vm status")
+}
+
+// TestRunShellColdPath_StartVMError verifies that a daemon error on
+// StartVM surfaces as a RunShell error.
+func TestRunShellColdPath_StartVMError(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+		startErr:   fmt.Errorf("clone failed"),
+	}
+
+	deps := ShellDeps{
+		Tart:             tartPathNotNeeded(t),
+		ServiceAPIClient: admin,
+		UserSpawner:      &stubSpawner{},
+		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
+	}
+	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "start vm")
+}
+
+// tartPathNotNeeded returns a *tart.Tart whose binary is "false" —
+// it will exit 1 immediately if called. Use this when the test is
+// exercising a path that should never invoke tart.
+func tartPathNotNeeded(t *testing.T) *tart.Tart {
+	t.Helper()
+	tr := tart.New()
+	tr.Path = "false"
+	return tr
+}
+
+// fakeTartBin writes a shell script into dir that exits 0 for all
+// subcommands, and returns a *tart.Tart pointing at it.
+func fakeTartBin(t *testing.T, dir string) *tart.Tart {
+	t.Helper()
+	bin := filepath.Join(dir, "tart-fake")
+	script := "#!/bin/sh\nexec true\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+	return tr
+}
+
+// ---------- supervision.go helper types (shared with supervision tests) ----------
 
 // stateRunner: scripted responses for sbx ls (running/stopped),
 // sbx ports --json, and the Sessions probe script. Concurrency-safe.
@@ -118,439 +292,9 @@ func (r *stateRunner) RunStdin(stdin, name string, args ...string) error {
 	return r.Run(name, args...)
 }
 
-func minimalCfg() schema.Config {
-	return schema.Config{
-		Project:  schema.Project{ID: "x", SandboxName: "x-sbx"},
-		Services: map[string]schema.Service{},
-	}
-}
-
-func TestRunShellAlreadyRunningTakesShortcut(t *testing.T) {
-	repoRoot := t.TempDir()
-	spawner := &stubSpawner{}
-	runner := &stateRunner{lsStatus: "running"}
-
-	// User shell exits immediately with success.
-	userCmd := &stubCmd{waitErr: make(chan error, 1)}
-	userCmd.waitErr <- nil
-	spawner.cmdQueue = []*stubCmd{userCmd}
-
-	deps := ShellDeps{
-		AnchorSpawner: spawner,
-		UserSpawner:   spawner,
-		Runner:        runner,
-		LockPath:      filepath.Join(repoRoot, ".devm/lock"),
-	}
-	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-
-	// Only ONE Start should have been called (the user shell), not two.
-	require.Len(t, spawner.started, 1)
-	assert.Contains(t, strings.Join(spawner.started[0], " "), "sbx exec")
-	assert.Contains(t, strings.Join(spawner.started[0], " "), "x-sbx")
-
-	// No port reconcile on shortcut path.
-	for _, c := range runner.calls {
-		joined := strings.Join(c, " ")
-		require.False(t, strings.Contains(joined, "--publish"), "should not reconcile on shortcut: %s", joined)
-		require.False(t, strings.Contains(joined, "--unpublish"), "should not reconcile on shortcut: %s", joined)
-	}
-}
-
-func TestRunShellInjectsServiceEnv(t *testing.T) {
-	repoRoot := t.TempDir()
-	spawner := &stubSpawner{}
-	runner := &stateRunner{lsStatus: "running"}
-
-	userCmd := &stubCmd{waitErr: make(chan error, 1)}
-	userCmd.waitErr <- nil
-	spawner.cmdQueue = []*stubCmd{userCmd}
-
-	cfg := minimalCfg()
-	cfg.Services = map[string]schema.Service{
-		"api": {Port: 8080, Env: map[string]string{"LOG_LEVEL": "info"}},
-	}
-
-	deps := ShellDeps{
-		AnchorSpawner: spawner,
-		UserSpawner:   spawner,
-		Runner:        runner,
-		LockPath:      filepath.Join(repoRoot, ".devm/lock"),
-	}
-	rc, err := RunShell(context.Background(), deps, cfg, repoRoot, "x-sbx", "bash", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-
-	require.Len(t, spawner.started, 1)
-	joined := strings.Join(spawner.started[0], " ")
-
-	// New contract: persistent project + service env lives in /.devm/.env,
-	// sourced by the with-devm-env wrapper. Verify the wrapper is in argv
-	// AND the rendered .env contains the flattened service env.
-	assert.Contains(t, joined, filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env"),
-		"sbx exec must invoke via the with-devm-env wrapper")
-	assert.NotContains(t, joined, "API_LOG_LEVEL=info",
-		"service env must NOT ride on -e flags anymore; it lives in .devm/.env")
-
-	bs, err := os.ReadFile(filepath.Join(repoRoot, ".devm", ".env"))
-	require.NoError(t, err)
-	assert.Contains(t, string(bs), `export API_LOG_LEVEL='info'`,
-		"service env must be flattened into .devm/.env (NAME_KEY)")
-}
-
-func TestRunShellColdStartHappyPath(t *testing.T) {
-	repoRoot := t.TempDir()
-
-	runner := &stateRunner{
-		lsAbsent: true,                    // sandbox doesn't exist initially
-		probeOut: "27 bash pts/1 agent\n", // pty appears for the user shell
-	}
-
-	// runCmd: the sbx run subprocess; blocks on Wait until Killed.
-	runCmd := &stubCmd{waitErr: make(chan error, 1)}
-	// userCmd: the user shell; exits immediately.
-	userCmd := &stubCmd{waitErr: make(chan error, 1)}
-	userCmd.waitErr <- nil
-
-	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd, userCmd}}
-
-	// Flip state to "running" shortly after the orchestrator calls sbx ls.
-	go func() {
-		time.Sleep(40 * time.Millisecond)
-		runner.mu.Lock()
-		runner.lsAbsent = false
-		runner.lsStatus = "running"
-		runner.mu.Unlock()
-	}()
-
-	deps := ShellDeps{
-		AnchorSpawner:  spawner,
-		UserSpawner:    spawner,
-		Runner:         runner,
-		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
-		WaitForRunning: 2 * time.Second,
-		PollInterval:   20 * time.Millisecond,
-	}
-	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-
-	require.GreaterOrEqual(t, len(spawner.started), 2)
-	// Anchor is spawned as bare `sbx run` (no nohup wrap). sbx 0.31
-	// ignores SIGHUP under a controlling TTY, so the historical
-	// nohup wrap is redundant. Pinned by
-	// e2e/test_sbx_interop_02_anchor_master_close_lifetime.py.
-	assert.Equal(t, "sbx", spawner.started[0][0],
-		"anchor argv[0] must be `sbx`")
-	assert.Equal(t, "run", spawner.started[0][1],
-		"argv[1] must be `run`")
-	assert.Contains(t, strings.Join(spawner.started[1], " "), "sbx exec",
-		"user shell stays plain `sbx exec ...`")
-
-	// Verify --name flag is passed with the expected sandbox name.
-	runArgsJoined := strings.Join(spawner.started[0], " ")
-	assert.Contains(t, runArgsJoined, "--name x-sbx",
-		"sbx run must use --name so the actual sandbox name matches what we look up later")
-	assert.Contains(t, runArgsJoined, " x ", // agent positional (project.ID from minimalCfg)
-		"agent positional must be cfg.Project.ID")
-
-	// New architecture: anchor stays alive. runCmd must NOT be killed
-	// on the normal cold-start path. The anchor exits on its own when
-	// `sbx stop NAME` runs later (pinned by
-	// e2e/test_sbx_anchor_04_sbx_stop_reaps_anchor.py).
-	assert.False(t, runCmd.killed,
-		"anchor must NOT be killed during cold-start; it lives until sbx stop")
-
-	// Ordering invariant: anchor is spawned before the user shell so
-	// the sandbox is up and exec-ready before any sbx exec attaches.
-	require.GreaterOrEqual(t, len(spawner.started), 2,
-		"both anchor (sbx run) and user shell (sbx exec) must be spawned")
-}
-
-func TestRunShellRestartUsesKitName(t *testing.T) {
-	repoRoot := t.TempDir()
-
-	// Sandbox already exists in stopped state (lsAbsent=false, lsStatus="stopped").
-	runner := &stateRunner{
-		lsStatus: "stopped",
-		probeOut: "27 bash pts/1 agent\n",
-	}
-
-	runCmd := &stubCmd{waitErr: make(chan error, 1)}
-	userCmd := &stubCmd{waitErr: make(chan error, 1)}
-	userCmd.waitErr <- nil
-
-	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd, userCmd}}
-
-	go func() {
-		time.Sleep(40 * time.Millisecond)
-		runner.mu.Lock()
-		runner.lsStatus = "running"
-		runner.mu.Unlock()
-	}()
-
-	deps := ShellDeps{
-		AnchorSpawner:  spawner,
-		UserSpawner:    spawner,
-		Runner:         runner,
-		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
-		WaitForRunning: 2 * time.Second,
-		PollInterval:   20 * time.Millisecond,
-	}
-	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-
-	// Restart path: `sbx run --kit <dir> <sandbox-name>` — kit provides
-	// the agent definition (sbx doesn't remember across restarts); no
-	// --name (sbx rejects it for existing sandboxes).
-	runArgsJoined := strings.Join(spawner.started[0], " ")
-	assert.Contains(t, runArgsJoined, "sbx run --kit",
-		"restart path must pass --kit so sbx can resolve the custom agent")
-	assert.Contains(t, runArgsJoined, "x-sbx",
-		"restart path must include the sandbox name as positional")
-	assert.NotContains(t, runArgsJoined, "--name",
-		"restart path must NOT pass --name (sbx rejects it for existing sandboxes)")
-	// Also: agent positional and workspace positional are NOT passed on
-	// restart — sbx infers them from the sandbox name + loaded kit.
-	// We can't easily assert their absence without false positives, but
-	// asserting the exact arg count is a clean substitute:
-	expectedArgs := []string{"sbx", "run", "--kit", filepath.Join(repoRoot, ".devm"), "x-sbx"}
-	assert.Equal(t, expectedArgs, spawner.started[0],
-		"restart path argv should be exactly: sbx run --kit <kitdir> <sandbox-name>")
-}
-
-func TestRunShellWaitForRunningTimesOut(t *testing.T) {
-	repoRoot := t.TempDir()
-	runner := &stateRunner{lsStatus: "stopped"} // never flips
-	runCmd := &stubCmd{waitErr: make(chan error, 1)}
-	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd}}
-
-	deps := ShellDeps{
-		AnchorSpawner:  spawner,
-		UserSpawner:    spawner,
-		Runner:         runner,
-		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
-		WaitForRunning: 100 * time.Millisecond,
-		PollInterval:   20 * time.Millisecond,
-	}
-	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "never reached running")
-	assert.True(t, runCmd.killed, "run subprocess must be killed on failure")
-}
-
-func TestRunShellAbort_FreshlyCreated_RunsSbxRm(t *testing.T) {
-	// Cold-start path: sandbox doesn't exist initially, anchor spawned,
-	// but sandbox never reaches running (timeout). Cleanup defer MUST run
-	// `sbx rm -f <name>` so the half-built sandbox doesn't linger.
-	repoRoot := t.TempDir()
-	runner := &stateRunner{lsAbsent: true} // sandbox doesn't exist → freshlyCreated=true
-	runCmd := &stubCmd{waitErr: make(chan error, 1)}
-	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd}}
-
-	deps := ShellDeps{
-		AnchorSpawner:  spawner,
-		UserSpawner:    spawner,
-		Runner:         runner,
-		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
-		WaitForRunning: 100 * time.Millisecond,
-		PollInterval:   20 * time.Millisecond,
-	}
-	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
-	require.Error(t, err)
-
-	sawRm := false
-	runner.mu.Lock()
-	for _, c := range runner.calls {
-		if strings.Join(c, " ") == "sbx rm -f x-sbx" {
-			sawRm = true
-			break
-		}
-	}
-	runner.mu.Unlock()
-	assert.True(t, sawRm, "cold-start abort must `sbx rm -f` the half-built sandbox; got calls: %v", runner.calls)
-}
-
-func TestRunShellAbort_Restart_DoesNotRunSbxRm(t *testing.T) {
-	// Restart path: sandbox EXISTS initially but is stopped. RunShell will
-	// restart it. If install/startup fails, we must NOT `sbx rm -f` —
-	// that would destroy the user's existing sandbox data.
-	repoRoot := t.TempDir()
-	runner := &stateRunner{lsStatus: "stopped"} // exists, but not running; stays stopped
-	runCmd := &stubCmd{waitErr: make(chan error, 1)}
-	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd}}
-
-	deps := ShellDeps{
-		AnchorSpawner:  spawner,
-		UserSpawner:    spawner,
-		Runner:         runner,
-		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
-		WaitForRunning: 100 * time.Millisecond,
-		PollInterval:   20 * time.Millisecond,
-	}
-	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
-	require.Error(t, err)
-
-	runner.mu.Lock()
-	for _, c := range runner.calls {
-		joined := strings.Join(c, " ")
-		assert.NotEqual(t, "sbx rm -f x-sbx", joined,
-			"restart-path abort must NOT destroy an existing sandbox")
-	}
-	runner.mu.Unlock()
-}
-
-// Compile-time guards (so accidental refactors that delete a symbol
-// fail at build time rather than at runtime). Unused locals are fine.
+// Compile-time guard so accidental removal of sandbox.DefaultRunner breaks
+// loudly at build time rather than silently at runtime.
 var _ = sandbox.DefaultRunner{}
-
-// Regression for the cold-start ordering bug: install steps fetch from
-// external mirrors (deb.nodesource.com, etc.). Sbx default-denies, so
-// `network.allowed_domains` must be granted via `sbx policy allow`
-// BEFORE the install-gate sentinel is polled, not after.
-func TestRunShellColdStart_AppliesNetworkBeforeInstallGate(t *testing.T) {
-	repoRoot := t.TempDir()
-
-	runner := &stateRunner{
-		lsAbsent: true,
-		probeOut: "27 bash pts/1 agent\n",
-	}
-	runCmd := &stubCmd{waitErr: make(chan error, 1)}
-	userCmd := &stubCmd{waitErr: make(chan error, 1)}
-	userCmd.waitErr <- nil
-	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd, userCmd}}
-
-	go func() {
-		time.Sleep(40 * time.Millisecond)
-		runner.mu.Lock()
-		runner.lsAbsent = false
-		runner.lsStatus = "running"
-		runner.mu.Unlock()
-	}()
-
-	cfg := minimalCfg()
-	cfg.Network = schema.Network{AllowedDomains: []string{"deb.nodesource.com"}}
-
-	deps := ShellDeps{
-		AnchorSpawner:  spawner,
-		UserSpawner:    spawner,
-		Runner:         runner,
-		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
-		WaitForRunning: 2 * time.Second,
-		PollInterval:   20 * time.Millisecond,
-	}
-	rc, err := RunShell(context.Background(), deps, cfg, repoRoot, "x-sbx", "bash", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	policyIdx, gateIdx := -1, -1
-	for i, c := range runner.calls {
-		joined := strings.Join(c, " ")
-		if policyIdx < 0 && strings.Contains(joined, "sbx policy allow network x-sbx deb.nodesource.com") {
-			policyIdx = i
-		}
-		if gateIdx < 0 && strings.Contains(joined, "test -f /tmp/.devm-install/install-all-ok") {
-			gateIdx = i
-		}
-	}
-	require.GreaterOrEqual(t, policyIdx, 0, "sbx policy allow must be called; calls=%v", runner.calls)
-	require.GreaterOrEqual(t, gateIdx, 0, "install-gate sentinel must be polled; calls=%v", runner.calls)
-	assert.Less(t, policyIdx, gateIdx,
-		"network policy allow (idx=%d) must precede install-gate poll (idx=%d): install steps fetching from allowed domains must see the policy in place",
-		policyIdx, gateIdx)
-}
-
-func TestRunShellColdStartWritesSnapshot(t *testing.T) {
-	repoRoot := t.TempDir()
-
-	runner := &stateRunner{
-		lsAbsent: true,
-		probeOut: "27 bash pts/1 agent\n",
-	}
-	runCmd := &stubCmd{waitErr: make(chan error, 1)}
-	userCmd := &stubCmd{waitErr: make(chan error, 1)}
-	userCmd.waitErr <- nil
-
-	spawner := &stubSpawner{cmdQueue: []*stubCmd{runCmd, userCmd}}
-
-	go func() {
-		time.Sleep(40 * time.Millisecond)
-		runner.mu.Lock()
-		runner.lsAbsent = false
-		runner.lsStatus = "running"
-		runner.mu.Unlock()
-	}()
-
-	deps := ShellDeps{
-		AnchorSpawner:  spawner,
-		UserSpawner:    spawner,
-		Runner:         runner,
-		LockPath:       filepath.Join(repoRoot, ".devm/lock"),
-		WaitForRunning: 2 * time.Second,
-		PollInterval:   20 * time.Millisecond,
-	}
-	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-
-	// Verify the snapshot was written: look for any runner call whose
-	// args contain "applied.yaml" (the snapshot path or the .tmp form).
-	sawSnapshotWrite := false
-	runner.mu.Lock()
-	for _, c := range runner.calls {
-		joined := strings.Join(c, " ")
-		if strings.Contains(joined, "applied.yaml") {
-			sawSnapshotWrite = true
-			break
-		}
-	}
-	runner.mu.Unlock()
-	assert.True(t, sawSnapshotWrite, "cold-start must write snapshot via sbx exec ... applied.yaml")
-}
-
-func TestRunShellShortcutInvokesReconcileInner(t *testing.T) {
-	// Shortcut path with a snapshot that matches cfg → reconcile inner
-	// finds no diff → no recreate surface, no LIVE applies → user shell
-	// attaches normally.
-	repoRoot := t.TempDir()
-	cfg := minimalCfg()
-	snapYAML, _ := yaml.Marshal(cfg)
-	runner := &stateRunner{
-		lsStatus: "running",
-		catOut:   string(snapYAML),
-	}
-
-	userCmd := &stubCmd{waitErr: make(chan error, 1)}
-	userCmd.waitErr <- nil
-	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
-
-	deps := ShellDeps{
-		AnchorSpawner: spawner,
-		UserSpawner:   spawner,
-		Runner:        runner,
-		LockPath:      filepath.Join(repoRoot, ".devm/lock"),
-	}
-	rc, err := RunShell(context.Background(), deps, cfg, repoRoot, "x-sbx", "bash", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-
-	// Reconcile-inner ran (visible via the snapshot read call).
-	sawCat := false
-	runner.mu.Lock()
-	for _, c := range runner.calls {
-		joined := strings.Join(c, " ")
-		if strings.Contains(joined, "cat ") && strings.Contains(joined, "applied.yaml") {
-			sawCat = true
-			break
-		}
-	}
-	runner.mu.Unlock()
-	assert.True(t, sawCat, "shortcut path must invoke RunReconcileInner which reads the snapshot")
-}
 
 // stubRunnerForFailureReader returns scripted outputs for the sbx exec
 // calls readPhaseFailure makes. The map key is a substring of the joined
@@ -943,39 +687,4 @@ func (r *statefulStubRunner) Run(name string, args ...string) error {
 
 func (r *statefulStubRunner) RunStdin(stdin, name string, args ...string) error {
 	return r.Run(name, args...)
-}
-
-// TestBuildShellExecArgs_Shape pins the shape both cold-start
-// (RunShell) and warm reattach (runUserShell) share. Both call
-// buildShellExecArgs; if either ever diverges, you'll see -w missing,
-// terminfo forwarding missing, or env args in the wrong slot — all
-// the bugs the consolidation was meant to prevent.
-func TestBuildShellExecArgs_Shape(t *testing.T) {
-	cfg := schema.Config{}
-	got := buildShellExecArgs(cfg, "/repo", "sbx-a", "bash", []string{"-l"})
-
-	// Required head shape: exec -it -w <repoRoot>
-	if len(got) < 4 || got[0] != "exec" || got[1] != "-it" || got[2] != "-w" || got[3] != "/repo" {
-		t.Fatalf("expected head [exec -it -w /repo], got %v", got[:4])
-	}
-
-	// Wrapper path appears (between any env args and cmdName).
-	wrapperFound := false
-	for _, a := range got {
-		if a == "/repo/.devm/scripts/with-devm-env" {
-			wrapperFound = true
-			break
-		}
-	}
-	if !wrapperFound {
-		t.Errorf("expected wrapper path in argv, got %v", got)
-	}
-
-	// Tail order: <sandbox> <wrapper> <cmd> <cmdArgs...>
-	if got[len(got)-1] != "-l" {
-		t.Errorf("expected last arg to be cmdArg '-l', got %q", got[len(got)-1])
-	}
-	if got[len(got)-2] != "bash" {
-		t.Errorf("expected second-to-last arg to be cmdName 'bash', got %q", got[len(got)-2])
-	}
 }

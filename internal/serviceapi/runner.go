@@ -7,7 +7,9 @@ import (
 
 	"github.com/oklog/run"
 
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi/sockact"
+	"github.com/mdubb86/devm/internal/supervisor"
 )
 
 // RunService composes the service's goroutines into an oklog/run
@@ -35,6 +37,13 @@ func RunService(ctx context.Context, version string) error {
 	// registered on top.
 	server := NewServer(SocketPath(), version)
 	RegisterRoutesHandlers(server, routes)
+
+	// VM lifecycle endpoints (Ship 4). Supervisor and tart wrapper are
+	// daemon-scoped singletons; the supervisor manages the per-project VM
+	// processes and survives across CLI invocations.
+	tr := tart.New()
+	sup := supervisor.New("")
+	RegisterVMHandlers(server, sup, tr)
 
 	// Pull launchd-inherited listeners for :80 and :443. If the
 	// daemon was started outside launchd (e.g., `devm serve` from a
