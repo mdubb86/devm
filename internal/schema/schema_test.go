@@ -108,6 +108,35 @@ func TestServiceValidate(t *testing.T) {
 	assert.Error(t, emptyWorkspace.Validate(), "service must have canonical or at least one mask")
 }
 
+func TestServiceHostnameMustEndInDotTest(t *testing.T) {
+	cases := []struct {
+		name  string
+		host  string
+		fails bool
+	}{
+		{"empty is OK", "", false},
+		{"plain .test", "app.test", false},
+		{"deep subdomain", "a.b.c.app.test", false},
+		{".local rejected", "app.local", true},
+		{".dev rejected", "app.dev", true},
+		{"no TLD rejected", "app", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := Service{Hostname: c.host, Port: 8080}
+			err := s.Validate()
+			if c.fails {
+				assert.Error(t, err)
+				if err != nil {
+					assert.Contains(t, err.Error(), ".test")
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestConfigValidate(t *testing.T) {
 	c := Config{
 		Project: Project{
@@ -117,7 +146,7 @@ func TestConfigValidate(t *testing.T) {
 		BaseImage: BaseImage{Docker: true},
 		Network:   Network{AllowedDomains: []string{"github.com"}},
 		Services: map[string]Service{
-			"webapp": {Port: 3000, Hostname: "test.local"},
+			"webapp": {Port: 3000, Hostname: "test.test"},
 		},
 	}
 	assert.NoError(t, c.Validate())
@@ -125,8 +154,8 @@ func TestConfigValidate(t *testing.T) {
 	// Hostname collision across services
 	dup := c
 	dup.Services = map[string]Service{
-		"webapp": {Port: 3000, Hostname: "test.local"},
-		"api":    {Port: 8080, Hostname: "test.local"},
+		"webapp": {Port: 3000, Hostname: "test.test"},
+		"api":    {Port: 8080, Hostname: "test.test"},
 	}
 	assert.Error(t, dup.Validate(), "duplicate hostname")
 

@@ -25,7 +25,7 @@ base_image:
 services:
   webapp:
     port: 3000
-    hostname: test.local
+    hostname: test.test
 `)
 
 	cfg, err := Load(dir)

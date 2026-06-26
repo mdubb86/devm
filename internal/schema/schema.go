@@ -217,6 +217,9 @@ func (s Service) ResolveBind() string {
 }
 
 func (s Service) Validate() error {
+	if s.Hostname != "" && !strings.HasSuffix(s.Hostname, ".test") {
+		return fmt.Errorf("service.hostname: must end in .test (got %q)", s.Hostname)
+	}
 	if s.EnvHost != "" && !s.EnvInject {
 		return fmt.Errorf("env_host requires env_inject: true")
 	}
