@@ -27,6 +27,10 @@ const LaunchdPlistTemplate = `<?xml version='1.0' encoding='UTF-8'?>
     <true/>
     <key>RunAtLoad</key>
     <true/>
+    <key>StandardOutPath</key>
+    <string>__LOG_OUT__</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_ERR__</string>
     <key>Sockets</key>
     <dict>
         <key>HTTPSocket</key>

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -54,6 +55,20 @@ func newKardianosService() (service.Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("locate executable: %w", err)
 	}
+	// Substitute log paths into the plist template before handing to
+	// kardianos. launchd's StandardOutPath/ErrorPath need absolute
+	// paths — no $HOME expansion — and kardianos's template engine
+	// doesn't expose the user's home dir.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("locate home dir: %w", err)
+	}
+	logDir := filepath.Join(home, "Library", "Logs")
+	plistText := strings.NewReplacer(
+		"__LOG_OUT__", filepath.Join(logDir, "com.devm.service.out.log"),
+		"__LOG_ERR__", filepath.Join(logDir, "com.devm.service.err.log"),
+	).Replace(serviceapi.LaunchdPlistTemplate)
+
 	prog := &kardianosProgram{}
 	cfg := &service.Config{
 		Name:        "com.devm.service",
@@ -63,7 +78,7 @@ func newKardianosService() (service.Service, error) {
 		Arguments:   []string{"serve"},
 		Option: service.KeyValue{
 			"UserService":   true, // LaunchAgent, not LaunchDaemon
-			"LaunchdConfig": serviceapi.LaunchdPlistTemplate,
+			"LaunchdConfig": plistText,
 		},
 	}
 	return service.New(prog, cfg)
