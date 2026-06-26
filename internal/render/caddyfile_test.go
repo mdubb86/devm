@@ -12,8 +12,8 @@ func TestCaddyfileWithHostnamedServices(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{PortOffset: 10},
 		Services: map[string]schema.Service{
-			"webapp": {Port: 3000, Hostname: "test.local"},
-			"api":    {Port: 54321, Hostname: "api.test.local"},
+			"webapp": {Port: 3000, Hostname: "test.test"},
+			"api":    {Port: 54321, Hostname: "api.test.test"},
 			"db":     {Port: 54322}, // no hostname — should be omitted
 		},
 	}
@@ -23,9 +23,9 @@ func TestCaddyfileWithHostnamedServices(t *testing.T) {
 	// Mac-side mapping). With port_offset=10 the previous renderer
 	// emitted localhost:3010 / 54331, which broke routing because
 	// services actually bind at svc.Port.
-	assert.Contains(t, out, "http://test.local")
+	assert.Contains(t, out, "http://test.test")
 	assert.Contains(t, out, "reverse_proxy localhost:3000")
-	assert.Contains(t, out, "http://api.test.local")
+	assert.Contains(t, out, "http://api.test.test")
 	assert.Contains(t, out, "reverse_proxy localhost:54321")
 	// db has no hostname → no block
 	assert.False(t, strings.Contains(out, "54322"), "service without hostname must not appear")
@@ -45,7 +45,7 @@ func TestCaddyfileIgnoresPortOffset(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{PortOffset: 100},
 		Services: map[string]schema.Service{
-			"web": {Port: 8000, Hostname: "x.local"},
+			"web": {Port: 8000, Hostname: "x.test"},
 		},
 	}
 	out := Caddyfile(cfg)

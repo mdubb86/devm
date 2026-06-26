@@ -39,10 +39,10 @@ func TestMergeOverridesService(t *testing.T) {
 	base := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p-sbx"},
 		Services: map[string]schema.Service{
-			"webapp": {Port: 3000, Hostname: "p.local"},
+			"webapp": {Port: 3000, Hostname: "p.test"},
 		},
 	}
-	host := "custom.local"
+	host := "custom.test"
 	override := schema.ConfigOverride{
 		Services: map[string]schema.ServiceOverride{
 			"webapp": {Hostname: &host},
@@ -50,7 +50,7 @@ func TestMergeOverridesService(t *testing.T) {
 	}
 	merged, err := Merge(base, override)
 	assert.NoError(t, err)
-	assert.Equal(t, "custom.local", merged.Services["webapp"].Hostname)
+	assert.Equal(t, "custom.test", merged.Services["webapp"].Hostname)
 	assert.Equal(t, 3000, merged.Services["webapp"].Port, "non-overridden field preserved")
 }
 

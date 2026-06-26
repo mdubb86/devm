@@ -73,7 +73,7 @@ func TestSpecYAMLBasic(t *testing.T) {
 			},
 			"webapp": {
 				Port: 3000,
-				Hostname:  "test.local",
+				Hostname:  "test.test",
 				Masks: []schema.Mask{
 					{Path: "apps/web/node_modules", Size: "500M"},
 				},

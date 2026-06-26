@@ -16,7 +16,7 @@ func TestWriteDevmDir(t *testing.T) {
 		Project:   schema.Project{ID: "x", SandboxName: "x-sbx"},
 		BaseImage: schema.BaseImage{Docker: true},
 		Services: map[string]schema.Service{
-			"webapp": {Port: 3000, Hostname: "x.local"},
+			"webapp": {Port: 3000, Hostname: "x.test"},
 		},
 	}
 	err := WriteDevmDir(cfg, dir)

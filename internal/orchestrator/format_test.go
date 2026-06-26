@@ -121,15 +121,15 @@ func TestFormatStatusText_VMMode_WithRoutes(t *testing.T) {
 		Routing: router.RoutingStatus{
 			Proxy: "caddy", ProxyReachable: true, Mode: "vm",
 			Routes: []router.RouteStatus{
-				{Hostname: "api.foo.local", Dial: "localhost:55432", Mode: "vm"},
-				{Hostname: "app.foo.local", Dial: "localhost:53000", Mode: "vm"},
+				{Hostname: "api.foo.test", Dial: "localhost:55432", Mode: "vm"},
+				{Hostname: "app.foo.test", Dial: "localhost:53000", Mode: "vm"},
 			},
 		},
 	}
 	text := FormatStatusText(res)
 	assert.Contains(t, text, "mode:")
 	assert.Contains(t, text, "vm")
-	assert.Contains(t, text, "api.foo.local")
+	assert.Contains(t, text, "api.foo.test")
 	assert.Contains(t, text, "localhost:55432")
 	assert.NotContains(t, text, "resolves")
 }
@@ -139,8 +139,8 @@ func TestFormatStatusText_MixedMode_TagsRoutes(t *testing.T) {
 		Routing: router.RoutingStatus{
 			Proxy: "caddy", ProxyReachable: true, Mode: "mixed (drift)",
 			Routes: []router.RouteStatus{
-				{Hostname: "api.foo.local", Dial: "localhost:55432", Mode: "vm"},
-				{Hostname: "app.foo.local", Dial: "localhost:3000", Mode: "local"},
+				{Hostname: "api.foo.test", Dial: "localhost:55432", Mode: "vm"},
+				{Hostname: "app.foo.test", Dial: "localhost:3000", Mode: "local"},
 			},
 		},
 	}
