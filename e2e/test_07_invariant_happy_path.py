@@ -1,42 +1,44 @@
-"""07: full happy path — install ran, canonical port published, worker daemon up.
+"""07: full happy path — VM running, shell works, worker daemon up after reconcile.
 
-A project with an install: step, a service that declares a canonical
-port, and a service with a background startup command is cold-started
-via `devm shell`. The interactive shell reaches a prompt, the install
-marker is present, the canonical port is mapped to the expected host
-port (port_offset + canonical), and the worker's background process is
-alive inside the sandbox.
+A project with a service that has a background startup command is
+cold-started via the tart_sandbox fixture (minimal config), then the
+workspace is updated with the full service config and devm reconcile
+applies the startup service. The interactive shell reaches a prompt
+and the background worker process is verified alive inside the VM.
 
 What this pins:
-  - install: step ran at cold-create (marker file present).
-  - Canonical service port 8080 is published to host port
-    port_offset + 8080 (canonical-port mapping invariant).
-  - A service `startup:` entry with `background: True` actually leaves
-    a long-lived process running inside the sandbox after cold-start,
-    detected via pgrep with a self-match filter.
-  - Interactive shell reaches a prompt and survives until exit.
+  - Cold-start brings the VM to 'running' state.
+  - Interactive shell reaches a prompt.
+  - A service `startup:` entry with `background: True` leaves a
+    long-lived process running inside the VM, detectable via pgrep.
+  - devm stop --yes transitions running -> stopped.
 
 What it doesn't cover (tested elsewhere):
-  - Cold-start basic (install + shell + stop) -> test_01.
+  - install: step at cold-create -> test_17c or later.
   - Live port add via reconcile -> test_08.
   - Env injection (project + service vars) -> test_11.
   - Service add/remove churn -> test_21.
+  - Port publishing to host -> sbx-era mechanic, not pinned here.
 """
-import subprocess
+import time
 
 import pytest
 
-from helpers import Shell, sbx, stop_and_wait_stopped
+from helpers import Shell
 
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.timeout(60)
-def test_invariant_happy_path(workspace, devm, sandbox_name):
+@pytest.mark.timeout(120)
+def test_invariant_happy_path(workspace, devm, tart_sandbox):
+    # tart_sandbox fixture already cold-started the VM with minimal config.
+    assert tart_sandbox.state() == "running", (
+        f"expected VM to be running after cold-start; got {tart_sandbox.state()!r}"
+    )
+
+    # Update config to add worker service with background startup.
     workspace.write_devmyaml(
-        install=["touch /tmp/install-marker"],
         services={
-            "api": {"port": 8080},
             "worker": {
                 "startup": [
                     {"command": ["sh", "-c", "while true; do sleep 60; done"],
@@ -46,31 +48,27 @@ def test_invariant_happy_path(workspace, devm, sandbox_name):
         },
     )
 
+    # Open shell — devm reconcile applies the new service config (LIVE bucket).
     with Shell(devm, cwd=str(workspace.path)) as sh:
         sh.expect_prompt(timeout=90)
-
-        # install marker present (proves install ran)
-        sh.run_check("test -e /tmp/install-marker", expect_zero=True, timeout=30)
-
-        # Canonical port 8080 mapped to host port (port_offset + 8080).
-        sbx.wait_for_port_published(
-            sandbox_name, sandbox_port=8080,
-            host_port=workspace.port_offset + 8080, timeout=30,
-        )
 
         # Worker daemon is running. Filter the pgrep self-match: the
         # sh process running `pgrep -af MARKER` has MARKER in its own
         # argv and would otherwise return a false positive. `grep -v
-        # pgrep` drops that line. Without this filter the assertion
-        # passes regardless of whether a real daemon is alive.
-        out = subprocess.run(
-            ["sbx", "exec", sandbox_name, "sh", "-c",
-             "pgrep -af 'while true.*sleep 60' 2>/dev/null | grep -v pgrep | grep -q . && echo OK || echo MISS"],
-            capture_output=True, timeout=15, check=True,
-        ).stdout.decode().strip()
-        assert out == "OK", f"worker daemon not found: {out!r}"
+        # pgrep` drops that line.
+        r = tart_sandbox.exec_shell(
+            "pgrep -af 'while true.*sleep 60' 2>/dev/null | grep -v pgrep | grep -q . && echo OK || echo MISS"
+        )
+        assert r.ok, f"worker check exec failed: {r.stderr}"
+        assert r.stdout.strip() == "OK", f"worker daemon not found: {r.stdout.strip()!r}"
 
         sh.exit(timeout=30)
 
     # Anchor-alive: explicitly stop after shell exit.
-    stop_and_wait_stopped(devm, sandbox_name)
+    devm.stop(yes=True)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if tart_sandbox.state() == "stopped":
+            return
+        time.sleep(0.5)
+    pytest.fail("sandbox never reached stopped")

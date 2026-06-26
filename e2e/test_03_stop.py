@@ -11,8 +11,8 @@ What this pins:
   - sandbox transitions from 'running' to 'stopped' in both cases.
 
 What it doesn't cover (tested elsewhere):
-  - Teardown semantics (sandbox REMOVED, not just stopped) → test_05.
-  - Non-tty stop flow → not yet pinned (gap candidate).
+  - Teardown semantics (sandbox REMOVED, not just stopped) -> test_05.
+  - Non-tty stop flow -> not yet pinned (gap candidate).
 """
 from __future__ import annotations
 
@@ -22,14 +22,14 @@ import time
 import pexpect
 import pytest
 
-from helpers import Shell, sbx
+from helpers import Shell
 
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(90)
 @pytest.mark.parametrize("mode", ["prompt", "yes"], ids=["prompt", "yes"])
-def test_stop(workspace, devm, sandbox_name, mode):
+def test_stop(workspace, devm, tart_sandbox, mode):
     workspace.write_devmyaml()
 
     with Shell(devm, cwd=str(workspace.path)) as sh:
@@ -39,7 +39,10 @@ def test_stop(workspace, devm, sandbox_name, mode):
             # Spawn `devm stop` in a separate pexpect process to answer y.
             stop = pexpect.spawn(devm.path, ["stop"], cwd=str(workspace.path),
                                  encoding="utf-8", timeout=30, dimensions=(40, 200))
-            stop.expect(re.escape(f"Stop sandbox {sandbox_name}?") + r".*\[y/N\]:\s*", timeout=30)
+            stop.expect(
+                re.escape(f"Stop sandbox {tart_sandbox.name}?") + r".*\[y/N\]:\s*",
+                timeout=30,
+            )
             stop.sendline("y")
             stop.expect(pexpect.EOF, timeout=30)
             stop.close(force=True)
@@ -51,7 +54,7 @@ def test_stop(workspace, devm, sandbox_name, mode):
 
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
-        if sbx.sandbox_state(sandbox_name) == "stopped":
+        if tart_sandbox.state() == "stopped":
             return
         time.sleep(0.5)
     pytest.fail("sandbox never reached stopped")

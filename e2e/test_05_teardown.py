@@ -2,13 +2,13 @@
 
 devm shell cold-creates a sandbox. The user exits the shell. The user
 then runs `devm teardown` — with or without `--yes`. Either way the
-sandbox is REMOVED (not just stopped); a subsequent `sbx ls` no longer
-shows it. The prompt path requires answering 'y'.
+sandbox is REMOVED (not just stopped); tart list no longer shows it.
+The prompt path requires answering 'y'.
 
 What this pins:
   - Interactive path: `devm teardown` prompts; answering 'y' completes removal.
   - --yes path: skips prompt entirely; same end state.
-  - sandbox transitions from existing to absent (sbx.sandbox_exists returns False).
+  - sandbox transitions from existing to absent (tart_sandbox.state() == "absent").
 
 What it doesn't cover (tested elsewhere):
   - Stop semantics (sandbox to 'stopped' state, NOT removed) -> test_03.
@@ -21,14 +21,14 @@ import time
 import pexpect
 import pytest
 
-from helpers import Shell, sbx
+from helpers import Shell
 
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(90)
 @pytest.mark.parametrize("mode", ["prompt", "yes"], ids=["prompt", "yes"])
-def test_teardown(workspace, devm, sandbox_name, mode):
+def test_teardown(workspace, devm, tart_sandbox, mode):
     workspace.write_devmyaml()
 
     with Shell(devm, cwd=str(workspace.path)) as sh:
@@ -38,7 +38,10 @@ def test_teardown(workspace, devm, sandbox_name, mode):
             # Spawn `devm teardown` in a separate pexpect process to answer y.
             td = pexpect.spawn(devm.path, ["teardown"], cwd=str(workspace.path),
                                encoding="utf-8", timeout=30, dimensions=(40, 200))
-            td.expect(re.escape(f"Tear down sandbox {sandbox_name}?") + r".*\[y/N\]:\s*", timeout=30)
+            td.expect(
+                re.escape(f"Tear down sandbox {tart_sandbox.name}?") + r".*\[y/N\]:\s*",
+                timeout=30,
+            )
             td.sendline("y")
             td.expect(pexpect.EOF, timeout=30)
             td.close(force=True)
@@ -51,7 +54,7 @@ def test_teardown(workspace, devm, sandbox_name, mode):
     # Teardown removes the sandbox (not just stops it).
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
-        if not sbx.sandbox_exists(sandbox_name):
+        if tart_sandbox.state() == "absent":
             return
         time.sleep(0.5)
-    pytest.fail(f"sandbox {sandbox_name} still exists after teardown")
+    pytest.fail(f"sandbox {tart_sandbox.name} still exists after teardown")

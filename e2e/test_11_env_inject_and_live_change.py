@@ -13,27 +13,31 @@ What this pins:
   - Per-service `env:` values are injected as `<SERVICE>_<VAR>` (upper-
     cased service name + var name).
   - A live edit to a service env value is picked up by a NEW shell
-    against the same running sandbox (no recreate required).
+    against the same running VM (no recreate required).
   - The FIRST (already-attached) shell keeps the OLD value — env
     changes are LIVE-bucket but reach the env via with-devm-env
     sourcing .devm/.env at exec time, so existing exec'd shells don't
     re-source. (Same contract pinned for path: by test_35.)
-  - Second-shell shortcut (attach to running sandbox) works.
+  - Second-shell shortcut (attach to running VM) works.
 
 What it doesn't cover (tested elsewhere):
-  - Warm-attach concurrent shells sharing a sandbox -> test_02.
+  - Warm-attach concurrent shells sharing a VM -> test_02.
   - Live port add via reconcile -> test_08.
   - Install-change forcing recreate -> test_14.
 """
+import time
+
 import pytest
 
-from helpers import Shell, stop_and_wait_stopped
+from helpers import Shell
 
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(75)
-def test_env_inject_and_live_change(workspace, devm, sandbox_name):
+def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
+    # tart_sandbox fixture already cold-started the VM with minimal config.
+    # Write env config; env vars are LIVE-bucket so the warm-attach shell picks them up.
     workspace.write_devmyaml(
         env={"PROJECT_VAR": "projhello"},
         services={
@@ -76,7 +80,7 @@ def test_env_inject_and_live_change(workspace, devm, sandbox_name):
         first.expect_text(r"STILL_FIRST=info", timeout=15)
         first.expect_prompt(timeout=15)
 
-        # Second shell on the running sandbox (shortcut path).
+        # Second shell on the running VM (shortcut path).
         with Shell(devm, cwd=str(workspace.path)) as second:
             second.expect_prompt(timeout=60)
             second.send('echo "GOT_API=$API_LOG_LEVEL"')
@@ -86,5 +90,11 @@ def test_env_inject_and_live_change(workspace, devm, sandbox_name):
 
         first.exit(timeout=30)
 
-    # Anchor-alive: explicitly stop after shell exit.
-    stop_and_wait_stopped(devm, sandbox_name)
+    # Anchor-alive: explicitly stop after shell exits.
+    devm.stop(yes=True)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if tart_sandbox.state() == "stopped":
+            return
+        time.sleep(0.5)
+    pytest.fail("sandbox never reached stopped")

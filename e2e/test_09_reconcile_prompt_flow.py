@@ -22,44 +22,26 @@ import subprocess
 
 import pytest
 
-from helpers import Shell, sbx, stop_and_wait_stopped
+from helpers import Shell
 
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("mode", ["non_tty", "yes"], ids=["non_tty", "yes"])
-def test_reconcile_prompt_flow(workspace, devm, sandbox_name, mode):
-    workspace.write_devmyaml(services={
-        "worker": {
-            "startup": [
-                {"command": ["sh", "-c", "while true; do sleep 60; done"],
-                 "background": True}
-            ],
-        },
-    })
-
+def test_reconcile_prompt_flow(workspace, devm, tart_sandbox, mode):
+    # tart_sandbox fixture already cold-started the VM with minimal config.
+    # Open a shell that warm-attaches to the running VM.
     with Shell(devm, cwd=str(workspace.path)) as sh:
         sh.expect_prompt(timeout=90)
 
-        # Edit the startup command -> KindStartupChange is TEARDOWN+SHELL
-        # because sbx caches the kit at create-time and re-runs the
-        # cached startup on restart. New startup commands need sbx rm +
-        # recreate to take effect. Pinned by test_36.
-        workspace.patch_devmyaml(services={
-            "worker": {
-                "startup": [
-                    {"command": ["sh", "-c", "while true; do sleep 90; done"],
-                     "background": True}
-                ],
-            },
-        })
+        # Add an install step -- an install change always requires TEARDOWN
+        # recreate regardless of VM state.
+        workspace.patch_devmyaml(install=["touch /tmp/reconcile-probe"])
 
         if mode == "non_tty":
             # Run reconcile --json with stdin from /dev/null (non-TTY).
-            # Expect exit 2 and JSON with next_action=needs_approval. _run()
-            # inherits the test process's stdin, which may be a TTY; we must
-            # explicitly detach to exercise the non-TTY guard.
+            # Expect exit 2 and JSON with next_action=needs_approval.
             p = subprocess.run(
                 [devm.path, "reconcile", "--json"],
                 cwd=str(workspace.path),
@@ -81,7 +63,7 @@ def test_reconcile_prompt_flow(workspace, devm, sandbox_name, mode):
             sh.exit(timeout=30)
 
             # Anchor-alive: explicitly stop after shell exit.
-            stop_and_wait_stopped(devm, sandbox_name)
+            devm.stop(yes=True)
         else:  # mode == "yes"
             # reconcile --yes performs the recreate. devm may exit non-zero in
             # some recreate flows (sandbox vanishes underneath); we assert on
@@ -92,8 +74,8 @@ def test_reconcile_prompt_flow(workspace, devm, sandbox_name, mode):
             sh.expect_eof(timeout=30)
 
             # reconcile does NOT relaunch a shell -- sandbox should be
-            # GONE (TEARDOWN bucket = sbx rm, not sbx stop).
-            assert not sbx.sandbox_exists(sandbox_name), (
-                f"sandbox {sandbox_name} still exists after reconcile "
-                f"--yes on a startup change (should have been removed)"
+            # GONE (TEARDOWN bucket = VM removed, not just stopped).
+            assert tart_sandbox.state() == "absent", (
+                f"sandbox {tart_sandbox.name} still exists after reconcile "
+                f"--yes on an install change (should have been removed)"
             )

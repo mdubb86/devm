@@ -10,7 +10,7 @@ What this pins:
     warm-attaches instead of spinning up a separate sandbox.
   - Both shells reach a prompt concurrently.
   - Both pty bashes live inside one sandbox simultaneously (>=2
-    pts/N bash processes visible via `sbx exec` into sandbox_name).
+    pts/N bash processes visible via tart exec into the VM).
   - After both shells exit, the sandbox stays running (anchor-alive)
     until `devm stop --yes` brings it to 'stopped'.
 
@@ -18,17 +18,17 @@ What it doesn't cover (tested elsewhere):
   - Concurrent reconcile from two shells (not yet pinned -- gap candidate).
   - Cold-create + install marker -> test_01.
 """
-import subprocess
+import time
 
 import pytest
 
-from helpers import Shell, stop_and_wait_stopped
+from helpers import Shell
 
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(90)
-def test_concurrent_shells_share_sandbox(workspace, devm, sandbox_name):
+def test_concurrent_shells_share_sandbox(workspace, devm, tart_sandbox):
     workspace.write_devmyaml()
 
     with Shell(devm, cwd=str(workspace.path)) as first:
@@ -37,14 +37,21 @@ def test_concurrent_shells_share_sandbox(workspace, devm, sandbox_name):
             second.expect_prompt(timeout=60)
             # Both shells alive in the same sandbox: there should be
             # >= 2 bashes on pts/N inside the VM.
-            out = subprocess.run(
-                ["sbx", "exec", sandbox_name, "bash", "-c",
-                 "ps -eo comm,tty | grep -c '^bash *pts/'"],
-                capture_output=True, timeout=15, check=True,
-            ).stdout.decode().strip()
-            assert int(out) >= 2, f"expected >=2 pty bashes; got {out}"
+            r = tart_sandbox.exec_shell(
+                "ps -eo comm,tty | grep -c '^bash *pts/'"
+            )
+            assert r.ok, f"ps exec failed: {r.stderr}"
+            assert int(r.stdout.strip()) >= 2, (
+                f"expected >=2 pty bashes; got {r.stdout.strip()!r}"
+            )
             second.exit(timeout=30)
         first.exit(timeout=30)
 
     # Anchor-alive: explicitly stop after both shells exit.
-    stop_and_wait_stopped(devm, sandbox_name)
+    devm.stop(yes=True)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if tart_sandbox.state() == "stopped":
+            return
+        time.sleep(0.5)
+    pytest.fail("sandbox never reached stopped")
