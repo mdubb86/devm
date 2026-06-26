@@ -10,7 +10,9 @@ import (
 	"github.com/mdubb86/devm/internal/lock"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
 	"gopkg.in/yaml.v3"
 )
 
@@ -259,14 +261,15 @@ func RunReconcile(cfg schema.Config, sb *sandbox.Sandbox, repoRoot string, opts 
 	releaseLock()
 
 	stopDeps := StopDeps{
-		Runner:   sb.Runner,
-		LockPath: lockPath,
+		Tart:             tart.New(),
+		ServiceAPIClient: serviceapi.NewClient(),
+		LockPath:         lockPath,
 	}
 	mode := StopPreserve
 	if res.Flavor == FlavorTeardownShell {
 		mode = StopDestroy
 	}
-	if _, err := RunStop(context.Background(), stopDeps, sb.Name, mode, true); err != nil {
+	if _, err := RunStop(context.Background(), stopDeps, cfg.Project.ID, sb.Name, mode, true); err != nil {
 		return -1, res, fmt.Errorf("recreate (%s): %w", res.Flavor, err)
 	}
 

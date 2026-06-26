@@ -3,187 +3,165 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunStopPreserveCallsSbxStop(t *testing.T) {
-	repoRoot := t.TempDir()
-	runner := &stateRunner{lsStatus: "running", probeOut: "27 bash pts/1 agent\n"}
-	in := strings.NewReader("y\n")
-	out := &bytes.Buffer{}
+// ---------- fakes for RunStop tests ----------
 
-	deps := StopDeps{
-		Runner:   runner,
-		LockPath: filepath.Join(repoRoot, ".devm/lock"),
-		In:       in,
-		Out:      out,
-	}
-	rc, err := RunStop(context.Background(), deps, "x-sbx", StopPreserve, false)
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-
-	var sawStop bool
-	for _, c := range runner.calls {
-		if strings.Join(c, " ") == "sbx stop x-sbx" {
-			sawStop = true
-		}
-	}
-	assert.True(t, sawStop, "expected `sbx stop x-sbx` call; got: %v", runner.calls)
+// fakeStopClient records StopVM calls and returns a scripted error.
+type fakeStopClient struct {
+	stopCalled int
+	stopErr    error
 }
 
-func TestRunStopDestroyCallsSbxRm(t *testing.T) {
-	repoRoot := t.TempDir()
-	runner := &stateRunner{lsStatus: "running", probeOut: "27 bash pts/1 agent\n"}
-	in := strings.NewReader("y\n")
-	out := &bytes.Buffer{}
-
-	deps := StopDeps{
-		Runner:   runner,
-		LockPath: filepath.Join(repoRoot, ".devm/lock"),
-		In:       in,
-		Out:      out,
-	}
-	rc, err := RunStop(context.Background(), deps, "x-sbx", StopDestroy, false)
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-
-	var sawRm bool
-	for _, c := range runner.calls {
-		// sbx 0.29+ added a confirmation prompt; devm passes -f to skip it.
-		if strings.Join(c, " ") == "sbx rm -f x-sbx" {
-			sawRm = true
-		}
-	}
-	assert.True(t, sawRm, "expected `sbx rm -f x-sbx` call; got: %v", runner.calls)
+func (f *fakeStopClient) StopVM(_ context.Context, _ string) error {
+	f.stopCalled++
+	return f.stopErr
 }
 
-func TestRunStopDestroyPromptText(t *testing.T) {
+// ---------- RunStop tests ----------
+
+func TestRunStopPreserve_CallsStopVM(t *testing.T) {
 	repoRoot := t.TempDir()
-	runner := &stateRunner{
-		lsStatus: "running",
-		probeOut: "" +
-			"27 bash pts/1 agent\n" +
-			"44 zsh pts/2 root\n",
-	}
+	admin := &fakeStopClient{}
 	in := strings.NewReader("y\n")
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
-		Runner:   runner,
-		LockPath: filepath.Join(repoRoot, ".devm/lock"),
-		In:       in,
-		Out:      out,
+		Tart:             tartPathNotNeeded(t),
+		ServiceAPIClient: admin,
+		LockPath:         filepath.Join(repoRoot, ".devm/lock"),
+		In:               in,
+		Out:              out,
 	}
-	_, err := RunStop(context.Background(), deps, "x-sbx", StopDestroy, false)
+	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopPreserve, false)
 	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	assert.Equal(t, 1, admin.stopCalled, "StopVM must be called once")
+	assert.Contains(t, out.String(), "Stopped VM proj-sbx")
+	assert.Contains(t, out.String(), "Disk preserved")
+}
 
-	output := out.String()
-	// Action verb for destroy.
-	assert.Contains(t, output, "Tear down sandbox x-sbx")
-	// Session count plurality.
-	assert.Contains(t, output, "2 session(s)")
-	// Both sessions listed with their owner.
-	assert.Contains(t, output, "owner agent")
-	assert.Contains(t, output, "owner root")
+func TestRunStopDestroy_CallsStopVMThenDeletesDisk(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeStopClient{}
+
+	// fakeTartBin from shell_test.go: exits 0 for all subcommands.
+	tr := fakeTartBin(t, repoRoot)
+	in := strings.NewReader("y\n")
+	out := &bytes.Buffer{}
+
+	deps := StopDeps{
+		Tart:             tr,
+		ServiceAPIClient: admin,
+		LockPath:         filepath.Join(repoRoot, ".devm/lock"),
+		In:               in,
+		Out:              out,
+	}
+	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopDestroy, false)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	assert.Equal(t, 1, admin.stopCalled, "StopVM must be called before disk delete")
+	assert.Contains(t, out.String(), "Deleted VM proj-sbx")
 }
 
 func TestRunStopRefusalWithNo(t *testing.T) {
 	repoRoot := t.TempDir()
-	runner := &stateRunner{lsStatus: "running", probeOut: "27 bash pts/1 agent\n"}
+	admin := &fakeStopClient{}
 	in := strings.NewReader("n\n")
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
-		Runner:   runner,
-		LockPath: filepath.Join(repoRoot, ".devm/lock"),
-		In:       in,
-		Out:      out,
+		Tart:             tartPathNotNeeded(t),
+		ServiceAPIClient: admin,
+		LockPath:         filepath.Join(repoRoot, ".devm/lock"),
+		In:               in,
+		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "x-sbx", StopPreserve, false)
+	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopPreserve, false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, rc, "refusal exits 1")
-
-	for _, c := range runner.calls {
-		joined := strings.Join(c, " ")
-		require.False(t, strings.Contains(joined, "sbx stop"), "should not have stopped after refusal: %s", joined)
-		require.False(t, strings.Contains(joined, "sbx rm"), "should not have removed after refusal: %s", joined)
-	}
-
-	output := out.String()
-	assert.Contains(t, output, "aborted", "refusal must print 'aborted' to Out")
-	assert.Contains(t, output, "Active sessions in x-sbx", "must list active sessions in the prompt")
-	assert.Contains(t, output, "pts/1", "session listing must include the TTY")
-	assert.Contains(t, output, "[y/N]", "prompt must include [y/N]")
+	assert.Equal(t, 0, admin.stopCalled, "StopVM must not be called after refusal")
+	assert.Contains(t, out.String(), "aborted")
+	assert.Contains(t, out.String(), "[y/N]")
 }
 
 func TestRunStopAutoApproveSkipsPrompt(t *testing.T) {
 	repoRoot := t.TempDir()
-	runner := &stateRunner{lsStatus: "running", probeOut: "27 bash pts/1 agent\n"}
+	admin := &fakeStopClient{}
 	in := strings.NewReader("") // nothing to read
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
-		Runner:   runner,
-		LockPath: filepath.Join(repoRoot, ".devm/lock"),
-		In:       in,
-		Out:      out,
+		Tart:             tartPathNotNeeded(t),
+		ServiceAPIClient: admin,
+		LockPath:         filepath.Join(repoRoot, ".devm/lock"),
+		In:               in,
+		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "x-sbx", StopPreserve, true /* autoApprove */)
+	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopPreserve, true)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
+	assert.Equal(t, 1, admin.stopCalled)
 }
 
-func TestRunStopAlreadyStoppedIsNoOpForPreserve(t *testing.T) {
+func TestRunStopDaemonFailContinuesForTeardown(t *testing.T) {
+	// If the daemon StopVM fails, teardown should still attempt disk deletion.
 	repoRoot := t.TempDir()
-	runner := &stateRunner{lsStatus: "stopped"}
+	admin := &fakeStopClient{stopErr: errors.New("daemon down")}
+	tr := fakeTartBin(t, repoRoot)
 	out := &bytes.Buffer{}
+
 	deps := StopDeps{
-		Runner:   runner,
-		LockPath: filepath.Join(repoRoot, ".devm/lock"),
-		Out:      out,
+		Tart:             tr,
+		ServiceAPIClient: admin,
+		LockPath:         filepath.Join(repoRoot, ".devm/lock"),
+		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "x-sbx", StopPreserve, true)
+	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopDestroy, true)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
-
-	for _, c := range runner.calls {
-		require.False(t, strings.Contains(strings.Join(c, " "), "sbx stop"))
-	}
-
-	assert.Contains(t, out.String(), "sandbox is already stopped", "no-op path must print the already-stopped message")
+	assert.Contains(t, out.String(), "daemon down", "daemon error must be noted")
+	assert.Contains(t, out.String(), "Deleted VM proj-sbx", "disk delete must still run")
 }
 
-func TestRunStopAlreadyStoppedStillDestroysForTeardown(t *testing.T) {
-	// sbx rm against a stopped sandbox should still proceed.
-	repoRoot := t.TempDir()
-	runner := &stateRunner{lsStatus: "stopped"}
-	out := &bytes.Buffer{}
+func TestRunStopPromptText(t *testing.T) {
+	// StopPreserve prompt says "Stop VM"
+	admin := &fakeStopClient{}
+	inStop := strings.NewReader("n\n")
+	outStop := &bytes.Buffer{}
 	deps := StopDeps{
-		Runner:   runner,
-		LockPath: filepath.Join(repoRoot, ".devm/lock"),
-		Out:      out,
+		Tart:             tartPathNotNeeded(t),
+		ServiceAPIClient: admin,
+		LockPath:         filepath.Join(t.TempDir(), ".devm/lock"),
+		In:               inStop,
+		Out:              outStop,
 	}
-	rc, err := RunStop(context.Background(), deps, "x-sbx", StopDestroy, true)
+	_, err := RunStop(context.Background(), deps, "proj-123", "my-vm", StopPreserve, false)
 	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
+	assert.Contains(t, outStop.String(), "Stop VM my-vm")
 
-	var sawRm bool
-	for _, c := range runner.calls {
-		// sbx 0.29+ added a confirmation prompt; devm passes -f to skip it.
-		if strings.Join(c, " ") == "sbx rm -f x-sbx" {
-			sawRm = true
-		}
+	// StopDestroy prompt says "Tear down VM"
+	inTear := strings.NewReader("n\n")
+	outTear := &bytes.Buffer{}
+	deps2 := StopDeps{
+		Tart:             tartPathNotNeeded(t),
+		ServiceAPIClient: &fakeStopClient{},
+		LockPath:         filepath.Join(t.TempDir(), ".devm/lock"),
+		In:               inTear,
+		Out:              outTear,
 	}
-	assert.True(t, sawRm)
+	_, err = RunStop(context.Background(), deps2, "proj-123", "my-vm", StopDestroy, false)
+	require.NoError(t, err)
+	assert.Contains(t, outTear.String(), "Tear down VM my-vm")
 }
 
 func TestDestructivenessIdentity(t *testing.T) {
 	assert.NotEqual(t, StopPreserve, StopDestroy)
-	var _ sandbox.Runner = &stateRunner{}
 }

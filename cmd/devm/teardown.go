@@ -10,7 +10,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/orchestrator"
-	"github.com/mdubb86/devm/internal/sandbox"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
 )
@@ -19,12 +19,10 @@ var teardownYes bool
 
 var teardownCmd = &cobra.Command{
 	Use:   "teardown",
-	Short: "Destroy the sandbox entirely (sbx rm)",
-	Long: `Discovers active sessions inside the sandbox and prompts before
-issuing sbx rm. This deletes the VM, its filesystem, and all
-installed state. Use --yes (-y) to skip the prompt. The kit
-definition under .devm/ is not touched; devm shell will rebuild
-the sandbox from scratch.`,
+	Short: "Destroy the VM entirely (deletes disk)",
+	Long: `Prompts before stopping the project VM and deleting its disk image.
+All installed state is lost. Use --yes (-y) to skip the prompt. The kit
+definition under .devm/ is not touched; devm shell will rebuild from scratch.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		repoRoot, err := os.Getwd()
@@ -49,10 +47,11 @@ the sandbox from scratch.`,
 		rcancel()
 
 		deps := orchestrator.StopDeps{
-			Runner:   sandbox.DefaultRunner{},
-			LockPath: filepath.Join(repoRoot, ".devm", "lock"),
+			Tart:             tart.New(),
+			ServiceAPIClient: c,
+			LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
 		}
-		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.SandboxName, orchestrator.StopDestroy, teardownYes)
+		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.ID, cfg.Project.SandboxName, orchestrator.StopDestroy, teardownYes)
 		if err != nil {
 			return err
 		}
