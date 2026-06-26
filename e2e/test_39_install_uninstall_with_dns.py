@@ -1,4 +1,4 @@
-"""39: devm install configures DNS for .test → resolves → uninstall cleans up.
+"""39: install/uninstall with DNS — installs the .test resolver, resolves, uninstalls.
 
 macOS-only. Requires sudo (the install/uninstall path writes/removes
 /etc/resolver/test). Skips cleanly if sudo is unavailable or the test
@@ -29,9 +29,9 @@ def _resolver_file_path() -> str:
 
 
 @pytest.mark.timeout(90)
-def test_dns_lifecycle(devm, sudo_capable):
+def test_install_uninstall_with_dns(devm, sudo_capable):
     if platform.system() != "Darwin":
-        pytest.skip("devm DNS lifecycle test runs on macOS only")
+        pytest.skip("install/uninstall + DNS test runs on macOS only")
     if not shutil.which("dig"):
         pytest.skip("dig not installed; cannot cross-check the DNS responder")
 

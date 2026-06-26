@@ -1,4 +1,4 @@
-"""38: devm install / start / status / curl /health / uninstall lifecycle.
+"""38: install/uninstall basic — LaunchAgent + Unix socket API.
 
 Gated on macOS (LaunchAgent is Mac-only for Ship 1). Skipped elsewhere.
 
@@ -62,9 +62,9 @@ def _http_get_unix(path: str) -> tuple[int, str]:
 
 
 @pytest.mark.timeout(60)
-def test_service_lifecycle(devm):
+def test_install_uninstall_basic(devm):
     if platform.system() != "Darwin":
-        pytest.skip("devm service lifecycle test runs on macOS only")
+        pytest.skip("install/uninstall test runs on macOS only")
 
     # Pre-condition: not installed. Best-effort cleanup of any leftover state.
     subprocess.run([devm.path, "uninstall"], capture_output=True, timeout=15)

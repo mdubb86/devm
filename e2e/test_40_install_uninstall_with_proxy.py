@@ -1,4 +1,4 @@
-"""40: HTTPS reverse proxy lifecycle.
+"""40: install/uninstall with HTTPS reverse proxy — installs, exercises the proxy, uninstalls.
 
 devm install (with CA trust) → spin a local Go test server →
 devm route local → curl http + https → assert 200 → kill backend →
@@ -65,9 +65,9 @@ def _devm_yaml(workspace_path: str, project_id: str, hostname: str, port: int) -
 
 
 @pytest.mark.timeout(120)
-def test_https_reverse_proxy_lifecycle(devm, workspace, sudo_capable):
+def test_install_uninstall_with_proxy(devm, workspace, sudo_capable):
     if platform.system() != "Darwin":
-        pytest.skip("HTTPS reverse proxy test runs on macOS only")
+        pytest.skip("install/uninstall + HTTPS proxy test runs on macOS only")
     if not shutil.which("python3"):
         pytest.skip("python3 not on PATH")
     if not shutil.which("curl"):
