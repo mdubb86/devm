@@ -160,9 +160,9 @@ func TestRunReconcile_StoppedSandboxRendersAndExits0(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, "nothing_to_do", res.NextAction)
-	// .devm/spec.yaml should exist after the render step.
-	_, statErr := os.Stat(filepath.Join(repoRoot, ".devm", "spec.yaml"))
-	assert.NoError(t, statErr, ".devm/spec.yaml must be rendered even when sandbox is absent")
+	// .devm/.env should exist after the render step.
+	_, statErr := os.Stat(filepath.Join(repoRoot, ".devm", ".env"))
+	assert.NoError(t, statErr, ".devm/.env must be written even when sandbox is absent")
 }
 
 func TestRunReconcile_NonTTYRecreateExits2(t *testing.T) {

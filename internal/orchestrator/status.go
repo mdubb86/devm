@@ -6,7 +6,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -109,10 +108,10 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot string) (StatusResult,
 // probeSessions returns active interactive pty sessions in the VM by
 // running the probe script via tart exec. Returns nil on any error —
 // callers treat sessions as best-effort.
-func probeSessions(tr *tart.Tart, vmName string) []sandbox.Session {
-	r := tr.Exec(context.Background(), vmName, []string{"bash", "-c", sandbox.ProbeScript})
+func probeSessions(tr *tart.Tart, vmName string) []Session {
+	r := tr.Exec(context.Background(), vmName, []string{"bash", "-c", probeScript})
 	if r.ExitCode != 0 {
 		return nil
 	}
-	return sandbox.ParseSessions(r.Stdout)
+	return parseSessions(r.Stdout)
 }

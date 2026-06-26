@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/stretchr/testify/assert"
 )
@@ -12,7 +11,7 @@ import (
 func TestFormatStatusText_RunningInSync(t *testing.T) {
 	out := FormatStatusText(StatusResult{
 		Sandbox: "x", State: "running",
-		Sessions:    []sandbox.Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+		Sessions:    []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 		PendingLive: 0, PendingRecreate: 0,
 	})
 	assert.Contains(t, out, "Sandbox: x")
@@ -51,7 +50,7 @@ func TestFormatReconcileText_RecreatePending(t *testing.T) {
 			{Kind: KindEnvChange, Service: "api", Key: "LOG_LEVEL", Old: "info", New: "debug"},
 		},
 		Flavor:   FlavorStopShell,
-		Sessions: []sandbox.Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 	})
 	assert.Contains(t, out, "Applied 1 live change")
 	assert.Contains(t, out, "1 change(s) require recreate")
@@ -63,7 +62,7 @@ func TestFormatReconcileText_RecreatePending(t *testing.T) {
 func TestFormatStatusJSON(t *testing.T) {
 	js := FormatStatusJSON(StatusResult{
 		Sandbox: "x", State: "running",
-		Sessions:    []sandbox.Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+		Sessions:    []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 		PendingLive: 2, PendingRecreate: 1,
 	})
 	var parsed map[string]any
@@ -81,7 +80,7 @@ func TestFormatReconcileJSON(t *testing.T) {
 		Applied:          []Change{{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
 		RecreateRequired: []Change{{Kind: KindEnvChange, Service: "api", Key: "LOG_LEVEL", Old: "info", New: "debug"}},
 		Flavor:           FlavorStopShell,
-		Sessions:         []sandbox.Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+		Sessions:         []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 		NextAction:       "needs_approval",
 	})
 	var parsed map[string]any

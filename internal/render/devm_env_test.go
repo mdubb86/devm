@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +18,7 @@ func TestWriteDevmEnvWritesPersistentEnvToDotenv(t *testing.T) {
 
 	got, err := os.ReadFile(filepath.Join(dir, ".devm", ".env"))
 	require.NoError(t, err)
-	assert.Equal(t, sandbox.PersistentEnv(cfg), string(got))
+	assert.Equal(t, persistentEnv(cfg), string(got))
 }
 
 func TestWriteDevmEnvCreatesDotDevmDir(t *testing.T) {

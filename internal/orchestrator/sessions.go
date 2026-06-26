@@ -1,12 +1,11 @@
-package sandbox
+package orchestrator
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 )
 
-// Session represents one interactive pty session inside the sandbox.
+// Session represents one interactive pty session inside the VM.
 // Sessions are discovered by walking /proc for processes whose
 // controlling tty resolves to a /dev/pts/N device. System processes
 // (PID 1 init, daemons launched without a tty) have tty `?` and are
@@ -18,11 +17,11 @@ type Session struct {
 	User string // resolved username from /proc/<pid>/status Uid line
 }
 
-// ProbeScript walks /proc in the sandbox and prints one line per
+// probeScript walks /proc in the VM and prints one line per
 // process whose fd 0 (stdin) is a /dev/pts/N device. Output format is
 // space-separated: "<pid> <comm> <pts/N> <user>". Runs under bash,
-// which contract_27 pins is present on the base image.
-const ProbeScript = `for d in /proc/[0-9]*; do
+// which is present on the base image.
+const probeScript = `for d in /proc/[0-9]*; do
   pid="${d#/proc/}"
   [ -r "$d/comm" ] || continue
   comm=$(cat "$d/comm" 2>/dev/null) || continue
@@ -40,26 +39,10 @@ const ProbeScript = `for d in /proc/[0-9]*; do
 done
 `
 
-// Sessions returns the active interactive pty sessions in the sandbox.
-// Convenience wrapper around SessionsWithRunner using the sandbox's Runner.
-func (s *Sandbox) Sessions() ([]Session, error) {
-	return s.SessionsWithRunner(s.Runner)
-}
-
-// SessionsWithRunner is the testable inner. The runner's Output is
-// invoked with `sbx exec <name> bash -c <ProbeScript>`.
-func (s *Sandbox) SessionsWithRunner(r Runner) ([]Session, error) {
-	out, err := r.Output("sbx", "exec", s.Name, "bash", "-c", ProbeScript)
-	if err != nil {
-		return nil, fmt.Errorf("sessions: sbx exec: %w", err)
-	}
-	return ParseSessions(string(out)), nil
-}
-
-// ParseSessions extracts Session records from the probe output.
+// parseSessions extracts Session records from the probe output.
 // Malformed lines are silently skipped — the script can race processes
 // that vanish mid-walk, producing partial lines.
-func ParseSessions(out string) []Session {
+func parseSessions(out string) []Session {
 	var sessions []Session
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if line == "" {

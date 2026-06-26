@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mdubb86/devm/internal/sandbox"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
@@ -13,7 +12,7 @@ import (
 type StatusResult struct {
 	Sandbox         string
 	State           string // "running" | "stopped" | "absent"
-	Sessions        []sandbox.Session
+	Sessions        []Session
 	PendingLive     int
 	PendingRecreate int
 	Drift           []DriftItem
@@ -51,7 +50,7 @@ type ReconcileResult struct {
 	Applied          []Change
 	RecreateRequired []Change
 	Flavor           FlavorKind
-	Sessions         []sandbox.Session
+	Sessions         []Session
 	NextAction       string // "applied" | "needs_approval" | "user_refused" | "nothing_to_do"
 }
 
