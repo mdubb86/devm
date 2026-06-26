@@ -55,6 +55,17 @@ func TestRoutes_Remove_DropsProjectEntries(t *testing.T) {
 	assert.True(t, ok, "removing p1 must not touch p2")
 }
 
+func TestRoutes_BackendHost_PreservedInLookup(t *testing.T) {
+	r := NewRoutes()
+	r.Apply("p1", []Route{
+		{Hostname: "app.test", BackendHost: "192.168.64.5", BackendPort: 3000, Mode: ModeVM},
+	})
+	got, ok := r.Lookup("app.test")
+	assert.True(t, ok)
+	assert.Equal(t, "192.168.64.5", got.BackendHost)
+	assert.Equal(t, 3000, got.BackendPort)
+}
+
 func TestRoutes_ConcurrentReadWrite_NoRace(t *testing.T) {
 	r := NewRoutes()
 	r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM}})

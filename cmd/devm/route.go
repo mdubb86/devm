@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
@@ -41,7 +42,10 @@ func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error 
 		if err != nil {
 			return err
 		}
-		routes := buildRoutes(cfg, mode)
+		routes, err := buildRoutes(cfg, mode)
+		if err != nil {
+			return err
+		}
 		if len(routes) == 0 {
 			fmt.Println("no services with hostname+port; nothing to route")
 			return nil
@@ -54,31 +58,47 @@ func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error 
 		}
 		fmt.Printf("Routing set to %s.\n", mode)
 		for _, r := range routes {
-			fmt.Printf("  http(s)://%s → localhost:%d\n", r.Hostname, r.BackendPort)
+			host := r.BackendHost
+			if host == "" {
+				host = "localhost"
+			}
+			fmt.Printf("  http(s)://%s → %s:%d\n", r.Hostname, host, r.BackendPort)
 		}
 		return nil
 	}
 }
 
 // buildRoutes extracts Routes from the project config in the
-// requested mode. Mode determines whether BackendPort is the
-// service's in-VM canonical port (local) or the sbx-published host
-// port (vm). Package-private but accessible from any file in
-// cmd/devm/; Task 10 (shell.go) reuses it.
-func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) []serviceapi.Route {
+// requested mode. For vm mode, resolves the VM's IP via tart so the
+// proxy dials the VM directly instead of localhost.
+func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) ([]serviceapi.Route, error) {
 	var out []serviceapi.Route
+	var vmIP string
+
+	if mode == serviceapi.ModeVM {
+		tr := tart.New()
+		ip, err := tr.IP(context.Background(), cfg.Project.SandboxName)
+		if err != nil {
+			return nil, fmt.Errorf("get vm ip (is the VM running? `devm shell` first): %w", err)
+		}
+		vmIP = ip
+	}
+
 	for _, svc := range cfg.Services {
 		if svc.Hostname == "" || svc.Port == 0 {
 			continue
 		}
-		backendPort := svc.Port
-		out = append(out, serviceapi.Route{
+		route := serviceapi.Route{
 			Hostname:    svc.Hostname,
-			BackendPort: backendPort,
+			BackendPort: svc.Port,
 			Mode:        mode,
-		})
+		}
+		if mode == serviceapi.ModeVM {
+			route.BackendHost = vmIP
+		}
+		out = append(out, route)
 	}
-	return out
+	return out, nil
 }
 
 func init() {

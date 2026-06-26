@@ -51,8 +51,8 @@ attaches immediately. Port reconcile only runs on cold start.`,
 		// explicitly chosen `devm route local`, and we respect that
 		// across stop/start cycles per the Ship 3 design.
 		go func() {
-			routes := buildRoutes(cfg, serviceapi.ModeVM)
-			if len(routes) == 0 {
+			routes, err := buildRoutes(cfg, serviceapi.ModeVM)
+			if err != nil || len(routes) == 0 {
 				return
 			}
 			rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)

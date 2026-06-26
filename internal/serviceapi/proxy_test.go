@@ -116,6 +116,39 @@ func TestProxy_BackendUnreachable_502WithDiagnostic(t *testing.T) {
 	assert.Contains(t, string(body), "no service listening at down.test")
 }
 
+func TestProxy_BackendHost_ExplicitLocalhost(t *testing.T) {
+	backPort, cleanup := startBackend(t, "from backend")
+	defer cleanup()
+
+	routes := NewRoutes()
+	routes.Apply("p1", []Route{
+		{Hostname: "app.test", BackendHost: "127.0.0.1", BackendPort: backPort, Mode: ModeLocal},
+	})
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(dir)
+	require.NoError(t, err)
+
+	proxy := NewProxyServer(routes, ca)
+	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = proxy.Serve(ctx, []net.Listener{httpLn}, nil) }()
+	time.Sleep(100 * time.Millisecond)
+
+	req, err := http.NewRequest("GET", "http://"+httpLn.Addr().String()+"/", nil)
+	require.NoError(t, err)
+	req.Host = "app.test"
+	c := &http.Client{Timeout: 2 * time.Second}
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "from backend", string(body))
+}
+
 func TestProxy_HTTPS_ServesCertViaCA(t *testing.T) {
 	backPort, cleanup := startBackend(t, "https-backend")
 	defer cleanup()

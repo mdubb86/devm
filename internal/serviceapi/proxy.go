@@ -74,10 +74,14 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		write502NoRoute(w, host)
 		return
 	}
-	target, _ := url.Parse(fmt.Sprintf("http://localhost:%d", route.BackendPort))
+	backendHost := route.BackendHost
+	if backendHost == "" {
+		backendHost = "localhost"
+	}
+	target, _ := url.Parse(fmt.Sprintf("http://%s:%d", backendHost, route.BackendPort))
 	rev := httputil.NewSingleHostReverseProxy(target)
 	rev.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		write502BackendDown(w, host, route.BackendPort, err)
+		write502BackendDown(w, host, backendHost, route.BackendPort, err)
 	}
 	rev.ServeHTTP(w, r)
 }
@@ -91,11 +95,11 @@ func write502NoRoute(w http.ResponseWriter, host string) {
 	fmt.Fprintf(w, "  - run `devm route local` or `devm route vm`\n")
 }
 
-func write502BackendDown(w http.ResponseWriter, host string, port int, err error) {
+func write502BackendDown(w http.ResponseWriter, host, backendHost string, port int, err error) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusBadGateway)
-	fmt.Fprintf(w, "devm: no service listening at %s → localhost:%s\n\n",
-		host, strconv.Itoa(port))
+	fmt.Fprintf(w, "devm: no service listening at %s → %s:%s\n\n",
+		host, backendHost, strconv.Itoa(port))
 	fmt.Fprintf(w, "is your dev server running?\n")
 	fmt.Fprintf(w, "  vm mode:    `devm shell` to bring the sandbox up\n")
 	fmt.Fprintf(w, "  local mode: start the process this hostname targets\n\n")

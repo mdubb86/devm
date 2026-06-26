@@ -29,6 +29,7 @@ func (m RouteMode) String() string {
 // Route is one hostname → backend mapping.
 type Route struct {
 	Hostname    string    `json:"hostname"`
+	BackendHost string    `json:"backend_host,omitempty"` // defaults to localhost when empty
 	BackendPort int       `json:"backend_port"`
 	Mode        RouteMode `json:"mode"`
 }
