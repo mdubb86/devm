@@ -155,11 +155,11 @@ func (r *PtermReporter) Stop() {
 	defer r.mu.Unlock()
 	r.finalizeLocked()
 	// Pterm's spinner goroutine may have a queued frame after
-	// Success() returns. Without this drain, anything writing to
-	// the terminal immediately after Stop() (e.g., a sudo password
-	// prompt) lands on top of a stale spinner frame. Same workaround
-	// as Clear() uses.
-	time.Sleep(50 * time.Millisecond)
+	// Success() returns; the goroutine's tick interval is ~200ms,
+	// so 50ms wasn't enough. Without this drain, anything writing
+	// to the terminal immediately after Stop() (e.g., a sudo
+	// password prompt) lands on top of a stale spinner frame.
+	time.Sleep(250 * time.Millisecond)
 }
 
 // Clear emits ANSI escape codes to clear the visible terminal region

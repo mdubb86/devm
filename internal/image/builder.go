@@ -184,7 +184,9 @@ func ImageDirFromExe() (string, error) {
 	candidates := []string{
 		// Brew/installed layout: <prefix>/bin/devm → <prefix>/share/devm/image
 		filepath.Join(exeDir, "..", "share", "devm", "image"),
-		// Dev layout: ./devm → ./image
+		// Dev layout: repo-root/bin/devm → repo-root/image
+		filepath.Join(exeDir, "..", "image"),
+		// Flat dev layout: ./devm → ./image
 		filepath.Join(exeDir, "image"),
 	}
 	for _, c := range candidates {
