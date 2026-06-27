@@ -143,28 +143,12 @@ var installCmd = &cobra.Command{
 		if err := checkOldLaunchAgentPlist(oldPlist); err != nil {
 			return err
 		}
-		svc, err := newKardianosService()
-		if err != nil {
-			return err
-		}
-		st, _ := svc.Status()
-		if st == service.StatusUnknown {
-			if err := svc.Install(); err != nil {
-				return fmt.Errorf("install: %w", err)
-			}
-		}
-		if st != service.StatusRunning {
-			if err := svc.Start(); err != nil {
-				return fmt.Errorf("start after install: %w", err)
-			}
-		}
-
-		// All privileged setup (DNS resolver file + CA trust) runs
-		// under a single sudo invocation so the user sees exactly one
-		// password prompt when anything's actually needed.
+		// All install work — plist write, launchctl bootstrap,
+		// resolver, CA — happens inside runPrivilegedInstall's
+		// single sudo block. No user-side svc.Install / svc.Start.
 		runPrivilegedInstall()
 
-		// Build base Tart image if needed.
+		// Tart base-image build (user context, unchanged).
 		imageDir, err := image.ImageDirFromExe()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "note: could not locate image directory: %v\n", err)
@@ -176,7 +160,7 @@ var installCmd = &cobra.Command{
 			return nil
 		}
 		if needs {
-			fmt.Println("Building devm-base Tart image (5-10 min)...")
+			fmt.Println("Building devm-base Tart image (1-2 min)...")
 			if err := image.BuildBaseImage(cmd.Context(), imageDir, os.Stdout); err != nil {
 				fmt.Fprintf(os.Stderr, "note: base image build failed (%v). Re-run `devm install` to retry.\n", err)
 				return nil
@@ -189,17 +173,17 @@ var installCmd = &cobra.Command{
 	},
 }
 
-// runPrivilegedInstall consolidates DNS resolver setup and CA trust
-// install into one sudo call. Both checks (CheckResolverFile,
-// CheckCATrusted) are unprivileged; we only shell out to sudo when
-// at least one step actually needs to happen. Re-running install
-// after everything is in place produces zero sudo prompts.
 func runPrivilegedInstall() {
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: could not locate executable: %v\n", err)
+		return
+	}
+
 	dnsState, err := serviceapi.CheckResolverFile()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "note: could not check %s: %v\n",
 			serviceapi.ResolverFilePath, err)
-		fmt.Println("devm service installed and started.")
 		return
 	}
 	needsDNS := dnsState != serviceapi.ResolverFileMatches
@@ -207,20 +191,12 @@ func runPrivilegedInstall() {
 	trusted, err := serviceapi.CheckCATrusted()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "note: could not check CA trust state: %v\n", err)
-		// Treat as trusted to avoid spurious sudo prompts when the
-		// check itself broke (e.g., `security` not on PATH).
 		trusted = true
 	}
 	needsCA := !trusted
 
-	if !needsDNS && !needsCA {
-		fmt.Println("devm service installed; DNS resolver and CA trust already configured.")
-		return
-	}
-
-	// CA generation is unprivileged (writes to ~/Library/Application
-	// Support/devm/ca/); do it before the sudo block so the script
-	// has a cert file to point at.
+	// CA generation is unprivileged; do it before the sudo block so
+	// the script has a cert file to point at.
 	var rootCertPath string
 	if needsCA {
 		if _, err := serviceapi.LoadOrGenerate(); err != nil {
@@ -236,8 +212,9 @@ func runPrivilegedInstall() {
 		rootCertPath = filepath.Join(runDir, "ca", "root.crt")
 	}
 
-	// Compose the shell script. set -e: bail if any step fails so
-	// partial state is obvious rather than silent.
+	// Compose the single sudo script. Ship 4.2 always runs the
+	// _kardianos install step so the LaunchDaemon plist + launchctl
+	// bootstrap happen under root. DNS + CA steps are conditional.
 	var sb strings.Builder
 	sb.WriteString("set -e\n")
 	if needsDNS {
@@ -246,8 +223,6 @@ func runPrivilegedInstall() {
 				serviceapi.ResolverFilePath)
 		}
 		sb.WriteString("mkdir -p /etc/resolver\n")
-		// Single-quoted heredoc terminator so the content goes in
-		// verbatim with no shell interpolation.
 		fmt.Fprintf(&sb, "cat > %s <<'EOF'\n%sEOF\n",
 			serviceapi.ResolverFilePath, serviceapi.CanonicalResolverContents())
 	}
@@ -255,32 +230,19 @@ func runPrivilegedInstall() {
 		fmt.Fprintf(&sb, "security add-trusted-cert -d -r trustRoot -k %s %s\n",
 			shellQuote(serviceapi.SystemKeychain), shellQuote(rootCertPath))
 	}
+	// Always run the kardianos install — it's idempotent enough at
+	// the kardianos level (writes plist, bootstraps; second run with
+	// the same content is a no-op aside from the bootstrap re-load).
+	fmt.Fprintf(&sb, "%s _kardianos install\n", shellQuote(exe))
 
-	var todo []string
-	if needsDNS {
-		todo = append(todo, "DNS resolver")
-	}
-	if needsCA {
-		todo = append(todo, "CA trust")
-	}
-	fmt.Printf("devm service installed. Setting up %s (requires sudo)...\n",
-		strings.Join(todo, " + "))
-
-	scriptCmd := exec.Command("sudo", "sh", "-c", sb.String())
-	scriptCmd.Stdin = os.Stdin
-	scriptCmd.Stdout = os.Stdout
-	scriptCmd.Stderr = os.Stderr
-	if err := scriptCmd.Run(); err != nil {
+	fmt.Println("Running privileged install (1 sudo prompt expected)...")
+	c := exec.Command("sudo", "bash", "-c", sb.String())
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	c.Stdin = os.Stdin
+	if err := c.Run(); err != nil {
 		fmt.Fprintf(os.Stderr,
-			"note: privileged setup failed (%v). Re-run `devm install`.\n", err)
-		return
-	}
-
-	if needsDNS {
-		fmt.Println("DNS resolver configured.")
-	}
-	if needsCA {
-		fmt.Println("CA trusted.")
+			"note: privileged install failed (%v). Re-run `devm install`.\n", err)
 	}
 }
 
