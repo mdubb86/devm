@@ -310,7 +310,7 @@ var uninstallCmd = &cobra.Command{
 			return fmt.Errorf("privileged uninstall failed; see %s", logPath)
 		}
 		_ = os.Remove(serviceapi.SocketPath())
-		reporter.Info("uninstalled (runtime dir preserved)")
+		reporter.Info("uninstalled")
 		return nil
 	},
 }
