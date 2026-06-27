@@ -17,12 +17,17 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 			out.Project.Proxy = *override.Project.Proxy
 		}
 	}
-	if override.Network != nil && override.Network.AllowedDomains != nil {
-		out.Network.AllowedDomains = *override.Network.AllowedDomains
+	if override.Network != nil {
+		if override.Network.AllowedDomains != nil {
+			out.Network.AllowedDomains = *override.Network.AllowedDomains
+		}
+		if override.Network.Allow != nil {
+			out.Network.Allow = *override.Network.Allow
+		}
 	}
 	if override.Env != nil {
 		if out.Env == nil {
-			out.Env = map[string]string{}
+			out.Env = map[string]schema.EnvValue{}
 		}
 		for k, v := range override.Env {
 			out.Env[k] = v
@@ -49,7 +54,7 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 			}
 			if soverride.Env != nil {
 				if svc.Env == nil {
-					svc.Env = map[string]string{}
+					svc.Env = map[string]schema.EnvValue{}
 				}
 				for k, v := range soverride.Env {
 					svc.Env[k] = v

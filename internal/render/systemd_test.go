@@ -53,7 +53,7 @@ func TestRenderService_Declarative_AllFields(t *testing.T) {
 		Exec:    []string{"/bin/sleep", "infinity"},
 		WorkDir: "/var/lib/foo",
 		User:    "appuser",
-		Env:     map[string]string{"LOG_LEVEL": "debug", "API_KEY": "x"},
+		Env:     map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "debug"}, "API_KEY": {Literal: "x"}},
 		After:   []string{"postgresql.service", "redis.service"},
 		Restart: "always",
 	}

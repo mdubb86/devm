@@ -58,17 +58,22 @@ func ResolveEnv(cfg *Config, repoRoot string) error {
 	}
 
 	// Expand into a side buffer; only commit if all succeed.
-	resolved := make(map[string]string, len(cfg.Env)+2)
+	// Secrets are passed through as-is; only literals are expanded.
+	resolved := make(map[string]EnvValue, len(cfg.Env)+2)
 	for k, v := range cfg.Env {
-		out, err := expandWorkspace(v, repoRoot)
+		if v.IsSecret() {
+			resolved[k] = v
+			continue
+		}
+		out, err := expandWorkspace(v.Literal, repoRoot)
 		if err != nil {
 			return fmt.Errorf("env.%s: %w", k, err)
 		}
-		resolved[k] = out
+		resolved[k] = EnvValue{Literal: out}
 	}
 	type svcEdit struct {
 		name string
-		env  map[string]string
+		env  map[string]EnvValue
 	}
 	svcEdits := make([]svcEdit, 0, len(cfg.Services))
 	svcNames := make([]string, 0, len(cfg.Services))
@@ -81,20 +86,24 @@ func ResolveEnv(cfg *Config, repoRoot string) error {
 		if len(svc.Env) == 0 {
 			continue
 		}
-		expanded := make(map[string]string, len(svc.Env))
+		expanded := make(map[string]EnvValue, len(svc.Env))
 		for k, v := range svc.Env {
-			out, err := expandWorkspace(v, repoRoot)
+			if v.IsSecret() {
+				expanded[k] = v
+				continue
+			}
+			out, err := expandWorkspace(v.Literal, repoRoot)
 			if err != nil {
 				return fmt.Errorf("services.%s.env.%s: %w", svcName, k, err)
 			}
-			expanded[k] = out
+			expanded[k] = EnvValue{Literal: out}
 		}
 		svcEdits = append(svcEdits, svcEdit{name: svcName, env: expanded})
 	}
 
 	// Commit phase: no more failures possible.
-	resolved["WORKSPACE"] = repoRoot
-	resolved["IS_SANDBOX"] = "1"
+	resolved["WORKSPACE"] = EnvValue{Literal: repoRoot}
+	resolved["IS_SANDBOX"] = EnvValue{Literal: "1"}
 	cfg.Env = resolved
 	cfg.Path = resolvedPath
 	for _, e := range svcEdits {

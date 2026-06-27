@@ -75,7 +75,7 @@ func persistentEnv(cfg schema.Config) string {
 	merged := make(map[string]string, len(cfg.Env)*2)
 
 	for k, v := range cfg.Env {
-		merged[k] = v
+		merged[k] = v.Render()
 	}
 
 	svcNames := make([]string, 0, len(cfg.Services))
@@ -93,7 +93,7 @@ func persistentEnv(cfg schema.Config) string {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			merged[upper+"_"+k] = svc.Env[k]
+			merged[upper+"_"+k] = svc.Env[k].Render()
 		}
 	}
 

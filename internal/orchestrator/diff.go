@@ -390,10 +390,11 @@ func computeIdentityChange(old, new schema.Config) []Change {
 }
 
 func envOf(s schema.Service) map[string]string {
-	if s.Env == nil {
-		return map[string]string{}
+	out := make(map[string]string, len(s.Env))
+	for k, v := range s.Env {
+		out[k] = v.Render()
 	}
-	return s.Env
+	return out
 }
 
 func unionStringKeys(a, b map[string]string) []string {

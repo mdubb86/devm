@@ -10,6 +10,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ---------- EnvValue / SecretRef tests ----------
+
 func TestMaskRequiredFields(t *testing.T) {
 	m := Mask{Path: "node_modules", Size: "2G"}
 	assert.NoError(t, m.Validate())
@@ -567,4 +569,125 @@ project:
 	err := CheckUnknownKeys(yamlText)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "port_offset")
+}
+
+func TestParse_SecretTag_AsSecretRef(t *testing.T) {
+	const yamlSrc = `
+project:
+  id: x
+  sandbox_name: x
+services:
+  api:
+    exec: ["/bin/true"]
+    env:
+      GITHUB_TOKEN: !secret github_token
+      PLAIN: hello
+`
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &cfg))
+	svc := cfg.Services["api"]
+	require.NotNil(t, svc.Env["GITHUB_TOKEN"].Secret)
+	assert.Equal(t, "github_token", svc.Env["GITHUB_TOKEN"].Secret.Name)
+	assert.Equal(t, "", svc.Env["GITHUB_TOKEN"].Literal)
+	assert.Equal(t, "hello", svc.Env["PLAIN"].Literal)
+	assert.Nil(t, svc.Env["PLAIN"].Secret)
+}
+
+func TestParse_NetworkAllow(t *testing.T) {
+	const yamlSrc = `
+project:
+  id: x
+  sandbox_name: x
+network:
+  allow:
+    - github.com
+    - "*.npmjs.org"
+`
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &cfg))
+	assert.Equal(t, []string{"github.com", "*.npmjs.org"}, cfg.Network.Allow)
+}
+
+func TestEnvValue_TokenFor(t *testing.T) {
+	assert.Equal(t, "__DEVM_SECRET_github_token__", TokenFor("github_token"))
+	assert.Equal(t, "__DEVM_SECRET_x__", TokenFor("x"))
+}
+
+func TestEnvValue_Render_LiteralAndSecret(t *testing.T) {
+	literal := EnvValue{Literal: "hello"}
+	assert.Equal(t, "hello", literal.Render())
+
+	secret := EnvValue{Secret: &SecretRef{Name: "foo"}}
+	assert.Equal(t, "__DEVM_SECRET_foo__", secret.Render())
+}
+
+func TestEnvValue_IsSecret(t *testing.T) {
+	assert.False(t, EnvValue{Literal: "val"}.IsSecret())
+	assert.True(t, EnvValue{Secret: &SecretRef{Name: "x"}}.IsSecret())
+}
+
+func TestParse_TopLevel_SecretTag_AsSecretRef(t *testing.T) {
+	// !secret can also appear in the top-level env: map.
+	const yamlSrc = `
+project:
+  id: x
+  sandbox_name: x
+env:
+  API_KEY: !secret my_api_key
+  PLAIN: world
+`
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &cfg))
+	require.NotNil(t, cfg.Env["API_KEY"].Secret)
+	assert.Equal(t, "my_api_key", cfg.Env["API_KEY"].Secret.Name)
+	assert.Equal(t, "world", cfg.Env["PLAIN"].Literal)
+}
+
+func TestEnvValue_Render_SecretUsesTokenFor(t *testing.T) {
+	// Render() for a SecretRef must produce the same string as TokenFor().
+	name := "some_secret"
+	ev := EnvValue{Secret: &SecretRef{Name: name}}
+	assert.Equal(t, TokenFor(name), ev.Render())
+}
+
+// TestParse_SecretInOverrideFile exercises !secret decoding via
+// the serviceOverrideYAML path (serviceOverride.Env is map[string]EnvValue).
+func TestParse_SecretInServiceOverrideEnv(t *testing.T) {
+	const yamlSrc = `
+services:
+  api:
+    env:
+      TOKEN: !secret my_token
+`
+	var override ConfigOverride
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &override))
+	svc := override.Services["api"]
+	require.NotNil(t, svc.Env["TOKEN"].Secret)
+	assert.Equal(t, "my_token", svc.Env["TOKEN"].Secret.Name)
+}
+
+func TestWriteInTempDir_SecretTagPreservedThroughEnvFile(t *testing.T) {
+	// Secret tokens render as the opaque __DEVM_SECRET_<name>__ form
+	// in the devm.yaml temp-dir parse path. (Full Load path via
+	// internal/config skips secrets in ResolveEnv, passing them through.)
+	// This test covers the schema-level Render() contract only.
+	tmp := t.TempDir()
+	const yamlSrc = `
+project:
+  id: x
+  sandbox_name: x
+services:
+  api:
+    exec: ["/bin/true"]
+    env:
+      TOKEN: !secret gh_token
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "devm.yaml"), []byte(yamlSrc), 0o644))
+	data, err := os.ReadFile(filepath.Join(tmp, "devm.yaml"))
+	require.NoError(t, err)
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal(data, &cfg))
+	token := cfg.Services["api"].Env["TOKEN"]
+	require.NotNil(t, token.Secret)
+	assert.Equal(t, "__DEVM_SECRET_gh_token__", token.Render())
 }

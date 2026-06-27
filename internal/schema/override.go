@@ -10,6 +10,7 @@ type ProjectOverride struct {
 
 type NetworkOverride struct {
 	AllowedDomains *[]string `yaml:"allowed_domains,omitempty"`
+	Allow          *[]string `yaml:"allow,omitempty"`
 }
 
 type ServiceOverride struct {
@@ -21,30 +22,30 @@ type ServiceOverride struct {
 	BindIP    *string `yaml:"-"`
 	PortIsSet bool    `yaml:"-"`
 
-	Hostname  *string           `yaml:"hostname,omitempty"`
-	Env       map[string]string `yaml:"env,omitempty"`
-	Masks     *[]Mask           `yaml:"masks,omitempty"`
-	Templates *[]Template       `yaml:"templates,omitempty"`
-	Exec      *[]string         `yaml:"exec,omitempty"`
-	WorkDir   *string           `yaml:"workdir,omitempty"`
-	Restart   *string           `yaml:"restart,omitempty"`
-	After     *[]string         `yaml:"after,omitempty"`
-	User      *string           `yaml:"user,omitempty"`
-	Systemd   *string           `yaml:"systemd,omitempty"`
+	Hostname  *string              `yaml:"hostname,omitempty"`
+	Env       map[string]EnvValue  `yaml:"env,omitempty"`
+	Masks     *[]Mask              `yaml:"masks,omitempty"`
+	Templates *[]Template          `yaml:"templates,omitempty"`
+	Exec      *[]string            `yaml:"exec,omitempty"`
+	WorkDir   *string              `yaml:"workdir,omitempty"`
+	Restart   *string              `yaml:"restart,omitempty"`
+	After     *[]string            `yaml:"after,omitempty"`
+	User      *string              `yaml:"user,omitempty"`
+	Systemd   *string              `yaml:"systemd,omitempty"`
 }
 
 type serviceOverrideYAML struct {
-	Port      yaml.Node         `yaml:"port,omitempty"`
-	Hostname  *string           `yaml:"hostname,omitempty"`
-	Env       map[string]string `yaml:"env,omitempty"`
-	Masks     *[]Mask           `yaml:"masks,omitempty"`
-	Templates *[]Template       `yaml:"templates,omitempty"`
-	Exec      *[]string         `yaml:"exec,omitempty"`
-	WorkDir   *string           `yaml:"workdir,omitempty"`
-	Restart   *string           `yaml:"restart,omitempty"`
-	After     *[]string         `yaml:"after,omitempty"`
-	User      *string           `yaml:"user,omitempty"`
-	Systemd   *string           `yaml:"systemd,omitempty"`
+	Port      yaml.Node            `yaml:"port,omitempty"`
+	Hostname  *string              `yaml:"hostname,omitempty"`
+	Env       map[string]EnvValue  `yaml:"env,omitempty"`
+	Masks     *[]Mask              `yaml:"masks,omitempty"`
+	Templates *[]Template          `yaml:"templates,omitempty"`
+	Exec      *[]string            `yaml:"exec,omitempty"`
+	WorkDir   *string              `yaml:"workdir,omitempty"`
+	Restart   *string              `yaml:"restart,omitempty"`
+	After     *[]string            `yaml:"after,omitempty"`
+	User      *string              `yaml:"user,omitempty"`
+	Systemd   *string              `yaml:"systemd,omitempty"`
 }
 
 func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
@@ -80,7 +81,7 @@ func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
 type ConfigOverride struct {
 	Project  *ProjectOverride           `yaml:"project,omitempty"`
 	Network  *NetworkOverride           `yaml:"network,omitempty"`
-	Env      map[string]string          `yaml:"env,omitempty"`
+	Env      map[string]EnvValue        `yaml:"env,omitempty"`
 	Services map[string]ServiceOverride `yaml:"services,omitempty"`
 	Install  *[]string                  `yaml:"install,omitempty"`
 	Mounts   *[]string                  `yaml:"mounts,omitempty"`

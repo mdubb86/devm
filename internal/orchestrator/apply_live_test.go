@@ -64,7 +64,7 @@ func TestApplyLive_NetworkKindsAreNoOps(t *testing.T) {
 func TestApplyLive_EnvChange_WritesDevmEnv(t *testing.T) {
 	dir := t.TempDir()
 	tr, _ := fakeTartForApplyLive(t, dir)
-	cfg := schema.Config{Env: map[string]string{"FOO": "bar"}}
+	cfg := schema.Config{Env: map[string]schema.EnvValue{"FOO": {Literal: "bar"}}}
 
 	err := ApplyLive(tr, "x", []Change{
 		{Kind: KindEnvChange, Key: "FOO", Old: "old", New: "bar"},
@@ -80,7 +80,7 @@ func TestApplyLive_EnvAddAndRemove_AlsoWriteDevmEnv(t *testing.T) {
 	for _, kind := range []ChangeKind{KindEnvAdd, KindEnvRemove} {
 		dir := t.TempDir()
 		tr, _ := fakeTartForApplyLive(t, dir)
-		cfg := schema.Config{Env: map[string]string{"K": "v"}}
+		cfg := schema.Config{Env: map[string]schema.EnvValue{"K": {Literal: "v"}}}
 		err := ApplyLive(tr, "x", []Change{
 			{Kind: kind, Key: "K", New: "v"},
 		}, cfg, dir)
@@ -93,7 +93,7 @@ func TestApplyLive_EnvAddAndRemove_AlsoWriteDevmEnv(t *testing.T) {
 func TestApplyLive_MultipleEnvChanges_SingleWrite(t *testing.T) {
 	dir := t.TempDir()
 	tr, _ := fakeTartForApplyLive(t, dir)
-	cfg := schema.Config{Env: map[string]string{"A": "1", "B": "2", "C": "3"}}
+	cfg := schema.Config{Env: map[string]schema.EnvValue{"A": {Literal: "1"}, "B": {Literal: "2"}, "C": {Literal: "3"}}}
 	err := ApplyLive(tr, "x", []Change{
 		{Kind: KindEnvAdd, Key: "A", New: "1"},
 		{Kind: KindEnvChange, Key: "B", Old: "x", New: "2"},

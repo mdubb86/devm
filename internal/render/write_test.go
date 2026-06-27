@@ -57,7 +57,7 @@ func minimalConfig(t *testing.T) schema.Config {
 func TestWriteDevmDirWritesDotenv(t *testing.T) {
 	dir := t.TempDir()
 	cfg := minimalConfig(t)
-	cfg.Env = map[string]string{"FOO": "bar"}
+	cfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "bar"}}
 	require.NoError(t, WriteDevmDir(cfg, dir))
 
 	bs, err := os.ReadFile(filepath.Join(dir, ".devm", ".env"))

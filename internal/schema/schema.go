@@ -12,6 +12,55 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// SecretRef is the in-memory representation of a YAML `!secret <name>`
+// tagged value. Resolved to a literal at iron-proxy spawn time by
+// looking up <name> in the macOS login keychain.
+type SecretRef struct {
+	Name string
+}
+
+// EnvValue is either a literal string or a SecretRef. devm.yaml's
+// env: map decodes to map[string]EnvValue.
+type EnvValue struct {
+	Literal string     // populated when Secret == nil
+	Secret  *SecretRef // populated when the YAML value used !secret tag
+}
+
+// UnmarshalYAML decodes either a plain scalar or a !secret-tagged
+// scalar into an EnvValue.
+func (e *EnvValue) UnmarshalYAML(node *yaml.Node) error {
+	if node.Tag == "!secret" {
+		e.Secret = &SecretRef{Name: node.Value}
+		return nil
+	}
+	if node.Kind != yaml.ScalarNode {
+		return fmt.Errorf("env value: expected scalar or !secret, got %v", node.Kind)
+	}
+	e.Literal = node.Value
+	return nil
+}
+
+// IsSecret reports whether this env value is a secret reference.
+func (e EnvValue) IsSecret() bool { return e.Secret != nil }
+
+// TokenFor returns the deterministic opaque token devm uses to mark
+// a secret in workload env. Same secret name → same token across
+// process lifetimes so iron-proxy restarts don't strand stale tokens
+// in the VM's env.
+func TokenFor(secretName string) string {
+	return fmt.Sprintf("__DEVM_SECRET_%s__", secretName)
+}
+
+// Render returns the value to emit into a systemd Environment= line
+// or any other env-rendering context: the literal string, or the
+// opaque token form for a SecretRef.
+func (e EnvValue) Render() string {
+	if e.Secret != nil {
+		return TokenFor(e.Secret.Name)
+	}
+	return e.Literal
+}
+
 type Mask struct {
 	Path string `yaml:"path"`
 	Size string `yaml:"size"`
@@ -80,10 +129,10 @@ type Service struct {
 	// need to reach the service.
 	BindIP string `yaml:"-"`
 
-	Hostname  string            `yaml:"hostname,omitempty"`
-	Env       map[string]string `yaml:"env,omitempty"`
-	Masks     []Mask            `yaml:"masks,omitempty"`
-	Templates []Template        `yaml:"templates,omitempty"`
+	Hostname  string               `yaml:"hostname,omitempty"`
+	Env       map[string]EnvValue  `yaml:"env,omitempty"`
+	Masks     []Mask               `yaml:"masks,omitempty"`
+	Templates []Template           `yaml:"templates,omitempty"`
 
 	// Tart-era service execution fields. Systemd is mutually exclusive
 	// with the declarative fields (Exec, Restart, After, WorkDir, User).
@@ -99,17 +148,17 @@ type Service struct {
 // can decode it as either int or string and populate both Service.Port
 // and Service.BindIP from a single field.
 type serviceYAML struct {
-	Port      yaml.Node         `yaml:"port,omitempty"`
-	Hostname  string            `yaml:"hostname,omitempty"`
-	Env       map[string]string `yaml:"env,omitempty"`
-	Masks     []Mask            `yaml:"masks,omitempty"`
-	Templates []Template        `yaml:"templates,omitempty"`
-	Exec      []string          `yaml:"exec,omitempty"`
-	WorkDir   string            `yaml:"workdir,omitempty"`
-	Restart   string            `yaml:"restart,omitempty"`
-	After     []string          `yaml:"after,omitempty"`
-	User      string            `yaml:"user,omitempty"`
-	Systemd   string            `yaml:"systemd,omitempty"`
+	Port      yaml.Node            `yaml:"port,omitempty"`
+	Hostname  string               `yaml:"hostname,omitempty"`
+	Env       map[string]EnvValue  `yaml:"env,omitempty"`
+	Masks     []Mask               `yaml:"masks,omitempty"`
+	Templates []Template           `yaml:"templates,omitempty"`
+	Exec      []string             `yaml:"exec,omitempty"`
+	WorkDir   string               `yaml:"workdir,omitempty"`
+	Restart   string               `yaml:"restart,omitempty"`
+	After     []string             `yaml:"after,omitempty"`
+	User      string               `yaml:"user,omitempty"`
+	Systemd   string               `yaml:"systemd,omitempty"`
 }
 
 // UnmarshalYAML implements polymorphic decoding for the `port` field:
@@ -170,17 +219,17 @@ func (s *Service) decodePortNode(n yaml.Node) error {
 // machinery sees the same shape the user wrote.
 func (s Service) MarshalYAML() (interface{}, error) {
 	out := struct {
-		Port      interface{}       `yaml:"port,omitempty"`
-		Hostname  string            `yaml:"hostname,omitempty"`
-		Env       map[string]string `yaml:"env,omitempty"`
-		Masks     []Mask            `yaml:"masks,omitempty"`
-		Templates []Template        `yaml:"templates,omitempty"`
-		Exec      []string          `yaml:"exec,omitempty"`
-		WorkDir   string            `yaml:"workdir,omitempty"`
-		Restart   string            `yaml:"restart,omitempty"`
-		After     []string          `yaml:"after,omitempty"`
-		User      string            `yaml:"user,omitempty"`
-		Systemd   string            `yaml:"systemd,omitempty"`
+		Port      interface{}          `yaml:"port,omitempty"`
+		Hostname  string               `yaml:"hostname,omitempty"`
+		Env       map[string]EnvValue  `yaml:"env,omitempty"`
+		Masks     []Mask               `yaml:"masks,omitempty"`
+		Templates []Template           `yaml:"templates,omitempty"`
+		Exec      []string             `yaml:"exec,omitempty"`
+		WorkDir   string               `yaml:"workdir,omitempty"`
+		Restart   string               `yaml:"restart,omitempty"`
+		After     []string             `yaml:"after,omitempty"`
+		User      string               `yaml:"user,omitempty"`
+		Systemd   string               `yaml:"systemd,omitempty"`
 	}{
 		Hostname:  s.Hostname,
 		Env:       s.Env,
@@ -354,14 +403,15 @@ type BaseImage struct{}
 
 type Network struct {
 	AllowedDomains []string `yaml:"allowed_domains,omitempty"`
+	Allow          []string `yaml:"allow,omitempty"`
 }
 
 type Config struct {
-	Project   Project            `yaml:"project"`
-	BaseImage BaseImage          `yaml:"base_image,omitempty"`
-	Network   Network            `yaml:"network,omitempty"`
-	Env       map[string]string  `yaml:"env,omitempty"`
-	Services  map[string]Service `yaml:"services,omitempty"`
+	Project   Project              `yaml:"project"`
+	BaseImage BaseImage            `yaml:"base_image,omitempty"`
+	Network   Network              `yaml:"network,omitempty"`
+	Env       map[string]EnvValue  `yaml:"env,omitempty"`
+	Services  map[string]Service   `yaml:"services,omitempty"`
 
 	// Packages is a list of apt package names installed automatically
 	// via `apt-get install -y` during Tart VM provisioning.

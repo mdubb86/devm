@@ -175,10 +175,10 @@ func TestComputeNetworkChanges_Deterministic(t *testing.T) {
 
 func TestComputeEnvChanges(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Env: map[string]string{"LOG_LEVEL": "info", "STALE": "1"}},
+		"api": {Env: map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "info"}, "STALE": {Literal: "1"}}},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Env: map[string]string{"LOG_LEVEL": "debug", "NEW": "yes"}},
+		"api": {Env: map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "debug"}, "NEW": {Literal: "yes"}}},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir())
 	require.NoError(t, err)
@@ -424,7 +424,7 @@ func TestComputeAllChanges_NoOp(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p"},
 		Services: map[string]schema.Service{
-			"api": {Port: 8080, Env: map[string]string{"X": "y"}},
+			"api": {Port: 8080, Env: map[string]schema.EnvValue{"X": {Literal: "y"}}},
 		},
 		Network: schema.Network{AllowedDomains: []string{"a.com"}},
 		Install: []string{"true"},

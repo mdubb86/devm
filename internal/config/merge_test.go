@@ -44,7 +44,7 @@ func TestMergeServiceEnvPreservesBaseWhenOverrideAbsent(t *testing.T) {
 	base := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p-sbx"},
 		Services: map[string]schema.Service{
-			"webapp": {Port: 3000, Env: map[string]string{"LOG_LEVEL": "debug"}},
+			"webapp": {Port: 3000, Env: map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "debug"}}},
 		},
 	}
 	override := schema.ConfigOverride{
@@ -54,25 +54,25 @@ func TestMergeServiceEnvPreservesBaseWhenOverrideAbsent(t *testing.T) {
 	}
 	merged, err := Merge(base, override)
 	assert.NoError(t, err)
-	assert.Equal(t, "debug", merged.Services["webapp"].Env["LOG_LEVEL"])
+	assert.Equal(t, "debug", merged.Services["webapp"].Env["LOG_LEVEL"].Literal)
 }
 
 func TestMergeServiceEnvMergesKeys(t *testing.T) {
 	base := schema.Config{
 		Project: schema.Project{ID: "p", SandboxName: "p-sbx"},
 		Services: map[string]schema.Service{
-			"webapp": {Port: 3000, Env: map[string]string{"LOG_LEVEL": "debug"}},
+			"webapp": {Port: 3000, Env: map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "debug"}}},
 		},
 	}
 	override := schema.ConfigOverride{
 		Services: map[string]schema.ServiceOverride{
-			"webapp": {Env: map[string]string{"API_URL": "http://api.local"}},
+			"webapp": {Env: map[string]schema.EnvValue{"API_URL": {Literal: "http://api.local"}}},
 		},
 	}
 	merged, err := Merge(base, override)
 	assert.NoError(t, err)
-	assert.Equal(t, "debug", merged.Services["webapp"].Env["LOG_LEVEL"], "base key preserved")
-	assert.Equal(t, "http://api.local", merged.Services["webapp"].Env["API_URL"], "override key added")
+	assert.Equal(t, "debug", merged.Services["webapp"].Env["LOG_LEVEL"].Literal, "base key preserved")
+	assert.Equal(t, "http://api.local", merged.Services["webapp"].Env["API_URL"].Literal, "override key added")
 }
 
 func TestConfigOverrideInstallReplacement(t *testing.T) {

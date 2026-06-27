@@ -55,7 +55,7 @@ func RenderService(name string, svc schema.Service) []byte {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			fmt.Fprintf(&b, "Environment=%s=%s\n", k, svc.Env[k])
+			fmt.Fprintf(&b, "Environment=%s=%s\n", k, svc.Env[k].Render())
 		}
 	}
 	restart := svc.Restart

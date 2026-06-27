@@ -83,9 +83,9 @@ func buildTemplateData(cfg schema.Config) TemplateData {
 	svcData := make(map[string]ServiceData, len(cfg.Services))
 	for name, s := range cfg.Services {
 		hostPort := s.Port // Tart VMs have their own IP; canonical == host-visible
-		env := s.Env
-		if env == nil {
-			env = map[string]string{}
+		env := make(map[string]string, len(s.Env))
+		for k, v := range s.Env {
+			env[k] = v.Render()
 		}
 		svcData[name] = ServiceData{
 			Port:     s.Port,
@@ -94,9 +94,9 @@ func buildTemplateData(cfg schema.Config) TemplateData {
 			Env:      env,
 		}
 	}
-	pEnv := cfg.Env
-	if pEnv == nil {
-		pEnv = map[string]string{}
+	pEnv := make(map[string]string, len(cfg.Env))
+	for k, v := range cfg.Env {
+		pEnv[k] = v.Render()
 	}
 	return TemplateData{
 		Project: ProjectData{

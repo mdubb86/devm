@@ -61,11 +61,11 @@ env:
 
 	cfg, err := Load(dir)
 	assert.NoError(t, err)
-	assert.Equal(t, filepath.Join(dir, ".claude"), cfg.Env["CLAUDE_CONFIG_DIR"],
+	assert.Equal(t, filepath.Join(dir, ".claude"), cfg.Env["CLAUDE_CONFIG_DIR"].Literal,
 		"$WORKSPACE must be expanded by Load via ResolveEnv")
-	assert.Equal(t, dir, cfg.Env["WORKSPACE"],
+	assert.Equal(t, dir, cfg.Env["WORKSPACE"].Literal,
 		"WORKSPACE must be injected by Load via ResolveEnv")
-	assert.Equal(t, "1", cfg.Env["IS_SANDBOX"],
+	assert.Equal(t, "1", cfg.Env["IS_SANDBOX"].Literal,
 		"IS_SANDBOX must be injected by Load via ResolveEnv")
 }
 

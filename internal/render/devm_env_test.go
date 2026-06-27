@@ -12,7 +12,7 @@ import (
 
 func TestWriteDevmEnvWritesPersistentEnvToDotenv(t *testing.T) {
 	dir := t.TempDir()
-	cfg := schema.Config{Env: map[string]string{"X": "y"}}
+	cfg := schema.Config{Env: map[string]schema.EnvValue{"X": {Literal: "y"}}}
 
 	require.NoError(t, WriteDevmEnv(cfg, dir))
 
@@ -45,7 +45,7 @@ func TestWriteDevmEnvOverwritesExisting(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".devm"), 0o755))
 	require.NoError(t, os.WriteFile(envPath, []byte("# stale\n"), 0o644))
 
-	cfg := schema.Config{Env: map[string]string{"NEW": "val"}}
+	cfg := schema.Config{Env: map[string]schema.EnvValue{"NEW": {Literal: "val"}}}
 	require.NoError(t, WriteDevmEnv(cfg, dir))
 
 	got, err := os.ReadFile(envPath)
@@ -56,7 +56,7 @@ func TestWriteDevmEnvOverwritesExisting(t *testing.T) {
 
 func TestWriteDevmEnvIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	cfg := schema.Config{Env: map[string]string{"A": "1"}}
+	cfg := schema.Config{Env: map[string]schema.EnvValue{"A": {Literal: "1"}}}
 	require.NoError(t, WriteDevmEnv(cfg, dir))
 	first, err := os.ReadFile(filepath.Join(dir, ".devm", ".env"))
 	require.NoError(t, err)
