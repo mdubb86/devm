@@ -27,6 +27,8 @@ const LaunchdPlistTemplate = `<?xml version='1.0' encoding='UTF-8'?>
     <true/>
     <key>RunAtLoad</key>
     <true/>
+    <key>UserName</key>
+    <string>__USER__</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
