@@ -178,6 +178,50 @@ def tart_sandbox(devm, sandbox_name, workspace) -> TartSandbox:
     yield TartSandbox(name=sandbox_name)
 
 
+@pytest.fixture(scope="session")
+def inspector_vm() -> Iterator[TartSandbox]:
+    """Clone cirruslabs/debian to a session-shared VM and boot it.
+
+    Read-only tart contract tests share this VM to avoid 30-60s of
+    clone+boot per test. Lifecycle tests (clone, pull, run, delete)
+    create their own VMs with unique names.
+    """
+    import platform
+    if platform.system() != "Darwin":
+        pytest.skip("tart contract tests run on macOS only")
+    if shutil.which("tart") is None:
+        pytest.skip("tart not on PATH")
+
+    name = f"inspect-{secrets.token_hex(2)}"
+    template = "ghcr.io/cirruslabs/debian:latest"
+
+    registry.append("sandbox", name)
+    try:
+        subprocess.run(["tart", "pull", template], check=True, timeout=300)
+        subprocess.run(["tart", "clone", template, name], check=True, timeout=60)
+
+        proc = subprocess.Popen(
+            ["tart", "run", "--no-graphics", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            vm = TartSandbox(name=name)
+            assert vm.wait_running(timeout=120), f"{name} never reached running"
+            for _ in range(60):
+                if vm.ip():
+                    break
+                time.sleep(1)
+            else:
+                raise RuntimeError(f"{name} never got an IP")
+            yield vm
+        finally:
+            subprocess.run(["tart", "stop", name], capture_output=True, timeout=30)
+            proc.wait(timeout=30)
+    finally:
+        subprocess.run(["tart", "delete", name], capture_output=True, timeout=10)
+        registry.remove("sandbox", name)
+
+
 @pytest.fixture
 def phase():
     """Helper for sub-test phase timing.
