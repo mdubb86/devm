@@ -139,7 +139,6 @@ var installCmd = &cobra.Command{
 
 		reporter := status.New(os.Stderr)
 		defer reporter.Stop()
-		reporter.SetTotal(2)
 
 		logPath, logFile, err := openInstallLog()
 		if err != nil {
@@ -147,37 +146,33 @@ var installCmd = &cobra.Command{
 		}
 		defer logFile.Close()
 
-		// Phase 1: privileged install. Sudo's "Password:" prompt goes
-		// to /dev/tty so it still appears on the user's terminal even
-		// though we redirect the script's stdout/stderr to the log.
-		reporter.Step("privileged install (1 sudo prompt)", true)
+		// Privileged install: fast (just a couple of file writes +
+		// launchctl bootstrap). Print an info line so the user knows
+		// what the imminent sudo prompt is for; no spinner — the
+		// sudo prompt itself is the user-visible activity.
+		reporter.Info("running privileged install (1 sudo prompt)")
 		if err := runPrivilegedInstall(logFile); err != nil {
-			reporter.Fail()
 			tailLog(logPath, 30)
 			return fmt.Errorf("privileged install failed; see %s", logPath)
 		}
 
-		// Phase 2: base image build. build.sh's pull/boot/provisioning
-		// output lands in the log. Quiet on success; tail-on-fail.
+		// Base image: long-running, no terminal output (captured to
+		// log). Spinner has the terminal to itself.
 		imageDir, err := image.ImageDirFromExe()
 		if err != nil {
-			reporter.Fail()
 			return fmt.Errorf("locate image directory: %w", err)
 		}
 		needs, _, err := image.NeedsBuild(imageDir)
 		if err != nil {
-			reporter.Fail()
 			return fmt.Errorf("image hash check: %w", err)
 		}
 		if needs {
-			reporter.Step("building devm-base (1-2 min)", true)
+			reporter.Step("building devm-base", false)
 			if err := image.BuildBaseImage(cmd.Context(), imageDir, logFile); err != nil {
 				reporter.Fail()
 				tailLog(logPath, 30)
 				return fmt.Errorf("base image build failed; see %s", logPath)
 			}
-		} else {
-			reporter.Step("devm-base up to date", true)
 		}
 
 		reporter.Step("ready", false)
@@ -306,7 +301,6 @@ var uninstallCmd = &cobra.Command{
 		cmd.SilenceUsage = true
 		reporter := status.New(os.Stderr)
 		defer reporter.Stop()
-		reporter.SetTotal(1)
 
 		logPath, logFile, err := openInstallLog()
 		if err != nil {
@@ -314,9 +308,8 @@ var uninstallCmd = &cobra.Command{
 		}
 		defer logFile.Close()
 
-		reporter.Step("privileged uninstall (1 sudo prompt)", true)
+		reporter.Info("running privileged uninstall (1 sudo prompt)")
 		if err := runPrivilegedUninstall(logFile); err != nil {
-			reporter.Fail()
 			tailLog(logPath, 30)
 			return fmt.Errorf("privileged uninstall failed; see %s", logPath)
 		}

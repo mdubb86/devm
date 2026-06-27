@@ -18,19 +18,15 @@ apt-get install -y -qq --no-install-recommends \
   dnsmasq \
   nftables
 
-# --- Rename `admin` user → `devm`, drop `debian` ---
-# tart exec lands as uid 1000 (admin) by default, per the
-# cirruslabs template — pinned by
-# e2e/test_tart_contract_04_exec_runs_as_non_root.py. Renaming
-# admin keeps that uid + sudo intact under the new name. The
-# unused `debian` user (uid 1001) goes away.
+# --- Drop the unused `debian` user (uid 1001) ---
+# tart exec lands as `admin` (uid 1000), pinned by
+# e2e/test_tart_contract_04_exec_runs_as_non_root.py. We leave
+# `admin` alone — renaming it would require this script to not
+# already be running as admin (chicken-and-egg with
+# tart-guest-agent). Future: rename via a systemd one-shot that
+# runs before tart-guest-agent on next boot, then reboot the VM
+# at the end of build.sh.
 userdel -r debian 2>/dev/null || true
-usermod -l devm admin
-groupmod -n devm admin
-usermod -d /home/devm -m devm
-if [ -f /etc/sudoers.d/99_cirruslabs.cfg ]; then
-  sed -i 's/\b\(admin\|debian\)\b/devm/g' /etc/sudoers.d/99_cirruslabs.cfg
-fi
 
 # --- Disable cloud-init re-running on subsequent boots ---
 touch /etc/cloud/cloud-init.disabled
