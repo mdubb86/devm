@@ -182,9 +182,9 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 		// teardown to clean up).
 		info, _ := ironProxyState.get(req.ProjectID)
 		scripts := []string{
-			buildEnvScript(macIP, info.HTTPPort, info.HTTPSPort),
-			buildNftablesScript(macIP, info.HTTPPort, info.HTTPSPort),
-			buildDnsmasqScript(macIP),
+			buildEnvScript(),
+			buildNftablesScript(macIP, info.HTTPPort, info.HTTPSPort, info.DNSPort),
+			buildDnsmasqScript(macIP, info.DNSPort),
 		}
 		for i, script := range scripts {
 			cmd := exec.Command("tart", "exec", "-i", req.VMName, "sudo", "bash", "-s")

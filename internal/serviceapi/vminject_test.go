@@ -6,27 +6,41 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestBuildEnvScript_IncludesProxyAndNoProxy(t *testing.T) {
-	script := buildEnvScript("192.168.64.1", 8080, 8443)
-	assert.Contains(t, script, "HTTP_PROXY=http://192.168.64.1:8080")
-	assert.Contains(t, script, "HTTPS_PROXY=http://192.168.64.1:8443")
-	assert.Contains(t, script, "NO_PROXY=localhost,127.0.0.1,*.test")
-	assert.Contains(t, script, "/etc/environment")
+func TestBuildEnvScript_NoProxyOnly(t *testing.T) {
+	script := buildEnvScript()
+	assert.Contains(t, script, "NO_PROXY=*")
+	// Old HTTPS_PROXY-style assertions removed — the transparent
+	// model doesn't use env vars.
+	assert.NotContains(t, script, "HTTPS_PROXY=http")
+	assert.NotContains(t, script, "HTTP_PROXY=http")
 }
 
-func TestBuildNftablesScript_DefaultDenyWithAllowsToMacHost(t *testing.T) {
-	script := buildNftablesScript("192.168.64.1", 8080, 8443)
-	assert.Contains(t, script, "drop") // default-deny policy
+func TestBuildNftablesScript_DNATsHTTPAndHTTPS(t *testing.T) {
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053)
+	// NAT table redirects :443 and :80 to MAC_HOST:proxy_ports.
+	assert.Contains(t, script, "table ip devm_nat")
+	assert.Contains(t, script, "tcp dport 443 dnat to 192.168.64.1:8443")
+	assert.Contains(t, script, "tcp dport 80 dnat to 192.168.64.1:8080")
+	// Bypass for traffic already destined for MAC_HOST.
+	assert.Contains(t, script, "ip daddr 192.168.64.1 return")
+}
+
+func TestBuildNftablesScript_FilterDefaultDenyExceptIronProxyPorts(t *testing.T) {
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053)
+	assert.Contains(t, script, "table inet devm_filter")
+	assert.Contains(t, script, "policy drop;")
+	// All three iron-proxy ports allowed to MAC_HOST.
 	assert.Contains(t, script, "192.168.64.1")
-	// Allows for the two iron-proxy ports.
 	assert.Contains(t, script, "8080")
 	assert.Contains(t, script, "8443")
+	assert.Contains(t, script, "8053")
 	assert.Contains(t, script, "systemctl enable --now nftables")
 }
 
-func TestBuildDnsmasqScript_ForwardsToMacHost(t *testing.T) {
-	script := buildDnsmasqScript("192.168.64.1")
-	assert.Contains(t, script, "server=192.168.64.1")
-	assert.Contains(t, script, "/etc/dnsmasq.d/devm.conf")
+func TestBuildDnsmasqScript_ForwardsToIronProxyDNS(t *testing.T) {
+	script := buildDnsmasqScript("192.168.64.1", 8053)
+	assert.Contains(t, script, "no-resolv")
+	assert.Contains(t, script, "server=192.168.64.1#8053")
+	assert.Contains(t, script, "address=/test/127.0.0.1")
 	assert.Contains(t, script, "systemctl reload-or-restart dnsmasq")
 }

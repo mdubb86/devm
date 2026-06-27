@@ -2,61 +2,79 @@ package serviceapi
 
 import "fmt"
 
-// buildEnvScript writes HTTPS_PROXY/HTTP_PROXY/NO_PROXY into
-// /etc/environment inside the VM. iron-proxy uses two separate
-// ports (HTTP + HTTPS) on the same Mac IP.
-func buildEnvScript(macHost string, httpPort, httpsPort int) string {
-	return fmt.Sprintf(`sudo tee /etc/environment > /dev/null <<'EOF'
-HTTP_PROXY=http://%s:%d
-HTTPS_PROXY=http://%s:%d
-NO_PROXY=localhost,127.0.0.1,*.test
+// buildEnvScript wipes any HTTPS_PROXY/HTTP_PROXY env that Ship 5
+// previously set — the transparent-proxy model doesn't use them.
+// /etc/environment becomes a placeholder file with no proxy vars
+// (anything else the user had set is preserved by Linux's default
+// /etc/environment merging from PAM).
+//
+// Setting NO_PROXY in case the workload's image happens to have
+// HTTPS_PROXY set from a base image we don't control — NO_PROXY=*
+// disables it.
+func buildEnvScript() string {
+	return `sudo tee /etc/environment > /dev/null <<'EOF'
+NO_PROXY=*
 EOF
-`, macHost, httpPort, macHost, httpsPort)
+`
 }
 
-// buildNftablesScript installs the default-deny ruleset and enables
-// nftables. Only outbound to macHost on the two iron-proxy ports is
-// allowed; loopback unrestricted; established connections accepted.
+// buildNftablesScript installs two tables:
 //
-// dnsmasq inside the VM still answers DNS on 127.0.0.1:53 (allowed
-// via the loopback rule); it forwards external queries via the
-// proxy ports (HTTP CONNECT to iron-proxy, not a direct DNS query
-// to MAC_HOST:53 — that's why no :53 allow rule).
-func buildNftablesScript(macHost string, httpPort, httpsPort int) string {
+//  1. `ip devm_nat`: NAT chain in OUTPUT hook that rewrites :80 → MAC_HOST:HTTPPort
+//     and :443 → MAC_HOST:HTTPSPort. Bypasses traffic already destined for
+//     MAC_HOST (so we don't infinite-loop the rewritten packets).
+//
+//  2. `inet devm_filter`: default-deny OUTPUT chain that only allows
+//     post-DNAT traffic to MAC_HOST:{HTTPPort, HTTPSPort, DNSPort} and
+//     loopback. Anything else (DNS to public servers, direct IP outbound,
+//     non-HTTP TCP) is dropped.
+func buildNftablesScript(macHost string, httpPort, httpsPort, dnsPort int) string {
 	return fmt.Sprintf(`sudo tee /etc/nftables.conf > /dev/null <<EOF
-table inet devm {
+table ip devm_nat {
+  chain output {
+    type nat hook output priority -100;
+    ip daddr %s return
+    tcp dport 443 dnat to %s:%d
+    tcp dport 80 dnat to %s:%d
+  }
+}
+
+table inet devm_filter {
   chain output {
     type filter hook output priority 0; policy drop;
     ct state established,related accept
     oif lo accept
     ip daddr 127.0.0.0/8 accept
-    ip daddr %s tcp dport { %d, %d } accept
+    ip daddr %s tcp dport { %d, %d, %d } accept
+    ip daddr %s udp dport %d accept
   }
 }
 EOF
 sudo systemctl enable --now nftables
 sudo nft -f /etc/nftables.conf
-`, macHost, httpPort, httpsPort)
+`, macHost, macHost, httpsPort, macHost, httpPort,
+		macHost, httpPort, httpsPort, dnsPort,
+		macHost, dnsPort)
 }
 
-// buildDnsmasqScript adds a forward directive so dnsmasq doesn't
-// try to resolve unknown queries against the public internet
-// (which nftables blocks). With HTTPS_PROXY set, well-behaved
-// clients (curl, npm, pip) send hostnames as part of CONNECT to
-// iron-proxy and don't need local DNS resolution.
+// buildDnsmasqScript points dnsmasq's upstream at iron-proxy's DNS
+// server. dnsmasq still answers *.test locally; everything else
+// forwards to MAC_HOST:DNSPort. iron-proxy returns its own IP for
+// every name, so workload resolutions land at MAC_HOST and get
+// DNATed by the nftables rules.
 //
-// For clients that DO resolve locally first, dnsmasq's default
-// upstream (a public DNS server) is no longer reachable. We don't
-// fix that here in v1 — the typical workflow uses HTTP-aware
-// tools that go through HTTPS_PROXY.
-func buildDnsmasqScript(macHost string) string {
-	return fmt.Sprintf(`sudo tee -a /etc/dnsmasq.d/devm.conf > /dev/null <<EOF
+// no-resolv: don't consult /etc/resolv.conf (which would point at
+// systemd-resolved or some public DNS we can't reach anyway under
+// the nftables policy).
+func buildDnsmasqScript(macHost string, dnsPort int) string {
+	return fmt.Sprintf(`sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<EOF
+# *.test → 127.0.0.1 (existing — for in-VM Caddy)
+address=/test/127.0.0.1
 
-# Set by /vm/start: forward unknown queries to MAC_HOST (no effect
-# in v1 because nftables blocks direct DNS egress; left for the
-# future where iron-proxy serves DNS too).
-server=%s
+# Everything else → iron-proxy DNS on MAC_HOST:DNS_PORT
+no-resolv
+server=%s#%d
 EOF
 sudo systemctl reload-or-restart dnsmasq
-`, macHost)
+`, macHost, dnsPort)
 }
