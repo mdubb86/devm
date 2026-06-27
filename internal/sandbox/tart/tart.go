@@ -23,7 +23,6 @@ func New() *Tart { return &Tart{Path: "tart"} }
 
 // RunOpts controls `tart run`.
 type RunOpts struct {
-	NetShared  bool       // adds --net-shared (default for our use)
 	NoGraphics bool       // adds --no-graphics
 	DirMounts  []DirMount // each becomes a --dir=<spec> arg
 }
@@ -68,9 +67,6 @@ func (t *Tart) Run(ctx context.Context, name string, opts RunOpts) (*exec.Cmd, e
 	args := []string{"run"}
 	if opts.NoGraphics {
 		args = append(args, "--no-graphics")
-	}
-	if opts.NetShared {
-		args = append(args, "--net-shared")
 	}
 	for _, m := range opts.DirMounts {
 		args = append(args, t.formatDirArg(m))

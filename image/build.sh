@@ -46,11 +46,11 @@ done
 
 # --- Run provisioning script inside the VM via tart exec ---
 echo ">>> Provisioning base layer..."
-tart exec "${IMAGE_NAME}" -- bash -s < "${SCRIPT_DIR}/provision-base.sh"
+tart exec -i "${IMAGE_NAME}" sudo bash -s < "${SCRIPT_DIR}/provision-base.sh"
 
 # --- Clean shutdown — saves clone state ---
 echo ">>> Shutting down VM..."
-tart exec "${IMAGE_NAME}" -- systemctl poweroff || true
+tart exec "${IMAGE_NAME}" sudo systemctl poweroff || true
 for i in {1..30}; do
   if ! tart list --format=json 2>/dev/null | grep -q "\"${IMAGE_NAME}\".*running"; then break; fi
   sleep 2

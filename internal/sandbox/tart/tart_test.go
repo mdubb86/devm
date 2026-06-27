@@ -82,7 +82,6 @@ EOF`
 func TestTart_Run_ConstructsCorrectArgv(t *testing.T) {
 	tr := New()
 	cmd, err := tr.Run(context.Background(), "myvm", RunOpts{
-		NetShared:  true,
 		NoGraphics: true,
 		DirMounts: []DirMount{
 			{Name: "workspace", HostPath: "/Users/me/proj", Tag: "ws"},
@@ -94,7 +93,6 @@ func TestTart_Run_ConstructsCorrectArgv(t *testing.T) {
 	args := cmd.Args[1:] // [0] is the binary path
 	assert.Contains(t, args, "run")
 	assert.Contains(t, args, "--no-graphics")
-	assert.Contains(t, args, "--net-shared")
 	assert.Contains(t, args, "--dir=workspace:/Users/me/proj:tag=ws")
 	assert.Contains(t, args, "--dir=secrets:/Users/me/.config:ro")
 	assert.Contains(t, args, "myvm")
@@ -105,9 +103,8 @@ func TestTart_Run_DoesNotSetSetsid(t *testing.T) {
 	// supervisors may want different posture). The wrapper must leave it
 	// alone.
 	tr := New()
-	cmd, err := tr.Run(context.Background(), "myvm", RunOpts{NetShared: true})
+	cmd, err := tr.Run(context.Background(), "myvm", RunOpts{NoGraphics: true})
 	require.NoError(t, err)
-	// cmd.SysProcAttr is either nil or has Setsid=false.
 	if cmd.SysProcAttr != nil {
 		// Cannot directly check Setsid without importing syscall;
 		// the contract is "we don't touch it", so verifying nil is

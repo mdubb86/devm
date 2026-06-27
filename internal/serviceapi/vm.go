@@ -72,7 +72,6 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 
 		// Run options: net-shared, no graphics, workspace mount.
 		opts := tart.RunOpts{
-			NetShared:  true,
 			NoGraphics: true,
 		}
 		if req.WorkspaceHostPath != "" {
