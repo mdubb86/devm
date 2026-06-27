@@ -172,7 +172,7 @@ var installCmd = &cobra.Command{
 			}
 		}
 
-		reporter.Step("ready", false)
+		reporter.Info("ready")
 		return nil
 	},
 }
@@ -310,7 +310,7 @@ var uninstallCmd = &cobra.Command{
 			return fmt.Errorf("privileged uninstall failed; see %s", logPath)
 		}
 		_ = os.Remove(serviceapi.SocketPath())
-		reporter.Step("uninstalled (runtime dir preserved)", false)
+		reporter.Info("uninstalled (runtime dir preserved)")
 		return nil
 	},
 }
