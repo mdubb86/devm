@@ -24,9 +24,7 @@ const BaseImageName = "devm-base"
 // existing entries.
 var definitionFiles = []string{
 	"build.sh",
-	"preseed.cfg",
-	"firstrun.sh",
-	"devm-ready.target",
+	"provision-base.sh",
 	"devm-dns.service",
 	"devm-caddy.service",
 	"README.md",
@@ -112,9 +110,9 @@ func baseImageExists() bool {
 // BuildBaseImage runs imageDir/build.sh. Streams build output to w.
 // On success, writes the current definition hash to HashStorePath.
 //
-// Implementer note: the build can take 5-10 min on first run (Debian
-// netinst download dominated). Caller is expected to surface progress
-// to the user (e.g., by passing os.Stdout as w).
+// Implementer note: the build can take several minutes on first run
+// (template pull + provisioning). Caller is expected to surface
+// progress to the user (e.g., by passing os.Stdout as w).
 func BuildBaseImage(ctx context.Context, imageDir string, w io.Writer) error {
 	hash, err := DefinitionHash(imageDir)
 	if err != nil {

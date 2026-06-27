@@ -1,7 +1,0 @@
-[Unit]
-Description=devm runtime ready (DNS + Caddy + network online)
-Wants=devm-dns.service devm-caddy.service network-online.target
-After=devm-dns.service devm-caddy.service network-online.target
-
-[Install]
-WantedBy=multi-user.target

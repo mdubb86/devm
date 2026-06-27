@@ -108,15 +108,23 @@ var installCmd = &cobra.Command{
 	Short: "Register devm as a user-level launchd service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		if _, err := exec.LookPath("tart"); err != nil {
+			return fmt.Errorf("tart not found on PATH. Install it first:\n\n  brew install cirruslabs/cli/tart\n")
+		}
 		svc, err := newKardianosService()
 		if err != nil {
 			return err
 		}
-		if err := svc.Install(); err != nil {
-			return fmt.Errorf("install: %w", err)
+		st, _ := svc.Status()
+		if st == service.StatusUnknown {
+			if err := svc.Install(); err != nil {
+				return fmt.Errorf("install: %w", err)
+			}
 		}
-		if err := svc.Start(); err != nil {
-			return fmt.Errorf("start after install: %w", err)
+		if st != service.StatusRunning {
+			if err := svc.Start(); err != nil {
+				return fmt.Errorf("start after install: %w", err)
+			}
 		}
 
 		// All privileged setup (DNS resolver file + CA trust) runs
@@ -260,14 +268,17 @@ var uninstallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		// Best-effort stop before uninstall.
-		_ = svc.Stop()
-		if err := svc.Uninstall(); err != nil {
-			return fmt.Errorf("uninstall: %w", err)
+		st, _ := svc.Status()
+		if st != service.StatusUnknown {
+			_ = svc.Stop()
+			if err := svc.Uninstall(); err != nil {
+				return fmt.Errorf("uninstall: %w", err)
+			}
+			fmt.Println("devm service uninstalled.")
+		} else {
+			fmt.Println("devm service not installed; skipping launchd uninstall.")
 		}
-		// Clean up any leftover socket.
 		_ = os.Remove(serviceapi.SocketPath())
-		fmt.Println("devm service uninstalled.")
 
 		// All privileged teardown (DNS resolver file + CA trust)
 		// runs under a single sudo invocation. Symmetric with install.
