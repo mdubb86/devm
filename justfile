@@ -68,3 +68,20 @@ release-no-e2e:
 # Useful for validating .goreleaser.yaml without cutting a real release.
 release-dry:
     goreleaser release --snapshot --clean --skip=publish
+
+IRON_PROXY_VERSION := "v0.45.0"
+
+# Download the pinned iron-proxy binary into ./bin/iron-proxy (dev layout).
+# Skips if bin/iron-proxy already exists.
+fetch-iron-proxy:
+    @mkdir -p bin
+    @if [ ! -f bin/iron-proxy ]; then \
+      echo "Fetching iron-proxy {{IRON_PROXY_VERSION}}..." ; \
+      ver="$(echo '{{IRON_PROXY_VERSION}}' | sed 's/^v//')" ; \
+      curl -fsSL -o /tmp/iron-proxy.tar.gz \
+        "https://github.com/ironsh/iron-proxy/releases/download/{{IRON_PROXY_VERSION}}/iron-proxy_${ver}_darwin_arm64.tar.gz" ; \
+      tar -xzf /tmp/iron-proxy.tar.gz -C bin iron-proxy ; \
+      chmod +x bin/iron-proxy ; \
+      rm /tmp/iron-proxy.tar.gz ; \
+    fi
+    @echo "iron-proxy at bin/iron-proxy"
