@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
 	"go.viam.com/utils/pexec"
 )
 
@@ -54,8 +55,12 @@ type Supervisor struct {
 // New returns a Supervisor that captures per-process logs under
 // ~/Library/Logs/devm/. logDir overrides that location if non-empty.
 func New(logDir string) *Supervisor {
+	pm := pexec.NewProcessManager(zap.NewNop().Sugar())
+	// Flip the manager into "started" mode so AddProcessFromConfig
+	// actually starts the child instead of just registering it.
+	_ = pm.Start(context.Background())
 	return &Supervisor{
-		pm:     pexec.NewProcessManager(nil),
+		pm:     pm,
 		logDir: defaultLogDir(logDir),
 	}
 }
@@ -150,11 +155,12 @@ func (s *Supervisor) Status(k Key) State {
 }
 
 // envMap converts cmd.Env (KEY=VALUE slice) to the map[string]string
-// that pexec.ProcessConfig.Environment expects. Returns nil when
-// cmd.Env is empty so the child inherits the daemon's environment.
+// that pexec.ProcessConfig.Environment expects. When cmd.Env is empty,
+// the daemon's environment is forwarded — pexec builds the child's
+// env solely from this map (no implicit parent inheritance).
 func envMap(env []string) map[string]string {
 	if len(env) == 0 {
-		return nil
+		env = os.Environ()
 	}
 	m := make(map[string]string, len(env))
 	for _, kv := range env {
