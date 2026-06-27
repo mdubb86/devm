@@ -295,88 +295,12 @@ func runPrivilegedUninstall() {
 	}
 }
 
-var serviceStartCmd = &cobra.Command{
-	Use:   "start",
-	Short: "Start the devm service",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cmd.SilenceUsage = true
-		svc, err := newKardianosService()
-		if err != nil {
-			return err
-		}
-		if err := svc.Start(); err != nil {
-			return fmt.Errorf("start: %w", err)
-		}
-		fmt.Println("devm service started.")
-		return nil
-	},
-}
-
-var serviceStopCmd = &cobra.Command{
-	Use:   "stop-service",
-	Short: "Stop the devm service",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cmd.SilenceUsage = true
-		svc, err := newKardianosService()
-		if err != nil {
-			return err
-		}
-		if err := svc.Stop(); err != nil {
-			return fmt.Errorf("stop: %w", err)
-		}
-		fmt.Println("devm service stopped.")
-		return nil
-	},
-}
-
-var serviceRestartCmd = &cobra.Command{
-	Use:   "restart",
-	Short: "Restart the devm service",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cmd.SilenceUsage = true
-		svc, err := newKardianosService()
-		if err != nil {
-			return err
-		}
-		if err := svc.Restart(); err != nil {
-			return fmt.Errorf("restart: %w", err)
-		}
-		fmt.Println("devm service restarted.")
-		return nil
-	},
-}
-
-var serviceStatusCmd = &cobra.Command{
-	Use:   "service-status",
-	Short: "Show whether the devm service is running",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cmd.SilenceUsage = true
-		svc, err := newKardianosService()
-		if err != nil {
-			return err
-		}
-		st, err := svc.Status()
-		if err != nil {
-			return fmt.Errorf("status: %w", err)
-		}
-		switch st {
-		case service.StatusRunning:
-			fmt.Println("running")
-		case service.StatusStopped:
-			fmt.Println("stopped")
-		case service.StatusUnknown:
-			fmt.Println("not installed")
-		}
-		return nil
-	},
-}
-
 var serviceCmd = &cobra.Command{
 	Use:   "service",
 	Short: "Manage the devm background service",
 }
 
-var serviceStatusCmd2 = &cobra.Command{
+var serviceStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show whether the devm service is running",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -416,7 +340,7 @@ func runKardianosUnderSudo(verb string) error {
 	return c.Run()
 }
 
-var serviceStartCmd2 = &cobra.Command{
+var serviceStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the devm service (sudo internal)",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -425,7 +349,7 @@ var serviceStartCmd2 = &cobra.Command{
 	},
 }
 
-var serviceStopCmd2 = &cobra.Command{
+var serviceStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the devm service (sudo internal)",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -434,7 +358,7 @@ var serviceStopCmd2 = &cobra.Command{
 	},
 }
 
-var serviceRestartCmd2 = &cobra.Command{
+var serviceRestartCmd = &cobra.Command{
 	Use:   "restart",
 	Short: "Restart the devm service (sudo internal)",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -520,13 +444,12 @@ var kardianosRestartCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(serveCmd, installCmd, uninstallCmd,
-		serviceStartCmd, serviceStopCmd, serviceRestartCmd, serviceStatusCmd)
+	rootCmd.AddCommand(serveCmd, installCmd, uninstallCmd)
 	serviceCmd.AddCommand(
-		serviceStatusCmd2,
-		serviceStartCmd2,
-		serviceStopCmd2,
-		serviceRestartCmd2,
+		serviceStatusCmd,
+		serviceStartCmd,
+		serviceStopCmd,
+		serviceRestartCmd,
 	)
 	rootCmd.AddCommand(serviceCmd)
 	kardianosCmd.AddCommand(
@@ -569,7 +492,7 @@ func restartAndWait(reason string) error {
 		return nil
 	}
 	fmt.Fprintf(os.Stderr, "restarting devm service (%s)…\n", reason)
-	if err := svc.Restart(); err != nil {
+	if err := runKardianosUnderSudo("restart"); err != nil {
 		return fmt.Errorf("restart: %w", err)
 	}
 	c := serviceapi.NewClient()
