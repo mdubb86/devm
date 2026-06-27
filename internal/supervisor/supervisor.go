@@ -7,6 +7,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,9 @@ import (
 	"go.uber.org/zap"
 	"go.viam.com/utils/pexec"
 )
+
+// ErrNotFound is returned by Stop/Status when the key isn't registered.
+var ErrNotFound = errors.New("supervisor: key not found")
 
 // Role identifies the kind of supervised child.
 type Role string
@@ -121,7 +125,7 @@ func (s *Supervisor) Stop(ctx context.Context, k Key) error {
 	defer s.mu.Unlock()
 	p, ok := s.pm.RemoveProcessByID(k.String())
 	if !ok {
-		return fmt.Errorf("supervisor.Stop(%s): not found", k)
+		return fmt.Errorf("supervisor.Stop(%s): %w", k, ErrNotFound)
 	}
 	if err := p.Stop(); err != nil {
 		return fmt.Errorf("supervisor.Stop(%s): %w", k, err)

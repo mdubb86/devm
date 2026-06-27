@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -205,7 +206,17 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			http.Error(w, "project_id required", http.StatusBadRequest)
 			return
 		}
-		key := supervisor.Key{ProjectID: req.ProjectID, Role: supervisor.RoleVM}
+		// Stop iron-proxy for this project first. Best-effort — if
+		// it's not running, supervisor.Stop returns ErrNotFound which
+		// we treat as success.
+		key := supervisor.Key{ProjectID: req.ProjectID, Role: supervisor.RoleProxy}
+		if err := sup.Stop(r.Context(), key); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
+			http.Error(w, fmt.Sprintf("stop iron-proxy: %v", err), http.StatusInternalServerError)
+			return
+		}
+		ironProxyState.del(req.ProjectID)
+
+		key = supervisor.Key{ProjectID: req.ProjectID, Role: supervisor.RoleVM}
 		if err := sup.Stop(r.Context(), key); err != nil {
 			http.Error(w, fmt.Sprintf("supervisor stop: %v", err), http.StatusInternalServerError)
 			return
@@ -283,6 +294,12 @@ func (s *ironProxyStore) get(projectID string) (ironProxyInfo, bool) {
 	defer s.mu.Unlock()
 	v, ok := s.m[projectID]
 	return v, ok
+}
+
+func (s *ironProxyStore) del(projectID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, projectID)
 }
 
 var ironProxyState = newIronProxyStore()
