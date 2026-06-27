@@ -4,13 +4,16 @@ macOS + sudo gated. Slow: building the Tart base image takes 5-10 min.
 
 What this pins:
   - `devm install` builds the devm-base Tart image and registers the launchd
-    LaunchAgent (com.devm.service).
+    LaunchDaemon (com.devm.service) at /Library/LaunchDaemons/.
   - A cold-start via `devm shell -- true` proves the image build worked and
     that VM provisioning succeeds.
   - The VM is running after cold-start and exec-ready (tart_sandbox.state() ==
     "running", exec("true").exit_code == 0).
   - `devm teardown --yes` destroys the VM (state == "absent").
-  - `devm uninstall --yes` removes the LaunchAgent plist and the runtime dir.
+  - `devm uninstall --yes` removes the LaunchDaemon plist and the runtime dir.
+  - Ship 4.2: plist lives at /Library/LaunchDaemons/ (system scope), the old
+    ~/Library/LaunchAgents/ location is absent, launchctl shows the service
+    running in system scope, and the daemon process owner is the invoking user.
 
 What it doesn't cover (covered by other tests):
   - DNS / CA trust / HTTPS proxy (test_39, test_40).
@@ -23,6 +26,7 @@ import os
 import platform
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -31,10 +35,8 @@ from helpers.tart import TartSandbox
 pytestmark = pytest.mark.devm
 
 
-def _launchagent_plist_path() -> str:
-    return os.path.expanduser(
-        "~/Library/LaunchAgents/com.devm.service.plist"
-    )
+_LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.service.plist")
+_LAUNCH_AGENT_PLIST = Path("~/Library/LaunchAgents/com.devm.service.plist").expanduser()
 
 
 def _runtime_dir() -> str:
@@ -59,7 +61,7 @@ def test_install_uninstall_with_tart(devm, workspace, sudo_capable):
 
     try:
         # --- Step 1: install ---
-        # Builds devm-base Tart image + registers LaunchAgent + starts service.
+        # Builds devm-base Tart image + registers LaunchDaemon + starts service.
         # This is the long step: image build is 5-10 min on first run.
         r = subprocess.run(
             [devm.path, "install"],
@@ -69,9 +71,29 @@ def test_install_uninstall_with_tart(devm, workspace, sudo_capable):
             f"install failed:\nstdout={r.stdout.decode()!r}\n"
             f"stderr={r.stderr.decode()!r}"
         )
-        assert os.path.exists(_launchagent_plist_path()), (
-            "LaunchAgent plist not created by install"
-        )
+
+        # Ship 4.2: plist is now a system-level LaunchDaemon, not a user LaunchAgent.
+        assert _LAUNCH_DAEMON_PLIST.exists(), \
+            "LaunchDaemon plist not installed at /Library/LaunchDaemons/"
+        assert not _LAUNCH_AGENT_PLIST.exists(), \
+            "old LaunchAgent plist should not be present after Ship 4.2 install"
+
+        # launchctl shows the service in the system scope.
+        r = subprocess.run(["launchctl", "print", "system/com.devm.service"],
+                           capture_output=True, text=True, timeout=10)
+        assert r.returncode == 0, f"launchctl print failed: {r.stderr}"
+        assert "state = running" in r.stdout, \
+            f"daemon not running:\n{r.stdout}"
+
+        # Daemon runs as the user (UserName key in the plist), not root.
+        # Parse `launchctl print` for the pid, then check owner.
+        pid_line = [l for l in r.stdout.splitlines() if "pid = " in l]
+        assert pid_line, f"no pid in launchctl print output:\n{r.stdout}"
+        pid = pid_line[0].split("=")[1].strip()
+        ps = subprocess.run(["ps", "-o", "user=", "-p", pid],
+                            capture_output=True, text=True, timeout=5)
+        assert ps.stdout.strip() == os.environ.get("USER"), \
+            f"daemon running as {ps.stdout.strip()!r}, expected user {os.environ.get('USER')!r}"
 
         # --- Step 2: cold-start via `devm shell -- true` ---
         # This proves the image was built and provisioning works.
@@ -118,16 +140,8 @@ def test_install_uninstall_with_tart(devm, workspace, sudo_capable):
             f"uninstall failed: {r.stderr.decode()!r}"
         )
 
-        # LaunchAgent plist should be gone.
-        # Allow brief settle for launchd to drain.
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            if not os.path.exists(_launchagent_plist_path()):
-                break
-            time.sleep(0.2)
-        assert not os.path.exists(_launchagent_plist_path()), (
-            "LaunchAgent plist still present after uninstall"
-        )
+        assert not _LAUNCH_DAEMON_PLIST.exists(), \
+            "LaunchDaemon plist still present after uninstall"
 
         # Runtime dir should be gone (socket, CA, etc.).
         assert not os.path.exists(_runtime_dir()), (
