@@ -15,7 +15,8 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
   caddy \
-  dnsmasq
+  dnsmasq \
+  nftables
 
 # --- Rename `admin` user → `devm`, drop `debian` ---
 # tart exec lands as uid 1000 (admin) by default, per the
