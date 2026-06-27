@@ -378,7 +378,16 @@ var kardianosInstallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return svc.Install()
+		st, _ := svc.Status()
+		if st == service.StatusUnknown {
+			if err := svc.Install(); err != nil {
+				return err
+			}
+		}
+		if st != service.StatusRunning {
+			return svc.Start()
+		}
+		return nil
 	},
 }
 
@@ -392,6 +401,11 @@ var kardianosUninstallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		st, _ := svc.Status()
+		if st == service.StatusUnknown {
+			return nil
+		}
+		_ = svc.Stop()
 		return svc.Uninstall()
 	},
 }

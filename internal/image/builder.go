@@ -124,6 +124,19 @@ func BuildBaseImage(ctx context.Context, imageDir string, w io.Writer) error {
 		return fmt.Errorf("build.sh not found at %s: %w", scriptPath, err)
 	}
 
+	// If devm-base already exists, delete it so build.sh's
+	// "already exists" guard doesn't abort. We only reach here when
+	// NeedsBuild returned true, so rebuilding is the intent.
+	if baseImageExists() {
+		fmt.Fprintf(w, ">>> Deleting stale %s before rebuild...\n", BaseImageName)
+		del := exec.CommandContext(ctx, "tart", "delete", BaseImageName)
+		del.Stdout = w
+		del.Stderr = w
+		if err := del.Run(); err != nil {
+			return fmt.Errorf("delete stale %s: %w", BaseImageName, err)
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, "bash", scriptPath)
 	cmd.Dir = imageDir
 	cmd.Stdout = w
