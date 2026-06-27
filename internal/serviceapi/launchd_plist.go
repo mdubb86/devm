@@ -27,6 +27,13 @@ const LaunchdPlistTemplate = `<?xml version='1.0' encoding='UTF-8'?>
     <true/>
     <key>RunAtLoad</key>
     <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
     <key>StandardOutPath</key>
     <string>__LOG_OUT__</string>
     <key>StandardErrorPath</key>

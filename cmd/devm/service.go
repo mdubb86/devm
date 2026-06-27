@@ -69,6 +69,7 @@ func newKardianosService() (service.Service, error) {
 	plistText := strings.NewReplacer(
 		"__LOG_OUT__", filepath.Join(logDir, "com.devm.service.out.log"),
 		"__LOG_ERR__", filepath.Join(logDir, "com.devm.service.err.log"),
+		"__HOME__", home,
 	).Replace(serviceapi.LaunchdPlistTemplate)
 
 	prog := &kardianosProgram{}
@@ -96,9 +97,6 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		// Run() blocks until the service stops. On non-service
-		// invocation (e.g., `devm serve` from a shell), it runs
-		// in foreground mode and respects ctrl-c.
 		return svc.Run()
 	},
 }
