@@ -19,6 +19,7 @@ import (
 type IronProxyConfig struct {
 	HTTPListen   string            // proxy.http_listen
 	HTTPSListen  string            // proxy.https_listen
+	DNSListen    string            // dns.listen
 	CACertPath   string            // tls.ca_cert
 	CAKeyPath    string            // tls.ca_key
 	AllowList    []string          // transforms[{name:"allowlist"}].config.domains
@@ -30,7 +31,8 @@ type IronProxyConfig struct {
 func (c IronProxyConfig) YAML() ([]byte, error) {
 	raw := map[string]any{
 		"dns": map[string]any{
-			"enabled": false,
+			"enabled": true,
+			"listen":  c.DNSListen,
 		},
 		"proxy": map[string]any{
 			"http_listen":         c.HTTPListen,

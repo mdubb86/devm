@@ -130,7 +130,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			return
 		}
 
-		// Allocate two ephemeral ports on the Mac (HTTP + HTTPS).
+		// Allocate three ephemeral ports on the Mac (HTTP + HTTPS + DNS).
 		httpPort, err := pickPort()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("pick http port: %v", err), http.StatusInternalServerError)
@@ -139,6 +139,11 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 		httpsPort, err := pickPort()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("pick https port: %v", err), http.StatusInternalServerError)
+			return
+		}
+		dnsPort, err := pickPort()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("pick dns port: %v", err), http.StatusInternalServerError)
 			return
 		}
 
@@ -151,6 +156,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 		proxyCfg := IronProxyConfig{
 			HTTPListen:   fmt.Sprintf("%s:%d", macIP, httpPort),
 			HTTPSListen:  fmt.Sprintf("%s:%d", macIP, httpsPort),
+			DNSListen:    fmt.Sprintf("%s:%d", macIP, dnsPort),
 			CACertPath:   filepath.Join(caDir, "ca", "root.crt"),
 			CAKeyPath:    filepath.Join(caDir, "ca", "root.key"),
 			AllowList:    req.AllowList,
@@ -165,6 +171,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 		ironProxyState.put(req.ProjectID, ironProxyInfo{
 			HTTPPort:  httpPort,
 			HTTPSPort: httpsPort,
+			DNSPort:   dnsPort,
 			Tokens:    tokens,
 		})
 
@@ -271,6 +278,7 @@ func pickPort() (int, error) {
 type ironProxyInfo struct {
 	HTTPPort  int
 	HTTPSPort int
+	DNSPort   int
 	Tokens    map[string]string
 }
 

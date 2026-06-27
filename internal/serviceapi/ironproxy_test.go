@@ -13,6 +13,7 @@ func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 	cfg := IronProxyConfig{
 		HTTPListen:  "192.168.64.1:8080",
 		HTTPSListen: "192.168.64.1:8443",
+		DNSListen:   "192.168.64.1:8053",
 		CACertPath:  "/Users/x/Library/Application Support/devm/ca/root.crt",
 		CAKeyPath:   "/Users/x/Library/Application Support/devm/ca/root.key",
 		AllowList:   []string{"github.com", "*.npmjs.org"},
@@ -23,9 +24,10 @@ func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 	var got map[string]any
 	require.NoError(t, yaml.Unmarshal(blob, &got))
 
-	// dns section: disabled in all daemon-spawned instances
+	// dns section: always enabled (Task 9b VM injection depends on it)
 	dns := got["dns"].(map[string]any)
-	assert.Equal(t, false, dns["enabled"])
+	assert.Equal(t, true, dns["enabled"])
+	assert.Equal(t, "192.168.64.1:8053", dns["listen"])
 
 	// proxy section
 	proxy := got["proxy"].(map[string]any)
@@ -119,6 +121,25 @@ func TestBuildIronProxyConfig_NoSecretsTransformWhenEmpty(t *testing.T) {
 		return
 	}
 	assert.NotContains(t, string(blob), "name: secrets")
+}
+
+func TestBuildIronProxyConfig_EnablesDNSWhenListenSet(t *testing.T) {
+	cfg := IronProxyConfig{
+		HTTPListen:  "192.168.64.1:8080",
+		HTTPSListen: "192.168.64.1:8443",
+		DNSListen:   "192.168.64.1:8053",
+		CACertPath:  "/c",
+		CAKeyPath:   "/k",
+	}
+	blob, err := cfg.YAML()
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(blob, &got))
+
+	dns := got["dns"].(map[string]any)
+	assert.Equal(t, true, dns["enabled"])
+	assert.Equal(t, "192.168.64.1:8053", dns["listen"])
 }
 
 func TestIronProxyConfig_EnvVars(t *testing.T) {
