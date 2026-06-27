@@ -457,9 +457,93 @@ var serviceStatusCmd = &cobra.Command{
 	},
 }
 
+var kardianosCmd = &cobra.Command{
+	Use:    "_kardianos",
+	Short:  "Internal kardianos adapters (not user-facing)",
+	Hidden: true,
+}
+
+var kardianosInstallCmd = &cobra.Command{
+	Use:    "install",
+	Short:  "[internal] kardianos svc.Install() under sudo",
+	Hidden: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		svc, err := newKardianosService()
+		if err != nil {
+			return err
+		}
+		return svc.Install()
+	},
+}
+
+var kardianosUninstallCmd = &cobra.Command{
+	Use:    "uninstall",
+	Short:  "[internal] kardianos svc.Uninstall() under sudo",
+	Hidden: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		svc, err := newKardianosService()
+		if err != nil {
+			return err
+		}
+		return svc.Uninstall()
+	},
+}
+
+var kardianosStartCmd = &cobra.Command{
+	Use:    "start",
+	Short:  "[internal] kardianos svc.Start() under sudo",
+	Hidden: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		svc, err := newKardianosService()
+		if err != nil {
+			return err
+		}
+		return svc.Start()
+	},
+}
+
+var kardianosStopCmd = &cobra.Command{
+	Use:    "stop",
+	Short:  "[internal] kardianos svc.Stop() under sudo",
+	Hidden: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		svc, err := newKardianosService()
+		if err != nil {
+			return err
+		}
+		return svc.Stop()
+	},
+}
+
+var kardianosRestartCmd = &cobra.Command{
+	Use:    "restart",
+	Short:  "[internal] kardianos svc.Restart() under sudo",
+	Hidden: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		svc, err := newKardianosService()
+		if err != nil {
+			return err
+		}
+		return svc.Restart()
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(serveCmd, installCmd, uninstallCmd,
 		serviceStartCmd, serviceStopCmd, serviceRestartCmd, serviceStatusCmd)
+	kardianosCmd.AddCommand(
+		kardianosInstallCmd,
+		kardianosUninstallCmd,
+		kardianosStartCmd,
+		kardianosStopCmd,
+		kardianosRestartCmd,
+	)
+	rootCmd.AddCommand(kardianosCmd)
 	// Suppress signal for the long-running serve when run interactively.
 	signal.Ignore(syscall.SIGPIPE)
 }
