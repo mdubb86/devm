@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"time"
 )
 
 // Client talks to the devm service over its Unix domain socket.
@@ -22,6 +21,10 @@ func NewClient() *Client { return NewClientWithSocket(SocketPath()) }
 
 // NewClientWithSocket returns a Client targeting the given socket.
 // Tests use this with a temp socket.
+//
+// No client-level Timeout — long-running endpoints like /vm/start
+// (which clones+boots a VM and runs provisioning) can take minutes.
+// Per-request callers control timeout via context.WithTimeout.
 func NewClientWithSocket(socketPath string) *Client {
 	return &Client{
 		httpClient: &http.Client{
@@ -30,7 +33,6 @@ func NewClientWithSocket(socketPath string) *Client {
 					return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 				},
 			},
-			Timeout: 2 * time.Second,
 		},
 	}
 }
