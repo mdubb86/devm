@@ -146,11 +146,12 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			return
 		}
 		proxyCfg := IronProxyConfig{
-			HTTPListen:  fmt.Sprintf("%s:%d", macIP, httpPort),
-			HTTPSListen: fmt.Sprintf("%s:%d", macIP, httpsPort),
-			CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
-			CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
-			AllowList:   req.AllowList,
+			HTTPListen:   fmt.Sprintf("%s:%d", macIP, httpPort),
+			HTTPSListen:  fmt.Sprintf("%s:%d", macIP, httpsPort),
+			CACertPath:   filepath.Join(caDir, "ca", "root.crt"),
+			CAKeyPath:    filepath.Join(caDir, "ca", "root.key"),
+			AllowList:    req.AllowList,
+			SecretTokens: tokens,
 		}
 		if err := SpawnIronProxy(r.Context(), sup, req.ProjectID, proxyCfg); err != nil {
 			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)

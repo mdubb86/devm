@@ -1,6 +1,7 @@
 package serviceapi
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,4 +63,71 @@ func TestBuildIronProxyConfig_EmptyAllowList_OmitsTransforms(t *testing.T) {
 
 	_, hasTransforms := got["transforms"]
 	assert.False(t, hasTransforms, "transforms key should be absent when AllowList is empty")
+}
+
+func TestSecretEnvVarName(t *testing.T) {
+	assert.Equal(t, "DEVM_SECRET_GITHUB_TOKEN", secretEnvVarName("__DEVM_SECRET_github_token__"))
+	assert.Equal(t, "DEVM_SECRET_ANTHROPIC_API_KEY", secretEnvVarName("__DEVM_SECRET_anthropic_api_key__"))
+}
+
+func TestBuildIronProxyConfig_EmitsSecretsTransformWhenTokensPresent(t *testing.T) {
+	cfg := IronProxyConfig{
+		HTTPListen:   "x:1",
+		HTTPSListen:  "x:2",
+		CACertPath:   "/c",
+		CAKeyPath:    "/k",
+		SecretTokens: map[string]string{"__DEVM_SECRET_foo__": "real"},
+	}
+	blob, err := cfg.YAML()
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(blob, &got))
+
+	transforms := got["transforms"].([]any)
+	// Find the secrets transform.
+	var secretsT map[string]any
+	for _, tr := range transforms {
+		tm := tr.(map[string]any)
+		if tm["name"] == "secrets" {
+			secretsT = tm
+			break
+		}
+	}
+	require.NotNil(t, secretsT, "secrets transform missing")
+
+	conf := secretsT["config"].(map[string]any)
+	secrets := conf["secrets"].([]any)
+	require.Len(t, secrets, 1)
+	first := secrets[0].(map[string]any)
+	assert.Equal(t, "__DEVM_SECRET_foo__", first["proxy_value"])
+	src := first["source"].(map[string]any)
+	assert.Equal(t, "env", src["type"])
+	assert.Equal(t, "DEVM_SECRET_FOO", src["var"])
+
+	// Real secret value NOT in YAML.
+	assert.NotContains(t, string(blob), "real")
+}
+
+func TestBuildIronProxyConfig_NoSecretsTransformWhenEmpty(t *testing.T) {
+	cfg := IronProxyConfig{HTTPListen: "x:1", HTTPSListen: "x:2", CACertPath: "/c", CAKeyPath: "/k"}
+	blob, err := cfg.YAML()
+	require.NoError(t, err)
+
+	// Either no transforms key, or transforms present but no `secrets` entry.
+	if !strings.Contains(string(blob), "transforms") {
+		return
+	}
+	assert.NotContains(t, string(blob), "name: secrets")
+}
+
+func TestIronProxyConfig_EnvVars(t *testing.T) {
+	cfg := IronProxyConfig{
+		SecretTokens: map[string]string{
+			"__DEVM_SECRET_foo__": "value-1",
+			"__DEVM_SECRET_bar__": "value-2",
+		},
+	}
+	got := cfg.EnvVars()
+	assert.ElementsMatch(t, []string{"DEVM_SECRET_FOO=value-1", "DEVM_SECRET_BAR=value-2"}, got)
 }

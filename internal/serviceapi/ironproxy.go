@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -16,14 +17,12 @@ import (
 // against e2e/test_iron_contract_01_*.py and e2e/helpers/iron_proxy.py).
 // Fields use YAML names because we marshal to YAML on disk.
 type IronProxyConfig struct {
-	HTTPListen  string   // proxy.http_listen
-	HTTPSListen string   // proxy.https_listen
-	CACertPath  string   // tls.ca_cert
-	CAKeyPath   string   // tls.ca_key
-	AllowList   []string // transforms[{name:"allowlist"}].config.domains
-	// Note: secret substitution tokens are injected into the VM's
-	// environment directly (Task 9); iron-proxy v0.45.0 has no
-	// native secrets field in its config schema.
+	HTTPListen   string            // proxy.http_listen
+	HTTPSListen  string            // proxy.https_listen
+	CACertPath   string            // tls.ca_cert
+	CAKeyPath    string            // tls.ca_key
+	AllowList    []string          // transforms[{name:"allowlist"}].config.domains
+	SecretTokens map[string]string // proxy_value token → real secret value; real values go in env, NOT in YAML
 }
 
 // YAML returns the YAML blob iron-proxy reads from -config <path>.
@@ -45,15 +44,37 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 			"ca_key":  c.CAKeyPath,
 		},
 	}
+	var transforms []any
 	if len(c.AllowList) > 0 {
-		raw["transforms"] = []any{
-			map[string]any{
-				"name": "allowlist",
-				"config": map[string]any{
-					"domains": c.AllowList,
-				},
+		transforms = append(transforms, map[string]any{
+			"name": "allowlist",
+			"config": map[string]any{
+				"domains": c.AllowList,
 			},
+		})
+	}
+	if len(c.SecretTokens) > 0 {
+		var entries []any
+		for proxyValue := range c.SecretTokens {
+			entries = append(entries, map[string]any{
+				"source": map[string]any{
+					"type": "env",
+					"var":  secretEnvVarName(proxyValue),
+				},
+				"proxy_value":    proxyValue,
+				"match_headers":  []string{"Authorization"},
+				"rules":          []any{map[string]any{"host": "*"}},
+			})
 		}
+		transforms = append(transforms, map[string]any{
+			"name": "secrets",
+			"config": map[string]any{
+				"secrets": entries,
+			},
+		})
+	}
+	if len(transforms) > 0 {
+		raw["transforms"] = transforms
 	}
 	return yaml.Marshal(raw)
 }
@@ -82,8 +103,30 @@ func SpawnIronProxy(ctx context.Context, sup *supervisor.Supervisor, projectID s
 	}
 
 	cmd := exec.CommandContext(ctx, binary, "-config", configPath)
+	cmd.Env = append(os.Environ(), cfg.EnvVars()...)
 	key := supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}
 	return sup.Spawn(ctx, key, cmd)
+}
+
+// EnvVars returns the KEY=VALUE strings for iron-proxy's process env.
+// Each entry sources a real secret value to the env var name that the
+// `secrets` transform in YAML references. The values never touch the
+// on-disk config.
+func (c IronProxyConfig) EnvVars() []string {
+	out := make([]string, 0, len(c.SecretTokens))
+	for token, real := range c.SecretTokens {
+		out = append(out, fmt.Sprintf("%s=%s", secretEnvVarName(token), real))
+	}
+	return out
+}
+
+// secretEnvVarName derives the env var name iron-proxy reads from,
+// given a proxy_value token like "__DEVM_SECRET_github_token__".
+// "github_token" → "DEVM_SECRET_GITHUB_TOKEN".
+func secretEnvVarName(proxyValue string) string {
+	inner := strings.TrimPrefix(proxyValue, "__DEVM_SECRET_")
+	inner = strings.TrimSuffix(inner, "__")
+	return "DEVM_SECRET_" + strings.ToUpper(inner)
 }
 
 // writeIronProxyConfig persists the YAML blob to a stable per-project path
