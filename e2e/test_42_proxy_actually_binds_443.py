@@ -14,12 +14,13 @@ import pytest
 
 
 @pytest.mark.devm
-@pytest.mark.slow
-def test_proxy_binds_443(devm, sudo_capable):
-    """devm install must result in the daemon binding :443."""
-    # The sudo_capable fixture + install assumption matches test_41's
-    # shape. We don't re-install here; we rely on whatever install
-    # state test_41 (or a manual install) produced.
+def test_proxy_binds_443():
+    """devm install must result in the daemon binding :443.
+
+    Pure TCP connect — no sudo, no devm CLI. Relies on whatever install
+    state the host already has. If the daemon isn't installed/running,
+    this fails informatively.
+    """
     try:
         s = socket.create_connection(("127.0.0.1", 443), timeout=5)
         s.close()
@@ -30,8 +31,7 @@ def test_proxy_binds_443(devm, sudo_capable):
 
 
 @pytest.mark.devm
-@pytest.mark.slow
-def test_proxy_binds_80(devm, sudo_capable):
+def test_proxy_binds_80():
     """Same pin, port 80."""
     try:
         s = socket.create_connection(("127.0.0.1", 80), timeout=5)
