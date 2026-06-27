@@ -146,11 +146,9 @@ var installCmd = &cobra.Command{
 		}
 		defer logFile.Close()
 
-		// Privileged install: fast (just a couple of file writes +
-		// launchctl bootstrap). Print an info line so the user knows
-		// what the imminent sudo prompt is for; no spinner — the
-		// sudo prompt itself is the user-visible activity.
-		reporter.Info("running privileged install (1 sudo prompt)")
+		// Privileged install: silent. The sudo prompt itself (if it
+		// fires) is the user-visible activity. If everything is
+		// already in place, no prompt — and no log noise.
 		if err := runPrivilegedInstall(logFile); err != nil {
 			tailLog(logPath, 30)
 			return fmt.Errorf("privileged install failed; see %s", logPath)
@@ -308,7 +306,6 @@ var uninstallCmd = &cobra.Command{
 		}
 		defer logFile.Close()
 
-		reporter.Info("running privileged uninstall (1 sudo prompt)")
 		if err := runPrivilegedUninstall(logFile); err != nil {
 			tailLog(logPath, 30)
 			return fmt.Errorf("privileged uninstall failed; see %s", logPath)
