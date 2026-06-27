@@ -13,6 +13,7 @@ DESIGN NOTE — config on disk, not stdin:
 from __future__ import annotations
 
 import contextlib
+import os
 import socket
 import subprocess
 import tempfile
@@ -46,7 +47,12 @@ class IronProxyConfig:
       - tls.ca_cert        path to CA certificate file
       - tls.ca_key         path to CA private key file
       - transforms         list of {name, config} dicts; allowlist domains go
-                           under transforms[{name:"allowlist"}].config.domains
+                           under transforms[{name:"allowlist"}].config.domains;
+                           secret substitution entries go under
+                           transforms[{name:"secrets"}].config.secrets
+      - secret_tokens      dict mapping opaque token (proxy_value) to the env
+                           var name that holds the real value; env var values
+                           must be provided via spawn()'s env= parameter
     """
     http_listen: str
     https_listen: str
@@ -58,6 +64,10 @@ class IronProxyConfig:
     dns_listen: str = ""
     dns_proxy_ip: str = ""
     allow_domains: list[str] = field(default_factory=list)
+    # Maps opaque token (proxy_value, e.g. "__DEVM_SECRET_FOO__") to the
+    # env var name iron-proxy reads the real value from (e.g. "DEVM_SECRET_FOO").
+    # Pass the actual secret values via spawn(env={...}).
+    secret_tokens: dict[str, str] = field(default_factory=dict)
 
     def to_yaml_dict(self) -> dict:
         cfg: dict = {
@@ -79,13 +89,31 @@ class IronProxyConfig:
             cfg["dns"]["listen"] = self.dns_listen
             cfg["dns"]["proxy_ip"] = self.dns_proxy_ip
 
+        transforms: list = []
+
         if self.allow_domains:
-            cfg["transforms"] = [
+            transforms.append({
+                "name": "allowlist",
+                "config": {"domains": self.allow_domains},
+            })
+
+        if self.secret_tokens:
+            entries = [
                 {
-                    "name": "allowlist",
-                    "config": {"domains": self.allow_domains},
+                    "source": {"type": "env", "var": env_var},
+                    "proxy_value": token,
+                    "match_headers": ["Authorization"],
+                    "rules": [{"host": "*"}],
                 }
+                for token, env_var in self.secret_tokens.items()
             ]
+            transforms.append({
+                "name": "secrets",
+                "config": {"secrets": entries},
+            })
+
+        if transforms:
+            cfg["transforms"] = transforms
 
         return cfg
 
@@ -101,12 +129,21 @@ def _binary_path() -> str:
 
 
 @contextlib.contextmanager
-def spawn(config: IronProxyConfig, timeout: float = 10.0) -> Iterator[subprocess.Popen]:
+def spawn(
+    config: IronProxyConfig,
+    timeout: float = 10.0,
+    env: dict[str, str] | None = None,
+) -> Iterator[subprocess.Popen]:
     """Spawn iron-proxy with the given config. Yields the Popen.
 
     iron-proxy v0.45.0 requires a YAML config file on disk (no stdin).
     We write a temp file, start the process, wait for the HTTP port to
     bind, yield, then terminate and delete the temp file.
+
+    env: optional extra env vars merged into os.environ for the
+         iron-proxy process. Use this to supply real secret values for
+         the secrets transform (the YAML config only names the env var,
+         never the actual value).
     """
     cfg_dict = config.to_yaml_dict()
     cfg_yaml = yaml.dump(cfg_dict)
@@ -117,11 +154,14 @@ def spawn(config: IronProxyConfig, timeout: float = 10.0) -> Iterator[subprocess
         f.write(cfg_yaml)
         cfg_path = f.name
 
+    proc_env = {**os.environ, **(env or {})}
+
     try:
         proc = subprocess.Popen(
             [_binary_path(), "-config", cfg_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=proc_env,
         )
         try:
             # Wait for the HTTP listen port to bind.
