@@ -258,88 +258,40 @@ var uninstallCmd = &cobra.Command{
 	Short: "Deregister the devm launchd service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		svc, err := newKardianosService()
-		if err != nil {
-			return err
-		}
-		st, _ := svc.Status()
-		if st != service.StatusUnknown {
-			_ = svc.Stop()
-			if err := svc.Uninstall(); err != nil {
-				return fmt.Errorf("uninstall: %w", err)
-			}
-			fmt.Println("devm service uninstalled.")
-		} else {
-			fmt.Println("devm service not installed; skipping launchd uninstall.")
-		}
-		_ = os.Remove(serviceapi.SocketPath())
-
-		// All privileged teardown (DNS resolver file + CA trust)
-		// runs under a single sudo invocation. Symmetric with install.
+		// All uninstall work happens inside runPrivilegedUninstall's
+		// single sudo block.
 		runPrivilegedUninstall()
+		// Clean up any leftover socket.
+		_ = os.Remove(serviceapi.SocketPath())
+		fmt.Println("devm uninstalled. Runtime dir (~/Library/Application Support/devm/) preserved; rm -rf to wipe.")
 		return nil
 	},
 }
 
-// runPrivilegedUninstall consolidates DNS resolver removal and CA
-// trust removal into one sudo call. Both checks are unprivileged;
-// we only shell out to sudo when at least one removal is actually
-// needed. A divergent resolver file is left alone (with a warning)
-// — it's not ours to touch.
 func runPrivilegedUninstall() {
-	dnsState, _ := serviceapi.CheckResolverFile()
-	dropsDNS := dnsState == serviceapi.ResolverFileMatches
-	if dnsState == serviceapi.ResolverFileDiverged {
-		fmt.Fprintf(os.Stderr,
-			"note: %s exists but doesn't match devm's config — leaving it.\n",
-			serviceapi.ResolverFilePath)
-	}
-
-	trusted, _ := serviceapi.CheckCATrusted()
-	dropsCA := trusted
-
-	if !dropsDNS && !dropsCA {
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: could not locate executable: %v\n", err)
 		return
 	}
 
-	// Compose the shell script. set +e: don't fail the entire
-	// teardown if one piece is already gone or otherwise hiccups.
-	// We want best-effort removal of whatever's still there.
+	// Build the single sudo script. set +e: best-effort each step
+	// so a partial state still cleans up as much as possible.
 	var sb strings.Builder
 	sb.WriteString("set +e\n")
-	if dropsDNS {
-		fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(serviceapi.ResolverFilePath))
-	}
-	if dropsCA {
-		fmt.Fprintf(&sb, "security delete-certificate -c %s -t %s\n",
-			shellQuote(serviceapi.CATrustCertCN),
-			shellQuote(serviceapi.SystemKeychain))
-	}
+	fmt.Fprintf(&sb, "%s _kardianos uninstall\n", shellQuote(exe))
+	fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(serviceapi.ResolverFilePath))
+	fmt.Fprintf(&sb, "security delete-certificate -c %s %s 2>/dev/null\n",
+		shellQuote(serviceapi.CATrustCertCN), shellQuote(serviceapi.SystemKeychain))
 
-	var todo []string
-	if dropsDNS {
-		todo = append(todo, "DNS resolver")
-	}
-	if dropsCA {
-		todo = append(todo, "CA trust")
-	}
-	fmt.Printf("Removing %s (requires sudo)...\n", strings.Join(todo, " + "))
-
-	scriptCmd := exec.Command("sudo", "sh", "-c", sb.String())
-	scriptCmd.Stdin = os.Stdin
-	scriptCmd.Stdout = os.Stdout
-	scriptCmd.Stderr = os.Stderr
-	if err := scriptCmd.Run(); err != nil {
+	fmt.Println("Running privileged uninstall (1 sudo prompt expected)...")
+	c := exec.Command("sudo", "bash", "-c", sb.String())
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	c.Stdin = os.Stdin
+	if err := c.Run(); err != nil {
 		fmt.Fprintf(os.Stderr,
-			"note: privileged teardown had issues (%v). Some state may remain.\n", err)
-		return
-	}
-
-	if dropsDNS {
-		fmt.Println("DNS resolver removed.")
-	}
-	if dropsCA {
-		fmt.Println("CA trust removed.")
+			"note: privileged uninstall had issues (%v). Some state may remain.\n", err)
 	}
 }
 
