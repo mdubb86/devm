@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/mdubb86/devm/internal/mac"
@@ -158,12 +160,33 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			return
 		}
 
-		// Stash port info for Task 9 (VM env injection) to read.
+		// Stash port info for VM env injection to read.
 		ironProxyState.put(req.ProjectID, ironProxyInfo{
 			HTTPPort:  httpPort,
 			HTTPSPort: httpsPort,
 			Tokens:    tokens,
 		})
+
+		// Apply VM-side config via tart exec — env, nftables, dnsmasq.
+		// Three sudo-wrapped scripts run inside the VM. Each is its
+		// own tart exec invocation; any failure rolls back nothing
+		// (VM is in an indeterminate state — user re-runs devm
+		// teardown to clean up).
+		info, _ := ironProxyState.get(req.ProjectID)
+		scripts := []string{
+			buildEnvScript(macIP, info.HTTPPort, info.HTTPSPort),
+			buildNftablesScript(macIP, info.HTTPPort, info.HTTPSPort),
+			buildDnsmasqScript(macIP),
+		}
+		for i, script := range scripts {
+			cmd := exec.Command("tart", "exec", "-i", req.VMName, "sudo", "bash", "-s")
+			cmd.Stdin = strings.NewReader(script)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				http.Error(w, fmt.Sprintf("vm inject step %d failed: %v\n%s", i, err, out), http.StatusInternalServerError)
+				return
+			}
+		}
 
 		w.WriteHeader(http.StatusNoContent)
 	})
