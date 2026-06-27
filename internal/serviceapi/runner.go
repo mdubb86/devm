@@ -4,13 +4,45 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strings"
 
 	"github.com/oklog/run"
 
+	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi/sockact"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
+
+// filterBoundListeners drops listeners that launchd handed back unbound.
+//
+// When a LaunchAgent declares Sockets for privileged ports (:80, :443),
+// launchd returns file descriptors but does not actually bind them —
+// a user-level launchd context can't bind <1024. The fds surface as
+// listeners with Addr "0.0.0.0:0", and Accept on them returns EINVAL,
+// crashing the proxy actor and (under KeepAlive) the whole daemon in
+// a respawn loop.
+//
+// Resolution requires splitting the daemon: a LaunchDaemon (root) that
+// binds :80/:443 and forwards fds via Unix-socket SCM_RIGHTS to the
+// user-level LaunchAgent that does everything else. Tracked at
+// docs/superpowers/specs/2026-06-27-launchagent-vs-launchdaemon.md.
+// Until that lands, the daemon runs in proxy-disabled mode.
+func filterBoundListeners(in []net.Listener) []net.Listener {
+	out := in[:0]
+	for _, ln := range in {
+		addr := ln.Addr().String()
+		if strings.HasSuffix(addr, ":0") {
+			debuglog.Logf("serviceapi",
+				"proxy: dropping unbound launchd listener %s — privileged port socket activation requires LaunchDaemon", addr)
+			_ = ln.Close()
+			continue
+		}
+		out = append(out, ln)
+	}
+	return out
+}
 
 // RunService composes the service's goroutines into an oklog/run
 // group and blocks until any actor returns. Ship 1 only ran the
@@ -57,6 +89,14 @@ func RunService(ctx context.Context, version string) error {
 	if err != nil && !errors.Is(err, sockact.ErrNotActivated) {
 		return fmt.Errorf("sockact HTTPSSocket: %w", err)
 	}
+	// Discard listeners that launchd handed back unbound (Addr "0.0.0.0:0").
+	// A user-level LaunchAgent can't bind privileged ports through
+	// launchd's socket activation in all configurations — when it
+	// can't, launchd still returns fds but Accept on them surfaces
+	// EINVAL. Keep the daemon up in degraded mode; revisit the
+	// LaunchAgent → LaunchDaemon split as a separate ship.
+	httpListeners = filterBoundListeners(httpListeners)
+	httpsListeners = filterBoundListeners(httpsListeners)
 
 	var g run.Group
 
