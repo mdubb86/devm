@@ -3,9 +3,15 @@ package serviceapi
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"path/filepath"
+	"sync"
 
+	"github.com/mdubb86/devm/internal/mac"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -97,6 +103,67 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			return
 		}
 
+		// Resolve secrets from keychain.
+		secretBackend := secret.NewMacKeychain()
+		tokens := map[string]string{}
+		var missing []string
+		for _, name := range req.SecretNames {
+			v, err := secretBackend.Get(req.ProjectID + "/" + name)
+			if err != nil {
+				missing = append(missing, name)
+				continue
+			}
+			tokens[schema.TokenFor(name)] = v
+		}
+		if len(missing) > 0 {
+			http.Error(w, fmt.Sprintf("missing secrets in keychain: %v", missing), http.StatusBadRequest)
+			return
+		}
+
+		// Discover MAC_HOST (vmnet bridge IP).
+		macIP, err := mac.Host()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("discover MAC_HOST: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Allocate two ephemeral ports on the Mac (HTTP + HTTPS).
+		httpPort, err := pickPort()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("pick http port: %v", err), http.StatusInternalServerError)
+			return
+		}
+		httpsPort, err := pickPort()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("pick https port: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Build iron-proxy config + spawn.
+		caDir, err := EnsureRuntimeDir()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		proxyCfg := IronProxyConfig{
+			HTTPListen:  fmt.Sprintf("%s:%d", macIP, httpPort),
+			HTTPSListen: fmt.Sprintf("%s:%d", macIP, httpsPort),
+			CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
+			CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
+			AllowList:   req.AllowList,
+		}
+		if err := SpawnIronProxy(r.Context(), sup, req.ProjectID, proxyCfg); err != nil {
+			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Stash port info for Task 9 (VM env injection) to read.
+		ironProxyState.put(req.ProjectID, ironProxyInfo{
+			HTTPPort:  httpPort,
+			HTTPSPort: httpsPort,
+			Tokens:    tokens,
+		})
+
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -150,3 +217,48 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 }
+
+// pickPort returns a free ephemeral TCP port by binding to :0 and
+// immediately closing. There is a small TOCTOU window between the
+// close and the caller's bind, but this is the standard approach
+// on darwin where SO_REUSEPORT can't be used across processes.
+func pickPort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// ironProxyInfo holds the ports and token map allocated for one project's
+// iron-proxy instance. Read by Task 9 (VM env injection).
+type ironProxyInfo struct {
+	HTTPPort  int
+	HTTPSPort int
+	Tokens    map[string]string
+}
+
+type ironProxyStore struct {
+	mu sync.Mutex
+	m  map[string]ironProxyInfo
+}
+
+func newIronProxyStore() *ironProxyStore {
+	return &ironProxyStore{m: make(map[string]ironProxyInfo)}
+}
+
+func (s *ironProxyStore) put(projectID string, info ironProxyInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[projectID] = info
+}
+
+func (s *ironProxyStore) get(projectID string) (ironProxyInfo, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.m[projectID]
+	return v, ok
+}
+
+var ironProxyState = newIronProxyStore()
