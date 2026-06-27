@@ -81,13 +81,17 @@ func newSpinner(text string) *pterm.SpinnerPrinter {
 	return sp
 }
 
-// finalizeLocked resolves the active spinner as ✓ with elapsed time.
+// finalizeLocked resolves the active spinner as ✓ with elapsed time
+// (only for steps that took >= 1s — sub-second times are noise).
 func (r *PtermReporter) finalizeLocked() {
 	if r.spinner == nil {
 		return
 	}
 	elapsed := time.Since(r.curStart)
-	final := r.curLabel + " " + pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed))
+	final := r.curLabel
+	if elapsed >= time.Second {
+		final += " " + pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed))
+	}
 	r.spinner.Success(final)
 	r.spinner = nil
 }
@@ -138,7 +142,10 @@ func (r *PtermReporter) Fail() {
 		return
 	}
 	elapsed := time.Since(r.curStart)
-	final := r.curLabel + " " + pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed))
+	final := r.curLabel
+	if elapsed >= time.Second {
+		final += " " + pterm.FgGray.Sprintf("(%s)", formatElapsed(elapsed))
+	}
 	r.spinner.Fail(final)
 	r.spinner = nil
 }
