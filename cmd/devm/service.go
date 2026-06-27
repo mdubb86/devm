@@ -134,15 +134,6 @@ var installCmd = &cobra.Command{
 		if _, err := exec.LookPath("tart"); err != nil {
 			return fmt.Errorf("tart not found on PATH. Install it first:\n\n  brew install cirruslabs/cli/tart\n")
 		}
-		// Hard-break: refuse if the Ship 4-era LaunchAgent plist is still around.
-		_, home, err := resolveInstallUser(nil)
-		if err != nil {
-			return err
-		}
-		oldPlist := filepath.Join(home, "Library", "LaunchAgents", "com.devm.service.plist")
-		if err := checkOldLaunchAgentPlist(oldPlist); err != nil {
-			return err
-		}
 		// All install work — plist write, launchctl bootstrap,
 		// resolver, CA — happens inside runPrivilegedInstall's
 		// single sudo block. No user-side svc.Install / svc.Start.
@@ -243,7 +234,9 @@ func runPrivilegedInstall() {
 	if err := c.Run(); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"note: privileged install failed (%v). Re-run `devm install`.\n", err)
+		return
 	}
+	fmt.Println("devm service installed.")
 }
 
 // shellQuote wraps s in single quotes, escaping embedded quotes so
@@ -292,7 +285,9 @@ func runPrivilegedUninstall() {
 	if err := c.Run(); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"note: privileged uninstall had issues (%v). Some state may remain.\n", err)
+		return
 	}
+	fmt.Println("devm service uninstalled.")
 }
 
 var serviceCmd = &cobra.Command{
@@ -462,19 +457,6 @@ func init() {
 	rootCmd.AddCommand(kardianosCmd)
 	// Suppress signal for the long-running serve when run interactively.
 	signal.Ignore(syscall.SIGPIPE)
-}
-
-// checkOldLaunchAgentPlist refuses to proceed if the Ship 4-era
-// user-level LaunchAgent plist still exists. The new system-level
-// LaunchDaemon and the old LaunchAgent can't both manage
-// com.devm.service. We don't auto-migrate (single-user repo, hard
-// breaks preferred) — the user removes it manually with the printed
-// command and re-runs install.
-func checkOldLaunchAgentPlist(path string) error {
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("a previous-version devm install exists at %s\n\nRemove it first:\n\n  launchctl bootout gui/$UID/com.devm.service 2>/dev/null\n  rm %s\n\nThen re-run `devm install`.", path, path)
-	}
-	return nil
 }
 
 // restartAndWait restarts the kardianos service and polls /health
