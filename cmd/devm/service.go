@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -17,6 +18,31 @@ import (
 	"github.com/mdubb86/devm/internal/image"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
+
+// resolveInstallUser returns the username + home directory of the
+// person installing devm. Under sudo, $USER is "root" but $SUDO_USER
+// holds the real invoker — we prefer that. Refuses to install when
+// the resolved user is "root" (means devm install was launched from
+// a root shell without sudo, which is the wrong way to do it).
+//
+// lookup is injectable for testing; pass user.Lookup in production.
+func resolveInstallUser(lookup func(string) (*user.User, error)) (name, home string, err error) {
+	name = os.Getenv("SUDO_USER")
+	if name == "" {
+		name = os.Getenv("USER")
+	}
+	if name == "" || name == "root" {
+		return "", "", fmt.Errorf("cannot install as root; run `devm install` as your normal user account")
+	}
+	if lookup == nil {
+		lookup = user.Lookup
+	}
+	u, err := lookup(name)
+	if err != nil {
+		return "", "", fmt.Errorf("look up user %q: %w", name, err)
+	}
+	return u.Username, u.HomeDir, nil
+}
 
 // kardianosProgram is the kardianos/service.Interface implementation.
 // On Start, we kick off serviceapi.RunService in a goroutine and
