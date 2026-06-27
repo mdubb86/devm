@@ -93,10 +93,34 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// Cold start.
 	reporter.Step("starting vm", false)
 	debuglog.Logf("shell", "cold-start: sending StartVM to daemon")
+
+	// Collect allow-list from network config.
+	allowList := cfg.Network.Allow
+
+	// Collect secret names from top-level and per-service env, deduped.
+	seen := map[string]bool{}
+	var secretNames []string
+	for _, v := range cfg.Env {
+		if v.Secret != nil && !seen[v.Secret.Name] {
+			seen[v.Secret.Name] = true
+			secretNames = append(secretNames, v.Secret.Name)
+		}
+	}
+	for _, svc := range cfg.Services {
+		for _, v := range svc.Env {
+			if v.Secret != nil && !seen[v.Secret.Name] {
+				seen[v.Secret.Name] = true
+				secretNames = append(secretNames, v.Secret.Name)
+			}
+		}
+	}
+
 	if err := d.ServiceAPIClient.StartVM(ctx, serviceapi.VMStartRequest{
 		ProjectID:         cfg.Project.ID,
 		VMName:            vmName,
 		WorkspaceHostPath: repoRoot,
+		AllowList:         allowList,
+		SecretNames:       secretNames,
 	}); err != nil {
 		return -1, fmt.Errorf("start vm: %w", err)
 	}

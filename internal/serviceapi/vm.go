@@ -11,9 +11,11 @@ import (
 
 // VMStartRequest is the body shape for POST /vm/start.
 type VMStartRequest struct {
-	ProjectID         string `json:"project_id"`
-	VMName            string `json:"vm_name"`
-	WorkspaceHostPath string `json:"workspace_host_path"`
+	ProjectID         string   `json:"project_id"`
+	VMName            string   `json:"vm_name"`
+	WorkspaceHostPath string   `json:"workspace_host_path"`
+	AllowList         []string `json:"allow_list,omitempty"`
+	SecretNames       []string `json:"secret_names,omitempty"`
 }
 
 // VMStopRequest is the body shape for POST /vm/stop.
