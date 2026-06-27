@@ -1,6 +1,7 @@
 # Build outputs
 /devm
 /dist/
+/share/
 
 # Go test cache
 *.test
