@@ -8,22 +8,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPickBridgeIP_PrefersVmnetSubnet(t *testing.T) {
+func TestPickBridgeIP_PicksFirstNonLoopbackIPv4(t *testing.T) {
 	addrs := []net.Addr{
-		mustCIDR("10.0.0.5/24"),
-		mustCIDR("192.168.64.1/24"),
+		mustCIDR("127.0.0.1/8"),    // loopback, skip
+		mustCIDR("192.168.139.3/23"), // pick this
 		mustCIDR("169.254.1.1/16"),
 	}
 	got, err := pickBridgeIP(addrs)
 	require.NoError(t, err)
-	assert.Equal(t, "192.168.64.1", got)
+	assert.Equal(t, "192.168.139.3", got)
 }
 
-func TestPickBridgeIP_NoVmnetSubnet(t *testing.T) {
-	addrs := []net.Addr{
-		mustCIDR("10.0.0.5/24"),
-	}
-	_, err := pickBridgeIP(addrs)
+func TestPickBridgeIP_NoAddrs(t *testing.T) {
+	_, err := pickBridgeIP(nil)
 	require.Error(t, err)
 }
 

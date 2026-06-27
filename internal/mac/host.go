@@ -8,17 +8,13 @@ import (
 	"strings"
 )
 
-// vmnetSubnet is the default subnet macOS Virtualization.framework
-// uses for its shared-bridge networking. May change between Apple
-// versions; pickBridgeIP prefers but doesn't strictly require it.
-const vmnetSubnet = "192.168.64.0/24"
-
-// Host returns the Mac's IP on the vmnet bridge as a string.
+// Host returns the Mac's IP on the vmnet bridge.
 //
-// Looks at all bridge* interface addresses; picks the one inside
-// vmnet's canonical 192.168.64.0/24 subnet. Returns an error if no
-// address in that subnet exists (no VM ever brought up, or vmnet
-// moved subnets).
+// macOS Virtualization.framework typically uses 192.168.64.0/24 but
+// the actual subnet can vary per-Mac (we've seen 192.168.139.0/24 in
+// the wild). Discover by enumerating bridge* interfaces and picking
+// the first non-loopback IPv4 address — there's usually only one
+// bridge interface on a Mac and it's the vmnet one.
 func Host() (string, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -38,13 +34,9 @@ func Host() (string, error) {
 	return pickBridgeIP(allAddrs)
 }
 
-// pickBridgeIP picks the first address inside the vmnet subnet.
-// Exposed for tests; in production callers use Host().
+// pickBridgeIP picks the first non-loopback IPv4 address. Exposed
+// for tests; production callers use Host().
 func pickBridgeIP(addrs []net.Addr) (string, error) {
-	_, vmnet, err := net.ParseCIDR(vmnetSubnet)
-	if err != nil {
-		return "", err
-	}
 	for _, a := range addrs {
 		var ip net.IP
 		switch v := a.(type) {
@@ -56,9 +48,11 @@ func pickBridgeIP(addrs []net.Addr) (string, error) {
 		if ip == nil {
 			continue
 		}
-		if vmnet.Contains(ip) {
-			return ip.String(), nil
+		ip4 := ip.To4()
+		if ip4 == nil || ip4.IsLoopback() {
+			continue
 		}
+		return ip4.String(), nil
 	}
-	return "", fmt.Errorf("no interface in %s — is a VM running yet?", vmnetSubnet)
+	return "", fmt.Errorf("no IPv4 address on any bridge* interface — is vmnet up?")
 }
