@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -140,33 +141,40 @@ var installCmd = &cobra.Command{
 		defer reporter.Stop()
 		reporter.SetTotal(2)
 
-		// Phase 1: privileged install. Reporter pauses so sudo prompt
-		// and the script's own stdout/stderr take the terminal cleanly.
-		reporter.Step("privileged install (1 sudo prompt)", true)
-		reporter.Stop()
-		if err := runPrivilegedInstall(); err != nil {
-			reporter.Fail()
+		logPath, logFile, err := openInstallLog()
+		if err != nil {
 			return err
 		}
+		defer logFile.Close()
 
-		// Phase 2: base image build. Same surrender — build.sh streams
-		// curl/tart output that Reporter can't overlay cleanly.
+		// Phase 1: privileged install. Sudo's "Password:" prompt goes
+		// to /dev/tty so it still appears on the user's terminal even
+		// though we redirect the script's stdout/stderr to the log.
+		reporter.Step("privileged install (1 sudo prompt)", true)
+		if err := runPrivilegedInstall(logFile); err != nil {
+			reporter.Fail()
+			tailLog(logPath, 30)
+			return fmt.Errorf("privileged install failed; see %s", logPath)
+		}
+
+		// Phase 2: base image build. build.sh's pull/boot/provisioning
+		// output lands in the log. Quiet on success; tail-on-fail.
 		imageDir, err := image.ImageDirFromExe()
 		if err != nil {
-			reporter.Info(fmt.Sprintf("note: could not locate image directory: %v", err))
-			return nil
+			reporter.Fail()
+			return fmt.Errorf("locate image directory: %w", err)
 		}
 		needs, _, err := image.NeedsBuild(imageDir)
 		if err != nil {
-			reporter.Info(fmt.Sprintf("note: image hash check failed: %v", err))
-			return nil
+			reporter.Fail()
+			return fmt.Errorf("image hash check: %w", err)
 		}
 		if needs {
 			reporter.Step("building devm-base (1-2 min)", true)
-			reporter.Stop()
-			if err := image.BuildBaseImage(cmd.Context(), imageDir, os.Stdout); err != nil {
+			if err := image.BuildBaseImage(cmd.Context(), imageDir, logFile); err != nil {
 				reporter.Fail()
-				return fmt.Errorf("base image build failed: %w", err)
+				tailLog(logPath, 30)
+				return fmt.Errorf("base image build failed; see %s", logPath)
 			}
 		} else {
 			reporter.Step("devm-base up to date", true)
@@ -177,7 +185,48 @@ var installCmd = &cobra.Command{
 	},
 }
 
-func runPrivilegedInstall() error {
+// openInstallLog opens ~/Library/Logs/devm/install.log for append. The
+// install/uninstall flows redirect verbose subprocess output here so
+// the user only sees clean step lines on success; on error, tailLog
+// surfaces the tail for diagnosis.
+func openInstallLog() (string, *os.File, error) {
+	_, home, err := resolveInstallUser(nil)
+	if err != nil {
+		return "", nil, err
+	}
+	dir := filepath.Join(home, "Library", "Logs", "devm")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", nil, fmt.Errorf("create log dir %s: %w", dir, err)
+	}
+	path := filepath.Join(dir, "install.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return "", nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	fmt.Fprintf(f, "\n=== %s install log ===\n", time.Now().Format(time.RFC3339))
+	return path, f, nil
+}
+
+// tailLog prints the last n lines of path to stderr, prefixed so the
+// user can tell apart the captured noise from devm's own messages.
+func tailLog(path string, n int) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "(could not read log %s: %v)\n", path, err)
+		return
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	fmt.Fprintf(os.Stderr, "--- last %d lines of %s ---\n", n, path)
+	for _, l := range lines {
+		fmt.Fprintln(os.Stderr, l)
+	}
+	fmt.Fprintln(os.Stderr, "---")
+}
+
+func runPrivilegedInstall(out io.Writer) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate executable: %w", err)
@@ -234,8 +283,8 @@ func runPrivilegedInstall() error {
 	fmt.Fprintf(&sb, "%s _kardianos install\n", shellQuote(exe))
 
 	c := exec.Command("sudo", "bash", "-c", sb.String())
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
+	c.Stdout = out
+	c.Stderr = out
 	c.Stdin = os.Stdin
 	if err := c.Run(); err != nil {
 		return fmt.Errorf("privileged install: %w", err)
@@ -259,19 +308,25 @@ var uninstallCmd = &cobra.Command{
 		defer reporter.Stop()
 		reporter.SetTotal(1)
 
-		reporter.Step("privileged uninstall (1 sudo prompt)", true)
-		reporter.Stop()
-		if err := runPrivilegedUninstall(); err != nil {
-			reporter.Fail()
+		logPath, logFile, err := openInstallLog()
+		if err != nil {
 			return err
 		}
+		defer logFile.Close()
+
+		reporter.Step("privileged uninstall (1 sudo prompt)", true)
+		if err := runPrivilegedUninstall(logFile); err != nil {
+			reporter.Fail()
+			tailLog(logPath, 30)
+			return fmt.Errorf("privileged uninstall failed; see %s", logPath)
+		}
 		_ = os.Remove(serviceapi.SocketPath())
-		reporter.Step("uninstalled (runtime dir preserved; rm -rf ~/Library/Application\\ Support/devm/ to wipe)", false)
+		reporter.Step("uninstalled (runtime dir preserved)", false)
 		return nil
 	},
 }
 
-func runPrivilegedUninstall() error {
+func runPrivilegedUninstall(out io.Writer) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate executable: %w", err)
@@ -287,8 +342,8 @@ func runPrivilegedUninstall() error {
 		shellQuote(serviceapi.CATrustCertCN), shellQuote(serviceapi.SystemKeychain))
 
 	c := exec.Command("sudo", "bash", "-c", sb.String())
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
+	c.Stdout = out
+	c.Stderr = out
 	c.Stdin = os.Stdin
 	if err := c.Run(); err != nil {
 		return fmt.Errorf("privileged uninstall: %w", err)
