@@ -13,18 +13,23 @@ import (
 
 	"github.com/mdubb86/devm/internal/mac"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
-	"github.com/mdubb86/devm/internal/schema"
-	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
 // VMStartRequest is the body shape for POST /vm/start.
+//
+// SecretTokens is keyed by opaque proxy-token (e.g.
+// __DEVM_SECRET_GITHUB_TOKEN__) with values being the real secret.
+// The CLI resolves these from the keychain in its own (user) context
+// and sends them over the unix socket; the daemon doesn't touch the
+// keychain. This works around macOS's LaunchDaemon-vs-login-keychain
+// access restriction.
 type VMStartRequest struct {
-	ProjectID         string   `json:"project_id"`
-	VMName            string   `json:"vm_name"`
-	WorkspaceHostPath string   `json:"workspace_host_path"`
-	AllowList         []string `json:"allow_list,omitempty"`
-	SecretNames       []string `json:"secret_names,omitempty"`
+	ProjectID         string            `json:"project_id"`
+	VMName            string            `json:"vm_name"`
+	WorkspaceHostPath string            `json:"workspace_host_path"`
+	AllowList         []string          `json:"allow_list,omitempty"`
+	SecretTokens      map[string]string `json:"secret_tokens,omitempty"`
 }
 
 // VMStopRequest is the body shape for POST /vm/stop.
@@ -106,21 +111,12 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			return
 		}
 
-		// Resolve secrets from keychain.
-		secretBackend := secret.NewMacKeychain()
-		tokens := map[string]string{}
-		var missing []string
-		for _, name := range req.SecretNames {
-			v, err := secretBackend.Get(req.ProjectID + "/" + name)
-			if err != nil {
-				missing = append(missing, name)
-				continue
-			}
-			tokens[schema.TokenFor(name)] = v
-		}
-		if len(missing) > 0 {
-			http.Error(w, fmt.Sprintf("missing secrets in keychain: %v", missing), http.StatusBadRequest)
-			return
+		// Secrets are resolved CLI-side (user has login keychain
+		// access; we run as a LaunchDaemon which doesn't). The CLI
+		// sent us the proxy-token → real-value map directly.
+		tokens := req.SecretTokens
+		if tokens == nil {
+			tokens = map[string]string{}
 		}
 
 		// Discover MAC_HOST (vmnet bridge IP).

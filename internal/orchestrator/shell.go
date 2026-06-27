@@ -13,9 +13,53 @@ import (
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/status"
 )
+
+// resolveSecretsForCfg gathers every `!secret <name>` ref from cfg
+// (top-level env + per-service env, deduped), looks each up in the
+// macOS login keychain under "<project>/<name>", and returns the
+// proxy-token → real-value map for the daemon to hand to iron-proxy.
+//
+// Runs CLI-side because the daemon (a LaunchDaemon) doesn't have
+// access to the user's login keychain even though it runs as the user.
+func resolveSecretsForCfg(cfg schema.Config) (map[string]string, error) {
+	seen := map[string]bool{}
+	var names []string
+	collect := func(env map[string]schema.EnvValue) {
+		for _, v := range env {
+			if v.Secret != nil && !seen[v.Secret.Name] {
+				seen[v.Secret.Name] = true
+				names = append(names, v.Secret.Name)
+			}
+		}
+	}
+	collect(cfg.Env)
+	for _, svc := range cfg.Services {
+		collect(svc.Env)
+	}
+
+	if len(names) == 0 {
+		return nil, nil
+	}
+	backend := secret.NewMacKeychain()
+	tokens := map[string]string{}
+	var missing []string
+	for _, n := range names {
+		v, err := backend.Get(cfg.Project.ID + "/" + n)
+		if err != nil {
+			missing = append(missing, n)
+			continue
+		}
+		tokens[schema.TokenFor(n)] = v
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("missing secrets in keychain: %v (set with `devm secret set <name>`)", missing)
+	}
+	return tokens, nil
+}
 
 // ShellDeps wires the orchestrator's collaborators. Production callers
 // build one via DefaultShellDeps; tests substitute fakes.
@@ -97,22 +141,13 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// Collect allow-list from network config.
 	allowList := cfg.Network.Allow
 
-	// Collect secret names from top-level and per-service env, deduped.
-	seen := map[string]bool{}
-	var secretNames []string
-	for _, v := range cfg.Env {
-		if v.Secret != nil && !seen[v.Secret.Name] {
-			seen[v.Secret.Name] = true
-			secretNames = append(secretNames, v.Secret.Name)
-		}
-	}
-	for _, svc := range cfg.Services {
-		for _, v := range svc.Env {
-			if v.Secret != nil && !seen[v.Secret.Name] {
-				seen[v.Secret.Name] = true
-				secretNames = append(secretNames, v.Secret.Name)
-			}
-		}
+	// Resolve secrets from the keychain HERE (CLI runs as the user
+	// with full login keychain access) and pass the proxy-token →
+	// real-value map to the daemon. The daemon runs as a LaunchDaemon
+	// and can't access the user's login keychain.
+	tokens, err := resolveSecretsForCfg(cfg)
+	if err != nil {
+		return -1, fmt.Errorf("resolve secrets: %w", err)
 	}
 
 	if err := d.ServiceAPIClient.StartVM(ctx, serviceapi.VMStartRequest{
@@ -120,7 +155,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		VMName:            vmName,
 		WorkspaceHostPath: repoRoot,
 		AllowList:         allowList,
-		SecretNames:       secretNames,
+		SecretTokens:      tokens,
 	}); err != nil {
 		return -1, fmt.Errorf("start vm: %w", err)
 	}
