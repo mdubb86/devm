@@ -371,6 +371,37 @@ var serviceStatusCmd = &cobra.Command{
 	},
 }
 
+var serviceCmd = &cobra.Command{
+	Use:   "service",
+	Short: "Manage the devm background service",
+}
+
+var serviceStatusCmd2 = &cobra.Command{
+	Use:   "status",
+	Short: "Show whether the devm service is running",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		svc, err := newKardianosService()
+		if err != nil {
+			return err
+		}
+		st, err := svc.Status()
+		if err != nil {
+			fmt.Println("not installed")
+			return nil
+		}
+		switch st {
+		case service.StatusRunning:
+			fmt.Println("running")
+		case service.StatusStopped:
+			fmt.Println("stopped")
+		case service.StatusUnknown:
+			fmt.Println("not installed")
+		}
+		return nil
+	},
+}
+
 var kardianosCmd = &cobra.Command{
 	Use:    "_kardianos",
 	Short:  "Internal kardianos adapters (not user-facing)",
@@ -450,6 +481,8 @@ var kardianosRestartCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(serveCmd, installCmd, uninstallCmd,
 		serviceStartCmd, serviceStopCmd, serviceRestartCmd, serviceStatusCmd)
+	serviceCmd.AddCommand(serviceStatusCmd2)
+	rootCmd.AddCommand(serviceCmd)
 	kardianosCmd.AddCommand(
 		kardianosInstallCmd,
 		kardianosUninstallCmd,
