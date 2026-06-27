@@ -17,6 +17,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/image"
 	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/status"
 )
 
 // resolveInstallUser returns the username + home directory of the
@@ -134,48 +135,57 @@ var installCmd = &cobra.Command{
 		if _, err := exec.LookPath("tart"); err != nil {
 			return fmt.Errorf("tart not found on PATH. Install it first:\n\n  brew install cirruslabs/cli/tart\n")
 		}
-		// All install work — plist write, launchctl bootstrap,
-		// resolver, CA — happens inside runPrivilegedInstall's
-		// single sudo block. No user-side svc.Install / svc.Start.
-		runPrivilegedInstall()
 
-		// Tart base-image build (user context, unchanged).
+		reporter := status.New(os.Stderr)
+		defer reporter.Stop()
+		reporter.SetTotal(2)
+
+		// Phase 1: privileged install. Reporter pauses so sudo prompt
+		// and the script's own stdout/stderr take the terminal cleanly.
+		reporter.Step("privileged install (1 sudo prompt)", true)
+		reporter.Stop()
+		if err := runPrivilegedInstall(); err != nil {
+			reporter.Fail()
+			return err
+		}
+
+		// Phase 2: base image build. Same surrender — build.sh streams
+		// curl/tart output that Reporter can't overlay cleanly.
 		imageDir, err := image.ImageDirFromExe()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "note: could not locate image directory: %v\n", err)
+			reporter.Info(fmt.Sprintf("note: could not locate image directory: %v", err))
 			return nil
 		}
 		needs, _, err := image.NeedsBuild(imageDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "note: image hash check failed: %v\n", err)
+			reporter.Info(fmt.Sprintf("note: image hash check failed: %v", err))
 			return nil
 		}
 		if needs {
-			fmt.Println("Building devm-base Tart image (1-2 min)...")
+			reporter.Step("building devm-base (1-2 min)", true)
+			reporter.Stop()
 			if err := image.BuildBaseImage(cmd.Context(), imageDir, os.Stdout); err != nil {
-				fmt.Fprintf(os.Stderr, "note: base image build failed (%v). Re-run `devm install` to retry.\n", err)
-				return nil
+				reporter.Fail()
+				return fmt.Errorf("base image build failed: %w", err)
 			}
-			fmt.Println("devm-base built.")
 		} else {
-			fmt.Println("devm-base is up to date.")
+			reporter.Step("devm-base up to date", true)
 		}
+
+		reporter.Step("ready", false)
 		return nil
 	},
 }
 
-func runPrivilegedInstall() {
+func runPrivilegedInstall() error {
 	exe, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "note: could not locate executable: %v\n", err)
-		return
+		return fmt.Errorf("locate executable: %w", err)
 	}
 
 	dnsState, err := serviceapi.CheckResolverFile()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "note: could not check %s: %v\n",
-			serviceapi.ResolverFilePath, err)
-		return
+		return fmt.Errorf("check %s: %w", serviceapi.ResolverFilePath, err)
 	}
 	needsDNS := dnsState != serviceapi.ResolverFileMatches
 
@@ -191,14 +201,11 @@ func runPrivilegedInstall() {
 	var rootCertPath string
 	if needsCA {
 		if _, err := serviceapi.LoadOrGenerate(); err != nil {
-			fmt.Fprintf(os.Stderr,
-				"note: could not generate CA: %v. Re-run `devm install`.\n", err)
-			return
+			return fmt.Errorf("generate CA: %w", err)
 		}
 		runDir, err := serviceapi.EnsureRuntimeDir()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "note: could not resolve CA cert path: %v\n", err)
-			return
+			return fmt.Errorf("resolve CA cert path: %w", err)
 		}
 		rootCertPath = filepath.Join(runDir, "ca", "root.crt")
 	}
@@ -226,17 +233,14 @@ func runPrivilegedInstall() {
 	// the same content is a no-op aside from the bootstrap re-load).
 	fmt.Fprintf(&sb, "%s _kardianos install\n", shellQuote(exe))
 
-	fmt.Println("Running privileged install (1 sudo prompt expected)...")
 	c := exec.Command("sudo", "bash", "-c", sb.String())
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	c.Stdin = os.Stdin
 	if err := c.Run(); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"note: privileged install failed (%v). Re-run `devm install`.\n", err)
-		return
+		return fmt.Errorf("privileged install: %w", err)
 	}
-	fmt.Println("devm service installed.")
+	return nil
 }
 
 // shellQuote wraps s in single quotes, escaping embedded quotes so
@@ -251,21 +255,26 @@ var uninstallCmd = &cobra.Command{
 	Short: "Deregister the devm launchd service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		// All uninstall work happens inside runPrivilegedUninstall's
-		// single sudo block.
-		runPrivilegedUninstall()
-		// Clean up any leftover socket.
+		reporter := status.New(os.Stderr)
+		defer reporter.Stop()
+		reporter.SetTotal(1)
+
+		reporter.Step("privileged uninstall (1 sudo prompt)", true)
+		reporter.Stop()
+		if err := runPrivilegedUninstall(); err != nil {
+			reporter.Fail()
+			return err
+		}
 		_ = os.Remove(serviceapi.SocketPath())
-		fmt.Println("devm uninstalled. Runtime dir (~/Library/Application Support/devm/) preserved; rm -rf to wipe.")
+		reporter.Step("uninstalled (runtime dir preserved; rm -rf ~/Library/Application\\ Support/devm/ to wipe)", false)
 		return nil
 	},
 }
 
-func runPrivilegedUninstall() {
+func runPrivilegedUninstall() error {
 	exe, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "note: could not locate executable: %v\n", err)
-		return
+		return fmt.Errorf("locate executable: %w", err)
 	}
 
 	// Build the single sudo script. set +e: best-effort each step
@@ -277,17 +286,14 @@ func runPrivilegedUninstall() {
 	fmt.Fprintf(&sb, "security delete-certificate -c %s %s 2>/dev/null\n",
 		shellQuote(serviceapi.CATrustCertCN), shellQuote(serviceapi.SystemKeychain))
 
-	fmt.Println("Running privileged uninstall (1 sudo prompt expected)...")
 	c := exec.Command("sudo", "bash", "-c", sb.String())
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	c.Stdin = os.Stdin
 	if err := c.Run(); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"note: privileged uninstall had issues (%v). Some state may remain.\n", err)
-		return
+		return fmt.Errorf("privileged uninstall: %w", err)
 	}
-	fmt.Println("devm service uninstalled.")
+	return nil
 }
 
 var serviceCmd = &cobra.Command{
