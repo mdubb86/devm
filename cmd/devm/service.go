@@ -402,6 +402,47 @@ var serviceStatusCmd2 = &cobra.Command{
 	},
 }
 
+// runKardianosUnderSudo shells out to `sudo devm _kardianos <verb>`
+// as a single child process — one Touch ID prompt per call.
+func runKardianosUnderSudo(verb string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate executable: %w", err)
+	}
+	c := exec.Command("sudo", exe, "_kardianos", verb)
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	c.Stdin = os.Stdin
+	return c.Run()
+}
+
+var serviceStartCmd2 = &cobra.Command{
+	Use:   "start",
+	Short: "Start the devm service (sudo internal)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		return runKardianosUnderSudo("start")
+	},
+}
+
+var serviceStopCmd2 = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop the devm service (sudo internal)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		return runKardianosUnderSudo("stop")
+	},
+}
+
+var serviceRestartCmd2 = &cobra.Command{
+	Use:   "restart",
+	Short: "Restart the devm service (sudo internal)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		return runKardianosUnderSudo("restart")
+	},
+}
+
 var kardianosCmd = &cobra.Command{
 	Use:    "_kardianos",
 	Short:  "Internal kardianos adapters (not user-facing)",
@@ -481,7 +522,12 @@ var kardianosRestartCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(serveCmd, installCmd, uninstallCmd,
 		serviceStartCmd, serviceStopCmd, serviceRestartCmd, serviceStatusCmd)
-	serviceCmd.AddCommand(serviceStatusCmd2)
+	serviceCmd.AddCommand(
+		serviceStatusCmd2,
+		serviceStartCmd2,
+		serviceStopCmd2,
+		serviceRestartCmd2,
+	)
 	rootCmd.AddCommand(serviceCmd)
 	kardianosCmd.AddCommand(
 		kardianosInstallCmd,
