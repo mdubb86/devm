@@ -25,7 +25,7 @@ func newTestServerWithVM(t *testing.T, sup *supervisor.Supervisor, tr *tart.Tart
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
 	socket := filepath.Join(dir, "s.sock")
-	srv := NewServer(socket, "test-version")
+	srv := NewServer(socket, Build{Version: "test-version"})
 	RegisterVMHandlers(srv, sup, tr)
 
 	ctx, cancel := context.WithCancel(context.Background())

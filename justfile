@@ -15,13 +15,20 @@
 # binary; you'll just get keychain prompts on each rebuild.
 SIGN_IDENTITY := "devm-dev"
 
+# ldflags that inject the git commit (with a -dirty suffix when the
+# working tree has uncommitted changes) into main.Commit. The daemon
+# reports this via /version, and `just doctor` compares the daemon's
+# Commit to the working-tree binary's Commit to detect "you rebuilt
+# but forgot to restart" without depending on file mtimes.
+DEV_LDFLAGS := "-X main.Commit=$(git rev-parse --short=12 HEAD)$(git diff-index --quiet HEAD -- || echo -dirty)"
+
 # Build the devm binary into ./bin/devm and codesign with the local
 # self-signed identity if available. The path matches what `devm
 # install` records in the LaunchDaemon plist, so a rebuild swaps the
 # binary in place — `devm service restart` picks it up.
 build:
     @mkdir -p bin
-    go build -o bin/devm ./cmd/devm
+    go build -ldflags "{{DEV_LDFLAGS}}" -o bin/devm ./cmd/devm
     @if security find-certificate -c '{{SIGN_IDENTITY}}' >/dev/null 2>&1; then \
         codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime bin/devm && \
         echo "signed with {{SIGN_IDENTITY}}"; \
@@ -35,7 +42,7 @@ build:
 # any PATH games: `devm` → prod (brew), `devm-dev` → working tree.
 install:
     @bin="$(go env GOBIN)"; [ -n "$bin" ] || bin="$(go env GOPATH)/bin"; \
-        go build -o "$bin/devm-dev" ./cmd/devm && echo "installed $bin/devm-dev"
+        go build -ldflags "{{DEV_LDFLAGS}}" -o "$bin/devm-dev" ./cmd/devm && echo "installed $bin/devm-dev"
     @command -v devm-dev >/dev/null || echo "(reminder: add $(go env GOPATH)/bin to PATH so 'devm-dev' resolves)"
 
 # Run Go unit tests.
@@ -91,6 +98,13 @@ release-dry:
 # actually running. The iteration loop `just build && devm service
 # restart` only works when all three are aligned; this recipe makes
 # any misalignment loud.
+#
+# Identity uses git commit (with -dirty suffix) embedded via
+# DEV_LDFLAGS, not file mtimes — `go build` touches the file on
+# every invocation even when the result is identical, and `git
+# checkout` produces fresh-mtime files of older code. Commit is
+# what actually answers "is the daemon running the code I think
+# it is."
 doctor:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -105,18 +119,26 @@ doctor:
 
     running_pid=""
     running_path=""
-    running_start=""
     if [ -S "$socket" ]; then
         running_pid=$(lsof "$socket" 2>/dev/null | awk 'NR==2 {print $2}')
-        if [ -n "$running_pid" ]; then
-            running_path=$(ps -p "$running_pid" -o comm= 2>/dev/null | sed 's/^[ \t]*//')
-            running_start=$(ps -p "$running_pid" -o lstart= 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
-        fi
+        [ -n "$running_pid" ] && running_path=$(ps -p "$running_pid" -o comm= 2>/dev/null | sed 's/^[ \t]*//')
+    fi
+
+    # On-disk binary's embedded commit (what the next restart loads).
+    binary_commit=""
+    [ -x "$expected" ] && binary_commit=$("$expected" version --json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || true)
+
+    # Running daemon's reported commit (what's serving requests now).
+    daemon_commit=""
+    if [ -S "$socket" ]; then
+        daemon_commit=$(curl -sf --unix-socket "$socket" http://localhost/version 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || true)
     fi
 
     printf "working-tree build  (just build → ./bin/devm) : %s\n" "$expected"
     printf "plist               (registered binary)       : %s\n" "${plist_path:-<unreadable or not installed>}"
     printf "running daemon      (pid / binary)            : %s\n" "${running_pid:+$running_pid }${running_path:-<not running>}"
+    printf "  on-disk binary commit                       : %s\n" "${binary_commit:-<unknown>}"
+    printf "  running daemon commit                       : %s\n" "${daemon_commit:-<unknown>}"
 
     issues=0
     if [ -n "$plist_path" ] && [ "$plist_path" != "$expected" ]; then
@@ -134,16 +156,19 @@ doctor:
         echo "  fix: devm service restart"
         issues=$((issues+1))
     fi
-    if [ -n "$running_start" ] && [ -f "$expected" ]; then
-        start_ts=$(date -j -f '%a %b %e %T %Y' "$running_start" '+%s' 2>/dev/null || true)
-        binary_ts=$(stat -f %m "$expected" 2>/dev/null || true)
-        if [ -n "$start_ts" ] && [ -n "$binary_ts" ] && [ "$binary_ts" -gt "$start_ts" ]; then
-            echo
-            echo "✗ ./bin/devm has been rebuilt since the daemon started"
-            echo "  → daemon is running stale code."
-            echo "  fix: devm service restart"
-            issues=$((issues+1))
-        fi
+    if [ -n "$binary_commit" ] && [ -n "$daemon_commit" ] && [ "$binary_commit" != "$daemon_commit" ]; then
+        echo
+        echo "✗ daemon commit != on-disk binary commit"
+        echo "  → ./bin/devm was rebuilt at a different commit than what the daemon is running."
+        echo "  fix: devm service restart"
+        issues=$((issues+1))
+    fi
+    if [ -n "$binary_commit" ] && [ -z "$daemon_commit" ] && [ -n "$running_pid" ]; then
+        echo
+        echo "✗ daemon does not report a commit"
+        echo "  → daemon predates commit-aware /version (running an old binary)."
+        echo "  fix: devm service restart"
+        issues=$((issues+1))
     fi
     if [ "$issues" -eq 0 ]; then
         echo

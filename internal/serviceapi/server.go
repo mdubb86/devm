@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,17 +17,33 @@ import (
 // ships add endpoints via Register.
 type Server struct {
 	socketPath string
-	version    string
+	build      Build
 	mux        *http.ServeMux
 }
 
+// Build describes the daemon binary's build identity, reported via
+// /version. Version is the semver tag for release builds, "dev" for
+// working-tree builds. Commit is the git rev at build time, with a
+// "-dirty" suffix when the working tree had uncommitted changes.
+// Date is the ISO8601 build timestamp.
+//
+// Commit drives dev-loop drift detection: a CLI whose embedded Commit
+// differs from the daemon's reported Commit knows the daemon needs a
+// restart. Version isn't enough for that — every dev build reports
+// Version="dev".
+type Build struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	Date    string `json:"date"`
+}
+
 // NewServer constructs a Server. socketPath should be SocketPath()
-// in production; tests pass a temp path. version is the build
-// version reported by /version.
-func NewServer(socketPath, version string) *Server {
+// in production; tests pass a temp path. build is the binary's
+// build identity, reported via /version.
+func NewServer(socketPath string, build Build) *Server {
 	s := &Server{
 		socketPath: socketPath,
-		version:    version,
+		build:      build,
 		mux:        http.NewServeMux(),
 	}
 	s.mux.HandleFunc("/health", s.handleHealth)
@@ -48,7 +65,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "{\"version\":%q}\n", s.version)
+	_ = json.NewEncoder(w).Encode(s.build)
 }
 
 // Serve binds the Unix socket and serves until ctx is cancelled.

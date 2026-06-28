@@ -18,9 +18,9 @@ import (
 // HTTP server; Ship 2 added DNS; Ship 3 adds the reverse proxy on
 // launchd-inherited :80 and :443.
 //
-// version is the build version reported by /version. ctx is the
-// shutdown signal: cancel it and every actor stops.
-func RunService(ctx context.Context, version string) error {
+// build is the daemon's build identity, reported via /version.
+// ctx is the shutdown signal: cancel it and every actor stops.
+func RunService(ctx context.Context, build Build) error {
 	if _, err := EnsureRuntimeDir(); err != nil {
 		return fmt.Errorf("ensure runtime dir: %w", err)
 	}
@@ -36,7 +36,7 @@ func RunService(ctx context.Context, version string) error {
 
 	// HTTP API server (Ship 1) with the /routes/* admin endpoints
 	// registered on top.
-	server := NewServer(SocketPath(), version)
+	server := NewServer(SocketPath(), build)
 	RegisterRoutesHandlers(server, routes)
 
 	// VM lifecycle endpoints (Ship 4). Supervisor and tart wrapper are

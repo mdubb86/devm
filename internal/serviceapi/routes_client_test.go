@@ -21,7 +21,7 @@ func newTestServerWithRoutes(t *testing.T) (*Server, *Routes, func()) {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
 	socket := filepath.Join(dir, "s.sock")
-	srv := NewServer(socket, "test-version")
+	srv := NewServer(socket, Build{Version: "test-version"})
 	routes := NewRoutes()
 	RegisterRoutesHandlers(srv, routes)
 

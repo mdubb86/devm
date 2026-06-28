@@ -22,7 +22,7 @@ func newTestServer(t *testing.T) (*Server, func()) {
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "s.sock")
-	srv := NewServer(socket, "test-version")
+	srv := NewServer(socket, Build{Version: "test-version"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -93,7 +93,7 @@ func TestServer_SocketIs0600(t *testing.T) {
 func TestServer_RegisterAddsEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	socket := filepath.Join(dir, "s.sock")
-	srv := NewServer(socket, "test-version")
+	srv := NewServer(socket, Build{Version: "test-version"})
 
 	srv.Register("/custom", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(201)

@@ -59,7 +59,9 @@ func (p *kardianosProgram) Start(_ service.Service) error {
 	p.cancel = cancel
 	p.done = make(chan error, 1)
 	go func() {
-		p.done <- serviceapi.RunService(ctx, Version)
+		p.done <- serviceapi.RunService(ctx, serviceapi.Build{
+			Version: Version, Commit: Commit, Date: Date,
+		})
 	}()
 	return nil
 }

@@ -50,27 +50,38 @@ func (c *Client) Health(ctx context.Context) error {
 	return nil
 }
 
-// Version returns the build version the service reports.
+// Version returns the build version string the service reports.
+// Kept for backward compatibility; new callers should prefer
+// BuildInfo to get commit + date alongside.
 func (c *Client) Version(ctx context.Context) (string, error) {
-	resp, err := c.do(ctx, "GET", "/version")
+	b, err := c.BuildInfo(ctx)
 	if err != nil {
 		return "", err
+	}
+	return b.Version, nil
+}
+
+// BuildInfo returns the full build identity the service reports
+// (version + commit + date). Used by `just doctor` to detect when
+// the daemon is running a different commit than the working tree.
+func (c *Client) BuildInfo(ctx context.Context) (Build, error) {
+	resp, err := c.do(ctx, "GET", "/version")
+	if err != nil {
+		return Build{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("version request failed: status %d", resp.StatusCode)
+		return Build{}, fmt.Errorf("version request failed: status %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return Build{}, err
 	}
-	var v struct {
-		Version string `json:"version"`
+	var b Build
+	if err := json.Unmarshal(body, &b); err != nil {
+		return Build{}, fmt.Errorf("parse version response: %w", err)
 	}
-	if err := json.Unmarshal(body, &v); err != nil {
-		return "", fmt.Errorf("parse version response: %w", err)
-	}
-	return v.Version, nil
+	return b, nil
 }
 
 // Available returns true if the service is reachable. Used by CLI
