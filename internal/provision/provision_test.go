@@ -91,9 +91,12 @@ func TestProvisioner_FailsFastOnTartError(t *testing.T) {
 	writeFakeTartFailingAt(t, dir, "apt-get")
 
 	p := &Provisioner{
-		Tart:            tart.New(),
-		VMName:          "myproj-sbx",
-		Cfg:             schema.Config{Project: schema.Project{ID: "myproj", SandboxName: "myproj-sbx"}},
+		Tart:   tart.New(),
+		VMName: "myproj-sbx",
+		Cfg: schema.Config{
+			Project:  schema.Project{ID: "myproj", SandboxName: "myproj-sbx"},
+			Packages: []string{"jq"}, // forces apt-get update to actually run
+		},
 		CARootPEM:       []byte("fake-pem\n"),
 		WorkspaceVMPath: "/Users/test/myproj",
 	}
