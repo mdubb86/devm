@@ -174,6 +174,18 @@ func (p *Provisioner) installServiceUnits(ctx context.Context, w io.Writer) erro
 		return nil
 	}
 	for name, svc := range p.Cfg.Services {
+		// Merge top-level env into per-service env so cfg.Env entries
+		// (including !secret refs) reach the rendered systemd unit.
+		// Per-service env wins on key collision — explicit beats
+		// inherited.
+		merged := make(map[string]schema.EnvValue, len(p.Cfg.Env)+len(svc.Env))
+		for k, v := range p.Cfg.Env {
+			merged[k] = v
+		}
+		for k, v := range svc.Env {
+			merged[k] = v
+		}
+		svc.Env = merged
 		unit := render.RenderService(name, svc)
 		encoded := base64.StdEncoding.EncodeToString(unit)
 		unitPath := fmt.Sprintf("/etc/systemd/system/%s.service", name)
