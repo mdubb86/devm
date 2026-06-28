@@ -436,16 +436,17 @@ type Config struct {
 	// by the wrapper. Quote it or split into multiple steps.
 	Install []string `yaml:"install,omitempty"`
 
-	// Mounts are additional host paths mounted into the sandbox at
-	// the same path inside the VM (sbx's "mirrored path" mode). Each
-	// entry is a string of the form `HOST_PATH[:ro]`. HOST_PATH may
-	// be absolute, relative to the project root, or start with `~`
-	// for home-directory expansion. The optional `:ro` suffix is
-	// passed through to sbx verbatim and makes the mount read-only.
+	// Mounts are additional host paths shared into the VM at the same
+	// path inside the VM ("mirrored path" mode — same host and guest
+	// path). Each entry is a string of the form `HOST_PATH[:ro]`.
+	// HOST_PATH may be absolute, relative to the project root, or
+	// start with `~` for home-directory expansion. The optional `:ro`
+	// suffix is passed through to tart's `--dir` flag and makes the
+	// virtio-fs share read-only.
 	//
-	// Changing this field is in the TEARDOWN bucket: sbx run's
-	// positional workspaces are baked at create time and the sandbox
-	// must be removed and re-created to apply.
+	// Changing this field is in the TEARDOWN bucket: tart run's
+	// --dir mounts are baked at VM-start time and the VM must be
+	// stopped and re-started to apply.
 	Mounts []string `yaml:"mounts,omitempty"`
 
 	// Path is a list of directories prepended to PATH inside the
@@ -470,10 +471,11 @@ type Config struct {
 
 // ResolveMount expands and absolute-resolves a single mounts[] entry
 // against the given project root. Returns the canonical form
-// `ABS_HOST_PATH[:ro]` ready to pass as a positional to `sbx run`.
+// `ABS_HOST_PATH[:ro]` ready to pass to tart's `--dir` flag.
 //
-// Rules (matching sbx's own CLI parsing):
-//   - Optional `:ro` suffix is preserved.
+// Rules:
+//   - Optional `:ro` suffix is preserved (becomes `:ro` on the
+//     `--dir` argument, which tart honors as a read-only share).
 //   - A leading `~/` is expanded to the host user's home directory.
 //   - Relative paths are joined to projectRoot.
 //   - `filepath.Clean` is applied so `..` segments are resolved.
