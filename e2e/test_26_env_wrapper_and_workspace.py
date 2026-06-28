@@ -18,8 +18,8 @@ What this doesn't cover (tested elsewhere):
   - env reaching shell + live edit via reconcile:
     test_11_env_inject_and_live_change.
   - $WORKSPACE_DIR (set by devm daemon, distinct from devm's $WORKSPACE):
-    test_sbx_contract_17_install_workspace_dir_and_mount and
-    test_sbx_contract_23_env_workspace_dir_set_by_sbx.
+    test_56_install_workspace_dir_and_mount and
+    test_61_env_workspace_dir_set_in_consumers.
   - Schema-rejection error messages (env.WORKSPACE reserved, unknown
     $VAR): Go unit tests in internal/schema/env_test.go.
 """

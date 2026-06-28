@@ -1,9 +1,9 @@
 """36: editing a service startup + reconcile-yes recreates with the NEW startup.
 
-KindStartupChange is in the TEARDOWN+SHELL bucket because sbx caches
-the kit at create-time and re-runs the cached startup on restart
-(empirically true in sbx 0.31). So editing a startup command requires
-`sbx rm` + recreate to take effect, not just `sbx stop` + restart.
+KindStartupChange is in the TEARDOWN+SHELL bucket because the
+startup commands are baked into the per-project systemd units at
+provision time. Editing a startup command requires teardown +
+recreate to take effect, not just stop + restart.
 
 This test pins the round-trip: cold-start with v1 startup → edit to
 v2 → reconcile --yes (which removes the sandbox) → new devm shell

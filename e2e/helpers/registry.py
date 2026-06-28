@@ -3,7 +3,7 @@
 Each fixture appends to the registry BEFORE creating its resource so
 the sweep in run.sh can clean up anything fixtures didn't get to
 (pytest SIGKILL, wedged worker, etc.). Format: one line per
-resource, "<kind>\\t<value>\\n". Kinds: sandbox, workspace, policy.
+resource, "<kind>\\t<value>\\n". Kinds: sandbox, workspace.
 """
 import os
 import threading

@@ -1,12 +1,9 @@
 """70: a declared mount is accessible inside the VM and data persists across stop/restart.
 
-The original sbx-era test (test_sbx_contract_15_kit_volumes_ext4) asserted
-that a declared volume showed up as an ext4 block device via `findmnt -t ext4`.
-That assertion cannot hold for Tart: virtio-fs shares are not ext4 block devices.
-
-The meaningful behavior that still matters: the mount is present at the
-declared path AND data written to it survives a `devm stop` + `devm shell`
-restart cycle (i.e., the host-backed virtio-fs share provides persistence).
+Under Tart, declared mounts are virtio-fs shares (not block devices), so
+the meaningful invariant is: the mount is present at the declared path
+AND data written to it survives a `devm stop` + `devm shell` restart
+cycle (i.e., the host-backed virtio-fs share provides persistence).
 
 What this pins:
   - After cold-start with a declared mounts: entry, the path is a real

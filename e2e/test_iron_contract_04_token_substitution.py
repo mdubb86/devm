@@ -53,7 +53,7 @@ def _generate_ca(tmp_path):
     return ca_cert, ca_key
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_token_substitution(tmp_path):
     received: dict[str, str | None] = {"authorization": None}
 

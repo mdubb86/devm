@@ -35,7 +35,7 @@ def _generate_ca(tmp_path):
     return ca_cert, ca_key
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_default_deny_blocks_unknown(tmp_path):
     ca_cert, ca_key = _generate_ca(tmp_path)
 

@@ -11,7 +11,7 @@ import pytest
 from helpers import registry
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_tart_pull_then_clone_from_oci():
     template = "ghcr.io/cirruslabs/debian:latest"
     name = f"contract-clone-{secrets.token_hex(2)}"

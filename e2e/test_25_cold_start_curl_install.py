@@ -16,9 +16,11 @@ What this pins:
 
 What it doesn't cover (tested elsewhere):
   - install failure surfacing loud (non-zero install exit):
-    test_sbx_contract_02_lifecycle_install_failure_surfaces_loud.
-  - Install-phase network policy semantics:
-    test_sbx_contract_10_network_install_phase_unrestricted.
+    test_51_lifecycle_install_failure_surfaces_loud.
+  - Install-phase network policy semantics: not pinned by a contract
+    test in the post-iron-proxy world (iron-proxy enforces uniformly
+    across phases; no longer a distinct "install phase unrestricted"
+    invariant to pin).
   - Install-change recreate: test_14_install_change_recreate.
   - install: that pipes the curl output directly into a shell
     (true `curl|bash`, not curl-to-file): not yet pinned.

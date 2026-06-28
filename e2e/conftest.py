@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Iterator
 
 import pytest
 
@@ -108,27 +108,6 @@ def workspace(request, sandbox_name) -> Iterator[Workspace]:
     finally:
         shutil.rmtree(path, ignore_errors=True)
         registry.remove("workspace", str(path))
-
-
-@pytest.fixture
-def policy_registrar() -> Iterator[Callable[[str], None]]:
-    """Call `register(domain)` for any global sbx network policy a test adds.
-
-    Registered domains are removed on test teardown (and the registry
-    line is unregistered). sbx policies are GLOBAL and persist across
-    sandboxes / sbx rm, so this is critical for test isolation.
-    """
-    added: list[str] = []
-
-    def register(domain: str) -> None:
-        added.append(domain)
-        registry.append("policy", domain)
-
-    try:
-        yield register
-    finally:
-        for domain in added:
-            registry.remove("policy", domain)
 
 
 @pytest.fixture

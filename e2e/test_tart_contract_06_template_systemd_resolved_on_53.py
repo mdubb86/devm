@@ -9,7 +9,7 @@ mask step becomes unnecessary — we want a test failure to tell us.
 import pytest
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_systemd_resolved_owns_port_53_in_template(inspector_vm):
     r = inspector_vm.exec("sudo", "ss", "-tlnp")
     assert r.ok, f"ss failed: {r.stderr!r}"
@@ -26,7 +26,7 @@ def test_systemd_resolved_owns_port_53_in_template(inspector_vm):
     )
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_systemd_resolved_service_is_enabled(inspector_vm):
     r = inspector_vm.exec("systemctl", "is-enabled", "systemd-resolved")
     # is-enabled returns 0 for "enabled", non-zero otherwise; the

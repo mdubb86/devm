@@ -40,7 +40,7 @@ def _generate_ca(tmp_path):
     return ca_cert, ca_key
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 @pytest.mark.skipif(
     subprocess.run(
         ["ping", "-c", "1", "-W", "2", "registry.npmjs.org"],

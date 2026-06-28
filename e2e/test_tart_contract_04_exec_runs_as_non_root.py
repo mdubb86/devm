@@ -9,7 +9,7 @@ different user, our user-rename step in provision-base.sh breaks.
 import pytest
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_tart_exec_runs_as_admin_uid_1000(inspector_vm):
     r = inspector_vm.exec("id", "-u")
     assert r.ok, f"id -u failed: {r.stderr!r}"
@@ -26,7 +26,7 @@ def test_tart_exec_runs_as_admin_uid_1000(inspector_vm):
         f"tart exec default username changed: {r.stdout.strip()!r}"
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_tart_exec_with_sudo_reaches_root(inspector_vm):
     r = inspector_vm.exec("sudo", "id", "-u")
     assert r.ok, f"sudo id -u failed: {r.stderr!r}"

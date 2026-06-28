@@ -7,7 +7,7 @@ its presence and exec-readiness sentinels the whole base.
 import pytest
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_tart_guest_agent_package_present(inspector_vm):
     r = inspector_vm.exec("dpkg-query", "-W", "-f", "${Version}",
                           "tart-guest-agent")
@@ -23,14 +23,14 @@ def test_tart_guest_agent_package_present(inspector_vm):
         f"tart-guest-agent version drifted: {version!r} (expected 0.10.x)"
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_tart_guest_agent_service_active(inspector_vm):
     r = inspector_vm.exec("systemctl", "is-active", "tart-guest-agent")
     assert r.stdout.strip() == "active", \
         f"tart-guest-agent service not active: {r.stdout!r}"
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_tart_exec_round_trips_basic_command(inspector_vm):
     r = inspector_vm.exec("echo", "hello-tart")
     assert r.ok, f"echo failed: {r.stderr!r}"

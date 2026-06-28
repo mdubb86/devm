@@ -57,7 +57,7 @@ def test_install_uninstall_with_tart(devm, workspace, sudo_capable):
 
     # tart_sandbox fixture isn't used here because we drive install/uninstall
     # ourselves. We build a TartSandbox handle from the workspace's sandbox_name.
-    sbx = TartSandbox(name=workspace.sandbox_name)
+    vm = TartSandbox(name=workspace.sandbox_name)
 
     try:
         # --- Step 1: install ---
@@ -107,10 +107,10 @@ def test_install_uninstall_with_tart(devm, workspace, sudo_capable):
         )
 
         # --- Step 3: verify VM is running and exec-ready ---
-        assert sbx.state() == "running", (
-            f"VM should be running after cold-start; got {sbx.state()!r}"
+        assert vm.state() == "running", (
+            f"VM should be running after cold-start; got {vm.state()!r}"
         )
-        result = sbx.exec("true")
+        result = vm.exec("true")
         assert result.exit_code == 0, (
             f"exec true in VM failed: exit={result.exit_code}, "
             f"stderr={result.stderr!r}"
@@ -122,11 +122,11 @@ def test_install_uninstall_with_tart(devm, workspace, sudo_capable):
         # Allow a brief settle for Tart to remove the VM.
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if sbx.state() == "absent":
+            if vm.state() == "absent":
                 break
             time.sleep(0.5)
-        assert sbx.state() == "absent", (
-            f"VM still present after teardown; state={sbx.state()!r}"
+        assert vm.state() == "absent", (
+            f"VM still present after teardown; state={vm.state()!r}"
         )
 
     finally:

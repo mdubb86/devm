@@ -9,7 +9,7 @@ import subprocess
 import pytest
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_tart_exec_dash_i_forwards_stdin(inspector_vm):
     r = subprocess.run(
         ["tart", "exec", "-i", inspector_vm.name, "bash", "-s"],
@@ -21,7 +21,7 @@ def test_tart_exec_dash_i_forwards_stdin(inspector_vm):
         f"stdin not forwarded; stdout={r.stdout.decode()!r}"
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_tart_exec_without_dash_i_drops_stdin(inspector_vm):
     # Without -i, stdin is closed: bash -s reads nothing and exits 0
     # with no output.

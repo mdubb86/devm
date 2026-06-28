@@ -14,8 +14,8 @@ What this pins:
 
 What it doesn't cover (tested elsewhere):
   - virtio-fs mirror + :ro semantics in isolation:
-    test_sbx_contract_19_mounts_mirrored_at_same_path and
-    test_sbx_contract_20_mounts_ro_suffix_read_only.
+    test_58_mounts_mirrored_at_same_path and
+    test_59_mounts_ro_suffix_read_only.
   - Live mounts: change (add/remove a mounts entry on a running
     sandbox): not yet pinned.
 """

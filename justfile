@@ -52,20 +52,12 @@ e2e:
 
 # Test groups by pytest marker. Pick one when you only care about a slice:
 #   - devm:      tests that drive `devm` (the user-facing CLI flow)
-#   - contract:  declarative sbx invariants devm depends on
-#   - tripwire:  'broken' sbx behaviors devm works around (red = upstream fixed)
-#   - interop:   Go-primitive ↔ sbx combinations devm depends on
+#   - contract:  declarative tart + iron-proxy invariants devm depends on
 e2e-devm:
     @e2e/scripts/run.sh -m devm
 
 e2e-contract:
-    @e2e/scripts/run.sh -m sbx_contract
-
-e2e-tripwire:
-    @e2e/scripts/run.sh -m sbx_tripwire
-
-e2e-interop:
-    @e2e/scripts/run.sh -m sbx_interop
+    @e2e/scripts/run.sh -m contract
 
 # Run a single test by name (matches pytest -k pattern). Foreground (no -n).
 # Quote multi-word patterns: `just e2e-one "test_a or test_b"`.

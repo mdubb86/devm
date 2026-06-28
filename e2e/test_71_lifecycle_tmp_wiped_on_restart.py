@@ -1,15 +1,8 @@
-"""71: /tmp is WIPED on VM stop + restart (inverts the sbx-era pin).
-
-This inverts the sbx-era pin (test_sbx_contract_26_lifecycle_tmp_survives_sbx_stop_restart),
-where /tmp survived `sbx stop` + `sbx run` because sbx used container-pause semantics.
+"""71: /tmp is WIPED on VM stop + restart.
 
 With Tart, `tart stop` + `tart run` is a real VM shutdown/boot cycle. /tmp is on
-tmpfs and is wiped on boot. Consumers who relied on /tmp persistence across stop+start
-should use $WORKSPACE_DIR or a declared mounts: entry instead.
-
-A secondary consequence: the sbx-era startup-supervision hack that explicitly ran
-`rm -rf /tmp/.devm` at the head of each start is no longer needed. Tart's boot cycle
-gives us a clean /tmp for free.
+tmpfs and is wiped on boot. Consumers who need data to survive stop+start should
+use $WORKSPACE_DIR or a declared mounts: entry instead.
 
 What this pins:
   - A file written to /tmp before `devm stop --yes` is ABSENT after `devm shell`

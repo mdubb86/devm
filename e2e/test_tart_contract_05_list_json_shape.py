@@ -9,7 +9,7 @@ import subprocess
 import pytest
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_tart_list_json_shape(inspector_vm):
     r = subprocess.run(
         ["tart", "list", "--format=json"],

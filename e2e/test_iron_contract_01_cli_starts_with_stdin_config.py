@@ -22,7 +22,7 @@ import pytest
 from helpers.iron_proxy import IronProxyConfig, free_ports, spawn
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_iron_proxy_starts_binds_and_exits_on_sigterm(tmp_path):
     # Generate a self-signed CA (iron-proxy requires one for TLS MITM mode).
     ca_cert = tmp_path / "ca.crt"

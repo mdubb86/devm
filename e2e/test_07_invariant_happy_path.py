@@ -18,7 +18,7 @@ What it doesn't cover (tested elsewhere):
   - Live port add via reconcile -> test_08.
   - Env injection (project + service vars) -> test_11.
   - Service add/remove churn -> test_21.
-  - Port publishing to host -> sbx-era mechanic, not pinned here.
+  - Port publishing to host -> not pinned here; iron-proxy + Caddy own routing.
 """
 import time
 

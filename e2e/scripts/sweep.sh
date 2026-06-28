@@ -10,16 +10,12 @@ sweep_registry() {
         [ -z "$kind" ] && continue
         case "$kind" in
             sandbox)
-                echo "  sbx rm $val"
-                sbx rm "$val" >/dev/null 2>&1 || true
+                echo "  tart delete $val"
+                tart delete "$val" >/dev/null 2>&1 || true
                 ;;
             workspace)
                 echo "  rm -rf $val"
                 rm -rf "$val" >/dev/null 2>&1 || true
-                ;;
-            policy)
-                echo "  sbx policy rm network --resource $val"
-                sbx policy rm network --resource "$val" >/dev/null 2>&1 || true
                 ;;
             *)
                 echo "  (unknown kind: $kind)"

@@ -1,4 +1,4 @@
-"""Offline unit tests for helpers (no sbx, no devm)."""
+"""Offline unit tests for helpers (no tart, no devm)."""
 import os
 import subprocess
 import tempfile
@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import yaml
 
-from helpers import registry, sbx
+from helpers import registry
 from helpers.devm import Devm, DevmError
 from helpers.workspace import Workspace
 
@@ -68,39 +68,6 @@ def test_workspace_patch_devmyaml(tmp_path):
     ws.patch_devmyaml(install=["touch /tmp/b"])
     cfg = yaml.safe_load((tmp_path / "devm.yaml").read_text())
     assert cfg["install"] == ["touch /tmp/b"]
-
-
-# --- sbx ---
-
-def test_sbx_sandbox_exists_true():
-    fake = subprocess.CompletedProcess(
-        args=[], returncode=0,
-        stdout=b"SANDBOX  IMAGE  STATUS\nfoo      img    running\n",
-        stderr=b"",
-    )
-    with patch("subprocess.run", return_value=fake):
-        assert sbx.sandbox_exists("foo") is True
-
-
-def test_sbx_sandbox_exists_false():
-    fake = subprocess.CompletedProcess(
-        args=[], returncode=0,
-        stdout=b"SANDBOX  IMAGE  STATUS\nbar      img    stopped\n",
-        stderr=b"",
-    )
-    with patch("subprocess.run", return_value=fake):
-        assert sbx.sandbox_exists("foo") is False
-
-
-def test_sbx_ports_parses_json():
-    fake = subprocess.CompletedProcess(
-        args=[], returncode=0,
-        stdout=b'[{"host_ip":"127.0.0.1","host_port":59080,"sandbox_port":8080,"protocol":"tcp"}]',
-        stderr=b"",
-    )
-    with patch("subprocess.run", return_value=fake):
-        ports = sbx.ports("foo")
-    assert ports == [{"host_ip": "127.0.0.1", "host_port": 59080, "sandbox_port": 8080, "protocol": "tcp"}]
 
 
 # --- devm ---

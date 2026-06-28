@@ -14,7 +14,7 @@ from helpers import registry
 from helpers.tart import TartSandbox
 
 
-@pytest.mark.devm
+@pytest.mark.contract
 def test_tart_run_no_graphics_boots():
     template = "ghcr.io/cirruslabs/debian:latest"
     name = f"contract-boot-{secrets.token_hex(2)}"
