@@ -1,9 +1,34 @@
 # justfile
 
-# Build the devm-dev binary into ./devm-dev (for local testing).
-# Named devm-dev so it never collides with a brew-installed `devm`.
+# Identity to sign local builds with. macOS keychain ACL is keyed by
+# the signing identity, so signing each build with the SAME identity
+# means one "Always Allow" click ever (vs. one per build with no
+# stable identity).
+#
+# One-time setup (only needed for stable keychain access during dev):
+#   open Keychain Access → Certificate Assistant → Create a Certificate
+#     Name: devm-dev
+#     Identity Type: Self Signed Root
+#     Certificate Type: Code Signing
+#
+# If the cert doesn't exist, `just build` still produces a working
+# binary; you'll just get keychain prompts on each rebuild.
+SIGN_IDENTITY := "devm-dev"
+
+# Build the devm binary into ./bin/devm and codesign with the local
+# self-signed identity if available. The path matches what `devm
+# install` records in the LaunchDaemon plist, so a rebuild swaps the
+# binary in place — `devm service restart` picks it up.
 build:
-    go build -o devm-dev ./cmd/devm
+    @mkdir -p bin
+    go build -o bin/devm ./cmd/devm
+    @if security find-certificate -c '{{SIGN_IDENTITY}}' >/dev/null 2>&1; then \
+        codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime bin/devm && \
+        echo "signed with {{SIGN_IDENTITY}}"; \
+    else \
+        echo "warning: signing cert '{{SIGN_IDENTITY}}' not in keychain — every rebuild will re-prompt for keychain access"; \
+        echo "         one-time fix: Keychain Access → Certificate Assistant → Create a Certificate (Name: {{SIGN_IDENTITY}}, Code Signing, Self Signed Root)"; \
+    fi
 
 # Install the working-tree build as `devm-dev` in $GOBIN (or $GOPATH/bin).
 # The -dev suffix means it coexists with a brew-installed `devm` without
