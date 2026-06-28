@@ -43,7 +43,7 @@ func RenderService(name string, svc schema.Service) []byte {
 	}
 	user := svc.User
 	if user == "" {
-		user = "dev"
+		user = "admin"
 	}
 	fmt.Fprintf(&b, "User=%s\n", user)
 	// Sorted env keys so the rendered output is deterministic — the

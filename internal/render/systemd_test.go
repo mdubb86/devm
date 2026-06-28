@@ -41,7 +41,7 @@ func TestRenderService_Declarative_HasDefaults(t *testing.T) {
 
 	assert.Contains(t, got, "[Service]")
 	assert.Contains(t, got, "ExecStart=/usr/bin/npm run dev")
-	assert.Contains(t, got, "User=dev", "User defaults to dev")
+	assert.Contains(t, got, "User=admin", "User defaults to admin (cirruslabs default)")
 	assert.Contains(t, got, "Restart=on-failure", "Restart defaults to on-failure")
 
 	assert.Contains(t, got, "[Install]")
