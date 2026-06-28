@@ -134,6 +134,14 @@ func (p *Provisioner) reloadBaseServices(ctx context.Context, w io.Writer) error
 }
 
 func (p *Provisioner) aptUpdate(ctx context.Context, w io.Writer) error {
+	// No packages declared → no point fetching the index. Skipping
+	// is also necessary under Ship 5: deb.debian.org isn't typically
+	// in the project's allow-list, so apt-get update would either
+	// hang on blocked DNS or fail outright once iron-proxy enforces.
+	if len(p.Cfg.Packages) == 0 {
+		fmt.Fprintln(w, "(no packages declared, skipping)")
+		return nil
+	}
 	return p.exec(ctx, w, "sudo", "apt-get", "update", "-y")
 }
 
