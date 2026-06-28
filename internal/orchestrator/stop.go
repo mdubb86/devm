@@ -77,12 +77,12 @@ func RunStop(ctx context.Context, d StopDeps, projectID, sandboxName string, mod
 		}
 	}
 
-	// Ask the daemon supervisor to stop the VM. Best-effort: if the
-	// daemon is down or doesn't know about this project, log and
-	// continue so teardown can still delete the disk.
-	if err := d.ServiceAPIClient.StopVM(ctx, projectID); err != nil {
-		fmt.Fprintf(d.Out, "note: stop via daemon failed (%v); continuing\n", err)
-	}
+	// Ask the daemon supervisor to stop the VM. Best-effort: continue
+	// silently on failure so teardown can still delete the disk.
+	// Common case: daemon is down, or the VM was never supervised by
+	// THIS daemon process. Either way, the user's intent ("stop and
+	// destroy") is still achievable via tart.Delete below.
+	_ = d.ServiceAPIClient.StopVM(ctx, projectID)
 
 	if mode == StopDestroy {
 		if err := d.Tart.Delete(ctx, sandboxName); err != nil {

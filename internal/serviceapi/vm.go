@@ -220,7 +220,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 		ironProxyState.del(req.ProjectID)
 
 		key = supervisor.Key{ProjectID: req.ProjectID, Role: supervisor.RoleVM}
-		if err := sup.Stop(r.Context(), key); err != nil {
+		if err := sup.Stop(r.Context(), key); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
 			http.Error(w, fmt.Sprintf("supervisor stop: %v", err), http.StatusInternalServerError)
 			return
 		}
