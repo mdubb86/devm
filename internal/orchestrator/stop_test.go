@@ -112,7 +112,12 @@ func TestRunStopAutoApproveSkipsPrompt(t *testing.T) {
 }
 
 func TestRunStopDaemonFailContinuesForTeardown(t *testing.T) {
-	// If the daemon StopVM fails, teardown should still attempt disk deletion.
+	// Daemon StopVM failure is swallowed silently so teardown still
+	// proceeds to disk deletion. Common causes: daemon down, or the
+	// VM was never supervised by THIS daemon (e.g., adopted on
+	// restart and already torn down externally). In every case the
+	// user's intent — "stop and destroy" — is achievable via
+	// tart.Delete regardless of the daemon's response.
 	repoRoot := t.TempDir()
 	admin := &fakeStopClient{stopErr: errors.New("daemon down")}
 	tr := fakeTartBin(t, repoRoot)
@@ -127,7 +132,7 @@ func TestRunStopDaemonFailContinuesForTeardown(t *testing.T) {
 	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopDestroy, true)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
-	assert.Contains(t, out.String(), "daemon down", "daemon error must be noted")
+	assert.Equal(t, 1, admin.stopCalled, "daemon stop must still be attempted")
 	assert.Contains(t, out.String(), "Deleted VM proj-sbx", "disk delete must still run")
 }
 

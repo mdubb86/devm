@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -129,6 +130,95 @@ func TestSupervisor_SpawnActuallyRunsChild(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("child never ran; marker %s not created", marker)
+}
+
+// TestSupervisor_AdoptedStatusAndStop spawns a real long-running
+// child outside the supervisor's lifecycle, registers it via Adopt,
+// and verifies Status + Stop work the same as for managed entries.
+// This is the post-daemon-restart adoption path that lets us re-
+// attach to iron-proxy processes the prior daemon left running.
+func TestSupervisor_AdoptedStatusAndStop(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+	defer func() { _ = s.pm.Stop() }()
+
+	// Start a sleep we can later SIGTERM. We do this *outside* the
+	// supervisor — that's the whole point of adoption.
+	cmd := exec.Command("sleep", "30")
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	exitCh := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		exitCh <- cmd.Wait()
+		close(done)
+	}()
+	defer func() {
+		select {
+		case <-done:
+		default:
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			<-done
+		}
+	}()
+
+	k := Key{ProjectID: "adopted-proj", Role: RoleProxy}
+
+	state := s.Status(k)
+	assert.False(t, state.Present, "unknown key should not be present pre-Adopt")
+
+	s.Adopt(k, pid)
+
+	state = s.Status(k)
+	assert.True(t, state.Present)
+	assert.True(t, state.Running)
+	assert.Equal(t, pid, state.PID)
+
+	require.NoError(t, s.Stop(context.Background(), k))
+
+	// Confirm SIGTERM landed: child exits and reports signal=SIGTERM.
+	select {
+	case err := <-exitCh:
+		var exitErr *exec.ExitError
+		require.ErrorAs(t, err, &exitErr)
+		ws := exitErr.Sys().(syscall.WaitStatus)
+		assert.True(t, ws.Signaled())
+		assert.Equal(t, syscall.SIGTERM, ws.Signal())
+	case <-time.After(3 * time.Second):
+		t.Fatal("adopted child did not exit after Stop")
+	}
+
+	state = s.Status(k)
+	assert.False(t, state.Present, "adopted entry should be reaped after Stop")
+}
+
+// TestSupervisor_AdoptedDeadPIDReaped verifies that Status detects
+// when an adopted process has died (e.g., crashed externally) and
+// reaps the entry instead of forever claiming it's running.
+func TestSupervisor_AdoptedDeadPIDReaped(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+
+	// Spawn-and-wait so we have a definitely-reaped PID.
+	cmd := exec.Command("true")
+	require.NoError(t, cmd.Run())
+	deadPID := cmd.Process.Pid
+
+	k := Key{ProjectID: "ghost", Role: RoleProxy}
+	s.Adopt(k, deadPID)
+
+	state := s.Status(k)
+	assert.False(t, state.Present, "dead adopted PID should be reaped on Status probe")
+}
+
+// TestSupervisor_StopUnknownReturnsErrNotFound makes sure the
+// adopted-first path doesn't shadow the original error contract.
+func TestSupervisor_StopUnknownReturnsErrNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+
+	err := s.Stop(context.Background(), Key{ProjectID: "nope", Role: RoleProxy})
+	assert.ErrorIs(t, err, ErrNotFound)
 }
 
 // TestSupervisor_ChildInheritsDaemonEnv would have caught the

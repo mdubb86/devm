@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/oklog/run"
 
@@ -43,6 +44,15 @@ func RunService(ctx context.Context, version string) error {
 	// processes and survives across CLI invocations.
 	tr := tart.New()
 	sup := supervisor.New("")
+	// Adopt iron-proxy processes left running by a prior daemon
+	// instance. They survive daemon death by design (setsid on
+	// spawn); re-attaching here means /vm/stop and /vm/status
+	// behave correctly post-restart instead of orphaning them.
+	// Best-effort — a failure (e.g., `ps` missing) shouldn't
+	// block daemon startup.
+	if err := AdoptIronProxies(ctx, sup); err != nil {
+		fmt.Fprintf(os.Stderr, "iron-proxy adopt: %v\n", err)
+	}
 	RegisterVMHandlers(server, sup, tr)
 
 	// Pull launchd-inherited listeners for :80 and :443. If the

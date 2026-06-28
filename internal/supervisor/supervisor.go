@@ -49,11 +49,19 @@ type State struct {
 	PID     int  // 0 if not running
 }
 
-// Supervisor manages a set of (key → managed process) entries.
+// Supervisor manages a set of (key → managed process) entries. Two
+// classes coexist:
+//   - pexec-managed: spawned this daemon's lifetime via Spawn /
+//     SpawnWithStdin. Get full lifecycle, auto-restart with backoff,
+//     log capture.
+//   - adopted: discovered post-daemon-restart via Adopt. Only the PID
+//     is tracked; no auto-restart, no log capture. Stop signals via
+//     SIGTERM by PID.
 type Supervisor struct {
-	pm     pexec.ProcessManager
-	mu     sync.Mutex
-	logDir string
+	pm      pexec.ProcessManager
+	mu      sync.Mutex
+	logDir  string
+	adopted map[Key]int // adopted-from-prior-daemon → PID
 }
 
 // New returns a Supervisor that captures per-process logs under
@@ -64,9 +72,21 @@ func New(logDir string) *Supervisor {
 	// actually starts the child instead of just registering it.
 	_ = pm.Start(context.Background())
 	return &Supervisor{
-		pm:     pm,
-		logDir: defaultLogDir(logDir),
+		pm:      pm,
+		logDir:  defaultLogDir(logDir),
+		adopted: map[Key]int{},
 	}
+}
+
+// Adopt registers an externally-running process (e.g., one inherited
+// from a prior daemon instance after a restart). The supervisor only
+// knows its PID — no log capture, no auto-restart on crash. Stop on
+// an adopted key signals SIGTERM by PID; if the process dies without
+// our involvement, the next Status call surfaces it as gone.
+func (s *Supervisor) Adopt(k Key, pid int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.adopted[k] = pid
 }
 
 func defaultLogDir(override string) string {
@@ -119,10 +139,22 @@ func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd) error {
 }
 
 // Stop signals + waits for graceful shutdown. Removes the entry from
-// the registry.
+// the registry. Handles both pexec-managed and adopted entries; for
+// adopted, SIGTERM is delivered by PID and ESRCH (already-dead) is
+// treated as success.
 func (s *Supervisor) Stop(ctx context.Context, k Key) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if pid, ok := s.adopted[k]; ok {
+		delete(s.adopted, k)
+		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+			if errors.Is(err, syscall.ESRCH) {
+				return nil
+			}
+			return fmt.Errorf("supervisor.Stop(%s): kill adopted pid %d: %w", k, pid, err)
+		}
+		return nil
+	}
 	p, ok := s.pm.RemoveProcessByID(k.String())
 	if !ok {
 		return fmt.Errorf("supervisor.Stop(%s): %w", k, ErrNotFound)
@@ -140,10 +172,19 @@ func (s *Supervisor) StopAll() error {
 	return s.pm.Stop()
 }
 
-// Status reports basic state for `devm status`.
+// Status reports basic state for `devm status`. Handles both
+// pexec-managed and adopted entries; an adopted PID that no longer
+// exists is reaped from the map and reported as not present.
 func (s *Supervisor) Status(k Key) State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if pid, ok := s.adopted[k]; ok {
+		if err := syscall.Kill(pid, 0); err != nil {
+			delete(s.adopted, k)
+			return State{Present: false}
+		}
+		return State{Present: true, Running: true, PID: pid}
+	}
 	p, ok := s.pm.ProcessByID(k.String())
 	if !ok {
 		return State{Present: false}
