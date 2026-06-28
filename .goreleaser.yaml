@@ -2,26 +2,42 @@ version: 2
 
 project_name: devm
 
+# Fetch the pinned iron-proxy binary so it can be vendored into the
+# release archive. IRON_PROXY_VERSION can be overridden via the CI
+# environment; default matches the version pinned in justfile.
 before:
   hooks:
     - go mod tidy
+    - sh -c 'IRON_PROXY_VERSION="${IRON_PROXY_VERSION:-v0.45.0}" && ver="$(echo "$IRON_PROXY_VERSION" | sed "s/^v//")" && mkdir -p share/devm/bin && curl -fsSL -o /tmp/iron-proxy.tar.gz "https://github.com/ironsh/iron-proxy/releases/download/${IRON_PROXY_VERSION}/iron-proxy_${ver}_darwin_arm64.tar.gz" && tar -xzf /tmp/iron-proxy.tar.gz -C share/devm/bin iron-proxy && chmod +x share/devm/bin/iron-proxy && rm /tmp/iron-proxy.tar.gz'
 
 builds:
+  # Tart requires Apple Silicon; amd64 macOS isn't a supported target.
+  # CGO is required: internal/secret bridges to the macOS Security
+  # framework for keychain access, and internal/serviceapi/sockact
+  # has darwin+cgo files for launchd socket activation. macos-latest
+  # CI runners are darwin/arm64 → native cgo, no cross-compile pain.
   - id: devm
     main: ./cmd/devm
     binary: devm
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
     goos:
       - darwin
     goarch:
       - arm64
-      - amd64
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
       - -X main.Commit={{.ShortCommit}}
       - -X main.Date={{.Date}}
+
+# No explicit `signs:` block: the Go linker auto-applies an ad-hoc
+# signature to every darwin/arm64 binary at link time (mandatory on
+# Apple Silicon since Big Sur). `codesign -dvv` on the built binary
+# shows `flags=0x20002(adhoc,linker-signed)`. That's enough for
+# Gatekeeper to treat the binary as "cannot verify developer"
+# (right-click → Open dismissable) instead of "unidentified developer".
+# An explicit codesign step would be a no-op and is omitted.
 
 archives:
   - id: default
@@ -30,6 +46,11 @@ archives:
       {{ .ProjectName }}_v{{ .Version }}_
       {{- .Os }}_
       {{- .Arch }}
+    files:
+      - share/devm/bin/iron-proxy
+      - image/*
+      - LICENSE
+      - README.md
 
 checksum:
   name_template: "checksums.txt"
@@ -65,7 +86,7 @@ release:
 
 homebrew_casks:
   - name: devm
-    description: "Mac dev sandbox tool (wraps Docker Sandboxes)"
+    description: "Mac dev sandbox tool (wraps Tart VMs + iron-proxy egress enforcement)"
     homepage: "https://github.com/mdubb86/devm"
     repository:
       owner: mdubb86
@@ -76,13 +97,11 @@ homebrew_casks:
       email: bot@goreleaser.com
     binaries:
       - devm
-    # The binary is unsigned. macOS Gatekeeper blocks first-run with
-    # a "could not verify" dialog (SIGKILL, exit 137) on quarantined
-    # files. Homebrew applies com.apple.quarantine to all cask
-    # artifacts; no_quarantine was removed from the Cask DSL. Strip
-    # the xattr in a postflight hook so the binary runs cleanly.
-    # Standard pattern for unsigned OSS CLIs distributed via tap
-    # until proper signing + notarization is in place.
+    # The binary is ad-hoc signed (no Apple Developer ID). Gatekeeper
+    # still flags com.apple.quarantine on cask artifacts; strip the
+    # xattr in a postflight hook so first-run doesn't pop the "cannot
+    # verify developer" dialog. Standard pattern for OSS CLIs without
+    # paid notarization.
     custom_block: |
       postflight do
         system_command "/usr/bin/xattr",
