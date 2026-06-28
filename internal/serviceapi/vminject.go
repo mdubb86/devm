@@ -63,15 +63,19 @@ sudo nft -f /etc/nftables.conf
 // every name, so workload resolutions land at MAC_HOST and get
 // DNATed by the nftables rules.
 //
-// no-resolv: don't consult /etc/resolv.conf (which would point at
-// systemd-resolved or some public DNS we can't reach anyway under
-// the nftables policy).
+// systemd-resolved is masked first because it holds :53 by default
+// in the cirruslabs/debian template (binds 127.0.0.53 and 127.0.0.54);
+// dnsmasq can't start until resolved is gone. /etc/resolv.conf is
+// replaced with a plain "nameserver 127.0.0.1" so tools that respect
+// it find dnsmasq.
 func buildDnsmasqScript(macHost string, dnsPort int) string {
-	return fmt.Sprintf(`sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<EOF
-# *.test → 127.0.0.1 (existing — for in-VM Caddy)
+	return fmt.Sprintf(`sudo systemctl mask --now systemd-resolved.service 2>/dev/null || true
+sudo rm -f /etc/resolv.conf
+sudo tee /etc/resolv.conf > /dev/null <<'EOF'
+nameserver 127.0.0.1
+EOF
+sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<EOF
 address=/test/127.0.0.1
-
-# Everything else → iron-proxy DNS on MAC_HOST:DNS_PORT
 no-resolv
 server=%s#%d
 EOF

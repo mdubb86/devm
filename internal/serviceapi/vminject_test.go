@@ -39,8 +39,10 @@ func TestBuildNftablesScript_FilterDefaultDenyExceptIronProxyPorts(t *testing.T)
 
 func TestBuildDnsmasqScript_ForwardsToIronProxyDNS(t *testing.T) {
 	script := buildDnsmasqScript("192.168.64.1", 8053)
+	assert.Contains(t, script, "systemctl mask --now systemd-resolved")
 	assert.Contains(t, script, "no-resolv")
 	assert.Contains(t, script, "server=192.168.64.1#8053")
 	assert.Contains(t, script, "address=/test/127.0.0.1")
+	assert.Contains(t, script, "nameserver 127.0.0.1")
 	assert.Contains(t, script, "systemctl reload-or-restart dnsmasq")
 }
