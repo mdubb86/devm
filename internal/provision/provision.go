@@ -130,7 +130,7 @@ func (p *Provisioner) reloadBaseServices(ctx context.Context, w io.Writer) error
 	if err := p.exec(ctx, w, "sudo", "systemctl", "reload-or-restart", "dnsmasq"); err != nil {
 		return err
 	}
-	return p.exec(ctx, w, "sudo", "systemctl", "reload-or-restart", "devm-caddy")
+	return p.exec(ctx, w, "sudo", "systemctl", "reload-or-restart", "caddy")
 }
 
 func (p *Provisioner) aptUpdate(ctx context.Context, w io.Writer) error {
