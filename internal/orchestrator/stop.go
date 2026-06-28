@@ -86,9 +86,17 @@ func RunStop(ctx context.Context, d StopDeps, projectID, sandboxName string, mod
 
 	if mode == StopDestroy {
 		if err := d.Tart.Delete(ctx, sandboxName); err != nil {
-			return -1, fmt.Errorf("tart delete %s: %w", sandboxName, err)
+			// "VM does not exist" is the desired end state; treat
+			// as success. tart's stderr for absent VMs is stable:
+			// "the specified VM \"<name>\" does not exist".
+			if strings.Contains(err.Error(), "does not exist") {
+				fmt.Fprintf(d.Out, "VM %s already absent.\n", sandboxName)
+			} else {
+				return -1, fmt.Errorf("tart delete %s: %w", sandboxName, err)
+			}
+		} else {
+			fmt.Fprintf(d.Out, "Deleted VM %s.\n", sandboxName)
 		}
-		fmt.Fprintf(d.Out, "Deleted VM %s.\n", sandboxName)
 	} else {
 		fmt.Fprintf(d.Out, "Stopped VM %s. Disk preserved.\n", sandboxName)
 	}
