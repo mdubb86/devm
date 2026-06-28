@@ -135,6 +135,12 @@ func TestRunStatus_RoutingZeroWhenDaemonUnreachable(t *testing.T) {
 	// When the daemon is not running, RoutingStatusFromDaemon fails and
 	// RunStatus leaves Routing zero-valued. RunStatus must not error out
 	// in this case — the format layer handles zero Routing as unreachable.
+	//
+	// Point HOME at a tmpdir so serviceapi.SocketPath() resolves to a
+	// nonexistent socket, simulating daemon-unreachable regardless of
+	// whether a real daemon is running on this machine.
+	t.Setenv("HOME", t.TempDir())
+
 	tr := makeFakeTartStatus(t, `[]`, "", "")
 	cfg := statusMinimalCfg()
 	res, err := RunStatus(cfg, tr, "/tmp/fake")

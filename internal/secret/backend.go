@@ -1,14 +1,11 @@
 // Package secret stores per-project secrets in the macOS login keychain.
 //
 // The Backend interface lets tests use an in-memory fake. Production
-// uses NewMacKeychain which wraps github.com/keybase/go-keychain.
+// uses NewMacKeychain which wraps github.com/keybase/go-keychain
+// (darwin-only — non-darwin builds return errors from every method).
 package secret
 
-import (
-	"errors"
-
-	"github.com/keybase/go-keychain"
-)
+import "errors"
 
 // ServiceName is the kSecAttrService value all devm secrets share.
 const ServiceName = "devm"
@@ -37,72 +34,9 @@ type Backend interface {
 }
 
 // NewMacKeychain returns the production Backend backed by the macOS
-// login keychain.
+// login keychain. On non-darwin builds every method returns an
+// "unsupported on this platform" error — the constructor itself
+// never fails, so CI vet/test on Linux compiles cleanly.
 func NewMacKeychain() Backend { return &macKeychain{} }
 
 type macKeychain struct{}
-
-func (m *macKeychain) Set(account, value string) error {
-	item := keychain.NewItem()
-	item.SetSecClass(keychain.SecClassGenericPassword)
-	item.SetService(ServiceName)
-	item.SetAccount(account)
-	item.SetData([]byte(value))
-	item.SetSynchronizable(keychain.SynchronizableNo)
-	item.SetAccessible(keychain.AccessibleWhenUnlocked)
-
-	// Overwrite if present.
-	_ = m.Delete(account)
-	return keychain.AddItem(item)
-}
-
-func (m *macKeychain) Get(account string) (string, error) {
-	q := keychain.NewItem()
-	q.SetSecClass(keychain.SecClassGenericPassword)
-	q.SetService(ServiceName)
-	q.SetAccount(account)
-	q.SetMatchLimit(keychain.MatchLimitOne)
-	q.SetReturnData(true)
-
-	results, err := keychain.QueryItem(q)
-	if err != nil {
-		return "", err
-	}
-	if len(results) == 0 {
-		return "", ErrNotFound
-	}
-	return string(results[0].Data), nil
-}
-
-func (m *macKeychain) List(projectID string) ([]string, error) {
-	q := keychain.NewItem()
-	q.SetSecClass(keychain.SecClassGenericPassword)
-	q.SetService(ServiceName)
-	q.SetMatchLimit(keychain.MatchLimitAll)
-	q.SetReturnAttributes(true)
-
-	results, err := keychain.QueryItem(q)
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	prefix := projectID + "/"
-	for _, r := range results {
-		if len(r.Account) > len(prefix) && r.Account[:len(prefix)] == prefix {
-			names = append(names, r.Account[len(prefix):])
-		}
-	}
-	return names, nil
-}
-
-func (m *macKeychain) Delete(account string) error {
-	q := keychain.NewItem()
-	q.SetSecClass(keychain.SecClassGenericPassword)
-	q.SetService(ServiceName)
-	q.SetAccount(account)
-	err := keychain.DeleteItem(q)
-	if err == keychain.ErrorItemNotFound {
-		return ErrNotFound
-	}
-	return err
-}

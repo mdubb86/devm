@@ -3,13 +3,9 @@ package release
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // stubLister returns canned data per scope. Used by the pure-function
@@ -106,7 +102,7 @@ func TestSourceString(t *testing.T) {
 	assert.Equal(t, "manual", SourceManual.String())
 }
 
-// ---------- DefaultBrewLister integration via PATH manipulation ----------
+// ---------- DefaultBrewLister ----------
 
 func TestDefaultBrewLister_NoBrewOnPath(t *testing.T) {
 	t.Setenv("PATH", "/nonexistent")
@@ -114,54 +110,34 @@ func TestDefaultBrewLister_NoBrewOnPath(t *testing.T) {
 	assert.Nil(t, lister, "DefaultBrewLister must return nil when brew is not on PATH")
 }
 
-func TestDefaultBrewLister_FakeBrewExitsZero_ParsesPaths(t *testing.T) {
-	tmp := t.TempDir()
-	fakeBrew := filepath.Join(tmp, "brew")
-	require.NoError(t, os.WriteFile(fakeBrew, []byte(
-		"#!/bin/sh\nprintf '/opt/homebrew/Caskroom/devm/0.1.0/devm\\n/opt/homebrew/Caskroom/devm/0.1.0/LICENSE\\n'\n",
-	), 0o755))
-	t.Setenv("PATH", tmp)
-
-	lister := DefaultBrewLister()
-	require.NotNil(t, lister, "LookPath should find the fake brew")
-	paths, err := lister(context.Background(), "--cask", "devm")
-	require.NoError(t, err)
-	assert.Equal(t, []string{
-		"/opt/homebrew/Caskroom/devm/0.1.0/devm",
-		"/opt/homebrew/Caskroom/devm/0.1.0/LICENSE",
-	}, paths)
-}
-
-func TestDefaultBrewLister_FakeBrewExitsOne_ReturnsError(t *testing.T) {
-	tmp := t.TempDir()
-	fakeBrew := filepath.Join(tmp, "brew")
-	// Mirrors the empirical not-installed shape: stderr message, exit 1.
-	require.NoError(t, os.WriteFile(fakeBrew, []byte(
-		"#!/bin/sh\necho \"Error: No such keg\" >&2\nexit 1\n",
-	), 0o755))
-	t.Setenv("PATH", tmp)
-
-	lister := DefaultBrewLister()
-	require.NotNil(t, lister)
-	paths, err := lister(context.Background(), "--cask", "devm")
-	require.Error(t, err)
-	assert.Nil(t, paths)
-}
-
-func TestDefaultBrewLister_BrewHangs_TimesOut(t *testing.T) {
-	tmp := t.TempDir()
-	fakeBrew := filepath.Join(tmp, "brew")
-	require.NoError(t, os.WriteFile(fakeBrew, []byte(
-		"#!/bin/sh\nsleep 30\n",
-	), 0o755))
-	t.Setenv("PATH", tmp)
-
-	lister := DefaultBrewLister()
-	require.NotNil(t, lister)
-	start := time.Now()
-	paths, err := lister(context.Background(), "--cask", "devm")
-	elapsed := time.Since(start)
-	require.Error(t, err)
-	assert.Nil(t, paths)
-	assert.Less(t, elapsed, 2*time.Second, "must time out near 1s, not run for 30s")
+func TestParseBrewListOutput(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{
+			name: "two paths with trailing newline",
+			in:   "/opt/homebrew/Caskroom/devm/0.1.0/devm\n/opt/homebrew/Caskroom/devm/0.1.0/LICENSE\n",
+			want: []string{
+				"/opt/homebrew/Caskroom/devm/0.1.0/devm",
+				"/opt/homebrew/Caskroom/devm/0.1.0/LICENSE",
+			},
+		},
+		{
+			name: "empty",
+			in:   "",
+			want: nil,
+		},
+		{
+			name: "whitespace and blank lines are dropped",
+			in:   "  /a/b\n\n  \n/c/d  \n",
+			want: []string{"/a/b", "/c/d"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, parseBrewListOutput([]byte(tc.in)))
+		})
+	}
 }

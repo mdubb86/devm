@@ -78,26 +78,33 @@ func Classify(ctx context.Context, execPath string, lister BrewLister) Source {
 // pass the result directly to Classify — Classify handles the nil
 // case as "brew not available, classify as manual."
 //
-// The shell-out uses a 1-second per-call context timeout. A wedged
-// brew returns (nil, error) within 1s; Classify treats that as
-// "not installed in this scope" and moves on.
+// The shell-out uses a 3-second per-call context timeout. Healthy
+// brew returns in under 200ms; the budget exists so a wedged brew
+// can't stall `devm version` indefinitely.
 func DefaultBrewLister() BrewLister {
 	if _, err := exec.LookPath("brew"); err != nil {
 		return nil
 	}
 	return func(ctx context.Context, scope, name string) ([]string, error) {
-		ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		out, err := exec.CommandContext(ctx, "brew", "list", scope, name).Output()
 		if err != nil {
 			return nil, err
 		}
-		var paths []string
-		for _, line := range strings.Split(string(out), "\n") {
-			if line = strings.TrimSpace(line); line != "" {
-				paths = append(paths, line)
-			}
-		}
-		return paths, nil
+		return parseBrewListOutput(out), nil
 	}
+}
+
+// parseBrewListOutput splits brew's stdout (one path per line) into a
+// slice of trimmed paths, dropping empty lines. Split out so the parse
+// behavior can be unit-tested without exec'ing anything.
+func parseBrewListOutput(out []byte) []string {
+	var paths []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			paths = append(paths, line)
+		}
+	}
+	return paths
 }
