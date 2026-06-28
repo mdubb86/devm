@@ -148,10 +148,12 @@ func TestVMStop_NotFound(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
+	// StopVM on a project the supervisor doesn't know about is
+	// idempotent — both the iron-proxy and VM stops treat
+	// supervisor.ErrNotFound as success so re-tearing-down or
+	// stopping a project that was never started is silent.
 	err := c.StopVM(ctx, "nonexistent-project")
-	require.Error(t, err)
-	// supervisor.Stop returns "not found" → 500
-	assert.Contains(t, err.Error(), "vm/stop")
+	require.NoError(t, err)
 }
 
 // TestVMStatus_MethodNotAllowed verifies that non-GET requests to
