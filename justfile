@@ -86,6 +86,71 @@ release-no-e2e:
 release-dry:
     goreleaser release --snapshot --clean --skip=publish
 
+# Diagnose drift between the working-tree build (./bin/devm), the
+# LaunchDaemon plist's recorded binary, and the daemon process that's
+# actually running. The iteration loop `just build && devm service
+# restart` only works when all three are aligned; this recipe makes
+# any misalignment loud.
+doctor:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    expected="$(pwd)/bin/devm"
+    plist=/Library/LaunchDaemons/com.devm.service.plist
+    socket="$HOME/Library/Application Support/devm/devm.sock"
+
+    plist_path=""
+    if [ -r "$plist" ]; then
+        plist_path=$(plutil -extract ProgramArguments.0 raw -o - "$plist" 2>/dev/null || true)
+    fi
+
+    running_pid=""
+    running_path=""
+    running_start=""
+    if [ -S "$socket" ]; then
+        running_pid=$(lsof "$socket" 2>/dev/null | awk 'NR==2 {print $2}')
+        if [ -n "$running_pid" ]; then
+            running_path=$(ps -p "$running_pid" -o comm= 2>/dev/null | sed 's/^[ \t]*//')
+            running_start=$(ps -p "$running_pid" -o lstart= 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+        fi
+    fi
+
+    printf "working-tree build  (just build → ./bin/devm) : %s\n" "$expected"
+    printf "plist               (registered binary)       : %s\n" "${plist_path:-<unreadable or not installed>}"
+    printf "running daemon      (pid / binary)            : %s\n" "${running_pid:+$running_pid }${running_path:-<not running>}"
+
+    issues=0
+    if [ -n "$plist_path" ] && [ "$plist_path" != "$expected" ]; then
+        echo
+        echo "✗ plist binary != working-tree build"
+        echo "  → \`devm service restart\` will reload \"$plist_path\","
+        echo "    NOT \"$expected\" — your changes won't appear."
+        echo "  fix: ./bin/devm install"
+        issues=$((issues+1))
+    fi
+    if [ -n "$running_path" ] && [ -n "$plist_path" ] && [ "$running_path" != "$plist_path" ]; then
+        echo
+        echo "✗ running daemon binary != plist binary"
+        echo "  → plist was rewritten but the daemon wasn't restarted."
+        echo "  fix: devm service restart"
+        issues=$((issues+1))
+    fi
+    if [ -n "$running_start" ] && [ -f "$expected" ]; then
+        start_ts=$(date -j -f '%a %b %e %T %Y' "$running_start" '+%s' 2>/dev/null || true)
+        binary_ts=$(stat -f %m "$expected" 2>/dev/null || true)
+        if [ -n "$start_ts" ] && [ -n "$binary_ts" ] && [ "$binary_ts" -gt "$start_ts" ]; then
+            echo
+            echo "✗ ./bin/devm has been rebuilt since the daemon started"
+            echo "  → daemon is running stale code."
+            echo "  fix: devm service restart"
+            issues=$((issues+1))
+        fi
+    fi
+    if [ "$issues" -eq 0 ]; then
+        echo
+        echo "✓ in sync"
+    fi
+    exit "$issues"
+
 IRON_PROXY_VERSION := "v0.45.0"
 
 # Download the pinned iron-proxy binary into ./bin/iron-proxy (dev layout).
