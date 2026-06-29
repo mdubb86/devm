@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/mdubb86/devm/internal/debuglog"
@@ -27,7 +28,7 @@ import (
 //
 // Runs CLI-side because the daemon (a LaunchDaemon) can't access the
 // user's login keychain.
-func resolveSecretBindings(cfg schema.Config) ([]serviceapi.SecretBinding, error) {
+func resolveSecretBindings(cfg schema.Config, backend secret.Backend) ([]serviceapi.SecretBinding, error) {
 	seen := map[string]bool{}
 	var names []string
 	collect := func(env map[string]schema.EnvValue) {
@@ -42,12 +43,12 @@ func resolveSecretBindings(cfg schema.Config) ([]serviceapi.SecretBinding, error
 	for _, svc := range cfg.Services {
 		collect(svc.Env)
 	}
+	sort.Strings(names)
 	if len(names) == 0 {
 		return nil, nil
 	}
 
 	hosts := cfg.Network.SecretHosts()
-	backend := secret.NewMacKeychain()
 	var bindings []serviceapi.SecretBinding
 	var missing []string
 	for _, n := range names {
@@ -144,7 +145,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// Collect allow-list from network config.
 	allowList := cfg.Network.Domains()
 
-	bindings, err := resolveSecretBindings(cfg)
+	bindings, err := resolveSecretBindings(cfg, secret.NewMacKeychain())
 	if err != nil {
 		return -1, fmt.Errorf("resolve secrets: %w", err)
 	}

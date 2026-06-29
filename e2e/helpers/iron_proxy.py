@@ -69,7 +69,8 @@ class IronProxyConfig:
     # Pass the actual secret values via spawn(env={...}).
     secret_tokens: dict[str, str] = field(default_factory=dict)
     # Maps secret token (proxy_value) → list of hosts the secret may inject
-    # for. Empty/absent list ⇒ defaults to ["*"] (inject for any host).
+    # for. Absent key ⇒ defaults to ["*"] (inject for any host); explicit
+    # [] ⇒ no rules (never injects).
     secret_hosts: dict[str, list[str]] = field(default_factory=dict)
 
     def to_yaml_dict(self) -> dict:
