@@ -9,8 +9,8 @@ type ProjectOverride struct {
 }
 
 type NetworkOverride struct {
-	AllowedDomains *[]string `yaml:"allowed_domains,omitempty"`
-	Allow          *[]string `yaml:"allow,omitempty"`
+	AllowedDomains *[]string     `yaml:"allowed_domains,omitempty"`
+	Allow          *[]AllowEntry `yaml:"allow,omitempty"`
 }
 
 type ServiceOverride struct {

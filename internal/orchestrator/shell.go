@@ -139,7 +139,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	debuglog.Logf("shell", "cold-start: sending StartVM to daemon")
 
 	// Collect allow-list from network config.
-	allowList := cfg.Network.Allow
+	allowList := cfg.Network.Domains()
 
 	// Resolve secrets from the keychain HERE (CLI runs as the user
 	// with full login keychain access) and pass the proxy-token →

@@ -401,9 +401,75 @@ func CheckLegacyKeys(data []byte) error {
 // the image pipeline, not per-project YAML flags.
 type BaseImage struct{}
 
+// AllowEntry is one entry in network.allow. It is written in YAML as
+// either a bare host string (reachable, no secret injection) or a mapping
+// {host, secrets} (reachable, and the named secrets may be substituted for
+// that host). The secret name joins to a `!secret` env value elsewhere.
+type AllowEntry struct {
+	Host    string
+	Secrets []string
+}
+
+// UnmarshalYAML accepts a scalar host or a {host, secrets} mapping.
+func (a *AllowEntry) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		a.Host = node.Value
+		return nil
+	}
+	if node.Kind == yaml.MappingNode {
+		var raw struct {
+			Host    string   `yaml:"host"`
+			Secrets []string `yaml:"secrets"`
+		}
+		if err := node.Decode(&raw); err != nil {
+			return err
+		}
+		if raw.Host == "" {
+			return fmt.Errorf("network.allow entry: host is required")
+		}
+		a.Host = raw.Host
+		a.Secrets = raw.Secrets
+		return nil
+	}
+	return fmt.Errorf("network.allow entry: expected host string or {host, secrets} mapping")
+}
+
 type Network struct {
-	AllowedDomains []string `yaml:"allowed_domains,omitempty"`
-	Allow          []string `yaml:"allow,omitempty"`
+	AllowedDomains []string     `yaml:"allowed_domains,omitempty"`
+	Allow          []AllowEntry `yaml:"allow,omitempty"`
+}
+
+// Domains is the reachability list: every allow entry's host, in order.
+func (n Network) Domains() []string {
+	out := make([]string, 0, len(n.Allow))
+	for _, e := range n.Allow {
+		out = append(out, e.Host)
+	}
+	return out
+}
+
+// SecretHosts maps each secret name to the sorted, de-duplicated set of
+// hosts that named it across allow entries — the injection scope union.
+func (n Network) SecretHosts() map[string][]string {
+	sets := map[string]map[string]bool{}
+	for _, e := range n.Allow {
+		for _, s := range e.Secrets {
+			if sets[s] == nil {
+				sets[s] = map[string]bool{}
+			}
+			sets[s][e.Host] = true
+		}
+	}
+	out := make(map[string][]string, len(sets))
+	for s, hostSet := range sets {
+		hosts := make([]string, 0, len(hostSet))
+		for h := range hostSet {
+			hosts = append(hosts, h)
+		}
+		sort.Strings(hosts)
+		out[s] = hosts
+	}
+	return out
 }
 
 type Config struct {

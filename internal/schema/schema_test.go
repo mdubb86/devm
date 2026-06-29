@@ -593,7 +593,7 @@ services:
 	assert.Nil(t, svc.Env["PLAIN"].Secret)
 }
 
-func TestParse_NetworkAllow(t *testing.T) {
+func TestParse_NetworkAllow_StringsAndMappings(t *testing.T) {
 	const yamlSrc = `
 project:
   id: x
@@ -602,10 +602,51 @@ network:
   allow:
     - github.com
     - "*.npmjs.org"
+    - host: api.github.com
+      secrets: [github_token]
+    - "*"
 `
 	var cfg Config
 	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &cfg))
-	assert.Equal(t, []string{"github.com", "*.npmjs.org"}, cfg.Network.Allow)
+	require.Len(t, cfg.Network.Allow, 4)
+	assert.Equal(t, AllowEntry{Host: "github.com"}, cfg.Network.Allow[0])
+	assert.Equal(t, AllowEntry{Host: "*.npmjs.org"}, cfg.Network.Allow[1])
+	assert.Equal(t, AllowEntry{Host: "api.github.com", Secrets: []string{"github_token"}}, cfg.Network.Allow[2])
+	assert.Equal(t, AllowEntry{Host: "*"}, cfg.Network.Allow[3])
+}
+
+func TestNetworkAllow_MappingWithoutHost_Errors(t *testing.T) {
+	const yamlSrc = `
+network:
+  allow:
+    - secrets: [x]
+`
+	var cfg Config
+	err := yaml.Unmarshal([]byte(yamlSrc), &cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "host is required")
+}
+
+func TestNetwork_Domains(t *testing.T) {
+	n := Network{Allow: []AllowEntry{
+		{Host: "github.com"},
+		{Host: "api.github.com", Secrets: []string{"github_token"}},
+		{Host: "*"},
+	}}
+	assert.Equal(t, []string{"github.com", "api.github.com", "*"}, n.Domains())
+}
+
+func TestNetwork_SecretHosts_UnionsHostsPerSecret(t *testing.T) {
+	n := Network{Allow: []AllowEntry{
+		{Host: "api.github.com", Secrets: []string{"gh"}},
+		{Host: "uploads.github.com", Secrets: []string{"gh"}},
+		{Host: "api.openai.com", Secrets: []string{"openai"}},
+		{Host: "*"}, // no secrets — contributes nothing
+	}}
+	got := n.SecretHosts()
+	assert.Equal(t, []string{"api.github.com", "uploads.github.com"}, got["gh"])
+	assert.Equal(t, []string{"api.openai.com"}, got["openai"])
+	assert.Len(t, got, 2)
 }
 
 func TestEnvValue_TokenFor(t *testing.T) {
