@@ -17,14 +17,18 @@ Store a credential once:
 devm secret set anthropic_key
 ```
 
-Then reference it in `devm.yaml`:
+Then reference it in `devm.yaml` and bind it to the host(s) that should receive the real value:
 
 ```yaml
 env:
   ANTHROPIC_API_KEY: !secret anthropic_key
+network:
+  allow:
+    - host: api.anthropic.com
+      secrets: [anthropic_key]
 ```
 
-At `devm shell`, the CLI reads `anthropic_key` from the keychain and injects the token `__DEVM_SECRET_anthropic_key__` into the VM's environment under `ANTHROPIC_API_KEY`. Iron-proxy replaces that token with the real value on every outbound request.
+At `devm shell`, the CLI reads `anthropic_key` from the keychain and injects the token `__DEVM_SECRET_anthropic_key__` into the VM's environment under `ANTHROPIC_API_KEY`. Iron-proxy substitutes the real value only on requests destined for hosts listed in `network.allow[].secrets` — a secret not bound to any host is never injected. See **Host scoping** below for details.
 
 ---
 
