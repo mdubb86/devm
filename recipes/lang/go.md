@@ -11,7 +11,7 @@ since: recipes-v1.0.0
 
 Cross-platform Go toolchain via apt, plus gopls for LSP-driven editor and
 agent intelligence. No environment overrides for module / build / bin
-locations — Go's defaults are honored so the sandbox doesn't share
+locations — Go's defaults are honored so the VM doesn't share
 linux/arm64 build artifacts with a darwin host.
 
 ## devm.yaml additions
@@ -25,12 +25,12 @@ install:
   # gopls — Go language server. Used by IDEs and by Claude Code's gopls-lsp
   # plugin (which runs gopls on the same machine as the agent; if Claude is
   # in the VM, gopls must be too). Installed system-wide so it's on PATH for
-  # any user inside the sandbox and survives shell rotation; it gets
+  # any user inside the VM and survives shell rotation; it gets
   # reinstalled at every cold-start via this block.
   - GOBIN=/usr/local/bin go install golang.org/x/tools/gopls@latest
 
 network:
-  allowed_domains:
+  allow:
     - proxy.golang.org      # `go mod download` + `go install` module proxy
     - sum.golang.org        # checksum database verification
     - golang.org            # bare `go install golang.org/x/...` paths
@@ -52,13 +52,13 @@ network:
 
 - **`path:` puts `$HOME/go/bin` on PATH.** This uses the top-level `path:`
   field (prepends absolute dirs to PATH). Go's default `GOBIN` is
-  `$HOME/go/bin` (= `/home/agent/go/bin` inside the sandbox); without this
+  `$HOME/go/bin` (= `/home/agent/go/bin` inside the VM); without this
   entry, ad-hoc `go install x@latest` succeeds but typing `x` fails. With
   the entry, the conventional layout works.
 
 - **Tools you want always-available go in the `install:` block** with
   `GOBIN=/usr/local/bin go install …` — they land on a system PATH dir
-  (visible to all users in the sandbox) and get reinstalled at every
+  (visible to all users in the VM) and get reinstalled at every
   cold-start (`install:` is the teardown bucket). Pattern used here for
   gopls.
 
