@@ -86,7 +86,7 @@ func scanRecipeForRetiredTerms(body string, terms []string) []string {
 	var hits []string
 	lower := strings.ToLower(body)
 	for _, term := range terms {
-		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(term) + `\b`)
+		re := regexp.MustCompile(`\b` + regexp.QuoteMeta(term) + `\b`)
 		if re.MatchString(lower) {
 			hits = append(hits, term)
 		}

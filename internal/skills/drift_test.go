@@ -52,7 +52,7 @@ func scanForRetiredTerms(body string, terms []string) []string {
 	for _, t := range terms {
 		// Whole-word match: `\bsbx\b` style, allowing `.`, `-`, `_`
 		// inside the term itself (e.g. install-all-ok).
-		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(t) + `\b`)
+		re := regexp.MustCompile(`\b` + regexp.QuoteMeta(t) + `\b`)
 		if re.MatchString(lower) {
 			hits = append(hits, t)
 		}
@@ -61,7 +61,7 @@ func scanForRetiredTerms(body string, terms []string) []string {
 }
 
 func TestScanForRetiredTerms_TableTests(t *testing.T) {
-	terms := []string{"sbx", "allowed_domains", "wrap-fg"}
+	terms := []string{"sbx", "allowed_domains", "wrap-fg", "kit policy"}
 	tests := []struct {
 		name string
 		body string
@@ -101,6 +101,16 @@ func TestScanForRetiredTerms_TableTests(t *testing.T) {
 			name: "multiple hits reported",
 			body: "sbx exec and allowed_domains config",
 			want: []string{"sbx", "allowed_domains"},
+		},
+		{
+			name: "catches multi-word kit policy",
+			body: "use kit policy when restricting network",
+			want: []string{"kit policy"},
+		},
+		{
+			name: "doesn't catch when kit and policy are separated",
+			body: "use kit other words policy when restricting network",
+			want: nil,
 		},
 	}
 	for _, tc := range tests {
