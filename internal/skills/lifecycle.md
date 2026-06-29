@@ -121,7 +121,9 @@ Reports (text or `--json`):
 
 Calls `config.Load` without touching the VM. Validates `devm.yaml` and `devm.me.yaml` (if present) against the schema. On success, prints `OK — N service(s) configured` and exits 0.
 
+<!-- migration-note-start -->
 `config.Load` runs `CheckLegacyKeys` before the typed parse. Configs using removed keys get a migration-pointer error rather than a silent parse failure. For example, `network.allowed_domains:` must be renamed to `network.allow:`, `project.sandbox_name:` must be renamed to `project.vm_name:`, and `project.hostname_apex:` is no longer supported.
+<!-- migration-note-end -->
 
 ---
 

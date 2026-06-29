@@ -192,4 +192,6 @@ The classification of every change kind is the `changeBucket` map in `internal/o
 
 ---
 
+<!-- migration-note-start -->
 > **Migration note:** Configs that use `network.allowed_domains:` or `project.sandbox_name:` will fail to load with a specific error message pointing to the replacement key (`network.allow` and `project.vm_name`, respectively).
+<!-- migration-note-end -->
