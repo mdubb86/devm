@@ -141,7 +141,7 @@ func TestConfigValidate(t *testing.T) {
 			ID:          "test",
 			SandboxName: "test-sbx",
 		},
-		Network: Network{AllowedDomains: []string{"github.com"}},
+		Network: Network{Allow: []string{"github.com"}},
 		Services: map[string]Service{
 			"webapp": {Port: 3000, Hostname: "test.test"},
 		},
@@ -386,6 +386,21 @@ func TestProject_Proxy_Validation(t *testing.T) {
 	}
 }
 
+func TestCheckLegacyKeys_AllowedDomainsMigration(t *testing.T) {
+	yaml := []byte(`
+project:
+  id: x
+  sandbox_name: x-sbx
+network:
+  allowed_domains:
+    - example.com
+`)
+	err := CheckLegacyKeys(yaml)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "network.allowed_domains is no longer supported")
+	assert.Contains(t, err.Error(), "network.allow")
+}
+
 func TestProject_HostnameApex_MigrationError(t *testing.T) {
 	yamlBlob := []byte(`
 project:
@@ -436,7 +451,7 @@ project:
   proxy: caddy
 base_image: {}
 network:
-  allowed_domains: [github.com]
+  allow: [github.com]
 env:
   EDITOR: vim
 services:

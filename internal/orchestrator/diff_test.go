@@ -146,33 +146,6 @@ func TestComputePortChanges_Deterministic(t *testing.T) {
 	assert.Equal(t, "zeta", c[1].Service)
 }
 
-func TestComputeNetworkChanges_Add(t *testing.T) {
-	old := schema.Config{Network: schema.Network{AllowedDomains: []string{"a.com"}}}
-	new := schema.Config{Network: schema.Network{AllowedDomains: []string{"a.com", "b.com"}}}
-	changes := ComputeNetworkChanges(old, new)
-	assert.Len(t, changes, 1)
-	assert.Equal(t, KindNetworkAdd, changes[0].Kind)
-	assert.Equal(t, "b.com", changes[0].Key)
-}
-
-func TestComputeNetworkChanges_Remove(t *testing.T) {
-	old := schema.Config{Network: schema.Network{AllowedDomains: []string{"a.com", "b.com"}}}
-	new := schema.Config{Network: schema.Network{AllowedDomains: []string{"a.com"}}}
-	changes := ComputeNetworkChanges(old, new)
-	assert.Len(t, changes, 1)
-	assert.Equal(t, KindNetworkRemove, changes[0].Kind)
-	assert.Equal(t, "b.com", changes[0].Key)
-}
-
-func TestComputeNetworkChanges_Deterministic(t *testing.T) {
-	old := schema.Config{}
-	new := schema.Config{Network: schema.Network{AllowedDomains: []string{"z.com", "a.com"}}}
-	c := ComputeNetworkChanges(old, new)
-	assert.Len(t, c, 2)
-	assert.Equal(t, "a.com", c[0].Key)
-	assert.Equal(t, "z.com", c[1].Key)
-}
-
 func TestComputeEnvChanges(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
 		"api": {Env: map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "info"}, "STALE": {Literal: "1"}}},
@@ -426,7 +399,7 @@ func TestComputeAllChanges_NoOp(t *testing.T) {
 		Services: map[string]schema.Service{
 			"api": {Port: 8080, Env: map[string]schema.EnvValue{"X": {Literal: "y"}}},
 		},
-		Network: schema.Network{AllowedDomains: []string{"a.com"}},
+		Network: schema.Network{Allow: []string{"a.com"}},
 		Install: []string{"true"},
 	}
 	changes, err := ComputeAllChanges(cfg, cfg, t.TempDir())

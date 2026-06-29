@@ -392,6 +392,13 @@ func CheckLegacyKeys(data []byte) error {
 				"templates from {{.Project.HostnameApex}} to " +
 				"{{.Env.HOSTNAME_APEX}}.")
 	}
+	if net, ok := raw["network"].(map[string]any); ok {
+		if _, hasAD := net["allowed_domains"]; hasAD {
+			return fmt.Errorf(
+				"network.allowed_domains is no longer supported. " +
+					"Use network.allow instead (rename the key in devm.yaml).")
+		}
+	}
 	return nil
 }
 
@@ -402,8 +409,7 @@ func CheckLegacyKeys(data []byte) error {
 type BaseImage struct{}
 
 type Network struct {
-	AllowedDomains []string `yaml:"allowed_domains,omitempty"`
-	Allow          []string `yaml:"allow,omitempty"`
+	Allow []string `yaml:"allow,omitempty"`
 }
 
 type Config struct {

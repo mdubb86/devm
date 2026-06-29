@@ -18,9 +18,6 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 		}
 	}
 	if override.Network != nil {
-		if override.Network.AllowedDomains != nil {
-			out.Network.AllowedDomains = *override.Network.AllowedDomains
-		}
 		if override.Network.Allow != nil {
 			out.Network.Allow = *override.Network.Allow
 		}

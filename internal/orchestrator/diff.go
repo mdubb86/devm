@@ -182,38 +182,6 @@ func ComputePortChanges(old, new schema.Config) []Change {
 	return changes
 }
 
-// ComputeNetworkChanges returns add/remove diffs for allowed_domains,
-// sorted alphabetically for determinism.
-func ComputeNetworkChanges(old, new schema.Config) []Change {
-	oldSet := setFromSlice(old.Network.AllowedDomains)
-	newSet := setFromSlice(new.Network.AllowedDomains)
-	all := make(map[string]struct{})
-	for d := range oldSet {
-		all[d] = struct{}{}
-	}
-	for d := range newSet {
-		all[d] = struct{}{}
-	}
-	sorted := make([]string, 0, len(all))
-	for d := range all {
-		sorted = append(sorted, d)
-	}
-	sort.Strings(sorted)
-
-	var changes []Change
-	for _, d := range sorted {
-		_, inOld := oldSet[d]
-		_, inNew := newSet[d]
-		switch {
-		case !inOld && inNew:
-			changes = append(changes, Change{Kind: KindNetworkAdd, Key: d, New: d})
-		case inOld && !inNew:
-			changes = append(changes, Change{Kind: KindNetworkRemove, Key: d, Old: d})
-		}
-	}
-	return changes
-}
-
 // ComputeAllChanges returns the full set of diffs between old and new
 // configs. Order: ports, network, env (per service), service unit fields
 // (per service), install, packages, mounts, masks (per service), image,
@@ -225,7 +193,6 @@ func ComputeNetworkChanges(old, new schema.Config) []Change {
 func ComputeAllChanges(old, new schema.Config, repoRoot string) ([]Change, error) {
 	var out []Change
 	out = append(out, ComputePortChanges(old, new)...)
-	out = append(out, ComputeNetworkChanges(old, new)...)
 	out = append(out, computeEnvChanges(old, new)...)
 	out = append(out, computeServiceUnitChanges(old, new)...)
 	out = append(out, computeHostnameChanges(old, new)...)
@@ -423,14 +390,6 @@ func stringSliceEqual(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-func setFromSlice(ss []string) map[string]struct{} {
-	out := make(map[string]struct{}, len(ss))
-	for _, s := range ss {
-		out[s] = struct{}{}
-	}
-	return out
 }
 
 func unionServiceNames(a, b map[string]schema.Service) []string {
