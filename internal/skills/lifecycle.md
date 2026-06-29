@@ -78,7 +78,7 @@ Sandbox stopped; config changes will apply on next `devm shell`.
 
 **Two known gaps:**
 
-1. **Network (`allow`) changes** — classified BucketLive in `changeBucket` but explicitly no-op in `ApplyLive` ("no apply path in Ship 4"). The allow-list is passed to the daemon at `StartVM` time, so changes take effect at the next cold start, not on a running VM.
+1. **Network (`allow`) changes** — classified BucketLive in `changeBucket` but has no apply code in `ApplyLive`. The allow-list is passed to the daemon at `StartVM` time, so changes take effect at the next cold start, not on a running VM.
 
 2. **Top-level `env:` changes** — `computeEnvChanges` iterates only per-service env (via `envOf`). A change made only at the top-level `env:` key produces no diff and takes effect at the next cold start via `installServiceUnits` (which merges top-level env into each service unit).
 
@@ -121,7 +121,7 @@ Reports (text or `--json`):
 
 Calls `config.Load` without touching the VM. Validates `devm.yaml` and `devm.me.yaml` (if present) against the schema. On success, prints `OK — N service(s) configured` and exits 0.
 
-`config.Load` runs `CheckLegacyKeys` before the typed parse. Configs using removed keys get a migration-pointer error rather than a silent parse failure. For example, `network.allowed_domains:` must be renamed to `network.allow:`, and `project.sandbox_name:` must be renamed to `project.vm_name:`.
+`config.Load` runs `CheckLegacyKeys` before the typed parse. Configs using removed keys get a migration-pointer error rather than a silent parse failure. For example, `network.allowed_domains:` must be renamed to `network.allow:`, `project.sandbox_name:` must be renamed to `project.vm_name:`, and `project.hostname_apex:` is no longer supported.
 
 ---
 
@@ -145,7 +145,7 @@ Classified BucketLive but no apply path in `ApplyLive` (take effect at next cold
 | Kind | Note |
 |---|---|
 | Port add / remove / change | No apply code in `ApplyLive` |
-| Network `allow` add / remove | Explicit no-op: "no apply path in Ship 4" |
+| Network `allow` add / remove | No apply code in `ApplyLive` — the allow-list is applied at `StartVM` time, so changes land on the next cold start |
 | `path` change | No apply code in `ApplyLive` |
 | Service `exec`, `restart`, `after`, `workdir`, `user`, `systemd` override, `hostname` | No apply code in `ApplyLive` |
 
@@ -158,7 +158,7 @@ The VM must be fully deleted and recreated. `devm reconcile` surfaces these as p
 | `install` change | `install:` command list differs |
 | `packages` change | `packages:` list differs |
 | Mount add / remove | `mounts:` list differs |
-| Mask add / remove | Per-service `masks:` list differs |
+| Mask add / remove | Per-service `masks:` list differs. mask `path` must be relative to the repo root (absolute paths, `~/`, and `$VAR` are rejected at `devm validate`). |
 | Image change | `base_image:` field differs. Note: `BaseImage` is an empty struct with no fields; structural equality is always true, so `KindImageChange` cannot fire from a `devm.yaml` edit. |
 | Identity change | `project:` identity fields differ |
 
