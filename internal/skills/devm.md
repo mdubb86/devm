@@ -17,7 +17,7 @@ devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-proje
 
 ## Where the allowlist lives
 
-`network.allow` in `devm.yaml` is the egress allowlist — a list of hostnames your code is permitted to reach. The list is enforced by iron-proxy on the Mac, which inspects each outbound request by SNI (TLS) or `Host` header (plain HTTP). Inside the VM, nftables permits only connections to the Mac host on iron-proxy's HTTP, HTTPS, and DNS ports, plus loopback. dnsmasq in the VM forwards all external DNS queries to iron-proxy's DNS port; iron-proxy returns its own IP for every resolved name, so all workload connections land at the Mac host and pass through the allowlist check before reaching the internet.
+`network.allow` in `devm.yaml` is the egress allowlist — each entry names a hostname (or `*` for open egress) your code may reach, and optionally declares which `!secret` values iron-proxy may inject on requests to that host. The list is enforced by iron-proxy on the Mac, which inspects each outbound request by SNI (TLS) or `Host` header (plain HTTP). Inside the VM, nftables permits only connections to the Mac host on iron-proxy's HTTP, HTTPS, and DNS ports, plus loopback. dnsmasq in the VM forwards all external DNS queries to iron-proxy's DNS port; iron-proxy returns its own IP for every resolved name, so all workload connections land at the Mac host and pass through the allowlist check before reaching the internet.
 
 ## Quickstart
 

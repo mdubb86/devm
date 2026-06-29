@@ -43,15 +43,24 @@ Controls outbound access enforced by iron-proxy (bucket: **live**).
 
 | Field | Type | Purpose |
 |---|---|---|
-| `allow` | []string | Hostnames the VM is permitted to reach, matched by SNI for TLS connections or HTTP Host header for plain HTTP. |
+| `allow` | []AllowEntry | Hostnames the VM is permitted to reach, matched by SNI for TLS connections or HTTP Host header for plain HTTP. Each entry is a bare host scalar or a `{host, secrets}` mapping. |
 
 Changes to `allow` take effect on the next `devm shell` cold start. The change-detection and live-apply path for network is not currently wired, so `devm reconcile` will not report or apply them.
+
+Each allow entry accepts two forms:
+
+- **Bare scalar** — just the hostname string: `- api.example.com`
+- **Mapping** — `{host, secrets}`: names a host and lists which `!secret` values iron-proxy may inject on requests to that host only. Secrets not named in any allow entry are omitted from iron-proxy config and never injected.
+
+Bare `*` is the open-egress sentinel: it matches any destination host, permitting unrestricted outbound access through iron-proxy.
 
 ```yaml
 network:
   allow:
-    - api.example.com
-    - registry.npmjs.org
+    - api.example.com                        # bare scalar
+    - host: api.other.com
+      secrets: [my_api_key]                  # inject my_api_key only to this host
+    - "*"                                    # open egress — any host
 ```
 
 ---

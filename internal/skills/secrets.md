@@ -42,6 +42,27 @@ All subcommands derive the project ID from `devm.yaml` in the working directory.
 
 ---
 
+## Host scoping
+
+By default, a `!secret` reference alone does not cause injection. To inject a secret on outbound requests, you must bind it to one or more hosts via the `secrets:` list on a `network.allow` entry:
+
+```yaml
+env:
+  ANTHROPIC_API_KEY: !secret anthropic_key
+network:
+  allow:
+    - host: api.anthropic.com
+      secrets: [anthropic_key]
+```
+
+With this config, iron-proxy substitutes the real value only on requests destined for `api.anthropic.com`. Requests to any other host carry the opaque token unchanged.
+
+A secret referenced in `env:` but not named under any allow entry's `secrets:` is omitted from iron-proxy's config entirely — it is **never injected**. (`internal/serviceapi/ironproxy.go`: `if len(s.Hosts) > 0` — only secrets with a non-empty host list are included in the `secrets` transform.)
+
+You may bind one secret across multiple hosts by listing it in multiple allow entries; iron-proxy receives the union of those hosts as the injection scope.
+
+---
+
 ## The flow
 
 ```
@@ -49,17 +70,17 @@ devm shell
   │
   ├─ reads devm.yaml → finds !secret refs
   ├─ calls macOS keychain: Get("<project-id>/<name>") for each ref
-  ├─ builds proxy-token map:
-  │     "__DEVM_SECRET_anthropic_key__"  →  "sk-ant-..."
+  ├─ collects host bindings from network.allow[*].secrets
+  │     anthropic_key → ["api.anthropic.com"]
   │
-  ├─ calls daemon: StartVM { SecretTokens: <map> }
+  ├─ calls daemon: StartVM { Secrets: [{Name, Value, Hosts}, ...] }
   │
   └─ daemon spawns iron-proxy:
-       ├─ config YAML declares a `secrets` transform:
+       ├─ config YAML declares a `secrets` transform (host-scoped):
        │     proxy_value: "__DEVM_SECRET_anthropic_key__"
        │     source: { type: env, var: "DEVM_SECRET_ANTHROPIC_KEY" }
-       │     match_headers: [Authorization]
-       │     rules: [{ host: "*" }]
+       │     match_headers: []  (all headers)
+       │     rules: [{ host: "api.anthropic.com" }]
        └─ real values injected into iron-proxy's process env
             (never written to the on-disk config file)
 
