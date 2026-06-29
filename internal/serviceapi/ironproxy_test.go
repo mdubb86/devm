@@ -1,7 +1,6 @@
 package serviceapi
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -68,59 +67,77 @@ func TestBuildIronProxyConfig_EmptyAllowList_OmitsTransforms(t *testing.T) {
 }
 
 func TestSecretEnvVarName(t *testing.T) {
-	assert.Equal(t, "DEVM_SECRET_GITHUB_TOKEN", secretEnvVarName("__DEVM_SECRET_github_token__"))
-	assert.Equal(t, "DEVM_SECRET_ANTHROPIC_API_KEY", secretEnvVarName("__DEVM_SECRET_anthropic_api_key__"))
+	assert.Equal(t, "DEVM_SECRET_GITHUB_TOKEN", secretEnvVarName("github_token"))
+	assert.Equal(t, "DEVM_SECRET_ANTHROPIC_API_KEY", secretEnvVarName("anthropic_api_key"))
 }
 
-func TestBuildIronProxyConfig_EmitsSecretsTransformWhenTokensPresent(t *testing.T) {
-	cfg := IronProxyConfig{
-		HTTPListen:   "x:1",
-		HTTPSListen:  "x:2",
-		CACertPath:   "/c",
-		CAKeyPath:    "/k",
-		SecretTokens: map[string]string{"__DEVM_SECRET_foo__": "real"},
-	}
-	blob, err := cfg.YAML()
-	require.NoError(t, err)
-
+// helper: pull the `secrets` transform's secret entries out of emitted YAML.
+func secretEntries(t *testing.T, blob []byte) []map[string]any {
+	t.Helper()
 	var got map[string]any
 	require.NoError(t, yaml.Unmarshal(blob, &got))
-
-	transforms := got["transforms"].([]any)
-	// Find the secrets transform.
-	var secretsT map[string]any
+	transforms, _ := got["transforms"].([]any)
 	for _, tr := range transforms {
 		tm := tr.(map[string]any)
 		if tm["name"] == "secrets" {
-			secretsT = tm
-			break
+			conf := tm["config"].(map[string]any)
+			raw := conf["secrets"].([]any)
+			out := make([]map[string]any, 0, len(raw))
+			for _, s := range raw {
+				out = append(out, s.(map[string]any))
+			}
+			return out
 		}
 	}
-	require.NotNil(t, secretsT, "secrets transform missing")
-
-	conf := secretsT["config"].(map[string]any)
-	secrets := conf["secrets"].([]any)
-	require.Len(t, secrets, 1)
-	first := secrets[0].(map[string]any)
-	assert.Equal(t, "__DEVM_SECRET_foo__", first["proxy_value"])
-	src := first["source"].(map[string]any)
-	assert.Equal(t, "env", src["type"])
-	assert.Equal(t, "DEVM_SECRET_FOO", src["var"])
-
-	// Real secret value NOT in YAML.
-	assert.NotContains(t, string(blob), "real")
+	return nil
 }
 
-func TestBuildIronProxyConfig_NoSecretsTransformWhenEmpty(t *testing.T) {
-	cfg := IronProxyConfig{HTTPListen: "x:1", HTTPSListen: "x:2", CACertPath: "/c", CAKeyPath: "/k"}
+func TestIronProxy_SecretEmission_ReplaceNestingAndRules(t *testing.T) {
+	cfg := IronProxyConfig{
+		HTTPListen: "x:1", HTTPSListen: "x:2", CACertPath: "/c", CAKeyPath: "/k",
+		AllowList: []string{"*"},
+		Secrets: []IronSecret{
+			{Name: "github_token", Value: "real-gh", Hosts: []string{"api.github.com", "uploads.github.com"}},
+		},
+	}
 	blob, err := cfg.YAML()
 	require.NoError(t, err)
 
-	// Either no transforms key, or transforms present but no `secrets` entry.
-	if !strings.Contains(string(blob), "transforms") {
-		return
+	entries := secretEntries(t, blob)
+	require.Len(t, entries, 1)
+	e := entries[0]
+
+	// source
+	src := e["source"].(map[string]any)
+	assert.Equal(t, "env", src["type"])
+	assert.Equal(t, "DEVM_SECRET_GITHUB_TOKEN", src["var"])
+
+	// replace block (NOT top-level)
+	rep := e["replace"].(map[string]any)
+	assert.Equal(t, "__DEVM_SECRET_github_token__", rep["proxy_value"])
+	assert.Equal(t, []any{}, rep["match_headers"]) // [] = all headers
+	assert.Nil(t, e["proxy_value"], "proxy_value must be under replace:, not top-level")
+
+	// rules: one {host} per bound host, sibling of source/replace
+	rules := e["rules"].([]any)
+	require.Len(t, rules, 2)
+	assert.Equal(t, "api.github.com", rules[0].(map[string]any)["host"])
+	assert.Equal(t, "uploads.github.com", rules[1].(map[string]any)["host"])
+
+	// real value never in YAML
+	assert.NotContains(t, string(blob), "real-gh")
+}
+
+func TestIronProxy_SecretWithNoHosts_Omitted(t *testing.T) {
+	cfg := IronProxyConfig{
+		HTTPListen: "x:1", HTTPSListen: "x:2", CACertPath: "/c", CAKeyPath: "/k",
+		AllowList: []string{"*"},
+		Secrets:   []IronSecret{{Name: "unbound", Value: "real", Hosts: nil}},
 	}
-	assert.NotContains(t, string(blob), "name: secrets")
+	blob, err := cfg.YAML()
+	require.NoError(t, err)
+	assert.NotContains(t, string(blob), "name: secrets", "unbound secret must not produce a secrets transform")
+	assert.NotContains(t, string(blob), "real")
 }
 
 func TestBuildIronProxyConfig_EnablesDNSWhenListenSet(t *testing.T) {
@@ -142,13 +159,13 @@ func TestBuildIronProxyConfig_EnablesDNSWhenListenSet(t *testing.T) {
 	assert.Equal(t, "192.168.64.1:8053", dns["listen"])
 }
 
-func TestIronProxyConfig_EnvVars(t *testing.T) {
+func TestIronProxy_EnvVars_OnlyBoundSecrets(t *testing.T) {
 	cfg := IronProxyConfig{
-		SecretTokens: map[string]string{
-			"__DEVM_SECRET_foo__": "value-1",
-			"__DEVM_SECRET_bar__": "value-2",
+		Secrets: []IronSecret{
+			{Name: "foo", Value: "value-1", Hosts: []string{"api.foo.com"}},
+			{Name: "unbound", Value: "value-2", Hosts: nil},
 		},
 	}
 	got := cfg.EnvVars()
-	assert.ElementsMatch(t, []string{"DEVM_SECRET_FOO=value-1", "DEVM_SECRET_BAR=value-2"}, got)
+	assert.Equal(t, []string{"DEVM_SECRET_FOO=value-1"}, got)
 }

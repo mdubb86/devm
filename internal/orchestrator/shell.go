@@ -18,14 +18,16 @@ import (
 	"github.com/mdubb86/devm/internal/status"
 )
 
-// resolveSecretsForCfg gathers every `!secret <name>` ref from cfg
-// (top-level env + per-service env, deduped), looks each up in the
-// macOS login keychain under "<project>/<name>", and returns the
-// proxy-token → real-value map for the daemon to hand to iron-proxy.
+// resolveSecretBindings gathers every `!secret <name>` ref from cfg
+// (top-level env + per-service env, deduped), looks each up in the macOS
+// login keychain under "<project>/<name>", and attaches the injection-host
+// scope declared in network.allow. Returns the bindings the daemon hands
+// to iron-proxy. A secret with no network.allow host scope is still
+// resolved and sent with empty Hosts (iron-proxy omits it — never injects).
 //
-// Runs CLI-side because the daemon (a LaunchDaemon) doesn't have
-// access to the user's login keychain even though it runs as the user.
-func resolveSecretsForCfg(cfg schema.Config) (map[string]string, error) {
+// Runs CLI-side because the daemon (a LaunchDaemon) can't access the
+// user's login keychain.
+func resolveSecretBindings(cfg schema.Config) ([]serviceapi.SecretBinding, error) {
 	seen := map[string]bool{}
 	var names []string
 	collect := func(env map[string]schema.EnvValue) {
@@ -40,12 +42,13 @@ func resolveSecretsForCfg(cfg schema.Config) (map[string]string, error) {
 	for _, svc := range cfg.Services {
 		collect(svc.Env)
 	}
-
 	if len(names) == 0 {
 		return nil, nil
 	}
+
+	hosts := cfg.Network.SecretHosts()
 	backend := secret.NewMacKeychain()
-	tokens := map[string]string{}
+	var bindings []serviceapi.SecretBinding
 	var missing []string
 	for _, n := range names {
 		v, err := backend.Get(cfg.Project.ID + "/" + n)
@@ -53,12 +56,12 @@ func resolveSecretsForCfg(cfg schema.Config) (map[string]string, error) {
 			missing = append(missing, n)
 			continue
 		}
-		tokens[schema.TokenFor(n)] = v
+		bindings = append(bindings, serviceapi.SecretBinding{Name: n, Value: v, Hosts: hosts[n]})
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing secrets in keychain: %v (set with `devm secret set <name>`)", missing)
 	}
-	return tokens, nil
+	return bindings, nil
 }
 
 // ShellDeps wires the orchestrator's collaborators. Production callers
@@ -141,11 +144,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// Collect allow-list from network config.
 	allowList := cfg.Network.Domains()
 
-	// Resolve secrets from the keychain HERE (CLI runs as the user
-	// with full login keychain access) and pass the proxy-token →
-	// real-value map to the daemon. The daemon runs as a LaunchDaemon
-	// and can't access the user's login keychain.
-	tokens, err := resolveSecretsForCfg(cfg)
+	bindings, err := resolveSecretBindings(cfg)
 	if err != nil {
 		return -1, fmt.Errorf("resolve secrets: %w", err)
 	}
@@ -155,7 +154,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		VMName:            vmName,
 		WorkspaceHostPath: repoRoot,
 		AllowList:         allowList,
-		SecretTokens:      tokens,
+		Secrets:           bindings,
 	}); err != nil {
 		return -1, fmt.Errorf("start vm: %w", err)
 	}
