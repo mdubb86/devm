@@ -76,7 +76,7 @@ The output block immediately above the error line contains the captured stdout a
 
 | Step | What it does | Common failure | Fix |
 |---|---|---|---|
-| `mkdir workspace parents` | `sudo mkdir -p <parent-of-workspace-path>` inside the VM | VM user cannot create the path (permissions or path component missing) | Verify `project.workspace` (or the default workspace path) in `devm.yaml`; check base image sudo configuration |
+| `mkdir workspace parents` | `sudo mkdir -p <parent-of-workspace-path>` inside the VM | VM user cannot create the path (permissions or path component missing) | The workspace path is mounted from the Mac host into the VM at the same absolute path; the path is set via `mounts:` in `devm.yaml` (or the daemon's default `WorkspaceHostPath`). Verify that path exists on the host and check base image sudo configuration. |
 | `install CA root` | Base64-decodes the devm CA cert, writes it to `/usr/local/share/ca-certificates/devm.crt`, runs `update-ca-certificates` | `update-ca-certificates` not available in the base image, or network blocked during CA update | Ensure the base image includes the `ca-certificates` package; if the CA file itself is missing, run `devm install` to regenerate it |
 | `write Caddyfile` | Renders and writes `/etc/caddy/Caddyfile` | Template variable resolution failed (bad service hostname) | Verify `services[*].hostname` values in `devm.yaml` |
 | `write dnsmasq config` | Writes `/etc/dnsmasq.d/devm-test.conf` | `tee` permission failure or missing parent directory | Should not fail on a healthy base image; check base image integrity |

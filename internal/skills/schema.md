@@ -28,7 +28,7 @@ Required. Identifies the project and configures the local reverse proxy.
 | Field | Type | Required | Purpose |
 |---|---|---|---|
 | `id` | string | yes | Project slug used as the devm-owned namespace in shared resources (Caddy `@id`). |
-| `vm_name` | string | yes | Tart VM image name to use when creating the sandbox. |
+| `vm_name` | string | yes | Tart VM instance name (the running VM identifier). |
 | `proxy` | string | no | `caddy` (default) or `none`. With `none`, `devm route` subcommands print a disabled message and exit 0. |
 
 Validation: `id` and `vm_name` are required; `proxy` must be empty, `caddy`, or `none`.

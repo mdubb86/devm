@@ -160,7 +160,7 @@ The VM must be fully deleted and recreated. `devm reconcile` surfaces these as p
 | `install` change | `install:` command list differs |
 | `packages` change | `packages:` list differs |
 | Mount add / remove | `mounts:` list differs |
-| Mask add / remove | Per-service `masks:` list differs. mask `path` must be relative to the repo root (absolute paths, `~/`, and `$VAR` are rejected at `devm validate`). |
+| Mask add / remove | Per-service `masks:` list differs. mask `path` must be relative to the repo root (absolute paths, `~`, and `$VAR` are rejected at `devm validate`). |
 | Image change | `base_image:` field differs. Note: `BaseImage` is an empty struct with no fields; structural equality is always true, so `KindImageChange` cannot fire from a `devm.yaml` edit. |
 | Identity change | `project:` identity fields differ |
 

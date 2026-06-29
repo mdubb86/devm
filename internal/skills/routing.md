@@ -94,7 +94,7 @@ The VM's DNS and network stack is configured at boot by the daemon (via `tart ex
    - Port 443 → DNAT to `MAC_HOST:HTTPSPort` (iron-proxy HTTPS).
    - A filter chain default-denies everything except loopback and traffic to MAC_HOST on the proxy and DNS ports.
 
-4. **Caddy** runs inside the VM (service `devm-caddy`) with a generated `/etc/caddy/Caddyfile`. The Caddyfile has one `http://hostname { reverse_proxy localhost:port }` block per service that declares a hostname. `auto_https off` is set — TLS for in-VM access is handled at the Mac proxy layer. The Caddyfile is written by the provisioner at first boot and reloaded on `devm reconcile` when hostnames or ports change.
+4. **Caddy** runs inside the VM (service `caddy`) with a generated `/etc/caddy/Caddyfile`. The Caddyfile has one `http://hostname { reverse_proxy localhost:port }` block per service that declares a hostname. `auto_https off` is set — TLS for in-VM access is handled at the Mac proxy layer. The Caddyfile is written by the provisioner at first boot and reloaded on `devm reconcile` when hostnames or ports change.
 
 ---
 

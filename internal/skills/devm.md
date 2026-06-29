@@ -12,7 +12,7 @@ devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-proje
 ## Three-process model
 
 - **`devm` CLI** — the command you type in your terminal. Reads `devm.yaml`, renders `.devm/` from the current config, then talks to the service over a Unix socket to start or query the VM. Once the VM is up, it attaches your terminal via `tart exec`.
-- **`devm service`** (LaunchDaemon, runs as your user) — owns the VM lifecycle (start, stop) and drives iron-proxy on the Mac. Secrets from the macOS login keychain are resolved CLI-side and handed to the daemon at start time, because the LaunchDaemon cannot access the login keychain directly.
+- **the devm daemon** (LaunchDaemon `com.devm.service`, managed via `devm service` subcommands) — owns the VM lifecycle (start, stop) and drives iron-proxy on the Mac. Secrets from the macOS login keychain are resolved CLI-side and handed to the daemon at start time, because the LaunchDaemon cannot access the login keychain directly.
 - **The Tart VM** — runs your code on a Debian Linux base image. nftables inside the VM default-denies all outbound traffic, NATing port 80 and 443 to the Mac host. DNS inside the VM is handled by a local dnsmasq that forwards upstream queries to iron-proxy on the Mac. The VM has no direct path to the internet.
 
 ## Where the allowlist lives
