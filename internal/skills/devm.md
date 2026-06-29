@@ -1,84 +1,38 @@
 ---
 name: devm
-description: Init or edit devm.yaml — Mac+VM dev sandbox tool. Use when the user wants to set up devm in a project, add ports/services/env/install/mounts, or integrate tools.
-hidden: false
+description: Configure and edit devm.yaml — a Mac+Tart-VM dev workspace tool with iron-proxy egress enforcement. Use when the user wants to set up devm in a project, add ports / services / env / install steps / mounts, integrate tools, or understand devm's process model.
 ---
 
-# devm — init and edit devm.yaml
+# devm
 
-You are configuring devm.yaml for the user. Use this skill when they
-want to set devm up in a project or change an existing devm.yaml.
+## What devm is
 
-## When you load: discover what's available
+devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-project Tart VM as your development environment. Your project directory is mounted into the VM at its same absolute path as on the Mac. All outbound network traffic from the VM is gated through an iron-proxy daemon running on the Mac, so the VM cannot reach the internet except through an explicit allowlist. Configuration lives in `devm.yaml` at the project root.
 
-Run `devm skills list` once at the start of the session to see what
-reference content is available. Common reference docs:
+## Three-process model
 
-- `devm skills get schema` — devm.yaml field reference
-- `devm skills get lifecycle` — when to suggest devm shell/reconcile/teardown
-- `devm skills get errors` — supervision error patterns
+- **`devm` CLI** — the command you type in your terminal. Reads `devm.yaml`, renders `.devm/` from the current config, then talks to the service over a Unix socket to start or query the VM. Once the VM is up, it attaches your terminal via `tart exec`.
+- **`devm service`** (LaunchDaemon, runs as your user) — owns the VM lifecycle (start, stop) and drives iron-proxy on the Mac. Secrets from the macOS login keychain are resolved CLI-side and handed to the daemon at start time, because the LaunchDaemon cannot access the login keychain directly.
+- **The Tart VM** — runs your code on a Debian Linux base image. nftables inside the VM default-denies all outbound traffic, NATing port 80 and 443 to the Mac host. DNS inside the VM is handled by a local dnsmasq that forwards upstream queries to iron-proxy on the Mac. The VM has no direct path to the internet.
 
-Fetch references on demand only — don't preload them.
+## Where the allowlist lives
 
-## Decide: init or edit?
+`network.allow` in `devm.yaml` is the egress allowlist — a list of hostnames your code is permitted to reach. The list is enforced by iron-proxy on the Mac, which inspects each outbound request by SNI (TLS) or `Host` header (plain HTTP). Inside the VM, nftables permits only connections to the Mac host on iron-proxy's HTTP, HTTPS, and DNS ports, plus loopback. dnsmasq in the VM forwards all external DNS queries to iron-proxy's DNS port; iron-proxy returns its own IP for every resolved name, so all workload connections land at the Mac host and pass through the allowlist check before reaching the internet.
 
-Check if `devm.yaml` exists in the cwd. If yes → edit flow. If no → init flow.
+## Quickstart
 
-## Init flow
+```
+brew install cirruslabs/cli/tart            # Tart is a prerequisite
+brew install --cask mdubb86/tap/devm
+devm install                                # registers the LaunchDaemon; requires sudo
+devm shell                                  # cold-starts the VM, drops you in
+```
 
-1. **Scan the project.** Use `ls`, `cat package.json`, `cat pyproject.toml`,
-   `cat go.mod`, `cat Cargo.toml`, etc. Identify the stack.
-2. **Search recipes for each detected tool.** For each tool you found,
-   run `devm recipes search <tool>`. If a recipe matches, fetch it with
-   `devm recipes get <name>` and apply its devm.yaml additions.
-3. **Propose a minimal devm.yaml.** Include only what the project needs.
-   Don't bake in services the user didn't ask for.
-4. **Iterate with the user.** Show them the proposal. Ask one focused
-   question at a time about anything ambiguous (ports? extra tools?
-   mounts?).
-5. **Write the file.** Add `.devm/` and `.devm-failures/` to `.gitignore`
-   if not already present.
-6. **Suggest next step:** `devm shell` to test the bringup.
+## Where to look next
 
-## Edit flow
-
-1. **Read the existing devm.yaml** carefully.
-2. **Understand the user's intent.** Are they adding a service, port,
-   env var, install step, mount, network rule?
-3. **For tool integrations:** run `devm recipes search <tool>` first.
-4. **For schema questions:** run `devm skills get schema`.
-5. **Propose the minimal change.** Show a focused diff.
-6. **Apply the change.** Validate with `devm validate` if available.
-7. **Mention bucket impact:**
-   - `env:`, `path:`, ports → live, picked up on next `devm shell`.
-   - `install:` → teardown bucket. Suggest `devm teardown && devm shell`.
-   - `services[*].startup:` → stop bucket. Suggest re-shelling.
-   (Fetch `devm skills get lifecycle` for the full table.)
-
-7. **PATH additions** for tool binaries the user wants on `$PATH`
-   (e.g. `~/.cargo/bin` for Rust, `node_modules/.bin` for Node)
-   belong in the top-level `path:` field, NOT prepended via `env: PATH`.
-   Devm assembles the final PATH from `path:` entries +
-   `$WORKSPACE/.devm/scripts` + the container's `$PATH`. Use
-   `$WORKSPACE`-relative entries when possible (workspace mount survives
-   teardown). Example:
-   ```yaml
-   path:
-     - $WORKSPACE/.cargo/bin
-     - /opt/custom-tool/bin
-   ```
-
-## When something goes wrong
-
-If the user runs into a supervision error, fetch `devm skills get errors`
-for the diagnosis playbook. Don't try to debug from first principles.
-
-## Do not
-
-- Don't bake in opinionated services (postgres, redis) unless the user
-  asked.
-- Don't suggest manual `apt-get update` in install: — bootstrap already
-  runs it.
-- Don't suggest mounting `~/.claude` for Claude Code persistence — use
-  `env: CLAUDE_CONFIG_DIR: $WORKSPACE/.claude` instead (see
-  `devm recipes get tool/ai/claude`).
+- `devm skills get schema` — every `devm.yaml` field, its type, and which change bucket it falls in.
+- `devm skills get lifecycle` — when to use `devm shell`, `reconcile`, `stop`, `teardown`, and `validate`.
+- `devm skills get service` — managing the background service (install, uninstall, restart, logs).
+- `devm skills get routing` — how port declarations, the Caddy reverse-proxy, and `*.test` hostnames work inside the VM.
+- `devm skills get secrets` — storing credentials in the macOS keychain and referencing them with `!secret` in `devm.yaml`.
+- `devm skills get errors` — reading supervision error blocks and where logs live.
