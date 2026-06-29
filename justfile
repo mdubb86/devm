@@ -37,21 +37,13 @@ build:
         echo "         one-time fix: Keychain Access → Certificate Assistant → Create a Certificate (Name: {{SIGN_IDENTITY}}, Code Signing, Self Signed Root)"; \
     fi
 
-# Install the working-tree build as `devm-dev` in $GOBIN (or $GOPATH/bin).
-# The -dev suffix means it coexists with a brew-installed `devm` without
-# any PATH games: `devm` → prod (brew), `devm-dev` → working tree.
-install:
-    @bin="$(go env GOBIN)"; [ -n "$bin" ] || bin="$(go env GOPATH)/bin"; \
-        go build -ldflags "{{DEV_LDFLAGS}}" -o "$bin/devm-dev" ./cmd/devm && echo "installed $bin/devm-dev"
-    @command -v devm-dev >/dev/null || echo "(reminder: add $(go env GOPATH)/bin to PATH so 'devm-dev' resolves)"
-
 # Run Go unit tests.
 test:
     go test ./...
 
 # Remove build artifacts.
 clean:
-    rm -f devm-dev
+    rm -rf bin/
 
 # Run the full e2e suite.
 e2e:
@@ -92,89 +84,6 @@ release-no-e2e:
 # Useful for validating .goreleaser.yaml without cutting a real release.
 release-dry:
     goreleaser release --snapshot --clean --skip=publish
-
-# Diagnose drift between the working-tree build (./bin/devm), the
-# LaunchDaemon plist's recorded binary, and the daemon process that's
-# actually running. The iteration loop `just build && devm service
-# restart` only works when all three are aligned; this recipe makes
-# any misalignment loud.
-#
-# Identity uses git commit (with -dirty suffix) embedded via
-# DEV_LDFLAGS, not file mtimes — `go build` touches the file on
-# every invocation even when the result is identical, and `git
-# checkout` produces fresh-mtime files of older code. Commit is
-# what actually answers "is the daemon running the code I think
-# it is."
-doctor:
-    #!/usr/bin/env bash
-    set -uo pipefail
-    expected="$(pwd)/bin/devm"
-    plist=/Library/LaunchDaemons/com.devm.service.plist
-    socket="$HOME/Library/Application Support/devm/devm.sock"
-
-    plist_path=""
-    if [ -r "$plist" ]; then
-        plist_path=$(plutil -extract ProgramArguments.0 raw -o - "$plist" 2>/dev/null || true)
-    fi
-
-    running_pid=""
-    running_path=""
-    if [ -S "$socket" ]; then
-        running_pid=$(lsof "$socket" 2>/dev/null | awk 'NR==2 {print $2}')
-        [ -n "$running_pid" ] && running_path=$(ps -p "$running_pid" -o comm= 2>/dev/null | sed 's/^[ \t]*//')
-    fi
-
-    # On-disk binary's embedded commit (what the next restart loads).
-    binary_commit=""
-    [ -x "$expected" ] && binary_commit=$("$expected" version --json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || true)
-
-    # Running daemon's reported commit (what's serving requests now).
-    daemon_commit=""
-    if [ -S "$socket" ]; then
-        daemon_commit=$(curl -sf --unix-socket "$socket" http://localhost/version 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || true)
-    fi
-
-    printf "working-tree build  (just build → ./bin/devm) : %s\n" "$expected"
-    printf "plist               (registered binary)       : %s\n" "${plist_path:-<unreadable or not installed>}"
-    printf "running daemon      (pid / binary)            : %s\n" "${running_pid:+$running_pid }${running_path:-<not running>}"
-    printf "  on-disk binary commit                       : %s\n" "${binary_commit:-<unknown>}"
-    printf "  running daemon commit                       : %s\n" "${daemon_commit:-<unknown>}"
-
-    issues=0
-    if [ -n "$plist_path" ] && [ "$plist_path" != "$expected" ]; then
-        echo
-        echo "✗ plist binary != working-tree build"
-        echo "  → \`devm service restart\` will reload \"$plist_path\","
-        echo "    NOT \"$expected\" — your changes won't appear."
-        echo "  fix: ./bin/devm install"
-        issues=$((issues+1))
-    fi
-    if [ -n "$running_path" ] && [ -n "$plist_path" ] && [ "$running_path" != "$plist_path" ]; then
-        echo
-        echo "✗ running daemon binary != plist binary"
-        echo "  → plist was rewritten but the daemon wasn't restarted."
-        echo "  fix: devm service restart"
-        issues=$((issues+1))
-    fi
-    if [ -n "$binary_commit" ] && [ -n "$daemon_commit" ] && [ "$binary_commit" != "$daemon_commit" ]; then
-        echo
-        echo "✗ daemon commit != on-disk binary commit"
-        echo "  → ./bin/devm was rebuilt at a different commit than what the daemon is running."
-        echo "  fix: devm service restart"
-        issues=$((issues+1))
-    fi
-    if [ -n "$binary_commit" ] && [ -z "$daemon_commit" ] && [ -n "$running_pid" ]; then
-        echo
-        echo "✗ daemon does not report a commit"
-        echo "  → daemon predates commit-aware /version (running an old binary)."
-        echo "  fix: devm service restart"
-        issues=$((issues+1))
-    fi
-    if [ "$issues" -eq 0 ]; then
-        echo
-        echo "✓ in sync"
-    fi
-    exit "$issues"
 
 IRON_PROXY_VERSION := "v0.45.0"
 
