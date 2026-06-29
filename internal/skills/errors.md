@@ -1,52 +1,144 @@
 ---
 name: errors
-description: Reference — how to read supervision error blocks and where logs live.
-hidden: true
+description: Debugging devm — failure shapes from the daemon, the provisioner, and the VM. Use when devm shell fails to come up, or when something inside the VM isn't reachable.
 ---
 
-# Supervision error patterns
+# Debugging devm
 
-If `devm shell` prints a structured error like:
+Failures fall into three layers. Identifying the layer narrows the search to the right log.
 
-```
-error: install step 3 failed (rc=1)
-  command: apt-get install -y nonexistent-pkg
-  output (last N bytes of /tmp/.devm-install/install-3/current):
-    Reading package lists...
-    E: Unable to locate package nonexistent-pkg
-```
+## Three layers of failure
 
-The error block is everything the agent needs. The `output` section
-contains the actual failing command's stdout+stderr, captured by the
-wrap-fg.sh wrapper. Don't re-run the failing command speculatively;
-read the captured output.
-
-## Patterns
-
-| Pattern | Meaning | Action |
+| Layer | When it fails | Symptom |
 |---|---|---|
-| `error: install step N failed (rc=R)` | A user `install:` command exited non-zero. Sbx tore down the sandbox per its contract. | Read `output:` block. Likely fix is in the captured stderr. |
-| `error: startup step N failed (rc=R)` | A user `services[*].startup:` command failed. Sandbox is silent on startup failure but devm detected it via marker files. | Read `output:` block. Daemon failures (port-in-use, missing config) common. |
-| `error: install did not complete` / `step N still running or hung` | Install gate timed out (default 120s). The hanging step's captured output is in `output:`. | Often an apt or network-blocked install. Check network policy. |
-| `error: startup did not complete` / `step N still running or hung` | Startup gate timed out (default 30s). | Often a service that opens a port and hangs but never signals ready. |
+| **Daemon** | Before the VM starts | `devm shell` prints `query vm status: ...` or another pre-VM error |
+| **Provisioner** | VM started; first-boot setup failed | Output contains `[step: <name>]` lines followed by `provision: provision step "<name>": ...` |
+| **Workload** | Provision succeeded; code in the VM can't reach something | Connection refused, DNS failure, or HTTPS cert error inside the VM |
 
-## Where logs live (if user wants more than the error block)
+---
 
-Inside the sandbox (use `sbx exec NAME cat ...`):
+## Daemon failures
 
-- `/tmp/.devm-install/install-<N>/current` — captured stdout+stderr per install step
-- `/tmp/.devm-install/install-<N>.rc` — exit code
-- `/tmp/.devm-install/install-<N>.ok` — present iff step succeeded
-- `/tmp/.devm-startup/<...>` — same layout for startup phase
+`devm shell` contacts the daemon over a local socket before doing anything else. If the daemon is not running:
 
-On the host (in case the sandbox is gone after an install failure):
+```
+query vm status: <detail>
+```
 
-- `<repoRoot>/.devm-failures/install-<N>.current` — mirrored failure record
-- `<repoRoot>/.devm-failures/install-<N>.rc` — mirrored exit code
+Check daemon state:
 
-## Gate timeouts (test/debug overrides)
+```
+devm service status
+```
 
-- `DEVM_INSTALL_GATE_TIMEOUT_S=<seconds>` — override the install gate timeout.
-- `DEVM_STARTUP_GATE_TIMEOUT_S=<seconds>` — override the startup gate timeout.
+Prints `running`, `stopped`, or `not installed`. If stopped:
 
-Defaults: 120s install, 30s startup.
+```
+devm service start
+```
+
+If the daemon fails to stay up, check the error log:
+
+```
+tail -n 50 ~/Library/Logs/com.devm.service.err.log
+```
+
+Other pre-VM errors from `devm shell`:
+
+| Error prefix | Cause | Fix |
+|---|---|---|
+| `acquire lock: ...` | Another `devm shell` for the same project is already running | Wait for it to finish, or stop the other shell; lock lives at `.devm/lock` |
+| `render devm dir: ...` | `devm.yaml` failed to render (bad template variable or YAML parse error) | Fix the YAML and retry |
+| `resolve secrets: missing secrets in keychain: [<name>] ...` | A `!secret` reference has no matching entry in the macOS login keychain | Run `devm secret set <name>` for each listed name; see `devm skills get secrets` |
+| `start vm: ...` | Daemon rejected the `StartVM` call | Check daemon log at `~/Library/Logs/com.devm.service.err.log` |
+| `vm did not become ready: timeout waiting for vm <name> to become exec-ready` | VM did not accept exec connections within 60 seconds | Run `tart list` to check VM state; daemon log may have more detail |
+
+---
+
+## Provisioner failures
+
+After the VM starts, `devm shell` runs a 12-step provisioner inside the VM. Each step prints a header as it begins:
+
+```
+[step: <name>]
+<stdout and stderr from the command>
+```
+
+On failure the error line is:
+
+```
+provision: provision step "<name>": tart exec <command>: exit <N>
+```
+
+The output block immediately above the error line contains the captured stdout and stderr from the failing command. Read that block first.
+
+### Step reference
+
+| Step | What it does | Common failure | Fix |
+|---|---|---|---|
+| `mkdir workspace parents` | `sudo mkdir -p <parent-of-workspace-path>` inside the VM | VM user cannot create the path (permissions or path component missing) | Verify `project.workspace` (or the default workspace path) in `devm.yaml`; check base image sudo configuration |
+| `install CA root` | Base64-decodes the devm CA cert, writes it to `/usr/local/share/ca-certificates/devm.crt`, runs `update-ca-certificates` | `update-ca-certificates` not available in the base image, or network blocked during CA update | Ensure the base image includes the `ca-certificates` package; if the CA file itself is missing, run `devm install` to regenerate it |
+| `write Caddyfile` | Renders and writes `/etc/caddy/Caddyfile` | Template variable resolution failed (bad service hostname) | Verify `services[*].hostname` values in `devm.yaml` |
+| `write dnsmasq config` | Writes `/etc/dnsmasq.d/devm-test.conf` | `tee` permission failure or missing parent directory | Should not fail on a healthy base image; check base image integrity |
+| `reload base services` | `systemctl reload-or-restart dnsmasq` then `systemctl reload-or-restart caddy` | dnsmasq: port 53 is already bound (e.g., `systemd-resolved` is active in the VM). Caddy: Caddyfile syntax error | dnsmasq: `tart exec <vm> journalctl -u dnsmasq`. Caddy: `tart exec <vm> journalctl -u caddy` |
+| `apt-get update` | `sudo apt-get update -y` (skipped if `packages:` is empty in `devm.yaml`) | `deb.debian.org` is not listed in `network.allow`; apt hangs or fails | Add `deb.debian.org` to `network.allow` in `devm.yaml` |
+| `apt-get install packages` | Installs every package listed under `packages:` | Package name not found, or apt network access blocked | Read the captured apt output; verify package names and check `network.allow` |
+| `run install commands` | Runs each command listed under `install:` in order; prints `[N/M] <command>` before each one | User command exits non-zero | Read the captured stderr shown in the output block above the error; fix the failing command |
+| `install service units` | Renders systemd unit files and writes them to `/etc/systemd/system/` | Bad `services[*].exec` or `services[*].systemd` field in `devm.yaml` | Check `devm.yaml` service declarations |
+| `systemctl daemon-reload` | Reloads systemd after unit files are written | Unit file syntax error | Run `tart exec <vm> journalctl -xe` for the systemd error detail |
+| `enable + start services` | `sudo systemctl enable --now <unit>` for each service that declares an exec or systemd unit | Service failed to start (port in use, missing binary, bad config) | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>` |
+| `apply masks` | Bind-mounts per-service mask directories from `/var/devm/masks/<project-id>/<service>/<path>` over workspace paths | Target path doesn't exist, or `mount --bind` fails | Check `services[*].masks` paths in `devm.yaml`; verify workspace path is correct |
+
+---
+
+## Workload failures
+
+These occur after a successful provision: the VM is up and provisioned, but code running inside it cannot reach something.
+
+### Connection refused or no such host
+
+```
+curl: (7) Failed to connect to api.example.com port 443: Connection refused
+curl: (6) Could not resolve host: api.example.com
+```
+
+All outbound traffic from the VM is routed through iron-proxy on the Mac. If the destination is not listed under `network.allow` in `devm.yaml`, iron-proxy blocks it. Check:
+
+1. `devm.yaml` — confirm the host appears under `network.allow`.
+2. Iron-proxy log at `~/Library/Logs/devm/<project-id>-proxy.log` — logs every request decision. Replace `<project-id>` with the value of `project.id` in your `devm.yaml`.
+
+See `devm skills get routing` for the full iron-proxy network model and allow-list syntax.
+
+### HTTPS certificate errors
+
+```
+curl: (60) SSL certificate problem: unable to get local issuer certificate
+```
+
+Iron-proxy terminates TLS on the Mac and re-signs responses with the devm CA. If the VM does not trust the devm CA, every HTTPS request through the proxy fails with a cert error.
+
+Check the `install CA root` provisioner step output from the most recent cold start to confirm whether the step succeeded. If it failed, recreate the VM (delete and re-run `devm shell`) so the provisioner runs again.
+
+If the CA cert itself is missing from the Mac (`~/Library/Application Support/devm/ca/root.crt`), or is not trusted in the System Keychain, run `devm install` to regenerate and re-trust it.
+
+### Token and secret issues
+
+If an API call fails with unexpected credentials or a 401, check whether iron-proxy's token substitution is working correctly. See `devm skills get secrets` for the full secret flow and how to diagnose substitution failures.
+
+---
+
+## Where logs live
+
+| Log | Path | Notes |
+|---|---|---|
+| Daemon stdout | `~/Library/Logs/com.devm.service.out.log` | Primary daemon output |
+| Daemon stderr | `~/Library/Logs/com.devm.service.err.log` | Start here for daemon crashes and startup failures |
+| Iron-proxy | `~/Library/Logs/devm/<project-id>-proxy.log` | Per-project; logs every proxied request. `<project-id>` = `project.id` in `devm.yaml` |
+| In-VM systemd | `tart exec <vm> journalctl -u <unit>` | Use `-xe` for recent system errors; use `-u <unit>` for a specific service |
+| Install / uninstall | `~/Library/Logs/devm/install.log` | Subprocess output from `devm install` and `devm uninstall`; last 30 lines are printed automatically on failure |
+
+The `.devm/` directory in your project root is maintained by the CLI and is not committed to version control. It contains:
+
+- `.devm/.env` — rendered environment file; shell-sourceable; sourced by the VM shell on attach
+- `.devm/templates/` — installer scripts generated from `devm.yaml` template declarations
+- `.devm/lock` — orchestrator lock file; prevents concurrent cold starts in the same project directory
