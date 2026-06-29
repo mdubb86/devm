@@ -45,7 +45,7 @@ Controls outbound access enforced by iron-proxy (bucket: **live**).
 |---|---|---|
 | `allow` | []string | Hostnames the VM is permitted to reach, matched by SNI for TLS connections or HTTP Host header for plain HTTP. |
 
-Changes to `allow` are applied by `devm reconcile` without restarting the VM.
+Changes to `allow` take effect on the next `devm shell` cold start. The change-detection and live-apply path for network is not currently wired, so `devm reconcile` will not report or apply them.
 
 ```yaml
 network:
@@ -76,6 +76,8 @@ Substitution rules in values:
 - Any other `$VAR` reference is an error.
 
 Per-service `env` entries win over top-level `env` on key collision.
+
+Note: `devm reconcile` detects env changes via per-service `env` entries only. A change to top-level `env` with no corresponding per-service change produces no diff output; it takes effect on the next `devm shell` cold start.
 
 ---
 
@@ -154,7 +156,7 @@ Named service definitions. Each key is the service name.
 | `port` | int or "IP:PORT" | live | VM-side listen port. String form (`"0.0.0.0:8080"`) also sets the host bind IP; default bind is `127.0.0.1`. |
 | `hostname` | string | live | Hostname for the Caddy reverse-proxy entry. Must end in `.test`. |
 | `env` | map[string]EnvValue | live | Per-service environment variables (same `!secret` syntax as top-level `env`). |
-| `masks` | []Mask | recreate | `mount --bind` overlays applied at boot. Each has `path` (relative to repo root, or absolute under a `mounts` entry) and `size` (e.g. `100m`). |
+| `masks` | []Mask | recreate | `mount --bind` overlays applied at boot. Each has `path` (relative to repo root) and `size` (e.g. `100m`). |
 | `templates` | []Template | live | Files rendered from source scripts and written into the VM. Each has `source` (project-relative path) and `output` (absolute path in VM). |
 | `exec` | []string | live | Command and arguments to run as the service process. |
 | `workdir` | string | live | Working directory for the service process. |
@@ -167,7 +169,7 @@ Validation rules:
 - A service must define at least one of `port`, `masks`, `exec`, or `systemd`.
 - `hostname` must end in `.test`.
 - Port values must be in range 1–65535; no two services may share a port or a hostname.
-- Mask `path` must stay inside the workspace (relative paths) or under a configured `mounts` entry (absolute paths).
+- Mask `path` must be relative to the repo root; absolute paths, `~`, `$VAR`, and `../` traversal are rejected.
 - Template `source` must be project-relative (no `../` traversal); `output` must be absolute.
 
 ---
@@ -176,13 +178,13 @@ Validation rules:
 
 Object — bucket: **recreate**.
 
-Accepted for YAML compatibility; has no active fields. Tart VM images are configured via the image pipeline, not per-project YAML flags. A change to this block (even an empty one added or removed) triggers `KindImageChange`, which is in the recreate bucket.
+Accepted for YAML compatibility; has no active fields. Tart VM images are configured via the image pipeline, not per-project YAML flags. The block is an empty struct; structural equality means a devm.yaml edit cannot produce a detectable `base_image` change, so the recreate bucket entry for this field is unreachable in practice.
 
 ---
 
 ## Bucket glossary
 
-**live** — `devm reconcile` applies the change to the running VM without stopping it or ending active sessions. Mechanism varies by field: env and path changes rewrite `.devm/.env` and the workspace mount surfaces the new file inside the VM; service unit changes re-render the unit file and restart the affected service via `tart exec`; network changes update the iron-proxy allowlist; port and hostname changes reload the in-VM Caddyfile.
+**live** — `devm reconcile` applies the change to the running VM without stopping it or ending active sessions. Mechanism varies by field: env and path changes rewrite `.devm/.env` and the workspace mount surfaces the new file inside the VM; service unit changes re-render the unit file and restart the affected service via `tart exec`; port and hostname changes reload the in-VM Caddyfile. Network (`allow`) changes are classified live per the `changeBucket` map but the detection and apply path is not currently wired; they take effect on the next cold start.
 
 **recreate** (internally: `teardown+shell`) — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `packages`, `mounts` (virtio-fs shares set at `tart run` time), `masks` (bind mounts applied at boot), `base_image`, and `project` identity fields.
 
