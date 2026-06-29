@@ -9,7 +9,7 @@ type ProjectOverride struct {
 }
 
 type NetworkOverride struct {
-	Allow *[]string `yaml:"allow,omitempty"`
+	Allow *[]AllowEntry `yaml:"allow,omitempty"`
 }
 
 type ServiceOverride struct {

@@ -399,7 +399,7 @@ func TestComputeAllChanges_NoOp(t *testing.T) {
 		Services: map[string]schema.Service{
 			"api": {Port: 8080, Env: map[string]schema.EnvValue{"X": {Literal: "y"}}},
 		},
-		Network: schema.Network{Allow: []string{"a.com"}},
+		Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}},
 		Install: []string{"true"},
 	}
 	changes, err := ComputeAllChanges(cfg, cfg, t.TempDir())

@@ -16,20 +16,23 @@ import (
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
+// SecretBinding is one resolved, host-scoped secret. The CLI resolves
+// Value from the login keychain in the user's context (the daemon runs as
+// a LaunchDaemon and cannot) and sends it over the unix socket. Hosts is
+// the injection scope from network.allow.
+type SecretBinding struct {
+	Name  string   `json:"name"`
+	Value string   `json:"value"`
+	Hosts []string `json:"hosts,omitempty"`
+}
+
 // VMStartRequest is the body shape for POST /vm/start.
-//
-// SecretTokens is keyed by opaque proxy-token (e.g.
-// __DEVM_SECRET_GITHUB_TOKEN__) with values being the real secret.
-// The CLI resolves these from the keychain in its own (user) context
-// and sends them over the unix socket; the daemon doesn't touch the
-// keychain. This works around macOS's LaunchDaemon-vs-login-keychain
-// access restriction.
 type VMStartRequest struct {
-	ProjectID         string            `json:"project_id"`
-	VMName            string            `json:"vm_name"`
-	WorkspaceHostPath string            `json:"workspace_host_path"`
-	AllowList         []string          `json:"allow_list,omitempty"`
-	SecretTokens      map[string]string `json:"secret_tokens,omitempty"`
+	ProjectID         string          `json:"project_id"`
+	VMName            string          `json:"vm_name"`
+	WorkspaceHostPath string          `json:"workspace_host_path"`
+	AllowList         []string        `json:"allow_list,omitempty"`
+	Secrets           []SecretBinding `json:"secrets,omitempty"`
 }
 
 // VMStopRequest is the body shape for POST /vm/stop.
@@ -111,12 +114,11 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			return
 		}
 
-		// Secrets are resolved CLI-side (user has login keychain
-		// access; we run as a LaunchDaemon which doesn't). The CLI
-		// sent us the proxy-token → real-value map directly.
-		tokens := req.SecretTokens
-		if tokens == nil {
-			tokens = map[string]string{}
+		// Secrets are resolved CLI-side (login-keychain access); the CLI
+		// sent us resolved values + host scopes directly.
+		ironSecrets := make([]IronSecret, 0, len(req.Secrets))
+		for _, b := range req.Secrets {
+			ironSecrets = append(ironSecrets, IronSecret{Name: b.Name, Value: b.Value, Hosts: b.Hosts})
 		}
 
 		// Discover MAC_HOST (vmnet bridge IP).
@@ -150,13 +152,13 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			return
 		}
 		proxyCfg := IronProxyConfig{
-			HTTPListen:   fmt.Sprintf("%s:%d", macIP, httpPort),
-			HTTPSListen:  fmt.Sprintf("%s:%d", macIP, httpsPort),
-			DNSListen:    fmt.Sprintf("%s:%d", macIP, dnsPort),
-			CACertPath:   filepath.Join(caDir, "ca", "root.crt"),
-			CAKeyPath:    filepath.Join(caDir, "ca", "root.key"),
-			AllowList:    req.AllowList,
-			SecretTokens: tokens,
+			HTTPListen:  fmt.Sprintf("%s:%d", macIP, httpPort),
+			HTTPSListen: fmt.Sprintf("%s:%d", macIP, httpsPort),
+			DNSListen:   fmt.Sprintf("%s:%d", macIP, dnsPort),
+			CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
+			CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
+			AllowList:   req.AllowList,
+			Secrets:     ironSecrets,
 		}
 		if err := SpawnIronProxy(r.Context(), sup, req.ProjectID, proxyCfg); err != nil {
 			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)
@@ -168,7 +170,6 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			HTTPPort:  httpPort,
 			HTTPSPort: httpsPort,
 			DNSPort:   dnsPort,
-			Tokens:    tokens,
 		})
 
 		// Apply VM-side config via tart exec — env, nftables, dnsmasq.
@@ -287,13 +288,10 @@ func pickPort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-// ironProxyInfo holds the ports and token map allocated for one project's
-// iron-proxy instance. Read by Task 9 (VM env injection).
 type ironProxyInfo struct {
 	HTTPPort  int
 	HTTPSPort int
 	DNSPort   int
-	Tokens    map[string]string
 }
 
 type ironProxyStore struct {

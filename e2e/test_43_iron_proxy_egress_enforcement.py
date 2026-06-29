@@ -80,3 +80,30 @@ def test_egress_enforcement(devm, workspace, sandbox_name):
                        capture_output=True, timeout=60)
         subprocess.run([devm.path, "secret", "delete", "TEST_TOKEN"], cwd=str(workspace.path),
                        capture_output=True, timeout=10)
+
+
+@pytest.mark.devm
+@pytest.mark.slow
+def test_open_mode_reaches_any_host(devm, workspace, sandbox_name):
+    """network.allow: ['*'] reaches a host that the restrictive test blocks."""
+    workspace.write_devmyaml(
+        install=["true"],
+        services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
+        network={"allow": ["*"]},
+    )
+    try:
+        r = subprocess.run([devm.path, "shell", "--", "true"],
+                           cwd=str(workspace.path), capture_output=True, timeout=300)
+        assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
+
+        # google.com is BLOCKED in the restrictive test; under '*' it must reach.
+        r = subprocess.run(
+            [devm.path, "shell", "--", "curl", "-sf", "-o", "/dev/null",
+             "-w", "%{http_code}", "--max-time", "15", "https://google.com"],
+            cwd=str(workspace.path), capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0 and r.stdout.strip() in (b"200", b"301", b"302"), \
+            f"open mode failed to reach google.com: {r.stdout!r} (stderr: {r.stderr.decode()})"
+    finally:
+        subprocess.run([devm.path, "teardown", "--yes"], cwd=str(workspace.path),
+                       capture_output=True, timeout=60)

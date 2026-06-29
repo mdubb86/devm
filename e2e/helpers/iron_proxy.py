@@ -68,6 +68,10 @@ class IronProxyConfig:
     # env var name iron-proxy reads the real value from (e.g. "DEVM_SECRET_FOO").
     # Pass the actual secret values via spawn(env={...}).
     secret_tokens: dict[str, str] = field(default_factory=dict)
+    # Maps secret token (proxy_value) → list of hosts the secret may inject
+    # for. Absent key ⇒ defaults to ["*"] (inject for any host); explicit
+    # [] ⇒ no rules (never injects).
+    secret_hosts: dict[str, list[str]] = field(default_factory=dict)
 
     def to_yaml_dict(self) -> dict:
         cfg: dict = {
@@ -98,15 +102,17 @@ class IronProxyConfig:
             })
 
         if self.secret_tokens:
-            entries = [
-                {
+            entries = []
+            for token, env_var in self.secret_tokens.items():
+                hosts = self.secret_hosts.get(token, ["*"])
+                entries.append({
                     "source": {"type": "env", "var": env_var},
-                    "proxy_value": token,
-                    "match_headers": ["Authorization"],
-                    "rules": [{"host": "*"}],
-                }
-                for token, env_var in self.secret_tokens.items()
-            ]
+                    "replace": {
+                        "proxy_value": token,
+                        "match_headers": [],  # [] = all headers
+                    },
+                    "rules": [{"host": h} for h in hosts],
+                })
             transforms.append({
                 "name": "secrets",
                 "config": {"secrets": entries},
