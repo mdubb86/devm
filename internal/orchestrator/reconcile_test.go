@@ -14,7 +14,7 @@ import (
 
 func reconcileMinimalCfg() schema.Config {
 	return schema.Config{
-		Project: schema.Project{ID: "x", SandboxName: "x"},
+		Project: schema.Project{ID: "x", VMName: "x"},
 	}
 }
 
@@ -171,9 +171,9 @@ func TestRunReconcile_NonTTYRecreateExits2(t *testing.T) {
 	snapCfg := reconcileMinimalCfg()
 	snapCfg.Install = []string{"old"}
 	snapYAML, _ := yaml.Marshal(snapCfg)
-	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x-sbx"), string(snapYAML))
+	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x-vm"), string(snapYAML))
 	newCfg := reconcileMinimalCfg()
-	newCfg.Project.SandboxName = "x-sbx"
+	newCfg.Project.VMName = "x-vm"
 	newCfg.Install = []string{"new"}
 	opts := ReconcileOptions{NonInteractive: true}
 	rc, res, err := RunReconcile(newCfg, tr, t.TempDir(), opts)
@@ -184,11 +184,11 @@ func TestRunReconcile_NonTTYRecreateExits2(t *testing.T) {
 
 func TestRunReconcile_DryRunDoesNotApply(t *testing.T) {
 	snapCfg := reconcileMinimalCfg()
-	snapCfg.Project.SandboxName = "x-sbx"
+	snapCfg.Project.VMName = "x-vm"
 	snapYAML, _ := yaml.Marshal(snapCfg)
-	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x-sbx"), string(snapYAML))
+	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x-vm"), string(snapYAML))
 	newCfg := reconcileMinimalCfg()
-	newCfg.Project.SandboxName = "x-sbx"
+	newCfg.Project.VMName = "x-vm"
 	newCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
 	opts := ReconcileOptions{DryRun: true}
 	rc, res, err := RunReconcile(newCfg, tr, t.TempDir(), opts)

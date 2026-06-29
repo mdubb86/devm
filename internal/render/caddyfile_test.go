@@ -10,7 +10,7 @@ import (
 
 func TestCaddyfileWithHostnamedServices(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{ID: "test", SandboxName: "test-sbx"},
+		Project: schema.Project{ID: "test", VMName: "test-vm"},
 		Services: map[string]schema.Service{
 			"webapp": {Port: 3000, Hostname: "test.test"},
 			"api":    {Port: 54321, Hostname: "api.test.test"},

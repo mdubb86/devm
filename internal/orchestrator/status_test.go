@@ -14,7 +14,7 @@ import (
 
 func statusMinimalCfg() schema.Config {
 	return schema.Config{
-		Project: schema.Project{ID: "x", SandboxName: "x-sbx"},
+		Project: schema.Project{ID: "x", VMName: "x-vm"},
 	}
 }
 
@@ -70,11 +70,11 @@ func TestRunStatus_Absent(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "absent", res.State)
 	assert.Empty(t, res.Sessions)
-	assert.Equal(t, "x-sbx", res.Sandbox)
+	assert.Equal(t, "x-vm", res.Sandbox)
 }
 
 func TestRunStatus_Stopped(t *testing.T) {
-	tr := makeFakeTartStatus(t, `[{"Name":"x-sbx","State":"stopped"}]`, "", "")
+	tr := makeFakeTartStatus(t, `[{"Name":"x-vm","State":"stopped"}]`, "", "")
 	res, err := RunStatus(statusMinimalCfg(), tr, "/tmp/fake")
 	assert.NoError(t, err)
 	assert.Equal(t, "stopped", res.State)
@@ -85,7 +85,7 @@ func TestRunStatus_RunningInSync(t *testing.T) {
 	snapCfg := statusMinimalCfg()
 	snapYAML, _ := yaml.Marshal(snapCfg)
 	tr := makeFakeTartStatus(t,
-		`[{"Name":"x-sbx","State":"running"}]`,
+		`[{"Name":"x-vm","State":"running"}]`,
 		string(snapYAML),
 		"27 bash pts/1 agent\n",
 	)
@@ -102,7 +102,7 @@ func TestRunStatus_RunningPendingMixed(t *testing.T) {
 	snapCfg.Install = []string{"old"}
 	snapYAML, _ := yaml.Marshal(snapCfg)
 	tr := makeFakeTartStatus(t,
-		`[{"Name":"x-sbx","State":"running"}]`,
+		`[{"Name":"x-vm","State":"running"}]`,
 		string(snapYAML),
 		"",
 	)
@@ -118,7 +118,7 @@ func TestRunStatus_RunningPendingMixed(t *testing.T) {
 func TestRunStatus_RunningEmptySnapshotIsInSync(t *testing.T) {
 	// Empty snapshot in VM → treat as identical to new cfg.
 	tr := makeFakeTartStatus(t,
-		`[{"Name":"x-sbx","State":"running"}]`,
+		`[{"Name":"x-vm","State":"running"}]`,
 		"",
 		"",
 	)

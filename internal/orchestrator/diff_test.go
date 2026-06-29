@@ -18,8 +18,8 @@ func cfgWithServices(svcs map[string]schema.Service) schema.Config {
 func cfgWith(services map[string]schema.Service) schema.Config {
 	return schema.Config{
 		Project: schema.Project{
-			ID:          "x",
-			SandboxName: "x-sbx",
+			ID:     "x",
+			VMName: "x-vm",
 		},
 		Services: services,
 	}
@@ -375,8 +375,8 @@ func TestComputeImageChange(t *testing.T) {
 	// BaseImage is now an empty struct; image changes are detected
 	// via identity change or install changes. Test that no KindImageChange
 	// is emitted for identical (empty) BaseImage structs.
-	old := schema.Config{Project: schema.Project{ID: "p", SandboxName: "p"}}
-	new := schema.Config{Project: schema.Project{ID: "p", SandboxName: "p"}}
+	old := schema.Config{Project: schema.Project{ID: "p", VMName: "p"}}
+	new := schema.Config{Project: schema.Project{ID: "p", VMName: "p"}}
 	changes, err := ComputeAllChanges(old, new, t.TempDir())
 	require.NoError(t, err)
 	for _, c := range changes {
@@ -385,8 +385,8 @@ func TestComputeImageChange(t *testing.T) {
 }
 
 func TestComputeIdentityChange(t *testing.T) {
-	old := schema.Config{Project: schema.Project{ID: "p1", SandboxName: "s1"}}
-	new := schema.Config{Project: schema.Project{ID: "p2", SandboxName: "s1"}}
+	old := schema.Config{Project: schema.Project{ID: "p1", VMName: "s1"}}
+	new := schema.Config{Project: schema.Project{ID: "p2", VMName: "s1"}}
 	changes, err := ComputeAllChanges(old, new, t.TempDir())
 	require.NoError(t, err)
 	assert.Len(t, changes, 1)
@@ -395,7 +395,7 @@ func TestComputeIdentityChange(t *testing.T) {
 
 func TestComputeAllChanges_NoOp(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p"},
+		Project: schema.Project{ID: "p", VMName: "p"},
 		Services: map[string]schema.Service{
 			"api": {Port: 8080, Env: map[string]schema.EnvValue{"X": {Literal: "y"}}},
 		},
@@ -434,7 +434,7 @@ func TestComputeTemplateChanges_NewTemplate(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".devm/templates"), 0o755))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p"},
+		Project: schema.Project{ID: "p", VMName: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -453,7 +453,7 @@ func TestComputeTemplateChanges_NoChanges(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x {{.Project.ID}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p"},
+		Project: schema.Project{ID: "p", VMName: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -472,7 +472,7 @@ func TestComputeTemplateChanges_ContentChanged(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("v1 {{.Project.ID}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p"},
+		Project: schema.Project{ID: "p", VMName: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -494,7 +494,7 @@ func TestComputeTemplateChanges_Removed(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x"), 0o644))
 
 	cfg1 := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p"},
+		Project: schema.Project{ID: "p", VMName: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -521,7 +521,7 @@ func TestComputeAllChanges_IncludesTemplates(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".devm/templates"), 0o755))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p"},
+		Project: schema.Project{ID: "p", VMName: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},

@@ -77,7 +77,7 @@ func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) ([]serviceapi.Rou
 
 	if mode == serviceapi.ModeVM {
 		tr := tart.New()
-		ip, err := tr.IP(context.Background(), cfg.Project.SandboxName)
+		ip, err := tr.IP(context.Background(), cfg.Project.VMName)
 		if err != nil {
 			return nil, fmt.Errorf("get vm ip (is the VM running? `devm shell` first): %w", err)
 		}

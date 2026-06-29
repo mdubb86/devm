@@ -72,7 +72,7 @@ attaches immediately. Port reconcile only runs on cold start.`,
 		}()
 
 		deps := orchestrator.DefaultShellDeps(repoRoot)
-		rc, err := orchestrator.RunShell(ctx, deps, cfg, repoRoot, cfg.Project.SandboxName, cmdName, cmdArgs)
+		rc, err := orchestrator.RunShell(ctx, deps, cfg, repoRoot, cfg.Project.VMName, cmdName, cmdArgs)
 		if err != nil {
 			// SIGINT during cold start cancels ctx. Suppress the noisy
 			// "context canceled" stack and exit 130 (SIGINT convention).

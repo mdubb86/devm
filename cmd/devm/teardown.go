@@ -51,7 +51,7 @@ definition under .devm/ is not touched; devm shell will rebuild from scratch.`,
 			ServiceAPIClient: c,
 			LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
 		}
-		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.ID, cfg.Project.SandboxName, orchestrator.StopDestroy, teardownYes)
+		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.ID, cfg.Project.VMName, orchestrator.StopDestroy, teardownYes)
 		if err != nil {
 			return err
 		}

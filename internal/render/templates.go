@@ -26,8 +26,8 @@ type TemplateData struct {
 
 // ProjectData mirrors schema.Project fields useful to templates.
 type ProjectData struct {
-	ID          string
-	SandboxName string
+	ID     string
+	VMName string
 }
 
 // ServiceData mirrors schema.Service fields useful to templates plus
@@ -100,8 +100,8 @@ func buildTemplateData(cfg schema.Config) TemplateData {
 	}
 	return TemplateData{
 		Project: ProjectData{
-			ID:          cfg.Project.ID,
-			SandboxName: cfg.Project.SandboxName,
+			ID:     cfg.Project.ID,
+			VMName: cfg.Project.VMName,
 		},
 		Service: svcData,
 		Env:     pEnv,

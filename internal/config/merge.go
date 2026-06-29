@@ -10,8 +10,8 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 		if override.Project.ID != nil {
 			out.Project.ID = *override.Project.ID
 		}
-		if override.Project.SandboxName != nil {
-			out.Project.SandboxName = *override.Project.SandboxName
+		if override.Project.VMName != nil {
+			out.Project.VMName = *override.Project.VMName
 		}
 		if override.Project.Proxy != nil {
 			out.Project.Proxy = *override.Project.Proxy

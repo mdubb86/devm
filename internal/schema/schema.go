@@ -302,17 +302,17 @@ func (s Service) Validate() error {
 }
 
 type Project struct {
-	ID          string `yaml:"id"`
-	SandboxName string `yaml:"sandbox_name"`
-	Proxy       string `yaml:"proxy,omitempty"` // "caddy" (default) or "none"
+	ID     string `yaml:"id"`
+	VMName string `yaml:"vm_name"`
+	Proxy  string `yaml:"proxy,omitempty"` // "caddy" (default) or "none"
 }
 
 func (p Project) Validate() error {
 	if p.ID == "" {
 		return fmt.Errorf("project.id is required")
 	}
-	if p.SandboxName == "" {
-		return fmt.Errorf("project.sandbox_name is required")
+	if p.VMName == "" {
+		return fmt.Errorf("project.vm_name is required")
 	}
 	switch p.Proxy {
 	case "", "caddy", "none":
@@ -337,7 +337,7 @@ func CheckUnknownKeys(data []byte) error {
 		"services", "install", "mounts", "path", "packages",
 	}
 	knownProject := []string{
-		"id", "sandbox_name", "proxy",
+		"id", "vm_name", "proxy",
 	}
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
@@ -391,6 +391,11 @@ func CheckLegacyKeys(data []byte) error {
 				"Move the value into env: HOSTNAME_APEX and update " +
 				"templates from {{.Project.HostnameApex}} to " +
 				"{{.Env.HOSTNAME_APEX}}.")
+	}
+	if _, hasSN := proj["sandbox_name"]; hasSN {
+		return fmt.Errorf(
+			"project.sandbox_name is no longer supported. " +
+				"Use project.vm_name instead (rename the key in devm.yaml).")
 	}
 	if net, ok := raw["network"].(map[string]any); ok {
 		if _, hasAD := net["allowed_domains"]; hasAD {

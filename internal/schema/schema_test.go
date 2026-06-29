@@ -138,8 +138,8 @@ func TestServiceHostnameMustEndInDotTest(t *testing.T) {
 func TestConfigValidate(t *testing.T) {
 	c := Config{
 		Project: Project{
-			ID:          "test",
-			SandboxName: "test-sbx",
+			ID:     "test",
+			VMName: "test-vm",
 		},
 		Network: Network{Allow: []string{"github.com"}},
 		Services: map[string]Service{
@@ -175,7 +175,7 @@ func TestConfigValidate(t *testing.T) {
 
 func TestConfigValidatesPortRange(t *testing.T) {
 	base := Config{
-		Project: Project{ID: "p", SandboxName: "p"},
+		Project: Project{ID: "p", VMName: "p"},
 	}
 
 	// canonical out of range (too large) → error.
@@ -191,7 +191,7 @@ func TestConfigValidatesPortRange(t *testing.T) {
 
 func TestConfigValidatesInstallSteps(t *testing.T) {
 	cfg := Config{
-		Project: Project{ID: "x", SandboxName: "x-sbx"},
+		Project: Project{ID: "x", VMName: "x-vm"},
 		Install: []string{
 			"", // invalid
 		},
@@ -328,7 +328,7 @@ func TestServiceResolveBind(t *testing.T) {
 
 func TestConfigValidateRejectsEmptyMountEntry(t *testing.T) {
 	cfg := Config{
-		Project: Project{ID: "x", SandboxName: "x-sbx"},
+		Project: Project{ID: "x", VMName: "x-vm"},
 		Mounts:  []string{"/etc/hosts", ""},
 	}
 	err := cfg.Validate()
@@ -343,7 +343,7 @@ func TestConfigValidateWithRootChecksExistence(t *testing.T) {
 
 	// Existing path passes.
 	cfg := Config{
-		Project: Project{ID: "x", SandboxName: "x-sbx"},
+		Project: Project{ID: "x", VMName: "x-vm"},
 		Mounts:  []string{existing + ":ro"},
 	}
 	require.NoError(t, cfg.ValidateWithRoot(tmp))
@@ -356,7 +356,7 @@ func TestConfigValidateWithRootChecksExistence(t *testing.T) {
 
 	// Relative path resolves against projectRoot.
 	relCfg := Config{
-		Project: Project{ID: "x", SandboxName: "x-sbx"},
+		Project: Project{ID: "x", VMName: "x-vm"},
 		Mounts:  []string{"real:ro"},
 	}
 	require.NoError(t, relCfg.ValidateWithRoot(tmp))
@@ -375,7 +375,7 @@ func TestProject_Proxy_Validation(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p := Project{ID: "x", SandboxName: "x", Proxy: c.value}
+			p := Project{ID: "x", VMName: "x", Proxy: c.value}
 			err := p.Validate()
 			if c.wantErr {
 				assert.Error(t, err)
@@ -390,7 +390,7 @@ func TestCheckLegacyKeys_AllowedDomainsMigration(t *testing.T) {
 	yaml := []byte(`
 project:
   id: x
-  sandbox_name: x-sbx
+  vm_name: x-vm
 network:
   allowed_domains:
     - example.com
@@ -401,11 +401,23 @@ network:
 	assert.Contains(t, err.Error(), "network.allow")
 }
 
+func TestCheckLegacyKeys_SandboxNameMigration(t *testing.T) {
+	yaml := []byte(`
+project:
+  id: x
+  sandbox_name: x-sbx
+`)
+	err := CheckLegacyKeys(yaml)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "project.sandbox_name is no longer supported")
+	assert.Contains(t, err.Error(), "project.vm_name")
+}
+
 func TestProject_HostnameApex_MigrationError(t *testing.T) {
 	yamlBlob := []byte(`
 project:
   id: foo
-  sandbox_name: foo-sbx
+  vm_name: foo-vm
   hostname_apex: foo.local
 `)
 	err := CheckLegacyKeys(yamlBlob)
@@ -418,7 +430,7 @@ func TestCheckUnknownKeys_TopLevel_Rejected(t *testing.T) {
 	yamlBlob := []byte(`
 project:
   id: foo
-  sandbox_name: foo-sbx
+  vm_name: foo-vm
 volumes:
   /data: 1G
 `)
@@ -434,7 +446,7 @@ func TestCheckUnknownKeys_ProjectLevel_Rejected(t *testing.T) {
 	yamlBlob := []byte(`
 project:
   id: foo
-  sandbox_name: foo-sbx
+  vm_name: foo-vm
   proxie: caddy
 `)
 	err := CheckUnknownKeys(yamlBlob)
@@ -447,7 +459,7 @@ func TestCheckUnknownKeys_AllValidFields_Accepted(t *testing.T) {
 	yamlBlob := []byte(`
 project:
   id: foo
-  sandbox_name: foo-sbx
+  vm_name: foo-vm
   proxy: caddy
 base_image: {}
 network:
@@ -473,7 +485,7 @@ func TestCheckUnknownKeys_EmptyAndMinimal_Accepted(t *testing.T) {
 	require.NoError(t, CheckUnknownKeys([]byte("")))
 	require.NoError(t, CheckUnknownKeys([]byte(`project:
   id: foo
-  sandbox_name: foo-sbx
+  vm_name: foo-vm
 `)))
 }
 
@@ -543,7 +555,7 @@ func TestService_Restart_ValidValues(t *testing.T) {
 
 func TestConfig_MaskMustBeInsideShare(t *testing.T) {
 	cfg := Config{
-		Project: Project{ID: "x", SandboxName: "x-sbx"},
+		Project: Project{ID: "x", VMName: "x-vm"},
 		Services: map[string]Service{
 			"api": {
 				Exec:  []string{"/bin/true"},
@@ -568,7 +580,7 @@ func TestConfig_MaskMustBeInsideShare(t *testing.T) {
 
 func TestPackages_TopLevelAccepted(t *testing.T) {
 	cfg := Config{
-		Project:  Project{ID: "x", SandboxName: "x-sbx"},
+		Project:  Project{ID: "x", VMName: "x-vm"},
 		Packages: []string{"jq", "postgresql-client"},
 	}
 	require.NoError(t, cfg.Validate())
@@ -578,7 +590,7 @@ func TestCheckUnknownKeys_RejectsLegacyPortOffset(t *testing.T) {
 	yamlText := []byte(`
 project:
   id: x
-  sandbox_name: x-sbx
+  vm_name: x-vm
   port_offset: 51000
 `)
 	err := CheckUnknownKeys(yamlText)
@@ -590,7 +602,7 @@ func TestParse_SecretTag_AsSecretRef(t *testing.T) {
 	const yamlSrc = `
 project:
   id: x
-  sandbox_name: x
+  vm_name: x
 services:
   api:
     exec: ["/bin/true"]
@@ -612,7 +624,7 @@ func TestParse_NetworkAllow(t *testing.T) {
 	const yamlSrc = `
 project:
   id: x
-  sandbox_name: x
+  vm_name: x
 network:
   allow:
     - github.com
@@ -646,7 +658,7 @@ func TestParse_TopLevel_SecretTag_AsSecretRef(t *testing.T) {
 	const yamlSrc = `
 project:
   id: x
-  sandbox_name: x
+  vm_name: x
 env:
   API_KEY: !secret my_api_key
   PLAIN: world
@@ -690,7 +702,7 @@ func TestWriteInTempDir_SecretTagPreservedThroughEnvFile(t *testing.T) {
 	const yamlSrc = `
 project:
   id: x
-  sandbox_name: x
+  vm_name: x
 services:
   api:
     exec: ["/bin/true"]

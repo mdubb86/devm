@@ -48,7 +48,7 @@ func TestProvisioner_RunsAllStepsOnHappyPath(t *testing.T) {
 	p := &Provisioner{
 		Tart:            tart.New(),
 		VMName:          "myproj-sbx",
-		Cfg:             schema.Config{Project: schema.Project{ID: "myproj", SandboxName: "myproj-sbx"}},
+		Cfg:             schema.Config{Project: schema.Project{ID: "myproj", VMName: "myproj-vm"}},
 		CARootPEM:       []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"),
 		WorkspaceVMPath: "/Users/test/myproj",
 	}
@@ -94,7 +94,7 @@ func TestProvisioner_FailsFastOnTartError(t *testing.T) {
 		Tart:   tart.New(),
 		VMName: "myproj-sbx",
 		Cfg: schema.Config{
-			Project:  schema.Project{ID: "myproj", SandboxName: "myproj-sbx"},
+			Project:  schema.Project{ID: "myproj", VMName: "myproj-vm"},
 			Packages: []string{"jq"}, // forces apt-get update to actually run
 		},
 		CARootPEM:       []byte("fake-pem\n"),
@@ -119,7 +119,7 @@ func TestProvisioner_RoutingOnlyServiceSkipped(t *testing.T) {
 		Tart:   tart.New(),
 		VMName: "myproj-sbx",
 		Cfg: schema.Config{
-			Project: schema.Project{ID: "myproj", SandboxName: "myproj-sbx"},
+			Project: schema.Project{ID: "myproj", VMName: "myproj-vm"},
 			Services: map[string]schema.Service{
 				// Routing-only (no Exec, no Systemd).
 				"routing-only": {Hostname: "x.test", Port: 8080},

@@ -12,7 +12,7 @@ import (
 
 func TestRenderTemplates_Empty(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{ID: "x", SandboxName: "x"},
+		Project: schema.Project{ID: "x", VMName: "x"},
 	}
 	got, err := RenderTemplates(cfg, t.TempDir())
 	require.NoError(t, err)
@@ -29,7 +29,7 @@ func TestRenderTemplates_SymlinkEscape_Rejected(t *testing.T) {
 	require.NoError(t, os.Symlink(outside, link))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "x", SandboxName: "x"},
+		Project: schema.Project{ID: "x", VMName: "x"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{
 				{Source: "leak.tmpl", Output: "/x"},
@@ -48,7 +48,7 @@ func TestRenderTemplates_Simple(t *testing.T) {
 	require.NoError(t, os.WriteFile(tmplPath, []byte("hello {{.Project.ID}} at {{.Service.api.HostPort}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "myapp", SandboxName: "myapp-sbx"},
+		Project: schema.Project{ID: "myapp", VMName: "myapp-vm"},
 		Services: map[string]schema.Service{
 			"api": {Port: 8080, Templates: []schema.Template{{Source: "hello.tmpl", Output: "/etc/hello"}}},
 		},
@@ -78,7 +78,7 @@ func TestRenderTemplates_MissingVar_Error(t *testing.T) {
 		[]byte("port {{.Service.nope.HostPort}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "x", SandboxName: "x"},
+		Project: schema.Project{ID: "x", VMName: "x"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "bad.tmpl", Output: "/x"}}},
 		},
@@ -96,7 +96,7 @@ func TestRenderTemplates_PathTraversal_Rejected(t *testing.T) {
 	t.Cleanup(func() { _ = os.Remove(outside) })
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "x", SandboxName: "x"},
+		Project: schema.Project{ID: "x", VMName: "x"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{
 				// Skip schema.Validate (which already rejects this) and hit
@@ -116,7 +116,7 @@ func TestRenderTemplates_Deterministic(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.tmpl"), []byte("b {{.Project.ID}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", SandboxName: "p"},
+		Project: schema.Project{ID: "p", VMName: "p"},
 		Services: map[string]schema.Service{
 			"zeta":  {Port: 9000, Templates: []schema.Template{{Source: "b.tmpl", Output: "/b"}}},
 			"alpha": {Port: 8000, Templates: []schema.Template{{Source: "a.tmpl", Output: "/a"}}},

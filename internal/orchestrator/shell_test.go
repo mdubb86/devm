@@ -90,7 +90,7 @@ func (c *stubCmd) Pid() int { return c.pid }
 
 func minimalCfg() schema.Config {
 	return schema.Config{
-		Project:  schema.Project{ID: "x", SandboxName: "x-sbx"},
+		Project:  schema.Project{ID: "x", VMName: "x-vm"},
 		Services: map[string]schema.Service{},
 	}
 }

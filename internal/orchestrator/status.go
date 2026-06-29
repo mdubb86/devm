@@ -14,7 +14,7 @@ import (
 
 // RunStatus collects read-only state for `devm status`.
 func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot string) (StatusResult, error) {
-	vmName := cfg.Project.SandboxName
+	vmName := cfg.Project.VMName
 	res := StatusResult{Sandbox: vmName}
 
 	// Routing status — query the daemon's /routes endpoint. Runs

@@ -143,7 +143,7 @@ type ReconcileOptions struct {
 //	 2  — non-TTY context with recreate-required pending (no --yes)
 //	-1  — operational error (lock fail, render fail, RunStop fail)
 func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts ReconcileOptions) (int, ReconcileResult, error) {
-	vmName := cfg.Project.SandboxName
+	vmName := cfg.Project.VMName
 	res := ReconcileResult{}
 
 	// 1. Always render .devm/ static files first (spec.yaml, Caddyfile,

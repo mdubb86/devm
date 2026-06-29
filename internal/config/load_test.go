@@ -19,7 +19,7 @@ func TestLoadBaseOnly(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   id: test
-  sandbox_name: test-sbx
+  vm_name: test-vm
 services:
   webapp:
     port: 3000
@@ -37,7 +37,7 @@ func TestLoadWithOverride_Proxy(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   id: test
-  sandbox_name: test-sbx
+  vm_name: test-vm
 `)
 	writeFile(t, dir, "devm.me.yaml", `
 project:
@@ -54,7 +54,7 @@ func TestLoadResolvesEnvAndInjectsWorkspaceAndIsSandbox(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   id: test
-  sandbox_name: test-sbx
+  vm_name: test-vm
 env:
   CLAUDE_CONFIG_DIR: $WORKSPACE/.claude
 `)
@@ -74,7 +74,7 @@ func TestLoadReportsReservedEnvKeyError(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   id: test
-  sandbox_name: test-sbx
+  vm_name: test-vm
 env:
   WORKSPACE: /tmp/sneaky
 `)
@@ -90,7 +90,7 @@ func TestLoad_RejectsLegacyHostnameApex_InBase(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   id: foo
-  sandbox_name: foo-sbx
+  vm_name: foo-vm
   hostname_apex: foo.local
 `)
 
@@ -107,7 +107,7 @@ func TestLoad_RejectsLegacyHostnameApex_InOverride(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   id: foo
-  sandbox_name: foo-sbx
+  vm_name: foo-vm
 `)
 	writeFile(t, dir, "devm.me.yaml", `
 project:
@@ -127,7 +127,7 @@ func TestLoad_RejectsUnknownTopLevelField_InBase(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   id: foo
-  sandbox_name: foo-sbx
+  vm_name: foo-vm
 volumes:
   /data: 1G
 `)
@@ -145,7 +145,7 @@ func TestLoad_RejectsUnknownTopLevelField_InOverride(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   id: foo
-  sandbox_name: foo-sbx
+  vm_name: foo-vm
 `)
 	writeFile(t, dir, "devm.me.yaml", `
 volumes:
@@ -163,10 +163,10 @@ func TestLoadStrictFailsOnMissingRequiredField(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   id: test
-  # missing sandbox_name
+  # missing vm_name
 `)
 
 	_, err := Load(dir)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "sandbox_name")
+	assert.Contains(t, err.Error(), "vm_name")
 }

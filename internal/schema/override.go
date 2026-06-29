@@ -3,9 +3,9 @@ package schema
 import "gopkg.in/yaml.v3"
 
 type ProjectOverride struct {
-	ID          *string `yaml:"id,omitempty"`
-	SandboxName *string `yaml:"sandbox_name,omitempty"`
-	Proxy       *string `yaml:"proxy,omitempty"`
+	ID     *string `yaml:"id,omitempty"`
+	VMName *string `yaml:"vm_name,omitempty"`
+	Proxy  *string `yaml:"proxy,omitempty"`
 }
 
 type NetworkOverride struct {
