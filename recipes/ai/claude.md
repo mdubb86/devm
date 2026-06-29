@@ -11,8 +11,8 @@ since: recipes-v1.0.0
 
 Uses the official native installer (no Node dependency) and relocates
 all `~/.claude` state onto the host-side workspace bind-mount so it
-survives `devm teardown`. Self-contained allowlist (doesn't rely on
-sbx's host-global ai-services defaults).
+survives `devm teardown`. The allow list is explicit — every domain
+Claude Code needs is listed here.
 
 ## devm.yaml additions
 
@@ -25,7 +25,7 @@ env:
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
 
 network:
-  allowed_domains:
+  allow:
     - api.anthropic.com         # Claude API (core)
     - claude.ai                 # OAuth login + install.sh
     - platform.claude.com       # Console account auth
@@ -46,7 +46,7 @@ network:
 - **Binary** lands at `/usr/local/bin/claude` (real file) with
   `/home/agent/.local/bin/claude` → it (symlink). Ephemeral — the
   installer re-runs on every cold-start (`install:` runs once per
-  sandbox lifetime).
+  VM lifetime).
 - **State** is everything Claude stores under `~/.claude`: OAuth at
   `.credentials.json`, conversation transcripts under
   `projects/<repo>/<session>.jsonl`, memory, history, settings.
