@@ -1,57 +1,193 @@
 ---
 name: schema
-description: Reference — every field in devm.yaml and what it does.
-hidden: true
+description: devm.yaml schema reference — every top-level field, type, and bucket semantics.
 ---
 
 # devm.yaml schema reference
 
-Top-level fields (all optional unless noted):
+## Top-level fields
+
+| Field | Type | Bucket | Purpose |
+|---|---|---|---|
+| `project` | object | recreate | Project identity and proxy settings (required). |
+| `base_image` | object | recreate | Accepted for YAML compatibility; has no active fields. |
+| `network` | object | live | Iron-proxy outbound allowlist. |
+| `env` | map[string]EnvValue | live | Project-wide environment variables forwarded to all services. |
+| `services` | map[string]Service | varies | Named service definitions; bucket depends on which sub-field changes (see Services section). |
+| `packages` | []string | recreate | Apt packages installed at VM creation time. |
+| `install` | []string | recreate | Shell commands run once at VM creation as root. |
+| `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
+| `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
+
+---
+
+## `project`
+
+Required. Identifies the project and configures the local reverse proxy.
+
+| Field | Type | Required | Purpose |
+|---|---|---|---|
+| `id` | string | yes | Project slug used as the devm-owned namespace in shared resources (Caddy `@id`). |
+| `vm_name` | string | yes | Tart VM image name to use when creating the sandbox. |
+| `proxy` | string | no | `caddy` (default) or `none`. With `none`, `devm route` subcommands print a disabled message and exit 0. |
+
+Validation: `id` and `vm_name` are required; `proxy` must be empty, `caddy`, or `none`.
+
+Changing any `project` field is in the **recreate** bucket — the VM must be deleted and recreated from scratch.
+
+---
+
+## `network`
+
+Controls outbound access enforced by iron-proxy (bucket: **live**).
 
 | Field | Type | Purpose |
 |---|---|---|
-| `project` | object (REQUIRED) | `id`, `sandbox_name`, optional `port_offset`, `proxy`, `host_resolver` |
-| `base_image` | object | `docker: bool` — true for the docker-templates:shell-docker image |
-| `network` | object | `allowed_domains: [string]` — domain allowlist |
-| `env` | map[string]string | Project-wide env vars. Substitution: `$WORKSPACE` expands to repo root. Reserved keys: `WORKSPACE`, `IS_SANDBOX`. |
-| `services` | map[string]Service | Named service definitions. See Service fields below. |
-| `install` | []string | Shell commands run ONCE at sandbox create as root. Each runs under `bash -o pipefail -c` (so pipelines fail loud). Wrapped by wrap-fg.sh. `apt-get update` already ran via bootstrap. |
-| `mounts` | []string | Host paths mirrored into the sandbox at the same absolute path. Format: `HOST_PATH[:ro]`. |
-| `path` | []string | Directories prepended to `$PATH` inside the sandbox. Final shape: `path[0]:path[1]:...:$WORKSPACE/.devm/scripts:$PATH`. Substitution: `$WORKSPACE` expands at load time. Entries must be absolute (start with `/` or `$WORKSPACE`); empty entries and `~` rejected. Reaches install, startup foreground, startup background, and the interactive shell via `.devm/.env`. **Bucket: live.** |
-| `packages` | []string | Apt package names installed automatically via `apt-get install -y` during Tart VM provisioning. |
+| `allow` | []string | Hostnames the VM is permitted to reach, matched by SNI for TLS connections or HTTP Host header for plain HTTP. |
 
-## Project fields
+Changes to `allow` are applied by `devm reconcile` without restarting the VM.
 
-| Field | Type | Purpose |
-|---|---|---|
-| `id` | string (REQUIRED) | Project slug — used as the devm-owned namespace in shared resources (Caddy `@id`, etc.). |
-| `sandbox_name` | string (REQUIRED) | Sbx sandbox name. |
-| `port_offset` | int | Added to each service's canonical port for the host-side mapping. |
-| `proxy` | string | `caddy` (default) or `none`. Gates `devm route`. With `none`, route subcommands print a disabled message and exit 0. |
-| `host_resolver` | string | `snippet` (default) or `localias`. Selects how `/etc/hosts` is managed. `snippet` prints a copy-paste hint when hostnames don't resolve; `localias` talks to a running localias daemon. |
+```yaml
+network:
+  allow:
+    - api.example.com
+    - registry.npmjs.org
+```
 
-## Service fields
+---
 
-| Field | Type | Purpose |
-|---|---|---|
-| `port` | int OR "IP:N" | Sandbox-side port. String form sets bind IP. |
-| `hostname` | string | Hostname for Caddy reverse-proxy entry. |
-| `env_inject` | bool | If true, exports NAME_PORT/NAME_HOST env vars from this service. |
-| `env_host` | string | The IP to inject as NAME_HOST. Requires env_inject. |
-| `env` | map[string]string | Per-service env. Flattened with NAME_ prefix. |
-| `masks` | []Mask | tmpfs overlay masks. `path` + `size`. |
-| `templates` | []Template | `source` (relative file) + `output` (absolute path in VM). |
-| `startup` | []StartupCommand | Per-service startup commands. Each has `command: []string`, optional `background: bool`. |
+## `env`
 
-## Affordances baked into bootstrap
+`map[string]EnvValue` — bucket: **live**.
 
-- `apt-get update` runs first; user install steps can `apt-get install -y <pkg>` directly.
-- `ncurses-term` is pre-installed (modern terminfo for TUIs).
-- `s6-log` is dropped at `.devm/scripts/s6-log` (used by wrap-bg.sh for background daemon log rotation).
+Project-wide environment variables injected into all services. Values are literal strings or `!secret` references resolved from the macOS keychain:
 
-## Reserved names
+```yaml
+env:
+  RAILS_ENV: development
+  API_KEY: !secret my-api-key
+```
 
-- `env.WORKSPACE`, `env.IS_SANDBOX` — devm-injected, cannot be user-set.
-- `$WORKSPACE` in env values — expands to repo root at load time.
-- `$$` in env values — escapes to literal `$`.
-- `--` in install / startup command argv — reserved by the wrap-fg.sh / wrap-bg.sh wrappers.
+Reserved keys (devm-injected; cannot be overridden): `WORKSPACE`, `IS_SANDBOX`.
+
+Substitution rules in values:
+- `$WORKSPACE` (or `${WORKSPACE}`) expands to the project root at load time.
+- `$$` → literal `$`.
+- Any other `$VAR` reference is an error.
+
+Per-service `env` entries win over top-level `env` on key collision.
+
+---
+
+## `path`
+
+`[]string` — bucket: **live**.
+
+Directories prepended to `$PATH` inside the VM. Changes take effect in new interactive shells and newly-started services; running processes keep their current `$PATH`.
+
+Final `$PATH` shape inside the VM:
+
+```
+<path[0]>:<path[1]>:...:$WORKSPACE/.devm/scripts:$PATH
+```
+
+Rules:
+- Entries must be absolute (start with `/` or `$WORKSPACE`).
+- `$WORKSPACE` expands to the project root at load time. `$$` → literal `$`.
+- Empty entries and `~` expansion are rejected.
+
+---
+
+## `install`
+
+`[]string` — bucket: **recreate**.
+
+Shell commands run once at VM creation time, in order, as root. Each command runs under `bash -o pipefail -c`. Bootstrap runs first, so `apt-get update` has already been called — user entries can `apt-get install -y <pkg>` directly.
+
+Changing `install` requires a full VM teardown and cold start.
+
+Note: `--` in a command's argv is consumed by the internal wrapper; quote it or split the command into multiple steps.
+
+---
+
+## `mounts`
+
+`[]string` — bucket: **recreate**.
+
+Host paths shared into the VM via virtio-fs at matching absolute paths. Each entry is `HOST_PATH[:ro]`.
+
+`HOST_PATH` may be:
+- Absolute: `/Users/alice/src`
+- Relative to the project root: `../shared`
+- Home-relative: `~/data`
+
+The optional `:ro` suffix makes the share read-only inside the VM.
+
+Mounts are baked at `tart run` time; changing them requires a full VM teardown and cold start.
+
+---
+
+## `packages`
+
+`[]string` — bucket: **recreate**.
+
+Apt package names installed via `apt-get install -y` during VM creation. Changing this list requires a full VM teardown and cold start.
+
+```yaml
+packages:
+  - postgresql-client
+  - redis-tools
+```
+
+Note: if `packages` is empty, `apt-get update` is skipped entirely during provisioning.
+
+---
+
+## `services`
+
+`map[string]Service` — bucket varies by sub-field.
+
+Named service definitions. Each key is the service name.
+
+| Field | Type | Bucket | Purpose |
+|---|---|---|---|
+| `port` | int or "IP:PORT" | live | VM-side listen port. String form (`"0.0.0.0:8080"`) also sets the host bind IP; default bind is `127.0.0.1`. |
+| `hostname` | string | live | Hostname for the Caddy reverse-proxy entry. Must end in `.test`. |
+| `env` | map[string]EnvValue | live | Per-service environment variables (same `!secret` syntax as top-level `env`). |
+| `masks` | []Mask | recreate | `mount --bind` overlays applied at boot. Each has `path` (relative to repo root, or absolute under a `mounts` entry) and `size` (e.g. `100m`). |
+| `templates` | []Template | live | Files rendered from source scripts and written into the VM. Each has `source` (project-relative path) and `output` (absolute path in VM). |
+| `exec` | []string | live | Command and arguments to run as the service process. |
+| `workdir` | string | live | Working directory for the service process. |
+| `restart` | string | live | Restart policy: `no`, `on-failure`, or `always`. |
+| `after` | []string | live | Service names this service waits for at start (ordering only). |
+| `user` | string | live | Unix user to run the service as. |
+| `systemd` | string | live | Name of an existing systemd unit to manage. Mutually exclusive with `exec`, `restart`, `after`, `workdir`, and `user`. |
+
+Validation rules:
+- A service must define at least one of `port`, `masks`, `exec`, or `systemd`.
+- `hostname` must end in `.test`.
+- Port values must be in range 1–65535; no two services may share a port or a hostname.
+- Mask `path` must stay inside the workspace (relative paths) or under a configured `mounts` entry (absolute paths).
+- Template `source` must be project-relative (no `../` traversal); `output` must be absolute.
+
+---
+
+## `base_image`
+
+Object — bucket: **recreate**.
+
+Accepted for YAML compatibility; has no active fields. Tart VM images are configured via the image pipeline, not per-project YAML flags. A change to this block (even an empty one added or removed) triggers `KindImageChange`, which is in the recreate bucket.
+
+---
+
+## Bucket glossary
+
+**live** — `devm reconcile` applies the change to the running VM without stopping it or ending active sessions. Mechanism varies by field: env and path changes rewrite `.devm/.env` and the workspace mount surfaces the new file inside the VM; service unit changes re-render the unit file and restart the affected service via `tart exec`; network changes update the iron-proxy allowlist; port and hostname changes reload the in-VM Caddyfile.
+
+**recreate** (internally: `teardown+shell`) — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `packages`, `mounts` (virtio-fs shares set at `tart run` time), `masks` (bind mounts applied at boot), `base_image`, and `project` identity fields.
+
+The classification of every change kind is the `changeBucket` map in `internal/orchestrator/diff.go`.
+
+---
+
+> **Migration note:** Configs that use `network.allowed_domains:` or `project.sandbox_name:` will fail to load with a specific error message pointing to the replacement key (`network.allow` and `project.vm_name`, respectively).
