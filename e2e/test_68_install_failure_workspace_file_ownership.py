@@ -1,22 +1,21 @@
 """68: install failure: file written to $WORKSPACE_DIR by root-in-VM is
 readable and removable on the host without sudo.
 
-Follow-on to test_67. Per test_67, a wrapper that writes to
-$WORKSPACE_DIR before exiting non-zero gets its file persisted on the
-host. But install: runs as root in the VM. This test pins what UID/perms
-that root-in-VM-write produces on the host filesystem, and whether devm's
-host-side process (running as the invoking user, not root) can read AND
-delete it.
+Follow-on to test_67. Per test_67, a write to $WORKSPACE_DIR during a
+failing install: persists on the host. But install: runs as the VM
+user. This test pins what UID/perms that write produces on the host
+filesystem, and whether the host-side process (running as the invoking
+user, not root) can read AND delete it.
 
 With virtio-fs on Tart / Apple Silicon, the UID mapping may differ from
-the sbx era: observe and pin whatever Tart actually does.
+sbx: observe and pin whatever Tart actually does.
 
-If the host CANNOT delete the file without sudo, wrap-fg.sh would need
-to chown before exiting so devm can clean up failure records at next
-render. This test documents the observed behavior.
+If the host CANNOT delete the file without sudo, devm would need to
+chown before the VM exits so devm can clean up failure records.
+This test documents the observed behavior.
 
 What this pins:
-  - Host process can read a file written by root-in-VM via virtio-fs.
+  - Host process can read a file written by the VM install: context via virtio-fs.
   - Host process can remove the file without sudo.
   - Observed UID/GID/mode are documented via print (not hard asserted,
     since the exact UID mapping is platform-specific).
@@ -28,12 +27,14 @@ import subprocess
 
 import pytest
 
+from helpers.tart import TartSandbox
+
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(180)
 def test_install_failure_workspace_file_readable_and_removable_on_host(
-    workspace, devm, tart_sandbox
+    workspace, devm
 ):
     workspace.write_devmyaml(
         install=[
@@ -51,9 +52,10 @@ def test_install_failure_workspace_file_readable_and_removable_on_host(
         f"devm shell should exit non-zero on failing install; got rc=0\n"
         f"stderr={p.stderr.decode()}"
     )
-    assert tart_sandbox.state() == "absent", (
+    vm = TartSandbox(name=workspace.sandbox_name)
+    assert vm.state() == "absent", (
         f"failed install must not leave a VM behind; "
-        f"VM is still in state {tart_sandbox.state()!r}"
+        f"VM is still in state {vm.state()!r}"
     )
 
     host_path = workspace.path / "probe.out"
@@ -79,9 +81,8 @@ def test_install_failure_workspace_file_readable_and_removable_on_host(
         host_path.unlink()
     except PermissionError as e:
         pytest.fail(
-            f"host cannot remove root-in-VM-written file without sudo. "
-            f"wrap-fg.sh must chown/chmod to a host-friendly UID before "
-            f"exiting. Observed UID={st.st_uid}, host EUID={os.geteuid()}. "
+            f"host cannot remove VM-written file without sudo. "
+            f"Observed UID={st.st_uid}, host EUID={os.geteuid()}. "
             f"Error: {e}"
         )
 

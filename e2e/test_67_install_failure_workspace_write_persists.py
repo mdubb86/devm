@@ -1,11 +1,11 @@
 """67: install failure: file written to $WORKSPACE_DIR by a failing install
 step persists on the host filesystem after devm teardown.
 
-Smoke-tests the viability of devm's "wrapper mirrors failure record to
-the workspace mount" approach for surviving install failures. When
-install: fails, devm tears down the VM — the VM's tmpfs is gone. But
-files written to $WORKSPACE_DIR ARE the workspace (virtio-fs mirrored),
-which lives on the host.
+Pins the virtio-fs invariant: files written to $WORKSPACE_DIR during
+install: persist on the host even after the VM is torn down. Because
+$WORKSPACE_DIR is the same absolute path as the host workspace
+(virtio-fs mirrored paths), writes inside the VM land in the shared
+directory and survive VM teardown.
 
 The probe:
   - install step 1: write a marker to $WORKSPACE_DIR/install-wrote.txt
@@ -14,10 +14,8 @@ The probe:
 After `devm shell` exits non-zero, we verify that install-wrote.txt
 still exists on the host at workspace.path/install-wrote.txt.
 
-Devm dependency: wrap-fg.sh mirrors failure records to $WORKSPACE_DIR
-before exiting with the user rc, so devm can read them post-teardown
-on the host. This test locks in the foundational property that
-virtio-fs writes survive VM teardown.
+Devm dependency: virtio-fs writes to $WORKSPACE_DIR survive VM teardown.
+This test locks in the foundational property.
 """
 from __future__ import annotations
 
@@ -25,11 +23,13 @@ import subprocess
 
 import pytest
 
+from helpers.tart import TartSandbox
+
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(180)
-def test_install_failure_workspace_write_persists_on_host(workspace, devm, tart_sandbox):
+def test_install_failure_workspace_write_persists_on_host(workspace, devm):
     workspace.write_devmyaml(
         install=[
             'touch "$WORKSPACE_DIR/install-wrote.txt"',
@@ -48,9 +48,10 @@ def test_install_failure_workspace_write_persists_on_host(workspace, devm, tart_
     )
 
     # VM should be gone (loud failure per test_51).
-    assert tart_sandbox.state() == "absent", (
+    vm = TartSandbox(name=workspace.sandbox_name)
+    assert vm.state() == "absent", (
         f"failed install must not leave a VM behind; "
-        f"VM is still in state {tart_sandbox.state()!r}"
+        f"VM is still in state {vm.state()!r}"
     )
 
     # The viability pin: the workspace write from step 1 must persist
@@ -58,7 +59,7 @@ def test_install_failure_workspace_write_persists_on_host(workspace, devm, tart_
     host_path = workspace.path / "install-wrote.txt"
     assert host_path.exists(), (
         f"VM-side write to $WORKSPACE_DIR did NOT persist on host after "
-        f"install failure + VM teardown. The wrapper-writes-failure-record "
-        f"approach is not viable. devm output:\n"
+        f"install failure + VM teardown. The virtio-fs write-and-survive "
+        f"invariant is broken. devm output:\n"
         f"{p.stdout.decode()}{p.stderr.decode()}"
     )

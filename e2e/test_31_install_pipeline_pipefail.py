@@ -7,7 +7,7 @@ and dash doesn't support `set -o pipefail`. That meant a recipe like
 (curl fails, bash gets no input, exits 0, pipeline exits 0, wrapper
 records 0).
 
-The fix in internal/render/spec.go runs user install commands under
+The fix in internal/provision/provision.go runs user install commands under
 `bash -o pipefail -c "<cmd>"` so a non-zero exit anywhere in the
 pipeline propagates as the pipeline's rc. This test pins that.
 """
@@ -15,13 +15,11 @@ import subprocess
 
 import pytest
 
-from helpers import Shell, stop_and_wait_stopped
-
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(120)
-def test_install_pipeline_failure_fails_loud(workspace, devm, sandbox_name):
+def test_install_pipeline_failure_fails_loud(workspace, devm):
     # `false | cat` exits 0 without pipefail (cat's rc), non-zero WITH
     # pipefail (false's rc propagates). This is the canonical test for
     # pipefail being active.
@@ -40,7 +38,7 @@ def test_install_pipeline_failure_fails_loud(workspace, devm, sandbox_name):
         f"stdout={proc.stdout.decode()!r}\nstderr={proc.stderr.decode()!r}"
     )
     err = proc.stderr.decode()
-    # bootstrap.sh is install step 1; user `false | cat` is install step 2.
-    assert "install step 2 failed" in err, (
-        f"expected 'install step 2 failed' in stderr; got:\n{err}"
+    # The provisioner names the failing step in the error chain.
+    assert 'provision step "run install commands"' in err, (
+        f"expected 'provision step \"run install commands\"' in stderr; got:\n{err}"
     )

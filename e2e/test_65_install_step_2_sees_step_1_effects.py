@@ -9,10 +9,10 @@ Setup:
   - install step 2: test -f /tmp/from-step-1  (fails if step 1 didn't
     finish first)
 
-The tart_sandbox fixture cold-starts via `devm shell -- true`. If
-install steps ran in parallel or with overlap, step 2 would race step 1
-and the cold-start would fail (returning a non-running VM). Reaching
-running state itself proves both steps completed in order.
+The first `devm shell -- true` IS the cold-start that runs install
+steps in order. If steps ran in parallel or with overlap, step 2 would
+race step 1 and the cold-start would fail. A successful cold-start
+(rc=0) proves both steps completed in order.
 
 Devm dependency: install: is ordered + fail-fast; users may write step
 N+1 to depend on step N's side effects. If devm ever parallelizes
@@ -20,13 +20,15 @@ install, test_65 fires.
 """
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(180)
-def test_install_step_2_sees_step_1_effects(workspace, devm, tart_sandbox):
+def test_install_step_2_sees_step_1_effects(workspace, devm):
     workspace.write_devmyaml(
         install=[
             "touch /tmp/from-step-1",
@@ -36,15 +38,23 @@ def test_install_step_2_sees_step_1_effects(workspace, devm, tart_sandbox):
         ],
     )
 
-    # tart_sandbox fixture cold-starts. If we reach here the VM is up,
-    # meaning both install steps succeeded in order.
-    assert tart_sandbox.state() == "running", (
-        f"expected VM running after ordered install; got {tart_sandbox.state()!r}"
+    # First devm shell IS the cold-start; rc=0 means both steps ran in order.
+    p = subprocess.run(
+        [devm.path, "shell", "--", "true"],
+        capture_output=True, cwd=str(workspace.path), timeout=180,
+    )
+    assert p.returncode == 0, (
+        f"cold-start with sequential install steps failed; ordering invariant broken.\n"
+        f"stdout={p.stdout.decode()!r}\nstderr={p.stderr.decode()!r}"
     )
 
-    # Belt-and-suspenders: confirm the marker is still on disk.
-    r = tart_sandbox.exec_shell("test -f /tmp/from-step-1 && echo present")
-    assert r.ok and "present" in r.stdout, (
+    # Belt-and-suspenders: confirm the marker is still on disk in the VM.
+    r = subprocess.run(
+        [devm.path, "shell", "--", "bash", "-c",
+         "test -f /tmp/from-step-1 && echo present"],
+        capture_output=True, cwd=str(workspace.path), timeout=60,
+    )
+    assert r.returncode == 0 and "present" in r.stdout.decode(), (
         f"/tmp/from-step-1 missing post-bringup; install ordering or "
-        f"completion semantics changed. stdout={r.stdout!r} stderr={r.stderr!r}"
+        f"completion semantics changed. stdout={r.stdout.decode()!r} stderr={r.stderr.decode()!r}"
     )

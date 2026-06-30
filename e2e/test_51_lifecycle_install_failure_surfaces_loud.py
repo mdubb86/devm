@@ -18,11 +18,13 @@ import subprocess
 
 import pytest
 
+from helpers.tart import TartSandbox
+
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(120)
-def test_install_failure_surfaces_loud(devm, workspace, tart_sandbox):
+def test_install_failure_surfaces_loud(devm, workspace):
     # Override the workspace config to use a failing install step.
     # `false` always exits 1.
     workspace.write_devmyaml(install=["false"])
@@ -37,7 +39,8 @@ def test_install_failure_surfaces_loud(devm, workspace, tart_sandbox):
         f"got rc={p.returncode}\nstderr={p.stderr.decode()}"
     )
     # No zombie VM should remain.
-    assert tart_sandbox.state() == "absent", (
+    vm = TartSandbox(name=workspace.sandbox_name)
+    assert vm.state() == "absent", (
         f"failed install must not leave a VM behind; "
-        f"VM is still in state {tart_sandbox.state()!r}"
+        f"VM is still in state {vm.state()!r}"
     )

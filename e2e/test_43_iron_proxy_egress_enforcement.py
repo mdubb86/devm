@@ -19,7 +19,7 @@ import pytest
 
 @pytest.mark.devm
 @pytest.mark.slow
-def test_egress_enforcement(devm, workspace, sandbox_name):
+def test_egress_enforcement(devm, workspace):
     """Cold-start with allow-list; verify allowed/blocked behavior."""
     # devm.yaml with network.allow + one !secret entry.
     workspace.write_devmyaml(
@@ -84,7 +84,7 @@ def test_egress_enforcement(devm, workspace, sandbox_name):
 
 @pytest.mark.devm
 @pytest.mark.slow
-def test_open_mode_reaches_any_host(devm, workspace, sandbox_name):
+def test_open_mode_reaches_any_host(devm, workspace):
     """network.allow: ['*'] reaches a host that the restrictive test blocks."""
     workspace.write_devmyaml(
         install=["true"],
