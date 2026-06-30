@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -193,4 +194,99 @@ func TestProvisioner_AssertsServicesActive(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `service "broken" did not become active`)
 	require.Contains(t, err.Error(), "status=failed")
+}
+
+// deadlineCapturingTart records the remaining deadline duration of every
+// context passed to Exec. Used to verify that install steps run under the
+// correct per-step timeout budget.
+type deadlineCapturingTart struct {
+	deadlines []time.Duration
+}
+
+func (d *deadlineCapturingTart) Exec(ctx context.Context, _ string, _ []string) tart.ExecResult {
+	if dl, ok := ctx.Deadline(); ok {
+		d.deadlines = append(d.deadlines, time.Until(dl))
+	}
+	return tart.ExecResult{ExitCode: 0}
+}
+
+func newDeadlineCapturingTart() *deadlineCapturingTart {
+	return &deadlineCapturingTart{}
+}
+
+// slowTart blocks Exec calls that carry a deadline context for `delay`,
+// simulating a command that hangs longer than its per-step timeout budget.
+// Calls without a deadline (non-install provisioner steps) return immediately
+// so the test only burns time on the step under test.
+type slowTart struct {
+	delay time.Duration
+}
+
+func (s *slowTart) Exec(ctx context.Context, _ string, _ []string) tart.ExecResult {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		return tart.ExecResult{ExitCode: 0}
+	}
+	select {
+	case <-ctx.Done():
+		return tart.ExecResult{ExitCode: -1}
+	case <-time.After(s.delay):
+		return tart.ExecResult{ExitCode: 0}
+	}
+}
+
+func newSlowTart(d time.Duration) *slowTart {
+	return &slowTart{delay: d}
+}
+
+func TestProvisioner_InstallStepTimeout_DefaultAndOverride(t *testing.T) {
+	// The env var must be readable from os.Getenv at run time, and a
+	// small override value must be honored. The test exercises both
+	// paths by spying on the deadline passed into tart.Exec.
+
+	tests := []struct {
+		name     string
+		envVal   string
+		wantSecs int
+	}{
+		{name: "default 600s when env unset", envVal: "", wantSecs: 600},
+		{name: "env override 3s honored", envVal: "3", wantSecs: 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.envVal == "" {
+				t.Setenv("DEVM_INSTALL_STEP_TIMEOUT_S", "")
+			} else {
+				t.Setenv("DEVM_INSTALL_STEP_TIMEOUT_S", tc.envVal)
+			}
+			fakeTart := newDeadlineCapturingTart()
+			cfg := schema.Config{
+				Project: schema.Project{ID: "p", VMName: "p-vm"},
+				Install: []string{"echo hello"},
+			}
+			p := &Provisioner{Tart: fakeTart, VMName: "p-vm", Cfg: cfg}
+			_ = p.Run(context.Background(), io.Discard)
+			require.NotEmpty(t, fakeTart.deadlines)
+			// Allow a 100ms wiggle for scheduling.
+			got := fakeTart.deadlines[0]
+			assert.InDelta(t, tc.wantSecs, got.Seconds(), 0.2,
+				"install step deadline mismatch")
+		})
+	}
+}
+
+func TestProvisioner_InstallStepTimeout_ErrorMessage(t *testing.T) {
+	// Step exceeds the deadline → structured error names the step
+	// number and the command that timed out.
+	t.Setenv("DEVM_INSTALL_STEP_TIMEOUT_S", "1")
+	fakeTart := newSlowTart(2 * time.Second)
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Install: []string{"sleep 2"},
+	}
+	p := &Provisioner{Tart: fakeTart, VMName: "p-vm", Cfg: cfg}
+	err := p.Run(context.Background(), io.Discard)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `install step 1`)
+	assert.Contains(t, err.Error(), `sleep 2`)
+	assert.Contains(t, err.Error(), "timed out")
 }

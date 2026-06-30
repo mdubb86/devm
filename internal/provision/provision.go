@@ -6,10 +6,13 @@ package provision
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,9 +21,15 @@ import (
 	"github.com/mdubb86/devm/internal/schema"
 )
 
+// tartExecer is the subset of *tart.Tart used by Provisioner. Defined as
+// an interface so tests can inject fakes without shelling out to tart.
+type tartExecer interface {
+	Exec(ctx context.Context, name string, argv []string) tart.ExecResult
+}
+
 // Provisioner runs the per-project first-boot sequence in a Tart VM.
 type Provisioner struct {
-	Tart   *tart.Tart
+	Tart   tartExecer
 	VMName string
 	Cfg    schema.Config
 
@@ -156,14 +165,29 @@ func (p *Provisioner) aptInstall(ctx context.Context, w io.Writer) error {
 	return p.exec(ctx, w, args...)
 }
 
+const defaultInstallStepTimeout = 600 * time.Second
+
 func (p *Provisioner) runInstallCommands(ctx context.Context, w io.Writer) error {
 	if len(p.Cfg.Install) == 0 {
 		fmt.Fprintln(w, "(no install commands)")
 		return nil
 	}
+	budget := defaultInstallStepTimeout
+	if v := os.Getenv("DEVM_INSTALL_STEP_TIMEOUT_S"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			budget = time.Duration(n) * time.Second
+		}
+	}
 	for i, command := range p.Cfg.Install {
 		fmt.Fprintf(w, "[%d/%d] %s\n", i+1, len(p.Cfg.Install), command)
-		if err := p.execShell(ctx, w, command); err != nil {
+		stepCtx, cancel := context.WithTimeout(ctx, budget)
+		err := p.execShell(stepCtx, w, command)
+		cancel()
+		if errors.Is(stepCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("install step %d (%q) timed out after %ds",
+				i+1, command, int(budget.Seconds()))
+		}
+		if err != nil {
 			return err
 		}
 	}
