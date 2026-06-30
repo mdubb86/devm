@@ -46,7 +46,7 @@ def test_cold_start_with_curl_install(workspace, devm, tart_sandbox, sandbox_nam
         # (We're not certain whether the sandbox enforces this at install
         # time, but set it anyway so the test doesn't depend on that.)
         network={
-            "allowed_domains": ["github.com", "raw.githubusercontent.com"],
+            "allow": ["github.com", "raw.githubusercontent.com"],
         },
     )
 

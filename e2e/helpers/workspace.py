@@ -28,8 +28,7 @@ class Workspace:
         cfg: dict[str, Any] = {
             "project": {
                 "id": self.slug,
-                "sandbox_name": self.sandbox_name,
-                "port_offset": self.port_offset,
+                "vm_name": self.sandbox_name,
             },
             "base_image": {"docker": False},
         }

@@ -48,15 +48,9 @@ def _spawn_backend(port: int, body: str) -> subprocess.Popen:
 def _devm_yaml(workspace_path: str, project_id: str, hostname: str, port: int) -> None:
     path = os.path.join(workspace_path, "devm.yaml")
     with open(path, "w") as f:
-        # port_offset: 0 — local mode routes to svc.Port directly,
-        # not port + offset, so 0 is correct here. A nonzero offset
-        # would just cause schema validation to fail when the
-        # ephemeral backend port is high enough to overflow 65535.
         f.write(
             f"project:\n"
             f"  id: {project_id}\n"
-            f"  sandbox_name: {project_id}-sbx\n"
-            f"  port_offset: 0\n"
             f"services:\n"
             f"  api:\n"
             f"    hostname: {hostname}\n"

@@ -8,7 +8,7 @@ shell attaches — `cat`-able with substituted values.
 What this pins:
   - Template output file exists inside the sandbox at the declared path.
   - `{{.Service.<svc>.Port}}` renders to the canonical port.
-  - `{{.Service.<svc>.HostPort}}` renders to port_offset + canonical.
+  - `{{.Service.<svc>.HostPort}}` renders to the canonical port (HostPort == Port for Tart VMs).
   - `{{.Project.ID}}` renders to the workspace slug.
   - Render happens cold (no reconcile invoked).
 
@@ -54,10 +54,10 @@ def test_template_cold_start(workspace, devm, tart_sandbox, sandbox_name):
         sh.expect_prompt(timeout=90)
         # The template file must exist with the rendered content.
         sh.run_check("test -f /etc/probe.conf", expect_zero=True, timeout=10)
-        # Content checks — host port reflects port_offset + canonical.
+        # Content checks — HostPort == Port for Tart VMs (no offset).
         sh.send("cat /etc/probe.conf")
         sh.expect_text(r"PORT=8080", timeout=10)
-        sh.expect_text(rf"HOSTPORT={workspace.port_offset + 8080}", timeout=10)
+        sh.expect_text(r"HOSTPORT=8080", timeout=10)
         sh.expect_text(rf"PROJECT={workspace.slug}", timeout=10)
         sh.expect_prompt(timeout=10)
 
