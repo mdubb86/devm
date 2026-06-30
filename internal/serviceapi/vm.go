@@ -279,13 +279,17 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			PID:     state.PID,
 		}
 
-		// Fall back to tart's view if the supervisor doesn't know
-		// about this VM. The supervisor's registry is in-memory and
-		// lost across daemon restarts; tart is the authoritative
-		// source for "does this VM exist / is it running". A running
-		// VM tart owns can still be attached via `tart exec`.
+		// When vm_name is provided, tart is the authoritative source
+		// for "does this VM exist / is it running" — the supervisor's
+		// key is (project_id, role) only, so adoption across daemon
+		// restarts can re-attach to a PID from a previous project run
+		// whose VM name no longer matches the current request. Cross-
+		// check the supervisor's claim against tart's list and let
+		// tart win.
 		vmName := r.URL.Query().Get("vm_name")
-		if vmName != "" && !state.Running {
+		if vmName != "" {
+			resp.Present = false
+			resp.Running = false
 			if vms, err := tr.List(r.Context()); err == nil {
 				for _, vm := range vms {
 					if vm.Name == vmName {
