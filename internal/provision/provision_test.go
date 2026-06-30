@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,6 +112,37 @@ func TestProvisioner_FailsFastOnTartError(t *testing.T) {
 	assert.NotContains(t, out, "[step: enable + start services]")
 }
 
+// writeFakeTartIsActiveMap writes a tart shell script that responds to
+// `systemctl is-active <name>` probes using the given states map (names
+// absent from the map return "active" / exit-0). All other commands
+// succeed silently.
+func writeFakeTartIsActiveMap(t *testing.T, dir string, states map[string]string) {
+	t.Helper()
+	var cases strings.Builder
+	for name, state := range states {
+		exitCode := 0
+		if state != "active" {
+			exitCode = 1
+		}
+		fmt.Fprintf(&cases, "        %s) echo %s; exit %d ;;\n", name, state, exitCode)
+	}
+	script := fmt.Sprintf(`#!/bin/sh
+prev=""
+for arg in "$@"; do
+    if [ "$prev" = "is-active" ]; then
+        case "$arg" in
+%s        *) echo active; exit 0 ;;
+        esac
+    fi
+    prev="$arg"
+done
+echo fake-tart-output
+exit 0
+`, cases.String())
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tart"), []byte(script), 0755))
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+}
+
 func TestProvisioner_RoutingOnlyServiceSkipped(t *testing.T) {
 	dir := t.TempDir()
 	writeFakeTartOK(t, dir)
@@ -135,4 +167,30 @@ func TestProvisioner_RoutingOnlyServiceSkipped(t *testing.T) {
 
 	out := buf.String()
 	assert.Contains(t, out, "(skip routing-only — routing-only declaration)")
+}
+
+func TestProvisioner_AssertsServicesActive(t *testing.T) {
+	// Service health check: after `systemctl enable --now <unit>`, the
+	// provisioner polls `systemctl is-active <unit>` (bounded by a short
+	// wait) and returns a structured error if any unit ends in "failed".
+	dir := t.TempDir()
+	writeFakeTartIsActiveMap(t, dir, map[string]string{"broken": "failed"})
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Services: map[string]schema.Service{
+			"broken": {Systemd: "[Service]\nExecStart=/bin/false\n"},
+		},
+	}
+	p := &Provisioner{
+		Tart:            tart.New(),
+		VMName:          "p-vm",
+		Cfg:             cfg,
+		CARootPEM:       []byte("fake\n"),
+		WorkspaceVMPath: "/tmp/p",
+	}
+	err := p.Run(context.Background(), io.Discard)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `service "broken" did not become active`)
+	require.Contains(t, err.Error(), "status=failed")
 }

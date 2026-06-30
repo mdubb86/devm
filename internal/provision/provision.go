@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -204,7 +206,14 @@ func (p *Provisioner) daemonReload(ctx context.Context, w io.Writer) error {
 	return p.exec(ctx, w, "sudo", "systemctl", "daemon-reload")
 }
 
+const (
+	healthPollInterval = 500 * time.Millisecond
+	healthTotalBudget  = 10 * time.Second
+)
+
 func (p *Provisioner) enableStartServices(ctx context.Context, w io.Writer) error {
+	// Collect non-routing-only service names, sorted for determinism.
+	var names []string
 	for name, svc := range p.Cfg.Services {
 		// Skip routing-only service blocks (no Exec, no Systemd) — they
 		// declare a hostname+port for the proxy but have no in-VM process.
@@ -212,9 +221,38 @@ func (p *Provisioner) enableStartServices(ctx context.Context, w io.Writer) erro
 			fmt.Fprintf(w, "(skip %s — routing-only declaration)\n", name)
 			continue
 		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
 		unitName := name + ".service"
 		if err := p.exec(ctx, w, "sudo", "systemctl", "enable", "--now", unitName); err != nil {
 			return err
+		}
+	}
+
+	// Poll each service's active state. A service in "failed" state surfaces
+	// immediately as a structured error; all others wait up to healthTotalBudget.
+	deadline := time.Now().Add(healthTotalBudget)
+	for _, name := range names {
+		for {
+			r := p.Tart.Exec(ctx, p.VMName, []string{"systemctl", "is-active", name})
+			state := strings.TrimSpace(r.Stdout)
+			if r.ExitCode == 0 {
+				break
+			}
+			if state == "failed" {
+				return fmt.Errorf("service %q did not become active: status=%s", name, state)
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("service %q did not become active: status=%s (timeout)", name, state)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(healthPollInterval):
+			}
 		}
 	}
 	return nil
