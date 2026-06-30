@@ -19,9 +19,10 @@ import secrets
 import pexpect
 
 
-# Bash prompt from the sbx-templates:shell agent.
-# Shape: `agent@e2e-<slug>-<rand>:workspace$ ` — basename cwd, optional trailing space.
-PROMPT_RE = r"agent@\S+:\S+\$ ?"
+# Bash prompt from the cirruslabs/debian Tart base image. The default
+# /etc/bash.bashrc sets PS1 to `\u@\h:\w\$ ` — interactively that renders
+# as `admin@debian:~$ ` (login user `admin`, hostname `debian`).
+PROMPT_RE = r"admin@\S+:\S+\$ ?"
 
 
 class ShellTimeoutError(RuntimeError):
