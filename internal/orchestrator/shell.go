@@ -17,6 +17,7 @@ import (
 	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/status"
+	"golang.org/x/term"
 )
 
 // resolveSecretBindings gathers every `!secret <name>` ref from cfg
@@ -199,9 +200,18 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 // attachShell attaches an interactive shell inside the VM via `tart exec`.
 // The tart binary is invoked via UserSpawner so the user's terminal
 // stdin/stdout/stderr are inherited (ExecSpawner with Interactive=true).
+//
+// `tart exec` defaults to non-interactive: no stdin attached, no PTY
+// allocated. When the caller's stdin is itself a TTY (a real terminal
+// or pexpect), pass `-i -t` so bash sees a TTY and stays interactive
+// instead of exiting on EOF.
 func (d ShellDeps) attachShell(ctx context.Context, vmName, cmdName string, cmdArgs []string) (int, error) {
-	// argv: tart exec <vmName> <cmdName> [cmdArgs...]
-	execArgs := append([]string{"exec", vmName, cmdName}, cmdArgs...)
+	execArgs := []string{"exec"}
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		execArgs = append(execArgs, "-i", "-t")
+	}
+	execArgs = append(execArgs, vmName, cmdName)
+	execArgs = append(execArgs, cmdArgs...)
 	debuglog.Logf("shell", "attaching interactive shell: tart exec %s %v", vmName, execArgs)
 	cmd, err := d.UserSpawner.Start(d.Tart.Path, execArgs...)
 	if err != nil {
