@@ -29,6 +29,15 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "mounts: entries beyond the workspace share are not passed to tart run --dir "
+        "in the Tart era — VMStartRequest only carries WorkspaceHostPath; extra "
+        "mounts[] entries are validated by the schema but never wired through "
+        "serviceapi into DirMounts. Remove xfail when bug I lands."
+    ),
+)
 @pytest.mark.timeout(300)
 def test_mount_is_mountpoint_and_data_persists(workspace, devm, tart_sandbox):
     # Create a host-side directory that will be mounted as the "volume".

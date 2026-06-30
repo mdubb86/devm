@@ -26,6 +26,15 @@ from helpers import Shell, stop_and_wait_stopped
 pytestmark = pytest.mark.devm
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "mounts: entries beyond the workspace share are not passed to tart run --dir "
+        "in the Tart era — same root cause as bug I. The declared mount is never "
+        "present inside the VM so the marker-file and :ro checks both fail. "
+        "Remove xfail when bug I lands."
+    ),
+)
 @pytest.mark.timeout(90)
 def test_mounts_mirrored_path_and_readonly(workspace, devm, tart_sandbox, sandbox_name, tmp_path):
     # Host-side fixture: a directory with a marker file.

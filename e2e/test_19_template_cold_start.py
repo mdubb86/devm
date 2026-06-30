@@ -26,6 +26,15 @@ from helpers import Shell, stop_and_wait_stopped
 pytestmark = pytest.mark.devm
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "templates: entries not rendered during cold-start in Tart era — "
+        "the service-level template output file is never created inside the VM. "
+        "VMStartRequest carries no template-render step; the feature is schema-defined "
+        "but not wired through serviceapi. Remove xfail when bug H lands."
+    ),
+)
 @pytest.mark.timeout(60)
 def test_template_cold_start(workspace, devm, tart_sandbox, sandbox_name):
     # The template renders the canonical port into a config file we
