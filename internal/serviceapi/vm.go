@@ -1,6 +1,7 @@
 package serviceapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mdubb86/devm/internal/mac"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -46,6 +48,26 @@ type VMStatusResponse struct {
 	Running bool   `json:"running"`
 	PID     int    `json:"pid"`
 	IP      string `json:"ip,omitempty"`
+}
+
+// waitVMExecReady polls `tart exec <name> true` until exit 0 or timeout.
+// The Tart Guest Agent inside the VM takes a few seconds to register a
+// listener after `tart run`; until it does, `tart exec` returns the
+// gRPC connection error documented at /vm/start.
+func waitVMExecReady(ctx context.Context, vmName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		probe := exec.Command("tart", "exec", vmName, "true")
+		if err := probe.Run(); err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(1 * time.Second):
+		}
+	}
+	return fmt.Errorf("timeout waiting for vm %s to become exec-ready", vmName)
 }
 
 // RegisterVMHandlers wires /vm/start, /vm/stop, and /vm/status onto the
@@ -111,6 +133,16 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 		key := supervisor.Key{ProjectID: req.ProjectID, Role: supervisor.RoleVM}
 		if err := sup.Spawn(ctx, key, cmd); err != nil {
 			http.Error(w, fmt.Sprintf("supervisor spawn: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Wait for the Tart Guest Agent to come up before injecting
+		// scripts via `tart exec`. Fresh VMs take a few seconds for
+		// the agent to register; without this wait, the env script
+		// (the first inject step) fires before the agent's gRPC
+		// listener is reachable and the handler 500s.
+		if err := waitVMExecReady(ctx, req.VMName, 60*time.Second); err != nil {
+			http.Error(w, fmt.Sprintf("wait for vm exec-ready: %v", err), http.StatusInternalServerError)
 			return
 		}
 
