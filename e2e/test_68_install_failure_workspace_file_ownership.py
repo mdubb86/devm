@@ -8,7 +8,7 @@ filesystem, and whether the host-side process (running as the invoking
 user, not root) can read AND delete it.
 
 With virtio-fs on Tart / Apple Silicon, the UID mapping may differ from
-sbx: observe and pin whatever Tart actually does.
+pre-Tart era: observe and pin whatever Tart actually does.
 
 If the host CANNOT delete the file without sudo, devm would need to
 chown before the VM exits so devm can clean up failure records.
@@ -59,7 +59,7 @@ def test_install_failure_workspace_file_readable_and_removable_on_host(
         f"devm shell should exit non-zero on failing install; got rc=0\n"
         f"stderr={p.stderr.decode()}"
     )
-    vm = TartSandbox(name=workspace.sandbox_name)
+    vm = TartSandbox(name=workspace.vm_name)
     assert vm.state() == "absent", (
         f"failed install must not leave a VM behind; "
         f"VM is still in state {vm.state()!r}"

@@ -46,7 +46,7 @@ def test_install_failure_surfaces_loud(devm, workspace):
         f"got rc={p.returncode}\nstderr={p.stderr.decode()}"
     )
     # No zombie VM should remain.
-    vm = TartSandbox(name=workspace.sandbox_name)
+    vm = TartSandbox(name=workspace.vm_name)
     assert vm.state() == "absent", (
         f"failed install must not leave a VM behind; "
         f"VM is still in state {vm.state()!r}"

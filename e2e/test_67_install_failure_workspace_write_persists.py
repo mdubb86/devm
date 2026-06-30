@@ -55,7 +55,7 @@ def test_install_failure_workspace_write_persists_on_host(workspace, devm):
     )
 
     # VM should be gone (loud failure per test_51).
-    vm = TartSandbox(name=workspace.sandbox_name)
+    vm = TartSandbox(name=workspace.vm_name)
     assert vm.state() == "absent", (
         f"failed install must not leave a VM behind; "
         f"VM is still in state {vm.state()!r}"

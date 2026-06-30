@@ -102,7 +102,7 @@ def workspace(request, sandbox_name) -> Iterator[Workspace]:
     registry.append("workspace", str(path))
     try:
         port_offset = _port_offset_from_file(Path(request.node.fspath).name)
-        ws = Workspace(path, slug=slug, sandbox_name=sandbox_name, port_offset=port_offset)
+        ws = Workspace(path, slug=slug, vm_name=sandbox_name, port_offset=port_offset)
         ws.write_devmyaml()  # minimal config; tests can call write_devmyaml again with extras
         yield ws
     finally:

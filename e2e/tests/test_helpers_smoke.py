@@ -43,7 +43,7 @@ def test_registry_noop_when_env_unset(tmp_path, monkeypatch):
 # --- workspace ---
 
 def test_workspace_write_minimal_devmyaml(tmp_path):
-    ws = Workspace(tmp_path, slug="example", sandbox_name="e2e-example-1234")
+    ws = Workspace(tmp_path, slug="example", vm_name="e2e-example-1234")
     ws.write_devmyaml()
     cfg = yaml.safe_load((tmp_path / "devm.yaml").read_text())
     assert cfg["project"]["id"] == "example"
@@ -51,7 +51,7 @@ def test_workspace_write_minimal_devmyaml(tmp_path):
 
 
 def test_workspace_write_with_services_install(tmp_path):
-    ws = Workspace(tmp_path, slug="x", sandbox_name="e2e-x-aaaa")
+    ws = Workspace(tmp_path, slug="x", vm_name="e2e-x-aaaa")
     ws.write_devmyaml(
         install=["touch /tmp/m"],
         services={"api": {"port": 8080}},
@@ -62,7 +62,7 @@ def test_workspace_write_with_services_install(tmp_path):
 
 
 def test_workspace_patch_devmyaml(tmp_path):
-    ws = Workspace(tmp_path, slug="x", sandbox_name="e2e-x-aaaa")
+    ws = Workspace(tmp_path, slug="x", vm_name="e2e-x-aaaa")
     ws.write_devmyaml(install=["touch /tmp/a"])
     ws.patch_devmyaml(install=["touch /tmp/b"])
     cfg = yaml.safe_load((tmp_path / "devm.yaml").read_text())
@@ -111,7 +111,7 @@ def test_devm_reconcile_raises_on_nonzero(monkeypatch, tmp_path):
 
 def test_add_systemd_service_writes_block(tmp_path):
     from helpers.workspace import Workspace
-    ws = Workspace(tmp_path, slug="hsmoke", sandbox_name="hsmoke-vm")
+    ws = Workspace(tmp_path, slug="hsmoke", vm_name="hsmoke-vm")
     ws.write_devmyaml()
     ws.add_systemd_service("greeter", exec=["/usr/bin/echo", "hi"])
     import yaml
@@ -122,7 +122,7 @@ def test_add_systemd_service_writes_block(tmp_path):
 
 def test_add_systemd_service_idempotent_last_wins(tmp_path):
     from helpers.workspace import Workspace
-    ws = Workspace(tmp_path, slug="hsmoke", sandbox_name="hsmoke-vm")
+    ws = Workspace(tmp_path, slug="hsmoke", vm_name="hsmoke-vm")
     ws.write_devmyaml()
     ws.add_systemd_service("svc", exec=["/bin/a"])
     ws.add_systemd_service("svc", exec=["/bin/b"], restart="no")

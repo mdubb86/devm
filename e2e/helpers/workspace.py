@@ -12,10 +12,10 @@ import yaml
 
 
 class Workspace:
-    def __init__(self, path: Path, slug: str, sandbox_name: str, port_offset: int = 51000):
+    def __init__(self, path: Path, slug: str, vm_name: str, port_offset: int = 51000):
         self.path = Path(path)
         self.slug = slug
-        self.sandbox_name = sandbox_name
+        self.vm_name = vm_name
         self.port_offset = port_offset
 
     @property
@@ -28,7 +28,7 @@ class Workspace:
         cfg: dict[str, Any] = {
             "project": {
                 "id": self.slug,
-                "vm_name": self.sandbox_name,
+                "vm_name": self.vm_name,
             },
             "base_image": {"docker": False},
         }

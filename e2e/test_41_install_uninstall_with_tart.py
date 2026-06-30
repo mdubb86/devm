@@ -56,8 +56,8 @@ def test_install_uninstall_with_tart(devm, workspace, sudo_capable):
     subprocess.run([devm.path, "uninstall"], capture_output=True, timeout=30)
 
     # tart_sandbox fixture isn't used here because we drive install/uninstall
-    # ourselves. We build a TartSandbox handle from the workspace's sandbox_name.
-    vm = TartSandbox(name=workspace.sandbox_name)
+    # ourselves. We build a TartSandbox handle from the workspace's vm_name.
+    vm = TartSandbox(name=workspace.vm_name)
 
     try:
         # --- Step 1: install ---
