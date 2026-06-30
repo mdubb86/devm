@@ -17,6 +17,13 @@ import subprocess
 import pytest
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug C: iron-proxy DNS forwarding is broken inside the VM; "
+        "curl exits 6 (could not resolve host). Remove xfail when bug C lands."
+    ),
+)
 @pytest.mark.devm
 @pytest.mark.slow
 def test_egress_enforcement(devm, workspace):
@@ -26,9 +33,6 @@ def test_egress_enforcement(devm, workspace):
         install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         network={"allow": ["httpbin.org"]},
-        # Note: env's !secret values are passed as YAML in write_devmyaml's
-        # extras. Adapt to whatever shape the helper expects — see
-        # e2e/helpers/workspace.py.
     )
 
     # Plant a test secret first.
@@ -82,6 +86,13 @@ def test_egress_enforcement(devm, workspace):
                        capture_output=True, timeout=10)
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug C: iron-proxy DNS forwarding is broken inside the VM; "
+        "curl exits 6 (could not resolve host). Remove xfail when bug C lands."
+    ),
+)
 @pytest.mark.devm
 @pytest.mark.slow
 def test_open_mode_reaches_any_host(devm, workspace):

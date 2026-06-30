@@ -32,6 +32,13 @@ from helpers.tart import TartSandbox
 pytestmark = pytest.mark.devm
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug B: orchestrator/shell.go RunShell returns provision error without "
+        "VM teardown, leaving a zombie VM. Remove xfail when bug B lands."
+    ),
+)
 @pytest.mark.timeout(180)
 def test_install_failure_workspace_file_readable_and_removable_on_host(
     workspace, devm

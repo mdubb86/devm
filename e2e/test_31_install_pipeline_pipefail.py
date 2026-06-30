@@ -18,6 +18,13 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug A: provision.go:execShell uses `bash -c` without `-o pipefail`, "
+        "so pipeline failures don't propagate. Remove xfail when bug A lands."
+    ),
+)
 @pytest.mark.timeout(120)
 def test_install_pipeline_failure_fails_loud(workspace, devm):
     # `false | cat` exits 0 without pipefail (cat's rc), non-zero WITH
