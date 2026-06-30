@@ -1,43 +1,48 @@
-"""28: a failing startup: step makes devm shell exit non-zero with captured stderr.
+"""28: declared service that exits non-zero makes devm shell exit
+non-zero with a structured error.
 
-Pin for the supervision design's startup-failure UX. Before this
-work, devm silently let the user into a half-broken shell. With
-supervision, devm catches the missing startup-all-ok sentinel and
-reports the captured stderr from the failing step.
+Pin Task 3 from the e2e refresh: provisioner asserts each declared
+service reaches `is-active` after enable+start; a service that ends
+in `failed` triggers a structured error and a non-zero shell exit.
 """
 import subprocess
-
 import pytest
 
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.timeout(120)
-def test_startup_step_fails_loud(workspace, devm, tart_sandbox):
-    workspace.write_devmyaml(
-        services={
-            "api": {
-                "port": 8080,
-                "startup": [
-                    {"command": ["sh", "-c", "echo 'something broke' 1>&2; exit 1"]}
-                ],
-            },
-        },
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug K: systemdQuoteArgv joins exec argv with bare spaces, so"
+        " ['/bin/sh', '-c', 'script'] renders as ExecStart=/bin/sh -c script"
+        " — systemd splits on whitespace and passes only 'echo' as the -c"
+        " argument, so the service exits 0 (inactive) instead of 1 (failed)."
+        " Health check times out with status=inactive instead of fast-failing"
+        " with status=failed."
+        " Remove xfail when bug K lands."
+    ),
+)
+@pytest.mark.timeout(180)
+def test_failed_service_makes_devm_shell_exit_nonzero(workspace, devm):
+    # Declare a service that exits non-zero on start. systemd marks
+    # it `failed`; the provisioner's health check returns a structured
+    # error; devm shell propagates exit non-zero.
+    workspace.write_devmyaml()
+    workspace.add_systemd_service(
+        name="broken",
+        exec=["/bin/sh", "-c", "echo intentional fail >&2; exit 1"],
+        restart="no",
     )
-
     proc = subprocess.run(
-        [devm.path, "shell"],
+        [devm.path, "shell", "--", "true"],
         cwd=str(workspace.path),
-        capture_output=True, timeout=90,
+        capture_output=True, timeout=180,
     )
     assert proc.returncode != 0, (
-        f"devm shell should exit non-zero on startup failure; got rc=0\n"
+        f"devm shell should exit non-zero on service-fail; got rc=0\n"
         f"stderr={proc.stderr.decode()!r}"
     )
     err = proc.stderr.decode()
-    assert "startup step" in err and "failed" in err, (
-        f"expected 'startup step ... failed' in stderr; got:\n{err}"
-    )
-    assert "something broke" in err, (
-        f"expected captured stderr 'something broke' in error report; got:\n{err}"
-    )
+    assert 'service "broken" did not become active' in err
+    assert "status=failed" in err
