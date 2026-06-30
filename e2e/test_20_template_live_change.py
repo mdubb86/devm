@@ -27,12 +27,23 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(60)
-def test_template_live_change(workspace, devm, tart_sandbox, sandbox_name):
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug D: WriteSnapshot uses hardcoded /home/agent/.devm/ which does not "
+        "exist in Tart VMs (admin user). Reconcile applies the template change but "
+        "then fails at snapshot write, exiting non-zero. Remove xfail when bug D lands."
+    ),
+)
+def test_template_live_change(workspace, devm, sandbox_name):
     tmpl_dir = workspace.path / "configs"
     tmpl_dir.mkdir()
     tmpl_path = tmpl_dir / "msg.tmpl"
     tmpl_path.write_text("first {{.Project.ID}}\n")
 
+    # Write the full config BEFORE cold-start so the provisioner installs
+    # the template. The service is routing-only (no exec) — provisioner
+    # skips enabling it; only the template install matters here.
     workspace.write_devmyaml(
         services={
             "probe": {

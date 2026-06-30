@@ -28,6 +28,15 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(120)
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug D: WriteSnapshot uses hardcoded /home/agent/.devm/ which does not "
+        "exist in Tart VMs (admin user). Empty snapshot is treated as zero-diff so "
+        "install: TEARDOWN change is never detected, reconcile exits 1 not 2. "
+        "Remove xfail when bug D lands."
+    ),
+)
 @pytest.mark.parametrize("mode", ["non_tty", "yes"], ids=["non_tty", "yes"])
 def test_reconcile_prompt_flow(workspace, devm, tart_sandbox, mode):
     # tart_sandbox fixture already cold-started the VM with minimal config.

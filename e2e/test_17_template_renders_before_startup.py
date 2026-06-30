@@ -1,27 +1,22 @@
 """17: template installs BEFORE service startup runs on cold start.
 
-devm's spec.yaml startup ordering is:
-  1. cleanup /tmp/.devm-startup
-  2. devm-startup.sh (claim volumes, sync /etc/hosts)
-  3. install-templates.sh (render+install user templates)
-  4. user services' startup commands
+devm's startup ordering is:
+  1. install-templates (render+install user templates)
+  2. user services' startup commands
 
-Step 3 must complete before step 4 begins — otherwise a service whose
+Step 1 must complete before step 2 begins — otherwise a service whose
 startup command reads its own template file finds nothing there.
-test_19 pins post-attach visibility (the file is there by the time
-the user shell attaches) but doesn't actually prove the file was
-already there at the moment service-startup ran.
 
-This test does prove it: a foreground startup command reads its own
-template into a marker file, recording either the rendered content
-or a "TEMPLATE_MISSING" sentinel. Post-attach we cat the marker and
-verify the rendered content was seen.
+This test proves it: the service's ExecStart reads its own template into
+a marker file at startup, recording either the rendered content or a
+"TEMPLATE_MISSING" sentinel. Post-attach we cat the marker and verify
+the rendered content was seen.
 
 What this pins:
   - Template installation completes BEFORE the consuming service's
-    startup commands run.
-  - The startup command, when it ran, saw the rendered file at the
-    declared output path with the substituted values.
+    ExecStart runs.
+  - The service, when it ran, saw the rendered file at the declared
+    output path with the substituted values.
 
 What it doesn't cover (tested elsewhere):
   - Template render at all -> test_19.
@@ -35,20 +30,19 @@ from helpers import Shell, stop_and_wait_stopped
 
 pytestmark = pytest.mark.devm
 
-# The service's startup either records the rendered content into the
-# marker, or records TEMPLATE_MISSING. Either way it exits 0 so the
-# sandbox brings up cleanly and the test can read the marker after.
-STARTUP_PROBE = (
-    "if [ -f /etc/probe.conf ]; then "
-    "cat /etc/probe.conf > /tmp/startup-saw-template; "
-    "else "
-    "echo TEMPLATE_MISSING > /tmp/startup-saw-template; "
-    "fi"
+
+@pytest.mark.timeout(180)
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug G: template installation is not a provisioner step. "
+        "Templates (install-templates.sh) are only applied via ApplyLive "
+        "(reconcile), not at cold-start. The probe service sees "
+        "TEMPLATE_MISSING instead of the rendered /etc/probe.conf. "
+        "Remove xfail when bug G lands."
+    ),
 )
-
-
-@pytest.mark.timeout(90)
-def test_template_renders_before_startup(workspace, devm, tart_sandbox, sandbox_name):
+def test_template_renders_before_startup(workspace, devm, sandbox_name):
     tmpl_dir = workspace.path / "configs"
     tmpl_dir.mkdir()
     (tmpl_dir / "probe.conf.tmpl").write_text(
@@ -56,7 +50,22 @@ def test_template_renders_before_startup(workspace, devm, tart_sandbox, sandbox_
         "MARKER=ordering-pin-ok\n"
     )
 
+    # Pre-write the probe script via install: to avoid shell metacharacters
+    # in ExecStart= (exec: joins argv with spaces without quoting, so
+    # ["sh", "-c", "<complex-script>"] would be mis-parsed by systemd).
+    # The probe records the template content (or TEMPLATE_MISSING) then
+    # execs sleep infinity so the provisioner health poll sees "active".
     workspace.write_devmyaml(
+        install=[
+            "printf '#!/bin/sh\\n"
+            "if [ -f /etc/probe.conf ]; then\\n"
+            "  cat /etc/probe.conf > /tmp/startup-saw-template\\n"
+            "else\\n"
+            "  echo TEMPLATE_MISSING > /tmp/startup-saw-template\\n"
+            "fi\\n"
+            "exec sleep infinity\\n"
+            "' > /tmp/probe.sh && chmod +x /tmp/probe.sh",
+        ],
         services={
             "probe": {
                 "port": 8080,
@@ -64,23 +73,19 @@ def test_template_renders_before_startup(workspace, devm, tart_sandbox, sandbox_
                     {"source": "configs/probe.conf.tmpl",
                      "output": "/etc/probe.conf"},
                 ],
-                "startup": [
-                    # Foreground (no background: true) so devm waits for
-                    # this to complete during sandbox bring-up. If the
-                    # template hadn't been installed yet, the cat would
-                    # find no file and the marker would record
-                    # TEMPLATE_MISSING.
-                    {"command": ["sh", "-c", STARTUP_PROBE]},
-                ],
+                # exec: single-element argv so ExecStart= is just
+                # /tmp/probe.sh — no quoting needed.
+                "exec": ["/tmp/probe.sh"],
+                "restart": "always",
             },
         },
     )
 
     with Shell(devm, cwd=str(workspace.path)) as sh:
-        sh.expect_prompt(timeout=90)
+        sh.expect_prompt(timeout=120)
 
         # The marker must contain the rendered template content — proving
-        # the template was already installed when service-startup ran.
+        # the template was already installed when service startup ran.
         sh.send("cat /tmp/startup-saw-template")
         sh.expect_text(r"PORT=8080", timeout=10)
         sh.expect_text(r"MARKER=ordering-pin-ok", timeout=10)

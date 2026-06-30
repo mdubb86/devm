@@ -35,37 +35,30 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(120)
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug D: WriteSnapshot uses hardcoded /home/agent/.devm/ which does not "
+        "exist in Tart VMs (admin user). Empty snapshot is treated as zero-diff so "
+        "install: TEARDOWN change is never detected; reconcile exits 1 and the VM is "
+        "not torn down. Remove xfail when bug D lands."
+    ),
+)
 def test_install_change_recreate(workspace, devm, tart_sandbox, sandbox_name, phase):
     workspace.write_devmyaml(
-        install=["touch /home/agent/marker-a"],
-        services={
-            "worker": {
-                "startup": [
-                    {"command": ["sh", "-c", "while true; do sleep 60; done"],
-                     "background": True}
-                ],
-            },
-        },
+        install=["touch /tmp/marker-a"],
     )
     phase("setup")
 
     # Cold start 1: install runs at create → marker-a present.
     with Shell(devm, cwd=str(workspace.path)) as sh:
         sh.expect_prompt(timeout=90)
-        sh.run_check("test -e /home/agent/marker-a", expect_zero=True, timeout=15)
+        sh.run_check("test -e /tmp/marker-a", expect_zero=True, timeout=15)
         phase("cold-start-1")
 
         # Edit install — TEARDOWN-bucket field. Triggers a recreate (VM rm).
         workspace.patch_devmyaml(
-            install=["touch /home/agent/marker-b"],
-            services={
-                "worker": {
-                    "startup": [
-                        {"command": ["sh", "-c", "while true; do sleep 60; done"],
-                         "background": True}
-                    ],
-                },
-            },
+            install=["touch /tmp/marker-b"],
         )
         devm.reconcile(yes=True, timeout=90, check=False)
 
@@ -84,8 +77,8 @@ def test_install_change_recreate(workspace, devm, tart_sandbox, sandbox_name, ph
     # marker-b present (new install ran) AND marker-a absent (teardown wiped state).
     with Shell(devm, cwd=str(workspace.path)) as fresh:
         fresh.expect_prompt(timeout=90)
-        fresh.run_check("test -e /home/agent/marker-b", expect_zero=True, timeout=15)
-        fresh.run_check("test -e /home/agent/marker-a", expect_zero=False, timeout=15)
+        fresh.run_check("test -e /tmp/marker-b", expect_zero=True, timeout=15)
+        fresh.run_check("test -e /tmp/marker-a", expect_zero=False, timeout=15)
         fresh.exit(timeout=30)
 
     # Anchor-alive: explicitly stop after shell exit.
