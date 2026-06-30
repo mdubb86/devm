@@ -39,7 +39,7 @@ def test_teardown(workspace, devm, tart_sandbox, mode):
             td = pexpect.spawn(devm.path, ["teardown"], cwd=str(workspace.path),
                                encoding="utf-8", timeout=30, dimensions=(40, 200))
             td.expect(
-                re.escape(f"Tear down sandbox {tart_sandbox.name}?") + r".*\[y/N\]:\s*",
+                re.escape(f"Tear down VM {tart_sandbox.name}?") + r".*\[y/N\]:\s*",
                 timeout=30,
             )
             td.sendline("y")

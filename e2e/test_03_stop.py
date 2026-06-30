@@ -40,7 +40,7 @@ def test_stop(workspace, devm, tart_sandbox, mode):
             stop = pexpect.spawn(devm.path, ["stop"], cwd=str(workspace.path),
                                  encoding="utf-8", timeout=30, dimensions=(40, 200))
             stop.expect(
-                re.escape(f"Stop sandbox {tart_sandbox.name}?") + r".*\[y/N\]:\s*",
+                re.escape(f"Stop VM {tart_sandbox.name}?") + r".*\[y/N\]:\s*",
                 timeout=30,
             )
             stop.sendline("y")
