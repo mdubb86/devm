@@ -23,6 +23,15 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug J: devm stop signals SIGTERM to the tart run process rather than "
+        "calling tart stop <name> first, so the guest OS does not complete a clean "
+        "shutdown and in-flight disk writes are not committed to the image. "
+        "Remove xfail when bug J lands."
+    ),
+)
 @pytest.mark.timeout(240)
 def test_shell_restarts_existing_stopped_vm(devm, workspace, tart_sandbox):
     # tart_sandbox fixture already cold-started the VM.

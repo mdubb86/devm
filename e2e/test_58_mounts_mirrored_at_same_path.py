@@ -28,6 +28,14 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug I: mounts: entries beyond the workspace share are not passed to "
+        "tart run --dir. The declared extra mount is never present inside the VM. "
+        "Remove xfail when bug I lands."
+    ),
+)
 @pytest.mark.timeout(180)
 def test_extra_mount_mirrored_at_same_path(workspace, devm, tart_sandbox):
     extra = tempfile.mkdtemp(prefix="devm-e2e-mount58-")

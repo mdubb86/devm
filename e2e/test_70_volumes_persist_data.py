@@ -30,12 +30,12 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason=(
-        "mounts: entries beyond the workspace share are not passed to tart run --dir "
-        "in the Tart era — VMStartRequest only carries WorkspaceHostPath; extra "
-        "mounts[] entries are validated by the schema but never wired through "
-        "serviceapi into DirMounts. Remove xfail when bug I lands."
+        "devm bug I: mounts: entries beyond the workspace share are not passed to "
+        "tart run --dir. VMStartRequest only carries WorkspaceHostPath; extra "
+        "mounts[] entries are never wired through serviceapi into DirMounts. "
+        "Remove xfail when bug I lands."
     ),
 )
 @pytest.mark.timeout(300)

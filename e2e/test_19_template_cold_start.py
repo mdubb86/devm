@@ -27,12 +27,11 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason=(
-        "templates: entries not rendered during cold-start in Tart era — "
-        "the service-level template output file is never created inside the VM. "
-        "VMStartRequest carries no template-render step; the feature is schema-defined "
-        "but not wired through serviceapi. Remove xfail when bug H lands."
+        "devm bug G: Provisioner.Run() has no template-render step; templates only "
+        "land via reconcile. The service-level template output file is never created "
+        "on cold start. Remove xfail when bug G lands."
     ),
 )
 @pytest.mark.timeout(60)

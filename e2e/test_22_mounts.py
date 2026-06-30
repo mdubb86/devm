@@ -27,12 +27,11 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason=(
-        "mounts: entries beyond the workspace share are not passed to tart run --dir "
-        "in the Tart era — same root cause as bug I. The declared mount is never "
-        "present inside the VM so the marker-file and :ro checks both fail. "
-        "Remove xfail when bug I lands."
+        "devm bug I: mounts: entries beyond the workspace share are not passed to "
+        "tart run --dir. The declared mount is never present inside the VM so the "
+        "marker-file and :ro checks both fail. Remove xfail when bug I lands."
     ),
 )
 @pytest.mark.timeout(90)

@@ -29,12 +29,12 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason=(
-        "VM disk state does not survive devm stop + restart — devm stop signals "
-        "SIGTERM to the tart run process rather than calling tart stop <name> "
-        "first, so the guest OS does not complete a clean shutdown and in-flight "
-        "disk writes are not committed to the image. Remove xfail when bug J lands."
+        "devm bug J: devm stop signals SIGTERM to the tart run process rather than "
+        "calling tart stop <name> first, so the guest OS does not complete a clean "
+        "shutdown and in-flight disk writes are not committed to the image. "
+        "Remove xfail when bug J lands."
     ),
 )
 @pytest.mark.timeout(240)

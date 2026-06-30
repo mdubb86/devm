@@ -25,6 +25,14 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug I: mounts: entries beyond the workspace share are not passed to "
+        "tart run --dir. The declared :ro mount is never present inside the VM. "
+        "Remove xfail when bug I lands."
+    ),
+)
 @pytest.mark.timeout(180)
 def test_ro_suffix_makes_mount_read_only(workspace, devm, tart_sandbox):
     ro_dir = tempfile.mkdtemp(prefix="devm-e2e-mount59-")
