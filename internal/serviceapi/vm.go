@@ -212,10 +212,12 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 		// from the workspace (e.g. .devm/.env).
 		info, _ := ironProxyState.get(req.ProjectID)
 		scripts := []string{
-			buildWorkspaceMountScript(req.WorkspaceHostPath),
 			buildEnvScript(),
 			buildNftablesScript(macIP, info.HTTPPort, info.HTTPSPort, info.DNSPort),
 			buildDnsmasqScript(macIP, info.DNSPort),
+		}
+		if req.WorkspaceHostPath != "" {
+			scripts = append([]string{buildWorkspaceMountScript(req.WorkspaceHostPath)}, scripts...)
 		}
 		for i, script := range scripts {
 			cmd := exec.Command("tart", "exec", "-i", req.VMName, "sudo", "bash", "-s")
