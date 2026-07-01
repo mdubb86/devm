@@ -87,3 +87,26 @@ func TestRenderService_Declarative_HostnameAndPortOnlyService(t *testing.T) {
 	got := string(RenderService("api", svc))
 	assert.NotContains(t, got, "ExecStart=")
 }
+
+func TestSystemdQuoteArgv(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{"plain", []string{"/bin/echo", "hello"}, `/bin/echo hello`},
+		{"whitespace in arg", []string{"sh", "-c", "touch /tmp/x"}, `sh -c "touch /tmp/x"`},
+		{"single quote in arg", []string{"sh", "-c", "echo 'hi'"}, `sh -c "echo 'hi'"`},
+		{"double quote in arg", []string{"sh", "-c", `echo "hi"`}, `sh -c "echo \"hi\""`},
+		{"backslash in arg", []string{"sh", "-c", `printf %s\n foo`}, `sh -c "printf %s\\n foo"`},
+		{"empty argv", []string{}, ``},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := systemdQuoteArgv(tc.argv)
+			if got != tc.want {
+				t.Fatalf("systemdQuoteArgv(%v)\n got: %q\nwant: %q", tc.argv, got, tc.want)
+			}
+		})
+	}
+}

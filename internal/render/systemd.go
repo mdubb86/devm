@@ -71,10 +71,38 @@ func RenderService(name string, svc schema.Service) []byte {
 	return []byte(b.String())
 }
 
-// systemdQuoteArgv joins argv with spaces for systemd's ExecStart=.
-// Systemd's ExecStart parser handles quoting itself when needed; we
-// just space-join. If a user has whitespace in their argv elements,
-// they should drop down to the systemd: full-override field.
+// systemdQuoteArgv renders an argv slice for systemd ExecStart=. Systemd's
+// parser splits ExecStart on whitespace unless args are double-quoted with
+// C-style escapes (see systemd.service(5) COMMAND LINES). Elements that
+// contain whitespace, double quotes, or backslashes are wrapped in double
+// quotes with `"` and `\` backslash-escaped. Plain elements pass through
+// unquoted so simple ExecStart lines stay readable.
 func systemdQuoteArgv(argv []string) string {
-	return strings.Join(argv, " ")
+	parts := make([]string, len(argv))
+	for i, a := range argv {
+		parts[i] = quoteSystemdArg(a)
+	}
+	return strings.Join(parts, " ")
+}
+
+func quoteSystemdArg(a string) string {
+	if a == "" {
+		return `""`
+	}
+	if !strings.ContainsAny(a, " \t\n\"\\") {
+		return a
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range a {
+		switch r {
+		case '\\', '"':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }

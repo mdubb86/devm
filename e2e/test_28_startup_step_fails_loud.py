@@ -11,18 +11,6 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug K: systemdQuoteArgv joins exec argv with bare spaces, so"
-        " ['/bin/sh', '-c', 'script'] renders as ExecStart=/bin/sh -c script"
-        " — systemd splits on whitespace and passes only 'echo' as the -c"
-        " argument, so the service exits 0 (inactive) instead of 1 (failed)."
-        " Health check times out with status=inactive instead of fast-failing"
-        " with status=failed."
-        " Remove xfail when bug K lands."
-    ),
-)
 @pytest.mark.timeout(180)
 def test_failed_service_makes_devm_shell_exit_nonzero(workspace, devm):
     # Declare a service that exits non-zero on start. systemd marks

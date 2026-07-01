@@ -35,12 +35,10 @@ pytestmark = pytest.mark.devm
     reason=(
         "devm bug L (new): provisioner's runInstallCommands runs `tart exec bash -c` "
         "without sourcing .devm/.env, so WORKSPACE_DIR is not set during install: "
-        "commands — install-ws-61 is absent. Additionally: devm bug K "
-        "(systemdQuoteArgv) causes the startup service to mis-exec its sh -c command, "
-        "leaving no startup-ws-61. devm bug F (workspace not mounted) means the "
-        "with-devm-env exec also cannot find .devm/.env. Also note: this test writes "
-        "devmyaml AFTER the tart_sandbox fixture has already cold-started (test "
-        "ordering bug). Remove xfail when bugs F, K, and L land."
+        "commands — install-ws-61 is absent. devm bug F (workspace not mounted) "
+        "means the with-devm-env exec also cannot find .devm/.env. Also note: this "
+        "test writes devmyaml AFTER the tart_sandbox fixture has already cold-started "
+        "(test ordering bug). Remove xfail when bugs F and L land."
     ),
 )
 @pytest.mark.timeout(180)

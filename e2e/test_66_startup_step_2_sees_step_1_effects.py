@@ -22,26 +22,17 @@ systemd After= dependency so users can express ordered startup.
 """
 from __future__ import annotations
 
+import subprocess
+
 import pytest
+
+from helpers.tart import TartSandbox
 
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug K: systemdQuoteArgv joins exec argv with bare spaces, so "
-        "[\"sh\", \"-c\", \"touch /tmp/s1-ran\"] renders as "
-        "ExecStart=sh -c touch /tmp/s1-ran — systemd splits on whitespace and passes "
-        "only 'touch' as the -c argument; sh -c 'touch' runs touch with no args, "
-        "so /tmp/s1-ran is never created. Also note: this test writes devmyaml AFTER "
-        "the tart_sandbox fixture has already cold-started (test ordering bug); a "
-        "full fix requires restructuring AND landing bug K. "
-        "Remove xfail when bug K lands."
-    ),
-)
 @pytest.mark.timeout(180)
-def test_startup_service_after_sees_dep_effects(workspace, devm, tart_sandbox):
+def test_startup_service_after_sees_dep_effects(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
         services={
             "step1": {
@@ -57,19 +48,22 @@ def test_startup_service_after_sees_dep_effects(workspace, devm, tart_sandbox):
         },
     )
 
-    assert tart_sandbox.state() == "running", (
-        f"expected VM running; got {tart_sandbox.state()!r}"
+    subprocess.run(
+        [devm.path, "shell", "--", "true"],
+        capture_output=True, cwd=str(workspace.path),
+        timeout=300, check=False,
+    )
+    sandbox = TartSandbox(name=sandbox_name)
+    assert sandbox.state() == "running", (
+        f"expected VM running after cold-start; got {sandbox.state()!r}"
     )
 
-    # step1's marker must be present.
-    r = tart_sandbox.exec_shell("test -f /tmp/s1-ran && echo present")
+    r = sandbox.exec_shell("test -f /tmp/s1-ran && echo present")
     assert r.ok and "present" in r.stdout, (
         f"/tmp/s1-ran missing — step1 service didn't run or write marker. "
         f"stdout={r.stdout!r} stderr={r.stderr!r}"
     )
-
-    # The contract pin: step2 saw step1's effect.
-    r = tart_sandbox.exec_shell("test -f /tmp/s2-saw-s1 && echo present")
+    r = sandbox.exec_shell("test -f /tmp/s2-saw-s1 && echo present")
     assert r.ok and "present" in r.stdout, (
         f"/tmp/s2-saw-s1 absent — step2 either didn't run or ran before "
         f"step1 completed. The after: field may not be rendering to a "
