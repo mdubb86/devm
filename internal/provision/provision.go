@@ -96,7 +96,10 @@ func (p *Provisioner) exec(ctx context.Context, w io.Writer, argv ...string) err
 // execShell runs the given shell script via `bash -c "..."` for steps
 // that need pipes, redirection, or compound commands.
 func (p *Provisioner) execShell(ctx context.Context, w io.Writer, script string) error {
-	return p.exec(ctx, w, "bash", "-c", script)
+	// -o errexit + -o pipefail so any pipeline component failing (not just
+	// the last) aborts the script. -o nounset would be nice but many user
+	// install steps rely on unset-vars-as-empty (e.g., ${FOO:-default}).
+	return p.exec(ctx, w, "bash", "-e", "-o", "pipefail", "-c", script)
 }
 
 func (p *Provisioner) mkdirWorkspaceParents(ctx context.Context, w io.Writer) error {
