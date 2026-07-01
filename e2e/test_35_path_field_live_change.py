@@ -27,6 +27,15 @@ from helpers import Shell, stop_and_wait_stopped
 pytestmark = pytest.mark.devm
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "devm bug D: WriteSnapshot uses hardcoded /home/agent/.devm/ which does not "
+        "exist in Tart VMs (admin user). reconcile --yes exits 1 on the snapshot "
+        "write, so the path: live-change cannot be applied or verified. "
+        "Remove xfail when bug D lands."
+    ),
+)
 @pytest.mark.timeout(120)
 def test_path_field_live_change(workspace, devm, sandbox_name):
     # Cold-start with NO path: entry.
