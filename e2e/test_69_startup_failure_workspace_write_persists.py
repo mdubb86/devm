@@ -39,16 +39,6 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(180)
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug F: the workspace virtiofs share is passed to tart run via "
-        "--dir but is never mounted inside the VM (no provisioner step and no "
-        "injection script mounts it). The failing service's write to the "
-        "workspace path goes to a non-existent path inside the VM; the file "
-        "is never visible on the host. Remove xfail when bug F lands."
-    ),
-)
 def test_startup_failure_workspace_write_persists_on_host(workspace, devm, sandbox_name):
     # The workspace is virtio-fs mounted in the VM at the same absolute path
     # as on the host. Use the concrete path so the service's exec doesn't

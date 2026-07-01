@@ -6,6 +6,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestBuildWorkspaceMountScript_MountsVirtioFSAtMirrorPath(t *testing.T) {
+	path := "/Users/michael/workspace/myproject"
+	script := buildWorkspaceMountScript(path)
+	assert.Contains(t, script, "mount -t virtiofs workspace "+path)
+	assert.Contains(t, script, "mkdir -p "+path)
+	assert.Contains(t, script, "chown admin:admin "+path)
+	assert.Contains(t, script, "workspace "+path+" virtiofs")
+}
+
 func TestBuildEnvScript_NoProxyOnly(t *testing.T) {
 	script := buildEnvScript()
 	assert.Contains(t, script, "NO_PROXY=*")

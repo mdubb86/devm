@@ -204,13 +204,15 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			DNSPort:   dnsPort,
 		})
 
-		// Apply VM-side config via tart exec — env, nftables, dnsmasq.
-		// Three sudo-wrapped scripts run inside the VM. Each is its
-		// own tart exec invocation; any failure rolls back nothing
-		// (VM is in an indeterminate state — user re-runs devm
-		// teardown to clean up).
+		// Apply VM-side config via tart exec — workspace mount, env,
+		// nftables, dnsmasq. Each is its own tart exec invocation; any
+		// failure rolls back nothing (VM is in an indeterminate state —
+		// user re-runs devm teardown to clean up).
+		// Workspace mount runs first so subsequent scripts can read files
+		// from the workspace (e.g. .devm/.env).
 		info, _ := ironProxyState.get(req.ProjectID)
 		scripts := []string{
+			buildWorkspaceMountScript(req.WorkspaceHostPath),
 			buildEnvScript(),
 			buildNftablesScript(macIP, info.HTTPPort, info.HTTPSPort, info.DNSPort),
 			buildDnsmasqScript(macIP, info.DNSPort),

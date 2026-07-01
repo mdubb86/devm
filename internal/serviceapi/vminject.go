@@ -2,6 +2,24 @@ package serviceapi
 
 import "fmt"
 
+// buildWorkspaceMountScript mounts the workspace virtiofs share at the same
+// absolute path inside the VM as it lives on the host (Ship 4 mirrored-path
+// decision). Cirruslabs base image doesn't auto-mount virtiofs shares; without
+// this the guest can't see the workspace.
+//
+// The mount tag is "workspace" — set at `tart run --dir=workspace:...:tag=workspace`
+// (see internal/sandbox/tart/tart.go:formatDirArg + serviceapi/vm.go).
+// /etc/fstab persists the mount across guest reboots for symmetry with the
+// runtime state; devm stops the VM cleanly so a fresh tart run remounts via fstab.
+func buildWorkspaceMountScript(workspaceMirrorPath string) string {
+	return fmt.Sprintf(`set -e
+sudo mkdir -p %s
+sudo mount -t virtiofs workspace %s
+sudo chown admin:admin %s || true
+grep -q '^workspace' /etc/fstab || echo 'workspace %s virtiofs rw,_netdev 0 0' | sudo tee -a /etc/fstab
+`, workspaceMirrorPath, workspaceMirrorPath, workspaceMirrorPath, workspaceMirrorPath)
+}
+
 // buildEnvScript wipes any HTTPS_PROXY/HTTP_PROXY env that Ship 5
 // previously set — the transparent-proxy model doesn't use them.
 // /etc/environment becomes a placeholder file with no proxy vars

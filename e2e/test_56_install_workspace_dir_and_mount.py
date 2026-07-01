@@ -28,13 +28,11 @@ pytestmark = pytest.mark.devm
 @pytest.mark.xfail(
     strict=False,
     reason=(
-        "devm bug L (new): provisioner's runInstallCommands runs `tart exec bash -c` "
+        "devm bug L: provisioner's runInstallCommands runs `tart exec bash -c` "
         "without sourcing .devm/.env, so WORKSPACE_DIR is not set during install: "
-        "commands. devm bug F (workspace virtiofs share never mounted) means the "
-        "sentinel file is not visible inside the VM. Also note: this test writes "
-        "devmyaml AFTER the tart_sandbox fixture has already cold-started (test "
-        "ordering bug); a full fix requires restructuring AND the above devm bugs. "
-        "Remove xfail when bugs F and L land."
+        "commands. Also note: this test writes devmyaml AFTER the tart_sandbox "
+        "fixture has already cold-started (test ordering bug); a full fix requires "
+        "restructuring AND bug L. Remove xfail when bug L lands."
     ),
 )
 @pytest.mark.timeout(180)
