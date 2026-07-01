@@ -13,8 +13,8 @@ import (
 )
 
 // makeSnapTart writes a fake tart binary:
-//   - `exec <vm> cat <path>` → exits catCode; emits catOut to stdout, catErr to stderr
-//   - `exec <vm> bash -c ...` (WriteSnapshot) → exits 0, logs the full argv
+//   - `exec <vm> bash -c "cat ..."` (ReadSnapshot) → exits catCode; emits catOut to stdout, catErr to stderr
+//   - `exec <vm> bash -c "mkdir ..."` (WriteSnapshot) → exits 0, logs the full argv
 func makeSnapTart(t *testing.T, catOut, catErr string, catCode int) (*tart.Tart, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -31,12 +31,22 @@ func makeSnapTart(t *testing.T, catOut, catErr string, catCode int) (*tart.Tart,
 		exitLine = fmt.Sprintf("cat '%s' >&2; exit %d\n", catErrFile, catCode)
 	}
 
+	// Both ReadSnapshot and WriteSnapshot now call `bash -c <script>`.
+	// Distinguish them by whether $5 (the script body) starts with "cat"
+	// (ReadSnapshot) or anything else (WriteSnapshot).
 	script := "#!/bin/sh\n" +
 		"echo \"$@\" >> '" + callLog + "'\n" +
 		"case \"$3\" in\n" +
-		"  cat)\n" +
-		"    " + exitLine +
-		"    cat '" + catOutFile + "'\n" +
+		"  bash)\n" +
+		"    case \"$5\" in\n" +
+		"      cat*)\n" +
+		"        " + exitLine +
+		"        cat '" + catOutFile + "'\n" +
+		"        ;;\n" +
+		"      *)\n" +
+		"        exit 0\n" +
+		"        ;;\n" +
+		"    esac\n" +
 		"    ;;\n" +
 		"  *)\n" +
 		"    exit 0\n" +
@@ -56,8 +66,8 @@ func TestReadSnapshot_Success(t *testing.T) {
 }
 
 func TestReadSnapshot_NotFoundIsEmpty(t *testing.T) {
-	// Cat exits non-zero with "No such file" on stderr → clean miss.
-	tr, _ := makeSnapTart(t, "", "cat: /home/agent/.devm/applied.yaml: No such file or directory", 1)
+	// bash exits non-zero with "No such file" on stderr → clean miss.
+	tr, _ := makeSnapTart(t, "", "bash: line 1: cat: $HOME/.devm/applied.yaml: No such file or directory", 1)
 	out, err := ReadSnapshot(tr, "x")
 	assert.NoError(t, err, "missing snapshot is not an error")
 	assert.Equal(t, "", out)

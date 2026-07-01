@@ -30,10 +30,10 @@ pytestmark = pytest.mark.devm
 @pytest.mark.xfail(
     strict=False,
     reason=(
-        "devm bug D: WriteSnapshot uses hardcoded /home/agent/.devm/ which does not "
-        "exist in Tart VMs (admin user). reconcile --yes exits 1 on the snapshot "
-        "write, so the path: live-change cannot be applied or verified. "
-        "Remove xfail when bug D lands."
+        "devm bug E: devm shell attaches bash directly via `tart exec vmName bash` "
+        "without going through with-devm-env, so .devm/.env is not sourced in the "
+        "warm-attached shell. The second shell does not see the new path: head. "
+        "Remove xfail when bug E lands."
     ),
 )
 @pytest.mark.timeout(120)

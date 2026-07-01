@@ -21,8 +21,8 @@ func statusMinimalCfg() schema.Config {
 // makeFakeTartStatus creates a fake tart binary for RunStatus tests.
 // Uses files to avoid shell quoting issues with YAML content.
 //   - `list --format json` → listJSON
-//   - `exec <vmName> cat <path>` → snapOut
-//   - `exec <vmName> bash -c ...` → probeOut (session lines)
+//   - `exec <vmName> bash -c "cat ..."` → snapOut (ReadSnapshot)
+//   - `exec <vmName> bash -c "for ..."` → probeOut (probeSessions)
 func makeFakeTartStatus(t *testing.T, listJSON, snapOut, probeOut string) *tart.Tart {
 	t.Helper()
 	dir := t.TempDir()
@@ -35,6 +35,10 @@ func makeFakeTartStatus(t *testing.T, listJSON, snapOut, probeOut string) *tart.
 	require.NoError(t, os.WriteFile(snapFile, []byte(snapOut), 0o644))
 	require.NoError(t, os.WriteFile(probeFile, []byte(probeOut), 0o644))
 
+	// Both ReadSnapshot and probeSessions use `bash -c <script>`.
+	// Distinguish them by $5 (the bash body):
+	//   cat*  → ReadSnapshot ("cat \"$HOME/...\"")
+	//   *     → probeSessions (the /proc-walking for-loop)
 	script := "#!/bin/sh\n" +
 		"case \"$1\" in\n" +
 		"  list)\n" +
@@ -42,11 +46,15 @@ func makeFakeTartStatus(t *testing.T, listJSON, snapOut, probeOut string) *tart.
 		"    ;;\n" +
 		"  exec)\n" +
 		"    case \"$3\" in\n" +
-		"      cat)\n" +
-		"        cat '" + snapFile + "'\n" +
-		"        ;;\n" +
 		"      bash)\n" +
-		"        cat '" + probeFile + "'\n" +
+		"        case \"$5\" in\n" +
+		"          cat*)\n" +
+		"            cat '" + snapFile + "'\n" +
+		"            ;;\n" +
+		"          *)\n" +
+		"            cat '" + probeFile + "'\n" +
+		"            ;;\n" +
+		"        esac\n" +
 		"        ;;\n" +
 		"      *)\n" +
 		"        exit 0\n" +

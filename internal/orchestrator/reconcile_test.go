@@ -31,6 +31,9 @@ func makeFakeTart(t *testing.T, dir, listJSON, snapOut string) *tart.Tart {
 	require.NoError(t, os.WriteFile(listFile, []byte(listJSON), 0o644))
 	require.NoError(t, os.WriteFile(snapFile, []byte(snapOut), 0o644))
 
+	// ReadSnapshot now runs `bash -c "cat ..."` so dispatch on $3==bash
+	// and check $5 (the script body) to distinguish snapshot reads
+	// (cat*) from other bash calls (write, probe — all exit 0 here).
 	script := "#!/bin/sh\n" +
 		"case \"$1\" in\n" +
 		"  list)\n" +
@@ -38,8 +41,15 @@ func makeFakeTart(t *testing.T, dir, listJSON, snapOut string) *tart.Tart {
 		"    ;;\n" +
 		"  exec)\n" +
 		"    case \"$3\" in\n" +
-		"      cat)\n" +
-		"        cat '" + snapFile + "'\n" +
+		"      bash)\n" +
+		"        case \"$5\" in\n" +
+		"          cat*)\n" +
+		"            cat '" + snapFile + "'\n" +
+		"            ;;\n" +
+		"          *)\n" +
+		"            exit 0\n" +
+		"            ;;\n" +
+		"        esac\n" +
 		"        ;;\n" +
 		"      *)\n" +
 		"        exit 0\n" +

@@ -40,6 +40,22 @@ func (e *EnvValue) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
+// MarshalYAML encodes an EnvValue as the same on-wire format that
+// UnmarshalYAML reads: a plain scalar for literals, a !secret-tagged
+// scalar for secrets. This makes yaml.Marshal(cfg) produce YAML that
+// round-trips through yaml.Unmarshal(&cfg) without error — required
+// for snapshot storage.
+func (e EnvValue) MarshalYAML() (interface{}, error) {
+	if e.Secret != nil {
+		return &yaml.Node{
+			Kind:  yaml.ScalarNode,
+			Tag:   "!secret",
+			Value: e.Secret.Name,
+		}, nil
+	}
+	return e.Literal, nil
+}
+
 // IsSecret reports whether this env value is a secret reference.
 func (e EnvValue) IsSecret() bool { return e.Secret != nil }
 

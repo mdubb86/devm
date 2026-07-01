@@ -12,7 +12,7 @@ container state was discarded (not preserved across teardown).
 What this pins:
   - First cold-start runs the declared install (marker-a present).
   - Editing `install` is a TEARDOWN-bucket change: reconcile rms the
-    sandbox; the open user shell hits EOF, tart_sandbox.state() is absent.
+    sandbox; the open user shell hits EOF, TartSandbox.state() is absent.
   - The next cold-start re-runs the NEW install (marker-b present).
   - Teardown wipes prior container state — old marker-a is gone in the
     fresh sandbox.
@@ -30,25 +30,18 @@ import time
 import pytest
 
 from helpers import Shell, stop_and_wait_stopped
+from helpers.tart import TartSandbox
 
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(120)
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug D: WriteSnapshot uses hardcoded /home/agent/.devm/ which does not "
-        "exist in Tart VMs (admin user). Empty snapshot is treated as zero-diff so "
-        "install: TEARDOWN change is never detected; reconcile exits 1 and the VM is "
-        "not torn down. Remove xfail when bug D lands."
-    ),
-)
-def test_install_change_recreate(workspace, devm, tart_sandbox, sandbox_name, phase):
+def test_install_change_recreate(workspace, devm, sandbox_name, phase):
     workspace.write_devmyaml(
         install=["touch /tmp/marker-a"],
     )
     phase("setup")
+    sandbox = TartSandbox(name=sandbox_name)
 
     # Cold start 1: install runs at create → marker-a present.
     with Shell(devm, cwd=str(workspace.path)) as sh:
@@ -67,10 +60,10 @@ def test_install_change_recreate(workspace, devm, tart_sandbox, sandbox_name, ph
 
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
-        if tart_sandbox.state() == "absent":
+        if sandbox.state() == "absent":
             break
         time.sleep(0.5)
-    assert tart_sandbox.state() == "absent", "sandbox still exists after teardown recreate"
+    assert sandbox.state() == "absent", "sandbox still exists after teardown recreate"
     phase("reconcile-teardown")
 
     # Cold start 2: fresh create re-runs the NEW install. In ONE fresh shell:

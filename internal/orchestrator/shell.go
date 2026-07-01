@@ -18,6 +18,7 @@ import (
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/status"
 	"golang.org/x/term"
+	"gopkg.in/yaml.v3"
 )
 
 // resolveSecretBindings gathers every `!secret <name>` ref from cfg
@@ -186,6 +187,19 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		return -1, fmt.Errorf("provision: %w", err)
 	}
 	debuglog.Logf("shell", "cold-start: provisioning done")
+
+	// Write initial snapshot so that subsequent `devm reconcile` calls have
+	// a baseline to diff against. Without this, ReadSnapshot returns "" which
+	// reconcile treats as zero-diff (identity with the new config), masking
+	// any changes made between cold-start and the first reconcile.
+	provSnap, err := yaml.Marshal(cfg)
+	if err != nil {
+		return -1, fmt.Errorf("marshal provision snapshot: %w", err)
+	}
+	if err := WriteSnapshot(d.Tart, vmName, snapshotHeader+string(provSnap)); err != nil {
+		return -1, fmt.Errorf("write provision snapshot: %w", err)
+	}
+	debuglog.Logf("shell", "cold-start: snapshot written")
 
 	reporter.Step("ready", false)
 	reporter.Stop()

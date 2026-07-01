@@ -26,15 +26,15 @@ from helpers import Shell, stop_and_wait_stopped
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.timeout(60)
 @pytest.mark.xfail(
     strict=False,
     reason=(
-        "devm bug D: WriteSnapshot uses hardcoded /home/agent/.devm/ which does not "
-        "exist in Tart VMs (admin user). Reconcile applies the template change but "
-        "then fails at snapshot write, exiting non-zero. Remove xfail when bug D lands."
+        "devm bug G: Provisioner.Run() has no template-render step; templates only "
+        "land via reconcile. The baseline `cat /etc/msg` fails on cold start because "
+        "the template installer was never run. Remove xfail when bug G lands."
     ),
 )
+@pytest.mark.timeout(60)
 def test_template_live_change(workspace, devm, sandbox_name):
     tmpl_dir = workspace.path / "configs"
     tmpl_dir.mkdir()
