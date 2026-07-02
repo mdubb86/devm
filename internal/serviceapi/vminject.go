@@ -13,9 +13,10 @@ import "fmt"
 // every VM start regardless of whether the mount already came up via fstab, so
 // every step here must be idempotent (mount check + fstab grep-guard).
 func buildWorkspaceMountScript(workspaceMirrorPath string) string {
-	// virtiofs on Apple Virtualization.framework passes UIDs through; the
-	// guest can't chown files on the share (`Operation not permitted`).
-	// Ownership is inherited from whichever host process wrote the file.
+	// No chown: Apple Virtualization's virtiofs surfaces the share with the
+	// default exec user's ownership already — files authored on the host as
+	// uid 501 show up in the guest as uid 1000 (admin). A `chown admin:admin`
+	// is a no-op. Pinned by e2e/test_tart_contract_09_*.
 	return fmt.Sprintf(`set -e
 sudo mkdir -p %s
 mountpoint -q %s || sudo mount -t virtiofs workspace %s
