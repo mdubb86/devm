@@ -137,7 +137,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		reporter.Step("ready", false)
 		reporter.Stop()
 		reporter.Clear()
-		return d.attachShell(ctx, vmName, cmdName, cmdArgs)
+		return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
 	}
 
 	// Cold start.
@@ -208,7 +208,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	_ = lk.Release()
 	released = true
 
-	return d.attachShell(ctx, vmName, cmdName, cmdArgs)
+	return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
 }
 
 // attachShell attaches an interactive shell inside the VM via `tart exec`.
@@ -219,12 +219,19 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 // allocated. When the caller's stdin is itself a TTY (a real terminal
 // or pexpect), pass `-i -t` so bash sees a TTY and stays interactive
 // instead of exiting on EOF.
-func (d ShellDeps) attachShell(ctx context.Context, vmName, cmdName string, cmdArgs []string) (int, error) {
+//
+// The user command is invoked via the with-devm-env wrapper so the
+// project env (.devm/.env) is sourced before argv runs. The wrapper
+// lives at $WORKSPACE/.devm/scripts/with-devm-env.sh on the host and
+// surfaces at the same absolute path inside the VM via the workspace
+// virtiofs share.
+func (d ShellDeps) attachShell(ctx context.Context, vmName, repoRoot, cmdName string, cmdArgs []string) (int, error) {
 	execArgs := []string{"exec"}
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		execArgs = append(execArgs, "-i", "-t")
 	}
-	execArgs = append(execArgs, vmName, cmdName)
+	wrapper := filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env")
+	execArgs = append(execArgs, vmName, wrapper, cmdName)
 	execArgs = append(execArgs, cmdArgs...)
 	debuglog.Logf("shell", "attaching interactive shell: tart exec %s %v", vmName, execArgs)
 	cmd, err := d.UserSpawner.Start(d.Tart.Path, execArgs...)

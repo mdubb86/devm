@@ -28,16 +28,6 @@ from helpers import Shell, stop_and_wait_stopped
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug E: devm shell attaches bash directly via `tart exec vmName bash` "
-        "without going through with-devm-env, so .devm/.env is not sourced in the "
-        "interactive session. The path: field uses the same .devm/.env fan-out as "
-        "cfg.Env, so path: entries are not prepended to $PATH in the shell. "
-        "Remove xfail when bug E lands."
-    ),
-)
 @pytest.mark.timeout(90)
 def test_path_field_prepends(workspace, devm, sandbox_name):
     workspace.write_devmyaml(

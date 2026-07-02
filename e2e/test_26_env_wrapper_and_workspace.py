@@ -31,15 +31,6 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(120)
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug E: devm shell attaches bash directly via `tart exec vmName bash` "
-        "without going through with-devm-env, so .devm/.env env vars (WORKSPACE, "
-        "IS_SANDBOX, CLAUDE_CONFIG_DIR) are not sourced in the interactive session. "
-        "Remove xfail when bug E lands."
-    ),
-)
 def test_env_wrapper_and_workspace(workspace, devm, tart_sandbox, sandbox_name):
     workspace.write_devmyaml(
         env={"CLAUDE_CONFIG_DIR": "$WORKSPACE/.claude"},

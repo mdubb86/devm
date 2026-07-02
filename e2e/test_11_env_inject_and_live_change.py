@@ -35,14 +35,6 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(75)
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug E: devm shell attaches bash directly via `tart exec vmName bash` "
-        "without going through with-devm-env, so .devm/.env env vars are not sourced "
-        "in the interactive session. Remove xfail when bug E lands."
-    ),
-)
 def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
     # tart_sandbox fixture already cold-started the VM with minimal config.
     # Write env config; env vars are LIVE-bucket so the warm-attach shell picks them up.

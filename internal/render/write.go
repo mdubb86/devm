@@ -6,20 +6,42 @@ import (
 	"path/filepath"
 
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/scripts"
 )
 
 // WriteDevmDir regenerates the .devm/ cache in repoRoot with current
 // config values. Always overwrites — .devm/ is CLI-owned.
 //
-// Writes the project env file (.devm/.env) and all per-template
-// installer scripts under .devm/templates/. Static files (Caddyfile,
-// scripts/, etc.) are handled by the provisioner at VM start time and
-// are NOT written here.
+// Writes:
+//   - .devm/.env (project env)
+//   - .devm/templates/*.sh (per-template installers)
+//   - .devm/scripts/with-devm-env (sources .env then execs argv; PATH
+//     surfaces this as `with-devm-env` inside the VM, so users can
+//     `with-devm-env <cmd>` themselves. Also invoked by
+//     orchestrator/shell.go:attachShell to hand the interactive shell
+//     the project env)
 func WriteDevmDir(cfg schema.Config, repoRoot string) error {
 	if err := WriteDevmEnv(cfg, repoRoot); err != nil {
 		return err
 	}
+	if err := writeStaticScripts(repoRoot); err != nil {
+		return err
+	}
 	return writeTemplateInstallers(cfg, repoRoot)
+}
+
+func writeStaticScripts(repoRoot string) error {
+	dir := filepath.Join(repoRoot, ".devm", "scripts")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir .devm/scripts: %w", err)
+	}
+	// No .sh suffix: PATH-based invocation (`with-devm-env <cmd>`) needs
+	// the bare name. The shebang line makes it executable.
+	path := filepath.Join(dir, "with-devm-env")
+	if err := os.WriteFile(path, []byte(scripts.WithDevmEnv), 0o755); err != nil {
+		return fmt.Errorf("write with-devm-env: %w", err)
+	}
+	return nil
 }
 
 // WriteDevmDirStaticOnly regenerates the .devm/.env without touching
