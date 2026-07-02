@@ -1,7 +1,7 @@
-"""68: install failure: file written to $WORKSPACE_DIR by root-in-VM is
+"""68: install failure: file written to $WORKSPACE by root-in-VM is
 readable and removable on the host without sudo.
 
-Follow-on to test_67. Per test_67, a write to $WORKSPACE_DIR during a
+Follow-on to test_67. Per test_67, a write to $WORKSPACE during a
 failing install: persists on the host. But install: runs as the VM
 user. This test pins what UID/perms that write produces on the host
 filesystem, and whether the host-side process (running as the invoking
@@ -32,21 +32,14 @@ from helpers.tart import TartSandbox
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug B: orchestrator/shell.go RunShell returns provision error without "
-        "VM teardown, leaving a zombie VM. Remove xfail when bug B lands."
-    ),
-)
 @pytest.mark.timeout(180)
 def test_install_failure_workspace_file_readable_and_removable_on_host(
     workspace, devm
 ):
     workspace.write_devmyaml(
         install=[
-            'touch "$WORKSPACE_DIR/probe.out"',
-            'sh -c \'echo HELLO > "$WORKSPACE_DIR/probe.out"\'',
+            'touch "$WORKSPACE/probe.out"',
+            'sh -c \'echo HELLO > "$WORKSPACE/probe.out"\'',
             "false",  # deliberate failure
         ],
     )

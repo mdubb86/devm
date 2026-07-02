@@ -1,20 +1,19 @@
-"""67: install failure: file written to $WORKSPACE_DIR by a failing install
+"""67: install failure: file written to $WORKSPACE by a failing install
 step persists on the host filesystem after devm teardown.
 
-Pins the virtio-fs invariant: files written to $WORKSPACE_DIR during
-install: persist on the host even after the VM is torn down. Because
-$WORKSPACE_DIR is the same absolute path as the host workspace
-(virtio-fs mirrored paths), writes inside the VM land in the shared
-directory and survive VM teardown.
+Pins the virtio-fs invariant: files written to $WORKSPACE during install:
+persist on the host even after the VM is torn down. Because $WORKSPACE is
+the same absolute path as the host workspace (virtio-fs mirrored paths),
+writes inside the VM land in the shared directory and survive VM teardown.
 
 The probe:
-  - install step 1: write a marker to $WORKSPACE_DIR/install-wrote.txt
+  - install step 1: write a marker to $WORKSPACE/install-wrote.txt
   - install step 2: exit 1 (deliberate failure)
 
 After `devm shell` exits non-zero, we verify that install-wrote.txt
 still exists on the host at workspace.path/install-wrote.txt.
 
-Devm dependency: virtio-fs writes to $WORKSPACE_DIR survive VM teardown.
+Devm dependency: virtio-fs writes to $WORKSPACE survive VM teardown.
 This test locks in the foundational property.
 """
 from __future__ import annotations
@@ -28,18 +27,11 @@ from helpers.tart import TartSandbox
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug B: orchestrator/shell.go RunShell returns provision error without "
-        "VM teardown, leaving a zombie VM. Remove xfail when bug B lands."
-    ),
-)
 @pytest.mark.timeout(180)
 def test_install_failure_workspace_write_persists_on_host(workspace, devm):
     workspace.write_devmyaml(
         install=[
-            'touch "$WORKSPACE_DIR/install-wrote.txt"',
+            'touch "$WORKSPACE/install-wrote.txt"',
             "false",  # deliberate failure
         ],
     )

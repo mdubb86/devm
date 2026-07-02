@@ -26,6 +26,8 @@ type fakeVMAdmin struct {
 	statusErr   error
 	startCalled int
 	startErr    error
+	stopCalled  int
+	stopErr     error
 }
 
 func (f *fakeVMAdmin) VMStatus(_ context.Context, _, _ string) (serviceapi.VMStatusResponse, error) {
@@ -39,6 +41,13 @@ func (f *fakeVMAdmin) StartVM(_ context.Context, _ serviceapi.VMStartRequest) er
 	defer f.mu.Unlock()
 	f.startCalled++
 	return f.startErr
+}
+
+func (f *fakeVMAdmin) StopVM(_ context.Context, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopCalled++
+	return f.stopErr
 }
 
 // stubSpawner records Start calls and hands out scripted SpawnedCmds
@@ -175,6 +184,46 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	admin.mu.Unlock()
 }
 
+// TestRunShellColdPath_ProvisionFail_TearsDownVM verifies Bug B: when a
+// cold-start step after StartVM fails, RunShell asks the daemon to stop
+// the VM AND invokes `tart delete` so no zombie VM is left behind.
+func TestRunShellColdPath_ProvisionFail_TearsDownVM(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+	}
+
+	// Fail on the CA install shell script — first provision-step that
+	// contains "base64" in its argv. waitVMReady (`true`) still succeeds.
+	tartBin, logPath := fakeTartBinFailingAt(t, repoRoot, "base64")
+
+	spawner := &stubSpawner{}
+	deps := ShellDeps{
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
+	}
+	t.Setenv("HOME", repoRoot)
+	caPath := filepath.Join(repoRoot, "Library", "Application Support", "devm", "ca")
+	require.NoError(t, os.MkdirAll(caPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(caPath, "root.crt"), []byte("FAKE-CA"), 0o644))
+
+	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "provision")
+
+	// Bug B assertions.
+	admin.mu.Lock()
+	assert.Equal(t, 1, admin.stopCalled, "StopVM must be called on provision failure")
+	admin.mu.Unlock()
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(logBytes), "delete x-sbx",
+		"tart delete <vm> must run on provision failure so the VM disk is destroyed")
+}
+
 // TestRunShellWarmPath_VMStatusError verifies that a daemon error on
 // VMStatus surfaces as a RunShell error.
 func TestRunShellWarmPath_VMStatusError(t *testing.T) {
@@ -234,6 +283,28 @@ func fakeTartBin(t *testing.T, dir string) *tart.Tart {
 	tr := tart.New()
 	tr.Path = bin
 	return tr
+}
+
+// fakeTartBinFailingAt writes a shell script that exits 1 on any argv
+// containing `failMarker`, and records every invocation to a log file.
+// Returns the *tart.Tart and the path to the invocation log.
+func fakeTartBinFailingAt(t *testing.T, dir, failMarker string) (*tart.Tart, string) {
+	t.Helper()
+	bin := filepath.Join(dir, "tart-fake-failing")
+	logPath := filepath.Join(dir, "tart-invocations.log")
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$*" >> %q
+for arg in "$@"; do
+  case "$arg" in
+    *%s*) exit 1 ;;
+  esac
+done
+exit 0
+`, logPath, failMarker)
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+	return tr, logPath
 }
 
 // ---------- resolveSecretBindings tests ----------

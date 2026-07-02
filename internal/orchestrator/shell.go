@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mdubb86/devm/internal/debuglog"
@@ -83,6 +84,7 @@ type ShellDeps struct {
 type VMAdminClient interface {
 	VMStatus(ctx context.Context, projectID, vmName string) (serviceapi.VMStatusResponse, error)
 	StartVM(ctx context.Context, req serviceapi.VMStartRequest) error
+	StopVM(ctx context.Context, projectID string) error
 }
 
 // DefaultShellDeps returns deps wired for production.
@@ -162,10 +164,25 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		return -1, fmt.Errorf("start vm: %w", err)
 	}
 
+	// From here on, any cold-start failure must tear down the VM to avoid
+	// leaving a zombie. `devm shell` promises loud-failure: exit non-zero
+	// AND leave no half-created VM behind (pinned by test_51).
+	teardownOnFail := func(err error, msg string) (int, error) {
+		debuglog.Logf("shell", "cold-start failed after StartVM: %s: %v", msg, err)
+		teardownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = d.ServiceAPIClient.StopVM(teardownCtx, cfg.Project.ID)
+		if derr := d.Tart.Delete(teardownCtx, vmName); derr != nil &&
+			!strings.Contains(derr.Error(), "does not exist") {
+			debuglog.Logf("shell", "teardown-on-fail: delete %s failed: %v", vmName, derr)
+		}
+		return -1, fmt.Errorf("%s: %w", msg, err)
+	}
+
 	// Wait for VM to accept exec connections.
 	reporter.Step("waiting for vm ready", false)
 	if err := waitVMReady(ctx, d.Tart, vmName, 60*time.Second); err != nil {
-		return -1, fmt.Errorf("vm did not become ready: %w", err)
+		return teardownOnFail(err, "vm did not become ready")
 	}
 	debuglog.Logf("shell", "cold-start: vm exec-ready")
 
@@ -173,7 +190,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	reporter.Step("provisioning", false)
 	caPEM, err := os.ReadFile(filepath.Join(caStorageDir(), "root.crt"))
 	if err != nil {
-		return -1, fmt.Errorf("read CA root: %w", err)
+		return teardownOnFail(err, "read CA root")
 	}
 	prov := &provision.Provisioner{
 		Tart:            d.Tart,
@@ -184,7 +201,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	}
 	debuglog.Logf("shell", "cold-start: provisioning")
 	if err := prov.Run(ctx, os.Stdout); err != nil {
-		return -1, fmt.Errorf("provision: %w", err)
+		return teardownOnFail(err, "provision")
 	}
 	debuglog.Logf("shell", "cold-start: provisioning done")
 
@@ -194,10 +211,10 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// any changes made between cold-start and the first reconcile.
 	provSnap, err := yaml.Marshal(cfg)
 	if err != nil {
-		return -1, fmt.Errorf("marshal provision snapshot: %w", err)
+		return teardownOnFail(err, "marshal provision snapshot")
 	}
 	if err := WriteSnapshot(d.Tart, vmName, snapshotHeader+string(provSnap)); err != nil {
-		return -1, fmt.Errorf("write provision snapshot: %w", err)
+		return teardownOnFail(err, "write provision snapshot")
 	}
 	debuglog.Logf("shell", "cold-start: snapshot written")
 
