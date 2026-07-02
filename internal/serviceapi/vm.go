@@ -38,8 +38,11 @@ type VMStartRequest struct {
 }
 
 // VMStopRequest is the body shape for POST /vm/stop.
+// VMName is optional; when set, the daemon calls `tart stop <VMName>` for a
+// graceful guest shutdown before SIGTERM'ing the supervised tart process.
 type VMStopRequest struct {
 	ProjectID string `json:"project_id"`
+	VMName    string `json:"vm_name,omitempty"`
 }
 
 // VMStatusResponse is the body shape for GET /vm/status.
@@ -259,6 +262,18 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			return
 		}
 		ironProxyState.del(req.ProjectID)
+
+		// Ask tart for a graceful guest shutdown before SIGTERM'ing the
+		// tart-run process. Without this, in-flight guest disk writes
+		// aren't flushed and files written just before stop are lost.
+		// Best-effort: `tart stop` on an already-stopped VM errors out;
+		// carry on regardless — the supervisor stop below is what
+		// releases devm's process handle.
+		if req.VMName != "" {
+			stopCtx, stopCancel := context.WithTimeout(r.Context(), 15*time.Second)
+			_ = tr.Stop(stopCtx, req.VMName)
+			stopCancel()
+		}
 
 		key = supervisor.Key{ProjectID: req.ProjectID, Role: supervisor.RoleVM}
 		if err := sup.Stop(r.Context(), key); err != nil && !errors.Is(err, supervisor.ErrNotFound) {

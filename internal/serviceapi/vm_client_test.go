@@ -128,9 +128,43 @@ func TestVMStop_MissingProjectID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err := c.StopVM(ctx, "")
+	err := c.StopVM(ctx, "", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "vm/stop")
+}
+
+// TestVMStop_WithVMName_CallsTartStop verifies Bug J: /vm/stop asks tart
+// for a graceful guest shutdown (`tart stop <name>`) before SIGTERM'ing
+// the tart-run process. Without this, in-flight guest disk writes aren't
+// flushed and files from just before stop are lost across restart.
+func TestVMStop_WithVMName_CallsTartStop(t *testing.T) {
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+
+	// Record tart invocations. `tart stop <name>` should appear before
+	// any supervisor SIGTERM would land on the tart-run process.
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "tart-log")
+	bin := filepath.Join(dir, "tart-fake")
+	script := "#!/bin/sh\necho \"$*\" >> " + logPath + "\nexit 0\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := c.StopVM(ctx, "proj-a", "proj-a-vm")
+	require.NoError(t, err)
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(logBytes), "stop proj-a-vm",
+		"handler must call `tart stop <vm_name>` for a graceful guest shutdown")
 }
 
 // TestVMStop_NotFound verifies /vm/stop returns 500 for an unknown
@@ -152,7 +186,7 @@ func TestVMStop_NotFound(t *testing.T) {
 	// idempotent — both the iron-proxy and VM stops treat
 	// supervisor.ErrNotFound as success so re-tearing-down or
 	// stopping a project that was never started is silent.
-	err := c.StopVM(ctx, "nonexistent-project")
+	err := c.StopVM(ctx, "nonexistent-project", "")
 	require.NoError(t, err)
 }
 

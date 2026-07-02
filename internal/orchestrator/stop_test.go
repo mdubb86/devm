@@ -17,11 +17,18 @@ import (
 // fakeStopClient records StopVM calls and returns a scripted error.
 type fakeStopClient struct {
 	stopCalled int
+	stopArgs   []stopCall
 	stopErr    error
 }
 
-func (f *fakeStopClient) StopVM(_ context.Context, _ string) error {
+type stopCall struct {
+	projectID string
+	vmName    string
+}
+
+func (f *fakeStopClient) StopVM(_ context.Context, projectID, vmName string) error {
 	f.stopCalled++
+	f.stopArgs = append(f.stopArgs, stopCall{projectID: projectID, vmName: vmName})
 	return f.stopErr
 }
 

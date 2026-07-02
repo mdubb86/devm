@@ -23,22 +23,15 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug J: devm stop signals SIGTERM to the tart run process rather than "
-        "calling tart stop <name> first, so the guest OS does not complete a clean "
-        "shutdown and in-flight disk writes are not committed to the image. "
-        "Remove xfail when bug J lands."
-    ),
-)
 @pytest.mark.timeout(240)
 def test_shell_restarts_existing_stopped_vm(devm, workspace, tart_sandbox):
     # tart_sandbox fixture already cold-started the VM.
     assert tart_sandbox.state() == "running"
 
-    # Plant a marker to verify restart != recreate.
-    r = tart_sandbox.exec_shell("touch /tmp/restart-marker")
+    # Plant a marker to verify restart != recreate. sync() forces the
+    # write to disk so page-cache races don't mask the restart-vs-recreate
+    # signal we're actually pinning.
+    r = tart_sandbox.exec_shell("touch /home/admin/restart-marker && sync")
     assert r.exit_code == 0, f"failed to plant marker: {r.stderr}"
 
     # Stop the VM.
@@ -69,7 +62,7 @@ def test_shell_restarts_existing_stopped_vm(devm, workspace, tart_sandbox):
     )
 
     # Marker survived → it was a restart, not a recreate.
-    check = tart_sandbox.exec_shell("test -f /tmp/restart-marker && echo present")
+    check = tart_sandbox.exec_shell("test -f /home/admin/restart-marker && echo present")
     assert check.exit_code == 0, (
         "restart-marker missing after stop/restart — devm may have recreated "
         "the VM from scratch instead of restarting it"

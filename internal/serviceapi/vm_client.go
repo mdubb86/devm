@@ -25,9 +25,11 @@ func (c *Client) StartVM(ctx context.Context, req VMStartRequest) error {
 	return nil
 }
 
-// StopVM asks the daemon to stop the project VM.
-func (c *Client) StopVM(ctx context.Context, projectID string) error {
-	body, err := json.Marshal(VMStopRequest{ProjectID: projectID})
+// StopVM asks the daemon to stop the project VM. When vmName is set, the
+// daemon calls `tart stop <vmName>` first so the guest gets a graceful
+// shutdown before the tart-run process is signalled.
+func (c *Client) StopVM(ctx context.Context, projectID, vmName string) error {
+	body, err := json.Marshal(VMStopRequest{ProjectID: projectID, VMName: vmName})
 	if err != nil {
 		return err
 	}

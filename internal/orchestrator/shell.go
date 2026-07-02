@@ -84,7 +84,7 @@ type ShellDeps struct {
 type VMAdminClient interface {
 	VMStatus(ctx context.Context, projectID, vmName string) (serviceapi.VMStatusResponse, error)
 	StartVM(ctx context.Context, req serviceapi.VMStartRequest) error
-	StopVM(ctx context.Context, projectID string) error
+	StopVM(ctx context.Context, projectID, vmName string) error
 }
 
 // DefaultShellDeps returns deps wired for production.
@@ -171,7 +171,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		debuglog.Logf("shell", "cold-start failed after StartVM: %s: %v", msg, err)
 		teardownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = d.ServiceAPIClient.StopVM(teardownCtx, cfg.Project.ID)
+		_ = d.ServiceAPIClient.StopVM(teardownCtx, cfg.Project.ID, vmName)
 		if derr := d.Tart.Delete(teardownCtx, vmName); derr != nil &&
 			!strings.Contains(derr.Error(), "does not exist") {
 			debuglog.Logf("shell", "teardown-on-fail: delete %s failed: %v", vmName, derr)

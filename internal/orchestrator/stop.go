@@ -27,7 +27,7 @@ const (
 // StopVMClient is the subset of *serviceapi.Client this orchestrator
 // uses. Defined here to allow test fakes; the real client satisfies it.
 type StopVMClient interface {
-	StopVM(ctx context.Context, projectID string) error
+	StopVM(ctx context.Context, projectID, vmName string) error
 }
 
 // StopDeps wires collaborators for RunStop. In and Out drive the
@@ -82,7 +82,12 @@ func RunStop(ctx context.Context, d StopDeps, projectID, sandboxName string, mod
 	// Common case: daemon is down, or the VM was never supervised by
 	// THIS daemon process. Either way, the user's intent ("stop and
 	// destroy") is still achievable via tart.Delete below.
-	_ = d.ServiceAPIClient.StopVM(ctx, projectID)
+	//
+	// vmName is forwarded so the daemon can `tart stop <vmName>` first
+	// for a graceful guest shutdown before SIGTERM'ing the tart-run
+	// process — otherwise in-flight guest writes aren't flushed and
+	// files from just before stop are lost (Bug J).
+	_ = d.ServiceAPIClient.StopVM(ctx, projectID, sandboxName)
 
 	if mode == StopDestroy {
 		if err := d.Tart.Delete(ctx, sandboxName); err != nil {

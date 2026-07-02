@@ -28,22 +28,14 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug J: devm stop signals SIGTERM to the tart run process rather than "
-        "calling tart stop <name> first, so the guest OS does not complete a clean "
-        "shutdown and in-flight disk writes are not committed to the image. "
-        "Remove xfail when bug J lands."
-    ),
-)
 @pytest.mark.timeout(240)
 def test_stop_preserves_filesystem_state(devm, workspace, tart_sandbox):
     # tart_sandbox fixture already cold-started the VM.
     assert tart_sandbox.state() == "running"
 
-    # Write a marker file inside the VM.
-    r = tart_sandbox.exec_shell("echo hello > /tmp/marker.txt")
+    # Write a marker file inside the VM. sync() forces the write to disk
+    # so the observed behavior isolates devm stop from page-cache races.
+    r = tart_sandbox.exec_shell("echo hello > /home/admin/marker.txt && sync")
     assert r.exit_code == 0, f"failed to write marker: {r.stderr}"
 
     # Stop the VM.
@@ -74,7 +66,7 @@ def test_stop_preserves_filesystem_state(devm, workspace, tart_sandbox):
     )
 
     # Marker file must have survived the stop/restart cycle.
-    check = tart_sandbox.exec_shell("cat /tmp/marker.txt")
+    check = tart_sandbox.exec_shell("cat /home/admin/marker.txt")
     assert check.exit_code == 0, f"marker missing after restart: {check.stderr}"
     assert check.stdout.strip() == "hello", (
         f"marker corrupted after restart: {check.stdout!r}"
