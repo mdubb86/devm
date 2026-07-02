@@ -9,13 +9,16 @@ import "fmt"
 //
 // The mount tag is "workspace" — set at `tart run --dir=workspace:...:tag=workspace`
 // (see internal/sandbox/tart/tart.go:formatDirArg + serviceapi/vm.go).
-// /etc/fstab persists the mount across guest reboots for symmetry with the
-// runtime state; devm stops the VM cleanly so a fresh tart run remounts via fstab.
+// /etc/fstab persists the mount across guest reboots; this script also runs on
+// every VM start regardless of whether the mount already came up via fstab, so
+// every step here must be idempotent (mount check + fstab grep-guard).
 func buildWorkspaceMountScript(workspaceMirrorPath string) string {
+	// virtiofs on Apple Virtualization.framework passes UIDs through; the
+	// guest can't chown files on the share (`Operation not permitted`).
+	// Ownership is inherited from whichever host process wrote the file.
 	return fmt.Sprintf(`set -e
 sudo mkdir -p %s
-sudo mount -t virtiofs workspace %s
-sudo chown admin:admin %s || true
+mountpoint -q %s || sudo mount -t virtiofs workspace %s
 grep -q '^workspace' /etc/fstab || echo 'workspace %s virtiofs rw,_netdev 0 0' | sudo tee -a /etc/fstab
 `, workspaceMirrorPath, workspaceMirrorPath, workspaceMirrorPath, workspaceMirrorPath)
 }

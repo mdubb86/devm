@@ -116,9 +116,13 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			NoGraphics: true,
 		}
 		if req.WorkspaceHostPath != "" {
+			// Deliberate: no Name. A named share (`--dir=workspace:PATH`)
+			// puts host content at MIRROR_PATH/workspace inside the guest
+			// and the guest cannot write to MIRROR_PATH itself. Dropping
+			// Name yields `--dir=PATH:tag=workspace`, mounting host content
+			// directly at the mirror path.
 			opts.DirMounts = []tart.DirMount{
 				{
-					Name:     "workspace",
 					HostPath: req.WorkspaceHostPath,
 					Tag:      "workspace",
 				},

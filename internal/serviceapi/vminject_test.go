@@ -11,8 +11,10 @@ func TestBuildWorkspaceMountScript_MountsVirtioFSAtMirrorPath(t *testing.T) {
 	script := buildWorkspaceMountScript(path)
 	assert.Contains(t, script, "mount -t virtiofs workspace "+path)
 	assert.Contains(t, script, "mkdir -p "+path)
-	assert.Contains(t, script, "chown admin:admin "+path)
 	assert.Contains(t, script, "workspace "+path+" virtiofs")
+	// Explicit: no chown — virtiofs on Apple Virtualization.framework rejects
+	// guest-side ownership changes with "Operation not permitted".
+	assert.NotContains(t, script, "chown")
 }
 
 func TestBuildEnvScript_NoProxyOnly(t *testing.T) {
