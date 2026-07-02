@@ -57,6 +57,7 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 	}{
 		{"mkdir workspace parents", p.mkdirWorkspaceParents},
 		{"install CA root", p.installCARoot},
+		{"link with-devm-env into PATH", p.linkWithDevmEnv},
 		{"write Caddyfile", p.writeCaddyfile},
 		{"write dnsmasq config", p.writeDnsmasqConfig},
 		{"reload base services", p.reloadBaseServices},
@@ -105,6 +106,14 @@ func (p *Provisioner) execShell(ctx context.Context, w io.Writer, script string)
 func (p *Provisioner) mkdirWorkspaceParents(ctx context.Context, w io.Writer) error {
 	parent := filepath.Dir(p.WorkspaceVMPath)
 	return p.exec(ctx, w, "sudo", "mkdir", "-p", parent)
+}
+
+// linkWithDevmEnv symlinks the workspace-share wrapper into /usr/local/bin
+// so `with-devm-env` resolves from any shell in the VM without depending on
+// .devm/.env having been sourced first. Idempotent via `ln -sf`.
+func (p *Provisioner) linkWithDevmEnv(ctx context.Context, w io.Writer) error {
+	src := filepath.Join(p.WorkspaceVMPath, ".devm", "scripts", "with-devm-env")
+	return p.exec(ctx, w, "sudo", "ln", "-sf", src, "/usr/local/bin/with-devm-env")
 }
 
 func (p *Provisioner) installCARoot(ctx context.Context, w io.Writer) error {
@@ -181,10 +190,15 @@ func (p *Provisioner) runInstallCommands(ctx context.Context, w io.Writer) error
 			budget = time.Duration(n) * time.Second
 		}
 	}
+	// Install commands run through the with-devm-env wrapper so the
+	// user's project env (WORKSPACE_DIR, path: entries, cfg.Env values)
+	// is sourced from .devm/.env before their command runs. Same wrapper
+	// as the interactive shell path in orchestrator/shell.go.
+	wrapper := filepath.Join(p.WorkspaceVMPath, ".devm", "scripts", "with-devm-env")
 	for i, command := range p.Cfg.Install {
 		fmt.Fprintf(w, "[%d/%d] %s\n", i+1, len(p.Cfg.Install), command)
 		stepCtx, cancel := context.WithTimeout(ctx, budget)
-		err := p.execShell(stepCtx, w, command)
+		err := p.exec(stepCtx, w, wrapper, "bash", "-e", "-o", "pipefail", "-c", command)
 		cancel()
 		if errors.Is(stepCtx.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("install step %d (%q) timed out after %ds",
@@ -239,41 +253,51 @@ const (
 )
 
 func (p *Provisioner) enableStartServices(ctx context.Context, w io.Writer) error {
-	// Collect non-routing-only service names, sorted for determinism.
-	var names []string
+	// Collect non-routing-only services (skipping ones with no Exec + no
+	// Systemd — those are proxy-routing declarations with no in-VM process).
+	// Split by lifecycle: long-running services need `active`; one-shot
+	// services (Restart == "no") ran-to-completion means `inactive` is OK
+	// and only `failed` counts as a failure.
+	type entry struct {
+		name    string
+		oneShot bool
+	}
+	var entries []entry
 	for name, svc := range p.Cfg.Services {
-		// Skip routing-only service blocks (no Exec, no Systemd) — they
-		// declare a hostname+port for the proxy but have no in-VM process.
 		if svc.Systemd == "" && len(svc.Exec) == 0 {
 			fmt.Fprintf(w, "(skip %s — routing-only declaration)\n", name)
 			continue
 		}
-		names = append(names, name)
+		entries = append(entries, entry{name: name, oneShot: svc.Restart == "no"})
 	}
-	sort.Strings(names)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
 
-	for _, name := range names {
-		unitName := name + ".service"
+	for _, e := range entries {
+		unitName := e.name + ".service"
 		if err := p.exec(ctx, w, "sudo", "systemctl", "enable", "--now", unitName); err != nil {
 			return err
 		}
 	}
 
-	// Poll each service's active state. A service in "failed" state surfaces
-	// immediately as a structured error; all others wait up to healthTotalBudget.
+	// Poll each service. Long-running: wait for `active`. One-shot: wait
+	// for a terminal state that isn't `failed` (usually `inactive`).
 	deadline := time.Now().Add(healthTotalBudget)
-	for _, name := range names {
+	for _, e := range entries {
 		for {
-			r := p.Tart.Exec(ctx, p.VMName, []string{"systemctl", "is-active", name})
+			r := p.Tart.Exec(ctx, p.VMName, []string{"systemctl", "is-active", e.name})
 			state := strings.TrimSpace(r.Stdout)
-			if r.ExitCode == 0 {
+			if state == "failed" {
+				return fmt.Errorf("service %q did not become active: status=%s", e.name, state)
+			}
+			if e.oneShot {
+				if state == "inactive" || r.ExitCode == 0 {
+					break
+				}
+			} else if r.ExitCode == 0 {
 				break
 			}
-			if state == "failed" {
-				return fmt.Errorf("service %q did not become active: status=%s", name, state)
-			}
 			if time.Now().After(deadline) {
-				return fmt.Errorf("service %q did not become active: status=%s (timeout)", name, state)
+				return fmt.Errorf("service %q did not become active: status=%s (timeout)", e.name, state)
 			}
 			select {
 			case <-ctx.Done():

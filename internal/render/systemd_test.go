@@ -98,8 +98,13 @@ func TestSystemdQuoteArgv(t *testing.T) {
 		{"whitespace in arg", []string{"sh", "-c", "touch /tmp/x"}, `sh -c "touch /tmp/x"`},
 		{"single quote in arg", []string{"sh", "-c", "echo 'hi'"}, `sh -c "echo 'hi'"`},
 		{"double quote in arg", []string{"sh", "-c", `echo "hi"`}, `sh -c "echo \"hi\""`},
-		{"backslash in arg", []string{"sh", "-c", `printf %s\n foo`}, `sh -c "printf %s\\n foo"`},
+		{"backslash in arg", []string{"sh", "-c", `printf %s\n foo`}, `sh -c "printf %%s\\n foo"`},
 		{"empty argv", []string{}, ``},
+		// systemd specifier escaping: bare % in argv would be substituted
+		// by systemd (%s = user shell, %h = user home, …). devm doubles
+		// them so the argv reaches the process verbatim.
+		{"percent-s not consumed as specifier", []string{"printf", `%s`, "hi"}, `printf %%s hi`},
+		{"double percent stays escaped", []string{"echo", "50%"}, `echo 50%%`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

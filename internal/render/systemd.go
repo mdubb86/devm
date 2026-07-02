@@ -86,6 +86,10 @@ func systemdQuoteArgv(argv []string) string {
 }
 
 func quoteSystemdArg(a string) string {
+	// Escape systemd specifiers first (%s = user shell, %h = user home, …
+	// systemd.unit(5) SPECIFIERS). A literal `%` in an argv element must
+	// be doubled or systemd swaps it for its own value silently.
+	a = strings.ReplaceAll(a, "%", "%%")
 	if a == "" {
 		return `""`
 	}

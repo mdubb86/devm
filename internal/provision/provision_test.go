@@ -196,16 +196,19 @@ func TestProvisioner_AssertsServicesActive(t *testing.T) {
 	require.Contains(t, err.Error(), "status=failed")
 }
 
-// deadlineCapturingTart records the remaining deadline duration of every
-// context passed to Exec. Used to verify that install steps run under the
-// correct per-step timeout budget.
+// deadlineCapturingTart records the remaining deadline duration and the
+// argv of every context passed to Exec. Used to verify that install steps
+// run under the correct per-step timeout budget and go through the
+// with-devm-env wrapper.
 type deadlineCapturingTart struct {
 	deadlines []time.Duration
+	argvs     [][]string
 }
 
-func (d *deadlineCapturingTart) Exec(ctx context.Context, _ string, _ []string) tart.ExecResult {
+func (d *deadlineCapturingTart) Exec(ctx context.Context, _ string, argv []string) tart.ExecResult {
 	if dl, ok := ctx.Deadline(); ok {
 		d.deadlines = append(d.deadlines, time.Until(dl))
+		d.argvs = append(d.argvs, append([]string(nil), argv...))
 	}
 	return tart.ExecResult{ExitCode: 0}
 }
@@ -272,6 +275,55 @@ func TestProvisioner_InstallStepTimeout_DefaultAndOverride(t *testing.T) {
 				"install step deadline mismatch")
 		})
 	}
+}
+
+func TestProvisioner_OneShotServiceInactiveIsSuccess(t *testing.T) {
+	// A service declared with `restart: no` ran-to-completion means
+	// systemctl reports `inactive` — not `active`. The health check must
+	// treat that as success, not a failure.
+	dir := t.TempDir()
+	writeFakeTartIsActiveMap(t, dir, map[string]string{"oneshot": "inactive"})
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Services: map[string]schema.Service{
+			"oneshot": {
+				Exec:    []string{"/bin/true"},
+				Restart: "no",
+			},
+		},
+	}
+	p := &Provisioner{
+		Tart:            tart.New(),
+		VMName:          "p-vm",
+		Cfg:             cfg,
+		CARootPEM:       []byte("fake\n"),
+		WorkspaceVMPath: "/tmp/p",
+	}
+	require.NoError(t, p.Run(context.Background(), io.Discard))
+}
+
+func TestProvisioner_InstallStepsGoThroughWithDevmEnvWrapper(t *testing.T) {
+	// Pin: install commands run via
+	//   with-devm-env bash -e -o pipefail -c <cmd>
+	// so .devm/.env is sourced (WORKSPACE_DIR, path: entries, cfg.Env).
+	// Regression pin for Bug L.
+	fakeTart := newDeadlineCapturingTart()
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Install: []string{"true"},
+	}
+	p := &Provisioner{
+		Tart: fakeTart, VMName: "p-vm", Cfg: cfg,
+		WorkspaceVMPath: "/Users/x/repo",
+	}
+	_ = p.Run(context.Background(), io.Discard)
+	require.Len(t, fakeTart.argvs, 1, "expected one deadline-carrying call (the install step)")
+	got := fakeTart.argvs[0]
+	require.Equal(t,
+		[]string{"/Users/x/repo/.devm/scripts/with-devm-env", "bash", "-e", "-o", "pipefail", "-c", "true"},
+		got,
+	)
 }
 
 func TestProvisioner_InstallStepTimeout_ErrorMessage(t *testing.T) {

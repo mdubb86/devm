@@ -5,9 +5,9 @@ A var declared in devm.yaml's top-level `env:` map must be visible in:
   2. startup: (systemd service exec)
   3. interactive exec via tart (direct exec; wrapper sources .devm/.env)
 
-Ship 4 mechanism: devm renders cfg.Env into .devm/.env as `export KEY='value'`
-lines. The with-devm-env wrapper sources this file. Systemd services and the
-interactive shell both source it via the wrapper.
+devm renders cfg.Env into .devm/.env as `export KEY='value'` lines. The
+with-devm-env wrapper sources this file. Systemd services get the same env
+via rendered Environment= lines; the interactive shell sources via wrapper.
 
 What this pins:
   - env: vars are visible in install: commands.
@@ -16,33 +16,25 @@ What this pins:
 
 What it doesn't cover (tested elsewhere):
   - $WORKSPACE expansion in env values -> test_26.
-  - WORKSPACE_DIR availability -> test_61.
+  - WORKSPACE availability across consumers -> test_61.
   - Service-level env (services.X.env) -> covered by systemd Environment= in
     service unit rendering tests.
 """
 from __future__ import annotations
 
+import subprocess
+
 import pytest
+
+from helpers.tart import TartSandbox
 
 pytestmark = pytest.mark.devm
 
 EXPECTED = "kit-value-60"
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug L (new): provisioner's runInstallCommands runs `tart exec bash -c` "
-        "without sourcing .devm/.env, so cfg.Env vars (FROM_KIT_60) are not set "
-        "during install: commands — the install marker file is absent. Also note: "
-        "this test writes devmyaml AFTER the tart_sandbox fixture has already "
-        "cold-started (test ordering bug); the cold-start runs with the previous "
-        "minimal config, not the one written in the test body. "
-        "Remove xfail when bug L lands."
-    ),
-)
 @pytest.mark.timeout(180)
-def test_kit_env_reaches_all_consumers(workspace, devm, tart_sandbox):
+def test_kit_env_reaches_all_consumers(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
         env={"FROM_KIT_60": EXPECTED},
         install=[
@@ -56,6 +48,15 @@ def test_kit_env_reaches_all_consumers(workspace, devm, tart_sandbox):
         },
     )
 
+    # Owns cold-start: install: commands only run at first `devm shell`, so
+    # the test itself triggers cold-start after devm.yaml is in place.
+    r = subprocess.run(
+        [devm.path, "shell", "--", "true"],
+        cwd=str(workspace.path), capture_output=True, timeout=300,
+    )
+    assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
+
+    tart_sandbox = TartSandbox(name=sandbox_name)
     assert tart_sandbox.state() == "running", (
         f"expected VM running; got {tart_sandbox.state()!r}"
     )
