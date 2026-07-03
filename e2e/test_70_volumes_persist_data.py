@@ -26,20 +26,13 @@ import time
 
 import pytest
 
+from helpers.tart import TartSandbox
+
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug I: mounts: entries beyond the workspace share are not passed to "
-        "tart run --dir. VMStartRequest only carries WorkspaceHostPath; extra "
-        "mounts[] entries are never wired through serviceapi into DirMounts. "
-        "Remove xfail when bug I lands."
-    ),
-)
 @pytest.mark.timeout(300)
-def test_mount_is_mountpoint_and_data_persists(workspace, devm, tart_sandbox):
+def test_mount_is_mountpoint_and_data_persists(workspace, devm, sandbox_name):
     # Create a host-side directory that will be mounted as the "volume".
     vol_dir = tempfile.mkdtemp(prefix="devm-e2e-vol70-")
     try:
@@ -47,6 +40,14 @@ def test_mount_is_mountpoint_and_data_persists(workspace, devm, tart_sandbox):
             mounts=[vol_dir],
         )
 
+        # Owns cold-start: extra mount is baked into `tart run --dir`.
+        r = subprocess.run(
+            [devm.path, "shell", "--", "true"],
+            cwd=str(workspace.path), capture_output=True, timeout=300,
+        )
+        assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
+
+        tart_sandbox = TartSandbox(name=sandbox_name)
         assert tart_sandbox.state() == "running", (
             f"expected VM running after cold-start; got {tart_sandbox.state()!r}"
         )

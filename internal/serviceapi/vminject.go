@@ -1,6 +1,53 @@
 package serviceapi
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+// extraMount is a parsed user-declared mount entry.
+type extraMount struct {
+	hostPath string
+	readOnly bool
+}
+
+// parseExtraMounts converts CLI-resolved `ABS_HOST_PATH[:ro]` entries into
+// hostPath + readOnly pairs. Malformed entries (empty host path) are
+// dropped silently — schema.ValidateWithRoot already rejected them
+// CLI-side, so this is defense-in-depth.
+func parseExtraMounts(entries []string) []extraMount {
+	out := make([]extraMount, 0, len(entries))
+	for _, e := range entries {
+		path, ro := strings.CutSuffix(e, ":ro")
+		if path == "" {
+			continue
+		}
+		out = append(out, extraMount{hostPath: path, readOnly: ro})
+	}
+	return out
+}
+
+// buildExtraMountScript mounts one user-declared extra virtiofs share at
+// the same absolute path inside the VM as on the host (mirrored). The
+// mount tag matches what the /vm/start handler set on the corresponding
+// tart.DirMount. Idempotent — safe to re-run on VM restart.
+//
+// Read-only shares are mounted with `-o ro` and get `ro` in fstab so the
+// guest can't accidentally attempt writes that virtiofs would reject.
+func buildExtraMountScript(tag, hostPath string, readOnly bool) string {
+	fstabOpts := "rw,_netdev"
+	mountOpts := ""
+	if readOnly {
+		fstabOpts = "ro,_netdev"
+		mountOpts = "-o ro "
+	}
+	return fmt.Sprintf(`set -e
+sudo mkdir -p %s
+mountpoint -q %s || sudo mount %s-t virtiofs %s %s
+grep -q '^%s ' /etc/fstab || echo '%s %s virtiofs %s 0 0' | sudo tee -a /etc/fstab
+`, hostPath, hostPath, mountOpts, tag, hostPath,
+		tag, tag, hostPath, fstabOpts)
+}
 
 // buildWorkspaceMountScript mounts the workspace virtiofs share at the same
 // absolute path inside the VM as it lives on the host (Ship 4 mirrored-path

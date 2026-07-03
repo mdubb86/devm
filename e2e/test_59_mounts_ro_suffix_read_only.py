@@ -18,23 +18,18 @@ What it doesn't cover (tested elsewhere):
 from __future__ import annotations
 
 import shutil
+import subprocess
 import tempfile
 
 import pytest
 
+from helpers.tart import TartSandbox
+
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug I: mounts: entries beyond the workspace share are not passed to "
-        "tart run --dir. The declared :ro mount is never present inside the VM. "
-        "Remove xfail when bug I lands."
-    ),
-)
 @pytest.mark.timeout(180)
-def test_ro_suffix_makes_mount_read_only(workspace, devm, tart_sandbox):
+def test_ro_suffix_makes_mount_read_only(workspace, devm, sandbox_name):
     ro_dir = tempfile.mkdtemp(prefix="devm-e2e-mount59-")
     try:
         # Plant a readable file in the ro mount directory.
@@ -47,6 +42,13 @@ def test_ro_suffix_makes_mount_read_only(workspace, devm, tart_sandbox):
             mounts=[f"{ro_dir}:ro"],
         )
 
+        r = subprocess.run(
+            [devm.path, "shell", "--", "true"],
+            cwd=str(workspace.path), capture_output=True, timeout=300,
+        )
+        assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
+
+        tart_sandbox = TartSandbox(name=sandbox_name)
         assert tart_sandbox.state() == "running", (
             f"expected VM running; got {tart_sandbox.state()!r}"
         )

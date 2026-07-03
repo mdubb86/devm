@@ -22,20 +22,13 @@ What it doesn't cover (tested elsewhere):
 import pytest
 
 from helpers import Shell, stop_and_wait_stopped
+from helpers.tart import TartSandbox
 
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug I: mounts: entries beyond the workspace share are not passed to "
-        "tart run --dir. The declared mount is never present inside the VM so the "
-        "marker-file and :ro checks both fail. Remove xfail when bug I lands."
-    ),
-)
-@pytest.mark.timeout(90)
-def test_mounts_mirrored_path_and_readonly(workspace, devm, tart_sandbox, sandbox_name, tmp_path):
+@pytest.mark.timeout(180)
+def test_mounts_mirrored_path_and_readonly(workspace, devm, sandbox_name, tmp_path):
     # Host-side fixture: a directory with a marker file.
     mount_src = tmp_path / "extra-mount"
     mount_src.mkdir()
@@ -47,7 +40,7 @@ def test_mounts_mirrored_path_and_readonly(workspace, devm, tart_sandbox, sandbo
     )
 
     with Shell(devm, cwd=str(workspace.path)) as sh:
-        sh.expect_prompt(timeout=90)
+        sh.expect_prompt(timeout=120)
 
         # Marker file readable at the mirrored host path.
         sh.run_check(
@@ -55,6 +48,7 @@ def test_mounts_mirrored_path_and_readonly(workspace, devm, tart_sandbox, sandbo
         )
 
         # Content matches — verify via direct VM exec (no wrapper).
+        tart_sandbox = TartSandbox(name=sandbox_name)
         result = tart_sandbox.exec("cat", f"{mount_src}/MARKER")
         assert result.ok, f"cat failed: {result.stderr!r}"
         assert result.stdout.strip() == "hello-from-host", (

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildWorkspaceMountScript_MountsVirtioFSAtMirrorPath(t *testing.T) {
@@ -15,6 +16,32 @@ func TestBuildWorkspaceMountScript_MountsVirtioFSAtMirrorPath(t *testing.T) {
 	// Explicit: no chown — virtiofs on Apple Virtualization.framework rejects
 	// guest-side ownership changes with "Operation not permitted".
 	assert.NotContains(t, script, "chown")
+}
+
+func TestParseExtraMounts_RWAndRO(t *testing.T) {
+	got := parseExtraMounts([]string{
+		"/Users/x/data",
+		"/Users/x/ro-thing:ro",
+		"", // dropped
+	})
+	require.Len(t, got, 2)
+	assert.Equal(t, extraMount{hostPath: "/Users/x/data", readOnly: false}, got[0])
+	assert.Equal(t, extraMount{hostPath: "/Users/x/ro-thing", readOnly: true}, got[1])
+}
+
+func TestBuildExtraMountScript_RW(t *testing.T) {
+	script := buildExtraMountScript("extra_0", "/Users/x/data", false)
+	assert.Contains(t, script, "mkdir -p /Users/x/data")
+	assert.Contains(t, script, "mount -t virtiofs extra_0 /Users/x/data")
+	assert.Contains(t, script, "extra_0 /Users/x/data virtiofs rw,_netdev 0 0")
+	// RW must not pass -o ro to mount.
+	assert.NotContains(t, script, "-o ro")
+}
+
+func TestBuildExtraMountScript_ReadOnly(t *testing.T) {
+	script := buildExtraMountScript("extra_1", "/Users/x/ro-thing", true)
+	assert.Contains(t, script, "mount -o ro -t virtiofs extra_1 /Users/x/ro-thing")
+	assert.Contains(t, script, "extra_1 /Users/x/ro-thing virtiofs ro,_netdev 0 0")
 }
 
 func TestBuildEnvScript_NoProxyOnly(t *testing.T) {

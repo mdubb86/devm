@@ -35,6 +35,10 @@ type VMStartRequest struct {
 	WorkspaceHostPath string          `json:"workspace_host_path"`
 	AllowList         []string        `json:"allow_list,omitempty"`
 	Secrets           []SecretBinding `json:"secrets,omitempty"`
+	// ExtraMounts are additional host paths to share into the VM at the
+	// same absolute path (mirrored). Each entry is the CLI-resolved form
+	// `ABS_HOST_PATH[:ro]` (see schema.ResolveMount).
+	ExtraMounts []string `json:"extra_mounts,omitempty"`
 }
 
 // VMStopRequest is the body shape for POST /vm/stop.
@@ -131,6 +135,23 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 				},
 			}
 		}
+		// Extra user-declared mounts. Each entry is `HOST_PATH[:ro]`
+		// (already resolved CLI-side); tag is `extra_N` so the guest-side
+		// mount script can address each share independently.
+		//
+		// We deliberately DON'T pass ReadOnly through to tart's --dir.
+		// Apple Virtualization's parser gets confused by
+		// `--dir=<path>:ro:tag=X` (interprets the path segment as the
+		// share name — slashes then reject as "file system sensitive
+		// characters"). Enforcing read-only via the guest mount script
+		// (`mount -o ro`) is equivalent for our use.
+		extraMountSpecs := parseExtraMounts(req.ExtraMounts)
+		for i, m := range extraMountSpecs {
+			opts.DirMounts = append(opts.DirMounts, tart.DirMount{
+				HostPath: m.hostPath,
+				Tag:      fmt.Sprintf("extra_%d", i),
+			})
+		}
 		cmd, err := tr.Run(ctx, req.VMName, opts)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("tart run prep: %v", err), http.StatusInternalServerError)
@@ -222,6 +243,14 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			buildEnvScript(),
 			buildNftablesScript(macIP, info.HTTPPort, info.HTTPSPort, info.DNSPort),
 			buildDnsmasqScript(macIP, info.DNSPort),
+		}
+		// Extra mounts must land BEFORE the env/nftables/dnsmasq scripts
+		// so any of those that read files from an extra mount can find
+		// them. Order among extras doesn't matter — each is independent.
+		for i, m := range extraMountSpecs {
+			scripts = append([]string{
+				buildExtraMountScript(fmt.Sprintf("extra_%d", i), m.hostPath, m.readOnly),
+			}, scripts...)
 		}
 		if req.WorkspaceHostPath != "" {
 			scripts = append([]string{buildWorkspaceMountScript(req.WorkspaceHostPath)}, scripts...)
