@@ -166,7 +166,7 @@ Named service definitions. Each key is the service name.
 | `hostname` | string | live | Hostname for the Caddy reverse-proxy entry. Must end in `.test`. |
 | `env` | map[string]EnvValue | live | Per-service environment variables (same `!secret` syntax as top-level `env`). |
 | `masks` | []Mask | recreate | `mount --bind` overlays applied at boot. Each has `path` (relative to repo root) and `size` (e.g. `100m`). |
-| `templates` | []Template | live | Files rendered from source scripts and written into the VM. Each has `source` (project-relative path) and `output` (absolute path in VM). |
+| `templates` | []Template | live | Files rendered from source scripts and written into the VM. Each has `source` (project-relative path), `output` (absolute path in VM), and optional `sudo` (default `false`; set `true` when `output` is under a root-owned dir like `/etc` so the installer escalates and the resulting file lands root-owned). |
 | `exec` | []string | live | Command and arguments to run as the service process. |
 | `workdir` | string | live | Working directory for the service process. |
 | `restart` | string | live | Restart policy: `no`, `on-failure`, or `always`. |
@@ -180,6 +180,7 @@ Validation rules:
 - Port values must be in range 1–65535; no two services may share a port or a hostname.
 - Mask `path` must be relative to the repo root; absolute paths, `~`, `$VAR`, and `../` traversal are rejected.
 - Template `source` must be project-relative (no `../` traversal); `output` must be absolute.
+- Template `sudo` defaults to `false` (installer runs as the guest user, file lands owned by that user). Set `true` for outputs under `/etc`, `/usr`, `/var` where the guest user cannot write; the installer then uses `sudo install -o root -g root` and the file lands root-owned.
 
 ---
 

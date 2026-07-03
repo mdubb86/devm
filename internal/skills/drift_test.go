@@ -12,31 +12,73 @@ import (
 )
 
 // TestSchemaSkillMentionsAllConfigFields fails when a new field is
-// added to schema.Config but the schema.md reference forgets to
-// mention it. The check is over `yaml:` tag names (the user-facing
-// field names), not Go field names.
+// added to schema.Config OR any struct reachable from it (Service,
+// Template, Mask, etc.) but schema.md forgets to mention it. The
+// check is over `yaml:` tag names (the user-facing names), not Go
+// field names.
+//
+// Walks the type graph recursively so nested additions (e.g. a new
+// Template.Sudo field) don't slip past — that was the miss that let
+// Bug G's sudo escape hatch land undocumented.
 func TestSchemaSkillMentionsAllConfigFields(t *testing.T) {
 	s, err := Get("schema")
 	require.NoError(t, err)
 	body := s.Body
 
-	cfgType := reflect.TypeOf(schema.Config{})
+	visited := map[reflect.Type]bool{}
 	var missing []string
-	for i := 0; i < cfgType.NumField(); i++ {
-		f := cfgType.Field(i)
-		tag := f.Tag.Get("yaml")
-		// "name,omitempty" -> "name"
-		name := strings.Split(tag, ",")[0]
-		if name == "" || name == "-" {
-			continue
-		}
-		if !strings.Contains(body, "`"+name+"`") {
-			missing = append(missing, name)
+	collectYAMLFields(reflect.TypeOf(schema.Config{}), body, visited, &missing)
+	require.Empty(t, missing,
+		"schema.md is missing references for these yaml fields: %v "+
+			"(add them to the schema cheatsheet)", missing)
+}
+
+func TestCollectYAMLFields_CatchesNestedMissing(t *testing.T) {
+	// Regression pin for the drift walker itself. Body omits any mention
+	// of "sudo" — the walker must surface it as missing since Template
+	// (nested under Config.Services[*].Templates) has a sudo yaml field.
+	body := "The schema mentions `install` and `mounts` and `templates` at the top level."
+	visited := map[reflect.Type]bool{}
+	var missing []string
+	collectYAMLFields(reflect.TypeOf(schema.Config{}), body, visited, &missing)
+	assert.Contains(t, missing, "sudo",
+		"the walker must descend into nested struct types (Config → Service → Template) so a new Template field can't slip past")
+}
+
+// collectYAMLFields walks a struct type and every struct it points to
+// (directly or via slice/map/pointer), and appends yaml-tagged field
+// names that don't appear anywhere in the schema.md body.
+func collectYAMLFields(t reflect.Type, body string, visited map[reflect.Type]bool, missing *[]string) {
+	// Deref through pointer / slice / map value / array to reach a struct.
+	for {
+		switch t.Kind() {
+		case reflect.Ptr, reflect.Slice, reflect.Array:
+			t = t.Elem()
+		case reflect.Map:
+			t = t.Elem()
+		default:
+			goto done
 		}
 	}
-	require.Empty(t, missing,
-		"schema.md is missing references for these Config fields: %v "+
-			"(add them to the schema cheatsheet)", missing)
+done:
+	if t.Kind() != reflect.Struct {
+		return
+	}
+	if visited[t] {
+		return
+	}
+	visited[t] = true
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := f.Tag.Get("yaml")
+		name := strings.Split(tag, ",")[0]
+		if name != "" && name != "-" {
+			if !strings.Contains(body, "`"+name+"`") {
+				*missing = append(*missing, name)
+			}
+		}
+		collectYAMLFields(f.Type, body, visited, missing)
+	}
 }
 
 // ---------------------------------------------------------------------------
