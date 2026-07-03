@@ -34,7 +34,7 @@ from helpers import Shell
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.timeout(75)
+@pytest.mark.timeout(180)
 def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
     # tart_sandbox fixture already cold-started the VM with minimal config.
     # Write env config; env vars are LIVE-bucket so the warm-attach shell picks them up.
@@ -50,7 +50,9 @@ def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
     )
 
     with Shell(devm, cwd=str(workspace.path)) as first:
-        first.expect_prompt(timeout=90)
+        # Bumped to 120 (from 90) — the shell attach races other tests'
+        # /vm/start requests to the daemon under pytest-xdist parallelism.
+        first.expect_prompt(timeout=120)
 
         # Both env vars injected. (Service env: `LOG_LEVEL` is exposed as
         # `<SERVICE>_LOG_LEVEL` upper-cased.)
