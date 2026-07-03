@@ -215,6 +215,15 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	}
 	debuglog.Logf("shell", "cold-start: provisioning")
 	if err := prov.Run(ctx, os.Stdout); err != nil {
+		// Service-phase failures (unit install, daemon-reload, enable+start,
+		// apply masks) leave the VM in a debuggable state — user's fix is
+		// in devm.yaml, not in the VM. Surface the error but keep the VM
+		// alive so `tart exec <vm> systemctl status` etc. works. Pre-service
+		// failures tear down (test_51: install failure = state=absent).
+		if provision.IsPostInstallFailure(err) {
+			debuglog.Logf("shell", "cold-start: post-install failure — keeping VM: %v", err)
+			return -1, fmt.Errorf("provision: %w", err)
+		}
 		return teardownOnFail(err, "provision")
 	}
 	debuglog.Logf("shell", "cold-start: provisioning done")

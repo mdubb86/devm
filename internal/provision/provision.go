@@ -45,11 +45,54 @@ type Provisioner struct {
 	WorkspaceVMPath string
 }
 
+// StepFailure carries which provisioning step failed. Callers use this
+// to decide whether the VM is worth keeping (service startup failure →
+// user can debug in-place) or should be torn down (install-phase failure
+// → the VM is in a bad state and the user's fix belongs in devm.yaml).
+type StepFailure struct {
+	Step string
+	Err  error
+}
+
+func (f *StepFailure) Error() string {
+	return fmt.Sprintf("provision step %q: %v", f.Step, f.Err)
+}
+
+func (f *StepFailure) Unwrap() error { return f.Err }
+
+// stepsAfterInstall are the steps that come AFTER "run install commands".
+// A failure at or after any of these is considered post-install: the VM
+// is basically good, the user's service definition is what's broken, and
+// devm shell should surface the error but leave the VM running so the
+// user can `tart exec` in and inspect. Anything before this list (install
+// commands, apt-get, CA install, mounts, etc.) is a cold-start-broken
+// state where the VM is worth destroying and re-creating from scratch.
+var stepsAfterInstall = map[string]bool{
+	"install templates":       true,
+	"install service units":   true,
+	"systemctl daemon-reload": true,
+	"enable + start services": true,
+	"apply masks":             true,
+}
+
+// IsPostInstallFailure reports whether err is a StepFailure at or after
+// the "install service units" step — i.e. a failure that leaves the VM in
+// a debuggable state and shouldn't trigger teardown.
+func IsPostInstallFailure(err error) bool {
+	var sf *StepFailure
+	if !errors.As(err, &sf) {
+		return false
+	}
+	return stepsAfterInstall[sf.Step]
+}
+
 // Run executes the full provisioning sequence. Streams progress and
 // per-step output to w. Returns on the first failure.
 //
 // Each step's output is prefixed with [step: <name>] so failures
-// point clearly.
+// point clearly. The returned error is always a *StepFailure so callers
+// can classify install-phase vs service-phase failures via
+// IsPostInstallFailure.
 func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 	steps := []struct {
 		name string
@@ -73,7 +116,7 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 	for _, step := range steps {
 		fmt.Fprintf(w, "\n[step: %s]\n", step.name)
 		if err := step.fn(ctx, w); err != nil {
-			return fmt.Errorf("provision step %q: %w", step.name, err)
+			return &StepFailure{Step: step.name, Err: err}
 		}
 	}
 	return nil

@@ -184,6 +184,50 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	admin.mu.Unlock()
 }
 
+// TestRunShellColdPath_PostInstallFail_KeepsVM verifies that a
+// service-phase failure (enable + start services, etc.) leaves the VM
+// running so the user can debug — install failures still tear down.
+func TestRunShellColdPath_PostInstallFail_KeepsVM(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+	}
+	// Fail on systemctl is-active — that only fires from
+	// enable+start-services in the health poll. Everything before succeeds.
+	tartBin, logPath := fakeTartBinFailingAt(t, repoRoot, "is-active")
+
+	// Provision needs at least one declared service to hit is-active.
+	cfg := minimalCfg()
+	cfg.Services = map[string]schema.Service{
+		"broken": {Exec: []string{"/bin/false"}, Restart: "no"},
+	}
+
+	spawner := &stubSpawner{}
+	deps := ShellDeps{
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
+	}
+	t.Setenv("HOME", repoRoot)
+	caPath := filepath.Join(repoRoot, "Library", "Application Support", "devm", "ca")
+	require.NoError(t, os.MkdirAll(caPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(caPath, "root.crt"), []byte("FAKE-CA"), 0o644))
+
+	_, err := RunShell(context.Background(), deps, cfg, repoRoot, "x-sbx", "bash", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "enable + start services")
+
+	admin.mu.Lock()
+	assert.Equal(t, 0, admin.stopCalled, "StopVM must NOT be called on post-install failure")
+	admin.mu.Unlock()
+
+	if logBytes, err := os.ReadFile(logPath); err == nil {
+		assert.NotContains(t, string(logBytes), "delete x-sbx",
+			"tart delete must NOT run on post-install failure — VM is worth debugging in place")
+	}
+}
+
 // TestRunShellColdPath_ProvisionFail_TearsDownVM verifies Bug B: when a
 // cold-start step after StartVM fails, RunShell asks the daemon to stop
 // the VM AND invokes `tart delete` so no zombie VM is left behind.
