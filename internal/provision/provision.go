@@ -382,12 +382,21 @@ func (p *Provisioner) enableStartServices(ctx context.Context, w io.Writer) erro
 
 func (p *Provisioner) applyMasks(ctx context.Context, w io.Writer) error {
 	for svcName, svc := range p.Cfg.Services {
+		// Chown to the user the service will run as (default admin). Without
+		// this the mask dir stays root-owned from `sudo mkdir` and a
+		// non-root service can't write into its own mask. Same default as
+		// render.RenderService's User=.
+		owner := svc.User
+		if owner == "" {
+			owner = "admin"
+		}
 		for _, m := range svc.Masks {
 			maskHostPath := filepath.Join("/var/devm/masks",
 				p.Cfg.Project.ID, svcName, m.Path)
 			mountTarget := filepath.Join(p.WorkspaceVMPath, m.Path)
 			script := strings.Join([]string{
 				"sudo", "mkdir", "-p", maskHostPath, "&&",
+				"sudo", "chown", owner, maskHostPath, "&&",
 				"sudo", "mkdir", "-p", mountTarget, "&&",
 				"sudo", "mount", "--bind", maskHostPath, mountTarget,
 			}, " ")

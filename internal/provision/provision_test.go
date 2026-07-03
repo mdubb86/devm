@@ -303,6 +303,73 @@ func TestProvisioner_OneShotServiceInactiveIsSuccess(t *testing.T) {
 	require.NoError(t, p.Run(context.Background(), io.Discard))
 }
 
+// argvRecordingTart records every argv slice passed to Exec so callers
+// can assert on what the provisioner asked tart to run.
+type argvRecordingTart struct{ argvs [][]string }
+
+func (a *argvRecordingTart) Exec(_ context.Context, _ string, argv []string) tart.ExecResult {
+	a.argvs = append(a.argvs, append([]string(nil), argv...))
+	return tart.ExecResult{ExitCode: 0}
+}
+
+func TestProvisioner_ApplyMasks_ChownsToServiceUser(t *testing.T) {
+	// Bug fix: applyMasks was `sudo mkdir`-ing the mask dir and NEVER
+	// chowning it, so a non-root service couldn't write into its own
+	// mask. Pin: the emitted bash script chowns the mask dir to the
+	// service's User (default admin).
+	tests := []struct {
+		name      string
+		svcUser   string
+		wantOwner string
+	}{
+		{"default user is admin", "", "admin"},
+		{"explicit user", "e2euser", "e2euser"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &argvRecordingTart{}
+			cfg := schema.Config{
+				Project: schema.Project{ID: "p", VMName: "p-vm"},
+				Services: map[string]schema.Service{
+					"svc": {
+						Exec:  []string{"/bin/true"},
+						User:  tc.svcUser,
+						Masks: []schema.Mask{{Path: "data", Size: "10m"}},
+					},
+				},
+			}
+			p := &Provisioner{
+				Tart:            rec,
+				VMName:          "p-vm",
+				Cfg:             cfg,
+				CARootPEM:       []byte("fake\n"),
+				WorkspaceVMPath: "/Users/x/proj",
+			}
+			require.NoError(t, p.Run(context.Background(), io.Discard))
+
+			var maskScript string
+			for _, argv := range rec.argvs {
+				// applyMasks goes through execShell → `bash -e -o pipefail -c "<script>"`.
+				if len(argv) >= 5 && argv[0] == "bash" && argv[len(argv)-2] == "-c" &&
+					strings.Contains(argv[len(argv)-1], "/var/devm/masks") {
+					maskScript = argv[len(argv)-1]
+					break
+				}
+			}
+			require.NotEmpty(t, maskScript, "no mask-install bash invocation captured")
+			assert.Contains(t, maskScript,
+				fmt.Sprintf("sudo chown %s /var/devm/masks/p/svc/data", tc.wantOwner),
+				"mask script must chown the mask dir to the service's User (default admin)")
+			// Order matters: chown before bind mount, otherwise the mount
+			// covers up the chown target.
+			chownIdx := strings.Index(maskScript, "chown")
+			mountIdx := strings.Index(maskScript, "mount --bind")
+			assert.True(t, chownIdx > 0 && chownIdx < mountIdx,
+				"chown must precede mount --bind in the mask script; got:\n%s", maskScript)
+		})
+	}
+}
+
 func TestProvisioner_InstallStepsGoThroughWithDevmEnvWrapper(t *testing.T) {
 	// Pin: install commands run via
 	//   with-devm-env bash -e -o pipefail -c <cmd>

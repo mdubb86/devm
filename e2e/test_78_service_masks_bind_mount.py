@@ -15,6 +15,9 @@ What this pins:
     the mask (bind-mount overlay).
   - Writes from inside the VM to $WORKSPACE/subdir land in the mask
     dir, NOT on the host — the host's original subdir stays unchanged.
+  - The mask dir is writable by the guest user the service runs as (the
+    provisioner chowns to svc.User, default admin) — no sudo needed for
+    the natural in-mask write.
 
 What it doesn't cover (tested elsewhere):
   - Mask validation (relative path, size required) — unit-tested in
@@ -72,13 +75,14 @@ def test_service_masks_overlay_workspace_path(workspace, devm, sandbox_name):
         f"{r.stdout!r}"
     )
 
-    # Guest writes to $WORKSPACE/masked/GUEST land in the mask dir, not
-    # on the host workspace. sudo because the provisioner creates the
-    # mask dir root-owned (a latent devm bug — users declaring a mask
-    # need sudo to write into it, or the running service needs to be
-    # a root/system user; worth filing but out of scope here).
-    r = tart_sandbox.exec_shell(f"sudo tee {ws}/masked/GUEST_MARK <<<from-guest")
-    assert r.ok, f"failed to write in mask: {r.stderr}"
+    # Guest writes to $WORKSPACE/masked/GUEST_MARK land in the mask dir,
+    # not on the host workspace. No sudo needed — the provisioner chowns
+    # the mask dir to the service's User (default admin) before mount.
+    r = tart_sandbox.exec_shell(f"echo from-guest > {ws}/masked/GUEST_MARK")
+    assert r.ok, (
+        f"admin failed to write into its own mask — the mask chown-to-user "
+        f"fix regressed: {r.stderr}"
+    )
 
     host_should_not_exist = subdir / "GUEST_MARK"
     assert not host_should_not_exist.exists(), (
