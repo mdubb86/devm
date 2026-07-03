@@ -2,7 +2,7 @@
 
 This is the proxy-level equivalent of test_42. Cold-starts a project
 VM with network.allow + one !secret entry, then verifies:
-- allow-listed host (httpbin.org) reaches upstream via iron-proxy
+- allow-listed host (api.github.com) reaches upstream via iron-proxy
 - non-allow-listed host (google.com) is blocked (nftables drops the
   rewritten connection because iron-proxy returns 502 for unknown
   hosts in the allow-list)
@@ -17,13 +17,6 @@ import subprocess
 import pytest
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug C: iron-proxy DNS forwarding is broken inside the VM; "
-        "curl exits 6 (could not resolve host). Remove xfail when bug C lands."
-    ),
-)
 @pytest.mark.devm
 @pytest.mark.slow
 def test_egress_enforcement(devm, workspace):
@@ -32,7 +25,7 @@ def test_egress_enforcement(devm, workspace):
     workspace.write_devmyaml(
         install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
-        network={"allow": ["httpbin.org"]},
+        network={"allow": ["api.github.com"]},
     )
 
     # Plant a test secret first.
@@ -56,12 +49,12 @@ def test_egress_enforcement(devm, workspace):
         # Allow-listed host reaches upstream.
         r = subprocess.run(
             [devm.path, "shell", "--", "curl", "-sf", "-o", "/dev/null",
-             "-w", "%{http_code}", "--max-time", "15", "https://httpbin.org/get"],
+             "-w", "%{http_code}", "--max-time", "15", "https://api.github.com/octocat"],
             cwd=str(workspace.path),
             capture_output=True,
             timeout=30,
         )
-        # 200 OK from httpbin.
+        # 200 OK from api.github.com.
         assert r.returncode == 0 and r.stdout.strip() == b"200", \
             f"allow-listed host returned status {r.stdout!r} (stderr: {r.stderr.decode()})"
 
@@ -86,13 +79,6 @@ def test_egress_enforcement(devm, workspace):
                        capture_output=True, timeout=10)
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug C: iron-proxy DNS forwarding is broken inside the VM; "
-        "curl exits 6 (could not resolve host). Remove xfail when bug C lands."
-    ),
-)
 @pytest.mark.devm
 @pytest.mark.slow
 def test_open_mode_reaches_any_host(devm, workspace):

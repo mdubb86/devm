@@ -33,14 +33,6 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(180)
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug C: iron-proxy DNS forwarding is broken inside the VM; "
-        "curl exits 6 (could not resolve host) when the install: step tries "
-        "to fetch from raw.githubusercontent.com. Remove xfail when bug C lands."
-    ),
-)
 def test_cold_start_with_curl_install(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
         install=[

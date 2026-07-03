@@ -28,6 +28,15 @@ type SecretBinding struct {
 	Hosts []string `json:"hosts,omitempty"`
 }
 
+// proxySentinelIP is the address iron-proxy returns for every allow-listed
+// hostname. Chosen from RFC 5737 "documentation" space so it can never
+// collide with a real destination. The guest's default route sends it to
+// MAC_HOST via vmnet, where nftables DNAT catches `tcp dport 443/80` and
+// rewrites the packet to iron-proxy's actual listen address. Using MAC_HOST
+// itself here would trip the guest's `ip daddr <MAC_HOST> return` bypass
+// (a legit rule for guest→iron-proxy DNS traffic) and skip DNAT entirely.
+const proxySentinelIP = "192.0.2.1"
+
 // VMStartRequest is the body shape for POST /vm/start.
 type VMStartRequest struct {
 	ProjectID         string          `json:"project_id"`
@@ -181,10 +190,23 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			ironSecrets = append(ironSecrets, IronSecret{Name: b.Name, Value: b.Value, Hosts: b.Hosts})
 		}
 
-		// Discover MAC_HOST (vmnet bridge IP).
-		macIP, err := mac.Host()
+		// Discover MAC_HOST (vmnet bridge IP that THIS VM is routed through).
+		// Apple Virtualization creates one bridge* interface per VM group; a
+		// Mac running several tart VMs can have several bridges, each with
+		// its own /24 subnet. We must bind iron-proxy on the bridge whose
+		// subnet contains OUR guest — otherwise the guest's default route
+		// can't reach iron-proxy at all (silent DNS + egress failure).
+		//
+		// The VM has an IP by now (waitVMExecReady already succeeded, which
+		// implies both the vmnet handshake and the guest agent are up).
+		vmIP, err := tr.IP(ctx, req.VMName)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("discover MAC_HOST: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("discover VM ip: %v", err), http.StatusInternalServerError)
+			return
+		}
+		macIP, err := mac.HostForVM(vmIP)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("discover MAC_HOST for vm %s: %v", vmIP, err), http.StatusInternalServerError)
 			return
 		}
 
@@ -215,6 +237,13 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			HTTPListen:  fmt.Sprintf("%s:%d", macIP, httpPort),
 			HTTPSListen: fmt.Sprintf("%s:%d", macIP, httpsPort),
 			DNSListen:   fmt.Sprintf("%s:%d", macIP, dnsPort),
+			// DNS answers with a sentinel IP (RFC 5737 documentation range,
+			// never a real destination) so the guest's nftables DNAT rules
+			// can catch the packet by port and rewrite to iron-proxy's real
+			// address. If we returned macIP here, the guest's `ip daddr
+			// <macIP> return` bypass would fire before DNAT and the packet
+			// would connect to nothing on macIP:443.
+			DNSProxyIP:  proxySentinelIP,
 			CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
 			CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
 			AllowList:   req.AllowList,

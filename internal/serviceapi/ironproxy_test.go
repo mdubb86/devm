@@ -13,6 +13,7 @@ func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 		HTTPListen:  "192.168.64.1:8080",
 		HTTPSListen: "192.168.64.1:8443",
 		DNSListen:   "192.168.64.1:8053",
+		DNSProxyIP:  "192.168.64.1",
 		CACertPath:  "/Users/x/Library/Application Support/devm/ca/root.crt",
 		CAKeyPath:   "/Users/x/Library/Application Support/devm/ca/root.key",
 		AllowList:   []string{"github.com", "*.npmjs.org"},
@@ -27,6 +28,10 @@ func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 	dns := got["dns"].(map[string]any)
 	assert.Equal(t, true, dns["enabled"])
 	assert.Equal(t, "192.168.64.1:8053", dns["listen"])
+	// proxy_ip is the answer iron-proxy returns for every allow-listed
+	// host. Guest's DNAT rules rewrite traffic to it. Required by iron-proxy
+	// 0.45+.
+	assert.Equal(t, "192.168.64.1", dns["proxy_ip"])
 
 	// proxy section
 	proxy := got["proxy"].(map[string]any)

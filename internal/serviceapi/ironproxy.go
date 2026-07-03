@@ -28,6 +28,11 @@ type IronProxyConfig struct {
 	HTTPListen  string
 	HTTPSListen string
 	DNSListen   string
+	// DNSProxyIP is the IP iron-proxy answers with for every host in the
+	// allow list. The guest's nftables DNAT then rewrites traffic destined
+	// for that IP to iron-proxy's HTTP/HTTPS ports. Required by iron-proxy
+	// 0.45+; empty causes iron-proxy to exit with "dns.proxy_ip is required".
+	DNSProxyIP  string
 	CACertPath  string
 	CAKeyPath   string
 	AllowList   []string
@@ -39,8 +44,9 @@ type IronProxyConfig struct {
 func (c IronProxyConfig) YAML() ([]byte, error) {
 	raw := map[string]any{
 		"dns": map[string]any{
-			"enabled": true,
-			"listen":  c.DNSListen,
+			"enabled":  true,
+			"listen":   c.DNSListen,
+			"proxy_ip": c.DNSProxyIP,
 		},
 		"proxy": map[string]any{
 			"http_listen":         c.HTTPListen,
@@ -52,6 +58,12 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 		"tls": map[string]any{
 			"ca_cert": c.CACertPath,
 			"ca_key":  c.CAKeyPath,
+		},
+		// Metrics listen on an ephemeral port so per-project iron-proxy
+		// instances don't fight over the built-in default of :9090. devm
+		// doesn't consume the metrics; iron-proxy just needs a valid bind.
+		"metrics": map[string]any{
+			"listen": ":0",
 		},
 	}
 	var transforms []any
