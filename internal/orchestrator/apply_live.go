@@ -67,9 +67,12 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		}
 		// Single dispatcher invocation re-runs all installers. The
 		// dispatcher path is mounted into the VM via the workspace virtio-fs
-		// share, so no transfer step is needed here.
+		// share, so no transfer step is needed here. Wrapper sources
+		// .devm/.env so $WORKSPACE is set — the dispatcher reads it to
+		// locate .devm/templates and errors under `set -u` without it.
+		wrapperPath := filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env")
 		dispatcherPath := filepath.Join(repoRoot, ".devm", "scripts", "install-templates.sh")
-		r := tr.Exec(context.Background(), vmName, []string{"bash", dispatcherPath})
+		r := tr.Exec(context.Background(), vmName, []string{wrapperPath, "bash", dispatcherPath})
 		if r.ExitCode != 0 {
 			return fmt.Errorf("apply_live: install-templates: exit %d (stderr: %s)", r.ExitCode, r.Stderr)
 		}

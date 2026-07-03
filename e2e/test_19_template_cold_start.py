@@ -26,16 +26,8 @@ from helpers import Shell, stop_and_wait_stopped
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug G: Provisioner.Run() has no template-render step; templates only "
-        "land via reconcile. The service-level template output file is never created "
-        "on cold start. Remove xfail when bug G lands."
-    ),
-)
-@pytest.mark.timeout(60)
-def test_template_cold_start(workspace, devm, tart_sandbox, sandbox_name):
+@pytest.mark.timeout(120)
+def test_template_cold_start(workspace, devm, sandbox_name):
     # The template renders the canonical port into a config file we
     # then verify from inside the sandbox.
     tmpl_dir = workspace.path / "configs"
@@ -52,12 +44,16 @@ def test_template_cold_start(workspace, devm, tart_sandbox, sandbox_name):
                 "port": 8080,
                 "templates": [
                     {"source": "configs/probe.conf.tmpl",
-                     "output": "/etc/probe.conf"},
+                     "output": "/etc/probe.conf",
+                     "sudo": True},
                 ],
             },
         },
     )
 
+    # Owns cold-start: the Shell context is the first `devm shell` — it
+    # triggers cold-start with the yaml already in place, so the
+    # provisioner's install-templates step sees the probe template.
     with Shell(devm, cwd=str(workspace.path)) as sh:
         sh.expect_prompt(timeout=90)
         # The template file must exist with the rendered content.

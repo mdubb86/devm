@@ -72,6 +72,49 @@ func TestRenderTemplates_Simple(t *testing.T) {
 	assert.Contains(t, script, "mv \"$TMP\" \"$DEST\"")
 }
 
+func TestRenderTemplates_SudoDefault_NoSudoInScript(t *testing.T) {
+	// sudo defaults to false: installer uses plain mv, no sudo/install.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "u.tmpl"), []byte("x\n"), 0o644))
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Services: map[string]schema.Service{
+			"a": {Port: 80, Templates: []schema.Template{{Source: "u.tmpl", Output: "/home/admin/x"}}},
+		},
+	}
+	got, err := RenderTemplates(cfg, dir)
+	require.NoError(t, err)
+	script := got[filepath.Join(dir, ".devm", "templates", "00-a-x.sh")]
+	require.NotEmpty(t, script)
+	assert.NotContains(t, script, "sudo install", "sudo:false must not shell out to sudo install")
+	assert.NotContains(t, script, "sudo mv", "sudo:false must not sudo the mv either")
+	assert.Contains(t, script, "mv \"$TMP\" \"$DEST\"", "expected plain mv on the default path")
+	assert.Contains(t, script, "sudo=false", "renderer should record the setting in a comment")
+}
+
+func TestRenderTemplates_Sudo_EmitsRootOwnedInstall(t *testing.T) {
+	// sudo: true → installer stages in /tmp, sudo install -o root -g root.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "n.tmpl"), []byte("y\n"), 0o644))
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Services: map[string]schema.Service{
+			"a": {Port: 80, Templates: []schema.Template{{
+				Source: "n.tmpl", Output: "/etc/n.conf", Sudo: true,
+			}}},
+		},
+	}
+	got, err := RenderTemplates(cfg, dir)
+	require.NoError(t, err)
+	script := got[filepath.Join(dir, ".devm", "templates", "00-a-n.conf.sh")]
+	require.NotEmpty(t, script)
+	assert.Contains(t, script, "TMP=\"$(mktemp)\"", "sudo path must stage TMP in /tmp")
+	assert.Contains(t, script, `sudo install -m 0644 -o root -g root "$TMP" "$DEST"`)
+	assert.NotContains(t, script, "mv \"$TMP\" \"$DEST\"",
+		"sudo path must not use plain mv — it wouldn't set root ownership")
+	assert.Contains(t, script, "sudo=true")
+}
+
 func TestRenderTemplates_MissingVar_Error(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "bad.tmpl"),

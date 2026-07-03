@@ -32,16 +32,6 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(180)
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug G: template installation is not a provisioner step. "
-        "Templates (install-templates.sh) are only applied via ApplyLive "
-        "(reconcile), not at cold-start. The probe service sees "
-        "TEMPLATE_MISSING instead of the rendered /etc/probe.conf. "
-        "Remove xfail when bug G lands."
-    ),
-)
 def test_template_renders_before_startup(workspace, devm, sandbox_name):
     tmpl_dir = workspace.path / "configs"
     tmpl_dir.mkdir()
@@ -71,7 +61,8 @@ def test_template_renders_before_startup(workspace, devm, sandbox_name):
                 "port": 8080,
                 "templates": [
                     {"source": "configs/probe.conf.tmpl",
-                     "output": "/etc/probe.conf"},
+                     "output": "/etc/probe.conf",
+                     "sudo": True},
                 ],
                 # exec: single-element argv so ExecStart= is just
                 # /tmp/probe.sh — no quoting needed.

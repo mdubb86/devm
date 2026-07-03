@@ -64,6 +64,7 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 		{"apt-get update", p.aptUpdate},
 		{"apt-get install packages", p.aptInstall},
 		{"run install commands", p.runInstallCommands},
+		{"install templates", p.installTemplates},
 		{"install service units", p.installServiceUnits},
 		{"systemctl daemon-reload", p.daemonReload},
 		{"enable + start services", p.enableStartServices},
@@ -209,6 +210,33 @@ func (p *Provisioner) runInstallCommands(ctx context.Context, w io.Writer) error
 		}
 	}
 	return nil
+}
+
+// installTemplates runs the install-templates.sh dispatcher inside the VM,
+// which loops over .devm/templates/*.sh and executes each per-template
+// installer. Each installer is idempotent (atomic rename over the target
+// path) so re-running on warm restart is safe.
+//
+// No-op when no templates are declared (empty .devm/templates/ dir causes
+// the dispatcher to exit 0 immediately).
+//
+// Runs THROUGH with-devm-env so $WORKSPACE is set — the dispatcher uses
+// it to locate .devm/templates.
+func (p *Provisioner) installTemplates(ctx context.Context, w io.Writer) error {
+	anyTemplate := false
+	for _, svc := range p.Cfg.Services {
+		if len(svc.Templates) > 0 {
+			anyTemplate = true
+			break
+		}
+	}
+	if !anyTemplate {
+		fmt.Fprintln(w, "(no templates declared)")
+		return nil
+	}
+	wrapper := filepath.Join(p.WorkspaceVMPath, ".devm", "scripts", "with-devm-env")
+	dispatcher := filepath.Join(p.WorkspaceVMPath, ".devm", "scripts", "install-templates.sh")
+	return p.exec(ctx, w, wrapper, "bash", dispatcher)
 }
 
 func (p *Provisioner) installServiceUnits(ctx context.Context, w io.Writer) error {

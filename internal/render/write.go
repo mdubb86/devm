@@ -20,6 +20,9 @@ import (
 //     `with-devm-env <cmd>` themselves. Also invoked by
 //     orchestrator/shell.go:attachShell to hand the interactive shell
 //     the project env)
+//   - .devm/scripts/install-templates.sh (invoked by the provisioner
+//     at cold-start and by apply_live on template changes; loops over
+//     .devm/templates/*.sh and runs each)
 func WriteDevmDir(cfg schema.Config, repoRoot string) error {
 	if err := WriteDevmEnv(cfg, repoRoot); err != nil {
 		return err
@@ -35,11 +38,17 @@ func writeStaticScripts(repoRoot string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir .devm/scripts: %w", err)
 	}
-	// No .sh suffix: PATH-based invocation (`with-devm-env <cmd>`) needs
-	// the bare name. The shebang line makes it executable.
-	path := filepath.Join(dir, "with-devm-env")
-	if err := os.WriteFile(path, []byte(scripts.WithDevmEnv), 0o755); err != nil {
-		return fmt.Errorf("write with-devm-env: %w", err)
+	// No .sh suffix on with-devm-env: PATH-based invocation
+	// (`with-devm-env <cmd>`) needs the bare name.
+	staticFiles := map[string]string{
+		"with-devm-env":         scripts.WithDevmEnv,
+		"install-templates.sh":  scripts.InstallTemplates,
+	}
+	for name, content := range staticFiles {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			return fmt.Errorf("write %s: %w", name, err)
+		}
 	}
 	return nil
 }

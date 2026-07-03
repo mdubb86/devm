@@ -5,7 +5,7 @@
 #
 # Behavior:
 #   1. Create /tmp/.devm-<phase>/<phase>-<N>/.
-#   2. Source $WORKSPACE_DIR/.devm/.env.
+#   2. Source $WORKSPACE/.devm/.env.
 #   3. Spawn the user command in a subshell with output piped to
 #      s6-log (the static binary embedded by devm at .devm/scripts/s6-log);
 #      subshell runs in the background (`&`).
@@ -19,8 +19,8 @@ base=/tmp/.devm-${phase}
 dir=${base}/${phase}-${n}
 mkdir -p "$dir"
 
-[ -f "$WORKSPACE_DIR/.devm/.env" ] && . "$WORKSPACE_DIR/.devm/.env"
+[ -f "$WORKSPACE/.devm/.env" ] && . "$WORKSPACE/.devm/.env"
 
-("$@" 2>&1 | "$WORKSPACE_DIR/.devm/scripts/s6-log" -b n20 s1000000 T "$dir") &
+("$@" 2>&1 | "$WORKSPACE/.devm/scripts/s6-log" -b n20 s1000000 T "$dir") &
 touch "${base}/${phase}-${n}.spawned"
 exit 0

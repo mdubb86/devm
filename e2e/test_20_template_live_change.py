@@ -26,15 +26,7 @@ from helpers import Shell, stop_and_wait_stopped
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "devm bug G: Provisioner.Run() has no template-render step; templates only "
-        "land via reconcile. The baseline `cat /etc/msg` fails on cold start because "
-        "the template installer was never run. Remove xfail when bug G lands."
-    ),
-)
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(180)
 def test_template_live_change(workspace, devm, sandbox_name):
     tmpl_dir = workspace.path / "configs"
     tmpl_dir.mkdir()
@@ -49,7 +41,9 @@ def test_template_live_change(workspace, devm, sandbox_name):
             "probe": {
                 "port": 8080,
                 "templates": [
-                    {"source": "configs/msg.tmpl", "output": "/etc/msg"},
+                    {"source": "configs/msg.tmpl",
+                     "output": "/etc/msg",
+                     "sudo": True},
                 ],
             },
         },
