@@ -21,8 +21,8 @@ import pexpect
 
 # Bash prompt from the cirruslabs/debian Tart base image. The default
 # /etc/bash.bashrc sets PS1 to `\u@\h:\w\$ ` — interactively that renders
-# as `admin@debian:~$ ` (login user `admin`, hostname `debian`).
-PROMPT_RE = r"admin@\S+:\S+\$ ?"
+# as `devm@debian:~$ ` (login user `devm`, hostname `debian`).
+PROMPT_RE = r"devm@\S+:\S+\$ ?"
 
 
 class ShellTimeoutError(RuntimeError):
