@@ -103,6 +103,24 @@ def test_install_uninstall_with_tart(devm, workspace, sudo_capable):
         assert ps.stdout.strip() == os.environ.get("USER"), \
             f"daemon running as {ps.stdout.strip()!r}, expected user {os.environ.get('USER')!r}"
 
+        # --- Step 1b: LaunchDaemon socket activation binds :80 and :443 ---
+        # Ship 3/4 gap: LaunchAgent socket activation returned unbound file
+        # descriptors for the reverse-proxy ports. Ship 4.2's LaunchDaemon
+        # makes them genuinely bound. Verify with a plain TCP connect —
+        # ECONNREFUSED means the bind never happened.
+        import socket
+        for port in (80, 443):
+            try:
+                s = socket.create_connection(("127.0.0.1", port), timeout=5)
+                s.close()
+            except ConnectionRefusedError:
+                pytest.fail(
+                    f"nothing listening on 127.0.0.1:{port} — proxy not "
+                    f"bound. Ship 3/4-era LaunchAgent socket-activation bug."
+                )
+            except OSError as e:
+                pytest.fail(f"unexpected error connecting to :{port}: {e}")
+
         # --- Step 2: cold-start via `devm shell -- true` ---
         # This proves the image was built and provisioning works.
         r = subprocess.run(
