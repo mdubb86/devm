@@ -23,11 +23,22 @@ from helpers.tart import TartSandbox
 
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-mark tests that use helpers.Shell as `pty` so run.sh can
-    route them to a single-process pass — pytest-xdist workers have a
-    background RPC thread, and pexpect's forkpty in a multi-threaded
-    process races on lock inheritance (Python's own DeprecationWarning
-    on forkpty spells this out).
+    """Auto-mark tests that must NOT run under pytest-xdist parallelism:
+
+      - `pty`: uses helpers.Shell (pexpect + pty.forkpty). xdist workers
+        have a background RPC thread; forkpty in a multi-threaded process
+        races on lock inheritance (Python's own DeprecationWarning on
+        forkpty spells this out).
+
+      - `serial`: mutates global system state via `devm install` /
+        `devm uninstall` (LaunchDaemon plist, /etc/resolver/test, the
+        system CA, the tart devm-base image). Concurrent runs of these
+        tests step on each other's install/uninstall sequences.
+
+    Both markers land in run.sh's serial phase (`-m "pty or serial"`).
+    Detection is a source-grep at collect time; matches beat missed marks
+    because the cost of a serial-run non-serial test is only latency, not
+    correctness.
     """
     for item in items:
         try:
@@ -36,6 +47,8 @@ def pytest_collection_modifyitems(config, items):
             continue
         if "Shell(" in src or "from helpers import Shell" in src:
             item.add_marker(pytest.mark.pty)
+        if 'devm.path, "install"' in src or 'devm.path, "uninstall"' in src:
+            item.add_marker(pytest.mark.serial)
 
 
 

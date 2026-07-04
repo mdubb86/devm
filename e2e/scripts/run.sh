@@ -69,11 +69,11 @@ for arg in "$@"; do
     esac
 done
 
-parallel_mark="not pty"
-serial_mark="pty"
+parallel_mark="not pty and not serial"
+serial_mark="pty or serial"
 if [ -n "$CALLER_MARK" ]; then
-    parallel_mark="($CALLER_MARK) and not pty"
-    serial_mark="($CALLER_MARK) and pty"
+    parallel_mark="($CALLER_MARK) and not pty and not serial"
+    serial_mark="($CALLER_MARK) and (pty or serial)"
 fi
 
 rc_parallel=0
