@@ -223,21 +223,22 @@ def _uninstall_devm(devm_path: str) -> None:
     )
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(autouse=True)
 def _daemon_matches_devm_bin(devm_path):
-    """Session precondition: the running LaunchDaemon must be the one
-    from DEVM_BIN, not a stale prod install or a leftover from a
-    previous session with a different temp path.
+    """Precondition run before every test: the LaunchDaemon must be
+    installed from DEVM_BIN. Fast path is a single `launchctl print`
+    (<100ms) that no-ops when the daemon already matches; slow path
+    only fires when a previous test (install/uninstall cycle) left
+    the state wrong.
 
-    Every devm test talks to the daemon over the Unix socket — none of
-    them get meaningful signal from a stale daemon. Running this once
-    per session (autouse) means individual tests can assume the daemon
-    is present and correct; only tests that DELIBERATELY mutate the
-    daemon (install/uninstall cycles, service restart) need the
-    `serial` marker.
+    Every devm test talks to the daemon over the Unix socket — none
+    of them get meaningful signal from a stale or absent daemon. This
+    makes them all robust to being run in any order (the
+    install/uninstall tests leave the host uninstalled at teardown,
+    but the next test's autouse re-installs before it runs).
 
-    Skip conditions match `sudo_capable`: no /dev/tty → skip devm
-    tests entirely, since we can't fix the daemon without sudo.
+    Skip conditions match `sudo_capable`: no /dev/tty → don't try
+    to fix, trust ambient state.
     """
     import platform as _platform
     if _platform.system() != "Darwin":
@@ -246,9 +247,6 @@ def _daemon_matches_devm_bin(devm_path):
     try:
         open("/dev/tty").close()
     except OSError:
-        # No TTY — can't sudo, can't fix. Trust ambient state and let
-        # individual tests decide how to react (most will fail loud on
-        # a mismatched daemon, which is the right signal in that env).
         yield
         return
 
