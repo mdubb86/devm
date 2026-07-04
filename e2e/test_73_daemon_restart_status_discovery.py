@@ -45,7 +45,7 @@ def _unix_vm_status(project_id: str, vm_name: str) -> dict:
 
 @pytest.mark.timeout(180)
 def test_vm_status_discovers_from_tart_after_daemon_restart(
-    workspace, devm, tart_sandbox, sandbox_name, sudo_capable
+    workspace, devm, tart_sandbox, sandbox_name, devm_installed
 ):
     # tart_sandbox already cold-started the VM. Confirm it's running
     # via tart's view directly.

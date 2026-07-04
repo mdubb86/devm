@@ -165,6 +165,47 @@ def sudo_capable():
         pytest.skip("no /dev/tty — sudo can't prompt, skipping interactive test")
 
 
+_LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.service.plist")
+
+
+@pytest.fixture
+def devm_installed(devm, sudo_capable):
+    """Ensure devm is installed (LaunchDaemon plist present + daemon socket
+    available) before the test runs. Installs if absent; leaves the install
+    in place at teardown so subsequent tests in the same session don't need
+    to reinstall.
+
+    Use for tests that exercise runtime daemon behavior (iron-proxy
+    adoption, /vm/status discovery, cross-restart secrets) but don't own
+    the install/uninstall lifecycle themselves. Tests that DO manage
+    install (test_39/40/41) don't need this fixture.
+    """
+    if not _LAUNCH_DAEMON_PLIST.exists():
+        # Install with a bounded timeout; first-run image build can be
+        # slow but the daemon plist itself is quick.
+        r = subprocess.run(
+            [devm.path, "install"],
+            capture_output=True, timeout=780,
+        )
+        if r.returncode != 0:
+            pytest.fail(
+                f"prerequisite `devm install` failed:\n"
+                f"stdout={r.stdout.decode()!r}\n"
+                f"stderr={r.stderr.decode()!r}"
+            )
+        # Wait for LaunchDaemon to fully spawn — install returns as soon
+        # as launchd accepts the load; the daemon socket appears once
+        # `state = running`.
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if Path(os.path.expanduser(
+                "~/Library/Application Support/devm/devm.sock"
+            )).exists():
+                break
+            time.sleep(0.25)
+    yield
+
+
 @pytest.fixture
 def tart_sandbox(devm, sandbox_name, workspace) -> TartSandbox:
     """Cold-starts the project VM via `devm shell -- true` (a no-op command

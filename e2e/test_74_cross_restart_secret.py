@@ -85,7 +85,7 @@ def _has_secret_transform(config: dict, secret_name: str) -> bool:
 
 @pytest.mark.timeout(420)
 @pytest.mark.slow
-def test_secret_survives_daemon_restart(workspace, devm, sandbox_name, sudo_capable):
+def test_secret_survives_daemon_restart(workspace, devm, sandbox_name, devm_installed):
     secret_name = f"e2e_secret_{sandbox_name.replace('-', '_')}"
     secret_value = "s3kr3tv4l"
     token_form = f"__DEVM_SECRET_{secret_name}__"
