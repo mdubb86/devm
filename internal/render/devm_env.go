@@ -38,6 +38,17 @@ func WriteDevmEnv(cfg schema.Config, repoRoot string) error {
 		cleanup()
 		return fmt.Errorf("write tmpfile: %w", err)
 	}
+	// fsync before close/rename. Belt-and-suspenders against buffered
+	// writes lingering in the kernel: the tmpfile's bytes must be on
+	// disk before rename swaps it into place — otherwise the guest's
+	// virtiofs client can serve a partial view for a brief window (the
+	// scripts/with-devm-env wrapper also sleeps 0.2s before sourcing
+	// .env to be robust to this race).
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("sync tmpfile: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		cleanup()
 		return fmt.Errorf("close tmpfile: %w", err)

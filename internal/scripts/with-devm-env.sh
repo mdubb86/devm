@@ -7,7 +7,16 @@
 # the symlink's parent.
 self=$(readlink -f "$0" 2>/dev/null || echo "$0")
 dir=$(cd "$(dirname "$self")/.." && pwd)
-[ -f "$dir/.env" ] && . "$dir/.env"
+if [ -f "$dir/.env" ]; then
+    # Apple Virtualization's virtiofs has a guest-side attr/data cache;
+    # a fresh read within ~100ms of a host-side rewrite can see a stale
+    # truncated view (symptom: `Syntax error: Unterminated quoted string`
+    # inside `. .env`). A brief wait forces the cache to age out. 200ms is
+    # small enough to not matter for shell startup, big enough to be
+    # robust across observed timings.
+    sleep 0.2
+    . "$dir/.env"
+fi
 
 # Terminfo forwarding: install the host's terminfo entry for $TERM
 # when the sandbox's terminfo db doesn't already know it (Ghostty,

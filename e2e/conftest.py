@@ -22,6 +22,22 @@ from helpers import Devm, Workspace, registry
 from helpers.tart import TartSandbox
 
 
+def pytest_collection_modifyitems(config, items):
+    """Auto-mark tests that use helpers.Shell as `pty` so run.sh can
+    route them to a single-process pass — pytest-xdist workers have a
+    background RPC thread, and pexpect's forkpty in a multi-threaded
+    process races on lock inheritance (Python's own DeprecationWarning
+    on forkpty spells this out).
+    """
+    for item in items:
+        try:
+            src = Path(item.fspath).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "Shell(" in src or "from helpers import Shell" in src:
+            item.add_marker(pytest.mark.pty)
+
+
 
 
 # --- session ---
