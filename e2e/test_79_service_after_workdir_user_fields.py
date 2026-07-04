@@ -12,12 +12,12 @@ service itself writes, so we test what actually happens — not just what
 the rendered unit says.
 
 Base image users:
-  - admin (uid 1000) — devm's default.
-  - root (uid 0) — always available; distinct from admin, so setting
+  - devm (uid 1000) — devm's default.
+  - root (uid 0) — always available; distinct from devm, so setting
     User=root proves the field wired through.
 
 install: creates a probe user (`e2euser`) so the assertion doesn't
-depend on choosing between admin (the default — no signal) and root
+depend on choosing between devm (the default — no signal) and root
 (which the base image already privileges for the provisioner).
 
 What this pins:

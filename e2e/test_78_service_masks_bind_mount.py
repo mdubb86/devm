@@ -16,7 +16,7 @@ What this pins:
   - Writes from inside the VM to $WORKSPACE/subdir land in the mask
     dir, NOT on the host — the host's original subdir stays unchanged.
   - The mask dir is writable by the guest user the service runs as (the
-    provisioner chowns to svc.User, default admin) — no sudo needed for
+    provisioner chowns to svc.User, default devm) — no sudo needed for
     the natural in-mask write.
 
 What it doesn't cover (tested elsewhere):
@@ -77,10 +77,10 @@ def test_service_masks_overlay_workspace_path(workspace, devm, sandbox_name):
 
     # Guest writes to $WORKSPACE/masked/GUEST_MARK land in the mask dir,
     # not on the host workspace. No sudo needed — the provisioner chowns
-    # the mask dir to the service's User (default admin) before mount.
+    # the mask dir to the service's User (default devm) before mount.
     r = tart_sandbox.exec_shell(f"echo from-guest > {ws}/masked/GUEST_MARK")
     assert r.ok, (
-        f"admin failed to write into its own mask — the mask chown-to-user "
+        f"devm failed to write into its own mask — the mask chown-to-user "
         f"fix regressed: {r.stderr}"
     )
 
