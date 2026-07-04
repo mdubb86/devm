@@ -168,41 +168,78 @@ def sudo_capable():
 _LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.service.plist")
 
 
+def _daemon_program_path() -> str | None:
+    """Extract the ProgramArguments[0] from the running LaunchDaemon.
+    Returns None if no daemon is registered.
+    """
+    r = subprocess.run(
+        ["launchctl", "print", "system/com.devm.service"],
+        capture_output=True, text=True, timeout=10,
+    )
+    if r.returncode != 0:
+        return None
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("program = "):
+            return line[len("program = "):].strip()
+    return None
+
+
+def _install_devm(devm) -> None:
+    r = subprocess.run(
+        [devm.path, "install"],
+        capture_output=True, timeout=780,
+    )
+    if r.returncode != 0:
+        pytest.fail(
+            f"prerequisite `devm install` failed:\n"
+            f"stdout={r.stdout.decode()!r}\n"
+            f"stderr={r.stderr.decode()!r}"
+        )
+    deadline = time.monotonic() + 15
+    sock = Path(os.path.expanduser(
+        "~/Library/Application Support/devm/devm.sock"
+    ))
+    while time.monotonic() < deadline:
+        if sock.exists():
+            return
+        time.sleep(0.25)
+
+
+def _uninstall_devm(devm) -> None:
+    subprocess.run(
+        [devm.path, "uninstall"],
+        capture_output=True, timeout=30,
+    )
+
+
 @pytest.fixture
 def devm_installed(devm, sudo_capable):
-    """Ensure devm is installed (LaunchDaemon plist present + daemon socket
-    available) before the test runs. Installs if absent; leaves the install
-    in place at teardown so subsequent tests in the same session don't need
-    to reinstall.
+    """Ensure devm is installed AND the running daemon is the one from
+    devm.path (the temp DEVM_BIN under test), not a stale prod install.
 
-    Use for tests that exercise runtime daemon behavior (iron-proxy
-    adoption, /vm/status discovery, cross-restart secrets) but don't own
-    the install/uninstall lifecycle themselves. Tests that DO manage
-    install (test_39/40/41) don't need this fixture.
+    Three possible incoming states:
+      - Nothing installed: `devm install`.
+      - Installed but daemon points elsewhere (a `bin/devm` prod install,
+        a previous session's temp path, etc.): uninstall + reinstall so
+        the test runs against the CURRENT DEVM_BIN.
+      - Installed and points at devm.path: no-op.
+
+    Without this identity check we'd silently exercise a stale daemon
+    and green-light DEVM_BIN changes that the running daemon never
+    actually loaded.
+
+    Doesn't uninstall at teardown — leaves the install in place so
+    subsequent tests in the same session reuse it.
     """
-    if not _LAUNCH_DAEMON_PLIST.exists():
-        # Install with a bounded timeout; first-run image build can be
-        # slow but the daemon plist itself is quick.
-        r = subprocess.run(
-            [devm.path, "install"],
-            capture_output=True, timeout=780,
-        )
-        if r.returncode != 0:
-            pytest.fail(
-                f"prerequisite `devm install` failed:\n"
-                f"stdout={r.stdout.decode()!r}\n"
-                f"stderr={r.stderr.decode()!r}"
-            )
-        # Wait for LaunchDaemon to fully spawn — install returns as soon
-        # as launchd accepts the load; the daemon socket appears once
-        # `state = running`.
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            if Path(os.path.expanduser(
-                "~/Library/Application Support/devm/devm.sock"
-            )).exists():
-                break
-            time.sleep(0.25)
+    current_program = _daemon_program_path()
+    if current_program is None or not _LAUNCH_DAEMON_PLIST.exists():
+        _install_devm(devm)
+    elif current_program != devm.path:
+        # Stale install from a different binary. Uninstall + reinstall so
+        # the daemon binary matches DEVM_BIN.
+        _uninstall_devm(devm)
+        _install_devm(devm)
     yield
 
 
