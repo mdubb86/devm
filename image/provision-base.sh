@@ -19,14 +19,51 @@ apt-get install -y -qq --no-install-recommends \
   nftables
 
 # --- Drop the unused `debian` user (uid 1001) ---
-# tart exec lands as `admin` (uid 1000), pinned by
-# e2e/test_tart_contract_04_exec_runs_as_non_root.py. We leave
-# `admin` alone — renaming it would require this script to not
-# already be running as admin (chicken-and-egg with
-# tart-guest-agent). Future: rename via a systemd one-shot that
-# runs before tart-guest-agent on next boot, then reboot the VM
-# at the end of build.sh.
 userdel -r debian 2>/dev/null || true
+
+# --- Install one-shot rename unit + script ---
+# Renames admin (uid 1000) to devm on next boot, BEFORE tart-guest-agent
+# starts. build.sh triggers the reboot that fires this. After the rename
+# fires and the identity is verified, build.sh removes this machinery
+# before the final poweroff — the saved image ships already-renamed.
+cat > /usr/local/bin/devm-rename-user <<'SCRIPT'
+#!/bin/bash
+set -e
+if id devm >/dev/null 2>&1; then exit 0; fi
+if ! id admin >/dev/null 2>&1; then exit 0; fi
+usermod -l devm admin
+usermod -d /home/devm -m devm
+groupmod -n devm admin
+for u in /usr/lib/systemd/system/tart-guest-agent.service /etc/systemd/system/tart-guest-agent.service; do
+  [ -f "$u" ] && sed -i 's/^User=admin$/User=devm/' "$u"
+done
+for f in /etc/sudoers.d/*; do
+  [ -f "$f" ] || continue
+  grep -q '\<admin\>' "$f" && sed -i 's/\<admin\>/devm/g' "$f"
+done
+SCRIPT
+chmod +x /usr/local/bin/devm-rename-user
+
+cat > /etc/systemd/system/devm-rename-user.service <<'UNIT'
+[Unit]
+Description=Rename admin -> devm (devm bootstrap)
+DefaultDependencies=no
+Before=tart-guest-agent.service
+After=local-fs.target
+ConditionPathExists=!/var/lib/devm/user-renamed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/devm-rename-user
+ExecStartPost=/bin/sh -c "mkdir -p /var/lib/devm && touch /var/lib/devm/user-renamed"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable devm-rename-user.service
 
 # --- Disable cloud-init re-running on subsequent boots ---
 touch /etc/cloud/cloud-init.disabled
