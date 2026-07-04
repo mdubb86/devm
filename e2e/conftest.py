@@ -40,6 +40,19 @@ def pytest_collection_modifyitems(config, items):
     because the cost of a serial-run non-serial test is only latency, not
     correctness.
     """
+    # Any test using sudo_capable OR devm_installed mutates shared global
+    # state (LaunchDaemon plist, runtime dir, daemon socket, iron-proxy
+    # supervisor) — group them into `serial` even if they don't call
+    # `devm install` directly. The `devm_installed` fixture itself can
+    # uninstall+reinstall to sync DEVM_BIN, which stomps on any
+    # concurrent test's live daemon connection.
+    _serial_hints = (
+        'devm.path, "install"',
+        'devm.path, "uninstall"',
+        'sudo_capable',
+        'devm_installed',
+        '"service", "restart"',
+    )
     for item in items:
         try:
             src = Path(item.fspath).read_text(encoding="utf-8", errors="replace")
@@ -47,7 +60,7 @@ def pytest_collection_modifyitems(config, items):
             continue
         if "Shell(" in src or "from helpers import Shell" in src:
             item.add_marker(pytest.mark.pty)
-        if 'devm.path, "install"' in src or 'devm.path, "uninstall"' in src:
+        if any(h in src for h in _serial_hints):
             item.add_marker(pytest.mark.serial)
 
 
