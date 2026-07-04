@@ -312,6 +312,15 @@ var uninstallCmd = &cobra.Command{
 			return fmt.Errorf("privileged uninstall failed; see %s", logPath)
 		}
 		_ = os.Remove(serviceapi.SocketPath())
+		// Runtime dir is user-owned (holds the CA key, iron-proxy configs,
+		// and the socket parent). Wiping it makes uninstall a clean slate
+		// so a subsequent `devm install` regenerates the CA fresh; leaving
+		// stale keys around after uninstall would surprise users who ran
+		// uninstall to reset a broken setup.
+		runtimeDir := filepath.Dir(serviceapi.SocketPath())
+		if err := os.RemoveAll(runtimeDir); err != nil {
+			return fmt.Errorf("remove runtime dir %s: %w", runtimeDir, err)
+		}
 		reporter.Info("uninstalled")
 		return nil
 	},

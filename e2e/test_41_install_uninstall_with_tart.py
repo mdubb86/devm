@@ -78,12 +78,20 @@ def test_install_uninstall_with_tart(devm, workspace, sudo_capable):
         assert not _LAUNCH_AGENT_PLIST.exists(), \
             "old LaunchAgent plist should not be present after Ship 4.2 install"
 
-        # launchctl shows the service in the system scope.
-        r = subprocess.run(["launchctl", "print", "system/com.devm.service"],
-                           capture_output=True, text=True, timeout=10)
+        # launchctl shows the service in the system scope. Poll — install
+        # returns as soon as launchd accepts the load, but the process
+        # transitions through `state = xpcproxy` before reaching `running`.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            r = subprocess.run(["launchctl", "print", "system/com.devm.service"],
+                               capture_output=True, text=True, timeout=10)
+            if r.returncode == 0 and "state = running" in r.stdout:
+                break
+            time.sleep(0.25)
         assert r.returncode == 0, f"launchctl print failed: {r.stderr}"
-        assert "state = running" in r.stdout, \
-            f"daemon not running:\n{r.stdout}"
+        assert "state = running" in r.stdout, (
+            f"daemon didn't reach `state = running` within 10s of install:\n{r.stdout}"
+        )
 
         # Daemon runs as the user (UserName key in the plist), not root.
         # Parse `launchctl print` for the pid, then check owner.
