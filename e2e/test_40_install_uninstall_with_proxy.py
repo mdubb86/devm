@@ -51,6 +51,7 @@ def _devm_yaml(workspace_path: str, project_id: str, hostname: str, port: int) -
         f.write(
             f"project:\n"
             f"  id: {project_id}\n"
+            f"  vm_name: {project_id}-vm\n"
             f"services:\n"
             f"  api:\n"
             f"    hostname: {hostname}\n"
