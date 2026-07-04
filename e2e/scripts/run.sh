@@ -33,8 +33,19 @@ trap on_exit EXIT
 uv sync --quiet
 
 # Build the devm binary into a temp location and export DEVM_BIN.
+# Co-locate iron-proxy next to it — the daemon looks next to its own
+# executable to find iron-proxy (internal/ironproxy.Path). For the
+# install/uninstall tests that register DEVM_BIN's path with launchd,
+# the LaunchDaemon spawns from that temp dir; without a sibling
+# iron-proxy the daemon fails /vm/start with a 500 (visible in
+# ~/Library/Logs/com.devm.service.err.log as
+# `iron-proxy adopt: locate iron-proxy: iron-proxy not found`).
 DEVM_BIN="${DEVM_BIN:-$(mktemp -d)/devm}"
+DEVM_BIN_DIR="$(dirname "$DEVM_BIN")"
 (cd .. && go build -o "$DEVM_BIN" ./cmd/devm)
+if [ -x "$(cd .. && pwd)/bin/iron-proxy" ]; then
+    cp "$(cd .. && pwd)/bin/iron-proxy" "$DEVM_BIN_DIR/iron-proxy"
+fi
 export DEVM_BIN
 
 # Two-phase run:
