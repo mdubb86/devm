@@ -7,32 +7,20 @@ makes them genuinely bound. This test pins that.
 Minimal pin: TCP-connect to 127.0.0.1:443. Don't TLS-negotiate, don't
 issue HTTP — just verify a TCP listener is there. If the proxy
 isn't bound the connect fails with ECONNREFUSED.
-
-Depends on the ambient install: skips (rather than fails) if the
-LaunchDaemon plist isn't present, so `test_41`'s uninstall doesn't
-poison the suite for later runs.
 """
 import socket
-from pathlib import Path
 
 import pytest
 
 
-_LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.service.plist")
-
-
-def _require_devm_installed():
-    if not _LAUNCH_DAEMON_PLIST.exists():
-        pytest.skip(
-            "devm is not installed on this Mac (no LaunchDaemon plist). "
-            "Run `devm install` before rerunning this test — the port-bind "
-            "pin is meaningful only against a live install."
-        )
-
-
 @pytest.mark.devm
 def test_proxy_binds_443():
-    _require_devm_installed()
+    """devm install must result in the daemon binding :443.
+
+    Pure TCP connect — no sudo, no devm CLI. Relies on whatever install
+    state the host already has. If the daemon isn't installed/running,
+    this fails informatively.
+    """
     try:
         s = socket.create_connection(("127.0.0.1", 443), timeout=5)
         s.close()
@@ -44,7 +32,7 @@ def test_proxy_binds_443():
 
 @pytest.mark.devm
 def test_proxy_binds_80():
-    _require_devm_installed()
+    """Same pin, port 80."""
     try:
         s = socket.create_connection(("127.0.0.1", 80), timeout=5)
         s.close()
