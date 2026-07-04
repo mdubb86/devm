@@ -173,9 +173,36 @@ def sudo_capable():
         open("/dev/tty").close()
     except OSError:
         pytest.skip("no /dev/tty — sudo can't prompt, skipping interactive test")
+    _require_sudo_primed()
 
 
 _LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.service.plist")
+
+
+def _require_sudo_primed():
+    """Fail-fast: sudo credentials must already be cached before a test
+    that uses sudo runs. Without this, sudo either tries to prompt
+    (works but requires interaction and blocks whichever test noticed
+    first) or hangs waiting on a stdin pytest has captured. Either way,
+    the user is better off being told UP FRONT to prime sudo.
+    """
+    r = subprocess.run(
+        ["sudo", "-n", "true"],
+        capture_output=True, timeout=5,
+    )
+    if r.returncode != 0:
+        pytest.exit(
+            "sudo credentials are not cached. This test needs sudo but the\n"
+            "cache is cold, and prompting from inside pytest is unreliable\n"
+            "(captured stdin, no controlling TTY on some setups). Run:\n"
+            "\n"
+            "    sudo -v && just e2e-one \"...\"\n"
+            "\n"
+            "sudo -v primes the credential cache with a single prompt in\n"
+            "your interactive shell; subsequent sudo calls inside pytest\n"
+            "then use the cache without prompting.",
+            returncode=2,
+        )
 
 
 def _daemon_program_path() -> str | None:
@@ -252,8 +279,10 @@ def _daemon_matches_devm_bin(devm_path):
 
     current_program = _daemon_program_path()
     if current_program is None or not _LAUNCH_DAEMON_PLIST.exists():
+        _require_sudo_primed()
         _install_devm(devm_path)
     elif current_program != devm_path:
+        _require_sudo_primed()
         _uninstall_devm(devm_path)
         _install_devm(devm_path)
     yield
