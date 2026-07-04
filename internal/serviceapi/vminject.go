@@ -62,7 +62,7 @@ grep -q '^%s ' /etc/fstab || echo '%s %s virtiofs %s 0 0' | sudo tee -a /etc/fst
 func buildWorkspaceMountScript(workspaceMirrorPath string) string {
 	// No chown: Apple Virtualization's virtiofs surfaces the share with the
 	// default exec user's ownership already — files authored on the host as
-	// uid 501 show up in the guest as uid 1000 (admin). A `chown admin:admin`
+	// uid 501 show up in the guest as uid 1000 (devm). A `chown devm:devm`
 	// is a no-op. Pinned by e2e/test_tart_contract_09_*.
 	return fmt.Sprintf(`set -e
 sudo mkdir -p %s
