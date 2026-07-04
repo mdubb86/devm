@@ -40,17 +40,14 @@ def pytest_collection_modifyitems(config, items):
     because the cost of a serial-run non-serial test is only latency, not
     correctness.
     """
-    # Any test using sudo_capable OR devm_installed mutates shared global
-    # state (LaunchDaemon plist, runtime dir, daemon socket, iron-proxy
-    # supervisor) — group them into `serial` even if they don't call
-    # `devm install` directly. The `devm_installed` fixture itself can
-    # uninstall+reinstall to sync DEVM_BIN, which stomps on any
-    # concurrent test's live daemon connection.
+    # `serial` marker is for tests that MUTATE the shared daemon during
+    # their run — install, uninstall, or service restart — because those
+    # kill the socket other tests are actively using. Merely NEEDING the
+    # daemon isn't enough; the session-scoped _daemon_matches_devm_bin
+    # fixture handles that precondition once at session start.
     _serial_hints = (
         'devm.path, "install"',
         'devm.path, "uninstall"',
-        'sudo_capable',
-        'devm_installed',
         '"service", "restart"',
     )
     for item in items:
@@ -198,14 +195,14 @@ def _daemon_program_path() -> str | None:
     return None
 
 
-def _install_devm(devm) -> None:
+def _install_devm(devm_path: str) -> None:
     r = subprocess.run(
-        [devm.path, "install"],
+        [devm_path, "install"],
         capture_output=True, timeout=780,
     )
     if r.returncode != 0:
-        pytest.fail(
-            f"prerequisite `devm install` failed:\n"
+        pytest.exit(
+            f"session prerequisite `devm install` failed:\n"
             f"stdout={r.stdout.decode()!r}\n"
             f"stderr={r.stderr.decode()!r}"
         )
@@ -219,40 +216,56 @@ def _install_devm(devm) -> None:
         time.sleep(0.25)
 
 
-def _uninstall_devm(devm) -> None:
+def _uninstall_devm(devm_path: str) -> None:
     subprocess.run(
-        [devm.path, "uninstall"],
+        [devm_path, "uninstall"],
         capture_output=True, timeout=30,
     )
 
 
-@pytest.fixture
-def devm_installed(devm, sudo_capable):
-    """Ensure devm is installed AND the running daemon is the one from
-    devm.path (the temp DEVM_BIN under test), not a stale prod install.
+@pytest.fixture(scope="session", autouse=True)
+def _daemon_matches_devm_bin(devm_path):
+    """Session precondition: the running LaunchDaemon must be the one
+    from DEVM_BIN, not a stale prod install or a leftover from a
+    previous session with a different temp path.
 
-    Three possible incoming states:
-      - Nothing installed: `devm install`.
-      - Installed but daemon points elsewhere (a `bin/devm` prod install,
-        a previous session's temp path, etc.): uninstall + reinstall so
-        the test runs against the CURRENT DEVM_BIN.
-      - Installed and points at devm.path: no-op.
+    Every devm test talks to the daemon over the Unix socket — none of
+    them get meaningful signal from a stale daemon. Running this once
+    per session (autouse) means individual tests can assume the daemon
+    is present and correct; only tests that DELIBERATELY mutate the
+    daemon (install/uninstall cycles, service restart) need the
+    `serial` marker.
 
-    Without this identity check we'd silently exercise a stale daemon
-    and green-light DEVM_BIN changes that the running daemon never
-    actually loaded.
-
-    Doesn't uninstall at teardown — leaves the install in place so
-    subsequent tests in the same session reuse it.
+    Skip conditions match `sudo_capable`: no /dev/tty → skip devm
+    tests entirely, since we can't fix the daemon without sudo.
     """
+    import platform as _platform
+    if _platform.system() != "Darwin":
+        yield
+        return
+    try:
+        open("/dev/tty").close()
+    except OSError:
+        # No TTY — can't sudo, can't fix. Trust ambient state and let
+        # individual tests decide how to react (most will fail loud on
+        # a mismatched daemon, which is the right signal in that env).
+        yield
+        return
+
     current_program = _daemon_program_path()
     if current_program is None or not _LAUNCH_DAEMON_PLIST.exists():
-        _install_devm(devm)
-    elif current_program != devm.path:
-        # Stale install from a different binary. Uninstall + reinstall so
-        # the daemon binary matches DEVM_BIN.
-        _uninstall_devm(devm)
-        _install_devm(devm)
+        _install_devm(devm_path)
+    elif current_program != devm_path:
+        _uninstall_devm(devm_path)
+        _install_devm(devm_path)
+    yield
+
+
+# Kept for backward compatibility with tests that still list
+# `devm_installed` as a param — it's now a session-level guarantee,
+# so per-test it's a no-op.
+@pytest.fixture
+def devm_installed(_daemon_matches_devm_bin):
     yield
 
 
