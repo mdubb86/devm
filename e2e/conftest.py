@@ -278,11 +278,29 @@ def _daemon_matches_devm_bin(devm_path):
         return
 
     current_program = _daemon_program_path()
+
+    if current_program == devm_path and _LAUNCH_DAEMON_PLIST.exists():
+        yield
+        return
+
+    # Daemon needs installing or reinstalling. Need sudo — if it isn't
+    # primed, skip THIS test (not session-abort). Callers who
+    # deliberately opt into sudo work via `sudo_capable` still get the
+    # session-abort behavior from `_require_sudo_primed` because that
+    # fires in `sudo_capable` before the fixture runs at all.
+    check = subprocess.run(
+        ["sudo", "-n", "true"], capture_output=True, timeout=5,
+    )
+    if check.returncode != 0:
+        pytest.skip(
+            "devm daemon doesn't match DEVM_BIN and sudo cache is cold — "
+            "cannot sync. Run `sudo -v && just e2e-devm` (or `bin/devm "
+            "install` to install matching bin/devm) to enable this test."
+        )
+
     if current_program is None or not _LAUNCH_DAEMON_PLIST.exists():
-        _require_sudo_primed()
         _install_devm(devm_path)
-    elif current_program != devm_path:
-        _require_sudo_primed()
+    else:
         _uninstall_devm(devm_path)
         _install_devm(devm_path)
     yield
