@@ -35,7 +35,7 @@ def test_stop_preserves_filesystem_state(devm, workspace, tart_sandbox):
 
     # Write a marker file inside the VM. sync() forces the write to disk
     # so the observed behavior isolates devm stop from page-cache races.
-    r = tart_sandbox.exec_shell("echo hello > /home/admin/marker.txt && sync")
+    r = tart_sandbox.exec_shell("echo hello > /home/devm/marker.txt && sync")
     assert r.exit_code == 0, f"failed to write marker: {r.stderr}"
 
     # Stop the VM.
@@ -66,7 +66,7 @@ def test_stop_preserves_filesystem_state(devm, workspace, tart_sandbox):
     )
 
     # Marker file must have survived the stop/restart cycle.
-    check = tart_sandbox.exec_shell("cat /home/admin/marker.txt")
+    check = tart_sandbox.exec_shell("cat /home/devm/marker.txt")
     assert check.exit_code == 0, f"marker missing after restart: {check.stderr}"
     assert check.stdout.strip() == "hello", (
         f"marker corrupted after restart: {check.stdout!r}"

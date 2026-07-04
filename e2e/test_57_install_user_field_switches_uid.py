@@ -1,13 +1,13 @@
 """57: service user: field switches the systemd unit's User= and runtime UID.
 
 A service with `user: "root"` runs as UID 0. A service with no explicit
-user (defaults to "admin") runs as the "admin" user (non-root). Each writes
+user (defaults to "devm") runs as the "devm" user (non-root). Each writes
 `id -u` to a marker file; after cold-start the markers must contain the
 expected UIDs.
 
 Services are rendered as systemd units. The `user:` field in devm.yaml
 maps directly to `User=` in the [Service] section. The default user is
-"admin" (cirruslabs base image default; see internal/render/systemd.go).
+"devm" (see internal/render/systemd.go).
 
 Helper scripts are pre-written via install: and exec'd as single-argument
 execs (no shell wrapper). This avoids systemd's ExecStart= quoting
@@ -16,7 +16,7 @@ contain shell metacharacters; scripts in /tmp sidestep the issue entirely.
 
 What this pins:
   - `user: "root"` → systemd unit runs as UID 0.
-  - No explicit user (default "admin") → systemd unit runs as non-root.
+  - No explicit user (default "devm") → systemd unit runs as non-root.
 
 What it doesn't cover (tested elsewhere):
   - Systemd service lifecycle (start/stop/restart) -> test_07.
@@ -36,7 +36,7 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(180)
 def test_user_field_switches_uid(workspace, devm, sandbox_name):
     # Pre-write helper scripts via install: so services can exec them
-    # without shell metacharacters in ExecStart=. install: runs as admin
+    # without shell metacharacters in ExecStart=. install: runs as devm
     # before services start, so scripts exist by the time services exec them.
     # restart:always: service stays active so provisioner health poll passes.
     workspace.write_devmyaml(
@@ -56,7 +56,7 @@ def test_user_field_switches_uid(workspace, devm, sandbox_name):
             },
             "asdev": {
                 "exec": ["/tmp/run-asdev.sh"],
-                # No user: field -> defaults to "admin"
+                # No user: field -> defaults to "devm"
                 "restart": "always",
             },
         },
@@ -83,10 +83,10 @@ def test_user_field_switches_uid(workspace, devm, sandbox_name):
         f"user: 'root' should run as UID 0; got {uid_root!r}"
     )
 
-    # admin service: must write a non-zero UID.
+    # devm service: must write a non-zero UID.
     r = sandbox.exec_shell("cat /tmp/uid-as-dev")
     assert r.ok, f"uid-as-dev marker missing: {r.stderr}"
     uid_dev = r.stdout.strip()
     assert uid_dev != "0", (
-        f"default user should run as non-root (admin); got UID {uid_dev!r}"
+        f"default user should run as non-root (devm); got UID {uid_dev!r}"
     )

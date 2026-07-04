@@ -1,5 +1,5 @@
 """80: template with default `sudo: false` renders to a guest-user-writable
-path and lands admin-owned.
+path and lands devm-owned.
 
 Companion to test_19 (which pins the `sudo: true` + /etc case). Default
 sudo:false is the ergonomic path for the common case — a rendered config
@@ -12,8 +12,8 @@ filesystem check), templating would break entirely.
 
 What this pins:
   - `templates: [{source, output, sudo: false}]` writes to
-    /home/admin/foo — a guest-user-writable path — and succeeds.
-  - The resulting file is owned by admin (uid 1000), not root.
+    /home/devm/foo — a guest-user-writable path — and succeeds.
+  - The resulting file is owned by devm (uid 1000), not root.
   - Content is rendered from the source (not the source verbatim).
 
 What it doesn't cover (tested elsewhere):
@@ -31,7 +31,7 @@ pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(120)
-def test_template_sudo_false_writes_admin_owned(workspace, devm, sandbox_name):
+def test_template_sudo_false_writes_devm_owned(workspace, devm, sandbox_name):
     tmpl_dir = workspace.path / "configs"
     tmpl_dir.mkdir()
     (tmpl_dir / "user.conf.tmpl").write_text(
@@ -46,7 +46,7 @@ def test_template_sudo_false_writes_admin_owned(workspace, devm, sandbox_name):
                 "templates": [
                     {
                         "source": "configs/user.conf.tmpl",
-                        "output": "/home/admin/user.conf",
+                        "output": "/home/devm/user.conf",
                         # sudo omitted — pin defaults to false.
                     },
                 ],
@@ -59,22 +59,22 @@ def test_template_sudo_false_writes_admin_owned(workspace, devm, sandbox_name):
         sh.expect_prompt(timeout=120)
 
         # File exists at the declared path.
-        sh.run_check("test -f /home/admin/user.conf", expect_zero=True, timeout=10)
+        sh.run_check("test -f /home/devm/user.conf", expect_zero=True, timeout=10)
 
-        # File is admin-owned (not root). Emit a distinctive marker so
+        # File is devm-owned (not root). Emit a distinctive marker so
         # the assertion doesn't collide with the echoed command line.
-        sh.send("printf 'DEVM_OWNER=%s\\n' \"$(stat -c '%U' /home/admin/user.conf)\"")
-        sh.expect_text(r"DEVM_OWNER=admin", timeout=10)
+        sh.send("printf 'DEVM_OWNER=%s\\n' \"$(stat -c '%U' /home/devm/user.conf)\"")
+        sh.expect_text(r"DEVM_OWNER=devm", timeout=10)
         sh.expect_prompt(timeout=10)
 
         # Content was rendered (template variables replaced).
-        sh.send("cat /home/admin/user.conf")
+        sh.send("cat /home/devm/user.conf")
         sh.expect_text(rf"PROJECT={workspace.slug}", timeout=10)
         sh.expect_text(r"PORT=9090", timeout=10)
         sh.expect_prompt(timeout=10)
 
-        # As admin, we can rewrite the file — no sudo needed.
-        sh.run_check("echo overwritten > /home/admin/user.conf",
+        # As devm, we can rewrite the file — no sudo needed.
+        sh.run_check("echo overwritten > /home/devm/user.conf",
                      expect_zero=True, timeout=10)
 
         sh.exit(timeout=30)

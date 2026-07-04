@@ -39,7 +39,7 @@ Requires=devm-ready.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'echo full-override-ok > /home/admin/systemd-override-marker && sync'
+ExecStart=/bin/sh -c 'echo full-override-ok > /home/devm/systemd-override-marker && sync'
 RemainAfterExit=yes
 
 [Install]
@@ -75,7 +75,7 @@ def test_service_systemd_full_override_lands_verbatim(workspace, devm, sandbox_n
     )
 
     # The service ran and wrote the marker.
-    r = tart_sandbox.exec_shell("cat /home/admin/systemd-override-marker")
+    r = tart_sandbox.exec_shell("cat /home/devm/systemd-override-marker")
     assert r.ok, f"marker missing — service didn't execute: {r.stderr}"
     assert r.stdout.strip() == "full-override-ok", (
         f"marker content wrong: {r.stdout!r}"
