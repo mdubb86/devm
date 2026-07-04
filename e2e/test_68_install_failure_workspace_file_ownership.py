@@ -40,6 +40,11 @@ def test_install_failure_workspace_file_readable_and_removable_on_host(
         install=[
             'touch "$WORKSPACE/probe.out"',
             'sh -c \'echo HELLO > "$WORKSPACE/probe.out"\'',
+            # sync forces the virtiofs write-back cache to flush to the
+            # host before Bug B's teardown-on-fail fires — otherwise the
+            # write can be lost when tart delete kills the guest before
+            # its dirty pages reach the shared workspace.
+            "sync",
             "false",  # deliberate failure
         ],
     )

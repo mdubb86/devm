@@ -90,13 +90,18 @@ def test_mount_is_mountpoint_and_data_persists(workspace, devm, sandbox_name):
             capture_output=True, cwd=str(workspace.path), timeout=180,
         )
 
-        deadline = time.monotonic() + 30
+        # Bumped from 30s to 90s — cold-start can queue behind other
+        # tests' /vm/start under the parallel phase; 30s was tight even
+        # standalone.
+        deadline = time.monotonic() + 90
+        final_state = "unknown"
         while time.monotonic() < deadline:
-            if tart_sandbox.state() == "running":
+            final_state = tart_sandbox.state()
+            if final_state == "running":
                 break
             time.sleep(0.5)
-        assert tart_sandbox.state() == "running", (
-            f"VM should be running after restart; got {tart_sandbox.state()!r}"
+        assert final_state == "running", (
+            f"VM should be running after restart; got {final_state!r}"
         )
 
         # Probe file must survive the stop/restart cycle.
