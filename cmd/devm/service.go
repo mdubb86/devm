@@ -157,20 +157,19 @@ var installCmd = &cobra.Command{
 		}
 
 		// Base image: long-running, no terminal output (captured to
-		// log). Spinner has the terminal to itself. Treat "image
-		// directory not found" as a soft skip — user might be running
-		// install from outside the repo, and the base image is
-		// probably already built; missing it means we just don't
-		// auto-rebuild here.
-		if imageDir, err := image.ImageDirFromExe(); err == nil {
-			needs, _, _ := image.NeedsBuild(imageDir)
-			if needs {
-				reporter.Step("building devm-base", false)
-				if err := image.BuildBaseImage(cmd.Context(), imageDir, logFile); err != nil {
-					reporter.Fail()
-					tailLog(logPath, 30)
-					return fmt.Errorf("base image build failed; see %s", logPath)
-				}
+		// log). Spinner has the terminal to itself. The provisioning
+		// script is embedded in the binary via //go:embed, so we no
+		// longer need an image/ directory on disk to decide whether a
+		// rebuild is needed or to run one. imageDir is passed through
+		// as an empty string for API compatibility with NeedsBuild /
+		// BuildBaseImage (both ignore it).
+		needs, _, _ := image.NeedsBuild("")
+		if needs {
+			reporter.Step("building devm-base", false)
+			if err := image.BuildBaseImage(cmd.Context(), "", logFile); err != nil {
+				reporter.Fail()
+				tailLog(logPath, 30)
+				return fmt.Errorf("base image build failed; see %s", logPath)
 			}
 		}
 
