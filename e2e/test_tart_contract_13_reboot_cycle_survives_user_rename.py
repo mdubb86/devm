@@ -108,7 +108,11 @@ export DETECTIVE_DIR=/mnt/debug
 detective preflight-id -- /usr/bin/id
 detective preflight-passwd -- /bin/bash -c 'grep -E "^(admin|devm):" /etc/passwd'
 detective preflight-home -- /bin/ls -la /home
-detective preflight-guest-agent -- /bin/systemctl is-active tart-guest-agent
+# `systemctl is-active` returns rc=3 when the service is inactive — which
+# is the CORRECT state here because our unit is ordered Before=tart-guest-
+# agent.service. Wrap in `|| true` so that expected nonzero rc doesn't
+# trip `set -e` and abort the rest of the rename.
+detective preflight-guest-agent -- /bin/systemctl is-active tart-guest-agent || true
 
 # Idempotent guard — matches provision-base.sh.
 if id devm >/dev/null 2>&1; then
