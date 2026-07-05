@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 )
 
 // StartVM asks the daemon to clone (if absent) and start the project VM.
@@ -20,7 +22,8 @@ func (c *Client) StartVM(ctx context.Context, req VMStartRequest) error {
 	}
 	defer r.Body.Close()
 	if r.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("vm/start: status %d", r.StatusCode)
+		msg, _ := io.ReadAll(r.Body)
+		return fmt.Errorf("vm/start: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	return nil
 }
