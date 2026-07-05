@@ -356,12 +356,22 @@ func BuildBaseImage(ctx context.Context, imageDir string, w io.Writer) error {
 		return fmt.Errorf("tart pull %s: %w", template, err)
 	}
 
+	// Delete any existing devm-base before rebuilding. The old shell
+	// script aborted here as a defensive check when a human ran
+	// build.sh manually; called programmatically from Go, the builder
+	// owns the lifecycle — NeedsBuild returning true is enough
+	// authorization to blow away the stale image. Without this, every
+	// `devm upgrade` and every install-triggered rebuild-on-hash-change
+	// would fail because devm-base is present but out of date.
 	exists, err := baseImageExistsCtx(ctx)
 	if err != nil {
 		return fmt.Errorf("check for existing %s: %w", BaseImageName, err)
 	}
 	if exists {
-		return fmt.Errorf("VM %s already exists; delete it first: tart delete %s", BaseImageName, BaseImageName)
+		fmt.Fprintf(w, ">>> Removing stale %s before rebuild...\n", BaseImageName)
+		if err := runTart(ctx, w, "delete", BaseImageName); err != nil {
+			return fmt.Errorf("delete stale %s: %w", BaseImageName, err)
+		}
 	}
 
 	fmt.Fprintf(w, ">>> Cloning %s -> %s...\n", template, BaseImageName)
