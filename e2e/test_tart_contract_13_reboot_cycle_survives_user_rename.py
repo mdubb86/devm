@@ -137,6 +137,14 @@ for u in /usr/lib/systemd/system/tart-guest-agent.service /etc/systemd/system/ta
     fi
 done
 
+# CRITICAL: after modifying the tart-guest-agent unit file, systemd is
+# still using its cached (pre-modification) view of it. If we don't
+# reload here, systemd tries to start the agent with the old User=admin,
+# fails with status=217/USER because admin no longer exists after
+# usermod, and the agent never comes up — leaving `tart exec` hanging
+# indefinitely from the Mac side.
+detective daemon-reload -- /bin/systemctl daemon-reload
+
 for f in /etc/sudoers.d/*; do
     if [ -f "$f" ] && /bin/grep -q '\<admin\>' "$f"; then
         detective sed-sudoers -- /bin/sed -i 's/\<admin\>/devm/g' "$f"

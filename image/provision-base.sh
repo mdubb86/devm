@@ -38,6 +38,13 @@ groupmod -n devm admin
 for u in /usr/lib/systemd/system/tart-guest-agent.service /etc/systemd/system/tart-guest-agent.service; do
   [ -f "$u" ] && sed -i 's/^User=admin$/User=devm/' "$u"
 done
+# CRITICAL: without daemon-reload, systemd keeps its cached (pre-sed)
+# view of tart-guest-agent.service and tries to start the agent with the
+# old User=admin. Since usermod already renamed admin -> devm, that
+# lookup fails with status=217/USER and the agent never comes up —
+# leaving `tart exec` hanging from the Mac. Pinned by
+# e2e/test_tart_contract_13_reboot_cycle_survives_user_rename.py.
+systemctl daemon-reload
 for f in /etc/sudoers.d/*; do
   [ -f "$f" ] || continue
   grep -q '\<admin\>' "$f" && sed -i 's/\<admin\>/devm/g' "$f"
