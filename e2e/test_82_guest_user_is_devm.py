@@ -38,7 +38,8 @@ from helpers.tart import TartSandbox
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.slow
+@pytest.mark.timeout(900)  # first-time devm-base build via the autouse fixture is ~5 min
 def test_guest_identity_is_devm(workspace, devm, sandbox_name):
     workspace.write_devmyaml()
 
