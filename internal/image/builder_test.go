@@ -1,65 +1,64 @@
 package image
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	baseimage "github.com/mdubb86/devm/image"
 )
 
-// writeDefinition drops stub files for all definitionFiles into dir.
-// Each file gets its name as content (sufficient for hashing tests).
-func writeDefinition(t *testing.T, dir string) {
-	t.Helper()
-	for _, name := range definitionFiles {
-		path := filepath.Join(dir, name)
-		require.NoError(t, os.WriteFile(path, []byte("content-of-"+name), 0644))
-	}
-}
+// DefinitionHash no longer reads anything from imageDir — the
+// definition is embedded provision-base.sh + cleanupScript +
+// definitionVersion, baked into the binary. imageDir is accepted only
+// so NeedsBuild/BuildBaseImage keep their existing call signature; a
+// nonexistent, empty, or garbage path must not affect the hash.
 
-func TestDefinitionHash_StableForSameInputs(t *testing.T) {
-	dir := t.TempDir()
-	writeDefinition(t, dir)
-	h1, err := DefinitionHash(dir)
+func TestDefinitionHash_StableAcrossCalls(t *testing.T) {
+	h1, err := DefinitionHash("/does/not/exist")
 	require.NoError(t, err)
-	h2, err := DefinitionHash(dir)
+	h2, err := DefinitionHash("/does/not/exist")
 	require.NoError(t, err)
-	assert.Equal(t, h1, h2, "same inputs must hash the same")
+	assert.Equal(t, h1, h2, "same embedded inputs must hash the same")
 	assert.Len(t, h1, 64, "sha256 hex must be 64 chars")
 }
 
-func TestDefinitionHash_ChangesOnFileEdit(t *testing.T) {
+func TestDefinitionHash_IgnoresImageDir(t *testing.T) {
+	// A real, populated directory and a bogus path must hash
+	// identically — imageDir is vestigial (kept for API compatibility)
+	// now that the definition is embedded rather than read from disk.
 	dir := t.TempDir()
-	writeDefinition(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "provision-base.sh"), []byte("not the real script"), 0644))
+
 	h1, err := DefinitionHash(dir)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "build.sh"), []byte("MUTATED"), 0644))
-	h2, err := DefinitionHash(dir)
+	h2, err := DefinitionHash("/some/other/nonexistent/path")
 	require.NoError(t, err)
-	assert.NotEqual(t, h1, h2, "edit must change the hash")
+	assert.Equal(t, h1, h2, "DefinitionHash must not depend on imageDir contents")
 }
 
-func TestDefinitionHash_OrderIndependent(t *testing.T) {
-	dir1 := t.TempDir()
-	dir2 := t.TempDir()
-	writeDefinition(t, dir1)
-	writeDefinition(t, dir2)
-	h1, err := DefinitionHash(dir1)
-	require.NoError(t, err)
-	h2, err := DefinitionHash(dir2)
-	require.NoError(t, err)
-	assert.Equal(t, h1, h2, "identical content in different dirs must hash the same")
-}
+// TestDefinitionHash_MatchesFormula recomputes sha256(script + 0x00 +
+// cleanup + 0x00 + version) directly against this package's
+// unexported inputs, so the test fails loudly if the hash formula (or
+// its inputs) ever changes silently without a definitionVersion bump.
+func TestDefinitionHash_MatchesFormula(t *testing.T) {
+	h := sha256.New()
+	io.WriteString(h, baseimage.ProvisionBaseScript)
+	h.Write([]byte{0})
+	io.WriteString(h, cleanupScript)
+	h.Write([]byte{0})
+	io.WriteString(h, definitionVersion)
+	want := hex.EncodeToString(h.Sum(nil))
 
-func TestDefinitionHash_MissingFile_Errors(t *testing.T) {
-	dir := t.TempDir()
-	writeDefinition(t, dir)
-	require.NoError(t, os.Remove(filepath.Join(dir, "build.sh")))
-	_, err := DefinitionHash(dir)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "build.sh")
+	got, err := DefinitionHash("")
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
 }
 
 func TestHashStorePath_HomeRelative(t *testing.T) {
@@ -68,11 +67,42 @@ func TestHashStorePath_HomeRelative(t *testing.T) {
 	assert.Contains(t, p, "Library/Application Support/devm/cache/base-image.hash")
 }
 
-// NeedsBuild's full behavior depends on Tart being installed
-// (baseImageExists shells out). We test the hash-mismatch branch by
-// pointing HashStorePath at a temp file via env override... but the
-// current API doesn't allow that. So we just verify the hash-only
-// path indirectly: if no stored hash exists, NeedsBuild returns true.
-//
-// More aggressive testing of baseImageExists() is left to the e2e in
-// Ship 4 Task 19.
+// NeedsBuild's "VM absent" branch depends on Tart being installed
+// (baseImageExists shells out to `tart list`). We test the
+// hash-mismatch branch here, which doesn't require Tart: with no
+// stored hash on disk, NeedsBuild must report true unconditionally.
+func TestNeedsBuild_TrueWhenNoStoredHash(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	needs, hash, err := NeedsBuild("/does/not/matter")
+	require.NoError(t, err)
+	assert.True(t, needs, "no stored hash means a build is needed")
+	assert.Len(t, hash, 64)
+}
+
+// TestNeedsBuild_HashMatchesStored verifies NeedsBuild returns the
+// current definition hash regardless of its boolean verdict. The
+// verdict itself depends on baseImageExists, which shells out to the
+// real `tart list` — in CI/dev environments without Tart installed
+// (or without devm-base built), that reports false, so NeedsBuild
+// would report true even with a matching stored hash. That's the
+// documented "VM absent" branch, not a bug, so we don't assert the
+// boolean here — doing so would make the test's outcome depend on the
+// local machine's Tart state.
+func TestNeedsBuild_HashMatchesStored(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cur, err := DefinitionHash("")
+	require.NoError(t, err)
+
+	storePath, err := HashStorePath()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0700))
+	require.NoError(t, os.WriteFile(storePath, []byte(cur), 0644))
+
+	_, hash, err := NeedsBuild("/does/not/matter")
+	require.NoError(t, err)
+	assert.Equal(t, cur, hash)
+}

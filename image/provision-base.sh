@@ -23,9 +23,10 @@ userdel -r debian 2>/dev/null || true
 
 # --- Install one-shot rename unit + script ---
 # Renames admin (uid 1000) to devm on next boot, BEFORE tart-guest-agent
-# starts. build.sh triggers the reboot that fires this. After the rename
-# fires and the identity is verified, build.sh removes this machinery
-# before the final poweroff — the saved image ships already-renamed.
+# starts. The Go builder (internal/image.BuildBaseImage) triggers the
+# reboot that fires this. After the rename fires and the identity is
+# verified, the Go builder removes this machinery before the final
+# poweroff — the saved image ships already-renamed.
 cat > /usr/local/bin/devm-rename-user <<'SCRIPT'
 #!/bin/bash
 set -e

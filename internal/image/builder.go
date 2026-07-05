@@ -12,44 +12,55 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
+	"time"
+
+	baseimage "github.com/mdubb86/devm/image"
 )
 
 // BaseImageName is the Tart VM name we build into.
 const BaseImageName = "devm-base"
 
-// definitionFiles are the inputs to DefinitionHash. Order matters for
-// reproducibility; we sort before hashing so additions don't shuffle
-// existing entries.
-var definitionFiles = []string{
-	"build.sh",
-	"provision-base.sh",
-	"devm-dns.service",
-	"devm-caddy.service",
-	"README.md",
-}
+// defaultTemplate is the Tart image devm-base clones from when the
+// TEMPLATE environment variable isn't set.
+const defaultTemplate = "ghcr.io/cirruslabs/debian:latest"
 
-// DefinitionHash returns sha256 over the image definition's inputs.
-// imageDir is the path to the `image/` directory in the repo (or
-// wherever the daemon has unpacked it at runtime).
+// cleanupScript runs inside the VM (via `tart exec … sudo bash -c`)
+// once the rename-on-boot one-shot has fired and its effect has been
+// verified. It removes the transient rename machinery installed by
+// provision-base.sh so the saved image ships clean — no leftover
+// unit, script, or state file referencing the pre-rename setup.
+const cleanupScript = `
+systemctl disable devm-rename-user.service 2>/dev/null || true
+rm -f /etc/systemd/system/devm-rename-user.service
+rm -f /etc/systemd/system/multi-user.target.wants/devm-rename-user.service
+rm -f /usr/local/bin/devm-rename-user
+rm -f /var/lib/devm/user-renamed
+rmdir /var/lib/devm 2>/dev/null || true
+systemctl daemon-reload
+`
+
+// definitionVersion bumps DefinitionHash's output independent of the
+// embedded script contents. Bump this when the build *procedure*
+// itself changes (step order, new tart flags, etc.) so a previously
+// built devm-base gets rebuilt even though provision-base.sh and
+// cleanupScript are byte-for-byte unchanged.
+const definitionVersion = "v1-native-go-builder"
+
+// DefinitionHash returns sha256 over the image definition: the
+// embedded provisioning script, the embedded cleanup fragment, and
+// definitionVersion. imageDir is accepted for API compatibility with
+// existing callers (which resolve it via ImageDirFromExe) but is no
+// longer read from disk — the definition is baked into the binary via
+// go:embed, so devm doesn't depend on the image/ directory existing
+// at install time.
 func DefinitionHash(imageDir string) (string, error) {
-	sorted := append([]string(nil), definitionFiles...)
-	sort.Strings(sorted)
 	h := sha256.New()
-	for _, name := range sorted {
-		path := filepath.Join(imageDir, name)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return "", fmt.Errorf("read %s: %w", path, err)
-		}
-		// Name + null + content + null — name embedded so renames
-		// change the hash too.
-		fmt.Fprintf(h, "%s", name)
-		h.Write([]byte{0})
-		h.Write(data)
-		h.Write([]byte{0})
-	}
+	io.WriteString(h, baseimage.ProvisionBaseScript)
+	h.Write([]byte{0})
+	io.WriteString(h, cleanupScript)
+	h.Write([]byte{0})
+	io.WriteString(h, definitionVersion)
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
@@ -70,6 +81,9 @@ func HashStorePath() (string, error) {
 // Returns true if any of:
 //   - The image definition hash has changed since last build
 //   - The devm-base Tart VM is absent from local cache
+//
+// imageDir is unused (see DefinitionHash) and kept only so existing
+// callers don't need to change.
 func NeedsBuild(imageDir string) (bool, string, error) {
 	cur, err := DefinitionHash(imageDir)
 	if err != nil {
@@ -96,54 +110,314 @@ func NeedsBuild(imageDir string) (bool, string, error) {
 // Returns false on any error reading from Tart (we'd rather rebuild
 // than skip a potentially-needed rebuild).
 func baseImageExists() bool {
-	cmd := exec.Command("tart", "list", "--format=json")
-	out, err := cmd.Output()
+	ok, err := baseImageExistsCtx(context.Background())
 	if err != nil {
 		return false
+	}
+	return ok
+}
+
+// baseImageExistsCtx runs `tart list --format=json` under a bounded
+// context and reports whether devm-base is listed.
+func baseImageExistsCtx(ctx context.Context) (bool, error) {
+	attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(attemptCtx, "tart", "list", "--format=json")
+	out, err := cmd.Output()
+	if err != nil {
+		return false, err
 	}
 	// Cheap substring scan — we just need to know the VM is listed
 	// somewhere in the output by name. JSON format on Tart varies a
 	// bit across versions; we don't try to fully decode.
-	return strings.Contains(string(out), `"`+BaseImageName+`"`)
+	return strings.Contains(string(out), `"`+BaseImageName+`"`), nil
 }
 
-// BuildBaseImage runs imageDir/build.sh. Streams build output to w.
-// On success, writes the current definition hash to HashStorePath.
+// runTart runs `tart <args...>` under ctx, streaming stdout/stderr to
+// w. Every tart invocation in this package goes through either this
+// helper or one of the more specialized ones below — all of them use
+// exec.CommandContext, never a bare exec.Command.
+func runTart(ctx context.Context, w io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, "tart", args...)
+	cmd.Stdout = w
+	cmd.Stderr = w
+	return cmd.Run()
+}
+
+// tartExecStdin runs `tart exec -i devm-base sudo bash -s`, piping
+// script to the guest bash's stdin, and streams output to w. Used for
+// the provisioning step, which is long-running (apt installs) and
+// worth surfacing progress for.
+func tartExecStdin(ctx context.Context, w io.Writer, script string) error {
+	cmd := exec.CommandContext(ctx, "tart", "exec", "-i", BaseImageName, "sudo", "bash", "-s")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Stdout = w
+	cmd.Stderr = w
+	return cmd.Run()
+}
+
+// tartExecIdentity runs `tart exec devm-base id -un` under a
+// per-attempt timeout and returns the trimmed identity, or "unknown"
+// if the command didn't complete (guest unreachable, hung
+// guest-agent handshake, etc.) — mirroring the shell script's
+// `timeout 5 tart exec … id -un 2>/dev/null || echo unknown`.
+func tartExecIdentity(ctx context.Context, timeout time.Duration) string {
+	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(attemptCtx, "tart", "exec", BaseImageName, "id", "-un")
+	out, err := cmd.Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// tartExecCleanup runs the cleanup fragment inside the guest under a
+// bounded context, streaming output to w.
+func tartExecCleanup(ctx context.Context, timeout time.Duration, w io.Writer) error {
+	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(attemptCtx, "tart", "exec", BaseImageName, "sudo", "bash", "-c", cleanupScript)
+	cmd.Stdout = w
+	cmd.Stderr = w
+	return cmd.Run()
+}
+
+// waitForIP polls `tart ip devm-base` until it succeeds, sleeping
+// interval between attempts, up to attempts tries. Mirrors the shell
+// script's boot-wait loop (60 attempts × 2s = 120s ceiling).
+func waitForIP(ctx context.Context, attempts int, interval time.Duration) error {
+	for i := 0; i < attempts; i++ {
+		cmd := exec.CommandContext(ctx, "tart", "ip", BaseImageName)
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+		if i == attempts-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+	return fmt.Errorf("VM did not report an IP within %s", time.Duration(attempts)*interval)
+}
+
+// waitForReachable polls `tart exec devm-base true`, each attempt
+// bounded by perAttemptTimeout, sleeping interval between attempts,
+// up to attempts tries. This is the native-Go replacement for the
+// shell script's `timeout 3 tart exec … true` readiness loop.
 //
-// Implementer note: the build can take several minutes on first run
-// (template pull + provisioning). Caller is expected to surface
-// progress to the user (e.g., by passing os.Stdout as w).
+// Unlike the shell script (which falls through silently on exhaustion
+// and lets the subsequent identity check produce a slightly
+// misleading "identity is 'unknown'" error), this returns a distinct,
+// clearer error when the VM never becomes reachable.
+func waitForReachable(ctx context.Context, w io.Writer, attempts int, interval, perAttemptTimeout time.Duration) error {
+	for i := 1; i <= attempts; i++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+		cmd := exec.CommandContext(attemptCtx, "tart", "exec", BaseImageName, "true")
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+		err := cmd.Run()
+		cancel()
+		if err == nil {
+			fmt.Fprintf(w, ">>> VM reachable after %ds\n", i)
+			return nil
+		}
+		if i == attempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+	return fmt.Errorf("VM not reachable via tart exec within %s", time.Duration(attempts)*interval)
+}
+
+// tartRunner wraps a background `tart run --no-graphics devm-base`
+// process. The clean way to know the VM has stopped is to wait for
+// this process to exit — tart run's lifecycle is tied to the VM being
+// up, so cmd.Wait() returning IS the "VM is down" signal. We never
+// poll `tart list` for a running/stopped, and we only kill the
+// process as an explicit, logged escalation when that clean wait
+// hangs.
+type tartRunner struct {
+	cmd    *exec.Cmd
+	done   chan error
+	exited bool
+}
+
+// startTartRun launches `tart run --no-graphics devm-base` in the
+// background. Output is discarded: tart run's stdout/stderr is a
+// console mirror, not useful build-progress output, and streaming it
+// to w would just add noise on top of the milestone lines we print
+// ourselves.
+func startTartRun(ctx context.Context) (*tartRunner, error) {
+	cmd := exec.CommandContext(ctx, "tart", "run", "--no-graphics", BaseImageName)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	return &tartRunner{cmd: cmd, done: done}, nil
+}
+
+// killIfRunning force-stops the VM process if it hasn't already
+// exited. Used as a defer'd safety net so a mid-build failure never
+// leaves a zombie `tart run` behind.
+func (r *tartRunner) killIfRunning() {
+	if r.exited {
+		return
+	}
+	if r.cmd.Process != nil {
+		_ = r.cmd.Process.Kill()
+	}
+	<-r.done
+	r.exited = true
+}
+
+// powerOffAndWait sends a clean guest poweroff via `tart exec … sudo
+// systemctl poweroff` (best-effort — the guest-agent exec channel
+// often closes mid-shutdown, which surfaces as a non-nil error here
+// even on a fully successful poweroff) and then waits for the
+// background tart run process to exit on its own. That exit is the
+// actual "VM stopped" signal.
+//
+// If tart run doesn't exit within 60s of the poweroff, that's a
+// genuine hang, not a slow shutdown — we escalate to killing the
+// process and return an error so the failure is visible and
+// diagnosable, rather than silently working around it.
+func (r *tartRunner) powerOffAndWait(ctx context.Context, w io.Writer) error {
+	if err := runTart(ctx, w, "exec", BaseImageName, "sudo", "systemctl", "poweroff"); err != nil {
+		fmt.Fprintf(w, "note: tart exec poweroff returned %v (expected if the guest-agent channel closes mid-shutdown)\n", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	select {
+	case err := <-r.done:
+		r.exited = true
+		if err != nil {
+			fmt.Fprintf(w, "tart run exited after poweroff (%v) — normal for a guest-initiated shutdown\n", err)
+		}
+		return nil
+	case <-waitCtx.Done():
+		if r.cmd.Process != nil {
+			_ = r.cmd.Process.Kill()
+		}
+		<-r.done
+		r.exited = true
+		return fmt.Errorf("tart run did not exit within 60s of guest poweroff; killed the process as a fallback: %w", waitCtx.Err())
+	}
+}
+
+// BuildBaseImage builds the devm-base Tart VM natively in Go,
+// reproducing the steps the (now-deleted) image/build.sh used to
+// perform via tart(1):
+//
+//  1. tart pull the template.
+//  2. Abort if devm-base already exists (caller is expected to have
+//     deleted it first — NeedsBuild returning true does not imply
+//     it's safe to blow away an existing devm-base out from under
+//     whatever's using it).
+//  3. tart clone the template into devm-base.
+//  4. Boot headless, wait for the guest-agent IP.
+//  5. Provision via `tart exec -i … sudo bash -s` fed
+//     provision-base.sh.
+//  6. Poweroff + fresh boot to fire the rename-on-boot one-shot
+//     (in-place `systemctl reboot` doesn't reliably re-establish the
+//     guest-agent handshake; a clean poweroff + new `tart run` does).
+//  7. Verify the identity is "devm".
+//  8. Run the cleanup fragment to remove the rename machinery.
+//  9. Final poweroff to save a clean image.
+//
+// Streams progress to w. On success, records the current definition
+// hash so a subsequent NeedsBuild call reports up-to-date.
 func BuildBaseImage(ctx context.Context, imageDir string, w io.Writer) error {
 	hash, err := DefinitionHash(imageDir)
 	if err != nil {
 		return err
 	}
 
-	scriptPath := filepath.Join(imageDir, "build.sh")
-	if _, err := os.Stat(scriptPath); err != nil {
-		return fmt.Errorf("build.sh not found at %s: %w", scriptPath, err)
+	template := os.Getenv("TEMPLATE")
+	if template == "" {
+		template = defaultTemplate
 	}
 
-	// If devm-base already exists, delete it so build.sh's
-	// "already exists" guard doesn't abort. We only reach here when
-	// NeedsBuild returned true, so rebuilding is the intent.
-	if baseImageExists() {
-		fmt.Fprintf(w, ">>> Deleting stale %s before rebuild...\n", BaseImageName)
-		del := exec.CommandContext(ctx, "tart", "delete", BaseImageName)
-		del.Stdout = w
-		del.Stderr = w
-		if err := del.Run(); err != nil {
-			return fmt.Errorf("delete stale %s: %w", BaseImageName, err)
-		}
+	fmt.Fprintf(w, ">>> Pulling template %s...\n", template)
+	if err := runTart(ctx, w, "pull", template); err != nil {
+		return fmt.Errorf("tart pull %s: %w", template, err)
 	}
 
-	cmd := exec.CommandContext(ctx, "bash", scriptPath)
-	cmd.Dir = imageDir
-	cmd.Stdout = w
-	cmd.Stderr = w
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("build.sh: %w", err)
+	exists, err := baseImageExistsCtx(ctx)
+	if err != nil {
+		return fmt.Errorf("check for existing %s: %w", BaseImageName, err)
 	}
+	if exists {
+		return fmt.Errorf("VM %s already exists; delete it first: tart delete %s", BaseImageName, BaseImageName)
+	}
+
+	fmt.Fprintf(w, ">>> Cloning %s -> %s...\n", template, BaseImageName)
+	if err := runTart(ctx, w, "clone", template, BaseImageName); err != nil {
+		return fmt.Errorf("tart clone %s %s: %w", template, BaseImageName, err)
+	}
+
+	runner, err := startTartRun(ctx)
+	if err != nil {
+		return fmt.Errorf("start tart run: %w", err)
+	}
+	defer runner.killIfRunning()
+
+	fmt.Fprintln(w, ">>> Waiting for VM boot...")
+	if err := waitForIP(ctx, 60, 2*time.Second); err != nil {
+		return fmt.Errorf("VM did not report an IP: %w", err)
+	}
+
+	fmt.Fprintln(w, ">>> Provisioning base layer...")
+	if err := tartExecStdin(ctx, w, baseimage.ProvisionBaseScript); err != nil {
+		return fmt.Errorf("provision base layer: %w", err)
+	}
+
+	fmt.Fprintln(w, ">>> Powering off VM to release guest-agent state...")
+	if err := runner.powerOffAndWait(ctx, w); err != nil {
+		return fmt.Errorf("poweroff after provisioning: %w", err)
+	}
+
+	fmt.Fprintln(w, ">>> Booting fresh to fire rename one-shot...")
+	runner, err = startTartRun(ctx)
+	if err != nil {
+		return fmt.Errorf("start tart run (fresh boot): %w", err)
+	}
+	defer runner.killIfRunning()
+
+	if err := waitForReachable(ctx, w, 30, time.Second, 3*time.Second); err != nil {
+		return fmt.Errorf("VM not reachable after fresh boot: %w", err)
+	}
+
+	identity := tartExecIdentity(ctx, 5*time.Second)
+	if identity != "devm" {
+		return fmt.Errorf("rename one-shot did not fire — tart exec identity is '%s', expected 'devm'", identity)
+	}
+	fmt.Fprintln(w, ">>> Rename verified: tart exec runs as devm.")
+
+	fmt.Fprintln(w, ">>> Cleaning up rename bootstrap unit...")
+	if err := tartExecCleanup(ctx, 30*time.Second, w); err != nil {
+		return fmt.Errorf("cleanup rename bootstrap: %w", err)
+	}
+
+	fmt.Fprintln(w, ">>> Shutting down VM...")
+	if err := runner.powerOffAndWait(ctx, w); err != nil {
+		return fmt.Errorf("final poweroff: %w", err)
+	}
+
+	fmt.Fprintf(w, ">>> devm-base built (cloned from %s).\n", template)
 
 	storePath, err := HashStorePath()
 	if err != nil {
@@ -172,7 +446,12 @@ func ImageDirFromRepoRoot(repoRoot string) string {
 //  2. Dev: binary at workspace/devm or ./devm, image at
 //     workspace/image (next to the source).
 //
-// Returns the first candidate whose build.sh exists.
+// Returns the first candidate whose provision-base.sh exists. Note
+// that BuildBaseImage no longer reads provision-base.sh from this
+// directory at runtime (it's embedded in the binary) — this function
+// exists only so callers (cmd/devm) can decide whether the image/
+// asset directory is present at all before calling NeedsBuild /
+// BuildBaseImage.
 func ImageDirFromExe() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -190,14 +469,14 @@ func ImageDirFromExe() (string, error) {
 		filepath.Join(exeDir, "image"),
 	}
 	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "build.sh")); err == nil {
+		if _, err := os.Stat(filepath.Join(c, "provision-base.sh")); err == nil {
 			return c, nil
 		}
 	}
 	// Last resort: cwd/image (handy in dev when running from source root).
 	if cwd, err := os.Getwd(); err == nil {
 		c := filepath.Join(cwd, "image")
-		if _, err := os.Stat(filepath.Join(c, "build.sh")); err == nil {
+		if _, err := os.Stat(filepath.Join(c, "provision-base.sh")); err == nil {
 			return c, nil
 		}
 	}
