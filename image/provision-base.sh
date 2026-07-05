@@ -22,14 +22,10 @@ apt-get install -y -qq --no-install-recommends \
 userdel -r debian 2>/dev/null || true
 
 # --- Install one-shot rename unit + script ---
-# Renames admin (uid 1000) to devm BEFORE tart-guest-agent starts.
-# The unit is enabled here but NOT fired at build time — an in-VM
-# reboot cycle inside build.sh has an unreliable tart-guest-agent
-# handshake on Apple Virtualization (see build.sh comment for the
-# root cause). Instead the unit fires on the first boot of every
-# clone; the marker at /var/lib/devm/user-renamed makes it idempotent,
-# so subsequent boots of the same clone no-op. The unit + script
-# stay dormant in devm-base after their one-shot fires.
+# Renames admin (uid 1000) to devm on next boot, BEFORE tart-guest-agent
+# starts. build.sh triggers the reboot that fires this. After the rename
+# fires and the identity is verified, build.sh removes this machinery
+# before the final poweroff — the saved image ships already-renamed.
 cat > /usr/local/bin/devm-rename-user <<'SCRIPT'
 #!/bin/bash
 set -e

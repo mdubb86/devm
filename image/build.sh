@@ -48,29 +48,75 @@ done
 echo ">>> Provisioning base layer..."
 tart exec -i "${IMAGE_NAME}" sudo bash -s < "${SCRIPT_DIR}/provision-base.sh"
 
+# --- Fire the rename one-shot via a full poweroff + fresh boot ---
+# The one-shot is Before=tart-guest-agent, so it must fire before the
+# next agent start. In-place `systemctl reboot` is unreliable: the
+# outer `tart run` process's guest-agent handshake often does not
+# re-establish across an in-VM reboot. A clean poweroff + fresh
+# `tart run` sidesteps that — the second run comes up in ~2s with a
+# working guest-agent socket.
+#
+# Each `tart exec` in the readiness loop is wrapped in `timeout 3`
+# so a hung guest-agent handshake surfaces as a failed iteration
+# instead of blocking indefinitely. If the loop exhausts, that's a
+# real hang, not a slow boot.
+wait_for_stopped() {
+  for _ in {1..30}; do
+    if ! tart list --format=json 2>/dev/null | grep -q "\"${IMAGE_NAME}\".*running"; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+echo ">>> Powering off VM to release guest-agent state..."
+tart exec "${IMAGE_NAME}" sudo systemctl poweroff || true
+kill "${TART_PID}" 2>/dev/null || true
+if ! wait_for_stopped; then
+  echo "ERROR: VM did not stop within 30s after first poweroff" >&2
+  tart list --format=json 2>/dev/null | grep "${IMAGE_NAME}" >&2 || true
+  exit 1
+fi
+wait "${TART_PID}" 2>/dev/null || true
+
+echo ">>> Booting fresh to fire rename one-shot..."
+tart run --no-graphics "${IMAGE_NAME}" >/dev/null 2>&1 &
+TART_PID=$!
+trap 'tart stop "${IMAGE_NAME}" 2>/dev/null || true; kill $TART_PID 2>/dev/null || true' EXIT
+
+for i in {1..30}; do
+  if timeout 3 tart exec "${IMAGE_NAME}" true 2>/dev/null; then
+    echo ">>> VM reachable after ${i}s"
+    break
+  fi
+  sleep 1
+done
+
+IDENTITY=$(timeout 5 tart exec "${IMAGE_NAME}" id -un 2>/dev/null || echo unknown)
+if [ "${IDENTITY}" != "devm" ]; then
+  echo "ERROR: rename one-shot did not fire — tart exec identity is '${IDENTITY}', expected 'devm'" >&2
+  exit 1
+fi
+echo ">>> Rename verified: tart exec runs as devm."
+
+# --- Remove the transient rename machinery so the saved image is clean ---
+echo ">>> Cleaning up rename bootstrap unit..."
+timeout 30 tart exec "${IMAGE_NAME}" sudo bash -c '
+systemctl disable devm-rename-user.service 2>/dev/null || true
+rm -f /etc/systemd/system/devm-rename-user.service
+rm -f /etc/systemd/system/multi-user.target.wants/devm-rename-user.service
+rm -f /usr/local/bin/devm-rename-user
+rm -f /var/lib/devm/user-renamed
+rmdir /var/lib/devm 2>/dev/null || true
+systemctl daemon-reload
+'
+
 # --- Clean shutdown — saves clone state ---
-# The one-shot rename unit (installed by provision-base.sh) is NOT
-# fired at build time. Doing so in-place requires a VM reboot cycle
-# whose tart-guest-agent socket handshake is unreliable on Apple
-# Virtualization: the fresh `tart run` after the first shutdown
-# often can't re-establish, and `tart exec` (which has no --timeout
-# flag) then hangs indefinitely.
-#
-# Instead: the unit is `WantedBy=multi-user.target` +
-# `ConditionPathExists=!/var/lib/devm/user-renamed`, so it fires
-# on the first boot of every clone (i.e. the first `devm shell`
-# cold-start after a fresh VM). One-time per-clone cost is ~2-3s
-# for the usermod+sed operations; subsequent boots of the same
-# clone no-op because the marker file exists.
-#
-# The devm-base image ships with the unit enabled but unfired.
 echo ">>> Shutting down VM..."
 tart exec "${IMAGE_NAME}" sudo systemctl poweroff || true
-for i in {1..30}; do
-  if ! tart list --format=json 2>/dev/null | grep -q "\"${IMAGE_NAME}\".*running"; then break; fi
-  sleep 2
-done
+if ! wait_for_stopped; then
+  echo "ERROR: VM did not stop within 30s after final poweroff" >&2
+  exit 1
+fi
 trap - EXIT
 
 echo ">>> devm-base built (cloned from ${TEMPLATE})."
-echo ">>> Note: admin -> devm rename fires on first boot of any clone."
