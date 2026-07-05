@@ -305,45 +305,89 @@ def test_reboot_cycle_after_user_rename(rename_reboot_lab):
     )
 
     try:
-        # Step 4: bounded readiness — each attempt is its own 3s subprocess
-        # so no single hung `tart exec` blocks the whole loop.
-        reachable = False
-        deadline = time.monotonic() + 180
-        attempt = 0
-        while time.monotonic() < deadline:
-            attempt += 1
-            r = subprocess.run(
-                ["tart", "exec", vm.name, "true"],
-                capture_output=True, timeout=3,
-            )
-            if r.returncode == 0:
-                reachable = True
+        # Step 4a: wait for the VM to have an IP — this is the "kernel is
+        # up, guest-agent has (or is trying to) bind" signal. Different
+        # failure mode from "IP present but guest-agent socket
+        # unreachable", and we want to distinguish them.
+        ip_deadline = time.monotonic() + 60
+        got_ip = False
+        while time.monotonic() < ip_deadline:
+            if vm.ip():
+                got_ip = True
                 break
             time.sleep(1)
 
-        # Step 5: capture identity (or the failure to capture one) BEFORE we
-        # tear down, so the assertion messages have real evidence.
-        r = subprocess.run(
-            ["tart", "exec", vm.name, "id", "-un"],
-            capture_output=True, timeout=5,
-        )
-        identity = r.stdout.decode().strip() if r.returncode == 0 else f"(unreachable, rc={r.returncode}, stderr={r.stderr.decode()!r})"
+        # Step 4b: bounded readiness — each attempt is its own 3s
+        # subprocess. A tart-exec timeout is a failed iteration, not a
+        # test failure.
+        reachable = False
+        deadline = time.monotonic() + 180
+        attempt = 0
+        last_stderr = ""
+        while time.monotonic() < deadline:
+            attempt += 1
+            try:
+                r = subprocess.run(
+                    ["tart", "exec", vm.name, "true"],
+                    capture_output=True, timeout=3,
+                )
+                if r.returncode == 0:
+                    reachable = True
+                    break
+                last_stderr = r.stderr.decode(errors="replace").strip()
+            except subprocess.TimeoutExpired:
+                last_stderr = "(3s per-attempt timeout — tart exec hung)"
+            time.sleep(1)
+
+        # Step 5: capture identity (or the failure to capture one) BEFORE
+        # tear down.
+        try:
+            r = subprocess.run(
+                ["tart", "exec", vm.name, "id", "-un"],
+                capture_output=True, timeout=5,
+            )
+            if r.returncode == 0:
+                identity = r.stdout.decode().strip()
+            else:
+                identity = f"(unreachable, rc={r.returncode}, stderr={r.stderr.decode(errors='replace').strip()!r})"
+        except subprocess.TimeoutExpired:
+            identity = "(unreachable, tart exec id -un hung for 5s)"
 
         # Grab the debug transcript regardless of pass/fail — this is the
-        # whole point of the harness.
+        # whole point of the harness. Also grab the current tart list
+        # entry for the VM so we can distinguish "VM crashed" from
+        # "guest-agent socket unreachable".
         debug_transcript = _read_debug_logs(host_debug)
+        tart_state = subprocess.run(
+            ["tart", "list", "--format=json"],
+            capture_output=True, timeout=5,
+        ).stdout.decode()
 
+        preamble = (
+            f"got_ip_within_60s={got_ip}, "
+            f"reachable_within_180s={reachable}, "
+            f"attempts={attempt}, "
+            f"last_tart_exec_stderr={last_stderr!r}, "
+            f"identity_capture={identity!r}"
+        )
+
+        assert got_ip, (
+            f"second tart-run's VM never got a vmnet IP within 60s.\n\n"
+            f"=== preamble ===\n{preamble}\n\n"
+            f"=== tart list ===\n{tart_state}\n\n"
+            f"=== debug transcript ===\n{debug_transcript}"
+        )
         assert reachable, (
             f"second tart-run's guest-agent socket never accepted a `tart exec` "
-            f"call within 180s (across {attempt} attempts, each bounded to 3s). "
-            f"identity capture attempt: {identity!r}\n\n"
+            f"call within 180s.\n\n"
+            f"=== preamble ===\n{preamble}\n\n"
+            f"=== tart list ===\n{tart_state}\n\n"
             f"=== debug transcript ===\n{debug_transcript}"
         )
         assert identity == "devm", (
-            f"second boot's identity is {identity!r}, expected 'devm'. "
-            f"The rename one-shot either didn't fire, or fired without "
-            f"switching tart-guest-agent's User=. "
-            f"\n\n=== debug transcript ===\n{debug_transcript}"
+            f"second boot's identity is {identity!r}, expected 'devm'.\n\n"
+            f"=== preamble ===\n{preamble}\n\n"
+            f"=== debug transcript ===\n{debug_transcript}"
         )
     finally:
         subprocess.run(["tart", "stop", vm.name], capture_output=True, timeout=30)
