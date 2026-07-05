@@ -184,14 +184,20 @@ func tartExecCleanup(ctx context.Context, timeout time.Duration, w io.Writer) er
 }
 
 // waitForIP polls `tart ip devm-base` until it succeeds, sleeping
-// interval between attempts, up to attempts tries. Mirrors the shell
-// script's boot-wait loop (60 attempts × 2s = 120s ceiling).
-func waitForIP(ctx context.Context, attempts int, interval time.Duration) error {
+// interval between attempts, up to attempts tries. Each attempt is
+// bounded by perAttemptTimeout so a hung `tart ip` surfaces as a
+// failed iteration rather than blocking indefinitely — matching the
+// per-attempt bound applied to every other polling loop in this
+// package.
+func waitForIP(ctx context.Context, attempts int, interval, perAttemptTimeout time.Duration) error {
 	for i := 0; i < attempts; i++ {
-		cmd := exec.CommandContext(ctx, "tart", "ip", BaseImageName)
+		attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+		cmd := exec.CommandContext(attemptCtx, "tart", "ip", BaseImageName)
 		cmd.Stdout = io.Discard
 		cmd.Stderr = io.Discard
-		if err := cmd.Run(); err == nil {
+		err := cmd.Run()
+		cancel()
+		if err == nil {
 			return nil
 		}
 		if i == attempts-1 {
@@ -386,7 +392,7 @@ func BuildBaseImage(ctx context.Context, imageDir string, w io.Writer) error {
 	defer runner.killIfRunning()
 
 	fmt.Fprintln(w, ">>> Waiting for VM boot...")
-	if err := waitForIP(ctx, 60, 2*time.Second); err != nil {
+	if err := waitForIP(ctx, 60, 2*time.Second, 5*time.Second); err != nil {
 		return fmt.Errorf("VM did not report an IP: %w", err)
 	}
 
