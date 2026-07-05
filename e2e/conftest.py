@@ -251,7 +251,7 @@ def _uninstall_devm(devm_path: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _daemon_matches_devm_bin(devm_path):
+def _daemon_matches_devm_bin(request, devm_path):
     """Precondition run before every test: the LaunchDaemon must be
     installed from DEVM_BIN. Fast path is a single `launchctl print`
     (<100ms) that no-ops when the daemon already matches; slow path
@@ -264,9 +264,18 @@ def _daemon_matches_devm_bin(devm_path):
     install/uninstall tests leave the host uninstalled at teardown,
     but the next test's autouse re-installs before it runs).
 
+    Contract tests (marked `contract`) don't touch the devm daemon at
+    all — they pin behavior of external tools like tart or iron-proxy
+    directly. Skip the precondition entirely for them so a stale
+    daemon doesn't block an unrelated test from running.
+
     Skip conditions match `sudo_capable`: no /dev/tty → don't try
     to fix, trust ambient state.
     """
+    if request.node.get_closest_marker("contract") is not None:
+        yield
+        return
+
     import platform as _platform
     if _platform.system() != "Darwin":
         yield
