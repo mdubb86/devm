@@ -197,12 +197,14 @@ def rename_reboot_lab():
             raise RuntimeError(f"{name} never exec-ready on first boot")
 
         # Mount the debug share, install detective + rename script + unit,
-        # enable the unit.
+        # enable the unit. Skip chmod — virtiofs rejects perm changes on
+        # the mounted share; instead we rely on virtiofs's uid remap
+        # (host uid → guest 1000) and on the one-shot running as root
+        # inside the guest, which can write to any owner regardless.
         setup = vm.exec_shell(textwrap.dedent(f"""
             set -e
             sudo mkdir -p {MOUNTPOINT}
             sudo mount -t virtiofs debug {MOUNTPOINT}
-            sudo chmod 0777 {MOUNTPOINT}
         """))
         assert setup.ok, f"mount debug share failed: {setup.stderr!r}"
 
