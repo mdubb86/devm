@@ -77,9 +77,12 @@ LABEL="$1"; shift
 [ "$1" = "--" ] && shift
 
 DIR="${DETECTIVE_DIR:-/mnt/debug}"
-NN=$(printf '%03d' "$(cat "$DIR/.seq" 2>/dev/null || echo 0)")
-next=$(( ${NN#0*} + 1 ))
-echo "$next" > "$DIR/.seq"
+# Read current seq (default 1), format as 3-digit padded index for this
+# log's filename, then increment for the NEXT call. `10#` forces base-10
+# so a padded "008" isn't parsed as invalid octal.
+CUR=$(cat "$DIR/.seq" 2>/dev/null || echo 1)
+NN=$(printf '%03d' "$CUR")
+echo "$(( 10#$CUR + 1 ))" > "$DIR/.seq"
 
 LOG="$DIR/$NN-$LABEL.log"
 {
@@ -165,6 +168,56 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 """
 
+# Runs AFTER multi-user.target (i.e., after tart-guest-agent.service has
+# had a chance to start) so we can snapshot its runtime state — status,
+# journal, systemd's --failed list — into the virtiofs mount for
+# post-hoc reading. This is the load-bearing piece for diagnosing
+# "rename succeeded but tart exec can't reach the agent": we can only
+# tell if the agent restarted cleanly by looking at systemd's own view.
+LATE_BOOT_UNIT = """[Unit]
+Description=Contract-13 late-boot inspector (post tart-guest-agent)
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/late-boot-inspect
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+LATE_BOOT_SCRIPT = r"""#!/bin/bash
+# late-boot-inspect — snapshot post-rename tart-guest-agent state.
+# Runs After=multi-user.target, so by this point the agent has either
+# started, failed, or is still trying. All three are informative.
+set +e
+LOG=/mnt/debug/998-late-boot.log
+{
+    echo "=== ts: $(date -Iseconds) ==="
+    echo "=== id (this unit runs as root) ==="
+    id
+    echo "=== systemctl is-active tart-guest-agent ==="
+    systemctl is-active tart-guest-agent
+    echo "=== systemctl status tart-guest-agent --no-pager ==="
+    systemctl status tart-guest-agent --no-pager
+    echo "=== systemctl --failed --no-pager ==="
+    systemctl --failed --no-pager
+    echo "=== journalctl -u tart-guest-agent --no-pager -b ==="
+    journalctl -u tart-guest-agent --no-pager -b
+    echo "=== ps -ef | grep -i tart ==="
+    ps -ef | grep -i tart | grep -v grep
+    echo "=== ss -lnp | grep -i tart ==="
+    ss -lnp 2>/dev/null | grep -i tart || echo "(ss not available or no tart listener)"
+    echo "=== /etc/systemd/system/tart-guest-agent.service (current) ==="
+    cat /etc/systemd/system/tart-guest-agent.service 2>/dev/null
+    echo "=== /usr/lib/systemd/system/tart-guest-agent.service (current) ==="
+    cat /usr/lib/systemd/system/tart-guest-agent.service 2>/dev/null
+    echo "=== END late-boot snapshot ==="
+} >> "$LOG" 2>&1
+"""
+
 
 @pytest.fixture
 def rename_reboot_lab():
@@ -231,8 +284,18 @@ RENAMESCRIPT
 {DETECTIVE_ONESHOT_UNIT}
 UNITSCRIPT
 
+                cat > /usr/local/bin/late-boot-inspect <<'LATESCRIPT'
+{LATE_BOOT_SCRIPT}
+LATESCRIPT
+                chmod +x /usr/local/bin/late-boot-inspect
+
+                cat > /etc/systemd/system/late-boot-inspect.service <<'LATEUNIT'
+{LATE_BOOT_UNIT}
+LATEUNIT
+
                 systemctl daemon-reload
                 systemctl enable devm-rename-user.service
+                systemctl enable late-boot-inspect.service
 
                 # Also stamp the unmounted state so we can see what
                 # /etc/fstab looks like on next boot (bind our
