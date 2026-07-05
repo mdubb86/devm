@@ -17,8 +17,6 @@ embedded into the devm binary at compile time.
   tart-guest-agent starts). `//go:embed`ded by `image/embed.go`;
   `internal/image.BuildBaseImage` streams it via
   `tart exec -i devm-base sudo bash -s`.
-- `devm-caddy.service`, `devm-dns.service` — systemd units for the
-  base infrastructure that run inside every project VM.
 - `embed.go` — tiny Go shim exporting `ProvisionBaseScript` via
   `//go:embed`. `//go:embed` can't traverse `..`, so the shim lives
   next to the script rather than in `internal/image`.

@@ -9,7 +9,7 @@ import (
 )
 
 // Path returns the absolute path to the iron-proxy binary, resolving
-// via the same fallback chain as image.ImageDirFromExe:
+// via this fallback chain:
 //  1. next-to-devm-binary (dev layout: ./bin/devm → ./bin/iron-proxy)
 //  2. <prefix>/share/devm/bin/iron-proxy (brew/installed layout)
 //  3. $PATH (last-resort escape hatch for devs who installed iron-proxy themselves)

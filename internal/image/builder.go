@@ -49,12 +49,10 @@ const definitionVersion = "v1-native-go-builder"
 
 // DefinitionHash returns sha256 over the image definition: the
 // embedded provisioning script, the embedded cleanup fragment, and
-// definitionVersion. imageDir is accepted for API compatibility with
-// existing callers (which resolve it via ImageDirFromExe) but is no
-// longer read from disk — the definition is baked into the binary via
-// go:embed, so devm doesn't depend on the image/ directory existing
+// definitionVersion. The definition is baked into the binary via
+// //go:embed — devm doesn't depend on the image/ directory existing
 // at install time.
-func DefinitionHash(imageDir string) (string, error) {
+func DefinitionHash() (string, error) {
 	h := sha256.New()
 	io.WriteString(h, baseimage.ProvisionBaseScript)
 	h.Write([]byte{0})
@@ -81,11 +79,8 @@ func HashStorePath() (string, error) {
 // Returns true if any of:
 //   - The image definition hash has changed since last build
 //   - The devm-base Tart VM is absent from local cache
-//
-// imageDir is unused (see DefinitionHash) and kept only so existing
-// callers don't need to change.
-func NeedsBuild(imageDir string) (bool, string, error) {
-	cur, err := DefinitionHash(imageDir)
+func NeedsBuild() (bool, string, error) {
+	cur, err := DefinitionHash()
 	if err != nil {
 		return false, "", err
 	}
@@ -329,10 +324,8 @@ func (r *tartRunner) powerOffAndWait(ctx context.Context, w io.Writer) error {
 // perform via tart(1):
 //
 //  1. tart pull the template.
-//  2. Abort if devm-base already exists (caller is expected to have
-//     deleted it first — NeedsBuild returning true does not imply
-//     it's safe to blow away an existing devm-base out from under
-//     whatever's using it).
+//  2. Delete any pre-existing devm-base (NeedsBuild returning true
+//     is authorization to blow away the stale image).
 //  3. tart clone the template into devm-base.
 //  4. Boot headless, wait for the guest-agent IP.
 //  5. Provision via `tart exec -i … sudo bash -s` fed
@@ -346,8 +339,8 @@ func (r *tartRunner) powerOffAndWait(ctx context.Context, w io.Writer) error {
 //
 // Streams progress to w. On success, records the current definition
 // hash so a subsequent NeedsBuild call reports up-to-date.
-func BuildBaseImage(ctx context.Context, imageDir string, w io.Writer) error {
-	hash, err := DefinitionHash(imageDir)
+func BuildBaseImage(ctx context.Context, w io.Writer) error {
+	hash, err := DefinitionHash()
 	if err != nil {
 		return err
 	}
@@ -448,53 +441,3 @@ func BuildBaseImage(ctx context.Context, imageDir string, w io.Writer) error {
 	return nil
 }
 
-// ImageDirFromRepoRoot returns repoRoot/image. Helper for callers
-// that have the repo root handy.
-func ImageDirFromRepoRoot(repoRoot string) string {
-	return filepath.Join(repoRoot, "image")
-}
-
-// ImageDirFromExe returns the path to the image/ directory relative
-// to the running devm binary. Handles two layouts:
-//
-//  1. Brew / go install: binary at <prefix>/bin/devm, image at
-//     <prefix>/share/devm/image (set up by goreleaser).
-//  2. Dev: binary at workspace/devm or ./devm, image at
-//     workspace/image (next to the source).
-//
-// Returns the first candidate whose provision-base.sh exists. Note
-// that BuildBaseImage no longer reads provision-base.sh from this
-// directory at runtime (it's embedded in the binary) — this function
-// exists only so callers (cmd/devm) can decide whether the image/
-// asset directory is present at all before calling NeedsBuild /
-// BuildBaseImage.
-func ImageDirFromExe() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	exe, _ = filepath.EvalSymlinks(exe)
-	exeDir := filepath.Dir(exe)
-
-	candidates := []string{
-		// Brew/installed layout: <prefix>/bin/devm → <prefix>/share/devm/image
-		filepath.Join(exeDir, "..", "share", "devm", "image"),
-		// Dev layout: repo-root/bin/devm → repo-root/image
-		filepath.Join(exeDir, "..", "image"),
-		// Flat dev layout: ./devm → ./image
-		filepath.Join(exeDir, "image"),
-	}
-	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "provision-base.sh")); err == nil {
-			return c, nil
-		}
-	}
-	// Last resort: cwd/image (handy in dev when running from source root).
-	if cwd, err := os.Getwd(); err == nil {
-		c := filepath.Join(cwd, "image")
-		if _, err := os.Stat(filepath.Join(c, "provision-base.sh")); err == nil {
-			return c, nil
-		}
-	}
-	return "", fmt.Errorf("image/ directory not found near devm binary")
-}

@@ -14,33 +14,16 @@ import (
 	baseimage "github.com/mdubb86/devm/image"
 )
 
-// DefinitionHash no longer reads anything from imageDir — the
-// definition is embedded provision-base.sh + cleanupScript +
-// definitionVersion, baked into the binary. imageDir is accepted only
-// so NeedsBuild/BuildBaseImage keep their existing call signature; a
-// nonexistent, empty, or garbage path must not affect the hash.
+// DefinitionHash is a pure function of embedded content — the
+// provisioning script, the cleanup fragment, and definitionVersion.
 
 func TestDefinitionHash_StableAcrossCalls(t *testing.T) {
-	h1, err := DefinitionHash("/does/not/exist")
+	h1, err := DefinitionHash()
 	require.NoError(t, err)
-	h2, err := DefinitionHash("/does/not/exist")
+	h2, err := DefinitionHash()
 	require.NoError(t, err)
 	assert.Equal(t, h1, h2, "same embedded inputs must hash the same")
 	assert.Len(t, h1, 64, "sha256 hex must be 64 chars")
-}
-
-func TestDefinitionHash_IgnoresImageDir(t *testing.T) {
-	// A real, populated directory and a bogus path must hash
-	// identically — imageDir is vestigial (kept for API compatibility)
-	// now that the definition is embedded rather than read from disk.
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "provision-base.sh"), []byte("not the real script"), 0644))
-
-	h1, err := DefinitionHash(dir)
-	require.NoError(t, err)
-	h2, err := DefinitionHash("/some/other/nonexistent/path")
-	require.NoError(t, err)
-	assert.Equal(t, h1, h2, "DefinitionHash must not depend on imageDir contents")
 }
 
 // TestDefinitionHash_MatchesFormula recomputes sha256(script + 0x00 +
@@ -56,7 +39,7 @@ func TestDefinitionHash_MatchesFormula(t *testing.T) {
 	io.WriteString(h, definitionVersion)
 	want := hex.EncodeToString(h.Sum(nil))
 
-	got, err := DefinitionHash("")
+	got, err := DefinitionHash()
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
 }
@@ -75,7 +58,7 @@ func TestNeedsBuild_TrueWhenNoStoredHash(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	needs, hash, err := NeedsBuild("/does/not/matter")
+	needs, hash, err := NeedsBuild()
 	require.NoError(t, err)
 	assert.True(t, needs, "no stored hash means a build is needed")
 	assert.Len(t, hash, 64)
@@ -94,7 +77,7 @@ func TestNeedsBuild_HashMatchesStored(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	cur, err := DefinitionHash("")
+	cur, err := DefinitionHash()
 	require.NoError(t, err)
 
 	storePath, err := HashStorePath()
@@ -102,7 +85,7 @@ func TestNeedsBuild_HashMatchesStored(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0700))
 	require.NoError(t, os.WriteFile(storePath, []byte(cur), 0644))
 
-	_, hash, err := NeedsBuild("/does/not/matter")
+	_, hash, err := NeedsBuild()
 	require.NoError(t, err)
 	assert.Equal(t, cur, hash)
 }

@@ -62,13 +62,12 @@ var upgradeCmd = &cobra.Command{
 
 		// Rebuild base Tart image if the new binary ships updated
 		// image definition. Best-effort — binary IS updated either way;
-		// run `devm install` to retry on failure. The provisioning
-		// script is embedded (//go:embed), so we don't need an on-disk
-		// image/ directory anymore.
-		needs, _, _ := image.NeedsBuild("")
+		// run `devm install` to retry on failure. Definition is
+		// embedded (//go:embed).
+		needs, _, _ := image.NeedsBuild()
 		if needs {
 			fmt.Println("Rebuilding devm-base after binary upgrade...")
-			if err := image.BuildBaseImage(cmd.Context(), "", os.Stdout); err != nil {
+			if err := image.BuildBaseImage(cmd.Context(), os.Stdout); err != nil {
 				fmt.Fprintf(os.Stderr, "note: rebuild failed (%v). Run `devm install` to retry.\n", err)
 			}
 		}
