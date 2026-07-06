@@ -59,6 +59,12 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.pty)
         if any(h in src for h in _serial_hints):
             item.add_marker(pytest.mark.serial)
+            # Every tests we currently auto-mark `serial` also invokes a
+            # sudo-requiring command directly; the two sets overlap 1:1.
+            # Keep both markers so `just e2e-sudo` can select on `sudo`
+            # semantically (privilege requirement) and the two-phase
+            # runner keeps selecting on `serial` (concurrency safety).
+            item.add_marker(pytest.mark.sudo)
 
 
 

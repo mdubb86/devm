@@ -53,10 +53,15 @@ e2e:
 #   - devm:      tests that drive `devm` (the user-facing CLI flow)
 #   - contract:  declarative tart + iron-proxy invariants devm depends on
 e2e-devm:
-    @e2e/scripts/run.sh -m devm
+    @e2e/scripts/run.sh -m "devm and not sudo"
 
 e2e-contract:
     @e2e/scripts/run.sh -m contract
+
+# Sudo-requiring devm tests (install/uninstall/service restart cycles).
+# Prime credentials once: `sudo -v && just e2e-sudo`.
+e2e-sudo:
+    @e2e/scripts/run.sh -m sudo
 
 # Run a single test by name (matches pytest -k pattern). Foreground (no -n).
 # Quote multi-word patterns: `just e2e-one "test_a or test_b"`.
