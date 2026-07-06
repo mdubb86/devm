@@ -139,16 +139,31 @@ func (t *Tart) ExecWithRetry(ctx context.Context, name string, argv []string) Ex
 	return r
 }
 
-// IsTransportInactive detects tart-guest-agent's gRPC "Transport became
-// inactive" flake — an HTTP/2 GOAWAY or connection-drop on the
-// guest-side RPC channel. Manifests as a non-zero exit with the string
-// in stderr; the code (14 = UNAVAILABLE) is stable across gRPC versions.
+// IsTransportInactive detects tart-guest-agent's gRPC transport flakes
+// — HTTP/2 GOAWAY, connection-drop, or header-send races on the
+// guest-side RPC channel. The gRPC codes are stable across versions:
+//
+//	"unavailable (14)"   — UNAVAILABLE
+//	"internal error (13)" — INTERNAL
+//
+// Manifests as a non-zero exit with one of the marker strings in stderr.
+// Keep in sync with e2e/helpers/tart.py's `_TRANSPORT_FLAKE_MARKERS`.
 func IsTransportInactive(r ExecResult) bool {
 	if r.ExitCode == 0 {
 		return false
 	}
-	return strings.Contains(r.Stderr, "Transport became inactive") ||
-		strings.Contains(r.Stderr, "unavailable (14)")
+	markers := []string{
+		"Transport became inactive",
+		"unavailable (14)",
+		"SendHeader called multiple times",
+		"internal error (13)",
+	}
+	for _, m := range markers {
+		if strings.Contains(r.Stderr, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // List returns all VMs Tart knows about (running or stopped).

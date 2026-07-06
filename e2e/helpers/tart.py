@@ -18,16 +18,35 @@ class TartSandbox:
     name: str
 
     def exec(self, *argv: str, timeout: float = 60.0) -> "ExecResult":
-        """Run a command inside the VM via `tart exec`."""
+        """Run a command inside the VM via `tart exec`.
+
+        Retries ONCE on tart-guest-agent's specific gRPC transport
+        flakes ("Transport became inactive" / "SendHeader called
+        multiple times" — both HTTP/2 issues on the agent's RPC
+        channel). Any other non-zero exit is returned as-is; a
+        legitimate command failure must reach the caller.
+        """
         r = subprocess.run(
             ["tart", "exec", self.name, *argv],
             capture_output=True, timeout=timeout,
         )
-        return ExecResult(
+        result = ExecResult(
             stdout=r.stdout.decode(errors="replace"),
             stderr=r.stderr.decode(errors="replace"),
             exit_code=r.returncode,
         )
+        if _is_transport_flake(result):
+            time.sleep(2)
+            r = subprocess.run(
+                ["tart", "exec", self.name, *argv],
+                capture_output=True, timeout=timeout,
+            )
+            result = ExecResult(
+                stdout=r.stdout.decode(errors="replace"),
+                stderr=r.stderr.decode(errors="replace"),
+                exit_code=r.returncode,
+            )
+        return result
 
     def exec_shell(self, script: str, timeout: float = 60.0) -> "ExecResult":
         """Run a shell script inside the VM via `tart exec bash -c '...'`."""
@@ -100,3 +119,21 @@ class ExecResult:
     @property
     def ok(self) -> bool:
         return self.exit_code == 0
+
+
+_TRANSPORT_FLAKE_MARKERS = (
+    "Transport became inactive",
+    "unavailable (14)",
+    "SendHeader called multiple times",
+    "internal error (13)",
+)
+
+
+def _is_transport_flake(r: "ExecResult") -> bool:
+    """Detect tart-guest-agent's gRPC transport flakes — HTTP/2
+    connection drops or header-send races on the guest-side RPC
+    channel. Mirrors `tart.IsTransportInactive` in the Go layer.
+    """
+    if r.exit_code == 0:
+        return False
+    return any(m in r.stderr for m in _TRANSPORT_FLAKE_MARKERS)
