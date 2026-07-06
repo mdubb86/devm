@@ -103,9 +103,14 @@ def test_guest_identity_is_devm(workspace, devm, sandbox_name):
     # that reaches the VM via `tart exec` (they only work if the agent
     # is running under the renamed user), but we assert it directly
     # here so the failure mode is obvious.
+    #
+    # The unit ships at /etc/systemd/system/ on cirruslabs (verified via
+    # test_tart_contract_13). Grep on that path only — some other
+    # distros put it under /usr/lib/systemd/system, and passing both
+    # paths to a single grep would return exit 2 (file unreadable) even
+    # when the match succeeded, which is misleading.
     r = tart_sandbox.exec_shell(
-        "grep '^User=' /etc/systemd/system/tart-guest-agent.service "
-        "/usr/lib/systemd/system/tart-guest-agent.service 2>/dev/null"
+        "grep '^User=' /etc/systemd/system/tart-guest-agent.service"
     )
     assert r.ok, f"could not read tart-guest-agent unit: {r.stderr}"
     assert "User=devm" in r.stdout, (
