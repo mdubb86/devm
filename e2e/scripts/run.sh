@@ -13,6 +13,7 @@ source "$SCRIPT_DIR/sweep.sh"
 export E2E_REGISTRY="$(mktemp -t devm-e2e-reg.XXXX)"
 
 PYTEST_PID=""
+SUDO_KEEPALIVE_PID=""
 shutdown() {
     echo "=== e2e: caught signal, terminating pytest ==="
     if [ -n "$PYTEST_PID" ]; then
@@ -23,6 +24,9 @@ shutdown() {
 }
 on_exit() {
     local rc=$?
+    if [ -n "$SUDO_KEEPALIVE_PID" ]; then
+        kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+    fi
     sweep_registry
     rm -f "$E2E_REGISTRY"
     exit $rc
@@ -62,6 +66,16 @@ if ! sudo -n true 2>/dev/null; then
     echo "=== e2e: sudo cache is cold — prime with 'sudo -v' first ===" >&2
     exit 2
 fi
+
+# Keep sudo alive for the whole run. Default cache is 5 min inactivity;
+# the serial phase's install/uninstall tests run further in than that
+# and otherwise hit `_require_sudo_primed()` mid-suite. The keepalive
+# runs `sudo -n true` every 60s, which just refreshes the cache —
+# never prompts (if the cache ever DID expire, -n makes it exit 1
+# rather than prompt, and the next test failing loud is the correct
+# signal). Killed at on_exit.
+( while true; do sudo -n true 2>/dev/null || exit; sleep 60; done ) &
+SUDO_KEEPALIVE_PID=$!
 
 # Always uninstall + reinstall. `kardianos install` is a no-op when a
 # plist already exists (even from a stale prior-session temp path), so
