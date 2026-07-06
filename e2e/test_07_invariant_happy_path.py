@@ -52,8 +52,9 @@ def test_invariant_happy_path(workspace, devm, sandbox_name):
     with Shell(devm, cwd=str(workspace.path)) as sh:
         sh.expect_prompt(timeout=120)
 
-        assert sandbox.state() == "running", (
-            f"expected VM to be running after cold-start; got {sandbox.state()!r}"
+        current = sandbox.state()
+        assert current == "running", (
+            f"expected VM to be running after cold-start; got {current!r}"
         )
 
         # Worker daemon is running (sleep infinity stays alive as long as the VM is up).

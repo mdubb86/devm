@@ -24,8 +24,9 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(120)
 def test_cold_start_brings_vm_to_running(tart_sandbox):
     # tart_sandbox fixture already cold-started the VM.
-    assert tart_sandbox.state() == "running", (
-        f"expected VM to be running after cold-start; got {tart_sandbox.state()!r}"
+    current = tart_sandbox.state()
+    assert current == "running", (
+        f"expected VM to be running after cold-start; got {current!r}"
     )
     # Exec-ready: a no-op exec should succeed.
     result = tart_sandbox.exec("true")

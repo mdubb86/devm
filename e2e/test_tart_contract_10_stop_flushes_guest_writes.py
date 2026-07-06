@@ -89,13 +89,9 @@ def test_tart_stop_persists_synced_writes(owned_vm):
 
     first_proc.wait(timeout=30)
 
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        if vm.state() == "stopped":
-            break
-        time.sleep(0.5)
-    assert vm.state() == "stopped", (
-        f"expected stopped after tart stop; got {vm.state()!r}"
+    stopped_state = vm.wait_state("stopped", timeout=20)
+    assert stopped_state == "stopped", (
+        f"expected stopped after tart stop; got {stopped_state!r}"
     )
 
     proc = run_bg()

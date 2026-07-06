@@ -23,8 +23,9 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(120)
 def test_teardown_destroys_vm(devm, tart_sandbox):
     # tart_sandbox fixture already cold-started the VM.
-    assert tart_sandbox.state() != "absent", (
-        f"VM should exist before teardown; got {tart_sandbox.state()!r}"
+    before = tart_sandbox.state()
+    assert before != "absent", (
+        f"VM should exist before teardown; got {before!r}"
     )
 
     devm.teardown(yes=True, timeout=30)

@@ -57,9 +57,8 @@ def test_kit_env_reaches_all_consumers(workspace, devm, sandbox_name):
     assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
 
     tart_sandbox = TartSandbox(name=sandbox_name)
-    assert tart_sandbox.state() == "running", (
-        f"expected VM running; got {tart_sandbox.state()!r}"
-    )
+    current = tart_sandbox.state()
+    assert current == "running", f"expected VM running; got {current!r}"
 
     # Consumer 1: install: command.
     r = tart_sandbox.exec_shell("cat /tmp/install-mark-60")

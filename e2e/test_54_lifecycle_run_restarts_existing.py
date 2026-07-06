@@ -37,13 +37,9 @@ def test_shell_restarts_existing_stopped_vm(devm, workspace, tart_sandbox):
     # Stop the VM.
     devm.stop(yes=True, timeout=30)
 
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if tart_sandbox.state() == "stopped":
-            break
-        time.sleep(0.5)
-    assert tart_sandbox.state() == "stopped", (
-        f"VM should be 'stopped' after devm stop; got {tart_sandbox.state()!r}"
+    stopped_state = tart_sandbox.wait_state("stopped", timeout=15)
+    assert stopped_state == "stopped", (
+        f"VM should be 'stopped' after devm stop; got {stopped_state!r}"
     )
 
     # Restart via devm shell -- true.
@@ -52,13 +48,9 @@ def test_shell_restarts_existing_stopped_vm(devm, workspace, tart_sandbox):
         capture_output=True, cwd=str(workspace.path), timeout=120,
     )
 
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        if tart_sandbox.state() == "running":
-            break
-        time.sleep(0.5)
-    assert tart_sandbox.state() == "running", (
-        f"VM should be 'running' after restart; got {tart_sandbox.state()!r}"
+    running_state = tart_sandbox.wait_state("running", timeout=30)
+    assert running_state == "running", (
+        f"VM should be 'running' after restart; got {running_state!r}"
     )
 
     # Marker survived → it was a restart, not a recreate.

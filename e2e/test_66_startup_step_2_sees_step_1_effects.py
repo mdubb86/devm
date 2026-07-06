@@ -54,8 +54,9 @@ def test_startup_service_after_sees_dep_effects(workspace, devm, sandbox_name):
         timeout=300, check=False,
     )
     sandbox = TartSandbox(name=sandbox_name)
-    assert sandbox.state() == "running", (
-        f"expected VM running after cold-start; got {sandbox.state()!r}"
+    current = sandbox.state()
+    assert current == "running", (
+        f"expected VM running after cold-start; got {current!r}"
     )
 
     r = sandbox.exec_shell("test -f /tmp/s1-ran && echo present")

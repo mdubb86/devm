@@ -48,8 +48,9 @@ def test_mount_is_mountpoint_and_data_persists(workspace, devm, sandbox_name):
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
 
         tart_sandbox = TartSandbox(name=sandbox_name)
-        assert tart_sandbox.state() == "running", (
-            f"expected VM running after cold-start; got {tart_sandbox.state()!r}"
+        current = tart_sandbox.state()
+        assert current == "running", (
+            f"expected VM running after cold-start; got {current!r}"
         )
 
         # The mount path must be a real mountpoint inside the VM.
@@ -75,13 +76,9 @@ def test_mount_is_mountpoint_and_data_persists(workspace, devm, sandbox_name):
         # Stop the VM.
         devm.stop(yes=True, timeout=30)
 
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            if tart_sandbox.state() == "stopped":
-                break
-            time.sleep(0.5)
-        assert tart_sandbox.state() == "stopped", (
-            f"VM should be stopped after devm stop; got {tart_sandbox.state()!r}"
+        stopped_state = tart_sandbox.wait_state("stopped", timeout=15)
+        assert stopped_state == "stopped", (
+            f"VM should be stopped after devm stop; got {stopped_state!r}"
         )
 
         # Restart via devm shell -- true.

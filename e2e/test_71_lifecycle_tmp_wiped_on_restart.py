@@ -25,8 +25,9 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(300)
 def test_tmp_wiped_on_stop_restart(workspace, devm, tart_sandbox):
     # tart_sandbox fixture already cold-started the VM.
-    assert tart_sandbox.state() == "running", (
-        f"expected VM running after cold-start; got {tart_sandbox.state()!r}"
+    current = tart_sandbox.state()
+    assert current == "running", (
+        f"expected VM running after cold-start; got {current!r}"
     )
 
     # Write a probe file to /tmp.
@@ -40,13 +41,9 @@ def test_tmp_wiped_on_stop_restart(workspace, devm, tart_sandbox):
     # Stop the VM.
     devm.stop(yes=True, timeout=30)
 
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if tart_sandbox.state() == "stopped":
-            break
-        time.sleep(0.5)
-    assert tart_sandbox.state() == "stopped", (
-        f"VM should be stopped after devm stop; got {tart_sandbox.state()!r}"
+    stopped_state = tart_sandbox.wait_state("stopped", timeout=15)
+    assert stopped_state == "stopped", (
+        f"VM should be stopped after devm stop; got {stopped_state!r}"
     )
 
     # Restart via devm shell -- true (cold-restart / real boot cycle).
@@ -55,13 +52,9 @@ def test_tmp_wiped_on_stop_restart(workspace, devm, tart_sandbox):
         capture_output=True, cwd=str(workspace.path), timeout=180,
     )
 
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        if tart_sandbox.state() == "running":
-            break
-        time.sleep(0.5)
-    assert tart_sandbox.state() == "running", (
-        f"VM should be running after restart; got {tart_sandbox.state()!r}"
+    running_state = tart_sandbox.wait_state("running", timeout=30)
+    assert running_state == "running", (
+        f"VM should be running after restart; got {running_state!r}"
     )
 
     # Probe file must be ABSENT — Tart's boot cycle wipes /tmp.

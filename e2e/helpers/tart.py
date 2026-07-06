@@ -71,6 +71,25 @@ class TartSandbox:
             time.sleep(1.0)
         return False
 
+    def wait_state(self, expected: str, timeout: float = 30.0) -> str:
+        """Poll `state()` until it matches `expected` or timeout expires.
+        Returns the final observed state (whether or not it matched).
+
+        Use in place of two-step "wait then assert" patterns that call
+        `state()` twice (once for the check, once for the error message)
+        — those double-calls race the VM transitioning between the two
+        polls and can produce "expected 'X' == 'X'" style failures where
+        the state changed between the assertion and the error format.
+        """
+        deadline = time.monotonic() + timeout
+        current = self.state()
+        while time.monotonic() < deadline:
+            current = self.state()
+            if current == expected:
+                return current
+            time.sleep(0.5)
+        return current
+
 
 @dataclass
 class ExecResult:

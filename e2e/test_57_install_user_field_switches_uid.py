@@ -71,8 +71,9 @@ def test_user_field_switches_uid(workspace, devm, sandbox_name):
         timeout=300, check=False,
     )
 
-    assert sandbox.state() == "running", (
-        f"expected VM running after cold-start; got {sandbox.state()!r}"
+    current = sandbox.state()
+    assert current == "running", (
+        f"expected VM running after cold-start; got {current!r}"
     )
 
     # root service: must write "0".

@@ -30,8 +30,9 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(60)
 def test_cold_start(workspace, devm, tart_sandbox):
     # tart_sandbox fixture already cold-started the VM.
-    assert tart_sandbox.state() == "running", (
-        f"expected VM to be running after cold-start; got {tart_sandbox.state()!r}"
+    current = tart_sandbox.state()
+    assert current == "running", (
+        f"expected VM to be running after cold-start; got {current!r}"
     )
 
     with Shell(devm, cwd=str(workspace.path)) as sh:

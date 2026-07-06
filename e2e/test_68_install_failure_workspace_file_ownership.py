@@ -58,9 +58,10 @@ def test_install_failure_workspace_file_readable_and_removable_on_host(
         f"stderr={p.stderr.decode()}"
     )
     vm = TartSandbox(name=workspace.vm_name)
-    assert vm.state() == "absent", (
+    current = vm.state()
+    assert current == "absent", (
         f"failed install must not leave a VM behind; "
-        f"VM is still in state {vm.state()!r}"
+        f"VM is still in state {current!r}"
     )
 
     host_path = workspace.path / "probe.out"

@@ -65,8 +65,9 @@ def test_caddy_systemd_service_active_and_reachable(workspace, devm, sandbox_nam
         f"cold-start failed: stderr={proc.stderr.decode()!r}"
     )
 
-    assert sandbox.state() == "running", (
-        f"expected VM running after cold-start; got {sandbox.state()!r}"
+    current = sandbox.state()
+    assert current == "running", (
+        f"expected VM running after cold-start; got {current!r}"
     )
 
     # Confirm the service unit reached active state inside the VM.

@@ -78,8 +78,9 @@ def test_startup_failure_workspace_write_persists_on_host(workspace, devm, sandb
     )
 
     # VM should be running even though the service failed.
-    assert sandbox.state() == "running", (
-        f"expected VM running despite startup failure; got {sandbox.state()!r}"
+    current = sandbox.state()
+    assert current == "running", (
+        f"expected VM running despite startup failure; got {current!r}"
     )
 
     # Give systemd a moment to run (and fail) the service.

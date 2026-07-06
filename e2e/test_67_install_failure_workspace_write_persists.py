@@ -48,9 +48,10 @@ def test_install_failure_workspace_write_persists_on_host(workspace, devm):
 
     # VM should be gone (loud failure per test_51).
     vm = TartSandbox(name=workspace.vm_name)
-    assert vm.state() == "absent", (
+    current = vm.state()
+    assert current == "absent", (
         f"failed install must not leave a VM behind; "
-        f"VM is still in state {vm.state()!r}"
+        f"VM is still in state {current!r}"
     )
 
     # The viability pin: the workspace write from step 1 must persist

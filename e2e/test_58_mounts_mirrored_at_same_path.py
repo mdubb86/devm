@@ -54,9 +54,8 @@ def test_extra_mount_mirrored_at_same_path(workspace, devm, sandbox_name):
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
 
         tart_sandbox = TartSandbox(name=sandbox_name)
-        assert tart_sandbox.state() == "running", (
-            f"expected VM running; got {tart_sandbox.state()!r}"
-        )
+        current = tart_sandbox.state()
+        assert current == "running", f"expected VM running; got {current!r}"
 
         # Extra mount must be visible at the exact same host path inside the VM.
         r = tart_sandbox.exec_shell(f"cat {marker}")
