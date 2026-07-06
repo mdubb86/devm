@@ -183,11 +183,22 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// AND leave no half-created VM behind (pinned by test_51).
 	teardownOnFail := func(err error, msg string) (int, error) {
 		debuglog.Logf("shell", "cold-start failed after StartVM: %s: %v", msg, err)
+		fmt.Fprintf(os.Stderr, "teardown-on-fail: %s: %v\n", msg, err)
+
 		teardownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = d.ServiceAPIClient.StopVM(teardownCtx, cfg.Project.ID, vmName)
+
+		if stopErr := d.ServiceAPIClient.StopVM(teardownCtx, cfg.Project.ID, vmName); stopErr != nil {
+			// StopVM is best-effort here (VM may be already stopped or
+			// gone), but if it errored for a reason worth diagnosing, we
+			// want the caller to see it — otherwise this class of failure
+			// (VM stopped but not deleted) is invisible from the outside.
+			fmt.Fprintf(os.Stderr, "teardown-on-fail: StopVM: %v\n", stopErr)
+			debuglog.Logf("shell", "teardown-on-fail: StopVM: %v", stopErr)
+		}
 		if derr := d.Tart.Delete(teardownCtx, vmName); derr != nil &&
 			!strings.Contains(derr.Error(), "does not exist") {
+			fmt.Fprintf(os.Stderr, "teardown-on-fail: tart delete %s failed: %v\n", vmName, derr)
 			debuglog.Logf("shell", "teardown-on-fail: delete %s failed: %v", vmName, derr)
 		}
 		return -1, fmt.Errorf("%s: %w", msg, err)
