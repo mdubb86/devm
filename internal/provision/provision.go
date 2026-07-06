@@ -124,8 +124,20 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 
 // exec runs the given argv via tart.Exec, writes captured stdout +
 // stderr to w, and returns an error if exit code is nonzero.
+//
+// Retries ONCE on the specific "Transport became inactive" gRPC error —
+// tart-guest-agent's HTTP/2 transport occasionally drops mid-flight
+// during heavy exec load (multiple sequential steps under memory/CPU
+// pressure), and the agent typically recovers within a few seconds. We
+// don't retry on any other exit code because a user's install command
+// failing is a legitimate signal that must reach the caller.
 func (p *Provisioner) exec(ctx context.Context, w io.Writer, argv ...string) error {
 	r := p.Tart.Exec(ctx, p.VMName, argv)
+	if isTransportInactive(r) {
+		fmt.Fprintf(w, "note: retrying step after transient tart-guest-agent transport error\n")
+		time.Sleep(2 * time.Second)
+		r = p.Tart.Exec(ctx, p.VMName, argv)
+	}
 	if r.Stdout != "" {
 		_, _ = io.WriteString(w, r.Stdout)
 	}
@@ -136,6 +148,18 @@ func (p *Provisioner) exec(ctx context.Context, w io.Writer, argv ...string) err
 		return fmt.Errorf("tart exec %s: exit %d", strings.Join(argv, " "), r.ExitCode)
 	}
 	return nil
+}
+
+// isTransportInactive detects tart-guest-agent's gRPC "Transport became
+// inactive" flake — an HTTP/2 GOAWAY or connection-drop on the
+// guest-side RPC channel. Manifests as a non-zero exit with the string
+// in stderr; the code (14 = UNAVAILABLE) is stable across gRPC versions.
+func isTransportInactive(r tart.ExecResult) bool {
+	if r.ExitCode == 0 {
+		return false
+	}
+	return strings.Contains(r.Stderr, "Transport became inactive") ||
+		strings.Contains(r.Stderr, "unavailable (14)")
 }
 
 // execShell runs the given shell script via `bash -c "..."` for steps
