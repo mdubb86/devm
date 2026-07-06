@@ -62,11 +62,26 @@ if ! sudo -n true 2>/dev/null; then
     echo "=== e2e: sudo cache is cold — prime with 'sudo -v' first ===" >&2
     exit 2
 fi
-echo "=== e2e: installing devm daemon from $DEVM_BIN ===" >&2
-"$DEVM_BIN" install >/dev/null || {
-    echo "=== e2e: devm install failed; see ~/Library/Logs/devm/install.log ===" >&2
-    exit 1
-}
+
+# Reinstall only when the daemon's program path doesn't already match
+# DEVM_BIN. `kardianos install` is a no-op when a plist already exists
+# — even if it points at a different (stale) binary — so we have to
+# uninstall + reinstall to switch the daemon over to the current temp
+# path.
+DAEMON_PROG="$(launchctl print system/com.devm.service 2>/dev/null | awk '/^\s*program = /{print $3; exit}')"
+if [ "$DAEMON_PROG" != "$DEVM_BIN" ]; then
+    if [ -n "$DAEMON_PROG" ]; then
+        echo "=== e2e: uninstalling stale daemon (was: $DAEMON_PROG) ===" >&2
+        "$DEVM_BIN" uninstall >/dev/null 2>&1 || true
+    fi
+    echo "=== e2e: installing devm daemon from $DEVM_BIN ===" >&2
+    "$DEVM_BIN" install >/dev/null || {
+        echo "=== e2e: devm install failed; see ~/Library/Logs/devm/install.log ===" >&2
+        exit 1
+    }
+else
+    echo "=== e2e: daemon already installed from $DEVM_BIN ===" >&2
+fi
 
 # Two-phase run:
 #  1. tests NOT marked `pty` — parallel (pytest-xdist).
