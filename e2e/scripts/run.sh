@@ -69,12 +69,19 @@ fi
 
 # Keep sudo alive for the whole run. Default cache is 5 min inactivity;
 # the serial phase's install/uninstall tests run further in than that
-# and otherwise hit `_require_sudo_primed()` mid-suite. The keepalive
-# runs `sudo -n true` every 60s, which just refreshes the cache —
-# never prompts (if the cache ever DID expire, -n makes it exit 1
-# rather than prompt, and the next test failing loud is the correct
-# signal). Killed at on_exit.
-( while true; do sudo -n true 2>/dev/null || exit; sleep 60; done ) &
+# and otherwise hit `_require_sudo_primed()` mid-suite.
+#
+# `sudo -n -v` explicitly refreshes the credential cache TIMESTAMP
+# (`-v`) without prompting on failure (`-n`). Plain `sudo -n true`
+# uses the cache but doesn't reliably bump the timestamp on macOS,
+# so the cache still expires after 5 min even with the keepalive
+# running.
+#
+# If the cache goes cold anyway (backgrounded shell, laptop sleep,
+# etc.), the keepalive exits — the next test hitting sudo will fail
+# loud rather than silently prompt in a way the user might miss
+# (e.g., a Touch ID dialog blocked by a stuck stdin).
+( while true; do sudo -n -v 2>/dev/null || exit; sleep 60; done ) &
 SUDO_KEEPALIVE_PID=$!
 
 # Always uninstall + reinstall. `kardianos install` is a no-op when a
