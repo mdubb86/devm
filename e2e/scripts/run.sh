@@ -63,24 +63,28 @@ if ! sudo -n true 2>/dev/null; then
     exit 2
 fi
 
-# Reinstall only when the daemon's program path doesn't already match
-# DEVM_BIN. `kardianos install` is a no-op when a plist already exists
-# — even if it points at a different (stale) binary — so we have to
-# uninstall + reinstall to switch the daemon over to the current temp
-# path.
-DAEMON_PROG="$(launchctl print system/com.devm.service 2>/dev/null | awk '/^\s*program = /{print $3; exit}')"
+# Always uninstall + reinstall. `kardianos install` is a no-op when a
+# plist already exists (even from a stale prior-session temp path), so
+# we can't rely on the install command alone to switch the daemon over
+# to the current DEVM_BIN. Uninstall drops the plist; install writes a
+# fresh one pointing at DEVM_BIN.
+echo "=== e2e: uninstalling any prior devm daemon ===" >&2
+"$DEVM_BIN" uninstall >/dev/null 2>&1 || true
+echo "=== e2e: installing devm daemon from $DEVM_BIN ===" >&2
+"$DEVM_BIN" install >/dev/null || {
+    echo "=== e2e: devm install failed; see ~/Library/Logs/devm/install.log ===" >&2
+    exit 1
+}
+
+# Verify what we ended up with — if the daemon didn't actually pick up
+# the new binary, bail immediately with concrete evidence, rather than
+# letting the autouse fixture surface it later per-test.
+DAEMON_PROG="$(launchctl print system/com.devm.service 2>/dev/null | awk -F'= ' '/^[[:space:]]*program = /{print $2; exit}')"
 if [ "$DAEMON_PROG" != "$DEVM_BIN" ]; then
-    if [ -n "$DAEMON_PROG" ]; then
-        echo "=== e2e: uninstalling stale daemon (was: $DAEMON_PROG) ===" >&2
-        "$DEVM_BIN" uninstall >/dev/null 2>&1 || true
-    fi
-    echo "=== e2e: installing devm daemon from $DEVM_BIN ===" >&2
-    "$DEVM_BIN" install >/dev/null || {
-        echo "=== e2e: devm install failed; see ~/Library/Logs/devm/install.log ===" >&2
-        exit 1
-    }
-else
-    echo "=== e2e: daemon already installed from $DEVM_BIN ===" >&2
+    echo "=== e2e: daemon didn't switch to DEVM_BIN after reinstall ===" >&2
+    echo "    DEVM_BIN:            $DEVM_BIN" >&2
+    echo "    daemon program path: $DAEMON_PROG" >&2
+    exit 1
 fi
 
 # Two-phase run:
