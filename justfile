@@ -58,13 +58,6 @@ e2e-devm:
 e2e-contract:
     @e2e/scripts/run.sh -m contract
 
-# Just the tests that call sudo commands directly (install/uninstall/
-# service restart cycles). All of `e2e-devm` also needs `sudo -v`
-# primed for the daemon-match autouse fixture, but this subset is
-# handy for iterating specifically on the privileged-command flows.
-e2e-sudo:
-    @e2e/scripts/run.sh -m sudo
-
 # Run a single test by name (matches pytest -k pattern). Foreground (no -n).
 # Quote multi-word patterns: `just e2e-one "test_a or test_b"`.
 e2e-one NAME:

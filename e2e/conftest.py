@@ -59,12 +59,6 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.pty)
         if any(h in src for h in _serial_hints):
             item.add_marker(pytest.mark.serial)
-            # Every tests we currently auto-mark `serial` also invokes a
-            # sudo-requiring command directly; the two sets overlap 1:1.
-            # Keep both markers so `just e2e-sudo` can select on `sudo`
-            # semantically (privilege requirement) and the two-phase
-            # runner keeps selecting on `serial` (concurrency safety).
-            item.add_marker(pytest.mark.sudo)
 
 
 
@@ -298,19 +292,20 @@ def _daemon_matches_devm_bin(request, devm_path):
         yield
         return
 
-    # Daemon needs installing or reinstalling. Need sudo — if it isn't
-    # primed, skip THIS test (not session-abort). Callers who
-    # deliberately opt into sudo work via `sudo_capable` still get the
-    # session-abort behavior from `_require_sudo_primed` because that
-    # fires in `sudo_capable` before the fixture runs at all.
+    # Daemon needs installing or reinstalling. Every devm test in this
+    # suite needs the daemon in-sync with DEVM_BIN — a per-test skip
+    # here would leave the developer staring at "39 skipped" without an
+    # obvious next action. Abort the whole session immediately with the
+    # exact command to run.
     check = subprocess.run(
         ["sudo", "-n", "true"], capture_output=True, timeout=5,
     )
     if check.returncode != 0:
-        pytest.skip(
-            "devm daemon doesn't match DEVM_BIN and sudo cache is cold — "
-            "cannot sync. Run `sudo -v && just e2e-devm` (or `bin/devm "
-            "install` to install matching bin/devm) to enable this test."
+        pytest.exit(
+            "devm daemon doesn't match DEVM_BIN and sudo cache is cold. "
+            "Prime sudo first:\n\n"
+            "    sudo -v && just e2e-devm\n",
+            returncode=2,
         )
 
     if current_program is None or not _LAUNCH_DAEMON_PLIST.exists():

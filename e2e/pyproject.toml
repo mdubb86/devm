@@ -27,5 +27,4 @@ markers = [
     "slow: test involves a long-running operation (e.g. Tart image build); excluded from fast CI passes",
     "pty: uses helpers.Shell (pexpect + pty.forkpty). Must NOT run under pytest-xdist workers — those workers have a background RPC thread, and forkpty in a multi-threaded process races on lock inheritance. run.sh selects these into a single-process pass.",
     "serial: mutates global system state via `devm install` / `devm uninstall` (LaunchDaemon plist, /etc/resolver/test, system CA, tart devm-base image). Concurrent runs step on each other. run.sh selects these into the single-process pass alongside pty tests.",
-    "sudo: test calls sudo directly during its body (`devm install` / `devm uninstall` / `devm service restart`). Note: every devm-marked test needs `sudo -v` primed at least once per session because the daemon-match autouse fixture may need to re-install the daemon when DEVM_BIN changes; this marker isolates the tests whose test-BODY uses sudo, useful for focused iteration on the privileged flows via `just e2e-sudo`.",
 ]
