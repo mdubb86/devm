@@ -63,14 +63,18 @@ func DefinitionHash() (string, error) {
 }
 
 // HashStorePath returns the disk location where we cache the hash of
-// the most recently built image.
+// the most recently built image. Under ~/Library/Caches (not the
+// runtime dir under Application Support) so `devm uninstall`'s
+// runtime-dir cleanup doesn't wipe the build cache — losing the hash
+// would falsely trigger a devm-base rebuild on every subsequent
+// install, which takes ~5 min and thrashes the tart image cache.
 func HashStorePath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, "Library", "Application Support", "devm",
-		"cache", "base-image.hash"), nil
+	return filepath.Join(home, "Library", "Caches", "devm",
+		"base-image.hash"), nil
 }
 
 // NeedsBuild returns (true, currentHash, nil) if the base image

@@ -47,7 +47,7 @@ func TestDefinitionHash_MatchesFormula(t *testing.T) {
 func TestHashStorePath_HomeRelative(t *testing.T) {
 	p, err := HashStorePath()
 	require.NoError(t, err)
-	assert.Contains(t, p, "Library/Application Support/devm/cache/base-image.hash")
+	assert.Contains(t, p, "Library/Caches/devm/base-image.hash")
 }
 
 // NeedsBuild's "VM absent" branch depends on Tart being installed
