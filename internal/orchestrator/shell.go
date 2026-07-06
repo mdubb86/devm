@@ -286,10 +286,20 @@ func (d ShellDeps) attachShell(ctx context.Context, vmName, repoRoot, cmdName st
 }
 
 // waitVMReady polls `tart exec <vmName> true` until exit 0 or timeout.
+// Each attempt is bounded by perAttemptTimeout so a single hung
+// `tart exec` call (which can happen under system load when the guest
+// agent socket is slow to respond) doesn't consume the whole budget
+// and drop the effective retry count. Without this bound, we've seen
+// 60s deadlines silently used up by 3-4 slow attempts instead of ~60.
 func waitVMReady(ctx context.Context, tr *tart.Tart, vmName string, timeout time.Duration) error {
+	const perAttemptTimeout = 3 * time.Second
 	deadline := time.Now().Add(timeout)
+	attempt := 0
 	for time.Now().Before(deadline) {
-		r := tr.Exec(ctx, vmName, []string{"true"})
+		attempt++
+		attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+		r := tr.Exec(attemptCtx, vmName, []string{"true"})
+		cancel()
 		if r.ExitCode == 0 {
 			return nil
 		}
@@ -299,7 +309,10 @@ func waitVMReady(ctx context.Context, tr *tart.Tart, vmName string, timeout time
 		case <-time.After(1 * time.Second):
 		}
 	}
-	return fmt.Errorf("timeout waiting for vm %s to become exec-ready", vmName)
+	return fmt.Errorf(
+		"timeout waiting for vm %s to become exec-ready (%d attempts over %s)",
+		vmName, attempt, timeout,
+	)
 }
 
 // caStorageDir returns ~/Library/Application Support/devm/ca/,

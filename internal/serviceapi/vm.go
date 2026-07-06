@@ -70,11 +70,21 @@ type VMStatusResponse struct {
 // The Tart Guest Agent inside the VM takes a few seconds to register a
 // listener after `tart run`; until it does, `tart exec` returns the
 // gRPC connection error documented at /vm/start.
+//
+// Each attempt is bounded by a per-attempt context timeout so a single
+// hung `tart exec` (which can happen under system load when the guest
+// agent socket is slow) doesn't consume the whole budget.
 func waitVMExecReady(ctx context.Context, vmName string, timeout time.Duration) error {
+	const perAttemptTimeout = 3 * time.Second
 	deadline := time.Now().Add(timeout)
+	attempt := 0
 	for time.Now().Before(deadline) {
-		probe := exec.Command("tart", "exec", vmName, "true")
-		if err := probe.Run(); err == nil {
+		attempt++
+		attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+		probe := exec.CommandContext(attemptCtx, "tart", "exec", vmName, "true")
+		err := probe.Run()
+		cancel()
+		if err == nil {
 			return nil
 		}
 		select {
@@ -83,7 +93,10 @@ func waitVMExecReady(ctx context.Context, vmName string, timeout time.Duration) 
 		case <-time.After(1 * time.Second):
 		}
 	}
-	return fmt.Errorf("timeout waiting for vm %s to become exec-ready", vmName)
+	return fmt.Errorf(
+		"timeout waiting for vm %s to become exec-ready (%d attempts over %s)",
+		vmName, attempt, timeout,
+	)
 }
 
 // RegisterVMHandlers wires /vm/start, /vm/stop, and /vm/status onto the
