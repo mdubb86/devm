@@ -70,9 +70,6 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 UNIT
 
-systemctl daemon-reload
-systemctl enable devm-rename-user.service
-
 # --- Disable cloud-init re-running on subsequent boots ---
 touch /etc/cloud/cloud-init.disabled
 
@@ -86,6 +83,14 @@ Wants=network-online.target
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# One daemon-reload after ALL unit files are written, then enable them.
+# Enabling a unit systemd doesn't yet know about generally works (enable
+# reads [Install] from the file directly), but keeping this order
+# explicit prevents future edits from silently landing in the pre-reload
+# window and breaking on systems that cache more aggressively.
+systemctl daemon-reload
+systemctl enable devm-rename-user.service
 systemctl enable devm-ready.target
 
 # --- Clean up ---
