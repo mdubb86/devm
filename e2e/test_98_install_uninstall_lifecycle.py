@@ -30,18 +30,19 @@ Coverage preserved verbatim from the three former tests:
     - HTTP (:80) and HTTPS (:443) both proxy through with 200 body.
     - Backend killed → 502 with "no service listening" diagnostic.
 
-  Tart + LaunchDaemon (former test_41):
-    - Base image was built by the daemon (verified indirectly: cold-start
-      succeeds).
+  LaunchDaemon (former test_41 — subset):
     - LaunchDaemon plist at /Library/LaunchDaemons/, not the old
       LaunchAgent path (Ship 4.2 pin).
     - `launchctl print system/com.devm.service` reaches `state = running`
       within 10s, daemon runs as the invoking user (not root).
     - Ports 80/443 are TCP-bindable (LaunchDaemon socket activation
       pins them — Ship 4.2 fix for the Ship 3/4 unbound-fd bug).
-    - `devm shell -- true` cold-start succeeds against devm-base.
-    - `devm teardown --yes` moves the VM to `absent`.
     - `devm uninstall` removes the LaunchDaemon plist and runtime dir.
+
+Former test_41's cold-start-VM + teardown block is dropped here; that
+coverage is redundant with test_50 (cold-start brings VM to running),
+test_53 (teardown destroys VM), and test_82 (guest identity after
+cold-start).
 """
 from __future__ import annotations
 
@@ -55,8 +56,6 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-
-from helpers.tart import TartSandbox
 
 pytestmark = pytest.mark.devm
 
@@ -124,7 +123,6 @@ def test_install_uninstall_lifecycle(devm, workspace, sudo_capable):
     backend_port = _alloc_port()
     hostname = f"e2e-{backend_port}.test"
     backend = _spawn_backend(backend_port, "hello from backend")
-    vm = TartSandbox(name=workspace.vm_name)
 
     try:
         # --- INSTALL (2nd Touch ID prompt) ---
@@ -264,36 +262,14 @@ def test_install_uninstall_lifecycle(devm, workspace, sudo_capable):
         assert out.endswith("502"), f"unexpected status: {out}"
         assert "no service listening" in out, f"no diagnostic body: {out}"
 
-        # --- Cold-start via `devm shell -- true` (former test_41) ---
-        # Proves devm-base was built and provisioning works.
-        r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
-            capture_output=True, cwd=str(workspace.path),
-            timeout=300, check=False,
-        )
-        assert r.returncode == 0, (
-            f"cold-start shell failed:\nstdout={r.stdout.decode()!r}\n"
-            f"stderr={r.stderr.decode()!r}"
-        )
-        assert vm.state() == "running", (
-            f"VM should be running after cold-start; got {vm.state()!r}"
-        )
-        result = vm.exec("true")
-        assert result.exit_code == 0, (
-            f"exec true in VM failed: exit={result.exit_code}, "
-            f"stderr={result.stderr!r}"
-        )
-
-        # --- Teardown VM (former test_41) ---
-        devm.teardown(yes=True, timeout=60)
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            if vm.state() == "absent":
-                break
-            time.sleep(0.5)
-        assert vm.state() == "absent", (
-            f"VM still present after teardown; state={vm.state()!r}"
-        )
+        # NOTE: former test_41's cold-start-VM + teardown block dropped
+        # from this test. That coverage is redundant with:
+        #   test_50 — cold-start brings VM to running
+        #   test_53 — teardown destroys VM
+        #   test_82 — guest identity check after cold-start
+        # Keeping the LaunchDaemon block above IS the unique contribution
+        # from former test_41 (plist location, socket-bound ports,
+        # daemon-runs-as-user).
 
     finally:
         if backend is not None:
