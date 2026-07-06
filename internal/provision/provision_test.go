@@ -213,6 +213,10 @@ func (d *deadlineCapturingTart) Exec(ctx context.Context, _ string, argv []strin
 	return tart.ExecResult{ExitCode: 0}
 }
 
+func (d *deadlineCapturingTart) ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult {
+	return d.Exec(ctx, name, argv)
+}
+
 func newDeadlineCapturingTart() *deadlineCapturingTart {
 	return &deadlineCapturingTart{}
 }
@@ -235,6 +239,10 @@ func (s *slowTart) Exec(ctx context.Context, _ string, _ []string) tart.ExecResu
 	case <-time.After(s.delay):
 		return tart.ExecResult{ExitCode: 0}
 	}
+}
+
+func (s *slowTart) ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult {
+	return s.Exec(ctx, name, argv)
 }
 
 func newSlowTart(d time.Duration) *slowTart {
@@ -310,6 +318,10 @@ type argvRecordingTart struct{ argvs [][]string }
 func (a *argvRecordingTart) Exec(_ context.Context, _ string, argv []string) tart.ExecResult {
 	a.argvs = append(a.argvs, append([]string(nil), argv...))
 	return tart.ExecResult{ExitCode: 0}
+}
+
+func (a *argvRecordingTart) ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult {
+	return a.Exec(ctx, name, argv)
 }
 
 func TestProvisioner_ApplyMasks_ChownsToServiceUser(t *testing.T) {

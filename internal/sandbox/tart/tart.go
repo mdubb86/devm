@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Tart wraps the `tart` binary on PATH.
@@ -97,7 +98,9 @@ func (t *Tart) IP(ctx context.Context, name string) (string, error) {
 }
 
 // Exec runs a command inside the VM via `tart exec`. Captures stdout,
-// stderr, and exit code.
+// stderr, and exit code. Does NOT retry — callers that want defense
+// against transient tart-guest-agent transport failures should use
+// ExecWithRetry.
 func (t *Tart) Exec(ctx context.Context, name string, argv []string) ExecResult {
 	args := append([]string{"exec", name}, argv...)
 	cmd := exec.CommandContext(ctx, t.Path, args...)
@@ -112,6 +115,40 @@ func (t *Tart) Exec(ctx context.Context, name string, argv []string) ExecResult 
 		code = -1
 	}
 	return ExecResult{Stdout: so.String(), Stderr: se.String(), ExitCode: code}
+}
+
+// ExecWithRetry runs Exec, and if the result is the specific
+// "Transport became inactive" (gRPC unavailable (14)) tart-guest-agent
+// flake, sleeps 2s and retries once. Any other non-zero exit is
+// returned as-is — a legitimate command failure must reach the caller.
+//
+// Use this instead of Exec when the failure of a step would kill a
+// longer-running operation (e.g. provisioning, snapshot IO, apply-live
+// template installs). Do NOT use this in polling loops that already
+// have their own retry logic (e.g. waitVMReady) — you'd double-retry.
+func (t *Tart) ExecWithRetry(ctx context.Context, name string, argv []string) ExecResult {
+	r := t.Exec(ctx, name, argv)
+	if IsTransportInactive(r) {
+		select {
+		case <-ctx.Done():
+			return r
+		case <-time.After(2 * time.Second):
+		}
+		r = t.Exec(ctx, name, argv)
+	}
+	return r
+}
+
+// IsTransportInactive detects tart-guest-agent's gRPC "Transport became
+// inactive" flake — an HTTP/2 GOAWAY or connection-drop on the
+// guest-side RPC channel. Manifests as a non-zero exit with the string
+// in stderr; the code (14 = UNAVAILABLE) is stable across gRPC versions.
+func IsTransportInactive(r ExecResult) bool {
+	if r.ExitCode == 0 {
+		return false
+	}
+	return strings.Contains(r.Stderr, "Transport became inactive") ||
+		strings.Contains(r.Stderr, "unavailable (14)")
 }
 
 // List returns all VMs Tart knows about (running or stopped).

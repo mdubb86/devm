@@ -72,7 +72,7 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		// locate .devm/templates and errors under `set -u` without it.
 		wrapperPath := filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env")
 		dispatcherPath := filepath.Join(repoRoot, ".devm", "scripts", "install-templates.sh")
-		r := tr.Exec(context.Background(), vmName, []string{wrapperPath, "bash", dispatcherPath})
+		r := tr.ExecWithRetry(context.Background(), vmName, []string{wrapperPath, "bash", dispatcherPath})
 		if r.ExitCode != 0 {
 			return fmt.Errorf("apply_live: install-templates: exit %d (stderr: %s)", r.ExitCode, r.Stderr)
 		}

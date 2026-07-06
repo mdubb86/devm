@@ -108,8 +108,8 @@ type Template struct {
 	Source string `yaml:"source"`
 	Output string `yaml:"output"`
 	// Sudo escalates the installer to root when writing DEST. Default
-	// false: the installer runs as the guest user (admin) and writes the
-	// file admin-owned. Set true for /etc, /usr, /var — anywhere the guest
+	// false: the installer runs as the guest user (devm) and writes the
+	// file devm-owned. Set true for /etc, /usr, /var — anywhere the guest
 	// user can't write. Without sudo:true a failed write is a loud
 	// cold-start error rather than a silent sudo fallback.
 	Sudo bool `yaml:"sudo,omitempty"`

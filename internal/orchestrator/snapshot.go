@@ -9,17 +9,17 @@ import (
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 )
 
-// SnapshotFilename is the file name of the last-applied spec snapshot;
-// stored under the admin user's home directory inside the VM. The path
-// is resolved at runtime via `$HOME` inside the tart exec, not
-// hardcoded — cirruslabs base images use `admin`, not `agent`.
+// SnapshotFilename is the file name of the last-applied spec snapshot,
+// stored under the guest user's home directory inside the VM. The path
+// is resolved at runtime via `$HOME` inside the tart exec so it works
+// regardless of the guest user's login name.
 const SnapshotFilename = ".devm/applied.yaml"
 
 // ReadSnapshot returns the snapshot's contents. If the file does not
 // exist, returns ("", nil) — the absence of a snapshot is a valid state
 // (first reconcile after a cold start that somehow didn't write).
 func ReadSnapshot(tr *tart.Tart, vmName string) (string, error) {
-	r := tr.Exec(context.Background(), vmName, []string{
+	r := tr.ExecWithRetry(context.Background(), vmName, []string{
 		"bash", "-c", "cat \"$HOME/" + SnapshotFilename + "\"",
 	})
 	if r.ExitCode != 0 {
@@ -32,7 +32,7 @@ func ReadSnapshot(tr *tart.Tart, vmName string) (string, error) {
 }
 
 // WriteSnapshot writes content atomically to the in-VM snapshot path
-// under the admin user's home directory. Encodes content as base64 on
+// under the guest user's home directory. Encodes content as base64 on
 // the command line to avoid stdin pipe issues; all content is in argv
 // and no stdin pipe is involved.
 //
@@ -46,7 +46,7 @@ func WriteSnapshot(tr *tart.Tart, vmName, content string) error {
 			`mv "$HOME/%s.tmp" "$HOME/%s"`,
 		encoded, SnapshotFilename, SnapshotFilename, SnapshotFilename,
 	)
-	r := tr.Exec(context.Background(), vmName, []string{"bash", "-c", cmd})
+	r := tr.ExecWithRetry(context.Background(), vmName, []string{"bash", "-c", cmd})
 	if r.ExitCode != 0 {
 		return fmt.Errorf("write snapshot: exit %d (stderr: %s)", r.ExitCode, r.Stderr)
 	}
