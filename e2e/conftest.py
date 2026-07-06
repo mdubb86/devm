@@ -252,25 +252,16 @@ def _uninstall_devm(devm_path: str) -> None:
 
 @pytest.fixture(autouse=True)
 def _daemon_matches_devm_bin(request, devm_path):
-    """Precondition run before every test: the LaunchDaemon must be
-    installed from DEVM_BIN. Fast path is a single `launchctl print`
-    (<100ms) that no-ops when the daemon already matches; slow path
-    only fires when a previous test (install/uninstall cycle) left
-    the state wrong.
-
-    Every devm test talks to the daemon over the Unix socket — none
-    of them get meaningful signal from a stale or absent daemon. This
-    makes them all robust to being run in any order (the
-    install/uninstall tests leave the host uninstalled at teardown,
-    but the next test's autouse re-installs before it runs).
+    """Verify-only safety net: the LaunchDaemon program path must match
+    DEVM_BIN. The actual install happens once up-front in run.sh; if we
+    ever get here and the daemon doesn't match, either a previous test
+    uninstalled it and didn't restore, or the install failed silently.
+    Either way, aborting the session immediately with an actionable
+    message is better than 40 misleading per-test failures.
 
     Contract tests (marked `contract`) don't touch the devm daemon at
     all — they pin behavior of external tools like tart or iron-proxy
-    directly. Skip the precondition entirely for them so a stale
-    daemon doesn't block an unrelated test from running.
-
-    Skip conditions match `sudo_capable`: no /dev/tty → don't try
-    to fix, trust ambient state.
+    directly, and skip the precondition entirely.
     """
     if request.node.get_closest_marker("contract") is not None:
         yield
@@ -280,40 +271,24 @@ def _daemon_matches_devm_bin(request, devm_path):
     if _platform.system() != "Darwin":
         yield
         return
-    try:
-        open("/dev/tty").close()
-    except OSError:
-        yield
-        return
 
     current_program = _daemon_program_path()
-
     if current_program == devm_path and _LAUNCH_DAEMON_PLIST.exists():
         yield
         return
 
-    # Daemon needs installing or reinstalling. Every devm test in this
-    # suite needs the daemon in-sync with DEVM_BIN — a per-test skip
-    # here would leave the developer staring at "39 skipped" without an
-    # obvious next action. Abort the whole session immediately with the
-    # exact command to run.
-    check = subprocess.run(
-        ["sudo", "-n", "true"], capture_output=True, timeout=5,
+    pytest.exit(
+        f"devm daemon doesn't match DEVM_BIN. Either run.sh's up-front\n"
+        f"`devm install` didn't run (running pytest directly?), or a\n"
+        f"previous test uninstalled the daemon without restoring it.\n\n"
+        f"  DEVM_BIN            = {devm_path}\n"
+        f"  daemon program path = {current_program!r}\n"
+        f"  plist exists        = {_LAUNCH_DAEMON_PLIST.exists()}\n\n"
+        f"Fix by re-running the full suite via `just e2e-devm` (which\n"
+        f"invokes run.sh and does the pre-install), or manually run\n"
+        f"`{devm_path} install` before invoking pytest.",
+        returncode=2,
     )
-    if check.returncode != 0:
-        pytest.exit(
-            "devm daemon doesn't match DEVM_BIN and sudo cache is cold. "
-            "Prime sudo first:\n\n"
-            "    sudo -v && just e2e-devm\n",
-            returncode=2,
-        )
-
-    if current_program is None or not _LAUNCH_DAEMON_PLIST.exists():
-        _install_devm(devm_path)
-    else:
-        _uninstall_devm(devm_path)
-        _install_devm(devm_path)
-    yield
 
 
 # Kept for backward compatibility with tests that still list

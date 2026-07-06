@@ -173,3 +173,10 @@ def test_install_uninstall_with_tart(devm, workspace, sudo_capable):
         assert not os.path.exists(_runtime_dir()), (
             "devm runtime dir still present after uninstall"
         )
+
+        # Restore the daemon so downstream tests (which trust run.sh's
+        # up-front install via the verify-only autouse fixture) still
+        # see a matching daemon.
+        subprocess.run(
+            [devm.path, "install"], capture_output=True, timeout=780,
+        )

@@ -48,6 +48,26 @@ if [ -x "$(cd .. && pwd)/bin/iron-proxy" ]; then
 fi
 export DEVM_BIN
 
+# Single up-front daemon install. Every devm-marked test needs the
+# LaunchDaemon in-sync with DEVM_BIN, and doing it once here — before
+# any pytest worker starts — avoids the pathological case of 4 xdist
+# workers racing on `devm install` in their per-test autouse fixture
+# (which serializes on the plist file and blows the 120s per-test
+# timeout during setup).
+#
+# The autouse fixture becomes a verify-only safety net: if it ever
+# sees a mismatch after this pre-install, the test suite aborts
+# immediately with an actionable message.
+if ! sudo -n true 2>/dev/null; then
+    echo "=== e2e: sudo cache is cold — prime with 'sudo -v' first ===" >&2
+    exit 2
+fi
+echo "=== e2e: installing devm daemon from $DEVM_BIN ===" >&2
+"$DEVM_BIN" install >/dev/null || {
+    echo "=== e2e: devm install failed; see ~/Library/Logs/devm/install.log ===" >&2
+    exit 1
+}
+
 # Two-phase run:
 #  1. tests NOT marked `pty` — parallel (pytest-xdist).
 #  2. `pty`-marked tests — single process (`-p no:xdist`) because
