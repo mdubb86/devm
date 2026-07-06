@@ -82,9 +82,6 @@ def test_install_uninstall_with_dns(devm, sudo_capable):
         assert not os.path.exists(_resolver_file_path()), (
             "resolver file not removed by uninstall"
         )
-        # Restore the daemon so downstream tests (which trust run.sh's
-        # up-front install via the verify-only autouse fixture) still
-        # see a matching daemon.
-        subprocess.run(
-            [devm.path, "install"], capture_output=True, timeout=780,
-        )
+        # NOTE: no reinstall here — run.sh does one restore between
+        # phase 2a and 2b so the sudo phase costs one Touch ID prompt
+        # instead of one per test.

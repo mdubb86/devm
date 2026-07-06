@@ -141,19 +141,22 @@ for arg in "$@"; do
 done
 
 parallel_mark="not pty and not serial"
-serial_mark="pty or serial"
+sudo_mark="serial"
+pty_mark="pty and not serial"
 if [ -n "$CALLER_MARK" ]; then
     parallel_mark="($CALLER_MARK) and not pty and not serial"
-    serial_mark="($CALLER_MARK) and (pty or serial)"
+    sudo_mark="($CALLER_MARK) and serial"
+    pty_mark="($CALLER_MARK) and pty and not serial"
 fi
 
 rc_parallel=0
-rc_serial=0
+rc_sudo=0
+rc_pty=0
 
-# Phase 1: parallel for non-pty tests. Capped at 4 workers — `-n auto`
-# spawns one per CPU which overloads tart's guest-agent gRPC (surfaces as
-# `Error: internal error (13): transport: SendHeader called multiple
-# times` from concurrent tart exec calls).
+# Phase 1: parallel for non-pty, non-serial tests. Capped at 4 workers —
+# `-n auto` spawns one per CPU which overloads tart's guest-agent gRPC
+# (surfaces as `Error: internal error (13): transport: SendHeader
+# called multiple times` from concurrent tart exec calls).
 set -m
 uv run pytest -m "$parallel_mark" -n 4 ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
 PYTEST_PID=$!
@@ -164,18 +167,50 @@ rc_parallel=$?
 # intersection is empty (e.g. `-m contract` never intersects `pty`).
 [ $rc_parallel -eq 5 ] && rc_parallel=0
 
-# Phase 2: serial (no xdist) for pty tests. Skip pytest entirely when
-# no pty-eligible tests are selected — spares us pytest startup cost
-# on the parallel-only e2e-contract runs.
+# Phase 2a: serial-marked (install/uninstall/service-restart) tests
+# FIRST. These fire macOS Touch ID prompts every time they invoke sudo
+# on privileged operations (security add-trusted-cert, launchctl
+# bootstrap, etc.) — even with a warm sudo timestamp. Grouping them
+# up front means the prompts happen in a single burst while the user
+# is watching, not scattered through a 10-minute run.
+echo "=== e2e: phase 2a — sudo/touch-id tests (watch for prompts) ===" >&2
 set -m
-uv run pytest -m "$serial_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
+uv run pytest -m "$sudo_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
 PYTEST_PID=$!
 set +m
 wait $PYTEST_PID
-rc_serial=$?
-[ $rc_serial -eq 5 ] && rc_serial=0
+rc_sudo=$?
+[ $rc_sudo -eq 5 ] && rc_sudo=0
+
+# Between 2a and 2b: restore the daemon. Phase 2a's install/uninstall
+# tests leave the host uninstalled at teardown (they no longer
+# reinstall in their own finally blocks — one restore here costs one
+# Touch ID prompt instead of one-per-test). Phase 2b's pty tests rely
+# on `devm shell` which needs the daemon.
+if [ $rc_sudo -eq 0 ]; then
+    echo "=== e2e: restoring devm daemon after phase 2a (Touch ID) ===" >&2
+    "$DEVM_BIN" install >/dev/null || {
+        echo "=== e2e: post-phase-2a devm install failed ===" >&2
+        exit 1
+    }
+fi
+
+# Phase 2b: pty tests. Serial (no xdist) because pexpect's
+# pty.forkpty() races on lock inheritance if the process has a
+# background xdist RPC thread.
+echo "=== e2e: phase 2b — pty tests ===" >&2
+set -m
+uv run pytest -m "$pty_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
+PYTEST_PID=$!
+set +m
+wait $PYTEST_PID
+rc_pty=$?
+[ $rc_pty -eq 5 ] && rc_pty=0
 
 if [ $rc_parallel -ne 0 ]; then
     exit $rc_parallel
 fi
-exit $rc_serial
+if [ $rc_sudo -ne 0 ]; then
+    exit $rc_sudo
+fi
+exit $rc_pty

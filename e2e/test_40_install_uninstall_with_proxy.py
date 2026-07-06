@@ -158,8 +158,5 @@ def test_install_uninstall_with_proxy(devm, workspace, sudo_capable):
         # Best-effort cleanup; primary assertion is no leftover state.
         assert not os.path.exists("/etc/resolver/test"), \
             "resolver file lingered after uninstall"
-        # Restore the daemon so downstream tests still see a matching
-        # daemon under the verify-only autouse fixture.
-        subprocess.run(
-            [devm.path, "install"], capture_output=True, timeout=780,
-        )
+        # NOTE: no reinstall here — run.sh does one restore between
+        # phase 2a and 2b.
