@@ -426,6 +426,39 @@ project:
 	assert.Contains(t, err.Error(), "HOSTNAME_APEX")
 }
 
+func TestCheckLegacyKeys_BaseImageDockerMigration(t *testing.T) {
+	yaml := []byte(`
+project:
+  id: x
+  vm_name: x-vm
+base_image:
+  docker: my-registry.example.com/foo:latest
+`)
+	err := CheckLegacyKeys(yaml)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "base_image.docker is no longer supported")
+	assert.Contains(t, err.Error(), "Remove the base_image block")
+}
+
+func TestCheckUnknownKeys_BaseImageChild_Rejected(t *testing.T) {
+	// Any unknown child of base_image (that isn't the specific
+	// `docker` legacy field CheckLegacyKeys catches with a migration
+	// message) should surface a clear "this block accepts no fields"
+	// error rather than being silently dropped by yaml.Unmarshal.
+	yaml := []byte(`
+project:
+  id: x
+  vm_name: x-vm
+base_image:
+  registry: foo.bar
+`)
+	err := CheckUnknownKeys(yaml)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field")
+	assert.Contains(t, err.Error(), "base_image")
+	assert.Contains(t, err.Error(), "this block accepts no fields")
+}
+
 func TestCheckUnknownKeys_TopLevel_Rejected(t *testing.T) {
 	yamlBlob := []byte(`
 project:

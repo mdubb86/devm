@@ -373,6 +373,15 @@ func CheckUnknownKeys(data []byte) error {
 			return err
 		}
 	}
+	// base_image: is retained as a top-level key for YAML compatibility
+	// but must NOT have any children — the Tart image pipeline replaces
+	// per-project image config. Any child here is either legacy (caught
+	// by CheckLegacyKeys with a migration message) or a typo.
+	if bi, ok := raw["base_image"].(map[string]any); ok {
+		if err := rejectUnknown(bi, nil, "base_image"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -383,6 +392,11 @@ func rejectUnknown(m map[string]any, known []string, scope string) error {
 	}
 	for k := range m {
 		if !knownSet[k] {
+			if len(known) == 0 {
+				return fmt.Errorf(
+					"unknown field %q at %s — this block accepts no fields",
+					k, scope)
+			}
 			return fmt.Errorf("unknown field %q at %s — valid: %s",
 				k, scope, strings.Join(known, ", "))
 		}
@@ -424,6 +438,15 @@ func CheckLegacyKeys(data []byte) error {
 			return fmt.Errorf(
 				"network.allowed_domains is no longer supported. " +
 					"Use network.allow instead (rename the key in devm.yaml).")
+		}
+	}
+	if bi, ok := raw["base_image"].(map[string]any); ok {
+		if _, hasDocker := bi["docker"]; hasDocker {
+			return fmt.Errorf(
+				"base_image.docker is no longer supported. " +
+					"Devm builds a single Tart-based devm-base image via the " +
+					"internal image pipeline; per-project docker fallback was " +
+					"removed. Remove the base_image block from devm.yaml.")
 		}
 	}
 	return nil
