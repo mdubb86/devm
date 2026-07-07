@@ -153,12 +153,14 @@ rc_parallel=0
 rc_sudo=0
 rc_pty=0
 
-# Phase 1: parallel for non-pty, non-serial tests. Capped at 4 workers —
-# `-n auto` spawns one per CPU which overloads tart's guest-agent gRPC
-# (surfaces as `Error: internal error (13): transport: SendHeader
-# called multiple times` from concurrent tart exec calls).
+# Phase 1: parallel for non-pty, non-serial tests. Capped at 2 workers —
+# empirically, 4 workers concurrently cold-starting VMs runs into
+# memory/CPU pressure that kills VMs mid-provisioning (test_68 was the
+# consistent tell). 2 workers keeps most of the wall-clock savings vs
+# serial while staying under the resource ceiling. `-n auto` spawns one
+# per CPU and definitely overloads tart's guest-agent gRPC.
 set -m
-uv run pytest -m "$parallel_mark" -n 4 ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
+uv run pytest -m "$parallel_mark" -n 2 ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
 PYTEST_PID=$!
 set +m
 wait $PYTEST_PID
