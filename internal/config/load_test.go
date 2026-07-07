@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func writeFile(t *testing.T, dir, name, content string) {
@@ -156,6 +157,63 @@ volumes:
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), `unknown field`)
 	assert.Contains(t, err.Error(), `devm.me.yaml`)
+}
+
+// TestLoad_RejectsUnknownNestedField pins that yaml.v3's KnownFields(true)
+// catches typos and removed fields ANYWHERE in the document, not just at
+// the top level. Common examples: nested service field typos, a
+// reintroduced-then-removed key, an unfamiliar block someone copied from
+// a docs example.
+func TestLoad_RejectsUnknownNestedField(t *testing.T) {
+	cases := []struct {
+		name, yaml, wantIn string
+	}{
+		{
+			name: "unknown service field",
+			yaml: `
+project:
+  id: foo
+  vm_name: foo-vm
+services:
+  api:
+    exec: ["/bin/true"]
+    replicaz: 3
+`,
+			wantIn: "replicaz",
+		},
+		{
+			name: "unknown network field",
+			yaml: `
+project:
+  id: foo
+  vm_name: foo-vm
+network:
+  allowlist:
+    - example.com
+`,
+			wantIn: "allowlist",
+		},
+		{
+			name: "typo inside project",
+			yaml: `
+project:
+  id: foo
+  vm_name: foo-vm
+  proxxy: on
+`,
+			wantIn: "proxxy",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "devm.yaml", tc.yaml)
+			_, err := Load(dir)
+			require.Error(t, err, "expected unknown-field rejection")
+			assert.Contains(t, err.Error(), tc.wantIn,
+				"error should name the offending key: %s", err)
+		})
+	}
 }
 
 func TestLoadStrictFailsOnMissingRequiredField(t *testing.T) {

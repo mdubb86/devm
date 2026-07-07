@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,21 @@ import (
 	"github.com/mdubb86/devm/internal/schema"
 	"gopkg.in/yaml.v3"
 )
+
+// strictDecode runs yaml.v3 with KnownFields(true) so ANY unknown key
+// — top-level, nested, or deeply nested — hard-fails with a yaml-native
+// error. Complements the friendlier CheckUnknownKeys / CheckLegacyKeys
+// passes above (which fire first and cover the common top-level + project
+// typos with nicer messages), and closes the gap those passes leave for
+// nested blocks (services.<name>.*, network.*, base_image.*, etc.).
+func strictDecode(data []byte, into any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(into); err != nil {
+		return err
+	}
+	return nil
+}
 
 // Load reads devm.yaml (required) and devm.me.yaml (optional) from dir,
 // validates each, deep-merges, and validates the result. Returns the
@@ -25,7 +41,7 @@ func Load(dir string) (schema.Config, error) {
 		return schema.Config{}, fmt.Errorf("%s: %w", basePath, err)
 	}
 	var base schema.Config
-	if err := yaml.Unmarshal(baseBytes, &base); err != nil {
+	if err := strictDecode(baseBytes, &base); err != nil {
 		return schema.Config{}, fmt.Errorf("parse %s: %w", basePath, err)
 	}
 	if err := base.Validate(); err != nil {
@@ -45,7 +61,7 @@ func Load(dir string) (schema.Config, error) {
 		if err := schema.CheckUnknownKeys(ovBytes); err != nil {
 			return schema.Config{}, fmt.Errorf("%s: %w", overridePath, err)
 		}
-		if err := yaml.Unmarshal(ovBytes, &override); err != nil {
+		if err := strictDecode(ovBytes, &override); err != nil {
 			return schema.Config{}, fmt.Errorf("parse %s: %w", overridePath, err)
 		}
 	}

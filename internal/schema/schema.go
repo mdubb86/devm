@@ -183,10 +183,38 @@ type serviceYAML struct {
 	Systemd   string               `yaml:"systemd,omitempty"`
 }
 
+// serviceKnownFields lists the yaml keys serviceYAML accepts. Kept in
+// sync with the tags on serviceYAML above; enforced by
+// TestService_KnownFieldsMatchStruct so it never drifts.
+var serviceKnownFields = []string{
+	"port", "hostname", "env", "masks", "templates",
+	"exec", "workdir", "restart", "after", "user", "systemd",
+}
+
 // UnmarshalYAML implements polymorphic decoding for the `port` field:
 //   - int form: `port: 80` → Port=80, BindIP=""
 //   - string form: `port: "0.0.0.0:80"` → Port=80, BindIP="0.0.0.0"
+//
+// Also rejects unknown keys. yaml.v3's KnownFields(true) at the decoder
+// level does NOT propagate through custom UnmarshalYAML using
+// node.Decode, so services would silently accept typos like
+// `services.api.replicaz: 3` without this explicit check.
 func (s *Service) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.MappingNode {
+		known := make(map[string]bool, len(serviceKnownFields))
+		for _, k := range serviceKnownFields {
+			known[k] = true
+		}
+		for i := 0; i < len(node.Content); i += 2 {
+			key := node.Content[i].Value
+			if !known[key] {
+				return fmt.Errorf(
+					"unknown field %q at service (line %d) — valid: %s",
+					key, node.Content[i].Line,
+					strings.Join(serviceKnownFields, ", "))
+			}
+		}
+	}
 	var raw serviceYAML
 	if err := node.Decode(&raw); err != nil {
 		return err
