@@ -43,6 +43,10 @@ func (f *fakeVMAdmin) StartVM(_ context.Context, _ serviceapi.VMStartRequest) er
 	return f.startErr
 }
 
+func (f *fakeVMAdmin) ApplyEgressEnforcement(_ context.Context, _, _ string) error {
+	return nil
+}
+
 func (f *fakeVMAdmin) StopVM(_ context.Context, _, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

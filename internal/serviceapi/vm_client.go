@@ -28,6 +28,27 @@ func (c *Client) StartVM(ctx context.Context, req VMStartRequest) error {
 	return nil
 }
 
+// ApplyEgressEnforcement asks the daemon to inject the iron-proxy
+// nftables + dnsmasq scripts inside the VM. Called AFTER provisioning
+// succeeds — the CLI runs the user's install: / apt-get / template
+// installs with open network, then flips enforcement on just before
+// systemd services start.
+func (c *Client) ApplyEgressEnforcement(ctx context.Context, projectID, vmName string) error {
+	body, err := json.Marshal(VMApplyEgressRequest{ProjectID: projectID, VMName: vmName})
+	if err != nil {
+		return err
+	}
+	r, err := c.post(ctx, "/vm/apply-egress-enforcement", body)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("vm/apply-egress-enforcement: status %d", r.StatusCode)
+	}
+	return nil
+}
+
 // StopVM asks the daemon to stop the project VM. When vmName is set, the
 // daemon calls `tart stop <vmName>` first so the guest gets a graceful
 // shutdown before the tart-run process is signalled.

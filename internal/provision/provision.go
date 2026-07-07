@@ -44,6 +44,15 @@ type Provisioner struct {
 	// is mounted. Mirrored paths (Ship 4 decision): the same path as
 	// on the Mac (e.g., /Users/michael/projects/myproj).
 	WorkspaceVMPath string
+
+	// EnforceEgress is called between "systemctl daemon-reload" and
+	// "enable + start services". It asks the daemon to inject the iron-
+	// proxy nftables + dnsmasq scripts inside the VM, so systemd services
+	// come up UNDER enforcement while the earlier install: / apt-get /
+	// template-install steps ran with open network. Nil is allowed —
+	// tests that don't need enforcement (unit-tests, non-daemon paths)
+	// leave it unset.
+	EnforceEgress func(context.Context) error
 }
 
 // StepFailure carries which provisioning step failed. Callers use this
@@ -111,6 +120,7 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 		{"install templates", p.installTemplates},
 		{"install service units", p.installServiceUnits},
 		{"systemctl daemon-reload", p.daemonReload},
+		{"apply egress enforcement", p.applyEgressEnforcement},
 		{"enable + start services", p.enableStartServices},
 		{"apply masks", p.applyMasks},
 	}
@@ -194,12 +204,23 @@ func (p *Provisioner) writeDnsmasqConfig(ctx context.Context, w io.Writer) error
 	return p.execShell(ctx, w, script)
 }
 
+func (p *Provisioner) applyEgressEnforcement(ctx context.Context, w io.Writer) error {
+	if p.EnforceEgress == nil {
+		fmt.Fprintln(w, "(no EnforceEgress callback set — skipping)")
+		return nil
+	}
+	return p.EnforceEgress(ctx)
+}
+
 func (p *Provisioner) reloadBaseServices(ctx context.Context, w io.Writer) error {
 	// reload-or-restart handles both "config changed, reload" and
 	// "service not running yet, start it".
-	if err := p.exec(ctx, w, "sudo", "systemctl", "reload-or-restart", "dnsmasq"); err != nil {
-		return err
-	}
+	//
+	// Only caddy is reloaded here. Dnsmasq is not yet running: at this
+	// point systemd-resolved still holds :53. The apply-egress-enforcement
+	// step (fires post-provision) masks resolved and starts dnsmasq — so
+	// dnsmasq's config in /etc/dnsmasq.d/devm-test.conf (written at
+	// writeDnsmasqConfig above) becomes active there.
 	return p.exec(ctx, w, "sudo", "systemctl", "reload-or-restart", "caddy")
 }
 

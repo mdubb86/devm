@@ -84,6 +84,7 @@ type ShellDeps struct {
 type VMAdminClient interface {
 	VMStatus(ctx context.Context, projectID, vmName string) (serviceapi.VMStatusResponse, error)
 	StartVM(ctx context.Context, req serviceapi.VMStartRequest) error
+	ApplyEgressEnforcement(ctx context.Context, projectID, vmName string) error
 	StopVM(ctx context.Context, projectID, vmName string) error
 }
 
@@ -223,6 +224,9 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		Cfg:             cfg,
 		CARootPEM:       caPEM,
 		WorkspaceVMPath: repoRoot,
+		EnforceEgress: func(ctx context.Context) error {
+			return d.ServiceAPIClient.ApplyEgressEnforcement(ctx, cfg.Project.ID, vmName)
+		},
 	}
 	debuglog.Logf("shell", "cold-start: provisioning")
 	if err := prov.Run(ctx, os.Stdout); err != nil {

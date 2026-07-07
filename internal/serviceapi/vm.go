@@ -58,6 +58,14 @@ type VMStopRequest struct {
 	VMName    string `json:"vm_name,omitempty"`
 }
 
+// VMApplyEgressRequest is the body shape for POST /vm/apply-egress-enforcement.
+// The daemon looks up the iron-proxy port info stashed at /vm/start time
+// and runs the nftables + dnsmasq scripts inside the VM.
+type VMApplyEgressRequest struct {
+	ProjectID string `json:"project_id"`
+	VMName    string `json:"vm_name"`
+}
+
 // VMStatusResponse is the body shape for GET /vm/status.
 type VMStatusResponse struct {
 	Present bool   `json:"present"`
@@ -267,28 +275,31 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			return
 		}
 
-		// Stash port info for VM env injection to read.
+		// Stash port info + macIP for VM env injection and the deferred
+		// egress-enforcement inject to read.
 		ironProxyState.put(req.ProjectID, ironProxyInfo{
+			MacHost:   macIP,
 			HTTPPort:  httpPort,
 			HTTPSPort: httpsPort,
 			DNSPort:   dnsPort,
 		})
 
-		// Apply VM-side config via tart exec — workspace mount, env,
-		// nftables, dnsmasq. Each is its own tart exec invocation; any
-		// failure rolls back nothing (VM is in an indeterminate state —
-		// user re-runs devm teardown to clean up).
+		// Apply VM-side config via tart exec — workspace mount, extra
+		// mounts, env only. The iron-proxy egress-enforcement scripts
+		// (nftables + dnsmasq→iron-proxy) are DEFERRED to the post-
+		// provision `/vm/apply-egress-enforcement` call so the user's
+		// install:, apt-get, and template-install steps run with open
+		// egress. Iron-proxy is meant to gate the workload/services, not
+		// the developer's provisioning phase.
+		//
 		// Workspace mount runs first so subsequent scripts can read files
 		// from the workspace (e.g. .devm/.env).
-		info, _ := ironProxyState.get(req.ProjectID)
 		scripts := []string{
 			buildEnvScript(),
-			buildNftablesScript(macIP, info.HTTPPort, info.HTTPSPort, info.DNSPort),
-			buildDnsmasqScript(macIP, info.DNSPort),
 		}
-		// Extra mounts must land BEFORE the env/nftables/dnsmasq scripts
-		// so any of those that read files from an extra mount can find
-		// them. Order among extras doesn't matter — each is independent.
+		// Extra mounts must land BEFORE the env script so scripts that
+		// read files from an extra mount can find them. Order among
+		// extras doesn't matter — each is independent.
 		for i, m := range extraMountSpecs {
 			scripts = append([]string{
 				buildExtraMountScript(fmt.Sprintf("extra_%d", i), m.hostPath, m.readOnly),
@@ -307,6 +318,52 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			}
 		}
 
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// /vm/apply-egress-enforcement injects the iron-proxy nftables +
+	// dnsmasq scripts inside the VM. Called by the CLI orchestrator AFTER
+	// provisioning succeeds — so the user's install:, apt-get, template
+	// installs, etc. all run with open egress. Iron-proxy's purpose is
+	// to gate the workload/services, not the provisioning phase.
+	//
+	// Idempotent: safe to call on a VM where enforcement is already
+	// applied (nftables load overwrites, dnsmasq restart is a no-op if
+	// the config didn't change).
+	s.Register("/vm/apply-egress-enforcement", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMApplyEgressRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.ProjectID == "" || req.VMName == "" {
+			http.Error(w, "project_id and vm_name required", http.StatusBadRequest)
+			return
+		}
+		info, ok := ironProxyState.get(req.ProjectID)
+		if !ok {
+			http.Error(w, "iron-proxy state missing — was /vm/start called for this project?",
+				http.StatusPreconditionFailed)
+			return
+		}
+		scripts := []string{
+			buildNftablesScript(info.MacHost, info.HTTPPort, info.HTTPSPort, info.DNSPort),
+			buildDnsmasqScript(info.MacHost, info.DNSPort),
+		}
+		for i, script := range scripts {
+			cmd := exec.Command("tart", "exec", "-i", req.VMName, "sudo", "bash", "-s")
+			cmd.Stdin = strings.NewReader(script)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				http.Error(w, fmt.Sprintf("apply egress step %d failed: %v\n%s", i, err, out),
+					http.StatusInternalServerError)
+				return
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -419,6 +476,7 @@ func pickPort() (int, error) {
 }
 
 type ironProxyInfo struct {
+	MacHost   string
 	HTTPPort  int
 	HTTPSPort int
 	DNSPort   int
