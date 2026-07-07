@@ -24,13 +24,12 @@ class Workspace:
 
     def write_devmyaml(self, **sections: Any) -> None:
         """Write a fresh devm.yaml. Extra sections (install, services, env,
-        network, base_image) are merged into the project skeleton."""
+        network) are merged into the project skeleton."""
         cfg: dict[str, Any] = {
             "project": {
                 "id": self.slug,
                 "vm_name": self.vm_name,
             },
-            "base_image": {"docker": False},
         }
         for k, v in sections.items():
             cfg[k] = v
