@@ -18,7 +18,7 @@ Claude Code needs is listed here.
 
 ```yaml
 install:
-  - curl -fsSL https://claude.ai/install.sh | bash && install -m 755 /root/.local/share/claude/versions/* /usr/local/bin/claude && install -d -o agent -g agent /home/agent/.local/bin && ln -sf /usr/local/bin/claude /home/agent/.local/bin/claude
+  - curl -fsSL https://claude.ai/install.sh | bash && install -m 755 /root/.local/share/claude/versions/* /usr/local/bin/claude && install -d -o devm -g devm /home/devm/.local/bin && ln -sf /usr/local/bin/claude /home/devm/.local/bin/claude
 
 env:
   CLAUDE_CONFIG_DIR: $WORKSPACE/.devm/.claude
@@ -37,14 +37,14 @@ network:
 
 - **Why the install command is three steps:** the installer drops the
   binary at `/root/.local/share/claude/versions/*` (install runs as
-  root), which isn't on the agent user's PATH. First `install -m 755`
+  root), which isn't on the devm user's PATH. First `install -m 755`
   relocates the binary to `/usr/local/bin/claude` (system PATH, works
-  for any user). Then `install -d -o agent` + `ln -sf` creates
+  for any user). Then `install -d -o devm` + `ln -sf` creates
   `~/.local/bin/claude` as a symlink to it — Claude Code does a
   self-check that expects its binary at that canonical user path, and
   warns/refuses some operations without it.
 - **Binary** lands at `/usr/local/bin/claude` (real file) with
-  `/home/agent/.local/bin/claude` → it (symlink). Ephemeral — the
+  `/home/devm/.local/bin/claude` → it (symlink). Ephemeral — the
   installer re-runs on every cold-start (`install:` runs once per
   VM lifetime).
 - **State** is everything Claude stores under `~/.claude`: OAuth at

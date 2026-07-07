@@ -18,7 +18,7 @@ linux/arm64 build artifacts with a darwin host.
 
 ```yaml
 path:
-  - /home/agent/go/bin    # Go's default GOBIN -> on PATH so `go install x && x` works
+  - /home/devm/go/bin    # Go's default GOBIN -> on PATH so `go install x && x` works
 
 install:
   - apt-get install -y golang-go
@@ -52,7 +52,7 @@ network:
 
 - **`path:` puts `$HOME/go/bin` on PATH.** This uses the top-level `path:`
   field (prepends absolute dirs to PATH). Go's default `GOBIN` is
-  `$HOME/go/bin` (= `/home/agent/go/bin` inside the VM); without this
+  `$HOME/go/bin` (= `/home/devm/go/bin` inside the VM); without this
   entry, ad-hoc `go install x@latest` succeeds but typing `x` fails. With
   the entry, the conventional layout works.
 
