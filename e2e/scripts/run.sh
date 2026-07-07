@@ -153,14 +153,17 @@ rc_parallel=0
 rc_sudo=0
 rc_pty=0
 
-# Phase 1: parallel for non-pty, non-serial tests. Capped at 2 workers —
-# empirically, 4 workers concurrently cold-starting VMs runs into
-# memory/CPU pressure that kills VMs mid-provisioning (test_68 was the
-# consistent tell). 2 workers keeps most of the wall-clock savings vs
-# serial while staying under the resource ceiling. `-n auto` spawns one
-# per CPU and definitely overloads tart's guest-agent gRPC.
+# Phase 1: serial (`-p no:xdist`). We ran the suite at -n 4, -n 2, and
+# fully serial. -n 4 and -n 2 both produce ~1 flake per run — different
+# tests each time (test_43 SSL chain, test_52 state race, test_59
+# transport, test_68 VM died mid-provision). Serial produces zero
+# flakes across the same suite. Root cause: concurrent VM cold-starts
+# on Apple Virtualization + tart-guest-agent contend for resources
+# (memory, vmnet, guest-agent RPC channel) and occasionally kill each
+# other. Trade-off: phase 1 grows from ~90s to ~6 min. Full suite is
+# ~14 min. Worth it for a deterministic green.
 set -m
-uv run pytest -m "$parallel_mark" -n 2 ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
+uv run pytest -m "$parallel_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
 PYTEST_PID=$!
 set +m
 wait $PYTEST_PID
