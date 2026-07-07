@@ -17,6 +17,8 @@ import (
 // are ~1ms with no network.
 var nudgeForCommand = map[string]struct{}{
 	"shell":     {},
+	"start":     {},
+	"exec":      {},
 	"reconcile": {},
 	"stop":      {},
 	"status":    {},

@@ -19,76 +19,131 @@ var shellCmd = &cobra.Command{
 	Short: "Bootstrap the sandbox (if needed) and attach an interactive session",
 	Long: `Acquires a project-local lock, brings the sandbox to a running state
 if it is stopped, reconciles ports, then attaches an interactive shell.
-The sandbox auto-stops when the shell exits.
+The sandbox stays running after the shell exits — use ` + "`devm stop`" + ` to
+stop it or ` + "`devm teardown`" + ` to destroy it.
 
 If the sandbox is already running, devm shell skips bootstrap and
 attaches immediately. Port reconcile only runs on cold start.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Past arg parsing — errors from here on are runtime, not usage.
-		cmd.SilenceUsage = true
-		repoRoot, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("get cwd: %w", err)
-		}
-		cfg, err := config.Load(repoRoot)
-		if err != nil {
-			return err
-		}
-
 		cmdName := "bash"
 		var cmdArgs []string
 		if len(args) > 0 {
 			cmdName = args[0]
 			cmdArgs = args[1:]
 		}
-
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer cancel()
-
-		// Auto-install routes in vm mode if the project doesn't have
-		// any yet. Best-effort: silent if the daemon is down. We
-		// don't overwrite an existing route set — the user may have
-		// explicitly chosen `devm route local`, and we respect that
-		// across stop/start cycles per the Ship 3 design.
-		go func() {
-			routes, err := buildRoutes(cfg, serviceapi.ModeVM)
-			if err != nil || len(routes) == 0 {
-				return
-			}
-			rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer rcancel()
-			c := serviceapi.NewClient()
-			if !c.Available(rctx) {
-				return
-			}
-			existing, err := c.ListRoutes(rctx)
-			if err != nil {
-				return
-			}
-			if _, present := existing[cfg.Project.ID]; present {
-				return
-			}
-			_ = c.ApplyRoutes(rctx, cfg.Project.ID, routes)
-		}()
-
-		deps := orchestrator.DefaultShellDeps(repoRoot)
-		rc, err := orchestrator.RunShell(ctx, deps, cfg, repoRoot, cfg.Project.VMName, cmdName, cmdArgs)
-		if err != nil {
-			// SIGINT during cold start cancels ctx. Suppress the noisy
-			// "context canceled" stack and exit 130 (SIGINT convention).
-			if errors.Is(err, context.Canceled) {
-				fmt.Fprintln(os.Stderr, "aborted")
-				os.Exit(130)
-			}
-			return err
-		}
-		if rc != 0 {
-			os.Exit(rc)
-		}
-		return nil
+		return runShellFlow(cmd, cmdName, cmdArgs)
 	},
+}
+
+var startCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Bring the sandbox up without attaching a shell",
+	Long: `Cold-starts the sandbox (or attaches to an already-running one) and
+returns immediately. Equivalent to ` + "`devm shell -- true`" + ` but with
+clearer intent — useful in scripts, CI, or when you want the VM
+warmed up in the background before you attach later.
+
+The sandbox stays running until ` + "`devm stop`" + ` or ` + "`devm teardown`" + `.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) > 0 {
+			return fmt.Errorf("devm start takes no arguments (got %v)", args)
+		}
+		// Run `true` inside the VM so the flow completes provisioning and
+		// service start without opening an interactive shell. `true` is
+		// portable, exits 0, and takes no time.
+		return runShellFlow(cmd, "true", nil)
+	},
+}
+
+var execCmd = &cobra.Command{
+	Use:   "exec [--] COMMAND [ARGS...]",
+	Short: "Run a one-shot command inside the sandbox",
+	Long: `Runs COMMAND inside the sandbox with the project env sourced and cwd
+set to the workspace directory. Same cold-start / attach lifecycle as
+` + "`devm shell`" + `, but requires a command and returns its exit code
+directly — designed for scripts and CI.
+
+TTY/PTY handling is auto-detected from the caller's stdin:
+  - stdin is a terminal → PTY allocated (so ` + "`devm exec bash`" + ` acts
+    like an interactive shell).
+  - stdin is piped/redirected → plain pipes, exit code forwarded.
+
+Equivalent to ` + "`devm shell -- COMMAND [ARGS...]`" + ` but with a clearer
+name matching the docker exec / kubectl exec convention. Prefer
+` + "`devm shell`" + ` for interactive sessions, ` + "`devm exec`" + ` for one-shots.`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runShellFlow(cmd, args[0], args[1:])
+	},
+	// Don't try to parse flags in the exec'd command's argv — e.g.
+	// `devm exec ls -la` must pass -la to ls, not to devm.
+	DisableFlagParsing: true,
+}
+
+// runShellFlow is the shared cold-start / attach implementation used by
+// both `devm shell` and `devm start`. cmdName + cmdArgs is what runs
+// inside the VM after bootstrap; "true" from `devm start` returns
+// immediately, "bash" from `devm shell` attaches an interactive session.
+func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
+	// Past arg parsing — errors from here on are runtime, not usage.
+	cmd.SilenceUsage = true
+	repoRoot, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get cwd: %w", err)
+	}
+	cfg, err := config.Load(repoRoot)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	// Auto-install routes in vm mode if the project doesn't have
+	// any yet. Best-effort: silent if the daemon is down. We
+	// don't overwrite an existing route set — the user may have
+	// explicitly chosen `devm route local`, and we respect that
+	// across stop/start cycles per the Ship 3 design.
+	go func() {
+		routes, err := buildRoutes(cfg, serviceapi.ModeVM)
+		if err != nil || len(routes) == 0 {
+			return
+		}
+		rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer rcancel()
+		c := serviceapi.NewClient()
+		if !c.Available(rctx) {
+			return
+		}
+		existing, err := c.ListRoutes(rctx)
+		if err != nil {
+			return
+		}
+		if _, present := existing[cfg.Project.ID]; present {
+			return
+		}
+		_ = c.ApplyRoutes(rctx, cfg.Project.ID, routes)
+	}()
+
+	deps := orchestrator.DefaultShellDeps(repoRoot)
+	rc, err := orchestrator.RunShell(ctx, deps, cfg, repoRoot, cfg.Project.VMName, cmdName, cmdArgs)
+	if err != nil {
+		// SIGINT during cold start cancels ctx. Suppress the noisy
+		// "context canceled" stack and exit 130 (SIGINT convention).
+		if errors.Is(err, context.Canceled) {
+			fmt.Fprintln(os.Stderr, "aborted")
+			os.Exit(130)
+		}
+		return err
+	}
+	if rc != 0 {
+		os.Exit(rc)
+	}
+	return nil
 }
 
 func init() {
 	rootCmd.AddCommand(shellCmd)
+	rootCmd.AddCommand(startCmd)
+	rootCmd.AddCommand(execCmd)
 }

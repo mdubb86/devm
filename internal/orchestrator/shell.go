@@ -229,7 +229,11 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		},
 	}
 	debuglog.Logf("shell", "cold-start: provisioning")
-	if err := prov.Run(ctx, os.Stdout); err != nil {
+	// Provisioning output is DIAGNOSTIC — step names, package install
+	// noise, etc. It belongs on stderr so `devm exec pwd` / `devm shell
+	// -- <cmd>` produce clean stdout that scripts can pipe. Failure
+	// details flow via the returned error, not via this writer.
+	if err := prov.Run(ctx, os.Stderr); err != nil {
 		// Service-phase failures (unit install, daemon-reload, enable+start,
 		// apply masks) leave the VM in a debuggable state — user's fix is
 		// in devm.yaml, not in the VM. Surface the error but keep the VM

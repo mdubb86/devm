@@ -33,4 +33,14 @@ if [ -n "$DEVM_TERMINFO_BLOB" ] && [ -n "$TERM" ]; then
     unset DEVM_TERMINFO_BLOB
 fi
 
+# Auto-cd to the workspace directory so `devm shell`, `devm exec` and
+# provisioner install: steps all start in the project root — same
+# mental model as `docker run -w`, and where a user editing the repo
+# expects to land. Silent no-op if $WORKSPACE isn't set (defensive) or
+# the path doesn't exist (mount not ready — shouldn't happen post-
+# provision, but don't hard-fail).
+if [ -n "$WORKSPACE" ] && [ -d "$WORKSPACE" ]; then
+    cd "$WORKSPACE" || true
+fi
+
 exec "$@"
