@@ -499,12 +499,20 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 	})
 }
 
-// pickPort returns a free ephemeral TCP port by binding to :0 and
-// immediately closing. There is a small TOCTOU window between the
-// close and the caller's bind, but this is the standard approach
-// on darwin where SO_REUSEPORT can't be used across processes.
+// pickPort returns a free ephemeral TCP port by binding to :0 on
+// 0.0.0.0 (all interfaces) and immediately closing. There is a small
+// TOCTOU window between the close and iron-proxy's bind — standard on
+// darwin where SO_REUSEPORT can't be shared across processes.
+//
+// The listen address must be 0.0.0.0, not 127.0.0.1: iron-proxy binds
+// on MAC_HOST (a vmnet bridge IP like 192.168.64.1), not loopback. A
+// port free on 127.0.0.1 can be held by another process on
+// 192.168.64.1 — orphan iron-proxies from prior test runs, most
+// commonly. Binding on 0.0.0.0 means the kernel only hands back a
+// port free across every interface, so the subsequent iron-proxy bind
+// on MAC_HOST can't collide.
 func pickPort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		return 0, err
 	}
