@@ -181,20 +181,31 @@ func secretEnvVarName(name string) string {
 	return "DEVM_SECRET_" + strings.ToUpper(name)
 }
 
+// IronProxyConfigPath returns the on-disk path SpawnIronProxy writes
+// its config to for projectID. Used at adoption time to rehydrate
+// ironProxyState from the running iron-proxy's config file. Callers
+// don't need the file to exist; they get the expected location so
+// they can read it or bail on ENOENT.
+func IronProxyConfigPath(projectID string) (string, error) {
+	runDir, err := EnsureRuntimeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(runDir, "iron-proxy", fmt.Sprintf("%s.yaml", projectID)), nil
+}
+
 // writeIronProxyConfig persists the YAML blob to a stable per-project path
 // so the supervisor can re-spawn iron-proxy after a crash without re-running
 // the daemon's config-build path. Returns the absolute path. File is written
 // mode 0600 to limit exposure of the config contents.
 func writeIronProxyConfig(projectID string, blob []byte) (string, error) {
-	runDir, err := EnsureRuntimeDir()
+	path, err := IronProxyConfigPath(projectID)
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(runDir, "iron-proxy")
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", fmt.Errorf("create iron-proxy config dir: %w", err)
 	}
-	path := filepath.Join(dir, fmt.Sprintf("%s.yaml", projectID))
 	if err := os.WriteFile(path, blob, 0600); err != nil {
 		return "", fmt.Errorf("write iron-proxy config: %w", err)
 	}
