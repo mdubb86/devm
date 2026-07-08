@@ -92,6 +92,34 @@ func (c *Client) Available(ctx context.Context) bool {
 	return c.Health(ctx) == nil
 }
 
+// ProxyReady reports whether the daemon's reverse-proxy actor came
+// up this daemon lifetime — i.e. launchd handed off the :80/:443
+// listeners and NewProxyServer.Serve was launched. Returns false on
+// any transport / decode error so callers can treat "can't tell" as
+// "not ready" and render the CLI status accordingly.
+//
+// This replaces the older `net.DialTimeout("tcp", "127.0.0.1:443",
+// ...)` probe. That probe dropped the connection mid-TLS handshake
+// and each call spammed one "TLS handshake error … EOF" line into
+// the daemon log — which is how we caught the bug in the first place.
+func (c *Client) ProxyReady(ctx context.Context) (bool, error) {
+	resp, err := c.do(ctx, "GET", "/proxy-status")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return false, fmt.Errorf("proxy-status: status %d", resp.StatusCode)
+	}
+	var body struct {
+		Ready bool `json:"ready"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return false, err
+	}
+	return body.Ready, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+path, nil)
 	if err != nil {

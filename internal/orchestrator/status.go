@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -39,13 +38,19 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot string) (StatusResult,
 	trusted, _ := serviceapi.CheckCATrusted()
 	res.CATrusted = trusted
 
-	// Proxy health: TCP dial to localhost:443 within 500ms. If
-	// launchd handed off the socket and the daemon is up, this
-	// succeeds.
-	conn, err := net.DialTimeout("tcp", "127.0.0.1:443", 500*time.Millisecond)
-	if err == nil {
-		res.ProxyHealthy = true
-		_ = conn.Close()
+	// Proxy health: ask the daemon over the unix socket. Previously
+	// this was a TCP dial to 127.0.0.1:443 with immediate close — but
+	// every call dropped mid-TLS-handshake and each one spammed a
+	// "TLS handshake error … EOF" line into the daemon log, which
+	// masked real errors. The unix-socket probe has zero on-wire
+	// footprint for the reverse-proxy actor.
+	proxyCtx, proxyCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer proxyCancel()
+	if ready, err := c.ProxyReady(proxyCtx); err == nil {
+		res.ProxyHealthy = ready
+		if !ready {
+			res.ProxyError = "reverse-proxy actor not started (launchd sockets not handed off)"
+		}
 	} else {
 		res.ProxyError = err.Error()
 	}

@@ -123,9 +123,14 @@ func RunService(ctx context.Context, build Build) error {
 
 	// Reverse proxy actor (Ship 3). Skipped if no listeners were
 	// inherited (e.g., `devm serve` from a shell — dev convenience).
+	// SetProxyReady lets `devm status`'s /proxy-status probe report
+	// the actor's state instead of TCP-dialing 127.0.0.1:443 (which
+	// closes mid-handshake and spams "TLS handshake error … EOF" in
+	// the daemon log — the very bug this feedback loop caught).
 	if len(httpListeners)+len(httpsListeners) > 0 {
 		proxyCtx, cancel := context.WithCancel(ctx)
 		proxy := NewProxyServer(routes, ca)
+		server.SetProxyReady(true)
 		g.Add(func() error {
 			return proxy.Serve(proxyCtx, httpListeners, httpsListeners)
 		}, func(error) {

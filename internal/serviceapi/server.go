@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/mdubb86/devm/internal/debuglog"
@@ -19,6 +20,7 @@ type Server struct {
 	socketPath string
 	build      Build
 	mux        *http.ServeMux
+	proxyReady atomic.Bool
 }
 
 // Build describes the daemon binary's build identity, reported via
@@ -48,7 +50,28 @@ func NewServer(socketPath string, build Build) *Server {
 	}
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/version", s.handleVersion)
+	s.mux.HandleFunc("/proxy-status", s.handleProxyStatus)
 	return s
+}
+
+// SetProxyReady toggles the reverse-proxy actor's ready state. Called
+// by runner.go once launchd's :80/:443 listeners have been handed off
+// and the actor is serving. Cleared on daemon shutdown by process
+// exit; no explicit unset — a running daemon whose proxy actor
+// crashed intentionally keeps the flag true so the CLI still surfaces
+// the crash instead of pretending nothing was ever running.
+func (s *Server) SetProxyReady(ready bool) {
+	s.proxyReady.Store(ready)
+}
+
+// handleProxyStatus returns {"ready":bool} — was the reverse-proxy
+// actor started this daemon's lifetime. Used by `devm status` in place
+// of a raw TCP dial to 127.0.0.1:443 (which drops the connection
+// mid-TLS handshake and spams the daemon log with "TLS handshake
+// error … EOF").
+func (s *Server) handleProxyStatus(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ready": s.proxyReady.Load()})
 }
 
 // Register adds a handler at the given pattern. Used by later ships
