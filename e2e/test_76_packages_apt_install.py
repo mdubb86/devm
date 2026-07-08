@@ -46,12 +46,12 @@ def test_packages_installs_apt_binary(workspace, devm, sandbox_name):
     )
     assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
     stderr = r.stderr.decode()
-    assert "[step: apt-get install packages]" in r.stdout.decode(), (
-        f"expected provisioner step marker in stdout; got:\n{r.stdout.decode()}"
+    assert "[step: apt-get install packages]" in stderr, (
+        f"expected provisioner step marker in stderr; got:\n{stderr}"
     )
     # If apt-get itself surfaces an error the step exits non-zero — the
     # returncode check above catches that; still assert we didn't skip.
-    assert "(no packages declared)" not in r.stdout.decode(), (
+    assert "(no packages declared)" not in stderr, (
         "provisioner reported no packages even though jq was declared"
     )
 
