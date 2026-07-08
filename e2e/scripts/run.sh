@@ -106,6 +106,27 @@ echo "=== e2e: uninstalling any prior devm daemon ===" >&2
 # don't fail the run if pkill can't reach a PID.
 echo "=== e2e: reaping orphan iron-proxy processes ===" >&2
 pkill -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null || true
+
+# Reap orphan e2e-* tart VMs from prior runs. Test fixtures name their
+# VMs `e2e-<slug>-<hash>` and register them into E2E_REGISTRY for
+# sweep_registry to delete on exit — but the registry only knows
+# about VMs the CURRENT run created. A prior run that died before
+# sweep_registry could fire (SIGKILL on bash, laptop sleep, CI job
+# cancel) leaves its VMs behind, and they cost disk + occasionally
+# hold shared resources (vmnet DHCP leases, tart's per-VM
+# scratch dirs). Sweep them here so a fresh run starts from clean
+# state.
+#
+# Only touches VMs prefixed `e2e-` — same allow-list the e2e test
+# fixtures use and the same shape sweep-leftovers.sh matches. User
+# VMs and `devm-base` are untouched.
+echo "=== e2e: reaping orphan e2e-* tart VMs ===" >&2
+while read -r name; do
+    [ -z "$name" ] && continue
+    tart stop "$name" >/dev/null 2>&1 || true
+    tart delete "$name" >/dev/null 2>&1 || true
+done < <(tart list 2>/dev/null | awk 'NR>1 && $2 ~ /^e2e-/ {print $2}')
+
 # Small settle so kernels release the port bindings before the fresh
 # daemon starts picking ports.
 sleep 1
