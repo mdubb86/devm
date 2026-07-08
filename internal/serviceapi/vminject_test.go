@@ -92,16 +92,20 @@ func TestBuildNftablesScript_ZeroNTPPortSkipsRule(t *testing.T) {
 	assert.NotContains(t, script, ":0 ") // paranoia — no zero-port rule anywhere
 }
 
-func TestBuildTimesyncdScript_PointsAtMacHost(t *testing.T) {
-	script := buildTimesyncdScript("192.168.64.1")
+func TestBuildTimesyncdScript_PointsAtProxySentinel(t *testing.T) {
+	script := buildTimesyncdScript()
 	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")
-	assert.Contains(t, script, "NTP=192.168.64.1")
-	// Explicit empty FallbackNTP prevents timesyncd from ever trying the
-	// default pool.ntp.org list; egress firewall would deny it anyway,
-	// but silencing the attempt keeps the log clean.
+	// Sentinel (not MAC_HOST): the ip-daddr-MAC_HOST-return NAT bypass
+	// would otherwise fire before our udp:123 DNAT and the packet
+	// would arrive at MAC_HOST:123 (no listener) instead of the
+	// daemon's SNTP responder.
+	assert.Contains(t, script, "NTP="+proxySentinelIP)
+	// Explicit empty FallbackNTP prevents timesyncd from ever trying
+	// the default pool.ntp.org list; egress firewall would deny it
+	// anyway, but silencing the attempt keeps the log clean.
 	assert.Contains(t, script, "FallbackNTP=")
-	// Poll interval cap: even if timesyncd's exponential backoff climbs,
-	// the max is bounded — post-wake heal is ~64s worst case.
+	// Poll interval cap: even if timesyncd's exponential backoff
+	// climbs, the max is bounded — post-wake heal is ~64s worst case.
 	assert.Contains(t, script, "PollIntervalMaxSec=64")
 	assert.Contains(t, script, "systemctl restart systemd-timesyncd")
 }

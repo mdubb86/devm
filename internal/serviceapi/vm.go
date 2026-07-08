@@ -360,7 +360,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		scripts := []string{
 			buildNftablesScript(info.MacHost, info.HTTPPort, info.HTTPSPort, info.DNSPort, ntpPort),
 			buildDnsmasqScript(info.MacHost, info.DNSPort),
-			buildTimesyncdScript(info.MacHost),
+			buildTimesyncdScript(),
 		}
 		for i, script := range scripts {
 			cmd := exec.Command("tart", "exec", "-i", req.VMName, "sudo", "bash", "-s")

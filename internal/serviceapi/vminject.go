@@ -144,22 +144,29 @@ sudo nft -f /etc/nftables.conf
 		ntpFilterRule)
 }
 
-// buildTimesyncdScript configures systemd-timesyncd to sync from
-// MAC_HOST. The nftables DNAT catches guest→UDP:123 regardless of
-// destination, but pointing timesyncd at MAC_HOST explicitly (rather
-// than the default upstream pool) means:
-//   - No DNS round-trip on every poll (guest resolves nothing).
+// buildTimesyncdScript configures systemd-timesyncd to send NTP
+// traffic at the proxy sentinel IP. Sentinel — not MAC_HOST — because
+// the guest's `ip daddr <MAC_HOST> return` NAT bypass would otherwise
+// fire before our `udp dport 123 dnat` rule, and the packet would
+// reach MAC_HOST:123 (where nothing listens) instead of being
+// rewritten to the daemon's SNTP responder's random high port. Same
+// sentinel iron-proxy uses for DNS answers (see proxySentinelIP in
+// vm.go).
+//
+// Config choices:
+//   - No DNS lookup: sentinel is an IP, so timesyncd doesn't resolve
+//     anything on every poll.
 //   - PollIntervalMaxSec=64 caps the backoff so a Mac wake heals
 //     within ~64 seconds even if the previous poll succeeded.
-//   - The unit shows up as "MACH" / MAC_HOST in `timedatectl show-timesync`
-//     — operator-obvious that time is coming from the host, not the
-//     public internet.
+//   - Empty FallbackNTP prevents timesyncd from ever trying the
+//     public pool.ntp.org list — the egress firewall would deny it
+//     anyway, but silencing the attempt keeps the log clean.
 //
 // timesyncd is a systemd built-in; no install step needed on Debian.
 // `restart` (not `reload`) because timesyncd re-reads its config on
 // SIGHUP but not always the drop-in path — a restart is cheap and
 // unambiguous.
-func buildTimesyncdScript(macHost string) string {
+func buildTimesyncdScript() string {
 	return fmt.Sprintf(`sudo mkdir -p /etc/systemd/timesyncd.conf.d
 sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<EOF
 [Time]
@@ -170,7 +177,7 @@ PollIntervalMaxSec=64
 EOF
 sudo systemctl enable --now systemd-timesyncd
 sudo systemctl restart systemd-timesyncd
-`, macHost)
+`, proxySentinelIP)
 }
 
 // buildDnsmasqScript points dnsmasq's upstream at iron-proxy's DNS

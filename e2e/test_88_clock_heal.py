@@ -75,13 +75,34 @@ def test_clock_heals_after_forced_skew(workspace, devm):
         f"guest clock should start near host now={host_now}, got baseline={baseline}"
     )
 
-    # Force a large backwards skew. `date -s @0` sets the clock to
-    # 1970-01-01. TLS certs are all "not yet valid" from that vantage,
-    # matching the post-Mac-sleep symptom. `date -s` is idempotent so
-    # retrying on the tart transport flake is safe.
+    # Force a backwards skew big enough that TLS certs read as
+    # "not yet valid" (the post-Mac-sleep symptom this feature heals),
+    # but well inside the kernel's accepted range for settimeofday.
+    # Two moves matter:
+    #
+    #  1. Stop timesyncd before setting. With timesyncd actively
+    #     holding the clock via ntp_adjtime, `settimeofday` from
+    #     another writer races (and can return EINVAL). A real Mac
+    #     sleep has the same shape — timesyncd was paused during
+    #     host sleep too.
+    #
+    #  2. Skew by 24 hours, not 56 years. Some hardened kernel
+    #     configs reject settimeofday values before the system's
+    #     first-boot timestamp; 24h back is unambiguously safe and
+    #     more than enough to trip TLS not-yet-valid.
+    stop_ts = devm_exec_with_retry(
+        devm.path,
+        ["sudo", "systemctl", "stop", "systemd-timesyncd"],
+        cwd=str(workspace.path),
+        timeout=15,
+    )
+    assert stop_ts.returncode == 0, (
+        f"stop timesyncd: rc={stop_ts.returncode}\nstderr={stop_ts.stderr.decode()!r}"
+    )
+    skew_target = baseline - 86400  # 24h backward
     skew = devm_exec_with_retry(
         devm.path,
-        ["sudo", "date", "-s", "@0"],
+        ["sudo", "date", "-s", f"@{skew_target}"],
         cwd=str(workspace.path),
         timeout=15,
     )
@@ -89,10 +110,14 @@ def test_clock_heals_after_forced_skew(workspace, devm):
         f"date -s failed: rc={skew.returncode}\nstderr={skew.stderr.decode()!r}"
     )
 
-    # Confirm skew took effect.
+    # Confirm skew took effect. Allow generous slack — we don't care
+    # about drift precision, only that the clock is well behind host
+    # by at least many hours so heal is observable.
     after_skew = guest_epoch()
-    assert after_skew < 3600, (
-        f"guest clock should be near epoch after `date -s @0`; got {after_skew}"
+    host_now = int(time.time())
+    assert host_now - after_skew > 3600, (
+        f"guest clock should be at least an hour behind host after skew; "
+        f"guest={after_skew} host={host_now}"
     )
 
     # Poke timesyncd — restart it to force an immediate poll instead of
