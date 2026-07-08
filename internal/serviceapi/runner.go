@@ -59,7 +59,20 @@ func RunService(ctx context.Context, build Build) error {
 	// (we only have their PID, not their output stream), so counts
 	// start empty for them until the next SpawnIronProxy respawn.
 	denials := NewDenials()
-	RegisterVMHandlers(server, sup, tr, denials)
+
+	// SNTP responder — one daemon-wide instance, bound eagerly so /vm/start
+	// knows the port when it builds the guest's nftables script. The guest
+	// DNATs its outbound UDP:123 (timesyncd → wherever) to MAC_HOST at
+	// this port; we answer from the host's wall clock. This is what heals
+	// guest-clock drift after a Mac sleep — external NTP isn't reachable
+	// because our egress firewall doesn't proxy UDP, but the Mac itself
+	// is always time-correct.
+	ntp, err := NewNTPServer()
+	if err != nil {
+		return fmt.Errorf("start ntp responder: %w", err)
+	}
+
+	RegisterVMHandlers(server, sup, tr, denials, ntp.Port())
 
 	// Pull launchd-inherited listeners for :80 and :443. If the
 	// daemon was started outside launchd (e.g., `devm serve` from a
@@ -91,6 +104,18 @@ func RunService(ctx context.Context, build Build) error {
 		dnsServer := NewDNSServer()
 		g.Add(func() error {
 			return dnsServer.Serve(dnsCtx)
+		}, func(error) {
+			cancel()
+		})
+	}
+
+	// SNTP responder actor. The listener is already bound in NewNTPServer
+	// above so /vm/start could read the port immediately; here we start
+	// the read loop.
+	{
+		ntpCtx, cancel := context.WithCancel(ctx)
+		g.Add(func() error {
+			return ntp.Serve(ntpCtx)
 		}, func(error) {
 			cancel()
 		})

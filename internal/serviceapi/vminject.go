@@ -90,14 +90,30 @@ EOF
 // buildNftablesScript installs two tables:
 //
 //  1. `ip devm_nat`: NAT chain in OUTPUT hook that rewrites :80 → MAC_HOST:HTTPPort
-//     and :443 → MAC_HOST:HTTPSPort. Bypasses traffic already destined for
+//     and :443 → MAC_HOST:HTTPSPort. UDP:123 (NTP) also DNATs to
+//     MAC_HOST:ntpPort so the daemon's SNTP responder heals guest-clock
+//     drift after a Mac sleep. Bypasses traffic already destined for
 //     MAC_HOST (so we don't infinite-loop the rewritten packets).
 //
 //  2. `inet devm_filter`: default-deny OUTPUT chain that only allows
-//     post-DNAT traffic to MAC_HOST:{HTTPPort, HTTPSPort, DNSPort} and
-//     loopback. Anything else (DNS to public servers, direct IP outbound,
-//     non-HTTP TCP) is dropped.
-func buildNftablesScript(macHost string, httpPort, httpsPort, dnsPort int) string {
+//     post-DNAT traffic to MAC_HOST:{HTTPPort, HTTPSPort} (tcp),
+//     MAC_HOST:DNSPort (udp), MAC_HOST:ntpPort (udp), and loopback.
+//     Anything else is dropped.
+//
+// ntpPort=0 skips the NTP DNAT + filter rules — used by unit tests that
+// don't spin up an SNTP responder.
+func buildNftablesScript(macHost string, httpPort, httpsPort, dnsPort, ntpPort int) string {
+	ntpNatRule := ""
+	ntpFilterRule := ""
+	if ntpPort > 0 {
+		// NTP DNAT catches guest→UDP:123 regardless of target IP (timesyncd
+		// resolves a pool name via our dnsmasq→iron-proxy path which returns
+		// the proxy sentinel, so the destination is never MAC_HOST at match
+		// time). DNAT rewrites to MAC_HOST:ntpPort; the reply's SNAT is
+		// handled automatically by conntrack.
+		ntpNatRule = fmt.Sprintf("    udp dport 123 dnat to %s:%d\n", macHost, ntpPort)
+		ntpFilterRule = fmt.Sprintf("    ip daddr %s udp dport %d accept\n", macHost, ntpPort)
+	}
 	return fmt.Sprintf(`sudo tee /etc/nftables.conf > /dev/null <<EOF
 table ip devm_nat {
   chain output {
@@ -105,7 +121,7 @@ table ip devm_nat {
     ip daddr %s return
     tcp dport 443 dnat to %s:%d
     tcp dport 80 dnat to %s:%d
-  }
+%s  }
 }
 
 table inet devm_filter {
@@ -114,16 +130,47 @@ table inet devm_filter {
     ct state established,related accept
     oif lo accept
     ip daddr 127.0.0.0/8 accept
-    ip daddr %s tcp dport { %d, %d, %d } accept
+    ip daddr %s tcp dport { %d, %d } accept
     ip daddr %s udp dport %d accept
-  }
+%s  }
 }
 EOF
 sudo systemctl enable --now nftables
 sudo nft -f /etc/nftables.conf
 `, macHost, macHost, httpsPort, macHost, httpPort,
-		macHost, httpPort, httpsPort, dnsPort,
-		macHost, dnsPort)
+		ntpNatRule,
+		macHost, httpPort, httpsPort,
+		macHost, dnsPort,
+		ntpFilterRule)
+}
+
+// buildTimesyncdScript configures systemd-timesyncd to sync from
+// MAC_HOST. The nftables DNAT catches guest→UDP:123 regardless of
+// destination, but pointing timesyncd at MAC_HOST explicitly (rather
+// than the default upstream pool) means:
+//   - No DNS round-trip on every poll (guest resolves nothing).
+//   - PollIntervalMaxSec=64 caps the backoff so a Mac wake heals
+//     within ~64 seconds even if the previous poll succeeded.
+//   - The unit shows up as "MACH" / MAC_HOST in `timedatectl show-timesync`
+//     — operator-obvious that time is coming from the host, not the
+//     public internet.
+//
+// timesyncd is a systemd built-in; no install step needed on Debian.
+// `restart` (not `reload`) because timesyncd re-reads its config on
+// SIGHUP but not always the drop-in path — a restart is cheap and
+// unambiguous.
+func buildTimesyncdScript(macHost string) string {
+	return fmt.Sprintf(`sudo mkdir -p /etc/systemd/timesyncd.conf.d
+sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<EOF
+[Time]
+NTP=%s
+FallbackNTP=
+PollIntervalMinSec=32
+PollIntervalMaxSec=64
+EOF
+sudo systemctl enable --now systemd-timesyncd
+sudo systemctl restart systemd-timesyncd
+`, macHost)
 }
 
 // buildDnsmasqScript points dnsmasq's upstream at iron-proxy's DNS

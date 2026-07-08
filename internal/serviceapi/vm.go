@@ -112,7 +112,12 @@ func waitVMExecReady(ctx context.Context, vmName string, timeout time.Duration) 
 // lifecycle; tr wraps the tart binary for clone, list, run, and IP
 // queries. denials is the daemon-scoped tracker fed by the iron-proxy
 // audit tap — may be nil in tests that don't exercise denial paths.
-func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials) {
+// ntpPort is the UDP port the daemon's SNTP responder is listening on;
+// the guest's nftables script DNATs its outbound UDP:123 to
+// MAC_HOST:ntpPort so systemd-timesyncd resyncs from the host clock
+// after a Mac sleep. Zero disables the NTP DNAT rule (useful in unit
+// tests that don't spin up an NTP responder).
+func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials, ntpPort int) {
 	s.Register("/vm/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -353,8 +358,9 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 		scripts := []string{
-			buildNftablesScript(info.MacHost, info.HTTPPort, info.HTTPSPort, info.DNSPort),
+			buildNftablesScript(info.MacHost, info.HTTPPort, info.HTTPSPort, info.DNSPort, ntpPort),
 			buildDnsmasqScript(info.MacHost, info.DNSPort),
+			buildTimesyncdScript(info.MacHost),
 		}
 		for i, script := range scripts {
 			cmd := exec.Command("tart", "exec", "-i", req.VMName, "sudo", "bash", "-s")

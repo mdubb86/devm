@@ -54,7 +54,7 @@ func TestBuildEnvScript_NoProxyOnly(t *testing.T) {
 }
 
 func TestBuildNftablesScript_DNATsHTTPAndHTTPS(t *testing.T) {
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053)
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0)
 	// NAT table redirects :443 and :80 to MAC_HOST:proxy_ports.
 	assert.Contains(t, script, "table ip devm_nat")
 	assert.Contains(t, script, "tcp dport 443 dnat to 192.168.64.1:8443")
@@ -64,7 +64,7 @@ func TestBuildNftablesScript_DNATsHTTPAndHTTPS(t *testing.T) {
 }
 
 func TestBuildNftablesScript_FilterDefaultDenyExceptIronProxyPorts(t *testing.T) {
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053)
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0)
 	assert.Contains(t, script, "table inet devm_filter")
 	assert.Contains(t, script, "policy drop;")
 	// All three iron-proxy ports allowed to MAC_HOST.
@@ -73,6 +73,37 @@ func TestBuildNftablesScript_FilterDefaultDenyExceptIronProxyPorts(t *testing.T)
 	assert.Contains(t, script, "8443")
 	assert.Contains(t, script, "8053")
 	assert.Contains(t, script, "systemctl enable --now nftables")
+}
+
+func TestBuildNftablesScript_NTPPortAddsDNATAndFilterRule(t *testing.T) {
+	// ntpPort > 0 → DNAT for UDP:123 to MAC_HOST:ntpPort and a matching
+	// filter accept. Guest's timesyncd sends to whatever it thinks is NTP;
+	// nftables rewrites the destination transparently.
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+	assert.Contains(t, script, "udp dport 123 dnat to 192.168.64.1:51234")
+	assert.Contains(t, script, "ip daddr 192.168.64.1 udp dport 51234 accept")
+}
+
+func TestBuildNftablesScript_ZeroNTPPortSkipsRule(t *testing.T) {
+	// ntpPort == 0 (unit-test path) must not emit a broken `dnat to
+	// MAC_HOST:0` — that would nftables-reject and refuse to load.
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0)
+	assert.NotContains(t, script, "udp dport 123 dnat")
+	assert.NotContains(t, script, ":0 ") // paranoia — no zero-port rule anywhere
+}
+
+func TestBuildTimesyncdScript_PointsAtMacHost(t *testing.T) {
+	script := buildTimesyncdScript("192.168.64.1")
+	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")
+	assert.Contains(t, script, "NTP=192.168.64.1")
+	// Explicit empty FallbackNTP prevents timesyncd from ever trying the
+	// default pool.ntp.org list; egress firewall would deny it anyway,
+	// but silencing the attempt keeps the log clean.
+	assert.Contains(t, script, "FallbackNTP=")
+	// Poll interval cap: even if timesyncd's exponential backoff climbs,
+	// the max is bounded — post-wake heal is ~64s worst case.
+	assert.Contains(t, script, "PollIntervalMaxSec=64")
+	assert.Contains(t, script, "systemctl restart systemd-timesyncd")
 }
 
 func TestBuildDnsmasqScript_ForwardsToIronProxyDNS(t *testing.T) {
