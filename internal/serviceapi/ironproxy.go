@@ -120,11 +120,18 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 // 0600, user-owned. Idempotent at the supervisor level — if a process
 // with the same key is already running it is replaced by the new one.
 //
+// denials may be nil in contexts where denial tracking isn't wired
+// (unit tests, one-off tools). When non-nil, the tracker is reset for
+// projectID and receives every reject audit line as an io.Writer tap
+// on the supervisor. Reset here — rather than in RunService — so the
+// counts always match the currently running iron-proxy process, not a
+// prior config the user has already thrown away.
+//
 // Note: iron-proxy v0.45.0 doesn't accept config on stdin, so the
 // config lands on disk. Mitigated by file mode 0600 under the user's
 // runtime dir (~/Library/Application Support/devm/). Future improvement:
 // contribute stdin support upstream and switch.
-func SpawnIronProxy(ctx context.Context, sup *supervisor.Supervisor, projectID string, cfg IronProxyConfig) error {
+func SpawnIronProxy(ctx context.Context, sup *supervisor.Supervisor, projectID string, cfg IronProxyConfig, denials *Denials) error {
 	binary, err := ironproxy.Path()
 	if err != nil {
 		return fmt.Errorf("locate iron-proxy: %w", err)
@@ -141,6 +148,10 @@ func SpawnIronProxy(ctx context.Context, sup *supervisor.Supervisor, projectID s
 	cmd := exec.CommandContext(ctx, binary, "-config", configPath)
 	cmd.Env = append(os.Environ(), cfg.EnvVars()...)
 	key := supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}
+	if denials != nil {
+		denials.Reset(projectID)
+		return sup.Spawn(ctx, key, cmd, denials.TapWriter(projectID))
+	}
 	return sup.Spawn(ctx, key, cmd)
 }
 

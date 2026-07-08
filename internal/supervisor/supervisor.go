@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,7 +103,12 @@ func defaultLogDir(override string) string {
 // SysProcAttr.Setsid (darwin only) so the child detaches into its own
 // process group, then hands the underlying state to pexec for
 // lifecycle management.
-func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd) error {
+//
+// Optional taps receive an io.MultiWriter fanout of the child's combined
+// stdout+stderr alongside the on-disk log file. Used by the daemon to
+// consume structured audit output (e.g., iron-proxy's reject records)
+// without a second copy on disk. Nil taps are silently skipped.
+func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd, taps ...io.Writer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -118,6 +124,19 @@ func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd) error {
 		return fmt.Errorf("supervisor log %s: %w", logPath, err)
 	}
 
+	var out io.Writer = logWriter
+	if len(taps) > 0 {
+		writers := []io.Writer{logWriter}
+		for _, t := range taps {
+			if t != nil {
+				writers = append(writers, t)
+			}
+		}
+		if len(writers) > 1 {
+			out = io.MultiWriter(writers...)
+		}
+	}
+
 	backoff := newBackoff(time.Second, 30*time.Second)
 
 	cfg := pexec.ProcessConfig{
@@ -128,7 +147,7 @@ func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd) error {
 		Environment:      envMap(cmd.Env),
 		StopSignal:       syscall.SIGTERM,
 		StopTimeout:      10 * time.Second,
-		LogWriter:        logWriter,
+		LogWriter:        out,
 		OnUnexpectedExit: backoff.onExit,
 	}
 

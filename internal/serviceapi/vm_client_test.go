@@ -26,7 +26,7 @@ func newTestServerWithVM(t *testing.T, sup *supervisor.Supervisor, tr *tart.Tart
 
 	socket := filepath.Join(dir, "s.sock")
 	srv := NewServer(socket, Build{Version: "test-version"})
-	RegisterVMHandlers(srv, sup, tr)
+	RegisterVMHandlers(srv, sup, tr, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

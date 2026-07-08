@@ -53,7 +53,13 @@ func RunService(ctx context.Context, build Build) error {
 	if err := AdoptIronProxies(ctx, sup); err != nil {
 		fmt.Fprintf(os.Stderr, "iron-proxy adopt: %v\n", err)
 	}
-	RegisterVMHandlers(server, sup, tr)
+	// Denials tracker — per-project counts of iron-proxy allow-list
+	// rejects, fed by the supervisor's log tap on iron-proxy stderr.
+	// Adopted iron-proxies from a prior daemon instance don't get tapped
+	// (we only have their PID, not their output stream), so counts
+	// start empty for them until the next SpawnIronProxy respawn.
+	denials := NewDenials()
+	RegisterVMHandlers(server, sup, tr, denials)
 
 	// Pull launchd-inherited listeners for :80 and :443. If the
 	// daemon was started outside launchd (e.g., `devm serve` from a

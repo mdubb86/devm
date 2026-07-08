@@ -68,6 +68,32 @@ func (c *Client) StopVM(ctx context.Context, projectID, vmName string) error {
 	return nil
 }
 
+// Denials queries the daemon for iron-proxy allow-list rejects observed
+// this iron-proxy lifetime, per host. Sorted by count desc. Empty slice
+// (never nil) if the project hasn't triggered any denials yet, iron-proxy
+// isn't running, or the daemon wasn't built with tracking wired.
+func (c *Client) Denials(ctx context.Context, projectID string) ([]Denial, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"http://localhost/denials?project_id="+projectID, nil)
+	if err != nil {
+		return nil, err
+	}
+	r, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return nil, fmt.Errorf("denials: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var out []Denial
+	if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VMStatus queries the daemon for the project VM's current state.
 // vmName is optional; when non-empty the daemon will attempt to
 // surface the VM's IP address (only available when the VM is running).

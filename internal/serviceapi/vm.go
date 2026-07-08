@@ -107,10 +107,12 @@ func waitVMExecReady(ctx context.Context, vmName string, timeout time.Duration) 
 	)
 }
 
-// RegisterVMHandlers wires /vm/start, /vm/stop, and /vm/status onto the
-// given server. sup manages the VM process lifecycle; tr wraps the tart
-// binary for clone, list, run, and IP queries.
-func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
+// RegisterVMHandlers wires /vm/start, /vm/stop, /vm/status, and
+// /denials onto the given server. sup manages the VM process
+// lifecycle; tr wraps the tart binary for clone, list, run, and IP
+// queries. denials is the daemon-scoped tracker fed by the iron-proxy
+// audit tap — may be nil in tests that don't exercise denial paths.
+func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials) {
 	s.Register("/vm/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -270,7 +272,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			AllowList:   req.AllowList,
 			Secrets:     ironSecrets,
 		}
-		if err := SpawnIronProxy(r.Context(), sup, req.ProjectID, proxyCfg); err != nil {
+		if err := SpawnIronProxy(r.Context(), sup, req.ProjectID, proxyCfg, denials); err != nil {
 			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -390,6 +392,9 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 			return
 		}
 		ironProxyState.del(req.ProjectID)
+		if denials != nil {
+			denials.Reset(req.ProjectID)
+		}
 
 		// Ask tart for a graceful guest shutdown before SIGTERM'ing the
 		// tart-run process. Without this, in-flight guest disk writes
@@ -459,6 +464,32 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart) {
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	// /denials — read-only view of iron-proxy allow-list rejects for a
+	// project. Sorted by count desc. Empty array is a normal state (no
+	// rejects yet, or the process just respawned). Requires the tracker
+	// to be wired — if not, we still respond 200 with [] so the CLI has a
+	// uniform shape regardless of daemon build.
+	s.Register("/denials", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		projectID := r.URL.Query().Get("project_id")
+		if projectID == "" {
+			http.Error(w, "project_id query param required", http.StatusBadRequest)
+			return
+		}
+		var snap []Denial
+		if denials != nil {
+			snap = denials.Snapshot(projectID)
+		}
+		if snap == nil {
+			snap = []Denial{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snap)
 	})
 }
 
