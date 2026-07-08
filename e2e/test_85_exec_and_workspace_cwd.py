@@ -2,10 +2,11 @@
 
 Two related invariants:
 
-1. `devm exec COMMAND [ARGS...]` runs a non-interactive command,
-   captures its output, and returns its exit code. Equivalent to
-   `devm shell -- COMMAND ARGS...` but with a name matching docker
-   exec / kubectl exec convention.
+1. `devm exec COMMAND [ARGS...]` runs a non-interactive command inside
+   a *running* sandbox, captures its output, and returns its exit code.
+   It does NOT cold-start — if the VM is stopped, exec fails loud (the
+   docker exec / kubectl exec convention). See test_86 for the
+   stopped-VM failure pin.
 
 2. All wrapper-mediated invocations (shell, exec, and provisioner
    install: steps) auto-cd to $WORKSPACE before exec'ing argv. Same
@@ -20,6 +21,7 @@ What this pins:
 
 What it doesn't cover (tested elsewhere):
   - `devm start` cold-start-and-return -> test_84.
+  - `devm exec` fails when VM stopped -> test_86.
   - Exit code propagation via shell -> test_55.
   - Env injection into wrapper -> test_26.
 """
@@ -32,17 +34,29 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(240)
 def test_exec_pwd_lands_in_workspace(workspace, devm):
     """`devm exec pwd` returns the workspace path — the with-devm-env
     wrapper's auto-cd sets cwd to $WORKSPACE before running argv."""
     workspace.write_devmyaml()
 
+    # Prime the sandbox — exec requires a running VM.
+    start = subprocess.run(
+        [devm.path, "start"],
+        cwd=str(workspace.path),
+        capture_output=True,
+        timeout=180,
+    )
+    assert start.returncode == 0, (
+        f"devm start failed: rc={start.returncode}\n"
+        f"stderr={start.stderr.decode()!r}"
+    )
+
     p = subprocess.run(
         [devm.path, "exec", "pwd"],
         cwd=str(workspace.path),
         capture_output=True,
-        timeout=180,
+        timeout=60,
     )
     assert p.returncode == 0, (
         f"devm exec pwd failed: rc={p.returncode}\n"
@@ -65,7 +79,8 @@ def test_exec_pwd_lands_in_workspace(workspace, devm):
 @pytest.mark.timeout(60)
 def test_exec_requires_command(workspace, devm):
     """`devm exec` with no positional args must fail loud, not open
-    a shell or run a default."""
+    a shell or run a default. This is a cobra-level Args check that
+    fires before we hit the running-VM gate — so no VM needed."""
     workspace.write_devmyaml()
 
     p = subprocess.run(
@@ -79,18 +94,29 @@ def test_exec_requires_command(workspace, devm):
     )
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(240)
 def test_exec_passes_flags_to_target_command(workspace, devm):
     """DisableFlagParsing on execCmd means flags in argv go to the
     target command, not to devm. `devm exec ls -la /` must run
     `ls -la /` inside the VM, not error 'unknown flag: -la'."""
     workspace.write_devmyaml()
 
+    start = subprocess.run(
+        [devm.path, "start"],
+        cwd=str(workspace.path),
+        capture_output=True,
+        timeout=180,
+    )
+    assert start.returncode == 0, (
+        f"devm start failed: rc={start.returncode}\n"
+        f"stderr={start.stderr.decode()!r}"
+    )
+
     p = subprocess.run(
         [devm.path, "exec", "ls", "-la", "/"],
         cwd=str(workspace.path),
         capture_output=True,
-        timeout=180,
+        timeout=60,
     )
     assert p.returncode == 0, (
         f"devm exec ls -la / failed: rc={p.returncode}\n"

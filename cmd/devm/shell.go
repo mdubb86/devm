@@ -57,27 +57,57 @@ The sandbox stays running until ` + "`devm stop`" + ` or ` + "`devm teardown`" +
 
 var execCmd = &cobra.Command{
 	Use:   "exec [--] COMMAND [ARGS...]",
-	Short: "Run a one-shot command inside the sandbox",
+	Short: "Run a one-shot command inside a running sandbox",
 	Long: `Runs COMMAND inside the sandbox with the project env sourced and cwd
-set to the workspace directory. Same cold-start / attach lifecycle as
-` + "`devm shell`" + `, but requires a command and returns its exit code
-directly — designed for scripts and CI.
+set to the workspace directory. Returns COMMAND's exit code directly —
+designed for scripts and CI.
+
+Requires the sandbox to already be running: exec fails loud if the VM
+is stopped or absent. This matches the ` + "`docker exec`" + ` / ` + "`kubectl exec`" + `
+convention — bring the sandbox up with ` + "`devm start`" + ` (or ` + "`devm shell`" + `)
+first, then exec into it.
 
 TTY/PTY handling is auto-detected from the caller's stdin:
   - stdin is a terminal → PTY allocated (so ` + "`devm exec bash`" + ` acts
     like an interactive shell).
-  - stdin is piped/redirected → plain pipes, exit code forwarded.
-
-Equivalent to ` + "`devm shell -- COMMAND [ARGS...]`" + ` but with a clearer
-name matching the docker exec / kubectl exec convention. Prefer
-` + "`devm shell`" + ` for interactive sessions, ` + "`devm exec`" + ` for one-shots.`,
+  - stdin is piped/redirected → plain pipes, exit code forwarded.`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		if err := requireRunningVM(cmd.Context()); err != nil {
+			return err
+		}
 		return runShellFlow(cmd, args[0], args[1:])
 	},
 	// Don't try to parse flags in the exec'd command's argv — e.g.
 	// `devm exec ls -la` must pass -la to ls, not to devm.
 	DisableFlagParsing: true,
+}
+
+// requireRunningVM returns a clear error when the project's sandbox
+// isn't running — used by `devm exec` to enforce the docker-exec
+// convention (fail loud on stopped/absent, don't silently cold-start).
+// The load-cfg-here duplication with runShellFlow is intentional: this
+// runs before we commit to the cold-start path, and the exec-fail
+// message needs the project's VM name.
+func requireRunningVM(ctx context.Context) error {
+	repoRoot, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get cwd: %w", err)
+	}
+	cfg, err := config.Load(repoRoot)
+	if err != nil {
+		return err
+	}
+	c := serviceapi.NewClient()
+	st, err := c.VMStatus(ctx, cfg.Project.ID, cfg.Project.VMName)
+	if err != nil {
+		return fmt.Errorf("query vm status: %w", err)
+	}
+	if !st.Running {
+		return fmt.Errorf("sandbox %q is not running — start it with `devm start` (or `devm shell`) first", cfg.Project.VMName)
+	}
+	return nil
 }
 
 // runShellFlow is the shared cold-start / attach implementation used by
