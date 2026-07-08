@@ -56,5 +56,15 @@ if ! "$DEST/devm" version | grep -q "devm v0.1.0"; then
     rm -rf "$DEST"
     exit 1
 fi
+# iron-proxy lands at the canonical FHS location relative to $PREFIX.
+# internal/ironproxy/path.go's runtime lookup expects exactly this path,
+# so if this pin drifts the daemon will fail to spawn iron-proxy after
+# a curl-install and every /vm/start returns "iron-proxy not found".
+IRON_PROXY="$(cd "$DEST/.." && pwd)/share/devm/bin/iron-proxy"
+if [ ! -x "$IRON_PROXY" ]; then
+    echo "FAIL: iron-proxy not installed at $IRON_PROXY" >&2
+    rm -rf "$DEST"
+    exit 1
+fi
 echo "PASS: install.sh fetched, verified, and installed v0.1.0"
 rm -rf "$DEST"
