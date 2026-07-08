@@ -19,6 +19,8 @@ import subprocess
 
 import pytest
 
+from helpers.exec_retry import devm_exec_with_retry
+
 pytestmark = pytest.mark.devm
 
 
@@ -43,26 +45,27 @@ def test_denials_tracked_per_project(workspace, devm):
     )
 
     # Trigger denials: two hits to google.com, one to example.com.
+    # devm_exec_with_retry swallows the known Tart gRPC transport
+    # flake ("SendHeader called multiple times") on the wrapper only —
+    # curl itself is idempotent so a retry is safe. Without the retry,
+    # one flaky exec call means one fewer reject reaches iron-proxy
+    # and the count assertion falls short.
     for host, times in [("google.com", 2), ("example.com", 1)]:
         for _ in range(times):
-            # iron-proxy returns 403 on a reject; curl -sf exits non-zero.
-            # We don't assert on the curl's rc — the denials tracker is
-            # what matters. --max-time keeps the test bounded if the
-            # transparent-proxy path stalls for some reason.
-            subprocess.run(
-                [devm.path, "exec", "curl", "-sf", "-o", "/dev/null",
+            devm_exec_with_retry(
+                devm.path,
+                ["curl", "-sf", "-o", "/dev/null",
                  "--max-time", "10", f"https://{host}/"],
                 cwd=str(workspace.path),
-                capture_output=True,
                 timeout=30,
             )
 
     # Also make an allow-listed request; it must NOT appear in denials.
-    subprocess.run(
-        [devm.path, "exec", "curl", "-sf", "-o", "/dev/null",
+    devm_exec_with_retry(
+        devm.path,
+        ["curl", "-sf", "-o", "/dev/null",
          "--max-time", "15", "https://api.github.com/octocat"],
         cwd=str(workspace.path),
-        capture_output=True,
         timeout=30,
     )
 

@@ -27,6 +27,8 @@ import time
 
 import pytest
 
+from helpers.exec_retry import devm_exec_with_retry
+
 pytestmark = pytest.mark.devm
 
 
@@ -56,10 +58,10 @@ def test_clock_heals_after_forced_skew(workspace, devm):
 
     # Sanity: guest clock is close to host at start.
     def guest_epoch() -> int:
-        r = subprocess.run(
-            [devm.path, "exec", "date", "-u", "+%s"],
+        r = devm_exec_with_retry(
+            devm.path,
+            ["date", "-u", "+%s"],
             cwd=str(workspace.path),
-            capture_output=True,
             timeout=15,
         )
         assert r.returncode == 0, (
@@ -75,11 +77,12 @@ def test_clock_heals_after_forced_skew(workspace, devm):
 
     # Force a large backwards skew. `date -s @0` sets the clock to
     # 1970-01-01. TLS certs are all "not yet valid" from that vantage,
-    # matching the post-Mac-sleep symptom.
-    skew = subprocess.run(
-        [devm.path, "exec", "sudo", "date", "-s", "@0"],
+    # matching the post-Mac-sleep symptom. `date -s` is idempotent so
+    # retrying on the tart transport flake is safe.
+    skew = devm_exec_with_retry(
+        devm.path,
+        ["sudo", "date", "-s", "@0"],
         cwd=str(workspace.path),
-        capture_output=True,
         timeout=15,
     )
     assert skew.returncode == 0, (
@@ -97,10 +100,10 @@ def test_clock_heals_after_forced_skew(workspace, devm):
     # boot / resume hook would do; the primary pin is that timesyncd
     # CAN reach the daemon's responder at all. If bounded poll wait
     # ends up mattering for real users, that's a separate test.
-    poke = subprocess.run(
-        [devm.path, "exec", "sudo", "systemctl", "restart", "systemd-timesyncd"],
+    poke = devm_exec_with_retry(
+        devm.path,
+        ["sudo", "systemctl", "restart", "systemd-timesyncd"],
         cwd=str(workspace.path),
-        capture_output=True,
         timeout=15,
     )
     assert poke.returncode == 0, (

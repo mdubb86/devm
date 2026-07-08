@@ -13,3 +13,6 @@ done
 
 echo "=== e2e leftovers: /tmp/devm-e2e-* and /private/tmp/devm-e2e-* ==="
 rm -rf /tmp/devm-e2e-* /private/tmp/devm-e2e-* 2>/dev/null || true
+
+echo "=== e2e leftovers: orphan iron-proxy processes ==="
+pkill -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null || true

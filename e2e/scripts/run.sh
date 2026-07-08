@@ -91,6 +91,24 @@ SUDO_KEEPALIVE_PID=$!
 # fresh one pointing at DEVM_BIN.
 echo "=== e2e: uninstalling any prior devm daemon ===" >&2
 "$DEVM_BIN" uninstall >/dev/null 2>&1 || true
+
+# Reap orphan iron-proxies from prior test runs. `devm uninstall`
+# doesn't cascade to iron-proxy children (they setsid'd on spawn to
+# survive daemon death by design), so every test-suite run
+# accumulates more of them and each holds a MAC_HOST:port binding.
+# Eventually pickPort in a fresh /vm/start collides with one of those
+# ports, iron-proxy fails to bind, and cold-start fails (typically
+# hitting test_44 or another iron-proxy-lifecycle test).
+#
+# Match on `/iron-proxy -config .*/iron-proxy/*.yaml` — the argv
+# pattern the daemon always uses (see internal/serviceapi/ironproxy.go
+# SpawnIronProxy). Never matches the user's shell or tart. Best-effort;
+# don't fail the run if pkill can't reach a PID.
+echo "=== e2e: reaping orphan iron-proxy processes ===" >&2
+pkill -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null || true
+# Small settle so kernels release the port bindings before the fresh
+# daemon starts picking ports.
+sleep 1
 echo "=== e2e: installing devm daemon from $DEVM_BIN ===" >&2
 "$DEVM_BIN" install >/dev/null || {
     echo "=== e2e: devm install failed; see ~/Library/Logs/devm/install.log ===" >&2
