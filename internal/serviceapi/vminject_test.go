@@ -92,6 +92,42 @@ func TestBuildNftablesScript_ZeroNTPPortSkipsRule(t *testing.T) {
 	assert.NotContains(t, script, ":0 ") // paranoia — no zero-port rule anywhere
 }
 
+func TestBuildNftablesScript_LiveApplyPreservesUserOutput(t *testing.T) {
+	// Live-apply uses idempotent add + a scoped `flush chain output`
+	// so that any rules recipes added to user_output during install:
+	// aren't wiped when enforcement fires. Pin the exact primitives.
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+	// Idempotent create — no-op if exists.
+	assert.Contains(t, script, "add table inet devm_filter")
+	assert.Contains(t, script, "add chain inet devm_filter user_output")
+	assert.Contains(t, script, "add chain inet devm_filter output")
+	// Only OUR chain gets flushed — user_output must NOT be flushed
+	// during live-apply, or recipe rules disappear.
+	assert.Contains(t, script, "flush chain inet devm_filter output")
+	assert.NotContains(t, script, "flush chain inet devm_filter user_output")
+	// The tail of the output chain hands control to user_output before
+	// the policy=drop bites, so recipe rules can accept traffic the
+	// base rules didn't.
+	assert.Contains(t, script, "add rule inet devm_filter output jump user_output")
+}
+
+func TestBuildNftablesScript_PersistsViaIncludeGlob(t *testing.T) {
+	// Recipe rules survive VM reboot because:
+	//   (1) apply-egress-enforcement snapshots user_output's live
+	//       state to /etc/nftables.d/user_output.conf, and
+	//   (2) /etc/nftables.conf has `include "/etc/nftables.d/*.conf"`
+	//       so systemd's nftables.service pulls the snapshot back in
+	//       on the next boot.
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+	assert.Contains(t, script, "nft list chain inet devm_filter user_output > /etc/nftables.d/user_output.conf")
+	assert.Contains(t, script, `include "/etc/nftables.d/*.conf"`)
+	// The persisted config must ALSO reference user_output so the
+	// output chain's `jump` target exists at load time. Declared
+	// before include so the include's rules merge into it.
+	assert.Contains(t, script, "chain user_output {}")
+	assert.Contains(t, script, "jump user_output")
+}
+
 func TestBuildTimesyncdScript_PointsAtProxySentinel(t *testing.T) {
 	script := buildTimesyncdScript()
 	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")

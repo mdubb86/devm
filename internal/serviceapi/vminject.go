@@ -98,7 +98,21 @@ EOF
 //  2. `inet devm_filter`: default-deny OUTPUT chain that only allows
 //     post-DNAT traffic to MAC_HOST:{HTTPPort, HTTPSPort} (tcp),
 //     MAC_HOST:DNSPort (udp), MAC_HOST:ntpPort (udp), and loopback.
-//     Anything else is dropped.
+//     Anything else is dropped — with one escape hatch: a `jump
+//     user_output` at the tail of the output chain, so any rule a
+//     recipe added via `nft add rule inet devm_filter user_output ...`
+//     during install: takes effect before the policy=drop bites.
+//
+// Recipe rules survive across VM reboot because we snapshot
+// `user_output`'s live state to /etc/nftables.d/user_output.conf and
+// have /etc/nftables.conf `include` that path. systemd's
+// nftables.service re-runs `nft -f /etc/nftables.conf` on every boot;
+// the include restores whatever the recipe added.
+//
+// Live-apply uses idempotent `add table` / `add chain` primitives + a
+// `flush chain output` on our chain (not user_output) so the recipe
+// scaffold + any rules recipes added earlier during install: aren't
+// wiped when enforcement fires.
 //
 // ntpPort=0 skips the NTP DNAT + filter rules — used by unit tests that
 // don't spin up an SNTP responder.
@@ -106,15 +120,56 @@ func buildNftablesScript(macHost string, httpPort, httpsPort, dnsPort, ntpPort i
 	ntpNatRule := ""
 	ntpFilterRule := ""
 	if ntpPort > 0 {
-		// NTP DNAT catches guest→UDP:123 regardless of target IP (timesyncd
-		// resolves a pool name via our dnsmasq→iron-proxy path which returns
-		// the proxy sentinel, so the destination is never MAC_HOST at match
-		// time). DNAT rewrites to MAC_HOST:ntpPort; the reply's SNAT is
+		// NTP DNAT catches guest→UDP:123 regardless of target IP —
+		// timesyncd is pointed at the proxy sentinel (see
+		// buildTimesyncdScript), so packets go through the DNAT rather
+		// than falling into the `ip daddr MAC_HOST return` bypass.
+		// DNAT rewrites to MAC_HOST:ntpPort; the reply's SNAT is
 		// handled automatically by conntrack.
 		ntpNatRule = fmt.Sprintf("    udp dport 123 dnat to %s:%d\n", macHost, ntpPort)
 		ntpFilterRule = fmt.Sprintf("    ip daddr %s udp dport %d accept\n", macHost, ntpPort)
 	}
-	return fmt.Sprintf(`sudo tee /etc/nftables.conf > /dev/null <<EOF
+	// Two-stage live apply: first idempotently ensure tables/chains
+	// exist (preserves user_output if the scaffold step created it +
+	// any rules recipes have added), then flush ONLY our own chain
+	// (`output`) and rebuild it. `user_output` is never flushed by us.
+	liveApply := fmt.Sprintf(`sudo nft -f - <<'EOF'
+add table ip devm_nat
+add chain ip devm_nat output { type nat hook output priority -100 ; }
+flush chain ip devm_nat output
+add rule ip devm_nat output ip daddr %s return
+add rule ip devm_nat output tcp dport 443 dnat to %s:%d
+add rule ip devm_nat output tcp dport 80 dnat to %s:%d
+%s
+add table inet devm_filter
+add chain inet devm_filter user_output
+add chain inet devm_filter output { type filter hook output priority 0 ; policy drop ; }
+flush chain inet devm_filter output
+add rule inet devm_filter output ct state established,related accept
+add rule inet devm_filter output oif lo accept
+add rule inet devm_filter output ip daddr 127.0.0.0/8 accept
+add rule inet devm_filter output ip daddr %s tcp dport { %d, %d } accept
+add rule inet devm_filter output ip daddr %s udp dport %d accept
+%s
+add rule inet devm_filter output jump user_output
+EOF
+`, macHost, macHost, httpsPort, macHost, httpPort,
+		strings.TrimRight(strings.Replace(ntpNatRule, "    ", "add rule ip devm_nat output ", 1), "\n"),
+		macHost, httpPort, httpsPort,
+		macHost, dnsPort,
+		strings.TrimRight(strings.Replace(ntpFilterRule, "    ", "add rule inet devm_filter output ", 1), "\n"))
+
+	// Persistence: snapshot user_output's live state to a stable path
+	// and write /etc/nftables.conf so systemd's nftables.service
+	// restores everything on the next boot. The include glob catches
+	// whatever user_output.conf contains — nftables merges the
+	// re-declared table blocks so the chain's rules append.
+	persist := fmt.Sprintf(`sudo mkdir -p /etc/nftables.d
+sudo sh -c 'nft list chain inet devm_filter user_output > /etc/nftables.d/user_output.conf'
+sudo tee /etc/nftables.conf > /dev/null <<'EOF'
+#!/usr/sbin/nft -f
+flush ruleset
+
 table ip devm_nat {
   chain output {
     type nat hook output priority -100;
@@ -125,6 +180,7 @@ table ip devm_nat {
 }
 
 table inet devm_filter {
+  chain user_output {}
   chain output {
     type filter hook output priority 0; policy drop;
     ct state established,related accept
@@ -132,16 +188,20 @@ table inet devm_filter {
     ip daddr 127.0.0.0/8 accept
     ip daddr %s tcp dport { %d, %d } accept
     ip daddr %s udp dport %d accept
-%s  }
+%s    jump user_output
+  }
 }
+
+include "/etc/nftables.d/*.conf"
 EOF
 sudo systemctl enable --now nftables
-sudo nft -f /etc/nftables.conf
 `, macHost, macHost, httpsPort, macHost, httpPort,
 		ntpNatRule,
 		macHost, httpPort, httpsPort,
 		macHost, dnsPort,
 		ntpFilterRule)
+
+	return liveApply + persist
 }
 
 // buildTimesyncdScript configures systemd-timesyncd to send NTP
