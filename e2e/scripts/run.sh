@@ -155,14 +155,43 @@ if [ "$SKIP_INSTALL" = "0" ]; then
     }
 fi
 
-# Verify what we ended up with — if the daemon didn't actually pick up
-# the new binary, bail immediately with concrete evidence, rather than
-# letting the autouse fixture surface it later per-test.
+# Verify what we ended up with:
+#   1. Plist points at DEVM_BIN — catches "install said ok but the
+#      plist path is wrong" bugs.
+#   2. Daemon actually responds on its unix socket AND its Fingerprint
+#      matches — catches the zombie-daemon case where launchctl thinks
+#      the service is running but the socket file was deleted from
+#      under it (e.g., stale process holding an unlinked fd), or where
+#      launchctl's KeepAlive kept an old process alive across an
+#      install that should have replaced it.
 DAEMON_PROG="$(launchctl print system/com.devm.service 2>/dev/null | awk -F'= ' '/^[[:space:]]*program = /{print $2; exit}')"
 if [ "$DAEMON_PROG" != "$DEVM_BIN" ]; then
     echo "=== e2e: daemon didn't switch to DEVM_BIN after reinstall ===" >&2
     echo "    DEVM_BIN:            $DEVM_BIN" >&2
     echo "    daemon program path: $DAEMON_PROG" >&2
+    exit 1
+fi
+# Wait up to 10s for the socket to accept connections AND for the
+# daemon Fingerprint to match. On a fresh install, launchctl kicks the
+# process asynchronously; give it a moment before failing.
+_deadline=$(( $(date +%s) + 10 ))
+while [ "$(date +%s)" -lt "$_deadline" ]; do
+    if "$DEVM_BIN" status --json 2>/dev/null | \
+       jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.5
+done
+if ! "$DEVM_BIN" status --json 2>/dev/null | \
+     jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' >/dev/null 2>&1; then
+    echo "=== e2e: daemon not reachable via socket after install ===" >&2
+    echo "    plist says the service is running but the CLI can't dial the" >&2
+    echo "    unix socket, or the daemon reports a Fingerprint that doesn't" >&2
+    echo "    match this CLI. Most likely a zombie process holding an" >&2
+    echo "    unlinked socket fd from a prior uninstall. Fix:" >&2
+    echo "" >&2
+    echo "    sudo launchctl bootout system/com.devm.service" >&2
+    echo "    (then rerun this command)" >&2
     exit 1
 fi
 
