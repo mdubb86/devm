@@ -128,8 +128,15 @@ def _port_offset_from_file(filename: str) -> int:
 
 
 @pytest.fixture
-def workspace(request, sandbox_name) -> Iterator[Workspace]:
-    """Temp workspace dir bound to the test's sandbox_name."""
+def workspace(request, devm_path, sandbox_name) -> Iterator[Workspace]:
+    """Temp workspace dir bound to the test's sandbox_name.
+
+    Cleans up the VM AND iron-proxy for the project at the end via
+    `devm teardown --yes`. Tests don't need their own try/finally to
+    do this — the fixture is authoritative. Tests that legitimately
+    want to leave the sandbox in a specific end state (rare) can call
+    `devm teardown` themselves; the finally here is idempotent.
+    """
     slug = _slug_from_node(request.node.name)
     # Resolve symlinks so the path matches what devm (Go) sees inside
     # the spawned shell. On macOS, tempfile.mkdtemp returns
@@ -146,6 +153,21 @@ def workspace(request, sandbox_name) -> Iterator[Workspace]:
         ws.write_devmyaml()  # minimal config; tests can call write_devmyaml again with extras
         yield ws
     finally:
+        # Guaranteed teardown: stops the VM AND its iron-proxy child
+        # (which the tart-VM-only sweep in registry can't touch — it's
+        # a Mac process, not a tart entity). Best-effort — if the daemon
+        # is down or the sandbox is already absent, teardown noops with
+        # non-zero, which we swallow.
+        try:
+            import subprocess as _sp
+            _sp.run(
+                [devm_path, "teardown", "--yes"],
+                cwd=str(path),
+                capture_output=True,
+                timeout=60,
+            )
+        except Exception:
+            pass
         shutil.rmtree(path, ignore_errors=True)
         registry.remove("workspace", str(path))
 

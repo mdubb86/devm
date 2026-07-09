@@ -6,12 +6,13 @@ the sweep in run.sh can clean up anything fixtures didn't get to
 resource, "<kind>\\t<value>\\n". Kinds: sandbox, workspace.
 
 remove() verifies the resource is actually gone before dropping the
-registry entry — if a fixture says "I cleaned up" but the VM/workspace
-is still there, it force-cleans and prints a WARN. This is the
-lie-detector for tests/fixtures that skip real teardown.
+registry entry — if a fixture says "I cleaned up" but the VM/workspace/
+iron-proxy is still there, it force-cleans and prints a WARN. This is
+the lie-detector for tests/fixtures that skip real teardown.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -64,6 +65,11 @@ def _verify_gone_or_force_clean(kind: str, value: str) -> None:
 
 
 def _verify_sandbox_gone(name: str) -> None:
+    _verify_vm_gone(name)
+    _verify_iron_proxy_gone(name)
+
+
+def _verify_vm_gone(name: str) -> None:
     if not shutil.which("tart"):
         return
     r = subprocess.run(
@@ -86,6 +92,39 @@ def _verify_sandbox_gone(name: str) -> None:
             subprocess.run(["tart", "stop", name], capture_output=True, timeout=30)
             subprocess.run(["tart", "delete", name], capture_output=True, timeout=15)
             return
+
+
+def _verify_iron_proxy_gone(sandbox_name: str) -> None:
+    """A sandbox_name like `e2e-cold-start-abcd` maps to project id
+    `cold-start` (the slug), which is what iron-proxy encodes in its
+    -config path as `<runtime>/iron-proxy/<project>.yaml`. Search for
+    any live process whose argv references that project's yaml file
+    and SIGTERM it. This catches iron-proxies leaked by tests that
+    skipped `devm teardown` — the VM sweep alone wouldn't touch them
+    (iron-proxy is a Mac-side process, not a tart VM).
+    """
+    m = re.match(r"^e2e-(?P<slug>.+)-[0-9a-f]{4}$", sandbox_name)
+    if not m:
+        return
+    slug = m.group("slug")
+    # Argv pattern the daemon always writes (see SpawnIronProxy):
+    #   /path/to/iron-proxy -config <runtime>/iron-proxy/<slug>.yaml
+    pattern = rf"iron-proxy -config .*/iron-proxy/{re.escape(slug)}\.yaml"
+    r = subprocess.run(
+        ["pgrep", "-f", pattern],
+        capture_output=True, text=True, timeout=5,
+    )
+    pids = [p for p in r.stdout.split() if p.strip().isdigit()]
+    if not pids:
+        return
+    sys.stderr.write(
+        f"WARN: registry.remove(sandbox={sandbox_name!r}): iron-proxy still "
+        f"running for project {slug!r} (pids={pids}) — forcing SIGTERM. The "
+        f"test skipped `devm teardown` or `devm stop`; the sandbox_name "
+        f"fixture only tracks VMs, not the iron-proxy child. Add a `finally: "
+        f"subprocess.run([devm.path, 'teardown', '--yes'], ...)` to the test.\n"
+    )
+    subprocess.run(["pkill", "-f", pattern], capture_output=True, timeout=5)
 
 
 def _verify_workspace_gone(path: str) -> None:
