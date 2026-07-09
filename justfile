@@ -45,25 +45,29 @@ test:
 clean:
     rm -rf bin/
 
-# Run the full e2e suite.
+# Run the fast e2e suite (devm + contract markers). Explicitly excludes
+# recipe tests — those install real tools (Docker via get.docker.com,
+# etc.), take 5+ min each, and need public-internet egress. Run those
+# on demand via `just e2e-recipe`.
 e2e:
-    @e2e/scripts/run.sh
+    @e2e/scripts/run.sh -m "devm or contract"
 
 # Test groups by pytest marker. Pick one when you only care about a slice:
 #   - devm:      tests that drive `devm` (the user-facing CLI flow)
 #   - contract:  declarative tart + iron-proxy invariants devm depends on
+#   - recipe:    end-to-end pins for a specific recipe (Docker, etc.)
 e2e-devm:
     @e2e/scripts/run.sh -m devm
 
 e2e-contract:
     @e2e/scripts/run.sh -m contract
 
-# Exercise the docker recipe end-to-end. Slow (~5 min: installs Docker
-# via get.docker.com in a fresh VM, pulls hello-world, runs a container).
-# Kept separate from `e2e-devm` because it needs public-internet egress
-# to Docker Hub and is expensive.
-e2e-recipe-docker:
-    @e2e/scripts/run.sh -m recipe_docker
+# Exercise all recipe integrations end-to-end. Slow — each recipe's
+# install (Docker via get.docker.com, whatever the next recipe needs)
+# runs a real workload in a fresh VM. Kept out of `just e2e` because
+# these need public-internet egress and take minutes per test.
+e2e-recipe:
+    @e2e/scripts/run.sh -m recipe
 
 # Run a single test by name (matches pytest -k pattern). Foreground (no -n).
 # Quote multi-word patterns: `just e2e-one "test_a or test_b"`.

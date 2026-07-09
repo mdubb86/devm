@@ -36,7 +36,7 @@ import pytest
 
 from helpers.exec_retry import devm_exec_with_retry
 
-pytestmark = pytest.mark.recipe_docker
+pytestmark = pytest.mark.recipe
 
 
 @pytest.mark.slow
