@@ -199,11 +199,11 @@ func TestBuildDnsmasqScript_ForwardsToIronProxyDNS(t *testing.T) {
 	assert.Contains(t, script, "address=/test/127.0.0.1")
 	assert.Contains(t, script, "nameserver 127.0.0.1")
 	assert.Contains(t, script, "systemctl reload-or-restart dnsmasq")
-	// Bind on all interfaces so containers can reach dnsmasq via
-	// their docker0/br-* gateway. Without this, the prerouting-nat
-	// UDP:53 redirect lands on a loopback-only listener and packets
-	// arriving on docker0 have nowhere to go. Not a security issue —
-	// vmnet doesn't route external traffic to guest:53.
-	assert.Contains(t, script, "listen-address=0.0.0.0")
-	assert.Contains(t, script, "bind-interfaces")
+	// bind-dynamic makes dnsmasq listen on all interface addresses and
+	// re-bind whenever new interfaces come up. Required for containers:
+	// docker0 doesn't exist at dnsmasq's initial start (Docker installs
+	// later in provisioning), so a static bind mode would miss it and
+	// the nftables prerouting DNAT for container UDP:53 would land at
+	// an interface dnsmasq isn't listening on.
+	assert.Contains(t, script, "bind-dynamic")
 }

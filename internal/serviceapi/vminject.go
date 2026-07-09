@@ -296,13 +296,15 @@ sudo systemctl restart systemd-timesyncd
 // every name, so workload resolutions land at MAC_HOST and get
 // DNATed by the nftables rules.
 //
-// dnsmasq binds on 0.0.0.0 (all interfaces), not just 127.0.0.1. This
-// makes it reachable from container namespaces: the nftables
-// prerouting chain DNAT-redirects container UDP:53 traffic to the
-// guest's own port 53, which requires dnsmasq to actually be
-// listening on the interface the packet ultimately arrives on
-// (docker0, br-*, etc.). Not a security concern — nothing external
-// can route to the guest's :53 across vmnet.
+// bind-dynamic makes dnsmasq listen on all interface addresses AND
+// re-bind whenever an interface comes up. Required for the container
+// case: docker0 doesn't exist at dnsmasq's initial start; only after
+// Docker installs and starts (later in install:). Without
+// bind-dynamic, dnsmasq only knows about interfaces that existed at
+// start time, and a container's DNS query redirected to 172.17.0.1:53
+// via nftables PREROUTING would arrive at an interface dnsmasq isn't
+// listening on. Not a security concern — nothing external can route
+// to the guest's :53 across vmnet.
 //
 // systemd-resolved is masked first because it holds :53 by default
 // in the cirruslabs/debian template (binds 127.0.0.53 and 127.0.0.54);
@@ -319,8 +321,7 @@ sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<EOF
 address=/test/127.0.0.1
 no-resolv
 server=%s#%d
-listen-address=0.0.0.0
-bind-interfaces
+bind-dynamic
 EOF
 sudo systemctl reload-or-restart dnsmasq
 `, macHost, dnsPort)
