@@ -103,6 +103,25 @@ def test_docker_recipe_end_to_end(workspace, devm):
         f"stderr={info.stderr.decode()!r}"
     )
 
+    # ---- Diagnostic: what does a container see for DNS? ----
+    # If container HTTPS fails downstream, this points at whether DNS
+    # or the DNAT is the broken piece.
+    dns_diag = devm_exec_with_retry(
+        devm.path,
+        ["docker", "run", "--rm", "alpine:latest",
+         "sh", "-c",
+         "echo '--- /etc/resolv.conf ---'; cat /etc/resolv.conf; "
+         "echo '--- nslookup httpbin.org ---'; nslookup httpbin.org 2>&1 || true; "
+         "echo '--- nslookup google.com ---'; nslookup google.com 2>&1 || true"],
+        cwd=str(workspace.path), timeout=120,
+    )
+    print(
+        f"container DNS diagnostic:\n"
+        f"stdout={dns_diag.stdout.decode()}\n"
+        f"stderr={dns_diag.stderr.decode()}",
+        flush=True,
+    )
+
     # ---- Assertion 2: container HTTPS to an allow-listed host works. ----
     allowed = devm_exec_with_retry(
         devm.path,

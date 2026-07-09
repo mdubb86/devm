@@ -324,6 +324,7 @@ address=/test/127.0.0.1
 no-resolv
 server=%s#%d
 bind-dynamic
+log-queries
 EOF
 sudo systemctl reload-or-restart dnsmasq
 `, macHost, dnsPort)
