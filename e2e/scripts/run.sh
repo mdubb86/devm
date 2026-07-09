@@ -130,9 +130,13 @@ fi
 # Match on `/iron-proxy -config .*/iron-proxy/*.yaml` — the argv
 # pattern the daemon always uses (see internal/serviceapi/ironproxy.go
 # SpawnIronProxy). Never matches the user's shell or tart. Best-effort;
-# don't fail the run if pkill can't reach a PID.
-echo "=== e2e: reaping orphan iron-proxy processes ===" >&2
-pkill -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null || true
+# don't fail the run if pkill can't reach a PID. Silent when nothing's
+# there to reap.
+ORPHAN_IRON_PROXIES="$(pgrep -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null | wc -l | tr -d ' ')"
+if [ "${ORPHAN_IRON_PROXIES:-0}" -gt 0 ]; then
+    echo "=== e2e: reaping $ORPHAN_IRON_PROXIES orphan iron-proxy process(es) ===" >&2
+    pkill -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null || true
+fi
 
 # Reap orphan e2e-* tart VMs from prior runs. Test fixtures name their
 # VMs `e2e-<slug>-<hash>` and register them into E2E_REGISTRY for
@@ -146,17 +150,26 @@ pkill -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null || true
 #
 # Only touches VMs prefixed `e2e-` — same allow-list the e2e test
 # fixtures use and the same shape sweep-leftovers.sh matches. User
-# VMs and `devm-base` are untouched.
-echo "=== e2e: reaping orphan e2e-* tart VMs ===" >&2
+# VMs and `devm-base` are untouched. Silent when nothing's there.
+ORPHAN_VMS=()
 while read -r name; do
     [ -z "$name" ] && continue
-    tart stop "$name" >/dev/null 2>&1 || true
-    tart delete "$name" >/dev/null 2>&1 || true
+    ORPHAN_VMS+=("$name")
 done < <(tart list 2>/dev/null | awk 'NR>1 && $2 ~ /^e2e-/ {print $2}')
+if [ "${#ORPHAN_VMS[@]}" -gt 0 ]; then
+    echo "=== e2e: reaping ${#ORPHAN_VMS[@]} orphan e2e-* tart VM(s) ===" >&2
+    for name in "${ORPHAN_VMS[@]}"; do
+        tart stop "$name" >/dev/null 2>&1 || true
+        tart delete "$name" >/dev/null 2>&1 || true
+    done
+fi
 
 # Small settle so kernels release the port bindings before the fresh
-# daemon starts picking ports.
-sleep 1
+# daemon starts picking ports. Only useful if we actually killed
+# something above.
+if [ "${ORPHAN_IRON_PROXIES:-0}" -gt 0 ] || [ "${#ORPHAN_VMS[@]}" -gt 0 ]; then
+    sleep 1
+fi
 if [ "$SKIP_INSTALL" = "0" ]; then
     echo "=== e2e: installing devm daemon from $DEVM_BIN ===" >&2
     "$DEVM_BIN" install >/dev/null || {
