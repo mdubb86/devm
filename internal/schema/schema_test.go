@@ -792,3 +792,52 @@ services:
 	require.NotNil(t, token.Secret)
 	assert.Equal(t, "__DEVM_SECRET_gh_token__", token.Render())
 }
+
+func TestConfig_ParsesDockerTrue(t *testing.T) {
+	src := `
+project:
+  id: p
+  vm_name: v
+docker: true
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !cfg.Docker {
+		t.Errorf("Docker: want true, got false")
+	}
+}
+
+func TestConfig_DefaultsDockerFalse(t *testing.T) {
+	src := `
+project:
+  id: p
+  vm_name: v
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if cfg.Docker {
+		t.Errorf("Docker: want false (default), got true")
+	}
+}
+
+func TestConfig_DockerStringRejected(t *testing.T) {
+	// NOTE: "yes" is deliberately NOT used here — yaml.v3 resolves quoted
+	// "yes"/"no"/"true"/"false"/"on"/"off" as YAML 1.1 boolean literals
+	// even when the source is quoted, so `docker: "yes"` decodes to true
+	// instead of erroring. "banana" is unambiguously non-boolean.
+	src := `
+project:
+  id: p
+  vm_name: v
+docker: "banana"
+`
+	var cfg Config
+	err := yaml.Unmarshal([]byte(src), &cfg)
+	if err == nil {
+		t.Fatalf("want error on non-boolean docker value, got Docker=%v", cfg.Docker)
+	}
+}

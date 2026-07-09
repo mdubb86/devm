@@ -17,6 +17,9 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 			out.Project.Proxy = *override.Project.Proxy
 		}
 	}
+	if override.Docker != nil {
+		out.Docker = *override.Docker
+	}
 	if override.Network != nil {
 		if override.Network.Allow != nil {
 			out.Network.Allow = *override.Network.Allow

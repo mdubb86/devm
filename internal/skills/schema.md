@@ -11,6 +11,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 |---|---|---|---|
 | `project` | object | recreate | Project identity and proxy settings (required). |
 | `base_image` | object | recreate | Accepted for YAML compatibility; has no active fields. |
+| `docker` | bool | recreate | Enables the first-class docker feature (Docker Engine install, `devm-runc-shim` as default OCI runtime, Docker Hub allowlist). Defaults `false`. Requires teardown to toggle. |
 | `network` | object | live | Iron-proxy outbound allowlist. |
 | `env` | map[string]EnvValue | live | Project-wide environment variables forwarded to all services. |
 | `services` | map[string]Service | varies | Named service definitions; bucket depends on which sub-field changes (see Services section). |

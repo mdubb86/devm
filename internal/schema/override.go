@@ -80,6 +80,7 @@ func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
 type ConfigOverride struct {
 	Project  *ProjectOverride           `yaml:"project,omitempty"`
 	Network  *NetworkOverride           `yaml:"network,omitempty"`
+	Docker   *bool                      `yaml:"docker,omitempty"`
 	Env      map[string]EnvValue        `yaml:"env,omitempty"`
 	Services map[string]ServiceOverride `yaml:"services,omitempty"`
 	Install  *[]string                  `yaml:"install,omitempty"`

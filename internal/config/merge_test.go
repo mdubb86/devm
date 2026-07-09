@@ -133,3 +133,22 @@ func TestMerge_PreservesPathWhenOverrideNil(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/r/.cargo/bin"}, out.Path)
 }
+
+func TestMerge_DockerOverride(t *testing.T) {
+	base := schema.Config{} // Docker: false
+	tru := true
+	override := schema.ConfigOverride{Docker: &tru}
+
+	out, err := Merge(base, override)
+	require.NoError(t, err)
+	assert.True(t, out.Docker, "Docker: want true after override")
+}
+
+func TestMerge_DockerOverrideAbsentPreserves(t *testing.T) {
+	base := schema.Config{Docker: true}
+	override := schema.ConfigOverride{} // no Docker override
+
+	out, err := Merge(base, override)
+	require.NoError(t, err)
+	assert.True(t, out.Docker, "Docker: want preserved true")
+}
