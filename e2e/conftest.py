@@ -181,12 +181,12 @@ def sudo_capable():
       - /dev/tty unavailable (CI / no controlling terminal — sudo
         would hang on a prompt it can't deliver)
 
-    If sudo IS capable but not cached, the test will trigger Touch ID
-    (or password) prompts naturally during its install/uninstall
-    calls — sudo opens /dev/tty directly for the prompt, independent
-    of pytest's capture of stdin/stdout. No priming machinery: on
-    macOS, Touch ID doesn't share the sudo timestamp cache anyway,
-    so priming just adds an extra interaction.
+    No priming: sudo opens /dev/tty directly for its Touch ID (or
+    password) prompt, independent of pytest's capture of stdin/stdout,
+    so tests that need sudo just call it and the prompt fires
+    naturally. On macOS Touch ID doesn't share the sudo timestamp
+    cache anyway — priming would just add an extra interaction per
+    run.
     """
     import platform as _platform
 
@@ -196,36 +196,9 @@ def sudo_capable():
         open("/dev/tty").close()
     except OSError:
         pytest.skip("no /dev/tty — sudo can't prompt, skipping interactive test")
-    _require_sudo_primed()
 
 
 _LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.service.plist")
-
-
-def _require_sudo_primed():
-    """Fail-fast: sudo credentials must already be cached before a test
-    that uses sudo runs. Without this, sudo either tries to prompt
-    (works but requires interaction and blocks whichever test noticed
-    first) or hangs waiting on a stdin pytest has captured. Either way,
-    the user is better off being told UP FRONT to prime sudo.
-    """
-    r = subprocess.run(
-        ["sudo", "-n", "true"],
-        capture_output=True, timeout=5,
-    )
-    if r.returncode != 0:
-        pytest.exit(
-            "sudo credentials are not cached. This test needs sudo but the\n"
-            "cache is cold, and prompting from inside pytest is unreliable\n"
-            "(captured stdin, no controlling TTY on some setups). Run:\n"
-            "\n"
-            "    sudo -v && just e2e-one \"...\"\n"
-            "\n"
-            "sudo -v primes the credential cache with a single prompt in\n"
-            "your interactive shell; subsequent sudo calls inside pytest\n"
-            "then use the cache without prompting.",
-            returncode=2,
-        )
 
 
 def _daemon_program_path() -> str | None:

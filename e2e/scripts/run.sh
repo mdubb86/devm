@@ -13,7 +13,6 @@ source "$SCRIPT_DIR/sweep.sh"
 export E2E_REGISTRY="$(mktemp -t devm-e2e-reg.XXXX)"
 
 PYTEST_PID=""
-SUDO_KEEPALIVE_PID=""
 shutdown() {
     echo "=== e2e: caught signal, terminating pytest ==="
     if [ -n "$PYTEST_PID" ]; then
@@ -24,9 +23,6 @@ shutdown() {
 }
 on_exit() {
     local rc=$?
-    if [ -n "$SUDO_KEEPALIVE_PID" ]; then
-        kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
-    fi
     sweep_registry
     rm -f "$E2E_REGISTRY"
     exit $rc
@@ -68,37 +64,13 @@ if [ -x "$(cd .. && pwd)/bin/iron-proxy" ]; then
 fi
 export DEVM_BIN
 
-# Single up-front daemon install. Every devm-marked test needs the
-# LaunchDaemon in-sync with DEVM_BIN, and doing it once here — before
-# any pytest worker starts — avoids the pathological case of 4 xdist
-# workers racing on `devm install` in their per-test autouse fixture
-# (which serializes on the plist file and blows the 120s per-test
-# timeout during setup).
-#
-# The autouse fixture becomes a verify-only safety net: if it ever
-# sees a mismatch after this pre-install, the test suite aborts
-# immediately with an actionable message.
-if ! sudo -n true 2>/dev/null; then
-    echo "=== e2e: sudo cache is cold — prime with 'sudo -v' first ===" >&2
-    exit 2
-fi
-
-# Keep sudo alive for the whole run. Default cache is 5 min inactivity;
-# the serial phase's install/uninstall tests run further in than that
-# and otherwise hit `_require_sudo_primed()` mid-suite.
-#
-# `sudo -n -v` explicitly refreshes the credential cache TIMESTAMP
-# (`-v`) without prompting on failure (`-n`). Plain `sudo -n true`
-# uses the cache but doesn't reliably bump the timestamp on macOS,
-# so the cache still expires after 5 min even with the keepalive
-# running.
-#
-# If the cache goes cold anyway (backgrounded shell, laptop sleep,
-# etc.), the keepalive exits — the next test hitting sudo will fail
-# loud rather than silently prompt in a way the user might miss
-# (e.g., a Touch ID dialog blocked by a stuck stdin).
-( while true; do sudo -n -v 2>/dev/null || exit; sleep 60; done ) &
-SUDO_KEEPALIVE_PID=$!
+# No sudo priming or keepalive: on modern macOS with Touch ID, each
+# privileged op (launchctl bootstrap, security add-trusted-cert, etc.)
+# prompts individually anyway — sudo's timestamp cache doesn't skip
+# biometric auth. So priming buys nothing. Commands that need sudo
+# below (`devm uninstall`, `devm install`, and any install-marked
+# test's own operations) will prompt when they need it. When the
+# daemon already matches DEVM_BIN, nothing here needs sudo at all.
 
 # Skip uninstall+install when the daemon is RUNNING and its
 # Fingerprint matches. Two conditions:
