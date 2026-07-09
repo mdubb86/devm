@@ -30,22 +30,23 @@ def pytest_collection_modifyitems(config, items):
         races on lock inheritance (Python's own DeprecationWarning on
         forkpty spells this out).
 
-      - `serial`: mutates global system state via `devm install` /
-        `devm uninstall` (LaunchDaemon plist, /etc/resolver/test, the
-        system CA, the tart devm-base image). Concurrent runs of these
-        tests step on each other's install/uninstall sequences.
+      - `install`: exercises devm's install lifecycle — `devm install`,
+        `devm uninstall`, or `devm service restart` — which mutates
+        global system state (LaunchDaemon plist, /etc/resolver/test,
+        the system CA, the tart devm-base image). Concurrent runs of
+        these tests step on each other's install/uninstall sequences.
+        Semantic pair of the `devm` marker: install = installing devm
+        itself; devm = using it. Run via `just e2e-install`.
 
-    Both markers land in run.sh's serial phase (`-m "pty or serial"`).
-    Detection is a source-grep at collect time; matches beat missed marks
-    because the cost of a serial-run non-serial test is only latency, not
-    correctness.
+    Both markers land in run.sh's single-process phase. Detection is a
+    source-grep at collect time; matches beat missed marks because the
+    cost of a single-process-run test is only latency, not correctness.
     """
-    # `serial` marker is for tests that MUTATE the shared daemon during
-    # their run — install, uninstall, or service restart — because those
-    # kill the socket other tests are actively using. Merely NEEDING the
-    # daemon isn't enough; the session-scoped _daemon_matches_devm_bin
-    # fixture handles that precondition once at session start.
-    _serial_hints = (
+    # `install` marker: tests that MUTATE the shared daemon during their
+    # run. Merely NEEDING the daemon isn't enough; the session-scoped
+    # _daemon_matches_devm_bin fixture handles that precondition once
+    # at session start.
+    _install_hints = (
         'devm.path, "install"',
         'devm.path, "uninstall"',
         '"service", "restart"',
@@ -57,8 +58,8 @@ def pytest_collection_modifyitems(config, items):
             continue
         if "Shell(" in src or "from helpers import Shell" in src:
             item.add_marker(pytest.mark.pty)
-        if any(h in src for h in _serial_hints):
-            item.add_marker(pytest.mark.serial)
+        if any(h in src for h in _install_hints):
+            item.add_marker(pytest.mark.install)
 
 
 

@@ -179,13 +179,13 @@ for arg in "$@"; do
     esac
 done
 
-parallel_mark="not pty and not serial"
-sudo_mark="serial"
-pty_mark="pty and not serial"
+parallel_mark="not pty and not install"
+sudo_mark="install"
+pty_mark="pty and not install"
 if [ -n "$CALLER_MARK" ]; then
-    parallel_mark="($CALLER_MARK) and not pty and not serial"
-    sudo_mark="($CALLER_MARK) and serial"
-    pty_mark="($CALLER_MARK) and pty and not serial"
+    parallel_mark="($CALLER_MARK) and not pty and not install"
+    sudo_mark="($CALLER_MARK) and install"
+    pty_mark="($CALLER_MARK) and pty and not install"
 fi
 
 rc_parallel=0
@@ -211,8 +211,8 @@ rc_parallel=$?
 # intersection is empty (e.g. `-m contract` never intersects `pty`).
 [ $rc_parallel -eq 5 ] && rc_parallel=0
 
-# Phase 2a: serial-marked (install/uninstall/service-restart) tests
-# FIRST. These fire macOS Touch ID prompts every time they invoke sudo
+# Phase 2a: install-marked (devm install/uninstall/service-restart)
+# tests FIRST. These fire macOS Touch ID prompts every time they invoke sudo
 # on privileged operations (security add-trusted-cert, launchctl
 # bootstrap, etc.) — even with a warm sudo timestamp. Grouping them
 # up front means the prompts happen in a single burst while the user

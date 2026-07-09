@@ -46,18 +46,23 @@ clean:
     rm -rf bin/
 
 # Run the fast e2e suite (devm + contract markers). Explicitly excludes
-# recipe tests — those install real tools (Docker via get.docker.com,
-# etc.), take 5+ min each, and need public-internet egress. Run those
-# on demand via `just e2e-recipe`.
+# recipe tests (each takes 5+ min and needs public-internet egress —
+# run on demand via `just e2e-recipe`) and install-lifecycle tests
+# (mutate global system state, fire Touch ID prompts — run separately
+# via `just e2e-install`).
 e2e:
     @e2e/scripts/run.sh -m "devm or contract"
 
 # Test groups by pytest marker. Pick one when you only care about a slice:
-#   - devm:      tests that drive `devm` (the user-facing CLI flow)
+#   - devm:      exercises devm's features (using devm)
+#   - install:   exercises devm's install lifecycle (installing devm)
 #   - contract:  declarative tart + iron-proxy invariants devm depends on
 #   - recipe:    end-to-end pins for a specific recipe (Docker, etc.)
 e2e-devm:
-    @e2e/scripts/run.sh -m devm
+    @e2e/scripts/run.sh -m "devm and not install"
+
+e2e-install:
+    @e2e/scripts/run.sh -m install
 
 e2e-contract:
     @e2e/scripts/run.sh -m contract
