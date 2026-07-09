@@ -175,14 +175,33 @@ func (p *Provisioner) linkWithDevmEnv(ctx context.Context, w io.Writer) error {
 }
 
 func (p *Provisioner) installCARoot(ctx context.Context, w io.Writer) error {
-	// tart.Exec doesn't expose stdin streaming, so we base64-encode the
-	// PEM and decode inside the VM via a shell pipeline.
+	return p.execShell(ctx, w, p.installCARootScript())
+}
+
+// installCARootScript builds the shell script that installs the devm CA
+// into the guest's CApath and verifies it lands in the merged bundle file.
+//
+// tart.Exec doesn't expose stdin streaming, so we base64-encode the PEM and
+// decode inside the VM via a shell pipeline.
+//
+// --fresh is required: on a base image where update-ca-certificates has
+// already run, its cached state can cause a subsequent run to skip the
+// merge step, so /etc/ssl/certs/ca-certificates.crt never picks up
+// devm.crt even though the CApath symlink is created. --fresh rebuilds
+// from scratch, and the trailing grep makes provisioning fail loud if the
+// bundle merge ever regresses.
+func (p *Provisioner) installCARootScript() string {
 	encoded := base64.StdEncoding.EncodeToString(p.CARootPEM)
-	script := fmt.Sprintf(
-		`echo %s | base64 -d | sudo tee /usr/local/share/ca-certificates/devm.crt > /dev/null && sudo update-ca-certificates`,
+	return fmt.Sprintf(
+		`set -e
+echo %s | base64 -d | sudo tee /usr/local/share/ca-certificates/devm.crt > /dev/null
+sudo update-ca-certificates --fresh
+grep -q "devm Local CA" /etc/ssl/certs/ca-certificates.crt || {
+    echo "FAIL: devm CA installed to CApath but not merged into ca-certificates.crt bundle" >&2
+    exit 1
+}`,
 		encoded,
 	)
-	return p.execShell(ctx, w, script)
 }
 
 func (p *Provisioner) writeCaddyfile(ctx context.Context, w io.Writer) error {

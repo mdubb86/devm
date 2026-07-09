@@ -405,6 +405,19 @@ func TestProvisioner_InstallStepsGoThroughWithDevmEnvWrapper(t *testing.T) {
 	)
 }
 
+func TestInstallCARootScriptGuaranteesBundleMerge(t *testing.T) {
+	// Snapshot: script must include --fresh (else the bundle-merge bug
+	// resurfaces silently and containers stop trusting the guest CA).
+	p := &Provisioner{CARootPEM: []byte("dummy")}
+	script := p.installCARootScript()
+	if !strings.Contains(script, "update-ca-certificates --fresh") {
+		t.Errorf("installCARoot script must call `update-ca-certificates --fresh`, got:\n%s", script)
+	}
+	if !strings.Contains(script, `grep -q "devm Local CA" /etc/ssl/certs/ca-certificates.crt`) {
+		t.Errorf("installCARoot script must verify bundle contains devm CA, got:\n%s", script)
+	}
+}
+
 func TestProvisioner_InstallStepTimeout_ErrorMessage(t *testing.T) {
 	// Step exceeds the deadline → structured error names the step
 	// number and the command that timed out.
