@@ -214,27 +214,33 @@ func (p *Provisioner) applyEgressEnforcement(ctx context.Context, w io.Writer) e
 }
 
 // scaffoldUserFirewallChain creates the `inet devm_filter/user_output`
-// chain so recipes can `nft add rule inet devm_filter user_output ...`
-// during install: — the chain must exist before rules can be added to
-// it. applyEgressEnforcement runs later and snapshots whatever ended
-// up in this chain to /etc/nftables.d/user_output.conf so recipe-added
-// rules survive VM reboot.
+// and `inet devm_filter/user_forward` chains so recipes can
+// `nft add rule inet devm_filter user_output ...` (host-egress escape)
+// or `... user_forward ...` (container-egress escape) during install:
+// — the chains must exist before rules can be added to them.
+// applyEgressEnforcement runs later and snapshots whatever ended up
+// in each chain to /etc/nftables.d/user_output.conf and
+// /etc/nftables.d/user_forward.conf so recipe-added rules survive
+// VM reboot.
 //
-// FLUSHES user_output on every provision run: each cold-start
+// FLUSHES both chains on every provision run: each cold-start
 // re-executes install: from scratch, so any `nft add rule` there would
 // otherwise pile up duplicate rules across successive re-provisions
 // on the same disk (devm shell → change install: → devm shell). The
 // flush makes install: commands the single source of truth for what
-// ends up in user_output — reproducible from devm.yaml.
+// ends up in the user chains — reproducible from devm.yaml.
 //
 // The `add table` / `add chain` are idempotent (no-op if exists). The
-// chain has no type/hook, so a rule added to it has zero effect until
-// applyEgressEnforcement wires the output chain's `jump user_output`.
+// chains have no type/hook, so a rule added to them has zero effect
+// until applyEgressEnforcement wires the parent chains'
+// `jump user_output` / `jump user_forward`.
 func (p *Provisioner) scaffoldUserFirewallChain(ctx context.Context, w io.Writer) error {
 	script := `sudo nft -f - <<'EOF'
 add table inet devm_filter
 add chain inet devm_filter user_output
+add chain inet devm_filter user_forward
 flush chain inet devm_filter user_output
+flush chain inet devm_filter user_forward
 EOF
 `
 	return p.execShell(ctx, w, script)

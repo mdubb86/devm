@@ -128,6 +128,51 @@ func TestBuildNftablesScript_PersistsViaIncludeGlob(t *testing.T) {
 	assert.Contains(t, script, "jump user_output")
 }
 
+func TestBuildNftablesScript_ForwardChainRedirectsContainerTraffic(t *testing.T) {
+	// Container→internet packets traverse the FORWARD hook (they came
+	// from a docker bridge, headed for eth0). Our forward nat chain in
+	// PREROUTING must DNAT-redirect their HTTP/HTTPS to iron-proxy and
+	// their DNS to the guest's own port 53 (dnsmasq). Scoped by
+	// iifname so packets arriving from the Mac aren't touched.
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+
+	// DNS redirect: container→any-DNS-server:53 → local :53 (dnsmasq
+	// bound on 0.0.0.0). `redirect to :53` translates automatically to
+	// the local machine's IP, so it works regardless of which docker
+	// bridge the packet came from.
+	assert.Contains(t, script, `iifname { "docker0", "docker_gwbridge" } udp dport 53 redirect to :53`)
+	assert.Contains(t, script, `iifname "br-*" udp dport 53 redirect to :53`)
+	// HTTPS/HTTP DNAT: container→any:443/80 → MAC_HOST:iron-proxy
+	assert.Contains(t, script, `iifname { "docker0", "docker_gwbridge" } tcp dport 443 dnat to 192.168.64.1:8443`)
+	assert.Contains(t, script, `iifname "br-*" tcp dport 443 dnat to 192.168.64.1:8443`)
+	assert.Contains(t, script, `iifname { "docker0", "docker_gwbridge" } tcp dport 80 dnat to 192.168.64.1:8080`)
+	assert.Contains(t, script, `iifname "br-*" tcp dport 80 dnat to 192.168.64.1:8080`)
+}
+
+func TestBuildNftablesScript_ForwardFilterDefaultDeny(t *testing.T) {
+	// The forward filter chain closes container→internet on
+	// non-DNAT'd ports (e.g., a container trying to SSH out). Base
+	// rules only accept established/related plus post-DNAT traffic to
+	// MAC_HOST:iron-proxy — everything else drops.
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+	assert.Contains(t, script, "add chain inet devm_filter forward { type filter hook forward priority 0 ; policy drop ; }")
+	assert.Contains(t, script, "add rule inet devm_filter forward ct state established,related accept")
+	assert.Contains(t, script, "add rule inet devm_filter forward ip daddr 192.168.64.1 tcp dport { 8080, 8443 } accept")
+	assert.Contains(t, script, "add rule inet devm_filter forward jump user_forward")
+}
+
+func TestBuildNftablesScript_ForwardChainAndUserForwardPersisted(t *testing.T) {
+	// The persisted /etc/nftables.conf must contain the forward chains
+	// so systemd's nftables.service restores them on boot; and the
+	// snapshot of user_forward must be written alongside user_output
+	// so recipe-added rules survive VM reboot.
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+	assert.Contains(t, script, "nft list chain inet devm_filter user_forward > /etc/nftables.d/user_forward.conf")
+	assert.Contains(t, script, "chain user_forward {}")
+	assert.Contains(t, script, "chain forward {")
+	assert.Contains(t, script, "chain prerouting {")
+}
+
 func TestBuildTimesyncdScript_PointsAtProxySentinel(t *testing.T) {
 	script := buildTimesyncdScript()
 	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")
@@ -154,4 +199,11 @@ func TestBuildDnsmasqScript_ForwardsToIronProxyDNS(t *testing.T) {
 	assert.Contains(t, script, "address=/test/127.0.0.1")
 	assert.Contains(t, script, "nameserver 127.0.0.1")
 	assert.Contains(t, script, "systemctl reload-or-restart dnsmasq")
+	// Bind on all interfaces so containers can reach dnsmasq via
+	// their docker0/br-* gateway. Without this, the prerouting-nat
+	// UDP:53 redirect lands on a loopback-only listener and packets
+	// arriving on docker0 have nowhere to go. Not a security issue —
+	// vmnet doesn't route external traffic to guest:53.
+	assert.Contains(t, script, "listen-address=0.0.0.0")
+	assert.Contains(t, script, "bind-interfaces")
 }

@@ -58,6 +58,13 @@ e2e-devm:
 e2e-contract:
     @e2e/scripts/run.sh -m contract
 
+# Exercise the docker recipe end-to-end. Slow (~5 min: installs Docker
+# via get.docker.com in a fresh VM, pulls hello-world, runs a container).
+# Kept separate from `e2e-devm` because it needs public-internet egress
+# to Docker Hub and is expensive.
+e2e-recipe-docker:
+    @e2e/scripts/run.sh -m recipe_docker
+
 # Run a single test by name (matches pytest -k pattern). Foreground (no -n).
 # Quote multi-word patterns: `just e2e-one "test_a or test_b"`.
 e2e-one NAME:
