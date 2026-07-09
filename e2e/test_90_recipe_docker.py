@@ -123,26 +123,51 @@ def test_docker_recipe_end_to_end(workspace, devm):
         flush=True,
     )
 
-    # ---- Diagnostic: guest-side nftables state ----
-    nft_diag = devm_exec_with_retry(
+    # ---- Diagnostic: guest-side rules AND counters ----
+    # Add counters to my PREROUTING DNAT and FORWARD accept rules,
+    # trigger container traffic, then dump. Non-zero counter = rule
+    # actually fires. Zero = rule was there but didn't match.
+    devm_exec_with_retry(
         devm.path,
-        ["sudo", "nft", "list", "table", "ip", "devm_nat"],
+        ["sudo", "nft", "add", "rule", "ip", "devm_nat", "prerouting",
+         "iifname", "docker0", "tcp", "dport", "443", "counter", "return"],
+        cwd=str(workspace.path), timeout=10,
+    )
+    devm_exec_with_retry(
+        devm.path,
+        ["sudo", "nft", "add", "rule", "inet", "devm_filter", "forward",
+         "ip", "daddr", "192.168.64.1", "counter", "return"],
+        cwd=str(workspace.path), timeout=10,
+    )
+    # Now trigger — nc from a container.
+    devm_exec_with_retry(
+        devm.path,
+        ["docker", "run", "--rm", "alpine:latest",
+         "sh", "-c", "nc -zv -w 3 192.0.2.1 443 2>&1 || true"],
+        cwd=str(workspace.path), timeout=60,
+    )
+    # Dump full ruleset with counters, plus Docker's iptables.
+    ruleset = devm_exec_with_retry(
+        devm.path,
+        ["sudo", "nft", "list", "ruleset"],
         cwd=str(workspace.path), timeout=15,
     )
     print(
-        f"guest devm_nat table:\n"
-        f"{nft_diag.stdout.decode()}\n"
-        f"stderr={nft_diag.stderr.decode()}",
+        f"guest nftables ruleset:\n{ruleset.stdout.decode()}",
         flush=True,
     )
-    fwd_diag = devm_exec_with_retry(
+    iptables = devm_exec_with_retry(
         devm.path,
-        ["sudo", "nft", "list", "table", "inet", "devm_filter"],
+        ["sudo", "sh", "-c",
+         "iptables -L FORWARD -n -v --line-numbers 2>&1; "
+         "echo '--- iptables nat ---'; iptables -t nat -L -n -v --line-numbers 2>&1; "
+         "echo '--- bridge-nf-call-iptables ---'; sysctl net.bridge.bridge-nf-call-iptables 2>&1; "
+         "echo '--- ip route ---'; ip route show; "
+         "echo '--- ip link ---'; ip -brief link show"],
         cwd=str(workspace.path), timeout=15,
     )
     print(
-        f"guest devm_filter table:\n"
-        f"{fwd_diag.stdout.decode()}",
+        f"guest iptables + networking:\n{iptables.stdout.decode()}",
         flush=True,
     )
 
