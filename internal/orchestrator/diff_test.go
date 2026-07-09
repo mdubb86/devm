@@ -49,6 +49,7 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketTeardownShell, KindImageChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindIdentityChange.Bucket())
 	assert.Equal(t, BucketTeardownShell, KindMountAddRemove.Bucket())
+	assert.Equal(t, BucketTeardownShell, KindDockerToggle.Bucket())
 
 	// Live: service unit fields and hostname
 	assert.Equal(t, BucketLive, KindServiceExecChange.Bucket())
@@ -391,6 +392,29 @@ func TestComputeIdentityChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindIdentityChange, changes[0].Kind)
+}
+
+func TestComputeDockerChange_OnToOff(t *testing.T) {
+	old := schema.Config{Docker: true}
+	new := schema.Config{Docker: false}
+	changes := computeDockerChange(old, new)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindDockerToggle, changes[0].Kind)
+}
+
+func TestComputeDockerChange_OffToOn(t *testing.T) {
+	old := schema.Config{Docker: false}
+	new := schema.Config{Docker: true}
+	changes := computeDockerChange(old, new)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindDockerToggle, changes[0].Kind)
+}
+
+func TestComputeDockerChange_NoChange(t *testing.T) {
+	old := schema.Config{Docker: true}
+	new := schema.Config{Docker: true}
+	changes := computeDockerChange(old, new)
+	assert.Empty(t, changes)
 }
 
 func TestComputeAllChanges_NoOp(t *testing.T) {

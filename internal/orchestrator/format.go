@@ -414,6 +414,8 @@ func changeKindJSON(k ChangeKind) string {
 		return "image_change"
 	case KindIdentityChange:
 		return "identity_change"
+	case KindDockerToggle:
+		return "docker_toggle"
 	case KindTemplateChange:
 		return "template_change"
 	case KindMountAddRemove:
@@ -493,6 +495,8 @@ func formatChange(c Change) string {
 		return "~ base image"
 	case KindIdentityChange:
 		return "~ project identity"
+	case KindDockerToggle:
+		return "~ docker"
 	case KindTemplateChange:
 		switch {
 		case c.Old == "" && c.New != "":

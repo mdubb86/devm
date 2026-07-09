@@ -53,6 +53,7 @@ const (
 	KindMaskAddRemove
 	KindImageChange
 	KindIdentityChange
+	KindDockerToggle
 	KindTemplateChange
 	KindMountAddRemove
 	KindPathChange
@@ -87,9 +88,10 @@ var changeBucket = map[ChangeKind]Bucket{
 	// virtio-fs mounts are set at tart run time; requires full recreate.
 	KindMountAddRemove: BucketTeardownShell,
 	// mount --bind masks are applied at boot; requires full recreate.
-	KindMaskAddRemove: BucketTeardownShell,
-	KindImageChange:   BucketTeardownShell,
+	KindMaskAddRemove:  BucketTeardownShell,
+	KindImageChange:    BucketTeardownShell,
 	KindIdentityChange: BucketTeardownShell,
+	KindDockerToggle:   BucketTeardownShell,
 	KindTemplateChange: BucketLive,
 	// Path is materialized in .devm/.env (same fan-out as Env) — live.
 	KindPathChange: BucketLive,
@@ -202,6 +204,7 @@ func ComputeAllChanges(old, new schema.Config, repoRoot string) ([]Change, error
 	out = append(out, computeMaskAddRemove(old, new)...)
 	out = append(out, computeImageChange(old, new)...)
 	out = append(out, computeIdentityChange(old, new)...)
+	out = append(out, computeDockerChange(old, new)...)
 	out = append(out, computePathChange(old, new)...)
 	tmplChanges, err := ComputeTemplateChanges(new, repoRoot)
 	if err != nil {
@@ -354,6 +357,13 @@ func computeIdentityChange(old, new schema.Config) []Change {
 		return nil
 	}
 	return []Change{{Kind: KindIdentityChange}}
+}
+
+func computeDockerChange(old, new schema.Config) []Change {
+	if old.Docker == new.Docker {
+		return nil
+	}
+	return []Change{{Kind: KindDockerToggle}}
 }
 
 func envOf(s schema.Service) map[string]string {
