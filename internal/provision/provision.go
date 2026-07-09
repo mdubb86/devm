@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -118,6 +119,7 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 		{"apt-get install packages", p.aptInstall},
 		{"scaffold user firewall chain", p.scaffoldUserFirewallChain},
 		{"run install commands", p.runInstallCommands},
+		{"docker feature", p.dockerFeature},
 		{"install templates", p.installTemplates},
 		{"install service units", p.installServiceUnits},
 		{"systemctl daemon-reload", p.daemonReload},
@@ -159,6 +161,12 @@ func (p *Provisioner) execShell(ctx context.Context, w io.Writer, script string)
 	// the last) aborts the script. -o nounset would be nice but many user
 	// install steps rely on unset-vars-as-empty (e.g., ${FOO:-default}).
 	return p.exec(ctx, w, "bash", "-e", "-o", "pipefail", "-c", script)
+}
+
+// ExecShell is the exported entrypoint the docker package calls; wraps
+// the internal execShell.
+func (p *Provisioner) ExecShell(ctx context.Context, w io.Writer, script string) error {
+	return p.execShell(ctx, w, script)
 }
 
 func (p *Provisioner) mkdirWorkspaceParents(ctx context.Context, w io.Writer) error {
@@ -330,6 +338,17 @@ func (p *Provisioner) runInstallCommands(ctx context.Context, w io.Writer) error
 		}
 	}
 	return nil
+}
+
+// dockerFeature installs Docker Engine + devm-runc-shim + firewall rule
+// inside the VM when the project's devm.yaml declares `docker: true`.
+// No-op otherwise.
+func (p *Provisioner) dockerFeature(ctx context.Context, w io.Writer) error {
+	if !p.Cfg.Docker {
+		fmt.Fprintln(w, "(docker: false — skipping)")
+		return nil
+	}
+	return docker.Install(ctx, w, p)
 }
 
 // installTemplates runs the install-templates.sh dispatcher inside the VM,

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/debuglog"
+	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/lock"
 	"github.com/mdubb86/devm/internal/provision"
 	"github.com/mdubb86/devm/internal/render"
@@ -147,8 +148,9 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	reporter.Step("starting vm", false)
 	debuglog.Logf("shell", "cold-start: sending StartVM to daemon")
 
-	// Collect allow-list from network config.
-	allowList := cfg.Network.Domains()
+	// Collect allow-list from network config, expanded with Docker Hub
+	// hosts when docker: true.
+	allowList := docker.EffectiveAllowlist(cfg)
 
 	bindings, err := resolveSecretBindings(cfg, secret.NewMacKeychain())
 	if err != nil {
