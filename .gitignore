@@ -20,3 +20,7 @@ docs/superpowers/
 # Local scratch (notes, recipes, work-in-progress) — never committed
 .tmp/
 bin/
+
+# devm-runc-shim compiled artifact (source is cmd/devm-runc-shim/,
+# compiled at build time and embedded via internal/docker/embed.go)
+internal/docker/embed/devm-runc-shim

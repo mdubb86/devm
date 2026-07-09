@@ -9,6 +9,7 @@ before:
   hooks:
     - go mod tidy
     - sh -c 'IRON_PROXY_VERSION="${IRON_PROXY_VERSION:-v0.45.0}" && ver="$(echo "$IRON_PROXY_VERSION" | sed "s/^v//")" && mkdir -p share/devm/bin && curl -fsSL -o /tmp/iron-proxy.tar.gz "https://github.com/ironsh/iron-proxy/releases/download/${IRON_PROXY_VERSION}/iron-proxy_${ver}_darwin_arm64.tar.gz" && tar -xzf /tmp/iron-proxy.tar.gz -C share/devm/bin iron-proxy && chmod +x share/devm/bin/iron-proxy && rm /tmp/iron-proxy.tar.gz'
+    - sh -c 'mkdir -p internal/docker/embed && GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim'
 
 builds:
   # Tart requires Apple Silicon; amd64 macOS isn't a supported target.
