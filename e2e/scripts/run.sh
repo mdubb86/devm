@@ -44,9 +44,25 @@ uv sync --quiet
 # iron-proxy the daemon fails /vm/start with a 500 (visible in
 # ~/Library/Logs/com.devm.service.err.log as
 # `iron-proxy adopt: locate iron-proxy: iron-proxy not found`).
-DEVM_BIN="${DEVM_BIN:-$(mktemp -d)/devm}"
+# DEVM_BIN defaults to a stable path so the daemon's LaunchDaemon
+# plist can keep pointing at the same location across runs. That
+# enables the "skip reinstall if daemon already matches" check
+# below — every avoided reinstall is one fewer Touch ID prompt.
+# Override with DEVM_BIN=... in the env for CI / non-default layouts.
+DEVM_BIN="${DEVM_BIN:-$HOME/.cache/devm-e2e/devm}"
 DEVM_BIN_DIR="$(dirname "$DEVM_BIN")"
-(cd .. && go build -o "$DEVM_BIN" ./cmd/devm)
+mkdir -p "$DEVM_BIN_DIR"
+
+# Random per-build Fingerprint injected as a compiled-in constant.
+# Both the CLI and the (installed) daemon share this value — they were
+# built from the same `go build` invocation. Later, `devm` commands
+# check the daemon's reported Fingerprint against their own (compiled-in)
+# copy; a mismatch means the on-disk binary has been rebuilt since the
+# daemon last started, and the CLI raises an error telling the user to
+# `devm install`. Test infra uses that same signal to decide whether to
+# reinstall — no bash-side hashing needed.
+BUILD_FP="$(head -c 8 /dev/urandom | xxd -p)"
+(cd .. && go build -ldflags "-X main.Fingerprint=$BUILD_FP" -o "$DEVM_BIN" ./cmd/devm)
 if [ -x "$(cd .. && pwd)/bin/iron-proxy" ]; then
     cp "$(cd .. && pwd)/bin/iron-proxy" "$DEVM_BIN_DIR/iron-proxy"
 fi
@@ -84,13 +100,23 @@ fi
 ( while true; do sudo -n -v 2>/dev/null || exit; sleep 60; done ) &
 SUDO_KEEPALIVE_PID=$!
 
-# Always uninstall + reinstall. `kardianos install` is a no-op when a
-# plist already exists (even from a stale prior-session temp path), so
-# we can't rely on the install command alone to switch the daemon over
-# to the current DEVM_BIN. Uninstall drops the plist; install writes a
-# fresh one pointing at DEVM_BIN.
-echo "=== e2e: uninstalling any prior devm daemon ===" >&2
-"$DEVM_BIN" uninstall >/dev/null 2>&1 || true
+# Skip uninstall+install when the daemon is already up-to-date. The
+# `devm _daemon-check` probe returns exit 0 iff the daemon is running
+# AND its /version Fingerprint matches this freshly-built CLI's
+# compiled-in Fingerprint. Any other outcome (drift, daemon down,
+# socket error) is non-zero and we do the full reinstall.
+#
+# `kardianos install` is a no-op when a plist already exists even for
+# a different DEVM_BIN, so we can't rely on install alone — uninstall
+# drops the plist so install writes a fresh one.
+if "$DEVM_BIN" _daemon-check >/dev/null 2>&1; then
+    echo "=== e2e: daemon Fingerprint matches DEVM_BIN — skipping reinstall ===" >&2
+    SKIP_INSTALL=1
+else
+    SKIP_INSTALL=0
+    echo "=== e2e: uninstalling any prior devm daemon ===" >&2
+    "$DEVM_BIN" uninstall >/dev/null 2>&1 || true
+fi
 
 # Reap orphan iron-proxies from prior test runs. `devm uninstall`
 # doesn't cascade to iron-proxy children (they setsid'd on spawn to
@@ -130,11 +156,13 @@ done < <(tart list 2>/dev/null | awk 'NR>1 && $2 ~ /^e2e-/ {print $2}')
 # Small settle so kernels release the port bindings before the fresh
 # daemon starts picking ports.
 sleep 1
-echo "=== e2e: installing devm daemon from $DEVM_BIN ===" >&2
-"$DEVM_BIN" install >/dev/null || {
-    echo "=== e2e: devm install failed; see ~/Library/Logs/devm/install.log ===" >&2
-    exit 1
-}
+if [ "$SKIP_INSTALL" = "0" ]; then
+    echo "=== e2e: installing devm daemon from $DEVM_BIN ===" >&2
+    "$DEVM_BIN" install >/dev/null || {
+        echo "=== e2e: devm install failed; see ~/Library/Logs/devm/install.log ===" >&2
+        exit 1
+    }
+fi
 
 # Verify what we ended up with — if the daemon didn't actually pick up
 # the new binary, bail immediately with concrete evidence, rather than

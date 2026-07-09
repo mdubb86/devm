@@ -15,12 +15,22 @@
 # binary; you'll just get keychain prompts on each rebuild.
 SIGN_IDENTITY := "devm-dev"
 
-# ldflags that inject the git commit (with a -dirty suffix when the
-# working tree has uncommitted changes) into main.Commit. The daemon
-# reports this via /version, and `just doctor` compares the daemon's
-# Commit to the working-tree binary's Commit to detect "you rebuilt
-# but forgot to restart" without depending on file mtimes.
-DEV_LDFLAGS := "-X main.Commit=$(git rev-parse --short=12 HEAD)$(git diff-index --quiet HEAD -- || echo -dirty)"
+# ldflags injected into every dev build:
+#
+#  - main.Commit — git rev + `-dirty` when the working tree has
+#    uncommitted changes. Reported via /version; useful for humans
+#    grepping the daemon logs.
+#
+#  - main.Fingerprint — random per-build stamp. The CLI and the
+#    installed daemon share this value (both compiled from the same
+#    `go build` invocation); a mismatch at command time means the
+#    on-disk binary has been rebuilt since the daemon last started,
+#    and the CLI raises an error telling the user to `devm install`.
+#    Cheap runtime check — string equality against a compiled-in
+#    constant — but only meaningful if EVERY build injects a fresh
+#    Fingerprint, hence the injection here, in .goreleaser.yaml, and
+#    in e2e/scripts/run.sh's `go build` too.
+DEV_LDFLAGS := "-X main.Commit=$(git rev-parse --short=12 HEAD)$(git diff-index --quiet HEAD -- || echo -dirty) -X main.Fingerprint=$(head -c 8 /dev/urandom | xxd -p)"
 
 # Build the devm binary into ./bin/devm and codesign with the local
 # self-signed identity if available. The path matches what `devm
@@ -44,14 +54,6 @@ test:
 # Remove build artifacts.
 clean:
     rm -rf bin/
-
-# Run the fast e2e suite (devm + contract markers). Explicitly excludes
-# recipe tests (each takes 5+ min and needs public-internet egress —
-# run on demand via `just e2e-recipe`) and install-lifecycle tests
-# (mutate global system state, fire Touch ID prompts — run separately
-# via `just e2e-install`).
-e2e:
-    @e2e/scripts/run.sh -m "devm or contract"
 
 # Test groups by pytest marker. Pick one when you only care about a slice:
 #   - devm:      exercises devm's features (using devm)

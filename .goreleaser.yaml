@@ -30,6 +30,13 @@ builds:
       - -X main.Version={{.Version}}
       - -X main.Commit={{.ShortCommit}}
       - -X main.Date={{.Date}}
+      # Random per-build stamp. Both CLI and daemon are compiled from
+      # this build so they share the value; drift detection in
+      # cmd/devm/main.go's ensureDaemonInSync compares them at
+      # command time to catch "binary on disk was rebuilt but the
+      # daemon wasn't restarted." Must be injected on every build
+      # path (see justfile + e2e/scripts/run.sh for the others).
+      - -X main.Fingerprint={{.Env.FINGERPRINT}}
 
 # No explicit `signs:` block: the Go linker auto-applies an ad-hoc
 # signature to every darwin/arm64 binary at link time (mandatory on

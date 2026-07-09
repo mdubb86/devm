@@ -18,6 +18,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # Random per-build stamp injected into main.Fingerprint via
+      # goreleaser's ldflags (see .goreleaser.yaml). CLI + daemon share
+      # this value at compile time; drift detection compares them at
+      # command time to catch "binary rebuilt but daemon not restarted."
+      - name: Generate build fingerprint
+        run: echo "FINGERPRINT=$(head -c 8 /dev/urandom | xxd -p)" >> "$GITHUB_ENV"
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
@@ -25,3 +31,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          FINGERPRINT: ${{ env.FINGERPRINT }}

@@ -29,14 +29,24 @@ type Server struct {
 // "-dirty" suffix when the working tree had uncommitted changes.
 // Date is the ISO8601 build timestamp.
 //
-// Commit drives dev-loop drift detection: a CLI whose embedded Commit
-// differs from the daemon's reported Commit knows the daemon needs a
-// restart. Version isn't enough for that — every dev build reports
-// Version="dev".
+// Fingerprint is a content-hash of os.Executable() computed at
+// startup — the same value from the CLI's `devm version --json` and
+// the daemon's `/version`. Two processes running byte-for-byte
+// identical binaries produce the same Fingerprint; a rebuild that
+// changes any bit produces a different one. Test infra uses this to
+// decide whether the daemon is up-to-date without paying for a
+// reinstall on every run: if CLI.Fingerprint == daemon.Fingerprint,
+// the daemon is running the code the CLI just built.
+//
+// Commit drives release-build drift detection: a CLI whose embedded
+// Commit differs from the daemon's reported Commit knows the daemon
+// needs a restart. For dev builds Commit is "none" for both, so
+// Fingerprint carries the discrimination.
 type Build struct {
-	Version string `json:"version"`
-	Commit  string `json:"commit"`
-	Date    string `json:"date"`
+	Version     string `json:"version"`
+	Commit      string `json:"commit"`
+	Date        string `json:"date"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // NewServer constructs a Server. socketPath should be SocketPath()

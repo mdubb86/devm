@@ -60,7 +60,7 @@ func (p *kardianosProgram) Start(_ service.Service) error {
 	p.done = make(chan error, 1)
 	go func() {
 		p.done <- serviceapi.RunService(ctx, serviceapi.Build{
-			Version: Version, Commit: Commit, Date: Date,
+			Version: Version, Commit: Commit, Date: Date, Fingerprint: Fingerprint,
 		})
 	}()
 	return nil
