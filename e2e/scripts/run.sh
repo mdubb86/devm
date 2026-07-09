@@ -100,18 +100,23 @@ fi
 ( while true; do sudo -n -v 2>/dev/null || exit; sleep 60; done ) &
 SUDO_KEEPALIVE_PID=$!
 
-# Skip uninstall+install when the daemon is already up-to-date. `devm
-# status --json` reports daemon state whether the daemon is running or
-# not (it shells out to the plist's binary for the fingerprint when
-# stopped), exits 3 on Fingerprint drift, and exits 0 otherwise. jq
-# reads the daemon.fingerprint_matches_cli boolean directly — if
-# false or the plist points elsewhere, we reinstall.
+# Skip uninstall+install when the daemon is RUNNING and its
+# Fingerprint matches. Two conditions:
+#   - daemon.running == true (probe /health via unix socket)
+#   - daemon.fingerprint_matches_cli == true (compare /version reply
+#     to the CLI's compiled-in constant)
 #
-# `kardianos install` is a no-op when a plist already exists even for
-# a different DEVM_BIN, so we can't rely on install alone — uninstall
-# drops the plist so install writes a fresh one.
-if "$DEVM_BIN" status --json 2>/dev/null | jq -e '.daemon.fingerprint_matches_cli == true' >/dev/null 2>&1; then
-    echo "=== e2e: daemon Fingerprint matches DEVM_BIN — skipping reinstall ===" >&2
+# We deliberately don't skip on "daemon down but on-disk binary
+# matches" — the test suite needs the daemon actually serving, and
+# starting it requires the same sudo/Touch ID launchctl op that
+# reinstall does, so there's no saving to be had by trying to be
+# clever about that case.
+#
+# `kardianos install` is a no-op when a plist already exists even
+# for a different DEVM_BIN, so we can't rely on install alone —
+# uninstall drops the plist so install writes a fresh one.
+if "$DEVM_BIN" status --json 2>/dev/null | jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' >/dev/null 2>&1; then
+    echo "=== e2e: daemon running and Fingerprint matches DEVM_BIN — skipping reinstall ===" >&2
     SKIP_INSTALL=1
 else
     SKIP_INSTALL=0
