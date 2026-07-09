@@ -74,7 +74,7 @@ func makeFakeTartStatus(t *testing.T, listJSON, snapOut, probeOut string) *tart.
 
 func TestRunStatus_Absent(t *testing.T) {
 	tr := makeFakeTartStatus(t, `[]`, "", "")
-	res, err := RunStatus(statusMinimalCfg(), tr, "/tmp/fake")
+	res, err := RunStatus(statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
 	assert.NoError(t, err)
 	assert.Equal(t, "absent", res.State)
 	assert.Empty(t, res.Sessions)
@@ -83,7 +83,7 @@ func TestRunStatus_Absent(t *testing.T) {
 
 func TestRunStatus_Stopped(t *testing.T) {
 	tr := makeFakeTartStatus(t, `[{"Name":"x-vm","State":"stopped"}]`, "", "")
-	res, err := RunStatus(statusMinimalCfg(), tr, "/tmp/fake")
+	res, err := RunStatus(statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
 	assert.NoError(t, err)
 	assert.Equal(t, "stopped", res.State)
 	assert.Empty(t, res.Sessions)
@@ -97,7 +97,7 @@ func TestRunStatus_RunningInSync(t *testing.T) {
 		string(snapYAML),
 		"27 bash pts/1 agent\n",
 	)
-	res, err := RunStatus(snapCfg, tr, "/tmp/fake")
+	res, err := RunStatus(snapCfg, tr, "/tmp/fake", "test-fp")
 	assert.NoError(t, err)
 	assert.Equal(t, "running", res.State)
 	assert.Len(t, res.Sessions, 1)
@@ -117,7 +117,7 @@ func TestRunStatus_RunningPendingMixed(t *testing.T) {
 	newCfg := statusMinimalCfg()
 	newCfg.Install = []string{"new"}
 	newCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
-	res, err := RunStatus(newCfg, tr, "/tmp/fake")
+	res, err := RunStatus(newCfg, tr, "/tmp/fake", "test-fp")
 	assert.NoError(t, err)
 	assert.Equal(t, 1, res.PendingLive)     // port_add
 	assert.Equal(t, 1, res.PendingRecreate) // install_change
@@ -132,7 +132,7 @@ func TestRunStatus_RunningEmptySnapshotIsInSync(t *testing.T) {
 	)
 	cfg := statusMinimalCfg()
 	cfg.Services = map[string]schema.Service{"api": {Port: 8080}}
-	res, err := RunStatus(cfg, tr, "/tmp/fake")
+	res, err := RunStatus(cfg, tr, "/tmp/fake", "test-fp")
 	assert.NoError(t, err)
 	assert.Equal(t, "running", res.State)
 	assert.Zero(t, res.PendingLive)
@@ -151,7 +151,7 @@ func TestRunStatus_RoutingZeroWhenDaemonUnreachable(t *testing.T) {
 
 	tr := makeFakeTartStatus(t, `[]`, "", "")
 	cfg := statusMinimalCfg()
-	res, err := RunStatus(cfg, tr, "/tmp/fake")
+	res, err := RunStatus(cfg, tr, "/tmp/fake", "test-fp")
 	require.NoError(t, err)
 	assert.Equal(t, "absent", res.State)
 	assert.Equal(t, "", res.Routing.Proxy)

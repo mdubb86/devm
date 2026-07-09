@@ -100,16 +100,17 @@ fi
 ( while true; do sudo -n -v 2>/dev/null || exit; sleep 60; done ) &
 SUDO_KEEPALIVE_PID=$!
 
-# Skip uninstall+install when the daemon is already up-to-date. The
-# `devm _daemon-check` probe returns exit 0 iff the daemon is running
-# AND its /version Fingerprint matches this freshly-built CLI's
-# compiled-in Fingerprint. Any other outcome (drift, daemon down,
-# socket error) is non-zero and we do the full reinstall.
+# Skip uninstall+install when the daemon is already up-to-date. `devm
+# status --json` reports daemon state whether the daemon is running or
+# not (it shells out to the plist's binary for the fingerprint when
+# stopped), exits 3 on Fingerprint drift, and exits 0 otherwise. jq
+# reads the daemon.fingerprint_matches_cli boolean directly — if
+# false or the plist points elsewhere, we reinstall.
 #
 # `kardianos install` is a no-op when a plist already exists even for
 # a different DEVM_BIN, so we can't rely on install alone — uninstall
 # drops the plist so install writes a fresh one.
-if "$DEVM_BIN" _daemon-check >/dev/null 2>&1; then
+if "$DEVM_BIN" status --json 2>/dev/null | jq -e '.daemon.fingerprint_matches_cli == true' >/dev/null 2>&1; then
     echo "=== e2e: daemon Fingerprint matches DEVM_BIN — skipping reinstall ===" >&2
     SKIP_INSTALL=1
 else

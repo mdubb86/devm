@@ -27,7 +27,7 @@ var versionCmd = &cobra.Command{
 			}
 		}
 
-		printVersion(os.Stdout, Version, Commit, Date, latest, asJSON)
+		printVersion(os.Stdout, Version, Commit, Date, Fingerprint, latest, asJSON)
 		return nil
 	},
 }
@@ -43,18 +43,20 @@ type versionOutput struct {
 	Version        string `json:"version"`
 	Commit         string `json:"commit"`
 	Date           string `json:"date"`
+	Fingerprint    string `json:"fingerprint,omitempty"`
 	Latest         string `json:"latest,omitempty"`
 	UpgradeCommand string `json:"upgrade_command,omitempty"`
 }
 
 // printVersion writes version information to w. latest is non-empty only when
 // a newer version was found by --check. asJSON controls the output format.
-func printVersion(w io.Writer, version, commit, date, latest string, asJSON bool) {
+func printVersion(w io.Writer, version, commit, date, fingerprint, latest string, asJSON bool) {
 	if asJSON {
 		out := versionOutput{
-			Version: version,
-			Commit:  commit,
-			Date:    date,
+			Version:     version,
+			Commit:      commit,
+			Date:        date,
+			Fingerprint: fingerprint,
 		}
 		if latest != "" {
 			out.Latest = latest

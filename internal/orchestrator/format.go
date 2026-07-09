@@ -8,8 +8,14 @@ import (
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
-// StatusResult is what `devm status` produces.
+// StatusResult is what `devm status` produces. HasProject is false
+// when there's no devm.yaml in cwd — in that case only Daemon fields
+// are populated, and the sandbox/routing/DNS sections are skipped
+// entirely at format time. This lets `devm status` be a useful
+// "is the daemon happy?" probe outside a project directory.
 type StatusResult struct {
+	HasProject      bool
+	Daemon          DaemonStatus
 	Sandbox         string
 	State           string // "running" | "stopped" | "absent"
 	Sessions        []Session
@@ -66,10 +72,17 @@ func (f FlavorKind) String() string {
 	return "unknown"
 }
 
-// FormatStatusText renders StatusResult for human terminals.
+// FormatStatusText renders StatusResult for human terminals. The
+// Daemon section renders unconditionally; project-dependent sections
+// (sandbox, routing, DNS, CA, proxy) render only when HasProject.
 func FormatStatusText(r StatusResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Sandbox: %s\n", r.Sandbox)
+	b.WriteString(formatDaemonStatus(r.Daemon))
+	if !r.HasProject {
+		fmt.Fprintln(&b, "\n(no devm.yaml in cwd — project sections skipped)")
+		return b.String()
+	}
+	fmt.Fprintf(&b, "\nSandbox: %s\n", r.Sandbox)
 	fmt.Fprintf(&b, "State:   %s\n", r.State)
 	if r.State == "running" {
 		fmt.Fprintf(&b, "\nActive sessions (%d):\n", len(r.Sessions))
@@ -94,6 +107,36 @@ func FormatStatusText(r StatusResult) string {
 	b.WriteString(formatDNSHealth(r))
 	b.WriteString(formatCAHealth(r))
 	b.WriteString(formatProxyHealth(r))
+	return b.String()
+}
+
+// formatDaemonStatus renders the daemon section. Always fires — the
+// "is the devm daemon happy?" question is meaningful outside a
+// project directory too.
+func formatDaemonStatus(d DaemonStatus) string {
+	var b strings.Builder
+	b.WriteString("Daemon:\n")
+	switch {
+	case d.Running:
+		fmt.Fprintln(&b, "  state: running")
+	case d.Installed:
+		fmt.Fprintln(&b, "  state: installed but not running")
+	default:
+		fmt.Fprintln(&b, "  state: not installed")
+	}
+	if d.BinaryPath != "" {
+		fmt.Fprintf(&b, "  binary: %s\n", d.BinaryPath)
+	}
+	if d.Fingerprint != "" {
+		if d.FingerprintMatchesCLI {
+			fmt.Fprintf(&b, "  fingerprint: %s (matches CLI)\n", d.Fingerprint)
+		} else {
+			fmt.Fprintf(&b, "  fingerprint: %s (MISMATCH — CLI is different; run `devm install`)\n", d.Fingerprint)
+		}
+	}
+	if d.Error != "" {
+		fmt.Fprintf(&b, "  error: %s\n", d.Error)
+	}
 	return b.String()
 }
 
@@ -204,18 +247,37 @@ func FormatStatusJSON(r StatusResult) string {
 		Kind   string `json:"kind"`
 		Detail string `json:"detail"`
 	}
-	type body struct {
+	type daemon struct {
+		Running               bool   `json:"running"`
+		Installed             bool   `json:"installed"`
+		BinaryPath            string `json:"binary_path,omitempty"`
+		Fingerprint           string `json:"fingerprint,omitempty"`
+		FingerprintMatchesCLI bool   `json:"fingerprint_matches_cli"`
+		Error                 string `json:"error,omitempty"`
+	}
+	// health carries the global invariants `devm install` sets up:
+	// the resolver file at /etc/resolver/test, the CA in the System
+	// Keychain, launchd's :80/:443 socket handoff to the reverse
+	// proxy. All are single-installation state — none are per-project.
+	type health struct {
+		DNSHealthy   bool   `json:"dns_healthy"`
+		DNSError     string `json:"dns_error,omitempty"`
+		CATrusted    bool   `json:"ca_trusted"`
+		ProxyHealthy bool   `json:"proxy_healthy"`
+		ProxyError   string `json:"proxy_error,omitempty"`
+	}
+	type project struct {
 		Sandbox        string                   `json:"sandbox"`
 		State          string                   `json:"state"`
 		Sessions       []sess                   `json:"sessions"`
 		PendingChanges pending                  `json:"pending_changes"`
 		Drift          []drift                  `json:"drift"`
 		Routing        serviceapi.RoutingStatus `json:"routing"`
-		DNSHealthy     bool                     `json:"dns_healthy"`
-		DNSError       string                   `json:"dns_error,omitempty"`
-		CATrusted      bool                     `json:"ca_trusted"`
-		ProxyHealthy   bool                     `json:"proxy_healthy"`
-		ProxyError     string                   `json:"proxy_error,omitempty"`
+	}
+	type body struct {
+		Daemon  daemon   `json:"daemon"`
+		Health  health   `json:"health"`
+		Project *project `json:"project,omitempty"`
 	}
 	sessions := make([]sess, len(r.Sessions))
 	for i, s := range r.Sessions {
@@ -226,15 +288,37 @@ func FormatStatusJSON(r StatusResult) string {
 		drifts[i] = drift{Kind: d.Kind, Detail: d.Detail}
 	}
 	b := body{
-		Sandbox: r.Sandbox, State: r.State, Sessions: sessions,
-		PendingChanges: pending{Live: r.PendingLive, Recreate: r.PendingRecreate},
-		Drift:          drifts,
-		Routing:        r.Routing,
-		DNSHealthy:     r.DNSHealthy,
-		DNSError:       r.DNSError,
-		CATrusted:      r.CATrusted,
-		ProxyHealthy:   r.ProxyHealthy,
-		ProxyError:     r.ProxyError,
+		Daemon: daemon{
+			Running:               r.Daemon.Running,
+			Installed:             r.Daemon.Installed,
+			BinaryPath:            r.Daemon.BinaryPath,
+			Fingerprint:           r.Daemon.Fingerprint,
+			FingerprintMatchesCLI: r.Daemon.FingerprintMatchesCLI,
+			Error:                 r.Daemon.Error,
+		},
+		Health: health{
+			DNSHealthy:   r.DNSHealthy,
+			DNSError:     r.DNSError,
+			CATrusted:    r.CATrusted,
+			ProxyHealthy: r.ProxyHealthy,
+			ProxyError:   r.ProxyError,
+		},
+	}
+	if r.HasProject {
+		if sessions == nil {
+			sessions = []sess{}
+		}
+		if drifts == nil {
+			drifts = []drift{}
+		}
+		b.Project = &project{
+			Sandbox:        r.Sandbox,
+			State:          r.State,
+			Sessions:       sessions,
+			PendingChanges: pending{Live: r.PendingLive, Recreate: r.PendingRecreate},
+			Drift:          drifts,
+			Routing:        r.Routing,
+		}
 	}
 	out, _ := json.MarshalIndent(b, "", "  ")
 	return string(out)

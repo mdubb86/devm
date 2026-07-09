@@ -9,7 +9,7 @@ import (
 
 func TestPrintVersion_PlainText(t *testing.T) {
 	var buf bytes.Buffer
-	printVersion(&buf, "v0.1.0", "abc1234", "2026-06-07", "", false)
+	printVersion(&buf, "v0.1.0", "abc1234", "2026-06-07", "fp-test-abcd", "", false)
 	got := buf.String()
 
 	if !strings.Contains(got, "devm v0.1.0") {
@@ -25,7 +25,7 @@ func TestPrintVersion_PlainText(t *testing.T) {
 
 func TestPrintVersion_WithNewerAvailable(t *testing.T) {
 	var buf bytes.Buffer
-	printVersion(&buf, "v0.1.0", "abc1234", "2026-06-07", "v0.2.0", false)
+	printVersion(&buf, "v0.1.0", "abc1234", "2026-06-07", "fp-test-abcd", "v0.2.0", false)
 	got := buf.String()
 
 	if !strings.Contains(got, "newer version v0.2.0 available") {
@@ -38,7 +38,7 @@ func TestPrintVersion_WithNewerAvailable(t *testing.T) {
 
 func TestPrintVersion_JSON(t *testing.T) {
 	var buf bytes.Buffer
-	printVersion(&buf, "v0.1.0", "abc1234", "2026-06-07", "v0.2.0", true)
+	printVersion(&buf, "v0.1.0", "abc1234", "2026-06-07", "fp-test-abcd", "v0.2.0", true)
 
 	var out map[string]string
 	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
@@ -64,7 +64,7 @@ func TestPrintVersion_JSON(t *testing.T) {
 
 func TestPrintVersion_JSON_NoLatestOmitsField(t *testing.T) {
 	var buf bytes.Buffer
-	printVersion(&buf, "v0.1.0", "abc1234", "2026-06-07", "", true)
+	printVersion(&buf, "v0.1.0", "abc1234", "2026-06-07", "fp-test-abcd", "", true)
 
 	var out map[string]interface{}
 	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {

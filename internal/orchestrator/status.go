@@ -11,10 +11,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RunStatus collects read-only state for `devm status`.
-func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot string) (StatusResult, error) {
+// RunStatus collects read-only state for `devm status`. cliFingerprint
+// is the CLI's own compiled-in Fingerprint constant, threaded through
+// so ProbeDaemon can report drift without orchestrator importing
+// cmd/devm.
+func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string) (StatusResult, error) {
 	vmName := cfg.Project.VMName
-	res := StatusResult{Sandbox: vmName}
+	res := StatusResult{
+		HasProject: true,
+		Sandbox:    vmName,
+		Daemon:     ProbeDaemon(context.Background(), cliFingerprint),
+	}
 
 	// Routing status — query the daemon's /routes endpoint. Runs
 	// unconditionally so users see it whenever they `devm status`. On

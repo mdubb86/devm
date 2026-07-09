@@ -9,7 +9,7 @@ import (
 )
 
 func TestFormatStatusText_RunningInSync(t *testing.T) {
-	out := FormatStatusText(StatusResult{
+	out := FormatStatusText(StatusResult{HasProject: true,
 		Sandbox: "x", State: "running",
 		Sessions:    []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 		PendingLive: 0, PendingRecreate: 0,
@@ -21,7 +21,7 @@ func TestFormatStatusText_RunningInSync(t *testing.T) {
 }
 
 func TestFormatStatusText_RunningWithPending(t *testing.T) {
-	out := FormatStatusText(StatusResult{
+	out := FormatStatusText(StatusResult{HasProject: true,
 		Sandbox: "x", State: "running",
 		PendingLive: 2, PendingRecreate: 1,
 	})
@@ -30,7 +30,7 @@ func TestFormatStatusText_RunningWithPending(t *testing.T) {
 }
 
 func TestFormatStatusText_Stopped(t *testing.T) {
-	out := FormatStatusText(StatusResult{Sandbox: "x", State: "stopped"})
+	out := FormatStatusText(StatusResult{HasProject: true, Sandbox: "x", State: "stopped"})
 	assert.Contains(t, out, "Sandbox stopped; config changes will apply on next `devm shell`.")
 	assert.NotContains(t, out, "Active sessions")
 }
@@ -60,18 +60,25 @@ func TestFormatReconcileText_RecreatePending(t *testing.T) {
 }
 
 func TestFormatStatusJSON(t *testing.T) {
-	js := FormatStatusJSON(StatusResult{
+	js := FormatStatusJSON(StatusResult{HasProject: true,
 		Sandbox: "x", State: "running",
 		Sessions:    []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 		PendingLive: 2, PendingRecreate: 1,
 	})
 	var parsed map[string]any
 	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
-	assert.Equal(t, "x", parsed["sandbox"])
-	assert.Equal(t, "running", parsed["state"])
-	pending := parsed["pending_changes"].(map[string]any)
+	proj := parsed["project"].(map[string]any)
+	assert.Equal(t, "x", proj["sandbox"])
+	assert.Equal(t, "running", proj["state"])
+	pending := proj["pending_changes"].(map[string]any)
 	assert.Equal(t, float64(2), pending["live"])
 	assert.Equal(t, float64(1), pending["recreate"])
+	// Global health block emits both true and false bools explicitly —
+	// no omitempty swallowing the false case.
+	health := parsed["health"].(map[string]any)
+	assert.Contains(t, health, "ca_trusted")
+	assert.Contains(t, health, "dns_healthy")
+	assert.Contains(t, health, "proxy_healthy")
 }
 
 func TestFormatReconcileJSON(t *testing.T) {
@@ -92,7 +99,7 @@ func TestFormatReconcileJSON(t *testing.T) {
 }
 
 func TestFormatStatusText_ProxyNone(t *testing.T) {
-	res := StatusResult{
+	res := StatusResult{HasProject: true,
 		Routing: serviceapi.RoutingStatus{Proxy: "none"},
 	}
 	text := FormatStatusText(res)
@@ -100,7 +107,7 @@ func TestFormatStatusText_ProxyNone(t *testing.T) {
 }
 
 func TestFormatStatusText_ProxyUnreachable(t *testing.T) {
-	res := StatusResult{
+	res := StatusResult{HasProject: true,
 		Routing: serviceapi.RoutingStatus{Proxy: "devm", ProxyReachable: false},
 	}
 	text := FormatStatusText(res)
@@ -108,7 +115,7 @@ func TestFormatStatusText_ProxyUnreachable(t *testing.T) {
 }
 
 func TestFormatStatusText_NoRoutes(t *testing.T) {
-	res := StatusResult{
+	res := StatusResult{HasProject: true,
 		Routing: serviceapi.RoutingStatus{Proxy: "devm", ProxyReachable: true, Mode: ""},
 	}
 	text := FormatStatusText(res)
@@ -116,7 +123,7 @@ func TestFormatStatusText_NoRoutes(t *testing.T) {
 }
 
 func TestFormatStatusText_VMMode_WithRoutes(t *testing.T) {
-	res := StatusResult{
+	res := StatusResult{HasProject: true,
 		Routing: serviceapi.RoutingStatus{
 			Proxy: "devm", ProxyReachable: true, Mode: "vm",
 			Routes: []serviceapi.RouteStatus{
@@ -134,7 +141,7 @@ func TestFormatStatusText_VMMode_WithRoutes(t *testing.T) {
 }
 
 func TestFormatStatusText_MixedMode_TagsRoutes(t *testing.T) {
-	res := StatusResult{
+	res := StatusResult{HasProject: true,
 		Routing: serviceapi.RoutingStatus{
 			Proxy: "devm", ProxyReachable: true, Mode: "mixed (drift)",
 			Routes: []serviceapi.RouteStatus{
@@ -150,7 +157,7 @@ func TestFormatStatusText_MixedMode_TagsRoutes(t *testing.T) {
 }
 
 func TestFormatStatusText_DNSLine_SilentWhenHealthy(t *testing.T) {
-	res := StatusResult{
+	res := StatusResult{HasProject: true,
 		Sandbox: "test", State: "running",
 		DNSHealthy: true,
 	}
@@ -159,7 +166,7 @@ func TestFormatStatusText_DNSLine_SilentWhenHealthy(t *testing.T) {
 }
 
 func TestFormatStatusText_DNSLine_RedWhenUnhealthy(t *testing.T) {
-	res := StatusResult{
+	res := StatusResult{HasProject: true,
 		Sandbox: "test", State: "running",
 		DNSHealthy: false, DNSError: "resolving foo: timeout",
 	}
@@ -170,7 +177,7 @@ func TestFormatStatusText_DNSLine_RedWhenUnhealthy(t *testing.T) {
 }
 
 func TestFormatStatusText_CALine_SilentWhenTrusted(t *testing.T) {
-	res := StatusResult{
+	res := StatusResult{HasProject: true,
 		Sandbox: "x", State: "running",
 		DNSHealthy: true, CATrusted: true, ProxyHealthy: true,
 	}
@@ -178,7 +185,7 @@ func TestFormatStatusText_CALine_SilentWhenTrusted(t *testing.T) {
 }
 
 func TestFormatStatusText_CALine_RedWhenUntrusted(t *testing.T) {
-	res := StatusResult{
+	res := StatusResult{HasProject: true,
 		Sandbox: "x", State: "running",
 		DNSHealthy: true, CATrusted: false, ProxyHealthy: true,
 	}
@@ -188,7 +195,7 @@ func TestFormatStatusText_CALine_RedWhenUntrusted(t *testing.T) {
 }
 
 func TestFormatStatusText_ProxyLine_SilentWhenHealthy(t *testing.T) {
-	res := StatusResult{
+	res := StatusResult{HasProject: true,
 		Sandbox: "x", State: "running",
 		DNSHealthy: true, CATrusted: true, ProxyHealthy: true,
 	}
@@ -196,7 +203,7 @@ func TestFormatStatusText_ProxyLine_SilentWhenHealthy(t *testing.T) {
 }
 
 func TestFormatStatusText_ProxyLine_RedWhenDown(t *testing.T) {
-	res := StatusResult{
+	res := StatusResult{HasProject: true,
 		Sandbox: "x", State: "running",
 		DNSHealthy: true, CATrusted: true,
 		ProxyHealthy: false,
