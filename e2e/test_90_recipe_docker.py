@@ -103,22 +103,46 @@ def test_docker_recipe_end_to_end(workspace, devm):
         f"stderr={info.stderr.decode()!r}"
     )
 
-    # ---- Diagnostic: what does a container see for DNS? ----
-    # If container HTTPS fails downstream, this points at whether DNS
-    # or the DNAT is the broken piece.
+    # ---- Diagnostic: DNS + TCP reachability from a container ----
     dns_diag = devm_exec_with_retry(
         devm.path,
         ["docker", "run", "--rm", "alpine:latest",
          "sh", "-c",
+         "apk add --quiet curl >/dev/null 2>&1; "
          "echo '--- /etc/resolv.conf ---'; cat /etc/resolv.conf; "
          "echo '--- nslookup httpbin.org ---'; nslookup httpbin.org 2>&1 || true; "
-         "echo '--- nslookup google.com ---'; nslookup google.com 2>&1 || true"],
-        cwd=str(workspace.path), timeout=120,
+         "echo '--- nc -zv 192.0.2.1 443 (sentinel) ---'; nc -zv -w 5 192.0.2.1 443 2>&1 || true; "
+         "echo '--- curl -v --max-time 8 https://httpbin.org/status/200 ---'; "
+         "curl -v --max-time 8 https://httpbin.org/status/200 2>&1 || true"],
+        cwd=str(workspace.path), timeout=180,
     )
     print(
-        f"container DNS diagnostic:\n"
+        f"container network diagnostic:\n"
         f"stdout={dns_diag.stdout.decode()}\n"
         f"stderr={dns_diag.stderr.decode()}",
+        flush=True,
+    )
+
+    # ---- Diagnostic: guest-side nftables state ----
+    nft_diag = devm_exec_with_retry(
+        devm.path,
+        ["sudo", "nft", "list", "table", "ip", "devm_nat"],
+        cwd=str(workspace.path), timeout=15,
+    )
+    print(
+        f"guest devm_nat table:\n"
+        f"{nft_diag.stdout.decode()}\n"
+        f"stderr={nft_diag.stderr.decode()}",
+        flush=True,
+    )
+    fwd_diag = devm_exec_with_retry(
+        devm.path,
+        ["sudo", "nft", "list", "table", "inet", "devm_filter"],
+        cwd=str(workspace.path), timeout=15,
+    )
+    print(
+        f"guest devm_filter table:\n"
+        f"{fwd_diag.stdout.decode()}",
         flush=True,
     )
 
