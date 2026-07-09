@@ -200,8 +200,12 @@ sudo sh -c 'nft list chain inet devm_filter user_output > /etc/nftables.d/user_o
 sudo sh -c 'nft list chain inet devm_filter user_forward > /etc/nftables.d/user_forward.conf'
 sudo tee /etc/nftables.conf > /dev/null <<'EOF'
 #!/usr/sbin/nft -f
-flush ruleset
-
+# Declaring a table at file level replaces the entire contents of
+# that specific table. Other tables (Docker 29+'s docker-bridges,
+# fail2ban's f2b-*, etc.) are untouched. A "flush ruleset" would
+# wipe those too, breaking Docker networking because Docker only
+# installs its rules at daemon start and won't reinstall until
+# systemctl restart docker.
 table ip devm_nat {
   chain output {
     type nat hook output priority -100;
@@ -324,7 +328,6 @@ address=/test/127.0.0.1
 no-resolv
 server=%s#%d
 bind-dynamic
-log-queries
 EOF
 sudo systemctl reload-or-restart dnsmasq
 `, macHost, dnsPort)
