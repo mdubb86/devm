@@ -189,135 +189,28 @@ if [ "$DAEMON_PROG" != "$DEVM_BIN" ]; then
     exit 1
 fi
 
-# Two-phase run:
-#  1. tests NOT marked `pty` — parallel (pytest-xdist).
-#  2. `pty`-marked tests — single process (`-p no:xdist`) because
-#     pexpect's `pty.forkpty()` races on lock inheritance if the
-#     process has a background xdist RPC thread.
+# Single pytest run with -p no:xdist. Every just-target invokes run.sh
+# with exactly one marker family (`-m devm and not install`,
+# `-m install`, `-m contract`, `-m recipe`), each of which is either
+# feature/pty tests OR install-lifecycle tests but never both. So
+# there's no need to split into phases anymore — the old three-phase
+# structure (parallel / touch-id / pty) existed for xdist reasons
+# that no longer apply now that we're always serial.
 #
-# The two phases share the caller's other args ($REST_ARGS) but each
-# adds its own `-m` expression. If the caller already passed `-m EXPR`
-# we AND it with the phase filter.
-
-# Extract caller's -m expression and their -n choice. Both are absorbed
-# here (last -m wins in pytest anyway; and phase 2 forces -p no:xdist
-# which would reject any leftover -n).
-CALLER_MARK=""
-REST_ARGS=()
-skip_next=""
-for arg in "$@"; do
-    if [ -n "$skip_next" ]; then
-        case "$skip_next" in
-            mark) CALLER_MARK="$arg" ;;
-            drop) : ;;
-        esac
-        skip_next=""
-        continue
-    fi
-    case "$arg" in
-        -m) skip_next="mark" ;;
-        -n) skip_next="drop" ;;
-        *)  REST_ARGS+=("$arg") ;;
-    esac
-done
-
-parallel_mark="not pty and not install"
-sudo_mark="install"
-pty_mark="pty and not install"
-if [ -n "$CALLER_MARK" ]; then
-    parallel_mark="($CALLER_MARK) and not pty and not install"
-    sudo_mark="($CALLER_MARK) and install"
-    pty_mark="($CALLER_MARK) and pty and not install"
-fi
-
-rc_parallel=0
-rc_sudo=0
-rc_pty=0
-
-# phase_has_tests returns 0 if the given `-m EXPR` selects at least
-# one test, non-zero otherwise. --collect-only is fast (<2s on this
-# suite); its cost is far less than running a phase whose entire
-# banner + install-restore + zero-test invocation would otherwise
-# fire on markers that don't intersect this phase's constraints
-# (e.g. `-m recipe` has no `install`-marked tests, so phase 2a is
-# empty and we should skip its banner + the post-2a install restore).
-phase_has_tests() {
-    uv run pytest -m "$1" --collect-only -q >/dev/null 2>&1
-}
-
-# Phase 1: serial (`-p no:xdist`). We ran the suite at -n 4, -n 2, and
-# fully serial. -n 4 and -n 2 both produce ~1 flake per run — different
-# tests each time (test_43 SSL chain, test_52 state race, test_59
-# transport, test_68 VM died mid-provision). Serial produces zero
-# flakes across the same suite. Root cause: concurrent VM cold-starts
-# on Apple Virtualization + tart-guest-agent contend for resources
-# (memory, vmnet, guest-agent RPC channel) and occasionally kill each
-# other. Trade-off: phase 1 grows from ~90s to ~6 min. Full suite is
-# ~14 min. Worth it for a deterministic green.
-if phase_has_tests "$parallel_mark"; then
-    set -m
-    uv run pytest -m "$parallel_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
-    PYTEST_PID=$!
-    set +m
-    wait $PYTEST_PID
-    rc_parallel=$?
-    [ $rc_parallel -eq 5 ] && rc_parallel=0
-fi
-
-# Phase 2a: install-marked (devm install/uninstall/service-restart)
-# tests. These fire macOS Touch ID prompts every time they invoke
-# sudo on privileged operations (security add-trusted-cert, launchctl
-# bootstrap, etc.) — even with a warm sudo timestamp. Grouped up
-# front so prompts happen in a single burst while the user is
-# watching, not scattered through a 10-minute run.
-#
-# Skipped entirely (no banner, no daemon-restore below) when the
-# caller's marker doesn't intersect `install` — e.g. `just e2e-recipe`.
-if phase_has_tests "$sudo_mark"; then
-    echo "=== e2e: phase 2a — sudo/touch-id tests (watch for prompts) ===" >&2
-    set -m
-    uv run pytest -m "$sudo_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
-    PYTEST_PID=$!
-    set +m
-    wait $PYTEST_PID
-    rc_sudo=$?
-    [ $rc_sudo -eq 5 ] && rc_sudo=0
-
-    # Between 2a and 2b: restore the daemon. Phase 2a's install/
-    # uninstall tests leave the host uninstalled at teardown (they no
-    # longer reinstall in their own finally blocks — one restore here
-    # costs one Touch ID prompt instead of one-per-test). Phase 2b's
-    # pty tests rely on `devm shell` which needs the daemon. Only fires
-    # when 2a actually ran — hence the nesting under phase_has_tests.
-    if [ $rc_sudo -eq 0 ]; then
-        echo "=== e2e: restoring devm daemon after phase 2a (Touch ID) ===" >&2
-        "$DEVM_BIN" install >/dev/null || {
-            echo "=== e2e: post-phase-2a devm install failed ===" >&2
-            exit 1
-        }
-    fi
-fi
-
-# Phase 2b: pty tests. Serial (no xdist) because pexpect's
-# pty.forkpty() races on lock inheritance if the process has a
-# background xdist RPC thread. Skipped entirely (no banner) when the
-# caller's marker doesn't intersect `pty` — e.g. `just e2e-install`
-# has no pty tests, `just e2e-recipe` currently has no pty tests.
-if phase_has_tests "$pty_mark"; then
-    echo "=== e2e: phase 2b — pty tests ===" >&2
-    set -m
-    uv run pytest -m "$pty_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
-    PYTEST_PID=$!
-    set +m
-    wait $PYTEST_PID
-    rc_pty=$?
-    [ $rc_pty -eq 5 ] && rc_pty=0
-fi
-
-if [ $rc_parallel -ne 0 ]; then
-    exit $rc_parallel
-fi
-if [ $rc_sudo -ne 0 ]; then
-    exit $rc_sudo
-fi
-exit $rc_pty
+# Serial (`-p no:xdist`) not parallel: we ran the suite at -n 4, -n 2,
+# and fully serial. -n 4 and -n 2 both produced ~1 flake per run —
+# different tests each time (test_43 SSL chain, test_52 state race,
+# test_59 transport, test_68 VM died mid-provision). Serial produces
+# zero flakes. Root cause: concurrent VM cold-starts on Apple
+# Virtualization + tart-guest-agent contend for resources (memory,
+# vmnet, guest-agent RPC channel) and occasionally kill each other.
+set -m
+uv run pytest -p no:xdist "$@" &
+PYTEST_PID=$!
+set +m
+wait $PYTEST_PID
+rc=$?
+# rc=5 = "no tests collected" — legitimate for markers that don't
+# match anything (e.g. `-m foo` where foo isn't a known marker).
+[ $rc -eq 5 ] && rc=0
+exit $rc
