@@ -328,17 +328,12 @@ func runPrivilegedUninstall(out io.Writer) error {
 		return fmt.Errorf("locate executable: %w", err)
 	}
 
-	// Build the single sudo script. set +e: best-effort each step
-	// so a partial state still cleans up as much as possible.
+	// set +e: best-effort each step so partial state still cleans up.
 	//
-	// `launchctl bootout` runs first because kardianos's Stop uses the
-	// deprecated `launchctl unload`, which doesn't reliably terminate
-	// a KeepAlive daemon on modern macOS. bootout SIGTERMs the process
-	// and unregisters the service; the subsequent kardianos uninstall
-	// removes the plist file. Without this, the daemon process
-	// survives, the plist gets removed, and the next install writes a
-	// fresh plist while the old process still holds the socket fd —
-	// symptom is a "zombie daemon holding an unlinked socket."
+	// bootout deregisters + SIGTERMs the daemon synchronously. Must
+	// run before kardianos's Stop, which uses `launchctl unload` — a
+	// legacy subcommand that leaves KeepAlive daemons alive
+	// (github.com/kardianos/service#144).
 	var sb strings.Builder
 	sb.WriteString("set +e\n")
 	sb.WriteString("launchctl bootout system/com.devm.service 2>/dev/null\n")
