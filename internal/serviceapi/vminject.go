@@ -154,6 +154,7 @@ flush chain ip devm_nat prerouting
 add rule ip devm_nat output ip daddr %s return
 add rule ip devm_nat output tcp dport 443 dnat to %s:%d
 add rule ip devm_nat output tcp dport 80 dnat to %s:%d
+add rule ip devm_nat output udp dport 53 redirect to :53
 %s
 add rule ip devm_nat prerouting iifname { "docker0", "docker_gwbridge" } udp dport 53 redirect to :53
 add rule ip devm_nat prerouting iifname { "docker0", "docker_gwbridge" } tcp dport 443 dnat to %s:%d
@@ -207,6 +208,7 @@ table ip devm_nat {
     ip daddr %s return
     tcp dport 443 dnat to %s:%d
     tcp dport 80 dnat to %s:%d
+    udp dport 53 redirect to :53
 %s  }
   chain prerouting {
     type nat hook prerouting priority -100;
