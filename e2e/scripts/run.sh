@@ -234,6 +234,17 @@ rc_parallel=0
 rc_sudo=0
 rc_pty=0
 
+# phase_has_tests returns 0 if the given `-m EXPR` selects at least
+# one test, non-zero otherwise. --collect-only is fast (<2s on this
+# suite); its cost is far less than running a phase whose entire
+# banner + install-restore + zero-test invocation would otherwise
+# fire on markers that don't intersect this phase's constraints
+# (e.g. `-m recipe` has no `install`-marked tests, so phase 2a is
+# empty and we should skip its banner + the post-2a install restore).
+phase_has_tests() {
+    uv run pytest -m "$1" --collect-only -q >/dev/null 2>&1
+}
+
 # Phase 1: serial (`-p no:xdist`). We ran the suite at -n 4, -n 2, and
 # fully serial. -n 4 and -n 2 both produce ~1 flake per run — different
 # tests each time (test_43 SSL chain, test_52 state race, test_59
@@ -243,55 +254,65 @@ rc_pty=0
 # (memory, vmnet, guest-agent RPC channel) and occasionally kill each
 # other. Trade-off: phase 1 grows from ~90s to ~6 min. Full suite is
 # ~14 min. Worth it for a deterministic green.
-set -m
-uv run pytest -m "$parallel_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
-PYTEST_PID=$!
-set +m
-wait $PYTEST_PID
-rc_parallel=$?
-# rc=5 = "no tests collected" — legitimate when a phase's marker
-# intersection is empty (e.g. `-m contract` never intersects `pty`).
-[ $rc_parallel -eq 5 ] && rc_parallel=0
+if phase_has_tests "$parallel_mark"; then
+    set -m
+    uv run pytest -m "$parallel_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
+    PYTEST_PID=$!
+    set +m
+    wait $PYTEST_PID
+    rc_parallel=$?
+    [ $rc_parallel -eq 5 ] && rc_parallel=0
+fi
 
 # Phase 2a: install-marked (devm install/uninstall/service-restart)
-# tests FIRST. These fire macOS Touch ID prompts every time they invoke sudo
-# on privileged operations (security add-trusted-cert, launchctl
-# bootstrap, etc.) — even with a warm sudo timestamp. Grouping them
-# up front means the prompts happen in a single burst while the user
-# is watching, not scattered through a 10-minute run.
-echo "=== e2e: phase 2a — sudo/touch-id tests (watch for prompts) ===" >&2
-set -m
-uv run pytest -m "$sudo_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
-PYTEST_PID=$!
-set +m
-wait $PYTEST_PID
-rc_sudo=$?
-[ $rc_sudo -eq 5 ] && rc_sudo=0
+# tests. These fire macOS Touch ID prompts every time they invoke
+# sudo on privileged operations (security add-trusted-cert, launchctl
+# bootstrap, etc.) — even with a warm sudo timestamp. Grouped up
+# front so prompts happen in a single burst while the user is
+# watching, not scattered through a 10-minute run.
+#
+# Skipped entirely (no banner, no daemon-restore below) when the
+# caller's marker doesn't intersect `install` — e.g. `just e2e-recipe`.
+if phase_has_tests "$sudo_mark"; then
+    echo "=== e2e: phase 2a — sudo/touch-id tests (watch for prompts) ===" >&2
+    set -m
+    uv run pytest -m "$sudo_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
+    PYTEST_PID=$!
+    set +m
+    wait $PYTEST_PID
+    rc_sudo=$?
+    [ $rc_sudo -eq 5 ] && rc_sudo=0
 
-# Between 2a and 2b: restore the daemon. Phase 2a's install/uninstall
-# tests leave the host uninstalled at teardown (they no longer
-# reinstall in their own finally blocks — one restore here costs one
-# Touch ID prompt instead of one-per-test). Phase 2b's pty tests rely
-# on `devm shell` which needs the daemon.
-if [ $rc_sudo -eq 0 ]; then
-    echo "=== e2e: restoring devm daemon after phase 2a (Touch ID) ===" >&2
-    "$DEVM_BIN" install >/dev/null || {
-        echo "=== e2e: post-phase-2a devm install failed ===" >&2
-        exit 1
-    }
+    # Between 2a and 2b: restore the daemon. Phase 2a's install/
+    # uninstall tests leave the host uninstalled at teardown (they no
+    # longer reinstall in their own finally blocks — one restore here
+    # costs one Touch ID prompt instead of one-per-test). Phase 2b's
+    # pty tests rely on `devm shell` which needs the daemon. Only fires
+    # when 2a actually ran — hence the nesting under phase_has_tests.
+    if [ $rc_sudo -eq 0 ]; then
+        echo "=== e2e: restoring devm daemon after phase 2a (Touch ID) ===" >&2
+        "$DEVM_BIN" install >/dev/null || {
+            echo "=== e2e: post-phase-2a devm install failed ===" >&2
+            exit 1
+        }
+    fi
 fi
 
 # Phase 2b: pty tests. Serial (no xdist) because pexpect's
 # pty.forkpty() races on lock inheritance if the process has a
-# background xdist RPC thread.
-echo "=== e2e: phase 2b — pty tests ===" >&2
-set -m
-uv run pytest -m "$pty_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
-PYTEST_PID=$!
-set +m
-wait $PYTEST_PID
-rc_pty=$?
-[ $rc_pty -eq 5 ] && rc_pty=0
+# background xdist RPC thread. Skipped entirely (no banner) when the
+# caller's marker doesn't intersect `pty` — e.g. `just e2e-install`
+# has no pty tests, `just e2e-recipe` currently has no pty tests.
+if phase_has_tests "$pty_mark"; then
+    echo "=== e2e: phase 2b — pty tests ===" >&2
+    set -m
+    uv run pytest -m "$pty_mark" -p no:xdist ${REST_ARGS[@]+"${REST_ARGS[@]}"} &
+    PYTEST_PID=$!
+    set +m
+    wait $PYTEST_PID
+    rc_pty=$?
+    [ $rc_pty -eq 5 ] && rc_pty=0
+fi
 
 if [ $rc_parallel -ne 0 ]; then
     exit $rc_parallel
