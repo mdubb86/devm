@@ -1,5 +1,10 @@
 """26: devm env wrapper — $WORKSPACE expansion, devm-injected vars, PATH ergonomics, bypass clean miss.
 
+Writes devm.yaml against an already-running sandbox (from the
+tart_sandbox fixture's cold-start) and reconciles before attaching —
+env changes on a running VM only take effect via an explicit `devm
+reconcile`, not automatically on shell-attach.
+
 Pins the with-devm-env wrapper design end-to-end:
   1. $WORKSPACE in cfg.Env values expands to the absolute repo root
      at load time (internal/schema/env.go: ResolveEnv).
@@ -32,9 +37,14 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(120)
 def test_env_wrapper_and_workspace(workspace, devm, tart_sandbox, sandbox_name):
+    # tart_sandbox fixture already cold-started the VM with the minimal
+    # default config. Rewriting devm.yaml here doesn't take effect on its
+    # own — a running VM only picks up env/path changes via an explicit
+    # `devm reconcile` (no automatic apply on shell-attach).
     workspace.write_devmyaml(
         env={"CLAUDE_CONFIG_DIR": "$WORKSPACE/.claude"},
     )
+    devm.reconcile(yes=True, timeout=60)
 
     with Shell(devm, cwd=str(workspace.path)) as sh:
         sh.expect_prompt(timeout=90)

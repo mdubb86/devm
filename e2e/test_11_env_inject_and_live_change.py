@@ -1,19 +1,25 @@
-"""11: env injection — project + service vars; LIVE change picked up by next shell.
+"""11: env injection — project + service vars; LIVE change picked up after reconcile.
 
 A project declares a top-level `env:` map and a service with its own
 `env:` map. The first shell sees both injected: project vars verbatim
 (`PROJECT_VAR`) and service vars namespaced and uppercased
-(`<SERVICE>_LOG_LEVEL`). devm.yaml is then edited live to change
-`LOG_LEVEL` from info to debug; a second shell on the same running
-sandbox sees the new value, confirming live env change is picked up at
-shell-attach time.
+(`<SERVICE>_LOG_LEVEL`). devm.yaml is then edited to change `LOG_LEVEL`
+from info to debug; `devm reconcile --yes` applies the live change to
+the running sandbox, and a second shell on that same sandbox sees the
+new value.
+
+Env/path changes on a running VM only take effect via an explicit
+`devm reconcile` — nothing fires automatically on `devm shell` attach
+(unlike the pre-refactor WriteDevmDir-on-every-shell behavior). This is
+the intended "reconcile is where edits go into effect" semantics.
 
 What this pins:
   - Top-level `env:` values are injected into the shell verbatim.
   - Per-service `env:` values are injected as `<SERVICE>_<VAR>` (upper-
     cased service name + var name).
-  - A live edit to a service env value is picked up by a NEW shell
-    against the same running VM (no recreate required).
+  - `devm reconcile --yes` applies a live env edit to the running VM;
+    a NEW shell against that same VM picks it up (no recreate
+    required).
   - The FIRST (already-attached) shell keeps the OLD value — env
     changes are LIVE-bucket but reach the env via with-devm-env
     sourcing .devm/.env at exec time, so existing exec'd shells don't
@@ -37,7 +43,9 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(180)
 def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
     # tart_sandbox fixture already cold-started the VM with minimal config.
-    # Write env config; env vars are LIVE-bucket so the warm-attach shell picks them up.
+    # Write env config; env vars are LIVE-bucket, but a running VM only
+    # picks up live changes via an explicit reconcile — nothing fires
+    # automatically on shell-attach.
     workspace.write_devmyaml(
         env={"PROJECT_VAR": "projhello"},
         services={
@@ -48,6 +56,7 @@ def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
             },
         },
     )
+    devm.reconcile(yes=True, timeout=60)
 
     with Shell(devm, cwd=str(workspace.path)) as first:
         # Bumped to 120 (from 90) — the shell attach races other tests'
@@ -60,7 +69,8 @@ def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
         first.expect_text(r"GOT_API=info GOT_PROJ=projhello", timeout=15)
         first.expect_prompt(timeout=15)
 
-        # LIVE change: info -> debug. New shells see the new value.
+        # LIVE change: info -> debug. Explicit reconcile applies it to the
+        # running VM; new shells see the new value.
         workspace.patch_devmyaml(
             env={"PROJECT_VAR": "projhello"},
             services={
@@ -71,6 +81,7 @@ def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
                 },
             },
         )
+        devm.reconcile(yes=True, timeout=60)
 
         # First shell still sees the OLD value — already-attached
         # shells don't re-source .devm/.env mid-session.
