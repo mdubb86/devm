@@ -100,7 +100,7 @@ Directories prepended to `$PATH` inside the VM. Changes take effect in new inter
 Final `$PATH` shape inside the VM:
 
 ```
-<path[0]>:<path[1]>:...:$WORKSPACE/.devm/scripts:$PATH
+<path[0]>:<path[1]>:...:/opt/devm/scripts:$PATH
 ```
 
 Rules:
@@ -195,7 +195,7 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 ## Bucket glossary
 
-**live** — `devm reconcile` applies the change to the running VM without stopping it or ending active sessions. Mechanism varies by field: env and path changes rewrite `.devm/.env` and the workspace mount surfaces the new file inside the VM; service unit changes re-render the unit file and restart the affected service via `tart exec`; port and hostname changes reload the in-VM Caddyfile. Network (`allow`) changes are classified live per the `changeBucket` map but the detection and apply path is not currently wired; they take effect on the next cold start.
+**live** — Devm applies the change to the running VM without stopping it or ending active sessions (env/path/template via a bundle re-pipe to `/opt/devm/`; service, port, and hostname via targeted `tart exec`). Network (`allow`) changes are classified live per the `changeBucket` map but the detection and apply path is not currently wired; they take effect on the next cold start.
 
 **recreate** (internally: `teardown+shell`) — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `packages`, `mounts` (virtio-fs shares set at `tart run` time), `masks` (bind mounts applied at boot), `base_image`, and `project` identity fields.
 

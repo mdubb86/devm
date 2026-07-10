@@ -3,13 +3,18 @@
 When a devm.yaml change would force a sandbox recreate, devm prompts
 the user before tearing down. This pins two answers to that prompt:
   - non-tty: stdin isn't a tty -> devm exits 2 without recreating
-  - yes:     --yes flag bypasses prompt -> sandbox is removed (caller
-             can then re-shell to trigger the recreate)
+  - yes:     --yes flag bypasses prompt -> devm tears the sandbox down
+             and relaunches it (cold start) in the same call
 
 What this pins:
   - non-tty path: exit code 2 with next_action=needs_approval, sandbox
     state unchanged (user shell still alive).
-  - --yes path: sandbox is removed (user shell dies).
+  - --yes path: the old sandbox is torn down (user shell dies), then
+    reconcile relaunches it automatically -- same anchor-alive
+    contract as `devm start` (cold start, no shell attached, VM stays
+    running). This is the Task 7 behavior change: reconcile --yes used
+    to exit after removal and rely on a later `devm shell` to rebuild;
+    it now relaunches within the same call.
 
 What it doesn't cover (tested elsewhere):
   - The actual recreate flow -> test_14 (install-change forces recreate),
@@ -27,7 +32,7 @@ from helpers import Shell
 pytestmark = pytest.mark.devm
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(360)
 @pytest.mark.parametrize("mode", ["non_tty", "yes"], ids=["non_tty", "yes"])
 def test_reconcile_prompt_flow(workspace, devm, tart_sandbox, mode):
     # tart_sandbox fixture already cold-started the VM with minimal config.
@@ -65,17 +70,21 @@ def test_reconcile_prompt_flow(workspace, devm, tart_sandbox, mode):
             # Anchor-alive: explicitly stop after shell exit.
             devm.stop(yes=True)
         else:  # mode == "yes"
-            # reconcile --yes performs the recreate. devm may exit non-zero in
-            # some recreate flows (sandbox vanishes underneath); we assert on
-            # the resulting state, not on this call's exit code.
-            devm.reconcile(yes=True, timeout=60, check=False)
+            # reconcile --yes performs the recreate: tear down the old VM,
+            # then relaunch (cold start) automatically in the same call --
+            # this blocks until the new VM is up. devm may exit non-zero in
+            # some recreate flows; we assert on the resulting state, not on
+            # this call's exit code.
+            devm.reconcile(yes=True, timeout=300, check=False)
 
-            # User shell dies because the sandbox is removed under it.
+            # User's original shell dies because the sandbox is removed
+            # under it.
             sh.expect_eof(timeout=30)
 
-            # reconcile does NOT relaunch a shell -- sandbox should be
-            # GONE (TEARDOWN bucket = VM removed, not just stopped).
-            assert tart_sandbox.state() == "absent", (
-                f"sandbox {tart_sandbox.name} still exists after reconcile "
-                f"--yes on an install change (should have been removed)"
+            # reconcile relaunches after tearing down (same anchor-alive
+            # contract as `devm start`): the sandbox should be RUNNING
+            # again by the time the call returns, not left absent.
+            assert tart_sandbox.state() == "running", (
+                f"sandbox {tart_sandbox.name} should be running again "
+                f"after reconcile --yes relaunched it post-recreate"
             )

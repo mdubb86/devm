@@ -20,7 +20,7 @@ description: devm VM lifecycle commands — shell, reconcile, stop, teardown, st
 
 ## `devm shell`
 
-Acquires `.devm/lock`, re-renders `.devm/` from the current `devm.yaml`, then queries the daemon for the VM's running state.
+Queries the daemon for the VM's running state; if cold-start is needed, the daemon acquires the project mutex and provisions.
 
 ### Warm attach
 
@@ -39,7 +39,7 @@ If the VM is stopped or absent, `devm shell`:
    |---|---|
    | 1 | `mkdir workspace parents` |
    | 2 | `install CA root` |
-   | 3 | `link with-devm-env into PATH` |
+   | 3 | `install devm bundle` |
    | 4 | `write Caddyfile` |
    | 5 | `write dnsmasq config` |
    | 6 | `reload base services` |
@@ -74,7 +74,7 @@ Sandbox stopped; config changes will apply on next `devm shell`.
 **VM running:** reads the in-VM snapshot (last-applied `schema.Config`), diffs it against the current config via `ComputeAllChanges`, and splits changes by bucket:
 
 - **BucketLive changes** are passed to `ApplyLive` and reported as applied. Two kinds are actively wired today:
-  - Per-service `env` add / remove / change — rewrites `.devm/.env`; the workspace virtio-fs share surfaces the new file inside the VM immediately.
+  - Per-service `env` add / remove / change — daemon pipes an updated bundle into the guest at `/opt/devm/.env`.
   - `template` add / change / remove — re-runs the installer dispatcher script inside the VM via `tart exec`.
   
   All other BucketLive kinds (ports, path, service unit fields) have no apply path in `ApplyLive` and take effect at the next cold start, even though reconcile reports them as applied.
@@ -144,7 +144,7 @@ Currently wired in `ApplyLive` (changes take effect immediately):
 
 | Kind | Mechanism |
 |---|---|
-| Per-service env add / remove / change | Rewrites `.devm/.env`; workspace mount surfaces it in the VM |
+| Per-service env add / remove / change | Daemon pipes an updated bundle into the guest at `/opt/devm/.env` |
 | Template add / change / remove | Runs installer dispatcher script in the VM via `tart exec` |
 
 Classified BucketLive but no apply path in `ApplyLive` (take effect at next cold start):

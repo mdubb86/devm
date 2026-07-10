@@ -47,7 +47,6 @@ Other pre-VM errors from `devm shell`:
 
 | Error prefix | Cause | Fix |
 |---|---|---|
-| `acquire lock: ...` | Another `devm shell` for the same project is already running | Wait for it to finish, or stop the other shell; lock lives at `.devm/lock` |
 | `render devm dir: ...` | `devm.yaml` failed to render (bad template variable or YAML parse error) | Fix the YAML and retry |
 | `resolve secrets: missing secrets in keychain: [<name>] ...` | A `!secret` reference has no matching entry in the macOS login keychain | Run `devm secret set <name>` for each listed name; see `devm skills get secrets` |
 | `start vm: ...` | Daemon rejected the `StartVM` call | Check daemon log at `~/Library/Logs/com.devm.service.err.log` |
@@ -78,7 +77,7 @@ The output block immediately above the error line contains the captured stdout a
 |---|---|---|---|
 | `mkdir workspace parents` | `sudo mkdir -p <parent-of-workspace-path>` inside the VM | VM user cannot create the path (permissions or path component missing) | The workspace path is mounted from the Mac host into the VM at the same absolute path; the path is set via `mounts:` in `devm.yaml` (or the daemon's default `WorkspaceHostPath`). Verify that path exists on the host and check base image sudo configuration. |
 | `install CA root` | Base64-decodes the devm CA cert, writes it to `/usr/local/share/ca-certificates/devm.crt`, runs `update-ca-certificates` | `update-ca-certificates` not available in the base image, or network blocked during CA update | Ensure the base image includes the `ca-certificates` package; if the CA file itself is missing, run `devm install` to regenerate it |
-| `link with-devm-env into PATH` | Symlinks `$WORKSPACE/.devm/scripts/with-devm-env` into `/usr/local/bin` so the wrapper is on the guest's default PATH | Rare — sudo unavailable or `/usr/local/bin` missing | Should not fail on a healthy base image; check base image integrity |
+| `install devm bundle` | Builds the devm-owned artifact bundle (env file, with-devm-env wrapper, install-templates.sh dispatcher, install.sh) and pipes it into the guest, where `install.sh` extracts it to `/opt/devm` and symlinks `with-devm-env` onto `/usr/local/bin` | Rare — pipe interrupted, or `sudo`/`/usr/local/bin` unavailable in the guest | Should not fail on a healthy base image; check base image integrity |
 | `write Caddyfile` | Renders and writes `/etc/caddy/Caddyfile` | Template variable resolution failed (bad service hostname) | Verify `services[*].hostname` values in `devm.yaml` |
 | `write dnsmasq config` | Writes `/etc/dnsmasq.d/devm-test.conf` | `tee` permission failure or missing parent directory | Should not fail on a healthy base image; check base image integrity |
 | `reload base services` | `systemctl reload-or-restart dnsmasq` then `systemctl reload-or-restart caddy` | dnsmasq: port 53 is already bound (e.g., `systemd-resolved` is active in the VM). Caddy: Caddyfile syntax error | dnsmasq: `tart exec <vm> journalctl -u dnsmasq`. Caddy: `tart exec <vm> journalctl -u caddy` |
@@ -143,4 +142,3 @@ The `.devm/` directory in your project root is maintained by the CLI and is not 
 
 - `.devm/.env` — rendered environment file; shell-sourceable; sourced by the VM shell on attach
 - `.devm/templates/` — installer scripts generated from `devm.yaml` template declarations
-- `.devm/lock` — orchestrator lock file; prevents concurrent cold starts in the same project directory
