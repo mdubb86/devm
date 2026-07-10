@@ -217,6 +217,10 @@ func (d *deadlineCapturingTart) ExecWithRetry(ctx context.Context, name string, 
 	return d.Exec(ctx, name, argv)
 }
 
+func (d *deadlineCapturingTart) ExecStdin(ctx context.Context, name string, _ io.Reader, argv []string) tart.ExecResult {
+	return d.Exec(ctx, name, argv)
+}
+
 func newDeadlineCapturingTart() *deadlineCapturingTart {
 	return &deadlineCapturingTart{}
 }
@@ -242,6 +246,10 @@ func (s *slowTart) Exec(ctx context.Context, _ string, _ []string) tart.ExecResu
 }
 
 func (s *slowTart) ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult {
+	return s.Exec(ctx, name, argv)
+}
+
+func (s *slowTart) ExecStdin(ctx context.Context, name string, _ io.Reader, argv []string) tart.ExecResult {
 	return s.Exec(ctx, name, argv)
 }
 
@@ -321,6 +329,10 @@ func (a *argvRecordingTart) Exec(_ context.Context, _ string, argv []string) tar
 }
 
 func (a *argvRecordingTart) ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult {
+	return a.Exec(ctx, name, argv)
+}
+
+func (a *argvRecordingTart) ExecStdin(ctx context.Context, name string, _ io.Reader, argv []string) tart.ExecResult {
 	return a.Exec(ctx, name, argv)
 }
 

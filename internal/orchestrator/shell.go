@@ -122,13 +122,6 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	if err := render.WriteDevmDir(cfg, repoRoot); err != nil {
 		return -1, fmt.Errorf("render devm dir: %w", err)
 	}
-	// Docker feature delivers its shim through the workspace mount;
-	// the provisioner step installs from <workspace>/.devm/scripts/.
-	if cfg.Docker {
-		if err := docker.WriteShim(repoRoot); err != nil {
-			return -1, fmt.Errorf("write devm-runc-shim to workspace: %w", err)
-		}
-	}
 
 	// Check VM state via daemon admin.
 	vmStatus, err := d.ServiceAPIClient.VMStatus(ctx, cfg.Project.ID, vmName)

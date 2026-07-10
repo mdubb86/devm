@@ -27,6 +27,7 @@ import (
 type tartExecer interface {
 	Exec(ctx context.Context, name string, argv []string) tart.ExecResult
 	ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult
+	ExecStdin(ctx context.Context, name string, stdin io.Reader, argv []string) tart.ExecResult
 }
 
 // Provisioner runs the per-project first-boot sequence in a Tart VM.
@@ -167,6 +168,24 @@ func (p *Provisioner) execShell(ctx context.Context, w io.Writer, script string)
 // the internal execShell.
 func (p *Provisioner) ExecShell(ctx context.Context, w io.Writer, script string) error {
 	return p.execShell(ctx, w, script)
+}
+
+// PipeIntoShell pipes stdin into a shell script running inside the VM.
+// Used for delivering payloads too large for a single tart-exec argv
+// (e.g., embedded binaries via `sudo tee <path>`).
+func (p *Provisioner) PipeIntoShell(ctx context.Context, w io.Writer, stdin io.Reader, script string) error {
+	argv := []string{"bash", "-e", "-o", "pipefail", "-c", script}
+	r := p.Tart.ExecStdin(ctx, p.VMName, stdin, argv)
+	if r.Stdout != "" {
+		_, _ = io.WriteString(w, r.Stdout)
+	}
+	if r.Stderr != "" {
+		_, _ = io.WriteString(w, r.Stderr)
+	}
+	if r.ExitCode != 0 {
+		return fmt.Errorf("tart exec -i %s: exit %d", strings.Join(argv, " "), r.ExitCode)
+	}
+	return nil
 }
 
 func (p *Provisioner) mkdirWorkspaceParents(ctx context.Context, w io.Writer) error {
@@ -353,7 +372,7 @@ func (p *Provisioner) dockerFeature(ctx context.Context, w io.Writer) error {
 	}
 	stepCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
-	return docker.Install(stepCtx, w, p, p.WorkspaceVMPath)
+	return docker.Install(stepCtx, w, p)
 }
 
 // installTemplates runs the install-templates.sh dispatcher inside the VM,

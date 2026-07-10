@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -12,13 +13,12 @@ import (
 // the default OCI runtime, add the socket-permission drop-in, add the
 // host→container reachability nftables rule, and restart docker.
 //
-// workspaceVMPath is the guest-side absolute path where the workspace
-// is mounted; the shim lives at <workspaceVMPath>/.devm/scripts/devm-runc-shim
-// (see WriteShim).
+// The shim binary is delivered separately via stdin (see Install);
+// this script assumes /usr/local/bin/devm-runc-shim already exists.
 //
 // Fails fast on any error (`set -e`). Never declares docker.service as
 // a devm-managed service — get.docker.com enables it internally.
-func InstallScript(workspaceVMPath string) string {
+func InstallScript() string {
 	// daemon.json content — full write, no merge. devm owns this file.
 	daemon := `{
   "runtimes": {
@@ -30,8 +30,6 @@ func InstallScript(workspaceVMPath string) string {
 	socketOverride := `[Service]
 ExecStartPost=/bin/chmod 666 /run/docker.sock`
 
-	shimSrc := workspaceVMPath + "/.devm/scripts/devm-runc-shim"
-
 	var b strings.Builder
 	fmt.Fprintln(&b, "set -e")
 	fmt.Fprintln(&b, "# 1. Install Docker Engine via upstream installer.")
@@ -39,8 +37,8 @@ ExecStartPost=/bin/chmod 666 /run/docker.sock`
 	fmt.Fprintln(&b, "sudo usermod -aG docker devm")
 	fmt.Fprintln(&b, "# 2. Verify real runc is where we expect. daemon.json points there.")
 	fmt.Fprintln(&b, `test -x /usr/bin/runc || { echo "FAIL: /usr/bin/runc missing after docker install" >&2; exit 1; }`)
-	fmt.Fprintln(&b, "# 3. Install devm-runc-shim from the workspace mount.")
-	fmt.Fprintf(&b, "sudo install -m 0755 %q /usr/local/bin/devm-runc-shim\n", shimSrc)
+	fmt.Fprintln(&b, "# 3. Verify shim landed (piped in over stdin before this script ran).")
+	fmt.Fprintln(&b, `test -x /usr/local/bin/devm-runc-shim || { echo "FAIL: /usr/local/bin/devm-runc-shim missing" >&2; exit 1; }`)
 	fmt.Fprintln(&b, "# 4. Register shim as default OCI runtime.")
 	fmt.Fprintln(&b, "sudo install -d /etc/docker")
 	fmt.Fprintln(&b, "sudo tee /etc/docker/daemon.json > /dev/null <<'DEVM_DAEMON_JSON'")
@@ -63,23 +61,25 @@ ExecStartPost=/bin/chmod 666 /run/docker.sock`
 	return b.String()
 }
 
-// Install is the entrypoint the provisioner calls to run the docker
-// feature step inside the guest VM. execShell writes the script's
-// stdout+stderr to w and returns non-nil on non-zero exit.
+// shimInstallScript writes the shim from stdin to /usr/local/bin and
+// sets its mode. Used with PipeIntoShell to deliver the shim bytes.
+const shimInstallScript = `set -e
+sudo tee /usr/local/bin/devm-runc-shim > /dev/null
+sudo chmod 0755 /usr/local/bin/devm-runc-shim`
+
+// shellExecutor is what the docker package needs from the provisioner:
+// a shell runner (for the main install script) and a stdin-piping shell
+// runner (for the shim binary).
 type shellExecutor interface {
 	ExecShell(ctx context.Context, w io.Writer, script string) error
+	PipeIntoShell(ctx context.Context, w io.Writer, stdin io.Reader, script string) error
 }
 
-func Install(ctx context.Context, w io.Writer, sh shellExecutor, workspaceVMPath string) error {
-	return sh.ExecShell(ctx, w, InstallScript(workspaceVMPath))
-}
-
-// WriteShim writes the embedded shim binary to
-// <repoRoot>/.devm/scripts/devm-runc-shim (mode 0755). Called from the
-// cold-start path when cfg.Docker == true so the shim is present under
-// the workspace mount before the docker-feature provisioner step runs.
-func WriteShim(repoRoot string) error {
-	// Directory is created by render.WriteDevmDir which runs before this;
-	// we only need to drop the binary.
-	return writeShimBinary(repoRoot, Shim())
+// Install runs the docker-feature step: pipes the embedded shim into
+// the guest, then runs the install script that wires everything up.
+func Install(ctx context.Context, w io.Writer, sh shellExecutor) error {
+	if err := sh.PipeIntoShell(ctx, w, bytes.NewReader(Shim()), shimInstallScript); err != nil {
+		return fmt.Errorf("install devm-runc-shim: %w", err)
+	}
+	return sh.ExecShell(ctx, w, InstallScript())
 }

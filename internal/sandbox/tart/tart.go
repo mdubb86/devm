@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -104,6 +105,27 @@ func (t *Tart) IP(ctx context.Context, name string) (string, error) {
 func (t *Tart) Exec(ctx context.Context, name string, argv []string) ExecResult {
 	args := append([]string{"exec", name}, argv...)
 	cmd := exec.CommandContext(ctx, t.Path, args...)
+	var so, se bytes.Buffer
+	cmd.Stdout = &so
+	cmd.Stderr = &se
+	err := cmd.Run()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		code = -1
+	}
+	return ExecResult{Stdout: so.String(), Stderr: se.String(), ExitCode: code}
+}
+
+// ExecStdin runs a command inside the VM via `tart exec -i`, piping
+// the given reader as the command's stdin. Same capture + exit-code
+// semantics as Exec. Use for delivering large binary payloads that
+// would overflow an argv slot.
+func (t *Tart) ExecStdin(ctx context.Context, name string, stdin io.Reader, argv []string) ExecResult {
+	args := append([]string{"exec", "-i", name}, argv...)
+	cmd := exec.CommandContext(ctx, t.Path, args...)
+	cmd.Stdin = stdin
 	var so, se bytes.Buffer
 	cmd.Stdout = &so
 	cmd.Stderr = &se
