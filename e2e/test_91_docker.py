@@ -77,9 +77,16 @@ def test_docker_first_class_end_to_end(workspace, devm):
     # ---- WITHOUT -k. This is the key positive assertion the shim
     # ---- unlocks — container's TLS client MUST trust the mounted
     # ---- devm CA bundle.
+    #
+    # `-e CURL_CA_BUNDLE=` clears an image-specific env in
+    # curlimages/curl that pins curl to a bundled /cacert.pem and
+    # bypasses the OS trust store. Real workloads use the OS store
+    # (which is what the shim's bind-mount populates); we mirror that
+    # by asking curl to fall back to its compile-time default here.
     allowed = devm_exec_with_retry(
         devm.path,
-        ["docker", "run", "--rm", "curlimages/curl:latest",
+        ["docker", "run", "--rm", "-e", "CURL_CA_BUNDLE=",
+         "curlimages/curl:latest",
          "-s", "-o", "/dev/null", "-w", "%{http_code}",
          "-A", "Mozilla/5.0",
          "--max-time", "15", "https://httpbin.org/status/200"],
@@ -103,7 +110,8 @@ def test_docker_first_class_end_to_end(workspace, devm):
     # ---- layer; 000 = escaped through Docker's forward hook.
     blocked = devm_exec_with_retry(
         devm.path,
-        ["docker", "run", "--rm", "curlimages/curl:latest",
+        ["docker", "run", "--rm", "-e", "CURL_CA_BUNDLE=",
+         "curlimages/curl:latest",
          "-s", "-o", "/dev/null", "-w", "%{http_code}",
          "-A", "Mozilla/5.0",
          "--max-time", "15", "https://google.com/"],
