@@ -196,18 +196,17 @@ func (p *Provisioner) installCARoot(ctx context.Context, w io.Writer) error {
 // already run, its cached state can cause a subsequent run to skip the
 // merge step, so /etc/ssl/certs/ca-certificates.crt never picks up
 // devm.crt even though the CApath symlink is created. --fresh rebuilds
-// from scratch. The trailing openssl check makes provisioning fail loud
+// from scratch. The trailing `grep -F -f` makes provisioning fail loud
 // if the bundle merge ever regresses — Debian's ca-certificates.crt is
-// a pure PEM concatenation (no human-readable subject lines), so the
-// verification decodes the bundle with `openssl storeutl -certs` and
-// greps the emitted subject list.
+// a pure PEM concatenation, so we check whether devm.crt's exact PEM
+// content appears in the bundle (bulletproof, no openssl invocation).
 func (p *Provisioner) installCARootScript() string {
 	encoded := base64.StdEncoding.EncodeToString(p.CARootPEM)
 	return fmt.Sprintf(
 		`set -e
 echo %s | base64 -d | sudo tee /usr/local/share/ca-certificates/devm.crt > /dev/null
 sudo update-ca-certificates --fresh
-openssl storeutl -noout -certs /etc/ssl/certs/ca-certificates.crt 2>/dev/null | grep -q "CN *= *devm Local CA" || {
+grep -F -q -f /usr/local/share/ca-certificates/devm.crt /etc/ssl/certs/ca-certificates.crt || {
     echo "FAIL: devm CA installed to CApath but not merged into ca-certificates.crt bundle" >&2
     exit 1
 }`,

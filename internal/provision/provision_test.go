@@ -413,11 +413,8 @@ func TestInstallCARootScriptGuaranteesBundleMerge(t *testing.T) {
 	if !strings.Contains(script, "update-ca-certificates --fresh") {
 		t.Errorf("installCARoot script must call `update-ca-certificates --fresh`, got:\n%s", script)
 	}
-	if !strings.Contains(script, "openssl storeutl -noout -certs /etc/ssl/certs/ca-certificates.crt") {
-		t.Errorf("installCARoot script must decode the bundle with openssl storeutl to verify contents, got:\n%s", script)
-	}
-	if !strings.Contains(script, "devm Local CA") {
-		t.Errorf("installCARoot script must grep for devm Local CA subject, got:\n%s", script)
+	if !strings.Contains(script, "grep -F -q -f /usr/local/share/ca-certificates/devm.crt /etc/ssl/certs/ca-certificates.crt") {
+		t.Errorf("installCARoot script must verify devm.crt PEM content is embedded in the bundle, got:\n%s", script)
 	}
 }
 
