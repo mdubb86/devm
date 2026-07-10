@@ -70,6 +70,18 @@ func TestWriteStateCfg_Atomic(t *testing.T) {
 		"only the final file should remain; os.CreateTemp temp files must have been renamed away")
 }
 
+func TestState_RejectsPathTraversal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, id := range []string{"../evil", "foo/bar", "..", "foo\\bar"} {
+		t.Run(id, func(t *testing.T) {
+			require.Error(t, WriteStateCfg(id, schema.Config{}))
+			_, err := ReadStateCfg(id)
+			require.Error(t, err)
+			require.Error(t, RemoveStateCfg(id))
+		})
+	}
+}
+
 func names(entries []os.DirEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {
