@@ -327,22 +327,8 @@ func runPrivilegedUninstall(out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("locate executable: %w", err)
 	}
-
-	// set +e: best-effort each step so partial state still cleans up.
-	//
-	// bootout deregisters + SIGTERMs the daemon synchronously. Must
-	// run before kardianos's Stop, which uses `launchctl unload` — a
-	// legacy subcommand that leaves KeepAlive daemons alive
-	// (github.com/kardianos/service#144).
-	var sb strings.Builder
-	sb.WriteString("set +e\n")
-	sb.WriteString("launchctl bootout system/com.devm.service 2>/dev/null\n")
-	fmt.Fprintf(&sb, "%s _kardianos uninstall\n", shellQuote(exe))
-	fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(serviceapi.ResolverFilePath))
-	fmt.Fprintf(&sb, "security delete-certificate -c %s %s 2>/dev/null\n",
-		shellQuote(serviceapi.CATrustCertCN), shellQuote(serviceapi.SystemKeychain))
-
-	c := exec.Command("sudo", "bash", "-c", sb.String())
+	script := buildUninstallScript(exe)
+	c := exec.Command("sudo", "bash", "-c", script)
 	c.Stdout = out
 	c.Stderr = out
 	c.Stdin = os.Stdin
@@ -350,6 +336,32 @@ func runPrivilegedUninstall(out io.Writer) error {
 		return fmt.Errorf("privileged uninstall: %w", err)
 	}
 	return nil
+}
+
+// buildUninstallScript assembles the privileged cleanup script.
+//
+// set +e: best-effort each step so partial state still cleans up.
+//
+// bootout deregisters + SIGTERMs the daemon synchronously. Must run
+// before kardianos's Stop, which uses `launchctl unload` — a legacy
+// subcommand that leaves KeepAlive daemons alive
+// (github.com/kardianos/service#144).
+//
+// After the daemon is gone, kill any iron-proxy children it had
+// running. They setsid on spawn so they survive daemon death by design
+// (see runner.go's AdoptIronProxies); nothing cleans them up on
+// uninstall unless we do it here. Match the daemon's own argv pattern
+// so the pkill can't hit unrelated processes.
+func buildUninstallScript(exe string) string {
+	var sb strings.Builder
+	sb.WriteString("set +e\n")
+	sb.WriteString("launchctl bootout system/com.devm.service 2>/dev/null\n")
+	sb.WriteString("pkill -TERM -f 'iron-proxy -config .*/iron-proxy/.*\\.yaml' 2>/dev/null\n")
+	fmt.Fprintf(&sb, "%s _kardianos uninstall\n", shellQuote(exe))
+	fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(serviceapi.ResolverFilePath))
+	fmt.Fprintf(&sb, "security delete-certificate -c %s %s 2>/dev/null\n",
+		shellQuote(serviceapi.CATrustCertCN), shellQuote(serviceapi.SystemKeychain))
+	return sb.String()
 }
 
 var serviceCmd = &cobra.Command{
