@@ -344,13 +344,16 @@ func (p *Provisioner) runInstallCommands(ctx context.Context, w io.Writer) error
 
 // dockerFeature installs Docker Engine + devm-runc-shim + firewall rule
 // inside the VM when the project's devm.yaml declares `docker: true`.
-// No-op otherwise.
+// No-op otherwise. The 15-minute deadline covers `curl get.docker.com | sh`
+// fetching upstream packages on a cold cache.
 func (p *Provisioner) dockerFeature(ctx context.Context, w io.Writer) error {
 	if !p.Cfg.Docker {
 		fmt.Fprintln(w, "(docker: false — skipping)")
 		return nil
 	}
-	return docker.Install(ctx, w, p)
+	stepCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+	return docker.Install(stepCtx, w, p, p.WorkspaceVMPath)
 }
 
 // installTemplates runs the install-templates.sh dispatcher inside the VM,

@@ -2,7 +2,6 @@ package docker
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"strings"
@@ -13,13 +12,13 @@ import (
 // the default OCI runtime, add the socket-permission drop-in, add the
 // host→container reachability nftables rule, and restart docker.
 //
-// Fails fast on any error (`set -e`). Never declares
-// docker.service as a devm-managed service — get.docker.com enables
-// it internally, and re-declaring causes devm's enable step to fail
-// with "Unit docker.service has a bad unit file setting".
-func InstallScript() string {
-	shimB64 := base64.StdEncoding.EncodeToString(Shim())
-
+// workspaceVMPath is the guest-side absolute path where the workspace
+// is mounted; the shim lives at <workspaceVMPath>/.devm/scripts/devm-runc-shim
+// (see WriteShim).
+//
+// Fails fast on any error (`set -e`). Never declares docker.service as
+// a devm-managed service — get.docker.com enables it internally.
+func InstallScript(workspaceVMPath string) string {
 	// daemon.json content — full write, no merge. devm owns this file.
 	daemon := `{
   "runtimes": {
@@ -31,6 +30,8 @@ func InstallScript() string {
 	socketOverride := `[Service]
 ExecStartPost=/bin/chmod 666 /run/docker.sock`
 
+	shimSrc := workspaceVMPath + "/.devm/scripts/devm-runc-shim"
+
 	var b strings.Builder
 	fmt.Fprintln(&b, "set -e")
 	fmt.Fprintln(&b, "# 1. Install Docker Engine via upstream installer.")
@@ -38,9 +39,8 @@ ExecStartPost=/bin/chmod 666 /run/docker.sock`
 	fmt.Fprintln(&b, "sudo usermod -aG docker devm")
 	fmt.Fprintln(&b, "# 2. Verify real runc is where we expect. daemon.json points there.")
 	fmt.Fprintln(&b, `test -x /usr/bin/runc || { echo "FAIL: /usr/bin/runc missing after docker install" >&2; exit 1; }`)
-	fmt.Fprintln(&b, "# 3. Extract devm-runc-shim (linux/arm64) into place.")
-	fmt.Fprintf(&b, "echo %s | base64 -d | sudo tee /usr/local/bin/devm-runc-shim > /dev/null\n", shimB64)
-	fmt.Fprintln(&b, "sudo chmod 0755 /usr/local/bin/devm-runc-shim")
+	fmt.Fprintln(&b, "# 3. Install devm-runc-shim from the workspace mount.")
+	fmt.Fprintf(&b, "sudo install -m 0755 %q /usr/local/bin/devm-runc-shim\n", shimSrc)
 	fmt.Fprintln(&b, "# 4. Register shim as default OCI runtime.")
 	fmt.Fprintln(&b, "sudo install -d /etc/docker")
 	fmt.Fprintln(&b, "sudo tee /etc/docker/daemon.json > /dev/null <<'DEVM_DAEMON_JSON'")
@@ -70,6 +70,16 @@ type shellExecutor interface {
 	ExecShell(ctx context.Context, w io.Writer, script string) error
 }
 
-func Install(ctx context.Context, w io.Writer, sh shellExecutor) error {
-	return sh.ExecShell(ctx, w, InstallScript())
+func Install(ctx context.Context, w io.Writer, sh shellExecutor, workspaceVMPath string) error {
+	return sh.ExecShell(ctx, w, InstallScript(workspaceVMPath))
+}
+
+// WriteShim writes the embedded shim binary to
+// <repoRoot>/.devm/scripts/devm-runc-shim (mode 0755). Called from the
+// cold-start path when cfg.Docker == true so the shim is present under
+// the workspace mount before the docker-feature provisioner step runs.
+func WriteShim(repoRoot string) error {
+	// Directory is created by render.WriteDevmDir which runs before this;
+	// we only need to drop the binary.
+	return writeShimBinary(repoRoot, Shim())
 }

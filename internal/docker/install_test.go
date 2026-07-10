@@ -6,7 +6,7 @@ import (
 )
 
 func TestInstallScript_ContainsRequiredPieces(t *testing.T) {
-	script := InstallScript()
+	script := InstallScript("/Users/x/repo")
 	musts := []string{
 		"curl -fsSL https://get.docker.com | sh",
 		"usermod -aG docker devm",
@@ -20,6 +20,9 @@ func TestInstallScript_ContainsRequiredPieces(t *testing.T) {
 		"systemctl daemon-reload",
 		"systemctl restart docker",
 		"test -x /usr/bin/runc",
+		// Shim is installed from the workspace mount, not embedded
+		// in the argv.
+		"/Users/x/repo/.devm/scripts/devm-runc-shim",
 	}
 	for _, m := range musts {
 		if !strings.Contains(script, m) {
@@ -31,7 +34,7 @@ func TestInstallScript_ContainsRequiredPieces(t *testing.T) {
 func TestInstallScript_UsesFailFast(t *testing.T) {
 	// `set -e` at the top so any subshell failure fails the step,
 	// rather than the provisioner silently succeeding halfway through.
-	if !strings.HasPrefix(strings.TrimSpace(InstallScript()), "set -e") {
-		t.Errorf("InstallScript must begin with `set -e`, got:\n%s", InstallScript())
+	if !strings.HasPrefix(strings.TrimSpace(InstallScript("/x")), "set -e") {
+		t.Errorf("InstallScript must begin with `set -e`, got:\n%s", InstallScript("/x"))
 	}
 }
