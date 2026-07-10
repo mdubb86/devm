@@ -79,6 +79,24 @@ func RenderTemplates(cfg schema.Config, repoRoot string) (map[string]string, err
 	return out, nil
 }
 
+// RenderTemplatesByBasename renders cfg's templates like RenderTemplates
+// but keys the result by basename (e.g. "00-web-Caddyfile.sh") instead of
+// full path. This is the keying reconcile.ComputeTemplateChanges expects
+// for its last-applied baseline (serviceapi.StateSnapshot.TemplateContents),
+// since that baseline is persisted independently of any particular
+// repoRoot's .devm/templates/ directory.
+func RenderTemplatesByBasename(cfg schema.Config, repoRoot string) (map[string]string, error) {
+	rendered, err := RenderTemplates(cfg, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rendered))
+	for path, content := range rendered {
+		out[filepath.Base(path)] = content
+	}
+	return out, nil
+}
+
 func buildTemplateData(cfg schema.Config) TemplateData {
 	svcData := make(map[string]ServiceData, len(cfg.Services))
 	for name, s := range cfg.Services {

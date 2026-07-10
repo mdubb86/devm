@@ -13,6 +13,7 @@ import (
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/provision"
+	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/secret"
@@ -250,7 +251,12 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// a missing snapshot only degrades to "full diff on next
 	// reconcile" (safe), and failing here would kill a cold start that
 	// otherwise succeeded.
-	if err := serviceapi.WriteStateCfg(cfg.Project.ID, cfg); err != nil {
+	templateContents, err := render.RenderTemplatesByBasename(cfg, repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "state: render templates for seed snapshot %s failed: %v\n", cfg.Project.ID, err)
+	}
+	snap := serviceapi.StateSnapshot{Cfg: cfg, TemplateContents: templateContents}
+	if err := serviceapi.WriteStateSnapshot(cfg.Project.ID, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.ID, err)
 	}
 

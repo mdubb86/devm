@@ -33,10 +33,20 @@ func validProjectID(id string) error {
 	return nil
 }
 
-// ReadStateCfg loads the last-applied cfg for a project. Returns
+// StateSnapshot is what the daemon persists per project. Wraps
+// schema.Config with computed sidecar state (like rendered template
+// installer content) that ComputeAllChanges needs but that isn't
+// derivable from schema.Config alone at reconcile time (source files
+// on disk may have changed since last apply).
+type StateSnapshot struct {
+	Cfg              schema.Config     `json:"cfg"`
+	TemplateContents map[string]string `json:"template_contents,omitempty"` // basename -> rendered installer content
+}
+
+// ReadStateSnapshot loads the persisted snapshot for a project. Returns
 // (nil, nil) when the file is absent or malformed — reconcile treats
 // both as "assume everything changed" and computes a full diff.
-func ReadStateCfg(projectID string) (*schema.Config, error) {
+func ReadStateSnapshot(projectID string) (*StateSnapshot, error) {
 	if err := validProjectID(projectID); err != nil {
 		return nil, err
 	}
@@ -48,27 +58,28 @@ func ReadStateCfg(projectID string) (*schema.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read state %s: %w", path, err)
 	}
-	var cfg schema.Config
-	if err := json.Unmarshal(body, &cfg); err != nil {
+	var snap StateSnapshot
+	if err := json.Unmarshal(body, &snap); err != nil {
 		// Malformed → treated as missing. Log so operators can notice.
 		fmt.Fprintf(os.Stderr, "state: malformed snapshot at %s: %v (treating as missing)\n", path, err)
 		return nil, nil
 	}
-	return &cfg, nil
+	return &snap, nil
 }
 
-// WriteStateCfg persists cfg as the last-applied snapshot. Atomic via
-// temp file + rename to survive daemon crashes mid-write.
-func WriteStateCfg(projectID string, cfg schema.Config) error {
+// WriteStateSnapshot persists snap as the last-applied snapshot for
+// projectID. Atomic via temp file + rename to survive daemon crashes
+// mid-write.
+func WriteStateSnapshot(projectID string, snap StateSnapshot) error {
 	if err := validProjectID(projectID); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(StateDir(), 0o700); err != nil {
 		return fmt.Errorf("mkdir state dir: %w", err)
 	}
-	body, err := json.Marshal(cfg)
+	body, err := json.Marshal(snap)
 	if err != nil {
-		return fmt.Errorf("marshal cfg: %w", err)
+		return fmt.Errorf("marshal snapshot: %w", err)
 	}
 	path := filepath.Join(StateDir(), projectID+".json")
 	tmp, err := os.CreateTemp(StateDir(), projectID+".json.*")
@@ -86,6 +97,23 @@ func WriteStateCfg(projectID string, cfg schema.Config) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+// ReadStateCfg is a thin wrapper over ReadStateSnapshot for callers
+// that only care about the last-applied schema.Config, not the
+// template-contents sidecar.
+func ReadStateCfg(projectID string) (*schema.Config, error) {
+	snap, err := ReadStateSnapshot(projectID)
+	if err != nil || snap == nil {
+		return nil, err
+	}
+	return &snap.Cfg, nil
+}
+
+// WriteStateCfg is a thin wrapper over WriteStateSnapshot for callers
+// that don't have (or don't care about) rendered template contents.
+func WriteStateCfg(projectID string, cfg schema.Config) error {
+	return WriteStateSnapshot(projectID, StateSnapshot{Cfg: cfg})
 }
 
 // RemoveStateCfg deletes the snapshot for projectID. Idempotent —

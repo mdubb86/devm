@@ -104,7 +104,11 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 			return res, fmt.Errorf("parse snapshot: %w", err)
 		}
 	}
-	statusChanges, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot)
+	var lastAppliedTemplates map[string]string
+	if stateSnap, sErr := serviceapi.ReadStateSnapshot(cfg.Project.ID); sErr == nil && stateSnap != nil {
+		lastAppliedTemplates = stateSnap.TemplateContents
+	}
+	statusChanges, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot, lastAppliedTemplates)
 	if err != nil {
 		return res, fmt.Errorf("compute changes: %w", err)
 	}

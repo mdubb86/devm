@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/reconcile"
+	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -86,17 +87,19 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 
 		// Load baseline snapshot. Missing / malformed → nil, treated
 		// as "everything is new" by the diff engine.
-		oldCfg, err := ReadStateCfg(req.ProjectID)
+		oldSnap, err := ReadStateSnapshot(req.ProjectID)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read state: %v", err), http.StatusInternalServerError)
 			return
 		}
 		var base schema.Config
-		if oldCfg != nil {
-			base = *oldCfg
+		var lastAppliedTemplates map[string]string
+		if oldSnap != nil {
+			base = oldSnap.Cfg
+			lastAppliedTemplates = oldSnap.TemplateContents
 		}
 
-		changes, err := reconcile.ComputeAllChanges(base, req.Cfg, req.WorkspaceHostPath)
+		changes, err := reconcile.ComputeAllChanges(base, req.Cfg, req.WorkspaceHostPath, lastAppliedTemplates)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("diff: %v", err), http.StatusInternalServerError)
 			return
@@ -144,7 +147,15 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 			// live-applied fields onto old_cfg so pending teardown
 			// changes keep re-surfacing.
 			merged := mergeLiveApplied(base, req.Cfg, live)
-			if err := WriteStateCfg(req.ProjectID, merged); err != nil {
+			// Recompute the template-contents baseline from the merged
+			// cfg so it stays in lockstep with whatever templates that
+			// cfg now declares (including any just applied live).
+			mergedTemplates, err := render.RenderTemplatesByBasename(merged, req.WorkspaceHostPath)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("render templates: %v", err), http.StatusInternalServerError)
+				return
+			}
+			if err := WriteStateSnapshot(req.ProjectID, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}

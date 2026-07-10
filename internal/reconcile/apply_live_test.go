@@ -144,6 +144,30 @@ func TestApplyLive_MultipleEnvChanges_SingleBundlePipe(t *testing.T) {
 	assert.Equal(t, 1, countCalls(t, log, "exec -i"), "multiple env changes must still coalesce into a single bundle pipe")
 }
 
+// TestApplyLive_PathChange_PipesBundle_NoWorkspaceWrite is a regression
+// test for test_35 (e2e): a path-only change (no accompanying env
+// change) must still trigger the bundle rebuild + pipe, because
+// render.RenderEnv folds cfg.Path into the same .env's PATH= line —
+// there's no separate path-only artifact. Before this fix, ApplyLive's
+// switch had no case for KindPathChange, so a path-only reconcile
+// silently did nothing: the guest's /opt/devm/.env was never rewritten
+// and the next shell never saw the new PATH.
+func TestApplyLive_PathChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
+	dir := t.TempDir()
+	tr, log := fakeTartForApplyLive(t, dir)
+	cfg := schema.Config{Path: []string{"/workspace/bin"}}
+
+	err := ApplyLive(tr, "p-vm", []Change{
+		{Kind: KindPathChange, Old: "", New: "/workspace/bin"},
+	}, cfg, dir)
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(filepath.Join(dir, ".devm"))
+	require.True(t, os.IsNotExist(statErr),
+		"ApplyLive must NOT write .devm/ to the workspace; got: %v", statErr)
+	assert.Equal(t, 1, countCalls(t, log, "exec -i"), "path-only change must still pipe a bundle")
+}
+
 func TestApplyLive_NoEnvOrTemplateChange_DoesNotPipeBundle(t *testing.T) {
 	dir := t.TempDir()
 	tr, log := fakeTartForApplyLive(t, dir)

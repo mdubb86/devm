@@ -2,7 +2,6 @@ package reconcile
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -204,9 +203,12 @@ func ComputePortChanges(old, new schema.Config) []Change {
 // identity, templates, path. Within each section, service names are sorted
 // alphabetically for determinism.
 //
-// `repoRoot` is required by the templates diff which reads on-disk
-// installer scripts.
-func ComputeAllChanges(old, new schema.Config, repoRoot string) ([]Change, error) {
+// `repoRoot` is required by the templates diff to render the desired
+// installer scripts. `lastAppliedTemplates` is the last-applied baseline
+// (basename -> rendered content, from the daemon's persisted
+// StateSnapshot); pass nil when there is none (e.g. cold-start with no
+// prior snapshot), which surfaces every declared template as an add.
+func ComputeAllChanges(old, new schema.Config, repoRoot string, lastAppliedTemplates map[string]string) ([]Change, error) {
 	var out []Change
 	out = append(out, ComputePortChanges(old, new)...)
 	out = append(out, computeGlobalEnvChanges(old, new)...)
@@ -221,7 +223,7 @@ func ComputeAllChanges(old, new schema.Config, repoRoot string) ([]Change, error
 	out = append(out, computeIdentityChange(old, new)...)
 	out = append(out, computeDockerChange(old, new)...)
 	out = append(out, computePathChange(old, new)...)
-	tmplChanges, err := ComputeTemplateChanges(new, repoRoot)
+	tmplChanges, err := ComputeTemplateChanges(new, repoRoot, lastAppliedTemplates)
 	if err != nil {
 		return nil, err
 	}
@@ -467,14 +469,16 @@ func unionServiceNames(a, b map[string]schema.Service) []string {
 }
 
 // ComputeTemplateChanges diffs the installer scripts that would be
-// produced from `new` against those currently present on disk under
-// `.devm/templates/`. The on-disk scripts ARE the snapshot of last-applied
-// template state — we don't need a separate snapshot field.
+// produced from `new` against `lastApplied`, the rendered content of
+// each template as of the last successful apply (basename -> content),
+// sourced from the daemon's persisted StateSnapshot.TemplateContents.
+// Pass nil when there is no prior snapshot; every declared template
+// then surfaces as an add.
 //
-// Emits a Change per template that would differ from its on-disk
-// installer (including newly-added templates) and a Change per on-disk
-// installer that is no longer in the new config (removal).
-func ComputeTemplateChanges(new schema.Config, repoRoot string) ([]Change, error) {
+// Emits a Change per template that would differ from its last-applied
+// content (including newly-added templates) and a Change per
+// last-applied template that is no longer in the new config (removal).
+func ComputeTemplateChanges(new schema.Config, repoRoot string, lastApplied map[string]string) ([]Change, error) {
 	desired, err := render.RenderTemplates(new, repoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("compute templates: %w", err)
@@ -498,21 +502,9 @@ func ComputeTemplateChanges(new schema.Config, repoRoot string) ([]Change, error
 		}
 	}
 
-	templatesDir := filepath.Join(repoRoot, ".devm", "templates")
-	entries, err := os.ReadDir(templatesDir)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("compute templates: readdir: %w", err)
-	}
-	onDisk := map[string][]byte{}
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".sh" {
-			continue
-		}
-		b, rErr := os.ReadFile(filepath.Join(templatesDir, e.Name()))
-		if rErr != nil {
-			return nil, fmt.Errorf("compute templates: read %s: %w", e.Name(), rErr)
-		}
-		onDisk[e.Name()] = b
+	desiredBasenames := make(map[string]struct{}, len(desired))
+	for path := range desired {
+		desiredBasenames[filepath.Base(path)] = struct{}{}
 	}
 
 	var out []Change
@@ -520,7 +512,7 @@ func ComputeTemplateChanges(new schema.Config, repoRoot string) ([]Change, error
 	for path, content := range desired {
 		base := filepath.Base(path)
 		m := desiredMeta[base]
-		existing, ok := onDisk[base]
+		existing, ok := lastApplied[base]
 		if !ok {
 			out = append(out, Change{
 				Kind: KindTemplateChange, Service: m.Service, Detail: m.Output,
@@ -528,7 +520,7 @@ func ComputeTemplateChanges(new schema.Config, repoRoot string) ([]Change, error
 			})
 			continue
 		}
-		if string(existing) != content {
+		if existing != content {
 			out = append(out, Change{
 				Kind: KindTemplateChange, Service: m.Service, Detail: m.Output,
 				Old: "previous", New: "updated",
@@ -536,8 +528,8 @@ func ComputeTemplateChanges(new schema.Config, repoRoot string) ([]Change, error
 		}
 	}
 	// Removals.
-	for base := range onDisk {
-		if _, ok := desired[filepath.Join(templatesDir, base)]; ok {
+	for base := range lastApplied {
+		if _, ok := desiredBasenames[base]; ok {
 			continue
 		}
 		out = append(out, Change{
