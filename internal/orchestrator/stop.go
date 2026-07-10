@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 // Destructiveness selects between preserving the VM (stop) and
@@ -93,6 +94,18 @@ func RunStop(ctx context.Context, d StopDeps, projectID, sandboxName string, mod
 			}
 		} else {
 			fmt.Fprintf(d.Out, "Deleted VM %s.\n", sandboxName)
+		}
+
+		// Remove the daemon's last-applied-cfg snapshot now that the VM
+		// is gone. Without this, a recreated project with the same
+		// projectID inherits a stale baseline and reconcile diffs
+		// against the OLD vm's config instead of treating everything as
+		// new. Best-effort: log but don't fail the teardown over it —
+		// a stray snapshot only affects the first reconcile after
+		// recreation (degrades to the same "full diff" fallback used
+		// when no snapshot exists at all).
+		if err := serviceapi.RemoveStateCfg(projectID); err != nil {
+			fmt.Fprintf(d.Out, "warning: remove state snapshot for %s: %v\n", projectID, err)
 		}
 	} else {
 		fmt.Fprintf(d.Out, "Stopped VM %s. Disk preserved.\n", sandboxName)

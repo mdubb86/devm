@@ -15,6 +15,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestVMReconcile_NoSnapshotYet_TreatsAllAsFullDiff(t *testing.T) {
+	// Regression: without a baseline snapshot, ComputeAllChanges was
+	// diffing against schema.Config{} — every teardown-bucket kind
+	// spuriously surfaced as pending after a fresh cold-start. Fix
+	// seeds the snapshot at cold-start; this test locks that the
+	// reconcile handler now has a baseline available whenever the VM
+	// has ever been started.
+	t.Setenv("HOME", t.TempDir())
+	cfg := schema.Config{
+		Project:  schema.Project{ID: "p", VMName: "p-vm"},
+		Packages: []string{"jq"},
+	}
+	// Simulate what cold-start does: write snapshot.
+	require.NoError(t, WriteStateCfg("p", cfg))
+
+	// Reconcile against unchanged cfg → nothing to do.
+	req := VMReconcileRequest{ProjectID: "p", VMName: "p-vm", Cfg: cfg}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"})
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Empty(t, resp.Applied)
+	assert.Empty(t, resp.TeardownRequired,
+		"unchanged cfg against seeded snapshot must produce zero pending changes")
+}
+
 func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

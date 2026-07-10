@@ -240,6 +240,20 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	}
 	debuglog.Logf("shell", "cold-start: snapshot written")
 
+	// Seed the daemon-side state snapshot too, now that cold-start is
+	// fully green (provisioning AND egress enforcement, which runs as
+	// a step inside prov.Run, both succeeded). Without this, the first
+	// `devm reconcile` after `devm start` finds no baseline, diffs
+	// against schema.Config{}, and every teardown-bucket kind
+	// spuriously surfaces as pending — prompting the user to tear down
+	// the VM they just started. Best-effort: log but don't fail here —
+	// a missing snapshot only degrades to "full diff on next
+	// reconcile" (safe), and failing here would kill a cold start that
+	// otherwise succeeded.
+	if err := serviceapi.WriteStateCfg(cfg.Project.ID, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.ID, err)
+	}
+
 	reporter.Step("ready", false)
 	reporter.Stop()
 	reporter.Clear()

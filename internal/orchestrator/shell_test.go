@@ -184,6 +184,15 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	admin.mu.Lock()
 	assert.Equal(t, 1, admin.startCalled, "StartVM must be called exactly once on cold start")
 	admin.mu.Unlock()
+
+	// Regression: the daemon-side state snapshot must be seeded at the
+	// end of a fully-green cold start, so the first `devm reconcile`
+	// has a baseline instead of diffing against schema.Config{} (which
+	// spuriously surfaces every teardown-bucket kind as pending).
+	got, err := serviceapi.ReadStateCfg(minimalCfg().Project.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "cold start must seed the daemon state snapshot")
+	assert.Equal(t, minimalCfg().Project.VMName, got.Project.VMName)
 }
 
 // TestRunShellColdPath_PostInstallFail_KeepsVM verifies that a

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -132,6 +134,37 @@ func TestRunStopDaemonFailContinuesForTeardown(t *testing.T) {
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, 1, admin.stopCalled, "daemon stop must still be attempted")
 	assert.Contains(t, out.String(), "Deleted VM proj-sbx", "disk delete must still run")
+}
+
+func TestRunStopDestroy_RemovesStateSnapshot(t *testing.T) {
+	// Regression: RemoveStateCfg was exported but had zero production
+	// callers, so a stale daemon-side snapshot survived teardown and
+	// leaked into a subsequently recreated project. Teardown must wipe
+	// it so the next cold-start (or reconcile) starts from a clean
+	// baseline.
+	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, serviceapi.WriteStateCfg("proj-123", schema.Config{
+		Project: schema.Project{ID: "proj-123", VMName: "proj-sbx"},
+	}))
+
+	repoRoot := t.TempDir()
+	admin := &fakeStopClient{}
+	tr := fakeTartBin(t, repoRoot)
+	out := &bytes.Buffer{}
+
+	deps := StopDeps{
+		Tart:             tr,
+		ServiceAPIClient: admin,
+		In:               strings.NewReader("y\n"),
+		Out:              out,
+	}
+	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopDestroy, false)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	got, err := serviceapi.ReadStateCfg("proj-123")
+	require.NoError(t, err)
+	assert.Nil(t, got, "state snapshot must be removed after teardown")
 }
 
 func TestRunStopPromptText(t *testing.T) {
