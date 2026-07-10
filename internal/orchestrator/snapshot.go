@@ -15,6 +15,10 @@ import (
 // regardless of the guest user's login name.
 const SnapshotFilename = ".devm/applied.yaml"
 
+// snapshotHeader is prepended to every written snapshot so the file
+// is self-identifying for humans grepping the VM.
+const snapshotHeader = "# devm snapshot — last-applied schema.Config\n"
+
 // ReadSnapshot returns the snapshot's contents. If the file does not
 // exist, returns ("", nil) — the absence of a snapshot is a valid state
 // (first reconcile after a cold start that somehow didn't write).

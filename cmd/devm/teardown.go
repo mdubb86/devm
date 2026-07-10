@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"time"
 
 	"github.com/mdubb86/devm/internal/config"
@@ -49,7 +48,6 @@ definition under .devm/ is not touched; devm shell will rebuild from scratch.`,
 		deps := orchestrator.StopDeps{
 			Tart:             tart.New(),
 			ServiceAPIClient: c,
-			LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
 		}
 		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.ID, cfg.Project.VMName, orchestrator.StopDestroy, teardownYes)
 		if err != nil {

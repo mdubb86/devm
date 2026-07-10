@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -35,7 +34,6 @@ func (f *fakeStopClient) StopVM(_ context.Context, projectID, vmName string) err
 // ---------- RunStop tests ----------
 
 func TestRunStopPreserve_CallsStopVM(t *testing.T) {
-	repoRoot := t.TempDir()
 	admin := &fakeStopClient{}
 	in := strings.NewReader("y\n")
 	out := &bytes.Buffer{}
@@ -43,7 +41,6 @@ func TestRunStopPreserve_CallsStopVM(t *testing.T) {
 	deps := StopDeps{
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
-		LockPath:         filepath.Join(repoRoot, ".devm/lock"),
 		In:               in,
 		Out:              out,
 	}
@@ -67,7 +64,6 @@ func TestRunStopDestroy_CallsStopVMThenDeletesDisk(t *testing.T) {
 	deps := StopDeps{
 		Tart:             tr,
 		ServiceAPIClient: admin,
-		LockPath:         filepath.Join(repoRoot, ".devm/lock"),
 		In:               in,
 		Out:              out,
 	}
@@ -79,7 +75,6 @@ func TestRunStopDestroy_CallsStopVMThenDeletesDisk(t *testing.T) {
 }
 
 func TestRunStopRefusalWithNo(t *testing.T) {
-	repoRoot := t.TempDir()
 	admin := &fakeStopClient{}
 	in := strings.NewReader("n\n")
 	out := &bytes.Buffer{}
@@ -87,7 +82,6 @@ func TestRunStopRefusalWithNo(t *testing.T) {
 	deps := StopDeps{
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
-		LockPath:         filepath.Join(repoRoot, ".devm/lock"),
 		In:               in,
 		Out:              out,
 	}
@@ -100,7 +94,6 @@ func TestRunStopRefusalWithNo(t *testing.T) {
 }
 
 func TestRunStopAutoApproveSkipsPrompt(t *testing.T) {
-	repoRoot := t.TempDir()
 	admin := &fakeStopClient{}
 	in := strings.NewReader("") // nothing to read
 	out := &bytes.Buffer{}
@@ -108,7 +101,6 @@ func TestRunStopAutoApproveSkipsPrompt(t *testing.T) {
 	deps := StopDeps{
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
-		LockPath:         filepath.Join(repoRoot, ".devm/lock"),
 		In:               in,
 		Out:              out,
 	}
@@ -133,7 +125,6 @@ func TestRunStopDaemonFailContinuesForTeardown(t *testing.T) {
 	deps := StopDeps{
 		Tart:             tr,
 		ServiceAPIClient: admin,
-		LockPath:         filepath.Join(repoRoot, ".devm/lock"),
 		Out:              out,
 	}
 	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopDestroy, true)
@@ -151,7 +142,6 @@ func TestRunStopPromptText(t *testing.T) {
 	deps := StopDeps{
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
-		LockPath:         filepath.Join(t.TempDir(), ".devm/lock"),
 		In:               inStop,
 		Out:              outStop,
 	}
@@ -165,7 +155,6 @@ func TestRunStopPromptText(t *testing.T) {
 	deps2 := StopDeps{
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: &fakeStopClient{},
-		LockPath:         filepath.Join(t.TempDir(), ".devm/lock"),
 		In:               inTear,
 		Out:              outTear,
 	}

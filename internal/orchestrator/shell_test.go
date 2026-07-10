@@ -128,7 +128,6 @@ func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
-		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
 	}
 	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
 	require.NoError(t, err)
@@ -169,7 +168,6 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
-		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
 	}
 
 	// Point caStorageDir at our temp dir by overriding HOME.
@@ -211,7 +209,6 @@ func TestRunShellColdPath_PostInstallFail_KeepsVM(t *testing.T) {
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
-		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
 	}
 	t.Setenv("HOME", repoRoot)
 	caPath := filepath.Join(repoRoot, "Library", "Application Support", "devm", "ca")
@@ -250,7 +247,6 @@ func TestRunShellColdPath_ProvisionFail_TearsDownVM(t *testing.T) {
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
-		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
 	}
 	t.Setenv("HOME", repoRoot)
 	caPath := filepath.Join(repoRoot, "Library", "Application Support", "devm", "ca")
@@ -284,7 +280,6 @@ func TestRunShellWarmPath_VMStatusError(t *testing.T) {
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
 		UserSpawner:      &stubSpawner{},
-		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
 	}
 	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
 	require.Error(t, err)
@@ -304,7 +299,6 @@ func TestRunShellColdPath_StartVMError(t *testing.T) {
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
 		UserSpawner:      &stubSpawner{},
-		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
 	}
 	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
 	require.Error(t, err)

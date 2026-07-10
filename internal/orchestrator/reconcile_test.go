@@ -1,16 +1,17 @@
 package orchestrator
 
 import (
+	"context"
 	"os"
-	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
 func reconcileMinimalCfg() schema.Config {
@@ -19,193 +20,133 @@ func reconcileMinimalCfg() schema.Config {
 	}
 }
 
-// makeFakeTart writes a fake tart binary that:
-//   - `list --format json` → emits listJSON (passed as a file to avoid quoting issues)
-//   - `exec <vmName> cat <path>` → emits snapOut (passed as a file)
-//   - all other exec calls → exits 0 (snapshot writes, probes, dispatch)
-func makeFakeTart(t *testing.T, dir, listJSON, snapOut string) *tart.Tart {
+// nopApply is a stand-in for serviceapi.ApplyLiver that records nothing
+// and always succeeds — the fake daemon in these tests never actually
+// needs to shell into a VM since the live changes under test (env)
+// don't require verifying guest-side effects.
+type nopApply struct{}
+
+func (nopApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string) error {
+	return nil
+}
+
+// startReconcileDaemon spins up a real serviceapi.Server with the
+// /vm/reconcile handler registered on a temp Unix socket, and points
+// HOME at a temp dir so serviceapi.SocketPath() (and therefore
+// serviceapi.NewClient(), which RunReconcile calls internally) resolves
+// to it. Returns a cleanup func.
+func startReconcileDaemon(t *testing.T) func() {
 	t.Helper()
-	bin := filepath.Join(dir, "fake-tart")
-	listFile := filepath.Join(dir, "list.json")
-	snapFile := filepath.Join(dir, "snap.yaml")
+	// Unix domain socket paths are capped at ~104 bytes on macOS/BSD;
+	// t.TempDir() nests under /var/folders/.../T/<TestName>/001, which
+	// blows that budget once "Library/Application Support/devm/devm.sock"
+	// is appended. Use a short /tmp-rooted HOME instead (same trick as
+	// serviceapi's own socket-based tests).
+	home, err := os.MkdirTemp("/tmp", "devm-home-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(home) })
+	t.Setenv("HOME", home)
 
-	require.NoError(t, os.WriteFile(listFile, []byte(listJSON), 0o644))
-	require.NoError(t, os.WriteFile(snapFile, []byte(snapOut), 0o644))
+	_, err = serviceapi.EnsureRuntimeDir()
+	require.NoError(t, err)
+	socket := serviceapi.SocketPath()
 
-	// ReadSnapshot now runs `bash -c "cat ..."` so dispatch on $3==bash
-	// and check $5 (the script body) to distinguish snapshot reads
-	// (cat*) from other bash calls (write, probe — all exit 0 here).
-	script := "#!/bin/sh\n" +
-		"case \"$1\" in\n" +
-		"  list)\n" +
-		"    cat '" + listFile + "'\n" +
-		"    ;;\n" +
-		"  exec)\n" +
-		"    case \"$3\" in\n" +
-		"      bash)\n" +
-		"        case \"$5\" in\n" +
-		"          cat*)\n" +
-		"            cat '" + snapFile + "'\n" +
-		"            ;;\n" +
-		"          *)\n" +
-		"            exit 0\n" +
-		"            ;;\n" +
-		"        esac\n" +
-		"        ;;\n" +
-		"      *)\n" +
-		"        exit 0\n" +
-		"        ;;\n" +
-		"    esac\n" +
-		"    ;;\n" +
-		"  *)\n" +
-		"    exit 0\n" +
-		"    ;;\n" +
-		"esac\n"
-	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
+	serviceapi.RegisterReconcileHandler(srv, serviceapi.NewProjectLocks(), nopApply{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, socket)
+
+	return func() { cancel(); <-errCh }
+}
+
+// fakeTartForSessions returns a *tart.Tart whose `exec` calls always
+// exit non-zero, so probeSessions (called only on the teardown-required
+// path) resolves to nil sessions without shelling out for real.
+func fakeTartForSessions(t *testing.T) *tart.Tart {
+	t.Helper()
 	tr := tart.New()
-	tr.Path = bin
+	tr.Path = "false"
 	return tr
 }
 
-func runningVMListJSON(vmName string) string {
-	return `[{"Name":"` + vmName + `","State":"running"}]`
-}
+func TestRunReconcile_LiveChangeApplies(t *testing.T) {
+	cleanup := startReconcileDaemon(t)
+	defer cleanup()
 
-func absentVMListJSON() string { return `[]` }
-
-func TestRunReconcileInner_NothingToDo(t *testing.T) {
-	cfg := reconcileMinimalCfg()
-	snapYAML, _ := yaml.Marshal(cfg)
-	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x"), string(snapYAML))
-	res, err := RunReconcileInner(cfg, tr, "x", "/tmp/fake-repo-root")
-	assert.NoError(t, err)
-	assert.Empty(t, res.Applied)
-	assert.Empty(t, res.RecreateRequired)
-	assert.Equal(t, "nothing_to_do", res.NextAction)
-}
-
-func TestRunReconcileInner_LivePortAdd(t *testing.T) {
-	snapCfg := reconcileMinimalCfg()
-	snapYAML, _ := yaml.Marshal(snapCfg)
-	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x"), string(snapYAML))
+	oldCfg := reconcileMinimalCfg()
+	oldCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "old"}}
+	require.NoError(t, serviceapi.WriteStateCfg("x", oldCfg))
 
 	newCfg := reconcileMinimalCfg()
-	newCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
 
-	res, err := RunReconcileInner(newCfg, tr, "x", "/tmp/fake-repo-root")
-	assert.NoError(t, err)
-	assert.Len(t, res.Applied, 1)
-	assert.Equal(t, reconcile.KindPortAdd, res.Applied[0].Kind)
-	assert.Empty(t, res.RecreateRequired)
+	rc, res, err := RunReconcile(newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
 	assert.Equal(t, "applied", res.NextAction)
+	require.Len(t, res.Applied, 1)
+	assert.Equal(t, reconcile.KindEnvChange, res.Applied[0].Kind)
+	assert.Empty(t, res.RecreateRequired)
 }
 
-func TestRunReconcileInner_RecreateRequired(t *testing.T) {
-	snapCfg := reconcileMinimalCfg()
-	snapCfg.Install = []string{"old-install"}
-	snapYAML, _ := yaml.Marshal(snapCfg)
-	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x"), string(snapYAML))
-
-	newCfg := reconcileMinimalCfg()
-	newCfg.Install = []string{"new-install"}
-
-	res, err := RunReconcileInner(newCfg, tr, "x", "/tmp/fake-repo-root")
-	assert.NoError(t, err)
-	assert.Empty(t, res.Applied)
-	assert.Len(t, res.RecreateRequired, 1)
-	assert.Equal(t, reconcile.FlavorTeardownShell, res.Flavor)
-	assert.Equal(t, "needs_approval", res.NextAction)
-}
-
-func TestRunReconcileInner_EmptySnapshotIsIdentityWithNew(t *testing.T) {
-	// No snapshot in VM → treat as same as new (no changes detected;
-	// snapshot will be written at the end so future reconciles diff).
-	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x"), "")
+func TestRunReconcile_IdenticalBaseline_NothingToDo(t *testing.T) {
+	cleanup := startReconcileDaemon(t)
+	defer cleanup()
 
 	cfg := reconcileMinimalCfg()
-	cfg.Services = map[string]schema.Service{"api": {Port: 8080}}
+	require.NoError(t, serviceapi.WriteStateCfg("x", cfg))
 
-	res, err := RunReconcileInner(cfg, tr, "x", "/tmp/fake-repo-root")
-	assert.NoError(t, err)
+	rc, res, err := RunReconcile(cfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	assert.Equal(t, "nothing_to_do", res.NextAction)
 	assert.Empty(t, res.Applied)
 	assert.Empty(t, res.RecreateRequired)
-	assert.Equal(t, "nothing_to_do", res.NextAction)
 }
 
-func TestRunReconcileInner_LiveOnly_WritesSnapshot(t *testing.T) {
-	snapCfg := reconcileMinimalCfg()
-	snapYAML, _ := yaml.Marshal(snapCfg)
-	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x"), string(snapYAML))
+func TestRunReconcile_TeardownRequired_ClassifiesFlavorAndSessions(t *testing.T) {
+	cleanup := startReconcileDaemon(t)
+	defer cleanup()
+
+	oldCfg := reconcileMinimalCfg()
+	oldCfg.Packages = []string{"jq"}
+	require.NoError(t, serviceapi.WriteStateCfg("x", oldCfg))
 
 	newCfg := reconcileMinimalCfg()
-	newCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
+	newCfg.Packages = []string{"jq", "yq"}
 
-	_, err := RunReconcileInner(newCfg, tr, "x", "/tmp/fake-repo-root")
-	assert.NoError(t, err)
-}
-
-func TestRunReconcileInner_RecreatePending_DoesNotError(t *testing.T) {
-	snapCfg := reconcileMinimalCfg()
-	snapCfg.Install = []string{"old"}
-	snapYAML, _ := yaml.Marshal(snapCfg)
-	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x"), string(snapYAML))
-
-	newCfg := reconcileMinimalCfg()
-	newCfg.Install = []string{"new"}
-
-	res, err := RunReconcileInner(newCfg, tr, "x", "/tmp/fake-repo-root")
-	assert.NoError(t, err)
+	rc, res, err := RunReconcile(newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
 	assert.Equal(t, "needs_approval", res.NextAction)
+	require.Len(t, res.RecreateRequired, 1)
+	assert.Equal(t, reconcile.KindPackagesChange, res.RecreateRequired[0].Kind)
+	assert.Equal(t, reconcile.FlavorTeardownShell, res.Flavor)
+	assert.Empty(t, res.Applied)
+	// probeSessions is best-effort against a fake tart that always
+	// exits non-zero — nil, not an error.
+	assert.Nil(t, res.Sessions)
 }
 
-// ---------------------------------------------------------------------------
-// RunReconcile (outer state machine) tests.
-// ---------------------------------------------------------------------------
+func TestRunReconcile_DaemonUnreachable_ReturnsError(t *testing.T) {
+	// HOME points at a fresh tmpdir with no daemon listening — the
+	// client's request must fail cleanly rather than hang or panic.
+	t.Setenv("HOME", t.TempDir())
 
-func TestRunReconcile_StoppedSandboxRendersAndExits0(t *testing.T) {
-	t.Skip("rewritten in Task 7: RunReconcile no longer pre-renders .devm/.env on the host (Task 4 removed the WriteDevmDirStaticOnly call); reconcile's whole render/apply path moves into the daemon in Tasks 5-7")
-	tr := makeFakeTart(t, t.TempDir(), absentVMListJSON(), "")
 	cfg := reconcileMinimalCfg()
-	opts := ReconcileOptions{}
-	repoRoot := t.TempDir()
-	rc, res, err := RunReconcile(cfg, tr, repoRoot, opts)
-	assert.NoError(t, err)
-	assert.Equal(t, 0, rc)
-	assert.Equal(t, "nothing_to_do", res.NextAction)
-	// .devm/.env should exist after the render step.
-	_, statErr := os.Stat(filepath.Join(repoRoot, ".devm", ".env"))
-	assert.NoError(t, statErr, ".devm/.env must be written even when sandbox is absent")
-}
-
-func TestRunReconcile_NonTTYRecreateExits2(t *testing.T) {
-	// Snapshot has install A; new cfg has install B → recreate required.
-	// Non-TTY, no --yes → exit code 2, NextAction needs_approval.
-	snapCfg := reconcileMinimalCfg()
-	snapCfg.Install = []string{"old"}
-	snapYAML, _ := yaml.Marshal(snapCfg)
-	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x-vm"), string(snapYAML))
-	newCfg := reconcileMinimalCfg()
-	newCfg.Project.VMName = "x-vm"
-	newCfg.Install = []string{"new"}
-	opts := ReconcileOptions{NonInteractive: true}
-	rc, res, err := RunReconcile(newCfg, tr, t.TempDir(), opts)
-	assert.NoError(t, err)
-	assert.Equal(t, 2, rc)
-	assert.Equal(t, "needs_approval", res.NextAction)
-}
-
-func TestRunReconcile_DryRunDoesNotApply(t *testing.T) {
-	snapCfg := reconcileMinimalCfg()
-	snapCfg.Project.VMName = "x-vm"
-	snapYAML, _ := yaml.Marshal(snapCfg)
-	tr := makeFakeTart(t, t.TempDir(), runningVMListJSON("x-vm"), string(snapYAML))
-	newCfg := reconcileMinimalCfg()
-	newCfg.Project.VMName = "x-vm"
-	newCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
-	opts := ReconcileOptions{DryRun: true}
-	rc, res, err := RunReconcile(newCfg, tr, t.TempDir(), opts)
-	assert.NoError(t, err)
-	assert.Equal(t, 0, rc)
-	assert.Len(t, res.Applied, 1, "diff should still be computed for dry-run")
-	assert.Equal(t, reconcile.KindPortAdd, res.Applied[0].Kind)
+	rc, res, err := RunReconcile(cfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	require.Error(t, err)
+	assert.Equal(t, -1, rc)
+	assert.Equal(t, ReconcileResult{}, res)
 }

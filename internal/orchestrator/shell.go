@@ -12,7 +12,6 @@ import (
 	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
-	"github.com/mdubb86/devm/internal/lock"
 	"github.com/mdubb86/devm/internal/provision"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -74,7 +73,6 @@ func resolveSecretBindings(cfg schema.Config, backend secret.Backend) ([]service
 type ShellDeps struct {
 	Tart             *tart.Tart
 	ServiceAPIClient VMAdminClient
-	LockPath         string
 	// UserSpawner runs the interactive shell command. Production code
 	// uses ExecSpawner; tests use a stub.
 	UserSpawner Spawner
@@ -95,7 +93,6 @@ func DefaultShellDeps(repoRoot string) ShellDeps {
 		Tart:             tart.New(),
 		ServiceAPIClient: serviceapi.NewClient(),
 		UserSpawner:      &ExecSpawner{Interactive: true},
-		LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
 	}
 }
 
@@ -106,17 +103,6 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	defer reporter.Stop()
 	reporter.Start("starting up")
 
-	lk, err := lock.Acquire(d.LockPath)
-	if err != nil {
-		return -1, fmt.Errorf("acquire lock: %w", err)
-	}
-	released := false
-	defer func() {
-		if !released {
-			_ = lk.Release()
-		}
-	}()
-
 	// Check VM state via daemon admin.
 	vmStatus, err := d.ServiceAPIClient.VMStatus(ctx, cfg.Project.ID, vmName)
 	if err != nil {
@@ -126,12 +112,10 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 
 	if vmStatus.Running {
 		// Warm attach: VM is already up. Auto-apply LIVE changes before
-		// attaching. We already hold the lock, so use the lock-less inner.
+		// attaching.
 		reporter.Step("attaching to running vm", false)
 		// Warm attach: reconcile is handled by the provisioner on cold start.
 		// For now the warm path just attaches directly.
-		_ = lk.Release()
-		released = true
 		reporter.Step("ready", false)
 		reporter.Stop()
 		reporter.Clear()
@@ -259,9 +243,6 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	reporter.Step("ready", false)
 	reporter.Stop()
 	reporter.Clear()
-
-	_ = lk.Release()
-	released = true
 
 	return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
 }

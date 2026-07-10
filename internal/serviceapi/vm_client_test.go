@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -229,6 +230,90 @@ func TestVMStart_MethodNotAllowed(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+}
+
+// TestClientReconcile_RoundTrip verifies Client.Reconcile against a
+// real daemon socket: a live-bucket env change round-trips through
+// POST /vm/reconcile and comes back classified as Applied, with
+// TeardownRequired empty.
+func TestClientReconcile_RoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	oldCfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateCfg("p", oldCfg))
+	newCfg := oldCfg
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+
+	srv := NewServer(socket, Build{Version: "test-version"})
+	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-errCh })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, socket)
+
+	c := NewClientWithSocket(socket)
+	rctx, rcancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer rcancel()
+
+	resp, err := c.Reconcile(rctx, VMReconcileRequest{
+		ProjectID: "p", VMName: "p-vm", Cfg: newCfg, WorkspaceHostPath: "/tmp/repo",
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Applied, 1)
+	assert.Equal(t, "new", resp.Applied[0].New)
+	assert.Empty(t, resp.TeardownRequired)
+}
+
+// TestClientReconcile_MissingFields verifies /vm/reconcile rejects a
+// request lacking project_id/vm_name, and that the error surfaces the
+// endpoint name for easy grepping.
+func TestClientReconcile_MissingFields(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+
+	srv := NewServer(socket, Build{})
+	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-errCh })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, statErr := os.Stat(socket); statErr == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, socket)
+
+	c := NewClientWithSocket(socket)
+	_, err = c.Reconcile(context.Background(), VMReconcileRequest{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "vm/reconcile")
 }
 
 // TestVMStop_MethodNotAllowed verifies that non-POST requests to

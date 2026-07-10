@@ -3,283 +3,67 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 
-	"github.com/mdubb86/devm/internal/lock"
 	"github.com/mdubb86/devm/internal/reconcile"
-	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
-	"gopkg.in/yaml.v3"
 )
 
-// snapshotHeader is prepended to every written snapshot so the file
-// is self-identifying for humans grepping the VM.
-const snapshotHeader = "# devm snapshot — last-applied schema.Config\n"
+// ReconcileOptions controls RunReconcile's behaviour. Placeholder for
+// future CLI-facing switches — approval / non-interactive / JSON
+// decisions for a pending teardown now live in cmd/devm/reconcile.go:
+// RunReconcile itself never prompts and never executes a recreate.
+type ReconcileOptions struct{}
 
-// vmIsRunning returns true when the named VM appears in tart list with
-// Running=true.
-func vmIsRunning(tr *tart.Tart, vmName string) bool {
-	vms, err := tr.List(context.Background())
-	if err != nil {
-		return false
-	}
-	for _, vm := range vms {
-		if vm.Name == vmName {
-			return vm.Running
-		}
-	}
-	return false
-}
-
-// RunReconcileInner is the lock-less inner of the reconcile state
-// machine. The caller MUST already hold .devm/lock and MUST have
-// confirmed the VM is running. This function reads the in-VM snapshot
-// (last-applied schema.Config), diffs the new cfg against it, applies
-// all BucketLive changes via ApplyLive, and reports what remains
-// (recreate-required) without prompting or executing recreate.
+// RunReconcile POSTs cfg to the daemon's /vm/reconcile endpoint, which
+// diffs it against the project's last-applied snapshot, applies every
+// live-bucket change in place, and reports back what still needs a VM
+// recreate (teardown_required). All diff/apply logic — and the
+// .devm/lock serialization that used to guard it CLI-side — now lives
+// daemon-side (internal/serviceapi/reconcile.go), keyed per-project via
+// ProjectLocks.
 //
-// Snapshot semantics:
-//   - Empty snapshot → no prior apply. Treat as identical to new cfg
-//     (no diff detected; write fresh snapshot at the end so future
-//     reconciles have a baseline to diff against).
-//   - Non-empty snapshot → parse as schema.Config; structural diff.
-//   - On full success (no recreate-required), write new snapshot.
-//   - On partial success (recreate pending), leave old snapshot in
-//     place so subsequent reconciles re-detect everything. Live
-//     changes are idempotent so re-applying is harmless.
-func RunReconcileInner(cfg schema.Config, tr *tart.Tart, vmName, repoRoot string) (ReconcileResult, error) {
-	res := ReconcileResult{
-		Rendered:     true,
-		SandboxState: "running",
-	}
-
-	snapStr, err := ReadSnapshot(tr, vmName)
-	if err != nil {
-		return res, fmt.Errorf("read snapshot: %w", err)
-	}
-
-	var snapCfg schema.Config
-	if snapStr == "" {
-		// No baseline — treat as identical to current (zero diff).
-		snapCfg = cfg
-	} else {
-		if err := yaml.Unmarshal([]byte(snapStr), &snapCfg); err != nil {
-			return res, fmt.Errorf("parse snapshot: %w", err)
-		}
-	}
-
-	changes, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot)
-	if err != nil {
-		return res, fmt.Errorf("compute changes: %w", err)
-	}
-	for _, c := range changes {
-		if c.Bucket() == reconcile.BucketLive {
-			res.Applied = append(res.Applied, c)
-		} else {
-			res.RecreateRequired = append(res.RecreateRequired, c)
-		}
-	}
-	res.Flavor = reconcile.RecreateFlavor(changes)
-
-	if len(res.Applied) > 0 {
-		if err := reconcile.ApplyLive(tr, vmName, res.Applied, cfg, repoRoot); err != nil {
-			return res, fmt.Errorf("apply live: %w", err)
-		}
-	}
-
-	if len(res.RecreateRequired) > 0 {
-		res.NextAction = "needs_approval"
-		// Surface sessions so the caller can show them in the prompt
-		// / JSON output. Best-effort; failure here is non-fatal.
-		res.Sessions = probeSessions(tr, vmName)
-		return res, nil
-	}
-
-	// Full success — write snapshot.
-	newSnap, err := yaml.Marshal(cfg)
-	if err != nil {
-		return res, fmt.Errorf("marshal new snapshot: %w", err)
-	}
-	if err := WriteSnapshot(tr, vmName, snapshotHeader+string(newSnap)); err != nil {
-		return res, fmt.Errorf("write snapshot: %w", err)
-	}
-
-	if len(res.Applied) > 0 {
-		res.NextAction = "applied"
-	} else {
-		res.NextAction = "nothing_to_do"
-	}
-	return res, nil
-}
-
-// ReconcileOptions controls the outer state machine behaviour.
-type ReconcileOptions struct {
-	DryRun         bool
-	Yes            bool
-	NonInteractive bool      // true when stdin is not a TTY (set by CLI)
-	JSON           bool      // affects only CLI output formatting; outer doesn't print directly
-	Stdout         io.Writer // optional; defaults to os.Stdout for interactive prompt
-	Stdin          io.Reader // optional; defaults to os.Stdin for prompt response
-}
-
-// RunReconcile is the lock-acquiring outer of the reconcile state
-// machine. Always renders .devm/ first so file-only consumers see the
-// latest output; if the VM is running, runs the diff/apply state
-// machine; handles --dry-run, --yes, and non-TTY contexts; executes
-// recreate (without relaunching a shell) on approval.
+// RunReconcile does not prompt or execute a recreate itself: it
+// returns the daemon's classification and lets cmd/devm/reconcile.go
+// decide whether to prompt, and to run the teardown + start helpers
+// `devm teardown` / `devm shell` already use, on approval.
 //
-// Locking discipline: this function acquires .devm/lock for the
-// diff/apply phase and RELEASES it before invoking RunStop (which
-// acquires its own lock). The user runs `devm shell` themselves to
-// re-enter; we do not relaunch.
-//
-// Exit codes:
-//
-//	 0  — clean (applied / nothing_to_do)
-//	 1  — user refused at prompt
-//	 2  — non-TTY context with recreate-required pending (no --yes)
-//	-1  — operational error (lock fail, render fail, RunStop fail)
+// Return codes: 0 on success (regardless of whether a recreate is
+// pending — the caller inspects res.RecreateRequired), -1 when the
+// daemon call itself failed.
 func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts ReconcileOptions) (int, ReconcileResult, error) {
-	vmName := cfg.Project.VMName
-	res := ReconcileResult{}
-
-	// 1. Bundle install now happens inside the daemon's provisioner step
-	// (installDevmBundle); reconcile no longer pre-renders .devm/ on the
-	// host. Tasks 5-7 move the rest of this flow into the daemon.
-	res.Rendered = true
-
-	// 2. Acquire lock.
-	lockPath := filepath.Join(repoRoot, ".devm", "lock")
-	lk, err := lock.Acquire(lockPath)
+	client := serviceapi.NewClient()
+	resp, err := client.Reconcile(context.Background(), serviceapi.VMReconcileRequest{
+		ProjectID:         cfg.Project.ID,
+		VMName:            cfg.Project.VMName,
+		Cfg:               cfg,
+		WorkspaceHostPath: repoRoot,
+	})
 	if err != nil {
-		return -1, res, fmt.Errorf("acquire lock: %w", err)
+		return -1, ReconcileResult{}, fmt.Errorf("reconcile: %w", err)
 	}
-	released := false
-	releaseLock := func() {
-		if !released {
-			_ = lk.Release()
-			released = true
-		}
-	}
-	defer releaseLock()
 
-	// 3. VM state check.
-	if !vmIsRunning(tr, vmName) {
-		// VM stopped: write the full .devm/ (including template
-		// installers) so the next `devm shell` cold start picks up
-		// everything. No diff or apply needed.
-		if err := render.WriteTemplateInstallers(cfg, repoRoot); err != nil {
-			return -1, res, fmt.Errorf("render template installers: %w", err)
-		}
-		res.SandboxState = "stopped"
-		res.NextAction = "nothing_to_do"
-		return 0, res, nil
+	res := ReconcileResult{
+		Rendered:         true,
+		SandboxState:     "running",
+		Applied:          resp.Applied,
+		RecreateRequired: resp.TeardownRequired,
 	}
-	res.SandboxState = "running"
 
-	// 4. Dry-run branch: compute diff without applying or writing snapshot.
-	if opts.DryRun {
-		snapStr, err := ReadSnapshot(tr, vmName)
-		if err != nil {
-			return -1, res, fmt.Errorf("read snapshot: %w", err)
-		}
-		var snapCfg schema.Config
-		if snapStr == "" {
-			snapCfg = cfg
-		} else {
-			if err := yaml.Unmarshal([]byte(snapStr), &snapCfg); err != nil {
-				return -1, res, fmt.Errorf("parse snapshot: %w", err)
-			}
-		}
-		changes, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot)
-		if err != nil {
-			return -1, res, fmt.Errorf("compute changes: %w", err)
-		}
-		for _, c := range changes {
-			if c.Bucket() == reconcile.BucketLive {
-				res.Applied = append(res.Applied, c)
-			} else {
-				res.RecreateRequired = append(res.RecreateRequired, c)
-			}
-		}
-		res.Flavor = reconcile.RecreateFlavor(changes)
-		switch {
-		case len(res.RecreateRequired) > 0:
-			res.NextAction = "needs_approval"
-		case len(res.Applied) > 0:
+	if len(res.RecreateRequired) == 0 {
+		if len(res.Applied) > 0 {
 			res.NextAction = "applied"
-		default:
+		} else {
 			res.NextAction = "nothing_to_do"
 		}
 		return 0, res, nil
 	}
 
-	// 5. Real apply via Inner.
-	inner, err := RunReconcileInner(cfg, tr, vmName, repoRoot)
-	if err != nil {
-		// Surface whatever partial state Inner gathered.
-		res.Applied = inner.Applied
-		res.RecreateRequired = inner.RecreateRequired
-		res.Flavor = inner.Flavor
-		res.Sessions = inner.Sessions
-		res.NextAction = inner.NextAction
-		return -1, res, err
-	}
-	res.Applied = inner.Applied
-	res.RecreateRequired = inner.RecreateRequired
-	res.Flavor = inner.Flavor
-	res.Sessions = inner.Sessions
-	res.NextAction = inner.NextAction
-
-	// 6. No recreate? Done.
-	if len(res.RecreateRequired) == 0 {
-		return 0, res, nil
-	}
-
-	// 7. Recreate-required path: handle approval.
-	if !opts.Yes {
-		if opts.NonInteractive {
-			return 2, res, nil
-		}
-		// Interactive prompt.
-		stdout := opts.Stdout
-		if stdout == nil {
-			stdout = os.Stdout
-		}
-		stdin := opts.Stdin
-		if stdin == nil {
-			stdin = os.Stdin
-		}
-		fmt.Fprint(stdout, FormatReconcileText(res))
-		fmt.Fprint(stdout, "[y/N]: ")
-		var resp string
-		_, _ = fmt.Fscanln(stdin, &resp)
-		if resp != "y" && resp != "Y" {
-			res.NextAction = "user_refused"
-			return 1, res, nil
-		}
-	}
-
-	// 8. Execute recreate. Release our lock first so RunStop can acquire.
-	releaseLock()
-
-	stopDeps := StopDeps{
-		Tart:             tr,
-		ServiceAPIClient: serviceapi.NewClient(),
-		LockPath:         lockPath,
-	}
-	mode := StopPreserve
-	if res.Flavor == reconcile.FlavorTeardownShell {
-		mode = StopDestroy
-	}
-	if _, err := RunStop(context.Background(), stopDeps, cfg.Project.ID, vmName, mode, true); err != nil {
-		return -1, res, fmt.Errorf("recreate (%s): %w", res.Flavor, err)
-	}
-
-	res.NextAction = "applied"
+	res.Flavor = reconcile.RecreateFlavor(res.RecreateRequired)
+	// Surface sessions so the caller can show them in the prompt / JSON
+	// output. Best-effort; failure here is non-fatal.
+	res.Sessions = probeSessions(tr, cfg.Project.VMName)
+	res.NextAction = "needs_approval"
 	return 0, res, nil
 }

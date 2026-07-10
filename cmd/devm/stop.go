@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/orchestrator"
@@ -38,7 +37,6 @@ discarded. Re-launch with devm shell. Use --yes (-y) to skip the prompt.`,
 		deps := orchestrator.StopDeps{
 			Tart:             tart.New(),
 			ServiceAPIClient: serviceapi.NewClient(),
-			LockPath:         filepath.Join(repoRoot, ".devm", "lock"),
 			// In/Out left nil → os.Stdin/os.Stderr.
 		}
 		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.ID, cfg.Project.VMName, orchestrator.StopPreserve, stopYes)

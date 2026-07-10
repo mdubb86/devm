@@ -68,6 +68,31 @@ func (c *Client) StopVM(ctx context.Context, projectID, vmName string) error {
 	return nil
 }
 
+// Reconcile calls POST /vm/reconcile with cfg + workspace_host_path.
+// The daemon diffs cfg against the project's last-applied snapshot,
+// applies every live-bucket change in place, and returns what still
+// requires a VM recreate (teardown_required).
+func (c *Client) Reconcile(ctx context.Context, req VMReconcileRequest) (VMReconcileResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return VMReconcileResponse{}, err
+	}
+	r, err := c.post(ctx, "/vm/reconcile", body)
+	if err != nil {
+		return VMReconcileResponse{}, err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return VMReconcileResponse{}, fmt.Errorf("vm/reconcile: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp VMReconcileResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return VMReconcileResponse{}, err
+	}
+	return resp, nil
+}
+
 // Denials queries the daemon for iron-proxy allow-list rejects observed
 // this iron-proxy lifetime, per host. Sorted by count desc. Empty slice
 // (never nil) if the project hasn't triggered any denials yet, iron-proxy

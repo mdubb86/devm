@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mdubb86/devm/internal/lock"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 )
 
@@ -36,7 +35,6 @@ type StopVMClient interface {
 type StopDeps struct {
 	Tart             *tart.Tart
 	ServiceAPIClient StopVMClient
-	LockPath         string
 	In               io.Reader
 	Out              io.Writer
 }
@@ -59,12 +57,6 @@ func RunStop(ctx context.Context, d StopDeps, projectID, sandboxName string, mod
 	if d.Out == nil {
 		d.Out = os.Stderr
 	}
-
-	lk, err := lock.Acquire(d.LockPath)
-	if err != nil {
-		return -1, fmt.Errorf("acquire lock: %w", err)
-	}
-	defer lk.Release()
 
 	if !autoApprove {
 		approved, err := promptStopConfirm(d.In, d.Out, sandboxName, mode)
