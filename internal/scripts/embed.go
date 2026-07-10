@@ -14,6 +14,9 @@ var Bootstrap string
 //go:embed with-devm-env.sh
 var WithDevmEnv string
 
+//go:embed install.sh
+var Install string
+
 //go:embed wrap-fg.sh
 var WrapFG string
 

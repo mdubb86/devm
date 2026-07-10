@@ -63,7 +63,7 @@ func TestWriteDevmDirWritesDotenv(t *testing.T) {
 	bs, err := os.ReadFile(filepath.Join(dir, ".devm", ".env"))
 	require.NoError(t, err, ".devm/.env must be written")
 	assert.Contains(t, string(bs), `export FOO='bar'`)
-	assert.Contains(t, string(bs), `export PATH="$WORKSPACE/.devm/scripts:$PATH"`)
+	assert.Contains(t, string(bs), `export PATH="/opt/devm/scripts:$PATH"`)
 }
 
 func TestWriteDevmDir_StaleTemplateRemoved(t *testing.T) {

@@ -64,6 +64,13 @@ func WriteDevmEnv(cfg schema.Config, repoRoot string) error {
 	return nil
 }
 
+// RenderEnv returns the string body of what WriteDevmEnv would write.
+// Used by devmbundle.Build to pack into the tar; no host filesystem
+// side-effect.
+func RenderEnv(cfg schema.Config) (string, error) {
+	return persistentEnv(cfg), nil
+}
+
 // persistentEnv returns the contents of .devm/.env: a shell-sourceable
 // file with `export KEY='value'` lines covering everything persistent
 // devm wants in the sandbox's env. Sorted, deterministic, single-quoted.
@@ -78,10 +85,10 @@ func WriteDevmEnv(cfg schema.Config, repoRoot string) error {
 // expanded by schema.ResolveEnv) prepend devm's internal scripts dir
 // AND the container default $PATH:
 //
-//	export PATH="<cfg.Path[0]>:<cfg.Path[1]>:...:$WORKSPACE/.devm/scripts:$PATH"
+//	export PATH="<cfg.Path[0]>:<cfg.Path[1]>:...:/opt/devm/scripts:$PATH"
 //
 // When cfg.Path is empty the line collapses to the original
-// "$WORKSPACE/.devm/scripts:$PATH" form.
+// "/opt/devm/scripts:$PATH" form.
 func persistentEnv(cfg schema.Config) string {
 	merged := make(map[string]string, len(cfg.Env)*2)
 
@@ -128,7 +135,7 @@ func persistentEnv(cfg schema.Config) string {
 		b.WriteString(p)
 		b.WriteByte(':')
 	}
-	b.WriteString(`$WORKSPACE/.devm/scripts:$PATH"`)
+	b.WriteString(`/opt/devm/scripts:$PATH"`)
 	b.WriteByte('\n')
 	return b.String()
 }
