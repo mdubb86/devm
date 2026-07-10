@@ -9,9 +9,16 @@ import (
 )
 
 // WriteTemplateInstallers writes (or re-writes) the per-template installer
-// scripts under .devm/templates/ and prunes stale ones. Called by ApplyLive
-// just before running the in-sandbox dispatcher so that the sandbox always
-// executes the latest rendered scripts.
+// scripts under .devm/templates/ and prunes stale ones.
+//
+// ApplyLive no longer calls this directly (it pipes a devmbundle into the
+// guest instead, so the workspace stays clean of .devm/) — but
+// ComputeTemplateChanges still reads repoRoot/.devm/templates/ as the
+// on-disk "last applied" baseline for template diffing, and this is what
+// populates that baseline in tests. See docs/superpowers/ for the known
+// gap: nothing in production writes this baseline anymore now that both
+// cold-start and ApplyLive are bundle-only, so template-change detection
+// needs a follow-up before it can be trusted across reconcile runs.
 func WriteTemplateInstallers(cfg schema.Config, repoRoot string) error {
 	return writeTemplateInstallers(cfg, repoRoot)
 }

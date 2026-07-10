@@ -1,12 +1,12 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 
 	"github.com/mdubb86/devm/internal/devmbundle"
-	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -18,11 +18,12 @@ import (
 // Template changes are coalesced — any number of KindTemplateChange
 // entries trigger a SINGLE invocation of the in-sandbox dispatcher,
 // which re-runs every installer (cheap; identical content is an
-// idempotent atomic rewrite). The installer scripts are written to
-// .devm/templates/ immediately before the dispatcher runs, so the
-// sandbox always executes the latest rendered content. For each
-// changed template, this function logs a "consuming services may need
-// restart" line to stderr.
+// idempotent atomic rewrite). Any env or template change re-builds the
+// devmbundle from cfg + repoRoot and pipes it into the guest at
+// /opt/devm/ before the dispatcher runs, so the sandbox always executes
+// the latest rendered content — nothing is written to the host
+// workspace. For each changed template, this function logs a
+// "consuming services may need restart" line to stderr.
 //
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
@@ -46,30 +47,31 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		}
 	}
 
-	if envChanged {
-		// Rewrite .devm/.env on the host. The workspace mount surfaces
-		// the change inside the VM instantly; with-devm-env sources the
-		// new file on every subsequent exec. Running shells keep their old
-		// env until they re-exec — hence BucketLive.
-		if err := render.WriteDevmEnv(cfg, repoRoot); err != nil {
-			return fmt.Errorf("apply_live: write .devm/.env: %w", err)
+	if envChanged || len(templateChanges) > 0 {
+		// Rebuild the bundle and pipe it into the guest at /opt/devm/ —
+		// same mechanism the provisioner uses at cold-start. Nothing is
+		// written to the host workspace; with-devm-env sources the new
+		// .env on every subsequent exec, and (for template changes) the
+		// dispatcher below reads the freshly-piped installers. Running
+		// shells keep their old env until they re-exec — hence BucketLive.
+		tar, err := devmbundle.Build(cfg, repoRoot)
+		if err != nil {
+			return fmt.Errorf("apply_live: build bundle: %w", err)
+		}
+		r := tr.ExecStdin(context.Background(), vmName,
+			bytes.NewReader(tar),
+			[]string{"bash", "-e", "-o", "pipefail", "-c", devmbundle.GuestInstallScript},
+		)
+		if r.ExitCode != 0 {
+			return fmt.Errorf("apply_live: pipe bundle: exit %d (stderr: %s)", r.ExitCode, r.Stderr)
 		}
 	}
 
 	if len(templateChanges) > 0 {
-		// Write updated installer scripts before running the dispatcher so
-		// the sandbox executes the latest rendered content. This must happen
-		// here (not earlier in RunReconcile) so the on-disk installers
-		// remain as the diff baseline until the change has been detected
-		// and we're committed to applying it.
-		if err := render.WriteTemplateInstallers(cfg, repoRoot); err != nil {
-			return fmt.Errorf("apply_live: write template installers: %w", err)
-		}
-		// Single dispatcher invocation re-runs all installers. The
-		// dispatcher path is mounted into the VM via the workspace virtio-fs
-		// share, so no transfer step is needed here. Wrapper sources
-		// .devm/.env so $WORKSPACE is set — the dispatcher reads it to
-		// locate .devm/templates and errors under `set -u` without it.
+		// Single dispatcher invocation re-runs all installers already piped
+		// in above. Wrapper sources /opt/devm/.env (sets $WORKSPACE etc.)
+		// and cd's into the workspace before exec'ing the dispatcher, which
+		// itself reads the fixed /opt/devm/templates path.
 		wrapperPath := devmbundle.GuestWrapper
 		dispatcherPath := devmbundle.GuestDispatcher
 		r := tr.ExecWithRetry(context.Background(), vmName, []string{wrapperPath, "bash", dispatcherPath})

@@ -255,9 +255,9 @@ func pathEqual(a, b []string) bool {
 // computeGlobalEnvChanges diffs the project-level env map (cfg.Env),
 // distinct from computeEnvChanges below which diffs each service's own
 // env block. Service is left empty on these Change entries to mark
-// them as global-scoped — WriteDevmEnv (via ApplyLive) writes cfg.Env
-// unprefixed into .devm/.env, so a global-scope change is real and
-// must surface for reconcile to pick up.
+// them as global-scoped — ApplyLive pipes cfg.Env unprefixed into
+// /opt/devm/.env via the devmbundle, so a global-scope change is real
+// and must surface for reconcile to pick up.
 func computeGlobalEnvChanges(old, new schema.Config) []Change {
 	oEnv := globalEnvOf(old)
 	nEnv := globalEnvOf(new)

@@ -1,72 +1,17 @@
 package render
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/mdubb86/devm/internal/schema"
 )
 
-// WriteDevmEnv renders cfg into repoRoot/.devm/.env via tmpfile +
-// rename so a concurrent source by the with-devm-env wrapper cannot
-// observe a half-written file. Creates .devm/ if missing.
-//
-// Idempotent: a second call with the same cfg produces an identical file.
-//
-// Called from the render write path AND from apply_live on KindEnv* changes.
-func WriteDevmEnv(cfg schema.Config, repoRoot string) error {
-	dir := filepath.Join(repoRoot, ".devm")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dir, err)
-	}
-	final := filepath.Join(dir, ".env")
-	content := persistentEnv(cfg)
-
-	tmp, err := os.CreateTemp(dir, ".env.*.tmp")
-	if err != nil {
-		return fmt.Errorf("create tmpfile in %s: %w", dir, err)
-	}
-	tmpPath := tmp.Name()
-	// On any failure after this point, best-effort remove the tmpfile.
-	cleanup := func() { _ = os.Remove(tmpPath) }
-
-	if _, err := tmp.WriteString(content); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return fmt.Errorf("write tmpfile: %w", err)
-	}
-	// fsync before close/rename. Belt-and-suspenders against buffered
-	// writes lingering in the kernel: the tmpfile's bytes must be on
-	// disk before rename swaps it into place — otherwise the guest's
-	// virtiofs client can serve a partial view for a brief window (the
-	// scripts/with-devm-env wrapper also sleeps 0.2s before sourcing
-	// .env to be robust to this race).
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return fmt.Errorf("sync tmpfile: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return fmt.Errorf("close tmpfile: %w", err)
-	}
-	if err := os.Chmod(tmpPath, 0o644); err != nil {
-		cleanup()
-		return fmt.Errorf("chmod tmpfile: %w", err)
-	}
-	if err := os.Rename(tmpPath, final); err != nil {
-		cleanup()
-		return fmt.Errorf("rename %s -> %s: %w", tmpPath, final, err)
-	}
-	return nil
-}
-
-// RenderEnv returns the string body of what WriteDevmEnv would write.
-// Used by devmbundle.Build to pack into the tar; no host filesystem
-// side-effect.
+// RenderEnv returns the string body of the .env file the devmbundle
+// packs into the guest at /opt/devm/.env (via devmbundle.Build and the
+// standard install pipe). No host filesystem side-effect — the bundle
+// refactor's cold-start and ApplyLive paths both go through this, not
+// a host-side write.
 func RenderEnv(cfg schema.Config) (string, error) {
 	return persistentEnv(cfg), nil
 }

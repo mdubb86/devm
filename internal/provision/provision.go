@@ -384,15 +384,15 @@ func (p *Provisioner) dockerFeature(ctx context.Context, w io.Writer) error {
 }
 
 // installTemplates runs the install-templates.sh dispatcher inside the VM,
-// which loops over .devm/templates/*.sh and executes each per-template
+// which loops over /opt/devm/templates/*.sh and executes each per-template
 // installer. Each installer is idempotent (atomic rename over the target
 // path) so re-running on warm restart is safe.
 //
-// No-op when no templates are declared (empty .devm/templates/ dir causes
-// the dispatcher to exit 0 immediately).
+// No-op when no templates are declared (empty /opt/devm/templates/ dir
+// causes the dispatcher to exit 0 immediately).
 //
-// Runs THROUGH with-devm-env so $WORKSPACE is set — the dispatcher uses
-// it to locate .devm/templates.
+// Runs THROUGH with-devm-env for the auto-cd-to-$WORKSPACE + terminfo
+// setup it provides; the dispatcher itself reads a fixed /opt/devm path.
 func (p *Provisioner) installTemplates(ctx context.Context, w io.Writer) error {
 	anyTemplate := false
 	for _, svc := range p.Cfg.Services {
