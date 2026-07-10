@@ -56,14 +56,24 @@ func TestRemoveStateCfg_Idempotent(t *testing.T) {
 func TestWriteStateCfg_Atomic(t *testing.T) {
 	// A concurrent reader must never see a partial write. We assert
 	// on the mechanism (temp file + rename) rather than the race
-	// itself: after WriteStateCfg returns, no .tmp file lingers.
+	// itself: after WriteStateCfg returns, no os.CreateTemp-style
+	// temp file matching "<project-id>.json.*" lingers alongside
+	// the final "<project-id>.json".
 	t.Setenv("HOME", t.TempDir())
 	cfg := schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}
 	require.NoError(t, WriteStateCfg("p", cfg))
+
 	entries, err := os.ReadDir(StateDir())
 	require.NoError(t, err)
+	require.Len(t, entries, 1, "expected exactly one file in state dir, got: %v", names(entries))
+	assert.Equal(t, "p.json", entries[0].Name(),
+		"only the final file should remain; os.CreateTemp temp files must have been renamed away")
+}
+
+func names(entries []os.DirEntry) []string {
+	out := make([]string, 0, len(entries))
 	for _, e := range entries {
-		assert.False(t, filepath.Ext(e.Name()) == ".tmp",
-			"leftover temp file: %s", e.Name())
+		out = append(out, e.Name())
 	}
+	return out
 }
