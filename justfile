@@ -80,7 +80,7 @@ e2e-recipe:
 # Run a single test by name (matches pytest -k pattern). Foreground (no -n).
 # Quote multi-word patterns: `just e2e-one "test_a or test_b"`.
 e2e-one NAME:
-    @e2e/scripts/run.sh -k '{{NAME}}' -n 0
+    @e2e/scripts/run.sh -k '{{NAME}}'
 
 # List discovered tests without running them.
 e2e-list:
