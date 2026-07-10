@@ -88,6 +88,93 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 	assert.Equal(t, []string{"jq"}, got.Packages, "packages change must not be persisted until user acts")
 }
 
+func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
+	// Per-service env change (as opposed to top-level cfg.Env) must
+	// land in the snapshot's Services[svc].Env, not just cfg.Env.
+	// Otherwise the same change re-surfaces on every subsequent
+	// reconcile.
+	t.Setenv("HOME", t.TempDir())
+	oldCfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Services: map[string]schema.Service{
+			"web": {
+				Exec: []string{"/bin/true"},
+				Env:  map[string]schema.EnvValue{"OLD": {Literal: "a"}},
+			},
+		},
+	}
+	require.NoError(t, WriteStateCfg("p", oldCfg))
+
+	newCfg := oldCfg
+	newSvc := oldCfg.Services["web"]
+	newSvc.Env = map[string]schema.EnvValue{"OLD": {Literal: "b"}}
+	newCfg.Services = map[string]schema.Service{"web": newSvc}
+
+	req := VMReconcileRequest{ProjectID: "p", VMName: "p-vm", Cfg: newCfg}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, locks, &fakeApply{})
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	got, err := ReadStateCfg("p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "b", got.Services["web"].Env["OLD"].Literal,
+		"snapshot must reflect per-service env change; otherwise it re-surfaces every reconcile")
+}
+
+func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testing.T) {
+	// Same service has BOTH a live change (exec) AND a teardown-required
+	// change (masks). Applying the live exec must not silently absorb
+	// the pending masks change into the snapshot. Next reconcile must
+	// still surface the masks change as teardown_required.
+	t.Setenv("HOME", t.TempDir())
+	oldCfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Services: map[string]schema.Service{
+			"web": {
+				Exec:  []string{"/bin/true"},
+				Masks: []schema.Mask{{Path: "data", Size: "10m"}},
+			},
+		},
+	}
+	require.NoError(t, WriteStateCfg("p", oldCfg))
+
+	newCfg := oldCfg
+	newSvc := oldCfg.Services["web"]
+	newSvc.Exec = []string{"/bin/echo", "hi"} // live change
+	newSvc.Masks = []schema.Mask{
+		{Path: "data", Size: "10m"},
+		{Path: "logs", Size: "5m"}, // teardown-required addition
+	}
+	newCfg.Services = map[string]schema.Service{"web": newSvc}
+
+	req := VMReconcileRequest{ProjectID: "p", VMName: "p-vm", Cfg: newCfg}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, locks, &fakeApply{})
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	got, err := ReadStateCfg("p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	// Live change (exec) landed in snapshot.
+	assert.Equal(t, []string{"/bin/echo", "hi"}, got.Services["web"].Exec)
+	// Pending masks change did NOT land — old masks preserved so
+	// next reconcile still surfaces masks add as teardown_required.
+	assert.Equal(t, []schema.Mask{{Path: "data", Size: "10m"}}, got.Services["web"].Masks)
+}
+
 // fakeApply is a stand-in for the real ApplyLive; it records that it
 // was called and returns success.
 type fakeApply struct{ called bool }

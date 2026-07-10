@@ -119,47 +119,109 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver) 
 }
 
 // mergeLiveApplied returns a cfg that equals old_cfg except in the
-// fields represented by the applied Change list — those come from
-// new_cfg. The rule: pending teardown-required fields must stay at
-// their old_cfg values so they keep re-surfacing on subsequent
-// reconciles.
+// exact fields represented by the applied Change list — those come
+// from new_cfg. Pending teardown-required fields on the same service
+// (or elsewhere) MUST stay at their old_cfg values so they keep
+// re-surfacing on subsequent reconciles.
 //
-// Implementation note: this walks the applied changes and copies the
-// exact field(s) each Change refers to from new_cfg onto a copy of
-// old_cfg. Per-field granularity: Env is by-key, Path is by-index,
-// Services by-name-and-subfield.
+// Granularity: env is by-key (top-level or per-service); path is
+// wholesale; network by-list-membership; per-service subfield changes
+// touch ONLY that subfield on the service.
 func mergeLiveApplied(old, new schema.Config, applied []reconcile.Change) schema.Config {
 	merged := old
+	// Copy service map before mutating so we don't alias old_cfg's map.
+	if len(applied) > 0 && merged.Services != nil {
+		copied := make(map[string]schema.Service, len(merged.Services))
+		for k, v := range merged.Services {
+			copied[k] = v
+		}
+		merged.Services = copied
+	}
+
 	for _, c := range applied {
 		switch c.Kind {
 		case reconcile.KindEnvAdd, reconcile.KindEnvRemove, reconcile.KindEnvChange:
-			// Env changes: replace the top-level env map wholesale
-			// with new_cfg's when any env change lands. Simpler than
-			// per-key merge, and correct: if the change was applied,
-			// the guest already has new_cfg's env in /opt/devm/.env.
-			merged.Env = new.Env
+			if c.Service == "" {
+				// Global env change.
+				merged.Env = new.Env
+			} else {
+				// Per-service env change — replace only that service's Env map.
+				svc := merged.Services[c.Service]
+				if newSvc, ok := new.Services[c.Service]; ok {
+					svc.Env = newSvc.Env
+				} else {
+					// Service was removed in new_cfg; drop it from merged too.
+					delete(merged.Services, c.Service)
+					continue
+				}
+				if merged.Services == nil {
+					merged.Services = map[string]schema.Service{}
+				}
+				merged.Services[c.Service] = svc
+			}
 		case reconcile.KindPathChange:
 			merged.Path = new.Path
 		case reconcile.KindNetworkAdd, reconcile.KindNetworkRemove:
 			merged.Network = new.Network
 		case reconcile.KindTemplateChange:
-			// Templates come from cfg.Services; treat as service-scoped.
+			svc := merged.Services[c.Service]
+			if newSvc, ok := new.Services[c.Service]; ok {
+				svc.Templates = newSvc.Templates
+			} else {
+				delete(merged.Services, c.Service)
+				continue
+			}
 			if merged.Services == nil {
 				merged.Services = map[string]schema.Service{}
 			}
-			svc, ok := new.Services[c.Service]
-			if ok {
+			merged.Services[c.Service] = svc
+		case reconcile.KindServiceExecChange:
+			svc := merged.Services[c.Service]
+			if newSvc, ok := new.Services[c.Service]; ok {
+				svc.Exec = newSvc.Exec
 				merged.Services[c.Service] = svc
 			}
-		case reconcile.KindServiceExecChange, reconcile.KindServiceRestartChange,
-			reconcile.KindServiceAfterChange, reconcile.KindServiceWorkdirChange,
-			reconcile.KindServiceUserChange, reconcile.KindServiceSystemdOverrideChange,
-			reconcile.KindServiceHostnameChange,
-			reconcile.KindPortAdd, reconcile.KindPortRemove, reconcile.KindPortChange:
-			if merged.Services == nil {
-				merged.Services = map[string]schema.Service{}
+		case reconcile.KindServiceRestartChange:
+			svc := merged.Services[c.Service]
+			if newSvc, ok := new.Services[c.Service]; ok {
+				svc.Restart = newSvc.Restart
+				merged.Services[c.Service] = svc
 			}
-			if svc, ok := new.Services[c.Service]; ok {
+		case reconcile.KindServiceAfterChange:
+			svc := merged.Services[c.Service]
+			if newSvc, ok := new.Services[c.Service]; ok {
+				svc.After = newSvc.After
+				merged.Services[c.Service] = svc
+			}
+		case reconcile.KindServiceWorkdirChange:
+			svc := merged.Services[c.Service]
+			if newSvc, ok := new.Services[c.Service]; ok {
+				svc.WorkDir = newSvc.WorkDir
+				merged.Services[c.Service] = svc
+			}
+		case reconcile.KindServiceUserChange:
+			svc := merged.Services[c.Service]
+			if newSvc, ok := new.Services[c.Service]; ok {
+				svc.User = newSvc.User
+				merged.Services[c.Service] = svc
+			}
+		case reconcile.KindServiceSystemdOverrideChange:
+			svc := merged.Services[c.Service]
+			if newSvc, ok := new.Services[c.Service]; ok {
+				svc.Systemd = newSvc.Systemd
+				merged.Services[c.Service] = svc
+			}
+		case reconcile.KindServiceHostnameChange:
+			svc := merged.Services[c.Service]
+			if newSvc, ok := new.Services[c.Service]; ok {
+				svc.Hostname = newSvc.Hostname
+				merged.Services[c.Service] = svc
+			}
+		case reconcile.KindPortAdd, reconcile.KindPortRemove, reconcile.KindPortChange:
+			svc := merged.Services[c.Service]
+			if newSvc, ok := new.Services[c.Service]; ok {
+				svc.Port = newSvc.Port
+				svc.BindIP = newSvc.BindIP
 				merged.Services[c.Service] = svc
 			}
 		}
