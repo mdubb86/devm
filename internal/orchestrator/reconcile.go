@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/mdubb86/devm/internal/lock"
+	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -71,21 +72,21 @@ func RunReconcileInner(cfg schema.Config, tr *tart.Tart, vmName, repoRoot string
 		}
 	}
 
-	changes, err := ComputeAllChanges(snapCfg, cfg, repoRoot)
+	changes, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot)
 	if err != nil {
 		return res, fmt.Errorf("compute changes: %w", err)
 	}
 	for _, c := range changes {
-		if c.Bucket() == BucketLive {
+		if c.Bucket() == reconcile.BucketLive {
 			res.Applied = append(res.Applied, c)
 		} else {
 			res.RecreateRequired = append(res.RecreateRequired, c)
 		}
 	}
-	res.Flavor = RecreateFlavor(changes)
+	res.Flavor = reconcile.RecreateFlavor(changes)
 
 	if len(res.Applied) > 0 {
-		if err := ApplyLive(tr, vmName, res.Applied, cfg, repoRoot); err != nil {
+		if err := reconcile.ApplyLive(tr, vmName, res.Applied, cfg, repoRoot); err != nil {
 			return res, fmt.Errorf("apply live: %w", err)
 		}
 	}
@@ -194,18 +195,18 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 				return -1, res, fmt.Errorf("parse snapshot: %w", err)
 			}
 		}
-		changes, err := ComputeAllChanges(snapCfg, cfg, repoRoot)
+		changes, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot)
 		if err != nil {
 			return -1, res, fmt.Errorf("compute changes: %w", err)
 		}
 		for _, c := range changes {
-			if c.Bucket() == BucketLive {
+			if c.Bucket() == reconcile.BucketLive {
 				res.Applied = append(res.Applied, c)
 			} else {
 				res.RecreateRequired = append(res.RecreateRequired, c)
 			}
 		}
-		res.Flavor = RecreateFlavor(changes)
+		res.Flavor = reconcile.RecreateFlavor(changes)
 		switch {
 		case len(res.RecreateRequired) > 0:
 			res.NextAction = "needs_approval"
@@ -272,7 +273,7 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 		LockPath:         lockPath,
 	}
 	mode := StopPreserve
-	if res.Flavor == FlavorTeardownShell {
+	if res.Flavor == reconcile.FlavorTeardownShell {
 		mode = StopDestroy
 	}
 	if _, err := RunStop(context.Background(), stopDeps, cfg.Project.ID, vmName, mode, true); err != nil {

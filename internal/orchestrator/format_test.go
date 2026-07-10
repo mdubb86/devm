@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/stretchr/testify/assert"
 )
@@ -37,7 +38,7 @@ func TestFormatStatusText_Stopped(t *testing.T) {
 
 func TestFormatReconcileText_LiveOnly(t *testing.T) {
 	out := FormatReconcileText(ReconcileResult{
-		Applied: []Change{{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
+		Applied: []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
 	})
 	assert.Contains(t, out, "Applied 1 live change")
 	assert.Contains(t, out, "+ port 8080 (api)")
@@ -45,11 +46,11 @@ func TestFormatReconcileText_LiveOnly(t *testing.T) {
 
 func TestFormatReconcileText_RecreatePending(t *testing.T) {
 	out := FormatReconcileText(ReconcileResult{
-		Applied: []Change{{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
-		RecreateRequired: []Change{
-			{Kind: KindEnvChange, Service: "api", Key: "LOG_LEVEL", Old: "info", New: "debug"},
+		Applied: []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
+		RecreateRequired: []reconcile.Change{
+			{Kind: reconcile.KindEnvChange, Service: "api", Key: "LOG_LEVEL", Old: "info", New: "debug"},
 		},
-		Flavor:   FlavorStopShell,
+		Flavor:   reconcile.FlavorStopShell,
 		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 	})
 	assert.Contains(t, out, "Applied 1 live change")
@@ -84,9 +85,9 @@ func TestFormatStatusJSON(t *testing.T) {
 func TestFormatReconcileJSON(t *testing.T) {
 	js := FormatReconcileJSON(ReconcileResult{
 		Rendered: true, SandboxState: "running",
-		Applied:          []Change{{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
-		RecreateRequired: []Change{{Kind: KindEnvChange, Service: "api", Key: "LOG_LEVEL", Old: "info", New: "debug"}},
-		Flavor:           FlavorStopShell,
+		Applied:          []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
+		RecreateRequired: []reconcile.Change{{Kind: reconcile.KindEnvChange, Service: "api", Key: "LOG_LEVEL", Old: "info", New: "debug"}},
+		Flavor:           reconcile.FlavorStopShell,
 		Sessions:         []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 		NextAction:       "needs_approval",
 	})
@@ -216,17 +217,17 @@ func TestFormatStatusText_ProxyLine_RedWhenDown(t *testing.T) {
 
 func TestFormatChange_Template(t *testing.T) {
 	// Added template.
-	added := Change{Kind: KindTemplateChange, Service: "web", Detail: "/etc/caddy/Caddyfile", New: "installed"}
+	added := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "web", Detail: "/etc/caddy/Caddyfile", New: "installed"}
 	assert.Equal(t, "+ template: web → /etc/caddy/Caddyfile", formatChange(added))
 
 	// Changed template.
-	changed := Change{Kind: KindTemplateChange, Service: "web", Detail: "/etc/caddy/Caddyfile", Old: "previous", New: "updated"}
+	changed := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "web", Detail: "/etc/caddy/Caddyfile", Old: "previous", New: "updated"}
 	assert.Equal(t, "~ template: web → /etc/caddy/Caddyfile", formatChange(changed))
 
 	// Removed template.
-	removed := Change{Kind: KindTemplateChange, Service: "", Detail: "00-web-Caddyfile.sh", Old: "previous"}
+	removed := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "", Detail: "00-web-Caddyfile.sh", Old: "previous"}
 	assert.Equal(t, "- template: 00-web-Caddyfile.sh (sandbox file persists; recreate to wipe)", formatChange(removed))
 
 	// JSON mapping.
-	assert.Equal(t, "template_change", changeKindJSON(KindTemplateChange))
+	assert.Equal(t, "template_change", changeKindJSON(reconcile.KindTemplateChange))
 }

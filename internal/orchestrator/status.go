@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -103,12 +104,12 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 			return res, fmt.Errorf("parse snapshot: %w", err)
 		}
 	}
-	statusChanges, err := ComputeAllChanges(snapCfg, cfg, repoRoot)
+	statusChanges, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot)
 	if err != nil {
 		return res, fmt.Errorf("compute changes: %w", err)
 	}
 	for _, c := range statusChanges {
-		if c.Bucket() == BucketLive {
+		if c.Bucket() == reconcile.BucketLive {
 			res.PendingLive++
 		} else {
 			res.PendingRecreate++

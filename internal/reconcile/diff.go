@@ -1,4 +1,4 @@
-package orchestrator
+package reconcile
 
 import (
 	"fmt"
@@ -134,6 +134,20 @@ const (
 	FlavorStopShell
 	FlavorTeardownShell // requires VM delete + cold start
 )
+
+// String implements fmt.Stringer so FlavorKind renders directly in %s
+// format verbs (used by orchestrator's format.go and error messages).
+func (f FlavorKind) String() string {
+	switch f {
+	case FlavorLiveOnly:
+		return "live"
+	case FlavorStopShell:
+		return "stop+shell"
+	case FlavorTeardownShell:
+		return "teardown+shell"
+	}
+	return "unknown"
+}
 
 // RecreateFlavor picks the max severity across all changes' buckets.
 func RecreateFlavor(changes []Change) FlavorKind {

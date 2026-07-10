@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
@@ -94,7 +95,7 @@ func TestRunReconcileInner_LivePortAdd(t *testing.T) {
 	res, err := RunReconcileInner(newCfg, tr, "x", "/tmp/fake-repo-root")
 	assert.NoError(t, err)
 	assert.Len(t, res.Applied, 1)
-	assert.Equal(t, KindPortAdd, res.Applied[0].Kind)
+	assert.Equal(t, reconcile.KindPortAdd, res.Applied[0].Kind)
 	assert.Empty(t, res.RecreateRequired)
 	assert.Equal(t, "applied", res.NextAction)
 }
@@ -112,7 +113,7 @@ func TestRunReconcileInner_RecreateRequired(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, res.Applied)
 	assert.Len(t, res.RecreateRequired, 1)
-	assert.Equal(t, FlavorTeardownShell, res.Flavor)
+	assert.Equal(t, reconcile.FlavorTeardownShell, res.Flavor)
 	assert.Equal(t, "needs_approval", res.NextAction)
 }
 
@@ -206,5 +207,5 @@ func TestRunReconcile_DryRunDoesNotApply(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Len(t, res.Applied, 1, "diff should still be computed for dry-run")
-	assert.Equal(t, KindPortAdd, res.Applied[0].Kind)
+	assert.Equal(t, reconcile.KindPortAdd, res.Applied[0].Kind)
 }

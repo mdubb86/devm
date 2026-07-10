@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
@@ -53,23 +54,11 @@ type DriftItem struct {
 type ReconcileResult struct {
 	Rendered         bool
 	SandboxState     string
-	Applied          []Change
-	RecreateRequired []Change
-	Flavor           FlavorKind
+	Applied          []reconcile.Change
+	RecreateRequired []reconcile.Change
+	Flavor           reconcile.FlavorKind
 	Sessions         []Session
 	NextAction       string // "applied" | "needs_approval" | "user_refused" | "nothing_to_do"
-}
-
-func (f FlavorKind) String() string {
-	switch f {
-	case FlavorLiveOnly:
-		return "live"
-	case FlavorStopShell:
-		return "stop+shell"
-	case FlavorTeardownShell:
-		return "teardown+shell"
-	}
-	return "unknown"
 }
 
 // FormatStatusText renders StatusResult for human terminals. The
@@ -218,10 +207,10 @@ func FormatReconcileText(r ReconcileResult) string {
 		}
 		fmt.Fprintln(&b)
 		switch r.Flavor {
-		case FlavorTeardownShell:
+		case reconcile.FlavorTeardownShell:
 			fmt.Fprintln(&b, "Teardown + recreate sandbox? This WIPES installed packages and volume data,")
 			fmt.Fprintln(&b, "then re-runs install.")
-		case FlavorStopShell:
+		case reconcile.FlavorStopShell:
 			fmt.Fprintln(&b, "Restart sandbox to apply env/startup/network changes?")
 		}
 		if len(r.Sessions) > 0 {
@@ -352,7 +341,7 @@ func FormatReconcileJSON(r ReconcileResult) string {
 		NextAction       string       `json:"next_action"`
 	}
 
-	toJSON := func(c Change) changeJSON {
+	toJSON := func(c reconcile.Change) changeJSON {
 		return changeJSON{
 			Kind: changeKindJSON(c.Kind), Service: c.Service, Key: c.Key,
 			Old: c.Old, New: c.New,
@@ -386,118 +375,118 @@ func FormatReconcileJSON(r ReconcileResult) string {
 	return string(b)
 }
 
-func changeKindJSON(k ChangeKind) string {
+func changeKindJSON(k reconcile.ChangeKind) string {
 	switch k {
-	case KindPortAdd:
+	case reconcile.KindPortAdd:
 		return "port_add"
-	case KindPortRemove:
+	case reconcile.KindPortRemove:
 		return "port_remove"
-	case KindPortChange:
+	case reconcile.KindPortChange:
 		return "port_change"
-	case KindNetworkAdd:
+	case reconcile.KindNetworkAdd:
 		return "network_add"
-	case KindNetworkRemove:
+	case reconcile.KindNetworkRemove:
 		return "network_remove"
-	case KindEnvAdd:
+	case reconcile.KindEnvAdd:
 		return "env_add"
-	case KindEnvRemove:
+	case reconcile.KindEnvRemove:
 		return "env_remove"
-	case KindEnvChange:
+	case reconcile.KindEnvChange:
 		return "env_change"
-	case KindInstallChange:
+	case reconcile.KindInstallChange:
 		return "install_change"
-	case KindPackagesChange:
+	case reconcile.KindPackagesChange:
 		return "packages_change"
-	case KindMaskAddRemove:
+	case reconcile.KindMaskAddRemove:
 		return "mask_add_remove"
-	case KindImageChange:
+	case reconcile.KindImageChange:
 		return "image_change"
-	case KindIdentityChange:
+	case reconcile.KindIdentityChange:
 		return "identity_change"
-	case KindDockerToggle:
+	case reconcile.KindDockerToggle:
 		return "docker_toggle"
-	case KindTemplateChange:
+	case reconcile.KindTemplateChange:
 		return "template_change"
-	case KindMountAddRemove:
+	case reconcile.KindMountAddRemove:
 		return "mount_add_remove"
-	case KindServiceExecChange:
+	case reconcile.KindServiceExecChange:
 		return "service_exec_change"
-	case KindServiceRestartChange:
+	case reconcile.KindServiceRestartChange:
 		return "service_restart_change"
-	case KindServiceAfterChange:
+	case reconcile.KindServiceAfterChange:
 		return "service_after_change"
-	case KindServiceWorkdirChange:
+	case reconcile.KindServiceWorkdirChange:
 		return "service_workdir_change"
-	case KindServiceUserChange:
+	case reconcile.KindServiceUserChange:
 		return "service_user_change"
-	case KindServiceSystemdOverrideChange:
+	case reconcile.KindServiceSystemdOverrideChange:
 		return "service_systemd_override_change"
-	case KindServiceHostnameChange:
+	case reconcile.KindServiceHostnameChange:
 		return "service_hostname_change"
 	}
 	return "unknown"
 }
 
-func flavorJSON(f FlavorKind) string {
+func flavorJSON(f reconcile.FlavorKind) string {
 	switch f {
-	case FlavorLiveOnly:
+	case reconcile.FlavorLiveOnly:
 		return "live"
-	case FlavorStopShell:
+	case reconcile.FlavorStopShell:
 		return "stop_shell"
-	case FlavorTeardownShell:
+	case reconcile.FlavorTeardownShell:
 		return "teardown_shell"
 	}
 	return "unknown"
 }
 
 // formatChange returns a one-line, human-readable description of a Change.
-func formatChange(c Change) string {
+func formatChange(c reconcile.Change) string {
 	switch c.Kind {
-	case KindPortAdd:
+	case reconcile.KindPortAdd:
 		return fmt.Sprintf("+ port %s (%s)", c.New, c.Service)
-	case KindPortRemove:
+	case reconcile.KindPortRemove:
 		return fmt.Sprintf("- port %s (%s)", c.Old, c.Service)
-	case KindPortChange:
+	case reconcile.KindPortChange:
 		return fmt.Sprintf("~ port %s: %s → %s", c.Service, c.Old, c.New)
-	case KindNetworkAdd:
+	case reconcile.KindNetworkAdd:
 		return fmt.Sprintf("+ allow network %s", c.New)
-	case KindNetworkRemove:
+	case reconcile.KindNetworkRemove:
 		return fmt.Sprintf("- allow network %s", c.Old)
-	case KindEnvAdd:
+	case reconcile.KindEnvAdd:
 		return fmt.Sprintf("+ env: %s.%s = %q", c.Service, c.Key, c.New)
-	case KindEnvRemove:
+	case reconcile.KindEnvRemove:
 		return fmt.Sprintf("- env: %s.%s", c.Service, c.Key)
-	case KindEnvChange:
+	case reconcile.KindEnvChange:
 		return fmt.Sprintf("~ env: %s.%s: %q → %q", c.Service, c.Key, c.Old, c.New)
-	case KindInstallChange:
+	case reconcile.KindInstallChange:
 		return "~ install commands"
-	case KindPackagesChange:
+	case reconcile.KindPackagesChange:
 		return "~ packages"
-	case KindMountAddRemove:
+	case reconcile.KindMountAddRemove:
 		return "~ mounts"
-	case KindMaskAddRemove:
+	case reconcile.KindMaskAddRemove:
 		return fmt.Sprintf("~ volumes: %s", c.Service)
-	case KindServiceExecChange:
+	case reconcile.KindServiceExecChange:
 		return fmt.Sprintf("~ service exec: %s", c.Service)
-	case KindServiceRestartChange:
+	case reconcile.KindServiceRestartChange:
 		return fmt.Sprintf("~ service restart: %s", c.Service)
-	case KindServiceAfterChange:
+	case reconcile.KindServiceAfterChange:
 		return fmt.Sprintf("~ service after: %s", c.Service)
-	case KindServiceWorkdirChange:
+	case reconcile.KindServiceWorkdirChange:
 		return fmt.Sprintf("~ service workdir: %s", c.Service)
-	case KindServiceUserChange:
+	case reconcile.KindServiceUserChange:
 		return fmt.Sprintf("~ service user: %s", c.Service)
-	case KindServiceSystemdOverrideChange:
+	case reconcile.KindServiceSystemdOverrideChange:
 		return fmt.Sprintf("~ service systemd override: %s", c.Service)
-	case KindServiceHostnameChange:
+	case reconcile.KindServiceHostnameChange:
 		return fmt.Sprintf("~ service hostname: %s: %q → %q", c.Service, c.Old, c.New)
-	case KindImageChange:
+	case reconcile.KindImageChange:
 		return "~ base image"
-	case KindIdentityChange:
+	case reconcile.KindIdentityChange:
 		return "~ project identity"
-	case KindDockerToggle:
+	case reconcile.KindDockerToggle:
 		return "~ docker"
-	case KindTemplateChange:
+	case reconcile.KindTemplateChange:
 		switch {
 		case c.Old == "" && c.New != "":
 			return fmt.Sprintf("+ template: %s → %s", c.Service, c.Detail)
