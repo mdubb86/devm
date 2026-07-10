@@ -39,16 +39,21 @@ If the VM is stopped or absent, `devm shell`:
    |---|---|
    | 1 | `mkdir workspace parents` |
    | 2 | `install CA root` |
-   | 3 | `write Caddyfile` |
-   | 4 | `write dnsmasq config` |
-   | 5 | `reload base services` |
-   | 6 | `apt-get update` |
-   | 7 | `apt-get install packages` |
-   | 8 | `run install commands` |
-   | 9 | `install service units` |
-   | 10 | `systemctl daemon-reload` |
-   | 11 | `enable + start services` |
-   | 12 | `apply masks` |
+   | 3 | `link with-devm-env into PATH` |
+   | 4 | `write Caddyfile` |
+   | 5 | `write dnsmasq config` |
+   | 6 | `reload base services` |
+   | 7 | `apt-get update` |
+   | 8 | `apt-get install packages` |
+   | 9 | `scaffold user firewall chain` |
+   | 10 | `run install commands` |
+   | 11 | `docker feature` (only when `docker: true`) |
+   | 12 | `install templates` |
+   | 13 | `install service units` |
+   | 14 | `systemctl daemon-reload` |
+   | 15 | `apply egress enforcement` |
+   | 16 | `enable + start services` |
+   | 17 | `apply masks` |
 
 5. Attaches an interactive shell via `tart exec`. The VM auto-stops when the shell exits.
 
