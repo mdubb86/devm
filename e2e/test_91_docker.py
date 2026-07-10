@@ -130,21 +130,24 @@ def test_docker_first_class_end_to_end(workspace, devm):
 
     # ---- Assertion 4: host → container reachability on published port. ----
     #
-    # Non-80/443 port on the host side — the 80/443 hijack by devm_nat's
-    # OUTPUT DNAT is a known gap (deferred; needs a user_nat chain).
+    # Both sides use non-80/443. devm_nat's OUTPUT chain DNATs container
+    # port 80/443 to iron-proxy AFTER Docker's own DNAT, so a container
+    # listening on 80 would get hijacked even if the host side isn't 80.
+    # hashicorp/http-echo takes -listen=:8080 so we sidestep that.
     run = devm_exec_with_retry(
         devm.path,
         ["docker", "run", "-d", "--rm", "--name", "e2e-web",
-         "-p", "127.0.0.1:12345:80", "nginx:alpine"],
+         "-p", "127.0.0.1:12345:8080",
+         "hashicorp/http-echo", "-listen=:8080", "-text=hello"],
         cwd=str(workspace.path), timeout=180,
     )
     assert run.returncode == 0, (
-        f"docker run nginx failed: rc={run.returncode}\n"
+        f"docker run http-echo failed: rc={run.returncode}\n"
         f"stderr={run.stderr.decode()!r}"
     )
 
     try:
-        # nginx binds a moment after `docker run -d` returns. Poll up to ~15s.
+        # http-echo binds a moment after `docker run -d` returns. Poll up to ~15s.
         deadline = time.time() + 15
         got_code = ""
         while time.time() < deadline:
@@ -166,8 +169,8 @@ def test_docker_first_class_end_to_end(workspace, devm):
                 break
             time.sleep(1)
         assert got_code == "200", (
-            f"guest→127.0.0.1:12345→container:80 should return 200 "
-            f"(nginx default page); got {got_code!r}. 000 means the "
+            f"guest→127.0.0.1:12345→container:8080 should return 200 "
+            f"(http-echo response); got {got_code!r}. 000 means the "
             f"filter chain dropped the packet — 172.16.0.0/12 user_output "
             f"rule is missing."
         )
