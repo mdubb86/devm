@@ -26,6 +26,7 @@ type VMReconcileRequest struct {
 type VMReconcileResponse struct {
 	Applied          []reconcile.Change `json:"applied"`
 	TeardownRequired []reconcile.Change `json:"teardown_required"`
+	SandboxState     string             `json:"sandbox_state"` // "running" or "stopped"
 }
 
 // ApplyLiver is the daemon-internal contract for applying live changes
@@ -42,8 +43,14 @@ func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config
 	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot)
 }
 
+// TartLister is the subset of *tart.Tart the reconcile handler uses to
+// check VM running state before deciding whether to apply live changes.
+type TartLister interface {
+	List(ctx context.Context) ([]tart.VM, error)
+}
+
 // RegisterReconcileHandler wires POST /vm/reconcile.
-func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver) {
+func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, tr TartLister) {
 	s.Register("/vm/reconcile", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -61,6 +68,21 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver) 
 
 		unlock := locks.Lock(req.ProjectID)
 		defer unlock()
+
+		// Check VM state. If not running, don't apply anything — changes
+		// get picked up at next cold-start's provisioner bundle pipe.
+		vms, err := tr.List(r.Context())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("tart list: %v", err), http.StatusInternalServerError)
+			return
+		}
+		running := false
+		for _, vm := range vms {
+			if vm.Name == req.VMName {
+				running = vm.Running
+				break
+			}
+		}
 
 		// Load baseline snapshot. Missing / malformed → nil, treated
 		// as "everything is new" by the diff engine.
@@ -90,6 +112,24 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver) 
 			}
 		}
 
+		state := "running"
+		if !running {
+			state = "stopped"
+			// Skip apply + snapshot write; return classification only.
+			// Changes surface again at cold-start via the provisioner
+			// bundle pipe, which will see them via the same diff engine.
+			resp := VMReconcileResponse{
+				Applied:          nil,
+				TeardownRequired: teardown,
+				SandboxState:     state,
+			}
+			body, _ := json.Marshal(resp)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.Copy(w, bytes.NewReader(body))
+			return
+		}
+
 		// Apply live changes. On failure, return error and don't
 		// touch the snapshot — same as if the request never happened.
 		if len(live) > 0 {
@@ -110,7 +150,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver) 
 			}
 		}
 
-		resp := VMReconcileResponse{Applied: live, TeardownRequired: teardown}
+		resp := VMReconcileResponse{Applied: live, TeardownRequired: teardown, SandboxState: state}
 		body, _ := json.Marshal(resp)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

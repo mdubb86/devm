@@ -46,7 +46,7 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 
 	res := ReconcileResult{
 		Rendered:         true,
-		SandboxState:     "running",
+		SandboxState:     resp.SandboxState,
 		Applied:          resp.Applied,
 		RecreateRequired: resp.TeardownRequired,
 	}

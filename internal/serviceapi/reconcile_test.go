@@ -2,12 +2,14 @@ package serviceapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/reconcile"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,7 +40,7 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 
 	server := NewServer(SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, /* fake apply */ &fakeApply{})
+	RegisterReconcileHandler(server, locks, /* fake apply */ &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"})
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -71,7 +73,7 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 
 	server := NewServer(SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, &fakeApply{})
+	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"})
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -115,7 +117,7 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 
 	server := NewServer(SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, &fakeApply{})
+	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"})
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -159,7 +161,7 @@ func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testi
 
 	server := NewServer(SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, &fakeApply{})
+	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"})
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -182,4 +184,58 @@ type fakeApply struct{ called bool }
 func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string) error {
 	f.called = true
 	return nil
+}
+
+// fakeTartList is a stand-in for the daemon's *tart.Tart, reporting a
+// fixed running state for one VM name without shelling out to `tart`.
+type fakeTartList struct {
+	running bool
+	vmName  string
+}
+
+func (f *fakeTartList) List(ctx context.Context) ([]tart.VM, error) {
+	return []tart.VM{{Name: f.vmName, Running: f.running}}, nil
+}
+
+func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
+	// When VM is stopped, /vm/reconcile must not call ApplyLive and
+	// must not update the snapshot — changes get picked up at next
+	// cold-start's provisioner bundle pipe.
+	t.Setenv("HOME", t.TempDir())
+	oldCfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateCfg("p", oldCfg))
+
+	newCfg := oldCfg
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	req := VMReconcileRequest{ProjectID: "p", VMName: "p-vm", Cfg: newCfg}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(SocketPath(), Build{})
+	locks := NewProjectLocks()
+	fake := &fakeApply{}
+	// Use a fake tart that reports p-vm as NOT running.
+	fakeTart := &fakeTartList{running: false, vmName: "p-vm"}
+	RegisterReconcileHandler(server, locks, fake, fakeTart)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "stopped", resp.SandboxState)
+	assert.Empty(t, resp.Applied, "must not apply against stopped VM")
+	assert.False(t, fake.called, "ApplyLive must not be called against stopped VM")
+
+	// Snapshot preserved at old cfg — pending change re-surfaces
+	// next reconcile (or at cold-start).
+	got, err := ReadStateCfg("p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "old", got.Env["FOO"].Literal,
+		"snapshot must NOT be updated when VM is stopped")
 }

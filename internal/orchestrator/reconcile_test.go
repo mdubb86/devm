@@ -30,6 +30,19 @@ func (nopApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoo
 	return nil
 }
 
+// fakeTartList is a stand-in for the daemon's *tart.Tart, reporting a
+// fixed running state for one VM name without shelling out to `tart`.
+// These orchestrator-level tests exercise the "VM is running" path;
+// the stopped-VM path is pinned by serviceapi's own reconcile tests.
+type fakeTartList struct {
+	running bool
+	vmName  string
+}
+
+func (f *fakeTartList) List(ctx context.Context) ([]tart.VM, error) {
+	return []tart.VM{{Name: f.vmName, Running: f.running}}, nil
+}
+
 // startReconcileDaemon spins up a real serviceapi.Server with the
 // /vm/reconcile handler registered on a temp Unix socket, and points
 // HOME at a temp dir so serviceapi.SocketPath() (and therefore
@@ -52,7 +65,7 @@ func startReconcileDaemon(t *testing.T) func() {
 	socket := serviceapi.SocketPath()
 
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterReconcileHandler(srv, serviceapi.NewProjectLocks(), nopApply{})
+	serviceapi.RegisterReconcileHandler(srv, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: true, vmName: "x"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

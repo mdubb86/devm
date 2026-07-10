@@ -253,7 +253,7 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	socket := filepath.Join(dir, "s.sock")
 
 	srv := NewServer(socket, Build{Version: "test-version"})
-	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{})
+	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -294,7 +294,7 @@ func TestClientReconcile_MissingFields(t *testing.T) {
 	socket := filepath.Join(dir, "s.sock")
 
 	srv := NewServer(socket, Build{})
-	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{})
+	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
