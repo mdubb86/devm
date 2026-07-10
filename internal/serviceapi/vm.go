@@ -116,8 +116,10 @@ func waitVMExecReady(ctx context.Context, vmName string, timeout time.Duration) 
 // the guest's nftables script DNATs its outbound UDP:123 to
 // MAC_HOST:ntpPort so systemd-timesyncd resyncs from the host clock
 // after a Mac sleep. Zero disables the NTP DNAT rule (useful in unit
-// tests that don't spin up an NTP responder).
-func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials, ntpPort int) {
+// tests that don't spin up an NTP responder). locks serializes
+// concurrent state-mutating calls for the same project; every handler
+// registered here that mutates VM/proxy state acquires it on entry.
+func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials, ntpPort int, locks *ProjectLocks) {
 	s.Register("/vm/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -132,6 +134,9 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, "project_id and vm_name required", http.StatusBadRequest)
 			return
 		}
+
+		unlock := locks.Lock(req.ProjectID)
+		defer unlock()
 
 		ctx := r.Context()
 
@@ -351,6 +356,10 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, "project_id and vm_name required", http.StatusBadRequest)
 			return
 		}
+
+		unlock := locks.Lock(req.ProjectID)
+		defer unlock()
+
 		info, ok := ironProxyState.get(req.ProjectID)
 		if !ok {
 			http.Error(w, "iron-proxy state missing — was /vm/start called for this project?",
@@ -389,6 +398,10 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, "project_id required", http.StatusBadRequest)
 			return
 		}
+
+		unlock := locks.Lock(req.ProjectID)
+		defer unlock()
+
 		// Stop iron-proxy for this project first. Best-effort — if
 		// it's not running, supervisor.Stop returns ErrNotFound which
 		// we treat as success.

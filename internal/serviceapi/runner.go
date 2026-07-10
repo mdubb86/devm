@@ -44,6 +44,11 @@ func RunService(ctx context.Context, build Build) error {
 	// processes and survives across CLI invocations.
 	tr := tart.New()
 	sup := supervisor.New("")
+	// Per-project mutex for every state-mutating VM endpoint (start,
+	// stop, teardown, apply-egress-enforcement, reconcile). Serializes
+	// concurrent same-project calls inside the daemon instead of relying
+	// on the CLI-side flock.
+	locks := NewProjectLocks()
 	// Adopt iron-proxy processes left running by a prior daemon
 	// instance. They survive daemon death by design (setsid on
 	// spawn); re-attaching here means /vm/stop and /vm/status
@@ -72,7 +77,8 @@ func RunService(ctx context.Context, build Build) error {
 		return fmt.Errorf("start ntp responder: %w", err)
 	}
 
-	RegisterVMHandlers(server, sup, tr, denials, ntp.Port())
+	RegisterVMHandlers(server, sup, tr, denials, ntp.Port(), locks)
+	RegisterReconcileHandler(server, locks, &realApplyLiver{tr: tr})
 
 	// Pull launchd-inherited listeners for :80 and :443. If the
 	// daemon was started outside launchd (e.g., `devm serve` from a

@@ -209,6 +209,7 @@ func ComputePortChanges(old, new schema.Config) []Change {
 func ComputeAllChanges(old, new schema.Config, repoRoot string) ([]Change, error) {
 	var out []Change
 	out = append(out, ComputePortChanges(old, new)...)
+	out = append(out, computeGlobalEnvChanges(old, new)...)
 	out = append(out, computeEnvChanges(old, new)...)
 	out = append(out, computeServiceUnitChanges(old, new)...)
 	out = append(out, computeHostnameChanges(old, new)...)
@@ -249,6 +250,39 @@ func pathEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// computeGlobalEnvChanges diffs the project-level env map (cfg.Env),
+// distinct from computeEnvChanges below which diffs each service's own
+// env block. Service is left empty on these Change entries to mark
+// them as global-scoped — WriteDevmEnv (via ApplyLive) writes cfg.Env
+// unprefixed into .devm/.env, so a global-scope change is real and
+// must surface for reconcile to pick up.
+func computeGlobalEnvChanges(old, new schema.Config) []Change {
+	oEnv := globalEnvOf(old)
+	nEnv := globalEnvOf(new)
+	var out []Change
+	for _, k := range unionStringKeys(oEnv, nEnv) {
+		oVal, oOk := oEnv[k]
+		nVal, nOk := nEnv[k]
+		switch {
+		case !oOk && nOk:
+			out = append(out, Change{Kind: KindEnvAdd, Key: k, New: nVal})
+		case oOk && !nOk:
+			out = append(out, Change{Kind: KindEnvRemove, Key: k, Old: oVal})
+		case oOk && nOk && oVal != nVal:
+			out = append(out, Change{Kind: KindEnvChange, Key: k, Old: oVal, New: nVal})
+		}
+	}
+	return out
+}
+
+func globalEnvOf(cfg schema.Config) map[string]string {
+	out := make(map[string]string, len(cfg.Env))
+	for k, v := range cfg.Env {
+		out[k] = v.Render()
+	}
+	return out
 }
 
 func computeEnvChanges(old, new schema.Config) []Change {

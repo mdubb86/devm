@@ -165,6 +165,20 @@ func TestComputeEnvChanges(t *testing.T) {
 	assert.Contains(t, kinds, KindEnvChange)
 }
 
+func TestComputeGlobalEnvChanges(t *testing.T) {
+	old := schema.Config{Env: map[string]schema.EnvValue{"FOO": {Literal: "old"}, "STALE": {Literal: "1"}}}
+	new := schema.Config{Env: map[string]schema.EnvValue{"FOO": {Literal: "new"}, "ADDED": {Literal: "yes"}}}
+	changes, err := ComputeAllChanges(old, new, t.TempDir())
+	require.NoError(t, err)
+	var kinds []ChangeKind
+	for _, c := range changes {
+		kinds = append(kinds, c.Kind)
+	}
+	assert.Contains(t, kinds, KindEnvAdd, "ADDED should surface as an add")
+	assert.Contains(t, kinds, KindEnvRemove, "STALE should surface as a remove")
+	assert.Contains(t, kinds, KindEnvChange, "FOO should surface as a change")
+}
+
 func TestDiff_ServiceExecChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
 		"api": {Exec: []string{"old"}},
