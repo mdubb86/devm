@@ -4,6 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/schema"
@@ -63,6 +66,46 @@ func TestBuild_Deterministic(t *testing.T) {
 	b, err := Build(cfg, "/tmp/repo")
 	require.NoError(t, err)
 	assert.Equal(t, a, b)
+}
+
+func TestBuild_TemplatePathsAreFlatBaseNames(t *testing.T) {
+	// RenderTemplates returns a map keyed by absolute host paths
+	// (<repoRoot>/.devm/templates/NN-svc-base.sh); Build must reduce
+	// them to a flat basename so the guest's install-templates.sh
+	// dispatcher (which iterates templates/*.sh non-recursively) can
+	// find them. Regression: an earlier revision embedded the full
+	// host path into the tar entry name and silently broke the whole
+	// templates flow.
+	repoRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "tmpl"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "tmpl", "nginx.conf"), []byte("hello {{.Project.ID}}"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Services: map[string]schema.Service{
+			"web": {
+				Templates: []schema.Template{{
+					Source: "tmpl/nginx.conf",
+					Output: "/etc/nginx/nginx.conf",
+				}},
+			},
+		},
+	}
+	body, err := Build(cfg, repoRoot)
+	require.NoError(t, err)
+
+	entries := readTar(t, body)
+	found := false
+	for name := range entries {
+		if !strings.HasPrefix(name, "templates/") {
+			continue
+		}
+		found = true
+		rest := name[len("templates/"):]
+		require.Falsef(t, strings.Contains(rest, "/"),
+			"template entry name must be a flat basename, got %q", name)
+	}
+	require.True(t, found, "expected at least one templates/ entry in the bundle")
 }
 
 type tarEntry struct {

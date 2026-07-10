@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/mdubb86/devm/internal/render"
@@ -43,7 +44,7 @@ func Build(cfg schema.Config, repoRoot string) ([]byte, error) {
 	// Deterministic ordering: sort keys before writing.
 	names := sortedKeys(templates)
 	for _, name := range names {
-		if err := writeEntry(tw, "templates/"+name, 0o755, []byte(templates[name])); err != nil {
+		if err := writeEntry(tw, "templates/"+filepath.Base(name), 0o755, []byte(templates[name])); err != nil {
 			return nil, err
 		}
 	}
