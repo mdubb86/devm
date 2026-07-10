@@ -383,7 +383,7 @@ func (p Project) Validate() error {
 // it's not validated here.
 func CheckUnknownKeys(data []byte) error {
 	knownTop := []string{
-		"project", "base_image", "network", "env",
+		"project", "base_image", "docker", "network", "env",
 		"services", "install", "mounts", "path", "packages",
 	}
 	knownProject := []string{

@@ -495,6 +495,7 @@ project:
   vm_name: foo-vm
   proxy: caddy
 base_image: {}
+docker: true
 network:
   allow: [github.com]
 env:
@@ -510,6 +511,16 @@ path:
   - $WORKSPACE/bin
 packages:
   - jq
+`)
+	require.NoError(t, CheckUnknownKeys(yamlBlob))
+}
+
+func TestCheckUnknownKeys_DockerTopLevel_Accepted(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  id: foo
+  vm_name: foo-vm
+docker: true
 `)
 	require.NoError(t, CheckUnknownKeys(yamlBlob))
 }
