@@ -482,8 +482,8 @@ func TestComputeTemplateChanges_NoChanges(t *testing.T) {
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
 	}
-	// Materialise the installer that WriteDevmDir would have produced.
-	require.NoError(t, render.WriteDevmDir(cfg, dir))
+	// Materialise the installer that WriteTemplateInstallers would have produced.
+	require.NoError(t, render.WriteTemplateInstallers(cfg, dir))
 
 	got, err := ComputeTemplateChanges(cfg, dir)
 	require.NoError(t, err)
@@ -501,7 +501,7 @@ func TestComputeTemplateChanges_ContentChanged(t *testing.T) {
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
 	}
-	require.NoError(t, render.WriteDevmDir(cfg, dir)) // baseline on-disk
+	require.NoError(t, render.WriteTemplateInstallers(cfg, dir)) // baseline on-disk
 	// Mutate the source.
 	require.NoError(t, os.WriteFile(src, []byte("v2 {{.Project.ID}}\n"), 0o644))
 
@@ -523,7 +523,7 @@ func TestComputeTemplateChanges_Removed(t *testing.T) {
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
 	}
-	require.NoError(t, render.WriteDevmDir(cfg1, dir))
+	require.NoError(t, render.WriteTemplateInstallers(cfg1, dir))
 
 	// New config drops the template.
 	cfg2 := schema.Config{

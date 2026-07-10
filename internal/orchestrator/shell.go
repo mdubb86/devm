@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/debuglog"
+	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/lock"
 	"github.com/mdubb86/devm/internal/provision"
-	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/secret"
@@ -116,12 +116,6 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 			_ = lk.Release()
 		}
 	}()
-
-	// Render .devm/ from the current devm.yaml before doing anything.
-	// Cheap and idempotent; ensures cold-start picks up current config.
-	if err := render.WriteDevmDir(cfg, repoRoot); err != nil {
-		return -1, fmt.Errorf("render devm dir: %w", err)
-	}
 
 	// Check VM state via daemon admin.
 	vmStatus, err := d.ServiceAPIClient.VMStatus(ctx, cfg.Project.ID, vmName)
@@ -282,16 +276,15 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 // instead of exiting on EOF.
 //
 // The user command is invoked via the with-devm-env wrapper so the
-// project env (.devm/.env) is sourced before argv runs. The wrapper
-// lives at $WORKSPACE/.devm/scripts/with-devm-env.sh on the host and
-// surfaces at the same absolute path inside the VM via the workspace
-// virtiofs share.
+// project env (/opt/devm/.env) is sourced before argv runs. The wrapper
+// lives in the guest at devmbundle.GuestWrapper, installed by the
+// provisioner's "install devm bundle" step.
 func (d ShellDeps) attachShell(ctx context.Context, vmName, repoRoot, cmdName string, cmdArgs []string) (int, error) {
 	execArgs := []string{"exec"}
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		execArgs = append(execArgs, "-i", "-t")
 	}
-	wrapper := filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env")
+	wrapper := devmbundle.GuestWrapper
 	execArgs = append(execArgs, vmName, wrapper, cmdName)
 	execArgs = append(execArgs, cmdArgs...)
 	debuglog.Logf("shell", "attaching interactive shell: tart exec %s %v", vmName, execArgs)

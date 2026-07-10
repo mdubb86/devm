@@ -412,7 +412,7 @@ func TestProvisioner_InstallStepsGoThroughWithDevmEnvWrapper(t *testing.T) {
 	require.Len(t, fakeTart.argvs, 1, "expected one deadline-carrying call (the install step)")
 	got := fakeTart.argvs[0]
 	require.Equal(t,
-		[]string{"/Users/x/repo/.devm/scripts/with-devm-env", "bash", "-e", "-o", "pipefail", "-c", "true"},
+		[]string{"/opt/devm/scripts/with-devm-env", "bash", "-e", "-o", "pipefail", "-c", "true"},
 		got,
 	)
 }

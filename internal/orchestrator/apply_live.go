@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 
+	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -59,9 +59,9 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 	if len(templateChanges) > 0 {
 		// Write updated installer scripts before running the dispatcher so
 		// the sandbox executes the latest rendered content. This must happen
-		// here (not in the pre-diff WriteDevmDirStaticOnly call in RunReconcile)
-		// so the on-disk installers remain as the diff baseline until the
-		// change has been detected and we're committed to applying it.
+		// here (not earlier in RunReconcile) so the on-disk installers
+		// remain as the diff baseline until the change has been detected
+		// and we're committed to applying it.
 		if err := render.WriteTemplateInstallers(cfg, repoRoot); err != nil {
 			return fmt.Errorf("apply_live: write template installers: %w", err)
 		}
@@ -70,8 +70,8 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		// share, so no transfer step is needed here. Wrapper sources
 		// .devm/.env so $WORKSPACE is set — the dispatcher reads it to
 		// locate .devm/templates and errors under `set -u` without it.
-		wrapperPath := filepath.Join(repoRoot, ".devm", "scripts", "with-devm-env")
-		dispatcherPath := filepath.Join(repoRoot, ".devm", "scripts", "install-templates.sh")
+		wrapperPath := devmbundle.GuestWrapper
+		dispatcherPath := devmbundle.GuestDispatcher
 		r := tr.ExecWithRetry(context.Background(), vmName, []string{wrapperPath, "bash", dispatcherPath})
 		if r.ExitCode != 0 {
 			return fmt.Errorf("apply_live: install-templates: exit %d (stderr: %s)", r.ExitCode, r.Stderr)

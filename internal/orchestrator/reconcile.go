@@ -146,15 +146,9 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 	vmName := cfg.Project.VMName
 	res := ReconcileResult{}
 
-	// 1. Always render .devm/ static files first (spec.yaml, Caddyfile,
-	// scripts/). We deliberately skip the per-template installer scripts
-	// here so that ComputeTemplateChanges can still compare the on-disk
-	// installers (the "last-applied" snapshot) against the newly-rendered
-	// content and detect changes. The installer scripts are written later
-	// by ApplyLive, immediately before the in-sandbox dispatcher runs.
-	if err := render.WriteDevmDirStaticOnly(cfg, repoRoot); err != nil {
-		return -1, res, fmt.Errorf("render devm dir: %w", err)
-	}
+	// 1. Bundle install now happens inside the daemon's provisioner step
+	// (installDevmBundle); reconcile no longer pre-renders .devm/ on the
+	// host. Tasks 5-7 move the rest of this flow into the daemon.
 	res.Rendered = true
 
 	// 2. Acquire lock.

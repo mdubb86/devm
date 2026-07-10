@@ -4,6 +4,7 @@
 package provision
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -112,7 +114,7 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 	}{
 		{"mkdir workspace parents", p.mkdirWorkspaceParents},
 		{"install CA root", p.installCARoot},
-		{"link with-devm-env into PATH", p.linkWithDevmEnv},
+		{"install devm bundle", p.installDevmBundle},
 		{"write Caddyfile", p.writeCaddyfile},
 		{"write dnsmasq config", p.writeDnsmasqConfig},
 		{"reload base services", p.reloadBaseServices},
@@ -193,12 +195,18 @@ func (p *Provisioner) mkdirWorkspaceParents(ctx context.Context, w io.Writer) er
 	return p.exec(ctx, w, "sudo", "mkdir", "-p", parent)
 }
 
-// linkWithDevmEnv symlinks the workspace-share wrapper into /usr/local/bin
-// so `with-devm-env` resolves from any shell in the VM without depending on
-// .devm/.env having been sourced first. Idempotent via `ln -sf`.
-func (p *Provisioner) linkWithDevmEnv(ctx context.Context, w io.Writer) error {
-	src := filepath.Join(p.WorkspaceVMPath, ".devm", "scripts", "with-devm-env")
-	return p.exec(ctx, w, "sudo", "ln", "-sf", src, "/usr/local/bin/with-devm-env")
+// installDevmBundle builds the devm-owned artifact bundle (env file,
+// with-devm-env wrapper, install-templates.sh dispatcher, per-template
+// installers, install.sh) and pipes it into the guest, where install.sh
+// extracts it to /opt/devm and symlinks with-devm-env onto PATH. Runs
+// early — before "run install commands" and the docker feature — so
+// every later step that needs the wrapper finds it.
+func (p *Provisioner) installDevmBundle(ctx context.Context, w io.Writer) error {
+	body, err := devmbundle.Build(p.Cfg, p.WorkspaceVMPath)
+	if err != nil {
+		return fmt.Errorf("build devm bundle: %w", err)
+	}
+	return p.PipeIntoShell(ctx, w, bytes.NewReader(body), devmbundle.GuestInstallScript)
 }
 
 func (p *Provisioner) installCARoot(ctx context.Context, w io.Writer) error {
@@ -344,7 +352,7 @@ func (p *Provisioner) runInstallCommands(ctx context.Context, w io.Writer) error
 	// user's project env (WORKSPACE_DIR, path: entries, cfg.Env values)
 	// is sourced from .devm/.env before their command runs. Same wrapper
 	// as the interactive shell path in orchestrator/shell.go.
-	wrapper := filepath.Join(p.WorkspaceVMPath, ".devm", "scripts", "with-devm-env")
+	wrapper := devmbundle.GuestWrapper
 	for i, command := range p.Cfg.Install {
 		fmt.Fprintf(w, "[%d/%d] %s\n", i+1, len(p.Cfg.Install), command)
 		stepCtx, cancel := context.WithTimeout(ctx, budget)
@@ -397,8 +405,8 @@ func (p *Provisioner) installTemplates(ctx context.Context, w io.Writer) error {
 		fmt.Fprintln(w, "(no templates declared)")
 		return nil
 	}
-	wrapper := filepath.Join(p.WorkspaceVMPath, ".devm", "scripts", "with-devm-env")
-	dispatcher := filepath.Join(p.WorkspaceVMPath, ".devm", "scripts", "install-templates.sh")
+	wrapper := devmbundle.GuestWrapper
+	dispatcher := devmbundle.GuestDispatcher
 	return p.exec(ctx, w, wrapper, "bash", dispatcher)
 }
 

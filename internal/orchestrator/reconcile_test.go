@@ -162,6 +162,7 @@ func TestRunReconcileInner_RecreatePending_DoesNotError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunReconcile_StoppedSandboxRendersAndExits0(t *testing.T) {
+	t.Skip("rewritten in Task 7: RunReconcile no longer pre-renders .devm/.env on the host (Task 4 removed the WriteDevmDirStaticOnly call); reconcile's whole render/apply path moves into the daemon in Tasks 5-7")
 	tr := makeFakeTart(t, t.TempDir(), absentVMListJSON(), "")
 	cfg := reconcileMinimalCfg()
 	opts := ReconcileOptions{}
