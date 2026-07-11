@@ -181,7 +181,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 func mergeLiveApplied(old, new schema.Config, applied []reconcile.Change) schema.Config {
 	merged := old
 	// Copy service map before mutating so we don't alias old_cfg's map.
-	if len(applied) > 0 && merged.Services != nil {
+	if len(applied) > 0 {
 		copied := make(map[string]schema.Service, len(merged.Services))
 		for k, v := range merged.Services {
 			copied[k] = v

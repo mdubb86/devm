@@ -273,3 +273,40 @@ func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
 	assert.Equal(t, "old", got.Env["FOO"].Literal,
 		"snapshot must NOT be updated when VM is stopped")
 }
+
+func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
+	// Regression: when old_cfg.Services was nil (e.g., cold-start with an
+	// empty yaml) and new_cfg adds a service with a port, mergeLiveApplied
+	// panicked with "assignment to entry in nil map" because its defensive-
+	// copy guard skipped when the pre-image Services map was nil. Fixed by
+	// dropping the nil check; make() on a nil-length seed and range over
+	// nil are both valid.
+	t.Setenv("HOME", t.TempDir())
+	oldCfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		// No Services at all — Services is nil.
+	}
+	require.NoError(t, WriteStateCfg("p", oldCfg))
+
+	newCfg := oldCfg
+	newCfg.Services = map[string]schema.Service{
+		"api": {Port: 8080},
+	}
+	req := VMReconcileRequest{ProjectID: "p", VMName: "p-vm", Cfg: newCfg}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"})
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	// Snapshot must reflect the new port in the newly-created Services map.
+	got, err := ReadStateCfg("p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.Services, "Services should be initialized after live apply, not nil")
+	assert.Equal(t, 8080, got.Services["api"].Port)
+}
