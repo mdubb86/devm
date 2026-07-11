@@ -103,14 +103,16 @@ func main() {
 // on its own. Matched by cobra's full CommandPath — "start" alone
 // is ambiguous (`devm start` vs `devm service start`).
 var skipDriftCheckPaths = map[string]struct{}{
-	"devm install":         {},
-	"devm uninstall":       {},
-	"devm serve":           {},
-	"devm upgrade":         {},
-	"devm service start":   {},
-	"devm service stop":    {},
-	"devm service restart": {},
-	"devm service status":  {},
+	"devm install":            {},
+	"devm uninstall":          {},
+	"devm serve":              {},
+	"devm upgrade":            {},
+	"devm service start":      {},
+	"devm service stop":       {},
+	"devm service restart":    {},
+	"devm service status":     {},
+	"devm _kardianos install":   {},
+	"devm _kardianos uninstall": {},
 }
 
 // ensureDaemonInSync compares the CLI's Fingerprint against the
