@@ -53,15 +53,16 @@ this CLI's — an actionable signal that ` + "`devm install`" + ` will fix.`,
 		if statusJSON {
 			fmt.Println(orchestrator.FormatStatusJSON(res))
 		} else {
+			orchestrator.UseColor = os.Getenv("NO_COLOR") == "" && isTerminal(os.Stdout)
 			fmt.Print(orchestrator.FormatStatusText(res))
 		}
 
 		// Drift is an exit-3 condition — actionable ("run devm install")
-		// distinct from generic status failure. The daemon-up-with-drift
-		// case is already caught by PersistentPreRun's ensureDaemonInSync
-		// before we get here; this covers the daemon-down-but-on-disk-
-		// binary-mismatches case that ensureDaemonInSync can't (it fails
-		// open on unreachable daemon).
+		// distinct from generic status failure. Daemon-touching commands
+		// fail fast on drift via requireDaemonInSync; `devm status` is
+		// the read-only probe and shouldn't fail — it renders the
+		// mismatch in its output (red MISMATCH marker) and exits 3 so
+		// scripts can key off the code.
 		if res.Daemon.Fingerprint != "" && !res.Daemon.FingerprintMatchesCLI {
 			os.Exit(ExitDaemonDrift)
 		}

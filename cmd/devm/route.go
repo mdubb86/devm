@@ -34,6 +34,9 @@ var routeVMCmd = &cobra.Command{
 func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		if err := requireDaemonInSync(cmd.Context()); err != nil {
+			return err
+		}
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return err

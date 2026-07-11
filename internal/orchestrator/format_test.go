@@ -215,6 +215,26 @@ func TestFormatStatusText_ProxyLine_RedWhenDown(t *testing.T) {
 	assert.Contains(t, out, "connection refused")
 }
 
+func TestFormatDaemonStatus_MismatchColor(t *testing.T) {
+	d := DaemonStatus{
+		Running: true, BinaryPath: "/opt/devm/bin/devm",
+		Fingerprint: "abc", FingerprintMatchesCLI: false,
+	}
+	t.Run("plain_when_disabled", func(t *testing.T) {
+		UseColor = false
+		out := formatDaemonStatus(d)
+		assert.Contains(t, out, "MISMATCH")
+		assert.NotContains(t, out, "\x1b[")
+	})
+	t.Run("red_when_enabled", func(t *testing.T) {
+		UseColor = true
+		defer func() { UseColor = false }()
+		out := formatDaemonStatus(d)
+		assert.Contains(t, out, "\x1b[31m")
+		assert.Contains(t, out, "\x1b[0m")
+	})
+}
+
 func TestFormatChange_Template(t *testing.T) {
 	// Added template.
 	added := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "web", Detail: "/etc/caddy/Caddyfile", New: "installed"}

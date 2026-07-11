@@ -23,6 +23,9 @@ The VM filesystem and installed tools persist; only the running state is
 discarded. Re-launch with devm shell. Use --yes (-y) to skip the prompt.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		if err := requireDaemonInSync(cmd.Context()); err != nil {
+			return err
+		}
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)

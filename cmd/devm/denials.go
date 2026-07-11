@@ -28,6 +28,9 @@ out what to add to ` + "`network.allow`" + ` in devm.yaml when a tool inside the
 sandbox is failing to reach an upstream.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		if err := requireDaemonInSync(cmd.Context()); err != nil {
+			return err
+		}
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return err

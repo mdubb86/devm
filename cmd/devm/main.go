@@ -11,11 +11,12 @@ import (
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
-// ExitDaemonDrift is the exit code returned when the daemon's
-// Fingerprint doesn't match the CLI's. Callers can detect it
-// specifically (`if [ $? -eq 3 ]; then devm install; fi`) rather
-// than treating any non-zero exit as a drift. 3 is unused by any
-// other error path in this binary.
+// ExitDaemonDrift is the exit code `devm status` uses when the daemon
+// Fingerprint doesn't match the CLI's. Scripts can distinguish drift
+// from generic failure (`if [ $? -eq 3 ]; then devm install; fi`).
+// Only `devm status` uses this code — daemon-touching commands that
+// fail fast on drift via requireDaemonInSync return a normal error
+// and the CLI exits 1.
 const ExitDaemonDrift = 3
 
 // nudgeForCommand fires the "newer version available" check before
@@ -39,11 +40,8 @@ var nudgeForCommand = map[string]struct{}{
 // invocation. It's how the CLI and the daemon prove they were
 // compiled from the same binary: two processes that share the same
 // Fingerprint were built together; different Fingerprints mean the
-// on-disk binary has been rebuilt since the daemon last started.
-//
-// Runtime cost is zero — the value is a compiled-in string constant
-// on both sides. `ensureDaemonInSync` reads it from memory and
-// compares against the daemon's `/version` reply.
+// on-disk binary has been rebuilt since the daemon last started, so
+// the API contract between them is not guaranteed.
 var (
 	Version     = "dev"
 	Commit      = "none"
@@ -74,18 +72,6 @@ var rootCmd = &cobra.Command{
 				release.DefaultBrewLister(),
 			)
 		}
-
-		// Drift detection: if the running daemon was built from a
-		// different binary than this CLI (Fingerprint mismatch), the
-		// on-disk binary has been rebuilt since the daemon last
-		// started. Fail loud so the user (or test infra) knows to
-		// run `devm install`. Exits with ExitDaemonDrift (a specific
-		// non-1 code) so callers can distinguish drift from generic
-		// failure. No-op when the daemon is down or already in sync.
-		if err := ensureDaemonInSync(cmd.Context(), cmd.CommandPath()); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(ExitDaemonDrift)
-		}
 	},
 }
 
@@ -96,53 +82,38 @@ func main() {
 	}
 }
 
-// skipDriftCheckPaths are commands where drift detection must NOT
-// run: daemon-lifecycle commands manage the daemon themselves (a
-// drift check that raised inside `devm install` would prevent the
-// user from ever fixing drift), and `upgrade` restarts the daemon
-// on its own. Matched by cobra's full CommandPath — "start" alone
-// is ambiguous (`devm start` vs `devm service start`).
-var skipDriftCheckPaths = map[string]struct{}{
-	"devm install":            {},
-	"devm uninstall":          {},
-	"devm serve":              {},
-	"devm upgrade":            {},
-	"devm service start":      {},
-	"devm service stop":       {},
-	"devm service restart":    {},
-	"devm service status":     {},
-	"devm _kardianos install":   {},
-	"devm _kardianos uninstall": {},
-}
-
-// ensureDaemonInSync compares the CLI's Fingerprint against the
-// running daemon's Fingerprint. On mismatch, returns an error telling
-// the user to run `devm install`; the caller (PersistentPreRun) prints
-// it and exits.
+// requireDaemonInSync verifies the running daemon was built from the
+// same source as this CLI. Daemon-touching commands (shell, start,
+// exec, stop, reconcile, teardown, route local/vm, denials) call this
+// at the top of their RunE to fail fast — the CLI/daemon share a Go
+// API surface that isn't versioned, so a mismatched pair can produce
+// silent corruption or confusing errors deep in a command.
 //
-// Returns nil (no error) when:
-//   - the command is in skipDriftCheckCommands (self-managing);
-//   - the daemon is down (nothing to compare against — a real command
-//     issue will surface if the caller actually needs the daemon);
-//   - Fingerprint matches.
+// Returns nil (proceed) when:
+//   - the daemon is unreachable (a "daemon down" error will surface
+//     naturally when the command tries to call it);
+//   - either side's Fingerprint is empty (an older CLI or daemon that
+//     doesn't carry the field — best we can do is trust);
+//   - Fingerprints match.
 //
-// Fingerprint is a compiled-in constant, so this is a single unix-
-// socket round-trip plus a string equality — cheap enough to run
-// on every command that touches the daemon.
-func ensureDaemonInSync(ctx context.Context, cmdPath string) error {
-	if _, skip := skipDriftCheckPaths[cmdPath]; skip {
-		return nil
-	}
+// On mismatch, returns an actionable error naming both binaries and
+// pointing at the recovery command. Commands that don't touch the
+// daemon (recipes, secret, skills, version) don't call this — they
+// work regardless of daemon state.
+func requireDaemonInSync(ctx context.Context) error {
 	c := serviceapi.NewClient()
 	daemon, err := c.BuildInfo(ctx)
 	if err != nil {
-		return nil // service down; nothing to compare
+		return nil
 	}
-	if daemon.Fingerprint == Fingerprint {
+	if daemon.Fingerprint == "" || Fingerprint == "" || daemon.Fingerprint == Fingerprint {
 		return nil
 	}
 	return fmt.Errorf(
-		"devm daemon is out of sync with this CLI (daemon fingerprint %s, CLI %s) — run `devm install`",
-		daemon.Fingerprint, Fingerprint,
+		"devm daemon is out of sync with this CLI — API compatibility not guaranteed.\n"+
+			"  daemon: %s (fingerprint %s)\n"+
+			"  CLI:    %s (fingerprint %s)\n"+
+			"Recovery: `devm install`",
+		daemon.BinaryPath, daemon.Fingerprint, resolvedSelfPath(), Fingerprint,
 	)
 }

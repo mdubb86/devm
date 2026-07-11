@@ -61,6 +61,15 @@ type ReconcileResult struct {
 	NextAction       string // "applied" | "needs_approval" | "user_refused" | "nothing_to_do"
 }
 
+// UseColor gates ANSI escapes emitted by the formatters (currently
+// only the "MISMATCH" fingerprint marker). The CLI sets this from
+// stdout-is-tty + $NO_COLOR before calling FormatStatusText. Package-
+// level rather than a parameter because "should output be colored"
+// is a global property of the writing environment, not a per-call
+// formatting decision — and it keeps existing test call sites
+// untouched.
+var UseColor bool
+
 // FormatStatusText renders StatusResult for human terminals. The
 // Daemon section renders unconditionally; project-dependent sections
 // (sandbox, routing, DNS, CA, proxy) render only when HasProject.
@@ -101,7 +110,7 @@ func FormatStatusText(r StatusResult) string {
 
 // formatDaemonStatus renders the daemon section. Always fires — the
 // "is the devm daemon happy?" question is meaningful outside a
-// project directory too.
+// project directory too. Honors UseColor for the MISMATCH marker.
 func formatDaemonStatus(d DaemonStatus) string {
 	var b strings.Builder
 	b.WriteString("Daemon:\n")
@@ -120,7 +129,11 @@ func formatDaemonStatus(d DaemonStatus) string {
 		if d.FingerprintMatchesCLI {
 			fmt.Fprintf(&b, "  fingerprint: %s (matches CLI)\n", d.Fingerprint)
 		} else {
-			fmt.Fprintf(&b, "  fingerprint: %s (MISMATCH — CLI is different; run `devm install`)\n", d.Fingerprint)
+			marker := "(MISMATCH — CLI is different; run `devm install`)"
+			if UseColor {
+				marker = "\x1b[31m" + marker + "\x1b[0m"
+			}
+			fmt.Fprintf(&b, "  fingerprint: %s %s\n", d.Fingerprint, marker)
 		}
 	}
 	if d.Error != "" {

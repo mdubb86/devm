@@ -61,9 +61,27 @@ func (p *kardianosProgram) Start(_ service.Service) error {
 	go func() {
 		p.done <- serviceapi.RunService(ctx, serviceapi.Build{
 			Version: Version, Commit: Commit, Date: Date, Fingerprint: Fingerprint,
+			BinaryPath: resolvedSelfPath(),
 		})
 	}()
 	return nil
+}
+
+// resolvedSelfPath returns os.Executable() with symlinks resolved.
+// Compared client-side to daemon.BinaryPath (also resolved) to detect
+// "rebuild in place" drift: same on-disk file, different fingerprint
+// (== new bytes). Returns "" on any error — callers treat missing as
+// "unknown, don't auto-heal".
+func resolvedSelfPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	real, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return exe
+	}
+	return real
 }
 
 func (p *kardianosProgram) Stop(_ service.Service) error {
@@ -151,9 +169,14 @@ var installCmd = &cobra.Command{
 		// Privileged install: silent. The sudo prompt itself (if it
 		// fires) is the user-visible activity. If everything is
 		// already in place, no prompt — and no log noise.
-		if err := runPrivilegedInstall(logFile); err != nil {
+		didWork, err := runPrivilegedInstall(cmd.Context(), logFile)
+		if err != nil {
 			tailLog(logPath, 30)
 			return fmt.Errorf("privileged install failed; see %s", logPath)
+		}
+		if !didWork {
+			reporter.Info("already up to date")
+			return nil
 		}
 
 		// Base image: long-running, no terminal output (captured to
@@ -216,15 +239,31 @@ func tailLog(path string, n int) {
 	fmt.Fprintln(os.Stderr, "---")
 }
 
-func runPrivilegedInstall(out io.Writer) error {
+// runPrivilegedInstall composes and runs the install script that
+// touches root-owned state (DNS resolver file, CA trust, LaunchDaemon
+// plist). Each step is gated on whether it's actually needed:
+//
+//   - DNS resolver file: skipped when already present with matching bytes
+//   - CA trust: skipped when the cert is already in the System Keychain
+//   - Daemon plist + bootstrap: skipped when the daemon is already
+//     running with a Fingerprint that matches this CLI's
+//
+// When every step is a no-op, the function returns without escalating
+// to sudo at all — no Touch ID prompt for `devm install` when nothing
+// needs installing. Only drift or missing pieces trigger the prompt.
+//
+// Returns didWork = true when the script actually ran, so the caller
+// can distinguish "installed something" from "already up to date" for
+// the top-line message.
+func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("locate executable: %w", err)
+		return false, fmt.Errorf("locate executable: %w", err)
 	}
 
 	dnsState, err := serviceapi.CheckResolverFile()
 	if err != nil {
-		return fmt.Errorf("check %s: %w", serviceapi.ResolverFilePath, err)
+		return false, fmt.Errorf("check %s: %w", serviceapi.ResolverFilePath, err)
 	}
 	needsDNS := dnsState != serviceapi.ResolverFileMatches
 
@@ -235,23 +274,26 @@ func runPrivilegedInstall(out io.Writer) error {
 	}
 	needsCA := !trusted
 
+	needsDaemon := !daemonInSyncWithCLI(ctx)
+
+	if !needsDNS && !needsCA && !needsDaemon {
+		return false, nil
+	}
+
 	// CA generation is unprivileged; do it before the sudo block so
 	// the script has a cert file to point at.
 	var rootCertPath string
 	if needsCA {
 		if _, err := serviceapi.LoadOrGenerate(); err != nil {
-			return fmt.Errorf("generate CA: %w", err)
+			return false, fmt.Errorf("generate CA: %w", err)
 		}
 		runDir, err := serviceapi.EnsureRuntimeDir()
 		if err != nil {
-			return fmt.Errorf("resolve CA cert path: %w", err)
+			return false, fmt.Errorf("resolve CA cert path: %w", err)
 		}
 		rootCertPath = filepath.Join(runDir, "ca", "root.crt")
 	}
 
-	// Compose the single sudo script. Ship 4.2 always runs the
-	// _kardianos install step so the LaunchDaemon plist + launchctl
-	// bootstrap happen under root. DNS + CA steps are conditional.
 	var sb strings.Builder
 	sb.WriteString("set -e\n")
 	if needsDNS {
@@ -267,19 +309,42 @@ func runPrivilegedInstall(out io.Writer) error {
 		fmt.Fprintf(&sb, "security add-trusted-cert -d -r trustRoot -k %s %s\n",
 			shellQuote(serviceapi.SystemKeychain), shellQuote(rootCertPath))
 	}
-	// Always run the kardianos install — it's idempotent enough at
-	// the kardianos level (writes plist, bootstraps; second run with
-	// the same content is a no-op aside from the bootstrap re-load).
-	fmt.Fprintf(&sb, "%s _kardianos install\n", shellQuote(exe))
+	if needsDaemon {
+		// Full reload path: unload any running daemon, wipe the plist
+		// so kardianos writes a fresh one pointing at THIS binary, then
+		// let _kardianos install write + bootstrap. `bootout` and `rm`
+		// use `|| true` so a first-time install (no plist, no daemon
+		// loaded) still succeeds.
+		sb.WriteString("launchctl bootout system/com.devm.service 2>/dev/null || true\n")
+		fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(launchdPlistPath))
+		fmt.Fprintf(&sb, "%s _kardianos install\n", shellQuote(exe))
+	}
 
-	c := exec.Command("sudo", "bash", "-c", sb.String())
+	c := exec.CommandContext(ctx, "sudo", "bash", "-c", sb.String())
 	c.Stdout = out
 	c.Stderr = out
 	c.Stdin = os.Stdin
 	if err := c.Run(); err != nil {
-		return fmt.Errorf("privileged install: %w", err)
+		return true, fmt.Errorf("privileged install: %w", err)
 	}
-	return nil
+	return true, nil
+}
+
+// daemonInSyncWithCLI reports whether the running daemon shares this
+// CLI's Fingerprint — i.e. was built from the same binary. False when
+// the daemon is unreachable, doesn't report a Fingerprint, or reports
+// a different one. Used by `devm install` to skip the sudo escalation
+// when there's genuinely nothing to install.
+func daemonInSyncWithCLI(ctx context.Context) bool {
+	c := serviceapi.NewClient()
+	if !c.Available(ctx) {
+		return false
+	}
+	b, err := c.BuildInfo(ctx)
+	if err != nil {
+		return false
+	}
+	return b.Fingerprint != "" && Fingerprint != "" && b.Fingerprint == Fingerprint
 }
 
 // shellQuote wraps s in single quotes, escaping embedded quotes so
@@ -481,16 +546,13 @@ var kardianosInstallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		st, _ := svc.Status()
-		if st == service.StatusUnknown {
-			if err := svc.Install(); err != nil {
-				return err
-			}
+		// Called only from runPrivilegedInstall's sudo script, which
+		// has already bootout'd any prior daemon and removed the plist.
+		// Install (writes plist) + bootstrap (loads it) unconditionally.
+		if err := svc.Install(); err != nil {
+			return fmt.Errorf("svc.Install: %w", err)
 		}
-		if st != service.StatusRunning {
-			return launchdBootstrap()
-		}
-		return nil
+		return launchdBootstrap()
 	},
 }
 
@@ -567,25 +629,27 @@ func init() {
 	signal.Ignore(syscall.SIGPIPE)
 }
 
-// restartAndWait restarts the kardianos service and polls /health
-// until the new process is responsive. Prints a one-line stderr
-// notice. No-op when the service isn't installed or isn't running.
-// Used by `devm upgrade` post-install and by the PersistentPreRun
-// drift auto-heal.
+// restartAndWait restarts the devm service and polls /health until
+// the new process is responsive. Prints a one-line stderr notice.
+// No-op when the daemon isn't currently up. Used by `devm upgrade`
+// post-install and by the PersistentPreRun drift auto-heal.
+//
+// The "is the daemon up?" check goes through the daemon's own /health
+// endpoint (client.Available) rather than kardianos's svc.Status().
+// kardianos v1.2.4 on macOS asks user-level `launchctl list` for
+// running state, but system LaunchDaemons don't appear in the user
+// launchctl domain — so svc.Status() returns "not running" even
+// when the daemon is very much alive, which silently skipped the
+// restart and broke drift auto-heal. /health is the source of truth.
 func restartAndWait(reason string) error {
-	svc, err := newKardianosService()
-	if err != nil {
-		return err
-	}
-	st, err := svc.Status()
-	if err != nil || st != service.StatusRunning {
-		return nil
+	c := serviceapi.NewClient()
+	if !c.Available(context.Background()) {
+		return nil // daemon not up; nothing to restart
 	}
 	fmt.Fprintf(os.Stderr, "restarting devm service (%s)…\n", reason)
 	if err := runKardianosUnderSudo("restart"); err != nil {
 		return fmt.Errorf("restart: %w", err)
 	}
-	c := serviceapi.NewClient()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if c.Available(context.Background()) {

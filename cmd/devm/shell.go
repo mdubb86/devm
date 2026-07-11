@@ -74,6 +74,9 @@ TTY/PTY handling is auto-detected from the caller's stdin:
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		if err := requireDaemonInSync(cmd.Context()); err != nil {
+			return err
+		}
 		if err := requireRunningVM(cmd.Context()); err != nil {
 			return err
 		}
@@ -117,6 +120,9 @@ func requireRunningVM(ctx context.Context) error {
 func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	// Past arg parsing — errors from here on are runtime, not usage.
 	cmd.SilenceUsage = true
+	if err := requireDaemonInSync(cmd.Context()); err != nil {
+		return err
+	}
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)

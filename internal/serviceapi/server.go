@@ -42,11 +42,20 @@ type Server struct {
 // Commit differs from the daemon's reported Commit knows the daemon
 // needs a restart. For dev builds Commit is "none" for both, so
 // Fingerprint carries the discrimination.
+//
+// BinaryPath is the filesystem path the daemon process was launched
+// from (os.Executable() at startup, symlinks resolved). Reported so
+// the CLI can decide, on a Fingerprint drift, whether the invoked
+// binary is the same on-disk file as the daemon's — a "rebuild in
+// place" that can be auto-healed by restarting the daemon — versus a
+// different binary entirely (dev bin/devm vs prod ~/.local/bin/devm),
+// where auto-restart would silently flip the installed daemon.
 type Build struct {
 	Version     string `json:"version"`
 	Commit      string `json:"commit"`
 	Date        string `json:"date"`
 	Fingerprint string `json:"fingerprint,omitempty"`
+	BinaryPath  string `json:"binary_path,omitempty"`
 }
 
 // NewServer constructs a Server. socketPath should be SocketPath()

@@ -25,6 +25,9 @@ var reconcileCmd = &cobra.Command{
 	Short: "Diff devm.yaml against the running sandbox's daemon-side state; apply live changes or prompt for recreate",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		if err := requireDaemonInSync(cmd.Context()); err != nil {
+			return err
+		}
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return err
