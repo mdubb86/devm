@@ -2,9 +2,12 @@
 # scripts/release.sh — pre-tag picker + guards for `just release`.
 #
 # Env knobs (all optional):
-#   SKIP_E2E=1        skip `just e2e-devm`
 #   SKIP_CI_CHECK=1   skip the gh CI-green check
 #   NONINTERACTIVE=1  no picker; reads VERSION from $1
+#
+# The e2e suite is NOT run as a release guard — it needs sudo/Touch ID
+# (installs the LaunchDaemon) and can't run under a scripted shell.
+# Run `just e2e-devm` manually before tagging.
 
 set -euo pipefail
 
@@ -70,13 +73,6 @@ fi
 # ---- guards ----
 log "running go test ./..."
 go test ./...
-
-if [ "${SKIP_E2E:-}" = "1" ]; then
-    log "SKIP_E2E=1 — skipping just e2e-devm"
-else
-    log "running just e2e-devm"
-    just e2e-devm
-fi
 
 if [ "${SKIP_CI_CHECK:-}" = "1" ]; then
     log "SKIP_CI_CHECK=1 — skipping gh CI check"

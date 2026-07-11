@@ -90,14 +90,12 @@ e2e-list:
 e2e-clean:
     @e2e/scripts/sweep-leftovers.sh
 
-# Cut a release: interactive picker (patch/minor/major), runs all
-# pre-tag guards, tags + pushes. CI takes over from there.
+# Cut a release: interactive picker (patch/minor/major), runs unit
+# tests + gh CI-green check, tags + pushes. CI takes over from there.
+# `just e2e-devm` is a manual pre-release step — it needs sudo/Touch
+# ID and can't run under the release script's shell.
 release:
     @scripts/release.sh
-
-# Same as `release` but skips the e2e suite. Use for hotfixes.
-release-no-e2e:
-    @SKIP_E2E=1 scripts/release.sh
 
 # Run goreleaser locally in dry-run mode against the current commit.
 # Useful for validating .goreleaser.yaml without cutting a real release.
