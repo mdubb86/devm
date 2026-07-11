@@ -442,6 +442,35 @@ var kardianosCmd = &cobra.Command{
 	Hidden: true,
 }
 
+// launchdPlistPath is the system-wide LaunchDaemon plist path.
+const launchdPlistPath = "/Library/LaunchDaemons/com.devm.service.plist"
+
+// launchdTarget is the modern launchctl target for our service, used
+// with bootstrap/bootout.
+const launchdTarget = "system/com.devm.service"
+
+// launchdBootstrap loads the plist via modern `launchctl bootstrap`.
+// Replacement for kardianos's Start (`launchctl load` — deprecated on
+// modern macOS, fails with "Load failed: 5: Input/output error").
+func launchdBootstrap() error {
+	out, err := exec.Command("launchctl", "bootstrap", "system", launchdPlistPath).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("launchctl bootstrap system %s: %v: %s", launchdPlistPath, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// launchdBootout deregisters + SIGTERMs the service via modern
+// `launchctl bootout`. Replacement for kardianos's Stop (`launchctl
+// unload` — deprecated, leaves KeepAlive daemons alive).
+func launchdBootout() error {
+	out, err := exec.Command("launchctl", "bootout", launchdTarget).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("launchctl bootout %s: %v: %s", launchdTarget, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 var kardianosInstallCmd = &cobra.Command{
 	Use:    "install",
 	Short:  "[internal] kardianos svc.Install() under sudo",
@@ -459,7 +488,7 @@ var kardianosInstallCmd = &cobra.Command{
 			}
 		}
 		if st != service.StatusRunning {
-			return svc.Start()
+			return launchdBootstrap()
 		}
 		return nil
 	},
@@ -479,50 +508,41 @@ var kardianosUninstallCmd = &cobra.Command{
 		if st == service.StatusUnknown {
 			return nil
 		}
-		_ = svc.Stop()
+		_ = launchdBootout()
 		return svc.Uninstall()
 	},
 }
 
 var kardianosStartCmd = &cobra.Command{
 	Use:    "start",
-	Short:  "[internal] kardianos svc.Start() under sudo",
+	Short:  "[internal] launchctl bootstrap under sudo",
 	Hidden: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		svc, err := newKardianosService()
-		if err != nil {
-			return err
-		}
-		return svc.Start()
+		return launchdBootstrap()
 	},
 }
 
 var kardianosStopCmd = &cobra.Command{
 	Use:    "stop",
-	Short:  "[internal] kardianos svc.Stop() under sudo",
+	Short:  "[internal] launchctl bootout under sudo",
 	Hidden: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		svc, err := newKardianosService()
-		if err != nil {
-			return err
-		}
-		return svc.Stop()
+		return launchdBootout()
 	},
 }
 
 var kardianosRestartCmd = &cobra.Command{
 	Use:    "restart",
-	Short:  "[internal] kardianos svc.Restart() under sudo",
+	Short:  "[internal] launchctl bootout+bootstrap under sudo",
 	Hidden: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		svc, err := newKardianosService()
-		if err != nil {
-			return err
-		}
-		return svc.Restart()
+		// bootout may error if the service isn't loaded — that's fine,
+		// bootstrap will bring it up either way.
+		_ = launchdBootout()
+		return launchdBootstrap()
 	},
 }
 
