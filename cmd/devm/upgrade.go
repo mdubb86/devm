@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 
 	selfupdate "github.com/creativeprojects/go-selfupdate"
-	"github.com/mdubb86/devm/internal/image"
 	"github.com/mdubb86/devm/internal/release"
 	"github.com/spf13/cobra"
 )
@@ -60,24 +59,13 @@ var upgradeCmd = &cobra.Command{
 
 		fmt.Printf("upgraded to %s\n", rel.Version())
 
-		// Rebuild base Tart image if the new binary ships updated
-		// image definition. Best-effort — binary IS updated either way;
-		// run `devm install` to retry on failure. Definition is
-		// embedded (//go:embed).
-		needs, _, _ := image.NeedsBuild()
-		if needs {
-			fmt.Println("Rebuilding devm-base after binary upgrade...")
-			if err := image.BuildBaseImage(cmd.Context(), os.Stdout); err != nil {
-				fmt.Fprintf(os.Stderr, "note: rebuild failed (%v). Run `devm install` to retry.\n", err)
-			}
-		}
-
-		// If the daemon is running, restart it to pick up the new
-		// binary. Best-effort — binary IS replaced either way.
-		if err := restartAndWait("upgraded to " + rel.Version()); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
-		}
-		return nil
+		// Run the full install flow to sync the daemon with the freshly
+		// upgraded binary: rewrites the plist if it was pointing at a
+		// different binary, restarts the daemon so it picks up the new
+		// bytes, and rebuilds the base image if the embedded definition
+		// changed. Idempotent — a same-binary-path install is silent
+		// with no sudo prompt when everything is already in sync.
+		return runInstallFlow(ctx)
 	},
 }
 

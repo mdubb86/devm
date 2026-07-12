@@ -153,49 +153,59 @@ var installCmd = &cobra.Command{
 	Short: "Register devm as a user-level launchd service",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		if _, err := exec.LookPath("tart"); err != nil {
-			return fmt.Errorf("tart not found on PATH. Install it first:\n\n  brew install cirruslabs/cli/tart\n")
-		}
-
-		reporter := status.New(os.Stderr)
-		defer reporter.Stop()
-
-		logPath, logFile, err := openInstallLog()
-		if err != nil {
-			return err
-		}
-		defer logFile.Close()
-
-		// Privileged install: silent. The sudo prompt itself (if it
-		// fires) is the user-visible activity. If everything is
-		// already in place, no prompt — and no log noise.
-		didWork, err := runPrivilegedInstall(cmd.Context(), logFile)
-		if err != nil {
-			tailLog(logPath, 30)
-			return fmt.Errorf("privileged install failed; see %s", logPath)
-		}
-		if !didWork {
-			reporter.Info("already up to date")
-			return nil
-		}
-
-		// Base image: long-running, no terminal output (captured to
-		// log). Spinner has the terminal to itself. The provisioning
-		// script is embedded in the binary via //go:embed, so no
-		// on-disk image/ directory is needed.
-		needs, _, _ := image.NeedsBuild()
-		if needs {
-			reporter.Step("building devm-base", false)
-			if err := image.BuildBaseImage(cmd.Context(), logFile); err != nil {
-				reporter.Fail()
-				tailLog(logPath, 30)
-				return fmt.Errorf("base image build failed; see %s", logPath)
-			}
-		}
-
-		reporter.Info("ready")
-		return nil
+		return runInstallFlow(cmd.Context())
 	},
+}
+
+// runInstallFlow is the shared install pipeline used by `devm install`
+// directly and by `devm upgrade` after the binary swap. It checks
+// tart is present, runs the (conditionally-sudo) install script,
+// rebuilds the base image if needed, and reports "ready" or "already
+// up to date". Idempotent on every step — a second call in-sync is
+// silent and does not fire a Touch ID prompt.
+func runInstallFlow(ctx context.Context) error {
+	if _, err := exec.LookPath("tart"); err != nil {
+		return fmt.Errorf("tart not found on PATH. Install it first:\n\n  brew install cirruslabs/cli/tart\n")
+	}
+
+	reporter := status.New(os.Stderr)
+	defer reporter.Stop()
+
+	logPath, logFile, err := openInstallLog()
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+
+	// Privileged install: silent. The sudo prompt itself (if it
+	// fires) is the user-visible activity. If everything is
+	// already in place, no prompt — and no log noise.
+	didWork, err := runPrivilegedInstall(ctx, logFile)
+	if err != nil {
+		tailLog(logPath, 30)
+		return fmt.Errorf("privileged install failed; see %s", logPath)
+	}
+	if !didWork {
+		reporter.Info("already up to date")
+		return nil
+	}
+
+	// Base image: long-running, no terminal output (captured to
+	// log). Spinner has the terminal to itself. The provisioning
+	// script is embedded in the binary via //go:embed, so no
+	// on-disk image/ directory is needed.
+	needs, _, _ := image.NeedsBuild()
+	if needs {
+		reporter.Step("building devm-base", false)
+		if err := image.BuildBaseImage(ctx, logFile); err != nil {
+			reporter.Fail()
+			tailLog(logPath, 30)
+			return fmt.Errorf("base image build failed; see %s", logPath)
+		}
+	}
+
+	reporter.Info("ready")
+	return nil
 }
 
 // openInstallLog opens ~/Library/Logs/devm/install.log for append. The
