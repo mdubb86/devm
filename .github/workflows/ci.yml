@@ -18,6 +18,17 @@ jobs:
         run: |
           mkdir -p internal/docker/embed
           GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim
+      - name: Fetch + gzip iron-proxy for go:embed
+        env:
+          IRON_PROXY_VERSION: v0.45.0
+        run: |
+          mkdir -p internal/ironproxy/embed
+          ver="${IRON_PROXY_VERSION#v}"
+          curl -fsSL -o /tmp/iron-proxy.tar.gz \
+            "https://github.com/ironsh/iron-proxy/releases/download/${IRON_PROXY_VERSION}/iron-proxy_${ver}_darwin_arm64.tar.gz"
+          tar -xzf /tmp/iron-proxy.tar.gz -C /tmp iron-proxy
+          gzip -c /tmp/iron-proxy > internal/ironproxy/embed/iron-proxy.gz
+          rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build ./...
