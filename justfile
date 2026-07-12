@@ -36,7 +36,10 @@ DEV_LDFLAGS := "-X main.Commit=$(git rev-parse --short=12 HEAD)$(git diff-index 
 # self-signed identity if available. The path matches what `devm
 # install` records in the LaunchDaemon plist, so a rebuild swaps the
 # binary in place — `devm service restart` picks it up.
-build:
+#
+# fetch-iron-proxy runs first: the ironproxy package's //go:embed
+# needs internal/ironproxy/embed/iron-proxy.gz to exist at compile time.
+build: fetch-iron-proxy
     @mkdir -p bin internal/docker/embed
     GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim
     go build -ldflags "{{DEV_LDFLAGS}}" -o bin/devm ./cmd/devm
@@ -104,17 +107,19 @@ release-dry:
 
 IRON_PROXY_VERSION := "v0.45.0"
 
-# Download the pinned iron-proxy binary into ./bin/iron-proxy (dev layout).
-# Skips if bin/iron-proxy already exists.
+# Download the pinned iron-proxy binary and gzip it into the embed
+# directory. `//go:embed embed/iron-proxy.gz` in internal/ironproxy/embed.go
+# requires this file at compile time; `just build` depends on this
+# recipe. Skips the download when the gzipped blob is already present.
 fetch-iron-proxy:
-    @mkdir -p bin
-    @if [ ! -f bin/iron-proxy ]; then \
+    @mkdir -p internal/ironproxy/embed
+    @if [ ! -f internal/ironproxy/embed/iron-proxy.gz ]; then \
       echo "Fetching iron-proxy {{IRON_PROXY_VERSION}}..." ; \
       ver="$(echo '{{IRON_PROXY_VERSION}}' | sed 's/^v//')" ; \
       curl -fsSL -o /tmp/iron-proxy.tar.gz \
         "https://github.com/ironsh/iron-proxy/releases/download/{{IRON_PROXY_VERSION}}/iron-proxy_${ver}_darwin_arm64.tar.gz" ; \
-      tar -xzf /tmp/iron-proxy.tar.gz -C bin iron-proxy ; \
-      chmod +x bin/iron-proxy ; \
-      rm /tmp/iron-proxy.tar.gz ; \
+      tar -xzf /tmp/iron-proxy.tar.gz -C /tmp iron-proxy ; \
+      gzip -c /tmp/iron-proxy > internal/ironproxy/embed/iron-proxy.gz ; \
+      rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy ; \
     fi
-    @echo "iron-proxy at bin/iron-proxy"
+    @echo "iron-proxy embedded at internal/ironproxy/embed/iron-proxy.gz"

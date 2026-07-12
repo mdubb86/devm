@@ -90,20 +90,13 @@ log "checksum ok"
 
 tar -xzf "$TMP/$ARCHIVE_NAME" -C "$TMP"
 [ -x "$TMP/devm" ] || die "archive did not contain devm binary"
-[ -x "$TMP/share/devm/bin/iron-proxy" ] \
-    || die "archive did not contain share/devm/bin/iron-proxy — likely a build issue"
 install -m 0755 "$TMP/devm" "$PREFIX/devm"
 log "installed $PREFIX/devm"
 
-# iron-proxy lives at the canonical FHS location relative to $PREFIX
-# — internal/ironproxy/path.go's second lookup checks exactly this
-# path (<prefix>/../share/devm/bin/iron-proxy). Homebrew's cask layout
-# resolves the same way, so a curl-installed devm and a brew-installed
-# devm behave identically at runtime.
-IRON_PROXY_DIR="$(cd "$PREFIX/.." && pwd)/share/devm/bin"
-mkdir -p "$IRON_PROXY_DIR"
-install -m 0755 "$TMP/share/devm/bin/iron-proxy" "$IRON_PROXY_DIR/iron-proxy"
-log "installed $IRON_PROXY_DIR/iron-proxy"
+# iron-proxy is embedded (gzipped) inside the devm binary — the
+# daemon decompresses it into ~/Library/Application Support/devm/bin/
+# on startup. No separate install step needed. See
+# internal/ironproxy/embed.go.
 
 if ! command -v devm >/dev/null 2>&1; then
     log "WARNING: devm is not on PATH — add $PREFIX to PATH or run $PREFIX/devm directly"

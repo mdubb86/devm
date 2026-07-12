@@ -2,13 +2,17 @@ version: 2
 
 project_name: devm
 
-# Fetch the pinned iron-proxy binary so it can be vendored into the
-# release archive. IRON_PROXY_VERSION can be overridden via the CI
-# environment; default matches the version pinned in justfile.
+# Fetch the pinned iron-proxy binary and gzip it into the embed dir
+# so //go:embed in internal/ironproxy/embed.go picks it up at compile
+# time. IRON_PROXY_VERSION can be overridden via the CI environment;
+# default matches the version pinned in justfile. Ships iron-proxy
+# INSIDE the devm binary rather than alongside it — `devm upgrade`
+# then always gets a devm+iron-proxy pair atomically, no chance of
+# stale/absent iron-proxy on a self-updated install.
 before:
   hooks:
     - go mod tidy
-    - sh -c 'IRON_PROXY_VERSION="${IRON_PROXY_VERSION:-v0.45.0}" && ver="$(echo "$IRON_PROXY_VERSION" | sed "s/^v//")" && mkdir -p share/devm/bin && curl -fsSL -o /tmp/iron-proxy.tar.gz "https://github.com/ironsh/iron-proxy/releases/download/${IRON_PROXY_VERSION}/iron-proxy_${ver}_darwin_arm64.tar.gz" && tar -xzf /tmp/iron-proxy.tar.gz -C share/devm/bin iron-proxy && chmod +x share/devm/bin/iron-proxy && rm /tmp/iron-proxy.tar.gz'
+    - sh -c 'IRON_PROXY_VERSION="${IRON_PROXY_VERSION:-v0.45.0}" && ver="$(echo "$IRON_PROXY_VERSION" | sed "s/^v//")" && mkdir -p internal/ironproxy/embed && curl -fsSL -o /tmp/iron-proxy.tar.gz "https://github.com/ironsh/iron-proxy/releases/download/${IRON_PROXY_VERSION}/iron-proxy_${ver}_darwin_arm64.tar.gz" && tar -xzf /tmp/iron-proxy.tar.gz -C /tmp iron-proxy && gzip -c /tmp/iron-proxy > internal/ironproxy/embed/iron-proxy.gz && rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy'
     - sh -c 'mkdir -p internal/docker/embed && GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim'
 
 builds:
@@ -55,10 +59,10 @@ archives:
       {{- .Os }}_
       {{- .Arch }}
     files:
-      - share/devm/bin/iron-proxy
       - image/*
       - LICENSE
       - README.md
+      - THIRD_PARTY_NOTICES.md
 
 checksum:
   name_template: "checksums.txt"

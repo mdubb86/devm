@@ -42,7 +42,11 @@ type DiscoveredIronProxy struct {
 // Matching is intentionally strict: the command must start with the
 // canonical iron-proxy binary path. We never adopt unrelated processes.
 func DiscoverIronProxies(ctx context.Context) ([]DiscoveredIronProxy, error) {
-	binary, err := ironproxy.Path()
+	runDir, err := EnsureRuntimeDir()
+	if err != nil {
+		return nil, fmt.Errorf("runtime dir: %w", err)
+	}
+	binary, err := ironproxy.Ensure(runDir)
 	if err != nil {
 		return nil, fmt.Errorf("locate iron-proxy: %w", err)
 	}

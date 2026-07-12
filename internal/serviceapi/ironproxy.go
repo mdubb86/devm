@@ -132,7 +132,11 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 // runtime dir (~/Library/Application Support/devm/). Future improvement:
 // contribute stdin support upstream and switch.
 func SpawnIronProxy(ctx context.Context, sup *supervisor.Supervisor, projectID string, cfg IronProxyConfig, denials *Denials) error {
-	binary, err := ironproxy.Path()
+	runDir, err := EnsureRuntimeDir()
+	if err != nil {
+		return fmt.Errorf("runtime dir: %w", err)
+	}
+	binary, err := ironproxy.Ensure(runDir)
 	if err != nil {
 		return fmt.Errorf("locate iron-proxy: %w", err)
 	}

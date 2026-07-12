@@ -24,3 +24,7 @@ bin/
 # devm-runc-shim compiled artifact (source is cmd/devm-runc-shim/,
 # compiled at build time and embedded via internal/docker/embed.go)
 internal/docker/embed/devm-runc-shim
+
+# iron-proxy binary embedded (gzipped) into devm at build time.
+# Populated by `just fetch-iron-proxy` and by the goreleaser before-hook.
+internal/ironproxy/embed/iron-proxy.gz
