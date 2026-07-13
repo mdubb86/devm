@@ -249,6 +249,57 @@ func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
 	assert.Empty(t, resp.TeardownRequired)
 }
 
+func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
+	// Regression for F1: the live-apply success path wrote a fresh
+	// StateSnapshot{Cfg, TemplateContents} without carrying forward
+	// SecretHashes from the prior snapshot. That clobbered the baseline
+	// to nil, so the very next reconcile treated every existing secret
+	// as newly added (KindSecretAdd) — an iron-proxy respawn storm with
+	// no actual secret drift. A live-only reconcile (no network, no
+	// secret rotation) must leave SecretHashes untouched on disk.
+	t.Setenv("HOME", t.TempDir())
+
+	oldCfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{
+		Cfg:          oldCfg,
+		SecretHashes: map[string]string{"A": "h1"},
+	}))
+
+	// New cfg: FOO=new (bucket=live). Same secret hash — no drift.
+	newCfg := oldCfg
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	req := VMReconcileRequest{
+		ProjectID: "p", VMName: "p-vm", Cfg: newCfg,
+		WorkspaceHostPath: "/tmp/repo",
+		SecretHashes:      map[string]string{"A": "h1"},
+	}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"})
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp.Applied, "FOO change should apply")
+	assert.Empty(t, resp.AppliedIronProxy, "no secret drift or network change; nothing for iron-proxy")
+	assert.Empty(t, resp.TeardownRequired)
+
+	snap, err := ReadStateSnapshot("p")
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	assert.Equal(t, map[string]string{"A": "h1"}, snap.SecretHashes,
+		"live-only reconcile must not clobber SecretHashes to nil")
+}
+
 func TestVMReconcile_NetworkAddSurfacesAsAppliedIronProxy(t *testing.T) {
 	// Network-allow additions are BucketIronProxyRestart changes: the
 	// daemon does not apply them itself. They must come back to the CLI

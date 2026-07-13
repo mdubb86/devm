@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,8 +43,16 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 	sup := supervisor.New("")
 	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, nil)
 
-	// No config file exists → VM has never started. Snapshot should
-	// still update; response signals no live apply.
+	// Simulate cold-start (`devm start` / `devm shell`) having already
+	// seeded the snapshot with the real schema.Config — a prior
+	// /vm/start ran for this project, but no iron-proxy config file has
+	// been written yet (e.g. VM was stopped again before ever spawning
+	// iron-proxy).
+	seededCfg := schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: seededCfg}))
+
+	// No config file exists → VM has never started iron-proxy. Snapshot
+	// should still update; response signals no live apply.
 	body, _ := json.Marshal(VMApplyIronProxyRequest{
 		ProjectID: "p",
 		Allowlist: []string{"a.example.com"},
@@ -51,7 +60,7 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 	})
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/apply-iron-proxy", bytes.NewReader(body)))
-	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 
 	var resp VMApplyIronProxyResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
@@ -61,10 +70,39 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 
 	// Snapshot's SecretHashes must still update even with no live VM,
 	// so the next /vm/start writes iron-proxy config from the current
-	// schema without re-detecting the same drift.
+	// schema without re-detecting the same drift. The seeded Cfg must
+	// be preserved, not clobbered with a zero value.
 	snap, err := ReadStateSnapshot("p")
 	require.NoError(t, err)
 	require.NotNil(t, snap)
+	assert.Equal(t, seededCfg, snap.Cfg, "cfg must be preserved, not zeroed")
+}
+
+// TestApplyIronProxy_NeverColdStarted_FailsLoud covers F3: if
+// apply-iron-proxy is invoked before any cold-start has ever seeded a
+// snapshot for the project (no prior /vm/start), there is no real
+// schema.Config available to preserve. Writing
+// StateSnapshot{SecretHashes: hashes} with a zero-valued Cfg would make
+// every field in the eventual real cfg look like a pending
+// teardown-required change on the very next reconcile. The handler
+// must fail loud instead of fabricating a snapshot.
+func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	srv := NewServer(SocketPath(), Build{})
+	sup := supervisor.New("")
+	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, nil)
+
+	body, _ := json.Marshal(VMApplyIronProxyRequest{
+		ProjectID: "never-started",
+		Allowlist: []string{"a.example.com"},
+	})
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/apply-iron-proxy", bytes.NewReader(body)))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	snap, err := ReadStateSnapshot("never-started")
+	require.NoError(t, err)
+	assert.Nil(t, snap, "no snapshot should be fabricated on this failure path")
 }
 
 // TestApplyIronProxy_RunningRestartSucceeds covers the "iron-proxy was
@@ -82,6 +120,11 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	sup := supervisor.New(t.TempDir())
 
 	const projectID = "p-running"
+	// Simulate cold-start having already seeded the snapshot with the
+	// real schema.Config; apply-iron-proxy requires this to exist (F3).
+	seededCfg := schema.Config{Project: schema.Project{ID: projectID, VMName: "p-running-vm"}}
+	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg}))
+
 	macHost := "127.0.0.1"
 	httpPort, err := pickPort()
 	require.NoError(t, err)
@@ -152,4 +195,5 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	require.Contains(t, snap.SecretHashes, "github_token")
+	assert.Equal(t, seededCfg, snap.Cfg, "cfg must be preserved, not zeroed")
 }

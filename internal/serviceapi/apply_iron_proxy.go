@@ -213,21 +213,29 @@ func secretHashesFromBindings(bindings []SecretBinding) map[string]string {
 }
 
 // updateSnapshotSecretHashes loads the current StateSnapshot for
-// projectID (if any), overwrites SecretHashes, and persists it. Used on
-// every success path — including the VM-stopped no-op — so the
-// daemon's drift baseline always reflects the secrets the CLI most
-// recently resolved from the keychain.
+// projectID, overwrites SecretHashes, and persists it — preserving Cfg
+// and TemplateContents as-is. Used on every success path — including
+// the VM-stopped no-op — so the daemon's drift baseline always
+// reflects the secrets the CLI most recently resolved from the
+// keychain.
+//
+// Requires a snapshot to already exist: cold-start (`devm start` /
+// `devm shell`) seeds one with the real schema.Config before
+// apply-iron-proxy can ever be called. If none exists, fabricating one
+// here with a zero-valued Cfg would make every real field in the
+// eventual cold-start cfg look like a pending change on the next
+// reconcile — a teardown-required storm. Fail loud instead and leave
+// the (nonexistent) snapshot untouched.
 func updateSnapshotSecretHashes(projectID string, hashes map[string]string) error {
 	snap, err := ReadStateSnapshot(projectID)
 	if err != nil {
 		return err
 	}
-	var next StateSnapshot
-	if snap != nil {
-		next = *snap
+	if snap == nil {
+		return fmt.Errorf("apply-iron-proxy called before /vm/start ever ran for project %q — snapshot not seeded", projectID)
 	}
-	next.SecretHashes = hashes
-	return WriteStateSnapshot(projectID, next)
+	snap.SecretHashes = hashes
+	return WriteStateSnapshot(projectID, *snap)
 }
 
 // writeJSON writes body as JSON with 200 OK.

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/render"
@@ -157,9 +156,6 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 		// Apply live changes. On failure, return error and don't
 		// touch the snapshot — same as if the request never happened.
 		if len(live) > 0 {
-			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
-			defer cancel()
-			_ = ctx // reserved for future timeout plumbing into apply
 			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, req.VMName); err != nil {
 				http.Error(w, fmt.Sprintf("apply live: %v", err), http.StatusInternalServerError)
 				return
@@ -176,7 +172,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				http.Error(w, fmt.Sprintf("render templates: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := WriteStateSnapshot(req.ProjectID, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates}); err != nil {
+			if err := WriteStateSnapshot(req.ProjectID, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}
