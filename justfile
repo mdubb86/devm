@@ -42,6 +42,7 @@ DEV_LDFLAGS := "-X main.Commit=$(git rev-parse --short=12 HEAD)$(git diff-index 
 build: fetch-iron-proxy
     @mkdir -p bin internal/docker/embed
     GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim
+    GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-docker-shim ./cmd/devm-docker-shim
     go build -ldflags "{{DEV_LDFLAGS}}" -o bin/devm ./cmd/devm
     @if security find-certificate -c '{{SIGN_IDENTITY}}' >/dev/null 2>&1; then \
         codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime bin/devm && \

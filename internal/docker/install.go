@@ -61,25 +61,49 @@ ExecStartPost=/bin/chmod 666 /run/docker.sock`
 	return b.String()
 }
 
-// shimInstallScript writes the shim from stdin to /usr/local/bin and
-// sets its mode. Used with PipeIntoShell to deliver the shim bytes.
-const shimInstallScript = `set -e
+// runcShimInstallScript writes the OCI runtime shim from stdin to
+// /usr/local/bin/devm-runc-shim and sets its mode. Used with
+// PipeIntoShell to deliver the shim bytes.
+const runcShimInstallScript = `set -e
 sudo tee /usr/local/bin/devm-runc-shim > /dev/null
 sudo chmod 0755 /usr/local/bin/devm-runc-shim`
 
+// dockerShimInstallScript writes the docker CLI shim from stdin to
+// /usr/local/bin/docker (shadowing /usr/bin/docker via PATH order)
+// and sets its mode. Runs AFTER get.docker.com has installed the real
+// docker at /usr/bin/docker — the shim's PATH-strip lookup would
+// otherwise find nothing. Verifies the real docker exists at
+// /usr/bin/docker before overwriting to avoid landing a shim that
+// can't exec-forward.
+const dockerShimInstallScript = `set -e
+test -x /usr/bin/docker || { echo "FAIL: /usr/bin/docker missing — shim would have nothing to exec-forward to" >&2; exit 1; }
+sudo tee /usr/local/bin/docker > /dev/null
+sudo chmod 0755 /usr/local/bin/docker`
+
 // shellExecutor is what the docker package needs from the provisioner:
 // a shell runner (for the main install script) and a stdin-piping shell
-// runner (for the shim binary).
+// runner (for the shim binaries).
 type shellExecutor interface {
 	ExecShell(ctx context.Context, w io.Writer, script string) error
 	PipeIntoShell(ctx context.Context, w io.Writer, stdin io.Reader, script string) error
 }
 
-// Install runs the docker-feature step: pipes the embedded shim into
-// the guest, then runs the install script that wires everything up.
+// Install runs the docker-feature step in three stages:
+//  1. Land devm-runc-shim (needed by daemon.json before docker starts).
+//  2. Run the install script — get.docker.com + runtime config.
+//  3. Land devm-docker-shim at /usr/local/bin/docker (shadows the
+//     just-installed /usr/bin/docker via PATH order). Must come
+//     LAST: the shim's PATH-strip lookup expects the real docker at
+//     /usr/bin/docker to already exist.
 func Install(ctx context.Context, w io.Writer, sh shellExecutor) error {
-	if err := sh.PipeIntoShell(ctx, w, bytes.NewReader(Shim()), shimInstallScript); err != nil {
+	if err := sh.PipeIntoShell(ctx, w, bytes.NewReader(Shim()), runcShimInstallScript); err != nil {
 		return fmt.Errorf("install devm-runc-shim: %w", err)
 	}
-	return sh.ExecShell(ctx, w, InstallScript())
+	if err := sh.ExecShell(ctx, w, InstallScript()); err != nil {
+		return err
+	}
+	if err := sh.PipeIntoShell(ctx, w, bytes.NewReader(DockerShim()), dockerShimInstallScript); err != nil {
+		return fmt.Errorf("install devm-docker-shim: %w", err)
+	}
+	return nil
 }

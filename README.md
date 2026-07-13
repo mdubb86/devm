@@ -72,4 +72,38 @@ A few things devm does so your `devm.yaml` doesn't have to:
   Devm also embeds and drops a static `s6-log` binary at `.devm/scripts/s6-log`
   for `wrap-bg.sh` to use without any apt step.
 
+## Docker builds and iron-proxy
+
+When you enable `docker: true` in `devm.yaml`, devm installs a Docker CLI
+shim (`/usr/local/bin/docker`) that shadows the real docker at
+`/usr/bin/docker`. Its only job: append `--secret id=devm-ca,src=/etc/ssl/certs/devm.crt`
+on `docker build` and `docker buildx build`. Every other subcommand
+passes through unchanged.
+
+The shim exists because BuildKit's build sandbox goes through
+iron-proxy's MITM path (unlike plain `docker run`, which uses SNI
+passthrough on the bridge). Without the CA, HTTPS calls inside a RUN
+step fail cert-verify.
+
+To take advantage, add one RUN block near the top of any Dockerfile
+that does HTTPS in build steps:
+
+```dockerfile
+# syntax=docker/dockerfile:1
+FROM debian:bookworm-slim
+
+RUN --mount=type=secret,id=devm-ca,dst=/usr/local/share/ca-certificates/devm.crt,required=false \
+    [ -s /usr/local/share/ca-certificates/devm.crt ] && update-ca-certificates || true
+
+# your normal build steps below — HTTPS inside RUN now works
+RUN apt-get update && apt-get install -y curl && curl https://…
+```
+
+**Portability.** The `required=false` on the mount makes the RUN a
+no-op wherever the secret isn't defined — the same Dockerfile builds
+cleanly on your Mac (`docker build .`), in CI, and inside the devm
+sandbox. Only the sandbox path installs the CA; everywhere else the
+mount is empty, the `[ -s ... ]` test is false, and the RUN skips
+without failing the build.
+
 (More docs as the project matures.)

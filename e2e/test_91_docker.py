@@ -11,6 +11,9 @@ Consolidated end-to-end proof of `docker: true`:
   - Host process on the guest reaches a container's published port
     on 127.0.0.1:<non-80/443>. Pins the 172.16.0.0/12 user_output
     rule.
+  - `docker build` auto-receives the devm-ca buildkit secret —
+    proves devm-docker-shim at /usr/local/bin/docker intercepts
+    build subcommands and appends `--secret id=devm-ca,src=…`.
 
 Single test — cold-start is ~5 min; splitting triples cost for no
 coverage gain.
@@ -179,3 +182,30 @@ def test_docker_first_class_end_to_end(workspace, devm):
             [devm.path, "exec", "docker", "rm", "-f", "e2e-web"],
             cwd=str(workspace.path), capture_output=True, timeout=30,
         )
+
+    # ---- Assertion 5: devm-docker-shim intercepts `docker build` and
+    # ---- appends `--secret id=devm-ca,src=…`. The Dockerfile mounts
+    # ---- the secret with required=false, then a follow-up RUN fails
+    # ---- loud if the mount was empty. Without the shim, buildkit
+    # ---- sees no --secret flag → required=false makes the mount
+    # ---- silently empty → the `[ -s ]` test fails → build fails,
+    # ---- pinpointing the shim as the regression source.
+    build_ctx = workspace.path / "shim-e2e"
+    build_ctx.mkdir()
+    (build_ctx / "Dockerfile").write_text(
+        "# syntax=docker/dockerfile:1\n"
+        "FROM alpine:latest\n"
+        "RUN --mount=type=secret,id=devm-ca,dst=/tmp/devm-ca,required=false \\\n"
+        "    [ -s /tmp/devm-ca ] || { echo 'FAIL: devm-docker-shim did not inject --secret'; exit 1; }\n"
+    )
+    build = devm_exec_with_retry(
+        devm.path,
+        ["docker", "build", "-t", "devm-shim-e2e", "shim-e2e"],
+        cwd=str(workspace.path), timeout=300,
+    )
+    assert build.returncode == 0, (
+        f"docker build failed — shim likely did not inject "
+        f"--secret id=devm-ca into the build invocation:\n"
+        f"stderr={build.stderr.decode()!r}\n"
+        f"stdout={build.stdout.decode()!r}"
+    )

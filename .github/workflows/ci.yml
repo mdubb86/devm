@@ -14,10 +14,11 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go mod download
-      - name: Pre-build devm-runc-shim (linux/arm64) for go:embed
+      - name: Pre-build devm-runc-shim + devm-docker-shim (linux/arm64) for go:embed
         run: |
           mkdir -p internal/docker/embed
           GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim
+          GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-docker-shim ./cmd/devm-docker-shim
       - name: Fetch + gzip iron-proxy for go:embed
         env:
           IRON_PROXY_VERSION: v0.45.0
