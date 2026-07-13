@@ -32,7 +32,7 @@ func TestBucketStrings(t *testing.T) {
 }
 
 func TestChangeKindBuckets(t *testing.T) {
-	// Live: ports (add/remove/change), network (add/remove), env (add/remove/change)
+	// Live: ports (add/remove/change), env (add/remove/change)
 	assert.Equal(t, BucketLive, KindPortAdd.Bucket())
 	assert.Equal(t, BucketLive, KindPortRemove.Bucket())
 	assert.Equal(t, BucketLive, KindPortChange.Bucket())

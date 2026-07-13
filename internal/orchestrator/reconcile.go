@@ -59,7 +59,7 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 	// ApplyIronProxy. Auto-apply — no prompt (matches live-path UX).
 	var ipRestartApplied []reconcile.Change
 	var ironProxyRevived bool
-	var overrideSandboxState string
+	var stoppedByIronProxy bool
 	if len(resp.AppliedIronProxy) > 0 {
 		ipReq := serviceapi.VMApplyIronProxyRequest{
 			ProjectID: cfg.Project.ID,
@@ -72,14 +72,12 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 		}
 		ipRestartApplied = resp.AppliedIronProxy
 		ironProxyRevived = ipResp.Revived
-		if !ipResp.VMRunning {
-			overrideSandboxState = "stopped" // so the formatter says "Recorded"
-		}
+		stoppedByIronProxy = !ipResp.VMRunning
 	}
 
 	sandboxState := resp.SandboxState
-	if overrideSandboxState != "" {
-		sandboxState = overrideSandboxState
+	if stoppedByIronProxy {
+		sandboxState = "stopped" // so the formatter says "Recorded"
 	}
 
 	res := ReconcileResult{
