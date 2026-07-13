@@ -36,3 +36,4 @@ devm shell                                  # cold-starts the VM, drops you in
 - `devm skills get routing` — how port declarations, the Caddy reverse-proxy, and `*.test` hostnames work inside the VM.
 - `devm skills get secrets` — storing credentials in the macOS keychain and referencing them with `!secret` in `devm.yaml`.
 - `devm skills get errors` — reading supervision error blocks and where logs live.
+- `devm recipes get tool/service/docker` — docker is a built-in (`docker: true`), not a recipe you install, but the recipe covers the intricacies: the two egress paths (why `docker run` works with no config but `docker build` needs a Dockerfile RUN block), and the exact block to add for build-time HTTPS to survive iron-proxy's MITM.
