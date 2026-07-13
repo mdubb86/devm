@@ -36,8 +36,8 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketLive, KindPortAdd.Bucket())
 	assert.Equal(t, BucketLive, KindPortRemove.Bucket())
 	assert.Equal(t, BucketLive, KindPortChange.Bucket())
-	assert.Equal(t, BucketLive, KindNetworkAdd.Bucket())
-	assert.Equal(t, BucketLive, KindNetworkRemove.Bucket())
+	assert.Equal(t, BucketIronProxyRestart, KindNetworkAdd.Bucket())
+	assert.Equal(t, BucketIronProxyRestart, KindNetworkRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvAdd.Bucket())
 	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
@@ -593,4 +593,12 @@ func TestComputeAllChanges_IncludesTemplates(t *testing.T) {
 
 func TestBucketIronProxyRestartString(t *testing.T) {
 	assert.Equal(t, "iron-proxy-restart", BucketIronProxyRestart.String())
+}
+
+func TestNetworkAndSecretKindsInIronProxyRestartBucket(t *testing.T) {
+	assert.Equal(t, BucketIronProxyRestart, KindNetworkAdd.Bucket())
+	assert.Equal(t, BucketIronProxyRestart, KindNetworkRemove.Bucket())
+	assert.Equal(t, BucketIronProxyRestart, KindSecretAdd.Bucket())
+	assert.Equal(t, BucketIronProxyRestart, KindSecretRemove.Bucket())
+	assert.Equal(t, BucketIronProxyRestart, KindSecretChange.Bucket())
 }

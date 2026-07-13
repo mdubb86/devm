@@ -70,6 +70,12 @@ const (
 	KindServiceUserChange
 	KindServiceSystemdOverrideChange
 	KindServiceHostnameChange
+	// KindSecret* — value-drift of a `!secret NAME` reference (same
+	// declaration, different keychain value). Env-diff already covers
+	// reference syntax changes; these track the resolved values.
+	KindSecretAdd
+	KindSecretRemove
+	KindSecretChange
 )
 
 // changeBucket is the single source of truth that maps each ChangeKind
@@ -79,8 +85,8 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindPortAdd:       BucketLive,
 	KindPortRemove:    BucketLive,
 	KindPortChange:    BucketLive,
-	KindNetworkAdd:    BucketLive,
-	KindNetworkRemove: BucketLive,
+	KindNetworkAdd:    BucketIronProxyRestart,
+	KindNetworkRemove: BucketIronProxyRestart,
 	// Env changes are applied by rewriting the unit file and restarting
 	// the service via tart exec — no VM recreate needed.
 	KindEnvAdd:    BucketLive,
@@ -111,6 +117,11 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindServiceSystemdOverrideChange: BucketLive,
 	// Hostname: re-render Caddyfile, push to Mac proxy — live.
 	KindServiceHostnameChange: BucketLive,
+	// Secrets: iron-proxy config carries resolved values; a rotation
+	// requires regenerating that config and respawning iron-proxy.
+	KindSecretAdd:    BucketIronProxyRestart,
+	KindSecretRemove: BucketIronProxyRestart,
+	KindSecretChange: BucketIronProxyRestart,
 }
 
 // Bucket returns the bucket this ChangeKind belongs to.
