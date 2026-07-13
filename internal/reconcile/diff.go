@@ -226,9 +226,29 @@ func ComputePortChanges(old, new schema.Config) []Change {
 // (basename -> rendered content, from the daemon's persisted
 // StateSnapshot); pass nil when there is none (e.g. cold-start with no
 // prior snapshot), which surfaces every declared template as an add.
-func ComputeAllChanges(old, new schema.Config, repoRoot string, lastAppliedTemplates map[string]string) ([]Change, error) {
+// ComputeAllChanges returns the full set of diffs between old and new
+// configs. Order: ports, network, env (per service), service unit fields
+// (per service), install, packages, mounts, masks (per service), image,
+// identity, templates, path, secrets. Within each section, service names
+// are sorted alphabetically for determinism.
+//
+// `repoRoot` is required by the templates diff to render the desired
+// installer scripts. `lastAppliedTemplates` is the last-applied baseline
+// (basename -> rendered content, from the daemon's persisted
+// StateSnapshot); pass nil when there is none (e.g. cold-start with no
+// prior snapshot), which surfaces every declared template as an add.
+// `oldSecretHashes` is the last-applied SecretHashes map from the same
+// snapshot; `newSecretHashes` is the freshly-hashed set the CLI just
+// resolved. Both nil means "no secret drift to consider".
+func ComputeAllChanges(
+	old, new schema.Config,
+	repoRoot string,
+	lastAppliedTemplates map[string]string,
+	oldSecretHashes, newSecretHashes map[string]string,
+) ([]Change, error) {
 	var out []Change
 	out = append(out, ComputePortChanges(old, new)...)
+	out = append(out, computeNetworkChanges(old, new)...)
 	out = append(out, computeGlobalEnvChanges(old, new)...)
 	out = append(out, computeEnvChanges(old, new)...)
 	out = append(out, computeServiceUnitChanges(old, new)...)
@@ -246,6 +266,7 @@ func ComputeAllChanges(old, new schema.Config, repoRoot string, lastAppliedTempl
 		return nil, err
 	}
 	out = append(out, tmplChanges...)
+	out = append(out, computeSecretChanges(newSecretHashes, oldSecretHashes)...)
 	return out, nil
 }
 

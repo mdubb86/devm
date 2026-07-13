@@ -108,7 +108,7 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 	if stateSnap, sErr := serviceapi.ReadStateSnapshot(cfg.Project.ID); sErr == nil && stateSnap != nil {
 		lastAppliedTemplates = stateSnap.TemplateContents
 	}
-	statusChanges, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot, lastAppliedTemplates)
+	statusChanges, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot, lastAppliedTemplates, nil, nil)
 	if err != nil {
 		return res, fmt.Errorf("compute changes: %w", err)
 	}

@@ -99,7 +99,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 			lastAppliedTemplates = oldSnap.TemplateContents
 		}
 
-		changes, err := reconcile.ComputeAllChanges(base, req.Cfg, req.WorkspaceHostPath, lastAppliedTemplates)
+		changes, err := reconcile.ComputeAllChanges(base, req.Cfg, req.WorkspaceHostPath, lastAppliedTemplates, nil, nil)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("diff: %v", err), http.StatusInternalServerError)
 			return
