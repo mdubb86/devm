@@ -602,3 +602,28 @@ func TestNetworkAndSecretKindsInIronProxyRestartBucket(t *testing.T) {
 	assert.Equal(t, BucketIronProxyRestart, KindSecretRemove.Bucket())
 	assert.Equal(t, BucketIronProxyRestart, KindSecretChange.Bucket())
 }
+
+func TestComputeNetworkChanges_AddsAndRemoves(t *testing.T) {
+	old := schema.Config{Network: schema.Network{Allow: []schema.AllowEntry{
+		{Host: "existing.example.com"},
+		{Host: "gone.example.com"},
+	}}}
+	new := schema.Config{Network: schema.Network{Allow: []schema.AllowEntry{
+		{Host: "existing.example.com"},
+		{Host: "added.example.com"},
+	}}}
+	got := computeNetworkChanges(old, new)
+	require.Len(t, got, 2)
+	// Sorted by host alphabetically.
+	assert.Equal(t, KindNetworkAdd, got[0].Kind)
+	assert.Equal(t, "added.example.com", got[0].Key)
+	assert.Equal(t, "added.example.com", got[0].New)
+	assert.Equal(t, KindNetworkRemove, got[1].Kind)
+	assert.Equal(t, "gone.example.com", got[1].Key)
+	assert.Equal(t, "gone.example.com", got[1].Old)
+}
+
+func TestComputeNetworkChanges_NoChange(t *testing.T) {
+	cfg := schema.Config{Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}}}
+	assert.Nil(t, computeNetworkChanges(cfg, cfg))
+}

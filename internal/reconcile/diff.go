@@ -434,6 +434,39 @@ func computeDockerChange(old, new schema.Config) []Change {
 	return []Change{{Kind: KindDockerToggle}}
 }
 
+// computeNetworkChanges diffs cfg.Network.Domains() between old and
+// new configs. Order-preserving on the input list would be
+// unnecessary — a sorted comparison keeps diff output deterministic
+// regardless of the yaml order in the user's file.
+func computeNetworkChanges(old, new schema.Config) []Change {
+	oldSet := make(map[string]struct{}, len(old.Network.Domains()))
+	for _, h := range old.Network.Domains() {
+		oldSet[h] = struct{}{}
+	}
+	newSet := make(map[string]struct{}, len(new.Network.Domains()))
+	for _, h := range new.Network.Domains() {
+		newSet[h] = struct{}{}
+	}
+	var out []Change
+	for _, h := range new.Network.Domains() {
+		if _, ok := oldSet[h]; !ok {
+			out = append(out, Change{Kind: KindNetworkAdd, Key: h, New: h})
+		}
+	}
+	for _, h := range old.Network.Domains() {
+		if _, ok := newSet[h]; !ok {
+			out = append(out, Change{Kind: KindNetworkRemove, Key: h, Old: h})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Key != out[j].Key {
+			return out[i].Key < out[j].Key
+		}
+		return out[i].Kind < out[j].Kind
+	})
+	return out
+}
+
 func envOf(s schema.Service) map[string]string {
 	out := make(map[string]string, len(s.Env))
 	for k, v := range s.Env {
