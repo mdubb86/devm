@@ -590,3 +590,7 @@ func TestComputeAllChanges_IncludesTemplates(t *testing.T) {
 	}
 	assert.True(t, found, "expected KindTemplateChange in ComputeAllChanges output")
 }
+
+func TestBucketIronProxyRestartString(t *testing.T) {
+	assert.Equal(t, "iron-proxy-restart", BucketIronProxyRestart.String())
+}

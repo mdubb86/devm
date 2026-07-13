@@ -21,6 +21,11 @@ const (
 	// needs to bounce the VM without rebuilding it from scratch.
 	BucketStopShell
 	BucketTeardownShell // requires VM delete + cold start (volumes/install rerun)
+	// BucketIronProxyRestart — regenerate iron-proxy config and respawn
+	// iron-proxy on the same MAC_HOST:port. No VM cycle. Parallel to
+	// BucketLive and BucketTeardownShell (not a severity step): a single
+	// reconcile can produce changes in any combination of buckets.
+	BucketIronProxyRestart
 )
 
 func (b Bucket) String() string {
@@ -31,6 +36,8 @@ func (b Bucket) String() string {
 		return "stop+shell"
 	case BucketTeardownShell:
 		return "teardown+shell"
+	case BucketIronProxyRestart:
+		return "iron-proxy-restart"
 	}
 	return "unknown"
 }
