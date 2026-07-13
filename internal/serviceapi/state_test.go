@@ -82,6 +82,21 @@ func TestState_RejectsPathTraversal(t *testing.T) {
 	}
 }
 
+func TestStateSnapshot_SecretHashesRoundtrip(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+
+	snap := StateSnapshot{
+		Cfg:          schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}},
+		SecretHashes: map[string]string{"TOK": "abc123"},
+	}
+	require.NoError(t, WriteStateSnapshot("p", snap))
+
+	read, err := ReadStateSnapshot("p")
+	require.NoError(t, err)
+	require.NotNil(t, read)
+	assert.Equal(t, "abc123", read.SecretHashes["TOK"])
+}
+
 func names(entries []os.DirEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {

@@ -39,9 +39,16 @@ func validProjectID(id string) error {
 // installer content) that ComputeAllChanges needs but that isn't
 // derivable from schema.Config alone at reconcile time (source files
 // on disk may have changed since last apply).
+//
+// SecretHashes is the sha256(value) map for every `!secret NAME` ref
+// this snapshot was written with. Comparing against the freshly
+// resolved keychain values is how the diff engine detects
+// keychain-value rotation — the ref syntax hasn't changed but the
+// stored value has. Values themselves never persist to disk.
 type StateSnapshot struct {
 	Cfg              schema.Config     `json:"cfg"`
 	TemplateContents map[string]string `json:"template_contents,omitempty"` // basename -> rendered installer content
+	SecretHashes     map[string]string `json:"secret_hashes,omitempty"`     // secret name -> hex sha256(resolved value)
 }
 
 // ReadStateSnapshot loads the persisted snapshot for a project. Returns
