@@ -64,6 +64,78 @@ if [ -x "$(cd .. && pwd)/bin/iron-proxy" ]; then
 fi
 export DEVM_BIN
 
+# --- Isolated mode ---
+# When E2E_ISOLATE=1 (set by the just targets that don't need to
+# exercise install lifecycle: e2e-devm, e2e-contract, e2e-recipe,
+# e2e-one), run a foreground `devm serve` in a private
+# DEVM_RUNTIME_DIR under /tmp so we don't touch the user's real
+# `~/Library/Application Support/devm/`. This is the fix for the
+# recurring pain where running e2e trampled a real project's
+# iron-proxy configs (`devm uninstall` wipes the runtime dir; the
+# iron-proxy reaper below pkills every iron-proxy on the system).
+#
+# Isolated mode skips: `devm uninstall`, `devm install`, the orphan
+# iron-proxy reap (isolated iron-proxies come and go with the private
+# runtime dir), the launchctl-plist verification (there is no plist).
+# It still runs the tart-VM orphan reap because those live outside
+# the runtime dir.
+if [ "${E2E_ISOLATE:-0}" = "1" ]; then
+    ISOLATED_RUNTIME_DIR="$(mktemp -d -t devm-e2e-runtime.XXXX)"
+    export DEVM_RUNTIME_DIR="$ISOLATED_RUNTIME_DIR"
+    # Ephemeral DNS port so we don't collide with the real daemon on
+    # :51153. E2e tests don't exercise Mac-side *.test resolution
+    # (that lives in the install-marker group); iron-proxy's own
+    # per-project DNS listeners are separate and already dynamic.
+    export DEVM_DNS_ADDR="127.0.0.1:0"
+    echo "=== e2e: isolated runtime dir at $DEVM_RUNTIME_DIR ===" >&2
+
+    # Foreground daemon in the background of this script. Uses its own
+    # socket (under $DEVM_RUNTIME_DIR/devm.sock) so it can't conflict
+    # with the user's real launchd-managed daemon. Not a LaunchDaemon
+    # — no sudo, no plist, no /etc/resolver/test written. Tests that
+    # need Mac-side *.test resolution or ports 80/443 need install-
+    # marker mode; the non-install suite doesn't.
+    E2E_DAEMON_LOG="$ISOLATED_RUNTIME_DIR/daemon.log"
+    "$DEVM_BIN" serve --foreground >"$E2E_DAEMON_LOG" 2>&1 &
+    E2E_DAEMON_PID=$!
+
+    # Wait up to 10s for the isolated daemon's /health to answer.
+    _deadline=$(( $(date +%s) + 10 ))
+    while [ "$(date +%s)" -lt "$_deadline" ]; do
+        if "$DEVM_BIN" status --json 2>/dev/null | \
+           jq -e '.daemon.running == true' >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.2
+    done
+    if ! "$DEVM_BIN" status --json 2>/dev/null | \
+         jq -e '.daemon.running == true' >/dev/null 2>&1; then
+        echo "=== e2e: isolated daemon never came up; log:" >&2
+        cat "$E2E_DAEMON_LOG" >&2
+        exit 1
+    fi
+
+    # Extra teardown: kill the isolated daemon and rm its runtime dir.
+    # Redefine on_exit to add these steps; the EXIT trap set at line 31
+    # resolves the function by name at fire time so this override wins.
+    on_exit() {
+        local rc=$?
+        kill -TERM "$E2E_DAEMON_PID" 2>/dev/null || true
+        # Give it a moment to shut down cleanly, then SIGKILL.
+        for _ in 1 2 3 4 5; do
+            if ! kill -0 "$E2E_DAEMON_PID" 2>/dev/null; then break; fi
+            sleep 0.2
+        done
+        kill -KILL "$E2E_DAEMON_PID" 2>/dev/null || true
+        rm -rf "$ISOLATED_RUNTIME_DIR"
+        sweep_registry
+        rm -f "$E2E_REGISTRY"
+        exit "$rc"
+    }
+
+    SKIP_INSTALL=1  # rest of the script gates on this
+fi
+
 # No sudo priming or keepalive: on modern macOS with Touch ID, each
 # privileged op (launchctl bootstrap, security add-trusted-cert, etc.)
 # prompts individually anyway — sudo's timestamp cache doesn't skip
@@ -87,7 +159,9 @@ export DEVM_BIN
 # `kardianos install` is a no-op when a plist already exists even
 # for a different DEVM_BIN, so we can't rely on install alone —
 # uninstall drops the plist so install writes a fresh one.
-if "$DEVM_BIN" status --json 2>/dev/null | jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' >/dev/null 2>&1; then
+if [ "${E2E_ISOLATE:-0}" = "1" ]; then
+    :  # already handled above
+elif "$DEVM_BIN" status --json 2>/dev/null | jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' >/dev/null 2>&1; then
     echo "=== e2e: daemon running and Fingerprint matches DEVM_BIN — skipping reinstall ===" >&2
     SKIP_INSTALL=1
 else
@@ -109,10 +183,16 @@ fi
 # SpawnIronProxy). Never matches the user's shell or tart. Best-effort;
 # don't fail the run if pkill can't reach a PID. Silent when nothing's
 # there to reap.
-ORPHAN_IRON_PROXIES="$(pgrep -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null | wc -l | tr -d ' ')"
-if [ "${ORPHAN_IRON_PROXIES:-0}" -gt 0 ]; then
-    echo "=== e2e: reaping $ORPHAN_IRON_PROXIES orphan iron-proxy process(es) ===" >&2
-    pkill -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null || true
+#
+# Skipped in isolated mode: the reap pattern is system-wide and would
+# also kill the user's real project iron-proxies. Isolated iron-proxies
+# get cleaned up when the sandbox runtime dir is removed at teardown.
+if [ "${E2E_ISOLATE:-0}" != "1" ]; then
+    ORPHAN_IRON_PROXIES="$(pgrep -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "${ORPHAN_IRON_PROXIES:-0}" -gt 0 ]; then
+        echo "=== e2e: reaping $ORPHAN_IRON_PROXIES orphan iron-proxy process(es) ===" >&2
+        pkill -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null || true
+    fi
 fi
 
 # Reap orphan e2e-* tart VMs from prior runs. Test fixtures name their
@@ -155,44 +235,49 @@ if [ "$SKIP_INSTALL" = "0" ]; then
     }
 fi
 
-# Verify what we ended up with:
-#   1. Plist points at DEVM_BIN — catches "install said ok but the
-#      plist path is wrong" bugs.
-#   2. Daemon actually responds on its unix socket AND its Fingerprint
-#      matches — catches the zombie-daemon case where launchctl thinks
-#      the service is running but the socket file was deleted from
-#      under it (e.g., stale process holding an unlinked fd), or where
-#      launchctl's KeepAlive kept an old process alive across an
-#      install that should have replaced it.
-DAEMON_PROG="$(launchctl print system/com.devm.service 2>/dev/null | awk -F'= ' '/^[[:space:]]*program = /{print $2; exit}')"
-if [ "$DAEMON_PROG" != "$DEVM_BIN" ]; then
-    echo "=== e2e: daemon didn't switch to DEVM_BIN after reinstall ===" >&2
-    echo "    DEVM_BIN:            $DEVM_BIN" >&2
-    echo "    daemon program path: $DAEMON_PROG" >&2
-    exit 1
-fi
-# Wait up to 10s for the socket to accept connections AND for the
-# daemon Fingerprint to match. On a fresh install, launchctl kicks the
-# process asynchronously; give it a moment before failing.
-_deadline=$(( $(date +%s) + 10 ))
-while [ "$(date +%s)" -lt "$_deadline" ]; do
-    if "$DEVM_BIN" status --json 2>/dev/null | \
-       jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' >/dev/null 2>&1; then
-        break
+# Plist verification only applies to install-mode (launchd is running
+# the daemon). Isolated mode's daemon is our own foreground `devm
+# serve` — the daemon-up probe below is enough.
+if [ "${E2E_ISOLATE:-0}" != "1" ]; then
+    # Verify what we ended up with:
+    #   1. Plist points at DEVM_BIN — catches "install said ok but the
+    #      plist path is wrong" bugs.
+    #   2. Daemon actually responds on its unix socket AND its Fingerprint
+    #      matches — catches the zombie-daemon case where launchctl thinks
+    #      the service is running but the socket file was deleted from
+    #      under it (e.g., stale process holding an unlinked fd), or where
+    #      launchctl's KeepAlive kept an old process alive across an
+    #      install that should have replaced it.
+    DAEMON_PROG="$(launchctl print system/com.devm.service 2>/dev/null | awk -F'= ' '/^[[:space:]]*program = /{print $2; exit}')"
+    if [ "$DAEMON_PROG" != "$DEVM_BIN" ]; then
+        echo "=== e2e: daemon didn't switch to DEVM_BIN after reinstall ===" >&2
+        echo "    DEVM_BIN:            $DEVM_BIN" >&2
+        echo "    daemon program path: $DAEMON_PROG" >&2
+        exit 1
     fi
-    sleep 0.5
-done
-if ! "$DEVM_BIN" status --json 2>/dev/null | \
-     jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' >/dev/null 2>&1; then
-    echo "=== e2e: daemon not reachable via socket after install ===" >&2
-    echo "    plist says the service is running but the CLI can't dial the" >&2
-    echo "    unix socket, or the daemon reports a Fingerprint that doesn't" >&2
-    echo "    match this CLI. Most likely a zombie process holding an" >&2
-    echo "    unlinked socket fd from a prior uninstall. Fix:" >&2
-    echo "" >&2
-    echo "    sudo launchctl bootout system/com.devm.service" >&2
-    echo "    (then rerun this command)" >&2
-    exit 1
+    # Wait up to 10s for the socket to accept connections AND for the
+    # daemon Fingerprint to match. On a fresh install, launchctl kicks the
+    # process asynchronously; give it a moment before failing.
+    _deadline=$(( $(date +%s) + 10 ))
+    while [ "$(date +%s)" -lt "$_deadline" ]; do
+        if "$DEVM_BIN" status --json 2>/dev/null | \
+           jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.5
+    done
+    if ! "$DEVM_BIN" status --json 2>/dev/null | \
+         jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' >/dev/null 2>&1; then
+        echo "=== e2e: daemon not reachable via socket after install ===" >&2
+        echo "    plist says the service is running but the CLI can't dial the" >&2
+        echo "    unix socket, or the daemon reports a Fingerprint that doesn't" >&2
+        echo "    match this CLI. Most likely a zombie process holding an" >&2
+        echo "    unlinked socket fd from a prior uninstall. Fix:" >&2
+        echo "" >&2
+        echo "    sudo launchctl bootout system/com.devm.service" >&2
+        echo "    (then rerun this command)" >&2
+        exit 1
+    fi
 fi
 
 # Single pytest run with -p no:xdist. Every just-target invokes run.sh

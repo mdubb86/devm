@@ -65,26 +65,35 @@ clean:
 #   - install:   exercises devm's install lifecycle (installing devm)
 #   - contract:  declarative tart + iron-proxy invariants devm depends on
 #   - recipe:    end-to-end pins for a specific recipe (Docker, etc.)
+#
+# `E2E_ISOLATE=1` for everything EXCEPT install: run.sh spins up a
+# private daemon under /tmp with its own runtime dir so tests never
+# touch the user's real ~/Library/Application Support/devm/ (and
+# never uninstall/kill the user's real project iron-proxies).
+# e2e-install exercises the real launchd path — that's the point of
+# those tests — so it stays unisolated.
 e2e-devm:
-    @e2e/scripts/run.sh -m "devm and not install"
+    @E2E_ISOLATE=1 e2e/scripts/run.sh -m "devm and not install"
 
 e2e-install:
     @e2e/scripts/run.sh -m install
 
 e2e-contract:
-    @e2e/scripts/run.sh -m contract
+    @E2E_ISOLATE=1 e2e/scripts/run.sh -m contract
 
 # Exercise all recipe integrations end-to-end. Slow — each recipe's
 # install (Docker via get.docker.com, whatever the next recipe needs)
 # runs a real workload in a fresh VM. Kept out of `just e2e` because
 # these need public-internet egress and take minutes per test.
 e2e-recipe:
-    @e2e/scripts/run.sh -m recipe
+    @E2E_ISOLATE=1 e2e/scripts/run.sh -m recipe
 
 # Run a single test by name (matches pytest -k pattern). Foreground (no -n).
 # Quote multi-word patterns: `just e2e-one "test_a or test_b"`.
+# Defaults to isolated mode; override with E2E_ISOLATE=0 when running
+# an install-marker test by name.
 e2e-one NAME:
-    @e2e/scripts/run.sh -k '{{NAME}}'
+    @E2E_ISOLATE="${E2E_ISOLATE:-1}" e2e/scripts/run.sh -k '{{NAME}}'
 
 # List discovered tests without running them.
 e2e-list:

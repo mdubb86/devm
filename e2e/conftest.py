@@ -268,6 +268,16 @@ def _daemon_matches_devm_bin(request, devm_path):
         yield
         return
 
+    # Isolated mode: run.sh started a foreground `devm serve --foreground`
+    # in a private $DEVM_RUNTIME_DIR — there IS no LaunchDaemon plist for
+    # the test daemon, and the check below would spuriously find the
+    # user's REAL launchd-managed daemon (pointed at their real binary)
+    # and abort. Run.sh already health-checked the isolated daemon before
+    # invoking pytest, so no verification is needed here.
+    if os.environ.get("E2E_ISOLATE") == "1":
+        yield
+        return
+
     current_program = _daemon_program_path()
     if current_program == devm_path and _LAUNCH_DAEMON_PLIST.exists():
         yield

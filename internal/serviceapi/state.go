@@ -13,10 +13,11 @@ import (
 
 // StateDir returns the directory where per-project last-applied cfg
 // snapshots live. Sibling to the socket path; same lifecycle (created
-// on daemon startup, wiped on uninstall).
+// on daemon startup, wiped on uninstall). Follows the same
+// $DEVM_RUNTIME_DIR override as SocketPath so an e2e-sandboxed daemon
+// keeps its state alongside its socket.
 func StateDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "Application Support", "devm", "state")
+	return filepath.Join(RuntimeDir(), "state")
 }
 
 // validProjectID rejects project IDs that could escape StateDir() via

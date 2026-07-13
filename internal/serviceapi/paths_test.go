@@ -23,3 +23,21 @@ func TestEnsureRuntimeDir_CreatesDirectory(t *testing.T) {
 	parent := filepath.Dir(SocketPath())
 	assert.Equal(t, parent, dir)
 }
+
+// TestRuntimeDirEnvOverride pins that $DEVM_RUNTIME_DIR shifts every
+// runtime path — socket, state dir, ensured dir — off the default
+// `~/Library/Application Support/devm/` location. Load-bearing for
+// e2e isolation: without this, e2e runs would still trample the
+// user's real daemon state via SocketPath / StateDir.
+func TestRuntimeDirEnvOverride(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("DEVM_RUNTIME_DIR", tmp)
+
+	assert.Equal(t, tmp, RuntimeDir())
+	assert.Equal(t, filepath.Join(tmp, "devm.sock"), SocketPath())
+	assert.Equal(t, filepath.Join(tmp, "state"), StateDir())
+
+	dir, err := EnsureRuntimeDir()
+	require.NoError(t, err)
+	assert.Equal(t, tmp, dir)
+}

@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"context"
 	"net"
+	"os"
 
 	"github.com/miekg/dns"
 
@@ -10,14 +11,31 @@ import (
 )
 
 const (
-	// DNSAddr is the UDP socket the daemon listens on for *.test
-	// queries. Forwarded here by /etc/resolver/test.
-	DNSAddr = "127.0.0.1:51153"
+	// defaultDNSAddr is the UDP socket the daemon listens on for
+	// *.test queries. Forwarded here by /etc/resolver/test written by
+	// `devm install`. Overridable via $DEVM_DNS_ADDR — e2e's isolated
+	// mode sets it to 127.0.0.1:0 (ephemeral port) so a second daemon
+	// can coexist with the user's real one without a port collision.
+	defaultDNSAddr = "127.0.0.1:51153"
+
+	// dnsAddrEnv is the environment variable that overrides
+	// defaultDNSAddr. See defaultDNSAddr.
+	dnsAddrEnv = "DEVM_DNS_ADDR"
 
 	// testTLD is the only suffix we serve. miekg/dns expects the
 	// trailing dot.
 	testTLD = "test."
 )
+
+// DNSAddr returns the address the daemon's *.test DNS server binds
+// to. Respects $DEVM_DNS_ADDR when set; otherwise returns the default
+// port that /etc/resolver/test points at.
+func DNSAddr() string {
+	if v := os.Getenv(dnsAddrEnv); v != "" {
+		return v
+	}
+	return defaultDNSAddr
+}
 
 // DNSServer is the daemon's tiny *.test resolver. Answers A queries
 // with 127.0.0.1 and AAAA with ::1; everything else gets NODATA.
@@ -25,9 +43,11 @@ type DNSServer struct {
 	server *dns.Server
 }
 
-// NewDNSServer builds a server bound to the production DNSAddr.
+// NewDNSServer builds a server bound to the address returned by
+// DNSAddr() — the default 127.0.0.1:51153 unless $DEVM_DNS_ADDR
+// overrides.
 func NewDNSServer() *DNSServer {
-	return newDNSServerAt(DNSAddr)
+	return newDNSServerAt(DNSAddr())
 }
 
 // newDNSServerAt is the testable inner — tests pass an ephemeral
