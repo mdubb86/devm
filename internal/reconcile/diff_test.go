@@ -604,23 +604,40 @@ func TestNetworkAndSecretKindsInIronProxyRestartBucket(t *testing.T) {
 }
 
 func TestComputeNetworkChanges_AddsAndRemoves(t *testing.T) {
+	// Interleaved hosts to verify sort.SliceStable actually reorders results.
+	// Raw emission order (adds then removes): aaa.com, zzz2.com, zzz.com, aaa2.com
+	// Expected sorted order: aaa.com (Add), aaa2.com (Remove), zzz.com (Remove), zzz2.com (Add)
 	old := schema.Config{Network: schema.Network{Allow: []schema.AllowEntry{
-		{Host: "existing.example.com"},
-		{Host: "gone.example.com"},
+		{Host: "zzz.com"},
+		{Host: "aaa2.com"},
 	}}}
 	new := schema.Config{Network: schema.Network{Allow: []schema.AllowEntry{
-		{Host: "existing.example.com"},
-		{Host: "added.example.com"},
+		{Host: "aaa.com"},
+		{Host: "zzz2.com"},
 	}}}
 	got := computeNetworkChanges(old, new)
-	require.Len(t, got, 2)
-	// Sorted by host alphabetically.
+	require.Len(t, got, 4)
+
+	// Verify sorted by Key, then by Kind (Add < Remove for same key).
+	// Entry 0: aaa.com (Add)
+	assert.Equal(t, "aaa.com", got[0].Key)
 	assert.Equal(t, KindNetworkAdd, got[0].Kind)
-	assert.Equal(t, "added.example.com", got[0].Key)
-	assert.Equal(t, "added.example.com", got[0].New)
+	assert.Equal(t, "aaa.com", got[0].New)
+
+	// Entry 1: aaa2.com (Remove)
+	assert.Equal(t, "aaa2.com", got[1].Key)
 	assert.Equal(t, KindNetworkRemove, got[1].Kind)
-	assert.Equal(t, "gone.example.com", got[1].Key)
-	assert.Equal(t, "gone.example.com", got[1].Old)
+	assert.Equal(t, "aaa2.com", got[1].Old)
+
+	// Entry 2: zzz.com (Remove)
+	assert.Equal(t, "zzz.com", got[2].Key)
+	assert.Equal(t, KindNetworkRemove, got[2].Kind)
+	assert.Equal(t, "zzz.com", got[2].Old)
+
+	// Entry 3: zzz2.com (Add)
+	assert.Equal(t, "zzz2.com", got[3].Key)
+	assert.Equal(t, KindNetworkAdd, got[3].Kind)
+	assert.Equal(t, "zzz2.com", got[3].New)
 }
 
 func TestComputeNetworkChanges_NoChange(t *testing.T) {
