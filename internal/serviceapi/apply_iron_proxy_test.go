@@ -1,0 +1,155 @@
+package serviceapi
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"syscall"
+	"testing"
+
+	"github.com/mdubb86/devm/internal/supervisor"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// writePreExistingIronProxyConfig drops a minimal YAML at the
+// per-project path so /vm/apply-iron-proxy can pull ports out of it.
+func writePreExistingIronProxyConfig(t *testing.T, projectID, macHost string, httpPort, httpsPort, dnsPort int) {
+	t.Helper()
+	path, err := IronProxyConfigPath(projectID)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	body := []byte(
+		"dns:\n" +
+			"  listen: " + macHost + ":" + strconv.Itoa(dnsPort) + "\n" +
+			"proxy:\n" +
+			"  http_listen: " + macHost + ":" + strconv.Itoa(httpPort) + "\n" +
+			"  https_listen: " + macHost + ":" + strconv.Itoa(httpsPort) + "\n",
+	)
+	require.NoError(t, os.WriteFile(path, body, 0o600))
+}
+
+func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	srv := NewServer(SocketPath(), Build{})
+	sup := supervisor.New("")
+	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, nil)
+
+	// No config file exists → VM has never started. Snapshot should
+	// still update; response signals no live apply.
+	body, _ := json.Marshal(VMApplyIronProxyRequest{
+		ProjectID: "p",
+		Allowlist: []string{"a.example.com"},
+		Secrets:   nil,
+	})
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/apply-iron-proxy", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp VMApplyIronProxyResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.False(t, resp.Applied)
+	assert.False(t, resp.Revived)
+	assert.False(t, resp.VMRunning)
+
+	// Snapshot's SecretHashes must still update even with no live VM,
+	// so the next /vm/start writes iron-proxy config from the current
+	// schema without re-detecting the same drift.
+	snap, err := ReadStateSnapshot("p")
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+}
+
+// TestApplyIronProxy_RunningRestartSucceeds covers the "iron-proxy was
+// already running" happy path: a real config file exists on disk (so
+// MAC_HOST:port is preserved), the supervisor reports the process as
+// alive (simulated via Adopt on a real child pid, mirroring
+// TestSupervisor_AdoptedStatusAndStop), and the handler must stop the
+// old process, spawn a fresh one, verify it's listening, and persist
+// SecretHashes. SpawnIronProxy itself is expensive (execs the real
+// iron-proxy binary) so it's substituted via the spawnIronProxyFn
+// injection seam with a stub that just opens the expected listener.
+func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	srv := NewServer(SocketPath(), Build{})
+	sup := supervisor.New(t.TempDir())
+
+	const projectID = "p-running"
+	macHost := "127.0.0.1"
+	httpPort, err := pickPort()
+	require.NoError(t, err)
+	httpsPort, err := pickPort()
+	require.NoError(t, err)
+	dnsPort, err := pickPort()
+	require.NoError(t, err)
+	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
+
+	// Simulate "iron-proxy already running" by adopting a real,
+	// long-lived child process's pid — supervisor.Status only checks
+	// liveness via kill(pid, 0), it doesn't care what the process is.
+	cmd := exec.Command("sleep", "30")
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		default:
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			<-done
+		}
+	})
+	key := supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}
+	sup.Adopt(key, pid)
+	require.True(t, sup.Status(key).Present)
+	require.True(t, sup.Status(key).Running)
+
+	// Substitute the real SpawnIronProxy: instead of execing iron-proxy,
+	// just bind the https listener the handler will health-check.
+	origSpawn := spawnIronProxyFn
+	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
+	var ln net.Listener
+	spawnIronProxyFn = func(_ context.Context, _ *supervisor.Supervisor, _ string, cfg IronProxyConfig, _ *Denials) error {
+		var lerr error
+		ln, lerr = net.Listen("tcp", cfg.HTTPSListen)
+		return lerr
+	}
+
+	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, nil)
+
+	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
+		ProjectID: projectID,
+		Allowlist: []string{"a.example.com"},
+		Secrets: []SecretBinding{
+			{Name: "github_token", Value: "s3cr3t", Hosts: []string{"api.github.com"}},
+		},
+	})
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/apply-iron-proxy", bytes.NewReader(reqBody)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	if ln != nil {
+		defer ln.Close()
+	}
+
+	var resp VMApplyIronProxyResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.True(t, resp.Applied)
+	assert.False(t, resp.Revived, "was already running, so this is not a revival")
+	assert.True(t, resp.VMRunning)
+
+	snap, err := ReadStateSnapshot(projectID)
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	require.Contains(t, snap.SecretHashes, "github_token")
+}
