@@ -90,14 +90,22 @@ that does HTTPS in build steps:
 
 ```dockerfile
 # syntax=docker/dockerfile:1
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim   # or alpine:3.22, ubuntu:latest, fedora — same block works
 
 RUN --mount=type=secret,id=devm-ca,dst=/usr/local/share/ca-certificates/devm.crt,required=false \
-    [ -s /usr/local/share/ca-certificates/devm.crt ] && update-ca-certificates || true
+    [ -s /usr/local/share/ca-certificates/devm.crt ] && \
+    ( command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates \
+      || cat /usr/local/share/ca-certificates/devm.crt >> /etc/ssl/certs/ca-certificates.crt ) \
+    || true
 
 # your normal build steps below — HTTPS inside RUN now works
 RUN apt-get update && apt-get install -y curl && curl https://…
 ```
+
+The block uses `update-ca-certificates` when the base image ships it
+(Debian family), and falls back to appending the CA to the bundle at
+`/etc/ssl/certs/ca-certificates.crt` when it doesn't (Alpine and other
+minimal images). No distro branching in your Dockerfile.
 
 **Portability.** The `required=false` on the mount makes the RUN a
 no-op wherever the secret isn't defined — the same Dockerfile builds

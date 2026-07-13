@@ -51,10 +51,13 @@ Any Dockerfile that hits HTTPS inside a RUN step — `apt-get update`, `curl`, `
 
 ```dockerfile
 # syntax=docker/dockerfile:1
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim  # or alpine:3.22, ubuntu:latest, fedora, rhel — same block works
 
 RUN --mount=type=secret,id=devm-ca,dst=/usr/local/share/ca-certificates/devm.crt,required=false \
-    [ -s /usr/local/share/ca-certificates/devm.crt ] && update-ca-certificates || true
+    [ -s /usr/local/share/ca-certificates/devm.crt ] && \
+    ( command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates \
+      || cat /usr/local/share/ca-certificates/devm.crt >> /etc/ssl/certs/ca-certificates.crt ) \
+    || true
 
 # your normal build steps below — HTTPS inside RUN now works
 RUN apt-get update && apt-get install -y curl && curl https://api.example.com/...
@@ -64,9 +67,12 @@ RUN apt-get update && apt-get install -y curl && curl https://api.example.com/..
 
 - `# syntax=docker/dockerfile:1` — opts into the frontend that supports `--mount=type=secret`.
 - `--mount=type=secret,id=devm-ca` — buildkit binds the secret (delivered by the shim as `--secret id=devm-ca,src=…`) at `dst` for the duration of this RUN only. Not persisted to any image layer.
-- `dst=/usr/local/share/ca-certificates/devm.crt` — Debian's CA drop-in dir. `update-ca-certificates` reads it and merges the content into `/etc/ssl/certs/ca-certificates.crt`.
-- `required=false` — critical for portability. If the secret isn't defined, the mount is silently empty rather than failing the build.
-- `[ -s ... ] && update-ca-certificates || true` — only run update-ca-certificates when the mount actually delivered content. On environments without the shim (Mac, CI), the file is empty and the RUN skips.
+- `dst=/usr/local/share/ca-certificates/devm.crt` — Debian's canonical CA drop-in dir. Chosen so that when `update-ca-certificates` IS available, it finds and merges the cert automatically.
+- `required=false` — critical for portability. If the secret isn't defined (no shim in the path), the mount ends up as an empty file rather than failing the build.
+- `[ -s … ]` — "file exists AND is non-empty." Anything to do at all? On environments without the shim (Mac, CI), the mount is empty; the test fails; the `||` short-circuits the whole tail and the RUN exits 0.
+- `command -v update-ca-certificates` — is Debian's canonical tool available? Debian/Ubuntu/Fedora with `ca-certificates` installed: yes → use it (survives later CA-bundle rebuilds by the same tool). Alpine bare / minimal images: no → fall through.
+- `cat … >> /etc/ssl/certs/ca-certificates.crt` — universal bundle append. Works on any distro that ships the standard bundle path (Alpine, Debian, Ubuntu, Fedora, RHEL, most base images).
+- `|| true` — normalizes exit code so the RUN doesn't fail the build on the no-op path.
 
 ## Portability: same Dockerfile everywhere
 
@@ -74,7 +80,7 @@ The `required=false` + guard-then-skip pattern is deliberate. The same Dockerfil
 
 | Environment | Shim present | `--secret` passed | RUN behavior |
 |---|---|---|---|
-| Inside `devm shell` | yes | yes (auto) | mount populated → update-ca-certificates runs → CA merged |
+| Inside `devm shell` | yes | yes (auto) | mount populated → update-ca-certificates OR bundle-append runs → CA merged |
 | Plain `docker build` on Mac | no | no | mount empty → guard false → RUN no-ops |
 | CI (plain `docker build`) | no | no | same as Mac |
 
