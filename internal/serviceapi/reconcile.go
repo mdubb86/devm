@@ -31,7 +31,13 @@ type VMReconcileRequest struct {
 
 // VMReconcileResponse is the return shape.
 type VMReconcileResponse struct {
-	Applied          []reconcile.Change `json:"applied"`
+	Applied []reconcile.Change `json:"applied"`
+	// AppliedIronProxy carries changes in BucketIronProxyRestart that the
+	// daemon has NOT applied — the CLI dispatches /vm/apply-iron-proxy
+	// after resolving the current allowlist + secrets in the user
+	// context. The daemon never writes SecretHashes for these changes;
+	// only a successful /vm/apply-iron-proxy call does that.
+	AppliedIronProxy []reconcile.Change `json:"applied_iron_proxy,omitempty"`
 	TeardownRequired []reconcile.Change `json:"teardown_required"`
 	SandboxState     string             `json:"sandbox_state"` // "running" or "stopped"
 }
@@ -116,12 +122,15 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 			return
 		}
 
-		// Partition into live and teardown-required.
-		var live, teardown []reconcile.Change
+		// Partition into live, iron-proxy-restart, and teardown-required.
+		var live, ironProxy, teardown []reconcile.Change
 		for _, c := range changes {
-			if c.Bucket() == reconcile.BucketLive {
+			switch c.Bucket() {
+			case reconcile.BucketLive:
 				live = append(live, c)
-			} else {
+			case reconcile.BucketIronProxyRestart:
+				ironProxy = append(ironProxy, c)
+			default:
 				teardown = append(teardown, c)
 			}
 		}
@@ -134,6 +143,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 			// bundle pipe, which will see them via the same diff engine.
 			resp := VMReconcileResponse{
 				Applied:          nil,
+				AppliedIronProxy: ironProxy,
 				TeardownRequired: teardown,
 				SandboxState:     state,
 			}
@@ -172,7 +182,12 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 			}
 		}
 
-		resp := VMReconcileResponse{Applied: live, TeardownRequired: teardown, SandboxState: state}
+		resp := VMReconcileResponse{
+			Applied:          live,
+			AppliedIronProxy: ironProxy,
+			TeardownRequired: teardown,
+			SandboxState:     state,
+		}
 		body, _ := json.Marshal(resp)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

@@ -242,9 +242,51 @@ func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
 
 	var resp VMReconcileResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	kinds := changeKinds(append(append([]reconcile.Change{}, resp.Applied...), resp.TeardownRequired...))
+	kinds := changeKinds(resp.AppliedIronProxy)
 	assert.Contains(t, kinds, reconcile.KindSecretChange,
-		"rotated secret hash must surface as a KindSecretChange somewhere in the response")
+		"rotated secret hash must surface as a KindSecretChange in AppliedIronProxy")
+	assert.Empty(t, resp.Applied)
+	assert.Empty(t, resp.TeardownRequired)
+}
+
+func TestVMReconcile_NetworkAddSurfacesAsAppliedIronProxy(t *testing.T) {
+	// Network-allow additions are BucketIronProxyRestart changes: the
+	// daemon does not apply them itself. They must come back to the CLI
+	// via AppliedIronProxy (which the CLI dispatches to
+	// /vm/apply-iron-proxy), not Applied or TeardownRequired.
+	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{
+		Cfg: schema.Config{
+			Project: schema.Project{ID: "p", VMName: "p-vm"},
+			Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}},
+		},
+	}))
+
+	req := VMReconcileRequest{
+		ProjectID: "p",
+		VMName:    "p-vm",
+		Cfg: schema.Config{
+			Project: schema.Project{ID: "p", VMName: "p-vm"},
+			Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}, {Host: "b.com"}}},
+		},
+	}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"})
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp.AppliedIronProxy, 1)
+	assert.Equal(t, reconcile.KindNetworkAdd, resp.AppliedIronProxy[0].Kind)
+	assert.Equal(t, "b.com", resp.AppliedIronProxy[0].Key)
+	assert.Empty(t, resp.Applied)
+	assert.Empty(t, resp.TeardownRequired)
 }
 
 func changeKinds(cs []reconcile.Change) []reconcile.ChangeKind {
