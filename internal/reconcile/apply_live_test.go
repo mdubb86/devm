@@ -74,17 +74,6 @@ func TestApplyLive_PortKindsAreNoOps(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestApplyLive_NetworkKindsAreNoOps(t *testing.T) {
-	// Network egress is Ship 5 (iron-proxy); no apply path in Ship 4.
-	dir := t.TempDir()
-	tr, _ := fakeTartForApplyLive(t, dir)
-	err := ApplyLive(tr, "x", []Change{
-		{Kind: KindNetworkAdd, Key: "example.com", New: "example.com"},
-		{Kind: KindNetworkRemove, Key: "old.example.com", Old: "old.example.com"},
-	}, schema.Config{}, dir)
-	assert.NoError(t, err)
-}
-
 // TestApplyLive_EnvChange_PipesBundle_NoWorkspaceWrite is a regression
 // test for the bundle refactor: ApplyLive on an env change must pipe a
 // bundle to the guest via ExecStdin — NOT write repoRoot/.devm/.env on

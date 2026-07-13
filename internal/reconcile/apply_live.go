@@ -41,8 +41,6 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		case KindPortAdd, KindPortRemove, KindPortChange:
 			// Port changes in Tart world trigger Caddyfile reload via the
 			// provisioner pattern; no host-side port publishing needed.
-		case KindNetworkAdd, KindNetworkRemove:
-			// Network egress is Ship 5 (iron-proxy); no apply path in Ship 4.
 		case KindTemplateChange:
 			templateChanges = append(templateChanges, c)
 		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange:
