@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	selfupdate "github.com/creativeprojects/go-selfupdate"
+	"github.com/mdubb86/devm/internal/recipes"
 	"github.com/mdubb86/devm/internal/release"
 	"github.com/spf13/cobra"
 )
@@ -58,6 +59,19 @@ var upgradeCmd = &cobra.Command{
 		}
 
 		fmt.Printf("upgraded to %s\n", rel.Version())
+
+		// Refresh recipes too — they're on their own release cadence
+		// (recipes-<sha> tags fire on every push to recipes/**), so an
+		// upgraded devm otherwise sees whatever was current the last
+		// time the user ran `devm recipes list` (up to 24h stale via
+		// lazy sync). Explicit sync bypasses the 24h rate limit — the
+		// user's `devm upgrade` is exactly the "give me freshest"
+		// signal. Best-effort: a network failure here shouldn't fail
+		// the upgrade, since the binary swap already succeeded.
+		syncer := recipes.NewSyncer(recipes.CacheDir(), recipes.ReleasesURL())
+		if _, err := syncer.Sync(ctx, false); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: recipes sync failed (%v). Run `devm recipes sync` to retry.\n", err)
+		}
 
 		// Run the full install flow to sync the daemon with the freshly
 		// upgraded binary: rewrites the plist if it was pointing at a
