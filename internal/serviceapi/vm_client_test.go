@@ -336,3 +336,45 @@ func TestVMStop_MethodNotAllowed(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }
+
+// TestClientApplyIronProxy_ReadsResponse verifies Client.ApplyIronProxy
+// round-trips a request to the daemon and unmarshals the response correctly.
+func TestClientApplyIronProxy_ReadsResponse(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "sapi-apply-iron-proxy-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	sock := filepath.Join(dir, "s.sock")
+	srv := NewServer(sock, Build{})
+	// Fake handler that returns applied=true, revived=false, vm_running=true.
+	srv.mux.HandleFunc("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {
+		var req VMApplyIronProxyRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		assert.Equal(t, "p", req.ProjectID)
+		writeJSON(w, VMApplyIronProxyResponse{Applied: true, Revived: false, VMRunning: true})
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(sock); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, sock)
+
+	c := NewClientWithSocket(sock)
+	resp, err := c.ApplyIronProxy(context.Background(), VMApplyIronProxyRequest{
+		ProjectID: "p",
+		Allowlist: []string{"a.com"},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Applied)
+	assert.False(t, resp.Revived)
+	assert.True(t, resp.VMRunning)
+}

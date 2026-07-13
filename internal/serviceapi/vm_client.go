@@ -93,6 +93,34 @@ func (c *Client) Reconcile(ctx context.Context, req VMReconcileRequest) (VMRecon
 	return resp, nil
 }
 
+// ApplyIronProxy calls POST /vm/apply-iron-proxy with the freshly
+// resolved allowlist and secrets. The daemon regenerates the
+// per-project iron-proxy config on the SAME MAC_HOST:port as the
+// pre-existing config on disk, restarts iron-proxy if it was
+// running, or spawns it if the config existed but iron-proxy was
+// dead. Returns VMApplyIronProxyResponse.VMRunning=false when there
+// is no iron-proxy config file (VM has never started).
+func (c *Client) ApplyIronProxy(ctx context.Context, req VMApplyIronProxyRequest) (VMApplyIronProxyResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return VMApplyIronProxyResponse{}, err
+	}
+	r, err := c.post(ctx, "/vm/apply-iron-proxy", body)
+	if err != nil {
+		return VMApplyIronProxyResponse{}, err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return VMApplyIronProxyResponse{}, fmt.Errorf("vm/apply-iron-proxy: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp VMApplyIronProxyResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return VMApplyIronProxyResponse{}, err
+	}
+	return resp, nil
+}
+
 // Denials queries the daemon for iron-proxy allow-list rejects observed
 // this iron-proxy lifetime, per host. Sorted by count desc. Empty slice
 // (never nil) if the project hasn't triggered any denials yet, iron-proxy
