@@ -211,6 +211,50 @@ func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testi
 	assert.Equal(t, []schema.Mask{{Path: "data", Size: "10m"}}, got.Services["web"].Masks)
 }
 
+func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
+	// CLI resolves + hashes secret refs (login-keychain access happens
+	// in the user context) and sends the map on every /vm/reconcile
+	// call. Compared against the last-applied snapshot's SecretHashes,
+	// the diff engine must surface a KindSecretChange when the hash for
+	// an existing secret ref rotates.
+	t.Setenv("HOME", t.TempDir())
+
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{
+		Cfg:          schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}},
+		SecretHashes: map[string]string{"TOK": "old-hash"},
+	}))
+
+	req := VMReconcileRequest{
+		ProjectID:    "p",
+		VMName:       "p-vm",
+		Cfg:          schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}},
+		SecretHashes: map[string]string{"TOK": "new-hash"},
+	}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"})
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	kinds := changeKinds(append(append([]reconcile.Change{}, resp.Applied...), resp.TeardownRequired...))
+	assert.Contains(t, kinds, reconcile.KindSecretChange,
+		"rotated secret hash must surface as a KindSecretChange somewhere in the response")
+}
+
+func changeKinds(cs []reconcile.Change) []reconcile.ChangeKind {
+	out := make([]reconcile.ChangeKind, len(cs))
+	for i, c := range cs {
+		out[i] = c.Kind
+	}
+	return out
+}
+
 // fakeApply is a stand-in for the real ApplyLive; it records that it
 // was called and returns success.
 type fakeApply struct{ called bool }

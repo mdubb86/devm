@@ -21,6 +21,12 @@ type VMReconcileRequest struct {
 	VMName            string        `json:"vm_name"`
 	Cfg               schema.Config `json:"cfg"`
 	WorkspaceHostPath string        `json:"workspace_host_path"`
+	// SecretHashes is {name: hex sha256(resolved value)} for every
+	// !secret ref in cfg. The CLI resolves + hashes secrets (login-
+	// keychain access happens in the user context) and sends the map
+	// here. Empty or nil means "no secrets to consider" — safe for old
+	// clients.
+	SecretHashes map[string]string `json:"secret_hashes,omitempty"`
 }
 
 // VMReconcileResponse is the return shape.
@@ -94,12 +100,17 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 		}
 		var base schema.Config
 		var lastAppliedTemplates map[string]string
+		var oldSecretHashes map[string]string
 		if oldSnap != nil {
 			base = oldSnap.Cfg
 			lastAppliedTemplates = oldSnap.TemplateContents
+			oldSecretHashes = oldSnap.SecretHashes
 		}
 
-		changes, err := reconcile.ComputeAllChanges(base, req.Cfg, req.WorkspaceHostPath, lastAppliedTemplates, nil, nil)
+		changes, err := reconcile.ComputeAllChanges(
+			base, req.Cfg, req.WorkspaceHostPath, lastAppliedTemplates,
+			oldSecretHashes, req.SecretHashes,
+		)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("diff: %v", err), http.StatusInternalServerError)
 			return
