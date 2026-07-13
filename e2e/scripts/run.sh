@@ -115,18 +115,39 @@ if [ "${E2E_ISOLATE:-0}" = "1" ]; then
         exit 1
     fi
 
-    # Extra teardown: kill the isolated daemon and rm its runtime dir.
-    # Redefine on_exit to add these steps; the EXIT trap set at line 31
-    # resolves the function by name at fire time so this override wins.
+    # Extra teardown: kill the isolated daemon's iron-proxy children,
+    # then the daemon, then rm its runtime dir. Redefine on_exit to
+    # add these steps; the EXIT trap set at line 31 resolves the
+    # function by name at fire time so this override wins.
+    #
+    # Iron-proxies are setsid'd on spawn to survive daemon death by
+    # design (see internal/supervisor/setsid_darwin.go). Killing the
+    # daemon alone leaves them running as orphans on their MAC_HOST
+    # ports. Kill them explicitly BEFORE the daemon so tests can't
+    # accidentally reuse a port on the next run.
+    #
+    # The pattern matches iron-proxies whose -config path is under our
+    # isolated runtime dir. Cannot match the user's real project
+    # iron-proxies — their configs live under a different runtime dir
+    # entirely (~/Library/Application Support/devm/).
     on_exit() {
         local rc=$?
+        pkill -TERM -f "iron-proxy -config ${ISOLATED_RUNTIME_DIR}" 2>/dev/null || true
+        # Small grace for iron-proxy to exit before we take the daemon down.
+        for _ in 1 2 3 4 5; do
+            pgrep -f "iron-proxy -config ${ISOLATED_RUNTIME_DIR}" >/dev/null 2>&1 || break
+            sleep 0.2
+        done
+        pkill -KILL -f "iron-proxy -config ${ISOLATED_RUNTIME_DIR}" 2>/dev/null || true
+
         kill -TERM "$E2E_DAEMON_PID" 2>/dev/null || true
-        # Give it a moment to shut down cleanly, then SIGKILL.
+        # Give the daemon a moment to shut down cleanly, then SIGKILL.
         for _ in 1 2 3 4 5; do
             if ! kill -0 "$E2E_DAEMON_PID" 2>/dev/null; then break; fi
             sleep 0.2
         done
         kill -KILL "$E2E_DAEMON_PID" 2>/dev/null || true
+
         rm -rf "$ISOLATED_RUNTIME_DIR"
         sweep_registry
         rm -f "$E2E_REGISTRY"
