@@ -55,6 +55,7 @@ type ReconcileResult struct {
 	Rendered         bool
 	SandboxState     string
 	Applied          []reconcile.Change
+	AppliedIronProxy []reconcile.Change // BucketIronProxyRestart changes applied via /vm/apply-iron-proxy
 	RecreateRequired []reconcile.Change
 	Flavor           reconcile.FlavorKind
 	Sessions         []Session

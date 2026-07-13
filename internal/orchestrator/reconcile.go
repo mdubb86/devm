@@ -7,6 +7,7 @@ import (
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
@@ -16,13 +17,12 @@ import (
 // RunReconcile itself never prompts and never executes a recreate.
 type ReconcileOptions struct{}
 
-// RunReconcile POSTs cfg to the daemon's /vm/reconcile endpoint, which
-// diffs it against the project's last-applied snapshot, applies every
-// live-bucket change in place, and reports back what still needs a VM
-// recreate (teardown_required). All diff/apply logic — and the
-// .devm/lock serialization that used to guard it CLI-side — now lives
-// daemon-side (internal/serviceapi/reconcile.go), keyed per-project via
-// ProjectLocks.
+// RunReconcile POSTs cfg + secret_hashes to the daemon's /vm/reconcile
+// endpoint. Live changes apply daemon-side and come back on Applied.
+// Iron-proxy-restart changes come back on AppliedIronProxy and this
+// function then dispatches /vm/apply-iron-proxy with the freshly-
+// resolved allowlist + secrets. Teardown-required changes come back on
+// RecreateRequired and the caller decides whether to prompt.
 //
 // RunReconcile does not prompt or execute a recreate itself: it
 // returns the daemon's classification and lets cmd/devm/reconcile.go
@@ -34,27 +34,57 @@ type ReconcileOptions struct{}
 // daemon call itself failed.
 func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts ReconcileOptions) (int, ReconcileResult, error) {
 	client := serviceapi.NewClient()
+
+	// Resolve secrets CLI-side for the hash map AND for the possible
+	// downstream ApplyIronProxy call. resolveSecretBindings walks env
+	// values for !secret refs; if none, bindings is nil.
+	bindings, err := resolveSecretBindings(cfg, secret.NewMacKeychain())
+	if err != nil {
+		return -1, ReconcileResult{}, fmt.Errorf("resolve secrets: %w", err)
+	}
+	hashes := SecretHashesFromBindings(bindings)
+
 	resp, err := client.Reconcile(context.Background(), serviceapi.VMReconcileRequest{
 		ProjectID:         cfg.Project.ID,
 		VMName:            cfg.Project.VMName,
 		Cfg:               cfg,
 		WorkspaceHostPath: repoRoot,
+		SecretHashes:      hashes,
 	})
 	if err != nil {
 		return -1, ReconcileResult{}, fmt.Errorf("reconcile: %w", err)
+	}
+
+	// If the daemon reports iron-proxy-restart changes, dispatch
+	// ApplyIronProxy. Auto-apply — no prompt (matches live-path UX).
+	var ipRestartApplied []reconcile.Change
+	if len(resp.AppliedIronProxy) > 0 {
+		ipReq := serviceapi.VMApplyIronProxyRequest{
+			ProjectID: cfg.Project.ID,
+			Allowlist: cfg.Network.Domains(),
+			Secrets:   bindings,
+		}
+		ipResp, err := client.ApplyIronProxy(context.Background(), ipReq)
+		if err != nil {
+			return -1, ReconcileResult{}, fmt.Errorf("apply iron-proxy: %w", err)
+		}
+		ipRestartApplied = resp.AppliedIronProxy
+		_ = ipResp // Revived/VMRunning inform the report; wire in Task 13.
 	}
 
 	res := ReconcileResult{
 		Rendered:         true,
 		SandboxState:     resp.SandboxState,
 		Applied:          resp.Applied,
+		AppliedIronProxy: ipRestartApplied,
 		RecreateRequired: resp.TeardownRequired,
 	}
 
 	if len(res.RecreateRequired) == 0 {
-		if len(res.Applied) > 0 {
+		switch {
+		case len(res.Applied) > 0 || len(res.AppliedIronProxy) > 0:
 			res.NextAction = "applied"
-		} else {
+		default:
 			res.NextAction = "nothing_to_do"
 		}
 		return 0, res, nil
