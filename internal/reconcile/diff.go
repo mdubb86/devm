@@ -519,6 +519,46 @@ func unionServiceNames(a, b map[string]schema.Service) []string {
 	return out
 }
 
+// computeSecretChanges diffs a {name: hash} map of resolved secret
+// values. Compared against the last-applied snapshot's SecretHashes,
+// this catches keychain-value rotation that the reference-syntax
+// env-diff misses.
+//
+// Adds and removes cover the ref-lifecycle too (a new `!secret NAME`
+// entry means newHashes has NAME that oldHashes doesn't), so
+// KindSecret* is the canonical bucket-carrier for iron-proxy-restart;
+// KindEnv* still fires for the env reference itself but is bucketed
+// as BucketLive.
+func computeSecretChanges(newHashes, oldHashes map[string]string) []Change {
+	names := make(map[string]struct{}, len(newHashes)+len(oldHashes))
+	for n := range newHashes {
+		names[n] = struct{}{}
+	}
+	for n := range oldHashes {
+		names[n] = struct{}{}
+	}
+	sorted := make([]string, 0, len(names))
+	for n := range names {
+		sorted = append(sorted, n)
+	}
+	sort.Strings(sorted)
+
+	var out []Change
+	for _, n := range sorted {
+		nv, nOk := newHashes[n]
+		ov, oOk := oldHashes[n]
+		switch {
+		case nOk && !oOk:
+			out = append(out, Change{Kind: KindSecretAdd, Key: n})
+		case !nOk && oOk:
+			out = append(out, Change{Kind: KindSecretRemove, Key: n})
+		case nOk && oOk && nv != ov:
+			out = append(out, Change{Kind: KindSecretChange, Key: n})
+		}
+	}
+	return out
+}
+
 // ComputeTemplateChanges diffs the installer scripts that would be
 // produced from `new` against `lastApplied`, the rendered content of
 // each template as of the last successful apply (basename -> content),

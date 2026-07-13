@@ -644,3 +644,32 @@ func TestComputeNetworkChanges_NoChange(t *testing.T) {
 	cfg := schema.Config{Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}}}
 	assert.Nil(t, computeNetworkChanges(cfg, cfg))
 }
+
+func TestComputeSecretChanges_AllThreeShapes(t *testing.T) {
+	old := map[string]string{
+		"KEEP_SAME":   "hash_a",
+		"WILL_CHANGE": "hash_b_old",
+		"WILL_REMOVE": "hash_c",
+	}
+	new := map[string]string{
+		"KEEP_SAME":   "hash_a",
+		"WILL_CHANGE": "hash_b_new",
+		"WILL_ADD":    "hash_d",
+	}
+	got := computeSecretChanges(new, old)
+	require.Len(t, got, 3)
+
+	assert.Equal(t, KindSecretAdd, got[0].Kind)
+	assert.Equal(t, "WILL_ADD", got[0].Key)
+
+	assert.Equal(t, KindSecretChange, got[1].Kind)
+	assert.Equal(t, "WILL_CHANGE", got[1].Key)
+
+	assert.Equal(t, KindSecretRemove, got[2].Kind)
+	assert.Equal(t, "WILL_REMOVE", got[2].Key)
+}
+
+func TestComputeSecretChanges_Empty(t *testing.T) {
+	assert.Nil(t, computeSecretChanges(nil, nil))
+	assert.Nil(t, computeSecretChanges(map[string]string{"X": "h"}, map[string]string{"X": "h"}))
+}
