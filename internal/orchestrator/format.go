@@ -54,8 +54,10 @@ type DriftItem struct {
 type ReconcileResult struct {
 	Rendered         bool
 	SandboxState     string
+	Sandbox          string // project's vm_name, for reporting (e.g. the revive line)
 	Applied          []reconcile.Change
 	AppliedIronProxy []reconcile.Change // BucketIronProxyRestart changes applied via /vm/apply-iron-proxy
+	IronProxyRevived bool               // true when iron-proxy was dead and this reconcile respawned it
 	RecreateRequired []reconcile.Change
 	Flavor           reconcile.FlavorKind
 	Sessions         []Session
@@ -214,6 +216,20 @@ func FormatReconcileText(r ReconcileResult) string {
 		}
 		fmt.Fprintln(&b)
 	}
+	if len(r.AppliedIronProxy) > 0 {
+		verb := "Applied"
+		if r.SandboxState == "stopped" || r.SandboxState == "absent" {
+			verb = "Recorded"
+		}
+		fmt.Fprintf(&b, "%s %d network egress change(s):\n", verb, len(r.AppliedIronProxy))
+		for _, c := range r.AppliedIronProxy {
+			fmt.Fprintln(&b, "  "+formatIronProxyChange(c))
+		}
+		if r.IronProxyRevived && r.Sandbox != "" {
+			fmt.Fprintf(&b, "\niron-proxy for %s was not running — respawned with new config\n", r.Sandbox)
+		}
+		fmt.Fprintln(&b)
+	}
 	if len(r.RecreateRequired) > 0 {
 		fmt.Fprintf(&b, "%d change(s) require recreate (%s):\n", len(r.RecreateRequired), r.Flavor)
 		for _, c := range r.RecreateRequired {
@@ -351,6 +367,8 @@ func FormatReconcileJSON(r ReconcileResult) string {
 		Rendered         bool         `json:"rendered"`
 		SandboxState     string       `json:"sandbox_state"`
 		Applied          []changeJSON `json:"applied"`
+		AppliedIronProxy []changeJSON `json:"applied_iron_proxy,omitempty"`
+		IronProxyRevived bool         `json:"iron_proxy_revived,omitempty"`
 		RecreateRequired *recreate    `json:"recreate_required,omitempty"`
 		NextAction       string       `json:"next_action"`
 	}
@@ -367,7 +385,17 @@ func FormatReconcileJSON(r ReconcileResult) string {
 		applied[i] = toJSON(c)
 	}
 
-	out := body{Rendered: r.Rendered, SandboxState: r.SandboxState, Applied: applied, NextAction: r.NextAction}
+	ipRestart := make([]changeJSON, len(r.AppliedIronProxy))
+	for i, c := range r.AppliedIronProxy {
+		ipRestart[i] = toJSON(c)
+	}
+
+	out := body{
+		Rendered: r.Rendered, SandboxState: r.SandboxState,
+		Applied: applied, AppliedIronProxy: ipRestart,
+		IronProxyRevived: r.IronProxyRevived,
+		NextAction:       r.NextAction,
+	}
 
 	if len(r.RecreateRequired) > 0 {
 		changes := make([]changeJSON, len(r.RecreateRequired))
@@ -437,6 +465,12 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "service_systemd_override_change"
 	case reconcile.KindServiceHostnameChange:
 		return "service_hostname_change"
+	case reconcile.KindSecretAdd:
+		return "secret_add"
+	case reconcile.KindSecretRemove:
+		return "secret_remove"
+	case reconcile.KindSecretChange:
+		return "secret_change"
 	}
 	return "unknown"
 }
@@ -511,4 +545,23 @@ func formatChange(c reconcile.Change) string {
 		}
 	}
 	return "(unknown change)"
+}
+
+// formatIronProxyChange renders a KindNetwork* or KindSecret* change
+// under the "network egress" section header. Simpler than
+// formatChange's long switch: only four kinds live in this bucket.
+func formatIronProxyChange(c reconcile.Change) string {
+	switch c.Kind {
+	case reconcile.KindNetworkAdd:
+		return fmt.Sprintf("+ network.allow: %s", c.Key)
+	case reconcile.KindNetworkRemove:
+		return fmt.Sprintf("- network.allow: %s", c.Key)
+	case reconcile.KindSecretAdd:
+		return fmt.Sprintf("+ secret: %s", c.Key)
+	case reconcile.KindSecretRemove:
+		return fmt.Sprintf("- secret: %s", c.Key)
+	case reconcile.KindSecretChange:
+		return fmt.Sprintf("~ secret rotated: %s", c.Key)
+	}
+	return "(unknown iron-proxy change)"
 }

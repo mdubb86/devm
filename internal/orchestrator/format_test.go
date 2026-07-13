@@ -60,6 +60,45 @@ func TestFormatReconcileText_RecreatePending(t *testing.T) {
 	assert.Contains(t, out, "Will hang up 1 active session")
 }
 
+func TestFormatReconcileText_IronProxyRestartAppliedNormalPath(t *testing.T) {
+	r := ReconcileResult{
+		AppliedIronProxy: []reconcile.Change{
+			{Kind: reconcile.KindNetworkAdd, Key: "api.cloudflare.com", New: "api.cloudflare.com"},
+			{Kind: reconcile.KindSecretAdd, Key: "CLOUDFLARE_TOKEN"},
+		},
+	}
+	out := FormatReconcileText(r)
+	assert.Contains(t, out, "Applied 2 network egress change")
+	assert.Contains(t, out, "network.allow: api.cloudflare.com")
+	assert.Contains(t, out, "secret: CLOUDFLARE_TOKEN")
+	// No revive line when Revived is false (default).
+	assert.NotContains(t, out, "was not running")
+}
+
+func TestFormatReconcileText_IronProxyRestartVMOff(t *testing.T) {
+	r := ReconcileResult{
+		SandboxState: "stopped",
+		AppliedIronProxy: []reconcile.Change{
+			{Kind: reconcile.KindNetworkAdd, Key: "api.example.com", New: "api.example.com"},
+		},
+	}
+	out := FormatReconcileText(r)
+	assert.Contains(t, out, "Recorded 1 network egress change")
+	assert.NotContains(t, out, "Applied")
+}
+
+func TestFormatReconcileText_IronProxyRestartRevived(t *testing.T) {
+	r := ReconcileResult{
+		AppliedIronProxy: []reconcile.Change{
+			{Kind: reconcile.KindNetworkAdd, Key: "x.com", New: "x.com"},
+		},
+		IronProxyRevived: true,
+		Sandbox:          "myproj",
+	}
+	out := FormatReconcileText(r)
+	assert.Contains(t, out, "iron-proxy for myproj was not running — respawned")
+}
+
 func TestFormatStatusJSON(t *testing.T) {
 	js := FormatStatusJSON(StatusResult{HasProject: true,
 		Sandbox: "x", State: "running",
