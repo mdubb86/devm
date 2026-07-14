@@ -18,6 +18,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/image"
 	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/serviceapi/sshconfig"
 	"github.com/mdubb86/devm/internal/status"
 )
 
@@ -221,6 +222,14 @@ func runInstallFlow(ctx context.Context) error {
 	}
 
 	reporter.Info("ready")
+
+	if !sshConfigIncluded(sshconfig.Path()) {
+		fmt.Fprintf(os.Stderr,
+			"[devm] to enable ssh access to your VMs, add this line to ~/.ssh/config:\n"+
+				"    Include \"%s\"\n",
+			sshconfig.Path())
+	}
+
 	return nil
 }
 
@@ -453,6 +462,21 @@ func buildUninstallScript(exe string) string {
 	fmt.Fprintf(&sb, "security delete-certificate -c %s %s 2>/dev/null\n",
 		shellQuote(serviceapi.CATrustCertCN), shellQuote(serviceapi.SystemKeychain))
 	return sb.String()
+}
+
+// sshConfigIncluded reports whether the user's ~/.ssh/config has an
+// Include line pointing at path. Missing file → treated as not included.
+func sshConfigIncluded(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".ssh", "config"))
+	if err != nil {
+		return false
+	}
+	needle := `Include "` + path + `"`
+	return strings.Contains(string(data), needle)
 }
 
 var serviceCmd = &cobra.Command{
