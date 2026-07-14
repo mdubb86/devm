@@ -8,22 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPickBridgeIP_PicksFirstNonLoopbackIPv4(t *testing.T) {
-	addrs := []net.Addr{
-		mustCIDR("127.0.0.1/8"),    // loopback, skip
-		mustCIDR("192.168.139.3/23"), // pick this
-		mustCIDR("169.254.1.1/16"),
-	}
-	got, err := pickBridgeIP(addrs)
-	require.NoError(t, err)
-	assert.Equal(t, "192.168.139.3", got)
-}
-
-func TestPickBridgeIP_NoAddrs(t *testing.T) {
-	_, err := pickBridgeIP(nil)
-	require.Error(t, err)
-}
-
 func TestPickBridgeForVM_PicksMatchingSubnet(t *testing.T) {
 	// Three bridges (one per running VM group). Only bridge102's /24
 	// contains the target VM IP — HostForVM must return 192.168.64.1.

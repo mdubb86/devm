@@ -4,8 +4,6 @@
 //   - PtermReporter (pterm.go) — single-line spinner, ANSI color, ✓/✗ on done
 //   - PlainReporter (this file) — plain transcript, no ANSI
 //
-// A NoOpReporter (noop.go) is provided for tests.
-//
 // New(out) picks the right implementation based on whether out is a TTY.
 package status
 
@@ -45,7 +43,7 @@ type Reporter interface {
 	// prompt drops in on a clean screen. Scrollback is preserved.
 	// Called by the caller on the SUCCESS path right before PTY
 	// hand-off; NOT on failure (the error block must stay visible).
-	// PlainReporter and NoOpReporter implement Clear as a no-op.
+	// PlainReporter implements Clear as a no-op.
 	Clear()
 }
 

@@ -12,7 +12,7 @@ import (
 type RouteMode int
 
 const (
-	ModeVM    RouteMode = iota // dial sbx-published host port
+	ModeVM    RouteMode = iota // dial the VM's IP on the service's port
 	ModeLocal                  // dial Mac canonical port
 )
 

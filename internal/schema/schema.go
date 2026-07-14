@@ -577,22 +577,15 @@ type Config struct {
 	Packages []string `yaml:"packages,omitempty"`
 
 	// Install is the list of shell commands run ONCE at sandbox create
-	// time, in declaration order, as root. Each entry is wrapped by
-	// .devm/scripts/wrap-fg.sh so its stdout+stderr is captured to
-	// /tmp/.devm-install/install-<N>/current and an exit-code marker
-	// is written. The supervision design surfaces failures with the
-	// captured output via the install gate in `devm shell`.
+	// time, in declaration order, as root. Each command is executed
+	// under `bash -e -o pipefail -c`, wrapped by with-devm-env.sh so
+	// the project env (WORKSPACE_DIR, cfg.Env values, path: entries) is
+	// live inside the command. A failing step aborts provisioning.
 	//
-	// Affordances provided by devm's bootstrap step (runs FIRST, before
-	// any user install entry):
-	//   * `apt-get update` has already run, so user install entries can
-	//     `apt-get install -y <pkg>` directly without a preceding update.
-	//   * The `ncurses-term` package is installed (modern terminfo for TUIs).
-	//     Devm embeds a static `s6-log` at `.devm/scripts/s6-log` (used by
-	//     wrap-bg.sh for rotated background daemon logs — no apt step needed).
-	//
-	// Reserved arg-separator: `--` in a user command's argv is consumed
-	// by the wrapper. Quote it or split into multiple steps.
+	// Affordances from the base image (no apt-get update needed):
+	//   * ncurses-term is preinstalled (modern terminfo for TUIs).
+	//   * en_US.UTF-8 locale is generated so LANG/LC_* forwarding lands
+	//     on a real locale.
 	Install []string `yaml:"install,omitempty"`
 
 	// Mounts are additional host paths shared into the VM at the same

@@ -11,14 +11,14 @@ import (
 
 // forwardEnv is the set of host env vars that ride into every
 // interactive `tart exec` so TUIs inside the guest see the real
-// terminal capabilities (colors, keybindings, sort order, date
-// formatting, char boundaries). Copies the invariant the old sbx
-// sandbox package used before the tart migration (c97bcc2 dropped
-// it and colors + locale regressed together).
+// terminal capabilities: TERM/COLORTERM drive color and keybinding
+// resolution; LANG/LC_ALL/LC_CTYPE drive locale-dependent sort order,
+// date formatting, and character boundaries. Without forwarding, the
+// guest defaults to xterm+C — colors off, non-ASCII broken.
 //
-// The guest is provisioned with en_US.UTF-8 (see the guest bootstrap
-// script) so LANG/LC_* forwarding lands on generated locales instead
-// of spamming "cannot change locale" warnings.
+// The base image generates en_US.UTF-8 (see image/provision-base.sh)
+// so LANG/LC_* forwarding lands on a real locale instead of triggering
+// "cannot change locale" warnings on every shell invocation.
 var forwardEnv = []string{"TERM", "COLORTERM", "LANG", "LC_ALL", "LC_CTYPE"}
 
 // terminalEnvForward returns the argv prefix `env KEY=VAL KEY=VAL …`

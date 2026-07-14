@@ -20,11 +20,6 @@ import (
 //go:embed embed/iron-proxy.gz
 var ironProxyGz []byte
 
-// EmbeddedGz returns the raw gzipped iron-proxy bytes shipped inside
-// this devm binary. Callers should prefer Ensure(), which handles
-// decompression + atomic write; this is exposed for tests.
-func EmbeddedGz() []byte { return ironProxyGz }
-
 // embedSha256Hex is the sha256 of the embedded gzipped blob, computed
 // once at process start. Ensure() writes this to an
 // iron-proxy.sha256 sidecar next to the extracted binary; a matching

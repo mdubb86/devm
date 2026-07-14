@@ -659,33 +659,3 @@ func init() {
 	signal.Ignore(syscall.SIGPIPE)
 }
 
-// restartAndWait restarts the devm service and polls /health until
-// the new process is responsive. Prints a one-line stderr notice.
-// No-op when the daemon isn't currently up. Used by `devm upgrade`
-// post-install and by the PersistentPreRun drift auto-heal.
-//
-// The "is the daemon up?" check goes through the daemon's own /health
-// endpoint (client.Available) rather than kardianos's svc.Status().
-// kardianos v1.2.4 on macOS asks user-level `launchctl list` for
-// running state, but system LaunchDaemons don't appear in the user
-// launchctl domain — so svc.Status() returns "not running" even
-// when the daemon is very much alive, which silently skipped the
-// restart and broke drift auto-heal. /health is the source of truth.
-func restartAndWait(reason string) error {
-	c := serviceapi.NewClient()
-	if !c.Available(context.Background()) {
-		return nil // daemon not up; nothing to restart
-	}
-	fmt.Fprintf(os.Stderr, "restarting devm service (%s)…\n", reason)
-	if err := runKardianosUnderSudo("restart"); err != nil {
-		return fmt.Errorf("restart: %w", err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if c.Available(context.Background()) {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return fmt.Errorf("service did not become healthy within 5s after restart")
-}

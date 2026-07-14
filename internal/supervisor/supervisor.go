@@ -184,13 +184,6 @@ func (s *Supervisor) Stop(ctx context.Context, k Key) error {
 	return nil
 }
 
-// StopAll signals every child. Called on daemon shutdown.
-func (s *Supervisor) StopAll() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.pm.Stop()
-}
-
 // Status reports basic state for `devm status`. Handles both
 // pexec-managed and adopted entries; an adopted PID that no longer
 // exists is reaped from the map and reported as not present.
