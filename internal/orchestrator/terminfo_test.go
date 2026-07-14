@@ -24,6 +24,8 @@ func TestTerminalEnvForward_IncludesSetHostTermVars(t *testing.T) {
 	t.Setenv("TERM", "xterm-ghostty")
 	t.Setenv("COLORTERM", "truecolor")
 	t.Setenv("LANG", "en_US.UTF-8")
+	// Explicitly clear the others so the assertions don't depend on
+	// whatever the test host happens to have exported.
 	t.Setenv("LC_ALL", "")
 	t.Setenv("LC_CTYPE", "")
 

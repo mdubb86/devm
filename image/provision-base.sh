@@ -10,13 +10,29 @@ systemctl mask --now \
   e2scrub_all.timer \
   man-db.timer
 
-# --- Install base packages (Caddy, dnsmasq) ---
+# --- Install base packages (Caddy, dnsmasq, ncurses-term, locales) ---
+#
+# ncurses-term: ships terminfo for hundreds of modern terminals (ghostty,
+# kitty, alacritty, wezterm, …). Without it the base image only knows ~9
+# entries (xterm, vt100, …) and tools that resolve $TERM (vim, less, fzf,
+# htop, …) fall back to dumb-mode.
+#
+# locales + en_US.UTF-8 generation: the host-forwarded LANG/LC_* env
+# (see internal/orchestrator/terminfo.go forwardEnv) needs a matching
+# generated locale in the guest. Debian's stock image only generates the
+# C locale, so setlocale(LANG=en_US.UTF-8) warns "cannot change locale …"
+# on every bash invocation. Generating the locale in the base image
+# means every cloned sandbox inherits it — no per-project reprovision.
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
   caddy \
   dnsmasq \
-  nftables
+  nftables \
+  ncurses-term \
+  locales
+sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+locale-gen en_US.UTF-8
 
 # --- Drop the unused `debian` user (uid 1001) ---
 userdel -r debian 2>/dev/null || true

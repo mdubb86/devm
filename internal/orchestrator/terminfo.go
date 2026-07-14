@@ -11,9 +11,14 @@ import (
 
 // forwardEnv is the set of host env vars that ride into every
 // interactive `tart exec` so TUIs inside the guest see the real
-// terminal capabilities. Copies the invariant the old sbx sandbox
-// package used before the tart migration (c97bcc2 dropped it and
-// colors regressed).
+// terminal capabilities (colors, keybindings, sort order, date
+// formatting, char boundaries). Copies the invariant the old sbx
+// sandbox package used before the tart migration (c97bcc2 dropped
+// it and colors + locale regressed together).
+//
+// The guest is provisioned with en_US.UTF-8 (see the guest bootstrap
+// script) so LANG/LC_* forwarding lands on generated locales instead
+// of spamming "cannot change locale" warnings.
 var forwardEnv = []string{"TERM", "COLORTERM", "LANG", "LC_ALL", "LC_CTYPE"}
 
 // terminalEnvForward returns the argv prefix `env KEY=VAL KEY=VAL …`

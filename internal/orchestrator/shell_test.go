@@ -181,10 +181,9 @@ func TestRunShellWarmPath_ForwardsHostTermEnvIntoTartExec(t *testing.T) {
 	assert.Contains(t, argv, "COLORTERM=truecolor",
 		"host COLORTERM must be forwarded so truecolor TUIs render correctly")
 	assert.Contains(t, argv, "LANG=en_US.UTF-8",
-		"host LANG must be forwarded for locale-sensitive TUIs")
+		"host LANG must be forwarded for locale-sensitive TUIs (guest bootstrap generates en_US.UTF-8)")
 	// Empty vars are dropped by terminalEnvForward — an empty LC_ALL
-	// would poison the guest locale, so we deliberately don't emit
-	// `LC_ALL=` at all.
+	// would poison the guest locale.
 	for _, s := range argv {
 		assert.NotEqual(t, "LC_ALL=", s, "empty LC_ALL must not be forwarded")
 		assert.NotEqual(t, "LC_CTYPE=", s, "empty LC_CTYPE must not be forwarded")
