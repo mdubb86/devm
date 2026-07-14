@@ -202,7 +202,10 @@ func (p *Provisioner) mkdirWorkspaceParents(ctx context.Context, w io.Writer) er
 // early — before "run install commands" and the docker feature — so
 // every later step that needs the wrapper finds it.
 func (p *Provisioner) installDevmBundle(ctx context.Context, w io.Writer) error {
-	body, err := devmbundle.Build(p.Cfg, p.WorkspaceVMPath)
+	body, err := devmbundle.Build(devmbundle.BuildInput{
+		Cfg:      p.Cfg,
+		RepoRoot: p.WorkspaceVMPath,
+	})
 	if err != nil {
 		return fmt.Errorf("build devm bundle: %w", err)
 	}

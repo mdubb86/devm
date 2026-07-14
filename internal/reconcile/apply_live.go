@@ -55,7 +55,10 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		// .env on every subsequent exec, and (for template changes) the
 		// dispatcher below reads the freshly-piped installers. Running
 		// shells keep their old env until they re-exec — hence BucketLive.
-		tar, err := devmbundle.Build(cfg, repoRoot)
+		tar, err := devmbundle.Build(devmbundle.BuildInput{
+			Cfg:      cfg,
+			RepoRoot: repoRoot,
+		})
 		if err != nil {
 			return fmt.Errorf("apply_live: build bundle: %w", err)
 		}

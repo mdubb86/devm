@@ -21,7 +21,7 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 			"FOO": {Literal: "bar"},
 		},
 	}
-	body, err := Build(cfg, "/tmp/repo")
+	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 
 	entries := readTar(t, body)
@@ -47,7 +47,7 @@ func TestBuild_EnvReflectsConfig(t *testing.T) {
 			"MYVAR": {Literal: "myval"},
 		},
 	}
-	body, err := Build(cfg, "/tmp/repo")
+	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 
 	entries := readTar(t, body)
@@ -61,9 +61,9 @@ func TestBuild_Deterministic(t *testing.T) {
 	// required so future callers can gate re-pipe on content hash
 	// without spurious drift.
 	cfg := schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}
-	a, err := Build(cfg, "/tmp/repo")
+	a, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
-	b, err := Build(cfg, "/tmp/repo")
+	b, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 	assert.Equal(t, a, b)
 }
@@ -91,7 +91,7 @@ func TestBuild_TemplatePathsAreFlatBaseNames(t *testing.T) {
 			},
 		},
 	}
-	body, err := Build(cfg, repoRoot)
+	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: repoRoot})
 	require.NoError(t, err)
 
 	entries := readTar(t, body)
@@ -113,6 +113,36 @@ type tarEntry struct {
 	uid  int64
 	gid  int64
 	body []byte
+}
+
+func TestBuild_TakesBuildInput_Compat(t *testing.T) {
+	// Same inputs as the old (cfg, repoRoot) form should yield the same tar.
+	cfg := schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}
+	in := BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"}
+	got, err := Build(in)
+	require.NoError(t, err)
+	require.NotEmpty(t, got)
+	// Assert the tar has the pre-existing entries and no new junk yet.
+	names := tarEntryNames(t, got)
+	assert.Contains(t, names, ".env")
+	assert.Contains(t, names, "install.sh")
+	assert.Contains(t, names, "scripts/with-devm-env")
+}
+
+// tarEntryNames helper — reuse or add:
+func tarEntryNames(t *testing.T, blob []byte) []string {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(blob))
+	var out []string
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		out = append(out, h.Name)
+	}
+	return out
 }
 
 func readTar(t *testing.T, blob []byte) map[string]tarEntry {

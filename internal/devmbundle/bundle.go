@@ -16,14 +16,21 @@ import (
 // so two builds of the same cfg produce byte-identical archives.
 var zeroTime = time.Unix(0, 0).UTC()
 
+// BuildInput carries the inputs devmbundle.Build needs. Fields grow
+// as more artifacts fold into the bundle; existing fields are stable.
+type BuildInput struct {
+	Cfg      schema.Config
+	RepoRoot string
+}
+
 // Build returns a tar archive containing the devm-owned artifacts the
 // guest needs at /opt/devm/. The daemon pipes this into the guest via
 // PipeIntoShell + GuestInstallScript.
-func Build(cfg schema.Config, repoRoot string) ([]byte, error) {
+func Build(in BuildInput) ([]byte, error) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 
-	envBody, err := render.RenderEnv(cfg)
+	envBody, err := render.RenderEnv(in.Cfg)
 	if err != nil {
 		return nil, fmt.Errorf("render env: %w", err)
 	}
@@ -37,7 +44,7 @@ func Build(cfg schema.Config, repoRoot string) ([]byte, error) {
 		return nil, err
 	}
 
-	templates, err := render.RenderTemplates(cfg, repoRoot)
+	templates, err := render.RenderTemplates(in.Cfg, in.RepoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("render templates: %w", err)
 	}
