@@ -28,7 +28,7 @@ func TestVMReconcile_NoSnapshotYet_TreatsAllAsFullDiff(t *testing.T) {
 		Packages: []string{"jq"},
 	}
 	// Simulate what cold-start does: write snapshot.
-	require.NoError(t, WriteStateCfg("p", cfg))
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: cfg}))
 
 	// Reconcile against unchanged cfg → nothing to do.
 	req := VMReconcileRequest{ProjectID: "p", VMName: "p-vm", Cfg: cfg}
@@ -57,7 +57,7 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 		Project: schema.Project{ID: "p", VMName: "p-vm"},
 		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
 	}
-	require.NoError(t, WriteStateCfg("p", oldCfg))
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
 
 	// New cfg: FOO=new (bucket=live).
 	newCfg := oldCfg
@@ -86,10 +86,10 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 	assert.Empty(t, resp.TeardownRequired)
 
 	// Snapshot persisted.
-	got, err := ReadStateCfg("p")
+	got, err := ReadStateSnapshot("p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, "new", got.Env["FOO"].Literal)
+	assert.Equal(t, "new", got.Cfg.Env["FOO"].Literal)
 }
 
 func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
@@ -98,7 +98,7 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 		Project:  schema.Project{ID: "p", VMName: "p-vm"},
 		Packages: []string{"jq"},
 	}
-	require.NoError(t, WriteStateCfg("p", oldCfg))
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
 	newCfg := oldCfg
 	newCfg.Packages = []string{"jq", "yq"} // bucket=recreate
 
@@ -118,10 +118,10 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 	assert.NotEmpty(t, resp.TeardownRequired)
 
 	// Snapshot NOT overwritten with new_cfg (packages change is pending).
-	got, err := ReadStateCfg("p")
+	got, err := ReadStateSnapshot("p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, []string{"jq"}, got.Packages, "packages change must not be persisted until user acts")
+	assert.Equal(t, []string{"jq"}, got.Cfg.Packages, "packages change must not be persisted until user acts")
 }
 
 func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
@@ -139,7 +139,7 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, WriteStateCfg("p", oldCfg))
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := oldCfg
 	newSvc := oldCfg.Services["web"]
@@ -157,10 +157,10 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 
-	got, err := ReadStateCfg("p")
+	got, err := ReadStateSnapshot("p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, "b", got.Services["web"].Env["OLD"].Literal,
+	assert.Equal(t, "b", got.Cfg.Services["web"].Env["OLD"].Literal,
 		"snapshot must reflect per-service env change; otherwise it re-surfaces every reconcile")
 }
 
@@ -179,7 +179,7 @@ func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testi
 			},
 		},
 	}
-	require.NoError(t, WriteStateCfg("p", oldCfg))
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := oldCfg
 	newSvc := oldCfg.Services["web"]
@@ -201,14 +201,14 @@ func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testi
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 
-	got, err := ReadStateCfg("p")
+	got, err := ReadStateSnapshot("p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	// Live change (exec) landed in snapshot.
-	assert.Equal(t, []string{"/bin/echo", "hi"}, got.Services["web"].Exec)
+	assert.Equal(t, []string{"/bin/echo", "hi"}, got.Cfg.Services["web"].Exec)
 	// Pending masks change did NOT land — old masks preserved so
 	// next reconcile still surfaces masks add as teardown_required.
-	assert.Equal(t, []schema.Mask{{Path: "data", Size: "10m"}}, got.Services["web"].Masks)
+	assert.Equal(t, []schema.Mask{{Path: "data", Size: "10m"}}, got.Cfg.Services["web"].Masks)
 }
 
 func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
@@ -377,7 +377,7 @@ func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
 		Project: schema.Project{ID: "p", VMName: "p-vm"},
 		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
 	}
-	require.NoError(t, WriteStateCfg("p", oldCfg))
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := oldCfg
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
@@ -404,10 +404,10 @@ func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
 
 	// Snapshot preserved at old cfg — pending change re-surfaces
 	// next reconcile (or at cold-start).
-	got, err := ReadStateCfg("p")
+	got, err := ReadStateSnapshot("p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, "old", got.Env["FOO"].Literal,
+	assert.Equal(t, "old", got.Cfg.Env["FOO"].Literal,
 		"snapshot must NOT be updated when VM is stopped")
 }
 
@@ -423,7 +423,7 @@ func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
 		Project: schema.Project{ID: "p", VMName: "p-vm"},
 		// No Services at all — Services is nil.
 	}
-	require.NoError(t, WriteStateCfg("p", oldCfg))
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := oldCfg
 	newCfg.Services = map[string]schema.Service{
@@ -441,9 +441,9 @@ func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 
 	// Snapshot must reflect the new port in the newly-created Services map.
-	got, err := ReadStateCfg("p")
+	got, err := ReadStateSnapshot("p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	require.NotNil(t, got.Services, "Services should be initialized after live apply, not nil")
-	assert.Equal(t, 8080, got.Services["api"].Port)
+	require.NotNil(t, got.Cfg.Services, "Services should be initialized after live apply, not nil")
+	assert.Equal(t, 8080, got.Cfg.Services["api"].Port)
 }

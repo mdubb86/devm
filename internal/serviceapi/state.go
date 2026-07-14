@@ -107,23 +107,6 @@ func WriteStateSnapshot(projectID string, snap StateSnapshot) error {
 	return os.Rename(tmpPath, path)
 }
 
-// ReadStateCfg is a thin wrapper over ReadStateSnapshot for callers
-// that only care about the last-applied schema.Config, not the
-// template-contents sidecar.
-func ReadStateCfg(projectID string) (*schema.Config, error) {
-	snap, err := ReadStateSnapshot(projectID)
-	if err != nil || snap == nil {
-		return nil, err
-	}
-	return &snap.Cfg, nil
-}
-
-// WriteStateCfg is a thin wrapper over WriteStateSnapshot for callers
-// that don't have (or don't care about) rendered template contents.
-func WriteStateCfg(projectID string, cfg schema.Config) error {
-	return WriteStateSnapshot(projectID, StateSnapshot{Cfg: cfg})
-}
-
 // RemoveStateCfg deletes the snapshot for projectID. Idempotent —
 // remove-of-missing is not an error.
 func RemoveStateCfg(projectID string) error {

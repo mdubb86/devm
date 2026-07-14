@@ -99,7 +99,7 @@ func TestRunReconcile_LiveChangeApplies(t *testing.T) {
 
 	oldCfg := reconcileMinimalCfg()
 	oldCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "old"}}
-	require.NoError(t, serviceapi.WriteStateCfg("x", oldCfg))
+	require.NoError(t, serviceapi.WriteStateSnapshot("x", serviceapi.StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := reconcileMinimalCfg()
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
@@ -118,7 +118,7 @@ func TestRunReconcile_IdenticalBaseline_NothingToDo(t *testing.T) {
 	defer cleanup()
 
 	cfg := reconcileMinimalCfg()
-	require.NoError(t, serviceapi.WriteStateCfg("x", cfg))
+	require.NoError(t, serviceapi.WriteStateSnapshot("x", serviceapi.StateSnapshot{Cfg: cfg}))
 
 	rc, res, err := RunReconcile(cfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
 	require.NoError(t, err)
@@ -134,7 +134,7 @@ func TestRunReconcile_TeardownRequired_ClassifiesFlavorAndSessions(t *testing.T)
 
 	oldCfg := reconcileMinimalCfg()
 	oldCfg.Packages = []string{"jq"}
-	require.NoError(t, serviceapi.WriteStateCfg("x", oldCfg))
+	require.NoError(t, serviceapi.WriteStateSnapshot("x", serviceapi.StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := reconcileMinimalCfg()
 	newCfg.Packages = []string{"jq", "yq"}

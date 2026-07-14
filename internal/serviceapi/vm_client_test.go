@@ -243,7 +243,7 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 		Project: schema.Project{ID: "p", VMName: "p-vm"},
 		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
 	}
-	require.NoError(t, WriteStateCfg("p", oldCfg))
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
 	newCfg := oldCfg
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
 
