@@ -81,6 +81,11 @@ func TestEmit_RejectsUnsafeVMName(t *testing.T) {
 		"foo bar",
 		"foo *",
 		"foo\tbar",
+		"evil,*",   // comma is a Host-pattern separator in ssh_config
+		"foo#bar",  // # starts a comment
+		"foo?bar",  // ? is a single-char wildcard
+		"foo!bar",  // ! is a negation prefix in Host patterns
+		"foo=bar",  // = is a directive-value separator
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := Emit([]Entry{{ProjectID: "p", VMName: name, VMIP: "1.2.3.4"}})

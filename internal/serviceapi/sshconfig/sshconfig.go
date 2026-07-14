@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"text/template"
@@ -17,6 +18,16 @@ import (
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 )
+
+// safeIdent is the character set allowed in VMName + ProjectID for
+// safe rendering into ssh_config. Whitelist over blacklist — blacklisting
+// missed space (Host-pattern separator), comma (also a pattern separator),
+// hash (line comment), star (wildcard), and control chars across two
+// prior fix passes. This regex is the intersection of "characters devm's
+// real vm_names + project.ids use" and "characters that have no meaning
+// in ssh_config". Schema validation only enforces non-empty, so this is
+// the ONLY layer that catches injection attempts.
+var safeIdent = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
 // Entry describes one Host block to emit.
 type Entry struct {
@@ -59,47 +70,15 @@ func Emit(entries []Entry) error {
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].VMName < sorted[j].VMName })
 
 	for _, e := range sorted {
-		// Reject unsafe VMName (whitespace, control chars, quote) so it can't
-		// break out of the rendered Host block into an attacker-controlled
-		// directive. This is the ONLY layer that catches these — schema
-		// validation only checks non-empty.
-		if e.VMName == "" {
-			return fmt.Errorf("unsafe VMName: empty")
+		if !safeIdent.MatchString(e.VMName) {
+			return fmt.Errorf("unsafe VMName %q: only [a-zA-Z0-9._-] allowed", e.VMName)
 		}
-		if strings.ContainsAny(e.VMName, "\"") {
-			return fmt.Errorf("unsafe VMName %q: quote character not allowed", e.VMName)
+		if !safeIdent.MatchString(e.ProjectID) {
+			return fmt.Errorf("unsafe ProjectID %q: only [a-zA-Z0-9._-] allowed", e.ProjectID)
 		}
-		if strings.ContainsAny(e.VMName, " \t") {
-			return fmt.Errorf("unsafe VMName %q: whitespace not allowed (would inject as a Host-pattern separator)", e.VMName)
+		if strings.Contains(e.ProjectID, "..") {
+			return fmt.Errorf("unsafe ProjectID %q: path traversal not allowed", e.ProjectID)
 		}
-		for _, r := range e.VMName {
-			if r < 0x20 {
-				return fmt.Errorf("unsafe VMName %q: control characters not allowed", e.VMName)
-			}
-		}
-
-		// Reject unsafe ProjectID (control chars, quotes, path traversal) to prevent
-		// breaking out of quoted IdentityFile/UserKnownHostsFile paths into
-		// arbitrary Host blocks. This is the ONLY layer that validates these — schema
-		// validation only checks non-empty.
-		if e.ProjectID == "" {
-			return fmt.Errorf("unsafe ProjectID: empty")
-		}
-		if strings.ContainsAny(e.ProjectID, "/\\\"") || strings.Contains(e.ProjectID, "..") {
-			return fmt.Errorf("unsafe ProjectID %q: illegal characters", e.ProjectID)
-		}
-		if strings.ContainsAny(e.ProjectID, " \t") {
-			return fmt.Errorf("unsafe ProjectID %q: whitespace not allowed", e.ProjectID)
-		}
-		for _, r := range e.ProjectID {
-			if r < 0x20 {
-				return fmt.Errorf("unsafe ProjectID %q: control characters not allowed", e.ProjectID)
-			}
-		}
-
-		// Reject unsafe VMIP (must parse as valid IP) to prevent ProxyCommand injection.
-		// An attacker-influenced VMIP containing newline + directive would execute
-		// arbitrary shell on the user's next `ssh devm-<vmname>`.
 		if net.ParseIP(e.VMIP) == nil {
 			return fmt.Errorf("unsafe VMIP %q: not a valid IP address", e.VMIP)
 		}
