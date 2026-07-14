@@ -73,6 +73,46 @@ func TestEmit_AtomicWrite(t *testing.T) {
 
 func TestEmit_RejectsUnsafeVMName(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	err := Emit([]Entry{{ProjectID: "p", VMName: "bad name\nHost pwned", VMIP: "1.2.3.4"}})
-	require.Error(t, err)
+	for _, name := range []string{
+		"",
+		"bad name\nHost pwned",
+		"foo\"bar",
+		"foo\x00bar",
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := Emit([]Entry{{ProjectID: "p", VMName: name, VMIP: "1.2.3.4"}})
+			require.Error(t, err, "must reject VMName %q", name)
+		})
+	}
+}
+
+func TestEmit_RejectsUnsafeProjectID(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	for _, id := range []string{
+		"foo\nHost evil\n    HostName 10.0.0.1",
+		"foo\"bar",
+		"foo\x00bar",
+		"../evil",
+		"",
+	} {
+		t.Run(id, func(t *testing.T) {
+			err := Emit([]Entry{{ProjectID: id, VMName: "p-vm", VMIP: "10.0.0.1"}})
+			require.Error(t, err, "must reject ProjectID %q", id)
+		})
+	}
+}
+
+func TestEmit_RejectsUnsafeVMIP(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	for _, ip := range []string{
+		"not-an-ip",
+		"1.2.3.4\n    ProxyCommand /bin/sh -c pwned",
+		"1.2.3.4 5.6.7.8",
+		"",
+	} {
+		t.Run(ip, func(t *testing.T) {
+			err := Emit([]Entry{{ProjectID: "p", VMName: "p-vm", VMIP: ip}})
+			require.Error(t, err, "must reject VMIP %q", ip)
+		})
+	}
 }
