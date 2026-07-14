@@ -41,9 +41,27 @@ apt-get install -y -qq --no-install-recommends \
   dnsmasq \
   nftables \
   ncurses-term \
-  locales
+  locales \
+  openssh-server
 sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
 locale-gen en_US.UTF-8
+
+# --- devm sshd hardening ---
+# Base image sshd config override. Managed by devm; see
+# docs/superpowers/specs/2026-07-14-ssh-access-design.md.
+mkdir -p /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/devm.conf <<'SSHD_CONF'
+# Managed by devm — do not edit.
+PasswordAuthentication no
+PermitRootLogin no
+AllowUsers devm
+AcceptEnv TERM COLORTERM LANG LC_ALL LC_CTYPE
+SSHD_CONF
+
+# Mask so postinst-triggered start doesn't run against auto-generated
+# host keys — the per-project bundle drops devm's own host key and
+# unmasks before the provisioner enables + starts ssh.
+systemctl mask ssh
 
 # --- Drop the unused `debian` user (uid 1001) ---
 userdel -r debian 2>/dev/null || true
