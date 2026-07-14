@@ -238,6 +238,7 @@ func TestVMStart_MethodNotAllowed(t *testing.T) {
 // TeardownRequired empty.
 func TestClientReconcile_RoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
 
 	oldCfg := schema.Config{
 		Project: schema.Project{ID: "p", VMName: "p-vm"},

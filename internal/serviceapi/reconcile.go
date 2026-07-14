@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/render"
@@ -45,14 +47,14 @@ type VMReconcileResponse struct {
 // inside the guest. Real impl calls reconcile.ApplyLive; tests use a
 // fake to skip shelling out.
 type ApplyLiver interface {
-	ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string) error
+	ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM []byte) error
 }
 
 // realApplyLiver adapts reconcile.ApplyLive to the interface.
 type realApplyLiver struct{ tr *tart.Tart }
 
-func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string) error {
-	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot)
+func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM []byte) error {
+	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, caPEM)
 }
 
 // TartLister is the subset of *tart.Tart the reconcile handler uses to
@@ -156,7 +158,12 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 		// Apply live changes. On failure, return error and don't
 		// touch the snapshot — same as if the request never happened.
 		if len(live) > 0 {
-			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, req.VMName); err != nil {
+			caPEM, err := os.ReadFile(filepath.Join(RuntimeDir(), "ca", "root.crt"))
+			if err != nil {
+				http.Error(w, fmt.Sprintf("read CA root: %v", err), http.StatusInternalServerError)
+				return
+			}
+			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, req.VMName, caPEM); err != nil {
 				http.Error(w, fmt.Sprintf("apply live: %v", err), http.StatusInternalServerError)
 				return
 			}

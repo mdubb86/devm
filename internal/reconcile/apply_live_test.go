@@ -57,7 +57,7 @@ func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
 	err := ApplyLive(tr, "x", []Change{
 		{Kind: KindInstallChange},
 		{Kind: KindMaskAddRemove},
-	}, schema.Config{}, dir)
+	}, schema.Config{}, dir, nil)
 	assert.NoError(t, err)
 }
 
@@ -70,7 +70,7 @@ func TestApplyLive_PortKindsAreNoOps(t *testing.T) {
 		{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"},
 		{Kind: KindPortRemove, Service: "api", Key: "8080", Old: "8080"},
 		{Kind: KindPortChange, Service: "api", Key: "9090", Old: "8080", New: "9090"},
-	}, schema.Config{}, dir)
+	}, schema.Config{}, dir, nil)
 	assert.NoError(t, err)
 }
 
@@ -90,7 +90,7 @@ func TestApplyLive_EnvChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
 
 	err := ApplyLive(tr, "p-vm", []Change{
 		{Kind: KindEnvChange, Key: "FOO", Old: "old", New: "new"},
-	}, cfg, dir)
+	}, cfg, dir, nil)
 	require.NoError(t, err)
 
 	// No host-side .devm/ writes.
@@ -111,7 +111,7 @@ func TestApplyLive_EnvAddAndRemove_AlsoPipeBundle_NoWorkspaceWrite(t *testing.T)
 		cfg := schema.Config{Env: map[string]schema.EnvValue{"K": {Literal: "v"}}}
 		err := ApplyLive(tr, "x", []Change{
 			{Kind: kind, Key: "K", New: "v"},
-		}, cfg, dir)
+		}, cfg, dir, nil)
 		require.NoError(t, err, "kind=%v", kind)
 
 		_, statErr := os.Stat(filepath.Join(dir, ".devm"))
@@ -128,7 +128,7 @@ func TestApplyLive_MultipleEnvChanges_SingleBundlePipe(t *testing.T) {
 		{Kind: KindEnvAdd, Key: "A", New: "1"},
 		{Kind: KindEnvChange, Key: "B", Old: "x", New: "2"},
 		{Kind: KindEnvAdd, Key: "C", New: "3"},
-	}, cfg, dir)
+	}, cfg, dir, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, countCalls(t, log, "exec -i"), "multiple env changes must still coalesce into a single bundle pipe")
 }
@@ -148,7 +148,7 @@ func TestApplyLive_PathChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
 
 	err := ApplyLive(tr, "p-vm", []Change{
 		{Kind: KindPathChange, Old: "", New: "/workspace/bin"},
-	}, cfg, dir)
+	}, cfg, dir, nil)
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(filepath.Join(dir, ".devm"))
@@ -162,7 +162,7 @@ func TestApplyLive_NoEnvOrTemplateChange_DoesNotPipeBundle(t *testing.T) {
 	tr, log := fakeTartForApplyLive(t, dir)
 	err := ApplyLive(tr, "x", []Change{
 		{Kind: KindInstallChange},
-	}, schema.Config{}, dir)
+	}, schema.Config{}, dir, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, countCalls(t, log, "exec -i"), "apply_live should not pipe a bundle when there's no env or template change")
 	_, statErr := os.Stat(filepath.Join(dir, ".devm"))
@@ -189,7 +189,7 @@ func TestApplyLive_TemplateChange_PipesBundleThenInvokesDispatcher(t *testing.T)
 		{Kind: KindTemplateChange, Service: "web", Detail: "/etc/foo", New: "installed"},
 		{Kind: KindTemplateChange, Service: "api", Detail: "/etc/bar", New: "installed"},
 	}
-	assert.NoError(t, ApplyLive(tr, "x-sbx", changes, cfg, dir))
+	assert.NoError(t, ApplyLive(tr, "x-sbx", changes, cfg, dir, nil))
 
 	// Bundle piped exactly once regardless of how many templates changed...
 	assert.Equal(t, 1, countCalls(t, log, "exec -i"), "expected exactly one bundle pipe")

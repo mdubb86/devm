@@ -30,7 +30,7 @@ import (
 //
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
-func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot string) error {
+func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot string, caPEM []byte) error {
 	var templateChanges []Change
 	var envOrPathChanged bool
 	for _, c := range changes {
@@ -56,8 +56,9 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		// dispatcher below reads the freshly-piped installers. Running
 		// shells keep their old env until they re-exec — hence BucketLive.
 		tar, err := devmbundle.Build(devmbundle.BuildInput{
-			Cfg:      cfg,
-			RepoRoot: repoRoot,
+			Cfg:       cfg,
+			RepoRoot:  repoRoot,
+			CARootPEM: caPEM,
 		})
 		if err != nil {
 			return fmt.Errorf("apply_live: build bundle: %w", err)

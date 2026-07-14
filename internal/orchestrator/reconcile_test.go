@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func reconcileMinimalCfg() schema.Config {
 // don't require verifying guest-side effects.
 type nopApply struct{}
 
-func (nopApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string) error {
+func (nopApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM []byte) error {
 	return nil
 }
 
@@ -59,6 +60,12 @@ func startReconcileDaemon(t *testing.T) func() {
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(home) })
 	t.Setenv("HOME", home)
+
+	// Create a dummy CA file so reconcile.ApplyLive can load it.
+	caDir := filepath.Join(home, "Library", "Application Support", "devm", "ca")
+	require.NoError(t, os.MkdirAll(caDir, 0o755))
+	caCert := filepath.Join(caDir, "root.crt")
+	require.NoError(t, os.WriteFile(caCert, []byte("-----BEGIN CERTIFICATE-----\nDUMMY\n-----END CERTIFICATE-----\n"), 0o644))
 
 	_, err = serviceapi.EnsureRuntimeDir()
 	require.NoError(t, err)

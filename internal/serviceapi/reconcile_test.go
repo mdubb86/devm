@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/reconcile"
@@ -14,6 +16,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// createTestCA creates a dummy CA file in the test's HOME/.../ca/ directory.
+func createTestCA(t *testing.T) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	caDir := filepath.Join(home, "Library", "Application Support", "devm", "ca")
+	require.NoError(t, os.MkdirAll(caDir, 0o755))
+	caCert := filepath.Join(caDir, "root.crt")
+	require.NoError(t, os.WriteFile(caCert, []byte("-----BEGIN CERTIFICATE-----\nDUMMY\n-----END CERTIFICATE-----\n"), 0o644))
+}
 
 func TestVMReconcile_NoSnapshotYet_TreatsAllAsFullDiff(t *testing.T) {
 	// Regression: without a baseline snapshot, ComputeAllChanges was
@@ -51,6 +64,7 @@ func TestVMReconcile_NoSnapshotYet_TreatsAllAsFullDiff(t *testing.T) {
 
 func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
 
 	// Seed baseline snapshot: old_cfg has FOO=old.
 	oldCfg := schema.Config{
@@ -130,6 +144,7 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 	// Otherwise the same change re-surfaces on every subsequent
 	// reconcile.
 	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
 	oldCfg := schema.Config{
 		Project: schema.Project{ID: "p", VMName: "p-vm"},
 		Services: map[string]schema.Service{
@@ -170,6 +185,7 @@ func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testi
 	// the pending masks change into the snapshot. Next reconcile must
 	// still surface the masks change as teardown_required.
 	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
 	oldCfg := schema.Config{
 		Project: schema.Project{ID: "p", VMName: "p-vm"},
 		Services: map[string]schema.Service{
@@ -258,6 +274,7 @@ func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
 	// no actual secret drift. A live-only reconcile (no network, no
 	// secret rotation) must leave SecretHashes untouched on disk.
 	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
 
 	oldCfg := schema.Config{
 		Project: schema.Project{ID: "p", VMName: "p-vm"},
@@ -352,7 +369,7 @@ func changeKinds(cs []reconcile.Change) []reconcile.ChangeKind {
 // was called and returns success.
 type fakeApply struct{ called bool }
 
-func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string) error {
+func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM []byte) error {
 	f.called = true
 	return nil
 }
@@ -419,6 +436,7 @@ func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
 	// dropping the nil check; make() on a nil-length seed and range over
 	// nil are both valid.
 	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
 	oldCfg := schema.Config{
 		Project: schema.Project{ID: "p", VMName: "p-vm"},
 		// No Services at all — Services is nil.

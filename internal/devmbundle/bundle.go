@@ -19,8 +19,9 @@ var zeroTime = time.Unix(0, 0).UTC()
 // BuildInput carries the inputs devmbundle.Build needs. Fields grow
 // as more artifacts fold into the bundle; existing fields are stable.
 type BuildInput struct {
-	Cfg      schema.Config
-	RepoRoot string
+	Cfg       schema.Config
+	RepoRoot  string
+	CARootPEM []byte
 }
 
 // Build returns a tar archive containing the devm-owned artifacts the
@@ -58,6 +59,12 @@ func Build(in BuildInput) ([]byte, error) {
 
 	if err := writeEntry(tw, "install.sh", 0o755, []byte(scripts.Install)); err != nil {
 		return nil, err
+	}
+
+	if len(in.CARootPEM) > 0 {
+		if err := writeEntry(tw, "ca/devm.crt", 0o644, in.CARootPEM); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tw.Close(); err != nil {

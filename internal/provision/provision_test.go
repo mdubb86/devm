@@ -62,7 +62,7 @@ func TestProvisioner_RunsAllStepsOnHappyPath(t *testing.T) {
 	// All expected step headers appear in order.
 	expectedSteps := []string{
 		"[step: mkdir workspace parents]",
-		"[step: install CA root]",
+		"[step: install devm bundle]",
 		"[step: write Caddyfile]",
 		"[step: write dnsmasq config]",
 		"[step: reload base services]",
@@ -415,19 +415,6 @@ func TestProvisioner_InstallStepsGoThroughWithDevmEnvWrapper(t *testing.T) {
 		[]string{"/opt/devm/scripts/with-devm-env", "bash", "-e", "-o", "pipefail", "-c", "true"},
 		got,
 	)
-}
-
-func TestInstallCARootScriptGuaranteesBundleMerge(t *testing.T) {
-	// Snapshot: script must include --fresh (else the bundle-merge bug
-	// resurfaces silently and containers stop trusting the guest CA).
-	p := &Provisioner{CARootPEM: []byte("dummy")}
-	script := p.installCARootScript()
-	if !strings.Contains(script, "update-ca-certificates --fresh") {
-		t.Errorf("installCARoot script must call `update-ca-certificates --fresh`, got:\n%s", script)
-	}
-	if !strings.Contains(script, "grep -F -q -f /usr/local/share/ca-certificates/devm.crt /etc/ssl/certs/ca-certificates.crt") {
-		t.Errorf("installCARoot script must verify devm.crt PEM content is embedded in the bundle, got:\n%s", script)
-	}
 }
 
 func TestProvisioner_InstallStepTimeout_ErrorMessage(t *testing.T) {

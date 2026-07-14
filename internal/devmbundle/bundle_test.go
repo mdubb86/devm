@@ -145,6 +145,39 @@ func tarEntryNames(t *testing.T, blob []byte) []string {
 	return out
 }
 
+func TestBuild_TarContainsCA(t *testing.T) {
+	in := BuildInput{
+		Cfg:       schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}},
+		RepoRoot:  "/tmp/repo",
+		CARootPEM: []byte("-----BEGIN CERTIFICATE-----\nDUMMYDATA\n-----END CERTIFICATE-----\n"),
+	}
+	blob, err := Build(in)
+	require.NoError(t, err)
+
+	body := readTarEntry(t, blob, "ca/devm.crt")
+	assert.Equal(t, string(in.CARootPEM), string(body))
+}
+
+// readTarEntry helper — reuse or add:
+func readTarEntry(t *testing.T, blob []byte, name string) []byte {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(blob))
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		if h.Name == name {
+			data, err := io.ReadAll(tr)
+			require.NoError(t, err)
+			return data
+		}
+	}
+	t.Fatalf("entry %q not found in tar", name)
+	return nil
+}
+
 func readTar(t *testing.T, blob []byte) map[string]tarEntry {
 	t.Helper()
 	tr := tar.NewReader(bytes.NewReader(blob))

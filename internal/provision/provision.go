@@ -113,7 +113,6 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 		fn   func(context.Context, io.Writer) error
 	}{
 		{"mkdir workspace parents", p.mkdirWorkspaceParents},
-		{"install CA root", p.installCARoot},
 		{"install devm bundle", p.installDevmBundle},
 		{"write Caddyfile", p.writeCaddyfile},
 		{"write dnsmasq config", p.writeDnsmasqConfig},
@@ -203,45 +202,14 @@ func (p *Provisioner) mkdirWorkspaceParents(ctx context.Context, w io.Writer) er
 // every later step that needs the wrapper finds it.
 func (p *Provisioner) installDevmBundle(ctx context.Context, w io.Writer) error {
 	body, err := devmbundle.Build(devmbundle.BuildInput{
-		Cfg:      p.Cfg,
-		RepoRoot: p.WorkspaceVMPath,
+		Cfg:       p.Cfg,
+		RepoRoot:  p.WorkspaceVMPath,
+		CARootPEM: p.CARootPEM,
 	})
 	if err != nil {
 		return fmt.Errorf("build devm bundle: %w", err)
 	}
 	return p.PipeIntoShell(ctx, w, bytes.NewReader(body), devmbundle.GuestInstallScript)
-}
-
-func (p *Provisioner) installCARoot(ctx context.Context, w io.Writer) error {
-	return p.execShell(ctx, w, p.installCARootScript())
-}
-
-// installCARootScript builds the shell script that installs the devm CA
-// into the guest's CApath and verifies it lands in the merged bundle file.
-//
-// tart.Exec doesn't expose stdin streaming, so we base64-encode the PEM and
-// decode inside the VM via a shell pipeline.
-//
-// --fresh is required: on a base image where update-ca-certificates has
-// already run, its cached state can cause a subsequent run to skip the
-// merge step, so /etc/ssl/certs/ca-certificates.crt never picks up
-// devm.crt even though the CApath symlink is created. --fresh rebuilds
-// from scratch. The trailing `grep -F -f` makes provisioning fail loud
-// if the bundle merge ever regresses — Debian's ca-certificates.crt is
-// a pure PEM concatenation, so we check whether devm.crt's exact PEM
-// content appears in the bundle (bulletproof, no openssl invocation).
-func (p *Provisioner) installCARootScript() string {
-	encoded := base64.StdEncoding.EncodeToString(p.CARootPEM)
-	return fmt.Sprintf(
-		`set -e
-echo %s | base64 -d | sudo tee /usr/local/share/ca-certificates/devm.crt > /dev/null
-sudo update-ca-certificates --fresh
-grep -F -q -f /usr/local/share/ca-certificates/devm.crt /etc/ssl/certs/ca-certificates.crt || {
-    echo "FAIL: devm CA installed to CApath but not merged into ca-certificates.crt bundle" >&2
-    exit 1
-}`,
-		encoded,
-	)
 }
 
 func (p *Provisioner) writeCaddyfile(ctx context.Context, w io.Writer) error {
