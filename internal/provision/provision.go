@@ -265,15 +265,18 @@ EOF
 }
 
 func (p *Provisioner) reloadBaseServices(ctx context.Context, w io.Writer) error {
-	// reload-or-restart handles both "config changed, reload" and
-	// "service not running yet, start it".
-	//
-	// Only caddy is reloaded here. Dnsmasq is not yet running: at this
-	// point systemd-resolved still holds :53. The apply-egress-enforcement
-	// step (fires post-provision) masks resolved and starts dnsmasq — so
-	// dnsmasq's config in /etc/dnsmasq.d/devm-test.conf (installed by
-	// install.sh from the devm bundle) becomes active there.
-	return p.exec(ctx, w, "sudo", "systemctl", "reload-or-restart", "caddy")
+	// caddy: reload-or-restart handles config change + first start.
+	if err := p.exec(ctx, w, "sudo", "systemctl", "reload-or-restart", "caddy"); err != nil {
+		return err
+	}
+	// ssh: the bundle install.sh already unmasked; enable+start turns
+	// it on now that per-project host key + authorized_keys are in place.
+	if err := p.exec(ctx, w, "sudo", "systemctl", "enable", "--now", "ssh"); err != nil {
+		return err
+	}
+	// Dnsmasq stays deferred — see applyEgressEnforcement (still holds
+	// :53 via systemd-resolved until the egress step masks it).
+	return nil
 }
 
 func (p *Provisioner) aptUpdate(ctx context.Context, w io.Writer) error {

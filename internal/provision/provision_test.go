@@ -43,6 +43,52 @@ exit 0
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 }
 
+// fakeRecordingTart records every argv sequence passed to ExecWithRetry.
+type fakeRecordingTart struct {
+	onExec func(argv []string) tart.ExecResult
+}
+
+func (f *fakeRecordingTart) Exec(ctx context.Context, name string, argv []string) tart.ExecResult {
+	return f.onExec(argv)
+}
+
+func (f *fakeRecordingTart) ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult {
+	return f.onExec(argv)
+}
+
+func (f *fakeRecordingTart) ExecStdin(ctx context.Context, name string, stdin io.Reader, argv []string) tart.ExecResult {
+	return f.onExec(argv)
+}
+
+func TestReloadBaseServices_EnablesSSH(t *testing.T) {
+	// Fake tart that records every argv.
+	var seen [][]string
+	tr := &fakeRecordingTart{
+		onExec: func(argv []string) tart.ExecResult {
+			seen = append(seen, argv)
+			return tart.ExecResult{ExitCode: 0}
+		},
+	}
+	p := &Provisioner{Tart: tr, VMName: "vm"}
+	var buf bytes.Buffer
+	require.NoError(t, p.reloadBaseServices(context.Background(), &buf))
+
+	// Must invoke both caddy reload AND ssh enable+start.
+	joined := make([]string, 0, len(seen))
+	for _, a := range seen {
+		joined = append(joined, strings.Join(a, " "))
+	}
+	assert.Contains(t, joined, "sudo systemctl reload-or-restart caddy")
+	found := false
+	for _, s := range joined {
+		if strings.Contains(s, "systemctl enable --now ssh") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "reloadBaseServices must enable + start ssh; saw: %v", joined)
+}
+
 func TestProvisioner_RunsAllStepsOnHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	writeFakeTartOK(t, dir)
