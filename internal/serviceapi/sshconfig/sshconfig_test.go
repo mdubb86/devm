@@ -78,6 +78,9 @@ func TestEmit_RejectsUnsafeVMName(t *testing.T) {
 		"bad name\nHost pwned",
 		"foo\"bar",
 		"foo\x00bar",
+		"foo bar",
+		"foo *",
+		"foo\tbar",
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := Emit([]Entry{{ProjectID: "p", VMName: name, VMIP: "1.2.3.4"}})
@@ -94,6 +97,7 @@ func TestEmit_RejectsUnsafeProjectID(t *testing.T) {
 		"foo\x00bar",
 		"../evil",
 		"",
+		"foo bar",
 	} {
 		t.Run(id, func(t *testing.T) {
 			err := Emit([]Entry{{ProjectID: id, VMName: "p-vm", VMIP: "10.0.0.1"}})

@@ -69,6 +69,9 @@ func Emit(entries []Entry) error {
 		if strings.ContainsAny(e.VMName, "\"") {
 			return fmt.Errorf("unsafe VMName %q: quote character not allowed", e.VMName)
 		}
+		if strings.ContainsAny(e.VMName, " \t") {
+			return fmt.Errorf("unsafe VMName %q: whitespace not allowed (would inject as a Host-pattern separator)", e.VMName)
+		}
 		for _, r := range e.VMName {
 			if r < 0x20 {
 				return fmt.Errorf("unsafe VMName %q: control characters not allowed", e.VMName)
@@ -84,6 +87,9 @@ func Emit(entries []Entry) error {
 		}
 		if strings.ContainsAny(e.ProjectID, "/\\\"") || strings.Contains(e.ProjectID, "..") {
 			return fmt.Errorf("unsafe ProjectID %q: illegal characters", e.ProjectID)
+		}
+		if strings.ContainsAny(e.ProjectID, " \t") {
+			return fmt.Errorf("unsafe ProjectID %q: whitespace not allowed", e.ProjectID)
 		}
 		for _, r := range e.ProjectID {
 			if r < 0x20 {
