@@ -152,24 +152,6 @@ var serveCmd = &cobra.Command{
 			// RunService's oklog/run group unwinds cleanly.
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-
-			// Auto-rebuild the base image when this binary's provisioning
-			// script diverges from what devm-base was built with. Production
-			// `serve` (kardianos path below) runs as launchd and cannot
-			// safely shell out to tart for a multi-minute build; that path
-			// relies on `devm install` to have already synced the image.
-			// Foreground `serve` is the e2e-isolated entry point — running
-			// under a user shell with tart available — so it's the right
-			// place to catch stale-base-image on branches that changed the
-			// provisioning script.
-			needs, _, _ := image.NeedsBuild()
-			if needs {
-				fmt.Fprintln(os.Stderr, "devm serve --foreground: base image out of date; rebuilding devm-base…")
-				if err := image.BuildBaseImage(ctx, os.Stderr); err != nil {
-					return fmt.Errorf("build base image: %w", err)
-				}
-			}
-
 			return serviceapi.RunService(ctx, serviceapi.Build{
 				Version: Version, Commit: Commit, Date: Date, Fingerprint: Fingerprint,
 				BinaryPath: resolvedSelfPath(),
