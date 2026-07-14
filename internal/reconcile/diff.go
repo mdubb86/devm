@@ -60,6 +60,7 @@ const (
 	KindImageChange
 	KindIdentityChange
 	KindDockerToggle
+	KindDiskChange
 	KindTemplateChange
 	KindMountAddRemove
 	KindPathChange
@@ -104,6 +105,9 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindImageChange:    BucketTeardownShell,
 	KindIdentityChange: BucketTeardownShell,
 	KindDockerToggle:   BucketTeardownShell,
+	// Disk size is baked at clone / `tart set` time; grow-only, so a
+	// change recreates from base and re-applies the new size.
+	KindDiskChange:     BucketTeardownShell,
 	KindTemplateChange: BucketLive,
 	// Path is materialized in .devm/.env (same fan-out as Env) — live.
 	KindPathChange: BucketLive,
@@ -260,6 +264,7 @@ func ComputeAllChanges(
 	out = append(out, computeImageChange(old, new)...)
 	out = append(out, computeIdentityChange(old, new)...)
 	out = append(out, computeDockerChange(old, new)...)
+	out = append(out, computeDiskChange(old, new)...)
 	out = append(out, computePathChange(old, new)...)
 	tmplChanges, err := ComputeTemplateChanges(new, repoRoot, lastAppliedTemplates)
 	if err != nil {
@@ -453,6 +458,29 @@ func computeDockerChange(old, new schema.Config) []Change {
 		return nil
 	}
 	return []Change{{Kind: KindDockerToggle}}
+}
+
+// effectiveDiskGB is the VM disk size a config targets: the explicit
+// `disk:` override when set, else the base image default. Comparing
+// effective sizes means adding `disk: 32G` (equal to the default) is
+// not treated as a change.
+func effectiveDiskGB(c schema.Config) int {
+	if n, ok := c.DiskSizeGB(); ok {
+		return n
+	}
+	return schema.DefaultDiskSizeGB
+}
+
+func computeDiskChange(old, new schema.Config) []Change {
+	o, n := effectiveDiskGB(old), effectiveDiskGB(new)
+	if o == n {
+		return nil
+	}
+	return []Change{{
+		Kind: KindDiskChange,
+		Old:  fmt.Sprintf("%dG", o),
+		New:  fmt.Sprintf("%dG", n),
+	}}
 }
 
 // computeNetworkChanges diffs cfg.Network.Domains() between old and

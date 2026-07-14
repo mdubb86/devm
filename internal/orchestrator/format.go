@@ -447,6 +447,8 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "identity_change"
 	case reconcile.KindDockerToggle:
 		return "docker_toggle"
+	case reconcile.KindDiskChange:
+		return "disk_change"
 	case reconcile.KindTemplateChange:
 		return "template_change"
 	case reconcile.KindMountAddRemove:
@@ -534,6 +536,8 @@ func formatChange(c reconcile.Change) string {
 		return "~ project identity"
 	case reconcile.KindDockerToggle:
 		return "~ docker"
+	case reconcile.KindDiskChange:
+		return fmt.Sprintf("~ disk: %s → %s", c.Old, c.New)
 	case reconcile.KindTemplateChange:
 		switch {
 		case c.Old == "" && c.New != "":

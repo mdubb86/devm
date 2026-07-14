@@ -693,3 +693,28 @@ func TestComputeAllChanges_IncludesNetworkAndSecretChanges(t *testing.T) {
 	assert.Contains(t, kinds, KindNetworkAdd)
 	assert.Contains(t, kinds, KindSecretChange)
 }
+
+func TestComputeDiskChange(t *testing.T) {
+	mk := func(disk string) schema.Config {
+		return schema.Config{Project: schema.Project{ID: "x", VMName: "x-vm"}, Disk: disk}
+	}
+	// unset -> unset: no change
+	assert.Empty(t, computeDiskChange(mk(""), mk("")))
+	// unset (effective 32) -> explicit 32: no change
+	assert.Empty(t, computeDiskChange(mk(""), mk("32G")))
+	// unset -> 64: change, teardown
+	ch := computeDiskChange(mk(""), mk("64G"))
+	require.Len(t, ch, 1)
+	assert.Equal(t, KindDiskChange, ch[0].Kind)
+	assert.Equal(t, "32G", ch[0].Old)
+	assert.Equal(t, "64G", ch[0].New)
+	assert.Equal(t, BucketTeardownShell, ch[0].Bucket())
+	// 64 -> 100: change
+	assert.Len(t, computeDiskChange(mk("64G"), mk("100G")), 1)
+	// 64 -> 64: no change
+	assert.Empty(t, computeDiskChange(mk("64G"), mk("64G")))
+}
+
+func TestDiskChangeKindBucket(t *testing.T) {
+	assert.Equal(t, BucketTeardownShell, KindDiskChange.Bucket())
+}
