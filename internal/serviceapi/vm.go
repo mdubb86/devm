@@ -48,6 +48,10 @@ type VMStartRequest struct {
 	// same absolute path (mirrored). Each entry is the CLI-resolved form
 	// `ABS_HOST_PATH[:ro]` (see schema.ResolveMount).
 	ExtraMounts []string `json:"extra_mounts,omitempty"`
+	// DiskSizeGB, when > 0, grows this VM's virtual disk to the given
+	// gigabytes at clone time (a per-project `disk:` override). Zero
+	// means the base image default. See schema.Config.DiskSizeGB.
+	DiskSizeGB int `json:"disk_size_gb,omitempty"`
 }
 
 // VMStopRequest is the body shape for POST /vm/stop.
@@ -157,6 +161,17 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			if err := tr.Clone(ctx, "devm-base", req.VMName); err != nil {
 				http.Error(w, fmt.Sprintf("tart clone: %v", err), http.StatusInternalServerError)
 				return
+			}
+			// Apply a per-project disk override while the freshly-cloned
+			// VM is still stopped (tart set --disk-size requires a stopped
+			// VM). Grow-only and floor-validated in schema, so this is
+			// never a shrink; equal size is a safe no-op. The guest
+			// filesystem is grown after boot via the growpart inject below.
+			if req.DiskSizeGB > 0 {
+				if err := tr.SetDiskSize(ctx, req.VMName, req.DiskSizeGB); err != nil {
+					http.Error(w, fmt.Sprintf("tart set --disk-size: %v", err), http.StatusInternalServerError)
+					return
+				}
 			}
 		}
 
@@ -319,6 +334,11 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		}
 		if req.WorkspaceHostPath != "" {
 			scripts = append([]string{buildWorkspaceMountScript(req.WorkspaceHostPath)}, scripts...)
+		}
+		// On a freshly-cloned VM that got a disk override, grow the guest
+		// filesystem first so subsequent steps see the full disk.
+		if !exists && req.DiskSizeGB > 0 {
+			scripts = append([]string{buildGrowRootScript()}, scripts...)
 		}
 		for i, script := range scripts {
 			cmd := exec.Command("tart", "exec", "-i", req.VMName, "sudo", "bash", "-s")

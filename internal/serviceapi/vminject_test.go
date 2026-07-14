@@ -1,11 +1,22 @@
 package serviceapi
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBuildGrowRootScript(t *testing.T) {
+	s := buildGrowRootScript()
+	assert.Contains(t, s, "growpart /dev/vda 1")
+	assert.Contains(t, s, "resize2fs /dev/vda1")
+	// PATH must include /sbin so growpart finds sfdisk and resize2fs.
+	assert.Contains(t, s, "/sbin")
+	// growpart's no-op exit must be tolerated.
+	assert.True(t, strings.Contains(s, "growpart /dev/vda 1 || true"))
+}
 
 func TestBuildWorkspaceMountScript_MountsVirtioFSAtMirrorPath(t *testing.T) {
 	path := "/Users/michael/workspace/myproject"

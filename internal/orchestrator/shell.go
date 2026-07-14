@@ -149,6 +149,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		extraMounts = append(extraMounts, resolved)
 	}
 
+	diskGB, _ := cfg.DiskSizeGB()
 	if err := d.ServiceAPIClient.StartVM(ctx, serviceapi.VMStartRequest{
 		ProjectID:         cfg.Project.ID,
 		VMName:            vmName,
@@ -156,6 +157,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		AllowList:         allowList,
 		Secrets:           bindings,
 		ExtraMounts:       extraMounts,
+		DiskSizeGB:        diskGB,
 	}); err != nil {
 		return -1, fmt.Errorf("start vm: %w", err)
 	}
