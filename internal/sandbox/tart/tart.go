@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -58,6 +59,16 @@ func (t *Tart) Pull(ctx context.Context, image string) error {
 // Clone copies an image to a new local VM.
 func (t *Tart) Clone(ctx context.Context, src, dst string) error {
 	return t.run(ctx, "clone", src, dst).err
+}
+
+// SetDiskSize grows the VM's virtual disk to gib gigabytes via
+// `tart set <name> --disk-size <gib>`. The VM must be stopped. tart
+// resize is GROW-ONLY: a gib smaller than the current disk errors; a
+// gib equal to the current size is a no-op that exits 0. Growing the
+// raw disk does NOT grow the guest filesystem — the caller must run
+// growpart + resize2fs inside the guest afterward.
+func (t *Tart) SetDiskSize(ctx context.Context, name string, gib int) error {
+	return t.run(ctx, "set", name, "--disk-size", strconv.Itoa(gib)).err
 }
 
 // Run prepares an unstarted exec.Cmd for `tart run`. The caller (a
