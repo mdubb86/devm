@@ -1,0 +1,143 @@
+// Package sshkeys manages per-project SSH key material for devm-managed
+// VMs. All state lives under serviceapi.RuntimeDir()/ssh/projects/<id>/.
+// Client privkeys never leave the Mac; the guest receives only the
+// pubkey and its own host key material.
+package sshkeys
+
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"golang.org/x/crypto/ssh"
+
+	"github.com/mdubb86/devm/internal/serviceapi"
+)
+
+// ProjectDir returns the per-project ssh state directory. Callers use
+// this to compute paths for the ssh_config emitter (IdentityFile,
+// UserKnownHostsFile).
+func ProjectDir(projectID string) string {
+	return filepath.Join(serviceapi.RuntimeDir(), "ssh", "projects", projectID)
+}
+
+// EnsureProjectKeypair returns the client keypair pubkey for projectID,
+// generating it on first call. Idempotent — repeat calls return the
+// same on-disk pubkey without regenerating.
+//
+// Writes id_ed25519 (0600) and id_ed25519.pub (0644).
+func EnsureProjectKeypair(projectID string) ([]byte, error) {
+	if err := validProjectID(projectID); err != nil {
+		return nil, err
+	}
+	dir := ProjectDir(projectID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	pubPath := filepath.Join(dir, "id_ed25519.pub")
+	if existing, err := os.ReadFile(pubPath); err == nil {
+		return existing, nil
+	}
+	pubStr, privPEM, err := generateEd25519Pair()
+	if err != nil {
+		return nil, fmt.Errorf("gen client keypair: %w", err)
+	}
+	if err := writeSecret(filepath.Join(dir, "id_ed25519"), privPEM); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(pubPath, []byte(pubStr), 0o644); err != nil {
+		return nil, err
+	}
+	return []byte(pubStr), nil
+}
+
+// EnsureProjectHostKey returns the guest host keypair for projectID,
+// generating it on first call. Idempotent. Also writes known_hosts
+// pinning HostKeyAlias devm-<vmName>.
+//
+// Writes ssh_host_ed25519_key (0600), ssh_host_ed25519_key.pub (0644),
+// and known_hosts (0644, one line).
+func EnsureProjectHostKey(projectID, vmName string) (priv, pub []byte, err error) {
+	if err := validProjectID(projectID); err != nil {
+		return nil, nil, err
+	}
+	if strings.ContainsAny(vmName, " \t\n\r") || vmName == "" {
+		return nil, nil, fmt.Errorf("vmName %q: whitespace or empty not allowed", vmName)
+	}
+	dir := ProjectDir(projectID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, nil, fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	privPath := filepath.Join(dir, "ssh_host_ed25519_key")
+	pubPath := filepath.Join(dir, "ssh_host_ed25519_key.pub")
+	if p, err := os.ReadFile(privPath); err == nil {
+		q, err2 := os.ReadFile(pubPath)
+		if err2 == nil {
+			return p, q, nil
+		}
+	}
+	pubStr, privPEM, err := generateEd25519Pair()
+	if err != nil {
+		return nil, nil, fmt.Errorf("gen host key: %w", err)
+	}
+	if err := writeSecret(privPath, privPEM); err != nil {
+		return nil, nil, err
+	}
+	if err := os.WriteFile(pubPath, []byte(pubStr), 0o644); err != nil {
+		return nil, nil, err
+	}
+	// known_hosts: single line pinning HostKeyAlias devm-<vmName>.
+	knownLine := "devm-" + vmName + " " + strings.TrimSpace(pubStr) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "known_hosts"), []byte(knownLine), 0o644); err != nil {
+		return nil, nil, err
+	}
+	return []byte(privPEM), []byte(pubStr), nil
+}
+
+// Remove wipes the project's ssh subtree. Idempotent.
+func Remove(projectID string) error {
+	if err := validProjectID(projectID); err != nil {
+		return err
+	}
+	return os.RemoveAll(ProjectDir(projectID))
+}
+
+// generateEd25519Pair returns (openssh-authorized-key-format pubkey,
+// PEM-encoded OpenSSH-format privkey).
+func generateEd25519Pair() (pubStr, privPEM string, err error) {
+	pubEd, privEd, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return "", "", err
+	}
+	sshPub, err := ssh.NewPublicKey(pubEd)
+	if err != nil {
+		return "", "", err
+	}
+	pubStr = strings.TrimRight(string(ssh.MarshalAuthorizedKey(sshPub)), "\n") + "\n"
+	block, err := ssh.MarshalPrivateKey(privEd, "")
+	if err != nil {
+		return "", "", err
+	}
+	privPEM = string(pem.EncodeToMemory(block))
+	return pubStr, privPEM, nil
+}
+
+func writeSecret(path string, contents string) error {
+	return os.WriteFile(path, []byte(contents), 0o600)
+}
+
+// validProjectID rejects IDs that could escape ProjectDir via traversal
+// or backslashes. Mirrors the discipline in serviceapi/state.go.
+func validProjectID(id string) error {
+	if id == "" {
+		return fmt.Errorf("project id is empty")
+	}
+	if strings.ContainsAny(id, "/\\") || id == ".." || strings.Contains(id, "..") {
+		return fmt.Errorf("project id %q contains illegal characters", id)
+	}
+	return nil
+}
