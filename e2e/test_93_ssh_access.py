@@ -10,7 +10,7 @@ Cold-starts a project, then pins the full SSH lifecycle:
   3. `ssh -F <path> devm-<vm-name> uname -a` returns 0 with Linux.
   4. `ssh -F <path> devm-<vm-name> whoami` returns 'devm'.
   5. Stopping the project removes the Host block.
-  6. --destroy wipes the per-project ssh subtree.
+  6. `devm teardown --yes` wipes the per-project ssh subtree.
   7. Restarting the daemon re-emits current-truth.
 
 Note: step 7 (daemon restart) uses `devm service restart` which requires sudo
