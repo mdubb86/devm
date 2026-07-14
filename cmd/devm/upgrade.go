@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	selfupdate "github.com/creativeprojects/go-selfupdate"
@@ -73,13 +74,25 @@ var upgradeCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "warning: recipes sync failed (%v). Run `devm recipes sync` to retry.\n", err)
 		}
 
-		// Run the full install flow to sync the daemon with the freshly
-		// upgraded binary: rewrites the plist if it was pointing at a
-		// different binary, restarts the daemon so it picks up the new
-		// bytes, and rebuilds the base image if the embedded definition
-		// changed. Idempotent — a same-binary-path install is silent
-		// with no sudo prompt when everything is already in sync.
-		return runInstallFlow(ctx)
+		// Run the install flow via a re-exec of the newly-written
+		// binary. We can't call runInstallFlow directly from THIS
+		// process — this process was compiled from the OLD version, so
+		// its Fingerprint constant matches the still-running old
+		// daemon. daemonInSyncWithCLI would return true, install would
+		// early-out, and the daemon would never restart onto the new
+		// bytes. The re-exec runs the freshly-written binary whose
+		// compiled Fingerprint doesn't match the running daemon, so
+		// the sync check correctly detects drift and does the full
+		// plist swap + restart. `devm install` is in
+		// skipDriftCheckPaths so PersistentPreRun won't block it.
+		installCmd := exec.CommandContext(ctx, execPath, "install")
+		installCmd.Stdout = os.Stdout
+		installCmd.Stderr = os.Stderr
+		installCmd.Stdin = os.Stdin
+		if err := installCmd.Run(); err != nil {
+			return fmt.Errorf("post-upgrade install: %w", err)
+		}
+		return nil
 	},
 }
 
