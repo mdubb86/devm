@@ -38,19 +38,22 @@ func EnsureProjectKeypair(projectID string) ([]byte, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
+	privPath := filepath.Join(dir, "id_ed25519")
 	pubPath := filepath.Join(dir, "id_ed25519.pub")
-	if existing, err := os.ReadFile(pubPath); err == nil {
-		return existing, nil
+	if _, err := os.Stat(privPath); err == nil {
+		if existing, err := os.ReadFile(pubPath); err == nil {
+			return existing, nil
+		}
 	}
 	pubStr, privPEM, err := generateEd25519Pair()
 	if err != nil {
 		return nil, fmt.Errorf("gen client keypair: %w", err)
 	}
 	if err := writeSecret(filepath.Join(dir, "id_ed25519"), privPEM); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write id_ed25519: %w", err)
 	}
 	if err := os.WriteFile(pubPath, []byte(pubStr), 0o644); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write %s: %w", pubPath, err)
 	}
 	return []byte(pubStr), nil
 }
@@ -74,9 +77,17 @@ func EnsureProjectHostKey(projectID, vmName string) (priv, pub []byte, err error
 	}
 	privPath := filepath.Join(dir, "ssh_host_ed25519_key")
 	pubPath := filepath.Join(dir, "ssh_host_ed25519_key.pub")
+	knownPath := filepath.Join(dir, "known_hosts")
 	if p, err := os.ReadFile(privPath); err == nil {
 		q, err2 := os.ReadFile(pubPath)
 		if err2 == nil {
+			// Idempotent path: verify known_hosts is still present and correct.
+			wantLine := "devm-" + vmName + " " + strings.TrimSpace(string(q)) + "\n"
+			if existing, err := os.ReadFile(knownPath); err != nil || string(existing) != wantLine {
+				if err := os.WriteFile(knownPath, []byte(wantLine), 0o644); err != nil {
+					return nil, nil, fmt.Errorf("write %s: %w", knownPath, err)
+				}
+			}
 			return p, q, nil
 		}
 	}
@@ -85,15 +96,15 @@ func EnsureProjectHostKey(projectID, vmName string) (priv, pub []byte, err error
 		return nil, nil, fmt.Errorf("gen host key: %w", err)
 	}
 	if err := writeSecret(privPath, privPEM); err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("write %s: %w", privPath, err)
 	}
 	if err := os.WriteFile(pubPath, []byte(pubStr), 0o644); err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("write %s: %w", pubPath, err)
 	}
 	// known_hosts: single line pinning HostKeyAlias devm-<vmName>.
 	knownLine := "devm-" + vmName + " " + strings.TrimSpace(pubStr) + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "known_hosts"), []byte(knownLine), 0o644); err != nil {
-		return nil, nil, err
+	if err := os.WriteFile(knownPath, []byte(knownLine), 0o644); err != nil {
+		return nil, nil, fmt.Errorf("write %s: %w", knownPath, err)
 	}
 	return []byte(privPEM), []byte(pubStr), nil
 }
@@ -136,7 +147,7 @@ func validProjectID(id string) error {
 	if id == "" {
 		return fmt.Errorf("project id is empty")
 	}
-	if strings.ContainsAny(id, "/\\") || id == ".." || strings.Contains(id, "..") {
+	if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
 		return fmt.Errorf("project id %q contains illegal characters", id)
 	}
 	return nil

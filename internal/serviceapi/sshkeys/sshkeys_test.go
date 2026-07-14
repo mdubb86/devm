@@ -90,3 +90,36 @@ func TestEnsureProjectKeypair_RejectsPathTraversal(t *testing.T) {
 		})
 	}
 }
+
+func TestEnsureProjectKeypair_RegeneratesIfPrivkeyMissing(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	first, err := EnsureProjectKeypair("p")
+	require.NoError(t, err)
+
+	// Simulate loss of the privkey while the pubkey remains on disk.
+	require.NoError(t, os.Remove(filepath.Join(ProjectDir("p"), "id_ed25519")))
+
+	second, err := EnsureProjectKeypair("p")
+	require.NoError(t, err)
+	assert.NotEqual(t, string(first), string(second),
+		"must regenerate when privkey is missing, not return the stale pubkey")
+}
+
+func TestEnsureProjectHostKey_RecreatesKnownHostsIfMissing(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	_, _, err := EnsureProjectHostKey("p", "p-vm")
+	require.NoError(t, err)
+
+	// Simulate loss of the known_hosts file.
+	khPath := filepath.Join(ProjectDir("p"), "known_hosts")
+	require.NoError(t, os.Remove(khPath))
+
+	_, _, err = EnsureProjectHostKey("p", "p-vm")
+	require.NoError(t, err)
+
+	// Must be recreated with the correct content.
+	kh, err := os.ReadFile(khPath)
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(string(kh), "devm-p-vm ssh-ed25519 "),
+		"known_hosts must be recreated on second call when missing")
+}
