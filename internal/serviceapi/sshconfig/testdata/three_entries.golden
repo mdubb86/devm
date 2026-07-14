@@ -1,0 +1,34 @@
+# Managed by devm. Regenerated on VM lifecycle events; hand edits will be
+# overwritten. Include from ~/.ssh/config as:
+#     Include "~/Library/Application Support/devm/ssh_config"
+
+Host devm-alpha-vm
+    HostName             192.168.64.7
+    User                 devm
+    Port                 22
+    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/a/id_ed25519"
+    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/a/known_hosts"
+    HostKeyAlias         devm-alpha-vm
+    StrictHostKeyChecking yes
+    IdentitiesOnly       yes
+
+Host devm-bravo-vm
+    HostName             192.168.64.8
+    User                 devm
+    Port                 22
+    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/b/id_ed25519"
+    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/b/known_hosts"
+    HostKeyAlias         devm-bravo-vm
+    StrictHostKeyChecking yes
+    IdentitiesOnly       yes
+
+Host devm-charlie-vm
+    HostName             192.168.64.9
+    User                 devm
+    Port                 22
+    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/c/id_ed25519"
+    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/c/known_hosts"
+    HostKeyAlias         devm-charlie-vm
+    StrictHostKeyChecking yes
+    IdentitiesOnly       yes
+
