@@ -49,8 +49,8 @@ func EnsureProjectKeypair(projectID string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gen client keypair: %w", err)
 	}
-	if err := writeSecret(filepath.Join(dir, "id_ed25519"), privPEM); err != nil {
-		return nil, fmt.Errorf("write id_ed25519: %w", err)
+	if err := writeSecret(privPath, privPEM); err != nil {
+		return nil, fmt.Errorf("write %s: %w", privPath, err)
 	}
 	if err := os.WriteFile(pubPath, []byte(pubStr), 0o644); err != nil {
 		return nil, fmt.Errorf("write %s: %w", pubPath, err)
