@@ -117,7 +117,7 @@ curl: (60) SSL certificate problem: unable to get local issuer certificate
 
 Iron-proxy terminates TLS on the Mac and re-signs responses with the devm CA. If the VM does not trust the devm CA, every HTTPS request through the proxy fails with a cert error.
 
-Check the `install CA root` provisioner step output from the most recent cold start to confirm whether the step succeeded. If it failed, recreate the VM (delete and re-run `devm shell`) so the provisioner runs again.
+Check the `install devm bundle` step output from the most recent cold start. CA cert installation happens during that step; any CA merge failure surfaces as a `FAIL: devm CA installed to CApath but not merged into ca-certificates.crt bundle` line. If it failed, recreate the VM (delete and re-run `devm shell`) so the provisioner runs again.
 
 If the CA cert itself is missing from the Mac (`~/Library/Application Support/devm/ca/root.crt`), or is not trusted in the System Keychain, run `devm install` to regenerate and re-trust it.
 

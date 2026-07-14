@@ -366,11 +366,19 @@ func changeKinds(cs []reconcile.Change) []reconcile.ChangeKind {
 }
 
 // fakeApply is a stand-in for the real ApplyLive; it records that it
-// was called and returns success.
-type fakeApply struct{ called bool }
+// was called, captures SSH byte fields, and returns success.
+type fakeApply struct {
+	called         bool
+	lastSSHAuthPub []byte
+	lastSSHHostPriv []byte
+	lastSSHHostPub []byte
+}
 
 func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
 	f.called = true
+	f.lastSSHAuthPub = sshAuthPub
+	f.lastSSHHostPriv = sshHostPriv
+	f.lastSSHHostPub = sshHostPub
 	return nil
 }
 
@@ -464,4 +472,47 @@ func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
 	require.NotNil(t, got)
 	require.NotNil(t, got.Cfg.Services, "Services should be initialized after live apply, not nil")
 	assert.Equal(t, 8080, got.Cfg.Services["api"].Port)
+}
+
+func TestVMReconcile_ForwardsSSHBytesToApplyLive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	// Seed a snapshot so the reconcile handler treats this as a live-apply candidate.
+	oldCfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	req := VMReconcileRequest{
+		ProjectID:           "p",
+		VMName:              "p-vm",
+		Cfg:                 newCfg,
+		WorkspaceHostPath:   "/tmp/repo",
+		SSHAuthorizedPubkey: []byte("ssh-ed25519 AAAA_pub_marker\n"),
+		SSHHostPriv:         []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nHOST_MARKER\n"),
+		SSHHostPub:          []byte("ssh-ed25519 AAAA_host_pub_marker\n"),
+	}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(SocketPath(), Build{})
+	locks := NewProjectLocks()
+	fake := &fakeApply{}
+	RegisterReconcileHandler(server, locks, fake, &fakeTartList{running: true, vmName: "p-vm"})
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	assert.True(t, fake.called, "ApplyLive must have been invoked for a live env change")
+	assert.Equal(t, req.SSHAuthorizedPubkey, fake.lastSSHAuthPub,
+		"SSH authorized pubkey must forward to ApplyLive")
+	assert.Equal(t, req.SSHHostPriv, fake.lastSSHHostPriv,
+		"SSH host privkey must forward to ApplyLive")
+	assert.Equal(t, req.SSHHostPub, fake.lastSSHHostPub,
+		"SSH host pubkey must forward to ApplyLive")
 }

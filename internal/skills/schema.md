@@ -19,6 +19,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `install` | []string | recreate | Shell commands run once at VM creation as root. |
 | `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
+| `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
 
 ---
 
