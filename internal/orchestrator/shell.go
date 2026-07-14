@@ -290,7 +290,14 @@ func (d ShellDeps) attachShell(ctx context.Context, vmName, repoRoot, cmdName st
 		execArgs = append(execArgs, "-i", "-t")
 	}
 	wrapper := devmbundle.GuestWrapper
-	execArgs = append(execArgs, vmName, wrapper, cmdName)
+	execArgs = append(execArgs, vmName)
+	// Forward host terminal env into the guest so TUIs see the real
+	// TERM (colors, keybindings, TUI capabilities). tart exec has no
+	// --env flag, so we chain through env(1) inside the argv. Same
+	// semantic the old sbx `-e KEY=VAL` block had; the tart migration
+	// (c97bcc2) dropped it and colors regressed.
+	execArgs = append(execArgs, terminalEnvForward()...)
+	execArgs = append(execArgs, wrapper, cmdName)
 	execArgs = append(execArgs, cmdArgs...)
 	debuglog.Logf("shell", "attaching interactive shell: tart exec %s %v", vmName, execArgs)
 	cmd, err := d.UserSpawner.Start(d.Tart.Path, execArgs...)
