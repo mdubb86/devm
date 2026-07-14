@@ -63,7 +63,6 @@ func TestProvisioner_RunsAllStepsOnHappyPath(t *testing.T) {
 	expectedSteps := []string{
 		"[step: mkdir workspace parents]",
 		"[step: install devm bundle]",
-		"[step: write Caddyfile]",
 		"[step: write dnsmasq config]",
 		"[step: reload base services]",
 		"[step: apt-get update]",

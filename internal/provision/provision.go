@@ -114,7 +114,6 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 	}{
 		{"mkdir workspace parents", p.mkdirWorkspaceParents},
 		{"install devm bundle", p.installDevmBundle},
-		{"write Caddyfile", p.writeCaddyfile},
 		{"write dnsmasq config", p.writeDnsmasqConfig},
 		{"reload base services", p.reloadBaseServices},
 		{"apt-get update", p.aptUpdate},
@@ -210,16 +209,6 @@ func (p *Provisioner) installDevmBundle(ctx context.Context, w io.Writer) error 
 		return fmt.Errorf("build devm bundle: %w", err)
 	}
 	return p.PipeIntoShell(ctx, w, bytes.NewReader(body), devmbundle.GuestInstallScript)
-}
-
-func (p *Provisioner) writeCaddyfile(ctx context.Context, w io.Writer) error {
-	contents := render.Caddyfile(p.Cfg)
-	encoded := base64.StdEncoding.EncodeToString([]byte(contents))
-	script := fmt.Sprintf(
-		`echo %s | base64 -d | sudo tee /etc/caddy/Caddyfile > /dev/null`,
-		encoded,
-	)
-	return p.execShell(ctx, w, script)
 }
 
 func (p *Provisioner) writeDnsmasqConfig(ctx context.Context, w io.Writer) error {

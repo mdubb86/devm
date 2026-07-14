@@ -15,3 +15,10 @@ if [ -f /opt/devm/ca/devm.crt ] && ! cmp -s /opt/devm/ca/devm.crt /usr/local/sha
         exit 1
     }
 fi
+
+# --- Caddyfile: reverse-proxy config for hostname-declared services. ---
+if [ -f /opt/devm/caddy/Caddyfile ] && ! cmp -s /opt/devm/caddy/Caddyfile /etc/caddy/Caddyfile; then
+    install -o root -g root -m 0644 \
+        /opt/devm/caddy/Caddyfile \
+        /etc/caddy/Caddyfile
+fi

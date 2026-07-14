@@ -178,6 +178,20 @@ func readTarEntry(t *testing.T, blob []byte, name string) []byte {
 	return nil
 }
 
+func TestBuild_TarContainsCaddyfile(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Services: map[string]schema.Service{
+			"web": {Hostname: "web.local", Port: 8080},
+		},
+	}
+	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+	body := readTarEntry(t, blob, "caddy/Caddyfile")
+	assert.Contains(t, string(body), "web.local")
+	assert.Contains(t, string(body), "8080")
+}
+
 func readTar(t *testing.T, blob []byte) map[string]tarEntry {
 	t.Helper()
 	tr := tar.NewReader(bytes.NewReader(blob))

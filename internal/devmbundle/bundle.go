@@ -67,6 +67,11 @@ func Build(in BuildInput) ([]byte, error) {
 		}
 	}
 
+	caddyfile := render.Caddyfile(in.Cfg)
+	if err := writeEntry(tw, "caddy/Caddyfile", 0o644, []byte(caddyfile)); err != nil {
+		return nil, err
+	}
+
 	if err := tw.Close(); err != nil {
 		return nil, err
 	}
