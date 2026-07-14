@@ -11,6 +11,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 )
 
 // Destructiveness selects between preserving the VM (stop) and
@@ -111,6 +112,14 @@ func RunStop(ctx context.Context, d StopDeps, projectID, sandboxName string, mod
 		// when no snapshot exists at all).
 		if err := serviceapi.RemoveStateCfg(projectID); err != nil {
 			fmt.Fprintf(d.Out, "warning: remove state snapshot for %s: %v\n", projectID, err)
+		}
+
+		// Remove the per-project SSH key material. Without this, a
+		// recreated project with the same projectID inherits stale
+		// SSH keys. Best-effort: log but continue — leaked SSH material
+		// is inert without a matching authorized_keys in a fresh VM.
+		if err := sshkeys.Remove(projectID); err != nil {
+			log.Printf("sshkeys.Remove(%s): %v", projectID, err)
 		}
 	} else {
 		fmt.Fprintf(d.Out, "Stopped VM %s. Disk preserved.\n", sandboxName)

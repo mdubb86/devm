@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -163,6 +165,43 @@ func TestRunStopDestroy_RemovesStateSnapshot(t *testing.T) {
 	got, err := serviceapi.ReadStateSnapshot("proj-123")
 	require.NoError(t, err)
 	assert.Nil(t, got, "state snapshot must be removed after teardown")
+}
+
+func TestRunStopDestroy_RemovesSSHState(t *testing.T) {
+	// SSH key material must not survive teardown and leak into a
+	// subsequently recreated project. Teardown must wipe the per-project
+	// ssh subtree so the next cold-start starts from a clean baseline.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("DEVM_RUNTIME_DIR", os.TempDir())
+	require.NoError(t, serviceapi.WriteStateSnapshot("proj-123", serviceapi.StateSnapshot{
+		Cfg: schema.Config{Project: schema.Project{ID: "proj-123", VMName: "proj-sbx"}},
+	}))
+	_, err := sshkeys.EnsureProjectKeypair("proj-123")
+	require.NoError(t, err)
+
+	// Verify SSH directory exists before teardown
+	sshDir := sshkeys.ProjectDir("proj-123")
+	_, err = os.Stat(sshDir)
+	require.NoError(t, err, "ssh project dir must exist before teardown")
+
+	repoRoot := t.TempDir()
+	admin := &fakeStopClient{}
+	tr := fakeTartBin(t, repoRoot)
+	out := &bytes.Buffer{}
+
+	deps := StopDeps{
+		Tart:             tr,
+		ServiceAPIClient: admin,
+		In:               strings.NewReader("y\n"),
+		Out:              out,
+	}
+	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopDestroy, false)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	// Verify SSH directory is gone after teardown
+	_, err = os.Stat(sshDir)
+	assert.True(t, os.IsNotExist(err), "ssh project dir must be gone after --destroy")
 }
 
 func TestRunStopPromptText(t *testing.T) {
