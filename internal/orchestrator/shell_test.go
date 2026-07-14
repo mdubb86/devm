@@ -138,6 +138,59 @@ func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
 	admin.mu.Unlock()
 }
 
+// TestRunShellWarmPath_ForwardsHostTermEnvIntoTartExec pins the color
+// regression fix. The tart-migration refactor (c97bcc2) dropped the
+// old sbx `-e KEY=VAL` env forwarding from attachShell; the guest
+// bash then ran with an empty TERM, defaulted to dumb-mode, and TUIs
+// showed no colors. Restored via terminalEnvForward() which chains
+// through env(1) inside the argv. This test asserts the resulting
+// `tart exec` argv actually contains that env prefix.
+func TestRunShellWarmPath_ForwardsHostTermEnvIntoTartExec(t *testing.T) {
+	t.Setenv("TERM", "xterm-ghostty")
+	t.Setenv("COLORTERM", "truecolor")
+	t.Setenv("LANG", "en_US.UTF-8")
+	// Explicitly unset the other two so the assertions don't depend on
+	// whatever the test host happens to have exported.
+	t.Setenv("LC_ALL", "")
+	t.Setenv("LC_CTYPE", "")
+
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: true, Running: true},
+	}
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		Tart:             tartPathNotNeeded(t),
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	require.NotEmpty(t, spawner.started, "expected a spawn for tart exec")
+	argv := spawner.started[0]
+	// argv[0] is the tart binary path; the rest is [exec, ..., vmName, env, KEY=VAL..., wrapper, cmdName, ...]
+	assert.Contains(t, argv, "env",
+		"tart exec argv must include the env(1) prefix that carries host TERM/COLORTERM into the guest — this is the color fix")
+	assert.Contains(t, argv, "TERM=xterm-ghostty",
+		"host TERM must be forwarded so guest TUIs pick up the right terminfo")
+	assert.Contains(t, argv, "COLORTERM=truecolor",
+		"host COLORTERM must be forwarded so truecolor TUIs render correctly")
+	assert.Contains(t, argv, "LANG=en_US.UTF-8",
+		"host LANG must be forwarded for locale-sensitive TUIs")
+	// Empty vars are dropped by terminalEnvForward — an empty LC_ALL
+	// would poison the guest locale, so we deliberately don't emit
+	// `LC_ALL=` at all.
+	for _, s := range argv {
+		assert.NotEqual(t, "LC_ALL=", s, "empty LC_ALL must not be forwarded")
+		assert.NotEqual(t, "LC_CTYPE=", s, "empty LC_CTYPE must not be forwarded")
+	}
+}
+
 // TestRunShellColdPath_CallsStartAndProvisions verifies the cold-start
 // sequence: StartVM is called, then waitVMReady polls exec, then the
 // provisioner runs (here exercised as a no-op because tart is fake).
