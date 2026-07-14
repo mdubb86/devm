@@ -20,9 +20,15 @@ var zeroTime = time.Unix(0, 0).UTC()
 // BuildInput carries the inputs devmbundle.Build needs. Fields grow
 // as more artifacts fold into the bundle; existing fields are stable.
 type BuildInput struct {
-	Cfg            schema.Config
-	RepoRoot       string
-	CARootPEM      []byte
+	Cfg      schema.Config
+	RepoRoot string
+
+	CARootPEM []byte
+
+	SSHAuthorizedPubkey []byte
+	SSHHostPriv         []byte
+	SSHHostPub          []byte
+
 	DockerRuncShim []byte
 	DockerCLIShim  []byte
 }
@@ -70,18 +76,6 @@ func Build(in BuildInput) ([]byte, error) {
 		}
 	}
 
-	if in.Cfg.Docker {
-		if len(in.DockerRuncShim) == 0 || len(in.DockerCLIShim) == 0 {
-			return nil, fmt.Errorf("Cfg.Docker=true requires DockerRuncShim and DockerCLIShim bytes")
-		}
-		if err := writeEntry(tw, "bin/devm-runc-shim", 0o755, in.DockerRuncShim); err != nil {
-			return nil, err
-		}
-		if err := writeEntry(tw, "bin/docker", 0o755, in.DockerCLIShim); err != nil {
-			return nil, err
-		}
-	}
-
 	caddyfile := render.Caddyfile(in.Cfg)
 	if err := writeEntry(tw, "caddy/Caddyfile", 0o644, []byte(caddyfile)); err != nil {
 		return nil, err
@@ -117,6 +111,34 @@ func Build(in BuildInput) ([]byte, error) {
 		svc.Env = merged
 		unit := render.RenderService(name, svc)
 		if err := writeEntry(tw, "systemd/"+name+".service", 0o644, unit); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(in.SSHAuthorizedPubkey) > 0 {
+		if err := writeEntry(tw, "ssh/authorized_keys", 0o600, in.SSHAuthorizedPubkey); err != nil {
+			return nil, err
+		}
+	}
+	if len(in.SSHHostPriv) > 0 {
+		if err := writeEntry(tw, "ssh/ssh_host_ed25519_key", 0o600, in.SSHHostPriv); err != nil {
+			return nil, err
+		}
+	}
+	if len(in.SSHHostPub) > 0 {
+		if err := writeEntry(tw, "ssh/ssh_host_ed25519_key.pub", 0o644, in.SSHHostPub); err != nil {
+			return nil, err
+		}
+	}
+
+	if in.Cfg.Docker {
+		if len(in.DockerRuncShim) == 0 || len(in.DockerCLIShim) == 0 {
+			return nil, fmt.Errorf("Cfg.Docker=true requires DockerRuncShim and DockerCLIShim bytes")
+		}
+		if err := writeEntry(tw, "bin/devm-runc-shim", 0o755, in.DockerRuncShim); err != nil {
+			return nil, err
+		}
+		if err := writeEntry(tw, "bin/docker", 0o755, in.DockerCLIShim); err != nil {
 			return nil, err
 		}
 	}

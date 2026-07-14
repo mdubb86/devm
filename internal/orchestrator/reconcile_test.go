@@ -27,7 +27,7 @@ func reconcileMinimalCfg() schema.Config {
 // don't require verifying guest-side effects.
 type nopApply struct{}
 
-func (nopApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM []byte) error {
+func (nopApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
 	return nil
 }
 

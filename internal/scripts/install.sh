@@ -41,6 +41,27 @@ if [ -d /opt/devm/systemd ]; then
     done
 fi
 
+# --- SSH material (bundle-carried) ---
+if [ -f /opt/devm/ssh/ssh_host_ed25519_key ]; then
+    install -d -o devm -g devm -m 0700 /home/devm/.ssh
+    if ! cmp -s /opt/devm/ssh/authorized_keys /home/devm/.ssh/authorized_keys; then
+        install -o devm -g devm -m 0600 \
+            /opt/devm/ssh/authorized_keys \
+            /home/devm/.ssh/authorized_keys
+    fi
+    if ! cmp -s /opt/devm/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key; then
+        install -o root -g root -m 0600 \
+            /opt/devm/ssh/ssh_host_ed25519_key \
+            /etc/ssh/ssh_host_ed25519_key
+    fi
+    if ! cmp -s /opt/devm/ssh/ssh_host_ed25519_key.pub /etc/ssh/ssh_host_ed25519_key.pub; then
+        install -o root -g root -m 0644 \
+            /opt/devm/ssh/ssh_host_ed25519_key.pub \
+            /etc/ssh/ssh_host_ed25519_key.pub
+    fi
+    systemctl unmask ssh
+fi
+
 # --- Docker shims: devm-runc-shim + docker CLI shim. Present only when Cfg.Docker. ---
 if [ -d /opt/devm/bin ]; then
     for f in /opt/devm/bin/*; do

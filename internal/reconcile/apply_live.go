@@ -31,7 +31,7 @@ import (
 //
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
-func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot string, caPEM []byte) error {
+func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
 	var templateChanges []Change
 	var envOrPathChanged bool
 	for _, c := range changes {
@@ -57,9 +57,12 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		// dispatcher below reads the freshly-piped installers. Running
 		// shells keep their old env until they re-exec — hence BucketLive.
 		in := devmbundle.BuildInput{
-			Cfg:       cfg,
-			RepoRoot:  repoRoot,
-			CARootPEM: caPEM,
+			Cfg:                 cfg,
+			RepoRoot:            repoRoot,
+			CARootPEM:           caPEM,
+			SSHAuthorizedPubkey: sshAuthPub,
+			SSHHostPriv:         sshHostPriv,
+			SSHHostPub:          sshHostPub,
 		}
 		if cfg.Docker {
 			in.DockerRuncShim = docker.Shim()

@@ -27,7 +27,10 @@ type VMReconcileRequest struct {
 	// keychain access happens in the user context) and sends the map
 	// here. Empty or nil means "no secrets to consider" — safe for old
 	// clients.
-	SecretHashes map[string]string `json:"secret_hashes,omitempty"`
+	SecretHashes       map[string]string `json:"secret_hashes,omitempty"`
+	SSHAuthorizedPubkey []byte `json:"ssh_authorized_pubkey,omitempty"`
+	SSHHostPriv         []byte `json:"ssh_host_priv,omitempty"`
+	SSHHostPub          []byte `json:"ssh_host_pub,omitempty"`
 }
 
 // VMReconcileResponse is the return shape.
@@ -47,14 +50,14 @@ type VMReconcileResponse struct {
 // inside the guest. Real impl calls reconcile.ApplyLive; tests use a
 // fake to skip shelling out.
 type ApplyLiver interface {
-	ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM []byte) error
+	ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error
 }
 
 // realApplyLiver adapts reconcile.ApplyLive to the interface.
 type realApplyLiver struct{ tr *tart.Tart }
 
-func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM []byte) error {
-	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, caPEM)
+func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
+	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, caPEM, sshAuthPub, sshHostPriv, sshHostPub)
 }
 
 // TartLister is the subset of *tart.Tart the reconcile handler uses to
@@ -163,7 +166,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				http.Error(w, fmt.Sprintf("read CA root: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, req.VMName, caPEM); err != nil {
+			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, req.VMName, caPEM, req.SSHAuthorizedPubkey, req.SSHHostPriv, req.SSHHostPub); err != nil {
 				http.Error(w, fmt.Sprintf("apply live: %v", err), http.StatusInternalServerError)
 				return
 			}

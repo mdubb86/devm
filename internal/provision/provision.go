@@ -42,6 +42,15 @@ type Provisioner struct {
 	// merges it into the trusted bundle via update-ca-certificates.
 	CARootPEM []byte
 
+	// SSHAuthorizedPubkey is the ssh-ed25519 pubkey line devm writes into
+	// the guest's ~devm/.ssh/authorized_keys.
+	SSHAuthorizedPubkey []byte
+
+	// SSHHostPriv/Pub are the guest's own host key material. Persistent
+	// across VM recreates via ~/Library/Application Support/devm/ssh/projects/<id>/.
+	SSHHostPriv []byte
+	SSHHostPub  []byte
+
 	// WorkspaceVMPath is the path inside the VM where the workspace
 	// is mounted. Mirrored paths (Ship 4 decision): the same path as
 	// on the Mac (e.g., /Users/michael/projects/myproj).
@@ -196,9 +205,12 @@ func (p *Provisioner) mkdirWorkspaceParents(ctx context.Context, w io.Writer) er
 // every later step that needs the wrapper finds it.
 func (p *Provisioner) installDevmBundle(ctx context.Context, w io.Writer) error {
 	in := devmbundle.BuildInput{
-		Cfg:       p.Cfg,
-		RepoRoot:  p.WorkspaceVMPath,
-		CARootPEM: p.CARootPEM,
+		Cfg:                 p.Cfg,
+		RepoRoot:            p.WorkspaceVMPath,
+		CARootPEM:           p.CARootPEM,
+		SSHAuthorizedPubkey: p.SSHAuthorizedPubkey,
+		SSHHostPriv:         p.SSHHostPriv,
+		SSHHostPub:          p.SSHHostPub,
 	}
 	if p.Cfg.Docker {
 		in.DockerRuncShim = docker.Shim()

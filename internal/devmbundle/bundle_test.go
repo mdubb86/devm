@@ -304,3 +304,18 @@ func TestBuild_TarOmitsDockerShims_WhenDockerFalse(t *testing.T) {
 	assert.NotContains(t, names, "bin/devm-runc-shim")
 	assert.NotContains(t, names, "bin/docker")
 }
+
+func TestBuild_TarContainsSSHMaterial(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:                 schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}},
+		RepoRoot:            "/tmp/repo",
+		SSHAuthorizedPubkey: []byte("ssh-ed25519 AAAA...\n"),
+		SSHHostPriv:         []byte("-----BEGIN OPENSSH PRIVATE KEY-----\n..."),
+		SSHHostPub:          []byte("ssh-ed25519 BBBB...\n"),
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.Contains(t, names, "ssh/authorized_keys")
+	assert.Contains(t, names, "ssh/ssh_host_ed25519_key")
+	assert.Contains(t, names, "ssh/ssh_host_ed25519_key.pub")
+}

@@ -18,6 +18,7 @@ import (
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 	"github.com/mdubb86/devm/internal/status"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -201,12 +202,24 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	if err != nil {
 		return teardownOnFail(err, "read CA root")
 	}
+	authPub, err := sshkeys.EnsureProjectKeypair(cfg.Project.ID)
+	if err != nil {
+		return teardownOnFail(err, "ensure project ssh keypair")
+	}
+	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(cfg.Project.ID, cfg.Project.VMName)
+	if err != nil {
+		return teardownOnFail(err, "ensure project ssh host key")
+	}
+
 	prov := &provision.Provisioner{
-		Tart:            d.Tart,
-		VMName:          vmName,
-		Cfg:             cfg,
-		CARootPEM:       caPEM,
-		WorkspaceVMPath: repoRoot,
+		Tart:                d.Tart,
+		VMName:              vmName,
+		Cfg:                 cfg,
+		CARootPEM:           caPEM,
+		SSHAuthorizedPubkey: authPub,
+		SSHHostPriv:         hostPriv,
+		SSHHostPub:          hostPub,
+		WorkspaceVMPath:     repoRoot,
 		EnforceEgress: func(ctx context.Context) error {
 			return d.ServiceAPIClient.ApplyEgressEnforcement(ctx, cfg.Project.ID, vmName)
 		},

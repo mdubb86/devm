@@ -369,7 +369,7 @@ func changeKinds(cs []reconcile.Change) []reconcile.ChangeKind {
 // was called and returns success.
 type fakeApply struct{ called bool }
 
-func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM []byte) error {
+func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
 	f.called = true
 	return nil
 }

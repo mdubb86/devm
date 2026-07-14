@@ -9,6 +9,7 @@ import (
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 )
 
 // ReconcileOptions controls RunReconcile's behaviour. Placeholder for
@@ -44,12 +45,25 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 	}
 	hashes := SecretHashesFromBindings(bindings)
 
+	// Load SSH keys CLI-side and pass to the daemon.
+	authPub, err := sshkeys.EnsureProjectKeypair(cfg.Project.ID)
+	if err != nil {
+		return -1, ReconcileResult{}, fmt.Errorf("ensure ssh keypair: %w", err)
+	}
+	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(cfg.Project.ID, cfg.Project.VMName)
+	if err != nil {
+		return -1, ReconcileResult{}, fmt.Errorf("ensure ssh host key: %w", err)
+	}
+
 	resp, err := client.Reconcile(context.Background(), serviceapi.VMReconcileRequest{
-		ProjectID:         cfg.Project.ID,
-		VMName:            cfg.Project.VMName,
-		Cfg:               cfg,
-		WorkspaceHostPath: repoRoot,
-		SecretHashes:      hashes,
+		ProjectID:           cfg.Project.ID,
+		VMName:              cfg.Project.VMName,
+		Cfg:                 cfg,
+		WorkspaceHostPath:   repoRoot,
+		SecretHashes:        hashes,
+		SSHAuthorizedPubkey: authPub,
+		SSHHostPriv:         hostPriv,
+		SSHHostPub:          hostPub,
 	})
 	if err != nil {
 		return -1, ReconcileResult{}, fmt.Errorf("reconcile: %w", err)
