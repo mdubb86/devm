@@ -89,6 +89,13 @@ if [ "${E2E_ISOLATE:-0}" = "1" ]; then
     export DEVM_DNS_ADDR="127.0.0.1:0"
     echo "=== e2e: isolated runtime dir at $DEVM_RUNTIME_DIR ===" >&2
 
+    # Auto-rebuild devm-base BEFORE spawning the daemon, so any branch
+    # that changed image/provision-base.sh gets a fresh image without
+    # requiring `devm install`'s sudo path. Streams progress to stderr
+    # (build takes 5-10min on a fresh pull). No-op when the image is
+    # already current — cheap idempotent check.
+    "$DEVM_BIN" _build-base-if-needed
+
     # Foreground daemon in the background of this script. Uses its own
     # socket (under $DEVM_RUNTIME_DIR/devm.sock) so it can't conflict
     # with the user's real launchd-managed daemon. Not a LaunchDaemon

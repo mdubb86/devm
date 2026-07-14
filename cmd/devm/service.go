@@ -165,6 +165,35 @@ var serveCmd = &cobra.Command{
 	},
 }
 
+// buildBaseIfNeededCmd rebuilds devm-base when its provisioning-script
+// hash has drifted (or the image is missing). Hidden: not part of the
+// user surface — called by the e2e harness (`e2e/scripts/run.sh`) so
+// isolated runs auto-heal after any branch that changes
+// image/provision-base.sh, without needing `devm install`'s sudo path.
+//
+// Safe to invoke anywhere tart is on PATH: touches only tart's local
+// image cache. No LaunchDaemon, no DNS, no CA writes.
+var buildBaseIfNeededCmd = &cobra.Command{
+	Use:    "_build-base-if-needed",
+	Short:  "[internal] Rebuild devm-base when the provisioning script has drifted",
+	Hidden: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		if _, err := exec.LookPath("tart"); err != nil {
+			return fmt.Errorf("tart not found on PATH: %w", err)
+		}
+		needs, _, err := image.NeedsBuild()
+		if err != nil {
+			return fmt.Errorf("check base image state: %w", err)
+		}
+		if !needs {
+			return nil
+		}
+		fmt.Fprintln(os.Stderr, "devm _build-base-if-needed: base image drifted; rebuilding devm-base…")
+		return image.BuildBaseImage(cmd.Context(), os.Stderr)
+	},
+}
+
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Register devm as a user-level launchd service",
@@ -663,7 +692,7 @@ func init() {
 	// kardianos). Used by e2e's isolated mode so a test daemon can
 	// run in a private DEVM_RUNTIME_DIR without touching launchd.
 	serveCmd.Flags().Bool("foreground", false, "run RunService directly, bypassing kardianos (e2e-isolated mode)")
-	rootCmd.AddCommand(serveCmd, installCmd, uninstallCmd)
+	rootCmd.AddCommand(serveCmd, installCmd, uninstallCmd, buildBaseIfNeededCmd)
 	serviceCmd.AddCommand(
 		serviceStatusCmd,
 		serviceStartCmd,
