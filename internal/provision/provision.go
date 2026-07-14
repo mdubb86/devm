@@ -38,10 +38,10 @@ type Provisioner struct {
 	VMName string
 	Cfg    schema.Config
 
-	// CARootPEM is the contents of ~/Library/Application Support/devm/ca/root.crt
-	// (Ship 3 CA). The provisioner copies this into the VM at
-	// /usr/local/share/ca-certificates/devm.crt and runs
-	// update-ca-certificates so the VM trusts our CA for *.test HTTPS.
+	// CARootPEM is the contents of ~/Library/Application Support/devm/ca/root.crt.
+	// Threaded into devmbundle.Build's BuildInput so install.sh inside the
+	// guest installs it into /usr/local/share/ca-certificates/devm.crt and
+	// merges it into the trusted bundle via update-ca-certificates.
 	CARootPEM []byte
 
 	// WorkspaceVMPath is the path inside the VM where the workspace

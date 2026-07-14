@@ -28,10 +28,9 @@ import (
 	"syscall"
 )
 
-// caPath is where devm's CA lives in the guest. Provisioner writes
-// it here directly (see internal/provision/provision.go's
-// installCARootScript), then runs update-ca-certificates so the
-// content is merged into /etc/ssl/certs/ca-certificates.crt. This
+// caPath is where devm's CA cert lands inside the guest (bundle-carried
+// via internal/scripts/install.sh's CA section, installed by
+// update-ca-certificates on cold start and after CA rotation). This
 // source file is untouched by update-ca-certificates and stays
 // stable across devm versions and reprovisions. Do NOT switch to
 // /etc/ssl/certs/devm.crt — update-ca-certificates creates
