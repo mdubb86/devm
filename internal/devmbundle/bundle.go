@@ -90,6 +90,17 @@ func Build(in BuildInput) ([]byte, error) {
 		if svc.Systemd == "" && len(svc.Exec) == 0 {
 			continue
 		}
+		// Merge top-level env into per-service env so cfg.Env entries
+		// (including !secret refs) reach the rendered systemd unit.
+		// Per-service env wins on key collision — explicit beats inherited.
+		merged := make(map[string]schema.EnvValue, len(in.Cfg.Env)+len(svc.Env))
+		for k, v := range in.Cfg.Env {
+			merged[k] = v
+		}
+		for k, v := range svc.Env {
+			merged[k] = v
+		}
+		svc.Env = merged
 		unit := render.RenderService(name, svc)
 		if err := writeEntry(tw, "systemd/"+name+".service", 0o644, unit); err != nil {
 			return nil, err

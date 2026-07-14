@@ -87,7 +87,7 @@ var stepsAfterInstall = map[string]bool{
 }
 
 // IsPostInstallFailure reports whether err is a StepFailure at or after
-// the "install service units" step — i.e. a failure that leaves the VM in
+// the "install templates" step — i.e. a failure that leaves the VM in
 // a debuggable state and shouldn't trigger teardown.
 func IsPostInstallFailure(err error) bool {
 	var sf *StepFailure

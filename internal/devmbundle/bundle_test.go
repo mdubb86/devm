@@ -233,3 +233,47 @@ func readTar(t *testing.T, blob []byte) map[string]tarEntry {
 	}
 	return out
 }
+
+func TestBuild_ServiceUnit_InheritsCfgEnv(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Env: map[string]schema.EnvValue{
+			"GITHUB_TOKEN": {Literal: "xyz"}, // cfg-level env
+		},
+		Services: map[string]schema.Service{
+			"web": {
+				Exec: []string{"/bin/true"}, // eligible for a unit
+				// no per-service env — the cfg-level entry must reach the rendered unit
+			},
+		},
+	}
+	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+	unit := readTarEntry(t, blob, "systemd/web.service")
+	// Rendered unit should carry an Environment= line for GITHUB_TOKEN.
+	// Regression: cfg.Env used to merge into svc.Env before RenderService;
+	// Task 5 dropped that merge and this pinning test locks it back in.
+	assert.Contains(t, string(unit), "GITHUB_TOKEN",
+		"top-level env entries must reach rendered systemd units")
+	assert.Contains(t, string(unit), "xyz")
+}
+
+func TestBuild_ServiceUnit_PerServiceEnvOverridesCfg(t *testing.T) {
+	// Same key in cfg.Env and svc.Env → svc.Env wins.
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Env:     map[string]schema.EnvValue{"K": {Literal: "cfg-value"}},
+		Services: map[string]schema.Service{
+			"web": {
+				Exec: []string{"/bin/true"},
+				Env:  map[string]schema.EnvValue{"K": {Literal: "svc-value"}},
+			},
+		},
+	}
+	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+	unit := readTarEntry(t, blob, "systemd/web.service")
+	assert.Contains(t, string(unit), "svc-value")
+	assert.NotContains(t, string(unit), "cfg-value",
+		"per-service env must override cfg-level env on collision")
+}

@@ -38,22 +38,18 @@ If the VM is stopped or absent, `devm shell`:
    | # | Step name |
    |---|---|
    | 1 | `mkdir workspace parents` |
-   | 2 | `install CA root` |
-   | 3 | `install devm bundle` |
-   | 4 | `write Caddyfile` |
-   | 5 | `write dnsmasq config` |
-   | 6 | `reload base services` |
-   | 7 | `apt-get update` |
-   | 8 | `apt-get install packages` |
-   | 9 | `scaffold user firewall chain` |
-   | 10 | `run install commands` |
-   | 11 | `docker feature` (only when `docker: true`) |
-   | 12 | `install templates` |
-   | 13 | `install service units` |
-   | 14 | `systemctl daemon-reload` |
-   | 15 | `apply egress enforcement` |
-   | 16 | `enable + start services` |
-   | 17 | `apply masks` |
+   | 2 | `install devm bundle` |
+   | 3 | `reload base services` |
+   | 4 | `apt-get update` |
+   | 5 | `apt-get install packages` |
+   | 6 | `scaffold user firewall chain` |
+   | 7 | `run install commands` |
+   | 8 | `docker feature` (only when `docker: true`) |
+   | 9 | `install templates` |
+   | 10 | `systemctl daemon-reload` |
+   | 11 | `apply egress enforcement` |
+   | 12 | `enable + start services` |
+   | 13 | `apply masks` |
 
 5. Attaches an interactive shell via `tart exec`. The VM auto-stops when the shell exits.
 
@@ -85,7 +81,7 @@ Sandbox stopped; config changes will apply on next `devm shell`.
 
 1. **Network (`allow`) changes** — classified BucketLive in `changeBucket` but has no apply code in `ApplyLive`. The allow-list is passed to the daemon at `StartVM` time, so changes take effect at the next cold start, not on a running VM.
 
-2. **Top-level `env:` changes** — `computeEnvChanges` iterates only per-service env (via `envOf`). A change made only at the top-level `env:` key produces no diff and takes effect at the next cold start via `installServiceUnits` (which merges top-level env into each service unit).
+2. **Top-level `env:` changes** — `computeEnvChanges` iterates only per-service env (via `envOf`). A change made only at the top-level `env:` key produces no diff and takes effect at the next cold start. The devm bundle builder (`internal/devmbundle/bundle.go`, `Build` function) merges top-level env into each service's env before rendering systemd units, so top-level entries like `env: { GITHUB_TOKEN: !secret ... }` reach the per-service systemd units' `Environment=` lines.
 
 **Flags:** `--dry-run` (print diff, do not apply), `--yes` / `-y` (skip recreate confirmation), `--json`.
 
