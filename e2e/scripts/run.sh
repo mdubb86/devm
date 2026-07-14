@@ -94,7 +94,15 @@ if [ "${E2E_ISOLATE:-0}" = "1" ]; then
     # requiring `devm install`'s sudo path. Streams progress to stderr
     # (build takes 5-10min on a fresh pull). No-op when the image is
     # already current — cheap idempotent check.
-    "$DEVM_BIN" _build-base-if-needed
+    #
+    # Explicit exit-code check: the surrounding script only has
+    # `set -uo pipefail` (no -e), so a failed rebuild would otherwise
+    # silently proceed to serve --foreground and every test would fail
+    # obscurely at cold-start against a stale/missing devm-base.
+    if ! "$DEVM_BIN" _build-base-if-needed; then
+        echo "=== e2e: base image rebuild failed; aborting ===" >&2
+        exit 1
+    fi
 
     # Foreground daemon in the background of this script. Uses its own
     # socket (under $DEVM_RUNTIME_DIR/devm.sock) so it can't conflict
