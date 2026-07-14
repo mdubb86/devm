@@ -12,6 +12,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultDiskSizeGB is the virtual disk size (in GB) baked into the
+// devm-base image and the floor for a per-project `disk:` override.
+// The base image's root filesystem is grown to this during the base
+// build; every project VM clones it. tart disks are sparse, so a
+// larger ceiling costs nothing on the host until the guest writes to
+// it. tart disk resize is grow-only, so overrides below this are
+// rejected.
+const DefaultDiskSizeGB = 32
+
 // SecretRef is the in-memory representation of a YAML `!secret <name>`
 // tagged value. Resolved to a literal at iron-proxy spawn time by
 // looking up <name> in the macOS login keychain.
@@ -384,7 +393,7 @@ func (p Project) Validate() error {
 func CheckUnknownKeys(data []byte) error {
 	knownTop := []string{
 		"project", "base_image", "docker", "network", "env",
-		"services", "install", "mounts", "path", "packages",
+		"services", "install", "mounts", "path", "packages", "disk",
 	}
 	knownProject := []string{
 		"id", "vm_name", "proxy",
@@ -619,6 +628,14 @@ type Config struct {
 	// Bucket: LIVE — same as cfg.Env. New shells pick up the new
 	// PATH on next `devm shell`; running shells don't.
 	Path []string `yaml:"path,omitempty"`
+
+	// Disk optionally overrides the VM's virtual disk size, e.g.
+	// "64G". Units are gigabytes with a G/GB suffix; the value must be
+	// an integer of at least DefaultDiskSizeGB. Unset means the base
+	// image default (DefaultDiskSizeGB). The disk is grown from the
+	// base clone at create time and tart resize is grow-only, so
+	// changing this field recreates the VM (teardown bucket).
+	Disk string `yaml:"disk,omitempty"`
 }
 
 // ResolveMount expands and absolute-resolves a single mounts[] entry
@@ -666,6 +683,41 @@ func ResolveMount(entry, projectRoot string) (string, error) {
 	return path, nil
 }
 
+// parseDiskSize parses a `disk:` value like "64G" or "64GB" into an
+// integer number of gigabytes. The suffix is required and
+// case-insensitive; the magnitude must be a positive integer.
+func parseDiskSize(s string) (int, error) {
+	raw := strings.TrimSpace(s)
+	num := raw
+	upper := strings.ToUpper(num)
+	switch {
+	case strings.HasSuffix(upper, "GB"):
+		num = num[:len(num)-2]
+	case strings.HasSuffix(upper, "G"):
+		num = num[:len(num)-1]
+	default:
+		return 0, fmt.Errorf("disk: %q must use a gigabyte suffix, e.g. \"64G\"", s)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(num))
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("disk: %q must be a positive integer number of gigabytes, e.g. \"64G\"", s)
+	}
+	return n, nil
+}
+
+// DiskSizeGB returns the parsed disk override in gigabytes and whether
+// the user set `disk:` in devm.yaml. When unset, gib is 0 and set is
+// false — callers treat that as "use DefaultDiskSizeGB". The string is
+// validated in Config.Validate at load time, so the parse here cannot
+// fail on a validated Config.
+func (c Config) DiskSizeGB() (gib int, set bool) {
+	if c.Disk == "" {
+		return 0, false
+	}
+	n, _ := parseDiskSize(c.Disk)
+	return n, true
+}
+
 // ValidateWithRoot is like Validate but additionally checks the
 // `mounts:` entries resolve cleanly and the resolved host paths
 // exist. Callers that have the project root (devm's config loader)
@@ -691,6 +743,15 @@ func (c Config) ValidateWithRoot(projectRoot string) error {
 func (c Config) Validate() error {
 	if err := c.Project.Validate(); err != nil {
 		return err
+	}
+	if c.Disk != "" {
+		gib, err := parseDiskSize(c.Disk)
+		if err != nil {
+			return err
+		}
+		if gib < DefaultDiskSizeGB {
+			return fmt.Errorf("disk: %dG is below the %dG minimum (the base image default)", gib, DefaultDiskSizeGB)
+		}
 	}
 	for i, ic := range c.Install {
 		if ic == "" {

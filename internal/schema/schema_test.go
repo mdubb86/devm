@@ -852,3 +852,51 @@ docker: "banana"
 		t.Fatalf("want error on non-boolean docker value, got Docker=%v", cfg.Docker)
 	}
 }
+
+func TestDiskSizeParsingAndGetter(t *testing.T) {
+	cases := []struct {
+		in    string
+		gib   int
+		valid bool
+	}{
+		{"64G", 64, true},
+		{"64GB", 64, true},
+		{"32g", 32, true},
+		{"128", 0, false},   // missing unit
+		{"64.5G", 0, false}, // non-integer
+		{"0G", 0, false},    // zero
+		{"-8G", 0, false},   // negative
+		{"abcG", 0, false},  // non-numeric magnitude
+	}
+	for _, c := range cases {
+		cfg := Config{Project: Project{ID: "x", VMName: "x-vm"}, Disk: c.in}
+		err := cfg.Validate()
+		if !c.valid {
+			assert.Error(t, err, "expected %q rejected", c.in)
+			continue
+		}
+		require.NoError(t, err, "expected %q accepted", c.in)
+		gib, set := cfg.DiskSizeGB()
+		assert.True(t, set)
+		assert.Equal(t, c.gib, gib)
+	}
+}
+
+func TestDiskSizeBelowFloorRejected(t *testing.T) {
+	cfg := Config{Project: Project{ID: "x", VMName: "x-vm"}, Disk: "16G"}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "minimum")
+}
+
+func TestDiskUnsetHasNoOverride(t *testing.T) {
+	cfg := Config{Project: Project{ID: "x", VMName: "x-vm"}}
+	require.NoError(t, cfg.Validate())
+	gib, set := cfg.DiskSizeGB()
+	assert.False(t, set)
+	assert.Equal(t, 0, gib)
+}
+
+func TestCheckUnknownKeysAllowsDisk(t *testing.T) {
+	require.NoError(t, CheckUnknownKeys([]byte("disk: 64G\nproject:\n  id: x\n  vm_name: x-vm\n")))
+}

@@ -87,4 +87,5 @@ type ConfigOverride struct {
 	Mounts   *[]string                  `yaml:"mounts,omitempty"`
 	Path     *[]string                  `yaml:"path,omitempty"`
 	Packages *[]string                  `yaml:"packages,omitempty"`
+	Disk     *string                    `yaml:"disk,omitempty"`
 }
