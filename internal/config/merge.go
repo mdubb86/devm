@@ -99,5 +99,8 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 	if override.Packages != nil {
 		out.Packages = *override.Packages
 	}
+	if override.Disk != nil {
+		out.Disk = *override.Disk
+	}
 	return out, nil
 }

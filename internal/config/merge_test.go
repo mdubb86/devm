@@ -152,3 +152,22 @@ func TestMerge_DockerOverrideAbsentPreserves(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, out.Docker, "Docker: want preserved true")
 }
+
+func TestMerge_DiskOverride(t *testing.T) {
+	base := schema.Config{Disk: "32G"}
+	disk := "64G"
+	override := schema.ConfigOverride{Disk: &disk}
+
+	out, err := Merge(base, override)
+	require.NoError(t, err)
+	assert.Equal(t, "64G", out.Disk, "Disk: want 64G after override")
+}
+
+func TestMerge_DiskOverrideAbsentPreserves(t *testing.T) {
+	base := schema.Config{Disk: "64G"}
+	override := schema.ConfigOverride{} // no Disk override
+
+	out, err := Merge(base, override)
+	require.NoError(t, err)
+	assert.Equal(t, "64G", out.Disk, "Disk: want preserved 64G")
+}
