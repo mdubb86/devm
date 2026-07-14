@@ -12,10 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	baseimage "github.com/mdubb86/devm/image"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // BaseImageName is the Tart VM name we build into.
@@ -59,6 +61,8 @@ func DefinitionHash() (string, error) {
 	io.WriteString(h, cleanupScript)
 	h.Write([]byte{0})
 	io.WriteString(h, definitionVersion)
+	h.Write([]byte{0})
+	io.WriteString(h, strconv.Itoa(schema.DefaultDiskSizeGB))
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
@@ -382,6 +386,11 @@ func BuildBaseImage(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("tart clone %s %s: %w", template, BaseImageName, err)
 	}
 
+	fmt.Fprintf(w, ">>> Resizing %s disk to %dGB...\n", BaseImageName, schema.DefaultDiskSizeGB)
+	if err := runTart(ctx, w, "set", BaseImageName, "--disk-size", strconv.Itoa(schema.DefaultDiskSizeGB)); err != nil {
+		return fmt.Errorf("tart set --disk-size %s: %w", BaseImageName, err)
+	}
+
 	runner, err := startTartRun(ctx)
 	if err != nil {
 		return fmt.Errorf("start tart run: %w", err)
@@ -444,4 +453,3 @@ func BuildBaseImage(ctx context.Context, w io.Writer) error {
 	}
 	return nil
 }
-

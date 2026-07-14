@@ -10,6 +10,17 @@ systemctl mask --now \
   e2scrub_all.timer \
   man-db.timer
 
+# --- Grow the root filesystem to fill the resized virtual disk ---
+# The base disk is resized to schema.DefaultDiskSizeGB via
+# `tart set --disk-size` before this provisioning boot. cloud-init
+# growpart is disabled later in this script, so expand the root
+# partition + ext4 FS explicitly now. growpart lives in /usr/bin but
+# needs sfdisk from /sbin, which isn't on this script's PATH; set it.
+# growpart exits non-zero when the partition is already at max, which
+# is fine here — resize2fs is then a safe no-op.
+PATH=/usr/sbin:/sbin:$PATH growpart /dev/vda 1 || true
+PATH=/usr/sbin:/sbin:$PATH resize2fs /dev/vda1
+
 # --- Install base packages (Caddy, dnsmasq, ncurses-term, locales) ---
 #
 # ncurses-term: ships terminfo for hundreds of modern terminals (ghostty,

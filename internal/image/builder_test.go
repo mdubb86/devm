@@ -6,12 +6,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	baseimage "github.com/mdubb86/devm/image"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // DefinitionHash is a pure function of embedded content — the
@@ -27,9 +29,10 @@ func TestDefinitionHash_StableAcrossCalls(t *testing.T) {
 }
 
 // TestDefinitionHash_MatchesFormula recomputes sha256(script + 0x00 +
-// cleanup + 0x00 + version) directly against this package's
-// unexported inputs, so the test fails loudly if the hash formula (or
-// its inputs) ever changes silently without a definitionVersion bump.
+// cleanup + 0x00 + version + 0x00 + disk size) directly against this
+// package's unexported inputs, so the test fails loudly if the hash
+// formula (or its inputs) ever changes silently without a
+// definitionVersion bump.
 func TestDefinitionHash_MatchesFormula(t *testing.T) {
 	h := sha256.New()
 	io.WriteString(h, baseimage.ProvisionBaseScript)
@@ -37,6 +40,8 @@ func TestDefinitionHash_MatchesFormula(t *testing.T) {
 	io.WriteString(h, cleanupScript)
 	h.Write([]byte{0})
 	io.WriteString(h, definitionVersion)
+	h.Write([]byte{0})
+	io.WriteString(h, strconv.Itoa(schema.DefaultDiskSizeGB))
 	want := hex.EncodeToString(h.Sum(nil))
 
 	got, err := DefinitionHash()
