@@ -27,10 +27,10 @@ type VMReconcileRequest struct {
 	// keychain access happens in the user context) and sends the map
 	// here. Empty or nil means "no secrets to consider" — safe for old
 	// clients.
-	SecretHashes       map[string]string `json:"secret_hashes,omitempty"`
-	SSHAuthorizedPubkey []byte `json:"ssh_authorized_pubkey,omitempty"`
-	SSHHostPriv         []byte `json:"ssh_host_priv,omitempty"`
-	SSHHostPub          []byte `json:"ssh_host_pub,omitempty"`
+	SecretHashes        map[string]string `json:"secret_hashes,omitempty"`
+	SSHAuthorizedPubkey []byte            `json:"ssh_authorized_pubkey,omitempty"`
+	SSHHostPriv         []byte            `json:"ssh_host_priv,omitempty"`
+	SSHHostPub          []byte            `json:"ssh_host_pub,omitempty"`
 }
 
 // VMReconcileResponse is the return shape.
