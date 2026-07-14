@@ -114,7 +114,6 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 	}{
 		{"mkdir workspace parents", p.mkdirWorkspaceParents},
 		{"install devm bundle", p.installDevmBundle},
-		{"write dnsmasq config", p.writeDnsmasqConfig},
 		{"reload base services", p.reloadBaseServices},
 		{"apt-get update", p.aptUpdate},
 		{"apt-get install packages", p.aptInstall},
@@ -211,16 +210,6 @@ func (p *Provisioner) installDevmBundle(ctx context.Context, w io.Writer) error 
 	return p.PipeIntoShell(ctx, w, bytes.NewReader(body), devmbundle.GuestInstallScript)
 }
 
-func (p *Provisioner) writeDnsmasqConfig(ctx context.Context, w io.Writer) error {
-	cfg := render.DnsmasqConfig()
-	encoded := base64.StdEncoding.EncodeToString(cfg)
-	script := fmt.Sprintf(
-		`echo %s | base64 -d | sudo tee /etc/dnsmasq.d/devm-test.conf > /dev/null`,
-		encoded,
-	)
-	return p.execShell(ctx, w, script)
-}
-
 func (p *Provisioner) applyEgressEnforcement(ctx context.Context, w io.Writer) error {
 	if p.EnforceEgress == nil {
 		fmt.Fprintln(w, "(no EnforceEgress callback set — skipping)")
@@ -269,8 +258,8 @@ func (p *Provisioner) reloadBaseServices(ctx context.Context, w io.Writer) error
 	// Only caddy is reloaded here. Dnsmasq is not yet running: at this
 	// point systemd-resolved still holds :53. The apply-egress-enforcement
 	// step (fires post-provision) masks resolved and starts dnsmasq — so
-	// dnsmasq's config in /etc/dnsmasq.d/devm-test.conf (written at
-	// writeDnsmasqConfig above) becomes active there.
+	// dnsmasq's config in /etc/dnsmasq.d/devm-test.conf (installed by
+	// install.sh from the devm bundle) becomes active there.
 	return p.exec(ctx, w, "sudo", "systemctl", "reload-or-restart", "caddy")
 }
 

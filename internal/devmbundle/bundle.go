@@ -72,6 +72,10 @@ func Build(in BuildInput) ([]byte, error) {
 		return nil, err
 	}
 
+	if err := writeEntry(tw, "dnsmasq/devm-test.conf", 0o644, render.DnsmasqConfig()); err != nil {
+		return nil, err
+	}
+
 	if err := tw.Close(); err != nil {
 		return nil, err
 	}

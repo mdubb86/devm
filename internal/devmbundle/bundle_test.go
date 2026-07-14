@@ -192,6 +192,16 @@ func TestBuild_TarContainsCaddyfile(t *testing.T) {
 	assert.Contains(t, string(body), "8080")
 }
 
+func TestBuild_TarContainsDnsmasqDropIn(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:      schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}},
+		RepoRoot: "/tmp/repo",
+	})
+	require.NoError(t, err)
+	body := readTarEntry(t, blob, "dnsmasq/devm-test.conf")
+	assert.NotEmpty(t, body)
+}
+
 func readTar(t *testing.T, blob []byte) map[string]tarEntry {
 	t.Helper()
 	tr := tar.NewReader(bytes.NewReader(blob))
