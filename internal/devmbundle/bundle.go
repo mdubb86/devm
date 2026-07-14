@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/mdubb86/devm/internal/render"
@@ -74,6 +75,25 @@ func Build(in BuildInput) ([]byte, error) {
 
 	if err := writeEntry(tw, "dnsmasq/devm-test.conf", 0o644, render.DnsmasqConfig()); err != nil {
 		return nil, err
+	}
+
+	// One systemd unit per service that will actually run in-guest.
+	// Routing-only services (no Exec, no Systemd) contribute proxy config
+	// only and don't get a unit; matches enableStartServices' skip logic.
+	svcNames := make([]string, 0, len(in.Cfg.Services))
+	for name := range in.Cfg.Services {
+		svcNames = append(svcNames, name)
+	}
+	sort.Strings(svcNames)
+	for _, name := range svcNames {
+		svc := in.Cfg.Services[name]
+		if svc.Systemd == "" && len(svc.Exec) == 0 {
+			continue
+		}
+		unit := render.RenderService(name, svc)
+		if err := writeEntry(tw, "systemd/"+name+".service", 0o644, unit); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tw.Close(); err != nil {

@@ -202,6 +202,21 @@ func TestBuild_TarContainsDnsmasqDropIn(t *testing.T) {
 	assert.NotEmpty(t, body)
 }
 
+func TestBuild_TarContainsServiceUnits(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Services: map[string]schema.Service{
+			"web":     {Exec: []string{"/bin/true"}, Hostname: "w.local", Port: 80},
+			"routing": {Hostname: "r.local", Port: 81}, // no Exec/Systemd — skipped
+		},
+	}
+	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.Contains(t, names, "systemd/web.service")
+	assert.NotContains(t, names, "systemd/routing.service")
+}
+
 func readTar(t *testing.T, blob []byte) map[string]tarEntry {
 	t.Helper()
 	tr := tar.NewReader(bytes.NewReader(blob))

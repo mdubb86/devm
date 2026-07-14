@@ -67,7 +67,6 @@ func TestProvisioner_RunsAllStepsOnHappyPath(t *testing.T) {
 		"[step: apt-get update]",
 		"[step: apt-get install packages]",
 		"[step: run install commands]",
-		"[step: install service units]",
 		"[step: systemctl daemon-reload]",
 		"[step: enable + start services]",
 		"[step: apply masks]",
@@ -107,7 +106,7 @@ func TestProvisioner_FailsFastOnTartError(t *testing.T) {
 
 	out := buf.String()
 	// Steps after the failure must NOT appear.
-	assert.NotContains(t, out, "[step: install service units]")
+	assert.NotContains(t, out, "[step: systemctl daemon-reload]")
 	assert.NotContains(t, out, "[step: enable + start services]")
 }
 

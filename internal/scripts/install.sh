@@ -29,3 +29,14 @@ if [ -f /opt/devm/dnsmasq/devm-test.conf ] && ! cmp -s /opt/devm/dnsmasq/devm-te
         /opt/devm/dnsmasq/devm-test.conf \
         /etc/dnsmasq.d/devm-test.conf
 fi
+
+# --- systemd unit files: one per user-declared service with Exec or Systemd. ---
+if [ -d /opt/devm/systemd ]; then
+    for f in /opt/devm/systemd/*.service; do
+        [ -e "$f" ] || continue
+        dest="/etc/systemd/system/$(basename "$f")"
+        if ! cmp -s "$f" "$dest"; then
+            install -o root -g root -m 0644 "$f" "$dest"
+        fi
+    done
+fi

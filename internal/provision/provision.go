@@ -6,7 +6,6 @@ package provision
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +18,6 @@ import (
 
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
-	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -83,7 +81,6 @@ func (f *StepFailure) Unwrap() error { return f.Err }
 // state where the VM is worth destroying and re-creating from scratch.
 var stepsAfterInstall = map[string]bool{
 	"install templates":       true,
-	"install service units":   true,
 	"systemctl daemon-reload": true,
 	"enable + start services": true,
 	"apply masks":             true,
@@ -121,7 +118,6 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 		{"run install commands", p.runInstallCommands},
 		{"docker feature", p.dockerFeature},
 		{"install templates", p.installTemplates},
-		{"install service units", p.installServiceUnits},
 		{"systemctl daemon-reload", p.daemonReload},
 		{"apply egress enforcement", p.applyEgressEnforcement},
 		{"enable + start services", p.enableStartServices},
@@ -357,38 +353,6 @@ func (p *Provisioner) installTemplates(ctx context.Context, w io.Writer) error {
 	wrapper := devmbundle.GuestWrapper
 	dispatcher := devmbundle.GuestDispatcher
 	return p.exec(ctx, w, wrapper, "bash", dispatcher)
-}
-
-func (p *Provisioner) installServiceUnits(ctx context.Context, w io.Writer) error {
-	if len(p.Cfg.Services) == 0 {
-		fmt.Fprintln(w, "(no services declared)")
-		return nil
-	}
-	for name, svc := range p.Cfg.Services {
-		// Merge top-level env into per-service env so cfg.Env entries
-		// (including !secret refs) reach the rendered systemd unit.
-		// Per-service env wins on key collision — explicit beats
-		// inherited.
-		merged := make(map[string]schema.EnvValue, len(p.Cfg.Env)+len(svc.Env))
-		for k, v := range p.Cfg.Env {
-			merged[k] = v
-		}
-		for k, v := range svc.Env {
-			merged[k] = v
-		}
-		svc.Env = merged
-		unit := render.RenderService(name, svc)
-		encoded := base64.StdEncoding.EncodeToString(unit)
-		unitPath := fmt.Sprintf("/etc/systemd/system/%s.service", name)
-		script := fmt.Sprintf(
-			`echo %s | base64 -d | sudo tee %s > /dev/null`,
-			encoded, unitPath,
-		)
-		if err := p.execShell(ctx, w, script); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (p *Provisioner) daemonReload(ctx context.Context, w io.Writer) error {
