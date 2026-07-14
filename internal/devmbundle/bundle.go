@@ -20,9 +20,11 @@ var zeroTime = time.Unix(0, 0).UTC()
 // BuildInput carries the inputs devmbundle.Build needs. Fields grow
 // as more artifacts fold into the bundle; existing fields are stable.
 type BuildInput struct {
-	Cfg       schema.Config
-	RepoRoot  string
-	CARootPEM []byte
+	Cfg            schema.Config
+	RepoRoot       string
+	CARootPEM      []byte
+	DockerRuncShim []byte
+	DockerCLIShim  []byte
 }
 
 // Build returns a tar archive containing the devm-owned artifacts the
@@ -64,6 +66,18 @@ func Build(in BuildInput) ([]byte, error) {
 
 	if len(in.CARootPEM) > 0 {
 		if err := writeEntry(tw, "ca/devm.crt", 0o644, in.CARootPEM); err != nil {
+			return nil, err
+		}
+	}
+
+	if in.Cfg.Docker {
+		if len(in.DockerRuncShim) == 0 || len(in.DockerCLIShim) == 0 {
+			return nil, fmt.Errorf("Cfg.Docker=true requires DockerRuncShim and DockerCLIShim bytes")
+		}
+		if err := writeEntry(tw, "bin/devm-runc-shim", 0o755, in.DockerRuncShim); err != nil {
+			return nil, err
+		}
+		if err := writeEntry(tw, "bin/docker", 0o755, in.DockerCLIShim); err != nil {
 			return nil, err
 		}
 	}

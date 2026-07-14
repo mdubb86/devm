@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/mdubb86/devm/internal/devmbundle"
+	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -55,11 +56,16 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		// .env on every subsequent exec, and (for template changes) the
 		// dispatcher below reads the freshly-piped installers. Running
 		// shells keep their old env until they re-exec — hence BucketLive.
-		tar, err := devmbundle.Build(devmbundle.BuildInput{
+		in := devmbundle.BuildInput{
 			Cfg:       cfg,
 			RepoRoot:  repoRoot,
 			CARootPEM: caPEM,
-		})
+		}
+		if cfg.Docker {
+			in.DockerRuncShim = docker.Shim()
+			in.DockerCLIShim = docker.DockerShim()
+		}
+		tar, err := devmbundle.Build(in)
 		if err != nil {
 			return fmt.Errorf("apply_live: build bundle: %w", err)
 		}

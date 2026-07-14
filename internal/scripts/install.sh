@@ -40,3 +40,14 @@ if [ -d /opt/devm/systemd ]; then
         fi
     done
 fi
+
+# --- Docker shims: devm-runc-shim + docker CLI shim. Present only when Cfg.Docker. ---
+if [ -d /opt/devm/bin ]; then
+    for f in /opt/devm/bin/*; do
+        [ -e "$f" ] || continue
+        dest="/usr/local/bin/$(basename "$f")"
+        if ! cmp -s "$f" "$dest"; then
+            install -o root -g root -m 0755 "$f" "$dest"
+        fi
+    done
+fi

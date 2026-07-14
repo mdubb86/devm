@@ -277,3 +277,30 @@ func TestBuild_ServiceUnit_PerServiceEnvOverridesCfg(t *testing.T) {
 	assert.NotContains(t, string(unit), "cfg-value",
 		"per-service env must override cfg-level env on collision")
 }
+
+func TestBuild_TarContainsDockerShims_WhenDockerTrue(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}, Docker: true},
+		RepoRoot:       "/tmp/repo",
+		DockerRuncShim: []byte("runc-shim-elf"),
+		DockerCLIShim:  []byte("docker-shim-elf"),
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.Contains(t, names, "bin/devm-runc-shim")
+	assert.Contains(t, names, "bin/docker")
+	assert.Equal(t, []byte("runc-shim-elf"), readTarEntry(t, blob, "bin/devm-runc-shim"))
+}
+
+func TestBuild_TarOmitsDockerShims_WhenDockerFalse(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}, Docker: false},
+		RepoRoot:       "/tmp/repo",
+		DockerRuncShim: []byte("runc-shim-elf"),
+		DockerCLIShim:  []byte("docker-shim-elf"),
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.NotContains(t, names, "bin/devm-runc-shim")
+	assert.NotContains(t, names, "bin/docker")
+}
