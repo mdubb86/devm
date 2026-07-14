@@ -5,11 +5,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/serviceapi/sshconfig"
 )
 
 // Destructiveness selects between preserving the VM (stop) and
@@ -81,6 +83,12 @@ func RunStop(ctx context.Context, d StopDeps, projectID, sandboxName string, mod
 	// process — otherwise in-flight guest writes aren't flushed and
 	// files from just before stop are lost (Bug J).
 	_ = d.ServiceAPIClient.StopVM(ctx, projectID, sandboxName)
+
+	if err := sshconfig.EmitCurrent(ctx, d.Tart,
+		func(id string) (any, error) { return serviceapi.ReadStateSnapshot(id) },
+		serviceapi.StateDir); err != nil {
+		log.Printf("ssh_config emit failed after stop: %v", err)
+	}
 
 	if mode == StopDestroy {
 		if err := d.Tart.Delete(ctx, sandboxName); err != nil {

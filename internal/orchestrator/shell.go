@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/serviceapi/sshconfig"
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 	"github.com/mdubb86/devm/internal/status"
 	"golang.org/x/term"
@@ -121,6 +123,11 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		reporter.Step("ready", false)
 		reporter.Stop()
 		reporter.Clear()
+		if err := sshconfig.EmitCurrent(ctx, d.Tart,
+			func(id string) (any, error) { return serviceapi.ReadStateSnapshot(id) },
+			serviceapi.StateDir); err != nil {
+			log.Printf("ssh_config emit failed on warm attach: %v", err)
+		}
 		return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
 	}
 
@@ -277,6 +284,12 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	}
 	if err := serviceapi.WriteStateSnapshot(cfg.Project.ID, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.ID, err)
+	}
+
+	if err := sshconfig.EmitCurrent(ctx, d.Tart,
+		func(id string) (any, error) { return serviceapi.ReadStateSnapshot(id) },
+		serviceapi.StateDir); err != nil {
+		log.Printf("ssh_config emit failed after cold-start: %v", err)
 	}
 
 	reporter.Step("ready", false)

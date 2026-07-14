@@ -6,15 +6,18 @@ package sshconfig
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
 	"text/template"
 
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 )
@@ -123,4 +126,92 @@ func Emit(entries []Entry) error {
 		return err
 	}
 	return os.Rename(tmpPath, Path())
+}
+
+// EmitCurrent reads the current state snapshot directory + queries
+// tart for running VMs, and emits the intersection. Callers use this
+// from lifecycle hooks instead of composing Entry slices manually.
+//
+// snapshotReader should be a closure that calls serviceapi.ReadStateSnapshot.
+// It's passed as a callback to avoid package-level import cycles (sshconfig
+// is a sub-package of serviceapi, so it cannot import its parent directly
+// in a way that allows the parent to import the sub-package).
+func EmitCurrent(ctx context.Context, tr *tart.Tart,
+	snapshotReader func(projectID string) (any, error),
+	stateDir func() string) error {
+	vms, err := tr.List(ctx)
+	if err != nil {
+		return fmt.Errorf("tart list: %w", err)
+	}
+	// Build vm-name → running lookup.
+	running := make(map[string]bool, len(vms))
+	for _, v := range vms {
+		if v.Running {
+			running[v.Name] = true
+		}
+	}
+	// Walk state dir for known projects.
+	entries, err := listStateProjects(stateDir())
+	if err != nil {
+		return fmt.Errorf("list state projects: %w", err)
+	}
+	var out []Entry
+	for _, projectID := range entries {
+		snap, err := snapshotReader(projectID)
+		if err != nil || snap == nil {
+			continue
+		}
+		// Extract VMName from the snapshot using reflection.
+		// snap should be a *serviceapi.StateSnapshot with field Cfg.Project.VMName.
+		snapVal := reflect.ValueOf(snap)
+		if snapVal.Kind() != reflect.Ptr {
+			continue
+		}
+		cfg := snapVal.Elem().FieldByName("Cfg")
+		if !cfg.IsValid() {
+			continue
+		}
+		project := cfg.FieldByName("Project")
+		if !project.IsValid() {
+			continue
+		}
+		vmNameVal := project.FieldByName("VMName")
+		if !vmNameVal.IsValid() || vmNameVal.Kind() != reflect.String {
+			continue
+		}
+		vmName := vmNameVal.String()
+		if !running[vmName] {
+			continue
+		}
+		ip, err := tr.IP(ctx, vmName)
+		if err != nil || ip == "" {
+			continue
+		}
+		out = append(out, Entry{
+			ProjectID: projectID,
+			VMName:    vmName,
+			VMIP:      ip,
+		})
+	}
+	return Emit(out)
+}
+
+// listStateProjects lists project IDs devm has state snapshots for.
+func listStateProjects(stateDir string) ([]string, error) {
+	entries, err := os.ReadDir(stateDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		out = append(out, strings.TrimSuffix(name, ".json"))
+	}
+	return out, nil
 }
