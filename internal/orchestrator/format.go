@@ -42,6 +42,12 @@ type StatusResult struct {
 	// listeners properly.
 	ProxyHealthy bool
 	ProxyError   string
+
+	// ProxyHealth is the daemon's per-project iron-proxy verdict (from
+	// /handshake): missing, stale, or ok. Nil when the daemon was
+	// unreachable — the format layer omits the line entirely rather
+	// than claiming a status it doesn't have.
+	ProxyHealth *serviceapi.ProxyHealth
 }
 
 // DriftItem is one piece of mismatch between snapshot and live VM state.
@@ -108,6 +114,7 @@ func FormatStatusText(r StatusResult) string {
 	b.WriteString(formatDNSHealth(r))
 	b.WriteString(formatCAHealth(r))
 	b.WriteString(formatProxyHealth(r))
+	b.WriteString(formatIronProxyHealth(r))
 	return b.String()
 }
 
@@ -206,6 +213,28 @@ func formatProxyHealth(r StatusResult) string {
 	return b.String()
 }
 
+// formatIronProxyHealth renders the per-project iron-proxy verdict from
+// /handshake. Silent when ProxyHealth is nil (daemon unreachable, or
+// project mode wasn't queried) — same "don't claim a status we don't
+// have" rule as the other health sections.
+func formatIronProxyHealth(r StatusResult) string {
+	if r.ProxyHealth == nil {
+		return ""
+	}
+	var b strings.Builder
+	switch r.ProxyHealth.Status {
+	case serviceapi.ProxyOK:
+		b.WriteString("\niron-proxy: ok\n")
+	case serviceapi.ProxyMissing:
+		b.WriteString("\niron-proxy: MISSING (run 'devm reconcile')\n")
+	case serviceapi.ProxyStale:
+		b.WriteString("\niron-proxy: STALE (run 'devm reconcile')\n")
+	default:
+		fmt.Fprintf(&b, "\niron-proxy: unknown (%s)\n", r.ProxyHealth.Status)
+	}
+	return b.String()
+}
+
 // FormatReconcileText renders ReconcileResult for human terminals.
 func FormatReconcileText(r ReconcileResult) string {
 	var b strings.Builder
@@ -285,6 +314,10 @@ func FormatStatusJSON(r StatusResult) string {
 		ProxyHealthy bool   `json:"proxy_healthy"`
 		ProxyError   string `json:"proxy_error,omitempty"`
 	}
+	type ironProxy struct {
+		Status       string `json:"status"`
+		NeedsSecrets bool   `json:"needs_secrets"`
+	}
 	type project struct {
 		Sandbox        string                   `json:"sandbox"`
 		State          string                   `json:"state"`
@@ -292,6 +325,7 @@ func FormatStatusJSON(r StatusResult) string {
 		PendingChanges pending                  `json:"pending_changes"`
 		Drift          []drift                  `json:"drift"`
 		Routing        serviceapi.RoutingStatus `json:"routing"`
+		IronProxy      *ironProxy               `json:"iron_proxy,omitempty"`
 	}
 	type body struct {
 		Daemon  daemon   `json:"daemon"`
@@ -337,6 +371,12 @@ func FormatStatusJSON(r StatusResult) string {
 			PendingChanges: pending{Live: r.PendingLive, Recreate: r.PendingRecreate},
 			Drift:          drifts,
 			Routing:        r.Routing,
+		}
+		if r.ProxyHealth != nil {
+			b.Project.IronProxy = &ironProxy{
+				Status:       string(r.ProxyHealth.Status),
+				NeedsSecrets: r.ProxyHealth.NeedsSecrets,
+			}
 		}
 	}
 	out, _ := json.MarshalIndent(b, "", "  ")

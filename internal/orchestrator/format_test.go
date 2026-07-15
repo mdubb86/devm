@@ -104,6 +104,7 @@ func TestFormatStatusJSON(t *testing.T) {
 		Sandbox: "x", State: "running",
 		Sessions:    []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 		PendingLive: 2, PendingRecreate: 1,
+		ProxyHealth: &serviceapi.ProxyHealth{Status: serviceapi.ProxyStale, NeedsSecrets: true},
 	})
 	var parsed map[string]any
 	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
@@ -119,6 +120,17 @@ func TestFormatStatusJSON(t *testing.T) {
 	assert.Contains(t, health, "ca_trusted")
 	assert.Contains(t, health, "dns_healthy")
 	assert.Contains(t, health, "proxy_healthy")
+	ironProxy := proj["iron_proxy"].(map[string]any)
+	assert.Equal(t, "stale", ironProxy["status"])
+	assert.Equal(t, true, ironProxy["needs_secrets"])
+}
+
+func TestFormatStatusJSON_IronProxyNilOmitted(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running"})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	assert.NotContains(t, proj, "iron_proxy")
 }
 
 func TestFormatReconcileJSON(t *testing.T) {
@@ -252,6 +264,39 @@ func TestFormatStatusText_ProxyLine_RedWhenDown(t *testing.T) {
 	out := FormatStatusText(res)
 	assert.Contains(t, out, "proxy: NOT LISTENING")
 	assert.Contains(t, out, "connection refused")
+}
+
+func TestFormatStatusText_IronProxyHealth_OK(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		ProxyHealth: &serviceapi.ProxyHealth{Status: serviceapi.ProxyOK},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "iron-proxy: ok")
+}
+
+func TestFormatStatusText_IronProxyHealth_Missing(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		ProxyHealth: &serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "iron-proxy: MISSING (run 'devm reconcile')")
+}
+
+func TestFormatStatusText_IronProxyHealth_Stale(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		ProxyHealth: &serviceapi.ProxyHealth{Status: serviceapi.ProxyStale},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "iron-proxy: STALE (run 'devm reconcile')")
+}
+
+func TestFormatStatusText_IronProxyHealth_NilOmitsLine(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running"}
+	out := FormatStatusText(res)
+	assert.NotContains(t, out, "iron-proxy:")
 }
 
 func TestFormatDaemonStatus_MismatchColor(t *testing.T) {

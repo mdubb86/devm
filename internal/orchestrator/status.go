@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/mdubb86/devm/internal/reconcile"
@@ -62,6 +63,29 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 	} else {
 		res.ProxyError = err.Error()
 	}
+
+	// Per-project iron-proxy verdict, via /handshake — same daemon
+	// heal primitive daemon-touching commands use (see
+	// cmd/devm/handshake.go's daemonHandshake). status doesn't call
+	// requireDaemonInSync/daemonHandshake (it's the read-only probe,
+	// not a daemon-touching command), but per the "any daemon-touching
+	// command heals" principle it still must self-heal drift it
+	// detects here — so we heal inline, best-effort, and never fail
+	// the status command over it.
+	handshakeCtx, handshakeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	hs, hsErr := c.Handshake(handshakeCtx, cfg.Project.ID)
+	handshakeCancel()
+	if hsErr == nil {
+		res.ProxyHealth = hs.Proxy
+		if hs.Proxy != nil && hs.Proxy.Status != serviceapi.ProxyOK {
+			if herr := HealIronProxy(context.Background(), cfg); herr != nil {
+				fmt.Fprintf(os.Stderr, "warning: iron-proxy heal for %s failed: %v\n", cfg.Project.ID, herr)
+			}
+		}
+	}
+	// hsErr != nil: daemon unreachable — res.ProxyHealth stays nil and
+	// the format layer omits the iron-proxy line rather than claiming
+	// a status we don't have.
 
 	vms, err := tr.List(context.Background())
 	if err != nil {
