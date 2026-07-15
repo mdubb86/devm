@@ -687,8 +687,6 @@ func formatChange(c reconcile.Change) string {
 		default:
 			return fmt.Sprintf("~ template: %s → %s", c.Service, c.Detail)
 		}
-	case reconcile.KindIronProxyDown:
-		return "~ iron-proxy: restoring (missing/stale)"
 	}
 	return "(unknown change)"
 }

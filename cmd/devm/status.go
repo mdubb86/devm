@@ -54,6 +54,10 @@ exit code.`,
 			if anyProjectNeedsReconcile(rows) {
 				os.Exit(ExitReconcileRequired)
 			}
+			// Deliberately returns here without the ExitDaemonDrift check
+			// below: --all is a cross-project daemon RPC (StatusAll), not
+			// the per-project fingerprint probe that project-scoped status
+			// performs via RunStatus.
 			return nil
 		}
 

@@ -83,9 +83,10 @@ TTY/PTY handling is auto-detected from the caller's stdin:
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), cfg); err != nil {
-			return err
-		}
+		// daemonHandshake (fingerprint drift check + iron-proxy warning) is
+		// NOT called here — runShellFlow does it below, before any real
+		// work. Calling it here too would run the check twice and print
+		// any iron-proxy-drift warning twice.
 		if err := requireRunningVM(cmd.Context(), cfg); err != nil {
 			return err
 		}
