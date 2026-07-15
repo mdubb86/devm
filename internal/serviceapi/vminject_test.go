@@ -55,9 +55,13 @@ func TestBuildExtraMountScript_ReadOnly(t *testing.T) {
 	assert.Contains(t, script, "extra_1 /Users/x/ro-thing virtiofs ro,_netdev 0 0")
 }
 
-func TestBuildEnvScript_NoProxyOnly(t *testing.T) {
+func TestBuildEnvScript_SetsSystemWideEnvVars(t *testing.T) {
 	script := buildEnvScript()
 	assert.Contains(t, script, "NO_PROXY=*")
+	// NODE_EXTRA_CA_CERTS makes non-interactive SSH sessions (Orca's
+	// relay, plain `ssh devm-<vm> <cmd>`) trust iron-proxy's re-signed
+	// certs without inheriting from devm.yaml's `env:` block.
+	assert.Contains(t, script, "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt")
 	// Old HTTPS_PROXY-style assertions removed — the transparent
 	// model doesn't use env vars.
 	assert.NotContains(t, script, "HTTPS_PROXY=http")

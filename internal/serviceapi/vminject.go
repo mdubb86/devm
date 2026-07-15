@@ -94,9 +94,17 @@ PATH=/usr/sbin:/sbin:$PATH resize2fs /dev/vda1
 // Setting NO_PROXY in case the workload's image happens to have
 // HTTPS_PROXY set from a base image we don't control — NO_PROXY=*
 // disables it.
+//
+// NODE_EXTRA_CA_CERTS points node at devm's iron-proxy CA. Interactive
+// devm.yaml env inheritance covers `devm shell` sessions, but tools that
+// SSH in with a raw command (Orca's relay, plain `ssh devm-<vm> <cmd>`)
+// bypass that layer. /etc/environment is read by pam_env on ANY PAM
+// session, including non-interactive SSH commands, so setting it here
+// makes the node trust root system-wide.
 func buildEnvScript() string {
 	return `sudo tee /etc/environment > /dev/null <<'EOF'
 NO_PROXY=*
+NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt
 EOF
 `
 }
@@ -105,29 +113,29 @@ EOF
 //
 //  1. `ip devm_nat`:
 //     - `output` chain (guest-originated): rewrites :80 → MAC_HOST:HTTPPort,
-//       :443 → MAC_HOST:HTTPSPort, and UDP:123 → MAC_HOST:ntpPort (SNTP
-//       heal for post-Mac-sleep clock drift). Skips traffic already
-//       destined for MAC_HOST to avoid infinite loops.
+//     :443 → MAC_HOST:HTTPSPort, and UDP:123 → MAC_HOST:ntpPort (SNTP
+//     heal for post-Mac-sleep clock drift). Skips traffic already
+//     destined for MAC_HOST to avoid infinite loops.
 //     - `prerouting` chain (container-originated, i.e. packets arriving on
-//       a docker bridge): same HTTP/HTTPS DNAT to iron-proxy PLUS a
-//       `redirect` for UDP:53 to the guest's dnsmasq on port 53. Scoped
-//       by iifname pattern (`docker*`, `br-*`) so packets arriving from
-//       the Mac (eth0) aren't affected. This is what closes the
-//       container→internet bypass — a container asking for DNS or HTTP
-//       gets funneled through the same iron-proxy path the guest uses,
-//       transparently, without any /etc/docker/daemon.json rewiring.
+//     a docker bridge): same HTTP/HTTPS DNAT to iron-proxy PLUS a
+//     `redirect` for UDP:53 to the guest's dnsmasq on port 53. Scoped
+//     by iifname pattern (`docker*`, `br-*`) so packets arriving from
+//     the Mac (eth0) aren't affected. This is what closes the
+//     container→internet bypass — a container asking for DNS or HTTP
+//     gets funneled through the same iron-proxy path the guest uses,
+//     transparently, without any /etc/docker/daemon.json rewiring.
 //
 //  2. `inet devm_filter`:
 //     - `output` chain (default-deny): allows loopback, 127.0.0.0/8, and
-//       post-DNAT traffic to MAC_HOST at iron-proxy's HTTP/HTTPS/DNS/NTP
-//       ports. Everything else drops. `jump user_output` at the tail
-//       gives recipes an escape hatch.
+//     post-DNAT traffic to MAC_HOST at iron-proxy's HTTP/HTTPS/DNS/NTP
+//     ports. Everything else drops. `jump user_output` at the tail
+//     gives recipes an escape hatch.
 //     - `forward` chain (default-deny for container egress): allows
-//       return traffic (`ct state established,related`) and post-DNAT'd
-//       container HTTP/HTTPS heading to MAC_HOST:iron-proxy. Everything
-//       else drops. `jump user_forward` at the tail for the same
-//       escape-hatch pattern. Container→random-port:N (SSH, custom
-//       APIs) hits the drop — same allow-list model the guest gets.
+//     return traffic (`ct state established,related`) and post-DNAT'd
+//     container HTTP/HTTPS heading to MAC_HOST:iron-proxy. Everything
+//     else drops. `jump user_forward` at the tail for the same
+//     escape-hatch pattern. Container→random-port:N (SSH, custom
+//     APIs) hits the drop — same allow-list model the guest gets.
 //
 // Recipe rules survive across VM reboot because we snapshot each user
 // chain to /etc/nftables.d/*.conf and /etc/nftables.conf ends with
