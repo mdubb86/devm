@@ -113,6 +113,12 @@ if [ "${E2E_ISOLATE:-0}" = "1" ]; then
     E2E_DAEMON_LOG="$ISOLATED_RUNTIME_DIR/daemon.log"
     "$DEVM_BIN" serve --foreground >"$E2E_DAEMON_LOG" 2>&1 &
     E2E_DAEMON_PID=$!
+    # Stable pid file so the restart_isolated_daemon pytest fixture can
+    # find (and later replace) the current isolated daemon's PID
+    # without threading it through env. The isolated on_exit trap below
+    # also reads this file at teardown time so a fixture-relaunched
+    # daemon (new PID, same file) is reaped too.
+    echo "$E2E_DAEMON_PID" > "$ISOLATED_RUNTIME_DIR/daemon.pid"
 
     # Wait up to 10s for the isolated daemon's /health to answer.
     _deadline=$(( $(date +%s) + 10 ))
@@ -162,6 +168,20 @@ if [ "${E2E_ISOLATE:-0}" = "1" ]; then
             sleep 0.2
         done
         kill -KILL "$E2E_DAEMON_PID" 2>/dev/null || true
+
+        # The restart_isolated_daemon pytest fixture may have killed
+        # $E2E_DAEMON_PID and relaunched a replacement, rewriting
+        # daemon.pid with the new PID. Reap that one too — tolerate a
+        # stale/already-dead pid (file missing, empty, or process gone).
+        _current_daemon_pid="$(cat "$ISOLATED_RUNTIME_DIR/daemon.pid" 2>/dev/null || true)"
+        if [ -n "$_current_daemon_pid" ] && [ "$_current_daemon_pid" != "$E2E_DAEMON_PID" ]; then
+            kill -TERM "$_current_daemon_pid" 2>/dev/null || true
+            for _ in 1 2 3 4 5; do
+                if ! kill -0 "$_current_daemon_pid" 2>/dev/null; then break; fi
+                sleep 0.2
+            done
+            kill -KILL "$_current_daemon_pid" 2>/dev/null || true
+        fi
 
         rm -rf "$ISOLATED_RUNTIME_DIR"
         sweep_registry

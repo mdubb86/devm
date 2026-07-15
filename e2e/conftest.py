@@ -6,15 +6,17 @@ BEFORE creating any resource. If a fixture's finalizer doesn't run
 the registry. See internal design notes.
 """
 from __future__ import annotations
+import json
 import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 import pytest
 
@@ -324,6 +326,97 @@ def tart_sandbox(devm, sandbox_name, workspace) -> TartSandbox:
     # handle to inspect state.
 
     yield TartSandbox(name=sandbox_name)
+
+
+@pytest.fixture
+def restart_isolated_daemon(devm_path) -> Callable[[], None]:
+    """Callable that kills and relaunches the isolated `devm serve
+    --foreground` daemon in place, against the same DEVM_RUNTIME_DIR /
+    DEVM_DNS_ADDR run.sh already exported.
+
+    Only meaningful in isolated e2e mode (`E2E_ISOLATE=1`) — there's no
+    launchd/sudo involved, so a plain kill+respawn stands in for what
+    `devm service restart` does in install mode (see test_44/test_73).
+    Relaunching re-runs the daemon's startup adoption path
+    (DiscoverIronProxies + Supervisor.Adopt), which is what puts a
+    still-running iron-proxy into the *adopted* state — per a verified
+    spike, adopted proxies are NOT auto-restarted by the supervisor if
+    they later die, unlike a freshly-spawned one. Skips (not fails)
+    when not in isolated mode, since it has nothing to act on there.
+    """
+    if os.environ.get("E2E_ISOLATE") != "1":
+        pytest.skip("restart_isolated_daemon requires E2E_ISOLATE=1")
+
+    runtime_dir = os.environ.get("DEVM_RUNTIME_DIR")
+    if not runtime_dir:
+        pytest.skip("DEVM_RUNTIME_DIR not set (expected in isolated mode)")
+    pid_file = Path(runtime_dir) / "daemon.pid"
+    log_file = Path(runtime_dir) / "daemon.log"
+
+    def _daemon_running() -> bool:
+        r = subprocess.run(
+            [devm_path, "status", "--json"],
+            capture_output=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return False
+        try:
+            body = json.loads(r.stdout.decode())
+        except ValueError:
+            return False
+        return body.get("daemon", {}).get("running") is True
+
+    def _restart() -> None:
+        old_pid_text = pid_file.read_text().strip() if pid_file.exists() else ""
+        if old_pid_text:
+            old_pid = int(old_pid_text)
+            try:
+                os.kill(old_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(old_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.2)
+            else:
+                try:
+                    os.kill(old_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+        # Relaunch against the SAME DEVM_RUNTIME_DIR/DEVM_DNS_ADDR — both
+        # already exported into this process's environ by run.sh, and
+        # subprocess.Popen inherits the current environ by default.
+        with open(log_file, "a", encoding="utf-8") as log_f:
+            log_f.write("\n=== e2e: restart_isolated_daemon relaunching ===\n")
+            log_f.flush()
+            proc = subprocess.Popen(
+                [devm_path, "serve", "--foreground"],
+                stdout=log_f, stderr=subprocess.STDOUT,
+            )
+        # Overwrite daemon.pid so both this fixture (on a second call)
+        # and run.sh's isolated on_exit trap reap the NEW pid instead
+        # of the one we just killed.
+        pid_file.write_text(str(proc.pid))
+
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if _daemon_running():
+                return
+            if proc.poll() is not None:
+                raise RuntimeError(
+                    f"relaunched isolated daemon exited early (rc={proc.returncode}); "
+                    f"see {log_file}"
+                )
+            time.sleep(0.2)
+        raise RuntimeError(
+            f"relaunched isolated daemon never reported running; see {log_file}"
+        )
+
+    return _restart
 
 
 @pytest.fixture(scope="session")
