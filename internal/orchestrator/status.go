@@ -63,18 +63,6 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 		res.ProxyError = err.Error()
 	}
 
-	// Per-project iron-proxy verdict, via /handshake — read-only report.
-	// `devm reconcile` is the sole heal path; status never mutates.
-	handshakeCtx, handshakeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	hs, hsErr := c.Handshake(handshakeCtx, cfg.Project.ID)
-	handshakeCancel()
-	if hsErr == nil {
-		res.ProxyHealth = hs.Proxy
-	}
-	// hsErr != nil: daemon unreachable — res.ProxyHealth stays nil and
-	// the format layer omits the iron-proxy line rather than claiming
-	// a status we don't have.
-
 	vms, err := tr.List(context.Background())
 	if err != nil {
 		// List failure: report absent; don't surface the error — the
@@ -95,6 +83,25 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 		}
 	}
 	res.State = state
+
+	// Per-project iron-proxy verdict, via /handshake — read-only report.
+	// `devm reconcile` is the sole heal path; status never mutates. A
+	// stopped (or absent) VM has no live proxy by design — reconcile's
+	// KindIronProxyDown handler only fires for a running VM — so we
+	// don't even ask, and res.ProxyHealth stays nil: the format layer
+	// omits the iron-proxy line and the caller's exit-4 check
+	// (res.ProxyHealth != nil && ...) never fires for a stopped project.
+	if state == "running" {
+		handshakeCtx, handshakeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		hs, hsErr := c.Handshake(handshakeCtx, cfg.Project.ID)
+		handshakeCancel()
+		if hsErr == nil {
+			res.ProxyHealth = hs.Proxy
+		}
+		// hsErr != nil: daemon unreachable — res.ProxyHealth stays nil
+		// and the format layer omits the iron-proxy line rather than
+		// claiming a status we don't have.
+	}
 
 	if state != "running" {
 		return res, nil

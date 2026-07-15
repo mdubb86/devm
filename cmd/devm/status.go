@@ -32,8 +32,10 @@ ignores cwd/project.
 
 Exits with code 3 when the daemon binary's Fingerprint differs from
 this CLI's — an actionable signal that ` + "`devm install`" + ` will fix.
-Exits with code 4 when a running project's iron-proxy is MISSING or
-STALE — an actionable signal that ` + "`devm reconcile`" + ` will fix.`,
+Exits with code 4 when the current project's VM is running and its
+iron-proxy is MISSING or STALE — an actionable signal that ` + "`devm reconcile`" + ` will
+fix. A stopped VM has no iron-proxy by design and never triggers this
+exit code.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 
