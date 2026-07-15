@@ -695,7 +695,7 @@ func formatChange(c reconcile.Change) string {
 
 // formatIronProxyChange renders a KindNetwork* or KindSecret* change
 // under the "network egress" section header. Simpler than
-// formatChange's long switch: only five kinds live in this bucket.
+// formatChange's long switch: just the kinds that live in this bucket.
 func formatIronProxyChange(c reconcile.Change) string {
 	switch c.Kind {
 	case reconcile.KindNetworkAdd:

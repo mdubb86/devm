@@ -24,8 +24,7 @@ type ProjectStatus struct {
 
 // RegisterStatusAllHandler wires GET /status/all. sup is queried for
 // each project's iron-proxy health; tr supplies the running-VM set.
-// Read-only report — unlike healNoSecretProxiesAtStartup (removed
-// startheal.go), this never spawns anything.
+// Purely a read-only report — it never spawns anything.
 func RegisterStatusAllHandler(s *Server, sup *supervisor.Supervisor, tr TartLister) {
 	s.Register("/status/all", func(w http.ResponseWriter, r *http.Request) {
 		out, err := listProjectStatuses(r.Context(), sup, tr)
@@ -40,10 +39,7 @@ func RegisterStatusAllHandler(s *Server, sup *supervisor.Supervisor, tr TartList
 
 // listProjectStatuses enumerates every persisted StateSnapshot in
 // StateDir(), joins each against the running-VM set from tr.List, and
-// computes iron-proxy health per project. Mirrors the StateDir ×
-// running-VM join that healNoSecretProxiesAtStartup (startheal.go,
-// removed in 4e69ab9) used to decide what to respawn — this is the
-// read-only report version of that same enumeration.
+// computes iron-proxy health per project.
 func listProjectStatuses(ctx context.Context, sup *supervisor.Supervisor, tr TartLister) ([]ProjectStatus, error) {
 	vms, err := tr.List(ctx)
 	if err != nil {
