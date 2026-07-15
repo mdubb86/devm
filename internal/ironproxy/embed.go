@@ -29,3 +29,8 @@ var embedSha256Hex = func() string {
 	h := sha256.Sum256(ironProxyGz)
 	return hex.EncodeToString(h[:])
 }()
+
+// EmbeddedSha256 is the hex sha256 of the iron-proxy binary embedded in
+// this devm build — devm's identity for "the current iron-proxy". Used
+// to stamp which version a proxy was spawned from, for STALE detection.
+func EmbeddedSha256() string { return embedSha256Hex }

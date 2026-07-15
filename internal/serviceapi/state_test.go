@@ -99,6 +99,16 @@ func TestStateSnapshot_SecretHashesRoundtrip(t *testing.T) {
 	assert.Equal(t, "abc123", read.SecretHashes["TOK"])
 }
 
+func TestStateSnapshotProxyVersionRoundTrips(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	want := StateSnapshot{Cfg: schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}, ProxyVersion: "abc123"}
+	require.NoError(t, WriteStateSnapshot("p", want))
+	got, err := ReadStateSnapshot("p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "abc123", got.ProxyVersion)
+}
+
 func names(entries []os.DirEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {

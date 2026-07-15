@@ -84,6 +84,15 @@ func TestEnsure_RewritesOnSidecarMismatch(t *testing.T) {
 		"target must be replaced with the real iron-proxy, not left as the stale placeholder")
 }
 
+// TestEmbeddedSha256NonEmpty confirms the exported accessor returns the
+// compiled-in hex sha256 of the embedded blob — the value used to stamp
+// StateSnapshot.ProxyVersion for STALE detection.
+func TestEmbeddedSha256NonEmpty(t *testing.T) {
+	h := EmbeddedSha256()
+	require.Len(t, h, 64) // hex sha256
+	require.Regexp(t, "^[0-9a-f]{64}$", h)
+}
+
 // TestEnsure_RewritesWhenTargetMissing confirms that a matching sidecar
 // alone isn't enough — the target file itself must exist, else Ensure
 // re-extracts. Guards against a partial-uninstall state where the

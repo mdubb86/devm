@@ -49,6 +49,12 @@ type StateSnapshot struct {
 	Cfg              schema.Config     `json:"cfg"`
 	TemplateContents map[string]string `json:"template_contents,omitempty"` // basename -> rendered installer content
 	SecretHashes     map[string]string `json:"secret_hashes,omitempty"`     // secret name -> hex sha256(resolved value)
+
+	// ProxyVersion is ironproxy.EmbeddedSha256() as of the last time this
+	// project's iron-proxy was spawned. A running proxy whose stamp differs
+	// from the current EmbeddedSha256() is STALE (spawned by an older devm
+	// build) and should be respawned on the current binary.
+	ProxyVersion string `json:"proxy_version,omitempty"`
 }
 
 // ReadStateSnapshot loads the persisted snapshot for a project. Returns

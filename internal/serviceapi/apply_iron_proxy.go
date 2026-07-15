@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -102,7 +103,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 				// but SecretHashes still needs to move forward so the
 				// next /vm/start renders iron-proxy config from the
 				// current schema without re-detecting this same drift.
-				if err := updateSnapshotSecretHashes(req.ProjectID, hashes); err != nil {
+				if err := updateSnapshotAfterSpawn(req.ProjectID, hashes, false); err != nil {
 					http.Error(w, fmt.Sprintf("update snapshot: %v", err), http.StatusInternalServerError)
 					return
 				}
@@ -164,7 +165,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			return
 		}
 
-		if err := updateSnapshotSecretHashes(req.ProjectID, hashes); err != nil {
+		if err := updateSnapshotAfterSpawn(req.ProjectID, hashes, true); err != nil {
 			http.Error(w, fmt.Sprintf("update snapshot: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -212,12 +213,18 @@ func secretHashesFromBindings(bindings []SecretBinding) map[string]string {
 	return out
 }
 
-// updateSnapshotSecretHashes loads the current StateSnapshot for
+// updateSnapshotAfterSpawn loads the current StateSnapshot for
 // projectID, overwrites SecretHashes, and persists it — preserving Cfg
 // and TemplateContents as-is. Used on every success path — including
 // the VM-stopped no-op — so the daemon's drift baseline always
 // reflects the secrets the CLI most recently resolved from the
 // keychain.
+//
+// When stampVersion is true (a spawn actually happened), also sets
+// ProxyVersion = ironproxy.EmbeddedSha256() so a later STALE check can
+// tell this proxy was (re)spawned on the current devm build. The
+// VM-stopped no-op path passes false: no proxy was touched, so its
+// version stamp — whatever it is — must not change.
 //
 // Requires a snapshot to already exist: cold-start (`devm start` /
 // `devm shell`) seeds one with the real schema.Config before
@@ -226,7 +233,7 @@ func secretHashesFromBindings(bindings []SecretBinding) map[string]string {
 // eventual cold-start cfg look like a pending change on the next
 // reconcile — a teardown-required storm. Fail loud instead and leave
 // the (nonexistent) snapshot untouched.
-func updateSnapshotSecretHashes(projectID string, hashes map[string]string) error {
+func updateSnapshotAfterSpawn(projectID string, hashes map[string]string, stampVersion bool) error {
 	snap, err := ReadStateSnapshot(projectID)
 	if err != nil {
 		return err
@@ -235,6 +242,22 @@ func updateSnapshotSecretHashes(projectID string, hashes map[string]string) erro
 		return fmt.Errorf("apply-iron-proxy called before /vm/start ever ran for project %q — snapshot not seeded", projectID)
 	}
 	snap.SecretHashes = hashes
+	if stampVersion {
+		snap.ProxyVersion = ironproxy.EmbeddedSha256()
+	}
+	return WriteStateSnapshot(projectID, *snap)
+}
+
+// stampProxyVersion records the current iron-proxy embedded-blob hash into
+// the project's snapshot. No-ops on a missing snapshot (a proxy only
+// spawns for a project applied at least once). Used by the daemon-start
+// heal, which spawns outside the apply-iron-proxy handler.
+func stampProxyVersion(projectID string) error {
+	snap, err := ReadStateSnapshot(projectID)
+	if err != nil || snap == nil {
+		return err
+	}
+	snap.ProxyVersion = ironproxy.EmbeddedSha256()
 	return WriteStateSnapshot(projectID, *snap)
 }
 

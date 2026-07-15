@@ -13,6 +13,7 @@ import (
 	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
+	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/provision"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -278,6 +279,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		Cfg:              cfg,
 		TemplateContents: templateContents,
 		SecretHashes:     SecretHashesFromBindings(bindings),
+		ProxyVersion:     ironproxy.EmbeddedSha256(), // stamp the version cold-start spawned
 	}
 	if err := serviceapi.WriteStateSnapshot(cfg.Project.ID, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.ID, err)
