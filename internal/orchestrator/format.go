@@ -473,6 +473,8 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "secret_remove"
 	case reconcile.KindSecretChange:
 		return "secret_change"
+	case reconcile.KindIronProxyDown:
+		return "iron_proxy_down"
 	}
 	return "unknown"
 }
@@ -547,6 +549,8 @@ func formatChange(c reconcile.Change) string {
 		default:
 			return fmt.Sprintf("~ template: %s → %s", c.Service, c.Detail)
 		}
+	case reconcile.KindIronProxyDown:
+		return "~ iron-proxy: restoring (missing/stale)"
 	}
 	return "(unknown change)"
 }
@@ -566,6 +570,8 @@ func formatIronProxyChange(c reconcile.Change) string {
 		return fmt.Sprintf("- secret: %s", c.Key)
 	case reconcile.KindSecretChange:
 		return fmt.Sprintf("~ secret rotated: %s", c.Key)
+	case reconcile.KindIronProxyDown:
+		return "~ iron-proxy: restoring (missing/stale)"
 	}
 	return "(unknown iron-proxy change)"
 }

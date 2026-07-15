@@ -77,6 +77,14 @@ const (
 	KindSecretAdd
 	KindSecretRemove
 	KindSecretChange
+	// KindIronProxyDown is a synthetic change: not produced by diffing
+	// old vs new config, but emitted by the reconcile handler when a
+	// running VM's iron-proxy is missing or stale (see
+	// serviceapi.computeProxyHealth). Carries no config drift of its
+	// own — it exists purely to route through the same
+	// BucketIronProxyRestart / AppliedIronProxy path that respawns
+	// iron-proxy.
+	KindIronProxyDown
 )
 
 // changeBucket is the single source of truth that maps each ChangeKind
@@ -126,6 +134,9 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindSecretAdd:    BucketIronProxyRestart,
 	KindSecretRemove: BucketIronProxyRestart,
 	KindSecretChange: BucketIronProxyRestart,
+	// Synthetic heal signal — same bucket as the rest of the
+	// iron-proxy-restart family since it's applied the same way.
+	KindIronProxyDown: BucketIronProxyRestart,
 }
 
 // Bucket returns the bucket this ChangeKind belongs to.

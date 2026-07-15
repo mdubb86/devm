@@ -14,6 +14,7 @@ import (
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/supervisor"
 )
 
 // VMReconcileRequest is the body shape for POST /vm/reconcile.
@@ -66,8 +67,10 @@ type TartLister interface {
 	List(ctx context.Context) ([]tart.VM, error)
 }
 
-// RegisterReconcileHandler wires POST /vm/reconcile.
-func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, tr TartLister) {
+// RegisterReconcileHandler wires POST /vm/reconcile. sup is consulted
+// (only when the VM is running) to self-heal a missing/stale
+// iron-proxy: see the KindIronProxyDown emit below.
+func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, tr TartLister, sup *supervisor.Supervisor) {
 	s.Register("/vm/reconcile", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -136,6 +139,18 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				ironProxy = append(ironProxy, c)
 			default:
 				teardown = append(teardown, c)
+			}
+		}
+
+		// Self-heal: a running VM whose iron-proxy is missing or stale
+		// gets a synthetic KindIronProxyDown change appended, even when
+		// the config diff itself is empty. This rides the existing
+		// AppliedIronProxy path — the CLI already dispatches
+		// /vm/apply-iron-proxy whenever AppliedIronProxy is non-empty.
+		// Gated on running: a stopped VM has no live iron-proxy to heal.
+		if running {
+			if computeProxyHealth(sup, req.ProjectID).Status != ProxyOK {
+				ironProxy = append(ironProxy, reconcile.Change{Kind: reconcile.KindIronProxyDown})
 			}
 		}
 

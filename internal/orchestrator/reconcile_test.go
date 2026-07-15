@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,8 +74,9 @@ func startReconcileDaemon(t *testing.T) func() {
 	require.NoError(t, err)
 	socket := serviceapi.SocketPath()
 
+	sup := healthyIronProxySupervisor(t, "x")
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterReconcileHandler(srv, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: true, vmName: "x"})
+	serviceapi.RegisterReconcileHandler(srv, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: true, vmName: "x"}, sup)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -88,6 +92,25 @@ func startReconcileDaemon(t *testing.T) func() {
 	require.FileExists(t, socket)
 
 	return func() { cancel(); <-errCh }
+}
+
+// healthyIronProxySupervisor returns a *supervisor.Supervisor that
+// reports projectID's iron-proxy as healthy (computeProxyHealth ==
+// ProxyOK): an adopted PID that's actually alive (this test process
+// itself, so Status() reports Running=true without spawning anything)
+// plus a stub on-disk config file (computeProxyHealth only checks that
+// it exists). Task 4's reconcile self-heal fires whenever the iron-proxy
+// is NOT OK; tests that aren't exercising that heal path need a
+// healthy baseline so it stays out of their way.
+func healthyIronProxySupervisor(t *testing.T, projectID string) *supervisor.Supervisor {
+	t.Helper()
+	sup := supervisor.New("")
+	sup.Adopt(supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}, os.Getpid())
+	cfgPath, err := serviceapi.IronProxyConfigPath(projectID)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(cfgPath), 0o755))
+	require.NoError(t, os.WriteFile(cfgPath, []byte("stub\n"), 0o600))
+	return sup
 }
 
 // fakeTartForSessions returns a *tart.Tart whose `exec` calls always
@@ -169,4 +192,82 @@ func TestRunReconcile_DaemonUnreachable_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, -1, rc)
 	assert.Equal(t, ReconcileResult{}, res)
+}
+
+// startReconcileDaemonWithIronProxyCapture is a variant of
+// startReconcileDaemon that also registers a fake /vm/apply-iron-proxy
+// handler recording the Allowlist it was sent, instead of the real
+// RegisterApplyIronProxyHandler (which requires an on-disk iron-proxy
+// config file + a live spawn). Returns the cleanup func and a pointer
+// to the captured request, populated once RunReconcile dispatches
+// ApplyIronProxy.
+func startReconcileDaemonWithIronProxyCapture(t *testing.T, running bool) (cleanup func(), captured *serviceapi.VMApplyIronProxyRequest) {
+	t.Helper()
+	home, err := os.MkdirTemp("/tmp", "devm-home-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+
+	caDir := filepath.Join(home, "Library", "Application Support", "devm", "ca")
+	require.NoError(t, os.MkdirAll(caDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(caDir, "root.crt"),
+		[]byte("-----BEGIN CERTIFICATE-----\nDUMMY\n-----END CERTIFICATE-----\n"), 0o644))
+
+	_, err = serviceapi.EnsureRuntimeDir()
+	require.NoError(t, err)
+	socket := serviceapi.SocketPath()
+
+	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
+	serviceapi.RegisterReconcileHandler(srv, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(""))
+
+	req := &serviceapi.VMApplyIronProxyRequest{}
+	srv.Register("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(req)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(serviceapi.VMApplyIronProxyResponse{Applied: true, VMRunning: running})
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, socket)
+
+	return func() { cancel(); <-errCh }, req
+}
+
+func TestRunReconcile_DockerTrueCfg_AllowlistIncludesDockerHubHost(t *testing.T) {
+	// Regression: the reconcile heal path used to build the
+	// apply-iron-proxy allowlist from cfg.Network.Domains() directly,
+	// which drops Docker Hub hosts (unlike cold-start's
+	// docker.EffectiveAllowlist). A docker:true project healed via
+	// reconcile must still get its registry hosts, or `docker pull`
+	// breaks post-heal.
+	cleanup, captured := startReconcileDaemonWithIronProxyCapture(t, true)
+	defer cleanup()
+
+	oldCfg := reconcileMinimalCfg()
+	oldCfg.Docker = true
+	oldCfg.Network = schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}}
+	require.NoError(t, serviceapi.WriteStateSnapshot("x", serviceapi.StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newCfg.Network = schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}, {Host: "b.com"}}}
+
+	rc, res, err := RunReconcile(newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	require.NotEmpty(t, res.AppliedIronProxy, "network add is a BucketIronProxyRestart change")
+
+	assert.Contains(t, captured.Allowlist, "registry-1.docker.io",
+		"docker:true reconcile heal must include Docker Hub hosts in the apply-iron-proxy allowlist")
+	assert.Contains(t, captured.Allowlist, "a.com")
+	assert.Contains(t, captured.Allowlist, "b.com")
 }

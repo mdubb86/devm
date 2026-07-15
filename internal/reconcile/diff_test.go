@@ -718,3 +718,7 @@ func TestComputeDiskChange(t *testing.T) {
 func TestDiskChangeKindBucket(t *testing.T) {
 	assert.Equal(t, BucketTeardownShell, KindDiskChange.Bucket())
 }
+
+func TestIronProxyDownKindBucket(t *testing.T) {
+	assert.Equal(t, BucketIronProxyRestart, KindIronProxyDown.Bucket())
+}

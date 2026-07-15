@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -77,7 +78,7 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 	if len(resp.AppliedIronProxy) > 0 {
 		ipReq := serviceapi.VMApplyIronProxyRequest{
 			ProjectID: cfg.Project.ID,
-			Allowlist: cfg.Network.Domains(),
+			Allowlist: docker.EffectiveAllowlist(cfg),
 			Secrets:   bindings,
 		}
 		ipResp, err := client.ApplyIronProxy(context.Background(), ipReq)
