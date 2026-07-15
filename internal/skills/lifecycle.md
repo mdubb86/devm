@@ -51,7 +51,7 @@ If the VM is stopped or absent, `devm shell`:
    | 12 | `enable + start services` |
    | 13 | `apply masks` |
 
-5. Attaches an interactive shell via `tart exec`. The VM auto-stops when the shell exits.
+5. Attaches an interactive shell via `tart exec`. The shell exits but the VM keeps running; use `devm stop` to stop it.
 
 The Provisioner steps are idempotent: re-running them on a stopped VM whose disk is already provisioned (after `devm stop`) is safe and fast (apt packages are already installed, units are already in place).
 
@@ -107,7 +107,7 @@ Reports (text or `--json`):
 
 | Field | What it shows |
 |---|---|
-| Sandbox name | VM name from `project.vm_name` |
+| Sandbox name | VM name from `project.name` |
 | State | `absent` / `stopped` / `running` |
 | Active sessions | TTY, command, PID, owner (running VMs only; probed via `tart exec`) |
 | Pending changes | Count of live-bucket and recreate-bucket pending changes vs. the in-VM snapshot (running VMs only) |
@@ -123,7 +123,7 @@ Reports (text or `--json`):
 Calls `config.Load` without touching the VM. Validates `devm.yaml` and `devm.me.yaml` (if present) against the schema. On success, prints `OK — N service(s) configured` and exits 0.
 
 <!-- migration-note-start -->
-`config.Load` runs `CheckLegacyKeys` before the typed parse. Configs using removed keys get a migration-pointer error rather than a silent parse failure. For example, `network.allowed_domains:` must be renamed to `network.allow:`, `project.sandbox_name:` must be renamed to `project.vm_name:`, and `project.hostname_apex:` is no longer supported.
+`config.Load` runs `CheckUnknownKeys` before the typed parse. Any key that isn't part of the current schema — a typo, or a field removed in a newer devm — hard-fails with an `unknown field "<key>" at <scope>` error listing the valid keys, rather than being silently dropped. There is no per-key migration pointer; removed keys (e.g. `project.id`, `project.vm_name`, `network.allowed_domains`, `project.hostname_apex`) simply surface as unknown fields.
 <!-- migration-note-end -->
 
 ---

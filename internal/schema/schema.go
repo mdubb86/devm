@@ -160,10 +160,10 @@ type Service struct {
 	// need to reach the service.
 	BindIP string `yaml:"-"`
 
-	Hostname  string               `yaml:"hostname,omitempty"`
-	Env       map[string]EnvValue  `yaml:"env,omitempty"`
-	Masks     []Mask               `yaml:"masks,omitempty"`
-	Templates []Template           `yaml:"templates,omitempty"`
+	Hostname  string              `yaml:"hostname,omitempty"`
+	Env       map[string]EnvValue `yaml:"env,omitempty"`
+	Masks     []Mask              `yaml:"masks,omitempty"`
+	Templates []Template          `yaml:"templates,omitempty"`
 
 	// Tart-era service execution fields. Systemd is mutually exclusive
 	// with the declarative fields (Exec, Restart, After, WorkDir, User).
@@ -179,17 +179,17 @@ type Service struct {
 // can decode it as either int or string and populate both Service.Port
 // and Service.BindIP from a single field.
 type serviceYAML struct {
-	Port      yaml.Node            `yaml:"port,omitempty"`
-	Hostname  string               `yaml:"hostname,omitempty"`
-	Env       map[string]EnvValue  `yaml:"env,omitempty"`
-	Masks     []Mask               `yaml:"masks,omitempty"`
-	Templates []Template           `yaml:"templates,omitempty"`
-	Exec      []string             `yaml:"exec,omitempty"`
-	WorkDir   string               `yaml:"workdir,omitempty"`
-	Restart   string               `yaml:"restart,omitempty"`
-	After     []string             `yaml:"after,omitempty"`
-	User      string               `yaml:"user,omitempty"`
-	Systemd   string               `yaml:"systemd,omitempty"`
+	Port      yaml.Node           `yaml:"port,omitempty"`
+	Hostname  string              `yaml:"hostname,omitempty"`
+	Env       map[string]EnvValue `yaml:"env,omitempty"`
+	Masks     []Mask              `yaml:"masks,omitempty"`
+	Templates []Template          `yaml:"templates,omitempty"`
+	Exec      []string            `yaml:"exec,omitempty"`
+	WorkDir   string              `yaml:"workdir,omitempty"`
+	Restart   string              `yaml:"restart,omitempty"`
+	After     []string            `yaml:"after,omitempty"`
+	User      string              `yaml:"user,omitempty"`
+	Systemd   string              `yaml:"systemd,omitempty"`
 }
 
 // serviceKnownFields lists the yaml keys serviceYAML accepts. Kept in
@@ -278,17 +278,17 @@ func (s *Service) decodePortNode(n yaml.Node) error {
 // machinery sees the same shape the user wrote.
 func (s Service) MarshalYAML() (interface{}, error) {
 	out := struct {
-		Port      interface{}          `yaml:"port,omitempty"`
-		Hostname  string               `yaml:"hostname,omitempty"`
-		Env       map[string]EnvValue  `yaml:"env,omitempty"`
-		Masks     []Mask               `yaml:"masks,omitempty"`
-		Templates []Template           `yaml:"templates,omitempty"`
-		Exec      []string             `yaml:"exec,omitempty"`
-		WorkDir   string               `yaml:"workdir,omitempty"`
-		Restart   string               `yaml:"restart,omitempty"`
-		After     []string             `yaml:"after,omitempty"`
-		User      string               `yaml:"user,omitempty"`
-		Systemd   string               `yaml:"systemd,omitempty"`
+		Port      interface{}         `yaml:"port,omitempty"`
+		Hostname  string              `yaml:"hostname,omitempty"`
+		Env       map[string]EnvValue `yaml:"env,omitempty"`
+		Masks     []Mask              `yaml:"masks,omitempty"`
+		Templates []Template          `yaml:"templates,omitempty"`
+		Exec      []string            `yaml:"exec,omitempty"`
+		WorkDir   string              `yaml:"workdir,omitempty"`
+		Restart   string              `yaml:"restart,omitempty"`
+		After     []string            `yaml:"after,omitempty"`
+		User      string              `yaml:"user,omitempty"`
+		Systemd   string              `yaml:"systemd,omitempty"`
 	}{
 		Hostname:  s.Hostname,
 		Env:       s.Env,
@@ -361,17 +361,22 @@ func (s Service) Validate() error {
 }
 
 type Project struct {
-	ID     string `yaml:"id"`
-	VMName string `yaml:"vm_name"`
-	Proxy  string `yaml:"proxy,omitempty"` // "caddy" (default) or "none"
+	Name  string `yaml:"name"`
+	Proxy string `yaml:"proxy,omitempty"` // "caddy" (default) or "none"
 }
 
 func (p Project) Validate() error {
-	if p.ID == "" {
-		return fmt.Errorf("project.id is required")
+	if p.Name == "" {
+		return fmt.Errorf("project.name is required")
 	}
-	if p.VMName == "" {
-		return fmt.Errorf("project.vm_name is required")
+	// name is used as both the devm-owned identity namespace (a path
+	// component under the runtime dir) and the literal Tart VM handle, so
+	// it must be free of whitespace and path-escape characters.
+	if strings.ContainsAny(p.Name, " \t\n\r") {
+		return fmt.Errorf("project.name %q: whitespace not allowed", p.Name)
+	}
+	if strings.ContainsAny(p.Name, "/\\") || strings.Contains(p.Name, "..") {
+		return fmt.Errorf("project.name %q: '/', '\\', and '..' not allowed", p.Name)
 	}
 	switch p.Proxy {
 	case "", "caddy", "none":
@@ -384,19 +389,23 @@ func (p Project) Validate() error {
 // CheckUnknownKeys scans raw devm.yaml bytes for keys that aren't
 // part of the schema and returns an error listing them. Catches the
 // silent-failure class where a user mistypes a key or pastes an
-// example from an old version. Run alongside CheckLegacyKeys before
-// the typed unmarshal.
+// example from an old version, and is the only signal a user gets for a
+// key that was removed in a newer devm — there is no per-key migration
+// pointer.
 //
-// Checks top-level keys + project-block keys. Per-service shape has
-// more legitimate variation (kit-passthrough fields could grow) so
-// it's not validated here.
+// Checks top-level keys + project-block + network-block keys. Per-service
+// shape has more legitimate variation (kit-passthrough fields could grow)
+// so it's not validated here.
 func CheckUnknownKeys(data []byte) error {
 	knownTop := []string{
 		"project", "base_image", "docker", "network", "env",
 		"services", "install", "mounts", "path", "packages", "disk",
 	}
 	knownProject := []string{
-		"id", "vm_name", "proxy",
+		"name", "proxy",
+	}
+	knownNetwork := []string{
+		"allow",
 	}
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
@@ -410,10 +419,14 @@ func CheckUnknownKeys(data []byte) error {
 			return err
 		}
 	}
+	if net, ok := raw["network"].(map[string]any); ok {
+		if err := rejectUnknown(net, knownNetwork, "network"); err != nil {
+			return err
+		}
+	}
 	// base_image: is retained as a top-level key for YAML compatibility
 	// but must NOT have any children — the Tart image pipeline replaces
-	// per-project image config. Any child here is either legacy (caught
-	// by CheckLegacyKeys with a migration message) or a typo.
+	// per-project image config. Any child here is a typo.
 	if bi, ok := raw["base_image"].(map[string]any); ok {
 		if err := rejectUnknown(bi, nil, "base_image"); err != nil {
 			return err
@@ -436,54 +449,6 @@ func rejectUnknown(m map[string]any, known []string, scope string) error {
 			}
 			return fmt.Errorf("unknown field %q at %s — valid: %s",
 				k, scope, strings.Join(known, ", "))
-		}
-	}
-	return nil
-}
-
-// CheckLegacyKeys scans raw devm.yaml bytes for fields that were once
-// supported but have since been removed, returning a migration-pointer
-// error rather than letting yaml.Unmarshal silently drop the value.
-//
-// Run BEFORE the typed unmarshal so the user sees the migration message
-// instead of a downstream validation error.
-func CheckLegacyKeys(data []byte) error {
-	var raw map[string]any
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		// Not a migration concern; let the typed parse surface the real
-		// syntax error.
-		return nil
-	}
-	proj, ok := raw["project"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	if _, hasApex := proj["hostname_apex"]; hasApex {
-		return fmt.Errorf(
-			"project.hostname_apex is no longer supported. " +
-				"Move the value into env: HOSTNAME_APEX and update " +
-				"templates from {{.Project.HostnameApex}} to " +
-				"{{.Env.HOSTNAME_APEX}}.")
-	}
-	if _, hasSN := proj["sandbox_name"]; hasSN {
-		return fmt.Errorf(
-			"project.sandbox_name is no longer supported. " +
-				"Use project.vm_name instead (rename the key in devm.yaml).")
-	}
-	if net, ok := raw["network"].(map[string]any); ok {
-		if _, hasAD := net["allowed_domains"]; hasAD {
-			return fmt.Errorf(
-				"network.allowed_domains is no longer supported. " +
-					"Use network.allow instead (rename the key in devm.yaml).")
-		}
-	}
-	if bi, ok := raw["base_image"].(map[string]any); ok {
-		if _, hasDocker := bi["docker"]; hasDocker {
-			return fmt.Errorf(
-				"base_image.docker is no longer supported. " +
-					"Devm builds a single Tart-based devm-base image via the " +
-					"internal image pipeline; per-project docker fallback was " +
-					"removed. Remove the base_image block from devm.yaml.")
 		}
 	}
 	return nil
@@ -566,8 +531,8 @@ func (n Network) SecretHosts() map[string][]string {
 }
 
 type Config struct {
-	Project   Project              `yaml:"project"`
-	BaseImage BaseImage            `yaml:"base_image,omitempty"`
+	Project   Project   `yaml:"project"`
+	BaseImage BaseImage `yaml:"base_image,omitempty"`
 
 	// Docker turns on the first-class docker feature: devm installs
 	// Docker Engine via the upstream get.docker.com script, registers
@@ -577,9 +542,9 @@ type Config struct {
 	// effective allowlist. Requires teardown to toggle.
 	Docker bool `yaml:"docker,omitempty"`
 
-	Network   Network              `yaml:"network,omitempty"`
-	Env       map[string]EnvValue  `yaml:"env,omitempty"`
-	Services  map[string]Service   `yaml:"services,omitempty"`
+	Network  Network             `yaml:"network,omitempty"`
+	Env      map[string]EnvValue `yaml:"env,omitempty"`
+	Services map[string]Service  `yaml:"services,omitempty"`
 
 	// Packages is a list of apt package names installed automatically
 	// via `apt-get install -y` during Tart VM provisioning.

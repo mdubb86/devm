@@ -18,7 +18,7 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
-def _unix_vm_status(project_id: str, vm_name: str) -> dict:
+def _unix_vm_status(name: str) -> dict:
     """Hit /vm/status on the daemon's Unix socket and return the parsed body."""
     sock_path = str(
         Path.home() / "Library" / "Application Support" / "devm" / "devm.sock"
@@ -36,7 +36,7 @@ def _unix_vm_status(project_id: str, vm_name: str) -> dict:
     conn = UnixHTTPConnection(sock_path)
     conn.request(
         "GET",
-        f"/vm/status?project_id={project_id}&vm_name={vm_name}",
+        f"/vm/status?name={name}",
     )
     resp = conn.getresponse()
     assert resp.status == 200, f"/vm/status returned HTTP {resp.status}"
@@ -69,10 +69,7 @@ def test_vm_status_discovers_from_tart_after_daemon_restart(
     # Hit /vm/status via the daemon's Unix socket. The supervisor's
     # adoption map is empty post-restart, so the handler must fall
     # through to `tart list` to determine the VM's actual state.
-    body = _unix_vm_status(
-        project_id=workspace.slug,
-        vm_name=sandbox_name,
-    )
+    body = _unix_vm_status(sandbox_name)
     assert body["running"] is True, (
         f"vm_status reported not running after daemon restart; body={body}"
     )

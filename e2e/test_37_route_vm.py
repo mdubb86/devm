@@ -73,7 +73,7 @@ def _get_routes() -> dict[str, list]:
 
 def _remove_routes(project_id: str) -> None:
     """POST /routes/remove for the given project."""
-    body = json.dumps({"project_id": project_id}).encode()
+    body = json.dumps({"name": project_id}).encode()
     conn = _UnixSocketHTTP(_SOCKET_PATH)
     conn.request(
         "POST", "/routes/remove", body=body,

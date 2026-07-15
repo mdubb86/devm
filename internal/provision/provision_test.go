@@ -96,7 +96,7 @@ func TestProvisioner_RunsAllStepsOnHappyPath(t *testing.T) {
 	p := &Provisioner{
 		Tart:            tart.New(),
 		VMName:          "myproj-sbx",
-		Cfg:             schema.Config{Project: schema.Project{ID: "myproj", VMName: "myproj-vm"}},
+		Cfg:             schema.Config{Project: schema.Project{Name: "myproj"}},
 		CARootPEM:       []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"),
 		WorkspaceVMPath: "/Users/test/myproj",
 	}
@@ -139,7 +139,7 @@ func TestProvisioner_FailsFastOnTartError(t *testing.T) {
 		Tart:   tart.New(),
 		VMName: "myproj-sbx",
 		Cfg: schema.Config{
-			Project:  schema.Project{ID: "myproj", VMName: "myproj-vm"},
+			Project:  schema.Project{Name: "myproj"},
 			Packages: []string{"jq"}, // forces apt-get update to actually run
 		},
 		CARootPEM:       []byte("fake-pem\n"),
@@ -195,7 +195,7 @@ func TestProvisioner_RoutingOnlyServiceSkipped(t *testing.T) {
 		Tart:   tart.New(),
 		VMName: "myproj-sbx",
 		Cfg: schema.Config{
-			Project: schema.Project{ID: "myproj", VMName: "myproj-vm"},
+			Project: schema.Project{Name: "myproj"},
 			Services: map[string]schema.Service{
 				// Routing-only (no Exec, no Systemd).
 				"routing-only": {Hostname: "x.test", Port: 8080},
@@ -221,7 +221,7 @@ func TestProvisioner_AssertsServicesActive(t *testing.T) {
 	writeFakeTartIsActiveMap(t, dir, map[string]string{"broken": "failed"})
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"broken": {Systemd: "[Service]\nExecStart=/bin/false\n"},
 		},
@@ -322,7 +322,7 @@ func TestProvisioner_InstallStepTimeout_DefaultAndOverride(t *testing.T) {
 			}
 			fakeTart := newDeadlineCapturingTart()
 			cfg := schema.Config{
-				Project: schema.Project{ID: "p", VMName: "p-vm"},
+				Project: schema.Project{Name: "p"},
 				Install: []string{"echo hello"},
 			}
 			p := &Provisioner{Tart: fakeTart, VMName: "p-vm", Cfg: cfg}
@@ -344,7 +344,7 @@ func TestProvisioner_OneShotServiceInactiveIsSuccess(t *testing.T) {
 	writeFakeTartIsActiveMap(t, dir, map[string]string{"oneshot": "inactive"})
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"oneshot": {
 				Exec:    []string{"/bin/true"},
@@ -396,7 +396,7 @@ func TestProvisioner_ApplyMasks_ChownsToServiceUser(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &argvRecordingTart{}
 			cfg := schema.Config{
-				Project: schema.Project{ID: "p", VMName: "p-vm"},
+				Project: schema.Project{Name: "p"},
 				Services: map[string]schema.Service{
 					"svc": {
 						Exec:  []string{"/bin/true"},
@@ -444,7 +444,7 @@ func TestProvisioner_InstallStepsGoThroughWithDevmEnvWrapper(t *testing.T) {
 	// Regression pin for Bug L.
 	fakeTart := newDeadlineCapturingTart()
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Install: []string{"true"},
 	}
 	p := &Provisioner{
@@ -466,7 +466,7 @@ func TestProvisioner_InstallStepTimeout_ErrorMessage(t *testing.T) {
 	t.Setenv("DEVM_INSTALL_STEP_TIMEOUT_S", "1")
 	fakeTart := newSlowTart(2 * time.Second)
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Install: []string{"sleep 2"},
 	}
 	p := &Provisioner{Tart: fakeTart, VMName: "p-vm", Cfg: cfg}

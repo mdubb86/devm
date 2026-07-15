@@ -44,16 +44,16 @@ func TestEnsureProjectKeypair_IdempotentOnSecondCall(t *testing.T) {
 
 func TestEnsureProjectHostKey_WritesKnownHostsLine(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	priv, pub, err := EnsureProjectHostKey("p", "p-vm")
+	priv, pub, err := EnsureProjectHostKey("p")
 	require.NoError(t, err)
 	require.NotEmpty(t, priv)
 	require.NotEmpty(t, pub)
 
-	// known_hosts is one line: "devm-<vm-name> ssh-ed25519 <base64>"
+	// known_hosts is one line: "devm-<name> ssh-ed25519 <base64>"
 	kh, err := os.ReadFile(filepath.Join(ProjectDir("p"), "known_hosts"))
 	require.NoError(t, err)
 	line := strings.TrimSpace(string(kh))
-	assert.True(t, strings.HasPrefix(line, "devm-p-vm ssh-ed25519 "),
+	assert.True(t, strings.HasPrefix(line, "devm-p ssh-ed25519 "),
 		"known_hosts prefix mismatch: %q", line)
 
 	// Pubkey parses.
@@ -63,9 +63,9 @@ func TestEnsureProjectHostKey_WritesKnownHostsLine(t *testing.T) {
 
 func TestEnsureProjectHostKey_Idempotent(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	priv1, pub1, err := EnsureProjectHostKey("p", "p-vm")
+	priv1, pub1, err := EnsureProjectHostKey("p")
 	require.NoError(t, err)
-	priv2, pub2, err := EnsureProjectHostKey("p", "p-vm")
+	priv2, pub2, err := EnsureProjectHostKey("p")
 	require.NoError(t, err)
 	assert.Equal(t, priv1, priv2)
 	assert.Equal(t, pub1, pub2)
@@ -107,19 +107,19 @@ func TestEnsureProjectKeypair_RegeneratesIfPrivkeyMissing(t *testing.T) {
 
 func TestEnsureProjectHostKey_RecreatesKnownHostsIfMissing(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	_, _, err := EnsureProjectHostKey("p", "p-vm")
+	_, _, err := EnsureProjectHostKey("p")
 	require.NoError(t, err)
 
 	// Simulate loss of the known_hosts file.
 	khPath := filepath.Join(ProjectDir("p"), "known_hosts")
 	require.NoError(t, os.Remove(khPath))
 
-	_, _, err = EnsureProjectHostKey("p", "p-vm")
+	_, _, err = EnsureProjectHostKey("p")
 	require.NoError(t, err)
 
 	// Must be recreated with the correct content.
 	kh, err := os.ReadFile(khPath)
 	require.NoError(t, err)
-	assert.True(t, strings.HasPrefix(string(kh), "devm-p-vm ssh-ed25519 "),
+	assert.True(t, strings.HasPrefix(string(kh), "devm-p ssh-ed25519 "),
 		"known_hosts must be recreated on second call when missing")
 }

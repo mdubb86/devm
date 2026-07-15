@@ -19,7 +19,7 @@ func TestHandshake_WithProjectID(t *testing.T) {
 	RegisterHandshakeHandler(srv, build, sup)
 
 	rec := httptest.NewRecorder()
-	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/handshake?project_id=p", nil))
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/handshake?name=p", nil))
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 
 	var resp HandshakeResponse

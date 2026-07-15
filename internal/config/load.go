@@ -12,10 +12,10 @@ import (
 
 // strictDecode runs yaml.v3 with KnownFields(true) so ANY unknown key
 // — top-level, nested, or deeply nested — hard-fails with a yaml-native
-// error. Complements the friendlier CheckUnknownKeys / CheckLegacyKeys
-// passes above (which fire first and cover the common top-level + project
-// typos with nicer messages), and closes the gap those passes leave for
-// nested blocks (services.<name>.*, network.*, base_image.*, etc.).
+// error. Complements the friendlier CheckUnknownKeys pass above (which
+// fires first and covers the common top-level + project + network typos
+// with nicer messages), and closes the gap that pass leaves for nested
+// blocks (services.<name>.*, base_image.*, etc.).
 func strictDecode(data []byte, into any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -34,9 +34,6 @@ func Load(dir string) (schema.Config, error) {
 	if err != nil {
 		return schema.Config{}, fmt.Errorf("read %s: %w", basePath, err)
 	}
-	if err := schema.CheckLegacyKeys(baseBytes); err != nil {
-		return schema.Config{}, fmt.Errorf("%s: %w", basePath, err)
-	}
 	if err := schema.CheckUnknownKeys(baseBytes); err != nil {
 		return schema.Config{}, fmt.Errorf("%s: %w", basePath, err)
 	}
@@ -54,9 +51,6 @@ func Load(dir string) (schema.Config, error) {
 		ovBytes, err := os.ReadFile(overridePath)
 		if err != nil {
 			return schema.Config{}, fmt.Errorf("read %s: %w", overridePath, err)
-		}
-		if err := schema.CheckLegacyKeys(ovBytes); err != nil {
-			return schema.Config{}, fmt.Errorf("%s: %w", overridePath, err)
 		}
 		if err := schema.CheckUnknownKeys(ovBytes); err != nil {
 			return schema.Config{}, fmt.Errorf("%s: %w", overridePath, err)

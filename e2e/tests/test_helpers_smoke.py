@@ -46,8 +46,7 @@ def test_workspace_write_minimal_devmyaml(tmp_path):
     ws = Workspace(tmp_path, slug="example", vm_name="e2e-example-1234")
     ws.write_devmyaml()
     cfg = yaml.safe_load((tmp_path / "devm.yaml").read_text())
-    assert cfg["project"]["id"] == "example"
-    assert cfg["project"]["vm_name"] == "e2e-example-1234"
+    assert cfg["project"]["name"] == "e2e-example-1234"
 
 
 def test_workspace_write_with_services_install(tmp_path):

@@ -19,8 +19,7 @@ since: recipes-v1.0.0
 
 ```yaml
 project:
-  id: myproj
-  vm_name: myproj-vm
+  name: myproj
 docker: true
 ```
 

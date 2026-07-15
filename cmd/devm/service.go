@@ -711,4 +711,3 @@ func init() {
 	// Suppress signal for the long-running serve when run interactively.
 	signal.Ignore(syscall.SIGPIPE)
 }
-

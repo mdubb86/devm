@@ -17,7 +17,7 @@ import (
 // so ProbeDaemon can report drift without orchestrator importing
 // cmd/devm.
 func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string) (StatusResult, error) {
-	vmName := cfg.Project.VMName
+	vmName := cfg.Project.Name
 	res := StatusResult{
 		HasProject: true,
 		Sandbox:    vmName,
@@ -93,7 +93,7 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 	// (res.ProxyHealth != nil && ...) never fires for a stopped project.
 	if state == "running" {
 		handshakeCtx, handshakeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		hs, hsErr := c.Handshake(handshakeCtx, cfg.Project.ID)
+		hs, hsErr := c.Handshake(handshakeCtx, cfg.Project.Name)
 		handshakeCancel()
 		if hsErr == nil {
 			res.ProxyHealth = hs.Proxy
@@ -124,7 +124,7 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 		}
 	}
 	var lastAppliedTemplates map[string]string
-	if stateSnap, sErr := serviceapi.ReadStateSnapshot(cfg.Project.ID); sErr == nil && stateSnap != nil {
+	if stateSnap, sErr := serviceapi.ReadStateSnapshot(cfg.Project.Name); sErr == nil && stateSnap != nil {
 		lastAppliedTemplates = stateSnap.TemplateContents
 	}
 	statusChanges, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot, lastAppliedTemplates, nil, nil)

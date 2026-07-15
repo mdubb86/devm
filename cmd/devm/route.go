@@ -56,7 +56,7 @@ func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error 
 		c := serviceapi.NewClient()
 		ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
 		defer cancel()
-		if err := c.ApplyRoutes(ctx, cfg.Project.ID, routes); err != nil {
+		if err := c.ApplyRoutes(ctx, cfg.Project.Name, routes); err != nil {
 			return fmt.Errorf("apply routes: %w", err)
 		}
 		fmt.Printf("Routing set to %s.\n", mode)
@@ -80,7 +80,7 @@ func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) ([]serviceapi.Rou
 
 	if mode == serviceapi.ModeVM {
 		tr := tart.New()
-		ip, err := tr.IP(context.Background(), cfg.Project.VMName)
+		ip, err := tr.IP(context.Background(), cfg.Project.Name)
 		if err != nil {
 			return nil, fmt.Errorf("get vm ip (is the VM running? `devm shell` first): %w", err)
 		}

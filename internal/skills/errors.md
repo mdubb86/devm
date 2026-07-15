@@ -105,7 +105,7 @@ curl: (6) Could not resolve host: api.example.com
 All outbound traffic from the VM is routed through iron-proxy on the Mac. If the destination is not listed under `network.allow` in `devm.yaml`, iron-proxy blocks it. Check:
 
 1. `devm.yaml` — confirm the host appears under `network.allow`.
-2. Iron-proxy log at `~/Library/Logs/devm/<project-id>-proxy.log` — logs every request decision. Replace `<project-id>` with the value of `project.id` in your `devm.yaml`.
+2. Iron-proxy log at `~/Library/Logs/devm/<project-id>-proxy.log` — logs every request decision. Replace `<project-id>` with the value of `project.name` in your `devm.yaml`.
 
 See `devm skills get routing` for the full iron-proxy network model and allow-list syntax.
 
@@ -133,7 +133,7 @@ If an API call fails with unexpected credentials or a 401, check whether iron-pr
 |---|---|---|
 | Daemon stdout | `~/Library/Logs/com.devm.service.out.log` | Primary daemon output |
 | Daemon stderr | `~/Library/Logs/com.devm.service.err.log` | Start here for daemon crashes and startup failures |
-| Iron-proxy | `~/Library/Logs/devm/<project-id>-proxy.log` | Per-project; logs every proxied request. `<project-id>` = `project.id` in `devm.yaml` |
+| Iron-proxy | `~/Library/Logs/devm/<project-id>-proxy.log` | Per-project; logs every proxied request. `<project-id>` = `project.name` in `devm.yaml` |
 | In-VM systemd | `tart exec <vm> journalctl -u <unit>` | Use `-xe` for recent system errors; use `-u <unit>` for a specific service |
 | Install / uninstall | `~/Library/Logs/devm/install.log` | Subprocess output from `devm install` and `devm uninstall`; last 30 lines are printed automatically on failure |
 

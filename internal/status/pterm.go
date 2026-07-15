@@ -57,12 +57,13 @@ var (
 //
 // Pterm internals (verified against pterm@v0.12.83):
 //
-//   PrefixPrinter.Sprint   → " " + text + " " + " " + message
-//                            = " ✓  message"   (glyph col 2, msg col 5)
-//   SpinnerPrinter render  → seq + " " + message
+//	PrefixPrinter.Sprint   → " " + text + " " + " " + message
+//	                         = " ✓  message"   (glyph col 2, msg col 5)
+//	SpinnerPrinter render  → seq + " " + message
 //
 // With seq " ⠋ ", spinner renders " ⠋ " + " " + message
-//                                = " ⠋  message"  (glyph col 2, msg col 5).
+//
+//	= " ⠋  message"  (glyph col 2, msg col 5).
 //
 // Exact match: both glyph and message sit at the same column on every
 // row, so the running ⠋ doesn't visually jump as it resolves to ✓/✗.

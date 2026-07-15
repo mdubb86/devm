@@ -106,8 +106,7 @@ def test_secret_survives_daemon_restart(workspace, devm, sandbox_name, devm_inst
         # the file directly.
         workspace.devmyaml_path.write_text(textwrap.dedent(f"""\
             project:
-              id: {workspace.slug}
-              vm_name: {workspace.vm_name}
+              name: {workspace.vm_name}
             env:
               AUTH_TOKEN: !secret {secret_name}
             network:

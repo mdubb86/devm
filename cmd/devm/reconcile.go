@@ -80,7 +80,7 @@ var reconcileCmd = &cobra.Command{
 		if res.Flavor == reconcile.FlavorTeardownShell {
 			mode = orchestrator.StopDestroy
 		}
-		if _, err := orchestrator.RunStop(ctx, stopDeps, cfg.Project.ID, cfg.Project.VMName, mode, true); err != nil {
+		if _, err := orchestrator.RunStop(ctx, stopDeps, cfg.Project.Name, mode, true); err != nil {
 			return fmt.Errorf("recreate (%s): %w", res.Flavor, err)
 		}
 

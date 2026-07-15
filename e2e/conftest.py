@@ -151,7 +151,11 @@ def workspace(request, devm_path, sandbox_name) -> Iterator[Workspace]:
     registry.append("workspace", str(path))
     try:
         port_offset = _port_offset_from_file(Path(request.node.fspath).name)
-        ws = Workspace(path, slug=slug, vm_name=sandbox_name, port_offset=port_offset)
+        # project.name is a single field now, serving as both the project
+        # identity (iron-proxy/routes/state keys) and the tart VM name. Use
+        # the unique sandbox_name for both so identity lookups (workspace.slug)
+        # match what the daemon keys on.
+        ws = Workspace(path, slug=sandbox_name, vm_name=sandbox_name, port_offset=port_offset)
         ws.write_devmyaml()  # minimal config; tests can call write_devmyaml again with extras
         yield ws
     finally:

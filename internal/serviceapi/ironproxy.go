@@ -32,11 +32,11 @@ type IronProxyConfig struct {
 	// allow list. The guest's nftables DNAT then rewrites traffic destined
 	// for that IP to iron-proxy's HTTP/HTTPS ports. Required by iron-proxy
 	// 0.45+; empty causes iron-proxy to exit with "dns.proxy_ip is required".
-	DNSProxyIP  string
-	CACertPath  string
-	CAKeyPath   string
-	AllowList   []string
-	Secrets     []IronSecret
+	DNSProxyIP string
+	CACertPath string
+	CAKeyPath  string
+	AllowList  []string
+	Secrets    []IronSecret
 }
 
 // YAML returns the YAML blob iron-proxy reads from -config <path>.
@@ -49,8 +49,8 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 			"proxy_ip": c.DNSProxyIP,
 		},
 		"proxy": map[string]any{
-			"http_listen":         c.HTTPListen,
-			"https_listen":        c.HTTPSListen,
+			"http_listen":  c.HTTPListen,
+			"https_listen": c.HTTPSListen,
 			// Allow loopback upstream so in-VM services can be reached.
 			// Overrides iron-proxy's default deny for 127.0.0.0/8.
 			"upstream_deny_cidrs": []string{},

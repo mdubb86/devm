@@ -87,7 +87,7 @@ func persistentEnv(cfg schema.Config) string {
 
 // shellSingleQuote wraps v in single quotes, escaping any embedded
 // single quote via the POSIX 'closing-quote, backslash-quote, opening-quote'
-// dance: foo'bar → 'foo'\''bar'.
+// dance: foo'bar → 'foo'\”bar'.
 func shellSingleQuote(v string) string {
 	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
 }

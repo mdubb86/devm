@@ -36,8 +36,8 @@ func TestBackoff_DoublesOnRepeatedCrashes(t *testing.T) {
 func TestBackoff_ResetsAfterStablePeriod(t *testing.T) {
 	b := newBackoff(50*time.Millisecond, 5*time.Second)
 	b.onExit(context.Background(), 1)
-	b.delay = 2 * time.Second                        // simulate already-elevated
-	b.lastStart = time.Now().Add(-31 * time.Second)  // simulate stable >30s ago
+	b.delay = 2 * time.Second                       // simulate already-elevated
+	b.lastStart = time.Now().Add(-31 * time.Second) // simulate stable >30s ago
 	start := time.Now()
 	b.onExit(context.Background(), 1) // should reset to base = 50ms
 	elapsed := time.Since(start)

@@ -29,11 +29,10 @@ Required. Identifies the project and configures the local reverse proxy.
 
 | Field | Type | Required | Purpose |
 |---|---|---|---|
-| `id` | string | yes | Project slug used as the devm-owned namespace in shared resources (Caddy `@id`). |
-| `vm_name` | string | yes | Tart VM instance name (the running VM identifier). |
+| `name` | string | yes | Project name. Serves as both the devm-owned identity namespace (secrets, routes, state, iron-proxy, ssh keys) and the literal Tart VM instance name. Must contain no whitespace, `/`, `\`, or `..`. |
 | `proxy` | string | no | `caddy` (default) or `none`. With `none`, `devm route` subcommands print a disabled message and exit 0. |
 
-Validation: `id` and `vm_name` are required; `proxy` must be empty, `caddy`, or `none`.
+Validation: `name` is required; `proxy` must be empty, `caddy`, or `none`.
 
 Changing any `project` field is in the **recreate** bucket — the VM must be deleted and recreated from scratch.
 
@@ -205,5 +204,5 @@ The classification of every change kind is the `changeBucket` map in `internal/o
 ---
 
 <!-- migration-note-start -->
-> **Migration note:** Configs that use `network.allowed_domains:` or `project.sandbox_name:` will fail to load with a specific error message pointing to the replacement key (`network.allow` and `project.vm_name`, respectively).
+> **Migration note:** There is no legacy-key migration layer. Any key not in the current schema — including removed ones like `project.id`, `project.vm_name`, or `network.allowed_domains` — fails to load with an `unknown field` error listing the valid keys for that block.
 <!-- migration-note-end -->

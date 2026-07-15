@@ -58,4 +58,3 @@ func pickBridgeForVM(bridgeAddrs []net.Addr, vmIP string) (string, error) {
 	}
 	return "", fmt.Errorf("no bridge* interface has a subnet containing vm ip %s", vmIP)
 }
-

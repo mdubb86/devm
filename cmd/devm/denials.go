@@ -41,7 +41,7 @@ sandbox is failing to reach an upstream.`,
 		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 		defer cancel()
-		snap, err := serviceapi.NewClient().Denials(ctx, cfg.Project.ID)
+		snap, err := serviceapi.NewClient().Denials(ctx, cfg.Project.Name)
 		if err != nil {
 			return fmt.Errorf("query denials: %w", err)
 		}

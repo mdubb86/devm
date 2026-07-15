@@ -85,12 +85,12 @@ func (c *Client) BuildInfo(ctx context.Context) (Build, error) {
 	return b, nil
 }
 
-// Handshake returns the daemon's build identity and, when projectID is
+// Handshake returns the daemon's build identity and, when name is
 // non-empty, that project's iron-proxy health — one round-trip for the
 // fingerprint-drift check plus the heal decision daemon-touching commands
 // need to make.
-func (c *Client) Handshake(ctx context.Context, projectID string) (HandshakeResponse, error) {
-	resp, err := c.do(ctx, "GET", "/handshake?project_id="+url.QueryEscape(projectID))
+func (c *Client) Handshake(ctx context.Context, name string) (HandshakeResponse, error) {
+	resp, err := c.do(ctx, "GET", "/handshake?name="+url.QueryEscape(name))
 	if err != nil {
 		return HandshakeResponse{}, err
 	}

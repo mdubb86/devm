@@ -29,7 +29,7 @@ const (
 // StopVMClient is the subset of *serviceapi.Client this orchestrator
 // uses. Defined here to allow test fakes; the real client satisfies it.
 type StopVMClient interface {
-	StopVM(ctx context.Context, projectID, vmName string) error
+	StopVM(ctx context.Context, name string) error
 }
 
 // StopDeps wires collaborators for RunStop. In and Out drive the
@@ -46,14 +46,14 @@ type StopDeps struct {
 // `devm teardown` (mode=StopDestroy). autoApprove skips the
 // interactive prompt. Return code: 0 on success; 1 on user refusal.
 //
-// projectID is passed to the daemon admin StopVM call.
-// sandboxName is the Tart VM name used for disk deletion on teardown.
+// name is both the daemon admin StopVM key and the Tart VM name used
+// for disk deletion on teardown.
 //
 // The ctx parameter is currently advisory — it is accepted for
 // signature consistency with RunShell, but the interactive prompt
 // will block on stdin indefinitely; users cancel by ctrl-c at the
 // terminal, which kills the devm process.
-func RunStop(ctx context.Context, d StopDeps, projectID, sandboxName string, mode Destructiveness, autoApprove bool) (int, error) {
+func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness, autoApprove bool) (int, error) {
 	if d.In == nil {
 		d.In = os.Stdin
 	}
@@ -62,7 +62,7 @@ func RunStop(ctx context.Context, d StopDeps, projectID, sandboxName string, mod
 	}
 
 	if !autoApprove {
-		approved, err := promptStopConfirm(d.In, d.Out, sandboxName, mode)
+		approved, err := promptStopConfirm(d.In, d.Out, name, mode)
 		if err != nil {
 			return -1, err
 		}
@@ -78,51 +78,51 @@ func RunStop(ctx context.Context, d StopDeps, projectID, sandboxName string, mod
 	// THIS daemon process. Either way, the user's intent ("stop and
 	// destroy") is still achievable via tart.Delete below.
 	//
-	// vmName is forwarded so the daemon can `tart stop <vmName>` first
-	// for a graceful guest shutdown before SIGTERM'ing the tart-run
-	// process — otherwise in-flight guest writes aren't flushed and
-	// files from just before stop are lost (Bug J).
-	_ = d.ServiceAPIClient.StopVM(ctx, projectID, sandboxName)
+	// name is forwarded so the daemon can `tart stop <name>` first for a
+	// graceful guest shutdown before SIGTERM'ing the tart-run process —
+	// otherwise in-flight guest writes aren't flushed and files from just
+	// before stop are lost (Bug J).
+	_ = d.ServiceAPIClient.StopVM(ctx, name)
 
 	if err := EmitSSHConfig(ctx, d.Tart); err != nil {
 		log.Printf("ssh_config emit failed after stop: %v", err)
 	}
 
 	if mode == StopDestroy {
-		if err := d.Tart.Delete(ctx, sandboxName); err != nil {
+		if err := d.Tart.Delete(ctx, name); err != nil {
 			// "VM does not exist" is the desired end state; treat
 			// as success. tart's stderr for absent VMs is stable:
 			// "the specified VM \"<name>\" does not exist".
 			if strings.Contains(err.Error(), "does not exist") {
-				fmt.Fprintf(d.Out, "VM %s already absent.\n", sandboxName)
+				fmt.Fprintf(d.Out, "VM %s already absent.\n", name)
 			} else {
-				return -1, fmt.Errorf("tart delete %s: %w", sandboxName, err)
+				return -1, fmt.Errorf("tart delete %s: %w", name, err)
 			}
 		} else {
-			fmt.Fprintf(d.Out, "Deleted VM %s.\n", sandboxName)
+			fmt.Fprintf(d.Out, "Deleted VM %s.\n", name)
 		}
 
 		// Remove the daemon's last-applied-cfg snapshot now that the VM
 		// is gone. Without this, a recreated project with the same
-		// projectID inherits a stale baseline and reconcile diffs
+		// name inherits a stale baseline and reconcile diffs
 		// against the OLD vm's config instead of treating everything as
 		// new. Best-effort: log but don't fail the teardown over it —
 		// a stray snapshot only affects the first reconcile after
 		// recreation (degrades to the same "full diff" fallback used
 		// when no snapshot exists at all).
-		if err := serviceapi.RemoveStateCfg(projectID); err != nil {
-			fmt.Fprintf(d.Out, "warning: remove state snapshot for %s: %v\n", projectID, err)
+		if err := serviceapi.RemoveStateCfg(name); err != nil {
+			fmt.Fprintf(d.Out, "warning: remove state snapshot for %s: %v\n", name, err)
 		}
 
 		// Remove the per-project SSH key material. Without this, a
-		// recreated project with the same projectID inherits stale
+		// recreated project with the same name inherits stale
 		// SSH keys. Best-effort: log but continue — leaked SSH material
 		// is inert without a matching authorized_keys in a fresh VM.
-		if err := sshkeys.Remove(projectID); err != nil {
-			log.Printf("sshkeys.Remove(%s): %v", projectID, err)
+		if err := sshkeys.Remove(name); err != nil {
+			log.Printf("sshkeys.Remove(%s): %v", name, err)
 		}
 	} else {
-		fmt.Fprintf(d.Out, "Stopped VM %s. Disk preserved.\n", sandboxName)
+		fmt.Fprintf(d.Out, "Stopped VM %s. Disk preserved.\n", name)
 	}
 
 	return 0, nil

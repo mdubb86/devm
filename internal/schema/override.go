@@ -3,9 +3,8 @@ package schema
 import "gopkg.in/yaml.v3"
 
 type ProjectOverride struct {
-	ID     *string `yaml:"id,omitempty"`
-	VMName *string `yaml:"vm_name,omitempty"`
-	Proxy  *string `yaml:"proxy,omitempty"`
+	Name  *string `yaml:"name,omitempty"`
+	Proxy *string `yaml:"proxy,omitempty"`
 }
 
 type NetworkOverride struct {
@@ -21,30 +20,30 @@ type ServiceOverride struct {
 	BindIP    *string `yaml:"-"`
 	PortIsSet bool    `yaml:"-"`
 
-	Hostname  *string              `yaml:"hostname,omitempty"`
-	Env       map[string]EnvValue  `yaml:"env,omitempty"`
-	Masks     *[]Mask              `yaml:"masks,omitempty"`
-	Templates *[]Template          `yaml:"templates,omitempty"`
-	Exec      *[]string            `yaml:"exec,omitempty"`
-	WorkDir   *string              `yaml:"workdir,omitempty"`
-	Restart   *string              `yaml:"restart,omitempty"`
-	After     *[]string            `yaml:"after,omitempty"`
-	User      *string              `yaml:"user,omitempty"`
-	Systemd   *string              `yaml:"systemd,omitempty"`
+	Hostname  *string             `yaml:"hostname,omitempty"`
+	Env       map[string]EnvValue `yaml:"env,omitempty"`
+	Masks     *[]Mask             `yaml:"masks,omitempty"`
+	Templates *[]Template         `yaml:"templates,omitempty"`
+	Exec      *[]string           `yaml:"exec,omitempty"`
+	WorkDir   *string             `yaml:"workdir,omitempty"`
+	Restart   *string             `yaml:"restart,omitempty"`
+	After     *[]string           `yaml:"after,omitempty"`
+	User      *string             `yaml:"user,omitempty"`
+	Systemd   *string             `yaml:"systemd,omitempty"`
 }
 
 type serviceOverrideYAML struct {
-	Port      yaml.Node            `yaml:"port,omitempty"`
-	Hostname  *string              `yaml:"hostname,omitempty"`
-	Env       map[string]EnvValue  `yaml:"env,omitempty"`
-	Masks     *[]Mask              `yaml:"masks,omitempty"`
-	Templates *[]Template          `yaml:"templates,omitempty"`
-	Exec      *[]string            `yaml:"exec,omitempty"`
-	WorkDir   *string              `yaml:"workdir,omitempty"`
-	Restart   *string              `yaml:"restart,omitempty"`
-	After     *[]string            `yaml:"after,omitempty"`
-	User      *string              `yaml:"user,omitempty"`
-	Systemd   *string              `yaml:"systemd,omitempty"`
+	Port      yaml.Node           `yaml:"port,omitempty"`
+	Hostname  *string             `yaml:"hostname,omitempty"`
+	Env       map[string]EnvValue `yaml:"env,omitempty"`
+	Masks     *[]Mask             `yaml:"masks,omitempty"`
+	Templates *[]Template         `yaml:"templates,omitempty"`
+	Exec      *[]string           `yaml:"exec,omitempty"`
+	WorkDir   *string             `yaml:"workdir,omitempty"`
+	Restart   *string             `yaml:"restart,omitempty"`
+	After     *[]string           `yaml:"after,omitempty"`
+	User      *string             `yaml:"user,omitempty"`
+	Systemd   *string             `yaml:"systemd,omitempty"`
 }
 
 func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {

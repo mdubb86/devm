@@ -30,7 +30,7 @@ type fakeVMAdmin struct {
 	stopErr     error
 }
 
-func (f *fakeVMAdmin) VMStatus(_ context.Context, _, _ string) (serviceapi.VMStatusResponse, error) {
+func (f *fakeVMAdmin) VMStatus(_ context.Context, _ string) (serviceapi.VMStatusResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.statusResp, f.statusErr
@@ -43,11 +43,11 @@ func (f *fakeVMAdmin) StartVM(_ context.Context, _ serviceapi.VMStartRequest) er
 	return f.startErr
 }
 
-func (f *fakeVMAdmin) ApplyEgressEnforcement(_ context.Context, _, _ string) error {
+func (f *fakeVMAdmin) ApplyEgressEnforcement(_ context.Context, _ string) error {
 	return nil
 }
 
-func (f *fakeVMAdmin) StopVM(_ context.Context, _, _ string) error {
+func (f *fakeVMAdmin) StopVM(_ context.Context, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopCalled++
@@ -104,7 +104,7 @@ func (c *stubCmd) Pid() int { return c.pid }
 
 func minimalCfg() schema.Config {
 	return schema.Config{
-		Project:  schema.Project{ID: "x", VMName: "x-vm"},
+		Project:  schema.Project{Name: "x"},
 		Services: map[string]schema.Service{},
 	}
 }
@@ -241,10 +241,10 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	// end of a fully-green cold start, so the first `devm reconcile`
 	// has a baseline instead of diffing against schema.Config{} (which
 	// spuriously surfaces every teardown-bucket kind as pending).
-	got, err := serviceapi.ReadStateSnapshot(minimalCfg().Project.ID)
+	got, err := serviceapi.ReadStateSnapshot(minimalCfg().Project.Name)
 	require.NoError(t, err)
 	require.NotNil(t, got, "cold start must seed the daemon state snapshot")
-	assert.Equal(t, minimalCfg().Project.VMName, got.Cfg.Project.VMName)
+	assert.Equal(t, minimalCfg().Project.Name, got.Cfg.Project.Name)
 }
 
 // TestRunShellColdPath_PostInstallFail_KeepsVM verifies that a
@@ -423,7 +423,7 @@ func TestResolveSecretBindings(t *testing.T) {
 		require.NoError(t, be.Set("proj/gh", "token123"))
 
 		cfg := schema.Config{
-			Project: schema.Project{ID: "proj"},
+			Project: schema.Project{Name: "proj"},
 			Env:     map[string]schema.EnvValue{"TOKEN": secretRef("gh")},
 			Network: schema.Network{
 				Allow: []schema.AllowEntry{
@@ -447,7 +447,7 @@ func TestResolveSecretBindings(t *testing.T) {
 		require.NoError(t, be.Set("proj/mytoken", "secret_value"))
 
 		cfg := schema.Config{
-			Project: schema.Project{ID: "proj"},
+			Project: schema.Project{Name: "proj"},
 			Env:     map[string]schema.EnvValue{"MY_TOKEN": secretRef("mytoken")},
 			Network: schema.Network{
 				Allow: []schema.AllowEntry{
@@ -470,7 +470,7 @@ func TestResolveSecretBindings(t *testing.T) {
 		// Deliberately do NOT seed "proj/missing".
 
 		cfg := schema.Config{
-			Project: schema.Project{ID: "proj"},
+			Project: schema.Project{Name: "proj"},
 			Env:     map[string]schema.EnvValue{"TOKEN": secretRef("missing")},
 		}
 
@@ -485,7 +485,7 @@ func TestResolveSecretBindings(t *testing.T) {
 		require.NoError(t, be.Set("proj/tok", "val"))
 
 		cfg := schema.Config{
-			Project: schema.Project{ID: "proj"},
+			Project: schema.Project{Name: "proj"},
 			Env:     map[string]schema.EnvValue{"T": secretRef("tok")},
 			Network: schema.Network{
 				Allow: []schema.AllowEntry{
@@ -504,7 +504,7 @@ func TestResolveSecretBindings(t *testing.T) {
 	t.Run("no_secrets_returns_nil", func(t *testing.T) {
 		be := secret.NewFake()
 		cfg := schema.Config{
-			Project: schema.Project{ID: "proj"},
+			Project: schema.Project{Name: "proj"},
 			Env:     map[string]schema.EnvValue{"PLAIN": {Literal: "value"}},
 		}
 		bindings, err := resolveSecretBindings(cfg, be)

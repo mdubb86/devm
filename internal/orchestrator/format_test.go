@@ -321,9 +321,9 @@ func TestFormatDaemonStatus_MismatchColor(t *testing.T) {
 
 func TestFormatStatusAllText_TableShape(t *testing.T) {
 	rows := []serviceapi.ProjectStatus{
-		{ProjectID: "sewtrue", VMName: "sewtrue-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
-		{ProjectID: "everstone", VMName: "everstone-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
-		{ProjectID: "ship5", VMName: "ship5-vm", VMRunning: false, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+		{Name: "sewtrue", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+		{Name: "everstone", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+		{Name: "ship5", VMRunning: false, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
 	}
 	UseColor = false
 	out := FormatStatusAllText(rows)
@@ -340,7 +340,7 @@ func TestFormatStatusAllText_TableShape(t *testing.T) {
 
 func TestFormatStatusAllText_StaleShowsReconcileRequired(t *testing.T) {
 	rows := []serviceapi.ProjectStatus{
-		{ProjectID: "p", VMName: "p-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyStale}},
+		{Name: "p", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyStale}},
 	}
 	UseColor = false
 	out := FormatStatusAllText(rows)
@@ -355,8 +355,8 @@ func TestFormatStatusAllText_Empty(t *testing.T) {
 
 func TestFormatStatusAllText_Color(t *testing.T) {
 	rows := []serviceapi.ProjectStatus{
-		{ProjectID: "ok-proj", VMName: "ok-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
-		{ProjectID: "bad-proj", VMName: "bad-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+		{Name: "ok-proj", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+		{Name: "bad-proj", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
 	}
 	t.Run("plain_when_disabled", func(t *testing.T) {
 		UseColor = false
@@ -374,10 +374,10 @@ func TestFormatStatusAllText_Color(t *testing.T) {
 
 func TestFormatStatusAllJSON(t *testing.T) {
 	rows := []serviceapi.ProjectStatus{
-		{ProjectID: "p", VMName: "p-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+		{Name: "p", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
 	}
 	out := FormatStatusAllJSON(rows)
-	assert.Contains(t, out, `"project_id": "p"`)
+	assert.Contains(t, out, `"name": "p"`)
 	assert.Contains(t, out, `"vm_running": true`)
 	assert.Contains(t, out, `"status": "ok"`)
 }

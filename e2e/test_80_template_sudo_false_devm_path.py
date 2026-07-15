@@ -35,7 +35,7 @@ def test_template_sudo_false_writes_devm_owned(workspace, devm, sandbox_name):
     tmpl_dir = workspace.path / "configs"
     tmpl_dir.mkdir()
     (tmpl_dir / "user.conf.tmpl").write_text(
-        "PROJECT={{.Project.ID}}\n"
+        "PROJECT={{.Project.Name}}\n"
         "PORT={{.Service.probe.Port}}\n"
     )
 

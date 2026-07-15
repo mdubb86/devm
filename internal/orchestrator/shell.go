@@ -59,7 +59,7 @@ func resolveSecretBindings(cfg schema.Config, backend secret.Backend) ([]service
 	var bindings []serviceapi.SecretBinding
 	var missing []string
 	for _, n := range names {
-		v, err := backend.Get(cfg.Project.ID + "/" + n)
+		v, err := backend.Get(cfg.Project.Name + "/" + n)
 		if err != nil {
 			missing = append(missing, n)
 			continue
@@ -85,10 +85,10 @@ type ShellDeps struct {
 // VMAdminClient is the subset of serviceapi.Client used by RunShell.
 // Extracted as an interface so tests can inject a fake.
 type VMAdminClient interface {
-	VMStatus(ctx context.Context, projectID, vmName string) (serviceapi.VMStatusResponse, error)
+	VMStatus(ctx context.Context, name string) (serviceapi.VMStatusResponse, error)
 	StartVM(ctx context.Context, req serviceapi.VMStartRequest) error
-	ApplyEgressEnforcement(ctx context.Context, projectID, vmName string) error
-	StopVM(ctx context.Context, projectID, vmName string) error
+	ApplyEgressEnforcement(ctx context.Context, name string) error
+	StopVM(ctx context.Context, name string) error
 }
 
 // DefaultShellDeps returns deps wired for production.
@@ -108,7 +108,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	reporter.Start("starting up")
 
 	// Check VM state via daemon admin.
-	vmStatus, err := d.ServiceAPIClient.VMStatus(ctx, cfg.Project.ID, vmName)
+	vmStatus, err := d.ServiceAPIClient.VMStatus(ctx, cfg.Project.Name)
 	if err != nil {
 		return -1, fmt.Errorf("query vm status: %w", err)
 	}
@@ -157,8 +157,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 
 	diskGB, _ := cfg.DiskSizeGB()
 	if err := d.ServiceAPIClient.StartVM(ctx, serviceapi.VMStartRequest{
-		ProjectID:         cfg.Project.ID,
-		VMName:            vmName,
+		Name:              cfg.Project.Name,
 		WorkspaceHostPath: repoRoot,
 		AllowList:         allowList,
 		Secrets:           bindings,
@@ -178,7 +177,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		teardownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		if stopErr := d.ServiceAPIClient.StopVM(teardownCtx, cfg.Project.ID, vmName); stopErr != nil {
+		if stopErr := d.ServiceAPIClient.StopVM(teardownCtx, cfg.Project.Name); stopErr != nil {
 			// StopVM is best-effort here (VM may be already stopped or
 			// gone), but if it errored for a reason worth diagnosing, we
 			// want the caller to see it — otherwise this class of failure
@@ -207,11 +206,11 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	if err != nil {
 		return teardownOnFail(err, "read CA root")
 	}
-	authPub, err := sshkeys.EnsureProjectKeypair(cfg.Project.ID)
+	authPub, err := sshkeys.EnsureProjectKeypair(cfg.Project.Name)
 	if err != nil {
 		return teardownOnFail(err, "ensure project ssh keypair")
 	}
-	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(cfg.Project.ID, cfg.Project.VMName)
+	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(cfg.Project.Name)
 	if err != nil {
 		return teardownOnFail(err, "ensure project ssh host key")
 	}
@@ -226,7 +225,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		SSHHostPub:          hostPub,
 		WorkspaceVMPath:     repoRoot,
 		EnforceEgress: func(ctx context.Context) error {
-			return d.ServiceAPIClient.ApplyEgressEnforcement(ctx, cfg.Project.ID, vmName)
+			return d.ServiceAPIClient.ApplyEgressEnforcement(ctx, cfg.Project.Name)
 		},
 	}
 	debuglog.Logf("shell", "cold-start: provisioning")
@@ -273,7 +272,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// otherwise succeeded.
 	templateContents, err := render.RenderTemplatesByBasename(cfg, repoRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "state: render templates for seed snapshot %s failed: %v\n", cfg.Project.ID, err)
+		fmt.Fprintf(os.Stderr, "state: render templates for seed snapshot %s failed: %v\n", cfg.Project.Name, err)
 	}
 	snap := serviceapi.StateSnapshot{
 		Cfg:              cfg,
@@ -281,8 +280,8 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		SecretHashes:     SecretHashesFromBindings(bindings),
 		ProxyVersion:     ironproxy.EmbeddedSha256(), // stamp the version cold-start spawned
 	}
-	if err := serviceapi.WriteStateSnapshot(cfg.Project.ID, snap); err != nil {
-		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.ID, err)
+	if err := serviceapi.WriteStateSnapshot(cfg.Project.Name, snap); err != nil {
+		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)
 	}
 
 	if err := EmitSSHConfig(ctx, d.Tart); err != nil {

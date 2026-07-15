@@ -58,20 +58,20 @@ func EnsureProjectKeypair(projectID string) ([]byte, error) {
 	return []byte(pubStr), nil
 }
 
-// EnsureProjectHostKey returns the guest host keypair for projectID,
+// EnsureProjectHostKey returns the guest host keypair for the project,
 // generating it on first call. Idempotent. Also writes known_hosts
-// pinning HostKeyAlias devm-<vmName>.
+// pinning HostKeyAlias devm-<name>.
 //
 // Writes ssh_host_ed25519_key (0600), ssh_host_ed25519_key.pub (0644),
 // and known_hosts (0644, one line).
-func EnsureProjectHostKey(projectID, vmName string) (priv, pub []byte, err error) {
-	if err := validProjectID(projectID); err != nil {
+func EnsureProjectHostKey(name string) (priv, pub []byte, err error) {
+	if err := validProjectID(name); err != nil {
 		return nil, nil, err
 	}
-	if strings.ContainsAny(vmName, " \t\n\r") || vmName == "" {
-		return nil, nil, fmt.Errorf("vmName %q: whitespace or empty not allowed", vmName)
+	if strings.ContainsAny(name, " \t\n\r") {
+		return nil, nil, fmt.Errorf("name %q: whitespace not allowed", name)
 	}
-	dir := ProjectDir(projectID)
+	dir := ProjectDir(name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
@@ -82,7 +82,7 @@ func EnsureProjectHostKey(projectID, vmName string) (priv, pub []byte, err error
 		q, err2 := os.ReadFile(pubPath)
 		if err2 == nil {
 			// Idempotent path: verify known_hosts is still present and correct.
-			wantLine := "devm-" + vmName + " " + strings.TrimSpace(string(q)) + "\n"
+			wantLine := "devm-" + name + " " + strings.TrimSpace(string(q)) + "\n"
 			if existing, err := os.ReadFile(knownPath); err != nil || string(existing) != wantLine {
 				if err := os.WriteFile(knownPath, []byte(wantLine), 0o644); err != nil {
 					return nil, nil, fmt.Errorf("write %s: %w", knownPath, err)
@@ -101,8 +101,8 @@ func EnsureProjectHostKey(projectID, vmName string) (priv, pub []byte, err error
 	if err := os.WriteFile(pubPath, []byte(pubStr), 0o644); err != nil {
 		return nil, nil, fmt.Errorf("write %s: %w", pubPath, err)
 	}
-	// known_hosts: single line pinning HostKeyAlias devm-<vmName>.
-	knownLine := "devm-" + vmName + " " + strings.TrimSpace(pubStr) + "\n"
+	// known_hosts: single line pinning HostKeyAlias devm-<name>.
+	knownLine := "devm-" + name + " " + strings.TrimSpace(pubStr) + "\n"
 	if err := os.WriteFile(knownPath, []byte(knownLine), 0o644); err != nil {
 		return nil, nil, fmt.Errorf("write %s: %w", knownPath, err)
 	}

@@ -20,7 +20,7 @@ import (
 
 func reconcileMinimalCfg() schema.Config {
 	return schema.Config{
-		Project: schema.Project{ID: "x", VMName: "x"},
+		Project: schema.Project{Name: "x"},
 	}
 }
 

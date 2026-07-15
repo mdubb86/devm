@@ -10,7 +10,7 @@ import (
 
 func TestMerge_OverridesProxy(t *testing.T) {
 	base := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p", Proxy: "caddy"},
+		Project: schema.Project{Name: "p", Proxy: "caddy"},
 	}
 	proxy := "none"
 	override := schema.ConfigOverride{
@@ -23,7 +23,7 @@ func TestMerge_OverridesProxy(t *testing.T) {
 
 func TestMergeOverridesService(t *testing.T) {
 	base := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"webapp": {Port: 3000, Hostname: "p.test"},
 		},
@@ -42,7 +42,7 @@ func TestMergeOverridesService(t *testing.T) {
 
 func TestMergeServiceEnvPreservesBaseWhenOverrideAbsent(t *testing.T) {
 	base := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"webapp": {Port: 3000, Env: map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "debug"}}},
 		},
@@ -59,7 +59,7 @@ func TestMergeServiceEnvPreservesBaseWhenOverrideAbsent(t *testing.T) {
 
 func TestMergeServiceEnvMergesKeys(t *testing.T) {
 	base := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"webapp": {Port: 3000, Env: map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "debug"}}},
 		},
@@ -112,7 +112,7 @@ func TestServiceOverrideExecReplacement(t *testing.T) {
 
 func TestMerge_OverridesPath(t *testing.T) {
 	base := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p"},
+		Project: schema.Project{Name: "p"},
 		Path:    []string{"/r/.cargo/bin"},
 	}
 	devPath := []string{"/Users/dev/local/bin", "/r/.cargo/bin"}
@@ -125,7 +125,7 @@ func TestMerge_OverridesPath(t *testing.T) {
 
 func TestMerge_PreservesPathWhenOverrideNil(t *testing.T) {
 	base := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p"},
+		Project: schema.Project{Name: "p"},
 		Path:    []string{"/r/.cargo/bin"},
 	}
 	override := schema.ConfigOverride{} // no Path override

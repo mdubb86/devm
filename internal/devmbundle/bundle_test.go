@@ -16,7 +16,7 @@ import (
 
 func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Env: map[string]schema.EnvValue{
 			"FOO": {Literal: "bar"},
 		},
@@ -26,10 +26,10 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 
 	entries := readTar(t, body)
 	want := map[string]int64{
-		".env":                        0o644,
-		"scripts/with-devm-env":       0o755,
+		".env":                         0o644,
+		"scripts/with-devm-env":        0o755,
 		"scripts/install-templates.sh": 0o755,
-		"install.sh":                  0o755,
+		"install.sh":                   0o755,
 	}
 	for path, mode := range want {
 		e, ok := entries[path]
@@ -42,7 +42,7 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 
 func TestBuild_EnvReflectsConfig(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Env: map[string]schema.EnvValue{
 			"MYVAR": {Literal: "myval"},
 		},
@@ -60,7 +60,7 @@ func TestBuild_Deterministic(t *testing.T) {
 	// Two builds of the same cfg must produce byte-identical tars —
 	// required so future callers can gate re-pipe on content hash
 	// without spurious drift.
-	cfg := schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
 	a, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 	b, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
@@ -78,10 +78,10 @@ func TestBuild_TemplatePathsAreFlatBaseNames(t *testing.T) {
 	// templates flow.
 	repoRoot := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "tmpl"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "tmpl", "nginx.conf"), []byte("hello {{.Project.ID}}"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "tmpl", "nginx.conf"), []byte("hello {{.Project.Name}}"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"web": {
 				Templates: []schema.Template{{
@@ -117,7 +117,7 @@ type tarEntry struct {
 
 func TestBuild_TakesBuildInput_Compat(t *testing.T) {
 	// Same inputs as the old (cfg, repoRoot) form should yield the same tar.
-	cfg := schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
 	in := BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"}
 	got, err := Build(in)
 	require.NoError(t, err)
@@ -147,7 +147,7 @@ func tarEntryNames(t *testing.T, blob []byte) []string {
 
 func TestBuild_TarContainsCA(t *testing.T) {
 	in := BuildInput{
-		Cfg:       schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}},
+		Cfg:       schema.Config{Project: schema.Project{Name: "p"}},
 		RepoRoot:  "/tmp/repo",
 		CARootPEM: []byte("-----BEGIN CERTIFICATE-----\nDUMMYDATA\n-----END CERTIFICATE-----\n"),
 	}
@@ -180,7 +180,7 @@ func readTarEntry(t *testing.T, blob []byte, name string) []byte {
 
 func TestBuild_TarContainsCaddyfile(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"web": {Hostname: "web.local", Port: 8080},
 		},
@@ -194,7 +194,7 @@ func TestBuild_TarContainsCaddyfile(t *testing.T) {
 
 func TestBuild_TarContainsDnsmasqDropIn(t *testing.T) {
 	blob, err := Build(BuildInput{
-		Cfg:      schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}},
+		Cfg:      schema.Config{Project: schema.Project{Name: "p"}},
 		RepoRoot: "/tmp/repo",
 	})
 	require.NoError(t, err)
@@ -204,7 +204,7 @@ func TestBuild_TarContainsDnsmasqDropIn(t *testing.T) {
 
 func TestBuild_TarContainsServiceUnits(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"web":     {Exec: []string{"/bin/true"}, Hostname: "w.local", Port: 80},
 			"routing": {Hostname: "r.local", Port: 81}, // no Exec/Systemd — skipped
@@ -236,7 +236,7 @@ func readTar(t *testing.T, blob []byte) map[string]tarEntry {
 
 func TestBuild_ServiceUnit_InheritsCfgEnv(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Env: map[string]schema.EnvValue{
 			"GITHUB_TOKEN": {Literal: "xyz"}, // cfg-level env
 		},
@@ -261,7 +261,7 @@ func TestBuild_ServiceUnit_InheritsCfgEnv(t *testing.T) {
 func TestBuild_ServiceUnit_PerServiceEnvOverridesCfg(t *testing.T) {
 	// Same key in cfg.Env and svc.Env → svc.Env wins.
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Env:     map[string]schema.EnvValue{"K": {Literal: "cfg-value"}},
 		Services: map[string]schema.Service{
 			"web": {
@@ -280,7 +280,7 @@ func TestBuild_ServiceUnit_PerServiceEnvOverridesCfg(t *testing.T) {
 
 func TestBuild_TarContainsDockerShims_WhenDockerTrue(t *testing.T) {
 	blob, err := Build(BuildInput{
-		Cfg:            schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}, Docker: true},
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}, Docker: true},
 		RepoRoot:       "/tmp/repo",
 		DockerRuncShim: []byte("runc-shim-elf"),
 		DockerCLIShim:  []byte("docker-shim-elf"),
@@ -294,7 +294,7 @@ func TestBuild_TarContainsDockerShims_WhenDockerTrue(t *testing.T) {
 
 func TestBuild_TarOmitsDockerShims_WhenDockerFalse(t *testing.T) {
 	blob, err := Build(BuildInput{
-		Cfg:            schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}, Docker: false},
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}, Docker: false},
 		RepoRoot:       "/tmp/repo",
 		DockerRuncShim: []byte("runc-shim-elf"),
 		DockerCLIShim:  []byte("docker-shim-elf"),
@@ -307,7 +307,7 @@ func TestBuild_TarOmitsDockerShims_WhenDockerFalse(t *testing.T) {
 
 func TestBuild_TarContainsSSHMaterial(t *testing.T) {
 	blob, err := Build(BuildInput{
-		Cfg:                 schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}},
+		Cfg:                 schema.Config{Project: schema.Project{Name: "p"}},
 		RepoRoot:            "/tmp/repo",
 		SSHAuthorizedPubkey: []byte("ssh-ed25519 AAAA...\n"),
 		SSHHostPriv:         []byte("-----BEGIN OPENSSH PRIVATE KEY-----\n..."),

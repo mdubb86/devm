@@ -17,10 +17,7 @@ func cfgWithServices(svcs map[string]schema.Service) schema.Config {
 
 func cfgWith(services map[string]schema.Service) schema.Config {
 	return schema.Config{
-		Project: schema.Project{
-			ID:     "x",
-			VMName: "x-vm",
-		},
+		Project:  schema.Project{Name: "x"},
 		Services: services,
 	}
 }
@@ -390,8 +387,8 @@ func TestComputeImageChange(t *testing.T) {
 	// BaseImage is now an empty struct; image changes are detected
 	// via identity change or install changes. Test that no KindImageChange
 	// is emitted for identical (empty) BaseImage structs.
-	old := schema.Config{Project: schema.Project{ID: "p", VMName: "p"}}
-	new := schema.Config{Project: schema.Project{ID: "p", VMName: "p"}}
+	old := schema.Config{Project: schema.Project{Name: "p"}}
+	new := schema.Config{Project: schema.Project{Name: "p"}}
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	for _, c := range changes {
@@ -400,8 +397,8 @@ func TestComputeImageChange(t *testing.T) {
 }
 
 func TestComputeIdentityChange(t *testing.T) {
-	old := schema.Config{Project: schema.Project{ID: "p1", VMName: "s1"}}
-	new := schema.Config{Project: schema.Project{ID: "p2", VMName: "s1"}}
+	old := schema.Config{Project: schema.Project{Name: "p1"}}
+	new := schema.Config{Project: schema.Project{Name: "p2"}}
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	assert.Len(t, changes, 1)
@@ -433,7 +430,7 @@ func TestComputeDockerChange_NoChange(t *testing.T) {
 
 func TestComputeAllChanges_NoOp(t *testing.T) {
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"api": {Port: 8080, Env: map[string]schema.EnvValue{"X": {Literal: "y"}}},
 		},
@@ -468,10 +465,10 @@ func TestKindTemplateChange_BucketIsLive(t *testing.T) {
 
 func TestComputeTemplateChanges_NewTemplate(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x {{.Project.ID}}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x {{.Project.Name}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -488,10 +485,10 @@ func TestComputeTemplateChanges_NewTemplate(t *testing.T) {
 
 func TestComputeTemplateChanges_NoChanges(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x {{.Project.ID}}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x {{.Project.Name}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -515,10 +512,10 @@ func TestComputeTemplateChanges_NoChanges(t *testing.T) {
 func TestComputeTemplateChanges_ContentChanged_SurfacesAsChangeNotAdd(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "foo.tmpl")
-	require.NoError(t, os.WriteFile(src, []byte("v1 {{.Project.ID}}\n"), 0o644))
+	require.NoError(t, os.WriteFile(src, []byte("v1 {{.Project.Name}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -529,7 +526,7 @@ func TestComputeTemplateChanges_ContentChanged_SurfacesAsChangeNotAdd(t *testing
 	// reconcile.
 	baseline, err := render.RenderTemplatesByBasename(cfg, dir)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(src, []byte("v2 {{.Project.ID}}\n"), 0o644))
+	require.NoError(t, os.WriteFile(src, []byte("v2 {{.Project.Name}}\n"), 0o644))
 
 	got, err := ComputeTemplateChanges(cfg, dir, baseline)
 	require.NoError(t, err)
@@ -548,7 +545,7 @@ func TestComputeTemplateChanges_Removed(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x"), 0o644))
 
 	cfg1 := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -572,10 +569,10 @@ func TestComputeTemplateChanges_Removed(t *testing.T) {
 func TestComputeAllChanges_IncludesTemplates(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"),
-		[]byte("hello {{.Project.ID}}\n"), 0o644))
+		[]byte("hello {{.Project.Name}}\n"), 0o644))
 
 	cfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p"},
+		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
@@ -676,11 +673,11 @@ func TestComputeSecretChanges_Empty(t *testing.T) {
 
 func TestComputeAllChanges_IncludesNetworkAndSecretChanges(t *testing.T) {
 	old := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}},
 	}
 	new := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}, {Host: "b.com"}}},
 	}
 	oldHashes := map[string]string{"TOK": "h_old"}
@@ -696,7 +693,7 @@ func TestComputeAllChanges_IncludesNetworkAndSecretChanges(t *testing.T) {
 
 func TestComputeDiskChange(t *testing.T) {
 	mk := func(disk string) schema.Config {
-		return schema.Config{Project: schema.Project{ID: "x", VMName: "x-vm"}, Disk: disk}
+		return schema.Config{Project: schema.Project{Name: "x"}, Disk: disk}
 	}
 	// unset -> unset: no change
 	assert.Empty(t, computeDiskChange(mk(""), mk("")))

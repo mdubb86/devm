@@ -60,7 +60,7 @@ func TestVMStatus_Empty(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	status, err := c.VMStatus(ctx, "proj-a", "")
+	status, err := c.VMStatus(ctx, "proj-a")
 	require.NoError(t, err)
 	assert.False(t, status.Present)
 	assert.False(t, status.Running)
@@ -89,9 +89,9 @@ func TestVMStatus_MissingProjectID(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
-// TestVMStart_MissingFields verifies that /vm/start rejects requests
-// that omit required fields.
-func TestVMStart_MissingFields(t *testing.T) {
+// TestVMStart_MissingName verifies that /vm/start rejects a request
+// that omits the required name.
+func TestVMStart_MissingName(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	tr := tart.New()
@@ -104,13 +104,8 @@ func TestVMStart_MissingFields(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Missing vm_name.
-	err := c.StartVM(ctx, VMStartRequest{ProjectID: "proj-a"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "vm/start")
-
-	// Missing project_id.
-	err = c.StartVM(ctx, VMStartRequest{VMName: "proj-a-vm"})
+	// Missing name → 400.
+	err := c.StartVM(ctx, VMStartRequest{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "vm/start")
 }
@@ -129,7 +124,7 @@ func TestVMStop_MissingProjectID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err := c.StopVM(ctx, "", "")
+	err := c.StopVM(ctx, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "vm/stop")
 }
@@ -159,13 +154,13 @@ func TestVMStop_WithVMName_CallsTartStop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	err := c.StopVM(ctx, "proj-a", "proj-a-vm")
+	err := c.StopVM(ctx, "proj-a")
 	require.NoError(t, err)
 
 	logBytes, err := os.ReadFile(logPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(logBytes), "stop proj-a-vm",
-		"handler must call `tart stop <vm_name>` for a graceful guest shutdown")
+	assert.Contains(t, string(logBytes), "stop proj-a",
+		"handler must call `tart stop <name>` for a graceful guest shutdown")
 }
 
 // TestVMStop_NotFound verifies /vm/stop returns 500 for an unknown
@@ -187,7 +182,7 @@ func TestVMStop_NotFound(t *testing.T) {
 	// idempotent — both the iron-proxy and VM stops treat
 	// supervisor.ErrNotFound as success so re-tearing-down or
 	// stopping a project that was never started is silent.
-	err := c.StopVM(ctx, "nonexistent-project", "")
+	err := c.StopVM(ctx, "nonexistent-project")
 	require.NoError(t, err)
 }
 
@@ -241,7 +236,7 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	createTestCA(t)
 
 	oldCfg := schema.Config{
-		Project: schema.Project{ID: "p", VMName: "p-vm"},
+		Project: schema.Project{Name: "p"},
 		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
 	}
 	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
@@ -254,7 +249,7 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	socket := filepath.Join(dir, "s.sock")
 
 	srv := NewServer(socket, Build{Version: "test-version"})
-	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"}, supervisor.New(""))
+	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -275,7 +270,7 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	defer rcancel()
 
 	resp, err := c.Reconcile(rctx, VMReconcileRequest{
-		ProjectID: "p", VMName: "p-vm", Cfg: newCfg, WorkspaceHostPath: "/tmp/repo",
+		Name: "p", Cfg: newCfg, WorkspaceHostPath: "/tmp/repo",
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.Applied, 1)
@@ -295,7 +290,7 @@ func TestClientReconcile_MissingFields(t *testing.T) {
 	socket := filepath.Join(dir, "s.sock")
 
 	srv := NewServer(socket, Build{})
-	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{}, &fakeTartList{running: true, vmName: "p-vm"}, supervisor.New(""))
+	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -351,7 +346,7 @@ func TestClientApplyIronProxy_ReadsResponse(t *testing.T) {
 	srv.mux.HandleFunc("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {
 		var req VMApplyIronProxyRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		assert.Equal(t, "p", req.ProjectID)
+		assert.Equal(t, "p", req.Name)
 		writeJSON(w, VMApplyIronProxyResponse{Applied: true, Revived: false, VMRunning: true})
 	})
 
@@ -370,8 +365,7 @@ func TestClientApplyIronProxy_ReadsResponse(t *testing.T) {
 	require.FileExists(t, sock)
 
 	c := NewClientWithSocket(sock)
-	resp, err := c.ApplyIronProxy(context.Background(), VMApplyIronProxyRequest{
-		ProjectID: "p",
+	resp, err := c.ApplyIronProxy(context.Background(), VMApplyIronProxyRequest{Name: "p",
 		Allowlist: []string{"a.com"},
 	})
 	require.NoError(t, err)

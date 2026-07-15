@@ -42,7 +42,7 @@ discarded. Re-launch with devm shell. Use --yes (-y) to skip the prompt.`,
 			ServiceAPIClient: serviceapi.NewClient(),
 			// In/Out left nil → os.Stdin/os.Stderr.
 		}
-		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.ID, cfg.Project.VMName, orchestrator.StopPreserve, stopYes)
+		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.Name, orchestrator.StopPreserve, stopYes)
 		if err != nil {
 			return err
 		}

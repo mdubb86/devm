@@ -63,17 +63,17 @@ func startStatusAllDaemon(t *testing.T, running map[string]bool) func() {
 // itself since that os.Exit()s on drift — see anyProjectNeedsReconcile
 // for the unit-tested decision logic.
 func TestStatusAll_ClientRoundTrip(t *testing.T) {
-	cleanup := startStatusAllDaemon(t, map[string]bool{"p-vm": true})
+	cleanup := startStatusAllDaemon(t, map[string]bool{"p": true})
 	defer cleanup()
 
 	require.NoError(t, serviceapi.WriteStateSnapshot("p", serviceapi.StateSnapshot{
-		Cfg: schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}},
+		Cfg: schema.Config{Project: schema.Project{Name: "p"}},
 	}))
 
 	rows, err := serviceapi.NewClient().StatusAll(context.Background())
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, "p", rows[0].ProjectID)
+	assert.Equal(t, "p", rows[0].Name)
 	assert.True(t, rows[0].VMRunning)
 	assert.Equal(t, serviceapi.ProxyMissing, rows[0].Proxy.Status)
 	assert.True(t, anyProjectNeedsReconcile(rows))
@@ -97,37 +97,37 @@ func TestAnyProjectNeedsReconcile(t *testing.T) {
 		{
 			name: "all ok",
 			rows: []serviceapi.ProjectStatus{
-				{ProjectID: "a", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+				{Name: "a", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
 			},
 			want: false,
 		},
 		{
 			name: "running missing",
 			rows: []serviceapi.ProjectStatus{
-				{ProjectID: "a", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+				{Name: "a", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
 			},
 			want: true,
 		},
 		{
 			name: "running stale",
 			rows: []serviceapi.ProjectStatus{
-				{ProjectID: "a", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyStale}},
+				{Name: "a", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyStale}},
 			},
 			want: true,
 		},
 		{
 			name: "stopped missing is excluded",
 			rows: []serviceapi.ProjectStatus{
-				{ProjectID: "a", VMRunning: false, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+				{Name: "a", VMRunning: false, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
 			},
 			want: false,
 		},
 		{
 			name: "mixed - one bad running",
 			rows: []serviceapi.ProjectStatus{
-				{ProjectID: "a", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
-				{ProjectID: "b", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
-				{ProjectID: "c", VMRunning: false, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+				{Name: "a", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+				{Name: "b", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+				{Name: "c", VMRunning: false, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
 			},
 			want: true,
 		},

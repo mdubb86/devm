@@ -16,8 +16,7 @@ import (
 // health (from the supervisor) for every project the daemon has a
 // persisted StateSnapshot for. Backs `devm status --all`.
 type ProjectStatus struct {
-	ProjectID string      `json:"project_id"`
-	VMName    string      `json:"vm_name"`
+	Name      string      `json:"name"`
 	VMRunning bool        `json:"vm_running"`
 	Proxy     ProxyHealth `json:"proxy"`
 }
@@ -73,9 +72,8 @@ func listProjectStatuses(ctx context.Context, sup *supervisor.Supervisor, tr Tar
 			continue
 		}
 		out = append(out, ProjectStatus{
-			ProjectID: projectID,
-			VMName:    snap.Cfg.Project.VMName,
-			VMRunning: running[snap.Cfg.Project.VMName],
+			Name:      projectID,
+			VMRunning: running[projectID],
 			Proxy:     computeProxyHealth(sup, projectID),
 		})
 	}

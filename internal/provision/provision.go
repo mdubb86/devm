@@ -453,7 +453,7 @@ func (p *Provisioner) applyMasks(ctx context.Context, w io.Writer) error {
 		}
 		for _, m := range svc.Masks {
 			maskHostPath := filepath.Join("/var/devm/masks",
-				p.Cfg.Project.ID, svcName, m.Path)
+				p.Cfg.Project.Name, svcName, m.Path)
 			mountTarget := filepath.Join(p.WorkspaceVMPath, m.Path)
 			script := strings.Join([]string{
 				"sudo", "mkdir", "-p", maskHostPath, "&&",

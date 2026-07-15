@@ -74,7 +74,10 @@ func TestRoutes_ConcurrentReadWrite_NoRace(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		wg.Add(2)
 		go func() { defer wg.Done(); r.Lookup("app.test") }()
-		go func() { defer wg.Done(); r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM}}) }()
+		go func() {
+			defer wg.Done()
+			r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM}})
+		}()
 	}
 	wg.Wait()
 }

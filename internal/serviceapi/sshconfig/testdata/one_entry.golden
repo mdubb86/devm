@@ -2,13 +2,13 @@
 # overwritten. Include from ~/.ssh/config as:
 #     Include "~/Library/Application Support/devm/ssh_config"
 
-Host devm-myproj-vm
+Host devm-myproj
     HostName             192.168.64.7
     User                 devm
     Port                 22
     IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/myproj/id_ed25519"
     UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/myproj/known_hosts"
-    HostKeyAlias         devm-myproj-vm
+    HostKeyAlias         devm-myproj
     StrictHostKeyChecking yes
     IdentitiesOnly       yes
 

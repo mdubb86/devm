@@ -2,33 +2,33 @@
 # overwritten. Include from ~/.ssh/config as:
 #     Include "~/Library/Application Support/devm/ssh_config"
 
-Host devm-alpha-vm
+Host devm-alpha
     HostName             192.168.64.7
     User                 devm
     Port                 22
-    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/a/id_ed25519"
-    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/a/known_hosts"
-    HostKeyAlias         devm-alpha-vm
+    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/alpha/id_ed25519"
+    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/alpha/known_hosts"
+    HostKeyAlias         devm-alpha
     StrictHostKeyChecking yes
     IdentitiesOnly       yes
 
-Host devm-bravo-vm
+Host devm-bravo
     HostName             192.168.64.8
     User                 devm
     Port                 22
-    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/b/id_ed25519"
-    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/b/known_hosts"
-    HostKeyAlias         devm-bravo-vm
+    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/bravo/id_ed25519"
+    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/bravo/known_hosts"
+    HostKeyAlias         devm-bravo
     StrictHostKeyChecking yes
     IdentitiesOnly       yes
 
-Host devm-charlie-vm
+Host devm-charlie
     HostName             192.168.64.9
     User                 devm
     Port                 22
-    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/c/id_ed25519"
-    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/c/known_hosts"
-    HostKeyAlias         devm-charlie-vm
+    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/charlie/id_ed25519"
+    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/charlie/known_hosts"
+    HostKeyAlias         devm-charlie
     StrictHostKeyChecking yes
     IdentitiesOnly       yes
 

@@ -137,10 +137,7 @@ func TestServiceHostnameMustEndInDotTest(t *testing.T) {
 
 func TestConfigValidate(t *testing.T) {
 	c := Config{
-		Project: Project{
-			ID:     "test",
-			VMName: "test-vm",
-		},
+		Project: Project{Name: "test"},
 		Network: Network{Allow: []AllowEntry{{Host: "github.com"}}},
 		Services: map[string]Service{
 			"webapp": {Port: 3000, Hostname: "test.test"},
@@ -169,13 +166,13 @@ func TestConfigValidate(t *testing.T) {
 
 	// Missing required project fields
 	bad := c
-	bad.Project.ID = ""
-	assert.Error(t, bad.Validate(), "project.id required")
+	bad.Project.Name = ""
+	assert.Error(t, bad.Validate(), "project.name required")
 }
 
 func TestConfigValidatesPortRange(t *testing.T) {
 	base := Config{
-		Project: Project{ID: "p", VMName: "p"},
+		Project: Project{Name: "p"},
 	}
 
 	// canonical out of range (too large) → error.
@@ -191,7 +188,7 @@ func TestConfigValidatesPortRange(t *testing.T) {
 
 func TestConfigValidatesInstallSteps(t *testing.T) {
 	cfg := Config{
-		Project: Project{ID: "x", VMName: "x-vm"},
+		Project: Project{Name: "x"},
 		Install: []string{
 			"", // invalid
 		},
@@ -254,10 +251,10 @@ func TestResolveMountErrors(t *testing.T) {
 // a "IP:PORT" string (interface + sandbox port).
 func TestServicePortPolymorphicUnmarshal(t *testing.T) {
 	cases := []struct {
-		name      string
-		yaml      string
-		wantPort  int
-		wantBind  string
+		name     string
+		yaml     string
+		wantPort int
+		wantBind string
 	}{
 		{"int_form", "port: 80", 80, ""},
 		{"string_localhost", `port: "127.0.0.1:80"`, 80, "127.0.0.1"},
@@ -328,7 +325,7 @@ func TestServiceResolveBind(t *testing.T) {
 
 func TestConfigValidateRejectsEmptyMountEntry(t *testing.T) {
 	cfg := Config{
-		Project: Project{ID: "x", VMName: "x-vm"},
+		Project: Project{Name: "x"},
 		Mounts:  []string{"/etc/hosts", ""},
 	}
 	err := cfg.Validate()
@@ -343,7 +340,7 @@ func TestConfigValidateWithRootChecksExistence(t *testing.T) {
 
 	// Existing path passes.
 	cfg := Config{
-		Project: Project{ID: "x", VMName: "x-vm"},
+		Project: Project{Name: "x"},
 		Mounts:  []string{existing + ":ro"},
 	}
 	require.NoError(t, cfg.ValidateWithRoot(tmp))
@@ -356,7 +353,7 @@ func TestConfigValidateWithRootChecksExistence(t *testing.T) {
 
 	// Relative path resolves against projectRoot.
 	relCfg := Config{
-		Project: Project{ID: "x", VMName: "x-vm"},
+		Project: Project{Name: "x"},
 		Mounts:  []string{"real:ro"},
 	}
 	require.NoError(t, relCfg.ValidateWithRoot(tmp))
@@ -375,7 +372,7 @@ func TestProject_Proxy_Validation(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p := Project{ID: "x", VMName: "x", Proxy: c.value}
+			p := Project{Name: "x", Proxy: c.value}
 			err := p.Validate()
 			if c.wantErr {
 				assert.Error(t, err)
@@ -386,69 +383,42 @@ func TestProject_Proxy_Validation(t *testing.T) {
 	}
 }
 
-func TestCheckLegacyKeys_AllowedDomainsMigration(t *testing.T) {
+func TestCheckUnknownKeys_NetworkChild_Rejected(t *testing.T) {
+	// network.allowed_domains was renamed to network.allow; with no
+	// legacy-migration layer it surfaces as a plain unknown-field error.
 	yaml := []byte(`
 project:
-  id: x
-  vm_name: x-vm
+  name: x
 network:
   allowed_domains:
     - example.com
 `)
-	err := CheckLegacyKeys(yaml)
+	err := CheckUnknownKeys(yaml)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "network.allowed_domains is no longer supported")
-	assert.Contains(t, err.Error(), "network.allow")
+	assert.Contains(t, err.Error(), "unknown field")
+	assert.Contains(t, err.Error(), "allowed_domains")
+	assert.Contains(t, err.Error(), "network")
 }
 
-func TestCheckLegacyKeys_SandboxNameMigration(t *testing.T) {
+func TestCheckUnknownKeys_UnknownProjectKey_Rejected(t *testing.T) {
 	yaml := []byte(`
 project:
-  id: x
+  name: x
   sandbox_name: x-sbx
 `)
-	err := CheckLegacyKeys(yaml)
+	err := CheckUnknownKeys(yaml)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "project.sandbox_name is no longer supported")
-	assert.Contains(t, err.Error(), "project.vm_name")
-}
-
-func TestProject_HostnameApex_MigrationError(t *testing.T) {
-	yamlBlob := []byte(`
-project:
-  id: foo
-  vm_name: foo-vm
-  hostname_apex: foo.local
-`)
-	err := CheckLegacyKeys(yamlBlob)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "hostname_apex is no longer supported")
-	assert.Contains(t, err.Error(), "HOSTNAME_APEX")
-}
-
-func TestCheckLegacyKeys_BaseImageDockerMigration(t *testing.T) {
-	yaml := []byte(`
-project:
-  id: x
-  vm_name: x-vm
-base_image:
-  docker: my-registry.example.com/foo:latest
-`)
-	err := CheckLegacyKeys(yaml)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "base_image.docker is no longer supported")
-	assert.Contains(t, err.Error(), "Remove the base_image block")
+	assert.Contains(t, err.Error(), "unknown field")
+	assert.Contains(t, err.Error(), "sandbox_name")
 }
 
 func TestCheckUnknownKeys_BaseImageChild_Rejected(t *testing.T) {
-	// Any unknown child of base_image (that isn't the specific
-	// `docker` legacy field CheckLegacyKeys catches with a migration
-	// message) should surface a clear "this block accepts no fields"
-	// error rather than being silently dropped by yaml.Unmarshal.
+	// Any unknown child of base_image should surface a clear "this block
+	// accepts no fields" error rather than being silently dropped by
+	// yaml.Unmarshal.
 	yaml := []byte(`
 project:
-  id: x
-  vm_name: x-vm
+  name: x
 base_image:
   registry: foo.bar
 `)
@@ -462,8 +432,7 @@ base_image:
 func TestCheckUnknownKeys_TopLevel_Rejected(t *testing.T) {
 	yamlBlob := []byte(`
 project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
 volumes:
   /data: 1G
 `)
@@ -478,8 +447,7 @@ volumes:
 func TestCheckUnknownKeys_ProjectLevel_Rejected(t *testing.T) {
 	yamlBlob := []byte(`
 project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
   proxie: caddy
 `)
 	err := CheckUnknownKeys(yamlBlob)
@@ -491,8 +459,7 @@ project:
 func TestCheckUnknownKeys_AllValidFields_Accepted(t *testing.T) {
 	yamlBlob := []byte(`
 project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
   proxy: caddy
 base_image: {}
 docker: true
@@ -518,8 +485,7 @@ packages:
 func TestCheckUnknownKeys_DockerTopLevel_Accepted(t *testing.T) {
 	yamlBlob := []byte(`
 project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
 docker: true
 `)
 	require.NoError(t, CheckUnknownKeys(yamlBlob))
@@ -528,8 +494,7 @@ docker: true
 func TestCheckUnknownKeys_EmptyAndMinimal_Accepted(t *testing.T) {
 	require.NoError(t, CheckUnknownKeys([]byte("")))
 	require.NoError(t, CheckUnknownKeys([]byte(`project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
 `)))
 }
 
@@ -599,7 +564,7 @@ func TestService_Restart_ValidValues(t *testing.T) {
 
 func TestConfig_MaskMustBeInsideShare(t *testing.T) {
 	cfg := Config{
-		Project: Project{ID: "x", VMName: "x-vm"},
+		Project: Project{Name: "x"},
 		Services: map[string]Service{
 			"api": {
 				Exec:  []string{"/bin/true"},
@@ -624,7 +589,7 @@ func TestConfig_MaskMustBeInsideShare(t *testing.T) {
 
 func TestPackages_TopLevelAccepted(t *testing.T) {
 	cfg := Config{
-		Project:  Project{ID: "x", VMName: "x-vm"},
+		Project:  Project{Name: "x"},
 		Packages: []string{"jq", "postgresql-client"},
 	}
 	require.NoError(t, cfg.Validate())
@@ -633,8 +598,7 @@ func TestPackages_TopLevelAccepted(t *testing.T) {
 func TestCheckUnknownKeys_RejectsLegacyPortOffset(t *testing.T) {
 	yamlText := []byte(`
 project:
-  id: x
-  vm_name: x-vm
+  name: x
   port_offset: 51000
 `)
 	err := CheckUnknownKeys(yamlText)
@@ -645,8 +609,7 @@ project:
 func TestParse_SecretTag_AsSecretRef(t *testing.T) {
 	const yamlSrc = `
 project:
-  id: x
-  vm_name: x
+  name: x
 services:
   api:
     exec: ["/bin/true"]
@@ -667,8 +630,7 @@ services:
 func TestParse_NetworkAllow_StringsAndMappings(t *testing.T) {
 	const yamlSrc = `
 project:
-  id: x
-  vm_name: x
+  name: x
 network:
   allow:
     - github.com
@@ -742,8 +704,7 @@ func TestParse_TopLevel_SecretTag_AsSecretRef(t *testing.T) {
 	// !secret can also appear in the top-level env: map.
 	const yamlSrc = `
 project:
-  id: x
-  vm_name: x
+  name: x
 env:
   API_KEY: !secret my_api_key
   PLAIN: world
@@ -786,8 +747,7 @@ func TestWriteInTempDir_SecretTagPreservedThroughEnvFile(t *testing.T) {
 	tmp := t.TempDir()
 	const yamlSrc = `
 project:
-  id: x
-  vm_name: x
+  name: x
 services:
   api:
     exec: ["/bin/true"]
@@ -807,8 +767,7 @@ services:
 func TestConfig_ParsesDockerTrue(t *testing.T) {
 	src := `
 project:
-  id: p
-  vm_name: v
+  name: p
 docker: true
 `
 	var cfg Config
@@ -823,8 +782,7 @@ docker: true
 func TestConfig_DefaultsDockerFalse(t *testing.T) {
 	src := `
 project:
-  id: p
-  vm_name: v
+  name: p
 `
 	var cfg Config
 	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
@@ -842,8 +800,7 @@ func TestConfig_DockerStringRejected(t *testing.T) {
 	// instead of erroring. "banana" is unambiguously non-boolean.
 	src := `
 project:
-  id: p
-  vm_name: v
+  name: p
 docker: "banana"
 `
 	var cfg Config
@@ -869,7 +826,7 @@ func TestDiskSizeParsingAndGetter(t *testing.T) {
 		{"abcG", 0, false},  // non-numeric magnitude
 	}
 	for _, c := range cases {
-		cfg := Config{Project: Project{ID: "x", VMName: "x-vm"}, Disk: c.in}
+		cfg := Config{Project: Project{Name: "x"}, Disk: c.in}
 		err := cfg.Validate()
 		if !c.valid {
 			assert.Error(t, err, "expected %q rejected", c.in)
@@ -883,14 +840,14 @@ func TestDiskSizeParsingAndGetter(t *testing.T) {
 }
 
 func TestDiskSizeBelowFloorRejected(t *testing.T) {
-	cfg := Config{Project: Project{ID: "x", VMName: "x-vm"}, Disk: "16G"}
+	cfg := Config{Project: Project{Name: "x"}, Disk: "16G"}
 	err := cfg.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "minimum")
 }
 
 func TestDiskUnsetHasNoOverride(t *testing.T) {
-	cfg := Config{Project: Project{ID: "x", VMName: "x-vm"}}
+	cfg := Config{Project: Project{Name: "x"}}
 	require.NoError(t, cfg.Validate())
 	gib, set := cfg.DiskSizeGB()
 	assert.False(t, set)
@@ -898,5 +855,5 @@ func TestDiskUnsetHasNoOverride(t *testing.T) {
 }
 
 func TestCheckUnknownKeysAllowsDisk(t *testing.T) {
-	require.NoError(t, CheckUnknownKeys([]byte("disk: 64G\nproject:\n  id: x\n  vm_name: x-vm\n")))
+	require.NoError(t, CheckUnknownKeys([]byte("disk: 64G\nproject:\n  name: x\n")))
 }

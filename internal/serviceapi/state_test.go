@@ -13,14 +13,14 @@ import (
 func TestWriteRead_RoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfg := schema.Config{
-		Project: schema.Project{ID: "myproj", VMName: "myproj-vm"},
+		Project: schema.Project{Name: "myproj"},
 	}
 	require.NoError(t, WriteStateSnapshot("myproj", StateSnapshot{Cfg: cfg}))
 	got, err := ReadStateSnapshot("myproj")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, cfg.Project.ID, got.Cfg.Project.ID)
-	assert.Equal(t, cfg.Project.VMName, got.Cfg.Project.VMName)
+	assert.Equal(t, cfg.Project.Name, got.Cfg.Project.Name)
+	assert.Equal(t, cfg.Project.Name, got.Cfg.Project.Name)
 }
 
 func TestReadStateSnapshot_Missing_ReturnsNilNil(t *testing.T) {
@@ -47,7 +47,7 @@ func TestRemoveStateCfg_Idempotent(t *testing.T) {
 	// Remove of missing is not an error.
 	require.NoError(t, RemoveStateCfg("nope"))
 	require.NoError(t, WriteStateSnapshot("x", StateSnapshot{
-		Cfg: schema.Config{Project: schema.Project{ID: "x", VMName: "x-vm"}},
+		Cfg: schema.Config{Project: schema.Project{Name: "x"}},
 	}))
 	require.NoError(t, RemoveStateCfg("x"))
 	got, err := ReadStateSnapshot("x")
@@ -62,7 +62,7 @@ func TestWriteStateSnapshot_Atomic(t *testing.T) {
 	// temp file matching "<project-id>.json.*" lingers alongside
 	// the final "<project-id>.json".
 	t.Setenv("HOME", t.TempDir())
-	cfg := schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
 	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: cfg}))
 
 	entries, err := os.ReadDir(StateDir())
@@ -88,7 +88,7 @@ func TestStateSnapshot_SecretHashesRoundtrip(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
 
 	snap := StateSnapshot{
-		Cfg:          schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}},
+		Cfg:          schema.Config{Project: schema.Project{Name: "p"}},
 		SecretHashes: map[string]string{"TOK": "abc123"},
 	}
 	require.NoError(t, WriteStateSnapshot("p", snap))
@@ -101,7 +101,7 @@ func TestStateSnapshot_SecretHashesRoundtrip(t *testing.T) {
 
 func TestStateSnapshotProxyVersionRoundTrips(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	want := StateSnapshot{Cfg: schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}, ProxyVersion: "abc123"}
+	want := StateSnapshot{Cfg: schema.Config{Project: schema.Project{Name: "p"}}, ProxyVersion: "abc123"}
 	require.NoError(t, WriteStateSnapshot("p", want))
 	got, err := ReadStateSnapshot("p")
 	require.NoError(t, err)

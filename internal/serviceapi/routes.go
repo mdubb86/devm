@@ -126,13 +126,13 @@ func stripPort(host string) string {
 
 // ApplyRequest is the body shape for POST /routes/apply.
 type ApplyRequest struct {
-	ProjectID string  `json:"project_id"`
-	Routes    []Route `json:"routes"`
+	Name   string  `json:"name"`
+	Routes []Route `json:"routes"`
 }
 
 // RemoveRequest is the body shape for POST /routes/remove.
 type RemoveRequest struct {
-	ProjectID string `json:"project_id"`
+	Name string `json:"name"`
 }
 
 // RoutingStatus is what `devm status` displays for the Routing
@@ -165,11 +165,11 @@ func RegisterRoutesHandlers(s *Server, routes *Routes) {
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
 		}
-		if req.ProjectID == "" {
-			http.Error(w, "project_id required", http.StatusBadRequest)
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
-		routes.Apply(req.ProjectID, req.Routes)
+		routes.Apply(req.Name, req.Routes)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -183,11 +183,11 @@ func RegisterRoutesHandlers(s *Server, routes *Routes) {
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
 		}
-		if req.ProjectID == "" {
-			http.Error(w, "project_id required", http.StatusBadRequest)
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
-		routes.Remove(req.ProjectID)
+		routes.Remove(req.Name)
 		w.WriteHeader(http.StatusNoContent)
 	})
 

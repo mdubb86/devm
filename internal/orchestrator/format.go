@@ -61,7 +61,7 @@ type DriftItem struct {
 type ReconcileResult struct {
 	Rendered         bool
 	SandboxState     string
-	Sandbox          string // project's vm_name, for reporting (e.g. the revive line)
+	Sandbox          string // project's name, for reporting (e.g. the revive line)
 	Applied          []reconcile.Change
 	AppliedIronProxy []reconcile.Change // BucketIronProxyRestart changes applied via /vm/apply-iron-proxy
 	IronProxyRevived bool               // true when iron-proxy was dead and this reconcile respawned it
@@ -295,7 +295,7 @@ func FormatStatusAllText(rows []serviceapi.ProjectStatus) string {
 				proxyCol = string(r.Proxy.Status)
 			}
 		}
-		lines[i] = line{project: r.ProjectID, vm: vmState, proxy: proxyCol, reconcile: reconcileCol, colored: colored}
+		lines[i] = line{project: r.Name, vm: vmState, proxy: proxyCol, reconcile: reconcileCol, colored: colored}
 		widths[0] = max(widths[0], utf8.RuneCountInString(lines[i].project))
 		widths[1] = max(widths[1], utf8.RuneCountInString(lines[i].vm))
 		widths[2] = max(widths[2], utf8.RuneCountInString(lines[i].proxy))

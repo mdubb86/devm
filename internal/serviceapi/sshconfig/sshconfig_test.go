@@ -31,7 +31,7 @@ func TestEmit_EmptyEntries_WritesHeaderOnly(t *testing.T) {
 func TestEmit_SingleEntry_GoldenFile(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
 	require.NoError(t, Emit([]Entry{
-		{ProjectID: "myproj", VMName: "myproj-vm", VMIP: "192.168.64.7"},
+		{Name: "myproj", VMIP: "192.168.64.7"},
 	}))
 	got, err := os.ReadFile(Path())
 	require.NoError(t, err)
@@ -39,13 +39,13 @@ func TestEmit_SingleEntry_GoldenFile(t *testing.T) {
 	assert.Equal(t, want, string(got))
 }
 
-func TestEmit_MultipleEntries_SortedByVMName(t *testing.T) {
+func TestEmit_MultipleEntries_SortedByName(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	// Unsorted input; expect output sorted by VMName ascending.
+	// Unsorted input; expect output sorted by Name ascending.
 	require.NoError(t, Emit([]Entry{
-		{ProjectID: "c", VMName: "charlie-vm", VMIP: "192.168.64.9"},
-		{ProjectID: "a", VMName: "alpha-vm", VMIP: "192.168.64.7"},
-		{ProjectID: "b", VMName: "bravo-vm", VMIP: "192.168.64.8"},
+		{Name: "charlie", VMIP: "192.168.64.9"},
+		{Name: "alpha", VMIP: "192.168.64.7"},
+		{Name: "bravo", VMIP: "192.168.64.8"},
 	}))
 	got, err := os.ReadFile(Path())
 	require.NoError(t, err)
@@ -56,7 +56,7 @@ func TestEmit_MultipleEntries_SortedByVMName(t *testing.T) {
 func TestEmit_AtomicWrite(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
 	require.NoError(t, Emit([]Entry{
-		{ProjectID: "p", VMName: "p-vm", VMIP: "192.168.64.7"},
+		{Name: "p", VMIP: "192.168.64.7"},
 	}))
 	// Only ssh_config remains in RuntimeDir root; no temp files linger.
 	entries, err := os.ReadDir(filepath.Dir(Path()))
@@ -71,7 +71,7 @@ func TestEmit_AtomicWrite(t *testing.T) {
 	assert.Equal(t, []string{"ssh_config"}, names)
 }
 
-func TestEmit_RejectsUnsafeVMName(t *testing.T) {
+func TestEmit_RejectsUnsafeName(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
 	for _, name := range []string{
 		"",
@@ -81,32 +81,17 @@ func TestEmit_RejectsUnsafeVMName(t *testing.T) {
 		"foo bar",
 		"foo *",
 		"foo\tbar",
-		"evil,*",   // comma is a Host-pattern separator in ssh_config
-		"foo#bar",  // # starts a comment
-		"foo?bar",  // ? is a single-char wildcard
-		"foo!bar",  // ! is a negation prefix in Host patterns
-		"foo=bar",  // = is a directive-value separator
+		"evil,*",  // comma is a Host-pattern separator in ssh_config
+		"foo#bar", // # starts a comment
+		"foo?bar", // ? is a single-char wildcard
+		"foo!bar", // ! is a negation prefix in Host patterns
+		"foo=bar", // = is a directive-value separator
+		"../evil", // path traversal (name is also a path component)
+		"foo/bar", // slash escapes the project dir
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := Emit([]Entry{{ProjectID: "p", VMName: name, VMIP: "1.2.3.4"}})
-			require.Error(t, err, "must reject VMName %q", name)
-		})
-	}
-}
-
-func TestEmit_RejectsUnsafeProjectID(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	for _, id := range []string{
-		"foo\nHost evil\n    HostName 10.0.0.1",
-		"foo\"bar",
-		"foo\x00bar",
-		"../evil",
-		"",
-		"foo bar",
-	} {
-		t.Run(id, func(t *testing.T) {
-			err := Emit([]Entry{{ProjectID: id, VMName: "p-vm", VMIP: "10.0.0.1"}})
-			require.Error(t, err, "must reject ProjectID %q", id)
+			err := Emit([]Entry{{Name: name, VMIP: "1.2.3.4"}})
+			require.Error(t, err, "must reject name %q", name)
 		})
 	}
 }
@@ -120,7 +105,7 @@ func TestEmit_RejectsUnsafeVMIP(t *testing.T) {
 		"",
 	} {
 		t.Run(ip, func(t *testing.T) {
-			err := Emit([]Entry{{ProjectID: "p", VMName: "p-vm", VMIP: ip}})
+			err := Emit([]Entry{{Name: "p", VMIP: ip}})
 			require.Error(t, err, "must reject VMIP %q", ip)
 		})
 	}

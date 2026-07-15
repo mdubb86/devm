@@ -19,8 +19,7 @@ import (
 
 // VMReconcileRequest is the body shape for POST /vm/reconcile.
 type VMReconcileRequest struct {
-	ProjectID         string        `json:"project_id"`
-	VMName            string        `json:"vm_name"`
+	Name              string        `json:"name"`
 	Cfg               schema.Config `json:"cfg"`
 	WorkspaceHostPath string        `json:"workspace_host_path"`
 	// SecretHashes is {name: hex sha256(resolved value)} for every
@@ -81,12 +80,12 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
 		}
-		if req.ProjectID == "" || req.VMName == "" {
-			http.Error(w, "project_id and vm_name required", http.StatusBadRequest)
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
 
-		unlock := locks.Lock(req.ProjectID)
+		unlock := locks.Lock(req.Name)
 		defer unlock()
 
 		// Check VM state. If not running, don't apply anything — changes
@@ -98,7 +97,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 		}
 		running := false
 		for _, vm := range vms {
-			if vm.Name == req.VMName {
+			if vm.Name == req.Name {
 				running = vm.Running
 				break
 			}
@@ -106,7 +105,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 
 		// Load baseline snapshot. Missing / malformed → nil, treated
 		// as "everything is new" by the diff engine.
-		oldSnap, err := ReadStateSnapshot(req.ProjectID)
+		oldSnap, err := ReadStateSnapshot(req.Name)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read state: %v", err), http.StatusInternalServerError)
 			return
@@ -149,7 +148,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 		// /vm/apply-iron-proxy whenever AppliedIronProxy is non-empty.
 		// Gated on running: a stopped VM has no live iron-proxy to heal.
 		if running {
-			if computeProxyHealth(sup, req.ProjectID).Status != ProxyOK {
+			if computeProxyHealth(sup, req.Name).Status != ProxyOK {
 				ironProxy = append(ironProxy, reconcile.Change{Kind: reconcile.KindIronProxyDown})
 			}
 		}
@@ -181,7 +180,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				http.Error(w, fmt.Sprintf("read CA root: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, req.VMName, caPEM, req.SSHAuthorizedPubkey, req.SSHHostPriv, req.SSHHostPub); err != nil {
+			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, req.Name, caPEM, req.SSHAuthorizedPubkey, req.SSHHostPriv, req.SSHHostPub); err != nil {
 				http.Error(w, fmt.Sprintf("apply live: %v", err), http.StatusInternalServerError)
 				return
 			}
@@ -197,7 +196,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				http.Error(w, fmt.Sprintf("render templates: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := WriteStateSnapshot(req.ProjectID, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes}); err != nil {
+			if err := WriteStateSnapshot(req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}

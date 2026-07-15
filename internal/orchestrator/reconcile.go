@@ -47,18 +47,17 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 	hashes := SecretHashesFromBindings(bindings)
 
 	// Load SSH keys CLI-side and pass to the daemon.
-	authPub, err := sshkeys.EnsureProjectKeypair(cfg.Project.ID)
+	authPub, err := sshkeys.EnsureProjectKeypair(cfg.Project.Name)
 	if err != nil {
 		return -1, ReconcileResult{}, fmt.Errorf("ensure ssh keypair: %w", err)
 	}
-	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(cfg.Project.ID, cfg.Project.VMName)
+	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(cfg.Project.Name)
 	if err != nil {
 		return -1, ReconcileResult{}, fmt.Errorf("ensure ssh host key: %w", err)
 	}
 
 	resp, err := client.Reconcile(context.Background(), serviceapi.VMReconcileRequest{
-		ProjectID:           cfg.Project.ID,
-		VMName:              cfg.Project.VMName,
+		Name:                cfg.Project.Name,
 		Cfg:                 cfg,
 		WorkspaceHostPath:   repoRoot,
 		SecretHashes:        hashes,
@@ -77,7 +76,7 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 	var stoppedByIronProxy bool
 	if len(resp.AppliedIronProxy) > 0 {
 		ipReq := serviceapi.VMApplyIronProxyRequest{
-			ProjectID: cfg.Project.ID,
+			Name:      cfg.Project.Name,
 			Allowlist: docker.EffectiveAllowlist(cfg),
 			Secrets:   bindings,
 		}
@@ -98,7 +97,7 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 	res := ReconcileResult{
 		Rendered:         true,
 		SandboxState:     sandboxState,
-		Sandbox:          cfg.Project.VMName,
+		Sandbox:          cfg.Project.Name,
 		Applied:          resp.Applied,
 		AppliedIronProxy: ipRestartApplied,
 		IronProxyRevived: ironProxyRevived,
@@ -118,7 +117,7 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 	res.Flavor = reconcile.RecreateFlavor(res.RecreateRequired)
 	// Surface sessions so the caller can show them in the prompt / JSON
 	// output. Best-effort; failure here is non-fatal.
-	res.Sessions = probeSessions(tr, cfg.Project.VMName)
+	res.Sessions = probeSessions(tr, cfg.Project.Name)
 	res.NextAction = "needs_approval"
 	return 0, res, nil
 }

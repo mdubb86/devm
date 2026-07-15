@@ -44,7 +44,7 @@ definition under .devm/ is not touched; devm shell will rebuild from scratch.`,
 		rctx, rcancel := context.WithTimeout(context.Background(), 2*time.Second)
 		c := serviceapi.NewClient()
 		if c.Available(rctx) {
-			_ = c.RemoveRoutes(rctx, cfg.Project.ID)
+			_ = c.RemoveRoutes(rctx, cfg.Project.Name)
 		}
 		rcancel()
 
@@ -52,7 +52,7 @@ definition under .devm/ is not touched; devm shell will rebuild from scratch.`,
 			Tart:             tart.New(),
 			ServiceAPIClient: c,
 		}
-		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.ID, cfg.Project.VMName, orchestrator.StopDestroy, teardownYes)
+		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.Name, orchestrator.StopDestroy, teardownYes)
 		if err != nil {
 			return err
 		}

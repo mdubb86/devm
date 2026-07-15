@@ -9,7 +9,7 @@ What this pins:
   - Template output file exists inside the sandbox at the declared path.
   - `{{.Service.<svc>.Port}}` renders to the canonical port.
   - `{{.Service.<svc>.HostPort}}` renders to the canonical port (HostPort == Port for Tart VMs).
-  - `{{.Project.ID}}` renders to the workspace slug.
+  - `{{.Project.Name}}` renders to the workspace slug.
   - Render happens cold (no reconcile invoked).
 
 What it doesn't cover (tested elsewhere):
@@ -35,7 +35,7 @@ def test_template_cold_start(workspace, devm, sandbox_name):
     (tmpl_dir / "probe.conf.tmpl").write_text(
         "PORT={{.Service.probe.Port}}\n"
         "HOSTPORT={{.Service.probe.HostPort}}\n"
-        "PROJECT={{.Project.ID}}\n"
+        "PROJECT={{.Project.Name}}\n"
     )
 
     workspace.write_devmyaml(

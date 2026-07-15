@@ -41,18 +41,17 @@ func EmitSSHConfig(ctx context.Context, tr *tart.Tart) error {
 		if err != nil || snap == nil {
 			continue
 		}
-		vmName := snap.Cfg.Project.VMName
-		if !running[vmName] {
+		name := snap.Cfg.Project.Name
+		if !running[name] {
 			continue
 		}
-		ip, err := tr.IP(ctx, vmName)
+		ip, err := tr.IP(ctx, name)
 		if err != nil || ip == "" {
 			continue
 		}
 		out = append(out, sshconfig.Entry{
-			ProjectID: id,
-			VMName:    vmName,
-			VMIP:      ip,
+			Name: name,
+			VMIP: ip,
 		})
 	}
 	return sshconfig.Emit(out)

@@ -21,7 +21,7 @@ import (
 // (allow-list or secret-binding drift that requires a fresh iron-proxy
 // config + process, but doesn't touch the VM itself).
 type VMApplyIronProxyRequest struct {
-	ProjectID string          `json:"project_id"`
+	Name      string          `json:"name"`
 	Allowlist []string        `json:"allowlist,omitempty"`
 	Secrets   []SecretBinding `json:"secrets,omitempty"`
 }
@@ -77,12 +77,12 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
 		}
-		if req.ProjectID == "" {
-			http.Error(w, "project_id required", http.StatusBadRequest)
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
 
-		unlock := locks.Lock(req.ProjectID)
+		unlock := locks.Lock(req.Name)
 		defer unlock()
 
 		hashes := secretHashesFromBindings(req.Secrets)
@@ -90,7 +90,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// Read the existing iron-proxy config for ports + MAC_HOST. The
 		// dnsmasq inside the guest is already pointing at these ports;
 		// we must preserve them or DNS silently breaks.
-		cfgPath, err := IronProxyConfigPath(req.ProjectID)
+		cfgPath, err := IronProxyConfigPath(req.Name)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("resolve config path: %v", err), http.StatusInternalServerError)
 			return
@@ -103,7 +103,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 				// but SecretHashes still needs to move forward so the
 				// next /vm/start renders iron-proxy config from the
 				// current schema without re-detecting this same drift.
-				if err := updateSnapshotAfterSpawn(req.ProjectID, hashes, false); err != nil {
+				if err := updateSnapshotAfterSpawn(req.Name, hashes, false); err != nil {
 					http.Error(w, fmt.Sprintf("update snapshot: %v", err), http.StatusInternalServerError)
 					return
 				}
@@ -139,7 +139,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// Is iron-proxy alive for this project right now? Determines
 		// Revived in the response: config existed on disk, but no live
 		// process, means this spawn is a revival rather than a restart.
-		key := supervisor.Key{ProjectID: req.ProjectID, Role: supervisor.RoleProxy}
+		key := supervisor.Key{ProjectID: req.Name, Role: supervisor.RoleProxy}
 		wasRunning := sup.Status(key).Present && sup.Status(key).Running
 
 		if wasRunning {
@@ -153,7 +153,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			}
 		}
 
-		if err := spawnIronProxyFn(r.Context(), sup, req.ProjectID, newCfg, denials); err != nil {
+		if err := spawnIronProxyFn(r.Context(), sup, req.Name, newCfg, denials); err != nil {
 			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -165,7 +165,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			return
 		}
 
-		if err := updateSnapshotAfterSpawn(req.ProjectID, hashes, true); err != nil {
+		if err := updateSnapshotAfterSpawn(req.Name, hashes, true); err != nil {
 			http.Error(w, fmt.Sprintf("update snapshot: %v", err), http.StatusInternalServerError)
 			return
 		}

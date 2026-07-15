@@ -26,13 +26,12 @@ type fakeStopClient struct {
 }
 
 type stopCall struct {
-	projectID string
-	vmName    string
+	name string
 }
 
-func (f *fakeStopClient) StopVM(_ context.Context, projectID, vmName string) error {
+func (f *fakeStopClient) StopVM(_ context.Context, name string) error {
 	f.stopCalled++
-	f.stopArgs = append(f.stopArgs, stopCall{projectID: projectID, vmName: vmName})
+	f.stopArgs = append(f.stopArgs, stopCall{name: name})
 	return f.stopErr
 }
 
@@ -49,11 +48,11 @@ func TestRunStopPreserve_CallsStopVM(t *testing.T) {
 		In:               in,
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopPreserve, false)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopPreserve, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, 1, admin.stopCalled, "StopVM must be called once")
-	assert.Contains(t, out.String(), "Stopped VM proj-sbx")
+	assert.Contains(t, out.String(), "Stopped VM proj-123")
 	assert.Contains(t, out.String(), "Disk preserved")
 }
 
@@ -72,11 +71,11 @@ func TestRunStopDestroy_CallsStopVMThenDeletesDisk(t *testing.T) {
 		In:               in,
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopDestroy, false)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, 1, admin.stopCalled, "StopVM must be called before disk delete")
-	assert.Contains(t, out.String(), "Deleted VM proj-sbx")
+	assert.Contains(t, out.String(), "Deleted VM proj-123")
 }
 
 func TestRunStopRefusalWithNo(t *testing.T) {
@@ -90,7 +89,7 @@ func TestRunStopRefusalWithNo(t *testing.T) {
 		In:               in,
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopPreserve, false)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopPreserve, false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, rc, "refusal exits 1")
 	assert.Equal(t, 0, admin.stopCalled, "StopVM must not be called after refusal")
@@ -109,7 +108,7 @@ func TestRunStopAutoApproveSkipsPrompt(t *testing.T) {
 		In:               in,
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopPreserve, true)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopPreserve, true)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, 1, admin.stopCalled)
@@ -132,11 +131,11 @@ func TestRunStopDaemonFailContinuesForTeardown(t *testing.T) {
 		ServiceAPIClient: admin,
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopDestroy, true)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy, true)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, 1, admin.stopCalled, "daemon stop must still be attempted")
-	assert.Contains(t, out.String(), "Deleted VM proj-sbx", "disk delete must still run")
+	assert.Contains(t, out.String(), "Deleted VM proj-123", "disk delete must still run")
 }
 
 func TestRunStopDestroy_RemovesStateSnapshot(t *testing.T) {
@@ -145,7 +144,7 @@ func TestRunStopDestroy_RemovesStateSnapshot(t *testing.T) {
 	// the next cold-start (or reconcile) starts from a clean baseline.
 	t.Setenv("HOME", t.TempDir())
 	require.NoError(t, serviceapi.WriteStateSnapshot("proj-123", serviceapi.StateSnapshot{
-		Cfg: schema.Config{Project: schema.Project{ID: "proj-123", VMName: "proj-sbx"}},
+		Cfg: schema.Config{Project: schema.Project{Name: "proj-123"}},
 	}))
 
 	repoRoot := t.TempDir()
@@ -159,7 +158,7 @@ func TestRunStopDestroy_RemovesStateSnapshot(t *testing.T) {
 		In:               strings.NewReader("y\n"),
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopDestroy, false)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 
@@ -175,7 +174,7 @@ func TestRunStopDestroy_RemovesSSHState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
 	require.NoError(t, serviceapi.WriteStateSnapshot("proj-123", serviceapi.StateSnapshot{
-		Cfg: schema.Config{Project: schema.Project{ID: "proj-123", VMName: "proj-sbx"}},
+		Cfg: schema.Config{Project: schema.Project{Name: "proj-123"}},
 	}))
 	_, err := sshkeys.EnsureProjectKeypair("proj-123")
 	require.NoError(t, err)
@@ -196,7 +195,7 @@ func TestRunStopDestroy_RemovesSSHState(t *testing.T) {
 		In:               strings.NewReader("y\n"),
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", "proj-sbx", StopDestroy, false)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 
@@ -216,9 +215,9 @@ func TestRunStopPromptText(t *testing.T) {
 		In:               inStop,
 		Out:              outStop,
 	}
-	_, err := RunStop(context.Background(), deps, "proj-123", "my-vm", StopPreserve, false)
+	_, err := RunStop(context.Background(), deps, "proj-123", StopPreserve, false)
 	require.NoError(t, err)
-	assert.Contains(t, outStop.String(), "Stop VM my-vm")
+	assert.Contains(t, outStop.String(), "Stop VM proj-123")
 
 	// StopDestroy prompt says "Tear down VM"
 	inTear := strings.NewReader("n\n")
@@ -229,9 +228,9 @@ func TestRunStopPromptText(t *testing.T) {
 		In:               inTear,
 		Out:              outTear,
 	}
-	_, err = RunStop(context.Background(), deps2, "proj-123", "my-vm", StopDestroy, false)
+	_, err = RunStop(context.Background(), deps2, "proj-123", StopDestroy, false)
 	require.NoError(t, err)
-	assert.Contains(t, outTear.String(), "Tear down VM my-vm")
+	assert.Contains(t, outTear.String(), "Tear down VM proj-123")
 }
 
 func TestDestructivenessIdentity(t *testing.T) {

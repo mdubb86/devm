@@ -370,7 +370,7 @@ Worked the disposable `strip-devm-publish` branch. Ruled out as
     but driven via cobra+`signal.NotifyContext`; passes 5/5)
   - Kit content / project ID / agent name / cwd of the anchor
     (verified by building a probe variant that uses devm's
-    rendered `.devm/spec.yaml`, devm's `cfg.Project.ID` as
+    rendered `.devm/spec.yaml`, devm's `cfg.Project.Name` as
     agent name, and cwd=workspace; passes 10/10)
 
 **Pure-sbx (Python `subprocess.Popen` with inherited PTY for

@@ -101,8 +101,8 @@ func buildSNTPReply(req []byte, recvTime, txTime time.Time) []byte {
 		vn = 4
 	}
 	out[0] = (0 << 6) | (vn << 3) | 4
-	out[1] = 1  // Stratum: primary
-	out[2] = 4  // Poll interval (2^4 = 16s min); advisory only.
+	out[1] = 1    // Stratum: primary
+	out[2] = 4    // Poll interval (2^4 = 16s min); advisory only.
 	out[3] = 0xEC // Precision: -20, ~1µs.
 
 	// Root Delay + Root Dispersion — 0 (we are the reference).

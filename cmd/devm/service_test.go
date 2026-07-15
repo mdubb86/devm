@@ -83,4 +83,3 @@ func TestSSHConfigIncluded_DetectsPresence(t *testing.T) {
 		[]byte("Include \"/some/path/ssh_config\"\nHost github.com\n"), 0o600))
 	assert.True(t, sshConfigIncluded("/some/path/ssh_config"))
 }
-

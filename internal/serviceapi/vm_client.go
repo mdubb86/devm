@@ -33,8 +33,8 @@ func (c *Client) StartVM(ctx context.Context, req VMStartRequest) error {
 // succeeds — the CLI runs the user's install: / apt-get / template
 // installs with open network, then flips enforcement on just before
 // systemd services start.
-func (c *Client) ApplyEgressEnforcement(ctx context.Context, projectID, vmName string) error {
-	body, err := json.Marshal(VMApplyEgressRequest{ProjectID: projectID, VMName: vmName})
+func (c *Client) ApplyEgressEnforcement(ctx context.Context, name string) error {
+	body, err := json.Marshal(VMApplyEgressRequest{Name: name})
 	if err != nil {
 		return err
 	}
@@ -49,11 +49,11 @@ func (c *Client) ApplyEgressEnforcement(ctx context.Context, projectID, vmName s
 	return nil
 }
 
-// StopVM asks the daemon to stop the project VM. When vmName is set, the
-// daemon calls `tart stop <vmName>` first so the guest gets a graceful
-// shutdown before the tart-run process is signalled.
-func (c *Client) StopVM(ctx context.Context, projectID, vmName string) error {
-	body, err := json.Marshal(VMStopRequest{ProjectID: projectID, VMName: vmName})
+// StopVM asks the daemon to stop the project VM. The daemon calls
+// `tart stop <name>` first so the guest gets a graceful shutdown before
+// the tart-run process is signalled.
+func (c *Client) StopVM(ctx context.Context, name string) error {
+	body, err := json.Marshal(VMStopRequest{Name: name})
 	if err != nil {
 		return err
 	}
@@ -125,9 +125,9 @@ func (c *Client) ApplyIronProxy(ctx context.Context, req VMApplyIronProxyRequest
 // this iron-proxy lifetime, per host. Sorted by count desc. Empty slice
 // (never nil) if the project hasn't triggered any denials yet, iron-proxy
 // isn't running, or the daemon wasn't built with tracking wired.
-func (c *Client) Denials(ctx context.Context, projectID string) ([]Denial, error) {
+func (c *Client) Denials(ctx context.Context, name string) ([]Denial, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET",
-		"http://localhost/denials?project_id="+projectID, nil)
+		"http://localhost/denials?name="+name, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -147,15 +147,10 @@ func (c *Client) Denials(ctx context.Context, projectID string) ([]Denial, error
 	return out, nil
 }
 
-// VMStatus queries the daemon for the project VM's current state.
-// vmName is optional; when non-empty the daemon will attempt to
-// surface the VM's IP address (only available when the VM is running).
-func (c *Client) VMStatus(ctx context.Context, projectID, vmName string) (VMStatusResponse, error) {
-	path := "/vm/status?project_id=" + projectID
-	if vmName != "" {
-		path += "&vm_name=" + vmName
-	}
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://localhost"+path, nil)
+// VMStatus queries the daemon for the project VM's current state,
+// including the VM's IP address when it is running.
+func (c *Client) VMStatus(ctx context.Context, name string) (VMStatusResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://localhost/vm/status?name="+name, nil)
 	if err != nil {
 		return VMStatusResponse{}, err
 	}

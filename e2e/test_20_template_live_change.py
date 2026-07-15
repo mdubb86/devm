@@ -31,7 +31,7 @@ def test_template_live_change(workspace, devm, sandbox_name):
     tmpl_dir = workspace.path / "configs"
     tmpl_dir.mkdir()
     tmpl_path = tmpl_dir / "msg.tmpl"
-    tmpl_path.write_text("first {{.Project.ID}}\n")
+    tmpl_path.write_text("first {{.Project.Name}}\n")
 
     # Write the full config BEFORE cold-start so the provisioner installs
     # the template. The service is routing-only (no exec) — provisioner
@@ -57,7 +57,7 @@ def test_template_live_change(workspace, devm, sandbox_name):
         sh.expect_prompt(timeout=10)
 
         # Mutate the source on the host.
-        tmpl_path.write_text("second {{.Project.ID}}\n")
+        tmpl_path.write_text("second {{.Project.Name}}\n")
 
         # Reconcile from outside the shell.
         result = devm.reconcile(yes=True, timeout=60)

@@ -48,13 +48,13 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 	// /vm/start ran for this project, but no iron-proxy config file has
 	// been written yet (e.g. VM was stopped again before ever spawning
 	// iron-proxy).
-	seededCfg := schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}
+	seededCfg := schema.Config{Project: schema.Project{Name: "p"}}
 	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: seededCfg}))
 
 	// No config file exists → VM has never started iron-proxy. Snapshot
 	// should still update; response signals no live apply.
 	body, _ := json.Marshal(VMApplyIronProxyRequest{
-		ProjectID: "p",
+		Name:      "p",
 		Allowlist: []string{"a.example.com"},
 		Secrets:   nil,
 	})
@@ -93,7 +93,7 @@ func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
 	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, nil)
 
 	body, _ := json.Marshal(VMApplyIronProxyRequest{
-		ProjectID: "never-started",
+		Name:      "never-started",
 		Allowlist: []string{"a.example.com"},
 	})
 	rec := httptest.NewRecorder()
@@ -122,7 +122,7 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	const projectID = "p-running"
 	// Simulate cold-start having already seeded the snapshot with the
 	// real schema.Config; apply-iron-proxy requires this to exist (F3).
-	seededCfg := schema.Config{Project: schema.Project{ID: projectID, VMName: "p-running-vm"}}
+	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
 	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg}))
 
 	macHost := "127.0.0.1"
@@ -172,7 +172,7 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
-		ProjectID: projectID,
+		Name:      projectID,
 		Allowlist: []string{"a.example.com"},
 		Secrets: []SecretBinding{
 			{Name: "github_token", Value: "s3cr3t", Hosts: []string{"api.github.com"}},

@@ -19,21 +19,20 @@ import (
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 )
 
-// safeIdent is the character set allowed in VMName + ProjectID for
-// safe rendering into ssh_config. Whitelist over blacklist — blacklisting
+// safeIdent is the character set allowed in the project name for safe
+// rendering into ssh_config. Whitelist over blacklist — blacklisting
 // missed space (Host-pattern separator), comma (also a pattern separator),
 // hash (line comment), star (wildcard), and control chars across two
 // prior fix passes. This regex is the intersection of "characters devm's
-// real vm_names + project.ids use" and "characters that have no meaning
-// in ssh_config". Schema validation only enforces non-empty, so this is
-// the ONLY layer that catches injection attempts.
+// real project names use" and "characters that have no meaning in
+// ssh_config". It backstops schema validation as the last layer that
+// catches injection attempts.
 var safeIdent = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
 // Entry describes one Host block to emit.
 type Entry struct {
-	ProjectID string // for on-disk path lookups (keys, known_hosts)
-	VMName    string // the user-facing host alias devm-<VMName>
-	VMIP      string // current IP filled at emission time
+	Name string // project name: host alias devm-<Name> + on-disk path lookups
+	VMIP string // current IP filled at emission time
 }
 
 const header = `# Managed by devm. Regenerated on VM lifecycle events; hand edits will be
@@ -42,13 +41,13 @@ const header = `# Managed by devm. Regenerated on VM lifecycle events; hand edit
 
 `
 
-const blockTmpl = `Host devm-{{.VMName}}
+const blockTmpl = `Host devm-{{.Name}}
     HostName             {{.VMIP}}
     User                 devm
     Port                 22
     IdentityFile         "{{.KeyPath}}"
     UserKnownHostsFile   "{{.KnownHostsPath}}"
-    HostKeyAlias         devm-{{.VMName}}
+    HostKeyAlias         devm-{{.Name}}
     StrictHostKeyChecking yes
     IdentitiesOnly       yes
 
@@ -60,24 +59,21 @@ func Path() string {
 }
 
 // Emit atomically replaces the ssh_config file with header + one block
-// per entry (sorted by VMName ascending). Validates all entry fields to
+// per entry (sorted by Name ascending). Validates all entry fields to
 // prevent ssh_config injection attacks (newlines, quotes, control chars).
 // This is the ONLY layer that validates these constraints — schema
 // validation only checks non-empty.
 func Emit(entries []Entry) error {
 	sorted := make([]Entry, len(entries))
 	copy(sorted, entries)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].VMName < sorted[j].VMName })
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 
 	for _, e := range sorted {
-		if !safeIdent.MatchString(e.VMName) {
-			return fmt.Errorf("unsafe VMName %q: only [a-zA-Z0-9._-] allowed", e.VMName)
+		if !safeIdent.MatchString(e.Name) {
+			return fmt.Errorf("unsafe name %q: only [a-zA-Z0-9._-] allowed", e.Name)
 		}
-		if !safeIdent.MatchString(e.ProjectID) {
-			return fmt.Errorf("unsafe ProjectID %q: only [a-zA-Z0-9._-] allowed", e.ProjectID)
-		}
-		if strings.Contains(e.ProjectID, "..") {
-			return fmt.Errorf("unsafe ProjectID %q: path traversal not allowed", e.ProjectID)
+		if strings.Contains(e.Name, "..") {
+			return fmt.Errorf("unsafe name %q: path traversal not allowed", e.Name)
 		}
 		if net.ParseIP(e.VMIP) == nil {
 			return fmt.Errorf("unsafe VMIP %q: not a valid IP address", e.VMIP)
@@ -88,9 +84,9 @@ func Emit(entries []Entry) error {
 	var buf bytes.Buffer
 	buf.WriteString(header)
 	for _, e := range sorted {
-		dir := sshkeys.ProjectDir(e.ProjectID)
+		dir := sshkeys.ProjectDir(e.Name)
 		if err := tmpl.Execute(&buf, map[string]string{
-			"VMName":         e.VMName,
+			"Name":           e.Name,
 			"VMIP":           e.VMIP,
 			"KeyPath":        filepath.Join(dir, "id_ed25519"),
 			"KnownHostsPath": filepath.Join(dir, "known_hosts"),
@@ -124,4 +120,3 @@ func Emit(entries []Entry) error {
 	}
 	return os.Rename(tmpPath, Path())
 }
-

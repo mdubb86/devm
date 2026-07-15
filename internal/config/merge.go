@@ -7,11 +7,8 @@ import "github.com/mdubb86/devm/internal/schema"
 func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, error) {
 	out := base
 	if override.Project != nil {
-		if override.Project.ID != nil {
-			out.Project.ID = *override.Project.ID
-		}
-		if override.Project.VMName != nil {
-			out.Project.VMName = *override.Project.VMName
+		if override.Project.Name != nil {
+			out.Project.Name = *override.Project.Name
 		}
 		if override.Project.Proxy != nil {
 			out.Project.Proxy = *override.Project.Proxy

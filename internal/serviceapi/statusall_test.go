@@ -40,15 +40,15 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 
 	writeStatusAllSnapshot(t, "running-proj", schema.Config{
-		Project: schema.Project{ID: "running-proj", VMName: "running-proj-vm"},
+		Project: schema.Project{Name: "running-proj"},
 	})
 	writeStatusAllSnapshot(t, "stopped-proj", schema.Config{
-		Project: schema.Project{ID: "stopped-proj", VMName: "stopped-proj-vm"},
+		Project: schema.Project{Name: "stopped-proj"},
 	})
 
 	srv := NewServer(SocketPath(), Build{Version: "dev"})
 	sup := supervisor.New("")
-	tr := &fakeStatusAllTart{running: map[string]bool{"running-proj-vm": true}}
+	tr := &fakeStatusAllTart{running: map[string]bool{"running-proj": true}}
 	RegisterStatusAllHandler(srv, sup, tr)
 
 	rec := httptest.NewRecorder()
@@ -61,18 +61,18 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 
 	byID := map[string]ProjectStatus{}
 	for _, r := range rows {
-		byID[r.ProjectID] = r
+		byID[r.Name] = r
 	}
 
 	running := byID["running-proj"]
-	assert.Equal(t, "running-proj-vm", running.VMName)
+	assert.Equal(t, "running-proj", running.Name)
 	assert.True(t, running.VMRunning)
 	// No live iron-proxy process and no config file on disk for this
 	// project — computeProxyHealth reports MISSING.
 	assert.Equal(t, ProxyMissing, running.Proxy.Status)
 
 	stopped := byID["stopped-proj"]
-	assert.Equal(t, "stopped-proj-vm", stopped.VMName)
+	assert.Equal(t, "stopped-proj", stopped.Name)
 	assert.False(t, stopped.VMRunning)
 }
 
@@ -98,7 +98,7 @@ func TestStatusAll_SkipsNonJSONAndMalformedFiles(t *testing.T) {
 	require.NoError(t, os.MkdirAll(StateDir(), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(StateDir(), "notes.txt"), []byte("hi"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(StateDir(), "broken.json"), []byte("{not json"), 0o600))
-	writeStatusAllSnapshot(t, "good", schema.Config{Project: schema.Project{ID: "good", VMName: "good-vm"}})
+	writeStatusAllSnapshot(t, "good", schema.Config{Project: schema.Project{Name: "good"}})
 
 	srv := NewServer(SocketPath(), Build{Version: "dev"})
 	sup := supervisor.New("")
@@ -112,7 +112,7 @@ func TestStatusAll_SkipsNonJSONAndMalformedFiles(t *testing.T) {
 	var rows []ProjectStatus
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rows))
 	require.Len(t, rows, 1)
-	assert.Equal(t, "good", rows[0].ProjectID)
+	assert.Equal(t, "good", rows[0].Name)
 }
 
 func TestStatusAll_TartListError_Returns500(t *testing.T) {

@@ -39,8 +39,7 @@ const proxySentinelIP = "192.0.2.1"
 
 // VMStartRequest is the body shape for POST /vm/start.
 type VMStartRequest struct {
-	ProjectID         string          `json:"project_id"`
-	VMName            string          `json:"vm_name"`
+	Name              string          `json:"name"`
 	WorkspaceHostPath string          `json:"workspace_host_path"`
 	AllowList         []string        `json:"allow_list,omitempty"`
 	Secrets           []SecretBinding `json:"secrets,omitempty"`
@@ -54,20 +53,18 @@ type VMStartRequest struct {
 	DiskSizeGB int `json:"disk_size_gb,omitempty"`
 }
 
-// VMStopRequest is the body shape for POST /vm/stop.
-// VMName is optional; when set, the daemon calls `tart stop <VMName>` for a
-// graceful guest shutdown before SIGTERM'ing the supervised tart process.
+// VMStopRequest is the body shape for POST /vm/stop. The daemon calls
+// `tart stop <Name>` for a graceful guest shutdown before SIGTERM'ing the
+// supervised tart process.
 type VMStopRequest struct {
-	ProjectID string `json:"project_id"`
-	VMName    string `json:"vm_name,omitempty"`
+	Name string `json:"name"`
 }
 
 // VMApplyEgressRequest is the body shape for POST /vm/apply-egress-enforcement.
 // The daemon looks up the iron-proxy port info stashed at /vm/start time
 // and runs the nftables + dnsmasq scripts inside the VM.
 type VMApplyEgressRequest struct {
-	ProjectID string `json:"project_id"`
-	VMName    string `json:"vm_name"`
+	Name string `json:"name"`
 }
 
 // VMStatusResponse is the body shape for GET /vm/status.
@@ -134,12 +131,12 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
 		}
-		if req.ProjectID == "" || req.VMName == "" {
-			http.Error(w, "project_id and vm_name required", http.StatusBadRequest)
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
 
-		unlock := locks.Lock(req.ProjectID)
+		unlock := locks.Lock(req.Name)
 		defer unlock()
 
 		ctx := r.Context()
@@ -152,13 +149,13 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		}
 		exists := false
 		for _, vm := range vms {
-			if vm.Name == req.VMName {
+			if vm.Name == req.Name {
 				exists = true
 				break
 			}
 		}
 		if !exists {
-			if err := tr.Clone(ctx, "devm-base", req.VMName); err != nil {
+			if err := tr.Clone(ctx, "devm-base", req.Name); err != nil {
 				http.Error(w, fmt.Sprintf("tart clone: %v", err), http.StatusInternalServerError)
 				return
 			}
@@ -168,7 +165,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			// never a shrink; equal size is a safe no-op. The guest
 			// filesystem is grown after boot via the growpart inject below.
 			if req.DiskSizeGB > 0 {
-				if err := tr.SetDiskSize(ctx, req.VMName, req.DiskSizeGB); err != nil {
+				if err := tr.SetDiskSize(ctx, req.Name, req.DiskSizeGB); err != nil {
 					http.Error(w, fmt.Sprintf("tart set --disk-size: %v", err), http.StatusInternalServerError)
 					return
 				}
@@ -209,13 +206,13 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 				Tag:      fmt.Sprintf("extra_%d", i),
 			})
 		}
-		cmd, err := tr.Run(ctx, req.VMName, opts)
+		cmd, err := tr.Run(ctx, req.Name, opts)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("tart run prep: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		key := supervisor.Key{ProjectID: req.ProjectID, Role: supervisor.RoleVM}
+		key := supervisor.Key{ProjectID: req.Name, Role: supervisor.RoleVM}
 		if err := sup.Spawn(ctx, key, cmd); err != nil {
 			http.Error(w, fmt.Sprintf("supervisor spawn: %v", err), http.StatusInternalServerError)
 			return
@@ -226,7 +223,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		// the agent to register; without this wait, the env script
 		// (the first inject step) fires before the agent's gRPC
 		// listener is reachable and the handler 500s.
-		if err := waitVMExecReady(ctx, req.VMName, 60*time.Second); err != nil {
+		if err := waitVMExecReady(ctx, req.Name, 60*time.Second); err != nil {
 			http.Error(w, fmt.Sprintf("wait for vm exec-ready: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -247,7 +244,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		//
 		// The VM has an IP by now (waitVMExecReady already succeeded, which
 		// implies both the vmnet handshake and the guest agent are up).
-		vmIP, err := tr.IP(ctx, req.VMName)
+		vmIP, err := tr.IP(ctx, req.Name)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("discover VM ip: %v", err), http.StatusInternalServerError)
 			return
@@ -291,20 +288,20 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			// address. If we returned macIP here, the guest's `ip daddr
 			// <macIP> return` bypass would fire before DNAT and the packet
 			// would connect to nothing on macIP:443.
-			DNSProxyIP:  proxySentinelIP,
-			CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
-			CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
-			AllowList:   req.AllowList,
-			Secrets:     ironSecrets,
+			DNSProxyIP: proxySentinelIP,
+			CACertPath: filepath.Join(caDir, "ca", "root.crt"),
+			CAKeyPath:  filepath.Join(caDir, "ca", "root.key"),
+			AllowList:  req.AllowList,
+			Secrets:    ironSecrets,
 		}
-		if err := SpawnIronProxy(r.Context(), sup, req.ProjectID, proxyCfg, denials); err != nil {
+		if err := SpawnIronProxy(r.Context(), sup, req.Name, proxyCfg, denials); err != nil {
 			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		// Stash port info + macIP for VM env injection and the deferred
 		// egress-enforcement inject to read.
-		ironProxyState.put(req.ProjectID, ironProxyInfo{
+		ironProxyState.put(req.Name, ironProxyInfo{
 			MacHost:   macIP,
 			HTTPPort:  httpPort,
 			HTTPSPort: httpsPort,
@@ -341,7 +338,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			scripts = append([]string{buildGrowRootScript()}, scripts...)
 		}
 		for i, script := range scripts {
-			cmd := exec.Command("tart", "exec", "-i", req.VMName, "sudo", "bash", "-s")
+			cmd := exec.Command("tart", "exec", "-i", req.Name, "sudo", "bash", "-s")
 			cmd.Stdin = strings.NewReader(script)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
@@ -372,15 +369,15 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
 		}
-		if req.ProjectID == "" || req.VMName == "" {
-			http.Error(w, "project_id and vm_name required", http.StatusBadRequest)
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
 
-		unlock := locks.Lock(req.ProjectID)
+		unlock := locks.Lock(req.Name)
 		defer unlock()
 
-		info, ok := ironProxyState.get(req.ProjectID)
+		info, ok := ironProxyState.get(req.Name)
 		if !ok {
 			http.Error(w, "iron-proxy state missing — was /vm/start called for this project?",
 				http.StatusPreconditionFailed)
@@ -392,7 +389,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			buildTimesyncdScript(),
 		}
 		for i, script := range scripts {
-			cmd := exec.Command("tart", "exec", "-i", req.VMName, "sudo", "bash", "-s")
+			cmd := exec.Command("tart", "exec", "-i", req.Name, "sudo", "bash", "-s")
 			cmd.Stdin = strings.NewReader(script)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
@@ -414,25 +411,25 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
 		}
-		if req.ProjectID == "" {
-			http.Error(w, "project_id required", http.StatusBadRequest)
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
 
-		unlock := locks.Lock(req.ProjectID)
+		unlock := locks.Lock(req.Name)
 		defer unlock()
 
 		// Stop iron-proxy for this project first. Best-effort — if
 		// it's not running, supervisor.Stop returns ErrNotFound which
 		// we treat as success.
-		key := supervisor.Key{ProjectID: req.ProjectID, Role: supervisor.RoleProxy}
+		key := supervisor.Key{ProjectID: req.Name, Role: supervisor.RoleProxy}
 		if err := sup.Stop(r.Context(), key); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
 			http.Error(w, fmt.Sprintf("stop iron-proxy: %v", err), http.StatusInternalServerError)
 			return
 		}
-		ironProxyState.del(req.ProjectID)
+		ironProxyState.del(req.Name)
 		if denials != nil {
-			denials.Reset(req.ProjectID)
+			denials.Reset(req.Name)
 		}
 
 		// Ask tart for a graceful guest shutdown before SIGTERM'ing the
@@ -441,13 +438,13 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		// Best-effort: `tart stop` on an already-stopped VM errors out;
 		// carry on regardless — the supervisor stop below is what
 		// releases devm's process handle.
-		if req.VMName != "" {
+		if req.Name != "" {
 			stopCtx, stopCancel := context.WithTimeout(r.Context(), 15*time.Second)
-			_ = tr.Stop(stopCtx, req.VMName)
+			_ = tr.Stop(stopCtx, req.Name)
 			stopCancel()
 		}
 
-		key = supervisor.Key{ProjectID: req.ProjectID, Role: supervisor.RoleVM}
+		key = supervisor.Key{ProjectID: req.Name, Role: supervisor.RoleVM}
 		if err := sup.Stop(r.Context(), key); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
 			http.Error(w, fmt.Sprintf("supervisor stop: %v", err), http.StatusInternalServerError)
 			return
@@ -460,12 +457,12 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
 			return
 		}
-		projectID := r.URL.Query().Get("project_id")
-		if projectID == "" {
-			http.Error(w, "project_id query param required", http.StatusBadRequest)
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "name query param required", http.StatusBadRequest)
 			return
 		}
-		key := supervisor.Key{ProjectID: projectID, Role: supervisor.RoleVM}
+		key := supervisor.Key{ProjectID: name, Role: supervisor.RoleVM}
 		state := sup.Status(key)
 
 		resp := VMStatusResponse{
@@ -474,30 +471,25 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			PID:     state.PID,
 		}
 
-		// When vm_name is provided, tart is the authoritative source
-		// for "does this VM exist / is it running" — the supervisor's
-		// key is (project_id, role) only, so adoption across daemon
-		// restarts can re-attach to a PID from a previous project run
-		// whose VM name no longer matches the current request. Cross-
-		// check the supervisor's claim against tart's list and let
-		// tart win.
-		vmName := r.URL.Query().Get("vm_name")
-		if vmName != "" {
-			resp.Present = false
-			resp.Running = false
-			if vms, err := tr.List(r.Context()); err == nil {
-				for _, vm := range vms {
-					if vm.Name == vmName {
-						resp.Present = true
-						resp.Running = vm.Running
-						break
-					}
+		// tart is the authoritative source for "does this VM exist / is it
+		// running" — the supervisor's key is (project, role) only, so
+		// adoption across daemon restarts can re-attach to a PID from a
+		// previous project run whose VM name no longer matches. Cross-check
+		// the supervisor's claim against tart's list and let tart win.
+		resp.Present = false
+		resp.Running = false
+		if vms, err := tr.List(r.Context()); err == nil {
+			for _, vm := range vms {
+				if vm.Name == name {
+					resp.Present = true
+					resp.Running = vm.Running
+					break
 				}
 			}
 		}
 
-		if vmName != "" && resp.Running {
-			ip, _ := tr.IP(r.Context(), vmName)
+		if resp.Running {
+			ip, _ := tr.IP(r.Context(), name)
 			resp.IP = ip
 		}
 
@@ -515,14 +507,14 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
 			return
 		}
-		projectID := r.URL.Query().Get("project_id")
-		if projectID == "" {
-			http.Error(w, "project_id query param required", http.StatusBadRequest)
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "name query param required", http.StatusBadRequest)
 			return
 		}
 		var snap []Denial
 		if denials != nil {
-			snap = denials.Snapshot(projectID)
+			snap = denials.Snapshot(name)
 		}
 		if snap == nil {
 			snap = []Denial{}

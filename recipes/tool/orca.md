@@ -29,7 +29,7 @@ VM starts, stops, or the daemon restarts.
 Once your project's VM is up (`devm shell` or `devm start`), point
 Orca at the VM:
 
-- **host:** `devm-<vm-name>` — matches `project.vm_name` in your `devm.yaml`.
+- **host:** `devm-<name>` — matches `project.name` in your `devm.yaml`.
 - **port:** 22
 - **username:** devm
 - **identityFile:** leave blank; ssh_config's `IdentityFile` inherits.

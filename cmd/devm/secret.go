@@ -141,7 +141,7 @@ func currentProjectID() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("locate devm.yaml: %w (run `devm secret` from a project root)", err)
 	}
-	return cfg.Project.ID, nil
+	return cfg.Project.Name, nil
 }
 
 func init() {

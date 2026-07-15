@@ -88,8 +88,7 @@ def test_reconcile_heals_secret_structure(devm, workspace, sandbox_name, devm_in
     try:
         workspace.devmyaml_path.write_text(textwrap.dedent(f"""\
             project:
-              id: {workspace.slug}
-              vm_name: {workspace.vm_name}
+              name: {workspace.vm_name}
             env:
               AUTH_TOKEN: !secret {secret_name}
             network:

@@ -11,8 +11,8 @@ import (
 
 // ApplyRoutes pushes the project's routes to the daemon. Replaces
 // any previous set for this project.
-func (c *Client) ApplyRoutes(ctx context.Context, projectID string, routes []Route) error {
-	body, err := json.Marshal(ApplyRequest{ProjectID: projectID, Routes: routes})
+func (c *Client) ApplyRoutes(ctx context.Context, name string, routes []Route) error {
+	body, err := json.Marshal(ApplyRequest{Name: name, Routes: routes})
 	if err != nil {
 		return err
 	}
@@ -34,8 +34,8 @@ func (c *Client) ApplyRoutes(ctx context.Context, projectID string, routes []Rou
 }
 
 // RemoveRoutes drops the project's routes.
-func (c *Client) RemoveRoutes(ctx context.Context, projectID string) error {
-	body, err := json.Marshal(RemoveRequest{ProjectID: projectID})
+func (c *Client) RemoveRoutes(ctx context.Context, name string) error {
+	body, err := json.Marshal(RemoveRequest{Name: name})
 	if err != nil {
 		return err
 	}

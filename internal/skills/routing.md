@@ -52,7 +52,7 @@ devm route vm
 
 What happens:
 
-1. `devm` queries Tart for the VM's current IP address (using `cfg.Project.VMName`). The VM must be running; start it first with `devm shell` if needed.
+1. `devm` queries Tart for the VM's current IP address (using `cfg.Project.Name`). The VM must be running; start it first with `devm shell` if needed.
 2. It sends `POST /routes/apply` to the daemon with `BackendHost=VM_IP` and `BackendPort=svc.Port` for each hostname.
 3. The daemon proxy now dials `VM_IP:svc.Port` directly when a request arrives for that hostname.
 

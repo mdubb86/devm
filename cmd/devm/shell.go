@@ -102,12 +102,12 @@ TTY/PTY handling is auto-detected from the caller's stdin:
 // convention (fail loud on stopped/absent, don't silently cold-start).
 func requireRunningVM(ctx context.Context, cfg schema.Config) error {
 	c := serviceapi.NewClient()
-	st, err := c.VMStatus(ctx, cfg.Project.ID, cfg.Project.VMName)
+	st, err := c.VMStatus(ctx, cfg.Project.Name)
 	if err != nil {
 		return fmt.Errorf("query vm status: %w", err)
 	}
 	if !st.Running {
-		return fmt.Errorf("sandbox %q is not running — start it with `devm start` (or `devm shell`) first", cfg.Project.VMName)
+		return fmt.Errorf("sandbox %q is not running — start it with `devm start` (or `devm shell`) first", cfg.Project.Name)
 	}
 	return nil
 }
@@ -154,14 +154,14 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 		if err != nil {
 			return
 		}
-		if _, present := existing[cfg.Project.ID]; present {
+		if _, present := existing[cfg.Project.Name]; present {
 			return
 		}
-		_ = c.ApplyRoutes(rctx, cfg.Project.ID, routes)
+		_ = c.ApplyRoutes(rctx, cfg.Project.Name, routes)
 	}()
 
 	deps := orchestrator.DefaultShellDeps(repoRoot)
-	rc, err := orchestrator.RunShell(ctx, deps, cfg, repoRoot, cfg.Project.VMName, cmdName, cmdArgs)
+	rc, err := orchestrator.RunShell(ctx, deps, cfg, repoRoot, cfg.Project.Name, cmdName, cmdArgs)
 	if err != nil {
 		// SIGINT during cold start cancels ctx. Suppress the noisy
 		// "context canceled" stack and exit 130 (SIGINT convention).

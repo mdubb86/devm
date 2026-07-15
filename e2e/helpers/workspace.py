@@ -27,8 +27,7 @@ class Workspace:
         network) are merged into the project skeleton."""
         cfg: dict[str, Any] = {
             "project": {
-                "id": self.slug,
-                "vm_name": self.vm_name,
+                "name": self.vm_name,
             },
         }
         for k, v in sections.items():

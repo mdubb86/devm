@@ -19,8 +19,7 @@ func TestLoadBaseOnly(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
-  id: test
-  vm_name: test-vm
+  name: test
 services:
   webapp:
     port: 3000
@@ -29,7 +28,7 @@ services:
 
 	cfg, err := Load(dir)
 	assert.NoError(t, err)
-	assert.Equal(t, "test", cfg.Project.ID)
+	assert.Equal(t, "test", cfg.Project.Name)
 	assert.Equal(t, 3000, cfg.Services["webapp"].Port)
 }
 
@@ -37,8 +36,7 @@ func TestLoadWithOverride_Proxy(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
-  id: test
-  vm_name: test-vm
+  name: test
 `)
 	writeFile(t, dir, "devm.me.yaml", `
 project:
@@ -54,8 +52,7 @@ func TestLoadResolvesEnvAndInjectsWorkspaceAndIsSandbox(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
-  id: test
-  vm_name: test-vm
+  name: test
 env:
   CLAUDE_CONFIG_DIR: $WORKSPACE/.claude
 `)
@@ -74,8 +71,7 @@ func TestLoadReportsReservedEnvKeyError(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
-  id: test
-  vm_name: test-vm
+  name: test
 env:
   WORKSPACE: /tmp/sneaky
 `)
@@ -90,25 +86,23 @@ func TestLoad_RejectsLegacyHostnameApex_InBase(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
   hostname_apex: foo.local
 `)
 
 	_, err := Load(dir)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "hostname_apex is no longer supported")
-	assert.Contains(t, err.Error(), "HOSTNAME_APEX")
+	assert.Contains(t, err.Error(), "unknown field")
+	assert.Contains(t, err.Error(), "hostname_apex")
 	assert.Contains(t, err.Error(), "devm.yaml",
 		"error should identify which file is offending")
 }
 
-func TestLoad_RejectsLegacyHostnameApex_InOverride(t *testing.T) {
+func TestLoad_RejectsUnknownProjectKey_InOverride(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
 `)
 	writeFile(t, dir, "devm.me.yaml", `
 project:
@@ -117,8 +111,8 @@ project:
 
 	_, err := Load(dir)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "hostname_apex is no longer supported")
-	assert.Contains(t, err.Error(), "HOSTNAME_APEX")
+	assert.Contains(t, err.Error(), "unknown field")
+	assert.Contains(t, err.Error(), "hostname_apex")
 	assert.Contains(t, err.Error(), "devm.me.yaml",
 		"error should identify the override file as offending")
 }
@@ -127,8 +121,7 @@ func TestLoad_RejectsUnknownTopLevelField_InBase(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
 volumes:
   /data: 1G
 `)
@@ -145,8 +138,7 @@ func TestLoad_RejectsUnknownTopLevelField_InOverride(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
 `)
 	writeFile(t, dir, "devm.me.yaml", `
 volumes:
@@ -172,8 +164,7 @@ func TestLoad_RejectsUnknownNestedField(t *testing.T) {
 			name: "unknown service field",
 			yaml: `
 project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
 services:
   api:
     exec: ["/bin/true"]
@@ -185,8 +176,7 @@ services:
 			name: "unknown network field",
 			yaml: `
 project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
 network:
   allowlist:
     - example.com
@@ -197,8 +187,7 @@ network:
 			name: "typo inside project",
 			yaml: `
 project:
-  id: foo
-  vm_name: foo-vm
+  name: foo
   proxxy: on
 `,
 			wantIn: "proxxy",
@@ -220,11 +209,11 @@ func TestLoadStrictFailsOnMissingRequiredField(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
-  id: test
-  # missing vm_name
+  proxy: caddy
+  # missing name
 `)
 
 	_, err := Load(dir)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "vm_name")
+	assert.Contains(t, err.Error(), "name")
 }
