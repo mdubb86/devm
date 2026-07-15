@@ -65,15 +65,6 @@ func RunService(ctx context.Context, build Build) error {
 	// start empty for them until the next SpawnIronProxy respawn.
 	denials := NewDenials()
 
-	// No-secret startup heal: respawn any iron-proxy that's MISSING for
-	// a project whose VM is already running. Covers the gap
-	// AdoptIronProxies doesn't — a VM that outlived a killed/crashed
-	// iron-proxy process, not just a killed daemon. Secret-bearing
-	// projects can't be healed here (no keychain access outside a
-	// user-context CLI invocation) and wait for the CLI to notice via
-	// /handshake. Best-effort — logs per project, never blocks startup.
-	healNoSecretProxiesAtStartup(ctx, tr, sup, denials)
-
 	// SNTP responder — one daemon-wide instance, bound eagerly so /vm/start
 	// knows the port when it builds the guest's nftables script. The guest
 	// DNATs its outbound UDP:123 (timesyncd → wherever) to MAC_HOST at

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mdubb86/devm/internal/orchestrator"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
@@ -13,8 +12,8 @@ import (
 // daemonHandshake does the daemon-sync fingerprint check (same as
 // requireDaemonInSync — kept in cmd/devm because it needs the package
 // Fingerprint var + resolvedSelfPath()) and, when the daemon reports this
-// project's iron-proxy unhealthy, heals it best-effort (logs on failure,
-// never blocks the user's command).
+// project's iron-proxy unhealthy, warns on stderr — reporting only, never
+// mutating. `devm reconcile` is the sole heal path.
 func daemonHandshake(ctx context.Context, cfg schema.Config) error {
 	hs, err := serviceapi.NewClient().Handshake(ctx, cfg.Project.ID)
 	if err != nil {
@@ -30,9 +29,7 @@ func daemonHandshake(ctx context.Context, cfg schema.Config) error {
 		)
 	}
 	if hs.Proxy != nil && hs.Proxy.Status != serviceapi.ProxyOK {
-		if herr := orchestrator.HealIronProxy(ctx, cfg); herr != nil {
-			fmt.Fprintf(os.Stderr, "warning: iron-proxy heal for %s failed: %v\n", cfg.Project.ID, herr)
-		}
+		fmt.Fprintf(os.Stderr, "warning: iron-proxy for %s is %s — run 'devm reconcile' to restore\n", cfg.Project.ID, hs.Proxy.Status)
 	}
 	return nil
 }

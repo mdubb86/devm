@@ -10,8 +10,8 @@ import (
 // HandshakeResponse is the body of GET /handshake. Build is always present
 // (the daemon-sync fingerprint check the CLI does on every daemon-touching
 // command). Proxy is present only when project_id is supplied, and carries
-// the project's iron-proxy health so the command can heal it in the same
-// round-trip.
+// the project's iron-proxy health so the command can report drift to the
+// user — `devm reconcile` is the only thing that heals it.
 type HandshakeResponse struct {
 	Build Build        `json:"build"`
 	Proxy *ProxyHealth `json:"proxy,omitempty"`

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,26 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// captureStderr redirects os.Stderr for the duration of fn and returns
+// everything written to it. Used to assert daemonHandshake's drift
+// warning without needing a real terminal.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = orig })
+
+	fn()
+
+	require.NoError(t, w.Close())
+	os.Stderr = orig
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+	return string(out)
+}
 
 // startHandshakeDaemon spins a real serviceapi.Server with only the
 // /handshake endpoint registered, bound to a temp socket under
@@ -83,4 +104,34 @@ func TestDaemonHandshake_DaemonUnreachable_ToleratedNoError(t *testing.T) {
 	cfg := schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}
 	err := daemonHandshake(context.Background(), cfg)
 	assert.NoError(t, err)
+}
+
+// TestDaemonHandshake_ProxyDrift_WarnsAndDoesNotHeal covers the
+// collapsed heal model: `devm reconcile` is the only thing that heals
+// iron-proxy drift now. daemonHandshake must not attempt to heal it —
+// only report it via a stderr warning — even though the daemon in this
+// test has no /vm/apply-iron-proxy handler registered at all (so any
+// attempt to heal would itself fail loudly, which is exactly what we're
+// asserting does NOT happen: no error, just a warning).
+func TestDaemonHandshake_ProxyDrift_WarnsAndDoesNotHeal(t *testing.T) {
+	origFingerprint := Fingerprint
+	Fingerprint = "fp-match"
+	t.Cleanup(func() { Fingerprint = origFingerprint })
+
+	// A fresh supervisor + no state snapshot for "p" means
+	// computeProxyHealth reports ProxyMissing (no live process, no
+	// config file on disk).
+	cleanup := startHandshakeDaemon(t, serviceapi.Build{Fingerprint: "fp-match"})
+	defer cleanup()
+
+	cfg := schema.Config{Project: schema.Project{ID: "p", VMName: "p-vm"}}
+
+	var err error
+	stderr := captureStderr(t, func() {
+		err = daemonHandshake(context.Background(), cfg)
+	})
+
+	assert.NoError(t, err, "drift must be reported, not surfaced as an error")
+	assert.Contains(t, stderr, "warning: iron-proxy for p is missing")
+	assert.Contains(t, stderr, "devm reconcile")
 }

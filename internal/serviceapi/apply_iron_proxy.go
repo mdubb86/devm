@@ -248,19 +248,6 @@ func updateSnapshotAfterSpawn(projectID string, hashes map[string]string, stampV
 	return WriteStateSnapshot(projectID, *snap)
 }
 
-// stampProxyVersion records the current iron-proxy embedded-blob hash into
-// the project's snapshot. No-ops on a missing snapshot (a proxy only
-// spawns for a project applied at least once). Used by the daemon-start
-// heal, which spawns outside the apply-iron-proxy handler.
-func stampProxyVersion(projectID string) error {
-	snap, err := ReadStateSnapshot(projectID)
-	if err != nil || snap == nil {
-		return err
-	}
-	snap.ProxyVersion = ironproxy.EmbeddedSha256()
-	return WriteStateSnapshot(projectID, *snap)
-}
-
 // writeJSON writes body as JSON with 200 OK.
 func writeJSON(w http.ResponseWriter, body any) {
 	w.Header().Set("Content-Type", "application/json")
