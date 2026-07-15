@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -233,6 +234,103 @@ func formatIronProxyHealth(r StatusResult) string {
 		fmt.Fprintf(&b, "\niron-proxy: unknown (%s)\n", r.ProxyHealth.Status)
 	}
 	return b.String()
+}
+
+// green wraps s in an ANSI green escape when UseColor is set.
+func green(s string) string {
+	if !UseColor {
+		return s
+	}
+	return "\x1b[32m" + s + "\x1b[0m"
+}
+
+// red wraps s in an ANSI red escape when UseColor is set. Mirrors the
+// inline pattern formatDaemonStatus uses for its MISMATCH marker.
+func red(s string) string {
+	if !UseColor {
+		return s
+	}
+	return "\x1b[31m" + s + "\x1b[0m"
+}
+
+// FormatStatusAllText renders a cross-project status table for `devm
+// status --all`: one row per project the daemon has a persisted
+// snapshot for, showing VM state, iron-proxy health, and whether
+// reconcile is required. The iron-proxy/reconcile columns show "—"
+// for stopped VMs — proxy health isn't actionable until the VM is up
+// (same reasoning as ExitReconcileRequired only firing for running
+// VMs). Honors UseColor: green "ok", red "MISSING"/"STALE".
+func FormatStatusAllText(rows []serviceapi.ProjectStatus) string {
+	if len(rows) == 0 {
+		return "No projects found.\n"
+	}
+
+	type line struct {
+		project, vm, proxy, reconcile string
+		colored                       string // "" | "ok" | "bad"
+	}
+
+	lines := make([]line, len(rows))
+	widths := [4]int{
+		utf8.RuneCountInString("PROJECT"),
+		utf8.RuneCountInString("VM"),
+		utf8.RuneCountInString("IRON-PROXY"),
+		utf8.RuneCountInString("RECONCILE"),
+	}
+	for i, r := range rows {
+		vmState := "stopped"
+		if r.VMRunning {
+			vmState = "running"
+		}
+		proxyCol, reconcileCol, colored := "—", "—", ""
+		if r.VMRunning {
+			switch r.Proxy.Status {
+			case serviceapi.ProxyOK:
+				proxyCol, colored = "ok", "ok"
+			case serviceapi.ProxyMissing:
+				proxyCol, reconcileCol, colored = "MISSING", "required", "bad"
+			case serviceapi.ProxyStale:
+				proxyCol, reconcileCol, colored = "STALE", "required", "bad"
+			default:
+				proxyCol = string(r.Proxy.Status)
+			}
+		}
+		lines[i] = line{project: r.ProjectID, vm: vmState, proxy: proxyCol, reconcile: reconcileCol, colored: colored}
+		widths[0] = max(widths[0], utf8.RuneCountInString(lines[i].project))
+		widths[1] = max(widths[1], utf8.RuneCountInString(lines[i].vm))
+		widths[2] = max(widths[2], utf8.RuneCountInString(lines[i].proxy))
+		widths[3] = max(widths[3], utf8.RuneCountInString(lines[i].reconcile))
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-*s  %-*s  %-*s  %-*s\n",
+		widths[0], "PROJECT", widths[1], "VM", widths[2], "IRON-PROXY", widths[3], "RECONCILE")
+	for _, l := range lines {
+		proxy := l.proxy
+		switch l.colored {
+		case "ok":
+			proxy = green(l.proxy)
+		case "bad":
+			proxy = red(l.proxy)
+		}
+		pad := widths[2] - utf8.RuneCountInString(l.proxy)
+		if pad < 0 {
+			pad = 0
+		}
+		fmt.Fprintf(&b, "%-*s  %-*s  %s%s  %-*s\n",
+			widths[0], l.project, widths[1], l.vm, proxy, strings.Repeat(" ", pad), widths[3], l.reconcile)
+	}
+	return b.String()
+}
+
+// FormatStatusAllJSON renders the []ProjectStatus from GET /status/all
+// as JSON — the CLI's `devm status --all --json` output.
+func FormatStatusAllJSON(rows []serviceapi.ProjectStatus) string {
+	if rows == nil {
+		rows = []serviceapi.ProjectStatus{}
+	}
+	out, _ := json.MarshalIndent(rows, "", "  ")
+	return string(out)
 }
 
 // FormatReconcileText renders ReconcileResult for human terminals.

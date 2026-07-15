@@ -319,6 +319,69 @@ func TestFormatDaemonStatus_MismatchColor(t *testing.T) {
 	})
 }
 
+func TestFormatStatusAllText_TableShape(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{ProjectID: "sewtrue", VMName: "sewtrue-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+		{ProjectID: "everstone", VMName: "everstone-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+		{ProjectID: "ship5", VMName: "ship5-vm", VMRunning: false, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+	}
+	UseColor = false
+	out := FormatStatusAllText(rows)
+
+	assert.Contains(t, out, "PROJECT")
+	assert.Contains(t, out, "VM")
+	assert.Contains(t, out, "IRON-PROXY")
+	assert.Contains(t, out, "RECONCILE")
+
+	assert.Regexp(t, `sewtrue\s+running\s+MISSING\s+required`, out)
+	assert.Regexp(t, `everstone\s+running\s+ok\s+—`, out)
+	assert.Regexp(t, `ship5\s+stopped\s+—\s+—`, out)
+}
+
+func TestFormatStatusAllText_StaleShowsReconcileRequired(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{ProjectID: "p", VMName: "p-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyStale}},
+	}
+	UseColor = false
+	out := FormatStatusAllText(rows)
+	assert.Regexp(t, `p\s+running\s+STALE\s+required`, out)
+}
+
+func TestFormatStatusAllText_Empty(t *testing.T) {
+	UseColor = false
+	out := FormatStatusAllText(nil)
+	assert.Contains(t, out, "No projects")
+}
+
+func TestFormatStatusAllText_Color(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{ProjectID: "ok-proj", VMName: "ok-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+		{ProjectID: "bad-proj", VMName: "bad-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+	}
+	t.Run("plain_when_disabled", func(t *testing.T) {
+		UseColor = false
+		out := FormatStatusAllText(rows)
+		assert.NotContains(t, out, "\x1b[")
+	})
+	t.Run("colored_when_enabled", func(t *testing.T) {
+		UseColor = true
+		defer func() { UseColor = false }()
+		out := FormatStatusAllText(rows)
+		assert.Contains(t, out, "\x1b[32mok\x1b[0m")
+		assert.Contains(t, out, "\x1b[31mMISSING\x1b[0m")
+	})
+}
+
+func TestFormatStatusAllJSON(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{ProjectID: "p", VMName: "p-vm", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+	}
+	out := FormatStatusAllJSON(rows)
+	assert.Contains(t, out, `"project_id": "p"`)
+	assert.Contains(t, out, `"vm_running": true`)
+	assert.Contains(t, out, `"status": "ok"`)
+}
+
 func TestFormatChange_Template(t *testing.T) {
 	// Added template.
 	added := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "web", Detail: "/etc/caddy/Caddyfile", New: "installed"}

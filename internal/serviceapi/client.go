@@ -109,6 +109,29 @@ func (c *Client) Handshake(ctx context.Context, projectID string) (HandshakeResp
 	return out, nil
 }
 
+// StatusAll returns a cross-project status summary — one entry per
+// project the daemon has a persisted StateSnapshot for, combining VM
+// running state with iron-proxy health. Backs `devm status --all`.
+func (c *Client) StatusAll(ctx context.Context) ([]ProjectStatus, error) {
+	resp, err := c.do(ctx, "GET", "/status/all")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("status/all request failed: status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var out []ProjectStatus
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("parse status/all response: %w", err)
+	}
+	return out, nil
+}
+
 // Available returns true if the service is reachable. Used by CLI
 // commands to decide whether to surface a warning, route through
 // the service, etc. Errors are swallowed — "not available" is a

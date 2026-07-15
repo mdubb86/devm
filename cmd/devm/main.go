@@ -19,6 +19,15 @@ import (
 // and the CLI exits 1.
 const ExitDaemonDrift = 3
 
+// ExitReconcileRequired is the exit code `devm status` (project-scoped
+// or --all) uses when a shown project's iron-proxy is MISSING or
+// STALE — an actionable signal that `devm reconcile` will fix.
+// Distinct from ExitDaemonDrift: this is per-project sandbox drift,
+// not a daemon-binary mismatch. Action commands (shell/stop/teardown)
+// don't use this code — they warn and proceed (exit 0); `devm status`
+// is the read-only probe that keys scripts off the exit code.
+const ExitReconcileRequired = 4
+
 // nudgeForCommand fires the "newer version available" check before
 // the named subcommands. Suppressions (DEVM_NO_UPDATE_CHECK, CI,
 // brew, dev builds) live inside MaybeNudge. Cache means most calls
