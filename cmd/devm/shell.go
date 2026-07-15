@@ -10,6 +10,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/orchestrator"
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
 )
@@ -74,10 +75,18 @@ TTY/PTY handling is auto-detected from the caller's stdin:
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		if err := requireDaemonInSync(cmd.Context()); err != nil {
+		repoRoot, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("get cwd: %w", err)
+		}
+		cfg, err := config.Load(repoRoot)
+		if err != nil {
 			return err
 		}
-		if err := requireRunningVM(cmd.Context()); err != nil {
+		if err := daemonHandshake(cmd.Context(), cfg); err != nil {
+			return err
+		}
+		if err := requireRunningVM(cmd.Context(), cfg); err != nil {
 			return err
 		}
 		return runShellFlow(cmd, args[0], args[1:])
@@ -90,18 +99,7 @@ TTY/PTY handling is auto-detected from the caller's stdin:
 // requireRunningVM returns a clear error when the project's sandbox
 // isn't running — used by `devm exec` to enforce the docker-exec
 // convention (fail loud on stopped/absent, don't silently cold-start).
-// The load-cfg-here duplication with runShellFlow is intentional: this
-// runs before we commit to the cold-start path, and the exec-fail
-// message needs the project's VM name.
-func requireRunningVM(ctx context.Context) error {
-	repoRoot, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("get cwd: %w", err)
-	}
-	cfg, err := config.Load(repoRoot)
-	if err != nil {
-		return err
-	}
+func requireRunningVM(ctx context.Context, cfg schema.Config) error {
 	c := serviceapi.NewClient()
 	st, err := c.VMStatus(ctx, cfg.Project.ID, cfg.Project.VMName)
 	if err != nil {
@@ -120,15 +118,15 @@ func requireRunningVM(ctx context.Context) error {
 func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	// Past arg parsing — errors from here on are runtime, not usage.
 	cmd.SilenceUsage = true
-	if err := requireDaemonInSync(cmd.Context()); err != nil {
-		return err
-	}
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
 	}
 	cfg, err := config.Load(repoRoot)
 	if err != nil {
+		return err
+	}
+	if err := daemonHandshake(cmd.Context(), cfg); err != nil {
 		return err
 	}
 

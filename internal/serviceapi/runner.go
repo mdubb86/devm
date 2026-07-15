@@ -80,6 +80,7 @@ func RunService(ctx context.Context, build Build) error {
 	RegisterVMHandlers(server, sup, tr, denials, ntp.Port(), locks)
 	RegisterReconcileHandler(server, locks, &realApplyLiver{tr: tr}, tr)
 	RegisterApplyIronProxyHandler(server, locks, sup, denials)
+	RegisterHandshakeHandler(server, build, sup)
 
 	// Pull launchd-inherited listeners for :80 and :443. If the
 	// daemon was started outside launchd (e.g., `devm serve` from a

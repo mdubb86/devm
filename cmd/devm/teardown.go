@@ -24,15 +24,15 @@ All installed state is lost. Use --yes (-y) to skip the prompt. The kit
 definition under .devm/ is not touched; devm shell will rebuild from scratch.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		if err := requireDaemonInSync(cmd.Context()); err != nil {
-			return err
-		}
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)
 		}
 		cfg, err := config.Load(repoRoot)
 		if err != nil {
+			return err
+		}
+		if err := daemonHandshake(cmd.Context(), cfg); err != nil {
 			return err
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)

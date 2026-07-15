@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 )
 
 // Client talks to the devm service over its Unix domain socket.
@@ -82,6 +83,30 @@ func (c *Client) BuildInfo(ctx context.Context) (Build, error) {
 		return Build{}, fmt.Errorf("parse version response: %w", err)
 	}
 	return b, nil
+}
+
+// Handshake returns the daemon's build identity and, when projectID is
+// non-empty, that project's iron-proxy health — one round-trip for the
+// fingerprint-drift check plus the heal decision daemon-touching commands
+// need to make.
+func (c *Client) Handshake(ctx context.Context, projectID string) (HandshakeResponse, error) {
+	resp, err := c.do(ctx, "GET", "/handshake?project_id="+url.QueryEscape(projectID))
+	if err != nil {
+		return HandshakeResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return HandshakeResponse{}, fmt.Errorf("handshake request failed: status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return HandshakeResponse{}, err
+	}
+	var out HandshakeResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return HandshakeResponse{}, fmt.Errorf("parse handshake response: %w", err)
+	}
+	return out, nil
 }
 
 // Available returns true if the service is reachable. Used by CLI
