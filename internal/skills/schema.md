@@ -17,6 +17,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `services` | map[string]Service | varies | Named service definitions; bucket depends on which sub-field changes (see Services section). |
 | `packages` | []string | recreate | Apt packages installed at VM creation time. |
 | `install` | []string | recreate | Shell commands run once at VM creation as root. |
+| `startup` | []string | live | Shell commands run on every boot, in order, as root, with open network (before egress enforcement). |
 | `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
@@ -116,11 +117,23 @@ Rules:
 
 Shell commands run once at VM creation time, in order, as root. Each command runs under `bash -o pipefail -c`. Bootstrap runs first, so `apt-get update` has already been called — user entries can `apt-get install -y <pkg>` directly.
 
-`install` runs **once, on first boot only** — it is gated by a marker (`/var/lib/devm/provisioned`) and is **not** re-run on a later cold start (`devm stop` then `devm shell` reuses the same disk, so installed tools and built artifacts are still there). It runs with **open** network, before egress enforcement is applied. Use `install` for one-time setup. For a command that must run on **every** boot, define a service (`exec:` / `systemd:`) instead — services are (re)started by systemd on each boot, under the enforced egress allowlist.
+`install` runs **once, on first boot only** — it is gated by a marker (`/var/lib/devm/provisioned`) and is **not** re-run on a later cold start (`devm stop` then `devm shell` reuses the same disk, so installed tools and built artifacts are still there). It runs with **open** network, before egress enforcement is applied. Use `install` for one-time setup. For a command that must run on **every** boot, use `startup:` (every boot, still open network — see below), or a service (`exec:` / `systemd:`) for a long-running process (every boot, under the enforced egress allowlist).
 
 Changing `install` requires a full VM teardown and cold start (a fresh VM then re-runs first-boot `install` with the new commands).
 
 Note: `--` in a command's argv is consumed by the internal wrapper; quote it or split the command into multiple steps.
+
+---
+
+## `startup`
+
+`[]string` — bucket: **live** (effect next boot).
+
+Shell commands run on **every** boot, in order, as root under `bash -o pipefail -c`, with **open** network — before egress enforcement is applied. Same shape as `install:`, but every boot instead of once. Use it for per-boot setup that needs unrestricted network (fetch/refresh something, register the VM, warm a cache).
+
+`startup:` runs on the initial boot too, alongside `install:` (after it), and on every subsequent boot. When `startup:` is set, devm masks the firewall-first `nftables.service` and restores enforcement from its own `devm-enforce.service` ordered **after** `devm-startup.service`, so the boot order is `network → startup (open egress) → enforce → services`. This opens a per-boot window — network up, enforcement not yet applied — for the whole VM; that is the cost of "open network on every boot," and it is opt-in (only projects that declare `startup:`; others keep the firewall-first boot).
+
+The three hooks: `install:` = once, first boot, open network. `startup:` = every boot, open network. services (`exec:`/`systemd:`) = every boot, enforced egress. Editing `startup:` commands takes effect on the next boot (devm does not re-run them mid-session).
 
 ---
 
