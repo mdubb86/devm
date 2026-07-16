@@ -20,6 +20,7 @@ import (
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 // tartExecer is the subset of *tart.Tart used by Provisioner. Defined as
@@ -129,6 +130,7 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 		{"install templates", p.installTemplates},
 		{"systemctl daemon-reload", p.daemonReload},
 		{"apply egress enforcement", p.applyEgressEnforcement},
+		{"apply svc_ingress firewall", p.applySvcIngressFirewall},
 		{"enable + start services", p.enableStartServices},
 		{"apply masks", p.applyMasks},
 	}
@@ -229,6 +231,23 @@ func (p *Provisioner) applyEgressEnforcement(ctx context.Context, w io.Writer) e
 		return nil
 	}
 	return p.EnforceEgress(ctx)
+}
+
+// applySvcIngressFirewall flush-rebuilds the svc_ingress nftables chain
+// from the project's direct-service ports, so Mac→container traffic for
+// `direct: true` published ports passes the forward hook's policy-drop.
+// Runs after applyEgressEnforcement — which is what scaffolds the
+// `jump svc_ingress` into the forward chain at cold-start — so the chain
+// this populates is already wired in. Skipped entirely for non-docker /
+// no-direct-service projects: DirectPorts returns nil and there's nothing
+// to open.
+func (p *Provisioner) applySvcIngressFirewall(ctx context.Context, w io.Writer) error {
+	ports := serviceapi.DirectPorts(p.Cfg)
+	if len(ports) == 0 {
+		fmt.Fprintln(w, "(no direct docker services — skipping)")
+		return nil
+	}
+	return p.execShell(ctx, w, serviceapi.BuildSvcIngressScript(ports))
 }
 
 // scaffoldUserFirewallChain creates the `inet devm_filter/user_output`

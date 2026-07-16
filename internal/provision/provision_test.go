@@ -89,6 +89,79 @@ func TestReloadBaseServices_EnablesSSH(t *testing.T) {
 	assert.True(t, found, "reloadBaseServices must enable + start ssh; saw: %v", joined)
 }
 
+func TestApplySvcIngressFirewall_DockerWithDirectService_RunsScript(t *testing.T) {
+	var seen [][]string
+	tr := &fakeRecordingTart{
+		onExec: func(argv []string) tart.ExecResult {
+			seen = append(seen, argv)
+			return tart.ExecResult{ExitCode: 0}
+		},
+	}
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Docker:  true,
+		Services: map[string]schema.Service{
+			"api": {Direct: true, Port: 54321},
+		},
+	}
+	p := &Provisioner{Tart: tr, VMName: "vm", Cfg: cfg}
+	var buf bytes.Buffer
+	require.NoError(t, p.applySvcIngressFirewall(context.Background(), &buf))
+
+	found := false
+	for _, argv := range seen {
+		joined := strings.Join(argv, " ")
+		if strings.Contains(joined, "ct original proto-dst 54321 accept") {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected svc_ingress script with port 54321; saw: %v", seen)
+}
+
+func TestApplySvcIngressFirewall_NoDirectPorts_Skipped(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  schema.Config
+	}{
+		{
+			name: "docker false",
+			cfg: schema.Config{
+				Project: schema.Project{Name: "p"},
+				Docker:  false,
+				Services: map[string]schema.Service{
+					"api": {Direct: true, Port: 54321},
+				},
+			},
+		},
+		{
+			name: "docker true but no direct services",
+			cfg: schema.Config{
+				Project: schema.Project{Name: "p"},
+				Docker:  true,
+				Services: map[string]schema.Service{
+					"api": {Port: 54321},
+				},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var seen [][]string
+			tr := &fakeRecordingTart{
+				onExec: func(argv []string) tart.ExecResult {
+					seen = append(seen, argv)
+					return tart.ExecResult{ExitCode: 0}
+				},
+			}
+			p := &Provisioner{Tart: tr, VMName: "vm", Cfg: tc.cfg}
+			var buf bytes.Buffer
+			require.NoError(t, p.applySvcIngressFirewall(context.Background(), &buf))
+			assert.Empty(t, seen, "no tart exec should run when there are no direct ports")
+			assert.Contains(t, buf.String(), "skipping")
+		})
+	}
+}
+
 func TestProvisioner_RunsAllStepsOnHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	writeFakeTartOK(t, dir)

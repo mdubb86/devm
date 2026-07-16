@@ -188,6 +188,32 @@ func TestBuildNftablesScript_ForwardChainAndUserForwardPersisted(t *testing.T) {
 	assert.Contains(t, script, "chain prerouting {")
 }
 
+func TestNftablesScaffoldsSvcIngress(t *testing.T) {
+	script := buildNftablesScript("192.168.64.1", 40000, 40001, 40002, 0)
+	// Chain declared and jumped from forward, before user_forward.
+	assert.Contains(t, script, "add chain inet devm_filter svc_ingress")
+	assert.Contains(t, script, "add rule inet devm_filter forward jump svc_ingress")
+	fwdIdx := strings.Index(script, "forward jump svc_ingress")
+	userIdx := strings.Index(script, "forward jump user_forward")
+	assert.True(t, fwdIdx > 0 && userIdx > fwdIdx, "svc_ingress jump must come before user_forward")
+	// Persist half declares the chain too.
+	assert.Contains(t, script, "chain svc_ingress {")
+}
+
+func TestBuildSvcIngressScript(t *testing.T) {
+	s := buildSvcIngressScript([]int{54322, 6543})
+	assert.Contains(t, s, "flush chain inet devm_filter svc_ingress")
+	assert.Contains(t, s, "ct original proto-dst 54322 accept")
+	assert.Contains(t, s, "ct original proto-dst 6543 accept")
+	assert.Contains(t, s, `comment "devm: direct ingress`)
+	assert.Contains(t, s, "/etc/nftables.d/svc_ingress.conf")
+
+	// Empty set still flushes (closes everything) and snapshots.
+	empty := buildSvcIngressScript(nil)
+	assert.Contains(t, empty, "flush chain inet devm_filter svc_ingress")
+	assert.NotContains(t, empty, "ct original proto-dst")
+}
+
 func TestBuildTimesyncdScript_PointsAtProxySentinel(t *testing.T) {
 	script := buildTimesyncdScript()
 	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")

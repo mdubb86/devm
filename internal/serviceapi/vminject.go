@@ -2,7 +2,10 @@ package serviceapi
 
 import (
 	"fmt"
+	"sort"
 	"strings"
+
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // extraMount is a parsed user-declared mount entry.
@@ -188,6 +191,7 @@ add rule ip devm_nat prerouting iifname "br-*" tcp dport 80 dnat to %s:%d
 add table inet devm_filter
 add chain inet devm_filter user_output
 add chain inet devm_filter user_forward
+add chain inet devm_filter svc_ingress
 add chain inet devm_filter output { type filter hook output priority 0 ; policy drop ; }
 add chain inet devm_filter forward { type filter hook forward priority 0 ; policy drop ; }
 flush chain inet devm_filter output
@@ -201,6 +205,7 @@ add rule inet devm_filter output ip daddr %s udp dport %d accept
 add rule inet devm_filter output jump user_output
 add rule inet devm_filter forward ct state established,related accept
 add rule inet devm_filter forward ip daddr %s tcp dport { %d, %d } accept
+add rule inet devm_filter forward jump svc_ingress
 add rule inet devm_filter forward jump user_forward
 EOF
 `, macHost, macHost, httpsPort, macHost, httpPort,
@@ -220,6 +225,7 @@ EOF
 	persist := fmt.Sprintf(`sudo mkdir -p /etc/nftables.d
 sudo sh -c 'nft list chain inet devm_filter user_output > /etc/nftables.d/user_output.conf'
 sudo sh -c 'nft list chain inet devm_filter user_forward > /etc/nftables.d/user_forward.conf'
+sudo sh -c 'nft list chain inet devm_filter svc_ingress > /etc/nftables.d/svc_ingress.conf'
 sudo tee /etc/nftables.conf > /dev/null <<'EOF'
 #!/usr/sbin/nft -f
 # Declaring a table at file level replaces the entire contents of
@@ -250,6 +256,7 @@ table ip devm_nat {
 table inet devm_filter {
   chain user_output {}
   chain user_forward {}
+  chain svc_ingress {}
   chain output {
     type filter hook output priority 0; policy drop;
     ct state established,related accept
@@ -263,6 +270,7 @@ table inet devm_filter {
     type filter hook forward priority 0; policy drop;
     ct state established,related accept
     ip daddr %s tcp dport { %d, %d } accept
+    jump svc_ingress
     jump user_forward
   }
 }
@@ -280,6 +288,53 @@ sudo systemctl enable --now nftables
 		macHost, httpPort, httpsPort)
 
 	return liveApply + persist
+}
+
+// buildSvcIngressScript flush-rebuilds the svc_ingress chain from the
+// given direct-service ports (the pre-DNAT, declared ports) and snapshots
+// it to /etc/nftables.d/svc_ingress.conf. Idempotent: `add chain` ensures
+// the chain exists before flush. Passing an empty slice closes all direct
+// ingress. The `jump svc_ingress` into the forward hook is established by
+// buildNftablesScript at cold-start; this only manages the chain contents.
+func buildSvcIngressScript(ports []int) string {
+	var rules strings.Builder
+	for _, p := range ports {
+		fmt.Fprintf(&rules,
+			"add rule inet devm_filter svc_ingress ct original proto-dst %d accept comment \"devm: direct ingress %d\"\n",
+			p, p)
+	}
+	return fmt.Sprintf(`sudo nft -f - <<'EOF'
+add table inet devm_filter
+add chain inet devm_filter svc_ingress
+flush chain inet devm_filter svc_ingress
+%sEOF
+sudo mkdir -p /etc/nftables.d
+sudo sh -c 'nft list chain inet devm_filter svc_ingress > /etc/nftables.d/svc_ingress.conf'
+`, rules.String())
+}
+
+// BuildSvcIngressScript is the exported entrypoint the provisioner (cold
+// start) and ApplyLive (warm reconcile) call to flush-rebuild the
+// svc_ingress chain from the current direct-service port list.
+func BuildSvcIngressScript(ports []int) string {
+	return buildSvcIngressScript(ports)
+}
+
+// DirectPorts returns the declared ports of all direct services when the
+// project uses docker (host-process direct services need no forward rule).
+// Returns nil for non-docker projects, so callers get an empty svc_ingress.
+func DirectPorts(cfg schema.Config) []int {
+	if !cfg.Docker {
+		return nil
+	}
+	var ports []int
+	for _, svc := range cfg.Services {
+		if svc.Direct && svc.Port != 0 {
+			ports = append(ports, svc.Port)
+		}
+	}
+	sort.Ints(ports)
+	return ports
 }
 
 // buildTimesyncdScript configures systemd-timesyncd to send NTP
