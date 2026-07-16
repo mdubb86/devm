@@ -95,8 +95,13 @@ func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) ([]serviceapi.Rou
 			Hostname:    svc.Hostname,
 			BackendPort: svc.Port,
 			Mode:        mode,
+			Project:     cfg.Project.Name,
 		}
-		if mode == serviceapi.ModeVM {
+		if svc.Direct {
+			// Direct services are DNS-only: no backend to dial, and the
+			// VM IP is resolved live by the daemon (not baked in here).
+			route.Direct = true
+		} else if mode == serviceapi.ModeVM {
 			route.BackendHost = vmIP
 		}
 		out = append(out, route)
