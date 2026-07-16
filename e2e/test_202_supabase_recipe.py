@@ -115,12 +115,10 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         project:
           name: {proj}
         docker: true
-        path:
-          - /usr/local/share/supabase
         packages:
           - postgresql-client
         install:
-          - "sudo mkdir -p /usr/local/share/supabase && curl -fsSL https://github.com/supabase/cli/releases/latest/download/supabase_linux_arm64.tar.gz | sudo tar -xz -C /usr/local/share/supabase"
+          - "curl -fsSL -o /tmp/supabase.deb https://github.com/supabase/cli/releases/latest/download/supabase_linux_arm64.deb && sudo dpkg -i /tmp/supabase.deb && rm /tmp/supabase.deb"
         services:
           supabase-api:
             port: 54321
@@ -141,7 +139,7 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
           - api.github.com
           - objects.githubusercontent.com
           - public.ecr.aws
-          - d2glxqk2uabbnd.cloudfront.net
+          - "*.cloudfront.net"
     """))
 
     # Cold-start. Budget covers base image (if not current) + docker
@@ -255,15 +253,15 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         f"stderr:\n{r.stderr.decode(errors='replace')}"
     )
 
-    # Kick the auth container so it re-reads templates from Kong.
-    # supabase/cli#4668: GoTrue races Kong's template endpoint on
-    # startup, silently falls back to default templates. A restart
-    # after `supabase start` picks the custom templates up.
-    _shell(
-        devm, workspace,
-        f"docker restart supabase_auth_{proj} && sleep 8",
-        timeout=60,
-    )
+    # Test-cadence sleep only. supabase/cli#4668 (fixed upstream in
+    # 2026-01) enables GoTrue's template reloader; it retries every
+    # ~10s until Kong's :8088 endpoint is serving. `supabase start`
+    # returns "healthy" before that first successful reload, so a test
+    # that hits /signup instantly races the reloader and gets the
+    # default template. Interactive users don't notice — they take
+    # seconds to click, plenty for the retry. Sleeping ~15s here is
+    # enough margin.
+    time.sleep(15)
 
     # Fetch anon key from supabase status.
     r = _shell(devm, workspace, "cd $WORKSPACE && supabase status -o env", timeout=30)
@@ -275,10 +273,10 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
     # ------------------------------------------------------------------
     # Phase C — supabase containers are actually up and serving.
     # ------------------------------------------------------------------
-    # Hit container ports directly (localhost:PORT) inside the VM — no
-    # hostname routing required. Hostname routing (*.test) is a devm
-    # feature pinned by other tests; the recipe's job is to make the
-    # STACK come up correctly.
+    # Hit container ports directly (localhost:PORT) inside the VM.
+    # Isolated e2e has no *.test hostname routing (see e2e/README.md).
+    # The recipe's job is to make the STACK come up correctly; direct
+    # probes prove that without needing the routing layer.
 
     # Kong (API gateway) on :54321. /rest/v1/ is PostgREST via Kong;
     # requires the apikey header for anon-key auth. Just prove it
@@ -325,10 +323,11 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
     # ------------------------------------------------------------------
     test_email = "e2etest@example.com"
     test_password = "correct-horse-battery-staple"
-    # Direct-to-Kong for API calls (localhost:54321) — sidesteps hostname
-    # routing, which is a devm feature pinned by other tests. What THIS
-    # test proves is the recipe's config (custom templates → correct
-    # site_url in email bodies) — see the smoking-gun assertion below.
+    # Direct-to-Kong for API calls (localhost:54321). Isolated e2e has
+    # no *.test hostname routing (see e2e/README.md — no launchd → no
+    # daemon proxy listener), so hostname URLs would hang. What THIS
+    # test proves is the recipe's config: custom templates → correct
+    # site_url in email bodies — see the smoking-gun assertion below.
     api_base = "http://localhost:54321"
     mailpit_base = "http://localhost:54324"
 
