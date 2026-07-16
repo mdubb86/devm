@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/miekg/dns"
 
@@ -37,22 +38,29 @@ func DNSAddr() string {
 	return defaultDNSAddr
 }
 
-// DNSServer is the daemon's tiny *.test resolver. Answers A queries
-// with 127.0.0.1 and AAAA with ::1; everything else gets NODATA.
+// vmIPResolver returns a project's current VM IP, if known.
+type vmIPResolver func(project string) (string, bool)
+
+// DNSServer is the daemon's tiny *.test resolver. Direct hostnames
+// answer with the owning project's current VM IP (A only, TTL 0);
+// everything else answers 127.0.0.1/::1, also TTL 0.
 type DNSServer struct {
-	server *dns.Server
+	server   *dns.Server
+	routes   *Routes
+	resolver vmIPResolver
 }
 
 // NewDNSServer builds a server bound to the address returned by
 // DNSAddr() — the default 127.0.0.1:51153 unless $DEVM_DNS_ADDR
-// overrides.
-func NewDNSServer() *DNSServer {
-	return newDNSServerAt(DNSAddr())
+// overrides. routes and resolver are consulted per-query to decide
+// whether a hostname is a direct service and, if so, its VM IP.
+func NewDNSServer(routes *Routes, resolver vmIPResolver) *DNSServer {
+	return newDNSServerAt(DNSAddr(), routes, resolver)
 }
 
 // newDNSServerAt is the testable inner — tests pass an ephemeral
 // address.
-func newDNSServerAt(addr string) *DNSServer {
+func newDNSServerAt(addr string, routes *Routes, resolver vmIPResolver) *DNSServer {
 	mux := dns.NewServeMux()
 	s := &DNSServer{
 		server: &dns.Server{
@@ -60,6 +68,8 @@ func newDNSServerAt(addr string) *DNSServer {
 			Net:     "udp",
 			Handler: mux,
 		},
+		routes:   routes,
+		resolver: resolver,
 	}
 	mux.HandleFunc(testTLD, s.handleTest)
 	return s
@@ -89,17 +99,34 @@ func (s *DNSServer) handleTest(w dns.ResponseWriter, r *dns.Msg) {
 	msg.SetReply(r)
 	msg.Authoritative = true
 	for _, q := range r.Question {
+		host := strings.TrimSuffix(q.Name, ".")
+		// Direct services resolve to the current VM IP (v4-only); every
+		// other name stays loopback.
+		dr, isDirect := s.routes.DirectRoute(host)
+		ipv4 := net.IPv4(127, 0, 0, 1)
+		if isDirect {
+			if ip, ok := s.resolver(dr.Project); ok {
+				if parsed := net.ParseIP(ip).To4(); parsed != nil {
+					ipv4 = parsed
+				}
+			}
+		}
 		switch q.Qtype {
 		case dns.TypeA:
 			msg.Answer = append(msg.Answer, &dns.A{
-				Hdr: dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 60},
-				A:   net.IPv4(127, 0, 0, 1),
+				Hdr: dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 0},
+				A:   ipv4,
 			})
 		case dns.TypeAAAA:
-			msg.Answer = append(msg.Answer, &dns.AAAA{
-				Hdr:  dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 60},
-				AAAA: net.ParseIP("::1"),
-			})
+			// Direct services are v4-only, so return NODATA for AAAA — a
+			// ::1 answer would send a v6-capable client to Mac loopback
+			// instead of the A-record VM IP. Non-direct names keep ::1.
+			if !isDirect {
+				msg.Answer = append(msg.Answer, &dns.AAAA{
+					Hdr:  dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 0},
+					AAAA: net.ParseIP("::1"),
+				})
+			}
 		}
 		// All other query types fall through; Answer stays empty —
 		// the client gets NOERROR + NODATA, which is what

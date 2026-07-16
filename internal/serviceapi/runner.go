@@ -110,7 +110,7 @@ func RunService(ctx context.Context, build Build) error {
 	// DNS server actor (Ship 2).
 	{
 		dnsCtx, cancel := context.WithCancel(ctx)
-		dnsServer := NewDNSServer()
+		dnsServer := NewDNSServer(routes, vmIPForProject)
 		g.Add(func() error {
 			return dnsServer.Serve(dnsCtx)
 		}, func(error) {
