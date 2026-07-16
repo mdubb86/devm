@@ -12,6 +12,7 @@ import (
 	"github.com/mdubb86/devm/internal/orchestrator"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
 )
@@ -54,23 +55,7 @@ var reconcileCmd = &cobra.Command{
 		// Best-effort: re-push routes so a `direct` flip made by this
 		// reconcile is reflected in the daemon's DNS answer right away,
 		// instead of waiting for the next `devm shell` auto-apply.
-		// buildRoutes(ModeVM) resolves the VM IP via tart and errors if
-		// the VM isn't running — that's a normal skip (nothing live to
-		// update on a stopped VM), not a failure. A down daemon or a
-		// push error must never fail `devm reconcile` itself.
-		if routes, err := buildRoutes(cfg, serviceapi.ModeVM); err == nil {
-			func() {
-				rctx, rcancel := context.WithTimeout(cmd.Context(), 3*time.Second)
-				defer rcancel()
-				c := serviceapi.NewClient()
-				if !c.Available(rctx) {
-					return
-				}
-				if err := c.ApplyRoutes(rctx, cfg.Project.Name, routes); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: re-push routes after reconcile: %v\n", err)
-				}
-			}()
-		}
+		repushRoutes(cfg, serviceapi.ModeVM)
 
 		if len(res.RecreateRequired) == 0 {
 			return nil
@@ -114,4 +99,29 @@ func init() {
 	reconcileCmd.Flags().BoolVarP(&reconcileYes, "yes", "y", false, "Skip the recreate confirmation prompt")
 	reconcileCmd.Flags().BoolVar(&reconcileJSON, "json", false, "Emit JSON output")
 	rootCmd.AddCommand(reconcileCmd)
+}
+
+// repushRoutes best-effort re-registers the project's routes with the
+// daemon so reconcile-time direct/proxied changes reflect immediately
+// (DNS reads the routes table). Never returns an error — a stopped VM,
+// down daemon, or push failure is a silent/logged no-op.
+//
+// buildRoutes(ModeVM) resolves the VM IP via tart and errors if the VM
+// isn't running — that's a normal skip (nothing live to update on a
+// stopped VM), not a failure. A down daemon or a push error must never
+// fail `devm reconcile` itself.
+func repushRoutes(cfg schema.Config, mode serviceapi.RouteMode) {
+	routes, err := buildRoutes(cfg, mode)
+	if err != nil {
+		return
+	}
+	rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer rcancel()
+	c := serviceapi.NewClient()
+	if !c.Available(rctx) {
+		return
+	}
+	if err := c.ApplyRoutes(rctx, cfg.Project.Name, routes); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: re-push routes after reconcile: %v\n", err)
+	}
 }
