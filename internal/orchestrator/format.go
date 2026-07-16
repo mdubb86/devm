@@ -359,6 +359,10 @@ func FormatReconcileText(r ReconcileResult) string {
 	}
 	if len(r.RecreateRequired) > 0 {
 		restart, teardown := partitionRecreateRequired(r.RecreateRequired)
+		// Both sections can share one pending recreate — print the
+		// session-hangup warning once for the whole reconcile rather
+		// than once per section.
+		hangupPrinted := false
 		if len(restart) > 0 {
 			fmt.Fprintf(&b, "%d change(s) require restart:\n", len(restart))
 			for _, c := range restart {
@@ -366,8 +370,9 @@ func FormatReconcileText(r ReconcileResult) string {
 			}
 			fmt.Fprintln(&b)
 			fmt.Fprintln(&b, "Restart sandbox (`devm stop` + `devm shell`) to apply. No teardown, no data loss.")
-			if len(r.Sessions) > 0 {
+			if len(r.Sessions) > 0 && !hangupPrinted {
 				fmt.Fprintf(&b, "Will hang up %d active session(s).\n", len(r.Sessions))
+				hangupPrinted = true
 			}
 			fmt.Fprintln(&b)
 		}
@@ -379,8 +384,9 @@ func FormatReconcileText(r ReconcileResult) string {
 			fmt.Fprintln(&b)
 			fmt.Fprintln(&b, "Teardown + recreate sandbox? This WIPES installed packages and volume data,")
 			fmt.Fprintln(&b, "then re-runs install.")
-			if len(r.Sessions) > 0 {
+			if len(r.Sessions) > 0 && !hangupPrinted {
 				fmt.Fprintf(&b, "Will hang up %d active session(s).\n", len(r.Sessions))
+				hangupPrinted = true
 			}
 		}
 	}

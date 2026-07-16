@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/reconcile"
@@ -51,7 +52,7 @@ func TestFormatReconcileText_RecreatePending(t *testing.T) {
 		RecreateRequired: []reconcile.Change{
 			{Kind: reconcile.KindPackagesChange},
 		},
-		Flavor:   reconcile.FlavorTeardownShell,
+		Flavor:   reconcile.FlavorTeardownVM,
 		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 	})
 	assert.Contains(t, out, "Applied 1 live change")
@@ -69,7 +70,7 @@ func TestFormatReconcileText_RestartPending(t *testing.T) {
 		RecreateRequired: []reconcile.Change{
 			{Kind: reconcile.KindStartupChange},
 		},
-		Flavor:   reconcile.FlavorStopShell,
+		Flavor:   reconcile.FlavorRestartVM,
 		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 	})
 	assert.Contains(t, out, "1 change(s) require restart")
@@ -86,12 +87,25 @@ func TestFormatReconcileText_RestartAndRecreatePending_BothSectionsRender(t *tes
 			{Kind: reconcile.KindStartupChange},
 			{Kind: reconcile.KindPackagesChange},
 		},
-		Flavor: reconcile.FlavorTeardownShell,
+		Flavor: reconcile.FlavorTeardownVM,
 	})
 	assert.Contains(t, out, "1 change(s) require restart")
 	assert.Contains(t, out, "~ startup commands")
 	assert.Contains(t, out, "1 change(s) require recreate")
 	assert.Contains(t, out, "~ packages")
+}
+
+func TestFormatReconcileText_RestartAndRecreatePending_HangupPrintedOnce(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		RecreateRequired: []reconcile.Change{
+			{Kind: reconcile.KindStartupChange},
+			{Kind: reconcile.KindPackagesChange},
+		},
+		Flavor:   reconcile.FlavorTeardownVM,
+		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+	})
+	assert.Equal(t, 1, strings.Count(out, "Will hang up 1 active session"),
+		"the restart and recreate sections both cover the same pending sessions — warn once, not per section")
 }
 
 func TestFormatReconcileText_IronProxyRestartAppliedNormalPath(t *testing.T) {
@@ -172,7 +186,7 @@ func TestFormatReconcileJSON(t *testing.T) {
 		Rendered: true, SandboxState: "running",
 		Applied:          []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
 		RecreateRequired: []reconcile.Change{{Kind: reconcile.KindPackagesChange}},
-		Flavor:           reconcile.FlavorTeardownShell,
+		Flavor:           reconcile.FlavorTeardownVM,
 		Sessions:         []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 		NextAction:       "needs_approval",
 	})
@@ -194,7 +208,7 @@ func TestFormatReconcileJSON_RestartRequired_SeparateFromRecreate(t *testing.T) 
 			{Kind: reconcile.KindStartupChange},
 			{Kind: reconcile.KindPackagesChange},
 		},
-		Flavor:     reconcile.FlavorTeardownShell,
+		Flavor:     reconcile.FlavorTeardownVM,
 		NextAction: "needs_approval",
 	})
 	var parsed map[string]any

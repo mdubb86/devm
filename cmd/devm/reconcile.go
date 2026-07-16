@@ -84,7 +84,7 @@ var reconcileCmd = &cobra.Command{
 			ServiceAPIClient: serviceapi.NewClient(),
 		}
 		mode := orchestrator.StopPreserve
-		if res.Flavor == reconcile.FlavorTeardownShell {
+		if res.Flavor == reconcile.FlavorTeardownVM {
 			mode = orchestrator.StopDestroy
 		}
 		if _, err := orchestrator.RunStop(ctx, stopDeps, cfg.Project.Name, mode, true); err != nil {

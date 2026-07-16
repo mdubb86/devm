@@ -174,11 +174,11 @@ type FlavorKind int
 
 const (
 	FlavorLiveOnly FlavorKind = iota // no recreate, only live applies
-	// FlavorStopShell — requires VM stop + cold start, no teardown.
+	// FlavorRestartVM — requires VM stop + cold start, no teardown.
 	// Reached whenever a change sits in BucketRestartVM (e.g.
 	// KindStartupChange) and nothing more severe is also pending.
-	FlavorStopShell
-	FlavorTeardownShell // requires VM delete + cold start
+	FlavorRestartVM
+	FlavorTeardownVM // requires VM delete + cold start
 )
 
 // String implements fmt.Stringer so FlavorKind renders directly in %s
@@ -187,10 +187,10 @@ func (f FlavorKind) String() string {
 	switch f {
 	case FlavorLiveOnly:
 		return "live"
-	case FlavorStopShell:
-		return "stop+shell"
-	case FlavorTeardownShell:
-		return "teardown+shell"
+	case FlavorRestartVM:
+		return "restart"
+	case FlavorTeardownVM:
+		return "teardown"
 	}
 	return "unknown"
 }
@@ -201,11 +201,11 @@ func RecreateFlavor(changes []Change) FlavorKind {
 	for _, c := range changes {
 		switch c.Bucket() {
 		case BucketRestartVM:
-			if max < FlavorStopShell {
-				max = FlavorStopShell
+			if max < FlavorRestartVM {
+				max = FlavorRestartVM
 			}
 		case BucketTeardownVM:
-			return FlavorTeardownShell // can't go higher
+			return FlavorTeardownVM // can't go higher
 		}
 	}
 	return max

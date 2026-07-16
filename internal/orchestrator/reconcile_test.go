@@ -175,7 +175,7 @@ func TestRunReconcile_TeardownRequired_ClassifiesFlavorAndSessions(t *testing.T)
 	assert.Equal(t, "needs_approval", res.NextAction)
 	require.Len(t, res.RecreateRequired, 1)
 	assert.Equal(t, reconcile.KindPackagesChange, res.RecreateRequired[0].Kind)
-	assert.Equal(t, reconcile.FlavorTeardownShell, res.Flavor)
+	assert.Equal(t, reconcile.FlavorTeardownVM, res.Flavor)
 	assert.Empty(t, res.Applied)
 	// probeSessions is best-effort against a fake tart that always
 	// exits non-zero — nil, not an error.

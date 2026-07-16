@@ -498,24 +498,24 @@ func TestRecreateFlavorPickMax(t *testing.T) {
 	assert.Equal(t, FlavorLiveOnly, RecreateFlavor([]Change{{Kind: KindPortAdd}}))
 
 	// Any teardown wins
-	assert.Equal(t, FlavorTeardownShell, RecreateFlavor([]Change{
+	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
 		{Kind: KindPortAdd},
 		{Kind: KindPackagesChange},
 		{Kind: KindInstallChange},
 	}))
 	// Single teardown change alone also picks teardown.
-	assert.Equal(t, FlavorTeardownShell, RecreateFlavor([]Change{
+	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
 		{Kind: KindInstallChange},
 	}))
 
-	// BucketRestartVM (KindStartupChange) alone picks FlavorStopShell —
+	// BucketRestartVM (KindStartupChange) alone picks FlavorRestartVM —
 	// VM stop + cold start, no teardown.
-	assert.Equal(t, FlavorStopShell, RecreateFlavor([]Change{
+	assert.Equal(t, FlavorRestartVM, RecreateFlavor([]Change{
 		{Kind: KindStartupChange},
 	}))
 	// A teardown change alongside a restart change still wins — can't
 	// go higher than teardown.
-	assert.Equal(t, FlavorTeardownShell, RecreateFlavor([]Change{
+	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
 		{Kind: KindStartupChange},
 		{Kind: KindInstallChange},
 	}))
