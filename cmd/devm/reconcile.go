@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/mattn/go-isatty"
 	"github.com/mdubb86/devm/internal/config"
@@ -48,6 +49,27 @@ var reconcileCmd = &cobra.Command{
 		}
 		if rc != 0 {
 			os.Exit(rc)
+		}
+
+		// Best-effort: re-push routes so a `direct` flip made by this
+		// reconcile is reflected in the daemon's DNS answer right away,
+		// instead of waiting for the next `devm shell` auto-apply.
+		// buildRoutes(ModeVM) resolves the VM IP via tart and errors if
+		// the VM isn't running — that's a normal skip (nothing live to
+		// update on a stopped VM), not a failure. A down daemon or a
+		// push error must never fail `devm reconcile` itself.
+		if routes, err := buildRoutes(cfg, serviceapi.ModeVM); err == nil {
+			func() {
+				rctx, rcancel := context.WithTimeout(cmd.Context(), 3*time.Second)
+				defer rcancel()
+				c := serviceapi.NewClient()
+				if !c.Available(rctx) {
+					return
+				}
+				if err := c.ApplyRoutes(rctx, cfg.Project.Name, routes); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: re-push routes after reconcile: %v\n", err)
+				}
+			}()
 		}
 
 		if len(res.RecreateRequired) == 0 {
