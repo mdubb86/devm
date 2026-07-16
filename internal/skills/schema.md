@@ -135,7 +135,7 @@ The mechanism is **always registered, for every project** — not opt-in on decl
 
 A failing `startup:` command does not block enforcement: `devm-enforce.service` only has `After=devm-startup.service` (no `Requires=`/`BindsTo=`), so systemd starts it regardless of whether `devm-startup.service` succeeded — enforcement is fail-safe.
 
-The three hooks: `install:` = once, first boot, open network. `startup:` = every boot, open network. services (`exec:`/`systemd:`) = every boot, enforced egress (every declared service unit orders `After=devm-enforce.service`). Editing `startup:` commands only rewrites `/opt/devm/startup.sh`'s content — the unit itself is stable and never changes. The edit takes effect on the next `devm stop` + `devm shell` (restart bucket); devm does not re-run it live or mid-session.
+The three hooks: `install:` = once, first boot, open network. `startup:` = every boot, open network. services (`exec:`/`systemd:`) = every boot, enforced egress (every declared service unit orders `After=devm-enforce.service`). Editing `startup:` commands only rewrites `/opt/devm/startup.sh`'s content — the unit itself is stable and never changes. devm does not re-run it live or mid-session. Editing `startup:` on an existing VM (**restart** bucket) takes effect over a subsequent cold start — it may not run on the very next boot; recreate the VM (`devm teardown` + `devm shell`) for immediate effect.
 
 ---
 
