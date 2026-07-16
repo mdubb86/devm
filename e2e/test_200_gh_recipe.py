@@ -54,7 +54,7 @@ pytestmark = pytest.mark.recipe
 
 
 @pytest.mark.timeout(600)
-def test_gh_recipe_installs_and_substitutes(devm, workspace, sandbox_name):
+def test_gh_recipe(devm, workspace, sandbox_name):
     secret_name = "GH_TOKEN"
     fake_token = f"devm-e2e-fake-{sandbox_name}"
 
