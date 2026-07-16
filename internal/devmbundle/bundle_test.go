@@ -305,6 +305,52 @@ func TestBuild_TarOmitsDockerShims_WhenDockerFalse(t *testing.T) {
 	assert.NotContains(t, names, "bin/docker")
 }
 
+func TestBuild_TarContainsStartupUnits_WhenStartupSet(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Startup: []string{"echo hi"},
+		Services: map[string]schema.Service{
+			"web": {Exec: []string{"/bin/true"}},
+		},
+	}
+	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+
+	names := tarEntryNames(t, blob)
+	assert.Contains(t, names, "systemd/devm-startup.service")
+	assert.Contains(t, names, "systemd/devm-enforce.service")
+
+	startupUnit := readTarEntry(t, blob, "systemd/devm-startup.service")
+	assert.Contains(t, string(startupUnit), "ExecStart=/bin/bash -o pipefail -c 'echo hi'")
+
+	enforceUnit := readTarEntry(t, blob, "systemd/devm-enforce.service")
+	assert.Contains(t, string(enforceUnit), "ExecStart=/usr/sbin/nft -f /etc/nftables.conf")
+
+	// Declared service units order themselves after enforcement once
+	// startup: commands are configured.
+	webUnit := readTarEntry(t, blob, "systemd/web.service")
+	assert.Contains(t, string(webUnit), "After=devm-ready.target devm-enforce.service")
+}
+
+func TestBuild_OmitsStartupUnits_WhenStartupUnset(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"web": {Exec: []string{"/bin/true"}},
+		},
+	}
+	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+
+	names := tarEntryNames(t, blob)
+	assert.NotContains(t, names, "systemd/devm-startup.service")
+	assert.NotContains(t, names, "systemd/devm-enforce.service")
+
+	webUnit := readTarEntry(t, blob, "systemd/web.service")
+	assert.NotContains(t, string(webUnit), "devm-enforce.service",
+		"services must not order after enforcement when startup: is unset")
+}
+
 func TestBuild_TarContainsSSHMaterial(t *testing.T) {
 	blob, err := Build(BuildInput{
 		Cfg:                 schema.Config{Project: schema.Project{Name: "p"}},

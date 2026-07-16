@@ -109,8 +109,20 @@ func Build(in BuildInput) ([]byte, error) {
 			merged[k] = v
 		}
 		svc.Env = merged
-		unit := render.RenderService(name, svc)
+		unit := render.RenderService(name, svc, len(in.Cfg.Startup) > 0)
 		if err := writeEntry(tw, "systemd/"+name+".service", 0o644, unit); err != nil {
+			return nil, err
+		}
+	}
+
+	// devm-startup.service runs startup: commands on every boot before
+	// devm-enforce.service applies the egress policy; opt-in — omitted
+	// entirely when startup: is unset.
+	if len(in.Cfg.Startup) > 0 {
+		if err := writeEntry(tw, "systemd/devm-startup.service", 0o644, render.RenderStartupUnit(in.Cfg.Startup)); err != nil {
+			return nil, err
+		}
+		if err := writeEntry(tw, "systemd/devm-enforce.service", 0o644, render.RenderEnforceUnit()); err != nil {
 			return nil, err
 		}
 	}
