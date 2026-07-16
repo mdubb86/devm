@@ -183,6 +183,35 @@ func TestRecoverProjectState_StashesVMIPAndRebuildsDirectRoutes(t *testing.T) {
 	assert.False(t, ok, "non-direct service must not become a direct route")
 }
 
+// TestRecoverProjectState_StashesDockerFlagFromSnapshot covers a
+// daemon-restart recovery for a project with `docker: true`:
+// recoverProjectState must fold the Docker flag out of the recovered
+// state snapshot into ironProxyInfo so a subsequent
+// /vm/apply-egress-enforcement (fired without a fresh /vm/start) still
+// emits the 172.16/12 container-bridge accept.
+func TestRecoverProjectState_StashesDockerFlagFromSnapshot(t *testing.T) {
+	const projectID = "recover-docker-proj"
+	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Cleanup(func() { ironProxyState.del(projectID) })
+
+	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{
+		Cfg: schema.Config{
+			Project: schema.Project{Name: projectID},
+			Docker:  true,
+		},
+	}))
+
+	tr := tart.New()
+	tr.Path = "false" // `tart ip` failing must not block the Docker stash
+
+	routes := NewRoutes()
+	recoverProjectState(context.Background(), tr, routes, projectID)
+
+	info, ok := ironProxyState.get(projectID)
+	require.True(t, ok)
+	assert.True(t, info.Docker)
+}
+
 // TestRecoverProjectState_MissingSnapshot_NoRoutesButVMIPStillStashed
 // covers a project whose config was never written to disk (or the
 // snapshot is malformed) — recoverProjectState should still stash the

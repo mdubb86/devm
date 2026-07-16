@@ -548,9 +548,10 @@ type Config struct {
 	// Docker turns on the first-class docker feature: devm installs
 	// Docker Engine via the upstream get.docker.com script, registers
 	// devm-runc-shim as the default OCI runtime so containers trust
-	// iron-proxy's CA transparently, adds the bridge-CIDR host→container
-	// reachability rule to user_output, and adds Docker Hub hosts to the
-	// effective allowlist. Requires teardown to toggle.
+	// iron-proxy's CA transparently, gates the bridge-CIDR host→container
+	// reachability rule in the cfg-derived egress enforcement, and adds
+	// Docker Hub hosts to the effective allowlist. Requires teardown to
+	// toggle.
 	Docker bool `yaml:"docker,omitempty"`
 
 	Network  Network             `yaml:"network,omitempty"`

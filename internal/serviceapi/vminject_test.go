@@ -69,7 +69,7 @@ func TestBuildEnvScript_SetsSystemWideEnvVars(t *testing.T) {
 }
 
 func TestBuildNftablesScript_DNATsHTTPAndHTTPS(t *testing.T) {
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0)
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0, false)
 	// NAT table redirects :443 and :80 to MAC_HOST:proxy_ports.
 	assert.Contains(t, script, "table ip devm_nat")
 	assert.Contains(t, script, "tcp dport 443 dnat to 192.168.64.1:8443")
@@ -79,7 +79,7 @@ func TestBuildNftablesScript_DNATsHTTPAndHTTPS(t *testing.T) {
 }
 
 func TestBuildNftablesScript_FilterDefaultDenyExceptIronProxyPorts(t *testing.T) {
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0)
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0, false)
 	assert.Contains(t, script, "table inet devm_filter")
 	assert.Contains(t, script, "policy drop;")
 	// All three iron-proxy ports allowed to MAC_HOST.
@@ -94,7 +94,7 @@ func TestBuildNftablesScript_NTPPortAddsDNATAndFilterRule(t *testing.T) {
 	// ntpPort > 0 → DNAT for UDP:123 to MAC_HOST:ntpPort and a matching
 	// filter accept. Guest's timesyncd sends to whatever it thinks is NTP;
 	// nftables rewrites the destination transparently.
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234, false)
 	assert.Contains(t, script, "udp dport 123 dnat to 192.168.64.1:51234")
 	assert.Contains(t, script, "ip daddr 192.168.64.1 udp dport 51234 accept")
 }
@@ -102,7 +102,7 @@ func TestBuildNftablesScript_NTPPortAddsDNATAndFilterRule(t *testing.T) {
 func TestBuildNftablesScript_ZeroNTPPortSkipsRule(t *testing.T) {
 	// ntpPort == 0 (unit-test path) must not emit a broken `dnat to
 	// MAC_HOST:0` — that would nftables-reject and refuse to load.
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0)
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0, false)
 	assert.NotContains(t, script, "udp dport 123 dnat")
 	assert.NotContains(t, script, ":0 ") // paranoia — no zero-port rule anywhere
 }
@@ -111,7 +111,7 @@ func TestBuildNftablesScript_LiveApplyPreservesUserOutput(t *testing.T) {
 	// Live-apply uses idempotent add + a scoped `flush chain output`
 	// so that any rules recipes added to user_output during install:
 	// aren't wiped when enforcement fires. Pin the exact primitives.
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234, false)
 	// Idempotent create — no-op if exists.
 	assert.Contains(t, script, "add table inet devm_filter")
 	assert.Contains(t, script, "add chain inet devm_filter user_output")
@@ -133,7 +133,7 @@ func TestBuildNftablesScript_PersistsViaIncludeGlob(t *testing.T) {
 	//   (2) /etc/nftables.conf has `include "/etc/nftables.d/*.conf"`
 	//       so systemd's nftables.service pulls the snapshot back in
 	//       on the next boot.
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234, false)
 	assert.Contains(t, script, "nft list chain inet devm_filter user_output > /etc/nftables.d/user_output.conf")
 	assert.Contains(t, script, `include "/etc/nftables.d/*.conf"`)
 	// The persisted config must ALSO reference user_output so the
@@ -143,13 +143,26 @@ func TestBuildNftablesScript_PersistsViaIncludeGlob(t *testing.T) {
 	assert.Contains(t, script, "jump user_output")
 }
 
+func TestBuildNftablesScript_DockerAddsBridgeAccept(t *testing.T) {
+	with := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0, true)
+	assert.Contains(t, with, "ip daddr 172.16.0.0/12 accept",
+		"docker=true must emit the container-bridge egress accept")
+	// present in BOTH the live-apply and the persisted /etc/nftables.conf.
+	assert.GreaterOrEqual(t, strings.Count(with, "ip daddr 172.16.0.0/12 accept"), 2,
+		"the accept must be in both the live-apply block and /etc/nftables.conf")
+
+	without := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0, false)
+	assert.NotContains(t, without, "172.16.0.0/12",
+		"docker=false must not open the container-bridge range")
+}
+
 func TestBuildNftablesScript_ForwardChainRedirectsContainerTraffic(t *testing.T) {
 	// Container→internet packets traverse the FORWARD hook (they came
 	// from a docker bridge, headed for eth0). Our forward nat chain in
 	// PREROUTING must DNAT-redirect their HTTP/HTTPS to iron-proxy and
 	// their DNS to the guest's own port 53 (dnsmasq). Scoped by
 	// iifname so packets arriving from the Mac aren't touched.
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234, false)
 
 	// DNS redirect: container→any-DNS-server:53 → local :53 (dnsmasq
 	// bound on 0.0.0.0). `redirect to :53` translates automatically to
@@ -169,7 +182,7 @@ func TestBuildNftablesScript_ForwardFilterDefaultDeny(t *testing.T) {
 	// non-DNAT'd ports (e.g., a container trying to SSH out). Base
 	// rules only accept established/related plus post-DNAT traffic to
 	// MAC_HOST:iron-proxy — everything else drops.
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234, false)
 	assert.Contains(t, script, "add chain inet devm_filter forward { type filter hook forward priority 0 ; policy drop ; }")
 	assert.Contains(t, script, "add rule inet devm_filter forward ct state established,related accept")
 	assert.Contains(t, script, "add rule inet devm_filter forward ip daddr 192.168.64.1 tcp dport { 8080, 8443 } accept")
@@ -181,7 +194,7 @@ func TestBuildNftablesScript_ForwardChainAndUserForwardPersisted(t *testing.T) {
 	// so systemd's nftables.service restores them on boot; and the
 	// snapshot of user_forward must be written alongside user_output
 	// so recipe-added rules survive VM reboot.
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234)
+	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234, false)
 	assert.Contains(t, script, "nft list chain inet devm_filter user_forward > /etc/nftables.d/user_forward.conf")
 	assert.Contains(t, script, "chain user_forward {}")
 	assert.Contains(t, script, "chain forward {")
@@ -189,7 +202,7 @@ func TestBuildNftablesScript_ForwardChainAndUserForwardPersisted(t *testing.T) {
 }
 
 func TestNftablesScaffoldsSvcIngress(t *testing.T) {
-	script := buildNftablesScript("192.168.64.1", 40000, 40001, 40002, 0)
+	script := buildNftablesScript("192.168.64.1", 40000, 40001, 40002, 0, false)
 	// Chain declared and jumped from forward, before user_forward.
 	assert.Contains(t, script, "add chain inet devm_filter svc_ingress")
 	assert.Contains(t, script, "add rule inet devm_filter forward jump svc_ingress")

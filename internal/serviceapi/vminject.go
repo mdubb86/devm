@@ -149,7 +149,7 @@ EOF
 //
 // ntpPort=0 skips the NTP DNAT + filter rules — used by unit tests that
 // don't spin up an SNTP responder.
-func buildNftablesScript(macHost string, httpPort, httpsPort, dnsPort, ntpPort int) string {
+func buildNftablesScript(macHost string, httpPort, httpsPort, dnsPort, ntpPort int, docker bool) string {
 	ntpNatRule := ""
 	ntpFilterRule := ""
 	if ntpPort > 0 {
@@ -161,6 +161,13 @@ func buildNftablesScript(macHost string, httpPort, httpsPort, dnsPort, ntpPort i
 		// handled automatically by conntrack.
 		ntpNatRule = fmt.Sprintf("    udp dport 123 dnat to %s:%d\n", macHost, ntpPort)
 		ntpFilterRule = fmt.Sprintf("    ip daddr %s udp dport %d accept\n", macHost, ntpPort)
+	}
+	dockerFilterRule := ""
+	if docker {
+		// Host→container reachability: Docker DNAT's published-port
+		// traffic to a 172.x bridge address; this accept lets the
+		// default-deny output chain pass it.
+		dockerFilterRule = "    ip daddr 172.16.0.0/12 accept\n"
 	}
 	// Two-stage live apply: first idempotently ensure tables/chains
 	// exist (preserves user_output/user_forward if the scaffold step
@@ -199,6 +206,7 @@ add rule inet devm_filter output ip daddr 127.0.0.0/8 accept
 add rule inet devm_filter output ip daddr %s tcp dport { %d, %d } accept
 add rule inet devm_filter output ip daddr %s udp dport %d accept
 %s
+%s
 add rule inet devm_filter output jump user_output
 add rule inet devm_filter forward ct state established,related accept
 add rule inet devm_filter forward ip daddr %s tcp dport { %d, %d } accept
@@ -212,6 +220,7 @@ EOF
 		macHost, httpPort, httpsPort,
 		macHost, dnsPort,
 		strings.TrimRight(strings.Replace(ntpFilterRule, "    ", "add rule inet devm_filter output ", 1), "\n"),
+		strings.TrimRight(strings.Replace(dockerFilterRule, "    ", "add rule inet devm_filter output ", 1), "\n"),
 		macHost, httpPort, httpsPort)
 
 	// Persistence: snapshot user chains and write /etc/nftables.conf
@@ -261,7 +270,7 @@ table inet devm_filter {
     ip daddr 127.0.0.0/8 accept
     ip daddr %s tcp dport { %d, %d } accept
     ip daddr %s udp dport %d accept
-%s    jump user_output
+%s%s    jump user_output
   }
   chain forward {
     type filter hook forward priority 0; policy drop;
@@ -282,6 +291,7 @@ sudo systemctl enable --now nftables
 		macHost, httpPort, httpsPort,
 		macHost, dnsPort,
 		ntpFilterRule,
+		dockerFilterRule,
 		macHost, httpPort, httpsPort)
 
 	return liveApply + persist

@@ -9,8 +9,8 @@ import (
 
 // InstallScript returns the shell script the provisioner runs inside
 // the guest VM to install Docker Engine, register devm-runc-shim as
-// the default OCI runtime, add the socket-permission drop-in, add the
-// host→container reachability nftables rule, and restart docker.
+// the default OCI runtime, add the socket-permission drop-in, and
+// restart docker.
 //
 // The shim binaries (devm-runc-shim and docker CLI shim) are delivered
 // via the devmbundle; this script assumes /usr/local/bin/devm-runc-shim
@@ -51,11 +51,7 @@ ExecStartPost=/bin/chmod 666 /run/docker.sock`
 	fmt.Fprintln(&b, "sudo tee /etc/systemd/system/docker.service.d/override.conf > /dev/null <<'DEVM_SOCKET_OVERRIDE'")
 	fmt.Fprintln(&b, socketOverride)
 	fmt.Fprintln(&b, "DEVM_SOCKET_OVERRIDE")
-	fmt.Fprintln(&b, "# 6. Host→container reachability. Docker DNAT's published-port")
-	fmt.Fprintln(&b, "#    traffic to a 172.x.x.x bridge address; this rule lets our")
-	fmt.Fprintln(&b, "#    filter chain accept it. Snapshotted by apply-egress-enforcement.")
-	fmt.Fprintln(&b, "sudo nft add rule inet devm_filter user_output ip daddr 172.16.0.0/12 accept")
-	fmt.Fprintln(&b, "# 7. Reload systemd + restart docker so the drop-in + daemon.json apply.")
+	fmt.Fprintln(&b, "# 6. Reload systemd + restart docker so the drop-in + daemon.json apply.")
 	fmt.Fprintln(&b, "sudo systemctl daemon-reload")
 	fmt.Fprintln(&b, "sudo systemctl restart docker")
 	return b.String()
@@ -69,10 +65,12 @@ type shellExecutor interface {
 
 // Install runs the docker-feature step: install Docker Engine, register
 // devm-runc-shim as the default OCI runtime, add the socket-permission
-// drop-in, add the host→container reachability nftables rule, and
-// restart docker. The shim binaries are delivered via the devmbundle
-// (see devmbundle.Build); this step only handles the Engine install and
-// configuration.
+// drop-in, and restart docker. The shim binaries are delivered via the
+// devmbundle (see devmbundle.Build); this step only handles the Engine
+// install and configuration. The host→container reachability nftables
+// rule is emitted by the cfg-derived egress enforcement instead (see
+// buildNftablesScript), so it applies on every cold start rather than
+// only when this step re-runs.
 func Install(ctx context.Context, w io.Writer, sh shellExecutor) error {
 	return sh.ExecShell(ctx, w, InstallScript())
 }

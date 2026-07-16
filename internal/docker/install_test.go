@@ -18,7 +18,6 @@ func TestInstallScript_ContainsRequiredPieces(t *testing.T) {
 		"/etc/docker/daemon.json",
 		`"default-runtime": "devm"`,
 		`"path": "/usr/local/bin/devm-runc-shim"`,
-		"nft add rule inet devm_filter user_output ip daddr 172.16.0.0/12 accept",
 		"systemctl daemon-reload",
 		"systemctl restart docker",
 		"test -x /usr/bin/runc",

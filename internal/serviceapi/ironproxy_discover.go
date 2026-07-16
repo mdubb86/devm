@@ -132,6 +132,11 @@ func recoverProjectState(ctx context.Context, tr *tart.Tart, routes *Routes, pro
 	if err != nil || snap == nil {
 		return
 	}
+
+	info, _ := ironProxyState.get(projectID)
+	info.Docker = snap.Cfg.Docker
+	ironProxyState.put(projectID, info)
+
 	var directRoutes []Route
 	for _, svc := range snap.Cfg.Services {
 		if !svc.Direct || svc.Hostname == "" {

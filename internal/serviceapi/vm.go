@@ -51,6 +51,11 @@ type VMStartRequest struct {
 	// gigabytes at clone time (a per-project `disk:` override). Zero
 	// means the base image default. See schema.Config.DiskSizeGB.
 	DiskSizeGB int `json:"disk_size_gb,omitempty"`
+	// Docker mirrors cfg.Docker — gates the 172.16/12 egress accept in
+	// buildNftablesScript so container traffic passes the default-deny
+	// output chain on every cold start, not just after the first-boot
+	// docker install step runs.
+	Docker bool `json:"docker,omitempty"`
 }
 
 // VMStopRequest is the body shape for POST /vm/stop. The daemon calls
@@ -307,6 +312,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			HTTPPort:  httpPort,
 			HTTPSPort: httpsPort,
 			DNSPort:   dnsPort,
+			Docker:    req.Docker,
 		})
 
 		// Apply VM-side config via tart exec — workspace mount, extra
@@ -385,7 +391,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 		scripts := []string{
-			buildNftablesScript(info.MacHost, info.HTTPPort, info.HTTPSPort, info.DNSPort, ntpPort),
+			buildNftablesScript(info.MacHost, info.HTTPPort, info.HTTPSPort, info.DNSPort, ntpPort, info.Docker),
 			buildDnsmasqScript(info.MacHost, info.DNSPort),
 			buildTimesyncdScript(),
 		}
@@ -552,6 +558,7 @@ type ironProxyInfo struct {
 	HTTPPort  int
 	HTTPSPort int
 	DNSPort   int
+	Docker    bool // cfg.Docker — gates the 172.16/12 egress accept in buildNftablesScript
 }
 
 type ironProxyStore struct {
