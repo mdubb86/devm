@@ -303,6 +303,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		// egress-enforcement inject to read.
 		ironProxyState.put(req.Name, ironProxyInfo{
 			MacHost:   macIP,
+			VMIP:      vmIP,
 			HTTPPort:  httpPort,
 			HTTPSPort: httpsPort,
 			DNSPort:   dnsPort,
@@ -547,6 +548,7 @@ func pickPort() (int, error) {
 
 type ironProxyInfo struct {
 	MacHost   string
+	VMIP      string // the guest's current DHCP IP (for direct-service DNS)
 	HTTPPort  int
 	HTTPSPort int
 	DNSPort   int
@@ -581,3 +583,14 @@ func (s *ironProxyStore) del(projectID string) {
 }
 
 var ironProxyState = newIronProxyStore()
+
+// vmIPForProject returns the current stashed VM IP for a project, if the
+// VM has been started this daemon lifetime. Used by the DNS server to
+// answer direct-service hostnames.
+func vmIPForProject(project string) (string, bool) {
+	info, ok := ironProxyState.get(project)
+	if !ok || info.VMIP == "" {
+		return "", false
+	}
+	return info.VMIP, true
+}
