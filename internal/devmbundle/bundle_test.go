@@ -30,6 +30,7 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 		"scripts/with-devm-env":        0o755,
 		"scripts/install-templates.sh": 0o755,
 		"install.sh":                   0o755,
+		"startup.sh":                   0o755,
 	}
 	for path, mode := range want {
 		e, ok := entries[path]
@@ -320,19 +321,24 @@ func TestBuild_TarContainsStartupUnits_WhenStartupSet(t *testing.T) {
 	assert.Contains(t, names, "systemd/devm-startup.service")
 	assert.Contains(t, names, "systemd/devm-enforce.service")
 
+	startupScript := readTarEntry(t, blob, "startup.sh")
+	assert.Contains(t, string(startupScript), "echo hi")
+
 	startupUnit := readTarEntry(t, blob, "systemd/devm-startup.service")
-	assert.Contains(t, string(startupUnit), "ExecStart=/bin/bash -o pipefail -c 'echo hi'")
+	assert.Contains(t, string(startupUnit), "ExecStart=/opt/devm/startup.sh")
 
 	enforceUnit := readTarEntry(t, blob, "systemd/devm-enforce.service")
 	assert.Contains(t, string(enforceUnit), "ExecStart=/usr/sbin/nft -f /etc/nftables.conf")
 
-	// Declared service units order themselves after enforcement once
-	// startup: commands are configured.
+	// Declared service units always order themselves after enforcement.
 	webUnit := readTarEntry(t, blob, "systemd/web.service")
 	assert.Contains(t, string(webUnit), "After=devm-ready.target devm-enforce.service")
 }
 
-func TestBuild_OmitsStartupUnits_WhenStartupUnset(t *testing.T) {
+func TestBuild_AlwaysEmitsStartupUnits_WhenStartupUnset(t *testing.T) {
+	// The mechanism is always registered, for every project — not
+	// opt-in on startup: being set. An empty cfg.Startup still gets
+	// startup.sh + both units; startup.sh is just a no-op script.
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
@@ -343,12 +349,16 @@ func TestBuild_OmitsStartupUnits_WhenStartupUnset(t *testing.T) {
 	require.NoError(t, err)
 
 	names := tarEntryNames(t, blob)
-	assert.NotContains(t, names, "systemd/devm-startup.service")
-	assert.NotContains(t, names, "systemd/devm-enforce.service")
+	assert.Contains(t, names, "startup.sh")
+	assert.Contains(t, names, "systemd/devm-startup.service")
+	assert.Contains(t, names, "systemd/devm-enforce.service")
+
+	startupScript := readTarEntry(t, blob, "startup.sh")
+	assert.Equal(t, "#!/bin/bash\nset -eo pipefail\n", string(startupScript))
 
 	webUnit := readTarEntry(t, blob, "systemd/web.service")
-	assert.NotContains(t, string(webUnit), "devm-enforce.service",
-		"services must not order after enforcement when startup: is unset")
+	assert.Contains(t, string(webUnit), "devm-enforce.service",
+		"services always order after enforcement, startup: set or not")
 }
 
 func TestBuild_TarContainsSSHMaterial(t *testing.T) {

@@ -16,7 +16,7 @@ ExecStart=/bin/true
 Type=oneshot
 `
 	svc := schema.Service{Systemd: override}
-	got := string(RenderService("api", svc, false))
+	got := string(RenderService("api", svc))
 	// Verbatim (with trailing newline normalized).
 	assert.Equal(t, override, got)
 }
@@ -24,7 +24,7 @@ Type=oneshot
 func TestRenderService_FullOverride_NormalizesTrailingWhitespace(t *testing.T) {
 	override := "[Unit]\nDescription=custom\n[Service]\nExecStart=/bin/true\n\n\n   \n"
 	svc := schema.Service{Systemd: override}
-	got := string(RenderService("api", svc, false))
+	got := string(RenderService("api", svc))
 	// Trimmed trailing whitespace + exactly one newline.
 	assert.True(t, strings.HasSuffix(got, "ExecStart=/bin/true\n"))
 	assert.False(t, strings.HasSuffix(got, "\n\n"))
@@ -32,7 +32,7 @@ func TestRenderService_FullOverride_NormalizesTrailingWhitespace(t *testing.T) {
 
 func TestRenderService_Declarative_HasDefaults(t *testing.T) {
 	svc := schema.Service{Exec: []string{"/usr/bin/npm", "run", "dev"}}
-	got := string(RenderService("api", svc, false))
+	got := string(RenderService("api", svc))
 
 	assert.Contains(t, got, "[Unit]")
 	assert.Contains(t, got, "Description=devm service: api")
@@ -57,7 +57,7 @@ func TestRenderService_Declarative_AllFields(t *testing.T) {
 		After:   []string{"postgresql.service", "redis.service"},
 		Restart: "always",
 	}
-	got := string(RenderService("worker", svc, false))
+	got := string(RenderService("worker", svc))
 
 	assert.Contains(t, got, "WorkingDirectory=/var/lib/foo")
 	assert.Contains(t, got, "User=appuser")
@@ -68,13 +68,13 @@ func TestRenderService_Declarative_AllFields(t *testing.T) {
 	assert.Greater(t, logLevelIdx, 0)
 	assert.Less(t, apiKeyIdx, logLevelIdx, "env keys sorted alphabetically")
 
-	assert.Contains(t, got, "After=devm-ready.target postgresql.service redis.service")
+	assert.Contains(t, got, "After=devm-ready.target postgresql.service redis.service devm-enforce.service")
 	assert.Contains(t, got, "Restart=always")
 }
 
 func TestRenderService_Declarative_NoEnv_OmitsEnvironmentLine(t *testing.T) {
 	svc := schema.Service{Exec: []string{"/bin/true"}}
-	got := string(RenderService("x", svc, false))
+	got := string(RenderService("x", svc))
 	assert.NotContains(t, got, "Environment=")
 }
 
@@ -84,24 +84,36 @@ func TestRenderService_Declarative_HostnameAndPortOnlyService(t *testing.T) {
 	// for the orchestrator to detect "nothing to run" and skip
 	// systemctl enable.
 	svc := schema.Service{Hostname: "api.test", Port: 8080}
-	got := string(RenderService("api", svc, false))
+	got := string(RenderService("api", svc))
 	assert.NotContains(t, got, "ExecStart=")
 }
 
+func TestRenderStartupScript(t *testing.T) {
+	s := string(RenderStartupScript([]string{"echo a", "echo b"}))
+	assert.True(t, strings.HasPrefix(s, "#!/bin/bash\nset -eo pipefail\n"))
+	assert.Contains(t, s, "echo a\n")
+	assert.Contains(t, s, "echo b\n")
+	assert.Less(t, strings.Index(s, "echo a"), strings.Index(s, "echo b"))
+	// Verbatim — no single-quote escaping in a script body.
+	assert.False(t, strings.Contains(s, `'\''`))
+}
+
+func TestRenderStartupScript_Empty_IsNoOp(t *testing.T) {
+	s := string(RenderStartupScript(nil))
+	assert.Equal(t, "#!/bin/bash\nset -eo pipefail\n", s)
+}
+
 func TestRenderStartupUnit(t *testing.T) {
-	u := string(RenderStartupUnit([]string{"echo a", "echo b"}))
+	u := string(RenderStartupUnit())
 	assert.Contains(t, u, "After=network-online.target")
 	assert.Contains(t, u, "Before=devm-enforce.service")
 	assert.Contains(t, u, "Type=oneshot")
-	// one ExecStart per command, in order, under bash -o pipefail
-	assert.Contains(t, u, "ExecStart=/bin/bash -o pipefail -c 'echo a'")
-	assert.Contains(t, u, "ExecStart=/bin/bash -o pipefail -c 'echo b'")
-	assert.Less(t, strings.Index(u, "echo a"), strings.Index(u, "echo b"))
+	assert.Contains(t, u, "ExecStart=/opt/devm/startup.sh")
 }
 
-func TestRenderStartupUnit_EscapesSingleQuotes(t *testing.T) {
-	u := string(RenderStartupUnit([]string{"echo 'hi'"}))
-	assert.Contains(t, u, `ExecStart=/bin/bash -o pipefail -c 'echo '\''hi'\'''`)
+func TestRenderStartupUnit_Stable(t *testing.T) {
+	// Content never varies — the commands live in startup.sh, not the unit.
+	assert.Equal(t, RenderStartupUnit(), RenderStartupUnit())
 }
 
 func TestRenderEnforceUnit(t *testing.T) {
@@ -111,16 +123,10 @@ func TestRenderEnforceUnit(t *testing.T) {
 	assert.Contains(t, u, "Type=oneshot")
 }
 
-func TestRenderService_AfterEnforce_AddsOrdering(t *testing.T) {
+func TestRenderService_AlwaysAfterEnforce(t *testing.T) {
 	svc := schema.Service{Exec: []string{"/bin/true"}}
-	got := string(RenderService("api", svc, true))
+	got := string(RenderService("api", svc))
 	assert.Contains(t, got, "After=devm-ready.target devm-enforce.service")
-}
-
-func TestRenderService_NoAfterEnforce_OmitsOrdering(t *testing.T) {
-	svc := schema.Service{Exec: []string{"/bin/true"}}
-	got := string(RenderService("api", svc, false))
-	assert.NotContains(t, got, "devm-enforce.service")
 }
 
 func TestSystemdQuoteArgv(t *testing.T) {

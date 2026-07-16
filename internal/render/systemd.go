@@ -14,15 +14,15 @@ import (
 // Otherwise generates from the declarative fields with sensible
 // defaults that hook into devm-ready.target.
 //
-// afterEnforce adds After=devm-enforce.service to the declarative
-// path's ordering, so the service starts only once startup: commands
-// and network enforcement have run. Callers pass true when the config
-// has startup: commands configured; it has no effect on the verbatim
-// Systemd override path.
+// The declarative path always adds After=devm-enforce.service, so a
+// declared service starts only once devm-startup.service and network
+// enforcement have run (see internal/provision's setupBootEnforcement
+// — the mechanism is always registered, for every project). It has no
+// effect on the verbatim Systemd override path.
 //
 // The returned bytes are the unit file contents — write at
 // /etc/systemd/system/<name>.service inside the VM.
-func RenderService(name string, svc schema.Service, afterEnforce bool) []byte {
+func RenderService(name string, svc schema.Service) []byte {
 	if svc.Systemd != "" {
 		// Trim trailing whitespace, ensure exactly one final newline.
 		return []byte(strings.TrimRight(svc.Systemd, " \t\n") + "\n")
@@ -36,9 +36,7 @@ func RenderService(name string, svc schema.Service, afterEnforce bool) []byte {
 	// devm-ready.target is the base infrastructure target written by
 	// the base image (Task 4). Includes dnsmasq + Caddy + network.
 	after := append([]string{"devm-ready.target"}, svc.After...)
-	if afterEnforce {
-		after = append(after, "devm-enforce.service")
-	}
+	after = append(after, "devm-enforce.service")
 	fmt.Fprintf(&b, "After=%s\n", strings.Join(after, " "))
 	b.WriteString("Requires=devm-ready.target\n")
 
@@ -80,16 +78,43 @@ func RenderService(name string, svc schema.Service, afterEnforce bool) []byte {
 	return []byte(b.String())
 }
 
-// RenderStartupUnit generates the devm-startup.service unit, which runs
-// every startup: command in order on every boot, before network
-// enforcement (devm-enforce.service) locks the guest down. Each command
-// runs as its own ExecStart= under `bash -o pipefail -c`, so a failing
-// command stops the unit (and blocks devm-enforce.service) rather than
-// silently continuing.
+// RenderStartupScript generates the bash script devm-startup.service
+// executes: each cfg.Startup command verbatim, one per line — a
+// script body needs no single-quote escaping, unlike an ExecStart=
+// argument. `set -eo pipefail` means a failing command aborts the
+// run, matching install:'s "a failing command fails the run"
+// semantics. An empty cmds produces just the shebang + set line: a
+// valid no-op that exits 0.
+//
+// The returned bytes are the script contents — write at
+// /opt/devm/startup.sh inside the VM, mode 0755.
+func RenderStartupScript(cmds []string) []byte {
+	var b strings.Builder
+	b.WriteString("#!/bin/bash\n")
+	b.WriteString("set -eo pipefail\n")
+	for _, cmd := range cmds {
+		b.WriteString(cmd)
+		b.WriteString("\n")
+	}
+	return []byte(b.String())
+}
+
+// RenderStartupUnit generates the devm-startup.service unit. Its
+// content is STABLE — it never changes with cfg.Startup; the commands
+// live in /opt/devm/startup.sh (RenderStartupScript), which the
+// provisioner's bundle re-pipe rewrites on every cold-start. Always
+// registered for every project (see internal/provision's
+// setupBootEnforcement) — not opt-in.
+//
+// A failing startup: command does NOT block devm-enforce.service:
+// devm-enforce.service has only After=devm-startup.service (no
+// Requires=/BindsTo=), so systemd starts it regardless of whether
+// devm-startup.service succeeded. This is fail-safe — egress
+// enforcement is always applied even when a startup command fails.
 //
 // The returned bytes are the unit file contents — write at
 // /etc/systemd/system/devm-startup.service inside the VM.
-func RenderStartupUnit(cmds []string) []byte {
+func RenderStartupUnit() []byte {
 	var b strings.Builder
 
 	b.WriteString("[Unit]\n")
@@ -101,9 +126,7 @@ func RenderStartupUnit(cmds []string) []byte {
 	b.WriteString("\n[Service]\n")
 	b.WriteString("Type=oneshot\n")
 	b.WriteString("RemainAfterExit=yes\n")
-	for _, cmd := range cmds {
-		fmt.Fprintf(&b, "ExecStart=/bin/bash -o pipefail -c '%s'\n", shellSingleQuoteEscape(cmd))
-	}
+	b.WriteString("ExecStart=/opt/devm/startup.sh\n")
 
 	b.WriteString("\n[Install]\n")
 	b.WriteString("WantedBy=multi-user.target\n")
@@ -113,8 +136,9 @@ func RenderStartupUnit(cmds []string) []byte {
 
 // RenderEnforceUnit generates the devm-enforce.service unit, which applies
 // the devm nftables egress policy after devm-startup.service has run.
-// Ordered before it in the per-service units (via afterEnforce=true) so
-// declared services start only once enforcement is in place.
+// Ordered before it in the per-service units (RenderService always
+// appends devm-enforce.service to After=) so declared services start
+// only once enforcement is in place.
 //
 // The returned bytes are the unit file contents — write at
 // /etc/systemd/system/devm-enforce.service inside the VM.
@@ -134,13 +158,6 @@ func RenderEnforceUnit() []byte {
 	b.WriteString("WantedBy=multi-user.target\n")
 
 	return []byte(b.String())
-}
-
-// shellSingleQuoteEscape escapes a string for embedding inside single
-// quotes in a POSIX shell command: each literal `'` becomes `'\''`
-// (close the quote, escaped literal quote, reopen the quote).
-func shellSingleQuoteEscape(s string) string {
-	return strings.ReplaceAll(s, "'", `'\''`)
 }
 
 // systemdQuoteArgv renders an argv slice for systemd ExecStart=. Systemd's

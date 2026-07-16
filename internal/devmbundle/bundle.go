@@ -109,22 +109,29 @@ func Build(in BuildInput) ([]byte, error) {
 			merged[k] = v
 		}
 		svc.Env = merged
-		unit := render.RenderService(name, svc, len(in.Cfg.Startup) > 0)
+		unit := render.RenderService(name, svc)
 		if err := writeEntry(tw, "systemd/"+name+".service", 0o644, unit); err != nil {
 			return nil, err
 		}
 	}
 
-	// devm-startup.service runs startup: commands on every boot before
-	// devm-enforce.service applies the egress policy; opt-in — omitted
-	// entirely when startup: is unset.
-	if len(in.Cfg.Startup) > 0 {
-		if err := writeEntry(tw, "systemd/devm-startup.service", 0o644, render.RenderStartupUnit(in.Cfg.Startup)); err != nil {
-			return nil, err
-		}
-		if err := writeEntry(tw, "systemd/devm-enforce.service", 0o644, render.RenderEnforceUnit()); err != nil {
-			return nil, err
-		}
+	// startup.sh + devm-startup.service + devm-enforce.service are
+	// always emitted, for every project: the mechanism is always
+	// registered (see internal/provision's setupBootEnforcement), not
+	// opt-in. startup.sh lands at /opt/devm/startup.sh directly —
+	// GuestInstallScript extracts the tar straight into /opt/devm, so a
+	// top-level entry needs no further install.sh copy step (unlike
+	// systemd/*.service, which install.sh copies into
+	// /etc/systemd/system/). An empty cfg.Startup renders a no-op
+	// script that exits 0.
+	if err := writeEntry(tw, "startup.sh", 0o755, render.RenderStartupScript(in.Cfg.Startup)); err != nil {
+		return nil, err
+	}
+	if err := writeEntry(tw, "systemd/devm-startup.service", 0o644, render.RenderStartupUnit()); err != nil {
+		return nil, err
+	}
+	if err := writeEntry(tw, "systemd/devm-enforce.service", 0o644, render.RenderEnforceUnit()); err != nil {
+		return nil, err
 	}
 
 	if len(in.SSHAuthorizedPubkey) > 0 {
