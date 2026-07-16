@@ -163,8 +163,14 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 const provisionedMarker = "/var/lib/devm/provisioned"
 
 // markerExists reports whether the first-boot marker is present in the guest.
+//
+// ExecWithRetry, not Exec: this is the first guest call after boot, and a
+// transient guest-agent transport drop here would misclassify a restart as a
+// first boot — re-running the apt/install:/docker steps under enforced egress,
+// where they fail and tear down a healthy VM. A genuine "marker absent" is a
+// clean exit 1 (not a transport flake), so it is not retried.
 func (p *Provisioner) markerExists(ctx context.Context) bool {
-	return p.Tart.Exec(ctx, p.VMName, []string{"test", "-f", provisionedMarker}).ExitCode == 0
+	return p.Tart.ExecWithRetry(ctx, p.VMName, []string{"test", "-f", provisionedMarker}).ExitCode == 0
 }
 
 // writeMarker records that first-boot provisioning completed.

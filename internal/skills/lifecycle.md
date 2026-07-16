@@ -35,24 +35,25 @@ If the VM is stopped or absent, `devm shell`:
 3. Polls `tart exec <vmName> true` until exit 0, or up to 60 seconds.
 4. Runs `Provisioner.Run` in sequence:
 
-   | # | Step name |
-   |---|---|
-   | 1 | `mkdir workspace parents` |
-   | 2 | `install devm bundle` |
-   | 3 | `reload base services` |
-   | 4 | `apt-get update` |
-   | 5 | `apt-get install packages` |
-   | 6 | `run install commands` |
-   | 7 | `docker feature` (only when `docker: true`) |
-   | 8 | `install templates` |
-   | 9 | `systemctl daemon-reload` |
-   | 10 | `apply egress enforcement` |
-   | 11 | `enable + start services` |
-   | 12 | `apply masks` |
+   | # | Step name | When |
+   |---|---|---|
+   | 1 | `mkdir workspace parents` | every cold start |
+   | 2 | `install devm bundle` | every cold start |
+   | 3 | `reload base services` | every cold start |
+   | 4 | `apt-get update` | **first boot only** |
+   | 5 | `apt-get install packages` | **first boot only** |
+   | 6 | `run install commands` | **first boot only** |
+   | 7 | `docker feature` (only when `docker: true`) | **first boot only** |
+   | 8 | `install templates` | every cold start |
+   | 9 | `systemctl daemon-reload` | every cold start |
+   | 10 | `apply egress enforcement` | every cold start |
+   | 11 | `apply svc_ingress firewall` (only when `direct: true` docker services) | every cold start |
+   | 12 | `enable + start services` | every cold start |
+   | 13 | `apply masks` | every cold start |
 
 5. Attaches an interactive shell via `tart exec`. The shell exits but the VM keeps running; use `devm stop` to stop it.
 
-The Provisioner steps are idempotent: re-running them on a stopped VM whose disk is already provisioned (after `devm stop`) is safe and fast (apt packages are already installed, units are already in place).
+The first-boot-only steps (apt, `run install commands`, `docker feature`) run once, gated by the `/var/lib/devm/provisioned` marker, and are skipped on later cold starts (after `devm stop` + `devm shell`). The every-cold-start steps are idempotent and network-free (units already in place, nftables rebuilt from config). Restart-time workload comes back via systemd — enabled units auto-start on boot, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
 
 ---
 
