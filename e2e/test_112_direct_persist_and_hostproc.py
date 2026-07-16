@@ -75,14 +75,6 @@ CONTAINER_PORT = 9200      # (a) container's internal nc listen port
 HOSTPROC_PORT = 54622      # (b) host-process nc listen port
 
 
-@pytest.mark.xfail(
-    reason="Blocked on the first-boot provisioning fix. On restart the docker "
-    "feature step re-runs under enforced egress (curl get.docker.com can't "
-    "resolve), so the cold-start reshell fails before svc_ingress can be "
-    "validated. Un-xfail once the marker-gated first-boot provisioning lands "
-    "(docs/superpowers/specs/2026-07-14-first-boot-provisioning-design.md).",
-    strict=False,
-)
 @pytest.mark.slow
 @pytest.mark.timeout(600)
 def test_direct_docker_persists_across_stop_shell(workspace, devm, sandbox_name):
