@@ -198,6 +198,15 @@ func TestNftablesScaffoldsSvcIngress(t *testing.T) {
 	assert.True(t, fwdIdx > 0 && userIdx > fwdIdx, "svc_ingress jump must come before user_forward")
 	// Persist half declares the chain too.
 	assert.Contains(t, script, "chain svc_ingress {")
+	// Persist half also jumps svc_ingress before user_forward, but as
+	// bare "jump" lines inside `chain forward { ... }` (no "forward"
+	// token on those lines, unlike the liveApply rules above). The
+	// persist heredoc is appended after liveApply in the returned
+	// string, and each jump line appears exactly once per half, so the
+	// *last* occurrence of each substring targets the persist block.
+	persistSvcIdx := strings.LastIndex(script, "jump svc_ingress")
+	persistUserIdx := strings.LastIndex(script, "jump user_forward")
+	assert.True(t, persistSvcIdx > fwdIdx && persistUserIdx > persistSvcIdx, "persist half: svc_ingress jump must come before user_forward")
 }
 
 func TestBuildSvcIngressScript(t *testing.T) {
