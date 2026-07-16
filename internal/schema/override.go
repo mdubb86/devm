@@ -21,6 +21,7 @@ type ServiceOverride struct {
 	PortIsSet bool    `yaml:"-"`
 
 	Hostname  *string             `yaml:"hostname,omitempty"`
+	Direct    *bool               `yaml:"direct,omitempty"`
 	Env       map[string]EnvValue `yaml:"env,omitempty"`
 	Masks     *[]Mask             `yaml:"masks,omitempty"`
 	Templates *[]Template         `yaml:"templates,omitempty"`
@@ -35,6 +36,7 @@ type ServiceOverride struct {
 type serviceOverrideYAML struct {
 	Port      yaml.Node           `yaml:"port,omitempty"`
 	Hostname  *string             `yaml:"hostname,omitempty"`
+	Direct    *bool               `yaml:"direct,omitempty"`
 	Env       map[string]EnvValue `yaml:"env,omitempty"`
 	Masks     *[]Mask             `yaml:"masks,omitempty"`
 	Templates *[]Template         `yaml:"templates,omitempty"`
@@ -52,6 +54,7 @@ func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
 		return err
 	}
 	o.Hostname = raw.Hostname
+	o.Direct = raw.Direct
 	o.Env = raw.Env
 	o.Masks = raw.Masks
 	o.Templates = raw.Templates

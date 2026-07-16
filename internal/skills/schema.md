@@ -165,6 +165,7 @@ Named service definitions. Each key is the service name.
 |---|---|---|---|
 | `port` | int or "IP:PORT" | live | VM-side listen port. String form (`"0.0.0.0:8080"`) also sets the host bind IP; default bind is `127.0.0.1`. |
 | `hostname` | string | live | Hostname for the Caddy reverse-proxy entry. Must end in `.test`. |
+| `direct` | bool | live | Route this service directly to the VM's IP (DNS + firewall) instead of through the daemon HTTP proxy + in-VM Caddy. For raw-TCP / non-HTTP services (e.g. Postgres). Requires `hostname`. Default `false`. |
 | `env` | map[string]EnvValue | live | Per-service environment variables (same `!secret` syntax as top-level `env`). |
 | `masks` | []Mask | recreate | `mount --bind` overlays applied at boot. Each has `path` (relative to repo root) and `size` (e.g. `100m`). |
 | `templates` | []Template | live | Files rendered from source scripts and written into the VM. Each has `source` (project-relative path), `output` (absolute path in VM), and optional `sudo` (default `false`; set `true` when `output` is under a root-owned dir like `/etc` so the installer escalates and the resulting file lands root-owned). |
@@ -178,6 +179,7 @@ Named service definitions. Each key is the service name.
 Validation rules:
 - A service must define at least one of `port`, `masks`, `exec`, or `systemd`.
 - `hostname` must end in `.test`.
+- `direct: true` requires a `hostname`.
 - Port values must be in range 1–65535; no two services may share a port or a hostname.
 - Mask `path` must be relative to the repo root; absolute paths, `~`, `$VAR`, and `../` traversal are rejected.
 - Template `source` must be project-relative (no `../` traversal); `output` must be absolute.

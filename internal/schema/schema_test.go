@@ -135,6 +135,19 @@ func TestServiceHostnameMustEndInDotTest(t *testing.T) {
 	}
 }
 
+func TestServiceDirectRequiresHostname(t *testing.T) {
+	// direct without hostname is a hard error.
+	err := Service{Port: 54322, Direct: true}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "direct: true requires a hostname")
+
+	// direct WITH hostname is fine.
+	assert.NoError(t, Service{Port: 54322, Hostname: "db.test", Direct: true}.Validate())
+
+	// non-direct without hostname stays valid (unchanged behavior).
+	assert.NoError(t, Service{Port: 54322}.Validate())
+}
+
 func TestConfigValidate(t *testing.T) {
 	c := Config{
 		Project: Project{Name: "test"},

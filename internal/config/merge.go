@@ -49,6 +49,9 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 			if soverride.Hostname != nil {
 				svc.Hostname = *soverride.Hostname
 			}
+			if soverride.Direct != nil {
+				svc.Direct = *soverride.Direct
+			}
 			if soverride.Env != nil {
 				if svc.Env == nil {
 					svc.Env = map[string]schema.EnvValue{}

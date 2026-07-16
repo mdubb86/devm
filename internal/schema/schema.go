@@ -160,7 +160,11 @@ type Service struct {
 	// need to reach the service.
 	BindIP string `yaml:"-"`
 
-	Hostname  string              `yaml:"hostname,omitempty"`
+	Hostname string `yaml:"hostname,omitempty"`
+	// Direct routes this service directly to the VM's IP instead of
+	// through the daemon HTTP proxy + in-VM Caddy. For raw-TCP / non-HTTP
+	// services (e.g. Postgres). Requires a hostname.
+	Direct    bool                `yaml:"direct,omitempty"`
 	Env       map[string]EnvValue `yaml:"env,omitempty"`
 	Masks     []Mask              `yaml:"masks,omitempty"`
 	Templates []Template          `yaml:"templates,omitempty"`
@@ -181,6 +185,7 @@ type Service struct {
 type serviceYAML struct {
 	Port      yaml.Node           `yaml:"port,omitempty"`
 	Hostname  string              `yaml:"hostname,omitempty"`
+	Direct    bool                `yaml:"direct,omitempty"`
 	Env       map[string]EnvValue `yaml:"env,omitempty"`
 	Masks     []Mask              `yaml:"masks,omitempty"`
 	Templates []Template          `yaml:"templates,omitempty"`
@@ -196,7 +201,7 @@ type serviceYAML struct {
 // sync with the tags on serviceYAML above; enforced by
 // TestService_KnownFieldsMatchStruct so it never drifts.
 var serviceKnownFields = []string{
-	"port", "hostname", "env", "masks", "templates",
+	"port", "hostname", "direct", "env", "masks", "templates",
 	"exec", "workdir", "restart", "after", "user", "systemd",
 }
 
@@ -229,6 +234,7 @@ func (s *Service) UnmarshalYAML(node *yaml.Node) error {
 		return err
 	}
 	s.Hostname = raw.Hostname
+	s.Direct = raw.Direct
 	s.Env = raw.Env
 	s.Masks = raw.Masks
 	s.Templates = raw.Templates
@@ -280,6 +286,7 @@ func (s Service) MarshalYAML() (interface{}, error) {
 	out := struct {
 		Port      interface{}         `yaml:"port,omitempty"`
 		Hostname  string              `yaml:"hostname,omitempty"`
+		Direct    bool                `yaml:"direct,omitempty"`
 		Env       map[string]EnvValue `yaml:"env,omitempty"`
 		Masks     []Mask              `yaml:"masks,omitempty"`
 		Templates []Template          `yaml:"templates,omitempty"`
@@ -291,6 +298,7 @@ func (s Service) MarshalYAML() (interface{}, error) {
 		Systemd   string              `yaml:"systemd,omitempty"`
 	}{
 		Hostname:  s.Hostname,
+		Direct:    s.Direct,
 		Env:       s.Env,
 		Masks:     s.Masks,
 		Templates: s.Templates,
@@ -323,6 +331,9 @@ func (s Service) ResolveBind() string {
 func (s Service) Validate() error {
 	if s.Hostname != "" && !strings.HasSuffix(s.Hostname, ".test") {
 		return fmt.Errorf("service.hostname: must end in .test (got %q)", s.Hostname)
+	}
+	if s.Direct && s.Hostname == "" {
+		return fmt.Errorf("direct: true requires a hostname")
 	}
 	if s.BindIP != "" && s.Port == 0 {
 		return fmt.Errorf("port bind interface requires a sandbox port")
