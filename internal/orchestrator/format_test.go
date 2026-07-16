@@ -408,3 +408,9 @@ func TestFormatChange_ServiceDirect(t *testing.T) {
 
 	assert.Equal(t, "service_direct_change", changeKindJSON(reconcile.KindServiceDirectChange))
 }
+
+func TestFormatChange_Startup(t *testing.T) {
+	change := reconcile.Change{Kind: reconcile.KindStartupChange}
+	assert.Equal(t, "~ startup commands", formatChange(change))
+	assert.Equal(t, "startup_change", changeKindJSON(reconcile.KindStartupChange))
+}

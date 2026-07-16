@@ -214,6 +214,32 @@ func TestApplyLive_PathChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
 	assert.Equal(t, 1, countCalls(t, log, "exec -i"), "path-only change must still pipe a bundle")
 }
 
+// TestApplyLive_StartupChange_PipesBundle_NoWorkspaceWrite pins the
+// mechanism KindStartupChange uses to reach the running VM: same as env
+// and path changes, it rebuilds the devmbundle (which re-renders
+// devm-startup.service from cfg.Startup) and pipes it into the guest —
+// no host workspace write. The unit itself only runs at boot, so this
+// doesn't restart anything; it just makes the new content available for
+// the VM's next cold start.
+func TestApplyLive_StartupChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
+	dir := t.TempDir()
+	tr, log := fakeTartForApplyLive(t, dir)
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Startup: []string{"echo one", "echo two"},
+	}
+
+	err := ApplyLive(tr, "p-vm", []Change{
+		{Kind: KindStartupChange},
+	}, cfg, dir, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(filepath.Join(dir, ".devm"))
+	require.True(t, os.IsNotExist(statErr),
+		"ApplyLive must NOT write .devm/ to the workspace; got: %v", statErr)
+	assert.Equal(t, 1, countCalls(t, log, "exec -i"), "startup change must pipe a bundle")
+}
+
 func TestApplyLive_NoEnvOrTemplateChange_DoesNotPipeBundle(t *testing.T) {
 	dir := t.TempDir()
 	tr, log := fakeTartForApplyLive(t, dir)

@@ -78,6 +78,12 @@ const (
 	KindSecretAdd
 	KindSecretRemove
 	KindSecretChange
+	// KindStartupChange fires when the ordered `startup:` command list
+	// differs between old and new config. Content edits and add/remove
+	// of the key both surface here; see the changeBucket comment for
+	// why this is BucketLive with a next-boot effect rather than a
+	// teardown.
+	KindStartupChange
 	// KindIronProxyDown is a synthetic change: not produced by diffing
 	// old vs new config, but emitted by the reconcile handler when a
 	// running VM's iron-proxy is missing or stale (see
@@ -132,6 +138,11 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindServiceHostnameChange: BucketLive,
 	// Direct: re-push routes (DNS), rebuild svc_ingress, re-render Caddyfile — live.
 	KindServiceDirectChange: BucketLive,
+	// startup: re-rendered into devm-startup.service on every cold start;
+	// a live bundle re-pipe carries the new content to the guest, but
+	// the change only takes effect on the VM's NEXT boot (startup: is a
+	// boot hook, not a running-service field).
+	KindStartupChange: BucketLive,
 	// Secrets: iron-proxy config carries resolved values; a rotation
 	// requires regenerating that config and respawning iron-proxy.
 	KindSecretAdd:    BucketIronProxyRestart,
@@ -246,9 +257,9 @@ func ComputePortChanges(old, new schema.Config) []Change {
 // prior snapshot), which surfaces every declared template as an add.
 // ComputeAllChanges returns the full set of diffs between old and new
 // configs. Order: ports, network, env (per service), service unit fields
-// (per service), install, packages, mounts, masks (per service), image,
-// identity, templates, path, secrets. Within each section, service names
-// are sorted alphabetically for determinism.
+// (per service), install, startup, packages, mounts, masks (per service),
+// image, identity, templates, path, secrets. Within each section, service
+// names are sorted alphabetically for determinism.
 //
 // `repoRoot` is required by the templates diff to render the desired
 // installer scripts. `lastAppliedTemplates` is the last-applied baseline
@@ -273,6 +284,7 @@ func ComputeAllChanges(
 	out = append(out, computeDirectChanges(old, new)...)
 	out = append(out, computeHostnameChanges(old, new)...)
 	out = append(out, computeInstallChanges(old, new)...)
+	out = append(out, computeStartupChanges(old, new)...)
 	out = append(out, computePackagesChange(old, new)...)
 	out = append(out, computeMountAddRemove(old, new)...)
 	out = append(out, computeMaskAddRemove(old, new)...)
@@ -431,6 +443,18 @@ func computeInstallChanges(old, new schema.Config) []Change {
 		return nil
 	}
 	return []Change{{Kind: KindInstallChange}}
+}
+
+// computeStartupChanges emits KindStartupChange when the ordered
+// `startup:` command list differs between old and new config. Compared
+// as an ordered slice (like Install/Packages/Mounts) rather than by
+// membership — reordering the boot commands is itself a meaningful
+// change.
+func computeStartupChanges(old, new schema.Config) []Change {
+	if stringSliceEqual(old.Startup, new.Startup) {
+		return nil
+	}
+	return []Change{{Kind: KindStartupChange}}
 }
 
 func computePackagesChange(old, new schema.Config) []Change {

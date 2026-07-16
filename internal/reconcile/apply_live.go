@@ -21,21 +21,25 @@ import (
 // Template changes are coalesced — any number of KindTemplateChange
 // entries trigger a SINGLE invocation of the in-sandbox dispatcher,
 // which re-runs every installer (cheap; identical content is an
-// idempotent atomic rewrite). Any env, path, or template change
+// idempotent atomic rewrite). Any env, path, startup, or template change
 // re-builds the devmbundle from cfg + repoRoot and pipes it into the
 // guest at /opt/devm/ before the dispatcher runs, so the sandbox always
 // executes the latest rendered content — nothing is written to the host
 // workspace. Path changes ride the same rebuild as env changes because
 // render.RenderEnv folds cfg.Path into the same .env's PATH= line
-// (there's no separate path-only artifact to pipe). For each changed
-// template, this function logs a "consuming services may need restart"
-// line to stderr.
+// (there's no separate path-only artifact to pipe). Startup changes ride
+// it too: devm-startup.service is rendered from cfg.Startup as part of
+// the same bundle, but since the unit only runs at boot (see
+// internal/provision), piping the new content doesn't restart anything —
+// it just makes the next cold start pick up the new commands. For each
+// changed template, this function logs a "consuming services may need
+// restart" line to stderr.
 //
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
 func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
 	var templateChanges []Change
-	var envOrPathChanged bool
+	var bundleRebuildNeeded bool
 	var directChanged bool
 	for _, c := range changes {
 		if c.Bucket() != BucketLive {
@@ -47,14 +51,14 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			// provisioner pattern; no host-side port publishing needed.
 		case KindTemplateChange:
 			templateChanges = append(templateChanges, c)
-		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange:
-			envOrPathChanged = true
+		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange, KindStartupChange:
+			bundleRebuildNeeded = true
 		case KindServiceDirectChange:
 			directChanged = true
 		}
 	}
 
-	if envOrPathChanged || len(templateChanges) > 0 {
+	if bundleRebuildNeeded || len(templateChanges) > 0 {
 		// Rebuild the bundle and pipe it into the guest at /opt/devm/ —
 		// same mechanism the provisioner uses at cold-start. Nothing is
 		// written to the host workspace; with-devm-env sources the new

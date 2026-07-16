@@ -59,6 +59,10 @@ func TestChangeKindBuckets(t *testing.T) {
 
 	// Live: path (same fan-out as env via .devm/.env)
 	assert.Equal(t, BucketLive, KindPathChange.Bucket())
+
+	// Live: startup commands (re-rendered into devm-startup.service via
+	// bundle re-pipe; effect next boot since startup: is a boot hook).
+	assert.Equal(t, BucketLive, KindStartupChange.Bucket())
 }
 
 func TestComputePathChange(t *testing.T) {
@@ -392,6 +396,24 @@ func TestComputeInstallChanges(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindInstallChange, changes[0].Kind)
+}
+
+func TestComputeStartupChanges(t *testing.T) {
+	old := schema.Config{Startup: []string{"echo one"}}
+	new := schema.Config{Startup: []string{"echo one", "echo two"}}
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	require.NoError(t, err)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindStartupChange, changes[0].Kind)
+	assert.Equal(t, BucketLive, changes[0].Bucket())
+
+	// Identical startup: lists → no change.
+	same := schema.Config{Startup: []string{"echo one", "echo two"}}
+	changes, err = ComputeAllChanges(same, same, t.TempDir(), nil, nil, nil)
+	require.NoError(t, err)
+	for _, c := range changes {
+		assert.NotEqual(t, KindStartupChange, c.Kind, "identical startup: must not produce a change")
+	}
 }
 
 func TestComputeMaskAddRemove(t *testing.T) {
