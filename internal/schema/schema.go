@@ -410,7 +410,7 @@ func (p Project) Validate() error {
 func CheckUnknownKeys(data []byte) error {
 	knownTop := []string{
 		"project", "base_image", "docker", "network", "env",
-		"services", "install", "mounts", "path", "packages", "disk",
+		"services", "install", "startup", "mounts", "path", "packages", "disk",
 	}
 	knownProject := []string{
 		"name", "proxy",
@@ -574,6 +574,12 @@ type Config struct {
 	//     on a real locale.
 	Install []string `yaml:"install,omitempty"`
 
+	// Startup is the list of shell commands run on EVERY boot, in
+	// declaration order, as root under `bash -o pipefail -c`, with open
+	// network (before egress enforcement). Contrast with Install (once,
+	// first boot) and services (every boot, enforced egress).
+	Startup []string `yaml:"startup,omitempty"`
+
 	// Mounts are additional host paths shared into the VM at the same
 	// path inside the VM ("mirrored path" mode — same host and guest
 	// path). Each entry is a string of the form `HOST_PATH[:ro]`.
@@ -733,6 +739,11 @@ func (c Config) Validate() error {
 	for i, ic := range c.Install {
 		if ic == "" {
 			return fmt.Errorf("install[%d] must not be empty", i)
+		}
+	}
+	for i, sc := range c.Startup {
+		if sc == "" {
+			return fmt.Errorf("startup[%d] must not be empty", i)
 		}
 	}
 	for i, entry := range c.Mounts {

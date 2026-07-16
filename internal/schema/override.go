@@ -86,6 +86,7 @@ type ConfigOverride struct {
 	Env      map[string]EnvValue        `yaml:"env,omitempty"`
 	Services map[string]ServiceOverride `yaml:"services,omitempty"`
 	Install  *[]string                  `yaml:"install,omitempty"`
+	Startup  *[]string                  `yaml:"startup,omitempty"`
 	Mounts   *[]string                  `yaml:"mounts,omitempty"`
 	Path     *[]string                  `yaml:"path,omitempty"`
 	Packages *[]string                  `yaml:"packages,omitempty"`

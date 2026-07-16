@@ -211,6 +211,25 @@ func TestConfigValidatesInstallSteps(t *testing.T) {
 	assert.Contains(t, err.Error(), "install[0]")
 }
 
+func TestConfig_StartupRoundTrip(t *testing.T) {
+	in := []byte("project:\n  name: p\nstartup:\n  - \"echo one\"\n  - \"echo two\"\n")
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal(in, &cfg))
+	assert.Equal(t, []string{"echo one", "echo two"}, cfg.Startup)
+}
+
+func TestConfigValidatesStartupSteps(t *testing.T) {
+	cfg := Config{
+		Project: Project{Name: "x"},
+		Startup: []string{
+			"", // invalid
+		},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "startup[0]")
+}
+
 func TestResolveMount(t *testing.T) {
 	root := "/proj"
 	cases := []struct {
