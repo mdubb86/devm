@@ -209,20 +209,6 @@ func TestNftablesScaffoldsSvcIngress(t *testing.T) {
 	assert.True(t, persistSvcIdx > fwdIdx && persistUserIdx > persistSvcIdx, "persist half: svc_ingress jump must come before user_forward")
 }
 
-func TestBuildSvcIngressScript(t *testing.T) {
-	s := buildSvcIngressScript([]int{54322, 6543})
-	assert.Contains(t, s, "flush chain inet devm_filter svc_ingress")
-	assert.Contains(t, s, "ct original proto-dst 54322 accept")
-	assert.Contains(t, s, "ct original proto-dst 6543 accept")
-	assert.Contains(t, s, `comment "devm: direct ingress`)
-	assert.Contains(t, s, "/etc/nftables.d/svc_ingress.conf")
-
-	// Empty set still flushes (closes everything) and snapshots.
-	empty := buildSvcIngressScript(nil)
-	assert.Contains(t, empty, "flush chain inet devm_filter svc_ingress")
-	assert.NotContains(t, empty, "ct original proto-dst")
-}
-
 func TestBuildTimesyncdScript_PointsAtProxySentinel(t *testing.T) {
 	script := buildTimesyncdScript()
 	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")

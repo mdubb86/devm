@@ -22,12 +22,38 @@ import (
 func fakeTartForApplyLive(t *testing.T, dir string) (*tart.Tart, string) {
 	t.Helper()
 	log := filepath.Join(dir, "tart-calls.txt")
+	stdinLog := stdinLogPath(log)
 	bin := filepath.Join(dir, "fake-tart")
-	script := "#!/bin/sh\necho \"$*\" >> " + log + "\nexec true\n"
+	// argv goes to log (unchanged shape — countCalls' line-based counting
+	// depends on this file containing ONLY argv lines). Any piped stdin
+	// (binary bundle tars, the svc_ingress nft script, etc.) is dumped to
+	// a SEPARATE file — mixing it into log would let a coincidental
+	// substring match inside a bundle's tar payload (e.g. an embedded
+	// filename like "install-templates.sh") corrupt countCalls' counts.
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\ncat >> " + stdinLog + "\nexec true\n"
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 	tr := tart.New()
 	tr.Path = bin
 	return tr, log
+}
+
+// stdinLogPath derives the sibling file fakeTartForApplyLive dumps piped
+// stdin bodies into, given the argv log path it returned.
+func stdinLogPath(log string) string {
+	return log + ".stdin"
+}
+
+// logContains reports whether any stdin body piped to the fake tart
+// (e.g. the svc_ingress nft script delivered via ExecStdin) contains
+// substr. logPath is the argv-log path returned by fakeTartForApplyLive.
+func logContains(t *testing.T, logPath, substr string) bool {
+	t.Helper()
+	data, err := os.ReadFile(stdinLogPath(logPath))
+	if os.IsNotExist(err) {
+		return false
+	}
+	require.NoError(t, err)
+	return strings.Contains(string(data), substr)
 }
 
 // countCalls returns how many recorded invocations in logPath contain
@@ -200,4 +226,60 @@ func TestApplyLive_TemplateChange_PipesBundleThenInvokesDispatcher(t *testing.T)
 	// not written to the workspace.
 	_, statErr := os.Stat(filepath.Join(dir, ".devm"))
 	assert.True(t, os.IsNotExist(statErr), "ApplyLive must NOT write .devm/ to the workspace; got: %v", statErr)
+}
+
+// TestApplyLiveRebuildsSvcIngress is a regression test for Task 9: a
+// KindServiceDirectChange in the change set must flush-rebuild the
+// svc_ingress chain live via ExecStdin, from the CURRENT cfg's direct
+// ports — the single source of truth shared with the provisioner
+// (internal/nftscript.BuildSvcIngressScript + DirectPorts).
+func TestApplyLiveRebuildsSvcIngress(t *testing.T) {
+	dir := t.TempDir()
+	tr, log := fakeTartForApplyLive(t, dir)
+	cfg := schema.Config{
+		Docker:  true,
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"db": {Port: 54322, Hostname: "db.test", Direct: true},
+		},
+	}
+	changes := []Change{{Kind: KindServiceDirectChange, Service: "db"}}
+	require.NoError(t, ApplyLive(tr, "p", changes, cfg, dir, nil, nil, nil, nil))
+	assert.True(t, logContains(t, log, "flush chain inet devm_filter svc_ingress"))
+	assert.True(t, logContains(t, log, "ct original proto-dst 54322 accept"))
+}
+
+// TestApplyLiveRebuildsSvcIngress_NonDockerStillClosesChain pins the
+// no-explicit-gate behavior: DirectPorts returns nil for non-docker
+// projects, so a KindServiceDirectChange still fires the rebuild — it
+// just flushes to empty, closing any stale direct ingress rather than
+// leaving it open.
+func TestApplyLiveRebuildsSvcIngress_NonDockerStillClosesChain(t *testing.T) {
+	dir := t.TempDir()
+	tr, log := fakeTartForApplyLive(t, dir)
+	cfg := schema.Config{
+		Docker:  false,
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"db": {Port: 54322, Hostname: "db.test", Direct: true},
+		},
+	}
+	changes := []Change{{Kind: KindServiceDirectChange, Service: "db"}}
+	require.NoError(t, ApplyLive(tr, "p", changes, cfg, dir, nil, nil, nil, nil))
+	assert.True(t, logContains(t, log, "flush chain inet devm_filter svc_ingress"))
+	assert.False(t, logContains(t, log, "ct original proto-dst 54322 accept"))
+}
+
+// TestApplyLive_NoDirectChange_DoesNotTouchSvcIngress ensures the
+// rebuild is gated strictly on KindServiceDirectChange being present —
+// unrelated change kinds must not fire an nft rebuild.
+func TestApplyLive_NoDirectChange_DoesNotTouchSvcIngress(t *testing.T) {
+	dir := t.TempDir()
+	tr, log := fakeTartForApplyLive(t, dir)
+	cfg := schema.Config{Docker: true}
+	err := ApplyLive(tr, "x", []Change{
+		{Kind: KindInstallChange},
+	}, cfg, dir, nil, nil, nil, nil)
+	require.NoError(t, err)
+	assert.False(t, logContains(t, log, "flush chain inet devm_filter svc_ingress"))
 }

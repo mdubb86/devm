@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
+	"github.com/mdubb86/devm/internal/nftscript"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -34,6 +36,7 @@ import (
 func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
 	var templateChanges []Change
 	var envOrPathChanged bool
+	var directChanged bool
 	for _, c := range changes {
 		if c.Bucket() != BucketLive {
 			continue
@@ -46,6 +49,8 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			templateChanges = append(templateChanges, c)
 		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange:
 			envOrPathChanged = true
+		case KindServiceDirectChange:
+			directChanged = true
 		}
 	}
 
@@ -112,6 +117,25 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			fmt.Fprintf(os.Stderr,
 				"template %s (service %s) %s; restart consuming services in the shell if needed.\n",
 				c.Detail, c.Service, action)
+		}
+	}
+
+	if directChanged {
+		// Reuse the SAME helpers the provisioner uses at cold-start
+		// (internal/nftscript) — single source of truth for the
+		// svc_ingress chain contents. nftscript.DirectPorts returns nil
+		// for non-docker projects, so this is a no-op-shaped flush-to-
+		// empty that correctly closes any stale direct ingress; no
+		// explicit docker gate is needed here. Rebuilds from the
+		// CURRENT cfg, so a removed direct service drops out
+		// automatically.
+		script := nftscript.BuildSvcIngressScript(nftscript.DirectPorts(cfg))
+		r := tr.ExecStdin(context.Background(), vmName,
+			strings.NewReader(script),
+			[]string{"bash", "-e", "-o", "pipefail", "-c", "cat | sudo bash"},
+		)
+		if r.ExitCode != 0 {
+			return fmt.Errorf("apply_live: svc_ingress: exit %d (stderr: %s)", r.ExitCode, r.Stderr)
 		}
 	}
 	return nil

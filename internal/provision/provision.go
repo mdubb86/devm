@@ -18,9 +18,9 @@ import (
 
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
+	"github.com/mdubb86/devm/internal/nftscript"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
-	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 // tartExecer is the subset of *tart.Tart used by Provisioner. Defined as
@@ -242,12 +242,12 @@ func (p *Provisioner) applyEgressEnforcement(ctx context.Context, w io.Writer) e
 // no-direct-service projects: DirectPorts returns nil and there's nothing
 // to open.
 func (p *Provisioner) applySvcIngressFirewall(ctx context.Context, w io.Writer) error {
-	ports := serviceapi.DirectPorts(p.Cfg)
+	ports := nftscript.DirectPorts(p.Cfg)
 	if len(ports) == 0 {
 		fmt.Fprintln(w, "(no direct docker services — skipping)")
 		return nil
 	}
-	return p.execShell(ctx, w, serviceapi.BuildSvcIngressScript(ports))
+	return p.execShell(ctx, w, nftscript.BuildSvcIngressScript(ports))
 }
 
 // scaffoldUserFirewallChain creates the `inet devm_filter/user_output`
