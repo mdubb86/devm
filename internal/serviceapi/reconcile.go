@@ -36,7 +36,7 @@ type VMReconcileRequest struct {
 // VMReconcileResponse is the return shape.
 type VMReconcileResponse struct {
 	Applied []reconcile.Change `json:"applied"`
-	// AppliedIronProxy carries changes in BucketIronProxyRestart that the
+	// AppliedIronProxy carries changes in BucketEgressRestart that the
 	// daemon has NOT applied — the CLI dispatches /vm/apply-iron-proxy
 	// after resolving the current allowlist + secrets in the user
 	// context. The daemon never writes SecretHashes for these changes;
@@ -134,7 +134,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 			switch c.Bucket() {
 			case reconcile.BucketLive:
 				live = append(live, c)
-			case reconcile.BucketIronProxyRestart:
+			case reconcile.BucketEgressRestart:
 				ironProxy = append(ironProxy, c)
 			default:
 				teardown = append(teardown, c)

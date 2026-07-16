@@ -63,7 +63,7 @@ type ReconcileResult struct {
 	SandboxState     string
 	Sandbox          string // project's name, for reporting (e.g. the revive line)
 	Applied          []reconcile.Change
-	AppliedIronProxy []reconcile.Change // BucketIronProxyRestart changes applied via /vm/apply-iron-proxy
+	AppliedIronProxy []reconcile.Change // BucketEgressRestart changes applied via /vm/apply-iron-proxy
 	IronProxyRevived bool               // true when iron-proxy was dead and this reconcile respawned it
 	RecreateRequired []reconcile.Change
 	Flavor           reconcile.FlavorKind
@@ -358,23 +358,50 @@ func FormatReconcileText(r ReconcileResult) string {
 		fmt.Fprintln(&b)
 	}
 	if len(r.RecreateRequired) > 0 {
-		fmt.Fprintf(&b, "%d change(s) require recreate (%s):\n", len(r.RecreateRequired), r.Flavor)
-		for _, c := range r.RecreateRequired {
-			fmt.Fprintln(&b, "  "+formatChange(c))
+		restart, teardown := partitionRecreateRequired(r.RecreateRequired)
+		if len(restart) > 0 {
+			fmt.Fprintf(&b, "%d change(s) require restart:\n", len(restart))
+			for _, c := range restart {
+				fmt.Fprintln(&b, "  "+formatChange(c))
+			}
+			fmt.Fprintln(&b)
+			fmt.Fprintln(&b, "Restart sandbox (`devm stop` + `devm shell`) to apply. No teardown, no data loss.")
+			if len(r.Sessions) > 0 {
+				fmt.Fprintf(&b, "Will hang up %d active session(s).\n", len(r.Sessions))
+			}
+			fmt.Fprintln(&b)
 		}
-		fmt.Fprintln(&b)
-		switch r.Flavor {
-		case reconcile.FlavorTeardownShell:
+		if len(teardown) > 0 {
+			fmt.Fprintf(&b, "%d change(s) require recreate:\n", len(teardown))
+			for _, c := range teardown {
+				fmt.Fprintln(&b, "  "+formatChange(c))
+			}
+			fmt.Fprintln(&b)
 			fmt.Fprintln(&b, "Teardown + recreate sandbox? This WIPES installed packages and volume data,")
 			fmt.Fprintln(&b, "then re-runs install.")
-		case reconcile.FlavorStopShell:
-			fmt.Fprintln(&b, "Restart sandbox to apply env/startup/network changes?")
-		}
-		if len(r.Sessions) > 0 {
-			fmt.Fprintf(&b, "Will hang up %d active session(s).\n", len(r.Sessions))
+			if len(r.Sessions) > 0 {
+				fmt.Fprintf(&b, "Will hang up %d active session(s).\n", len(r.Sessions))
+			}
 		}
 	}
 	return b.String()
+}
+
+// partitionRecreateRequired splits a RecreateRequired list into the
+// restart-bucket (BucketRestartVM — VM stop + cold start, no teardown)
+// and everything else (BucketTeardownVM — full delete + cold start),
+// so the text/JSON formatters can surface "restart" as its own
+// category distinct from "recreate", matching each change's real
+// severity instead of collapsing them under a single flavor.
+func partitionRecreateRequired(changes []reconcile.Change) (restart, teardown []reconcile.Change) {
+	for _, c := range changes {
+		if c.Bucket() == reconcile.BucketRestartVM {
+			restart = append(restart, c)
+		} else {
+			teardown = append(teardown, c)
+		}
+	}
+	return restart, teardown
 }
 
 // FormatStatusJSON renders StatusResult as JSON.
@@ -496,8 +523,10 @@ func FormatReconcileJSON(r ReconcileResult) string {
 		Comm string `json:"comm"`
 		User string `json:"user"`
 	}
-	type recreate struct {
-		Flavor   string       `json:"flavor"`
+	// changeSet is the shape of both the restart_required and
+	// recreate_required blocks — same fields, different membership
+	// (partitionRecreateRequired splits by bucket).
+	type changeSet struct {
 		Changes  []changeJSON `json:"changes"`
 		Sessions []sess       `json:"sessions"`
 	}
@@ -507,7 +536,8 @@ func FormatReconcileJSON(r ReconcileResult) string {
 		Applied          []changeJSON `json:"applied"`
 		AppliedIronProxy []changeJSON `json:"applied_iron_proxy,omitempty"`
 		IronProxyRevived bool         `json:"iron_proxy_revived,omitempty"`
-		RecreateRequired *recreate    `json:"recreate_required,omitempty"`
+		RestartRequired  *changeSet   `json:"restart_required,omitempty"`
+		RecreateRequired *changeSet   `json:"recreate_required,omitempty"`
 		NextAction       string       `json:"next_action"`
 	}
 
@@ -536,18 +566,24 @@ func FormatReconcileJSON(r ReconcileResult) string {
 	}
 
 	if len(r.RecreateRequired) > 0 {
-		changes := make([]changeJSON, len(r.RecreateRequired))
-		for i, c := range r.RecreateRequired {
-			changes[i] = toJSON(c)
-		}
+		restart, teardown := partitionRecreateRequired(r.RecreateRequired)
 		sessions := make([]sess, len(r.Sessions))
 		for i, s := range r.Sessions {
 			sessions[i] = sess{PID: s.PID, TTY: s.TTY, Comm: s.Comm, User: s.User}
 		}
-		out.RecreateRequired = &recreate{
-			Flavor:   flavorJSON(r.Flavor),
-			Changes:  changes,
-			Sessions: sessions,
+		if len(restart) > 0 {
+			changes := make([]changeJSON, len(restart))
+			for i, c := range restart {
+				changes[i] = toJSON(c)
+			}
+			out.RestartRequired = &changeSet{Changes: changes, Sessions: sessions}
+		}
+		if len(teardown) > 0 {
+			changes := make([]changeJSON, len(teardown))
+			for i, c := range teardown {
+				changes[i] = toJSON(c)
+			}
+			out.RecreateRequired = &changeSet{Changes: changes, Sessions: sessions}
 		}
 	}
 
@@ -617,18 +653,6 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "secret_change"
 	case reconcile.KindIronProxyDown:
 		return "iron_proxy_down"
-	}
-	return "unknown"
-}
-
-func flavorJSON(f reconcile.FlavorKind) string {
-	switch f {
-	case reconcile.FlavorLiveOnly:
-		return "live"
-	case reconcile.FlavorStopShell:
-		return "stop_shell"
-	case reconcile.FlavorTeardownShell:
-		return "teardown_shell"
 	}
 	return "unknown"
 }

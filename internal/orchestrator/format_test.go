@@ -7,6 +7,7 @@ import (
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFormatStatusText_RunningInSync(t *testing.T) {
@@ -48,16 +49,49 @@ func TestFormatReconcileText_RecreatePending(t *testing.T) {
 	out := FormatReconcileText(ReconcileResult{
 		Applied: []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
 		RecreateRequired: []reconcile.Change{
-			{Kind: reconcile.KindEnvChange, Service: "api", Key: "LOG_LEVEL", Old: "info", New: "debug"},
+			{Kind: reconcile.KindPackagesChange},
 		},
-		Flavor:   reconcile.FlavorStopShell,
+		Flavor:   reconcile.FlavorTeardownShell,
 		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 	})
 	assert.Contains(t, out, "Applied 1 live change")
 	assert.Contains(t, out, "1 change(s) require recreate")
-	assert.Contains(t, out, `env: api.LOG_LEVEL: "info" → "debug"`)
-	assert.Contains(t, out, "Restart sandbox to apply")
+	assert.Contains(t, out, "~ packages")
+	assert.Contains(t, out, "Teardown + recreate sandbox?")
 	assert.Contains(t, out, "Will hang up 1 active session")
+	assert.NotContains(t, out, "require restart")
+}
+
+func TestFormatReconcileText_RestartPending(t *testing.T) {
+	// KindStartupChange is BucketRestartVM — distinct "restart" category,
+	// not folded into the "recreate" (teardown) section.
+	out := FormatReconcileText(ReconcileResult{
+		RecreateRequired: []reconcile.Change{
+			{Kind: reconcile.KindStartupChange},
+		},
+		Flavor:   reconcile.FlavorStopShell,
+		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+	})
+	assert.Contains(t, out, "1 change(s) require restart")
+	assert.Contains(t, out, "~ startup commands")
+	assert.Contains(t, out, "Restart sandbox (`devm stop` + `devm shell`) to apply")
+	assert.Contains(t, out, "Will hang up 1 active session")
+	assert.NotContains(t, out, "require recreate")
+	assert.NotContains(t, out, "Teardown")
+}
+
+func TestFormatReconcileText_RestartAndRecreatePending_BothSectionsRender(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		RecreateRequired: []reconcile.Change{
+			{Kind: reconcile.KindStartupChange},
+			{Kind: reconcile.KindPackagesChange},
+		},
+		Flavor: reconcile.FlavorTeardownShell,
+	})
+	assert.Contains(t, out, "1 change(s) require restart")
+	assert.Contains(t, out, "~ startup commands")
+	assert.Contains(t, out, "1 change(s) require recreate")
+	assert.Contains(t, out, "~ packages")
 }
 
 func TestFormatReconcileText_IronProxyRestartAppliedNormalPath(t *testing.T) {
@@ -137,8 +171,8 @@ func TestFormatReconcileJSON(t *testing.T) {
 	js := FormatReconcileJSON(ReconcileResult{
 		Rendered: true, SandboxState: "running",
 		Applied:          []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
-		RecreateRequired: []reconcile.Change{{Kind: reconcile.KindEnvChange, Service: "api", Key: "LOG_LEVEL", Old: "info", New: "debug"}},
-		Flavor:           reconcile.FlavorStopShell,
+		RecreateRequired: []reconcile.Change{{Kind: reconcile.KindPackagesChange}},
+		Flavor:           reconcile.FlavorTeardownShell,
 		Sessions:         []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 		NextAction:       "needs_approval",
 	})
@@ -147,7 +181,34 @@ func TestFormatReconcileJSON(t *testing.T) {
 	assert.Equal(t, true, parsed["rendered"])
 	assert.Equal(t, "needs_approval", parsed["next_action"])
 	rec := parsed["recreate_required"].(map[string]any)
-	assert.Equal(t, "stop_shell", rec["flavor"])
+	changes := rec["changes"].([]any)
+	require.Len(t, changes, 1)
+	assert.Equal(t, "packages_change", changes[0].(map[string]any)["kind"])
+	assert.NotContains(t, parsed, "restart_required")
+}
+
+func TestFormatReconcileJSON_RestartRequired_SeparateFromRecreate(t *testing.T) {
+	js := FormatReconcileJSON(ReconcileResult{
+		Rendered: true, SandboxState: "running",
+		RecreateRequired: []reconcile.Change{
+			{Kind: reconcile.KindStartupChange},
+			{Kind: reconcile.KindPackagesChange},
+		},
+		Flavor:     reconcile.FlavorTeardownShell,
+		NextAction: "needs_approval",
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+
+	restart := parsed["restart_required"].(map[string]any)
+	restartChanges := restart["changes"].([]any)
+	require.Len(t, restartChanges, 1)
+	assert.Equal(t, "startup_change", restartChanges[0].(map[string]any)["kind"])
+
+	recreate := parsed["recreate_required"].(map[string]any)
+	recreateChanges := recreate["changes"].([]any)
+	require.Len(t, recreateChanges, 1)
+	assert.Equal(t, "packages_change", recreateChanges[0].(map[string]any)["kind"])
 }
 
 func TestFormatStatusText_ProxyNone(t *testing.T) {

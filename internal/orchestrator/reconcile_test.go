@@ -264,7 +264,7 @@ func TestRunReconcile_DockerTrueCfg_AllowlistIncludesDockerHubHost(t *testing.T)
 	rc, res, err := RunReconcile(newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
-	require.NotEmpty(t, res.AppliedIronProxy, "network add is a BucketIronProxyRestart change")
+	require.NotEmpty(t, res.AppliedIronProxy, "network add is a BucketEgressRestart change")
 
 	assert.Contains(t, captured.Allowlist, "registry-1.docker.io",
 		"docker:true reconcile heal must include Docker Hub hosts in the apply-iron-proxy allowlist")

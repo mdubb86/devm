@@ -24,8 +24,8 @@ func cfgWith(services map[string]schema.Service) schema.Config {
 
 func TestBucketStrings(t *testing.T) {
 	assert.Equal(t, "live", BucketLive.String())
-	assert.Equal(t, "stop+shell", BucketStopShell.String())
-	assert.Equal(t, "teardown+shell", BucketTeardownShell.String())
+	assert.Equal(t, "restart", BucketRestartVM.String())
+	assert.Equal(t, "teardown", BucketTeardownVM.String())
 }
 
 func TestChangeKindBuckets(t *testing.T) {
@@ -33,20 +33,20 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketLive, KindPortAdd.Bucket())
 	assert.Equal(t, BucketLive, KindPortRemove.Bucket())
 	assert.Equal(t, BucketLive, KindPortChange.Bucket())
-	assert.Equal(t, BucketIronProxyRestart, KindNetworkAdd.Bucket())
-	assert.Equal(t, BucketIronProxyRestart, KindNetworkRemove.Bucket())
+	assert.Equal(t, BucketEgressRestart, KindNetworkAdd.Bucket())
+	assert.Equal(t, BucketEgressRestart, KindNetworkRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvAdd.Bucket())
 	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
 
 	// Teardown+shell: install, packages, masks, mounts, image, identity
-	assert.Equal(t, BucketTeardownShell, KindInstallChange.Bucket())
-	assert.Equal(t, BucketTeardownShell, KindPackagesChange.Bucket())
-	assert.Equal(t, BucketTeardownShell, KindMaskAddRemove.Bucket())
-	assert.Equal(t, BucketTeardownShell, KindImageChange.Bucket())
-	assert.Equal(t, BucketTeardownShell, KindIdentityChange.Bucket())
-	assert.Equal(t, BucketTeardownShell, KindMountAddRemove.Bucket())
-	assert.Equal(t, BucketTeardownShell, KindDockerToggle.Bucket())
+	assert.Equal(t, BucketTeardownVM, KindInstallChange.Bucket())
+	assert.Equal(t, BucketTeardownVM, KindPackagesChange.Bucket())
+	assert.Equal(t, BucketTeardownVM, KindMaskAddRemove.Bucket())
+	assert.Equal(t, BucketTeardownVM, KindImageChange.Bucket())
+	assert.Equal(t, BucketTeardownVM, KindIdentityChange.Bucket())
+	assert.Equal(t, BucketTeardownVM, KindMountAddRemove.Bucket())
+	assert.Equal(t, BucketTeardownVM, KindDockerToggle.Bucket())
 
 	// Live: service unit fields and hostname
 	assert.Equal(t, BucketLive, KindServiceExecChange.Bucket())
@@ -60,9 +60,13 @@ func TestChangeKindBuckets(t *testing.T) {
 	// Live: path (same fan-out as env via .devm/.env)
 	assert.Equal(t, BucketLive, KindPathChange.Bucket())
 
-	// Live: startup commands (re-rendered into devm-startup.service via
-	// bundle re-pipe; effect next boot since startup: is a boot hook).
-	assert.Equal(t, BucketLive, KindStartupChange.Bucket())
+}
+
+func TestDiff_StartupChange_IsBucketRestartVM(t *testing.T) {
+	// startup: is a boot hook, not a running-service field — a change
+	// only takes effect on the VM's next boot, so it's BucketRestartVM
+	// (VM stop + cold start), not BucketLive.
+	assert.Equal(t, BucketRestartVM, KindStartupChange.Bucket())
 }
 
 func TestComputePathChange(t *testing.T) {
@@ -95,7 +99,7 @@ func TestComputeMountAddRemove(t *testing.T) {
 	changes := computeMountAddRemove(old, new)
 	require.Len(t, changes, 1)
 	assert.Equal(t, KindMountAddRemove, changes[0].Kind)
-	assert.Equal(t, BucketTeardownShell, changes[0].Bucket())
+	assert.Equal(t, BucketTeardownVM, changes[0].Bucket())
 
 	// Same list → no change.
 	assert.Empty(t, computeMountAddRemove(old, old))
@@ -340,7 +344,7 @@ func TestComputeDirectChanges(t *testing.T) {
 	require.Len(t, computeDirectChanges(next, gone), 1)
 }
 
-func TestDiff_PackagesChange_IsBucketTeardownShell(t *testing.T) {
+func TestDiff_PackagesChange_IsBucketTeardownVM(t *testing.T) {
 	old := schema.Config{Packages: []string{"jq"}}
 	new := schema.Config{Packages: []string{"jq", "ripgrep"}}
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
@@ -349,13 +353,13 @@ func TestDiff_PackagesChange_IsBucketTeardownShell(t *testing.T) {
 	for _, c := range changes {
 		if c.Kind == KindPackagesChange {
 			found = true
-			assert.Equal(t, BucketTeardownShell, c.Bucket())
+			assert.Equal(t, BucketTeardownVM, c.Bucket())
 		}
 	}
 	assert.True(t, found, "expected KindPackagesChange")
 }
 
-func TestDiff_MaskAddRemove_IsBucketTeardownShell(t *testing.T) {
+func TestDiff_MaskAddRemove_IsBucketTeardownVM(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
 		"db": {Masks: []schema.Mask{{Path: "data", Size: "10G"}}},
 	})
@@ -368,13 +372,13 @@ func TestDiff_MaskAddRemove_IsBucketTeardownShell(t *testing.T) {
 	for _, c := range changes {
 		if c.Kind == KindMaskAddRemove {
 			found = true
-			assert.Equal(t, BucketTeardownShell, c.Bucket())
+			assert.Equal(t, BucketTeardownVM, c.Bucket())
 		}
 	}
 	assert.True(t, found, "expected KindMaskAddRemove")
 }
 
-func TestDiff_MountAddRemove_IsBucketTeardownShell(t *testing.T) {
+func TestDiff_MountAddRemove_IsBucketTeardownVM(t *testing.T) {
 	old := schema.Config{Mounts: []string{"/etc/hosts:ro"}}
 	new := schema.Config{Mounts: []string{"/etc/hosts:ro", "/tmp:ro"}}
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
@@ -383,7 +387,7 @@ func TestDiff_MountAddRemove_IsBucketTeardownShell(t *testing.T) {
 	for _, c := range changes {
 		if c.Kind == KindMountAddRemove {
 			found = true
-			assert.Equal(t, BucketTeardownShell, c.Bucket())
+			assert.Equal(t, BucketTeardownVM, c.Bucket())
 		}
 	}
 	assert.True(t, found, "expected KindMountAddRemove")
@@ -405,7 +409,7 @@ func TestComputeStartupChanges(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindStartupChange, changes[0].Kind)
-	assert.Equal(t, BucketLive, changes[0].Bucket())
+	assert.Equal(t, BucketRestartVM, changes[0].Bucket())
 
 	// Identical startup: lists → no change.
 	same := schema.Config{Startup: []string{"echo one", "echo two"}}
@@ -501,6 +505,18 @@ func TestRecreateFlavorPickMax(t *testing.T) {
 	}))
 	// Single teardown change alone also picks teardown.
 	assert.Equal(t, FlavorTeardownShell, RecreateFlavor([]Change{
+		{Kind: KindInstallChange},
+	}))
+
+	// BucketRestartVM (KindStartupChange) alone picks FlavorStopShell —
+	// VM stop + cold start, no teardown.
+	assert.Equal(t, FlavorStopShell, RecreateFlavor([]Change{
+		{Kind: KindStartupChange},
+	}))
+	// A teardown change alongside a restart change still wins — can't
+	// go higher than teardown.
+	assert.Equal(t, FlavorTeardownShell, RecreateFlavor([]Change{
+		{Kind: KindStartupChange},
 		{Kind: KindInstallChange},
 	}))
 }
@@ -634,16 +650,16 @@ func TestComputeAllChanges_IncludesTemplates(t *testing.T) {
 	assert.True(t, found, "expected KindTemplateChange in ComputeAllChanges output")
 }
 
-func TestBucketIronProxyRestartString(t *testing.T) {
-	assert.Equal(t, "iron-proxy-restart", BucketIronProxyRestart.String())
+func TestBucketEgressRestartString(t *testing.T) {
+	assert.Equal(t, "egress-restart", BucketEgressRestart.String())
 }
 
 func TestNetworkAndSecretKindsInIronProxyRestartBucket(t *testing.T) {
-	assert.Equal(t, BucketIronProxyRestart, KindNetworkAdd.Bucket())
-	assert.Equal(t, BucketIronProxyRestart, KindNetworkRemove.Bucket())
-	assert.Equal(t, BucketIronProxyRestart, KindSecretAdd.Bucket())
-	assert.Equal(t, BucketIronProxyRestart, KindSecretRemove.Bucket())
-	assert.Equal(t, BucketIronProxyRestart, KindSecretChange.Bucket())
+	assert.Equal(t, BucketEgressRestart, KindNetworkAdd.Bucket())
+	assert.Equal(t, BucketEgressRestart, KindNetworkRemove.Bucket())
+	assert.Equal(t, BucketEgressRestart, KindSecretAdd.Bucket())
+	assert.Equal(t, BucketEgressRestart, KindSecretRemove.Bucket())
+	assert.Equal(t, BucketEgressRestart, KindSecretChange.Bucket())
 }
 
 func TestComputeNetworkChanges_AddsAndRemoves(t *testing.T) {
@@ -751,7 +767,7 @@ func TestComputeDiskChange(t *testing.T) {
 	assert.Equal(t, KindDiskChange, ch[0].Kind)
 	assert.Equal(t, "32G", ch[0].Old)
 	assert.Equal(t, "64G", ch[0].New)
-	assert.Equal(t, BucketTeardownShell, ch[0].Bucket())
+	assert.Equal(t, BucketTeardownVM, ch[0].Bucket())
 	// 64 -> 100: change
 	assert.Len(t, computeDiskChange(mk("64G"), mk("100G")), 1)
 	// 64 -> 64: no change
@@ -759,9 +775,9 @@ func TestComputeDiskChange(t *testing.T) {
 }
 
 func TestDiskChangeKindBucket(t *testing.T) {
-	assert.Equal(t, BucketTeardownShell, KindDiskChange.Bucket())
+	assert.Equal(t, BucketTeardownVM, KindDiskChange.Bucket())
 }
 
 func TestIronProxyDownKindBucket(t *testing.T) {
-	assert.Equal(t, BucketIronProxyRestart, KindIronProxyDown.Bucket())
+	assert.Equal(t, BucketEgressRestart, KindIronProxyDown.Bucket())
 }

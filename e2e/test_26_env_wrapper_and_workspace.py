@@ -17,7 +17,7 @@ Pins the with-devm-env wrapper design end-to-end:
      shows NONE of devm's persistent vars — confirms the channel is
      wrapper-only, no env leak. If devm.yaml's env: were ever
      accidentally routed via the VM's process env, this test would
-     fail (and simultaneously env edits would become BucketTeardownShell).
+     fail (and simultaneously env edits would become BucketTeardownVM).
 
 What this doesn't cover (tested elsewhere):
   - env reaching shell + live edit via reconcile:

@@ -16,28 +16,29 @@ type Bucket int
 
 const (
 	BucketLive Bucket = iota // applicable to a running sandbox without ending sessions
-	// BucketStopShell — requires VM stop + cold start. No ChangeKind
-	// uses this bucket today; reserved for a future change type that
-	// needs to bounce the VM without rebuilding it from scratch.
-	BucketStopShell
-	BucketTeardownShell // requires VM delete + cold start (volumes/install rerun)
-	// BucketIronProxyRestart — regenerate iron-proxy config and respawn
+	// BucketRestartVM — requires VM stop + cold start, no teardown; the
+	// provisioner re-establishes the change on the next boot. Used by
+	// KindStartupChange: a `startup:` edit is re-rendered into
+	// /opt/devm/startup.sh but only takes effect on the guest's next boot.
+	BucketRestartVM
+	BucketTeardownVM // requires VM delete + cold start (volumes/install rerun)
+	// BucketEgressRestart — regenerate iron-proxy config and respawn
 	// iron-proxy on the same MAC_HOST:port. No VM cycle. Parallel to
-	// BucketLive and BucketTeardownShell (not a severity step): a single
+	// BucketLive and BucketTeardownVM (not a severity step): a single
 	// reconcile can produce changes in any combination of buckets.
-	BucketIronProxyRestart
+	BucketEgressRestart
 )
 
 func (b Bucket) String() string {
 	switch b {
 	case BucketLive:
 		return "live"
-	case BucketStopShell:
-		return "stop+shell"
-	case BucketTeardownShell:
-		return "teardown+shell"
-	case BucketIronProxyRestart:
-		return "iron-proxy-restart"
+	case BucketRestartVM:
+		return "restart"
+	case BucketTeardownVM:
+		return "teardown"
+	case BucketEgressRestart:
+		return "egress-restart"
 	}
 	return "unknown"
 }
@@ -81,15 +82,15 @@ const (
 	// KindStartupChange fires when the ordered `startup:` command list
 	// differs between old and new config. Content edits and add/remove
 	// of the key both surface here; see the changeBucket comment for
-	// why this is BucketLive with a next-boot effect rather than a
-	// teardown.
+	// why this is BucketRestartVM (VM stop + cold start, not a
+	// teardown) rather than BucketLive.
 	KindStartupChange
 	// KindIronProxyDown is a synthetic change: not produced by diffing
 	// old vs new config, but emitted by the reconcile handler when a
 	// running VM's iron-proxy is missing or stale (see
 	// serviceapi.computeProxyHealth). Carries no config drift of its
 	// own — it exists purely to route through the same
-	// BucketIronProxyRestart / AppliedIronProxy path that respawns
+	// BucketEgressRestart / AppliedIronProxy path that respawns
 	// iron-proxy.
 	KindIronProxyDown
 )
@@ -101,8 +102,8 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindPortAdd:       BucketLive,
 	KindPortRemove:    BucketLive,
 	KindPortChange:    BucketLive,
-	KindNetworkAdd:    BucketIronProxyRestart,
-	KindNetworkRemove: BucketIronProxyRestart,
+	KindNetworkAdd:    BucketEgressRestart,
+	KindNetworkRemove: BucketEgressRestart,
 	// Env changes are applied by rewriting the unit file and restarting
 	// the service via tart exec — no VM recreate needed.
 	KindEnvAdd:    BucketLive,
@@ -110,19 +111,19 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindEnvChange: BucketLive,
 	// install: commands happen on first boot; can't re-run cleanly on a
 	// half-installed VM.
-	KindInstallChange: BucketTeardownShell,
+	KindInstallChange: BucketTeardownVM,
 	// apt packages similarly — recreate is cleaner than diffing.
-	KindPackagesChange: BucketTeardownShell,
+	KindPackagesChange: BucketTeardownVM,
 	// virtio-fs mounts are set at tart run time; requires full recreate.
-	KindMountAddRemove: BucketTeardownShell,
+	KindMountAddRemove: BucketTeardownVM,
 	// mount --bind masks are applied at boot; requires full recreate.
-	KindMaskAddRemove:  BucketTeardownShell,
-	KindImageChange:    BucketTeardownShell,
-	KindIdentityChange: BucketTeardownShell,
-	KindDockerToggle:   BucketTeardownShell,
+	KindMaskAddRemove:  BucketTeardownVM,
+	KindImageChange:    BucketTeardownVM,
+	KindIdentityChange: BucketTeardownVM,
+	KindDockerToggle:   BucketTeardownVM,
 	// Disk size is baked at clone / `tart set` time; grow-only, so a
 	// change recreates from base and re-applies the new size.
-	KindDiskChange:     BucketTeardownShell,
+	KindDiskChange:     BucketTeardownVM,
 	KindTemplateChange: BucketLive,
 	// Path is materialized in .devm/.env (same fan-out as Env) — live.
 	KindPathChange: BucketLive,
@@ -138,19 +139,19 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindServiceHostnameChange: BucketLive,
 	// Direct: re-push routes (DNS), rebuild svc_ingress, re-render Caddyfile — live.
 	KindServiceDirectChange: BucketLive,
-	// startup: re-rendered into devm-startup.service on every cold start;
-	// a live bundle re-pipe carries the new content to the guest, but
-	// the change only takes effect on the VM's NEXT boot (startup: is a
-	// boot hook, not a running-service field).
-	KindStartupChange: BucketLive,
+	// startup: re-rendered into /opt/devm/startup.sh; a live bundle
+	// re-pipe carries the new content to the guest, but it only takes
+	// effect on the VM's NEXT boot (startup: is a boot hook, not a
+	// running-service field) — VM stop + cold start, no teardown.
+	KindStartupChange: BucketRestartVM,
 	// Secrets: iron-proxy config carries resolved values; a rotation
 	// requires regenerating that config and respawning iron-proxy.
-	KindSecretAdd:    BucketIronProxyRestart,
-	KindSecretRemove: BucketIronProxyRestart,
-	KindSecretChange: BucketIronProxyRestart,
+	KindSecretAdd:    BucketEgressRestart,
+	KindSecretRemove: BucketEgressRestart,
+	KindSecretChange: BucketEgressRestart,
 	// Synthetic heal signal — same bucket as the rest of the
-	// iron-proxy-restart family since it's applied the same way.
-	KindIronProxyDown: BucketIronProxyRestart,
+	// egress-restart family since it's applied the same way.
+	KindIronProxyDown: BucketEgressRestart,
 }
 
 // Bucket returns the bucket this ChangeKind belongs to.
@@ -173,10 +174,9 @@ type FlavorKind int
 
 const (
 	FlavorLiveOnly FlavorKind = iota // no recreate, only live applies
-	// FlavorStopShell — requires VM stop + cold start. Unreachable
-	// today (no ChangeKind sits in BucketStopShell), kept paired with
-	// the bucket so adding a future BucketStopShell ChangeKind doesn't
-	// also need a flavor change.
+	// FlavorStopShell — requires VM stop + cold start, no teardown.
+	// Reached whenever a change sits in BucketRestartVM (e.g.
+	// KindStartupChange) and nothing more severe is also pending.
 	FlavorStopShell
 	FlavorTeardownShell // requires VM delete + cold start
 )
@@ -200,11 +200,11 @@ func RecreateFlavor(changes []Change) FlavorKind {
 	max := FlavorLiveOnly
 	for _, c := range changes {
 		switch c.Bucket() {
-		case BucketStopShell:
+		case BucketRestartVM:
 			if max < FlavorStopShell {
 				max = FlavorStopShell
 			}
-		case BucketTeardownShell:
+		case BucketTeardownVM:
 			return FlavorTeardownShell // can't go higher
 		}
 	}

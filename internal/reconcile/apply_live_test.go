@@ -214,14 +214,13 @@ func TestApplyLive_PathChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
 	assert.Equal(t, 1, countCalls(t, log, "exec -i"), "path-only change must still pipe a bundle")
 }
 
-// TestApplyLive_StartupChange_PipesBundle_NoWorkspaceWrite pins the
-// mechanism KindStartupChange uses to reach the running VM: same as env
-// and path changes, it rebuilds the devmbundle (which re-renders
-// devm-startup.service from cfg.Startup) and pipes it into the guest —
-// no host workspace write. The unit itself only runs at boot, so this
-// doesn't restart anything; it just makes the new content available for
-// the VM's next cold start.
-func TestApplyLive_StartupChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
+// TestApplyLive_StartupChange_NotLiveApplied pins that KindStartupChange
+// is skipped by ApplyLive entirely: it's BucketRestartVM, not
+// BucketLive, so the caller routes it through the recreate path (VM
+// stop + cold start) instead. The freshly-rendered /opt/devm/startup.sh
+// reaches the guest via the provisioner's normal bundle install on that
+// next boot, not a live pipe.
+func TestApplyLive_StartupChange_NotLiveApplied(t *testing.T) {
 	dir := t.TempDir()
 	tr, log := fakeTartForApplyLive(t, dir)
 	cfg := schema.Config{
@@ -235,9 +234,9 @@ func TestApplyLive_StartupChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(filepath.Join(dir, ".devm"))
-	require.True(t, os.IsNotExist(statErr),
-		"ApplyLive must NOT write .devm/ to the workspace; got: %v", statErr)
-	assert.Equal(t, 1, countCalls(t, log, "exec -i"), "startup change must pipe a bundle")
+	assert.True(t, os.IsNotExist(statErr), "ApplyLive must not touch the workspace")
+	assert.Equal(t, 0, countCalls(t, log, "exec -i"),
+		"KindStartupChange is BucketRestartVM, not BucketLive — ApplyLive must not pipe a bundle for it")
 }
 
 func TestApplyLive_NoEnvOrTemplateChange_DoesNotPipeBundle(t *testing.T) {

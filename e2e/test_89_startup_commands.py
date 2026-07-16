@@ -19,8 +19,8 @@ project:
      block below to bite). It must succeed, proving `startup:` ran
      before enforcement was applied.
   3. Enforcement intact after boot: a declared service (`exec:`, which
-     starts only After=devm-enforce.service — see render/systemd.go's
-     RenderService afterEnforce path) curls the SAME non-allow-listed
+     always orders After=devm-enforce.service — see render/systemd.go's
+     RenderService) curls the SAME non-allow-listed
      host. That curl must FAIL — proving devm-enforce.service (which
      masking nftables.service hands boot-restore off to, per
      provision.go's setupBootEnforcement) actually re-applies the
@@ -29,11 +29,11 @@ project:
      test_83's post-install enforcement check.
 
 Devm dependency: /etc/systemd/system/devm-startup.service runs every
-startup: command in order, Before=devm-enforce.service, on every boot
-when startup: is non-empty (provision.go's setupBootEnforcement masks
+startup: command in order, Before=devm-enforce.service, on every boot,
+for every project (provision.go's setupBootEnforcement always masks
 the stock nftables.service and enables devm-enforce.service +
-devm-startup.service instead). If that ordering or masking regresses,
-this test breaks loudly.
+devm-startup.service instead — not opt-in on startup: being set). If
+that ordering or masking regresses, this test breaks loudly.
 """
 from __future__ import annotations
 

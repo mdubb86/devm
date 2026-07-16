@@ -367,7 +367,7 @@ func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
 }
 
 func TestVMReconcile_NetworkAddSurfacesAsAppliedIronProxy(t *testing.T) {
-	// Network-allow additions are BucketIronProxyRestart changes: the
+	// Network-allow additions are BucketEgressRestart changes: the
 	// daemon does not apply them itself. They must come back to the CLI
 	// via AppliedIronProxy (which the CLI dispatches to
 	// /vm/apply-iron-proxy), not Applied or TeardownRequired.

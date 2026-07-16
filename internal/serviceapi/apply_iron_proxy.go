@@ -17,7 +17,7 @@ import (
 )
 
 // VMApplyIronProxyRequest is the body shape for POST /vm/apply-iron-proxy.
-// Sent by the CLI when reconcile detects BucketIronProxyRestart changes
+// Sent by the CLI when reconcile detects BucketEgressRestart changes
 // (allow-list or secret-binding drift that requires a fresh iron-proxy
 // config + process, but doesn't touch the VM itself).
 type VMApplyIronProxyRequest struct {

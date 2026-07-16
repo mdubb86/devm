@@ -21,19 +21,19 @@ import (
 // Template changes are coalesced — any number of KindTemplateChange
 // entries trigger a SINGLE invocation of the in-sandbox dispatcher,
 // which re-runs every installer (cheap; identical content is an
-// idempotent atomic rewrite). Any env, path, startup, or template change
+// idempotent atomic rewrite). Any env, path, or template change
 // re-builds the devmbundle from cfg + repoRoot and pipes it into the
 // guest at /opt/devm/ before the dispatcher runs, so the sandbox always
 // executes the latest rendered content — nothing is written to the host
 // workspace. Path changes ride the same rebuild as env changes because
 // render.RenderEnv folds cfg.Path into the same .env's PATH= line
-// (there's no separate path-only artifact to pipe). Startup changes ride
-// it too: devm-startup.service is rendered from cfg.Startup as part of
-// the same bundle, but since the unit only runs at boot (see
-// internal/provision), piping the new content doesn't restart anything —
-// it just makes the next cold start pick up the new commands. For each
-// changed template, this function logs a "consuming services may need
-// restart" line to stderr.
+// (there's no separate path-only artifact to pipe). KindStartupChange is
+// NOT live-applied — it's BucketRestartVM, not BucketLive, so the caller
+// routes it through the recreate path (VM stop + cold start; see
+// internal/provision's setupBootEnforcement / runStartupCommands, which
+// pick up the freshly-rendered /opt/devm/startup.sh on that next boot).
+// For each changed template, this function logs a "consuming services
+// may need restart" line to stderr.
 //
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
@@ -51,7 +51,7 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			// provisioner pattern; no host-side port publishing needed.
 		case KindTemplateChange:
 			templateChanges = append(templateChanges, c)
-		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange, KindStartupChange:
+		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange:
 			bundleRebuildNeeded = true
 		case KindServiceDirectChange:
 			directChanged = true
