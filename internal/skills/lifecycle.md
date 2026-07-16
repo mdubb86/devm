@@ -46,8 +46,8 @@ If the VM is stopped or absent, `devm shell`:
    | 7 | `docker feature` (only when `docker: true`) | **first boot only** |
    | 8 | `install templates` | every cold start |
    | 9 | `systemctl daemon-reload` | every cold start |
-   | 10 | `run startup commands` (only when `startup:` is set) | **first boot only** |
-   | 11 | `set up boot enforcement` | every cold start |
+   | 10 | `set up boot enforcement` | every cold start |
+   | 11 | `run startup commands` | every cold start |
    | 12 | `apply egress enforcement` | every cold start |
    | 13 | `apply svc_ingress firewall` (only when `direct: true` docker services) | every cold start |
    | 14 | `enable + start services` | every cold start |
@@ -55,9 +55,9 @@ If the VM is stopped or absent, `devm shell`:
 
 5. Attaches an interactive shell via `tart exec`. The shell exits but the VM keeps running; use `devm stop` to stop it.
 
-The first-boot-only steps (apt, `run install commands`, `docker feature`, `run startup commands`) run once, gated by the `/var/lib/devm/provisioned` marker, and are skipped on later cold starts (after `devm stop` + `devm shell`). `run startup commands` only runs the project's `startup:` list directly on this first boot; on every later boot, systemd itself starts `devm-startup.service` (enabled by `set up boot enforcement`) before enforcement locks down, so devm doesn't re-run it here. The every-cold-start steps are idempotent and network-free (units already in place, nftables rebuilt from config). Restart-time workload comes back via systemd — enabled units auto-start on boot, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
+The first-boot-only steps (apt, `run install commands`, `docker feature`) run once, gated by the `/var/lib/devm/provisioned` marker, and are skipped on later cold starts (after `devm stop` + `devm shell`). `set up boot enforcement` and `run startup commands` are **always** run, for every project — the mechanism is not opt-in on declaring `startup:`. `run startup commands` (`sudo systemctl start devm-startup.service`) runs on every cold start, including first boot; `/opt/devm/startup.sh` (rendered from `cfg.Startup`) always exists, so an empty `startup:` list is just a no-op script. On a later cold start, systemd itself already started `devm-startup.service` as part of its own boot sequence (enabled by `set up boot enforcement`, ordered before enforcement locks down), so this step's `systemctl start` against an already-active `RemainAfterExit=yes` oneshot is a no-op — it doesn't re-run the commands a second time. The every-cold-start steps are otherwise idempotent and network-free (units already in place, nftables rebuilt from config). Restart-time workload comes back via systemd — enabled units auto-start on boot, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
 
-For a project with `startup:` set, `set up boot enforcement` masks `nftables.service` and enables `devm-enforce.service` + `devm-startup.service` instead, so the guest's own boot order is `network → devm-startup.service (open egress) → devm-enforce.service (enforcement) → services`: the `startup:` commands run before egress enforcement is restored. For a project without `startup:`, nothing changes — `nftables.service` stays enabled and boot is firewall-first as before.
+For every project, `set up boot enforcement` masks the stock firewall-first `nftables.service` and enables `devm-enforce.service` + `devm-startup.service` instead, so the guest's own boot order is `network → devm-startup.service (open egress) → devm-enforce.service (enforcement) → services`: `startup:` commands (if any) run before egress enforcement is restored. This ordering applies to every project — not just those with `startup:` set.
 
 ---
 
@@ -79,7 +79,9 @@ Sandbox stopped; config changes will apply on next `devm shell`.
   
   All other BucketLive kinds (ports, path, service unit fields) have no apply path in `ApplyLive` and take effect at the next cold start, even though reconcile reports them as applied.
 
-- **BucketTeardownShell changes** are surfaced as pending. `devm reconcile` prompts the user; on approval it stops or tears down the VM automatically. The user then runs `devm shell` to rebuild.
+- **BucketRestartVM changes** (e.g. `startup:` edits) are surfaced as pending under a distinct "restart" section, separate from recreate. On approval `devm reconcile` stops the VM (preserving its disk — no teardown) and the user runs `devm shell` to cold-start and pick up the change.
+
+- **BucketTeardownVM changes** are surfaced as pending under the "recreate" section. `devm reconcile` prompts the user; on approval it stops or tears down the VM automatically. The user then runs `devm shell` to rebuild.
 
 **Two known gaps:**
 
@@ -134,7 +136,7 @@ Calls `config.Load` without touching the VM. Validates `devm.yaml` and `devm.me.
 
 ## Bucket semantics
 
-Every change kind is assigned to exactly one bucket in the `changeBucket` map (`internal/orchestrator/diff.go`). The bucket determines what action is needed.
+Every change kind is assigned to exactly one bucket in the `changeBucket` map (`internal/reconcile/diff.go`). The bucket determines what action is needed.
 
 ### BucketLive
 
@@ -156,7 +158,7 @@ Classified BucketLive but no apply path in `ApplyLive` (take effect at next cold
 | `path` change | No apply code in `ApplyLive` |
 | Service `exec`, `restart`, `after`, `workdir`, `user`, `systemd` override, `hostname` | No apply code in `ApplyLive` |
 
-### BucketTeardownShell
+### BucketTeardownVM
 
 The VM must be fully deleted and recreated. `devm reconcile` surfaces these as pending and offers to tear down the VM automatically (requires confirmation). A subsequent `devm shell` rebuilds from scratch.
 
@@ -169,6 +171,10 @@ The VM must be fully deleted and recreated. `devm reconcile` surfaces these as p
 | Image change | `base_image:` field differs. Note: `BaseImage` is an empty struct with no fields; structural equality is always true, so `KindImageChange` cannot fire from a `devm.yaml` edit. |
 | Identity change | `project:` identity fields differ |
 
-### BucketStopShell
+### BucketRestartVM
 
-Reserved. No change kind maps to this bucket today.
+VM stop + cold start — no teardown, no data loss; the provisioner re-establishes the change on the next boot. `devm reconcile` surfaces these under a "restart" section, distinct from recreate.
+
+| Kind | Trigger |
+|---|---|
+| `startup` change | `startup:` command list differs — re-rendered into `/opt/devm/startup.sh` by the bundle re-pipe, but only takes effect once `devm-startup.service` runs again on the next boot |

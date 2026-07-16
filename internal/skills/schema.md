@@ -17,7 +17,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `services` | map[string]Service | varies | Named service definitions; bucket depends on which sub-field changes (see Services section). |
 | `packages` | []string | recreate | Apt packages installed at VM creation time. |
 | `install` | []string | recreate | Shell commands run once at VM creation as root. |
-| `startup` | []string | live | Shell commands run on every boot, in order, as root, with open network (before egress enforcement). |
+| `startup` | []string | restart | Shell commands run on every boot, in order, as root, with open network (before egress enforcement). The mechanism (`devm-startup.service` → `devm-enforce.service` ordering, nftables masked) is always registered, for every project. |
 | `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
@@ -127,13 +127,15 @@ Note: `--` in a command's argv is consumed by the internal wrapper; quote it or 
 
 ## `startup`
 
-`[]string` — bucket: **live** (effect next boot).
+`[]string` — bucket: **restart** (VM stop + cold start; no teardown, no data loss).
 
-Shell commands run on **every** boot, in order, as root under `bash -o pipefail -c`, with **open** network — before egress enforcement is applied. Same shape as `install:`, but every boot instead of once. Use it for per-boot setup that needs unrestricted network (fetch/refresh something, register the VM, warm a cache).
+Shell commands run on **every** boot, in order, as root, with **open** network — before egress enforcement is applied. Rendered verbatim (one command per line, no shell escaping needed) into `/opt/devm/startup.sh` — mode 0755, root-owned — which the always-registered `devm-startup.service` executes (`Type=oneshot`, `RemainAfterExit=yes`), ordered `Before=devm-enforce.service`. Same open-network timing as `install:`, but every boot instead of once. Use it for per-boot setup that needs unrestricted network (fetch/refresh something, register the VM, warm a cache).
 
-`startup:` runs on the initial boot too, alongside `install:` (after it), and on every subsequent boot. When `startup:` is set, devm masks the firewall-first `nftables.service` and restores enforcement from its own `devm-enforce.service` ordered **after** `devm-startup.service`, so the boot order is `network → startup (open egress) → enforce → services`. This opens a per-boot window — network up, enforcement not yet applied — for the whole VM; that is the cost of "open network on every boot," and it is opt-in (only projects that declare `startup:`; others keep the firewall-first boot).
+The mechanism is **always registered, for every project** — not opt-in on declaring `startup:`. devm always masks the firewall-first `nftables.service` and restores enforcement from `devm-enforce.service` ordered after `devm-startup.service`, so the boot order is `network → devm-startup.service (open egress) → devm-enforce.service (enforcement) → services` for every project, `startup:` set or not. An empty (or unset) `startup:` renders a no-op `startup.sh` (just the shebang + `set -eo pipefail`) that exits 0 immediately, so this window is negligible when there are no commands to run.
 
-The three hooks: `install:` = once, first boot, open network. `startup:` = every boot, open network. services (`exec:`/`systemd:`) = every boot, enforced egress. Editing `startup:` commands takes effect on the next boot (devm does not re-run them mid-session).
+A failing `startup:` command does not block enforcement: `devm-enforce.service` only has `After=devm-startup.service` (no `Requires=`/`BindsTo=`), so systemd starts it regardless of whether `devm-startup.service` succeeded — enforcement is fail-safe.
+
+The three hooks: `install:` = once, first boot, open network. `startup:` = every boot, open network. services (`exec:`/`systemd:`) = every boot, enforced egress (every declared service unit orders `After=devm-enforce.service`). Editing `startup:` commands only rewrites `/opt/devm/startup.sh`'s content — the unit itself is stable and never changes. The edit takes effect on the next `devm stop` + `devm shell` (restart bucket); devm does not re-run it live or mid-session.
 
 ---
 
@@ -214,9 +216,11 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 **live** — Devm applies the change to the running VM without stopping it or ending active sessions (env/path/template via a bundle re-pipe to `/opt/devm/`; service, port, and hostname via targeted `tart exec`). Network (`allow`) changes are classified live per the `changeBucket` map but the detection and apply path is not currently wired; they take effect on the next cold start.
 
-**recreate** (internally: `teardown+shell`) — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `packages`, `mounts` (virtio-fs shares set at `tart run` time), `masks` (bind mounts applied at boot), `base_image`, and `project` identity fields.
+**restart** (internally: `BucketRestartVM`, `String()` = `"restart"`) — VM stop + cold start, no teardown/data-loss; the provisioner re-establishes it next boot. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Currently only `startup:` sits in this bucket: an edit is re-rendered into `/opt/devm/startup.sh` by the bundle re-pipe, but only takes effect once `devm-startup.service` runs again on the next boot.
 
-The classification of every change kind is the `changeBucket` map in `internal/orchestrator/diff.go`.
+**recreate** (internally: `BucketTeardownVM`, `String()` = `"teardown"`) — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `packages`, `mounts` (virtio-fs shares set at `tart run` time), `masks` (bind mounts applied at boot), `base_image`, and `project` identity fields.
+
+The classification of every change kind is the `changeBucket` map in `internal/reconcile/diff.go`.
 
 ---
 
