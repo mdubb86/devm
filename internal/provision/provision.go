@@ -98,6 +98,7 @@ var stepsAfterInstall = map[string]bool{
 	"systemctl daemon-reload": true,
 	"enable + start services": true,
 	"apply masks":             true,
+	"write first-boot marker": true,
 }
 
 // IsPostInstallFailure reports whether err is a StepFailure at or after

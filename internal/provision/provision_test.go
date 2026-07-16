@@ -256,6 +256,30 @@ func TestProvisioner_RestartSkipsGatedSteps(t *testing.T) {
 		"marker must not be re-written when already present")
 }
 
+// TestProvisioner_MarkerWriteFailureIsPostInstall pins that a failure to
+// write the first-boot marker — which only runs after every provisioning
+// step, including "enable + start services" and "apply masks", has
+// already succeeded — is classified as post-install. The VM is fully up
+// and healthy at that point, so a one-off marker-write hiccup must leave
+// it running rather than trigger teardown + recreate.
+func TestProvisioner_MarkerWriteFailureIsPostInstall(t *testing.T) {
+	fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
+		joined := strings.Join(argv, " ")
+		if strings.Contains(joined, "test -f /var/lib/devm/provisioned") {
+			return tart.ExecResult{ExitCode: 1} // absent → first boot
+		}
+		if strings.Contains(joined, "touch /var/lib/devm/provisioned") {
+			return tart.ExecResult{ExitCode: 1} // marker write fails
+		}
+		return tart.ExecResult{ExitCode: 0}
+	}}
+	p := &Provisioner{Tart: fake, VMName: "vm", Cfg: schema.Config{Install: []string{"echo hi"}}}
+	err := p.Run(context.Background(), &bytes.Buffer{})
+	require.Error(t, err)
+	assert.True(t, IsPostInstallFailure(err),
+		"marker-write failure must be classified post-install so the VM is left running")
+}
+
 // TestProvisioner_SvcIngressRunsAfterEgressEnforcement pins the step
 // order between the two firewall steps: svc_ingress rules must be
 // applied only after egress enforcement has scaffolded/locked down
