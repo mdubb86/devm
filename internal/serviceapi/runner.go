@@ -52,10 +52,13 @@ func RunService(ctx context.Context, build Build) error {
 	// Adopt iron-proxy processes left running by a prior daemon
 	// instance. They survive daemon death by design (setsid on
 	// spawn); re-attaching here means /vm/stop and /vm/status
-	// behave correctly post-restart instead of orphaning them.
+	// behave correctly post-restart instead of orphaning them. It
+	// also re-stashes each recovered project's VM IP and rebuilds its
+	// direct routes (both otherwise lost on restart), so direct-service
+	// DNS keeps working for a VM that's still running.
 	// Best-effort — a failure (e.g., `ps` missing) shouldn't
 	// block daemon startup.
-	if err := AdoptIronProxies(ctx, sup); err != nil {
+	if err := AdoptIronProxies(ctx, sup, tr, routes); err != nil {
 		fmt.Fprintf(os.Stderr, "iron-proxy adopt: %v\n", err)
 	}
 	// Denials tracker — per-project counts of iron-proxy allow-list

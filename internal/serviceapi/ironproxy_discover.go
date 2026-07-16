@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/mdubb86/devm/internal/ironproxy"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -74,7 +75,13 @@ func DiscoverIronProxies(ctx context.Context) ([]DiscoveredIronProxy, error) {
 // error only if the discovery step itself failed; per-process
 // rehydrate failures are swallowed silently to match the "best-effort"
 // contract callers expect.
-func AdoptIronProxies(ctx context.Context, sup *supervisor.Supervisor) error {
+//
+// Beyond rehydrating ironProxyState, each recovered project also gets
+// its VM IP re-stashed and its direct routes rebuilt from the on-disk
+// state snapshot (recoverProjectState) — both are in-memory-only and
+// otherwise lost on daemon restart, breaking direct-service DNS for a
+// VM that's still running under an orphaned iron-proxy.
+func AdoptIronProxies(ctx context.Context, sup *supervisor.Supervisor, tr *tart.Tart, routes *Routes) error {
 	procs, err := DiscoverIronProxies(ctx)
 	if err != nil {
 		return err
@@ -90,8 +97,56 @@ func AdoptIronProxies(ctx context.Context, sup *supervisor.Supervisor) error {
 			continue
 		}
 		ironProxyState.put(p.ProjectID, info)
+		recoverProjectState(ctx, tr, routes, p.ProjectID)
 	}
 	return nil
+}
+
+// recoverProjectState rebuilds the parts of a recovered project's
+// in-memory state that live outside ironProxyState's config-file
+// rehydration: the stashed VM IP (read fresh via `tart ip`, since the
+// config file iron-proxy was launched with doesn't record it) and the
+// project's direct routes, read back from its last-applied state
+// snapshot. It's split out of AdoptIronProxies's loop so it can be
+// unit tested without shelling out to `ps` (DiscoverIronProxies).
+//
+// Both pieces are best-effort and independent: a VM that isn't
+// running yet (tart ip fails) doesn't block rebuilding routes, and a
+// missing/malformed snapshot (or a project with no direct services)
+// doesn't block the VM-IP stash. There's simply nothing to recover
+// for the piece that failed.
+//
+// Only Direct routes are rebuilt here. Proxied (non-direct) routes
+// depend on the VM's IP as BackendHost and are normally re-pushed by
+// the CLI (`devm shell` auto-apply, `devm reconcile`); rebuilding them
+// here is out of scope for this recovery path — see buildRoutes in
+// cmd/devm/route.go for how the CLI constructs the full set.
+func recoverProjectState(ctx context.Context, tr *tart.Tart, routes *Routes, projectID string) {
+	if ip, err := tr.IP(ctx, projectID); err == nil {
+		info, _ := ironProxyState.get(projectID)
+		info.VMIP = ip
+		ironProxyState.put(projectID, info)
+	}
+
+	snap, err := ReadStateSnapshot(projectID)
+	if err != nil || snap == nil {
+		return
+	}
+	var directRoutes []Route
+	for _, svc := range snap.Cfg.Services {
+		if !svc.Direct || svc.Hostname == "" {
+			continue
+		}
+		directRoutes = append(directRoutes, Route{
+			Hostname:    svc.Hostname,
+			BackendPort: svc.Port,
+			Direct:      true,
+			Project:     projectID,
+		})
+	}
+	if len(directRoutes) > 0 {
+		routes.Apply(projectID, directRoutes)
+	}
 }
 
 // parseIronProxyProcesses extracts iron-proxy entries from `ps -axo
