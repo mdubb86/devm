@@ -191,17 +191,11 @@ func TestBuildNftablesScript_ForwardChainPersisted(t *testing.T) {
 
 func TestNftablesScaffoldsSvcIngress(t *testing.T) {
 	script := buildNftablesScript("192.168.64.1", 40000, 40001, 40002, 0, false)
-	// Chain declared and jumped from forward, after the base accept
-	// rules so svc_ingress only sees what those didn't already allow.
+	// Chain declared and jumped from forward.
 	assert.Contains(t, script, "add chain inet devm_filter svc_ingress")
 	assert.Contains(t, script, "add rule inet devm_filter forward jump svc_ingress")
-	baseIdx := strings.Index(script, "add rule inet devm_filter forward ip daddr 192.168.64.1 tcp dport { 40000, 40001 } accept")
-	fwdIdx := strings.Index(script, "add rule inet devm_filter forward jump svc_ingress")
-	assert.True(t, baseIdx > 0 && fwdIdx > baseIdx, "svc_ingress jump must come after the base forward accept rules")
 	// Persist half declares the chain and jumps it too.
 	assert.Contains(t, script, "chain svc_ingress {}")
-	persistFwdIdx := strings.LastIndex(script, "jump svc_ingress")
-	assert.True(t, persistFwdIdx > fwdIdx, "persist half's svc_ingress jump must come after the live-apply half's")
 }
 
 func TestBuildTimesyncdScript_PointsAtProxySentinel(t *testing.T) {

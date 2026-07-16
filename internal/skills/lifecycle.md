@@ -42,14 +42,13 @@ If the VM is stopped or absent, `devm shell`:
    | 3 | `reload base services` |
    | 4 | `apt-get update` |
    | 5 | `apt-get install packages` |
-   | 6 | `scaffold user firewall chain` |
-   | 7 | `run install commands` |
-   | 8 | `docker feature` (only when `docker: true`) |
-   | 9 | `install templates` |
-   | 10 | `systemctl daemon-reload` |
-   | 11 | `apply egress enforcement` |
-   | 12 | `enable + start services` |
-   | 13 | `apply masks` |
+   | 6 | `run install commands` |
+   | 7 | `docker feature` (only when `docker: true`) |
+   | 8 | `install templates` |
+   | 9 | `systemctl daemon-reload` |
+   | 10 | `apply egress enforcement` |
+   | 11 | `enable + start services` |
+   | 12 | `apply masks` |
 
 5. Attaches an interactive shell via `tart exec`. The shell exits but the VM keeps running; use `devm stop` to stop it.
 
