@@ -71,6 +71,7 @@ const (
 	KindServiceUserChange
 	KindServiceSystemdOverrideChange
 	KindServiceHostnameChange
+	KindServiceDirectChange
 	// KindSecret* — value-drift of a `!secret NAME` reference (same
 	// declaration, different keychain value). Env-diff already covers
 	// reference syntax changes; these track the resolved values.
@@ -129,6 +130,8 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindServiceSystemdOverrideChange: BucketLive,
 	// Hostname: re-render Caddyfile, push to Mac proxy — live.
 	KindServiceHostnameChange: BucketLive,
+	// Direct: re-push routes (DNS), rebuild svc_ingress, re-render Caddyfile — live.
+	KindServiceDirectChange: BucketLive,
 	// Secrets: iron-proxy config carries resolved values; a rotation
 	// requires regenerating that config and respawning iron-proxy.
 	KindSecretAdd:    BucketIronProxyRestart,
@@ -267,6 +270,7 @@ func ComputeAllChanges(
 	out = append(out, computeGlobalEnvChanges(old, new)...)
 	out = append(out, computeEnvChanges(old, new)...)
 	out = append(out, computeServiceUnitChanges(old, new)...)
+	out = append(out, computeDirectChanges(old, new)...)
 	out = append(out, computeHostnameChanges(old, new)...)
 	out = append(out, computeInstallChanges(old, new)...)
 	out = append(out, computePackagesChange(old, new)...)
@@ -388,6 +392,19 @@ func computeServiceUnitChanges(old, new schema.Config) []Change {
 		}
 		if o.Systemd != n.Systemd {
 			out = append(out, Change{Kind: KindServiceSystemdOverrideChange, Service: svc})
+		}
+	}
+	return out
+}
+
+// computeDirectChanges emits KindServiceDirectChange for services whose
+// Direct field differs between old and new (covers add: absent→direct,
+// remove: direct→absent, and flip).
+func computeDirectChanges(old, new schema.Config) []Change {
+	var out []Change
+	for _, svc := range unionServiceNames(old.Services, new.Services) {
+		if old.Services[svc].Direct != new.Services[svc].Direct {
+			out = append(out, Change{Kind: KindServiceDirectChange, Service: svc})
 		}
 	}
 	return out

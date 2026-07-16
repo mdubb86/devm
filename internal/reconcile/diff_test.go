@@ -312,6 +312,28 @@ func TestDiff_ServiceHostnameChange_IsBucketLive(t *testing.T) {
 	assert.True(t, found, "expected KindServiceHostnameChange")
 }
 
+func TestComputeDirectChanges(t *testing.T) {
+	base := schema.Config{Services: map[string]schema.Service{
+		"db": {Port: 54322, Hostname: "db.test"},
+	}}
+	// Flip to direct.
+	next := schema.Config{Services: map[string]schema.Service{
+		"db": {Port: 54322, Hostname: "db.test", Direct: true},
+	}}
+	changes := computeDirectChanges(base, next)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindServiceDirectChange, changes[0].Kind)
+	assert.Equal(t, "db", changes[0].Service)
+	assert.Equal(t, BucketLive, changes[0].Bucket())
+
+	// No change → no diff.
+	assert.Empty(t, computeDirectChanges(next, next))
+
+	// Removing a direct service (service disappears) is a direct change.
+	gone := schema.Config{Services: map[string]schema.Service{}}
+	require.Len(t, computeDirectChanges(next, gone), 1)
+}
+
 func TestDiff_PackagesChange_IsBucketTeardownShell(t *testing.T) {
 	old := schema.Config{Packages: []string{"jq"}}
 	new := schema.Config{Packages: []string{"jq", "ripgrep"}}
