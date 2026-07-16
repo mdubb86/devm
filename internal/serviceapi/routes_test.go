@@ -66,6 +66,32 @@ func TestRoutes_BackendHost_PreservedInLookup(t *testing.T) {
 	assert.Equal(t, 3000, got.BackendPort)
 }
 
+func TestRoutesLookupExcludesDirect(t *testing.T) {
+	r := NewRoutes()
+	r.Apply("proj", []Route{
+		{Hostname: "web.test", BackendPort: 8080, Mode: ModeVM, Project: "proj"},
+		{Hostname: "db.test", BackendPort: 54322, Direct: true, Project: "proj"},
+	})
+
+	// Proxy dial path: proxied host resolves, direct host does NOT.
+	_, ok := r.Lookup("web.test")
+	assert.True(t, ok, "proxied route must be dialable")
+	_, ok = r.Lookup("db.test")
+	assert.False(t, ok, "direct route must be excluded from the proxy dial path")
+
+	// DNS path: direct host resolves with its project.
+	dr, ok := r.DirectRoute("db.test")
+	assert.True(t, ok)
+	assert.Equal(t, "proj", dr.Project)
+	// A proxied host is not a direct route.
+	_, ok = r.DirectRoute("web.test")
+	assert.False(t, ok)
+
+	// AllByProject still lists both (for the admin/status view).
+	all := r.AllByProject()
+	assert.Len(t, all["proj"], 2)
+}
+
 func TestRoutes_ConcurrentReadWrite_NoRace(t *testing.T) {
 	r := NewRoutes()
 	r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM}})

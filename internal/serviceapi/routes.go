@@ -32,6 +32,10 @@ type Route struct {
 	BackendHost string    `json:"backend_host,omitempty"` // defaults to localhost when empty
 	BackendPort int       `json:"backend_port"`
 	Mode        RouteMode `json:"mode"`
+	// Direct marks a service reached directly at the VM's IP (no proxy).
+	// The HTTP proxy refuses to dial it; DNS answers VM_IP for it.
+	Direct  bool   `json:"direct,omitempty"`
+	Project string `json:"project,omitempty"` // owning project; used by DNS to find the VM IP
 }
 
 // Routes is the daemon's thread-safe in-memory route table. The
@@ -83,7 +87,22 @@ func (r *Routes) Lookup(host string) (Route, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	route, ok := r.hostnameToRoute[host]
+	if ok && route.Direct {
+		return Route{}, false // direct services are never proxy-dialed
+	}
 	return route, ok
+}
+
+// DirectRoute returns the direct route for host, if one exists. Used by
+// the DNS server to decide whether to answer VM_IP.
+func (r *Routes) DirectRoute(host string) (Route, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	route, ok := r.hostnameToRoute[host]
+	if !ok || !route.Direct {
+		return Route{}, false
+	}
+	return route, true
 }
 
 // AllByProject is used by GET /routes to render the full table.
