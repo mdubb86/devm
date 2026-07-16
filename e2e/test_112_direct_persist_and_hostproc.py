@@ -52,14 +52,20 @@ docstring.
 """
 from __future__ import annotations
 
-import os
-import socket as _socket_module
 import subprocess
 import time
 
 import pytest
 
 from helpers import stop_and_wait_stopped
+from helpers.direct import (
+    BANNER,
+    dig_a as _dig_a,
+    dns_addr as _dns_addr,
+    svc_ingress as _svc_ingress,
+    vm_ip as _vm_ip,
+    wait_reachable as _wait_reachable,
+)
 from helpers.exec_retry import devm_exec_with_retry
 
 pytestmark = pytest.mark.devm
@@ -67,56 +73,6 @@ pytestmark = pytest.mark.devm
 DIRECT_PORT = 54522        # (a) docker-published, declared port
 CONTAINER_PORT = 9200      # (a) container's internal nc listen port
 HOSTPROC_PORT = 54622      # (b) host-process nc listen port
-BANNER = b"devm-direct-e2e"
-
-
-def _dns_addr() -> tuple[str, int]:
-    raw = os.environ.get("DEVM_DNS_ADDR", "127.0.0.1:51153")
-    host, _, port_s = raw.rpartition(":")
-    return (host or "127.0.0.1"), int(port_s)
-
-
-def _dig_a(hostname: str, dns_host: str, dns_port: int, timeout: float = 5.0) -> str:
-    r = subprocess.run(
-        ["dig", "+short", "+time=2", "+tries=1",
-         f"@{dns_host}", "-p", str(dns_port), hostname, "A"],
-        capture_output=True, timeout=timeout,
-    )
-    if r.returncode != 0:
-        return ""
-    lines = [ln.strip() for ln in r.stdout.decode().splitlines() if ln.strip()]
-    return lines[0] if lines else ""
-
-
-def _tcp_connect(host: str, port: int, timeout: float = 3.0) -> bool:
-    try:
-        with _socket_module.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
-def _vm_ip(vm_name: str) -> str:
-    r = subprocess.run(["tart", "ip", vm_name], capture_output=True, timeout=15)
-    return r.stdout.decode().strip() if r.returncode == 0 else ""
-
-
-def _svc_ingress(devm) -> str:
-    r = devm_exec_with_retry(
-        devm.path,
-        ["sudo", "-n", "nft", "list", "chain", "inet", "devm_filter", "svc_ingress"],
-        cwd=devm.cwd, timeout=30,
-    )
-    return r.stdout.decode() if r.returncode == 0 else ""
-
-
-def _wait_reachable(host: str, port: int, timeout: float = 40.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _tcp_connect(host, port, timeout=3):
-            return True
-        time.sleep(1)
-    return False
 
 
 @pytest.mark.slow

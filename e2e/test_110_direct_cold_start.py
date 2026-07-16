@@ -57,29 +57,22 @@ installed daemon's default `:51153`, `E2E_ISOLATE=0`).
 """
 from __future__ import annotations
 
-import http.client
-import json
-import os
-import socket as _socket_module
 import subprocess
 import time
 
 import pytest
 
+from helpers.direct import (
+    BANNER,
+    dig_a as _dig_a,
+    dns_addr as _dns_addr,
+    get_routes as _get_routes,
+    tcp_read_banner as _tcp_read_banner,
+    vm_ip as _vm_ip,
+)
 from helpers.exec_retry import devm_exec_with_retry
 
 pytestmark = pytest.mark.devm
-
-# Honor the isolated e2e daemon's runtime dir (E2E_ISOLATE sets
-# DEVM_RUNTIME_DIR to a private /tmp dir); fall back to the installed
-# daemon's default location. See test_37_route_vm.py.
-_SOCKET_PATH = os.path.join(
-    os.environ.get(
-        "DEVM_RUNTIME_DIR",
-        os.path.expanduser("~/Library/Application Support/devm"),
-    ),
-    "devm.sock",
-)
 
 # The service's DECLARED (pre-DNAT) port — what devm.yaml, /routes,
 # and the svc_ingress conntrack-original match all use.
@@ -87,78 +80,6 @@ DIRECT_PORT = 54322
 # The container's INTERNAL listening port — must never appear in the
 # svc_ingress chain (which matches the pre-DNAT port only).
 CONTAINER_PORT = 9000
-BANNER = b"devm-direct-e2e"
-
-
-class _UnixSocketHTTP(http.client.HTTPConnection):
-    """HTTPConnection over a Unix domain socket."""
-
-    def __init__(self, socket_path: str):
-        super().__init__("localhost")
-        self._socket_path = socket_path
-
-    def connect(self) -> None:
-        self.sock = _socket_module.socket(
-            _socket_module.AF_UNIX, _socket_module.SOCK_STREAM
-        )
-        self.sock.connect(self._socket_path)
-
-
-def _get_routes() -> dict[str, list]:
-    conn = _UnixSocketHTTP(_SOCKET_PATH)
-    conn.request("GET", "/routes")
-    resp = conn.getresponse()
-    assert resp.status == 200, f"GET /routes returned {resp.status}"
-    return json.loads(resp.read())
-
-
-def _dns_addr() -> tuple[str, int]:
-    """Host/port of the daemon's *.test DNS resolver.
-
-    Honors $DEVM_DNS_ADDR (internal/serviceapi/dns.go DNSAddr()). In
-    the isolated e2e lane this is "127.0.0.1:0" (ephemeral) — see the
-    module docstring's KNOWN GAP.
-    """
-    raw = os.environ.get("DEVM_DNS_ADDR", "127.0.0.1:51153")
-    host, _, port_s = raw.rpartition(":")
-    return (host or "127.0.0.1"), int(port_s)
-
-
-def _dig_a(hostname: str, dns_host: str, dns_port: int, timeout: float = 5.0) -> str:
-    """First A-record answer for hostname from dns_host:dns_port, or ''."""
-    r = subprocess.run(
-        ["dig", "+short", "+time=2", "+tries=1",
-         f"@{dns_host}", "-p", str(dns_port), hostname, "A"],
-        capture_output=True, timeout=timeout,
-    )
-    if r.returncode != 0:
-        return ""
-    lines = [ln.strip() for ln in r.stdout.decode().splitlines() if ln.strip()]
-    return lines[0] if lines else ""
-
-
-def _tcp_connect(host: str, port: int, timeout: float = 3.0) -> bool:
-    try:
-        with _socket_module.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
-def _tcp_read_banner(host: str, port: int, expect: bytes, timeout: float = 3.0) -> bytes | None:
-    """Connect and read len(expect) bytes; returns what was read, or
-    None on any connection error. Caller compares to `expect`."""
-    try:
-        with _socket_module.create_connection((host, port), timeout=timeout) as s:
-            s.settimeout(timeout)
-            return s.recv(len(expect))
-    except OSError:
-        return None
-
-
-def _vm_ip(vm_name: str) -> str:
-    r = subprocess.run(["tart", "ip", vm_name], capture_output=True, timeout=15)
-    return r.stdout.decode().strip() if r.returncode == 0 else ""
 
 
 @pytest.mark.slow
