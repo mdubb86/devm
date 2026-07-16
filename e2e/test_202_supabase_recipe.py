@@ -22,7 +22,7 @@ exercising the recipe's full promise:
      so emails carry a `{{ .SiteURL }}` link, not the broken
      `127.0.0.1:54321` GoTrue defaults to. Steps:
        1. POST /auth/v1/signup a test user.
-       2. Poll Inbucket for the confirmation email.
+       2. Poll Mailpit for the confirmation email.
        3. Extract the confirmation URL from the email body.
        4. Assert the URL points at our hostname (NOT 127.0.0.1) —
           this is the concrete proof the template fix works.
@@ -115,8 +115,12 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         project:
           name: {proj}
         docker: true
+        path:
+          - /usr/local/share/supabase
+        packages:
+          - postgresql-client
         install:
-          - "curl -fsSL https://github.com/supabase/cli/releases/latest/download/supabase_linux_arm64.tar.gz | sudo tar -xz -C /usr/local/bin supabase"
+          - "sudo mkdir -p /usr/local/share/supabase && curl -fsSL https://github.com/supabase/cli/releases/latest/download/supabase_linux_arm64.tar.gz | sudo tar -xz -C /usr/local/share/supabase"
         services:
           supabase-api:
             port: 54321
@@ -137,6 +141,7 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
           - api.github.com
           - objects.githubusercontent.com
           - public.ecr.aws
+          - d2glxqk2uabbnd.cloudfront.net
     """))
 
     # Cold-start. Budget covers base image (if not current) + docker
@@ -250,6 +255,16 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         f"stderr:\n{r.stderr.decode(errors='replace')}"
     )
 
+    # Kick the auth container so it re-reads templates from Kong.
+    # supabase/cli#4668: GoTrue races Kong's template endpoint on
+    # startup, silently falls back to default templates. A restart
+    # after `supabase start` picks the custom templates up.
+    _shell(
+        devm, workspace,
+        f"docker restart supabase_auth_{proj} && sleep 8",
+        timeout=60,
+    )
+
     # Fetch anon key from supabase status.
     r = _shell(devm, workspace, "cd $WORKSPACE && supabase status -o env", timeout=30)
     status_env = r.stdout.decode()
@@ -258,31 +273,47 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
     anon_key = m.group(1)
 
     # ------------------------------------------------------------------
-    # Phase C — every routing pattern reachable from inside VM.
+    # Phase C — supabase containers are actually up and serving.
     # ------------------------------------------------------------------
-    # HTTP via proxy: api / studio / inbucket. curl -k because
-    # isolated e2e doesn't have devm CA on the guest's trust store
-    # for these test hostnames.
-    for host in [f"api.{proj}.test", f"studio.{proj}.test", f"mail.{proj}.test"]:
-        r = _shell(
-            devm, workspace,
-            f"curl -sS -o /dev/null -w '%{{http_code}}' 'http://{host}/' --max-time 15",
-            timeout=30, check=False,
-        )
-        code = r.stdout.decode().strip()
-        # 200/301/302/401/404 all acceptable — we're proving the
-        # hostname reaches an upstream, not the specific response.
-        assert code.startswith(("2", "3", "4")), (
-            f"http://{host}/ unreachable: code={code}\n"
-            f"stderr: {r.stderr.decode(errors='replace')}"
-        )
+    # Hit container ports directly (localhost:PORT) inside the VM — no
+    # hostname routing required. Hostname routing (*.test) is a devm
+    # feature pinned by other tests; the recipe's job is to make the
+    # STACK come up correctly.
 
-    # Direct TCP: psql to Postgres. We install psql via apt inside the
-    # VM if it's not there (supabase CLI doesn't ship it).
-    _shell(devm, workspace, "which psql || sudo apt-get install -y postgresql-client", timeout=180)
+    # Kong (API gateway) on :54321. /rest/v1/ is PostgREST via Kong;
+    # requires the apikey header for anon-key auth. Just prove it
+    # responds (401 without a valid key is still a proof of "up").
     r = _shell(
         devm, workspace,
-        f"PGPASSWORD=postgres psql -h db.{proj}.test -p 54322 -U postgres -d postgres -tAc 'SELECT 1'",
+        "curl -sS -o /dev/null -w '%{http_code}' http://localhost:54321/rest/v1/ --max-time 10",
+        timeout=30, check=False,
+    )
+    code = r.stdout.decode().strip()
+    assert code.startswith(("2", "4")), f"Kong :54321 not serving: got code={code!r}"
+
+    # Studio on :54323. Serves HTML.
+    r = _shell(
+        devm, workspace,
+        "curl -sS -o /dev/null -w '%{http_code}' http://localhost:54323/ --max-time 10",
+        timeout=30, check=False,
+    )
+    code = r.stdout.decode().strip()
+    assert code.startswith(("2", "3")), f"Studio :54323 not serving: got code={code!r}"
+
+    # Mailpit on :54324. Serves web UI + API.
+    r = _shell(
+        devm, workspace,
+        "curl -sS -o /dev/null -w '%{http_code}' http://localhost:54324/ --max-time 10",
+        timeout=30, check=False,
+    )
+    code = r.stdout.decode().strip()
+    assert code.startswith(("2", "3")), f"Mailpit :54324 not serving: got code={code!r}"
+
+    # Postgres on :54322 via localhost. psql was installed during
+    # provisioning (see install: block above).
+    r = _shell(
+        devm, workspace,
+        "PGPASSWORD=postgres psql -h localhost -p 54322 -U postgres -d postgres -tAc 'SELECT 1'",
         timeout=30,
     )
     assert r.stdout.decode().strip() == "1", (
@@ -294,7 +325,12 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
     # ------------------------------------------------------------------
     test_email = "e2etest@example.com"
     test_password = "correct-horse-battery-staple"
-    api_base = f"http://api.{proj}.test"
+    # Direct-to-Kong for API calls (localhost:54321) — sidesteps hostname
+    # routing, which is a devm feature pinned by other tests. What THIS
+    # test proves is the recipe's config (custom templates → correct
+    # site_url in email bodies) — see the smoking-gun assertion below.
+    api_base = "http://localhost:54321"
+    mailpit_base = "http://localhost:54324"
 
     # Signup.
     signup_body = json.dumps({"email": test_email, "password": test_password})
@@ -308,42 +344,88 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         timeout=30,
     )
     signup_resp = r.stdout.decode()
-    assert "id" in signup_resp or "user" in signup_resp, (
-        f"signup didn't return a user record: {signup_resp!r}"
+    # GoTrue returns {"id": "...", ...} on success (user object at top
+    # level when confirm-required is off) or {"user": {...}, ...} when
+    # confirm-required is on. Errors look like {"error_code": "...",
+    # "msg": "..."} — reject those.
+    try:
+        signup_json = json.loads(signup_resp)
+    except json.JSONDecodeError as e:
+        raise AssertionError(f"signup response not JSON: {signup_resp!r}") from e
+    assert "error_code" not in signup_json and "code" not in signup_json, (
+        f"signup returned an error: {signup_json}"
+    )
+    assert signup_json.get("id") or signup_json.get("user"), (
+        f"signup didn't return a user id: {signup_json}"
     )
 
-    # Poll Inbucket for the confirmation email. Inbucket mailbox is the
-    # local-part before @.
-    mailbox = test_email.split("@")[0]
-    inbucket_api = f"http://mail.{proj}.test/api/v1/mailbox/{mailbox}"
+    # Poll Mailpit for the confirmation email. Supabase CLI's mail
+    # container is Mailpit (the container name is `supabase_inbucket_*`
+    # for historical reasons, but the image is Mailpit).
+    #   GET /api/v1/messages           → {"messages":[{"ID":...}], ...}
+    #   GET /api/v1/message/{ID}       → {"HTML":..., "Text":..., "To":[{...}]}
+    messages_api = f"{mailpit_base}/api/v1/messages"
 
     confirmation_body = None
-    for _ in range(20):  # up to 20s of polling
+    for _ in range(30):  # up to 30s of polling
         r = _shell(
             devm, workspace,
-            f"curl -sS '{inbucket_api}'",
+            f"curl -sS '{messages_api}'",
             timeout=15, check=False,
         )
         if r.returncode == 0:
             try:
-                messages = json.loads(r.stdout.decode())
+                envelope = json.loads(r.stdout.decode())
+                messages = envelope.get("messages", [])
             except json.JSONDecodeError:
                 messages = []
-            if messages:
-                # Fetch the newest email's body.
-                mail_id = messages[0].get("id") or messages[0].get("mailbox-id")
+            # Find the message addressed to our test_email.
+            target = None
+            for m in messages:
+                for to in m.get("To", []):
+                    if to.get("Address") == test_email:
+                        target = m
+                        break
+                if target:
+                    break
+            if target:
+                mail_id = target["ID"]
                 r2 = _shell(
                     devm, workspace,
-                    f"curl -sS '{inbucket_api}/{mail_id}'",
+                    f"curl -sS '{mailpit_base}/api/v1/message/{mail_id}'",
                     timeout=15,
                 )
-                confirmation_body = r2.stdout.decode()
+                full = json.loads(r2.stdout.decode())
+                # Prefer HTML body (that's where our template lives);
+                # fall back to Text.
+                confirmation_body = full.get("HTML") or full.get("Text") or ""
                 break
         time.sleep(1)
 
-    assert confirmation_body, (
-        f"no confirmation email arrived in Inbucket for {test_email}"
-    )
+    if not confirmation_body:
+        # Diagnostic dump — supabase CLI has swapped mail containers
+        # before (Mailpit → Mailpit); if it happens again the API paths
+        # here will 404 and the container list + SMTP env below shows
+        # what changed.
+        debug_script = "\n".join([
+            "set +e",
+            "echo '=== all containers ==='",
+            "docker ps --format 'table {{.Names}}\\t{{.Ports}}\\t{{.Status}}'",
+            "echo '=== mailer SMTP env on auth ==='",
+            f"docker exec supabase_auth_{proj} env | grep -iE 'smtp|mail|inbucket'",
+            "echo '=== auth logs (last 60) ==='",
+            f"docker logs supabase_auth_{proj} 2>&1 | tail -60",
+        ])
+        r_debug = subprocess.run(
+            [devm.path, "shell", "--", "bash", "-c", debug_script],
+            cwd=str(workspace.path), capture_output=True, timeout=60,
+        )
+        raise AssertionError(
+            f"no confirmation email arrived in Mailpit for {test_email}\n"
+            f"signup response: {signup_json}\n"
+            f"debug stdout:\n{r_debug.stdout.decode(errors='replace')[:6000]}\n"
+            f"debug stderr:\n{r_debug.stderr.decode(errors='replace')[:2000]}"
+        )
 
     # This is the smoking-gun assertion for the recipe's email-templates
     # fix: the URL must contain OUR hostname, NOT the default

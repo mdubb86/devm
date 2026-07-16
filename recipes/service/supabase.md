@@ -2,8 +2,8 @@
 name: tool/service/supabase
 category: service
 display_name: Supabase
-description: "Local Supabase stack via `supabase start`. HTTP services (Kong / Studio / Inbucket) ride devm's proxy; Postgres uses `direct: true`. Same hostname works on Mac AND inside the VM."
-keywords: supabase postgres kong studio inbucket gotrue realtime auth database docker direct
+description: "Local Supabase stack via `supabase start`. HTTP services (Kong / Studio / Mailpit) ride devm's proxy; Postgres uses `direct: true`. Same hostname works on Mac AND inside the VM."
+keywords: supabase postgres kong studio mailpit inbucket gotrue realtime auth database docker direct
 since: recipes-vNEXT
 ---
 
@@ -15,7 +15,7 @@ inside the VM.
 
 Two routing patterns are combined:
 
-- **HTTP services** — Kong (`api`), Studio, Inbucket — ride the daemon
+- **HTTP services** — Kong (`api`), Studio, Mailpit — ride the daemon
   HTTP proxy on the Mac (`:80/:443`, TLS via devm's CA). One `hostname:`
   per service.
 - **Postgres** (raw TCP) — uses `direct: true`, which does two things
@@ -31,10 +31,20 @@ works from the Mac AND from inside the VM, unchanged.
 ```yaml
 docker: true                          # supabase start spins up ~10 containers
 
+path:
+  - /usr/local/share/supabase       # supabase + supabase-go co-located here
+
+packages:
+  - postgresql-client   # `psql` — handy for local queries, migrations, troubleshooting
+
 install:
-  # supabase CLI, latest release from github. Untarred straight into
-  # /usr/local/bin — the tarball's single top-level file is the binary.
-  - "curl -fsSL https://github.com/supabase/cli/releases/latest/download/supabase_linux_arm64.tar.gz | sudo tar -xz -C /usr/local/bin supabase"
+  # supabase CLI is a shim (`supabase`) + Go binary (`supabase-go`) that
+  # MUST live in the same dir — the shim looks for supabase-go alongside
+  # itself. Extract the whole tarball into /usr/local/share/supabase and
+  # add that to PATH (path: entry above). Extracting into /usr/local/bin
+  # works too but pollutes it with two binaries where one is normally
+  # expected.
+  - "sudo mkdir -p /usr/local/share/supabase && curl -fsSL https://github.com/supabase/cli/releases/latest/download/supabase_linux_arm64.tar.gz | sudo tar -xz -C /usr/local/share/supabase"
 
 services:
   supabase-api:
@@ -45,7 +55,7 @@ services:
     hostname: studio.<proj>.test
   supabase-mail:
     port: 54324
-    hostname: mail.<proj>.test         # Inbucket — optional but recipe includes it for email flows
+    hostname: mail.<proj>.test         # Mailpit — optional but recipe includes it for email flows
   supabase-db:
     port: 54322
     hostname: db.<proj>.test
@@ -60,10 +70,12 @@ network:
     - github.com                          # supabase CLI release download
     - api.github.com                      # /releases/latest lookup
     - objects.githubusercontent.com       # github redirects release assets here
-    - public.ecr.aws                      # supabase container image registry
-    # supabase images live on ECR Public, blob storage is CloudFront-fronted.
-    # If `supabase start` fails on `docker pull` with a different CDN host,
-    # add it here.
+    - public.ecr.aws                      # supabase container image registry (manifests)
+    - d2glxqk2uabbnd.cloudfront.net       # ECR Public blob storage (image layers)
+    # supabase images live on ECR Public with blob storage fronted by
+    # CloudFront. If `supabase start` fails on `docker pull` with a
+    # different `dXXX.cloudfront.net` host, add it here — it's the
+    # CDN distribution the image's blobs happen to sit behind.
 ```
 
 Then `devm route vm` (auto-applied on `devm shell` when no routes exist)
@@ -103,6 +115,20 @@ content_path = "./supabase/templates/recovery.html"
 subject = "Confirm your email change"
 content_path = "./supabase/templates/email_change.html"
 ```
+
+### 1a. Restart `supabase_auth_<proj>` after `supabase start`
+
+Supabase CLI serves the custom templates from Kong on port 8088, but
+GoTrue starts before Kong's template endpoint is ready, sees
+`connection refused`, and **falls back to defaults without retry** —
+even though templates are correctly configured. Every custom-template
+setup needs the same one-liner after `supabase start` completes:
+
+```bash
+docker restart supabase_auth_<proj>
+```
+
+Upstream: [supabase/cli#4668](https://github.com/supabase/cli/issues/4668).
 
 ### 2. Ship the four custom templates
 
@@ -185,7 +211,7 @@ $ supabase --version                                              # CLI installe
 $ supabase init && supabase start                                 # ~5-10 min first time
 $ curl -sS https://api.<proj>.test/rest/v1/                       # PostgREST reachable
 $ curl -sS https://studio.<proj>.test | head -20                  # Studio HTML
-$ curl -sS https://mail.<proj>.test/api/v1/mailbox/               # Inbucket API
+$ curl -sS https://mail.<proj>.test/api/v1/messages               # Mailpit API
 $ psql postgresql://postgres:postgres@db.<proj>.test:54322/postgres -c 'SELECT 1'
 ```
 
