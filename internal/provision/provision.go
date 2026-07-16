@@ -135,8 +135,8 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 		{name: "docker feature", firstBootOnly: true, fn: p.dockerFeature},
 		{name: "install templates", fn: p.installTemplates},
 		{name: "systemctl daemon-reload", fn: p.daemonReload},
-		{name: "run startup commands", firstBootOnly: true, fn: p.runStartupCommands},
 		{name: "set up boot enforcement", fn: p.setupBootEnforcement},
+		{name: "run startup commands", fn: p.runStartupCommands},
 		{name: "apply egress enforcement", fn: p.applyEgressEnforcement},
 		{name: "apply svc_ingress firewall", fn: p.applySvcIngressFirewall},
 		{name: "enable + start services", fn: p.enableStartServices},
@@ -262,39 +262,27 @@ func (p *Provisioner) installDevmBundle(ctx context.Context, w io.Writer) error 
 	return p.PipeIntoShell(ctx, w, bytes.NewReader(body), devmbundle.GuestInstallScript)
 }
 
-// setupBootEnforcement picks which unit restores egress enforcement on
-// the next guest boot. Runs on every cold start (not just first boot) so
-// it stays correct if a project adds or drops startup: between runs.
-//
-// With startup: commands declared, devm owns the boot-restore ordering
-// so startup: (open egress) runs before enforcement locks down: the
-// stock nftables.service is masked, and devm-enforce.service +
-// devm-startup.service (rendered in the bundle, ordered relative to each
-// other by systemd unit dependencies) take over instead.
-//
-// Without startup:, the stock firewall-first nftables.service is the
-// simplest correct boot-restore path — unmasked in case a previous
-// revision of this project had startup: and masked it.
+// setupBootEnforcement masks the stock firewall-first nftables.service
+// and enables devm-enforce.service + devm-startup.service instead, so
+// every project's boot order is network-online → devm-startup.service
+// (open egress) → devm-enforce.service (enforcement) → services. The
+// mechanism is always registered — unconditional and idempotent (mask
+// / enable are no-ops when already applied) — so it runs on every cold
+// start, not just first boot.
 func (p *Provisioner) setupBootEnforcement(ctx context.Context, w io.Writer) error {
-	if len(p.Cfg.Startup) > 0 {
-		return p.execShell(ctx, w,
-			"sudo systemctl mask nftables.service && "+
-				"sudo systemctl enable devm-enforce.service devm-startup.service")
-	}
 	return p.execShell(ctx, w,
-		"sudo systemctl unmask nftables.service && sudo systemctl enable nftables.service")
+		"sudo systemctl mask nftables.service && "+
+			"sudo systemctl enable devm-enforce.service devm-startup.service")
 }
 
-// runStartupCommands runs the project's startup: commands once, under
-// open egress, on the VM's first boot only. On every later boot systemd
-// itself runs devm-startup.service (enabled by setupBootEnforcement)
-// before enforcement locks down, so re-running it here would duplicate
-// work the guest already did at boot.
+// runStartupCommands starts devm-startup.service on every cold start.
+// /opt/devm/startup.sh (rendered from cfg.Startup) always exists — an
+// empty list renders a no-op script that exits 0 — so this call is
+// unconditional. `systemctl start` on an already-active
+// RemainAfterExit=yes oneshot is a no-op, so on a normal boot (where
+// systemd itself already ran the unit before this provisioning step
+// ever runs) this doesn't re-run the commands.
 func (p *Provisioner) runStartupCommands(ctx context.Context, w io.Writer) error {
-	if len(p.Cfg.Startup) == 0 {
-		fmt.Fprintln(w, "(no startup commands)")
-		return nil
-	}
 	return p.execShell(ctx, w, "sudo systemctl start devm-startup.service")
 }
 

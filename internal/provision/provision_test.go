@@ -306,81 +306,65 @@ func TestProvisioner_SvcIngressRunsAfterEgressEnforcement(t *testing.T) {
 	assert.Greater(t, svcIngressIdx, egressIdx, "svc_ingress firewall must run after egress enforcement")
 }
 
-// TestProvisioner_BootEnforcement_StartupMasksNftables pins that a
-// project with startup: commands hands boot-restore ownership to
-// devm-enforce.service/devm-startup.service — nftables.service must be
-// masked so it can't race the startup: commands with enforcement already
-// applied.
-func TestProvisioner_BootEnforcement_StartupMasksNftables(t *testing.T) {
-	var seen [][]string
-	tr := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
-		if !isMarkerProbe(argv) {
-			seen = append(seen, argv)
-		}
-		return tart.ExecResult{ExitCode: 0}
-	}}
-	p := &Provisioner{
-		Tart: tr, VMName: "vm",
-		Cfg: schema.Config{Startup: []string{"echo hi"}},
+// TestProvisioner_BootEnforcement_AlwaysMasksNftables pins that every
+// project — startup: set or not — hands boot-restore ownership to
+// devm-enforce.service/devm-startup.service: nftables.service is always
+// masked so it can't race the boot order with enforcement already
+// applied. The mechanism is always registered, not opt-in.
+func TestProvisioner_BootEnforcement_AlwaysMasksNftables(t *testing.T) {
+	for name, cfg := range map[string]schema.Config{
+		"with startup commands": {Startup: []string{"echo hi"}},
+		"without startup":       {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var seen [][]string
+			tr := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
+				if !isMarkerProbe(argv) {
+					seen = append(seen, argv)
+				}
+				return tart.ExecResult{ExitCode: 0}
+			}}
+			p := &Provisioner{Tart: tr, VMName: "vm", Cfg: cfg}
+			var buf bytes.Buffer
+			require.NoError(t, p.setupBootEnforcement(context.Background(), &buf))
+
+			joined := strings.Join(flattenArgvs(seen), "\n")
+			assert.Contains(t, joined, "mask nftables")
+			assert.Contains(t, joined, "enable")
+			assert.Contains(t, joined, "devm-enforce.service")
+			assert.Contains(t, joined, "devm-startup.service")
+			assert.NotContains(t, joined, "unmask")
+		})
 	}
-	var buf bytes.Buffer
-	require.NoError(t, p.setupBootEnforcement(context.Background(), &buf))
-
-	joined := strings.Join(flattenArgvs(seen), "\n")
-	assert.Contains(t, joined, "mask nftables")
-	assert.Contains(t, joined, "enable")
-	assert.Contains(t, joined, "devm-enforce.service")
-	assert.NotContains(t, joined, "enable --now nftables")
 }
 
-// TestProvisioner_BootEnforcement_NoStartupEnablesNftables pins that a
-// project with no startup: commands keeps the stock nftables.service as
-// the boot-restore path (and unmasks it, in case a previous project
-// revision had startup: and masked it).
-func TestProvisioner_BootEnforcement_NoStartupEnablesNftables(t *testing.T) {
-	var seen [][]string
-	tr := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
-		if !isMarkerProbe(argv) {
-			seen = append(seen, argv)
-		}
-		return tart.ExecResult{ExitCode: 0}
-	}}
-	p := &Provisioner{Tart: tr, VMName: "vm", Cfg: schema.Config{}}
-	var buf bytes.Buffer
-	require.NoError(t, p.setupBootEnforcement(context.Background(), &buf))
+// TestProvisioner_RunStartup_AlwaysStartsOnEveryColdStart pins that
+// devm-startup.service is started on every cold start, startup: set or
+// not (an empty cfg.Startup still has a startup.sh — a no-op script —
+// so there's always a unit to start).
+func TestProvisioner_RunStartup_AlwaysStartsOnEveryColdStart(t *testing.T) {
+	for name, cfg := range map[string]schema.Config{
+		"first boot with startup commands": {Startup: []string{"echo hi"}},
+		"first boot with no startup":       {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var seen [][]string
+			fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
+				if isMarkerProbe(argv) {
+					return tart.ExecResult{ExitCode: 1} // absent -> first boot
+				}
+				seen = append(seen, argv)
+				return tart.ExecResult{ExitCode: 0}
+			}}
+			p := &Provisioner{Tart: fake, VMName: "vm", Cfg: cfg}
+			require.NoError(t, p.Run(context.Background(), &bytes.Buffer{}))
 
-	joined := strings.Join(flattenArgvs(seen), "\n")
-	assert.Contains(t, joined, "unmask nftables.service")
-	assert.Contains(t, joined, "enable nftables.service")
-	// "unmask" is not "mask": guard against the substring false-positive.
-	assert.NotContains(t, joined, "systemctl mask nftables")
-	assert.NotContains(t, joined, "devm-enforce.service")
-	assert.NotContains(t, joined, "devm-startup.service")
-}
+			joined := strings.Join(flattenArgvs(seen), "\n")
+			assert.Contains(t, joined, "start devm-startup.service")
+		})
+	}
 
-// TestProvisioner_RunStartup_FirstBootOnly pins that devm-startup.service
-// is started explicitly only on first boot (systemd already ran it at
-// boot on a restart) and only when the project declares startup:.
-func TestProvisioner_RunStartup_FirstBootOnly(t *testing.T) {
-	t.Run("first boot with startup commands starts the service", func(t *testing.T) {
-		var seen [][]string
-		fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
-			if isMarkerProbe(argv) {
-				return tart.ExecResult{ExitCode: 1} // absent -> first boot
-			}
-			seen = append(seen, argv)
-			return tart.ExecResult{ExitCode: 0}
-		}}
-		p := &Provisioner{Tart: fake, VMName: "vm", Cfg: schema.Config{Startup: []string{"echo hi"}}}
-		p.firstBoot = !p.markerExists(context.Background())
-		var buf bytes.Buffer
-		require.NoError(t, p.runStartupCommands(context.Background(), &buf))
-
-		joined := strings.Join(flattenArgvs(seen), "\n")
-		assert.Contains(t, joined, "start devm-startup.service")
-	})
-
-	t.Run("restart does not start the service", func(t *testing.T) {
+	t.Run("restart (not first boot) still starts the service", func(t *testing.T) {
 		var seen [][]string
 		fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
 			if isMarkerProbe(argv) {
@@ -393,23 +377,7 @@ func TestProvisioner_RunStartup_FirstBootOnly(t *testing.T) {
 		require.NoError(t, p.Run(context.Background(), &bytes.Buffer{}))
 
 		joined := strings.Join(flattenArgvs(seen), "\n")
-		assert.NotContains(t, joined, "start devm-startup.service")
-	})
-
-	t.Run("no startup commands never starts the service", func(t *testing.T) {
-		var seen [][]string
-		fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
-			if isMarkerProbe(argv) {
-				return tart.ExecResult{ExitCode: 1} // absent -> first boot
-			}
-			seen = append(seen, argv)
-			return tart.ExecResult{ExitCode: 0}
-		}}
-		p := &Provisioner{Tart: fake, VMName: "vm", Cfg: schema.Config{}}
-		require.NoError(t, p.Run(context.Background(), &bytes.Buffer{}))
-
-		joined := strings.Join(flattenArgvs(seen), "\n")
-		assert.NotContains(t, joined, "devm-startup.service")
+		assert.Contains(t, joined, "start devm-startup.service")
 	})
 }
 
