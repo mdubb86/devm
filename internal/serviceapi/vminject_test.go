@@ -87,7 +87,10 @@ func TestBuildNftablesScript_FilterDefaultDenyExceptIronProxyPorts(t *testing.T)
 	assert.Contains(t, script, "8080")
 	assert.Contains(t, script, "8443")
 	assert.Contains(t, script, "8053")
-	assert.Contains(t, script, "systemctl enable --now nftables")
+	// The provisioner — not this script — owns which unit restores
+	// enforcement on boot (setupBootEnforcement enables either
+	// nftables.service or devm-enforce.service depending on startup:).
+	assert.NotContains(t, script, "systemctl enable --now nftables")
 }
 
 func TestBuildNftablesScript_NTPPortAddsDNATAndFilterRule(t *testing.T) {

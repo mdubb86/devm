@@ -270,7 +270,6 @@ table inet devm_filter {
 
 include "/etc/nftables.d/*.conf"
 EOF
-sudo systemctl enable --now nftables
 `, macHost, macHost, httpsPort, macHost, httpPort,
 		ntpNatRule,
 		macHost, httpsPort, macHost, httpPort,
