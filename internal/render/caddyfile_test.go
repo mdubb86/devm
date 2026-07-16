@@ -29,3 +29,15 @@ func TestCaddyfileWithHostnamedServices(t *testing.T) {
 	// auto_https off block
 	assert.Contains(t, out, "auto_https off")
 }
+
+func TestCaddyfileSkipsDirect(t *testing.T) {
+	cfg := schema.Config{
+		Services: map[string]schema.Service{
+			"web": {Port: 8080, Hostname: "web.test"},
+			"db":  {Port: 54322, Hostname: "db.test", Direct: true},
+		},
+	}
+	out := Caddyfile(cfg)
+	assert.Contains(t, out, "http://web.test")
+	assert.NotContains(t, out, "db.test", "direct service must not get a Caddy block")
+}

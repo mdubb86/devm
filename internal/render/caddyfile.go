@@ -18,7 +18,8 @@ func Caddyfile(cfg schema.Config) string {
 	// Sort service names so output is deterministic.
 	names := make([]string, 0, len(cfg.Services))
 	for name := range cfg.Services {
-		if cfg.Services[name].Hostname != "" && cfg.Services[name].Port != 0 {
+		svc := cfg.Services[name]
+		if svc.Hostname != "" && svc.Port != 0 && !svc.Direct {
 			names = append(names, name)
 		}
 	}
