@@ -605,6 +605,8 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "service_systemd_override_change"
 	case reconcile.KindServiceHostnameChange:
 		return "service_hostname_change"
+	case reconcile.KindServiceDirectChange:
+		return "service_direct_change"
 	case reconcile.KindSecretAdd:
 		return "secret_add"
 	case reconcile.KindSecretRemove:
@@ -670,6 +672,12 @@ func formatChange(c reconcile.Change) string {
 		return fmt.Sprintf("~ service systemd override: %s", c.Service)
 	case reconcile.KindServiceHostnameChange:
 		return fmt.Sprintf("~ service hostname: %s: %q → %q", c.Service, c.Old, c.New)
+	case reconcile.KindServiceDirectChange:
+		state := "off"
+		if c.New == "true" {
+			state = "on"
+		}
+		return fmt.Sprintf("~ service direct: %s: %s", c.Service, state)
 	case reconcile.KindImageChange:
 		return "~ base image"
 	case reconcile.KindIdentityChange:

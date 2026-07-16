@@ -403,8 +403,10 @@ func computeServiceUnitChanges(old, new schema.Config) []Change {
 func computeDirectChanges(old, new schema.Config) []Change {
 	var out []Change
 	for _, svc := range unionServiceNames(old.Services, new.Services) {
-		if old.Services[svc].Direct != new.Services[svc].Direct {
-			out = append(out, Change{Kind: KindServiceDirectChange, Service: svc})
+		o, n := old.Services[svc].Direct, new.Services[svc].Direct
+		if o != n {
+			out = append(out, Change{Kind: KindServiceDirectChange, Service: svc,
+				Old: strconv.FormatBool(o), New: strconv.FormatBool(n)})
 		}
 	}
 	return out

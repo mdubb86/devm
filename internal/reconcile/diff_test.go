@@ -324,6 +324,8 @@ func TestComputeDirectChanges(t *testing.T) {
 	require.Len(t, changes, 1)
 	assert.Equal(t, KindServiceDirectChange, changes[0].Kind)
 	assert.Equal(t, "db", changes[0].Service)
+	assert.Equal(t, "false", changes[0].Old)
+	assert.Equal(t, "true", changes[0].New)
 	assert.Equal(t, BucketLive, changes[0].Bucket())
 
 	// No change → no diff.

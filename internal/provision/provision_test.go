@@ -199,6 +199,32 @@ func TestProvisioner_RunsAllStepsOnHappyPath(t *testing.T) {
 	}
 }
 
+// TestProvisioner_SvcIngressRunsAfterEgressEnforcement pins the step
+// order between the two firewall steps: svc_ingress rules must be
+// applied only after egress enforcement has scaffolded/locked down
+// the base chains, never before.
+func TestProvisioner_SvcIngressRunsAfterEgressEnforcement(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeTartOK(t, dir)
+
+	p := &Provisioner{
+		Tart:            tart.New(),
+		VMName:          "myproj-sbx",
+		Cfg:             schema.Config{Project: schema.Project{Name: "myproj"}},
+		CARootPEM:       []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"),
+		WorkspaceVMPath: "/Users/test/myproj",
+	}
+	var buf bytes.Buffer
+	require.NoError(t, p.Run(context.Background(), &buf))
+	out := buf.String()
+
+	egressIdx := strings.Index(out, "[step: apply egress enforcement]")
+	svcIngressIdx := strings.Index(out, "[step: apply svc_ingress firewall]")
+	require.GreaterOrEqual(t, egressIdx, 0, "missing egress enforcement step header")
+	require.GreaterOrEqual(t, svcIngressIdx, 0, "missing svc_ingress firewall step header")
+	assert.Greater(t, svcIngressIdx, egressIdx, "svc_ingress firewall must run after egress enforcement")
+}
+
 // Note: failure-isolation testing (verifying that later steps DON'T
 // run after an earlier one fails) is harder because the fake tart
 // would need to track invocations. Acceptable simplification: verify

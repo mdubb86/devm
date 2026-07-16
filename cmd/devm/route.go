@@ -73,12 +73,15 @@ func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error 
 
 // buildRoutes extracts Routes from the project config in the
 // requested mode. For vm mode, resolves the VM's IP via tart so the
-// proxy dials the VM directly instead of localhost.
+// proxy dials the VM directly instead of localhost — but only when a
+// route actually needs it (a non-direct service with hostname+port);
+// an all-direct project needs no backend IP and shouldn't error just
+// because the VM happens to be down.
 func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) ([]serviceapi.Route, error) {
 	var out []serviceapi.Route
 	var vmIP string
 
-	if mode == serviceapi.ModeVM {
+	if mode == serviceapi.ModeVM && needsVMIP(cfg) {
 		tr := tart.New()
 		ip, err := tr.IP(context.Background(), cfg.Project.Name)
 		if err != nil {
@@ -107,6 +110,18 @@ func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) ([]serviceapi.Rou
 		out = append(out, route)
 	}
 	return out, nil
+}
+
+// needsVMIP reports whether any service in cfg needs the VM's IP
+// baked into its route's BackendHost — i.e. a routed (non-direct)
+// service with both a hostname and a port set.
+func needsVMIP(cfg schema.Config) bool {
+	for _, svc := range cfg.Services {
+		if svc.Hostname != "" && svc.Port != 0 && !svc.Direct {
+			return true
+		}
+	}
+	return false
 }
 
 func init() {

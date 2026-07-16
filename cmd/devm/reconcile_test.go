@@ -16,9 +16,42 @@ import (
 // TestRepushRoutes_Success spins a real serviceapi.Server with the
 // routes admin endpoints registered, same technique as
 // startHandshakeDaemon/startStatusAllDaemon, and asserts repushRoutes
-// pushes the project's routes into the daemon's table. Uses ModeLocal
-// so buildRoutes doesn't need a running VM (no tart.IP call).
+// pushes the project's routes into the daemon's table. The project has
+// no pre-existing routes, so repushRoutes falls back to ModeVM; the
+// service is Direct so buildRoutes(ModeVM) doesn't need a running VM
+// (no tart.IP call).
 func TestRepushRoutes_Success(t *testing.T) {
+	cleanup := startRoutesDaemon(t)
+	defer cleanup()
+
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"web": {Port: 8080, Hostname: "web.test", Direct: true},
+		},
+	}
+
+	repushRoutes(cfg)
+
+	got, err := serviceapi.NewClient().ListRoutes(t.Context())
+	require.NoError(t, err)
+	require.Contains(t, got, "p")
+	byHost := map[string]serviceapi.Route{}
+	for _, r := range got["p"] {
+		byHost[r.Hostname] = r
+	}
+	require.Contains(t, byHost, "web.test")
+	assert.Equal(t, 8080, byHost["web.test"].BackendPort)
+	assert.Equal(t, serviceapi.ModeVM, byHost["web.test"].Mode)
+}
+
+// TestRepushRoutes_PreservesExistingLocalMode is the regression pin
+// for the "reconcile silently overrides `devm route local`" bug:
+// repushRoutes must repush in the project's EXISTING mode, not a
+// hardcoded ModeVM. Pre-seeds the fake daemon with a ModeLocal route
+// for the project (as `devm route local` would have applied), then
+// asserts the routes repushRoutes re-applies are still ModeLocal.
+func TestRepushRoutes_PreservesExistingLocalMode(t *testing.T) {
 	cleanup := startRoutesDaemon(t)
 	defer cleanup()
 
@@ -29,7 +62,11 @@ func TestRepushRoutes_Success(t *testing.T) {
 		},
 	}
 
-	repushRoutes(cfg, serviceapi.ModeLocal)
+	seeded, err := buildRoutes(cfg, serviceapi.ModeLocal)
+	require.NoError(t, err)
+	require.NoError(t, serviceapi.NewClient().ApplyRoutes(t.Context(), cfg.Project.Name, seeded))
+
+	repushRoutes(cfg)
 
 	got, err := serviceapi.NewClient().ListRoutes(t.Context())
 	require.NoError(t, err)
@@ -38,8 +75,8 @@ func TestRepushRoutes_Success(t *testing.T) {
 	for _, r := range got["p"] {
 		byHost[r.Hostname] = r
 	}
-	assert.Contains(t, byHost, "web.test")
-	assert.Equal(t, 8080, byHost["web.test"].BackendPort)
+	require.Contains(t, byHost, "web.test")
+	assert.Equal(t, serviceapi.ModeLocal, byHost["web.test"].Mode, "repushRoutes must not flip a project already on ModeLocal back to ModeVM")
 }
 
 // TestRepushRoutes_DaemonDown asserts the c.Available guard makes
@@ -52,12 +89,12 @@ func TestRepushRoutes_DaemonDown(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
-			"web": {Port: 8080, Hostname: "web.test"},
+			"web": {Port: 8080, Hostname: "web.test", Direct: true},
 		},
 	}
 
 	assert.NotPanics(t, func() {
-		repushRoutes(cfg, serviceapi.ModeLocal)
+		repushRoutes(cfg)
 	})
 }
 

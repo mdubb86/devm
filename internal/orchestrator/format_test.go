@@ -398,3 +398,13 @@ func TestFormatChange_Template(t *testing.T) {
 	// JSON mapping.
 	assert.Equal(t, "template_change", changeKindJSON(reconcile.KindTemplateChange))
 }
+
+func TestFormatChange_ServiceDirect(t *testing.T) {
+	turnedOn := reconcile.Change{Kind: reconcile.KindServiceDirectChange, Service: "db", Old: "false", New: "true"}
+	assert.Equal(t, "~ service direct: db: on", formatChange(turnedOn))
+
+	turnedOff := reconcile.Change{Kind: reconcile.KindServiceDirectChange, Service: "db", Old: "true", New: "false"}
+	assert.Equal(t, "~ service direct: db: off", formatChange(turnedOff))
+
+	assert.Equal(t, "service_direct_change", changeKindJSON(reconcile.KindServiceDirectChange))
+}

@@ -17,3 +17,12 @@ func TestVMIPForProject(t *testing.T) {
 	_, ok = vmIPForProject("missing")
 	assert.False(t, ok)
 }
+
+func TestVMIPForProject_StashedWithEmptyVMIP(t *testing.T) {
+	ironProxyState.put("proj-y", ironProxyInfo{MacHost: "192.168.64.1", VMIP: ""})
+	t.Cleanup(func() { ironProxyState.del("proj-y") })
+
+	ip, ok := vmIPForProject("proj-y")
+	assert.False(t, ok)
+	assert.Empty(t, ip)
+}

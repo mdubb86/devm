@@ -55,7 +55,7 @@ var reconcileCmd = &cobra.Command{
 		// Best-effort: re-push routes so a `direct` flip made by this
 		// reconcile is reflected in the daemon's DNS answer right away,
 		// instead of waiting for the next `devm shell` auto-apply.
-		repushRoutes(cfg, serviceapi.ModeVM)
+		repushRoutes(cfg)
 
 		if len(res.RecreateRequired) == 0 {
 			return nil
@@ -106,19 +106,35 @@ func init() {
 // (DNS reads the routes table). Never returns an error — a stopped VM,
 // down daemon, or push failure is a silent/logged no-op.
 //
+// The daemon's route table REPLACES a project's whole route set on
+// apply, so repushing in the wrong mode would silently flip a project
+// off `devm route local` back onto the VM. repushRoutes reads the
+// project's existing routes first and repushes in that SAME mode
+// (all of a project's routes share one mode); with no existing routes
+// it falls back to ModeVM, matching the cold-start auto-apply default
+// in shell.go.
+//
 // buildRoutes(ModeVM) resolves the VM IP via tart and errors if the VM
 // isn't running — that's a normal skip (nothing live to update on a
 // stopped VM), not a failure. A down daemon or a push error must never
 // fail `devm reconcile` itself.
-func repushRoutes(cfg schema.Config, mode serviceapi.RouteMode) {
-	routes, err := buildRoutes(cfg, mode)
-	if err != nil {
-		return
-	}
+func repushRoutes(cfg schema.Config) {
 	rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer rcancel()
 	c := serviceapi.NewClient()
 	if !c.Available(rctx) {
+		return
+	}
+
+	mode := serviceapi.ModeVM
+	if existing, err := c.ListRoutes(rctx); err == nil {
+		if projectRoutes := existing[cfg.Project.Name]; len(projectRoutes) > 0 {
+			mode = projectRoutes[0].Mode
+		}
+	}
+
+	routes, err := buildRoutes(cfg, mode)
+	if err != nil {
 		return
 	}
 	if err := c.ApplyRoutes(rctx, cfg.Project.Name, routes); err != nil {
