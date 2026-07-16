@@ -126,26 +126,26 @@ EOF
 //     transparently, without any /etc/docker/daemon.json rewiring.
 //
 //  2. `inet devm_filter`:
-//     - `output` chain (default-deny): allows loopback, 127.0.0.0/8, and
+//     - `output` chain (default-deny): allows loopback, 127.0.0.0/8,
 //     post-DNAT traffic to MAC_HOST at iron-proxy's HTTP/HTTPS/DNS/NTP
-//     ports. Everything else drops. `jump user_output` at the tail
-//     gives recipes an escape hatch.
+//     ports, and — when `docker` is true — the 172.16.0.0/12 bridge
+//     range so host→container reachability works. Everything else drops.
 //     - `forward` chain (default-deny for container egress): allows
-//     return traffic (`ct state established,related`) and post-DNAT'd
-//     container HTTP/HTTPS heading to MAC_HOST:iron-proxy. Everything
-//     else drops. `jump user_forward` at the tail for the same
-//     escape-hatch pattern. Container→random-port:N (SSH, custom
-//     APIs) hits the drop — same allow-list model the guest gets.
+//     return traffic (`ct state established,related`), post-DNAT'd
+//     container HTTP/HTTPS heading to MAC_HOST:iron-proxy, and jumps
+//     `svc_ingress` for Mac→container traffic on `direct: true`
+//     published ports. Container→random-port:N (SSH, custom APIs) hits
+//     the drop — same allow-list model the guest gets.
 //
-// Recipe rules survive across VM reboot because we snapshot each user
-// chain to /etc/nftables.d/*.conf and /etc/nftables.conf ends with
+// `svc_ingress` survives across VM reboot because we snapshot it to
+// /etc/nftables.d/svc_ingress.conf and /etc/nftables.conf ends with an
 // `include` glob. systemd's nftables.service re-runs `nft -f
 // /etc/nftables.conf` on every boot; the include restores whatever the
-// recipe added.
+// snapshot contained.
 //
 // Live-apply uses idempotent `add table` / `add chain` primitives + a
-// scoped `flush chain <our-chain>` so the recipe scaffold + any rules
-// recipes have added aren't wiped when enforcement fires.
+// scoped `flush chain <our-chain>` so `svc_ingress` isn't wiped when
+// enforcement fires.
 //
 // ntpPort=0 skips the NTP DNAT + filter rules — used by unit tests that
 // don't spin up an SNTP responder.
@@ -170,10 +170,8 @@ func buildNftablesScript(macHost string, httpPort, httpsPort, dnsPort, ntpPort i
 		dockerFilterRule = "    ip daddr 172.16.0.0/12 accept\n"
 	}
 	// Two-stage live apply: first idempotently ensure tables/chains
-	// exist (preserves user_output/user_forward if the scaffold step
-	// created them + any rules recipes have added), then flush ONLY
-	// our own chains (`output`, `forward`, `prerouting`) and rebuild.
-	// The user chains are never flushed by us.
+	// exist, then flush ONLY our own chains (`output`, `forward`,
+	// `prerouting`) and rebuild.
 	liveApply := fmt.Sprintf(`sudo nft -f - <<'EOF'
 add table ip devm_nat
 add chain ip devm_nat output { type nat hook output priority -100 ; }
@@ -193,8 +191,6 @@ add rule ip devm_nat prerouting iifname "br-*" tcp dport 443 dnat to %s:%d
 add rule ip devm_nat prerouting iifname "br-*" tcp dport 80 dnat to %s:%d
 
 add table inet devm_filter
-add chain inet devm_filter user_output
-add chain inet devm_filter user_forward
 add chain inet devm_filter svc_ingress
 add chain inet devm_filter output { type filter hook output priority 0 ; policy drop ; }
 add chain inet devm_filter forward { type filter hook forward priority 0 ; policy drop ; }
@@ -207,11 +203,9 @@ add rule inet devm_filter output ip daddr %s tcp dport { %d, %d } accept
 add rule inet devm_filter output ip daddr %s udp dport %d accept
 %s
 %s
-add rule inet devm_filter output jump user_output
 add rule inet devm_filter forward ct state established,related accept
 add rule inet devm_filter forward ip daddr %s tcp dport { %d, %d } accept
 add rule inet devm_filter forward jump svc_ingress
-add rule inet devm_filter forward jump user_forward
 EOF
 `, macHost, macHost, httpsPort, macHost, httpPort,
 		strings.TrimRight(strings.Replace(ntpNatRule, "    ", "add rule ip devm_nat output ", 1), "\n"),
@@ -223,14 +217,11 @@ EOF
 		strings.TrimRight(strings.Replace(dockerFilterRule, "    ", "add rule inet devm_filter output ", 1), "\n"),
 		macHost, httpPort, httpsPort)
 
-	// Persistence: snapshot user chains and write /etc/nftables.conf
-	// so systemd's nftables.service restores everything on the next
-	// boot. The include glob catches whatever /etc/nftables.d/*.conf
-	// contains — nftables merges re-declared table blocks so chain
-	// rules append.
+	// Persistence: snapshot svc_ingress and write /etc/nftables.conf so
+	// systemd's nftables.service restores everything on the next boot.
+	// The include glob catches whatever /etc/nftables.d/*.conf contains
+	// — nftables merges re-declared table blocks so chain rules append.
 	persist := fmt.Sprintf(`sudo mkdir -p /etc/nftables.d
-sudo sh -c 'nft list chain inet devm_filter user_output > /etc/nftables.d/user_output.conf'
-sudo sh -c 'nft list chain inet devm_filter user_forward > /etc/nftables.d/user_forward.conf'
 sudo sh -c 'nft list chain inet devm_filter svc_ingress > /etc/nftables.d/svc_ingress.conf'
 sudo tee /etc/nftables.conf > /dev/null <<'EOF'
 #!/usr/sbin/nft -f
@@ -260,8 +251,6 @@ table ip devm_nat {
 }
 
 table inet devm_filter {
-  chain user_output {}
-  chain user_forward {}
   chain svc_ingress {}
   chain output {
     type filter hook output priority 0; policy drop;
@@ -270,14 +259,12 @@ table inet devm_filter {
     ip daddr 127.0.0.0/8 accept
     ip daddr %s tcp dport { %d, %d } accept
     ip daddr %s udp dport %d accept
-%s%s    jump user_output
-  }
+%s%s  }
   chain forward {
     type filter hook forward priority 0; policy drop;
     ct state established,related accept
     ip daddr %s tcp dport { %d, %d } accept
     jump svc_ingress
-    jump user_forward
   }
 }
 

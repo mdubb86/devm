@@ -107,40 +107,31 @@ func TestBuildNftablesScript_ZeroNTPPortSkipsRule(t *testing.T) {
 	assert.NotContains(t, script, ":0 ") // paranoia — no zero-port rule anywhere
 }
 
-func TestBuildNftablesScript_LiveApplyPreservesUserOutput(t *testing.T) {
-	// Live-apply uses idempotent add + a scoped `flush chain output`
-	// so that any rules recipes added to user_output during install:
-	// aren't wiped when enforcement fires. Pin the exact primitives.
-	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234, false)
-	// Idempotent create — no-op if exists.
-	assert.Contains(t, script, "add table inet devm_filter")
-	assert.Contains(t, script, "add chain inet devm_filter user_output")
-	assert.Contains(t, script, "add chain inet devm_filter output")
-	// Only OUR chain gets flushed — user_output must NOT be flushed
-	// during live-apply, or recipe rules disappear.
-	assert.Contains(t, script, "flush chain inet devm_filter output")
-	assert.NotContains(t, script, "flush chain inet devm_filter user_output")
-	// The tail of the output chain hands control to user_output before
-	// the policy=drop bites, so recipe rules can accept traffic the
-	// base rules didn't.
-	assert.Contains(t, script, "add rule inet devm_filter output jump user_output")
+func TestBuildNftablesScript_NoUserEscapeHatch(t *testing.T) {
+	for _, docker := range []bool{true, false} {
+		s := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234, docker)
+		assert.NotContains(t, s, "user_output", "user_output chain must be gone")
+		assert.NotContains(t, s, "user_forward", "user_forward chain must be gone")
+		// svc_ingress is retained.
+		assert.Contains(t, s, "svc_ingress", "svc_ingress must remain")
+	}
 }
 
 func TestBuildNftablesScript_PersistsViaIncludeGlob(t *testing.T) {
-	// Recipe rules survive VM reboot because:
-	//   (1) apply-egress-enforcement snapshots user_output's live
-	//       state to /etc/nftables.d/user_output.conf, and
+	// svc_ingress survives VM reboot because:
+	//   (1) apply-egress-enforcement snapshots its live state to
+	//       /etc/nftables.d/svc_ingress.conf, and
 	//   (2) /etc/nftables.conf has `include "/etc/nftables.d/*.conf"`
 	//       so systemd's nftables.service pulls the snapshot back in
 	//       on the next boot.
 	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234, false)
-	assert.Contains(t, script, "nft list chain inet devm_filter user_output > /etc/nftables.d/user_output.conf")
+	assert.Contains(t, script, "nft list chain inet devm_filter svc_ingress > /etc/nftables.d/svc_ingress.conf")
 	assert.Contains(t, script, `include "/etc/nftables.d/*.conf"`)
-	// The persisted config must ALSO reference user_output so the
-	// output chain's `jump` target exists at load time. Declared
+	// The persisted config must ALSO declare svc_ingress so the
+	// forward chain's `jump` target exists at load time. Declared
 	// before include so the include's rules merge into it.
-	assert.Contains(t, script, "chain user_output {}")
-	assert.Contains(t, script, "jump user_output")
+	assert.Contains(t, script, "chain svc_ingress {}")
+	assert.Contains(t, script, "jump svc_ingress")
 }
 
 func TestBuildNftablesScript_DockerAddsBridgeAccept(t *testing.T) {
@@ -186,40 +177,31 @@ func TestBuildNftablesScript_ForwardFilterDefaultDeny(t *testing.T) {
 	assert.Contains(t, script, "add chain inet devm_filter forward { type filter hook forward priority 0 ; policy drop ; }")
 	assert.Contains(t, script, "add rule inet devm_filter forward ct state established,related accept")
 	assert.Contains(t, script, "add rule inet devm_filter forward ip daddr 192.168.64.1 tcp dport { 8080, 8443 } accept")
-	assert.Contains(t, script, "add rule inet devm_filter forward jump user_forward")
+	assert.Contains(t, script, "add rule inet devm_filter forward jump svc_ingress")
 }
 
-func TestBuildNftablesScript_ForwardChainAndUserForwardPersisted(t *testing.T) {
-	// The persisted /etc/nftables.conf must contain the forward chains
-	// so systemd's nftables.service restores them on boot; and the
-	// snapshot of user_forward must be written alongside user_output
-	// so recipe-added rules survive VM reboot.
+func TestBuildNftablesScript_ForwardChainPersisted(t *testing.T) {
+	// The persisted /etc/nftables.conf must contain the forward and
+	// prerouting chains so systemd's nftables.service restores them on
+	// boot.
 	script := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 51234, false)
-	assert.Contains(t, script, "nft list chain inet devm_filter user_forward > /etc/nftables.d/user_forward.conf")
-	assert.Contains(t, script, "chain user_forward {}")
 	assert.Contains(t, script, "chain forward {")
 	assert.Contains(t, script, "chain prerouting {")
 }
 
 func TestNftablesScaffoldsSvcIngress(t *testing.T) {
 	script := buildNftablesScript("192.168.64.1", 40000, 40001, 40002, 0, false)
-	// Chain declared and jumped from forward, before user_forward.
+	// Chain declared and jumped from forward, after the base accept
+	// rules so svc_ingress only sees what those didn't already allow.
 	assert.Contains(t, script, "add chain inet devm_filter svc_ingress")
 	assert.Contains(t, script, "add rule inet devm_filter forward jump svc_ingress")
-	fwdIdx := strings.Index(script, "forward jump svc_ingress")
-	userIdx := strings.Index(script, "forward jump user_forward")
-	assert.True(t, fwdIdx > 0 && userIdx > fwdIdx, "svc_ingress jump must come before user_forward")
-	// Persist half declares the chain too.
-	assert.Contains(t, script, "chain svc_ingress {")
-	// Persist half also jumps svc_ingress before user_forward, but as
-	// bare "jump" lines inside `chain forward { ... }` (no "forward"
-	// token on those lines, unlike the liveApply rules above). The
-	// persist heredoc is appended after liveApply in the returned
-	// string, and each jump line appears exactly once per half, so the
-	// *last* occurrence of each substring targets the persist block.
-	persistSvcIdx := strings.LastIndex(script, "jump svc_ingress")
-	persistUserIdx := strings.LastIndex(script, "jump user_forward")
-	assert.True(t, persistSvcIdx > fwdIdx && persistUserIdx > persistSvcIdx, "persist half: svc_ingress jump must come before user_forward")
+	baseIdx := strings.Index(script, "add rule inet devm_filter forward ip daddr 192.168.64.1 tcp dport { 40000, 40001 } accept")
+	fwdIdx := strings.Index(script, "add rule inet devm_filter forward jump svc_ingress")
+	assert.True(t, baseIdx > 0 && fwdIdx > baseIdx, "svc_ingress jump must come after the base forward accept rules")
+	// Persist half declares the chain and jumps it too.
+	assert.Contains(t, script, "chain svc_ingress {}")
+	persistFwdIdx := strings.LastIndex(script, "jump svc_ingress")
+	assert.True(t, persistFwdIdx > fwdIdx, "persist half's svc_ingress jump must come after the live-apply half's")
 }
 
 func TestBuildTimesyncdScript_PointsAtProxySentinel(t *testing.T) {

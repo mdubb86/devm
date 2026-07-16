@@ -124,7 +124,6 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
 		{"reload base services", p.reloadBaseServices},
 		{"apt-get update", p.aptUpdate},
 		{"apt-get install packages", p.aptInstall},
-		{"scaffold user firewall chain", p.scaffoldUserFirewallChain},
 		{"run install commands", p.runInstallCommands},
 		{"docker feature", p.dockerFeature},
 		{"install templates", p.installTemplates},
@@ -248,39 +247,6 @@ func (p *Provisioner) applySvcIngressFirewall(ctx context.Context, w io.Writer) 
 		return nil
 	}
 	return p.execShell(ctx, w, nftscript.BuildSvcIngressScript(ports))
-}
-
-// scaffoldUserFirewallChain creates the `inet devm_filter/user_output`
-// and `inet devm_filter/user_forward` chains so recipes can
-// `nft add rule inet devm_filter user_output ...` (host-egress escape)
-// or `... user_forward ...` (container-egress escape) during install:
-// — the chains must exist before rules can be added to them.
-// applyEgressEnforcement runs later and snapshots whatever ended up
-// in each chain to /etc/nftables.d/user_output.conf and
-// /etc/nftables.d/user_forward.conf so recipe-added rules survive
-// VM reboot.
-//
-// FLUSHES both chains on every provision run: each cold-start
-// re-executes install: from scratch, so any `nft add rule` there would
-// otherwise pile up duplicate rules across successive re-provisions
-// on the same disk (devm shell → change install: → devm shell). The
-// flush makes install: commands the single source of truth for what
-// ends up in the user chains — reproducible from devm.yaml.
-//
-// The `add table` / `add chain` are idempotent (no-op if exists). The
-// chains have no type/hook, so a rule added to them has zero effect
-// until applyEgressEnforcement wires the parent chains'
-// `jump user_output` / `jump user_forward`.
-func (p *Provisioner) scaffoldUserFirewallChain(ctx context.Context, w io.Writer) error {
-	script := `sudo nft -f - <<'EOF'
-add table inet devm_filter
-add chain inet devm_filter user_output
-add chain inet devm_filter user_forward
-flush chain inet devm_filter user_output
-flush chain inet devm_filter user_forward
-EOF
-`
-	return p.execShell(ctx, w, script)
 }
 
 func (p *Provisioner) reloadBaseServices(ctx context.Context, w io.Writer) error {
