@@ -322,6 +322,30 @@ func TestServiceMarshalRoundTrip(t *testing.T) {
 	assert.NotContains(t, string(out), `bind`)
 }
 
+// TestServiceDirectYAMLRoundTrip exercises the `direct:` field through the
+// real custom decode/encode path (serviceKnownFields, serviceYAML.Direct,
+// Service.UnmarshalYAML, Service.MarshalYAML) rather than Go struct
+// literals. This is the riskiest part of the direct-services change: get
+// one of the four decoder call sites wrong and `direct: true` in a real
+// devm.yaml either silently drops or hard-fails as an "unknown field".
+func TestServiceDirectYAMLRoundTrip(t *testing.T) {
+	var withDirect Service
+	require.NoError(t, yaml.Unmarshal([]byte("port: 5432\nhostname: db.test\ndirect: true\n"), &withDirect))
+	assert.True(t, withDirect.Direct)
+
+	var withoutDirect Service
+	require.NoError(t, yaml.Unmarshal([]byte("port: 5432\nhostname: db.test\n"), &withoutDirect))
+	assert.False(t, withoutDirect.Direct)
+
+	out, err := yaml.Marshal(withDirect)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "direct: true")
+
+	var roundTripped Service
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.True(t, roundTripped.Direct, "direct must survive marshal/unmarshal round-trip (snapshot storage relies on this)")
+}
+
 func TestServiceValidatePortBindCoupling(t *testing.T) {
 	// BindIP without Port is invalid.
 	bad := Service{BindIP: "0.0.0.0"}
