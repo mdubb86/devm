@@ -113,6 +113,58 @@ func waitVMExecReady(ctx context.Context, vmName string, timeout time.Duration) 
 	)
 }
 
+// vmStopper is the subset of *tart.Tart that gracefulStopVM needs.
+type vmStopper interface {
+	Exec(ctx context.Context, name string, argv []string) tart.ExecResult
+	List(ctx context.Context) ([]tart.VM, error)
+}
+
+// shutdownGraceTimeout bounds how long a stop waits for the guest to power
+// itself off before the caller force-terminates it.
+const shutdownGraceTimeout = 45 * time.Second
+
+// gracefulStopVM asks the guest to power itself off cleanly and waits for
+// the VM to leave the running state. `tart stop` crashes the guest instead
+// of shutting it down (cirruslabs/tart#582, #659), which leaves docker
+// `--restart` containers stuck "created" on the next boot; an in-guest
+// `systemctl poweroff` lets systemd stop services cleanly so docker records
+// them as running-on-boot. Best-effort: on timeout the caller's supervisor
+// stop force-terminates the VM.
+func gracefulStopVM(ctx context.Context, tr vmStopper, name string) {
+	ctx, cancel := context.WithTimeout(ctx, shutdownGraceTimeout)
+	defer cancel()
+
+	// systemctl queues the shutdown and returns; the guest-agent connection
+	// then drops as the VM goes down, so ignore the exec result. Bound it so
+	// a hung agent can't consume the whole grace window.
+	execCtx, execCancel := context.WithTimeout(ctx, 10*time.Second)
+	_ = tr.Exec(execCtx, name, []string{"sudo", "systemctl", "poweroff"})
+	execCancel()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if vms, err := tr.List(ctx); err == nil && !vmRunning(vms, name) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// vmRunning reports whether the named VM appears running in a `tart list`.
+func vmRunning(vms []tart.VM, name string) bool {
+	for _, v := range vms {
+		if v.Name == name {
+			return v.Running
+		}
+	}
+	return false
+}
+
 // RegisterVMHandlers wires /vm/start, /vm/stop, /vm/status, and
 // /denials onto the given server. sup manages the VM process
 // lifecycle; tr wraps the tart binary for clone, list, run, and IP
@@ -439,16 +491,16 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			denials.Reset(req.Name)
 		}
 
-		// Ask tart for a graceful guest shutdown before SIGTERM'ing the
-		// tart-run process. Without this, in-flight guest disk writes
-		// aren't flushed and files written just before stop are lost.
-		// Best-effort: `tart stop` on an already-stopped VM errors out;
-		// carry on regardless — the supervisor stop below is what
-		// releases devm's process handle.
+		// Power the guest off from the inside before force-terminating it.
+		// `tart stop` crashes the guest rather than shutting it down
+		// (cirruslabs/tart#582, #659), so systemd never stops services and
+		// docker leaves its `--restart` containers stuck "created" on the
+		// next boot. An in-guest `systemctl poweroff` runs a clean shutdown —
+		// services stop, disk writes flush, docker records containers as
+		// running-on-boot. The supervisor stop below force-terminates as a
+		// fallback if the guest doesn't power off within the grace window.
 		if req.Name != "" {
-			stopCtx, stopCancel := context.WithTimeout(r.Context(), 15*time.Second)
-			_ = tr.Stop(stopCtx, req.Name)
-			stopCancel()
+			gracefulStopVM(r.Context(), tr, req.Name)
 		}
 
 		key = supervisor.Key{ProjectID: req.Name, Role: supervisor.RoleVM}

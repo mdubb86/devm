@@ -129,20 +129,21 @@ func TestVMStop_MissingProjectID(t *testing.T) {
 	assert.Contains(t, err.Error(), "vm/stop")
 }
 
-// TestVMStop_WithVMName_CallsTartStop verifies Bug J: /vm/stop asks tart
-// for a graceful guest shutdown (`tart stop <name>`) before SIGTERM'ing
-// the tart-run process. Without this, in-flight guest disk writes aren't
-// flushed and files from just before stop are lost across restart.
-func TestVMStop_WithVMName_CallsTartStop(t *testing.T) {
+// TestVMStop_WithVMName_PowersOffGuest verifies /vm/stop shuts the guest
+// down cleanly from the inside (`tart exec <name> sudo systemctl poweroff`)
+// before the supervisor force-terminates it — `tart stop` crashes the guest
+// (cirruslabs/tart#582, #659), leaving docker `--restart` containers stuck
+// "created" and dropping in-flight disk writes across a restart.
+func TestVMStop_WithVMName_PowersOffGuest(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 
-	// Record tart invocations. `tart stop <name>` should appear before
-	// any supervisor SIGTERM would land on the tart-run process.
+	// Record tart invocations. `list` reports no running VM so the graceful
+	// stop's poll returns immediately; other calls are logged.
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "tart-log")
 	bin := filepath.Join(dir, "tart-fake")
-	script := "#!/bin/sh\necho \"$*\" >> " + logPath + "\nexit 0\n"
+	script := "#!/bin/sh\ncase \"$1\" in\n  list) echo '[]' ;;\n  *) echo \"$*\" >> " + logPath + " ;;\nesac\nexit 0\n"
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 	tr := tart.New()
 	tr.Path = bin
@@ -159,17 +160,22 @@ func TestVMStop_WithVMName_CallsTartStop(t *testing.T) {
 
 	logBytes, err := os.ReadFile(logPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(logBytes), "stop proj-a",
-		"handler must call `tart stop <name>` for a graceful guest shutdown")
+	assert.Contains(t, string(logBytes), "exec proj-a sudo systemctl poweroff",
+		"handler must power the guest off from the inside for a clean shutdown")
 }
 
-// TestVMStop_NotFound verifies /vm/stop returns 500 for an unknown
+// TestVMStop_NotFound verifies /vm/stop is idempotent for an unknown
 // project (supervisor has no entry to stop).
 func TestVMStop_NotFound(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
+	// `list` reports no running VM so the graceful stop's poll returns at
+	// once; everything else is a harmless no-op.
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	script := "#!/bin/sh\ncase \"$1\" in\n  list) echo '[]' ;;\nesac\nexit 0\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 	tr := tart.New()
-	tr.Path = "false"
+	tr.Path = bin
 
 	srv, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
