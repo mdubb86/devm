@@ -46,14 +46,18 @@ If the VM is stopped or absent, `devm shell`:
    | 7 | `docker feature` (only when `docker: true`) | **first boot only** |
    | 8 | `install templates` | every cold start |
    | 9 | `systemctl daemon-reload` | every cold start |
-   | 10 | `apply egress enforcement` | every cold start |
-   | 11 | `apply svc_ingress firewall` (only when `direct: true` docker services) | every cold start |
-   | 12 | `enable + start services` | every cold start |
-   | 13 | `apply masks` | every cold start |
+   | 10 | `run startup commands` (only when `startup:` is set) | **first boot only** |
+   | 11 | `set up boot enforcement` | every cold start |
+   | 12 | `apply egress enforcement` | every cold start |
+   | 13 | `apply svc_ingress firewall` (only when `direct: true` docker services) | every cold start |
+   | 14 | `enable + start services` | every cold start |
+   | 15 | `apply masks` | every cold start |
 
 5. Attaches an interactive shell via `tart exec`. The shell exits but the VM keeps running; use `devm stop` to stop it.
 
-The first-boot-only steps (apt, `run install commands`, `docker feature`) run once, gated by the `/var/lib/devm/provisioned` marker, and are skipped on later cold starts (after `devm stop` + `devm shell`). The every-cold-start steps are idempotent and network-free (units already in place, nftables rebuilt from config). Restart-time workload comes back via systemd — enabled units auto-start on boot, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
+The first-boot-only steps (apt, `run install commands`, `docker feature`, `run startup commands`) run once, gated by the `/var/lib/devm/provisioned` marker, and are skipped on later cold starts (after `devm stop` + `devm shell`). `run startup commands` only runs the project's `startup:` list directly on this first boot; on every later boot, systemd itself starts `devm-startup.service` (enabled by `set up boot enforcement`) before enforcement locks down, so devm doesn't re-run it here. The every-cold-start steps are idempotent and network-free (units already in place, nftables rebuilt from config). Restart-time workload comes back via systemd — enabled units auto-start on boot, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
+
+For a project with `startup:` set, `set up boot enforcement` masks `nftables.service` and enables `devm-enforce.service` + `devm-startup.service` instead, so the guest's own boot order is `network → devm-startup.service (open egress) → devm-enforce.service (enforcement) → services`: the `startup:` commands run before egress enforcement is restored. For a project without `startup:`, nothing changes — `nftables.service` stays enabled and boot is firewall-first as before.
 
 ---
 
