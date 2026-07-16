@@ -139,9 +139,31 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	// don't overwrite an existing route set — the user may have
 	// explicitly chosen `devm route local`, and we respect that
 	// across stop/start cycles per the Ship 3 design.
+	//
+	// This goroutine is launched BEFORE orchestrator.RunShell brings the
+	// VM up below, so on a cold start buildRoutes(ModeVM) — which reads
+	// the VM's IP — fails until the VM exists. Retry on error (VM not up
+	// yet) until it succeeds or a generous cold-start-sized deadline
+	// passes, so routes still get registered during provisioning,
+	// before an interactive attach or a `-- cmd` exit. Retry ONLY on
+	// error; once buildRoutes returns nil error, stop — an empty result
+	// is legitimate (no hostnamed services) and not a reason to keep
+	// retrying.
 	go func() {
-		routes, err := buildRoutes(cfg, serviceapi.ModeVM)
-		if err != nil || len(routes) == 0 {
+		var routes []serviceapi.Route
+		deadline := time.Now().Add(5 * time.Minute)
+		for {
+			r, err := buildRoutes(cfg, serviceapi.ModeVM)
+			if err == nil {
+				routes = r
+				break
+			}
+			if time.Now().After(deadline) {
+				return
+			}
+			time.Sleep(2 * time.Second)
+		}
+		if len(routes) == 0 {
 			return
 		}
 		rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)

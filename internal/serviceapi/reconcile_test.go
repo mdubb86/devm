@@ -228,6 +228,55 @@ func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testi
 	assert.Equal(t, []schema.Mask{{Path: "data", Size: "10m"}}, got.Cfg.Services["web"].Masks)
 }
 
+func TestMergeLiveApplied_Direct(t *testing.T) {
+	// Regression: mergeLiveApplied's switch had no case for
+	// KindServiceDirectChange, so a live direct-add reconcile left the
+	// snapshot recording direct:false. A subsequent withdraw then diffed
+	// stale-false vs false, saw no change, and ApplyLive never rebuilt
+	// svc_ingress — the accept rule (and open port) persisted forever.
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"web": {Hostname: "web.test", Direct: false},
+		},
+	}
+	newCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"web": {Hostname: "web.test", Direct: true},
+		},
+	}
+	applied := []reconcile.Change{{Kind: reconcile.KindServiceDirectChange, Service: "web"}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	require.NotNil(t, merged.Services)
+	assert.True(t, merged.Services["web"].Direct,
+		"direct flip must land in the merged snapshot, or a subsequent withdraw diffs stale-false vs false and never rebuilds svc_ingress")
+}
+
+func TestMergeLiveApplied_Direct_ServiceRemoved(t *testing.T) {
+	// When the service carrying the direct flip is removed entirely in
+	// new_cfg, mergeLiveApplied must drop it from the merged snapshot
+	// (same as every other per-service case), not leave a stale entry.
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"web": {Hostname: "web.test", Direct: true},
+		},
+	}
+	newCfg := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Services: map[string]schema.Service{},
+	}
+	applied := []reconcile.Change{{Kind: reconcile.KindServiceDirectChange, Service: "web"}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	_, present := merged.Services["web"]
+	assert.False(t, present, "service removed in new_cfg must be dropped from the merged snapshot")
+}
+
 func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
 	// CLI resolves + hashes secret refs (login-keychain access happens
 	// in the user context) and sends the map on every /vm/reconcile

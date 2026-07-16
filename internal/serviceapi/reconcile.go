@@ -314,6 +314,14 @@ func mergeLiveApplied(old, new schema.Config, applied []reconcile.Change) schema
 				svc.Hostname = newSvc.Hostname
 				merged.Services[c.Service] = svc
 			}
+		case reconcile.KindServiceDirectChange:
+			svc := merged.Services[c.Service]
+			if newSvc, ok := new.Services[c.Service]; ok {
+				svc.Direct = newSvc.Direct
+				merged.Services[c.Service] = svc
+			} else {
+				delete(merged.Services, c.Service)
+			}
 		case reconcile.KindPortAdd, reconcile.KindPortRemove, reconcile.KindPortChange:
 			svc := merged.Services[c.Service]
 			if newSvc, ok := new.Services[c.Service]; ok {
