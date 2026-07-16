@@ -65,6 +65,10 @@ type Provisioner struct {
 	// tests that don't need enforcement (unit-tests, non-daemon paths)
 	// leave it unset.
 	EnforceEgress func(context.Context) error
+
+	// firstBoot is true when /var/lib/devm/provisioned is absent — i.e.
+	// this VM has not completed provisioning. Set at the top of Run.
+	firstBoot bool
 }
 
 // StepFailure carries which provisioning step failed. Callers use this
@@ -115,31 +119,56 @@ func IsPostInstallFailure(err error) bool {
 // can classify install-phase vs service-phase failures via
 // IsPostInstallFailure.
 func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
+	p.firstBoot = !p.markerExists(ctx)
 	steps := []struct {
-		name string
-		fn   func(context.Context, io.Writer) error
+		name          string
+		firstBootOnly bool
+		fn            func(context.Context, io.Writer) error
 	}{
-		{"mkdir workspace parents", p.mkdirWorkspaceParents},
-		{"install devm bundle", p.installDevmBundle},
-		{"reload base services", p.reloadBaseServices},
-		{"apt-get update", p.aptUpdate},
-		{"apt-get install packages", p.aptInstall},
-		{"run install commands", p.runInstallCommands},
-		{"docker feature", p.dockerFeature},
-		{"install templates", p.installTemplates},
-		{"systemctl daemon-reload", p.daemonReload},
-		{"apply egress enforcement", p.applyEgressEnforcement},
-		{"apply svc_ingress firewall", p.applySvcIngressFirewall},
-		{"enable + start services", p.enableStartServices},
-		{"apply masks", p.applyMasks},
+		{name: "mkdir workspace parents", fn: p.mkdirWorkspaceParents},
+		{name: "install devm bundle", fn: p.installDevmBundle},
+		{name: "reload base services", fn: p.reloadBaseServices},
+		{name: "apt-get update", firstBootOnly: true, fn: p.aptUpdate},
+		{name: "apt-get install packages", firstBootOnly: true, fn: p.aptInstall},
+		{name: "run install commands", firstBootOnly: true, fn: p.runInstallCommands},
+		{name: "docker feature", firstBootOnly: true, fn: p.dockerFeature},
+		{name: "install templates", fn: p.installTemplates},
+		{name: "systemctl daemon-reload", fn: p.daemonReload},
+		{name: "apply egress enforcement", fn: p.applyEgressEnforcement},
+		{name: "apply svc_ingress firewall", fn: p.applySvcIngressFirewall},
+		{name: "enable + start services", fn: p.enableStartServices},
+		{name: "apply masks", fn: p.applyMasks},
 	}
 	for _, step := range steps {
+		if step.firstBootOnly && !p.firstBoot {
+			fmt.Fprintf(w, "\n[step: %s] (skipped — already provisioned)\n", step.name)
+			continue
+		}
 		fmt.Fprintf(w, "\n[step: %s]\n", step.name)
 		if err := step.fn(ctx, w); err != nil {
 			return &StepFailure{Step: step.name, Err: err}
 		}
 	}
+	if p.firstBoot {
+		if err := p.writeMarker(ctx, w); err != nil {
+			return &StepFailure{Step: "write first-boot marker", Err: err}
+		}
+	}
 	return nil
+}
+
+// provisionedMarker is the path in the guest whose presence indicates
+// this VM has already completed first-boot provisioning.
+const provisionedMarker = "/var/lib/devm/provisioned"
+
+// markerExists reports whether the first-boot marker is present in the guest.
+func (p *Provisioner) markerExists(ctx context.Context) bool {
+	return p.Tart.Exec(ctx, p.VMName, []string{"test", "-f", provisionedMarker}).ExitCode == 0
+}
+
+// writeMarker records that first-boot provisioning completed.
+func (p *Provisioner) writeMarker(ctx context.Context, w io.Writer) error {
+	return p.execShell(ctx, w, "sudo mkdir -p /var/lib/devm && sudo touch "+provisionedMarker)
 }
 
 // exec runs the given argv via tart.ExecWithRetry (defends against

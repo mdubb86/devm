@@ -18,27 +18,40 @@ import (
 )
 
 // writeFakeTartOK drops a tart shell script into dir that succeeds for
-// every invocation. PATH is prepended.
+// every invocation, EXCEPT the first-boot marker probe (`test -f
+// /var/lib/devm/provisioned`), which it reports absent — keeping
+// callers on the first-boot path so gated steps still run. PATH is
+// prepended.
 func writeFakeTartOK(t *testing.T, dir string) {
 	t.Helper()
-	script := "#!/bin/sh\necho fake-tart-output\nexit 0\n"
+	script := fmt.Sprintf(`#!/bin/sh
+case "$*" in
+  *"test -f %s"*) exit 1 ;;
+esac
+echo fake-tart-output
+exit 0
+`, provisionedMarker)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "tart"), []byte(script), 0755))
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 }
 
 // writeFakeTartFailingAt drops a tart shell script that succeeds for
 // every invocation EXCEPT those whose argv contains `failureMarker`,
-// for which it exits 1.
+// for which it exits 1. Like writeFakeTartOK, the first-boot marker
+// probe is always reported absent so gated steps stay reachable.
 func writeFakeTartFailingAt(t *testing.T, dir, failureMarker string) {
 	t.Helper()
 	script := fmt.Sprintf(`#!/bin/sh
+case "$*" in
+  *"test -f %s"*) exit 1 ;;
+esac
 for arg in "$@"; do
   case "$arg" in
     *%s*) echo "step failure marker matched: $arg" >&2; exit 1 ;;
   esac
 done
 exit 0
-`, failureMarker)
+`, provisionedMarker, failureMarker)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "tart"), []byte(script), 0755))
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 }
@@ -58,6 +71,12 @@ func (f *fakeRecordingTart) ExecWithRetry(ctx context.Context, name string, argv
 
 func (f *fakeRecordingTart) ExecStdin(ctx context.Context, name string, stdin io.Reader, argv []string) tart.ExecResult {
 	return f.onExec(argv)
+}
+
+// isMarkerProbe reports whether argv is the first-boot marker read
+// (`test -f /var/lib/devm/provisioned`) that Provisioner.markerExists issues.
+func isMarkerProbe(argv []string) bool {
+	return len(argv) == 3 && argv[0] == "test" && argv[1] == "-f" && argv[2] == provisionedMarker
 }
 
 func TestReloadBaseServices_EnablesSSH(t *testing.T) {
@@ -197,6 +216,44 @@ func TestProvisioner_RunsAllStepsOnHappyPath(t *testing.T) {
 		assert.Greater(t, idx, prev, "step %s out of order", marker)
 		prev = idx
 	}
+}
+
+func TestProvisioner_FirstBootRunsGatedStepsAndWritesMarker(t *testing.T) {
+	var ran []string
+	fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
+		joined := strings.Join(argv, " ")
+		if strings.Contains(joined, "test -f /var/lib/devm/provisioned") {
+			return tart.ExecResult{ExitCode: 1} // absent → first boot
+		}
+		ran = append(ran, joined)
+		return tart.ExecResult{ExitCode: 0}
+	}}
+	p := &Provisioner{Tart: fake, VMName: "vm", Cfg: schema.Config{Install: []string{"echo hi"}}}
+	require.NoError(t, p.Run(context.Background(), &bytes.Buffer{}))
+
+	joinedAll := strings.Join(ran, "\n")
+	assert.Contains(t, joinedAll, "echo hi", "install: must run on first boot")
+	assert.Contains(t, joinedAll, "touch /var/lib/devm/provisioned",
+		"marker must be written after a successful first boot")
+}
+
+func TestProvisioner_RestartSkipsGatedSteps(t *testing.T) {
+	var ran []string
+	fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
+		joined := strings.Join(argv, " ")
+		if strings.Contains(joined, "test -f /var/lib/devm/provisioned") {
+			return tart.ExecResult{ExitCode: 0} // present → restart
+		}
+		ran = append(ran, joined)
+		return tart.ExecResult{ExitCode: 0}
+	}}
+	p := &Provisioner{Tart: fake, VMName: "vm", Cfg: schema.Config{Install: []string{"echo hi"}}}
+	require.NoError(t, p.Run(context.Background(), &bytes.Buffer{}))
+
+	joinedAll := strings.Join(ran, "\n")
+	assert.NotContains(t, joinedAll, "echo hi", "install: must NOT re-run on restart")
+	assert.NotContains(t, joinedAll, "touch /var/lib/devm/provisioned",
+		"marker must not be re-written when already present")
 }
 
 // TestProvisioner_SvcIngressRunsAfterEgressEnforcement pins the step
@@ -348,6 +405,11 @@ type deadlineCapturingTart struct {
 }
 
 func (d *deadlineCapturingTart) Exec(ctx context.Context, _ string, argv []string) tart.ExecResult {
+	if isMarkerProbe(argv) {
+		// Always report the first-boot marker absent so gated steps
+		// (e.g. the install step under test) still run.
+		return tart.ExecResult{ExitCode: 1}
+	}
 	if dl, ok := ctx.Deadline(); ok {
 		d.deadlines = append(d.deadlines, time.Until(dl))
 		d.argvs = append(d.argvs, append([]string(nil), argv...))
@@ -375,7 +437,12 @@ type slowTart struct {
 	delay time.Duration
 }
 
-func (s *slowTart) Exec(ctx context.Context, _ string, _ []string) tart.ExecResult {
+func (s *slowTart) Exec(ctx context.Context, _ string, argv []string) tart.ExecResult {
+	if isMarkerProbe(argv) {
+		// Always report the first-boot marker absent so the install
+		// step under test still runs (and can time out).
+		return tart.ExecResult{ExitCode: 1}
+	}
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		return tart.ExecResult{ExitCode: 0}
 	}
