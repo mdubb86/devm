@@ -116,7 +116,9 @@ Rules:
 
 Shell commands run once at VM creation time, in order, as root. Each command runs under `bash -o pipefail -c`. Bootstrap runs first, so `apt-get update` has already been called — user entries can `apt-get install -y <pkg>` directly.
 
-Changing `install` requires a full VM teardown and cold start.
+`install` runs **once, on first boot only** — it is gated by a marker (`/var/lib/devm/provisioned`) and is **not** re-run on a later cold start (`devm stop` then `devm shell` reuses the same disk, so installed tools and built artifacts are still there). It runs with **open** network, before egress enforcement is applied. Use `install` for one-time setup. For a command that must run on **every** boot, define a service (`exec:` / `systemd:`) instead — services are (re)started by systemd on each boot, under the enforced egress allowlist.
+
+Changing `install` requires a full VM teardown and cold start (a fresh VM then re-runs first-boot `install` with the new commands).
 
 Note: `--` in a command's argv is consumed by the internal wrapper; quote it or split the command into multiple steps.
 

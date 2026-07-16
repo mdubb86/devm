@@ -64,6 +64,24 @@ The daemon does not use the in-VM Caddy for this path — it connects to the ser
 
 ---
 
+## Direct services (`direct: true`)
+
+A service with `direct: true` is reached **directly at the VM's IP**, bypassing both the Mac-side daemon proxy and the in-VM Caddy. Use it for raw-TCP / non-HTTP services (e.g. Postgres) that an HTTP reverse proxy can't front.
+
+What happens for a direct service:
+
+1. **DNS answers the VM's IP.** The daemon's `*.test` resolver answers the service's `hostname` with the VM's current `tart ip` (TTL 0), not `127.0.0.1`. So `psql -h db.test` from the Mac connects straight to the VM — no proxy hop.
+2. **No proxy, no Caddy.** The daemon proxy refuses to dial a direct route (it carries no backend host), and the in-VM Caddyfile gets no block for the hostname.
+3. **Firewall (docker only).** When the project also runs Docker (`docker: true`), the container's published port is opened through the VM's `forward`-hook default-deny via a dedicated `svc_ingress` nftables chain (`ct original proto-dst <declared-port> accept`), so a Mac→`VM_IP:port` connection reaches the container. A **host-process** direct service (non-docker) needs no such rule — its traffic lands on the VM's own `input` hook, which devm never filters (the same path SSH uses).
+
+Rules and lifecycle:
+
+- `direct: true` requires a `hostname` ending in `.test`.
+- It is a **live** change: adding or removing `direct` takes effect on a running VM via `devm reconcile` (the DNS answer flips and the `svc_ingress` rule is added/removed), and it persists across a restart (the firewall snapshot is restored on boot).
+- Contrast with the proxied path above: a non-direct service with a `hostname` is HTTP-fronted (Mac proxy → in-VM Caddy → service); a direct service is raw TCP to the VM's IP.
+
+---
+
 ## Clearing routes
 
 Routes for a project are cleared when you run:
