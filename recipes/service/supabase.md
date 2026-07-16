@@ -76,6 +76,24 @@ network:
 Then `devm route vm` (auto-applied on `devm shell` when no routes exist)
 points every hostname at the VM.
 
+## Applying to an existing Node.js project
+
+Two supabase npm packages sometimes appear in `package.json` — they do
+different jobs and only one is redundant with the recipe's `.deb`
+install:
+
+- **`@supabase/supabase-js`** (`dependencies`) — the runtime JS client
+  the app imports (`import { createClient } from '@supabase/supabase-js'`).
+  Unrelated to the CLI. Keep it.
+- **`supabase`** (`devDependencies`) — the same CLI as the `.deb`,
+  wrapped for npm so `pnpm supabase start` works. Once the recipe
+  installs the `.deb`, this npm entry is redundant and risks version
+  drift between the two (native `.deb` at latest vs. npm pinned to
+  the last `pnpm install`).
+
+If `supabase` is in `devDependencies`, ask before removing it — the
+project may deliberately pin a version. If it's absent, nothing to do.
+
 ## Supabase-specific config fixes
 
 These are Supabase quirks devm can't know about.
