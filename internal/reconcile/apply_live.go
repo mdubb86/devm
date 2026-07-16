@@ -129,10 +129,25 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		// explicit docker gate is needed here. Rebuilds from the
 		// CURRENT cfg, so a removed direct service drops out
 		// automatically.
+		//
+		// Piped straight to a single privileged errexit shell (precedent:
+		// internal/serviceapi/vm.go's `tart exec -i <vm> sudo bash -s`) —
+		// NOT `bash -c "cat | sudo bash"`. That double-shell form put
+		// -e/-o pipefail on the OUTER bash while the script itself ran in
+		// an INNER, errexit-less `sudo bash`; a failing mid-script command
+		// (e.g. `nft -f -` rejecting a rule) was silently swallowed and
+		// the script's exit code was just the last line's (a `list chain`
+		// snapshot that succeeds regardless), so ApplyLive returned nil on
+		// a partially-applied chain. Running `sudo bash -e -o pipefail -s`
+		// directly makes the shell that actually interprets the script
+		// errexit, so a failing command aborts it and the nonzero exit
+		// propagates to the check below. The script's own `sudo` prefixes
+		// become redundant-but-harmless (root re-invoking passwordless
+		// sudo).
 		script := nftscript.BuildSvcIngressScript(nftscript.DirectPorts(cfg))
 		r := tr.ExecStdin(context.Background(), vmName,
 			strings.NewReader(script),
-			[]string{"bash", "-e", "-o", "pipefail", "-c", "cat | sudo bash"},
+			[]string{"sudo", "bash", "-e", "-o", "pipefail", "-s"},
 		)
 		if r.ExitCode != 0 {
 			return fmt.Errorf("apply_live: svc_ingress: exit %d (stderr: %s)", r.ExitCode, r.Stderr)
