@@ -34,12 +34,19 @@ func (e *egress) setPolicy(p Policy, ip *IronProxyEndpoint) {
 	}
 }
 
+// snapshot returns the current policy and iron-proxy endpoint under e.mu, for
+// readers (e.g. target, startDNS's policyResolver) that need a consistent
+// pair without holding the lock across their own work.
+func (e *egress) snapshot() (Policy, *IronProxyEndpoint) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.pol, e.ip
+}
+
 // target maps an outbound TCP flow to a host dial address per current policy.
 // ok=false => RST the flow. Pure; unit-tested.
 func (e *egress) target(dstIP string, dport uint16) (string, bool) {
-	e.mu.RLock()
-	pol, ip := e.pol, e.ip
-	e.mu.RUnlock()
+	pol, ip := e.snapshot()
 	if dstIP == NATAliasIP {
 		dstIP = HostLoopIP
 	}
