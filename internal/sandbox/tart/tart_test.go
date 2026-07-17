@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -112,4 +113,25 @@ func TestTart_Run_DoesNotSetSetsid(t *testing.T) {
 		// the SysProcAttr will be non-nil.
 		t.Fatal("Run() must not touch SysProcAttr; supervisor decides")
 	}
+}
+
+func TestExecStream_StreamsLinesAndExit(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "tart")
+	require.NoError(t, os.WriteFile(fake,
+		[]byte("#!/bin/bash\necho out1\necho err1 >&2\necho out2\nexit 3\n"), 0o755))
+	tr := &Tart{Path: fake}
+	var mu sync.Mutex
+	var got []string
+	code, err := tr.ExecStream(context.Background(), "vm", nil,
+		[]string{"true"}, func(stream, line string) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, stream+":"+line)
+		})
+	require.NoError(t, err)
+	require.Equal(t, 3, code)
+	require.Contains(t, got, "stdout:out1")
+	require.Contains(t, got, "stderr:err1")
+	require.Contains(t, got, "stdout:out2")
 }

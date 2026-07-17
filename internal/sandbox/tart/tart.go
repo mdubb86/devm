@@ -5,6 +5,7 @@
 package tart
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -148,6 +150,57 @@ func (t *Tart) ExecStdin(ctx context.Context, name string, stdin io.Reader, argv
 		code = -1
 	}
 	return ExecResult{Stdout: so.String(), Stderr: se.String(), ExitCode: code}
+}
+
+// ExecStream runs `tart exec -i <name> <argv>`, piping stdin in and streaming
+// stdout/stderr line-by-line to onLine ("stdout"/"stderr") as they arrive.
+// Returns the guest command's exit code. Unlike Exec, output is NOT buffered
+// into ExecResult — the caller drives progress live. onLine may be nil.
+//
+// onLine is invoked from two concurrent goroutines (one per stream) with no
+// serialization between them — if it touches shared state, the caller must
+// synchronize inside onLine.
+func (t *Tart) ExecStream(ctx context.Context, name string, stdin io.Reader,
+	argv []string, onLine func(stream, line string)) (int, error) {
+	args := append([]string{"exec", "-i", name}, argv...)
+	cmd := exec.CommandContext(ctx, t.Path, args...)
+	cmd.Stdin = stdin
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return -1, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return -1, err
+	}
+	if err := cmd.Start(); err != nil {
+		return -1, err
+	}
+
+	var wg sync.WaitGroup
+	scan := func(r io.Reader, stream string) {
+		defer wg.Done()
+		sc := bufio.NewScanner(r)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for sc.Scan() {
+			if onLine != nil {
+				onLine(stream, sc.Text())
+			}
+		}
+	}
+	wg.Add(2)
+	go scan(stdout, "stdout")
+	go scan(stderr, "stderr")
+	wg.Wait()
+
+	err = cmd.Wait()
+	if ee, ok := err.(*exec.ExitError); ok {
+		return ee.ExitCode(), nil
+	}
+	if err != nil {
+		return -1, err
+	}
+	return 0, nil
 }
 
 // ExecWithRetry runs Exec, and if the result is the specific
