@@ -4,7 +4,7 @@ import "testing"
 
 func TestApplyControlSetPolicy(t *testing.T) {
 	e := newEgress(nil)
-	err := applyControl(e, ControlMsg{
+	err := applyControl(e, newIngress(nil), ControlMsg{
 		Op:        "setPolicy",
 		Policy:    "ENFORCED",
 		IronProxy: &IronProxyEndpoint{HTTPS: "127.0.0.1:8443"},
@@ -19,7 +19,23 @@ func TestApplyControlSetPolicy(t *testing.T) {
 
 func TestApplyControlUnknownOpIgnored(t *testing.T) {
 	e := newEgress(nil)
-	if err := applyControl(e, ControlMsg{Op: "setExposeMap"}); err != nil {
+	if err := applyControl(e, newIngress(nil), ControlMsg{Op: "bogus"}); err != nil {
 		t.Fatalf("unknown op must be ignored, got %v", err)
 	}
+}
+
+func TestApplyControlSetExposeMap(t *testing.T) {
+	ing := newIngress(nil)
+	p := freeTCPPort(t)
+	err := applyControl(newEgress(nil), ing, ControlMsg{
+		Op:     "setExposeMap",
+		Expose: []ExposePort{{GuestPort: 5432, BindIP: "127.0.0.1", HostPort: p}},
+	})
+	if err != nil {
+		t.Fatalf("applyControl setExposeMap: %v", err)
+	}
+	if !hostReachable(p) {
+		t.Fatalf("setExposeMap should have opened host port %d", p)
+	}
+	ing.close()
 }

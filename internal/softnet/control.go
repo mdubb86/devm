@@ -9,7 +9,7 @@ import (
 	"os"
 )
 
-func applyControl(e *egress, m ControlMsg) error {
+func applyControl(e *egress, ing *ingress, m ControlMsg) error {
 	switch m.Op {
 	case "setPolicy":
 		p, err := ParsePolicy(m.Policy)
@@ -19,7 +19,7 @@ func applyControl(e *egress, m ControlMsg) error {
 		e.setPolicy(p, m.IronProxy)
 		return nil
 	case "setExposeMap":
-		// Implemented in Plan 2; ignore for forward-compatibility.
+		ing.apply(m.Expose)
 		return nil
 	default:
 		return nil // unknown ops are ignored, not fatal
@@ -28,7 +28,7 @@ func applyControl(e *egress, m ControlMsg) error {
 
 // serveControl listens on sockPath for newline-delimited JSON ControlMsgs and
 // applies them. Returns a Closer that stops the listener.
-func serveControl(sockPath string, e *egress) (io.Closer, error) {
+func serveControl(sockPath string, e *egress, ing *ingress) (io.Closer, error) {
 	_ = os.Remove(sockPath)
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
@@ -48,7 +48,7 @@ func serveControl(sockPath string, e *egress) (io.Closer, error) {
 					if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
 						continue
 					}
-					_ = applyControl(e, m)
+					_ = applyControl(e, ing, m)
 				}
 			}(conn)
 		}

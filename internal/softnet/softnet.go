@@ -56,7 +56,7 @@ func Run(args []string) error {
 		return fmt.Errorf("dns: %w", err)
 	}
 	if sock := os.Getenv("SOFTNET_CONTROL_SOCK"); sock != "" {
-		closer, err := serveControl(sock, e)
+		closer, err := serveControl(sock, e, newIngress(n))
 		if err != nil {
 			return err
 		}
