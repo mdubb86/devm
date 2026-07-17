@@ -18,22 +18,29 @@ project:
      at the iron-proxy layer, so a real host must be listed for the
      block below to bite). It must succeed, proving `startup:` ran
      before enforcement was applied.
-  3. Enforcement intact after boot: a declared service (`exec:`, which
-     always orders After=devm-enforce.service — see render/systemd.go's
-     RenderService) curls the SAME non-allow-listed
-     host. That curl must FAIL — proving devm-enforce.service (which
-     masking nftables.service hands boot-restore off to, per
-     provision.go's setupBootEnforcement) actually re-applies the
-     egress policy and doesn't leave the VM open. Cross-checked with a
-     direct `devm shell` probe of the same host post-boot, mirroring
-     test_83's post-install enforcement check.
+  3. Enforcement intact after boot: a declared service (started in the
+     composed script's `::devm:stage:services::` stage, which only
+     runs AFTER `::devm:stage:enforce::` has applied the real
+     allowlist — see internal/render.RenderProvisionScript) curls the
+     SAME non-allow-listed host. That curl must FAIL — proving the
+     enforce stage's `nft -f -` (the project's real allowlist ruleset,
+     baked in by internal/provision.Provisioner from iron-proxy's
+     EnforcementConfig) actually replaced the open-window ruleset
+     before services came up. Cross-checked with a direct `devm shell`
+     probe of the same host post-boot, mirroring test_83's post-install
+     enforcement check.
 
-Devm dependency: /etc/systemd/system/devm-startup.service runs every
-startup: command in order, Before=devm-enforce.service, on every boot,
-for every project (provision.go's setupBootEnforcement always masks
-the stock nftables.service and enables devm-enforce.service +
-devm-startup.service instead — not opt-in on startup: being set). If
-that ordering or masking regresses, this test breaks loudly.
+Devm dependency: the guest runs ONE composed provisioning script per
+boot (render.RenderProvisionScript / internal/provision.Provisioner)
+instead of separate systemd units — there is no more
+`devm-startup.service` or `devm-enforce.service`. The script always
+runs `startup:` (unconditionally, every boot — no FirstBoot gate,
+unlike `install:`) inside the open-egress window, THEN applies the
+enforced allowlist at the `enforce` stage, THEN starts/health-polls
+declared services at the `services` stage — all in the same `tart
+exec`, so the ordering is a straight-line script sequence, not
+unit dependency graph. If that stage ordering regresses, this test
+breaks loudly.
 """
 from __future__ import annotations
 
@@ -46,11 +53,11 @@ from helpers.exec_retry import devm_exec_with_retry
 
 pytestmark = pytest.mark.devm
 
-# Absolute /home/devm paths (not $HOME) — devm-startup.service runs
-# unqualified commands as root (no User= in RenderStartupUnit), so
-# $HOME there would resolve to /root, not the guest user's home. Using
-# an explicit path sidesteps that ambiguity, matching test_88's
-# SENTINEL convention.
+# Absolute /home/devm paths (not $HOME) — startup.sh runs inline in the
+# composed provisioning script (as the unprivileged devm user, via the
+# with-devm-env wrapper), so $HOME is already /home/devm here, but an
+# explicit path keeps the marker location unambiguous regardless of
+# invocation context, matching test_88's SENTINEL convention.
 COUNT_FILE = "/home/devm/.startup-count"
 STARTUP_FETCH_FILE = "/home/devm/.startup-fetch"
 SVC_FETCH_FILE = "/home/devm/.svc-fetch"
@@ -119,10 +126,11 @@ def test_startup_runs_every_boot_open_egress_enforced_after(workspace, devm, san
     )
 
     # ---- Assertion 3: enforcement intact after boot — the exec:
-    # ---- service (which starts only After=devm-enforce.service)
-    # ---- curling the SAME non-allow-listed host must have FAILED
-    # ---- (blocked), proving masking nftables.service + enabling
-    # ---- devm-enforce.service did not leave the VM unenforced. ----
+    # ---- service (which only starts in the composed script's
+    # ---- `services` stage, AFTER the `enforce` stage applied the real
+    # ---- allowlist) curling the SAME non-allow-listed host must have
+    # ---- FAILED (blocked), proving the enforce stage's ruleset did
+    # ---- not leave the VM unenforced by the time services start. ----
     assert file_size(SVC_FETCH_FILE) == 0, (
         "the exec: service's curl to a non-allow-listed host produced "
         f"non-empty output at {SVC_FETCH_FILE} — it should have been "

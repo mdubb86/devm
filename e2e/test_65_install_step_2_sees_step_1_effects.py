@@ -4,14 +4,16 @@ boundary, in one boot.
 Merges two independent-subsystem ordering probes that each cold-started
 their own VM:
   - test_65: install: runs sequentially with completion ordering — step
-    N+1 starts only after step N has FINISHED (the Go provisioner's
-    sequencing).
+    N+1 starts only after step N has FINISHED (the composed
+    provisioning script runs each install: command as its own `bash
+    -eo pipefail -c` line, one after another — see
+    internal/render.RenderProvisionScript's install stage).
   - test_66: a systemd service with `after: [dep]` starts only after
     `dep` has completed (the `after:` field rendering to a systemd
     After= dependency).
 
-These are genuinely independent subsystems (provisioner sequencing vs.
-systemd unit ordering), but both run during the same cold-start, so one
+These are genuinely independent subsystems (composed-script sequencing
+vs. systemd unit ordering), but both run during the same cold-start, so one
 devm.yaml declaring both an ordered install: list and an ordered
 services: pair — plus a third service that depends only on an install:
 side effect — proves all three ordering invariants in a single boot.

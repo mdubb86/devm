@@ -38,7 +38,15 @@ def test_install_pipeline_failure_fails_loud(workspace, devm):
         f"stdout={proc.stdout.decode()!r}\nstderr={proc.stderr.decode()!r}"
     )
     err = proc.stderr.decode()
-    # The provisioner names the failing step in the error chain.
-    assert 'provision step "run install commands"' in err, (
-        f"expected 'provision step \"run install commands\"' in stderr; got:\n{err}"
+    # The composed script names the failing STAGE (not the individual
+    # command — the old per-step provisioner's per-command echo is gone).
+    assert 'provision stage "install"' in err, (
+        f"expected 'provision stage \"install\"' in stderr; got:\n{err}"
+    )
+    # ...and surfaces the exit detail the composed script DOES report on a
+    # stage failure: the script's own exit code (StepFailure's wrapped err),
+    # proving `false | cat` propagated its failure through pipefail rather
+    # than being swallowed by cat's exit 0.
+    assert "provisioning script exited" in err, (
+        f"expected 'provisioning script exited' detail in stderr; got:\n{err}"
     )

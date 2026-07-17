@@ -1,9 +1,11 @@
 """27: a failing install: step makes devm shell exit non-zero with structured error.
 
-Pin for the supervision design's install-failure UX. Before this
-work, devm just dumped the captured anchor output. With supervision,
-devm pulls the failing step's per-step capture from
-/tmp/.devm/install-<N>/current and formats a structured error.
+Pin for the boot-integrity-gate provisioning UX. The guest runs one
+composed bash script (internal/render.RenderProvisionScript) instead
+of the old per-step provisioner; a failing install: command fails the
+whole "install" STAGE, and internal/provision.StepFailure/RunShell's
+teardown-on-fail report `provision stage "install": provisioning
+script exited <N>` on stderr — no per-command echo anymore.
 """
 import subprocess
 
@@ -29,10 +31,13 @@ def test_install_step_fails_loud(workspace, devm):
         f"stdout={proc.stdout.decode()!r}\nstderr={proc.stderr.decode()!r}"
     )
     err = proc.stderr.decode()
-    # The provisioner names the failing step in the error chain.
-    assert 'provision step "run install commands"' in err, (
-        f"expected 'provision step \"run install commands\"' in stderr; got:\n{err}"
+    # The composed script names the failing STAGE (not the individual
+    # command — the old per-step provisioner's per-command echo is gone).
+    assert 'provision stage "install"' in err, (
+        f"expected 'provision stage \"install\"' in stderr; got:\n{err}"
     )
-    assert "false" in err, (
-        f"expected user command 'false' in error report; got:\n{err}"
+    # ...and surfaces the exit detail the composed script DOES report on a
+    # stage failure: the script's own exit code (StepFailure's wrapped err).
+    assert "provisioning script exited" in err, (
+        f"expected 'provisioning script exited' detail in stderr; got:\n{err}"
     )

@@ -14,10 +14,16 @@ proving enforcement kicked in AFTER install (before services). Both
 halves together lock the sequencing: install runs open, workload runs
 gated.
 
-Devm dependency: /vm/apply-egress-enforcement fires between provisioner
-step 12 ("systemctl daemon-reload") and step 13 ("enable + start
-services"). If somebody ever moves the inject back into /vm/start,
-this test breaks loudly.
+Devm dependency: the guest runs ONE composed provisioning script
+(render.RenderProvisionScript / internal/provision.Provisioner) instead
+of the old per-step provisioner. Its `::devm:stage:open::` stage flushes
+the base image's boot-lock nftables ruleset for the whole open window —
+packages/install:/docker/templates/startup: all run under open egress —
+and only the LATER `::devm:stage:enforce::` stage applies the real
+allowlist ruleset, before the `::devm:stage:services::` stage
+starts/health-polls declared services. If somebody ever moves the
+enforce stage's nft apply earlier than install:/startup:, this test
+breaks loudly.
 """
 from __future__ import annotations
 
