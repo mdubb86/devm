@@ -1,4 +1,4 @@
-// Command softnet is a throwaway de-risking spike: a drop-in replacement for
+// Command softnet is a e2e contract-test fixture: a drop-in replacement for
 // cirruslabs/softnet that tart execs (resolved by bare name on $PATH). It reads
 // raw Ethernet frames off the AF_UNIX SOCK_DGRAM socket tart hands it as stdin
 // (fd 0), feeds them into an embedded gvisor-tap-vsock userspace netstack that
@@ -14,10 +14,10 @@
 // one raw Ethernet II frame, no framing header (this is gvisor-tap-vsock's
 // "vfkit" protocol verbatim).
 //
-// Spike-only extras, passed via env so they don't perturb the tart contract:
+// Fixture-only extras, passed via env so they don't perturb the tart contract:
 //
-//	SPIKE_ALLOW  comma-separated host:port allowlist (post-NAT dial targets)
-//	SPIKE_MARKER path to write a JSON marker proving the contract + euid
+//	FIXTURE_ALLOW  comma-separated host:port allowlist (post-NAT dial targets)
+//	FIXTURE_MARKER path to write a JSON marker proving the contract + euid
 package main
 
 import (
@@ -29,6 +29,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -56,24 +57,24 @@ const (
 	natAliasIP  = "192.168.127.254" // reaches the host's 127.0.0.1
 	hostLoopIP  = "127.0.0.1"
 	mtu         = 1500
-	dnsZoneName = "spike.test."
+	dnsZoneName = "fixture.test."
 )
 
 // marker is the JSON proof the e2e reads back to assert the contract.
 type marker struct {
-	Argv       []string `json:"argv"`
-	VMFD       int      `json:"vm_fd"`
-	VMMac      string   `json:"vm_mac"`
-	Allow      []string `json:"allow"`
-	Block      []string `json:"block"`
-	Expose     []string `json:"expose"`
-	SockType   int      `json:"sock_type"`   // expect SOCK_DGRAM (2 on darwin)
-	SockFamily int      `json:"sock_family"` // expect AF_UNIX (1)
-	Euid       int      `json:"euid"`
-	Uid        int      `json:"uid"`
-	SpikeAllow []string `json:"spike_allow"`
-	FirstSrc   string   `json:"first_src_mac"`  // src MAC of first guest frame
-	FirstAt    string   `json:"first_frame_at"` // timestamp
+	Argv         []string `json:"argv"`
+	VMFD         int      `json:"vm_fd"`
+	VMMac        string   `json:"vm_mac"`
+	Allow        []string `json:"allow"`
+	Block        []string `json:"block"`
+	Expose       []string `json:"expose"`
+	SockType     int      `json:"sock_type"`   // expect SOCK_DGRAM (2 on darwin)
+	SockFamily   int      `json:"sock_family"` // expect AF_UNIX (1)
+	Euid         int      `json:"euid"`
+	Uid          int      `json:"uid"`
+	FixtureAllow []string `json:"fixture_allow"`
+	FirstSrc     string   `json:"first_src_mac"`  // src MAC of first guest frame
+	FirstAt      string   `json:"first_frame_at"` // timestamp
 }
 
 func main() {
@@ -91,15 +92,15 @@ func main() {
 	}
 
 	mk := marker{
-		Argv:       os.Args,
-		VMFD:       *vmFD,
-		VMMac:      *vmMac,
-		Allow:      allow,
-		Block:      block,
-		Expose:     expose,
-		Euid:       os.Geteuid(),
-		Uid:        os.Getuid(),
-		SpikeAllow: splitCSV(os.Getenv("SPIKE_ALLOW")),
+		Argv:         os.Args,
+		VMFD:         *vmFD,
+		VMMac:        *vmMac,
+		Allow:        allow,
+		Block:        block,
+		Expose:       expose,
+		Euid:         os.Geteuid(),
+		Uid:          os.Getuid(),
+		FixtureAllow: splitCSV(os.Getenv("FIXTURE_ALLOW")),
 	}
 
 	// Prove the socket tart handed us is AF_UNIX SOCK_DGRAM (the wire contract).
@@ -120,14 +121,14 @@ func main() {
 	}
 
 	allowSet := make(map[string]struct{})
-	for _, a := range mk.SpikeAllow {
+	for _, a := range mk.FixtureAllow {
 		allowSet[a] = struct{}{}
 	}
 
 	writeMarker(&mk) // pre-flight marker so the e2e can read contract facts early
 
-	log("softnet spike up: euid=%d uid=%d vm-fd=%d mac=%s allow=%v",
-		mk.Euid, mk.Uid, *vmFD, *vmMac, mk.SpikeAllow)
+	log("softnet fixture up: euid=%d uid=%d vm-fd=%d mac=%s allow=%v",
+		mk.Euid, mk.Uid, *vmFD, *vmMac, mk.FixtureAllow)
 
 	// Wrap fd 0 (the SOCK_DGRAM socketpair end) as a net.Conn. net.FileConn
 	// returns a *net.UnixConn for a connected unixgram socket; Read/Write then
@@ -204,8 +205,11 @@ func newNetwork(allowSet map[string]struct{}, mk *marker) (*tap.Switch, error) {
 	}
 	tcpFwd := policyTCPForwarder(s, natTable, allowSet)
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
-	// No UDP forwarder installed => outbound UDP is default-dropped. DNS still
-	// works because the DNS server binds gateway:53 as its own endpoint below.
+	// Outbound UDP is default-dropped EXCEPT (a) DNS, which the server binds on
+	// gateway:53 as its own endpoint below, and (b) the single NTP dport
+	// forwarded by startUDPForward when FIXTURE_UDP_FWD is set. Bound endpoints
+	// (DNS) take demux precedence over the forwarder handler, so both coexist.
+	startUDPForward(s, os.Getenv("FIXTURE_UDP_FWD"))
 
 	if err := startDNS(config, s); err != nil {
 		return nil, fmt.Errorf("dns: %w", err)
@@ -213,6 +217,8 @@ func newNetwork(allowSet map[string]struct{}, mk *marker) (*tap.Switch, error) {
 	if err := startDHCP(config, s, ipPool); err != nil {
 		return nil, fmt.Errorf("dhcp: %w", err)
 	}
+	// Ingress (host->guest) port-forwards, if configured.
+	startExpose(s, os.Getenv("FIXTURE_EXPOSE"))
 	return sw, nil
 }
 
@@ -252,7 +258,7 @@ func buildStack(config *types.Configuration, ep stack.LinkEndpoint) (*stack.Stac
 
 // policyTCPForwarder mirrors forwarder.TCP, gating the outbound dial on an
 // allowlist. Non-allowed flows get an RST (r.Complete(true)) and no dial — the
-// enforcement the spike exists to prove.
+// enforcement the fixture exists to prove.
 func policyTCPForwarder(s *stack.Stack, nat map[tcpip.Address]tcpip.Address, allowSet map[string]struct{}) *tcp.Forwarder {
 	return tcp.NewForwarder(s, 0, 100, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
@@ -300,6 +306,136 @@ func splice(a, b net.Conn) {
 	wg.Wait()
 	_ = a.Close()
 	_ = b.Close()
+}
+
+// guestLeaseIP is the deterministic first DHCP lease our IPPool hands the sole
+// guest (.1 is reserved for the gateway). It's the dial target for host->guest
+// ingress.
+const guestLeaseIP = "192.168.127.2"
+
+// startExpose implements the ingress (host->guest) direction: for each
+// "hostPort:guestPort" in spec it listens on 127.0.0.1:hostPort and, per
+// accepted connection, dials guestLeaseIP:guestPort THROUGH the netstack
+// (gonet.DialContextTCP), splicing the two. This is gvisor-tap-vsock's
+// port-forward capability — the mechanism direct services / Caddy / SSH
+// ingress rely on once the guest IP is no longer host-routable.
+func startExpose(s *stack.Stack, spec string) {
+	for _, pair := range splitCSV(spec) {
+		parts := strings.SplitN(pair, ":", 2)
+		if len(parts) != 2 {
+			log("bad FIXTURE_EXPOSE entry %q (want hostPort:guestPort)", pair)
+			continue
+		}
+		guestPort, err := strconv.Atoi(parts[1])
+		if err != nil {
+			log("bad guest port in %q: %v", pair, err)
+			continue
+		}
+		ln, err := net.Listen("tcp", "127.0.0.1:"+parts[0])
+		if err != nil {
+			log("expose listen %s: %v", parts[0], err)
+			continue
+		}
+		log("EXPOSE host 127.0.0.1:%s -> guest %s:%d", parts[0], guestLeaseIP, guestPort)
+		go acceptExpose(ln, s, uint16(guestPort))
+	}
+}
+
+func acceptExpose(ln net.Listener, s *stack.Stack, guestPort uint16) {
+	for {
+		hc, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			gc, err := gonet.DialContextTCP(ctx, s, tcpip.FullAddress{
+				NIC:  1,
+				Addr: tcpip.AddrFrom4Slice(net.ParseIP(guestLeaseIP).To4()),
+				Port: guestPort,
+			}, ipv4.ProtocolNumber)
+			if err != nil {
+				log("INGRESS dial guest %s:%d: %v", guestLeaseIP, guestPort, err)
+				_ = hc.Close()
+				return
+			}
+			log("INGRESS host->guest tcp -> %s:%d", guestLeaseIP, guestPort)
+			splice(hc, gc)
+		}()
+	}
+}
+
+// startUDPForward forwards guest outbound UDP on a single dport (e.g. NTP :123)
+// to a host endpoint, mirroring today's funnel DNAT of udp:123 -> devm's host
+// NTP responder. spec is "guestDport:hostHost:hostPort". This is the netstack
+// UDP egress path the fixture otherwise leaves default-dropped; DNS (a bound
+// gateway:53 endpoint) keeps working alongside it.
+func startUDPForward(s *stack.Stack, spec string) {
+	if spec == "" {
+		return
+	}
+	parts := strings.SplitN(spec, ":", 3)
+	if len(parts) != 3 {
+		log("bad FIXTURE_UDP_FWD %q (want guestDport:hostHost:hostPort)", spec)
+		return
+	}
+	guestDport, err := strconv.Atoi(parts[0])
+	if err != nil {
+		log("bad guest dport in %q: %v", spec, err)
+		return
+	}
+	target := net.JoinHostPort(parts[1], parts[2])
+	fwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) {
+		id := r.ID()
+		if int(id.LocalPort) != guestDport {
+			log("DROP outbound udp -> :%d (only :%d forwarded)", id.LocalPort, guestDport)
+			return
+		}
+		var wq waiter.Queue
+		ep, terr := r.CreateEndpoint(&wq)
+		if terr != nil {
+			log("udp create endpoint: %v", terr)
+			return
+		}
+		guestConn := gonet.NewUDPConn(&wq, ep)
+		hostConn, err := net.Dial("udp", target)
+		if err != nil {
+			log("udp dial %s: %v", target, err)
+			_ = guestConn.Close()
+			return
+		}
+		log("FORWARD outbound udp :%d -> %s", guestDport, target)
+		go udpSplice(guestConn, hostConn)
+	})
+	s.SetTransportProtocolHandler(udp.ProtocolNumber, fwd.HandlePacket)
+	log("UDP forward enabled: guest udp :%d -> %s", guestDport, target)
+}
+
+// udpSplice copies datagrams both ways until 30s idle (UDP has no FIN; the idle
+// timeout reaps the flow — adequate for the fixture's request/reply proof).
+func udpSplice(guest, host net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	cp := func(dst, src net.Conn) {
+		defer wg.Done()
+		buf := make([]byte, 2048)
+		for {
+			_ = src.SetReadDeadline(time.Now().Add(30 * time.Second))
+			n, err := src.Read(buf)
+			if n > 0 {
+				_, _ = dst.Write(buf[:n])
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+	go cp(host, guest)
+	go cp(guest, host)
+	wg.Wait()
+	_ = guest.Close()
+	_ = host.Close()
 }
 
 func startDNS(config *types.Configuration, s *stack.Stack) error {
@@ -354,7 +490,7 @@ func installFirstFrameHook(sw *tap.Switch, mk *marker) {
 }
 
 func writeMarker(mk *marker) {
-	path := os.Getenv("SPIKE_MARKER")
+	path := os.Getenv("FIXTURE_MARKER")
 	if path == "" {
 		return
 	}
@@ -392,7 +528,7 @@ func splitCSV(s string) []string {
 }
 
 func log(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "[softnet-spike] "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "[softnet] "+format+"\n", args...)
 }
 
 func fatal(format string, args ...any) {

@@ -1,4 +1,4 @@
-module devmspike/softnet
+module devmcontract/softnet
 
 go 1.25.0
 
