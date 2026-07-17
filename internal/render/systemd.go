@@ -76,13 +76,15 @@ func RenderService(name string, svc schema.Service) []byte {
 	return []byte(b.String())
 }
 
-// RenderStartupScript generates the bash script devm-startup.service
-// executes: each cfg.Startup command verbatim, one per line — a
-// script body needs no single-quote escaping, unlike an ExecStart=
-// argument. `set -eo pipefail` means a failing command aborts the
-// run, matching install:'s "a failing command fails the run"
-// semantics. An empty cmds produces just the shebang + set line: a
-// valid no-op that exits 0.
+// RenderStartupScript generates the bash script the composed
+// provisioning script (RenderProvisionScript) invokes via
+// `/opt/devm/with-devm-env bash /opt/devm/startup.sh`: each
+// cfg.Startup command verbatim, one per line — a script body needs
+// no single-quote escaping, unlike an ExecStart= argument. `set -eo
+// pipefail` means a failing command aborts the run, matching
+// install:'s "a failing command fails the run" semantics. An empty
+// cmds produces just the shebang + set line: a valid no-op that
+// exits 0.
 //
 // The returned bytes are the script contents — write at
 // /opt/devm/startup.sh inside the VM, mode 0755.
