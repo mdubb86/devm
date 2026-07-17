@@ -11,13 +11,12 @@ Cold-starts a project, then pins the full SSH lifecycle:
   4. `ssh -F <path> devm-<vm-name> whoami` returns 'devm'.
   5. Stopping the project removes the Host block.
   6. `devm teardown --yes` wipes the per-project ssh subtree.
-  7. Restarting the daemon re-emits current-truth.
 
-Note: step 7 (daemon restart) uses `devm service restart` which requires sudo
-in install mode. In isolated mode (e2e-devm), the test verifies re-emission by
-doing a fresh cold-start after destroy, which naturally exercises the emission
-code path. The test as written works in both modes; daemon-kill-and-restart
-will be implemented if needed after initial run.
+Daemon-restart re-emission (does a crashed/restarted daemon rediscover
+running VMs and restore ssh_config?) is NOT covered here — it would
+need a real `devm service restart` (install mode, sudo) or the
+isolated kill/respawn seam (see test_73/test_100 for that pattern),
+not a second cold-start of the same already-destroyed project.
 """
 from __future__ import annotations
 
@@ -128,42 +127,3 @@ def test_ssh_access_end_to_end(devm, workspace):
     assert not project_dir.exists(), (
         f"expected {project_dir} to be removed by teardown, but it still exists"
     )
-
-    # --- Step 7: Re-emit after fresh cold-start ---
-    # Cold-start again to verify re-emission.
-    r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
-        cwd=str(workspace.path),
-        capture_output=True,
-        timeout=300,
-    )
-    assert r.returncode == 0, (
-        f"second cold-start failed:\nstdout={r.stdout.decode()!r}\n"
-        f"stderr={r.stderr.decode()!r}"
-    )
-
-    # Verify ssh_config shows the current state.
-    body = ssh_config.read_text()
-    assert f"Host devm-{workspace.vm_name}" in body, (
-        f"expected Host devm-{workspace.vm_name} after second cold-start, got:\n{body}"
-    )
-
-    # Optional: Attempt daemon restart to verify adoption of re-emission.
-    # This works in install mode (via `devm service restart` + sudo).
-    # In isolated mode, the above fresh cold-start already exercises the
-    # re-emission code path sufficiently. The restart step is mainly to verify
-    # that a crashed daemon can rediscover running VMs and restore the ssh_config.
-    # For now, we skip the explicit restart; it can be added if needed.
-    # If running in non-isolated mode with sudo capability, uncomment below:
-    #
-    # if os.environ.get("E2E_ISOLATE") != "1":
-    #     r = subprocess.run(
-    #         [devm.path, "service", "restart"],
-    #         capture_output=True, timeout=60,
-    #     )
-    #     if r.returncode == 0:
-    #         time.sleep(2)  # Settle for daemon to rediscover VMs
-    #         body = ssh_config.read_text()
-    #         assert f"Host devm-{workspace.vm_name}" in body, (
-    #             f"expected Host devm-{workspace.vm_name} after daemon restart, got:\n{body}"
-    #         )
