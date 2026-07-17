@@ -40,9 +40,9 @@ Coverage preserved verbatim from the three former tests:
     - `devm uninstall` removes the LaunchDaemon plist and runtime dir.
 
 Former test_41's cold-start-VM + teardown block is dropped here; that
-coverage is redundant with test_50 (cold-start brings VM to running),
-test_53 (teardown destroys VM), and test_82 (guest identity after
-cold-start).
+coverage is redundant with test_50 (cold-start brings VM to running,
+also guest identity after cold-start) and test_53 (teardown destroys
+VM).
 """
 from __future__ import annotations
 
@@ -263,9 +263,8 @@ def test_install_uninstall_lifecycle(devm, workspace, sudo_capable):
 
         # NOTE: former test_41's cold-start-VM + teardown block dropped
         # from this test. That coverage is redundant with:
-        #   test_50 — cold-start brings VM to running
+        #   test_50 — cold-start brings VM to running, guest identity
         #   test_53 — teardown destroys VM
-        #   test_82 — guest identity check after cold-start
         # Keeping the LaunchDaemon block above IS the unique contribution
         # from former test_41 (plist location, socket-bound ports,
         # daemon-runs-as-user).

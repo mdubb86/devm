@@ -223,7 +223,7 @@ def test_direct_cold_start_split_horizon(workspace, devm, sandbox_name):
         # ---- Assertion 6: split-horizon — the SAME port, with the
         # ---- SAME banner, is reachable from INSIDE the VM via
         # ---- loopback. `/dev/tcp` is a bash builtin (base image has
-        # ---- bash — test_63), so this needs no extra installed
+        # ---- bash — test_50), so this needs no extra installed
         # ---- tooling. ----
         in_vm = devm_exec_with_retry(
             devm.path,
