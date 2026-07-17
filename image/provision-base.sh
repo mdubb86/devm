@@ -1,6 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
+# Where the Go builder (internal/image.BuildBaseImage) stages the
+# embedded image/ assets (nftables-locked.conf, devm.target) before
+# piping this script over stdin. Not derived from $0 — this script
+# runs via `bash -s` (stdin), where $0 carries no usable path.
+SCRIPT_DIR="/root/devm-image-assets"
+
 # --- Disable autoupdaters and housekeeping cruft ---
 systemctl mask --now \
   unattended-upgrades.service \
@@ -62,6 +68,19 @@ SSHD_CONF
 # host keys — the per-project bundle drops devm's own host key and
 # unmasks before the provisioner enables + starts ssh.
 systemctl mask ssh
+
+# --- Boot-integrity gate floor ---
+# Lock: replace the stock nftables.conf with the devm locked skeleton and
+# enable nftables.service firewall-first (unmasked — it IS the boot lock now).
+install -o root -g root -m 0644 "$SCRIPT_DIR/nftables-locked.conf" /etc/nftables.conf
+systemctl enable nftables.service
+
+# Gate: install devm.target (NOT enabled — nothing pulls it at boot).
+install -o root -g root -m 0644 "$SCRIPT_DIR/devm.target" /etc/systemd/system/devm.target
+
+# Take caddy + dnsmasq out of the boot chain; devm.target Wants= them.
+# (ssh is already masked above; the provisioner unmasks + leaves disabled.)
+systemctl disable caddy.service dnsmasq.service
 
 # --- Drop the unused `debian` user (uid 1001) ---
 userdel -r debian 2>/dev/null || true

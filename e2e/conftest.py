@@ -468,6 +468,78 @@ def inspector_vm() -> Iterator[TartSandbox]:
 
 
 @pytest.fixture
+def base_clone() -> Iterator[str]:
+    """Clones `devm-base` raw — NO daemon, NO provisioning — and boots
+    it headless via `tart run`. Yields the clone's name so a test can
+    `tart exec` against the pre-daemon boot-integrity gate floor: a
+    bare boot of devm-base itself, not a devm-managed project VM.
+
+    Unlike `tart_sandbox` (which goes through `devm shell` and full
+    provisioning), this fixture never touches the devm daemon — it's
+    the raw-clone pattern also used by the session-scoped
+    `inspector_vm` fixture, just cloning devm-base instead of the
+    upstream template and scoped per-test (each test wants its own
+    untouched floor).
+
+    `tart stop` + `tart delete` on teardown.
+    """
+    import platform as _platform
+
+    if _platform.system() != "Darwin":
+        pytest.skip("base-image gate test runs on macOS only")
+    if shutil.which("tart") is None:
+        pytest.skip("tart not on PATH")
+
+    name = f"e2e-baseclone-{secrets.token_hex(4)}"
+    registry.append("sandbox", name)
+    try:
+        r = subprocess.run(
+            ["tart", "clone", "devm-base", name],
+            capture_output=True, timeout=60,
+        )
+        assert r.returncode == 0, (
+            f"tart clone devm-base failed: {r.stderr.decode(errors='replace')}"
+        )
+
+        proc = subprocess.Popen(
+            ["tart", "run", "--no-graphics", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            vm = TartSandbox(name=name)
+            assert vm.wait_running(timeout=60), f"{name} never reached running"
+
+            # Poll `tart exec <vm> true` for tart-guest-agent readiness.
+            # Each attempt is individually bounded; a hung attempt (the
+            # agent isn't listening yet) must not abort the whole poll —
+            # subprocess.run raises TimeoutExpired on a per-call timeout,
+            # so that's caught and treated as "not ready yet".
+            deadline = time.monotonic() + 90
+            ready = False
+            while time.monotonic() < deadline:
+                try:
+                    r = subprocess.run(
+                        ["tart", "exec", name, "true"],
+                        capture_output=True, timeout=5,
+                    )
+                    if r.returncode == 0:
+                        ready = True
+                        break
+                except subprocess.TimeoutExpired:
+                    pass
+                time.sleep(1)
+            assert ready, f"{name} never became reachable via tart exec"
+
+            yield name
+        finally:
+            subprocess.run(["tart", "stop", name], capture_output=True, timeout=30)
+            proc.wait(timeout=30)
+    finally:
+        subprocess.run(["tart", "delete", name], capture_output=True, timeout=10)
+        registry.remove("sandbox", name)
+
+
+@pytest.fixture
 def phase():
     """Helper for sub-test phase timing.
 

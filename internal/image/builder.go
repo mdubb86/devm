@@ -47,16 +47,26 @@ systemctl daemon-reload
 // itself changes (step order, new tart flags, etc.) so a previously
 // built devm-base gets rebuilt even though provision-base.sh and
 // cleanupScript are byte-for-byte unchanged.
-const definitionVersion = "v1-native-go-builder"
+const definitionVersion = "v2-boot-integrity-gate-floor"
+
+// assetStagingDir is where stageImageAssets writes the embedded
+// image/ assets on the guest before ProvisionBaseScript runs — must
+// match provision-base.sh's SCRIPT_DIR constant.
+const assetStagingDir = "/root/devm-image-assets"
 
 // DefinitionHash returns sha256 over the image definition: the
-// embedded provisioning script, the embedded cleanup fragment, and
-// definitionVersion. The definition is baked into the binary via
+// embedded provisioning script, the embedded image assets it installs
+// (nftables-locked.conf, devm.target), the embedded cleanup fragment,
+// and definitionVersion. The definition is baked into the binary via
 // //go:embed — devm doesn't depend on the image/ directory existing
 // at install time.
 func DefinitionHash() (string, error) {
 	h := sha256.New()
 	io.WriteString(h, baseimage.ProvisionBaseScript)
+	h.Write([]byte{0})
+	io.WriteString(h, baseimage.NftablesLockedConf)
+	h.Write([]byte{0})
+	io.WriteString(h, baseimage.DevmTarget)
 	h.Write([]byte{0})
 	io.WriteString(h, cleanupScript)
 	h.Write([]byte{0})
@@ -145,6 +155,26 @@ func runTart(ctx context.Context, w io.Writer, args ...string) error {
 	cmd.Stdout = w
 	cmd.Stderr = w
 	return cmd.Run()
+}
+
+// stageImageAssetsScript returns a shell fragment that (re)creates
+// assetStagingDir on the guest and writes the embedded image/ assets
+// (nftables-locked.conf, devm.target) into it. ProvisionBaseScript's
+// `install -o root -g root -m 0644 "$SCRIPT_DIR/..."` lines expect
+// these files to already be on disk, so this runs as a separate
+// tartExecStdin call BEFORE ProvisionBaseScript itself — the script
+// is piped over stdin (no on-disk image/ directory ships with the
+// binary), so there's nothing else to `install` from.
+func stageImageAssetsScript() string {
+	return fmt.Sprintf(`set -euo pipefail
+mkdir -p %s
+cat > %s/nftables-locked.conf <<'DEVM_ASSET_NFTABLES_EOF'
+%s
+DEVM_ASSET_NFTABLES_EOF
+cat > %s/devm.target <<'DEVM_ASSET_TARGET_EOF'
+%s
+DEVM_ASSET_TARGET_EOF
+`, assetStagingDir, assetStagingDir, baseimage.NftablesLockedConf, assetStagingDir, baseimage.DevmTarget)
 }
 
 // tartExecStdin runs `tart exec -i devm-base sudo bash -s`, piping
@@ -336,8 +366,9 @@ func (r *tartRunner) powerOffAndWait(ctx context.Context, w io.Writer) error {
 //     is authorization to blow away the stale image).
 //  3. tart clone the template into devm-base.
 //  4. Boot headless, wait for the guest-agent IP.
-//  5. Provision via `tart exec -i … sudo bash -s` fed
-//     provision-base.sh.
+//  5. Stage the embedded image/ assets (nftables-locked.conf,
+//     devm.target) onto the guest, then provision via `tart exec -i …
+//     sudo bash -s` fed provision-base.sh.
 //  6. Poweroff + fresh boot to fire the rename-on-boot one-shot
 //     (in-place `systemctl reboot` doesn't reliably re-establish the
 //     guest-agent handshake; a clean poweroff + new `tart run` does).
@@ -400,6 +431,11 @@ func BuildBaseImage(ctx context.Context, w io.Writer) error {
 	fmt.Fprintln(w, ">>> Waiting for VM boot...")
 	if err := waitForIP(ctx, 60, 2*time.Second, 5*time.Second); err != nil {
 		return fmt.Errorf("VM did not report an IP: %w", err)
+	}
+
+	fmt.Fprintln(w, ">>> Staging image assets...")
+	if err := tartExecStdin(ctx, w, stageImageAssetsScript()); err != nil {
+		return fmt.Errorf("stage image assets: %w", err)
 	}
 
 	fmt.Fprintln(w, ">>> Provisioning base layer...")

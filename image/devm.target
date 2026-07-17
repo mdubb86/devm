@@ -1,0 +1,7 @@
+[Unit]
+Description=devm user-facing surface (ssh + reverse proxy + services)
+# Membership expressed from the target's side for stock units we don't own,
+# so their unit files stay pristine across OS updates. Declared services and
+# dockerd add themselves via [Install] WantedBy=devm.target.
+Wants=ssh.service caddy.service dnsmasq.service
+After=ssh.service caddy.service dnsmasq.service

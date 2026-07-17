@@ -21,3 +21,18 @@ import _ "embed"
 //
 //go:embed provision-base.sh
 var ProvisionBaseScript string
+
+// NftablesLockedConf is the verbatim content of nftables-locked.conf,
+// the boot-integrity gate's locked nftables skeleton. BuildBaseImage
+// stages it onto the guest (alongside DevmTarget) before piping
+// ProvisionBaseScript, which installs it as /etc/nftables.conf.
+//
+//go:embed nftables-locked.conf
+var NftablesLockedConf string
+
+// DevmTarget is the verbatim content of devm.target, the gate unit
+// that pulls in ssh/caddy/dnsmasq once the daemon activates it.
+// Staged onto the guest the same way as NftablesLockedConf.
+//
+//go:embed devm.target
+var DevmTarget string
