@@ -52,7 +52,7 @@ func (ing *ingress) apply(ports []ExposePort) {
 		}
 		bind := p.BindIP
 		if bind == "" {
-			bind = "127.0.0.1"
+			bind = HostLoopIP
 		}
 		ln, err := net.Listen("tcp", net.JoinHostPort(bind, fmt.Sprint(hp)))
 		if err != nil {
