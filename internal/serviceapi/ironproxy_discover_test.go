@@ -187,7 +187,7 @@ func TestRecoverProjectState_StashesVMIPAndRebuildsDirectRoutes(t *testing.T) {
 // daemon-restart recovery for a project with `docker: true`:
 // recoverProjectState must fold the Docker flag out of the recovered
 // state snapshot into ironProxyInfo so a subsequent
-// /vm/apply-egress-enforcement (fired without a fresh /vm/start) still
+// /vm/enforcement-config fetch (without a fresh /vm/start) still
 // emits the 172.16/12 container-bridge accept.
 func TestRecoverProjectState_StashesDockerFlagFromSnapshot(t *testing.T) {
 	const projectID = "recover-docker-proj"

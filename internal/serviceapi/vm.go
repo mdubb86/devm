@@ -65,18 +65,19 @@ type VMStopRequest struct {
 	Name string `json:"name"`
 }
 
-// VMApplyEgressRequest is the body shape for POST /vm/apply-egress-enforcement.
-// The daemon looks up the iron-proxy port info stashed at /vm/start time
-// and runs the nftables + dnsmasq scripts inside the VM.
-type VMApplyEgressRequest struct {
-	Name string `json:"name"`
-}
-
-// VMEnforcedNftResponse is the body shape for GET /vm/enforced-nft-ruleset.
-// Ruleset is the enforced-egress allowlist ruleset body (the `nft -f -`
-// content, without the /etc/nftables.conf persistence block).
-type VMEnforcedNftResponse struct {
-	Ruleset string `json:"ruleset"`
+// VMEnforcementConfigResponse is the body shape for GET
+// /vm/enforcement-config: everything the boot-integrity-gate composed
+// provisioning script bakes into its enforce phase, computed from the
+// iron-proxy MAC_HOST/ports stashed at /vm/start. NftRuleset is the
+// enforced-egress allowlist ruleset body (the `nft -f -` content, without
+// the /etc/nftables.conf persistence block); DnsmasqScript and
+// TimesyncdScript point the guest's runtime DNS resolution and NTP sync
+// at iron-proxy / the daemon's SNTP responder — without them the guest
+// can enforce egress but can't resolve hostnames or keep its clock synced.
+type VMEnforcementConfigResponse struct {
+	NftRuleset      string `json:"nft_ruleset"`
+	DnsmasqScript   string `json:"dnsmasq_script"`
+	TimesyncdScript string `json:"timesyncd_script"`
 }
 
 // VMStatusResponse is the body shape for GET /vm/status.
@@ -375,12 +376,13 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		})
 
 		// Apply VM-side config via tart exec — workspace mount, extra
-		// mounts, env only. The iron-proxy egress-enforcement scripts
-		// (nftables + dnsmasq→iron-proxy) are DEFERRED to the post-
-		// provision `/vm/apply-egress-enforcement` call so the user's
-		// install:, apt-get, and template-install steps run with open
-		// egress. Iron-proxy is meant to gate the workload/services, not
-		// the developer's provisioning phase.
+		// mounts, env only. The iron-proxy egress-enforcement config
+		// (nftables + dnsmasq→iron-proxy + timesyncd) is fetched by the
+		// CLI orchestrator via GET /vm/enforcement-config and baked into
+		// the composed provisioning script's enforce phase, so the
+		// user's install:, apt-get, and template-install steps still run
+		// with open egress — iron-proxy is meant to gate the
+		// workload/services, not the developer's provisioning phase.
 		//
 		// Workspace mount runs first so subsequent scripts can read files
 		// from the workspace (e.g. .devm/.env).
@@ -416,65 +418,15 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// /vm/apply-egress-enforcement injects the iron-proxy nftables +
-	// dnsmasq scripts inside the VM. Called by the CLI orchestrator AFTER
-	// provisioning succeeds — so the user's install:, apt-get, template
-	// installs, etc. all run with open egress. Iron-proxy's purpose is
-	// to gate the workload/services, not the provisioning phase.
-	//
-	// Idempotent: safe to call on a VM where enforcement is already
-	// applied (nftables load overwrites, dnsmasq restart is a no-op if
-	// the config didn't change).
-	s.Register("/vm/apply-egress-enforcement", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		var req VMApplyEgressRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
-			return
-		}
-		if req.Name == "" {
-			http.Error(w, "name required", http.StatusBadRequest)
-			return
-		}
-
-		unlock := locks.Lock(req.Name)
-		defer unlock()
-
-		info, ok := ironProxyState.get(req.Name)
-		if !ok {
-			http.Error(w, "iron-proxy state missing — was /vm/start called for this project?",
-				http.StatusPreconditionFailed)
-			return
-		}
-		scripts := []string{
-			buildNftablesScript(info.MacHost, info.HTTPPort, info.HTTPSPort, info.DNSPort, ntpPort, info.Docker),
-			buildDnsmasqScript(info.MacHost, info.DNSPort),
-			buildTimesyncdScript(),
-		}
-		for i, script := range scripts {
-			cmd := exec.Command("tart", "exec", "-i", req.Name, "sudo", "bash", "-s")
-			cmd.Stdin = strings.NewReader(script)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				http.Error(w, fmt.Sprintf("apply egress step %d failed: %v\n%s", i, err, out),
-					http.StatusInternalServerError)
-				return
-			}
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	// /vm/enforced-nft-ruleset returns the enforced-egress allowlist
-	// ruleset (the `nft -f -` body — no persistence block) for the
-	// project, computed from the same iron-proxy MAC_HOST/ports the live
-	// egress-enforcement path uses. The boot-integrity-gate provisioning
-	// script bakes this into its enforce-phase heredoc so services come
-	// up under enforcement in the single composed script, rather than via
-	// a separate post-provision inject.
-	s.Register("/vm/enforced-nft-ruleset", func(w http.ResponseWriter, r *http.Request) {
+	// /vm/enforcement-config returns everything the boot-integrity-gate
+	// composed provisioning script bakes into its enforce phase — the
+	// enforced-egress nft ruleset, the dnsmasq upstream config, and the
+	// timesyncd NTP config — computed from the same iron-proxy
+	// MAC_HOST/ports the /vm/start handler stashed. Single source: the
+	// CLI orchestrator fetches this once per cold start and applies all
+	// three inside the same composed-script exec, rather than a separate
+	// post-provision inject.
+	s.Register("/vm/enforcement-config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
 			return
@@ -490,8 +442,10 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 				http.StatusPreconditionFailed)
 			return
 		}
-		writeJSON(w, VMEnforcedNftResponse{
-			Ruleset: buildNftablesRuleset(info.MacHost, info.HTTPPort, info.HTTPSPort, info.DNSPort, ntpPort, info.Docker),
+		writeJSON(w, VMEnforcementConfigResponse{
+			NftRuleset:      buildNftablesRuleset(info.MacHost, info.HTTPPort, info.HTTPSPort, info.DNSPort, ntpPort, info.Docker),
+			DnsmasqScript:   buildDnsmasqScript(info.MacHost, info.DNSPort),
+			TimesyncdScript: buildTimesyncdScript(),
 		})
 	})
 

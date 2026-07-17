@@ -227,6 +227,33 @@ func TestRun_EnforcedNftBakedIntoScript(t *testing.T) {
 		strings.Index(script, "systemctl start devm.target"))
 }
 
+// TestRun_DnsmasqTimesyncdBakedIntoScript pins that the daemon-supplied
+// dnsmasq/timesyncd config (fetched via serviceapi.Client.EnforcementConfig
+// and set on Provisioner by orchestrator.RunShell) flows through
+// scriptInput into the composed script's enforce phase — the runtime
+// DNS/NTP fix the boot-integrity-gate rewrite had dropped.
+func TestRun_DnsmasqTimesyncdBakedIntoScript(t *testing.T) {
+	f := &fakeStreamTart{}
+	p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
+	p.DnsmasqScript = "sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<'DEVM_DNSMASQ'\nserver=192.168.64.1#53101\nDEVM_DNSMASQ\n"
+	p.TimesyncdScript = "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nNTP=192.0.2.1\nDEVM_TIMESYNCD\n"
+	require.NoError(t, p.Run(context.Background(), io.Discard, nil))
+
+	script := scriptOf(t, f)
+	assert.Contains(t, script, "/etc/dnsmasq.d/devm.conf")
+	assert.Contains(t, script, "server=192.168.64.1#53101")
+	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")
+	assert.Contains(t, script, "NTP=192.0.2.1")
+	// applied in the enforce phase — after the enforced nft ruleset,
+	// before services/target come up.
+	enforceIdx := strings.Index(script, "EnforcedNft-applied-marker")
+	require.Greater(t, enforceIdx, 0)
+	assert.Greater(t, strings.Index(script, "/etc/dnsmasq.d/devm.conf"), enforceIdx)
+	assert.Greater(t, strings.Index(script, "/etc/systemd/timesyncd.conf.d/devm.conf"), enforceIdx)
+	assert.Less(t, strings.Index(script, "/etc/dnsmasq.d/devm.conf"),
+		strings.Index(script, "systemctl start devm.target"))
+}
+
 func TestRun_RoutingOnlyServiceOmittedButProcessServicesStarted(t *testing.T) {
 	f := &fakeStreamTart{}
 	p := baseProvisioner(f, schema.Config{

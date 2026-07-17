@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRenderProvisionScript_Structure(t *testing.T) {
@@ -20,9 +21,10 @@ func TestRenderProvisionScript_Structure(t *testing.T) {
 		Masks: []MaskMount{
 			{HostPath: "/var/devm/masks/p/web/data", MountTarget: "/Users/x/p/data", Owner: "devm"},
 		},
-		LockedNft:   "table inet devm_filter { }",
-		OpenNft:     "flush ruleset", // allow-all for the open window
-		EnforcedNft: "table inet devm_filter { policy drop }",
+		OpenNft:         "flush ruleset", // allow-all for the open window
+		EnforcedNft:     "table inet devm_filter { policy drop }",
+		DnsmasqScript:   "sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<'DEVM_DNSMASQ'\nserver=192.168.64.1#53101\nDEVM_DNSMASQ\n",
+		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nNTP=192.0.2.1\nDEVM_TIMESYNCD\n",
 	}
 	s := string(RenderProvisionScript(in))
 
@@ -72,14 +74,38 @@ func TestRenderProvisionScript_Structure(t *testing.T) {
 	for _, st := range []string{"packages", "install", "docker", "templates", "startup"} {
 		assert.Contains(t, s, "::devm:stage:"+st+"::")
 	}
+	// install: commands are individually timeout-wrapped
+	assert.Contains(t, s, "timeout 600 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
+	// startup: runs under one aggregate timeout budget for the script
+	assert.Contains(t, s, "timeout 600 /opt/devm/scripts/with-devm-env bash /opt/devm/startup.sh")
+	// dnsmasq + timesyncd config land in the enforce phase, AFTER the
+	// enforced nft ruleset and BEFORE services/target come up.
+	dnsmasqIdx := strings.Index(s, "/etc/dnsmasq.d/devm.conf")
+	timesyncdIdx := strings.Index(s, "/etc/systemd/timesyncd.conf.d/devm.conf")
+	require.Greater(t, dnsmasqIdx, 0)
+	require.Greater(t, timesyncdIdx, 0)
+	assert.Greater(t, dnsmasqIdx, strings.Index(s, "EnforcedNft-applied-marker"))
+	assert.Greater(t, timesyncdIdx, strings.Index(s, "EnforcedNft-applied-marker"))
+	assert.Less(t, dnsmasqIdx, strings.Index(s, "::devm:stage:services::"))
+	assert.Less(t, timesyncdIdx, strings.Index(s, "::devm:stage:services::"))
+	assert.Less(t, dnsmasqIdx, strings.Index(s, "systemctl start devm.target"))
+	assert.Less(t, timesyncdIdx, strings.Index(s, "systemctl start devm.target"))
+	// service health check is a bounded poll (is-active AND is-failed),
+	// not a single is-failed snapshot — before the target.
+	assert.Contains(t, s, "systemctl is-active --quiet web.service")
+	assert.Contains(t, s, "systemctl is-failed --quiet web.service")
+	assert.Less(t, strings.Index(s, "systemctl is-active --quiet web.service"),
+		strings.Index(s, "systemctl start devm.target"))
 }
 
 func TestRenderProvisionScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
 	// restart, empty startup, no packages/install/docker/templates → no
 	// flush-to-allow-all and no first-boot marker.
 	s := string(RenderProvisionScript(ProvisionScriptInput{
-		FirstBoot:   false,
-		EnforcedNft: "table inet devm_filter { policy drop }",
+		FirstBoot:       false,
+		EnforcedNft:     "table inet devm_filter { policy drop }",
+		DnsmasqScript:   "sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<'DEVM_DNSMASQ'\nDEVM_DNSMASQ\n",
+		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nDEVM_TIMESYNCD\n",
 	}))
 	assert.NotContains(t, s, "::devm:stage:startup::")
 	assert.NotContains(t, s, "::devm:stage:open::")
@@ -89,6 +115,31 @@ func TestRenderProvisionScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
 	// enforcement + target still happen every boot
 	assert.Contains(t, s, "EnforcedNft-applied-marker")
 	assert.Contains(t, s, "systemctl start devm.target")
+	// dnsmasq + timesyncd are applied every boot too, not just when the
+	// open window runs — DNS/NTP must work on a warm restart as well.
+	assert.Contains(t, s, "/etc/dnsmasq.d/devm.conf")
+	assert.Contains(t, s, "/etc/systemd/timesyncd.conf.d/devm.conf")
+}
+
+// TestRenderProvisionScript_ServiceHealthPoll_OneShotAware pins that the
+// health-check poll treats a oneshot unit that completed successfully
+// (ActiveState=inactive, Result=success — never becomes "active") as
+// healthy, not as a hang, alongside the plain is-active check used for
+// simple/forking/notify services.
+func TestRenderProvisionScript_ServiceHealthPoll_OneShotAware(t *testing.T) {
+	s := string(RenderProvisionScript(ProvisionScriptInput{
+		Services:    []string{"migrate"},
+		EnforcedNft: "table inet devm_filter { policy drop }",
+	}))
+	assert.Contains(t, s, `systemctl show -p Result --value migrate.service`)
+	assert.Contains(t, s, `systemctl show -p ActiveState --value migrate.service`)
+	assert.Contains(t, s, "success")
+	assert.Contains(t, s, "inactive")
+	// bounded — a deadline derived from SECONDS, not an unbounded loop.
+	assert.Contains(t, s, "svc_deadline=$((SECONDS+10))")
+	assert.Contains(t, s, `$SECONDS" -ge "$svc_deadline"`)
+	// a failed unit aborts the whole script (loud, no access).
+	assert.Contains(t, s, "echo 'service migrate failed' >&2; exit 1")
 }
 
 func TestRenderProvisionScript_RestartWithTemplatesOpensWindow(t *testing.T) {

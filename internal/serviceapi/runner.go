@@ -45,9 +45,8 @@ func RunService(ctx context.Context, build Build) error {
 	tr := tart.New()
 	sup := supervisor.New("")
 	// Per-project mutex for every state-mutating VM endpoint (start,
-	// stop, teardown, apply-egress-enforcement, reconcile). Serializes
-	// concurrent same-project calls inside the daemon instead of relying
-	// on the CLI-side flock.
+	// stop, teardown, reconcile). Serializes concurrent same-project
+	// calls inside the daemon instead of relying on the CLI-side flock.
 	locks := NewProjectLocks()
 	// Adopt iron-proxy processes left running by a prior daemon
 	// instance. They survive daemon death by design (setsid on

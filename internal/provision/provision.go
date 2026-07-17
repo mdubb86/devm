@@ -68,8 +68,17 @@ type Provisioner struct {
 	// EnforcedNft is the enforced-egress allowlist ruleset (the `nft -f -`
 	// body) baked into the composed script's enforce phase, so services
 	// come up under enforcement. The daemon computes it per project from
-	// the iron-proxy MAC_HOST/ports (serviceapi.Client.EnforcedNftRuleset).
+	// the iron-proxy MAC_HOST/ports (serviceapi.Client.EnforcementConfig).
 	EnforcedNft string
+
+	// DnsmasqScript and TimesyncdScript are the guest's runtime DNS
+	// resolution and NTP sync config, applied in the composed script's
+	// enforce phase alongside EnforcedNft — built by the daemon from the
+	// same iron-proxy MAC_HOST/ports (serviceapi.Client.EnforcementConfig).
+	// Without these the guest's egress is correctly locked down but
+	// external hostname resolution and NTP are broken at runtime.
+	DnsmasqScript   string
+	TimesyncdScript string
 
 	// firstBoot is true when /var/lib/devm/provisioned is absent — i.e.
 	// this VM has not completed provisioning. Set at the top of Run.
@@ -175,6 +184,8 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		Masks:            p.maskMounts(),
 		OpenNft:          openEgressRuleset,
 		EnforcedNft:      p.EnforcedNft,
+		DnsmasqScript:    p.DnsmasqScript,
+		TimesyncdScript:  p.TimesyncdScript,
 	}
 }
 

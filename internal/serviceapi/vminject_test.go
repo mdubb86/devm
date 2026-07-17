@@ -145,7 +145,7 @@ func TestBuildNftablesScript_NoUserEscapeHatch(t *testing.T) {
 
 func TestBuildNftablesScript_PersistsViaIncludeGlob(t *testing.T) {
 	// svc_ingress survives VM reboot because:
-	//   (1) apply-egress-enforcement snapshots its live state to
+	//   (1) the live-apply script snapshots its live state to
 	//       /etc/nftables.d/svc_ingress.conf, and
 	//   (2) /etc/nftables.conf has `include "/etc/nftables.d/*.conf"`
 	//       so systemd's nftables.service pulls the snapshot back in

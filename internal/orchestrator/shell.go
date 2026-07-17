@@ -87,7 +87,7 @@ type ShellDeps struct {
 type VMAdminClient interface {
 	VMStatus(ctx context.Context, name string) (serviceapi.VMStatusResponse, error)
 	StartVM(ctx context.Context, req serviceapi.VMStartRequest) error
-	EnforcedNftRuleset(ctx context.Context, name string) (string, error)
+	EnforcementConfig(ctx context.Context, name string) (serviceapi.VMEnforcementConfigResponse, error)
 	StopVM(ctx context.Context, name string) error
 }
 
@@ -216,13 +216,14 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		return teardownOnFail(err, "ensure project ssh host key")
 	}
 
-	// The enforced-egress allowlist ruleset is baked into the composed
-	// provisioning script's enforce phase (so services come up under
-	// enforcement in one exec). The daemon computes it per project from the
-	// iron-proxy MAC_HOST/ports stashed at StartVM.
-	enforcedNft, err := d.ServiceAPIClient.EnforcedNftRuleset(ctx, cfg.Project.Name)
+	// The enforcement config (nft allowlist + dnsmasq + timesyncd) is baked
+	// into the composed provisioning script's enforce phase (so DNS/NTP/
+	// egress all come up under enforcement in one exec). The daemon
+	// computes it per project from the iron-proxy MAC_HOST/ports stashed
+	// at StartVM.
+	enforcement, err := d.ServiceAPIClient.EnforcementConfig(ctx, cfg.Project.Name)
 	if err != nil {
-		return teardownOnFail(err, "fetch enforced nft ruleset")
+		return teardownOnFail(err, "fetch enforcement config")
 	}
 
 	prov := &provision.Provisioner{
@@ -234,7 +235,9 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		SSHHostPriv:         hostPriv,
 		SSHHostPub:          hostPub,
 		WorkspaceVMPath:     repoRoot,
-		EnforcedNft:         enforcedNft,
+		EnforcedNft:         enforcement.NftRuleset,
+		DnsmasqScript:       enforcement.DnsmasqScript,
+		TimesyncdScript:     enforcement.TimesyncdScript,
 	}
 	debuglog.Logf("shell", "cold-start: provisioning")
 	// Provisioning output is DIAGNOSTIC — stage names, package install

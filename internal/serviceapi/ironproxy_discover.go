@@ -61,7 +61,7 @@ func DiscoverIronProxies(ctx context.Context) ([]DiscoveredIronProxy, error) {
 // AdoptIronProxies discovers running iron-proxies, registers each with
 // the supervisor as adopted, and rehydrates ironProxyState from each
 // process's on-disk config file so per-project handlers
-// (/vm/apply-egress-enforcement) keep working across a daemon restart.
+// (/vm/enforcement-config) keep working across a daemon restart.
 //
 // The config file is the authoritative record of the ports iron-proxy
 // bound at spawn time; without rehydration, ironProxyState is empty at

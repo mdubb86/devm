@@ -339,6 +339,60 @@ func TestVMStop_MethodNotAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }
 
+// TestClientEnforcementConfig_ReadsResponse verifies GET
+// /vm/enforcement-config returns all three enforce-phase config strings —
+// the nft ruleset, dnsmasq upstream config, and timesyncd NTP config —
+// computed from the same iron-proxy MAC_HOST/ports stashed at /vm/start.
+// This is the single source the composed provisioning script's enforce
+// phase bakes DNS/NTP config from; before this endpoint existed, only the
+// nft ruleset was ported and runtime DNS/NTP were silently broken.
+func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	tr := tart.New()
+	tr.Path = "false"
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+	t.Cleanup(func() { ironProxyState.del("proj-enf") })
+
+	ironProxyState.put("proj-enf", ironProxyInfo{
+		MacHost: "192.168.64.1", HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
+	})
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := c.EnforcementConfig(ctx, "proj-enf")
+	require.NoError(t, err)
+	assert.Contains(t, resp.NftRuleset, "add table inet devm_filter")
+	assert.Contains(t, resp.DnsmasqScript, "server=192.168.64.1#8053")
+	assert.Contains(t, resp.DnsmasqScript, "/etc/dnsmasq.d/devm.conf")
+	assert.Contains(t, resp.TimesyncdScript, "/etc/systemd/timesyncd.conf.d/devm.conf")
+}
+
+// TestClientEnforcementConfig_MissingProjectState verifies the endpoint
+// 404/412s (surfaced as a Client error) when /vm/start was never called
+// for the project — there's no MAC_HOST/ports to compute config from.
+func TestClientEnforcementConfig_MissingProjectState(t *testing.T) {
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	tr := tart.New()
+	tr.Path = "false"
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := c.EnforcementConfig(ctx, "nonexistent-project")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "enforcement-config")
+}
+
 // TestClientApplyIronProxy_ReadsResponse verifies Client.ApplyIronProxy
 // round-trips a request to the daemon and unmarshals the response correctly.
 func TestClientApplyIronProxy_ReadsResponse(t *testing.T) {

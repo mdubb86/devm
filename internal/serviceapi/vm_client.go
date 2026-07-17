@@ -28,52 +28,32 @@ func (c *Client) StartVM(ctx context.Context, req VMStartRequest) error {
 	return nil
 }
 
-// ApplyEgressEnforcement asks the daemon to inject the iron-proxy
-// nftables + dnsmasq scripts inside the VM. Called AFTER provisioning
-// succeeds — the CLI runs the user's install: / apt-get / template
-// installs with open network, then flips enforcement on just before
-// systemd services start.
-func (c *Client) ApplyEgressEnforcement(ctx context.Context, name string) error {
-	body, err := json.Marshal(VMApplyEgressRequest{Name: name})
-	if err != nil {
-		return err
-	}
-	r, err := c.post(ctx, "/vm/apply-egress-enforcement", body)
-	if err != nil {
-		return err
-	}
-	defer r.Body.Close()
-	if r.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("vm/apply-egress-enforcement: status %d", r.StatusCode)
-	}
-	return nil
-}
-
-// EnforcedNftRuleset asks the daemon for the enforced-egress allowlist
-// ruleset (the `nft -f -` body) for a project, computed from the
-// iron-proxy MAC_HOST/ports stashed at /vm/start. The orchestrator bakes
-// it into the single composed provisioning script's enforce-phase
-// heredoc so services come up under enforcement.
-func (c *Client) EnforcedNftRuleset(ctx context.Context, name string) (string, error) {
+// EnforcementConfig asks the daemon for everything the boot-integrity-
+// gate composed provisioning script bakes into its enforce phase — the
+// enforced-egress nft ruleset, the dnsmasq upstream config, and the
+// timesyncd NTP config — computed from the iron-proxy MAC_HOST/ports
+// stashed at /vm/start. The orchestrator applies all three inside the
+// single composed script's enforce-phase.
+func (c *Client) EnforcementConfig(ctx context.Context, name string) (VMEnforcementConfigResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET",
-		"http://localhost/vm/enforced-nft-ruleset?name="+name, nil)
+		"http://localhost/vm/enforcement-config?name="+name, nil)
 	if err != nil {
-		return "", err
+		return VMEnforcementConfigResponse{}, err
 	}
 	r, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return VMEnforcementConfigResponse{}, err
 	}
 	defer r.Body.Close()
 	if r.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(r.Body)
-		return "", fmt.Errorf("vm/enforced-nft-ruleset: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+		return VMEnforcementConfigResponse{}, fmt.Errorf("vm/enforcement-config: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
 	}
-	var resp VMEnforcedNftResponse
+	var resp VMEnforcementConfigResponse
 	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
-		return "", err
+		return VMEnforcementConfigResponse{}, err
 	}
-	return resp.Ruleset, nil
+	return resp, nil
 }
 
 // StopVM asks the daemon to stop the project VM. The daemon calls

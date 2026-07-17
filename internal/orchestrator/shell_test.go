@@ -43,8 +43,12 @@ func (f *fakeVMAdmin) StartVM(_ context.Context, _ serviceapi.VMStartRequest) er
 	return f.startErr
 }
 
-func (f *fakeVMAdmin) EnforcedNftRuleset(_ context.Context, _ string) (string, error) {
-	return "table inet devm_filter { chain output { type filter hook output priority 0; policy drop; } }", nil
+func (f *fakeVMAdmin) EnforcementConfig(_ context.Context, _ string) (serviceapi.VMEnforcementConfigResponse, error) {
+	return serviceapi.VMEnforcementConfigResponse{
+		NftRuleset:      "table inet devm_filter { chain output { type filter hook output priority 0; policy drop; } }",
+		DnsmasqScript:   "sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<'DEVM_DNSMASQ'\nDEVM_DNSMASQ\n",
+		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nDEVM_TIMESYNCD\n",
+	}, nil
 }
 
 func (f *fakeVMAdmin) StopVM(_ context.Context, _ string) error {

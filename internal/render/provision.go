@@ -43,15 +43,35 @@ type ProvisionScriptInput struct {
 	Services         []string // service unit names to enable+start (health-polled)
 	SvcIngressPorts  []int    // direct docker service ports → svc_ingress chain
 	Masks            []MaskMount
-	LockedNft        string // the locked skeleton (re-affirmed if no open work)
 	OpenNft          string // allow-all ruleset for the open window
 	EnforcedNft      string // the real project allowlist ruleset
+	// DnsmasqScript points the guest's dnsmasq upstream at iron-proxy's
+	// DNS server; TimesyncdScript points systemd-timesyncd at the proxy
+	// sentinel so NTP resyncs through the same enforced path. Both are
+	// applied in the composed script's enforce phase alongside
+	// EnforcedNft — the daemon builds them from the same iron-proxy
+	// MAC_HOST/ports (serviceapi.Client.EnforcementConfig), reusing
+	// serviceapi's buildDnsmasqScript/buildTimesyncdScript.
+	DnsmasqScript   string
+	TimesyncdScript string
 }
 
 // hasOpenWork reports whether the open egress window is needed this boot.
 func (in ProvisionScriptInput) hasOpenWork() bool {
 	return in.FirstBoot || len(in.Startup) > 0 || in.InstallTemplates
 }
+
+// defaultStepTimeoutSeconds bounds every install:/startup: command. The
+// composed script is streamed over a single `tart exec`, so a command
+// that hangs blocks the whole exec — not just its own step — which would
+// hang `devm shell` indefinitely. Matches the old per-step provisioner's
+// DEVM_INSTALL_STEP_TIMEOUT_S default.
+const defaultStepTimeoutSeconds = 600
+
+// serviceHealthPollSeconds bounds how long the composed script waits for
+// each declared service to reach a healthy state before aborting. Matches
+// the old per-step provisioner's enableStartServices poll budget.
+const serviceHealthPollSeconds = 10
 
 // RenderProvisionScript composes the single guest provisioning script. It is
 // delivered as `bash -c '<this>'` with the bundle tar on stdin. Stages the CLI
@@ -92,7 +112,7 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 				p("echo ::devm:stage:install::")
 				for i, cmd := range in.Install {
 					p("echo ::devm:progress:install:%d:%d::", i+1, len(in.Install))
-					p("%s bash -eo pipefail -c %s", guestWrapper, shellSingleQuoted(cmd))
+					p("timeout %d %s bash -eo pipefail -c %s", defaultStepTimeoutSeconds, guestWrapper, shellSingleQuoted(cmd))
 				}
 			}
 			if in.Docker {
@@ -116,16 +136,31 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 		}
 		if len(in.Startup) > 0 {
 			p("echo ::devm:stage:startup::")
-			p("%s bash %s", guestWrapper, guestStartupSh)
+			// One timeout budget for the whole script, not per line inside
+			// it: startup.sh's commands share a single bash process (env
+			// exports / cd from an earlier line are visible to a later
+			// one), and wrapping each line in its own `bash -c` subshell
+			// would silently break that. install:'s commands, in
+			// contrast, were always independent invocations (no shared
+			// shell state), so each gets its own budget above.
+			p("timeout %d %s bash %s", defaultStepTimeoutSeconds, guestWrapper, guestStartupSh)
 		}
 	}
 
-	// (3) enforce: apply the real allowlist ruleset, then svc_ingress + masks.
-	// A failure here is the daemon's enforcement being broken (not the user's
-	// service) — the classifier treats it as teardown-worthy.
+	// (3) enforce: apply the real allowlist ruleset, then the runtime
+	// DNS/NTP config that routes through the same enforced path, then
+	// svc_ingress + masks. A failure here is the daemon's enforcement
+	// being broken (not the user's service) — the classifier treats it
+	// as teardown-worthy.
 	p("echo ::devm:stage:enforce::")
 	p("sudo nft -f - <<'DEVM_ENFORCE_NFT'\n%s\nDEVM_ENFORCE_NFT", in.EnforcedNft)
 	p("# EnforcedNft-applied-marker")
+	// dnsmasq (external hostname resolution) and timesyncd (NTP) both
+	// route through iron-proxy/the daemon behind the enforced nft
+	// ruleset — without these the guest's egress is correctly locked
+	// down but DNS and clock sync are broken at runtime.
+	p("%s", strings.TrimRight(in.DnsmasqScript, "\n"))
+	p("%s", strings.TrimRight(in.TimesyncdScript, "\n"))
 	if len(in.SvcIngressPorts) > 0 {
 		p("%s", strings.TrimRight(nftscript.BuildSvcIngressScript(in.SvcIngressPorts), "\n"))
 	}
@@ -150,8 +185,22 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 		p("sudo systemctl enable %s.service", svc)
 		p("sudo systemctl start %s.service", svc)
 	}
+	// Bounded health poll, not a single is-failed snapshot: a Type=simple
+	// service that dies a beat after `start` returns would slip past a
+	// one-shot check and let devm.target activate with a dead service.
+	// One-shot-aware: a Type=oneshot unit without RemainAfterExit settles
+	// at ActiveState=inactive/Result=success once its ExecStart exits 0 —
+	// that's a pass, not a hang, so it's checked alongside is-active.
 	for _, svc := range in.Services {
-		p("if systemctl is-failed --quiet %s.service; then echo 'service %s failed' >&2; exit 1; fi", svc, svc)
+		p("svc_deadline=$((SECONDS+%d))", serviceHealthPollSeconds)
+		p("while :; do")
+		p("  if systemctl is-failed --quiet %s.service; then echo 'service %s failed' >&2; exit 1; fi", svc, svc)
+		p("  systemctl is-active --quiet %s.service && break", svc)
+		p("  [ \"$(systemctl show -p Result --value %s.service)\" = success ] && "+
+			"[ \"$(systemctl show -p ActiveState --value %s.service)\" = inactive ] && break", svc, svc)
+		p("  if [ \"$SECONDS\" -ge \"$svc_deadline\" ]; then echo 'service %s did not become healthy within %ds' >&2; exit 1; fi", svc, serviceHealthPollSeconds)
+		p("  sleep 0.5")
+		p("done")
 	}
 
 	// (5) first-boot completion marker — its presence flips the next boot off
