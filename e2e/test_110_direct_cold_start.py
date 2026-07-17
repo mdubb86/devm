@@ -1,5 +1,5 @@
 """110: `direct: true` cold-start — split-horizon reachability for a
-raw-TCP service.
+raw-TCP service, plus persistence across `devm stop`/`devm shell`.
 
 Modeled on test_91_docker.py — reuses its already-proven docker-in-VM
 scaffold (`docker: true`, `devm exec docker run`,
@@ -21,6 +21,10 @@ the design doc's "resulting model" table:
   Mac → VM_IP:<port> → firewall (`svc_ingress`) → container   (direct)
   VM  → 127.0.0.1:<port> → loopback container                 (unchanged)
 
+...then continues in the SAME boot into a `devm stop` + `devm shell`
+restart cycle on the same container (`--restart unless-stopped`, not
+`--rm`, so it survives) to pin firewall-rule persistence.
+
 What this pins:
   - the daemon's `GET /routes` shows the hostname with `"direct": true`
     (no `backend_host` — direct routes carry no dial target);
@@ -37,12 +41,24 @@ What this pins:
     through — not just guest-local traffic);
   - the identical port, with the identical banner, is ALSO reachable
     from inside the VM via 127.0.0.1 (split-horizon: same URL works on
-    both planes).
+    both planes);
+  - after `devm stop` + `devm shell` (VM reboot, same VM, not a
+    recreate), `svc_ingress` comes back from
+    `/etc/nftables.d/svc_ingress.conf` (systemd's `nftables.service`
+    restores it on guest boot) WITHOUT a fresh `devm reconcile`/
+    route-push being what re-opens the port;
+  - DNS answers the (possibly NEW) VM IP after restart;
+  - the service is still reachable after restart (container came back
+    via its `--restart unless-stopped` policy once docker re-enabled
+    post-boot).
 
 What it doesn't cover (tested elsewhere):
   - Live add/withdraw via reconcile without a shell — test_111.
-  - Persistence across `devm stop`/reboot and the docker-vs-host-process
-    firewall gate — test_112.
+  - The docker-vs-host-process firewall gate (`direct` + non-docker
+    project needs NO svc_ingress rule at all) — test_112, a genuinely
+    different `devm.yaml` topology (no docker, host-process `exec:`
+    service) that can't be folded in here without losing that
+    boundary's own coverage.
   - The `direct: true` + no-hostname validation error — test_113 (no
     VM needed there).
 
@@ -62,13 +78,16 @@ import time
 
 import pytest
 
+from helpers import stop_and_wait_stopped
 from helpers.direct import (
     BANNER,
     dig_a as _dig_a,
     dns_addr as _dns_addr,
     get_routes as _get_routes,
+    svc_ingress as _svc_ingress,
     tcp_read_banner as _tcp_read_banner,
     vm_ip as _vm_ip,
+    wait_reachable as _wait_reachable,
 )
 from helpers.exec_retry import devm_exec_with_retry
 
@@ -83,8 +102,8 @@ CONTAINER_PORT = 9000
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(600)
-def test_direct_cold_start_split_horizon(workspace, devm, sandbox_name):
+@pytest.mark.timeout(900)
+def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_name):
     hostname = f"{sandbox_name}-nc.test"
     workspace.write_devmyaml(
         docker=True,
@@ -148,9 +167,14 @@ def test_direct_cold_start_split_horizon(workspace, devm, sandbox_name):
     # ---- connection (not just guest-local traffic) hits Docker's
     # ---- prerouting DNAT. The while-loop re-serves the banner on every
     # ---- new connection (busybox nc exits after one client). ----
+    # `--restart unless-stopped` (not `--rm`) so the container survives
+    # and re-launches after the guest's docker daemon comes back up
+    # post-restart, for the stop/shell persistence phase below — `--rm`
+    # and `--restart` are mutually exclusive.
     run = devm_exec_with_retry(
         devm.path,
-        ["docker", "run", "-d", "--rm", "--name", "e2e-direct-nc",
+        ["docker", "run", "-d", "--restart", "unless-stopped",
+         "--name", "e2e-direct-nc",
          "-p", f"{DIRECT_PORT}:{CONTAINER_PORT}",
          "busybox", "sh", "-c",
          f"while true; do printf '%s' '{BANNER.decode()}' | "
@@ -237,6 +261,67 @@ def test_direct_cold_start_split_horizon(workspace, devm, sandbox_name):
             f"in-VM loopback 127.0.0.1:{DIRECT_PORT} did not return the "
             f"expected banner: rc={in_vm.returncode} "
             f"stdout={in_vm.stdout!r} stderr={in_vm.stderr.decode()!r}"
+        )
+
+        # ---- Persistence phase (test_112a): `devm stop` then
+        # ---- `devm shell` again — same VM (not a recreate), Tart may
+        # ---- hand out a new DHCP lease on reboot. Continues in this
+        # ---- same boot rather than a fresh cold-start, since the
+        # ---- baseline state it needs (svc_ingress rule + reachable
+        # ---- container) was already established by assertions 3-6
+        # ---- above. ----
+        stop_and_wait_stopped(devm, sandbox_name)
+
+        reshell = subprocess.run(
+            [devm.path, "shell", "--", "true"],
+            cwd=str(workspace.path), capture_output=True, timeout=300,
+        )
+        assert reshell.returncode == 0, (
+            f"devm shell (restart existing VM) failed:\n"
+            f"stderr={reshell.stderr.decode()!r}"
+        )
+
+        vm_ip_after = _vm_ip(workspace.vm_name)
+        assert vm_ip_after, "could not get VM IP after restart"
+
+        # ---- Assertion: svc_ingress restored from
+        # ---- /etc/nftables.d/svc_ingress.conf on guest boot — no
+        # ---- fresh reconcile/route-push involved, just `devm shell`'s
+        # ---- normal /vm/start path. ----
+        deadline = time.time() + 30
+        nft_out = ""
+        while time.time() < deadline:
+            nft_out = _svc_ingress(devm)
+            if f"proto-dst {DIRECT_PORT}" in nft_out:
+                break
+            time.sleep(1)
+        assert f"ct original proto-dst {DIRECT_PORT} accept" in nft_out, (
+            f"svc_ingress not restored after stop/shell cycle:\n{nft_out}"
+        )
+
+        # ---- Assertion: DNS answers the (possibly NEW) VM IP. Soft
+        # ---- warn-and-continue (see module docstring KNOWN GAP) —
+        # ---- must NOT abort before the reachability check below. ----
+        dns_host, dns_port = _dns_addr()
+        if dns_port == 0:
+            print(
+                "WARNING: DEVM_DNS_ADDR is ephemeral; skipping the "
+                "Mac-side DNS sub-assertion only (see module docstring "
+                "KNOWN GAP)."
+            )
+        else:
+            answer = _dig_a(hostname, dns_host, dns_port)
+            assert answer == vm_ip_after, (
+                f"after stop/shell, DNS should answer the current VM "
+                f"IP {vm_ip_after!r} for {hostname!r}; got {answer!r}"
+            )
+
+        # ---- Assertion: still reachable (container came back via its
+        # ---- restart policy once docker re-enabled post-boot). ----
+        assert _wait_reachable(vm_ip_after, DIRECT_PORT, timeout=60), (
+            f"{vm_ip_after}:{DIRECT_PORT} not reachable after stop/shell "
+            f"cycle — svc_ingress or the container's restart policy "
+            f"didn't recover"
         )
     finally:
         subprocess.run(
