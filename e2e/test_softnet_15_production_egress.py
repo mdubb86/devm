@@ -152,12 +152,14 @@ def test_softnet_production_egress_locked_then_enforced():
         )
 
         # --- LOCKED: all egress denied ---
-        locked = None
-        for _ in range(6):
-            locked = _curl_code(name, proxy_port)
-            if "RC=0" not in locked:
-                break
-            time.sleep(1)
+        # Single-shot: target() is a pure, deterministic per-connection
+        # function and LOCKED is the zero-value default policy, so there is
+        # no startup race on the deny path. A retry-until-fail loop here
+        # would discard any RC=0 attempt — exactly the leak this test exists
+        # to catch. A brief fixed settle lets the just-applied policy take
+        # effect; the subsequent single curl is the actual assertion.
+        time.sleep(1)
+        locked = _curl_code(name, proxy_port)
         assert "RC=0" not in locked, f"LOCKED but egress succeeded: {locked!r}"
 
         # --- ENFORCED: :443 forwards to iron-proxy HTTPS endpoint, :5432 denied ---
@@ -188,12 +190,10 @@ def test_softnet_production_egress_locked_then_enforced():
             time.sleep(1)
         assert allowed == "200", f"ENFORCED :443 curl: {allowed!r}"
 
-        blocked = None
-        for _ in range(6):
-            blocked = _curl_code(name, 5432)
-            if "RC=0" not in blocked:
-                break
-            time.sleep(1)
+        # --- ENFORCED :5432: dport routing in target() is deterministic, and
+        # :443 above already confirmed ENFORCED is live — a single attempt is
+        # sound. A retry-until-fail loop would mask an RC=0 leak. ---
+        blocked = _curl_code(name, 5432)
         assert "RC=0" not in blocked, f"ENFORCED :5432 (non-80/443) reachable: {blocked!r}"
     finally:
         _cleanup(name, proc, softnet_bin)
