@@ -85,6 +85,10 @@ var rootCmd = &cobra.Command{
 }
 
 func main() {
+	if IsSoftnetInvocation(os.Args[0]) {
+		runSoftnetAndExit()
+	}
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
