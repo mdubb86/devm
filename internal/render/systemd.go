@@ -14,10 +14,13 @@ import (
 // Otherwise generates from the declarative fields with sensible
 // defaults that hook into devm-ready.target.
 //
-// The declarative path declares WantedBy=devm.target ([Install]), so
-// the unit starts when the provisioning script runs `systemctl start
-// devm.target` — after enforcement has already been applied. Ordering
-// relative to enforcement is therefore not a systemd concern here.
+// The declarative path declares WantedBy=devm.target ([Install]), but
+// that's enable-bookkeeping, not the start trigger: the composed
+// provisioning script (RenderProvisionScript) starts each declared
+// service explicitly and health-polls it BEFORE running `systemctl
+// start devm.target`, so a broken service aborts before access is
+// granted. Ordering relative to enforcement is therefore not a
+// systemd concern here.
 //
 // The returned bytes are the unit file contents — write at
 // /etc/systemd/system/<name>.service inside the VM.

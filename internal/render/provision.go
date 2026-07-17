@@ -37,8 +37,11 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 
 	p("#!/bin/bash")
 	p("set -eo pipefail")
-	// (1) in-progress marker FIRST
-	p("touch /run/devm/provisioning")
+	// (1) in-progress marker FIRST. /run is tmpfs and /run/devm doesn't
+	// exist yet; the script runs as the unprivileged devm user, so both
+	// the directory and the marker need sudo.
+	p("sudo mkdir -p /run/devm")
+	p("sudo touch /run/devm/provisioning")
 	// (2) extract the bundle (tar on stdin) and run the extractor for CA/symlinks
 	p("sudo mkdir -p /opt/devm")
 	p("sudo tar -xC /opt/devm")    // consumes stdin
@@ -51,7 +54,11 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 			if len(in.Packages) > 0 {
 				p("echo ::devm:stage:packages::")
 				p("sudo apt-get update -y")
-				p("sudo apt-get install -y %s", strings.Join(in.Packages, " "))
+				quoted := make([]string, len(in.Packages))
+				for i, pkg := range in.Packages {
+					quoted[i] = shellSingleQuoted(pkg)
+				}
+				p("sudo apt-get install -y %s", strings.Join(quoted, " "))
 			}
 			if len(in.Install) > 0 {
 				p("echo ::devm:stage:install::")
@@ -99,7 +106,7 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 	// ONLY after services are confirmed up.
 	p("sudo systemctl start devm.target")
 	// (6) cleanup marker on success
-	p("rm -f /run/devm/provisioning")
+	p("sudo rm -f /run/devm/provisioning")
 
 	return []byte(b.String())
 }

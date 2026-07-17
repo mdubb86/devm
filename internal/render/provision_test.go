@@ -29,6 +29,8 @@ func TestRenderProvisionScript_Structure(t *testing.T) {
 	// fail-fast
 	assert.Contains(t, s, "set -eo pipefail")
 	// order: open BEFORE startup, enforce BEFORE target
+	assert.Less(t, strings.Index(s, "::devm:stage:open::"),
+		strings.Index(s, "::devm:stage:startup::"))
 	assert.Less(t, strings.Index(s, "::devm:stage:startup::"),
 		strings.Index(s, "systemctl start devm.target"))
 	assert.Less(t, strings.Index(s, "EnforcedNft-applied-marker"), // see step 3
