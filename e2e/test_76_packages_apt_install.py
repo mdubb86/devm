@@ -1,17 +1,18 @@
 """75: `packages:` installs the listed apt packages at cold-start.
 
-devm's provisioner runs `apt-get update` then `apt-get install -y <pkg>...`
-during the "apt-get install packages" step. The list comes from cfg.Packages
-in the schema. iron-proxy must allow deb.debian.org and security.debian.org
-for the install to reach upstream.
+The composed provisioning script runs `apt-get update` then
+`apt-get install -y <pkg>...` in its `packages` stage (first boot only,
+inside the open-egress window). The list comes from cfg.Packages in the
+schema. iron-proxy must allow deb.debian.org and security.debian.org for
+the install to reach upstream.
 
 Package choice: `jq` — small, universally present in Debian's default
 repos, and verifiable via `command -v jq` (no config-dependent behavior).
 
 What this pins:
   - `packages: [jq]` yields `jq` on the guest's PATH after cold-start.
-  - The provisioner surfaces "apt-get install packages" as a distinct
-    step (not silently rolled into install: commands).
+  - The composed script surfaces `::devm:stage:packages::` as a distinct
+    stage (not silently rolled into install: commands).
 
 What it doesn't cover (tested elsewhere):
   - Failure of apt install with a blocked upstream — separately
@@ -46,13 +47,12 @@ def test_packages_installs_apt_binary(workspace, devm, sandbox_name):
     )
     assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
     stderr = r.stderr.decode()
-    assert "[step: apt-get install packages]" in stderr, (
-        f"expected provisioner step marker in stderr; got:\n{stderr}"
-    )
-    # If apt-get itself surfaces an error the step exits non-zero — the
-    # returncode check above catches that; still assert we didn't skip.
-    assert "(no packages declared)" not in stderr, (
-        "provisioner reported no packages even though jq was declared"
+    # The composed script emits the packages stage marker on stderr (the
+    # raw `::devm:stage:packages::` marker is forwarded to the diagnostic
+    # writer alongside the reporter's spinner line). Its presence proves
+    # the stage ran rather than being skipped for an empty package list.
+    assert "::devm:stage:packages::" in stderr, (
+        f"expected the composed script's packages stage marker in stderr; got:\n{stderr}"
     )
 
     tart_sandbox = TartSandbox(name=sandbox_name)
