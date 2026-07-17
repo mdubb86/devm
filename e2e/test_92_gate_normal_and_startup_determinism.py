@@ -1,5 +1,6 @@
 """92: a normal gated cold-start end to end, `startup:` determinism
-across a restart, and a crashing service blocking `devm.target`.
+across a restart, a crashing service blocking `devm.target`, and the
+warm-attach branch on an already-provisioned VM.
 
 Exercises the composed provisioning script's boot-integrity gate
 behavior on the ordinary (non-adopt, non-daemon-less) path -- contrast
@@ -13,6 +14,14 @@ with test_90 (daemon-less boot floor) and test_91 (adopt-in-place):
        `startup:`'s curl to a non-allow-listed host SUCCEEDS (it runs
        inside the composed script's open-egress window, before
        `enforce`).
+     - DNS resolution for an allow-listed host folds through
+       dnsmasq -> iron-proxy: `getent hosts` inside the VM resolves to
+       iron-proxy's fixed DNS-sentinel answer
+       (internal/serviceapi/vm.go's `proxySentinelIP`, 192.0.2.1), not
+       any real internet address and not loopback -- direct proof of
+       the `DnsmasqScript` fold (buildDnsmasqScript in
+       internal/serviceapi/vminject.go), not just an inference from a
+       successful curl.
      - Editing `startup:` to append a new command, then a single `devm
        stop` + `devm shell`, must run the NEW command on THAT boot --
        no second restart needed. This pins the redesigned
@@ -27,9 +36,16 @@ with test_90 (daemon-less boot floor) and test_91 (adopt-in-place):
        non-zero (loud) and `devm.target` must NOT be active -- no
        shell access granted on a broken boot.
 
+  3. `test_warm_attach_does_not_reprovision`:
+     - A second `devm shell` against an already-provisioned, still-
+       running VM takes the `warmAttach` branch (internal/orchestrator
+       /shell.go) -- logs "attaching to running vm" and does NOT
+       re-run provisioning ("starting vm" / "adopting running vm" must
+       be absent).
+
 What it doesn't cover (tested elsewhere):
   - The daemon-less boot floor itself -> test_90.
-  - Adopt-in-place -> test_91.
+  - Adopt-in-place / teardown-dirty recovery -> test_91.
   - install:/packages: first-boot-only gating -> test_88_install_once,
     test_76.
 """
@@ -50,6 +66,16 @@ NON_ALLOWLISTED_HOST = "https://example.com"
 STARTUP_FETCH_FILE = "/home/devm/.startup-fetch"
 SVC_FETCH_FILE = "/home/devm/.svc-fetch"
 DETERMINISM_SENTINEL = "/home/devm/.startup-determinism-sentinel"
+
+# internal/serviceapi/vm.go's proxySentinelIP -- the fixed RFC 5737
+# "documentation space" address iron-proxy's DNS listener answers with
+# for every allow-listed hostname it resolves. The guest's default
+# route sends it to MAC_HOST via vmnet, where nftables DNAT catches
+# tcp/443+80 and rewrites to iron-proxy's real listen address -- so a
+# `getent hosts` answer of exactly this IP is a precise, code-level
+# proof that DNS folded through dnsmasq -> iron-proxy, not a real
+# upstream resolver.
+PROXY_SENTINEL_IP = "192.0.2.1"
 
 
 def _runtime_dir() -> Path:
@@ -104,6 +130,26 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
     assert ssh_r.returncode == 0 and ssh_r.stdout.strip() == "devm", (
         f"ssh access to the cold-started VM failed: rc={ssh_r.returncode} "
         f"stdout={ssh_r.stdout!r} stderr={ssh_r.stderr!r}"
+    )
+
+    # ---- DNS resolution folds through dnsmasq -> iron-proxy: an
+    # ---- allow-listed host resolves to iron-proxy's fixed DNS-sentinel
+    # ---- answer, not a real internet IP -- proves the whole guest DNS
+    # ---- path is redirected through iron-proxy at the protocol level,
+    # ---- not merely inferred from a successful curl. ----
+    getent = vm.exec("getent", "hosts", "api.github.com")
+    assert getent.ok, (
+        f"getent hosts api.github.com failed inside the VM: {getent.stderr!r}"
+    )
+    resolved_ip = getent.stdout.split()[0] if getent.stdout.split() else ""
+    assert resolved_ip == PROXY_SENTINEL_IP, (
+        f"expected api.github.com to resolve to iron-proxy's DNS "
+        f"sentinel {PROXY_SENTINEL_IP!r} (dnsmasq forwards non-*.test "
+        f"queries to iron-proxy's DNS listener per DnsmasqScript, and "
+        f"iron-proxy answers every allow-listed name with this fixed "
+        f"address); got {resolved_ip!r} from `getent hosts`: "
+        f"{getent.stdout!r} -- DNS is not folding through "
+        f"dnsmasq -> iron-proxy"
     )
 
     def file_size(path: str) -> int:
@@ -193,4 +239,57 @@ def test_service_crash_blocks_target_activation(devm, workspace, sandbox_name):
     assert target_state != "active", (
         f"devm.target must not activate when a declared service crashes "
         f"during provisioning; got {target_state!r}"
+    )
+
+
+@pytest.mark.timeout(180)
+def test_warm_attach_does_not_reprovision(devm, workspace, sandbox_name):
+    """A second `devm shell` against an already-provisioned, still-running
+    VM takes `warmAttach` (internal/orchestrator/shell.go) -- no
+    reconciliation, no provisioning, just attach. Contrast with
+    test_91's adopt-in-place branch (VM running but NOT provisioned)
+    and the teardown-dirty branch (VM running with the interrupted-
+    provisioning marker) -- this is the ordinary "still warm" case none
+    of those exercise.
+    """
+    vm = TartSandbox(name=sandbox_name)
+    workspace.write_devmyaml()
+
+    # ---- 1. Cold-start: provisions the VM, devm.target ends up active. ----
+    r1 = subprocess.run(
+        [devm.path, "shell", "--", "true"],
+        cwd=str(workspace.path), capture_output=True, timeout=300,
+    )
+    assert r1.returncode == 0, f"cold-start failed:\n{r1.stderr.decode()}"
+    assert vm.state() == "running", f"expected running after cold-start, got {vm.state()!r}"
+    target_state = vm.exec("systemctl", "is-active", "devm.target").stdout.strip()
+    assert target_state == "active", (
+        f"expected devm.target active after cold-start, got {target_state!r}"
+    )
+
+    # ---- 2. A second `devm shell`, VM still running and provisioned:
+    # ---- must warm-attach, not re-provision. ----
+    r2 = subprocess.run(
+        [devm.path, "shell", "--", "echo", "warm-attached"],
+        cwd=str(workspace.path), capture_output=True, timeout=60,
+    )
+    assert r2.returncode == 0, (
+        f"warm-attach devm shell should exit 0; got rc={r2.returncode}\n"
+        f"stderr={r2.stderr.decode()}"
+    )
+    assert b"warm-attached" in r2.stdout, (
+        f"command should have run inside the warm-attached VM; stdout={r2.stdout!r}"
+    )
+
+    stderr2 = r2.stderr.decode()
+    assert "attaching to running vm" in stderr2, (
+        f"expected the warmAttach branch's status line in stderr; got:\n{stderr2}"
+    )
+    # Precise branch check: neither the cold-start nor adopt-in-place
+    # provisioning steps must have run.
+    assert "starting vm" not in stderr2, (
+        f"warm-attach must not go through the cold-start StartVM step; stderr:\n{stderr2}"
+    )
+    assert "adopting running vm" not in stderr2, (
+        f"warm-attach must not go through the adopt-in-place branch; stderr:\n{stderr2}"
     )
