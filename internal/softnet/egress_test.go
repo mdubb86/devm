@@ -20,6 +20,9 @@ func TestEgressTarget(t *testing.T) {
 	if got, ok := e.target("9.9.9.9", 12345); !ok || got != "9.9.9.9:12345" {
 		t.Fatalf("OPEN arbitrary port must pass direct, got %q,%v", got, ok)
 	}
+	if got, ok := e.target(NATAliasIP, 5432); !ok || got != HostLoopIP+":5432" {
+		t.Fatalf("OPEN NAT-alias dst = %q,%v want %s:5432", got, ok, HostLoopIP)
+	}
 
 	// ENFORCED: :80/:443 -> iron-proxy; other ports denied.
 	e.setPolicy(PolicyEnforced, ep)

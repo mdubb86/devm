@@ -40,6 +40,9 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 	e.mu.RLock()
 	pol, ip := e.pol, e.ip
 	e.mu.RUnlock()
+	if dstIP == NATAliasIP {
+		dstIP = HostLoopIP
+	}
 	switch pol {
 	case PolicyOpen:
 		return fmt.Sprintf("%s:%d", dstIP, dport), true
