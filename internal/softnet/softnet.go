@@ -55,8 +55,11 @@ func Run(args []string) error {
 	if err := n.startDNS(e); err != nil {
 		return fmt.Errorf("dns: %w", err)
 	}
+	attachUDP(n, e)
+	ing := newIngress(n)
+	defer ing.close()
 	if sock := os.Getenv("SOFTNET_CONTROL_SOCK"); sock != "" {
-		closer, err := serveControl(sock, e, newIngress(n))
+		closer, err := serveControl(sock, e, ing)
 		if err != nil {
 			return err
 		}
