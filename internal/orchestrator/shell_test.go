@@ -21,13 +21,17 @@ import (
 
 // fakeVMAdmin is a fake VMAdminClient for unit-testing RunShell.
 type fakeVMAdmin struct {
-	mu          sync.Mutex
-	statusResp  serviceapi.VMStatusResponse
-	statusErr   error
-	startCalled int
-	startErr    error
-	stopCalled  int
-	stopErr     error
+	mu                    sync.Mutex
+	statusResp            serviceapi.VMStatusResponse
+	statusErr             error
+	startCalled           int
+	startErr              error
+	stopCalled            int
+	stopErr               error
+	applyIronProxyCalled  int
+	applyIronProxyResp    serviceapi.VMApplyIronProxyResponse
+	applyIronProxyRespSet bool // distinguishes an explicit all-false resp from "unset"
+	applyIronProxyErr     error
 }
 
 func (f *fakeVMAdmin) VMStatus(_ context.Context, _ string) (serviceapi.VMStatusResponse, error) {
@@ -56,6 +60,22 @@ func (f *fakeVMAdmin) StopVM(_ context.Context, _ string) error {
 	defer f.mu.Unlock()
 	f.stopCalled++
 	return f.stopErr
+}
+
+func (f *fakeVMAdmin) ApplyIronProxy(_ context.Context, _ serviceapi.VMApplyIronProxyRequest) (serviceapi.VMApplyIronProxyResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.applyIronProxyCalled++
+	if f.applyIronProxyErr != nil {
+		return serviceapi.VMApplyIronProxyResponse{}, f.applyIronProxyErr
+	}
+	if f.applyIronProxyRespSet {
+		return f.applyIronProxyResp, nil
+	}
+	// Default: behaves like a successful revive so existing
+	// adopt-in-place tests that don't care about this call still
+	// pass through provisionAndAttach.
+	return serviceapi.VMApplyIronProxyResponse{Applied: true, VMRunning: true}, nil
 }
 
 // stubSpawner records Start calls and hands out scripted SpawnedCmds
@@ -406,6 +426,10 @@ func TestRunShellRunning_TargetInactiveNoMarker_AdoptsInPlace(t *testing.T) {
 	admin.mu.Lock()
 	assert.Equal(t, 0, admin.startCalled, "adopt-in-place must NOT call StartVM — the vm is already running")
 	assert.Equal(t, 0, admin.stopCalled, "adopt-in-place must not tear down a pristine vm")
+	assert.Equal(t, 1, admin.applyIronProxyCalled,
+		"adopt-in-place must revive this project's iron-proxy — StartVM (the only other "+
+			"thing that spawns it) is skipped, and a prior `devm stop` tears iron-proxy "+
+			"down with the vm")
 	admin.mu.Unlock()
 
 	logBytes, err := os.ReadFile(logPath)
@@ -418,6 +442,38 @@ func TestRunShellRunning_TargetInactiveNoMarker_AdoptsInPlace(t *testing.T) {
 		"adopt-in-place must not delete the vm it's adopting")
 
 	require.NotEmpty(t, spawner.started, "expected the adopted vm to be attached to")
+}
+
+// TestRunShellRunning_AdoptInPlace_NoIronProxyRecord_FailsLoud verifies
+// that adopt-in-place surfaces a clear error (rather than falling through
+// to a confusing EnforcementConfig 412) when ApplyIronProxy reports no
+// iron-proxy record exists at all for this project — a VM that was never
+// started by devm in the first place.
+func TestRunShellRunning_AdoptInPlace_NoIronProxyRecord_FailsLoud(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp:            serviceapi.VMStatusResponse{Present: true, Running: true},
+		applyIronProxyResp:    serviceapi.VMApplyIronProxyResponse{Applied: false, VMRunning: false},
+		applyIronProxyRespSet: true,
+	}
+	tartBin, _ := fakeTartBinState(t, repoRoot, false, false)
+	spawner := &stubSpawner{}
+
+	deps := ShellDeps{
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	writeFakeCA(t, repoRoot)
+
+	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no iron-proxy record found")
+
+	admin.mu.Lock()
+	assert.Equal(t, 1, admin.applyIronProxyCalled)
+	assert.Equal(t, 0, admin.stopCalled, "must not tear down the vm just because it lacks an iron-proxy record")
+	admin.mu.Unlock()
 }
 
 // TestRunShellRunning_TargetInactiveMarkerPresent_TeardownAndColdStart

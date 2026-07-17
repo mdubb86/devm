@@ -89,6 +89,14 @@ type VMAdminClient interface {
 	StartVM(ctx context.Context, req serviceapi.VMStartRequest) error
 	EnforcementConfig(ctx context.Context, name string) (serviceapi.VMEnforcementConfigResponse, error)
 	StopVM(ctx context.Context, name string) error
+	// ApplyIronProxy (re)spawns this project's iron-proxy on its
+	// existing MAC_HOST/ports without touching the VM — the same
+	// no-VM-cycle primitive `devm reconcile`'s self-heal
+	// (BucketEgressRestart) uses. Adopt-in-place needs it: a prior
+	// `devm stop` tears iron-proxy down along with the VM, so a VM
+	// adopted after a raw `tart run` may have no live iron-proxy even
+	// though the VM process itself is up.
+	ApplyIronProxy(ctx context.Context, req serviceapi.VMApplyIronProxyRequest) (serviceapi.VMApplyIronProxyResponse, error)
 }
 
 // DefaultShellDeps returns deps wired for production.
@@ -148,6 +156,25 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 			bindings, err := resolveSecretBindings(cfg, secret.NewMacKeychain())
 			if err != nil {
 				return -1, fmt.Errorf("resolve secrets: %w", err)
+			}
+			// Adopt-in-place deliberately skips StartVM below (the VM
+			// process is already up), but StartVM is also the only
+			// thing that normally (re)spawns this project's iron-proxy.
+			// Revive it explicitly on its last-known MAC_HOST/ports so
+			// the provisioning tail's EnforcementConfig fetch (next,
+			// inside provisionAndAttach) has a live iron-proxy to read.
+			applyResp, err := d.ServiceAPIClient.ApplyIronProxy(ctx, serviceapi.VMApplyIronProxyRequest{
+				Name:      cfg.Project.Name,
+				Allowlist: docker.EffectiveAllowlist(cfg),
+				Secrets:   bindings,
+			})
+			if err != nil {
+				return -1, fmt.Errorf("ensure iron-proxy for adopt-in-place: %w", err)
+			}
+			if !applyResp.Applied && !applyResp.VMRunning {
+				return -1, fmt.Errorf(
+					"adopt-in-place: no iron-proxy record found for %q — this vm was never started by devm",
+					cfg.Project.Name)
 			}
 			return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, reporter)
 		}

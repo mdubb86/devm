@@ -170,6 +170,27 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			return
 		}
 
+		// Rehydrate ironProxyState from the same on-disk config so
+		// /vm/enforcement-config keeps working for this project — it
+		// reads MAC_HOST/ports/Docker from ironProxyState, not from
+		// disk. Without this, a caller that reaches this handler with
+		// an empty ironProxyState (the VM's own process was never
+		// (re)started here, e.g. adopt-in-place after `devm stop`
+		// tore the previous iron-proxy down with it) would spawn a
+		// healthy iron-proxy yet still 412 on the very next
+		// EnforcementConfig fetch. Mirrors AdoptIronProxies'
+		// daemon-restart rehydration (ironproxy_discover.go). VMIP is
+		// preserved from any existing entry (this handler has no tart
+		// handle to re-discover it); Docker is recovered from the
+		// state snapshot just persisted above.
+		existing, _ := ironProxyState.get(req.Name)
+		info.VMIP = existing.VMIP
+		info.Docker = existing.Docker
+		if snap, serr := ReadStateSnapshot(req.Name); serr == nil && snap != nil {
+			info.Docker = snap.Cfg.Docker
+		}
+		ironProxyState.put(req.Name, info)
+
 		writeJSON(w, VMApplyIronProxyResponse{
 			Applied:   true,
 			Revived:   !wasRunning,
