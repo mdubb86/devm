@@ -20,44 +20,53 @@ description: devm VM lifecycle commands — shell, reconcile, stop, teardown, st
 
 ## `devm shell`
 
-Queries the daemon for the VM's running state; if cold-start is needed, the daemon acquires the project mutex and provisions.
+Queries the daemon for the VM's running state via `VMStatus`, then does one of three things: **warm attach** (already provisioned and running), **adopt-in-place** (running but never provisioned), or **cold start** (stopped/absent, or recovering from an interrupted provisioning run).
 
 ### Warm attach
 
-If the VM is already running (`Running=true` from the daemon), `devm shell` skips provisioning and attaches directly via `tart exec`. The shell exits but the VM keeps running.
+If the VM is running (`Running=true`), `devm shell` probes `systemctl is-active devm.target` inside the guest — the gate unit that provisioning starts last, once ssh/caddy/dnsmasq/dockerd/services are all up under enforcement. If it's active, the VM is fully provisioned: `devm shell` skips provisioning and attaches directly via `tart exec`. The shell exits but the VM keeps running.
+
+### Adopt-in-place
+
+If the VM is running but `devm.target` is **not** active, the daemon never finished provisioning it — most commonly a bare `tart run` outside devm, or a daemon crash-restart before provisioning began. `devm shell` checks for `/run/devm/provisioning` (written before the composed provisioning script starts, removed when it finishes successfully):
+
+- **Absent** → the VM is pristine — running, but never provisioned, and (per the boot-integrity gate below) still inert and egress-locked. `devm shell` adopts it in place: it runs the same provisioning tail as a cold start directly against the already-running VM, skipping `StartVM` and the exec-ready poll.
+- **Present** → a previous provisioning run was interrupted (daemon crash, host sleep, killed exec) and left the guest in an unknown intermediate state. `devm shell` never provisions onto a dirty slate: it stops and deletes the VM, then falls through to a fresh cold start.
 
 ### Cold start
 
-If the VM is stopped or absent, `devm shell`:
+If the VM is stopped or absent (or was just torn down as a dirty adopt-in-place above), `devm shell`:
 
 1. Resolves any `!secret` references from the macOS login keychain.
 2. Sends a `StartVM` request to the daemon (which starts the VM and applies the network allow-list from `network.allow`).
 3. Polls `tart exec <vmName> true` until exit 0, or up to 60 seconds.
-4. Runs `Provisioner.Run` in sequence:
-
-   | # | Step name | When |
-   |---|---|---|
-   | 1 | `mkdir workspace parents` | every cold start |
-   | 2 | `install devm bundle` | every cold start |
-   | 3 | `reload base services` | every cold start |
-   | 4 | `apt-get update` | **first boot only** |
-   | 5 | `apt-get install packages` | **first boot only** |
-   | 6 | `run install commands` | **first boot only** |
-   | 7 | `docker feature` (only when `docker: true`) | **first boot only** |
-   | 8 | `install templates` | every cold start |
-   | 9 | `systemctl daemon-reload` | every cold start |
-   | 10 | `set up boot enforcement` | every cold start |
-   | 11 | `run startup commands` | every cold start |
-   | 12 | `apply egress enforcement` | every cold start |
-   | 13 | `apply svc_ingress firewall` (only when `direct: true` docker services) | every cold start |
-   | 14 | `enable + start services` | every cold start |
-   | 15 | `apply masks` | every cold start |
-
+4. Runs the provisioning tail described below (shared with adopt-in-place).
 5. Attaches an interactive shell via `tart exec`. The shell exits but the VM keeps running; use `devm stop` to stop it.
 
-The first-boot-only steps (apt, `run install commands`, `docker feature`) run once, gated by the `/var/lib/devm/provisioned` marker, and are skipped on later cold starts (after `devm stop` + `devm shell`). `set up boot enforcement` and `run startup commands` are **always** run, for every project — the mechanism is not opt-in on declaring `startup:`. `run startup commands` (`sudo systemctl start devm-startup.service`) runs on every cold start, including first boot; `/opt/devm/startup.sh` (rendered from `cfg.Startup`) always exists, so an empty `startup:` list is just a no-op script. On a later cold start, systemd itself already started `devm-startup.service` as part of its own boot sequence (enabled by `set up boot enforcement`, ordered before enforcement locks down), so this step's `systemctl start` against an already-active `RemainAfterExit=yes` oneshot is a no-op — it doesn't re-run the commands a second time. The every-cold-start steps are otherwise idempotent and network-free (units already in place, nftables rebuilt from config). Restart-time workload comes back via systemd — enabled units auto-start on boot, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
+### The boot-integrity gate
 
-For every project, `set up boot enforcement` masks the stock firewall-first `nftables.service` and enables `devm-enforce.service` + `devm-startup.service` instead, so the guest's own boot order is `network → devm-startup.service (open egress) → devm-enforce.service (enforcement) → services`: `startup:` commands (if any) run before egress enforcement is restored. This ordering applies to every project — not just those with `startup:` set.
+The base image boots **locked and inert**: `nftables.service` applies a default-drop skeleton firewall-first, before anything else starts, so the VM is egress-locked from the first instant it's up. `devm.target` — the unit that pulls in ssh, caddy, dnsmasq, and dockerd — is installed but not enabled; nothing user-facing starts on a bare boot. A VM the daemon didn't drive through provisioning (direct `tart run`, or a crash before provisioning began) therefore stays inert and locked: no ssh, no caddy, no egress, nothing reachable.
+
+Provisioning is the daemon's job, not the guest's own boot sequence: it ships and runs **one composed bash script** over a single streaming `tart exec` (the devm bundle tar piped in on stdin) that walks:
+
+| Stage | When | What it does |
+|---|---|---|
+| _(preamble)_ | every run | Write the `/run/devm/provisioning` in-progress marker; extract the devm bundle tar to `/opt/devm`; run `install.sh` (CA install, `PATH` symlink). |
+| `open` | first boot, or `startup:` non-empty, or any service declares `templates:` | Flush the locked skeleton ruleset — fully open egress for this window. |
+| `packages` | first boot only, if `packages:` set | `apt-get update` + `apt-get install -y <packages>`. |
+| `install` | first boot only, if `install:` set | Run each `install:` command in order, open network. |
+| `docker` | first boot only, if `docker: true` | Install the Docker engine + runc shim; join `docker.service` to `devm.target` (disabled at boot, gated with everything else). |
+| `templates` | every boot, if any service declares `templates:` | Run the template installer dispatcher. |
+| `startup` | every boot, if `startup:` is non-empty | Run `/opt/devm/startup.sh`, open network. |
+| `enforce` | every boot | Apply the real nft allowlist; point dnsmasq and timesyncd at iron-proxy; apply the `svc_ingress` firewall for `direct: true` docker services. |
+| `services` | every boot | Bind-mount mask overlays; enable + start each declared service unit; health-poll each until active/healthy or timeout — **before** `devm.target` starts. |
+| _(finish)_ | first boot only | Write the `/var/lib/devm/provisioned` marker. |
+| _(finish)_ | every boot | `systemctl start devm.target` — brings up ssh, caddy, dnsmasq, and dockerd (services are already healthy), all under enforcement. **Access is granted only now.** |
+| _(cleanup)_ | every run, on success | Remove the `/run/devm/provisioning` marker. |
+
+`set -eo pipefail` makes any failing command abort the whole script before `devm.target` starts, so a failure never grants access. A failure at the `templates` or `services` stage leaves the VM running for in-place debugging (the user's service/template definition is what's broken); any earlier-stage failure (`open` through `enforce`) tears the VM down — `devm shell` promises loud failure, never a half-created VM left behind.
+
+`packages`/`install`/`docker` are gated by the `/var/lib/devm/provisioned` marker and only run once, on first boot; they're skipped on a later cold start (`devm stop` + `devm shell` reuses the same disk, so installed tools and built artifacts are still there). `startup:` and `templates` run on every boot that opens the window. Restart-time workload otherwise comes back via systemd — enabled units auto-start when `devm.target` activates, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
 
 ---
 
@@ -79,7 +88,7 @@ Sandbox stopped; config changes will apply on next `devm shell`.
   
   All other BucketLive kinds (ports, path, service unit fields) have no apply path in `ApplyLive` and take effect at the next cold start, even though reconcile reports them as applied.
 
-- **BucketRestartVM changes** (e.g. `startup:` edits) are surfaced as pending under a distinct "restart" section, separate from recreate. On approval `devm reconcile` stops the VM (preserving its disk — no teardown) and the user runs `devm shell` to cold-start and pick up the change.
+- **BucketRestartVM changes** (e.g. `startup:` edits) are surfaced as pending under a distinct "restart" section, separate from recreate. On approval `devm reconcile` stops the VM (preserving its disk — no teardown); the user then runs `devm shell` to cold-start and pick up the change. This is deterministic — the applying restart runs the freshly-composed provisioning script, so the change takes effect on that restart, not on some later boot.
 
 - **BucketTeardownVM changes** are surfaced as pending under the "recreate" section. `devm reconcile` prompts the user; on approval it stops or tears down the VM automatically. The user then runs `devm shell` to rebuild.
 
@@ -173,8 +182,8 @@ The VM must be fully deleted and recreated. `devm reconcile` surfaces these as p
 
 ### BucketRestartVM
 
-VM stop + cold start — no teardown, no data loss; the provisioner re-establishes the change on the next boot. `devm reconcile` surfaces these under a "restart" section, distinct from recreate.
+VM stop + cold start — no teardown, no data loss. `devm reconcile` surfaces these under a "restart" section, distinct from recreate.
 
 | Kind | Trigger |
 |---|---|
-| `startup` change | `startup:` command list differs — re-rendered into `/opt/devm/startup.sh` by the bundle re-pipe, but only takes effect once `devm-startup.service` runs again on the next boot |
+| `startup` change | `startup:` command list differs. Deterministic: the daemon composes a fresh `startup.sh` and runs it inside the single provisioning script on the applying `devm stop` + `devm shell` — the edit takes effect on that restart. |
