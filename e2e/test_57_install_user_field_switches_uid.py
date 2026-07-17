@@ -19,8 +19,8 @@ What this pins:
   - No explicit user (default "devm") → systemd unit runs as non-root.
 
 What it doesn't cover (tested elsewhere):
-  - Systemd service lifecycle (start/stop/restart) -> test_07.
-  - Env injection into services -> test_60.
+  - Systemd service lifecycle (start/stop/restart) -> test_01.
+  - Env injection into services -> test_26.
 """
 from __future__ import annotations
 
