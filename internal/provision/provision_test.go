@@ -159,7 +159,7 @@ func TestRun_NonZeroExitClassifiesFailureByStage(t *testing.T) {
 		{"apt/install phase tears down", "install", false},
 		{"docker phase tears down", "docker", false},
 		{"enforce phase tears down", "enforce", false},
-		{"templates phase keeps vm", "templates", true},
+		{"templates phase tears down (runs pre-enforce, unenforced)", "templates", false},
 		{"service phase keeps vm", "services", true},
 	}
 	for _, tc := range tests {

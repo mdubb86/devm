@@ -113,18 +113,20 @@ func (f *StepFailure) Unwrap() error { return f.Err }
 
 // stagesAfterInstall are the composed-script stages at or after which a
 // failure is considered post-install: the VM is basically good and the
-// user's service/template definition is what's broken, so `devm shell`
-// should surface the error but leave the VM running for `tart exec`
-// inspection. Any earlier stage (extract, open, apt, install:, docker,
+// user's service definition is what's broken, so `devm shell` should
+// surface the error but leave the VM running for `tart exec` inspection.
+// Any earlier stage (extract, open, apt, install:, docker, templates,
 // startup:, enforce) is a cold-start-broken state where the VM is worth
 // destroying and re-creating.
 //
-// Mirrors the old per-step stepsAfterInstall classification: templates
-// and the service-start phase kept the VM; apt/install/docker/enforce
-// tore it down.
+// templates deliberately does NOT keep the VM even though it runs after
+// install:/docker: templates run in the composed script's OPEN (unenforced)
+// egress window, before the enforce stage installs the real allowlist. A
+// VM kept alive on a templates failure would be sitting there unenforced.
+// services is the only kept-on-failure stage because it's the one stage
+// that runs AFTER enforce.
 var stagesAfterInstall = map[string]bool{
-	"templates": true,
-	"services":  true,
+	"services": true,
 }
 
 // IsPostInstallFailure reports whether err is a StepFailure at a stage

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -531,6 +532,155 @@ func TestRunShellRunning_TargetInactiveMarkerPresent_TeardownAndColdStart(t *tes
 		"a dirty vm must be deleted before the fresh cold start — never provision onto a dirty slate")
 
 	require.NotEmpty(t, spawner.started, "expected the freshly cold-started vm to be attached to")
+}
+
+// TestRunShellRunning_TargetProbeTransportFlake_RetriesThenWarmAttaches
+// verifies the devm.target probe uses ExecWithRetry, not Exec: a single
+// tart-guest-agent transport flake must not misclassify a warm,
+// provisioned vm as "not provisioned" — which would fall through to the
+// dirty/adopt checks and risk a needless re-provision of a healthy vm.
+func TestRunShellRunning_TargetProbeTransportFlake_RetriesThenWarmAttaches(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: true, Running: true},
+	}
+	tartBin, logPath := fakeTartBinTargetProbeFlake(t, repoRoot)
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	admin.mu.Lock()
+	assert.Equal(t, 0, admin.startCalled, "a single transport flake on the target probe must not trigger a re-provision path")
+	assert.Equal(t, 0, admin.stopCalled, "a single transport flake on the target probe must not trigger teardown")
+	admin.mu.Unlock()
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Equal(t, 2, strings.Count(string(logBytes), "is-active devm.target"),
+		"ExecWithRetry must retry the flaked probe exactly once")
+	assert.NotContains(t, string(logBytes), "test -f /run/devm/provisioning",
+		"the retried probe must resolve to provisioned — the dirty-marker probe must not run")
+}
+
+// TestRunShellRunning_DirtyProbeTransportFlake_RetriesThenAdoptsInPlace
+// verifies the dirty-provisioning-marker probe uses ExecWithRetry, not
+// Exec: a single transport flake must not misclassify a pristine vm as
+// dirty — which would tear it down needlessly instead of adopting it in
+// place.
+func TestRunShellRunning_DirtyProbeTransportFlake_RetriesThenAdoptsInPlace(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: true, Running: true},
+	}
+	tartBin, logPath := fakeTartBinDirtyProbeFlake(t, repoRoot)
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	writeFakeCA(t, repoRoot)
+
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	admin.mu.Lock()
+	assert.Equal(t, 0, admin.startCalled, "adopt-in-place must not call StartVM")
+	assert.Equal(t, 0, admin.stopCalled, "a single transport flake on the dirty probe must not trigger teardown")
+	assert.Equal(t, 1, admin.applyIronProxyCalled,
+		"the retried probe must resolve to pristine, taking the adopt-in-place path")
+	admin.mu.Unlock()
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Equal(t, 2, strings.Count(string(logBytes), "test -f /run/devm/provisioning"),
+		"ExecWithRetry must retry the flaked probe exactly once")
+	assert.NotContains(t, string(logBytes), "delete x-sbx",
+		"a pristine vm must not be torn down")
+}
+
+// fakeTartBinTargetProbeFlake returns a fake tart binary that flakes
+// exactly once on the "is-active devm.target" probe — emitting a
+// tart-guest-agent transport-inactive marker on stderr and exiting 1 —
+// and reports the vm provisioned (exit 0) on the retry. Every other
+// probe reports absent, so a successfully-retried target probe lands on
+// the warm-attach path.
+func fakeTartBinTargetProbeFlake(t *testing.T, dir string) (*tart.Tart, string) {
+	t.Helper()
+	bin := filepath.Join(dir, "tart-fake-target-flake")
+	logPath := filepath.Join(dir, "tart-invocations.log")
+	counterPath := filepath.Join(dir, "target-flake-counter")
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$*" >> %q
+case "$*" in
+  *"is-active devm.target"*)
+    c=$(cat %q 2>/dev/null || echo 0)
+    c=$((c+1))
+    echo "$c" > %q
+    if [ "$c" -eq 1 ]; then
+      echo "Transport became inactive" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+  *"test -f /run/devm/provisioning"*) exit 1 ;;
+  *"test -f /var/lib/devm/provisioned"*) exit 1 ;;
+esac
+exit 0
+`, logPath, counterPath, counterPath)
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+	return tr, logPath
+}
+
+// fakeTartBinDirtyProbeFlake returns a fake tart binary where
+// "is-active devm.target" always reports inactive (a real, non-flaky
+// result) and "test -f /run/devm/provisioning" flakes exactly once — a
+// transport-inactive marker on stderr, exit 1 — before resolving to
+// "absent" (exit 1, i.e. pristine, not dirty) on the retry.
+func fakeTartBinDirtyProbeFlake(t *testing.T, dir string) (*tart.Tart, string) {
+	t.Helper()
+	bin := filepath.Join(dir, "tart-fake-dirty-flake")
+	logPath := filepath.Join(dir, "tart-invocations.log")
+	counterPath := filepath.Join(dir, "dirty-flake-counter")
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$*" >> %q
+case "$*" in
+  *"is-active devm.target"*) exit 1 ;;
+  *"test -f /run/devm/provisioning"*)
+    c=$(cat %q 2>/dev/null || echo 0)
+    c=$((c+1))
+    echo "$c" > %q
+    if [ "$c" -eq 1 ]; then
+      echo "Transport became inactive" >&2
+      exit 1
+    fi
+    exit 1
+    ;;
+  *"test -f /var/lib/devm/provisioned"*) exit 1 ;;
+esac
+exit 0
+`, logPath, counterPath, counterPath)
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+	return tr, logPath
 }
 
 // tartPathNotNeeded returns a *tart.Tart whose binary is "false" —

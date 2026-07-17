@@ -128,7 +128,14 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		// provisioned. Probe devm.target (gates access until provisioning's
 		// service-start phase succeeds) to find out which of three states
 		// we're in.
-		provisioned := d.Tart.Exec(ctx, vmName,
+		//
+		// ExecWithRetry, not Exec: this probe drives the security-sensitive
+		// warm/adopt/dirty branch below. A transient guest-agent transport
+		// flake here (ExitCode -1) would misread a warm, provisioned VM as
+		// "not provisioned", falling into the dirty/adopt checks and risking
+		// a needless re-provision. A genuine "not active" is a clean
+		// non-zero exit (not a transport flake), so it is not retried.
+		provisioned := d.Tart.ExecWithRetry(ctx, vmName,
 			[]string{"systemctl", "is-active", "devm.target"}).ExitCode == 0
 		if provisioned {
 			return d.warmAttach(ctx, vmName, repoRoot, cmdName, cmdArgs, reporter)
@@ -139,7 +146,11 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		// inProgressMarker) — its presence means a previous provisioning
 		// run was interrupted (daemon crash, host sleep, killed exec) and
 		// left the guest in an unknown intermediate state.
-		dirty := d.Tart.Exec(ctx, vmName,
+		//
+		// ExecWithRetry, not Exec: a transport flake here (ExitCode -1)
+		// would misread a dirty VM as clean, adopting-in-place onto an
+		// unknown intermediate state instead of tearing it down.
+		dirty := d.Tart.ExecWithRetry(ctx, vmName,
 			[]string{"test", "-f", "/run/devm/provisioning"}).ExitCode == 0
 		if dirty {
 			// Never provision onto a dirty slate: tear down and fall
