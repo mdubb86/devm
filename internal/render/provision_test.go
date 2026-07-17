@@ -142,6 +142,25 @@ func TestRenderProvisionScript_ServiceHealthPoll_OneShotAware(t *testing.T) {
 	assert.Contains(t, s, "echo 'service migrate failed' >&2; exit 1")
 }
 
+// TestRenderProvisionScript_StepTimeoutOverride pins that a non-default
+// StepTimeoutSeconds replaces the hardcoded 600s default in both the
+// install: and startup: `timeout` wrapping — the daemon threads
+// DEVM_INSTALL_STEP_TIMEOUT_S through Provisioner into this field, and
+// e2e/test_75_install_step_timeout.py depends on it actually taking effect.
+func TestRenderProvisionScript_StepTimeoutOverride(t *testing.T) {
+	s := string(RenderProvisionScript(ProvisionScriptInput{
+		FirstBoot:          true,
+		Install:            []string{"echo hi"},
+		Startup:            []string{"echo boot"},
+		OpenNft:            "flush ruleset",
+		EnforcedNft:        "table inet devm_filter { policy drop }",
+		StepTimeoutSeconds: 1,
+	}))
+	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
+	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash /opt/devm/startup.sh")
+	assert.NotContains(t, s, "timeout 600 ")
+}
+
 func TestRenderProvisionScript_RestartWithTemplatesOpensWindow(t *testing.T) {
 	// A warm restart that still has templates must open the egress window so
 	// a template installer that fetches over the network can run.

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -285,6 +286,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		EnforcedNft:         enforcement.NftRuleset,
 		DnsmasqScript:       enforcement.DnsmasqScript,
 		TimesyncdScript:     enforcement.TimesyncdScript,
+		StepTimeoutSeconds:  installStepTimeoutSeconds(),
 	}
 	debuglog.Logf("shell", "provisioning %s", vmName)
 	reporter.Step("provisioning", false)
@@ -356,6 +358,28 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	reporter.Clear()
 
 	return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
+}
+
+// defaultInstallStepTimeoutSeconds is installStepTimeoutSeconds' fallback
+// when DEVM_INSTALL_STEP_TIMEOUT_S is unset or invalid. Matches
+// render.defaultStepTimeoutSeconds.
+const defaultInstallStepTimeoutSeconds = 600
+
+// installStepTimeoutSeconds reads DEVM_INSTALL_STEP_TIMEOUT_S — the e2e
+// suite's override for the composed script's install:/startup: `timeout`
+// budget — falling back to defaultInstallStepTimeoutSeconds when the var is
+// unset or not a positive integer. Mirrors the old per-step provisioner's
+// os.Getenv("DEVM_INSTALL_STEP_TIMEOUT_S") handling.
+func installStepTimeoutSeconds() int {
+	v := os.Getenv("DEVM_INSTALL_STEP_TIMEOUT_S")
+	if v == "" {
+		return defaultInstallStepTimeoutSeconds
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return defaultInstallStepTimeoutSeconds
+	}
+	return n
 }
 
 // teardownVM stops and deletes vmName via the daemon + tart. Used both by

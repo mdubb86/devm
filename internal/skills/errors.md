@@ -12,7 +12,7 @@ Failures fall into three layers. Identifying the layer narrows the search to the
 | Layer | When it fails | Symptom |
 |---|---|---|
 | **Daemon** | Before the VM starts | `devm shell` prints `query vm status: ...` or another pre-VM error |
-| **Provisioner** | VM started; first-boot setup failed | Output contains `[step: <name>]` lines followed by `provision: provision step "<name>": ...` |
+| **Provisioner** | VM started; provisioning (cold start or warm restart) failed | Output contains `::devm:stage:<name>::` markers followed by `provision: provision stage "<name>": ...` |
 | **Workload** | Provision succeeded; code in the VM can't reach something | Connection refused, DNS failure, or HTTPS cert error inside the VM |
 
 ---
@@ -56,37 +56,34 @@ Other pre-VM errors from `devm shell`:
 
 ## Provisioner failures
 
-After the VM starts, `devm shell` runs a 13-step provisioner inside the VM. Each step prints a header as it begins:
+After the VM starts, `devm shell` streams ONE composed bash script into the VM in a single `tart exec` (`internal/render/provision.go`'s `RenderProvisionScript`; the daemon no longer runs a per-step Go provisioner). The script emits a stage marker as it enters each phase:
 
 ```
-[step: <name>]
-<stdout and stderr from the command>
+::devm:stage:<name>::
 ```
 
-On failure the error line is:
+which drives the `devm shell` spinner. The whole script runs under `set -eo pipefail`, so any failing command aborts the script immediately — no later stage runs, and no access is granted. On failure the error line is:
 
 ```
-provision: provision step "<name>": tart exec <command>: exit <N>
+provision: provision stage "<name>": provisioning script exited <N>
 ```
 
-The output block immediately above the error line contains the captured stdout and stderr from the failing command. Read that block first.
+`<name>` is the LAST stage marker the script reached before it aborted. `<N>` is the script's exit code — e.g. `124` means a `timeout`-wrapped `install:`/`startup:` command was killed for exceeding its budget. The output immediately above the error line is the captured non-marker stdout/stderr from the run; read that first.
 
-### Step reference
+### Stage reference
 
-| Step | What it does | Common failure | Fix |
+| Stage | What it does | Common failure | Fix |
 |---|---|---|---|
-| `mkdir workspace parents` | `sudo mkdir -p <parent-of-workspace-path>` inside the VM | VM user cannot create the path (permissions or path component missing) | The workspace path is mounted from the Mac host into the VM at the same absolute path; the path is set via `mounts:` in `devm.yaml` (or the daemon's default `WorkspaceHostPath`). Verify that path exists on the host and check base image sudo configuration. |
-| `install devm bundle` | Builds the devm-owned artifact bundle (env file, with-devm-env wrapper, install-templates.sh dispatcher, systemd units, Caddyfile, dnsmasq config, install.sh) and pipes it into the guest, where `install.sh` extracts it to `/opt/devm`, installs systemd units to `/etc/systemd/system/`, writes configs to `/etc/caddy/` and `/etc/dnsmasq.d/`, and symlinks `with-devm-env` onto `/usr/local/bin`. Systemd units are rendered from `services[*]` with merged cfg-level and per-service env. | Rare — pipe interrupted, or `sudo`/`/usr/local/bin` unavailable in the guest. Bad `services[*].exec` or `services[*].systemd` field in `devm.yaml` causes unit file syntax errors. | Should not fail on a healthy base image; check base image integrity. Verify `services[*]` declarations in `devm.yaml`. |
-| `reload base services` | `systemctl reload-or-restart dnsmasq` then `systemctl reload-or-restart caddy` | dnsmasq: port 53 is already bound (e.g., `systemd-resolved` is active in the VM). Caddy: Caddyfile syntax error | dnsmasq: `tart exec <vm> journalctl -u dnsmasq`. Caddy: `tart exec <vm> journalctl -u caddy` |
-| `apt-get update` | `sudo apt-get update -y` (skipped if `packages:` is empty in `devm.yaml`) | `deb.debian.org` is not listed in `network.allow`; apt hangs or fails | Add `deb.debian.org` to `network.allow` in `devm.yaml` |
-| `apt-get install packages` | Installs every package listed under `packages:` | Package name not found, or apt network access blocked | Read the captured apt output; verify package names and check `network.allow` |
-| `run install commands` | Runs each command listed under `install:` in order; prints `[N/M] <command>` before each one. Each command goes through the with-devm-env wrapper so `$WORKSPACE`, `cfg.env`, and `path:` are in scope; per-step timeout defaults to 600s, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | User command exits non-zero, or step exceeds the timeout | Read the captured stderr shown in the output block above the error; fix the failing command. For long installs, raise `DEVM_INSTALL_STEP_TIMEOUT_S`. |
-| `docker feature` | Sets up Docker socket forwarding and systemd user service (only when `docker: true` in `devm.yaml`) | docker-proxy or docker socket unavailable on the Mac | Verify `docker: true` is set and Docker is running on the Mac |
-| `install templates` | Runs `install-templates.sh` inside the VM to render every `services[*].templates` entry into its declared output path. Uses `sudo install -o root -g root` for entries with `sudo: true`; plain `mv` (guest-user-owned) otherwise. | Template output path unwritable (e.g. `/etc/foo` without `sudo: true` on the template) or template source render error | Add `sudo: true` to the template if the output is under a root-owned dir; otherwise fix the template source |
-| `systemctl daemon-reload` | Reloads systemd after bundle systemd units are installed | Unit file syntax error | Run `tart exec <vm> journalctl -xe` for the systemd error detail; verify `services[*].exec` and `services[*].systemd` in `devm.yaml` |
-| `apply egress enforcement` | Injects iron-proxy nftables and dnsmasq configuration to enforce outbound network policy | Script failure or nftables unavailable | Should not fail on a healthy base image; check nftables kernel support |
-| `enable + start services` | `sudo systemctl enable --now <unit>` for each service that declares an exec or systemd unit | Service failed to start (port in use, missing binary, bad config) | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>` |
-| `apply masks` | Bind-mounts per-service mask directories from `/var/devm/masks/<project-id>/<service>/<path>` over workspace paths | Target path doesn't exist, or `mount --bind` fails | Check `services[*].masks` paths in `devm.yaml`; verify workspace path is correct |
+| `open` | Flushes the boot-lock nftables ruleset to allow-all for the provisioning window. Runs whenever there's open-window work to do (first boot, `startup:` commands, or templates); skipped on a warm restart with nothing to run. | Rare | n/a |
+| `packages` | `sudo apt-get update -y && apt-get install -y <packages>` (first boot only; skipped if `packages:` is empty) | Package name not found, or `deb.debian.org` not in `network.allow` | Add `deb.debian.org` to `network.allow` in `devm.yaml`; verify package names |
+| `install` | Runs each `install:` command in order, each individually wrapped in `timeout <N> <with-devm-env wrapper>` so `$WORKSPACE`, `cfg.env`, and `path:` are in scope (first boot only). `<N>` defaults to 600s, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | User command exits non-zero, or a step exceeds its timeout (`timeout` kills it, exit 124) | Read the captured output above the error; fix the failing command. For long installs, raise `DEVM_INSTALL_STEP_TIMEOUT_S`. |
+| `docker` | Installs the Docker engine + runc-shim registration via `daemon.json` (only when `docker: true`; first boot only) | docker-proxy or docker socket unavailable on the Mac | Verify `docker: true` is set and Docker is running on the Mac |
+| `templates` | Runs `install-templates.sh` (through the with-devm-env wrapper) to render every `services[*].templates` entry into its declared output path. Runs on ANY boot that has templates declared, not just first boot — a warm restart re-runs the (idempotent) dispatcher. | Template output path unwritable (e.g. `/etc/foo` without `sudo: true` on the template) or template source render error | Add `sudo: true` to the template if the output is under a root-owned dir; otherwise fix the template source |
+| `startup` | Runs every `startup:` command in ONE shared bash process (exports/`cd` from an earlier line are visible to later ones), the whole thing wrapped in a single aggregate `timeout <N>` — same default/override as `install`. | A command exits non-zero, or the combined script exceeds its timeout | Read the captured output above the error; fix the failing command, or raise `DEVM_INSTALL_STEP_TIMEOUT_S` |
+| `enforce` | Applies the real egress allowlist (`nft -f -`), then points dnsmasq/timesyncd at the same enforced path, then `svc_ingress` for direct docker service ports | Script failure or nftables unavailable | Should not fail on a healthy base image; check nftables kernel support |
+| `services` | Bind-mounts per-service mask directories from `/var/devm/masks/<project>/<service>/<path>` over workspace paths, then `systemctl enable --now` each declared service and health-polls it before `devm.target` (and therefore access) is granted | Service failed to start (port in use, missing binary, bad config), or a mask's mount target doesn't exist | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>`; check `services[*].masks` paths in `devm.yaml` |
+
+A failure at `open` through `enforce` leaves the VM in a bad cold-start state — `devm shell` tears it down (the next `devm shell` starts clean). A failure at `templates` or `services` leaves a basically-good VM whose user-declared service/template is what's broken, so `devm shell` surfaces the error but keeps the VM running for in-place debugging via `tart exec`.
 
 ---
 

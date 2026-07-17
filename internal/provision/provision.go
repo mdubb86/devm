@@ -80,6 +80,12 @@ type Provisioner struct {
 	DnsmasqScript   string
 	TimesyncdScript string
 
+	// StepTimeoutSeconds bounds every install:/startup: command in the
+	// composed script (render.ProvisionScriptInput.StepTimeoutSeconds). The
+	// daemon fills this from DEVM_INSTALL_STEP_TIMEOUT_S; zero means
+	// "unset" and RenderProvisionScript falls back to its own default.
+	StepTimeoutSeconds int
+
 	// firstBoot is true when /var/lib/devm/provisioned is absent — i.e.
 	// this VM has not completed provisioning. Set at the top of Run.
 	firstBoot bool
@@ -173,19 +179,20 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer, onLine func(stream, 
 // scriptInput assembles the ProvisionScriptInput from the project config.
 func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 	return render.ProvisionScriptInput{
-		FirstBoot:        p.firstBoot,
-		Packages:         p.Cfg.Packages,
-		Install:          p.Cfg.Install,
-		Docker:           p.Cfg.Docker,
-		InstallTemplates: p.hasTemplates(),
-		Startup:          p.Cfg.Startup,
-		Services:         p.serviceUnits(),
-		SvcIngressPorts:  nftscript.DirectPorts(p.Cfg),
-		Masks:            p.maskMounts(),
-		OpenNft:          openEgressRuleset,
-		EnforcedNft:      p.EnforcedNft,
-		DnsmasqScript:    p.DnsmasqScript,
-		TimesyncdScript:  p.TimesyncdScript,
+		FirstBoot:          p.firstBoot,
+		Packages:           p.Cfg.Packages,
+		Install:            p.Cfg.Install,
+		Docker:             p.Cfg.Docker,
+		InstallTemplates:   p.hasTemplates(),
+		Startup:            p.Cfg.Startup,
+		Services:           p.serviceUnits(),
+		SvcIngressPorts:    nftscript.DirectPorts(p.Cfg),
+		Masks:              p.maskMounts(),
+		OpenNft:            openEgressRuleset,
+		EnforcedNft:        p.EnforcedNft,
+		DnsmasqScript:      p.DnsmasqScript,
+		TimesyncdScript:    p.TimesyncdScript,
+		StepTimeoutSeconds: p.StepTimeoutSeconds,
 	}
 }
 

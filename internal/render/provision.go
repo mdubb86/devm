@@ -54,6 +54,13 @@ type ProvisionScriptInput struct {
 	// serviceapi's buildDnsmasqScript/buildTimesyncdScript.
 	DnsmasqScript   string
 	TimesyncdScript string
+
+	// StepTimeoutSeconds bounds every install:/startup: command (the
+	// `timeout %d` wrapping both stages). Zero means "unset" and falls back
+	// to defaultStepTimeoutSeconds — the daemon fills this from
+	// DEVM_INSTALL_STEP_TIMEOUT_S (see provision.Provisioner), so it is only
+	// ever zero in tests that don't care about the override.
+	StepTimeoutSeconds int
 }
 
 // hasOpenWork reports whether the open egress window is needed this boot.
@@ -61,11 +68,11 @@ func (in ProvisionScriptInput) hasOpenWork() bool {
 	return in.FirstBoot || len(in.Startup) > 0 || in.InstallTemplates
 }
 
-// defaultStepTimeoutSeconds bounds every install:/startup: command. The
-// composed script is streamed over a single `tart exec`, so a command
-// that hangs blocks the whole exec — not just its own step — which would
-// hang `devm shell` indefinitely. Matches the old per-step provisioner's
-// DEVM_INSTALL_STEP_TIMEOUT_S default.
+// defaultStepTimeoutSeconds is the fallback for ProvisionScriptInput.
+// StepTimeoutSeconds when unset. The composed script is streamed over a
+// single `tart exec`, so a command that hangs blocks the whole exec — not
+// just its own step — which would hang `devm shell` indefinitely. Matches
+// the old per-step provisioner's DEVM_INSTALL_STEP_TIMEOUT_S default.
 const defaultStepTimeoutSeconds = 600
 
 // serviceHealthPollSeconds bounds how long the composed script waits for
@@ -82,6 +89,10 @@ const serviceHealthPollSeconds = 10
 func RenderProvisionScript(in ProvisionScriptInput) []byte {
 	var b strings.Builder
 	p := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
+	stepTimeout := in.StepTimeoutSeconds
+	if stepTimeout <= 0 {
+		stepTimeout = defaultStepTimeoutSeconds
+	}
 
 	p("#!/bin/bash")
 	p("set -eo pipefail")
@@ -112,7 +123,7 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 				p("echo ::devm:stage:install::")
 				for i, cmd := range in.Install {
 					p("echo ::devm:progress:install:%d:%d::", i+1, len(in.Install))
-					p("timeout %d %s bash -eo pipefail -c %s", defaultStepTimeoutSeconds, guestWrapper, shellSingleQuoted(cmd))
+					p("timeout %d %s bash -eo pipefail -c %s", stepTimeout, guestWrapper, shellSingleQuoted(cmd))
 				}
 			}
 			if in.Docker {
@@ -143,7 +154,7 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 			// would silently break that. install:'s commands, in
 			// contrast, were always independent invocations (no shared
 			// shell state), so each gets its own budget above.
-			p("timeout %d %s bash %s", defaultStepTimeoutSeconds, guestWrapper, guestStartupSh)
+			p("timeout %d %s bash %s", stepTimeout, guestWrapper, guestStartupSh)
 		}
 	}
 
