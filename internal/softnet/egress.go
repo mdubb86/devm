@@ -69,6 +69,27 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 	}
 }
 
+// udpTarget maps an outbound UDP flow to a host dial address per current
+// policy. Mirrors target() but only NTP (:123) is forwarded when ENFORCED;
+// DNS is served by a bound gateway:53 endpoint, not here. ok=false => drop.
+func (e *egress) udpTarget(dstIP string, dport uint16) (string, bool) {
+	pol, ip := e.snapshot()
+	if dstIP == NATAliasIP {
+		dstIP = HostLoopIP
+	}
+	switch pol {
+	case PolicyOpen:
+		return fmt.Sprintf("%s:%d", dstIP, dport), true
+	case PolicyEnforced:
+		if dport == 123 && ip != nil && ip.NTP != "" {
+			return ip.NTP, true
+		}
+		return "", false
+	default: // LOCKED
+		return "", false
+	}
+}
+
 // attachEgress installs the policy TCP forwarder onto the stack. The forwarder
 // body is ported from the fixture's policyTCPForwarder, replacing the allowSet
 // lookup with e.target(...).
