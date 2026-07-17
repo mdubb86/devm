@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/secret"
@@ -29,6 +30,7 @@ type fakeVMAdmin struct {
 	stopCalled            int
 	stopErr               error
 	applyIronProxyCalled  int
+	applyIronProxyReq     serviceapi.VMApplyIronProxyRequest // last request received, for assertions
 	applyIronProxyResp    serviceapi.VMApplyIronProxyResponse
 	applyIronProxyRespSet bool // distinguishes an explicit all-false resp from "unset"
 	applyIronProxyErr     error
@@ -62,10 +64,11 @@ func (f *fakeVMAdmin) StopVM(_ context.Context, _ string) error {
 	return f.stopErr
 }
 
-func (f *fakeVMAdmin) ApplyIronProxy(_ context.Context, _ serviceapi.VMApplyIronProxyRequest) (serviceapi.VMApplyIronProxyResponse, error) {
+func (f *fakeVMAdmin) ApplyIronProxy(_ context.Context, req serviceapi.VMApplyIronProxyRequest) (serviceapi.VMApplyIronProxyResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applyIronProxyCalled++
+	f.applyIronProxyReq = req
 	if f.applyIronProxyErr != nil {
 		return serviceapi.VMApplyIronProxyResponse{}, f.applyIronProxyErr
 	}
@@ -419,7 +422,15 @@ func TestRunShellRunning_TargetInactiveNoMarker_AdoptsInPlace(t *testing.T) {
 	}
 	writeFakeCA(t, repoRoot)
 
-	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	// A non-trivial network allow-list (rather than minimalCfg's empty
+	// one) so the ApplyIronProxy request's Allowlist assertion below
+	// actually exercises docker.EffectiveAllowlist's plumbing instead
+	// of trivially comparing nil to nil.
+	cfg := minimalCfg()
+	cfg.Network.Allow = []schema.AllowEntry{{Host: "example.com"}}
+	cfg.Docker = true
+
+	rc, err := RunShell(context.Background(), deps, cfg, repoRoot, "x-sbx", "bash", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 
@@ -430,6 +441,10 @@ func TestRunShellRunning_TargetInactiveNoMarker_AdoptsInPlace(t *testing.T) {
 		"adopt-in-place must revive this project's iron-proxy — StartVM (the only other "+
 			"thing that spawns it) is skipped, and a prior `devm stop` tears iron-proxy "+
 			"down with the vm")
+	assert.Equal(t, docker.EffectiveAllowlist(cfg), admin.applyIronProxyReq.Allowlist,
+		"adopt-in-place must pass the resolved effective allowlist (user hosts + docker hub) to ApplyIronProxy")
+	assert.Empty(t, admin.applyIronProxyReq.Secrets,
+		"minimalCfg declares no !secret refs, so resolved bindings must be empty")
 	admin.mu.Unlock()
 
 	logBytes, err := os.ReadFile(logPath)

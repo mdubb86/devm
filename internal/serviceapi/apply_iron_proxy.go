@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/ironproxy"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -66,7 +67,7 @@ const (
 // health, or persisting the snapshot returns 500 and leaves the
 // snapshot untouched (except the two success/no-op paths, which
 // deliberately advance SecretHashes).
-func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervisor.Supervisor, denials *Denials) {
+func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials) {
 	s.Register("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -180,11 +181,21 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// healthy iron-proxy yet still 412 on the very next
 		// EnforcementConfig fetch. Mirrors AdoptIronProxies'
 		// daemon-restart rehydration (ironproxy_discover.go). VMIP is
-		// preserved from any existing entry (this handler has no tart
-		// handle to re-discover it); Docker is recovered from the
-		// state snapshot just persisted above.
+		// re-discovered the same way recoverProjectState does on a
+		// daemon restart — via `tart ip` — because on the
+		// adopt-in-place path a prior `devm stop` already cleared any
+		// existing ironProxyState entry, so falling back to it would
+		// silently leave VMIP empty and misroute direct: services to
+		// 127.0.0.1. Best-effort: if the VM isn't actually running
+		// (e.g. this call is a reconcile self-heal against a stopped
+		// VM with a stale config file), tart ip fails and whatever
+		// VMIP was already stashed is preserved instead. Docker is
+		// recovered from the state snapshot just persisted above.
 		existing, _ := ironProxyState.get(req.Name)
 		info.VMIP = existing.VMIP
+		if ip, err := tr.IP(r.Context(), req.Name); err == nil {
+			info.VMIP = ip
+		}
 		info.Docker = existing.Docker
 		if snap, serr := ReadStateSnapshot(req.Name); serr == nil && snap != nil {
 			info.Docker = snap.Cfg.Docker
