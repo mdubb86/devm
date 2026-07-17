@@ -116,20 +116,22 @@ func minimalCfg() schema.Config {
 // ---------- RunShell tests ----------
 
 // TestRunShellWarmPath_AttachesWithoutStart verifies that when the VM is
-// already running the daemon is NOT asked to start it again, and the
+// already running AND devm.target is active (fully provisioned), the
+// daemon is NOT asked to start it again, no provisioning runs, and the
 // user shell is spawned via tart exec.
 func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
 		statusResp: serviceapi.VMStatusResponse{Present: true, Running: true},
 	}
+	tartBin, logPath := fakeTartBinState(t, repoRoot, true, false)
 
 	userCmd := &stubCmd{waitErr: make(chan error, 1)}
 	userCmd.waitErr <- nil
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	deps := ShellDeps{
-		Tart:             tartPathNotNeeded(t),
+		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
 	}
@@ -140,6 +142,13 @@ func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
 	admin.mu.Lock()
 	assert.Equal(t, 0, admin.startCalled, "StartVM must NOT be called on the warm path")
 	admin.mu.Unlock()
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(logBytes), "is-active devm.target",
+		"RunShell must probe devm.target to recognize the warm-attach state")
+	assert.NotContains(t, string(logBytes), "test -f /run/devm/provisioning",
+		"an already-provisioned vm must short-circuit before the dirty-marker probe")
 }
 
 // TestRunShellWarmPath_ForwardsHostTermEnvIntoTartExec pins the color
@@ -162,12 +171,13 @@ func TestRunShellWarmPath_ForwardsHostTermEnvIntoTartExec(t *testing.T) {
 	admin := &fakeVMAdmin{
 		statusResp: serviceapi.VMStatusResponse{Present: true, Running: true},
 	}
+	tartBin, _ := fakeTartBinState(t, repoRoot, true, false)
 	userCmd := &stubCmd{waitErr: make(chan error, 1)}
 	userCmd.waitErr <- nil
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	deps := ShellDeps{
-		Tart:             tartPathNotNeeded(t),
+		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
 	}
@@ -365,6 +375,93 @@ func TestRunShellColdPath_StartVMError(t *testing.T) {
 	assert.Contains(t, err.Error(), "start vm")
 }
 
+// TestRunShellRunning_TargetInactiveNoMarker_AdoptsInPlace verifies the
+// adopt-in-place branch: the VM process is running, but devm.target isn't
+// active and no dirty-provisioning marker is present — a pristine VM
+// (started directly via `tart run`, or a clean daemon crash-restart before
+// provisioning began). RunShell must provision the already-running VM
+// WITHOUT asking the daemon to start it (no StartVM), then attach.
+func TestRunShellRunning_TargetInactiveNoMarker_AdoptsInPlace(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: true, Running: true},
+	}
+	tartBin, logPath := fakeTartBinState(t, repoRoot, false, false)
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	writeFakeCA(t, repoRoot)
+
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	admin.mu.Lock()
+	assert.Equal(t, 0, admin.startCalled, "adopt-in-place must NOT call StartVM — the vm is already running")
+	assert.Equal(t, 0, admin.stopCalled, "adopt-in-place must not tear down a pristine vm")
+	admin.mu.Unlock()
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(logBytes), "is-active devm.target",
+		"RunShell must probe devm.target to distinguish warm-attach from adopt")
+	assert.Contains(t, string(logBytes), "test -f /run/devm/provisioning",
+		"RunShell must probe the dirty-provisioning marker when devm.target is inactive")
+	assert.NotContains(t, string(logBytes), "delete x-sbx",
+		"adopt-in-place must not delete the vm it's adopting")
+
+	require.NotEmpty(t, spawner.started, "expected the adopted vm to be attached to")
+}
+
+// TestRunShellRunning_TargetInactiveMarkerPresent_TeardownAndColdStart
+// verifies the dirty-teardown branch: the VM process is running, devm.target
+// isn't active, and the dirty-provisioning marker IS present — a previous
+// provisioning run was interrupted, leaving the guest in an unknown
+// intermediate state. RunShell must never provision onto that slate: it
+// tears the VM down (stop + delete) and falls through to a fresh cold
+// start (StartVM + waitVMReady + provision + attach).
+func TestRunShellRunning_TargetInactiveMarkerPresent_TeardownAndColdStart(t *testing.T) {
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: true, Running: true},
+	}
+	tartBin, logPath := fakeTartBinState(t, repoRoot, false, true)
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	writeFakeCA(t, repoRoot)
+
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	admin.mu.Lock()
+	assert.Equal(t, 1, admin.stopCalled, "a dirty (interrupted-provisioning) vm must be stopped before a fresh cold start")
+	assert.Equal(t, 1, admin.startCalled, "after tearing down a dirty vm, RunShell must cold-start a fresh one")
+	admin.mu.Unlock()
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(logBytes), "delete x-sbx",
+		"a dirty vm must be deleted before the fresh cold start — never provision onto a dirty slate")
+
+	require.NotEmpty(t, spawner.started, "expected the freshly cold-started vm to be attached to")
+}
+
 // tartPathNotNeeded returns a *tart.Tart whose binary is "false" —
 // it will exit 1 immediately if called. Use this when the test is
 // exercising a path that should never invoke tart.
@@ -410,6 +507,50 @@ exit 0
 	tr := tart.New()
 	tr.Path = bin
 	return tr, logPath
+}
+
+// fakeTartBinState returns a fake tart binary for exercising RunShell's
+// four-way running-VM branch. targetActive and markerPresent set the exit
+// codes of the `systemctl is-active devm.target` / `test -f
+// /run/devm/provisioning` probes; the first-boot marker probe (`test -f
+// /var/lib/devm/provisioned`) always reports absent so any composed-script
+// provisioning that runs takes the first-boot path. Every other invocation
+// (waitVMReady's `true`, the provisioning ExecStream, `tart delete`, `tart
+// list`) succeeds. Every invocation is appended to logPath for assertions.
+func fakeTartBinState(t *testing.T, dir string, targetActive, markerPresent bool) (*tart.Tart, string) {
+	t.Helper()
+	bin := filepath.Join(dir, "tart-fake-state")
+	logPath := filepath.Join(dir, "tart-invocations.log")
+	targetExit, markerExit := 1, 1
+	if targetActive {
+		targetExit = 0
+	}
+	if markerPresent {
+		markerExit = 0
+	}
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$*" >> %q
+case "$*" in
+  *"is-active devm.target"*) exit %d ;;
+  *"test -f /run/devm/provisioning"*) exit %d ;;
+  *"test -f /var/lib/devm/provisioned"*) exit 1 ;;
+esac
+exit 0
+`, logPath, targetExit, markerExit)
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+	return tr, logPath
+}
+
+// writeFakeCA points caStorageDir() at repoRoot (via HOME) and seeds a
+// fake CA root, satisfying provisionAndAttach's CA read.
+func writeFakeCA(t *testing.T, repoRoot string) {
+	t.Helper()
+	t.Setenv("HOME", repoRoot)
+	caPath := filepath.Join(repoRoot, "Library", "Application Support", "devm", "ca")
+	require.NoError(t, os.MkdirAll(caPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(caPath, "root.crt"), []byte("FAKE-CA"), 0o644))
 }
 
 // ---------- resolveSecretBindings tests ----------

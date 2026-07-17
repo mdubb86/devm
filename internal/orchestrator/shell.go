@@ -115,21 +115,45 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	debuglog.Logf("shell", "vm status: present=%v running=%v", vmStatus.Present, vmStatus.Running)
 
 	if vmStatus.Running {
-		// Warm attach: VM is already up. Auto-apply LIVE changes before
-		// attaching.
-		reporter.Step("attaching to running vm", false)
-		// Warm attach: reconcile is handled by the provisioner on cold start.
-		// For now the warm path just attaches directly.
-		reporter.Step("ready", false)
-		reporter.Stop()
-		reporter.Clear()
-		if err := EmitSSHConfig(ctx, d.Tart); err != nil {
-			log.Printf("ssh_config emit failed on warm attach: %v", err)
+		// The VM process is up, but that alone doesn't tell us whether it's
+		// provisioned. Probe devm.target (gates access until provisioning's
+		// service-start phase succeeds) to find out which of three states
+		// we're in.
+		provisioned := d.Tart.Exec(ctx, vmName,
+			[]string{"systemctl", "is-active", "devm.target"}).ExitCode == 0
+		if provisioned {
+			return d.warmAttach(ctx, vmName, repoRoot, cmdName, cmdArgs, reporter)
 		}
-		return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
+
+		// Not provisioned. /run/devm/provisioning is written before the
+		// composed script starts and removed when it finishes (render's
+		// inProgressMarker) — its presence means a previous provisioning
+		// run was interrupted (daemon crash, host sleep, killed exec) and
+		// left the guest in an unknown intermediate state.
+		dirty := d.Tart.Exec(ctx, vmName,
+			[]string{"test", "-f", "/run/devm/provisioning"}).ExitCode == 0
+		if dirty {
+			// Never provision onto a dirty slate: tear down and fall
+			// through to a fresh cold start below.
+			reporter.Step("recovering (teardown + fresh start)", false)
+			if err := d.teardownVM(ctx, cfg, vmName); err != nil {
+				return -1, fmt.Errorf("teardown dirty vm: %w", err)
+			}
+		} else {
+			// Pristine: running but never provisioned (direct `tart run`,
+			// or a clean daemon crash-restart before provisioning began).
+			// Adopt in place — provision it without StartVM/waitVMReady,
+			// since it's already up and exec-ready.
+			reporter.Step("adopting running vm", false)
+			bindings, err := resolveSecretBindings(cfg, secret.NewMacKeychain())
+			if err != nil {
+				return -1, fmt.Errorf("resolve secrets: %w", err)
+			}
+			return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, reporter)
+		}
 	}
 
-	// Cold start.
+	// Cold start: the VM was stopped, or we just tore down a dirty one above.
 	reporter.Step("starting vm", false)
 	debuglog.Logf("shell", "cold-start: sending StartVM to daemon")
 
@@ -168,52 +192,48 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		return -1, fmt.Errorf("start vm: %w", err)
 	}
 
-	// From here on, any cold-start failure must tear down the VM to avoid
-	// leaving a zombie. `devm shell` promises loud-failure: exit non-zero
-	// AND leave no half-created VM behind (pinned by test_51).
-	teardownOnFail := func(err error, msg string) (int, error) {
-		debuglog.Logf("shell", "cold-start failed after StartVM: %s: %v", msg, err)
-		fmt.Fprintf(os.Stderr, "teardown-on-fail: %s: %v\n", msg, err)
-
-		teardownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		if stopErr := d.ServiceAPIClient.StopVM(teardownCtx, cfg.Project.Name); stopErr != nil {
-			// StopVM is best-effort here (VM may be already stopped or
-			// gone), but if it errored for a reason worth diagnosing, we
-			// want the caller to see it — otherwise this class of failure
-			// (VM stopped but not deleted) is invisible from the outside.
-			fmt.Fprintf(os.Stderr, "teardown-on-fail: StopVM: %v\n", stopErr)
-			debuglog.Logf("shell", "teardown-on-fail: StopVM: %v", stopErr)
-		}
-		if derr := d.Tart.Delete(teardownCtx, vmName); derr != nil &&
-			!strings.Contains(derr.Error(), "does not exist") {
-			fmt.Fprintf(os.Stderr, "teardown-on-fail: tart delete %s failed: %v\n", vmName, derr)
-			debuglog.Logf("shell", "teardown-on-fail: delete %s failed: %v", vmName, derr)
-		}
-		return -1, fmt.Errorf("%s: %w", msg, err)
-	}
-
 	// Wait for VM to accept exec connections.
 	reporter.Step("waiting for vm ready", false)
 	if err := waitVMReady(ctx, d.Tart, vmName, 60*time.Second); err != nil {
-		return teardownOnFail(err, "vm did not become ready")
+		return d.teardownOnFail(ctx, cfg, vmName, err, "vm did not become ready")
 	}
 	debuglog.Logf("shell", "cold-start: vm exec-ready")
 
-	// Provision: CA, Caddyfile, dnsmasq, packages, install, services.
-	reporter.Step("provisioning", false)
+	return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, reporter)
+}
+
+// warmAttach attaches to a VM that's already provisioned (devm.target
+// active) — no reconciliation, no provisioning, just attach.
+func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName string, cmdArgs []string, reporter status.Reporter) (int, error) {
+	// Warm attach: reconcile is handled by the provisioner on cold start.
+	// For now the warm path just attaches directly.
+	reporter.Step("attaching to running vm", false)
+	reporter.Step("ready", false)
+	reporter.Stop()
+	reporter.Clear()
+	if err := EmitSSHConfig(ctx, d.Tart); err != nil {
+		log.Printf("ssh_config emit failed on warm attach: %v", err)
+	}
+	return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
+}
+
+// provisionAndAttach runs the provisioning + attach tail shared by
+// cold-start (called after StartVM/waitVMReady) and adopt-in-place (called
+// directly — the VM is already running and exec-ready). Any failure here
+// tears the VM down unless it's a post-install failure, in which case the
+// VM is kept running for in-place debugging (test_51's contract).
+func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vmName, repoRoot, cmdName string, cmdArgs []string, bindings []serviceapi.SecretBinding, reporter status.Reporter) (int, error) {
 	caPEM, err := os.ReadFile(filepath.Join(caStorageDir(), "root.crt"))
 	if err != nil {
-		return teardownOnFail(err, "read CA root")
+		return d.teardownOnFail(ctx, cfg, vmName, err, "read CA root")
 	}
 	authPub, err := sshkeys.EnsureProjectKeypair(cfg.Project.Name)
 	if err != nil {
-		return teardownOnFail(err, "ensure project ssh keypair")
+		return d.teardownOnFail(ctx, cfg, vmName, err, "ensure project ssh keypair")
 	}
 	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(cfg.Project.Name)
 	if err != nil {
-		return teardownOnFail(err, "ensure project ssh host key")
+		return d.teardownOnFail(ctx, cfg, vmName, err, "ensure project ssh host key")
 	}
 
 	// The enforcement config (nft allowlist + dnsmasq + timesyncd) is baked
@@ -223,7 +243,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// at StartVM.
 	enforcement, err := d.ServiceAPIClient.EnforcementConfig(ctx, cfg.Project.Name)
 	if err != nil {
-		return teardownOnFail(err, "fetch enforcement config")
+		return d.teardownOnFail(ctx, cfg, vmName, err, "fetch enforcement config")
 	}
 
 	prov := &provision.Provisioner{
@@ -239,25 +259,29 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		DnsmasqScript:       enforcement.DnsmasqScript,
 		TimesyncdScript:     enforcement.TimesyncdScript,
 	}
-	debuglog.Logf("shell", "cold-start: provisioning")
+	debuglog.Logf("shell", "provisioning %s", vmName)
+	reporter.Step("provisioning", false)
 	// Provisioning output is DIAGNOSTIC — stage names, package install
 	// noise, etc. It belongs on stderr so `devm exec pwd` / `devm shell
-	// -- <cmd>` produce clean stdout that scripts can pipe. Failure
-	// details flow via the returned error, not via this writer. onLine is
-	// nil here; the daemon wires the stage-marker spinner (Task 7).
-	if err := prov.Run(ctx, os.Stderr, nil); err != nil {
+	// -- <cmd>` produce clean stdout that scripts can pipe. Failure details
+	// flow via the returned error plus pp.FailureOutput() below, not via
+	// this writer. pp drives the stage-marker spinner from ExecStream's
+	// line-by-line output.
+	pp := newProvisionProgress(reporter)
+	if err := prov.Run(ctx, os.Stderr, pp.Line); err != nil {
+		fmt.Fprint(os.Stderr, pp.FailureOutput())
 		// Service-phase failures (unit install, daemon-reload, enable+start,
 		// apply masks) leave the VM in a debuggable state — user's fix is
 		// in devm.yaml, not in the VM. Surface the error but keep the VM
 		// alive so `tart exec <vm> systemctl status` etc. works. Pre-service
 		// failures tear down (test_51: install failure = state=absent).
 		if provision.IsPostInstallFailure(err) {
-			debuglog.Logf("shell", "cold-start: post-install failure — keeping VM: %v", err)
+			debuglog.Logf("shell", "post-install failure — keeping VM: %v", err)
 			return -1, fmt.Errorf("provision: %w", err)
 		}
-		return teardownOnFail(err, "provision")
+		return d.teardownOnFail(ctx, cfg, vmName, err, "provision")
 	}
-	debuglog.Logf("shell", "cold-start: provisioning done")
+	debuglog.Logf("shell", "provisioning done: %s", vmName)
 
 	// Write initial snapshot so that subsequent `devm reconcile` calls have
 	// a baseline to diff against. Without this, ReadSnapshot returns "" which
@@ -265,14 +289,14 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// any changes made between cold-start and the first reconcile.
 	provSnap, err := yaml.Marshal(cfg)
 	if err != nil {
-		return teardownOnFail(err, "marshal provision snapshot")
+		return d.teardownOnFail(ctx, cfg, vmName, err, "marshal provision snapshot")
 	}
 	if err := WriteSnapshot(d.Tart, vmName, snapshotHeader+string(provSnap)); err != nil {
-		return teardownOnFail(err, "write provision snapshot")
+		return d.teardownOnFail(ctx, cfg, vmName, err, "write provision snapshot")
 	}
-	debuglog.Logf("shell", "cold-start: snapshot written")
+	debuglog.Logf("shell", "snapshot written: %s", vmName)
 
-	// Seed the daemon-side state snapshot too, now that cold-start is
+	// Seed the daemon-side state snapshot too, now that provisioning is
 	// fully green (provisioning AND egress enforcement, which runs as
 	// a step inside prov.Run, both succeeded). Without this, the first
 	// `devm reconcile` after `devm start` finds no baseline, diffs
@@ -280,7 +304,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// spuriously surfaces as pending — prompting the user to tear down
 	// the VM they just started. Best-effort: log but don't fail here —
 	// a missing snapshot only degrades to "full diff on next
-	// reconcile" (safe), and failing here would kill a cold start that
+	// reconcile" (safe), and failing here would kill a start that
 	// otherwise succeeded.
 	templateContents, err := render.RenderTemplatesByBasename(cfg, repoRoot)
 	if err != nil {
@@ -290,14 +314,14 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		Cfg:              cfg,
 		TemplateContents: templateContents,
 		SecretHashes:     SecretHashesFromBindings(bindings),
-		ProxyVersion:     ironproxy.EmbeddedSha256(), // stamp the version cold-start spawned
+		ProxyVersion:     ironproxy.EmbeddedSha256(), // stamp the version that just provisioned
 	}
 	if err := serviceapi.WriteStateSnapshot(cfg.Project.Name, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)
 	}
 
 	if err := EmitSSHConfig(ctx, d.Tart); err != nil {
-		log.Printf("ssh_config emit failed after cold-start: %v", err)
+		log.Printf("ssh_config emit failed after provisioning: %v", err)
 	}
 
 	reporter.Step("ready", false)
@@ -305,6 +329,46 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	reporter.Clear()
 
 	return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
+}
+
+// teardownVM stops and deletes vmName via the daemon + tart. Used both by
+// teardownOnFail (a provisioning-time failure) and directly by RunShell
+// when it finds the VM in a dirty (interrupted-provisioning) state and
+// must destroy it before a fresh cold start — never provision onto a
+// dirty slate.
+func (d ShellDeps) teardownVM(ctx context.Context, cfg schema.Config, vmName string) error {
+	teardownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if stopErr := d.ServiceAPIClient.StopVM(teardownCtx, cfg.Project.Name); stopErr != nil {
+		// StopVM is best-effort here (VM may be already stopped or gone),
+		// but if it errored for a reason worth diagnosing, we want the
+		// caller to see it — otherwise this class of failure (VM stopped
+		// but not deleted) is invisible from the outside.
+		fmt.Fprintf(os.Stderr, "teardown: StopVM: %v\n", stopErr)
+		debuglog.Logf("shell", "teardown: StopVM: %v", stopErr)
+	}
+	if derr := d.Tart.Delete(teardownCtx, vmName); derr != nil &&
+		!strings.Contains(derr.Error(), "does not exist") {
+		fmt.Fprintf(os.Stderr, "teardown: tart delete %s failed: %v\n", vmName, derr)
+		debuglog.Logf("shell", "teardown: delete %s failed: %v", vmName, derr)
+		return fmt.Errorf("tart delete %s: %w", vmName, derr)
+	}
+	return nil
+}
+
+// teardownOnFail tears down vmName via teardownVM and wraps err/msg into
+// the (int, error) shape RunShell/provisionAndAttach return. Any
+// cold-start-style failure (pre-service-start) must tear down the VM to
+// avoid leaving a zombie — `devm shell` promises loud-failure: exit
+// non-zero AND leave no half-created VM behind (pinned by test_51).
+func (d ShellDeps) teardownOnFail(ctx context.Context, cfg schema.Config, vmName string, err error, msg string) (int, error) {
+	debuglog.Logf("shell", "failed: %s: %v", msg, err)
+	fmt.Fprintf(os.Stderr, "teardown-on-fail: %s: %v\n", msg, err)
+	if terr := d.teardownVM(ctx, cfg, vmName); terr != nil {
+		fmt.Fprintf(os.Stderr, "teardown-on-fail: %v\n", terr)
+	}
+	return -1, fmt.Errorf("%s: %w", msg, err)
 }
 
 // attachShell attaches an interactive shell inside the VM via `tart exec`.
