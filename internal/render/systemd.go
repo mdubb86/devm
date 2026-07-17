@@ -14,11 +14,10 @@ import (
 // Otherwise generates from the declarative fields with sensible
 // defaults that hook into devm-ready.target.
 //
-// The declarative path always adds After=devm-enforce.service, so a
-// declared service starts only once devm-startup.service and network
-// enforcement have run (see internal/provision's setupBootEnforcement
-// — the mechanism is always registered, for every project). It has no
-// effect on the verbatim Systemd override path.
+// The declarative path declares WantedBy=devm.target ([Install]), so
+// the unit starts when the provisioning script runs `systemctl start
+// devm.target` — after enforcement has already been applied. Ordering
+// relative to enforcement is therefore not a systemd concern here.
 //
 // The returned bytes are the unit file contents — write at
 // /etc/systemd/system/<name>.service inside the VM.
@@ -36,7 +35,6 @@ func RenderService(name string, svc schema.Service) []byte {
 	// devm-ready.target is the base infrastructure target written by
 	// the base image (Task 4). Includes dnsmasq + Caddy + network.
 	after := append([]string{"devm-ready.target"}, svc.After...)
-	after = append(after, "devm-enforce.service")
 	fmt.Fprintf(&b, "After=%s\n", strings.Join(after, " "))
 	b.WriteString("Requires=devm-ready.target\n")
 
@@ -73,7 +71,7 @@ func RenderService(name string, svc schema.Service) []byte {
 
 	// [Install]
 	b.WriteString("\n[Install]\n")
-	b.WriteString("WantedBy=multi-user.target\n")
+	b.WriteString("WantedBy=devm.target\n")
 
 	return []byte(b.String())
 }
@@ -96,67 +94,6 @@ func RenderStartupScript(cmds []string) []byte {
 		b.WriteString(cmd)
 		b.WriteString("\n")
 	}
-	return []byte(b.String())
-}
-
-// RenderStartupUnit generates the devm-startup.service unit. Its
-// content is STABLE — it never changes with cfg.Startup; the commands
-// live in /opt/devm/startup.sh (RenderStartupScript), which the
-// provisioner's bundle re-pipe rewrites on every cold-start. Always
-// registered for every project (see internal/provision's
-// setupBootEnforcement) — not opt-in.
-//
-// A failing startup: command does NOT block devm-enforce.service:
-// devm-enforce.service has only After=devm-startup.service (no
-// Requires=/BindsTo=), so systemd starts it regardless of whether
-// devm-startup.service succeeded. This is fail-safe — egress
-// enforcement is always applied even when a startup command fails.
-//
-// The returned bytes are the unit file contents — write at
-// /etc/systemd/system/devm-startup.service inside the VM.
-func RenderStartupUnit() []byte {
-	var b strings.Builder
-
-	b.WriteString("[Unit]\n")
-	b.WriteString("Description=devm startup commands\n")
-	b.WriteString("After=network-online.target\n")
-	b.WriteString("Wants=network-online.target\n")
-	b.WriteString("Before=devm-enforce.service\n")
-
-	b.WriteString("\n[Service]\n")
-	b.WriteString("Type=oneshot\n")
-	b.WriteString("RemainAfterExit=yes\n")
-	b.WriteString("ExecStart=/opt/devm/startup.sh\n")
-
-	b.WriteString("\n[Install]\n")
-	b.WriteString("WantedBy=multi-user.target\n")
-
-	return []byte(b.String())
-}
-
-// RenderEnforceUnit generates the devm-enforce.service unit, which applies
-// the devm nftables egress policy after devm-startup.service has run.
-// Ordered before it in the per-service units (RenderService always
-// appends devm-enforce.service to After=) so declared services start
-// only once enforcement is in place.
-//
-// The returned bytes are the unit file contents — write at
-// /etc/systemd/system/devm-enforce.service inside the VM.
-func RenderEnforceUnit() []byte {
-	var b strings.Builder
-
-	b.WriteString("[Unit]\n")
-	b.WriteString("Description=devm network enforcement\n")
-	b.WriteString("After=devm-startup.service\n")
-
-	b.WriteString("\n[Service]\n")
-	b.WriteString("Type=oneshot\n")
-	b.WriteString("RemainAfterExit=yes\n")
-	b.WriteString("ExecStart=/usr/sbin/nft -f /etc/nftables.conf\n")
-
-	b.WriteString("\n[Install]\n")
-	b.WriteString("WantedBy=multi-user.target\n")
-
 	return []byte(b.String())
 }
 

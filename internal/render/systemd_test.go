@@ -6,6 +6,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRenderService_FullOverride_VerbatimReturn(t *testing.T) {
@@ -45,7 +46,13 @@ func TestRenderService_Declarative_HasDefaults(t *testing.T) {
 	assert.Contains(t, got, "Restart=on-failure", "Restart defaults to on-failure")
 
 	assert.Contains(t, got, "[Install]")
-	assert.Contains(t, got, "WantedBy=multi-user.target")
+	assert.Contains(t, got, "WantedBy=devm.target")
+}
+
+func TestRenderService_JoinsDevmTarget(t *testing.T) {
+	out := string(RenderService("web", schema.Service{Exec: []string{"run"}}))
+	require.Contains(t, out, "WantedBy=devm.target")
+	require.NotContains(t, out, "devm-enforce.service")
 }
 
 func TestRenderService_Declarative_AllFields(t *testing.T) {
@@ -68,7 +75,7 @@ func TestRenderService_Declarative_AllFields(t *testing.T) {
 	assert.Greater(t, logLevelIdx, 0)
 	assert.Less(t, apiKeyIdx, logLevelIdx, "env keys sorted alphabetically")
 
-	assert.Contains(t, got, "After=devm-ready.target postgresql.service redis.service devm-enforce.service")
+	assert.Contains(t, got, "After=devm-ready.target postgresql.service redis.service")
 	assert.Contains(t, got, "Restart=always")
 }
 
@@ -101,32 +108,6 @@ func TestRenderStartupScript(t *testing.T) {
 func TestRenderStartupScript_Empty_IsNoOp(t *testing.T) {
 	s := string(RenderStartupScript(nil))
 	assert.Equal(t, "#!/bin/bash\nset -eo pipefail\n", s)
-}
-
-func TestRenderStartupUnit(t *testing.T) {
-	u := string(RenderStartupUnit())
-	assert.Contains(t, u, "After=network-online.target")
-	assert.Contains(t, u, "Before=devm-enforce.service")
-	assert.Contains(t, u, "Type=oneshot")
-	assert.Contains(t, u, "ExecStart=/opt/devm/startup.sh")
-}
-
-func TestRenderStartupUnit_Stable(t *testing.T) {
-	// Content never varies — the commands live in startup.sh, not the unit.
-	assert.Equal(t, RenderStartupUnit(), RenderStartupUnit())
-}
-
-func TestRenderEnforceUnit(t *testing.T) {
-	u := string(RenderEnforceUnit())
-	assert.Contains(t, u, "After=devm-startup.service")
-	assert.Contains(t, u, "ExecStart=/usr/sbin/nft -f /etc/nftables.conf")
-	assert.Contains(t, u, "Type=oneshot")
-}
-
-func TestRenderService_AlwaysAfterEnforce(t *testing.T) {
-	svc := schema.Service{Exec: []string{"/bin/true"}}
-	got := string(RenderService("api", svc))
-	assert.Contains(t, got, "After=devm-ready.target devm-enforce.service")
 }
 
 func TestSystemdQuoteArgv(t *testing.T) {

@@ -306,7 +306,7 @@ func TestBuild_TarOmitsDockerShims_WhenDockerFalse(t *testing.T) {
 	assert.NotContains(t, names, "bin/docker")
 }
 
-func TestBuild_TarContainsStartupUnits_WhenStartupSet(t *testing.T) {
+func TestBuild_TarContainsStartupScript_WhenStartupSet(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
 		Startup: []string{"echo hi"},
@@ -318,27 +318,22 @@ func TestBuild_TarContainsStartupUnits_WhenStartupSet(t *testing.T) {
 	require.NoError(t, err)
 
 	names := tarEntryNames(t, blob)
-	assert.Contains(t, names, "systemd/devm-startup.service")
-	assert.Contains(t, names, "systemd/devm-enforce.service")
+	assert.Contains(t, names, "startup.sh")
+	assert.NotContains(t, names, "systemd/devm-startup.service")
+	assert.NotContains(t, names, "systemd/devm-enforce.service")
 
 	startupScript := readTarEntry(t, blob, "startup.sh")
 	assert.Contains(t, string(startupScript), "echo hi")
 
-	startupUnit := readTarEntry(t, blob, "systemd/devm-startup.service")
-	assert.Contains(t, string(startupUnit), "ExecStart=/opt/devm/startup.sh")
-
-	enforceUnit := readTarEntry(t, blob, "systemd/devm-enforce.service")
-	assert.Contains(t, string(enforceUnit), "ExecStart=/usr/sbin/nft -f /etc/nftables.conf")
-
-	// Declared service units always order themselves after enforcement.
+	// Declared service units join devm.target.
 	webUnit := readTarEntry(t, blob, "systemd/web.service")
-	assert.Contains(t, string(webUnit), "After=devm-ready.target devm-enforce.service")
+	assert.Contains(t, string(webUnit), "WantedBy=devm.target")
 }
 
-func TestBuild_AlwaysEmitsStartupUnits_WhenStartupUnset(t *testing.T) {
-	// The mechanism is always registered, for every project — not
-	// opt-in on startup: being set. An empty cfg.Startup still gets
-	// startup.sh + both units; startup.sh is just a no-op script.
+func TestBuild_AlwaysEmitsStartupScript_WhenStartupUnset(t *testing.T) {
+	// The startup.sh mechanism is always registered, for every project
+	// — not opt-in on startup: being set. An empty cfg.Startup still
+	// gets startup.sh; it's just a no-op script.
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
@@ -350,15 +345,15 @@ func TestBuild_AlwaysEmitsStartupUnits_WhenStartupUnset(t *testing.T) {
 
 	names := tarEntryNames(t, blob)
 	assert.Contains(t, names, "startup.sh")
-	assert.Contains(t, names, "systemd/devm-startup.service")
-	assert.Contains(t, names, "systemd/devm-enforce.service")
+	assert.NotContains(t, names, "systemd/devm-startup.service")
+	assert.NotContains(t, names, "systemd/devm-enforce.service")
 
 	startupScript := readTarEntry(t, blob, "startup.sh")
 	assert.Equal(t, "#!/bin/bash\nset -eo pipefail\n", string(startupScript))
 
 	webUnit := readTarEntry(t, blob, "systemd/web.service")
-	assert.Contains(t, string(webUnit), "devm-enforce.service",
-		"services always order after enforcement, startup: set or not")
+	assert.Contains(t, string(webUnit), "WantedBy=devm.target",
+		"declared service units join devm.target, startup: set or not")
 }
 
 func TestBuild_TarContainsSSHMaterial(t *testing.T) {

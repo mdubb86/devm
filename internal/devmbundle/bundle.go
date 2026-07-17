@@ -115,22 +115,15 @@ func Build(in BuildInput) ([]byte, error) {
 		}
 	}
 
-	// startup.sh + devm-startup.service + devm-enforce.service are
-	// always emitted, for every project: the mechanism is always
-	// registered (see internal/provision's setupBootEnforcement), not
-	// opt-in. startup.sh lands at /opt/devm/startup.sh directly —
-	// GuestInstallScript extracts the tar straight into /opt/devm, so a
-	// top-level entry needs no further install.sh copy step (unlike
-	// systemd/*.service, which install.sh copies into
+	// startup.sh is always emitted, for every project: the provisioning
+	// script (internal/provision) runs it before applying enforcement
+	// and starting devm.target. startup.sh lands at /opt/devm/startup.sh
+	// directly — GuestInstallScript extracts the tar straight into
+	// /opt/devm, so a top-level entry needs no further install.sh copy
+	// step (unlike systemd/*.service, which install.sh copies into
 	// /etc/systemd/system/). An empty cfg.Startup renders a no-op
 	// script that exits 0.
 	if err := writeEntry(tw, "startup.sh", 0o755, render.RenderStartupScript(in.Cfg.Startup)); err != nil {
-		return nil, err
-	}
-	if err := writeEntry(tw, "systemd/devm-startup.service", 0o644, render.RenderStartupUnit()); err != nil {
-		return nil, err
-	}
-	if err := writeEntry(tw, "systemd/devm-enforce.service", 0o644, render.RenderEnforceUnit()); err != nil {
 		return nil, err
 	}
 
