@@ -49,6 +49,33 @@ func (c *Client) ApplyEgressEnforcement(ctx context.Context, name string) error 
 	return nil
 }
 
+// EnforcedNftRuleset asks the daemon for the enforced-egress allowlist
+// ruleset (the `nft -f -` body) for a project, computed from the
+// iron-proxy MAC_HOST/ports stashed at /vm/start. The orchestrator bakes
+// it into the single composed provisioning script's enforce-phase
+// heredoc so services come up under enforcement.
+func (c *Client) EnforcedNftRuleset(ctx context.Context, name string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"http://localhost/vm/enforced-nft-ruleset?name="+name, nil)
+	if err != nil {
+		return "", err
+	}
+	r, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return "", fmt.Errorf("vm/enforced-nft-ruleset: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp VMEnforcedNftResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return "", err
+	}
+	return resp.Ruleset, nil
+}
+
 // StopVM asks the daemon to stop the project VM. The daemon calls
 // `tart stop <name>` first so the guest gets a graceful shutdown before
 // the tart-run process is signalled.

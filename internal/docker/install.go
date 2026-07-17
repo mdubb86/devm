@@ -1,9 +1,7 @@
 package docker
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"strings"
 )
 
@@ -55,22 +53,4 @@ ExecStartPost=/bin/chmod 666 /run/docker.sock`
 	fmt.Fprintln(&b, "sudo systemctl daemon-reload")
 	fmt.Fprintln(&b, "sudo systemctl restart docker")
 	return b.String()
-}
-
-// shellExecutor is what the docker package needs from the provisioner:
-// a shell runner for the main install script.
-type shellExecutor interface {
-	ExecShell(ctx context.Context, w io.Writer, script string) error
-}
-
-// Install runs the docker-feature step: install Docker Engine, register
-// devm-runc-shim as the default OCI runtime, add the socket-permission
-// drop-in, and restart docker. The shim binaries are delivered via the
-// devmbundle (see devmbundle.Build); this step only handles the Engine
-// install and configuration. The host→container reachability nftables
-// rule is emitted by the cfg-derived egress enforcement instead (see
-// buildNftablesScript), so it applies on every cold start rather than
-// only when this step re-runs.
-func Install(ctx context.Context, w io.Writer, sh shellExecutor) error {
-	return sh.ExecShell(ctx, w, InstallScript())
 }

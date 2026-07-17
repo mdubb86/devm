@@ -1,15 +1,14 @@
 package provision
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -17,648 +16,234 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// writeFakeTartOK drops a tart shell script into dir that succeeds for
-// every invocation, EXCEPT the first-boot marker probe (`test -f
-// /var/lib/devm/provisioned`), which it reports absent — keeping
-// callers on the first-boot path so gated steps still run. PATH is
-// prepended.
-func writeFakeTartOK(t *testing.T, dir string) {
-	t.Helper()
-	script := fmt.Sprintf(`#!/bin/sh
-case "$*" in
-  *"test -f %s"*) exit 1 ;;
-esac
-echo fake-tart-output
-exit 0
-`, provisionedMarker)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "tart"), []byte(script), 0755))
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+// fakeStreamTart is a tartExecer that answers the first-boot marker probe
+// from markerPresent and records the single ExecStream call the rewritten
+// Run makes, optionally emitting scripted output lines and a scripted exit
+// code / error.
+type fakeStreamTart struct {
+	markerPresent bool
+
+	streamCalls int
+	lastArgv    []string
+	lastStdin   []byte
+
+	// emit, when set, is called with the ExecStream onLine callback to
+	// simulate the guest script's streamed stdout/stderr.
+	emit      func(onLine func(stream, line string))
+	exit      int
+	streamErr error
 }
 
-// writeFakeTartFailingAt drops a tart shell script that succeeds for
-// every invocation EXCEPT those whose argv contains `failureMarker`,
-// for which it exits 1. Like writeFakeTartOK, the first-boot marker
-// probe is always reported absent so gated steps stay reachable.
-func writeFakeTartFailingAt(t *testing.T, dir, failureMarker string) {
-	t.Helper()
-	script := fmt.Sprintf(`#!/bin/sh
-case "$*" in
-  *"test -f %s"*) exit 1 ;;
-esac
-for arg in "$@"; do
-  case "$arg" in
-    *%s*) echo "step failure marker matched: $arg" >&2; exit 1 ;;
-  esac
-done
-exit 0
-`, provisionedMarker, failureMarker)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "tart"), []byte(script), 0755))
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-}
-
-// fakeRecordingTart records every argv sequence passed to ExecWithRetry.
-type fakeRecordingTart struct {
-	onExec func(argv []string) tart.ExecResult
-}
-
-func (f *fakeRecordingTart) Exec(ctx context.Context, name string, argv []string) tart.ExecResult {
-	return f.onExec(argv)
-}
-
-func (f *fakeRecordingTart) ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult {
-	return f.onExec(argv)
-}
-
-func (f *fakeRecordingTart) ExecStdin(ctx context.Context, name string, stdin io.Reader, argv []string) tart.ExecResult {
-	return f.onExec(argv)
-}
-
-// isMarkerProbe reports whether argv is the first-boot marker read
-// (`test -f /var/lib/devm/provisioned`) that Provisioner.markerExists issues.
-func isMarkerProbe(argv []string) bool {
-	return len(argv) == 3 && argv[0] == "test" && argv[1] == "-f" && argv[2] == provisionedMarker
-}
-
-func TestReloadBaseServices_EnablesSSH(t *testing.T) {
-	// Fake tart that records every argv.
-	var seen [][]string
-	tr := &fakeRecordingTart{
-		onExec: func(argv []string) tart.ExecResult {
-			seen = append(seen, argv)
+func (f *fakeStreamTart) ExecWithRetry(_ context.Context, _ string, argv []string) tart.ExecResult {
+	if len(argv) == 3 && argv[0] == "test" && argv[1] == "-f" && argv[2] == provisionedMarker {
+		if f.markerPresent {
 			return tart.ExecResult{ExitCode: 0}
-		},
-	}
-	p := &Provisioner{Tart: tr, VMName: "vm"}
-	var buf bytes.Buffer
-	require.NoError(t, p.reloadBaseServices(context.Background(), &buf))
-
-	// Must invoke both caddy reload AND ssh enable+start.
-	joined := make([]string, 0, len(seen))
-	for _, a := range seen {
-		joined = append(joined, strings.Join(a, " "))
-	}
-	assert.Contains(t, joined, "sudo systemctl reload-or-restart caddy")
-	found := false
-	for _, s := range joined {
-		if strings.Contains(s, "systemctl enable --now ssh") {
-			found = true
-			break
 		}
-	}
-	assert.True(t, found, "reloadBaseServices must enable + start ssh; saw: %v", joined)
-}
-
-func TestApplySvcIngressFirewall_DockerWithDirectService_RunsScript(t *testing.T) {
-	var seen [][]string
-	tr := &fakeRecordingTart{
-		onExec: func(argv []string) tart.ExecResult {
-			seen = append(seen, argv)
-			return tart.ExecResult{ExitCode: 0}
-		},
-	}
-	cfg := schema.Config{
-		Project: schema.Project{Name: "p"},
-		Docker:  true,
-		Services: map[string]schema.Service{
-			"api": {Direct: true, Port: 54321},
-		},
-	}
-	p := &Provisioner{Tart: tr, VMName: "vm", Cfg: cfg}
-	var buf bytes.Buffer
-	require.NoError(t, p.applySvcIngressFirewall(context.Background(), &buf))
-
-	found := false
-	for _, argv := range seen {
-		joined := strings.Join(argv, " ")
-		if strings.Contains(joined, "ct original proto-dst 54321 accept") {
-			found = true
-		}
-	}
-	assert.True(t, found, "expected svc_ingress script with port 54321; saw: %v", seen)
-}
-
-func TestApplySvcIngressFirewall_NoDirectPorts_Skipped(t *testing.T) {
-	cases := []struct {
-		name string
-		cfg  schema.Config
-	}{
-		{
-			name: "docker false",
-			cfg: schema.Config{
-				Project: schema.Project{Name: "p"},
-				Docker:  false,
-				Services: map[string]schema.Service{
-					"api": {Direct: true, Port: 54321},
-				},
-			},
-		},
-		{
-			name: "docker true but no direct services",
-			cfg: schema.Config{
-				Project: schema.Project{Name: "p"},
-				Docker:  true,
-				Services: map[string]schema.Service{
-					"api": {Port: 54321},
-				},
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var seen [][]string
-			tr := &fakeRecordingTart{
-				onExec: func(argv []string) tart.ExecResult {
-					seen = append(seen, argv)
-					return tart.ExecResult{ExitCode: 0}
-				},
-			}
-			p := &Provisioner{Tart: tr, VMName: "vm", Cfg: tc.cfg}
-			var buf bytes.Buffer
-			require.NoError(t, p.applySvcIngressFirewall(context.Background(), &buf))
-			assert.Empty(t, seen, "no tart exec should run when there are no direct ports")
-			assert.Contains(t, buf.String(), "skipping")
-		})
-	}
-}
-
-func TestProvisioner_RunsAllStepsOnHappyPath(t *testing.T) {
-	dir := t.TempDir()
-	writeFakeTartOK(t, dir)
-
-	p := &Provisioner{
-		Tart:            tart.New(),
-		VMName:          "myproj-sbx",
-		Cfg:             schema.Config{Project: schema.Project{Name: "myproj"}},
-		CARootPEM:       []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"),
-		WorkspaceVMPath: "/Users/test/myproj",
-	}
-	var buf bytes.Buffer
-	err := p.Run(context.Background(), &buf)
-	require.NoError(t, err)
-	out := buf.String()
-
-	// All expected step headers appear in order.
-	expectedSteps := []string{
-		"[step: mkdir workspace parents]",
-		"[step: install devm bundle]",
-		"[step: reload base services]",
-		"[step: apt-get update]",
-		"[step: apt-get install packages]",
-		"[step: run install commands]",
-		"[step: systemctl daemon-reload]",
-		"[step: enable + start services]",
-		"[step: apply masks]",
-	}
-	prev := -1
-	for _, marker := range expectedSteps {
-		idx := strings.Index(out, marker)
-		require.GreaterOrEqual(t, idx, 0, "missing step header: %s\nfull output:\n%s", marker, out)
-		assert.Greater(t, idx, prev, "step %s out of order", marker)
-		prev = idx
-	}
-}
-
-func TestProvisioner_FirstBootRunsGatedStepsAndWritesMarker(t *testing.T) {
-	var ran []string
-	fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
-		joined := strings.Join(argv, " ")
-		if strings.Contains(joined, "test -f /var/lib/devm/provisioned") {
-			return tart.ExecResult{ExitCode: 1} // absent → first boot
-		}
-		ran = append(ran, joined)
-		return tart.ExecResult{ExitCode: 0}
-	}}
-	p := &Provisioner{Tart: fake, VMName: "vm", Cfg: schema.Config{Install: []string{"echo hi"}}}
-	require.NoError(t, p.Run(context.Background(), &bytes.Buffer{}))
-
-	joinedAll := strings.Join(ran, "\n")
-	assert.Contains(t, joinedAll, "echo hi", "install: must run on first boot")
-	assert.Contains(t, joinedAll, "touch /var/lib/devm/provisioned",
-		"marker must be written after a successful first boot")
-}
-
-func TestProvisioner_RestartSkipsGatedSteps(t *testing.T) {
-	var ran []string
-	fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
-		joined := strings.Join(argv, " ")
-		if strings.Contains(joined, "test -f /var/lib/devm/provisioned") {
-			return tart.ExecResult{ExitCode: 0} // present → restart
-		}
-		ran = append(ran, joined)
-		return tart.ExecResult{ExitCode: 0}
-	}}
-	p := &Provisioner{Tart: fake, VMName: "vm", Cfg: schema.Config{Install: []string{"echo hi"}}}
-	require.NoError(t, p.Run(context.Background(), &bytes.Buffer{}))
-
-	joinedAll := strings.Join(ran, "\n")
-	assert.NotContains(t, joinedAll, "echo hi", "install: must NOT re-run on restart")
-	assert.NotContains(t, joinedAll, "touch /var/lib/devm/provisioned",
-		"marker must not be re-written when already present")
-}
-
-// TestProvisioner_MarkerWriteFailureIsPostInstall pins that a failure to
-// write the first-boot marker — which only runs after every provisioning
-// step, including "enable + start services" and "apply masks", has
-// already succeeded — is classified as post-install. The VM is fully up
-// and healthy at that point, so a one-off marker-write hiccup must leave
-// it running rather than trigger teardown + recreate.
-func TestProvisioner_MarkerWriteFailureIsPostInstall(t *testing.T) {
-	fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
-		joined := strings.Join(argv, " ")
-		if strings.Contains(joined, "test -f /var/lib/devm/provisioned") {
-			return tart.ExecResult{ExitCode: 1} // absent → first boot
-		}
-		if strings.Contains(joined, "touch /var/lib/devm/provisioned") {
-			return tart.ExecResult{ExitCode: 1} // marker write fails
-		}
-		return tart.ExecResult{ExitCode: 0}
-	}}
-	p := &Provisioner{Tart: fake, VMName: "vm", Cfg: schema.Config{Install: []string{"echo hi"}}}
-	err := p.Run(context.Background(), &bytes.Buffer{})
-	require.Error(t, err)
-	assert.True(t, IsPostInstallFailure(err),
-		"marker-write failure must be classified post-install so the VM is left running")
-}
-
-// TestProvisioner_SvcIngressRunsAfterEgressEnforcement pins the step
-// order between the two firewall steps: svc_ingress rules must be
-// applied only after egress enforcement has scaffolded/locked down
-// the base chains, never before.
-func TestProvisioner_SvcIngressRunsAfterEgressEnforcement(t *testing.T) {
-	dir := t.TempDir()
-	writeFakeTartOK(t, dir)
-
-	p := &Provisioner{
-		Tart:            tart.New(),
-		VMName:          "myproj-sbx",
-		Cfg:             schema.Config{Project: schema.Project{Name: "myproj"}},
-		CARootPEM:       []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"),
-		WorkspaceVMPath: "/Users/test/myproj",
-	}
-	var buf bytes.Buffer
-	require.NoError(t, p.Run(context.Background(), &buf))
-	out := buf.String()
-
-	egressIdx := strings.Index(out, "[step: apply egress enforcement]")
-	svcIngressIdx := strings.Index(out, "[step: apply svc_ingress firewall]")
-	require.GreaterOrEqual(t, egressIdx, 0, "missing egress enforcement step header")
-	require.GreaterOrEqual(t, svcIngressIdx, 0, "missing svc_ingress firewall step header")
-	assert.Greater(t, svcIngressIdx, egressIdx, "svc_ingress firewall must run after egress enforcement")
-}
-
-// TestProvisioner_BootEnforcement_AlwaysMasksNftables pins that every
-// project — startup: set or not — hands boot-restore ownership to
-// devm-enforce.service/devm-startup.service: nftables.service is always
-// masked so it can't race the boot order with enforcement already
-// applied. The mechanism is always registered, not opt-in.
-func TestProvisioner_BootEnforcement_AlwaysMasksNftables(t *testing.T) {
-	for name, cfg := range map[string]schema.Config{
-		"with startup commands": {Startup: []string{"echo hi"}},
-		"without startup":       {},
-	} {
-		t.Run(name, func(t *testing.T) {
-			var seen [][]string
-			tr := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
-				if !isMarkerProbe(argv) {
-					seen = append(seen, argv)
-				}
-				return tart.ExecResult{ExitCode: 0}
-			}}
-			p := &Provisioner{Tart: tr, VMName: "vm", Cfg: cfg}
-			var buf bytes.Buffer
-			require.NoError(t, p.setupBootEnforcement(context.Background(), &buf))
-
-			joined := strings.Join(flattenArgvs(seen), "\n")
-			assert.Contains(t, joined, "mask nftables")
-			assert.Contains(t, joined, "enable")
-			assert.Contains(t, joined, "devm-enforce.service")
-			assert.Contains(t, joined, "devm-startup.service")
-			assert.NotContains(t, joined, "unmask")
-		})
-	}
-}
-
-// TestProvisioner_RunStartup_AlwaysStartsOnEveryColdStart pins that
-// devm-startup.service is started on every cold start, startup: set or
-// not (an empty cfg.Startup still has a startup.sh — a no-op script —
-// so there's always a unit to start).
-func TestProvisioner_RunStartup_AlwaysStartsOnEveryColdStart(t *testing.T) {
-	for name, cfg := range map[string]schema.Config{
-		"first boot with startup commands": {Startup: []string{"echo hi"}},
-		"first boot with no startup":       {},
-	} {
-		t.Run(name, func(t *testing.T) {
-			var seen [][]string
-			fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
-				if isMarkerProbe(argv) {
-					return tart.ExecResult{ExitCode: 1} // absent -> first boot
-				}
-				seen = append(seen, argv)
-				return tart.ExecResult{ExitCode: 0}
-			}}
-			p := &Provisioner{Tart: fake, VMName: "vm", Cfg: cfg}
-			require.NoError(t, p.Run(context.Background(), &bytes.Buffer{}))
-
-			joined := strings.Join(flattenArgvs(seen), "\n")
-			assert.Contains(t, joined, "start devm-startup.service")
-		})
-	}
-
-	t.Run("restart (not first boot) still starts the service", func(t *testing.T) {
-		var seen [][]string
-		fake := &fakeRecordingTart{onExec: func(argv []string) tart.ExecResult {
-			if isMarkerProbe(argv) {
-				return tart.ExecResult{ExitCode: 0} // present -> restart
-			}
-			seen = append(seen, argv)
-			return tart.ExecResult{ExitCode: 0}
-		}}
-		p := &Provisioner{Tart: fake, VMName: "vm", Cfg: schema.Config{Startup: []string{"echo hi"}}}
-		require.NoError(t, p.Run(context.Background(), &bytes.Buffer{}))
-
-		joined := strings.Join(flattenArgvs(seen), "\n")
-		assert.Contains(t, joined, "start devm-startup.service")
-	})
-}
-
-// flattenArgvs joins each recorded argv into a single space-joined string
-// per invocation, for substring assertions across the whole recording.
-func flattenArgvs(argvs [][]string) []string {
-	out := make([]string, 0, len(argvs))
-	for _, a := range argvs {
-		out = append(out, strings.Join(a, " "))
-	}
-	return out
-}
-
-// Note: failure-isolation testing (verifying that later steps DON'T
-// run after an earlier one fails) is harder because the fake tart
-// would need to track invocations. Acceptable simplification: verify
-// the error propagation behavior only.
-func TestProvisioner_FailsFastOnTartError(t *testing.T) {
-	dir := t.TempDir()
-	// Fail when argv contains "apt-get" — i.e., the apt update step.
-	writeFakeTartFailingAt(t, dir, "apt-get")
-
-	p := &Provisioner{
-		Tart:   tart.New(),
-		VMName: "myproj-sbx",
-		Cfg: schema.Config{
-			Project:  schema.Project{Name: "myproj"},
-			Packages: []string{"jq"}, // forces apt-get update to actually run
-		},
-		CARootPEM:       []byte("fake-pem\n"),
-		WorkspaceVMPath: "/Users/test/myproj",
-	}
-	var buf bytes.Buffer
-	err := p.Run(context.Background(), &buf)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "apt-get update")
-
-	out := buf.String()
-	// Steps after the failure must NOT appear.
-	assert.NotContains(t, out, "[step: systemctl daemon-reload]")
-	assert.NotContains(t, out, "[step: enable + start services]")
-}
-
-// writeFakeTartIsActiveMap writes a tart shell script that responds to
-// `systemctl is-active <name>` probes using the given states map (names
-// absent from the map return "active" / exit-0). All other commands
-// succeed silently.
-func writeFakeTartIsActiveMap(t *testing.T, dir string, states map[string]string) {
-	t.Helper()
-	var cases strings.Builder
-	for name, state := range states {
-		exitCode := 0
-		if state != "active" {
-			exitCode = 1
-		}
-		fmt.Fprintf(&cases, "        %s) echo %s; exit %d ;;\n", name, state, exitCode)
-	}
-	script := fmt.Sprintf(`#!/bin/sh
-prev=""
-for arg in "$@"; do
-    if [ "$prev" = "is-active" ]; then
-        case "$arg" in
-%s        *) echo active; exit 0 ;;
-        esac
-    fi
-    prev="$arg"
-done
-echo fake-tart-output
-exit 0
-`, cases.String())
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "tart"), []byte(script), 0755))
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-}
-
-func TestProvisioner_RoutingOnlyServiceSkipped(t *testing.T) {
-	dir := t.TempDir()
-	writeFakeTartOK(t, dir)
-
-	p := &Provisioner{
-		Tart:   tart.New(),
-		VMName: "myproj-sbx",
-		Cfg: schema.Config{
-			Project: schema.Project{Name: "myproj"},
-			Services: map[string]schema.Service{
-				// Routing-only (no Exec, no Systemd).
-				"routing-only": {Hostname: "x.test", Port: 8080},
-				// Has Exec, should get systemctl enable --now.
-				"with-exec": {Exec: []string{"/bin/true"}},
-			},
-		},
-		CARootPEM:       []byte("fake\n"),
-		WorkspaceVMPath: "/Users/test/myproj",
-	}
-	var buf bytes.Buffer
-	require.NoError(t, p.Run(context.Background(), &buf))
-
-	out := buf.String()
-	assert.Contains(t, out, "(skip routing-only — routing-only declaration)")
-}
-
-func TestProvisioner_AssertsServicesActive(t *testing.T) {
-	// Service health check: after `systemctl enable --now <unit>`, the
-	// provisioner polls `systemctl is-active <unit>` (bounded by a short
-	// wait) and returns a structured error if any unit ends in "failed".
-	dir := t.TempDir()
-	writeFakeTartIsActiveMap(t, dir, map[string]string{"broken": "failed"})
-
-	cfg := schema.Config{
-		Project: schema.Project{Name: "p"},
-		Services: map[string]schema.Service{
-			"broken": {Systemd: "[Service]\nExecStart=/bin/false\n"},
-		},
-	}
-	p := &Provisioner{
-		Tart:            tart.New(),
-		VMName:          "p-vm",
-		Cfg:             cfg,
-		CARootPEM:       []byte("fake\n"),
-		WorkspaceVMPath: "/tmp/p",
-	}
-	err := p.Run(context.Background(), io.Discard)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), `service "broken" did not become active`)
-	require.Contains(t, err.Error(), "status=failed")
-}
-
-// deadlineCapturingTart records the remaining deadline duration and the
-// argv of every context passed to Exec. Used to verify that install steps
-// run under the correct per-step timeout budget and go through the
-// with-devm-env wrapper.
-type deadlineCapturingTart struct {
-	deadlines []time.Duration
-	argvs     [][]string
-}
-
-func (d *deadlineCapturingTart) Exec(ctx context.Context, _ string, argv []string) tart.ExecResult {
-	if isMarkerProbe(argv) {
-		// Always report the first-boot marker absent so gated steps
-		// (e.g. the install step under test) still run.
 		return tart.ExecResult{ExitCode: 1}
-	}
-	if dl, ok := ctx.Deadline(); ok {
-		d.deadlines = append(d.deadlines, time.Until(dl))
-		d.argvs = append(d.argvs, append([]string(nil), argv...))
 	}
 	return tart.ExecResult{ExitCode: 0}
 }
 
-func (d *deadlineCapturingTart) ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult {
-	return d.Exec(ctx, name, argv)
-}
-
-func (d *deadlineCapturingTart) ExecStdin(ctx context.Context, name string, _ io.Reader, argv []string) tart.ExecResult {
-	return d.Exec(ctx, name, argv)
-}
-
-func newDeadlineCapturingTart() *deadlineCapturingTart {
-	return &deadlineCapturingTart{}
-}
-
-// slowTart blocks Exec calls that carry a deadline context for `delay`,
-// simulating a command that hangs longer than its per-step timeout budget.
-// Calls without a deadline (non-install provisioner steps) return immediately
-// so the test only burns time on the step under test.
-type slowTart struct {
-	delay time.Duration
-}
-
-func (s *slowTart) Exec(ctx context.Context, _ string, argv []string) tart.ExecResult {
-	if isMarkerProbe(argv) {
-		// Always report the first-boot marker absent so the install
-		// step under test still runs (and can time out).
-		return tart.ExecResult{ExitCode: 1}
+func (f *fakeStreamTart) ExecStream(_ context.Context, _ string, stdin io.Reader,
+	argv []string, onLine func(stream, line string)) (int, error) {
+	f.streamCalls++
+	f.lastArgv = argv
+	if stdin != nil {
+		b, _ := io.ReadAll(stdin)
+		f.lastStdin = b
 	}
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		return tart.ExecResult{ExitCode: 0}
+	if f.emit != nil {
+		f.emit(onLine)
 	}
-	select {
-	case <-ctx.Done():
-		return tart.ExecResult{ExitCode: -1}
-	case <-time.After(s.delay):
-		return tart.ExecResult{ExitCode: 0}
+	return f.exit, f.streamErr
+}
+
+// scriptOf returns the composed guest script from the recorded ExecStream
+// argv (`bash -c <script>`).
+func scriptOf(t *testing.T, f *fakeStreamTart) string {
+	t.Helper()
+	require.Len(t, f.lastArgv, 3, "ExecStream argv must be [bash -c <script>]")
+	assert.Equal(t, "bash", f.lastArgv[0])
+	assert.Equal(t, "-c", f.lastArgv[1])
+	return f.lastArgv[2]
+}
+
+func baseProvisioner(f *fakeStreamTart, cfg schema.Config) *Provisioner {
+	return &Provisioner{
+		Tart:            f,
+		VMName:          "myproj-sbx",
+		Cfg:             cfg,
+		CARootPEM:       []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"),
+		WorkspaceVMPath: "/Users/test/myproj",
+		EnforcedNft:     "table inet devm_filter { policy drop }",
 	}
 }
 
-func (s *slowTart) ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult {
-	return s.Exec(ctx, name, argv)
+func TestRun_ShipsExactlyOneExecStreamWithScriptAndTar(t *testing.T) {
+	f := &fakeStreamTart{} // marker absent → first boot
+	p := baseProvisioner(f, schema.Config{
+		Project:  schema.Project{Name: "myproj"},
+		Packages: []string{"jq"},
+		Install:  []string{"echo hi"},
+	})
+	var buf bytes.Buffer
+	require.NoError(t, p.Run(context.Background(), &buf, nil))
+
+	require.Equal(t, 1, f.streamCalls, "Run must ship exactly ONE ExecStream")
+	script := scriptOf(t, f)
+
+	// The composed script fail-fasts, opens the window, runs first-boot
+	// work, enforces, and activates the target last.
+	assert.Contains(t, script, "set -eo pipefail")
+	assert.Contains(t, script, "sudo apt-get install -y 'jq'")
+	assert.Contains(t, script, "/opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
+	assert.Contains(t, script, "systemctl start devm.target")
+	// First-boot completion marker is written by the script.
+	assert.Contains(t, script, "touch /var/lib/devm/provisioned")
+
+	// Stdin is the bundle tar; it must be a valid archive carrying the
+	// devm-owned artifacts (install.sh + startup.sh).
+	require.NotEmpty(t, f.lastStdin, "ExecStream stdin must carry the bundle tar")
+	names := tarEntryNames(t, f.lastStdin)
+	assert.Contains(t, names, "install.sh")
+	assert.Contains(t, names, "startup.sh")
 }
 
-func (s *slowTart) ExecStdin(ctx context.Context, name string, _ io.Reader, argv []string) tart.ExecResult {
-	return s.Exec(ctx, name, argv)
+func tarEntryNames(t *testing.T, body []byte) []string {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(body))
+	var names []string
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, h.Name)
+	}
+	return names
 }
 
-func newSlowTart(d time.Duration) *slowTart {
-	return &slowTart{delay: d}
+func TestRun_ForwardsStreamedLinesToWriterAndOnLine(t *testing.T) {
+	f := &fakeStreamTart{
+		emit: func(onLine func(stream, line string)) {
+			onLine("stdout", "::devm:stage:open::")
+			onLine("stdout", "hello from guest")
+			onLine("stderr", "a warning")
+		},
+	}
+	p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
+
+	var buf bytes.Buffer
+	var seen []string
+	require.NoError(t, p.Run(context.Background(), &buf, func(stream, line string) {
+		seen = append(seen, stream+":"+line)
+	}))
+
+	// Every streamed line is captured to w AND forwarded to onLine.
+	assert.Contains(t, buf.String(), "hello from guest")
+	assert.Contains(t, buf.String(), "a warning")
+	assert.Equal(t, []string{
+		"stdout:::devm:stage:open::",
+		"stdout:hello from guest",
+		"stderr:a warning",
+	}, seen)
 }
 
-func TestProvisioner_InstallStepTimeout_DefaultAndOverride(t *testing.T) {
-	// The env var must be readable from os.Getenv at run time, and a
-	// small override value must be honored. The test exercises both
-	// paths by spying on the deadline passed into tart.Exec.
-
+func TestRun_NonZeroExitClassifiesFailureByStage(t *testing.T) {
 	tests := []struct {
-		name     string
-		envVal   string
-		wantSecs int
+		name         string
+		failAtStage  string
+		wantPostInst bool
 	}{
-		{name: "default 600s when env unset", envVal: "", wantSecs: 600},
-		{name: "env override 3s honored", envVal: "3", wantSecs: 3},
+		{"apt/install phase tears down", "install", false},
+		{"docker phase tears down", "docker", false},
+		{"enforce phase tears down", "enforce", false},
+		{"templates phase keeps vm", "templates", true},
+		{"service phase keeps vm", "services", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.envVal == "" {
-				t.Setenv("DEVM_INSTALL_STEP_TIMEOUT_S", "")
-			} else {
-				t.Setenv("DEVM_INSTALL_STEP_TIMEOUT_S", tc.envVal)
+			stage := tc.failAtStage
+			f := &fakeStreamTart{
+				exit: 1,
+				emit: func(onLine func(stream, line string)) {
+					onLine("stdout", "::devm:stage:"+stage+"::")
+					onLine("stderr", "boom")
+				},
 			}
-			fakeTart := newDeadlineCapturingTart()
-			cfg := schema.Config{
-				Project: schema.Project{Name: "p"},
-				Install: []string{"echo hello"},
-			}
-			p := &Provisioner{Tart: fakeTart, VMName: "p-vm", Cfg: cfg}
-			_ = p.Run(context.Background(), io.Discard)
-			require.NotEmpty(t, fakeTart.deadlines)
-			// Allow a 100ms wiggle for scheduling.
-			got := fakeTart.deadlines[0]
-			assert.InDelta(t, tc.wantSecs, got.Seconds(), 0.2,
-				"install step deadline mismatch")
+			p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
+			err := p.Run(context.Background(), io.Discard, nil)
+			require.Error(t, err)
+
+			var sf *StepFailure
+			require.ErrorAs(t, err, &sf)
+			assert.Equal(t, stage, sf.Step, "failure must be tagged with the stage it reached")
+			assert.Equal(t, tc.wantPostInst, IsPostInstallFailure(err))
 		})
 	}
 }
 
-func TestProvisioner_OneShotServiceInactiveIsSuccess(t *testing.T) {
-	// A service declared with `restart: no` ran-to-completion means
-	// systemctl reports `inactive` — not `active`. The health check must
-	// treat that as success, not a failure.
-	dir := t.TempDir()
-	writeFakeTartIsActiveMap(t, dir, map[string]string{"oneshot": "inactive"})
+func TestRun_ExecStreamTransportErrorIsStepFailure(t *testing.T) {
+	f := &fakeStreamTart{streamErr: context.DeadlineExceeded}
+	p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
+	err := p.Run(context.Background(), io.Discard, nil)
+	require.Error(t, err)
+	var sf *StepFailure
+	require.ErrorAs(t, err, &sf)
+}
 
-	cfg := schema.Config{
-		Project: schema.Project{Name: "p"},
+func TestRun_RestartOmitsFirstBootWork(t *testing.T) {
+	f := &fakeStreamTart{markerPresent: true} // present → restart, not first boot
+	p := baseProvisioner(f, schema.Config{
+		Project:  schema.Project{Name: "myproj"},
+		Packages: []string{"jq"},
+		Install:  []string{"echo hi"},
+	})
+	require.NoError(t, p.Run(context.Background(), io.Discard, nil))
+
+	script := scriptOf(t, f)
+	// First-boot-only work must NOT appear on a restart.
+	assert.NotContains(t, script, "apt-get install")
+	assert.NotContains(t, script, "echo hi")
+	assert.NotContains(t, script, "::devm:stage:packages::")
+	// And the completion marker is not re-written.
+	assert.NotContains(t, script, "touch /var/lib/devm/provisioned")
+	// Enforcement + target still run every boot.
+	assert.Contains(t, script, "EnforcedNft-applied-marker")
+	assert.Contains(t, script, "systemctl start devm.target")
+}
+
+func TestRun_EnforcedNftBakedIntoScript(t *testing.T) {
+	f := &fakeStreamTart{}
+	p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
+	p.EnforcedNft = "table inet devm_filter { chain output { policy drop } }"
+	require.NoError(t, p.Run(context.Background(), io.Discard, nil))
+
+	script := scriptOf(t, f)
+	assert.Contains(t, script, "table inet devm_filter { chain output { policy drop } }")
+	// Applied via nft before the target.
+	assert.Less(t, strings.Index(script, "DEVM_ENFORCE_NFT"),
+		strings.Index(script, "systemctl start devm.target"))
+}
+
+func TestRun_RoutingOnlyServiceOmittedButProcessServicesStarted(t *testing.T) {
+	f := &fakeStreamTart{}
+	p := baseProvisioner(f, schema.Config{
+		Project: schema.Project{Name: "myproj"},
 		Services: map[string]schema.Service{
-			"oneshot": {
-				Exec:    []string{"/bin/true"},
-				Restart: "no",
-			},
+			"routing-only": {Hostname: "x.test", Port: 8080},
+			"with-exec":    {Exec: []string{"/bin/true"}},
 		},
-	}
-	p := &Provisioner{
-		Tart:            tart.New(),
-		VMName:          "p-vm",
-		Cfg:             cfg,
-		CARootPEM:       []byte("fake\n"),
-		WorkspaceVMPath: "/tmp/p",
-	}
-	require.NoError(t, p.Run(context.Background(), io.Discard))
+	})
+	require.NoError(t, p.Run(context.Background(), io.Discard, nil))
+
+	script := scriptOf(t, f)
+	assert.Contains(t, script, "systemctl start with-exec.service")
+	assert.NotContains(t, script, "routing-only.service")
 }
 
-// argvRecordingTart records every argv slice passed to Exec so callers
-// can assert on what the provisioner asked tart to run.
-type argvRecordingTart struct{ argvs [][]string }
-
-func (a *argvRecordingTart) Exec(_ context.Context, _ string, argv []string) tart.ExecResult {
-	a.argvs = append(a.argvs, append([]string(nil), argv...))
-	return tart.ExecResult{ExitCode: 0}
-}
-
-func (a *argvRecordingTart) ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult {
-	return a.Exec(ctx, name, argv)
-}
-
-func (a *argvRecordingTart) ExecStdin(ctx context.Context, name string, _ io.Reader, argv []string) tart.ExecResult {
-	return a.Exec(ctx, name, argv)
-}
-
-func TestProvisioner_ApplyMasks_ChownsToServiceUser(t *testing.T) {
-	// Bug fix: applyMasks was `sudo mkdir`-ing the mask dir and NEVER
-	// chowning it, so a non-root service couldn't write into its own
-	// mask. Pin: the emitted bash script chowns the mask dir to the
-	// service's User (default devm).
+func TestRun_MaskChownedToServiceUserBeforeMount(t *testing.T) {
 	tests := []struct {
 		name      string
 		svcUser   string
@@ -669,8 +254,8 @@ func TestProvisioner_ApplyMasks_ChownsToServiceUser(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := &argvRecordingTart{}
-			cfg := schema.Config{
+			f := &fakeStreamTart{}
+			p := baseProvisioner(f, schema.Config{
 				Project: schema.Project{Name: "p"},
 				Services: map[string]schema.Service{
 					"svc": {
@@ -679,75 +264,49 @@ func TestProvisioner_ApplyMasks_ChownsToServiceUser(t *testing.T) {
 						Masks: []schema.Mask{{Path: "data", Size: "10m"}},
 					},
 				},
-			}
-			p := &Provisioner{
-				Tart:            rec,
-				VMName:          "p-vm",
-				Cfg:             cfg,
-				CARootPEM:       []byte("fake\n"),
-				WorkspaceVMPath: "/Users/x/proj",
-			}
-			require.NoError(t, p.Run(context.Background(), io.Discard))
+			})
+			p.WorkspaceVMPath = "/Users/x/proj"
+			require.NoError(t, p.Run(context.Background(), io.Discard, nil))
 
-			var maskScript string
-			for _, argv := range rec.argvs {
-				// applyMasks goes through execShell → `bash -e -o pipefail -c "<script>"`.
-				if len(argv) >= 5 && argv[0] == "bash" && argv[len(argv)-2] == "-c" &&
-					strings.Contains(argv[len(argv)-1], "/var/devm/masks") {
-					maskScript = argv[len(argv)-1]
-					break
-				}
-			}
-			require.NotEmpty(t, maskScript, "no mask-install bash invocation captured")
-			assert.Contains(t, maskScript,
-				fmt.Sprintf("sudo chown %s /var/devm/masks/p/svc/data", tc.wantOwner),
-				"mask script must chown the mask dir to the service's User (default devm)")
-			// Order matters: chown before bind mount, otherwise the mount
-			// covers up the chown target.
-			chownIdx := strings.Index(maskScript, "chown")
-			mountIdx := strings.Index(maskScript, "mount --bind")
-			assert.True(t, chownIdx > 0 && chownIdx < mountIdx,
-				"chown must precede mount --bind in the mask script; got:\n%s", maskScript)
+			script := scriptOf(t, f)
+			chown := "chown " + tc.wantOwner + " '/var/devm/masks/p/svc/data'"
+			assert.Contains(t, script, chown)
+			// chown must precede the bind mount, or the mount covers the target.
+			chownIdx := strings.Index(script, chown)
+			mountIdx := strings.Index(script, "mount --bind '/var/devm/masks/p/svc/data'")
+			require.Greater(t, chownIdx, 0)
+			assert.Greater(t, mountIdx, chownIdx)
 		})
 	}
 }
 
-func TestProvisioner_InstallStepsGoThroughWithDevmEnvWrapper(t *testing.T) {
-	// Pin: install commands run via
-	//   with-devm-env bash -e -o pipefail -c <cmd>
-	// so .devm/.env is sourced (WORKSPACE_DIR, path: entries, cfg.Env).
-	// Regression pin for Bug L.
-	fakeTart := newDeadlineCapturingTart()
-	cfg := schema.Config{
+func TestRun_TemplatesTriggerDispatcher(t *testing.T) {
+	// devmbundle.Build renders declared templates from a real source file
+	// under the repo root, so give it one.
+	repoRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "x"), []byte("hi {{.Project.Name}}\n"), 0o644))
+
+	f := &fakeStreamTart{}
+	p := baseProvisioner(f, schema.Config{
 		Project: schema.Project{Name: "p"},
-		Install: []string{"true"},
-	}
-	p := &Provisioner{
-		Tart: fakeTart, VMName: "p-vm", Cfg: cfg,
-		WorkspaceVMPath: "/Users/x/repo",
-	}
-	_ = p.Run(context.Background(), io.Discard)
-	require.Len(t, fakeTart.argvs, 1, "expected one deadline-carrying call (the install step)")
-	got := fakeTart.argvs[0]
-	require.Equal(t,
-		[]string{"/opt/devm/scripts/with-devm-env", "bash", "-e", "-o", "pipefail", "-c", "true"},
-		got,
-	)
+		Services: map[string]schema.Service{
+			"svc": {Exec: []string{"/bin/true"}, Templates: []schema.Template{{Source: "x", Output: "/tmp/y"}}},
+		},
+	})
+	p.WorkspaceVMPath = repoRoot
+	require.NoError(t, p.Run(context.Background(), io.Discard, nil))
+	assert.Contains(t, scriptOf(t, f), "install-templates.sh")
 }
 
-func TestProvisioner_InstallStepTimeout_ErrorMessage(t *testing.T) {
-	// Step exceeds the deadline → structured error names the step
-	// number and the command that timed out.
-	t.Setenv("DEVM_INSTALL_STEP_TIMEOUT_S", "1")
-	fakeTart := newSlowTart(2 * time.Second)
-	cfg := schema.Config{
+func TestRun_SvcIngressForDirectDockerPorts(t *testing.T) {
+	f := &fakeStreamTart{}
+	p := baseProvisioner(f, schema.Config{
 		Project: schema.Project{Name: "p"},
-		Install: []string{"sleep 2"},
-	}
-	p := &Provisioner{Tart: fakeTart, VMName: "p-vm", Cfg: cfg}
-	err := p.Run(context.Background(), io.Discard)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `install step 1`)
-	assert.Contains(t, err.Error(), `sleep 2`)
-	assert.Contains(t, err.Error(), "timed out")
+		Docker:  true,
+		Services: map[string]schema.Service{
+			"api": {Exec: []string{"/bin/true"}, Direct: true, Port: 54321},
+		},
+	})
+	require.NoError(t, p.Run(context.Background(), io.Discard, nil))
+	assert.Contains(t, scriptOf(t, f), "ct original proto-dst 54321 accept")
 }

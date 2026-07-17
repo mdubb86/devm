@@ -172,50 +172,9 @@ func buildNftablesScript(macHost string, httpPort, httpsPort, dnsPort, ntpPort i
 	// Two-stage live apply: first idempotently ensure tables/chains
 	// exist, then flush ONLY our own chains (`output`, `forward`,
 	// `prerouting`) and rebuild.
-	liveApply := fmt.Sprintf(`sudo nft -f - <<'EOF'
-add table ip devm_nat
-add chain ip devm_nat output { type nat hook output priority -100 ; }
-add chain ip devm_nat prerouting { type nat hook prerouting priority -100 ; }
-flush chain ip devm_nat output
-flush chain ip devm_nat prerouting
-add rule ip devm_nat output ip daddr %s return
-add rule ip devm_nat output tcp dport 443 dnat to %s:%d
-add rule ip devm_nat output tcp dport 80 dnat to %s:%d
-add rule ip devm_nat output udp dport 53 redirect to :53
-%s
-add rule ip devm_nat prerouting iifname { "docker0", "docker_gwbridge" } udp dport 53 redirect to :53
-add rule ip devm_nat prerouting iifname { "docker0", "docker_gwbridge" } tcp dport 443 dnat to %s:%d
-add rule ip devm_nat prerouting iifname { "docker0", "docker_gwbridge" } tcp dport 80 dnat to %s:%d
-add rule ip devm_nat prerouting iifname "br-*" udp dport 53 redirect to :53
-add rule ip devm_nat prerouting iifname "br-*" tcp dport 443 dnat to %s:%d
-add rule ip devm_nat prerouting iifname "br-*" tcp dport 80 dnat to %s:%d
-
-add table inet devm_filter
-add chain inet devm_filter svc_ingress
-add chain inet devm_filter output { type filter hook output priority 0 ; policy drop ; }
-add chain inet devm_filter forward { type filter hook forward priority 0 ; policy drop ; }
-flush chain inet devm_filter output
-flush chain inet devm_filter forward
-add rule inet devm_filter output ct state established,related accept
-add rule inet devm_filter output oif lo accept
-add rule inet devm_filter output ip daddr 127.0.0.0/8 accept
-add rule inet devm_filter output ip daddr %s tcp dport { %d, %d } accept
-add rule inet devm_filter output ip daddr %s udp dport %d accept
-%s
-%s
-add rule inet devm_filter forward ct state established,related accept
-add rule inet devm_filter forward ip daddr %s tcp dport { %d, %d } accept
-add rule inet devm_filter forward jump svc_ingress
-EOF
-`, macHost, macHost, httpsPort, macHost, httpPort,
-		strings.TrimRight(strings.Replace(ntpNatRule, "    ", "add rule ip devm_nat output ", 1), "\n"),
-		macHost, httpsPort, macHost, httpPort,
-		macHost, httpsPort, macHost, httpPort,
-		macHost, httpPort, httpsPort,
-		macHost, dnsPort,
-		strings.TrimRight(strings.Replace(ntpFilterRule, "    ", "add rule inet devm_filter output ", 1), "\n"),
-		strings.TrimRight(strings.Replace(dockerFilterRule, "    ", "add rule inet devm_filter output ", 1), "\n"),
-		macHost, httpPort, httpsPort)
+	liveApply := "sudo nft -f - <<'EOF'\n" +
+		buildNftablesRuleset(macHost, httpPort, httpsPort, dnsPort, ntpPort, docker) +
+		"EOF\n"
 
 	// Persistence: snapshot svc_ingress and write /etc/nftables.conf so
 	// systemd's nftables.service restores everything on the next boot.
@@ -281,6 +240,70 @@ EOF
 		macHost, httpPort, httpsPort)
 
 	return liveApply + persist
+}
+
+// buildNftablesRuleset returns just the `nft -f -` ruleset body (no
+// heredoc wrapper, no /etc/nftables.conf persistence block) that the
+// enforced-egress allowlist installs: the `ip devm_nat` DNAT tables and
+// the `inet devm_filter` default-deny output/forward chains. It is the
+// content the boot-integrity-gate provisioning script bakes into its
+// enforce-phase heredoc — the daemon live-applies the allowlist every
+// provision while the base image's skeleton nftables.conf stays the boot
+// lock, so only the ruleset (not persistence) is needed there. Shared
+// with buildNftablesScript so the policy has one definition.
+func buildNftablesRuleset(macHost string, httpPort, httpsPort, dnsPort, ntpPort int, docker bool) string {
+	ntpNatRule := ""
+	ntpFilterRule := ""
+	if ntpPort > 0 {
+		ntpNatRule = fmt.Sprintf("    udp dport 123 dnat to %s:%d\n", macHost, ntpPort)
+		ntpFilterRule = fmt.Sprintf("    ip daddr %s udp dport %d accept\n", macHost, ntpPort)
+	}
+	dockerFilterRule := ""
+	if docker {
+		dockerFilterRule = "    ip daddr 172.16.0.0/12 accept\n"
+	}
+	return fmt.Sprintf(`add table ip devm_nat
+add chain ip devm_nat output { type nat hook output priority -100 ; }
+add chain ip devm_nat prerouting { type nat hook prerouting priority -100 ; }
+flush chain ip devm_nat output
+flush chain ip devm_nat prerouting
+add rule ip devm_nat output ip daddr %s return
+add rule ip devm_nat output tcp dport 443 dnat to %s:%d
+add rule ip devm_nat output tcp dport 80 dnat to %s:%d
+add rule ip devm_nat output udp dport 53 redirect to :53
+%s
+add rule ip devm_nat prerouting iifname { "docker0", "docker_gwbridge" } udp dport 53 redirect to :53
+add rule ip devm_nat prerouting iifname { "docker0", "docker_gwbridge" } tcp dport 443 dnat to %s:%d
+add rule ip devm_nat prerouting iifname { "docker0", "docker_gwbridge" } tcp dport 80 dnat to %s:%d
+add rule ip devm_nat prerouting iifname "br-*" udp dport 53 redirect to :53
+add rule ip devm_nat prerouting iifname "br-*" tcp dport 443 dnat to %s:%d
+add rule ip devm_nat prerouting iifname "br-*" tcp dport 80 dnat to %s:%d
+
+add table inet devm_filter
+add chain inet devm_filter svc_ingress
+add chain inet devm_filter output { type filter hook output priority 0 ; policy drop ; }
+add chain inet devm_filter forward { type filter hook forward priority 0 ; policy drop ; }
+flush chain inet devm_filter output
+flush chain inet devm_filter forward
+add rule inet devm_filter output ct state established,related accept
+add rule inet devm_filter output oif lo accept
+add rule inet devm_filter output ip daddr 127.0.0.0/8 accept
+add rule inet devm_filter output ip daddr %s tcp dport { %d, %d } accept
+add rule inet devm_filter output ip daddr %s udp dport %d accept
+%s
+%s
+add rule inet devm_filter forward ct state established,related accept
+add rule inet devm_filter forward ip daddr %s tcp dport { %d, %d } accept
+add rule inet devm_filter forward jump svc_ingress
+`, macHost, macHost, httpsPort, macHost, httpPort,
+		strings.TrimRight(strings.Replace(ntpNatRule, "    ", "add rule ip devm_nat output ", 1), "\n"),
+		macHost, httpsPort, macHost, httpPort,
+		macHost, httpsPort, macHost, httpPort,
+		macHost, httpPort, httpsPort,
+		macHost, dnsPort,
+		strings.TrimRight(strings.Replace(ntpFilterRule, "    ", "add rule inet devm_filter output ", 1), "\n"),
+		strings.TrimRight(strings.Replace(dockerFilterRule, "    ", "add rule inet devm_filter output ", 1), "\n"),
+		macHost, httpPort, httpsPort)
 }
 
 // buildTimesyncdScript configures systemd-timesyncd to send NTP

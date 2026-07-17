@@ -93,6 +93,29 @@ func TestBuildNftablesScript_FilterDefaultDenyExceptIronProxyPorts(t *testing.T)
 	assert.NotContains(t, script, "systemctl enable --now nftables")
 }
 
+func TestBuildNftablesRuleset_RulesetBodyWithoutPersistence(t *testing.T) {
+	// The boot-integrity-gate provisioning script bakes ONLY the ruleset
+	// body (the `nft -f -` content) into its enforce-phase heredoc — the
+	// daemon live-applies it every provision while the base image's
+	// skeleton stays the boot lock, so the /etc/nftables.conf persistence
+	// block must NOT be present.
+	ruleset := buildNftablesRuleset("192.168.64.1", 8080, 8443, 8053, 0, false)
+	// The allowlist policy is present.
+	assert.Contains(t, ruleset, "add table inet devm_filter")
+	assert.Contains(t, ruleset, "tcp dport 443 dnat to 192.168.64.1:8443")
+	assert.Contains(t, ruleset, "add rule inet devm_filter forward jump svc_ingress")
+	// But NOT the heredoc wrapper or the persistence block.
+	assert.NotContains(t, ruleset, "sudo nft -f -")
+	assert.NotContains(t, ruleset, "/etc/nftables.conf")
+	assert.NotContains(t, ruleset, "include \"/etc/nftables.d/*.conf\"")
+
+	// buildNftablesScript embeds exactly this ruleset (single source of
+	// truth for the policy).
+	full := buildNftablesScript("192.168.64.1", 8080, 8443, 8053, 0, false)
+	assert.Contains(t, full, ruleset)
+	assert.Contains(t, full, "/etc/nftables.conf") // full script DOES persist
+}
+
 func TestBuildNftablesScript_NTPPortAddsDNATAndFilterRule(t *testing.T) {
 	// ntpPort > 0 → DNAT for UDP:123 to MAC_HOST:ntpPort and a matching
 	// filter accept. Guest's timesyncd sends to whatever it thinks is NTP;

@@ -43,8 +43,8 @@ func (f *fakeVMAdmin) StartVM(_ context.Context, _ serviceapi.VMStartRequest) er
 	return f.startErr
 }
 
-func (f *fakeVMAdmin) ApplyEgressEnforcement(_ context.Context, _ string) error {
-	return nil
+func (f *fakeVMAdmin) EnforcedNftRuleset(_ context.Context, _ string) (string, error) {
+	return "table inet devm_filter { chain output { type filter hook output priority 0; policy drop; } }", nil
 }
 
 func (f *fakeVMAdmin) StopVM(_ context.Context, _ string) error {
@@ -248,22 +248,17 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 }
 
 // TestRunShellColdPath_PostInstallFail_KeepsVM verifies that a
-// service-phase failure (enable + start services, etc.) leaves the VM
-// running so the user can debug — install failures still tear down.
+// service-phase failure (the composed script's `services` stage) leaves
+// the VM running so the user can debug — install failures still tear down.
 func TestRunShellColdPath_PostInstallFail_KeepsVM(t *testing.T) {
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
 		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
 	}
-	// Fail on systemctl is-active — that only fires from
-	// enable+start-services in the health poll. Everything before succeeds.
-	tartBin, logPath := fakeTartBinFailingAt(t, repoRoot, "is-active")
-
-	// Provision needs at least one declared service to hit is-active.
-	cfg := minimalCfg()
-	cfg.Services = map[string]schema.Service{
-		"broken": {Exec: []string{"/bin/false"}, Restart: "no"},
-	}
+	// The single provisioning ExecStream emits the `services` stage marker
+	// then exits non-zero — a broken user service. That stage is
+	// post-install, so the VM must be kept.
+	tartBin, logPath := fakeTartBinStageFail(t, repoRoot, "services")
 
 	spawner := &stubSpawner{}
 	deps := ShellDeps{
@@ -276,9 +271,9 @@ func TestRunShellColdPath_PostInstallFail_KeepsVM(t *testing.T) {
 	require.NoError(t, os.MkdirAll(caPath, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(caPath, "root.crt"), []byte("FAKE-CA"), 0o644))
 
-	_, err := RunShell(context.Background(), deps, cfg, repoRoot, "x-sbx", "bash", nil)
+	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "enable + start services")
+	require.Contains(t, err.Error(), "provision")
 
 	admin.mu.Lock()
 	assert.Equal(t, 0, admin.stopCalled, "StopVM must NOT be called on post-install failure")
@@ -290,18 +285,18 @@ func TestRunShellColdPath_PostInstallFail_KeepsVM(t *testing.T) {
 	}
 }
 
-// TestRunShellColdPath_ProvisionFail_TearsDownVM verifies Bug B: when a
-// cold-start step after StartVM fails, RunShell asks the daemon to stop
-// the VM AND invokes `tart delete` so no zombie VM is left behind.
+// TestRunShellColdPath_ProvisionFail_TearsDownVM verifies Bug B: when the
+// provisioning script fails in an install-phase stage, RunShell asks the
+// daemon to stop the VM AND invokes `tart delete` so no zombie VM is left.
 func TestRunShellColdPath_ProvisionFail_TearsDownVM(t *testing.T) {
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
 		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
 	}
 
-	// Fail on the CA install shell script — first provision-step that
-	// contains "base64" in its argv. waitVMReady (`true`) still succeeds.
-	tartBin, logPath := fakeTartBinFailingAt(t, repoRoot, "base64")
+	// The provisioning ExecStream emits the `install` stage marker then
+	// exits non-zero — an install-phase failure that must tear down.
+	tartBin, logPath := fakeTartBinStageFail(t, repoRoot, "install")
 
 	spawner := &stubSpawner{}
 	deps := ShellDeps{
@@ -388,22 +383,25 @@ func fakeTartBin(t *testing.T, dir string) *tart.Tart {
 	return tr
 }
 
-// fakeTartBinFailingAt writes a shell script that exits 1 on any argv
-// containing `failMarker`, and records every invocation to a log file.
-// Returns the *tart.Tart and the path to the invocation log.
-func fakeTartBinFailingAt(t *testing.T, dir, failMarker string) (*tart.Tart, string) {
+// fakeTartBinStageFail writes a fake tart binary that logs every
+// invocation and, for the single provisioning ExecStream (`bash -c
+// <script>`), emits the given `::devm:stage:<stage>::` marker on stdout
+// and exits non-zero — simulating a script failure at that stage. The
+// first-boot marker probe (`test -f /var/lib/devm/provisioned`) reports
+// absent so cold-start takes the first-boot path. Every other call
+// (waitVMReady `true`, teardown `delete`) succeeds / is logged.
+func fakeTartBinStageFail(t *testing.T, dir, stage string) (*tart.Tart, string) {
 	t.Helper()
-	bin := filepath.Join(dir, "tart-fake-failing")
+	bin := filepath.Join(dir, "tart-fake-stagefail")
 	logPath := filepath.Join(dir, "tart-invocations.log")
 	script := fmt.Sprintf(`#!/bin/sh
 echo "$*" >> %q
-for arg in "$@"; do
-  case "$arg" in
-    *%s*) exit 1 ;;
-  esac
-done
+case "$*" in
+  *"test -f /var/lib/devm/provisioned"*) exit 1 ;;
+  *"bash -c"*) echo "::devm:stage:%s::"; exit 1 ;;
+esac
 exit 0
-`, logPath, failMarker)
+`, logPath, stage)
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 	tr := tart.New()
 	tr.Path = bin

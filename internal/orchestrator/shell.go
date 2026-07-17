@@ -87,7 +87,7 @@ type ShellDeps struct {
 type VMAdminClient interface {
 	VMStatus(ctx context.Context, name string) (serviceapi.VMStatusResponse, error)
 	StartVM(ctx context.Context, req serviceapi.VMStartRequest) error
-	ApplyEgressEnforcement(ctx context.Context, name string) error
+	EnforcedNftRuleset(ctx context.Context, name string) (string, error)
 	StopVM(ctx context.Context, name string) error
 }
 
@@ -216,6 +216,15 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		return teardownOnFail(err, "ensure project ssh host key")
 	}
 
+	// The enforced-egress allowlist ruleset is baked into the composed
+	// provisioning script's enforce phase (so services come up under
+	// enforcement in one exec). The daemon computes it per project from the
+	// iron-proxy MAC_HOST/ports stashed at StartVM.
+	enforcedNft, err := d.ServiceAPIClient.EnforcedNftRuleset(ctx, cfg.Project.Name)
+	if err != nil {
+		return teardownOnFail(err, "fetch enforced nft ruleset")
+	}
+
 	prov := &provision.Provisioner{
 		Tart:                d.Tart,
 		VMName:              vmName,
@@ -225,16 +234,15 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		SSHHostPriv:         hostPriv,
 		SSHHostPub:          hostPub,
 		WorkspaceVMPath:     repoRoot,
-		EnforceEgress: func(ctx context.Context) error {
-			return d.ServiceAPIClient.ApplyEgressEnforcement(ctx, cfg.Project.Name)
-		},
+		EnforcedNft:         enforcedNft,
 	}
 	debuglog.Logf("shell", "cold-start: provisioning")
-	// Provisioning output is DIAGNOSTIC — step names, package install
+	// Provisioning output is DIAGNOSTIC — stage names, package install
 	// noise, etc. It belongs on stderr so `devm exec pwd` / `devm shell
 	// -- <cmd>` produce clean stdout that scripts can pipe. Failure
-	// details flow via the returned error, not via this writer.
-	if err := prov.Run(ctx, os.Stderr); err != nil {
+	// details flow via the returned error, not via this writer. onLine is
+	// nil here; the daemon wires the stage-marker spinner (Task 7).
+	if err := prov.Run(ctx, os.Stderr, nil); err != nil {
 		// Service-phase failures (unit install, daemon-reload, enable+start,
 		// apply masks) leave the VM in a debuggable state — user's fix is
 		// in devm.yaml, not in the VM. Surface the error but keep the VM

@@ -1,9 +1,6 @@
 package docker
 
 import (
-	"bytes"
-	"context"
-	"io"
 	"strings"
 	"testing"
 )
@@ -36,37 +33,5 @@ func TestInstallScript_UsesFailFast(t *testing.T) {
 	// rather than the provisioner silently succeeding halfway through.
 	if !strings.HasPrefix(strings.TrimSpace(InstallScript()), "set -e") {
 		t.Errorf("InstallScript must begin with `set -e`, got:\n%s", InstallScript())
-	}
-}
-
-// recordingShell captures the ExecShell calls Install() makes.
-type recordingShell struct {
-	events []string
-}
-
-func (r *recordingShell) ExecShell(_ context.Context, _ io.Writer, script string) error {
-	// Compact the recorded event to first line so the assertion
-	// stays readable; the exact identity of the InstallScript is
-	// covered by TestInstallScript_ContainsRequiredPieces.
-	label := "exec"
-	if strings.Contains(script, "get.docker.com") {
-		label = "exec:install_script"
-	}
-	r.events = append(r.events, label)
-	return nil
-}
-
-// TestInstall_CallsExecShell pins that Install runs the install script via ExecShell.
-func TestInstall_CallsExecShell(t *testing.T) {
-	sh := &recordingShell{}
-	if err := Install(context.Background(), &bytes.Buffer{}, sh); err != nil {
-		t.Fatalf("Install: %v", err)
-	}
-	want := []string{"exec:install_script"}
-	if len(sh.events) != len(want) {
-		t.Fatalf("events = %v, want %v", sh.events, want)
-	}
-	if sh.events[0] != want[0] {
-		t.Errorf("event[0] = %q, want %q", sh.events[0], want[0])
 	}
 }

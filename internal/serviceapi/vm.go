@@ -72,6 +72,13 @@ type VMApplyEgressRequest struct {
 	Name string `json:"name"`
 }
 
+// VMEnforcedNftResponse is the body shape for GET /vm/enforced-nft-ruleset.
+// Ruleset is the enforced-egress allowlist ruleset body (the `nft -f -`
+// content, without the /etc/nftables.conf persistence block).
+type VMEnforcedNftResponse struct {
+	Ruleset string `json:"ruleset"`
+}
+
 // VMStatusResponse is the body shape for GET /vm/status.
 type VMStatusResponse struct {
 	Present bool   `json:"present"`
@@ -458,6 +465,34 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			}
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// /vm/enforced-nft-ruleset returns the enforced-egress allowlist
+	// ruleset (the `nft -f -` body — no persistence block) for the
+	// project, computed from the same iron-proxy MAC_HOST/ports the live
+	// egress-enforcement path uses. The boot-integrity-gate provisioning
+	// script bakes this into its enforce-phase heredoc so services come
+	// up under enforcement in the single composed script, rather than via
+	// a separate post-provision inject.
+	s.Register("/vm/enforced-nft-ruleset", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+		info, ok := ironProxyState.get(name)
+		if !ok {
+			http.Error(w, "iron-proxy state missing — was /vm/start called for this project?",
+				http.StatusPreconditionFailed)
+			return
+		}
+		writeJSON(w, VMEnforcedNftResponse{
+			Ruleset: buildNftablesRuleset(info.MacHost, info.HTTPPort, info.HTTPSPort, info.DNSPort, ntpPort, info.Docker),
+		})
 	})
 
 	s.Register("/vm/stop", func(w http.ResponseWriter, r *http.Request) {

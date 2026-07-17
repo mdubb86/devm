@@ -1,6 +1,9 @@
-// Package provision orchestrates per-project first-boot work in a
-// freshly cloned Tart VM. The orchestrator (Task 9) calls
-// Provisioner.Run after tart run + supervisor.Spawn succeed.
+// Package provision composes and ships the single guest provisioning
+// script for a Tart VM. The orchestrator calls Provisioner.Run after
+// StartVM + waitVMReady succeed; Run builds the devm bundle tar, renders
+// one bash script (render.RenderProvisionScript), and streams both to the
+// guest in a single `tart exec -i`. The script's exit code is the whole
+// provisioning result.
 package provision
 
 import (
@@ -9,16 +12,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/nftscript"
+	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -26,12 +28,18 @@ import (
 // tartExecer is the subset of *tart.Tart used by Provisioner. Defined as
 // an interface so tests can inject fakes without shelling out to tart.
 type tartExecer interface {
-	Exec(ctx context.Context, name string, argv []string) tart.ExecResult
 	ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult
-	ExecStdin(ctx context.Context, name string, stdin io.Reader, argv []string) tart.ExecResult
+	ExecStream(ctx context.Context, name string, stdin io.Reader, argv []string, onLine func(stream, line string)) (int, error)
 }
 
-// Provisioner runs the per-project first-boot sequence in a Tart VM.
+// openEgressRuleset clears the base boot-lock nftables ruleset to open
+// egress for the provisioning / install / startup window. Flushing the
+// ruleset drops the skeleton's policy-drop; the enforce phase re-installs
+// the real allowlist before access is granted. Centralized here so no
+// caller has to know the magic string.
+const openEgressRuleset = "flush ruleset"
+
+// Provisioner ships the composed provisioning script to a Tart VM.
 type Provisioner struct {
 	Tart   tartExecer
 	VMName string
@@ -57,192 +65,124 @@ type Provisioner struct {
 	// on the Mac (e.g., /Users/michael/projects/myproj).
 	WorkspaceVMPath string
 
-	// EnforceEgress is called between "systemctl daemon-reload" and
-	// "enable + start services". It asks the daemon to inject the iron-
-	// proxy nftables + dnsmasq scripts inside the VM, so systemd services
-	// come up UNDER enforcement while the earlier install: / apt-get /
-	// template-install steps ran with open network. Nil is allowed —
-	// tests that don't need enforcement (unit-tests, non-daemon paths)
-	// leave it unset.
-	EnforceEgress func(context.Context) error
+	// EnforcedNft is the enforced-egress allowlist ruleset (the `nft -f -`
+	// body) baked into the composed script's enforce phase, so services
+	// come up under enforcement. The daemon computes it per project from
+	// the iron-proxy MAC_HOST/ports (serviceapi.Client.EnforcedNftRuleset).
+	EnforcedNft string
 
 	// firstBoot is true when /var/lib/devm/provisioned is absent — i.e.
 	// this VM has not completed provisioning. Set at the top of Run.
 	firstBoot bool
 }
 
-// StepFailure carries which provisioning step failed. Callers use this
-// to decide whether the VM is worth keeping (service startup failure →
-// user can debug in-place) or should be torn down (install-phase failure
-// → the VM is in a bad state and the user's fix belongs in devm.yaml).
+// StepFailure carries which provisioning stage the script had reached when
+// it failed. Callers use this to decide whether the VM is worth keeping
+// (service-phase failure → the user's service definition is broken, debug
+// in-place) or should be torn down (install-phase failure → the VM is in a
+// bad state and the user's fix belongs in devm.yaml).
 type StepFailure struct {
 	Step string
 	Err  error
 }
 
 func (f *StepFailure) Error() string {
-	return fmt.Sprintf("provision step %q: %v", f.Step, f.Err)
+	step := f.Step
+	if step == "" {
+		step = "provision"
+	}
+	return fmt.Sprintf("provision stage %q: %v", step, f.Err)
 }
 
 func (f *StepFailure) Unwrap() error { return f.Err }
 
-// stepsAfterInstall are the steps that come AFTER "run install commands".
-// A failure at or after any of these is considered post-install: the VM
-// is basically good, the user's service definition is what's broken, and
-// devm shell should surface the error but leave the VM running so the
-// user can `tart exec` in and inspect. Anything before this list (install
-// commands, apt-get, CA install, mounts, etc.) is a cold-start-broken
-// state where the VM is worth destroying and re-creating from scratch.
-var stepsAfterInstall = map[string]bool{
-	"install templates":       true,
-	"systemctl daemon-reload": true,
-	"enable + start services": true,
-	"apply masks":             true,
-	"write first-boot marker": true,
+// stagesAfterInstall are the composed-script stages at or after which a
+// failure is considered post-install: the VM is basically good and the
+// user's service/template definition is what's broken, so `devm shell`
+// should surface the error but leave the VM running for `tart exec`
+// inspection. Any earlier stage (extract, open, apt, install:, docker,
+// startup:, enforce) is a cold-start-broken state where the VM is worth
+// destroying and re-creating.
+//
+// Mirrors the old per-step stepsAfterInstall classification: templates
+// and the service-start phase kept the VM; apt/install/docker/enforce
+// tore it down.
+var stagesAfterInstall = map[string]bool{
+	"templates": true,
+	"services":  true,
 }
 
-// IsPostInstallFailure reports whether err is a StepFailure at or after
-// the "install templates" step — i.e. a failure that leaves the VM in
-// a debuggable state and shouldn't trigger teardown.
+// IsPostInstallFailure reports whether err is a StepFailure at a stage
+// that leaves the VM in a debuggable state and shouldn't trigger teardown.
 func IsPostInstallFailure(err error) bool {
 	var sf *StepFailure
 	if !errors.As(err, &sf) {
 		return false
 	}
-	return stepsAfterInstall[sf.Step]
+	return stagesAfterInstall[sf.Step]
 }
 
-// Run executes the full provisioning sequence. Streams progress and
-// per-step output to w. Returns on the first failure.
-//
-// Each step's output is prefixed with [step: <name>] so failures
-// point clearly. The returned error is always a *StepFailure so callers
-// can classify install-phase vs service-phase failures via
-// IsPostInstallFailure.
-func (p *Provisioner) Run(ctx context.Context, w io.Writer) error {
+// Run composes the single guest provisioning script + bundle tar and
+// ships both in ONE streaming `tart exec -i`. Every streamed line is
+// written to w (diagnostic capture) and forwarded to onLine (stage-marker
+// parsing / spinner — may be nil). The script's exit code is the whole
+// provisioning result: a non-zero exit returns a *StepFailure classified
+// by the last stage the script reached, so callers can distinguish
+// install-phase from service-phase failures via IsPostInstallFailure.
+func (p *Provisioner) Run(ctx context.Context, w io.Writer, onLine func(stream, line string)) error {
 	p.firstBoot = !p.markerExists(ctx)
-	steps := []struct {
-		name          string
-		firstBootOnly bool
-		fn            func(context.Context, io.Writer) error
-	}{
-		{name: "mkdir workspace parents", fn: p.mkdirWorkspaceParents},
-		{name: "install devm bundle", fn: p.installDevmBundle},
-		{name: "reload base services", fn: p.reloadBaseServices},
-		{name: "apt-get update", firstBootOnly: true, fn: p.aptUpdate},
-		{name: "apt-get install packages", firstBootOnly: true, fn: p.aptInstall},
-		{name: "run install commands", firstBootOnly: true, fn: p.runInstallCommands},
-		{name: "docker feature", firstBootOnly: true, fn: p.dockerFeature},
-		{name: "install templates", fn: p.installTemplates},
-		{name: "systemctl daemon-reload", fn: p.daemonReload},
-		{name: "set up boot enforcement", fn: p.setupBootEnforcement},
-		{name: "run startup commands", fn: p.runStartupCommands},
-		{name: "apply egress enforcement", fn: p.applyEgressEnforcement},
-		{name: "apply svc_ingress firewall", fn: p.applySvcIngressFirewall},
-		{name: "enable + start services", fn: p.enableStartServices},
-		{name: "apply masks", fn: p.applyMasks},
+
+	body, err := p.buildBundle()
+	if err != nil {
+		return &StepFailure{Step: "extract", Err: err}
 	}
-	for _, step := range steps {
-		if step.firstBootOnly && !p.firstBoot {
-			fmt.Fprintf(w, "\n[step: %s] (skipped — already provisioned)\n", step.name)
-			continue
+
+	script := render.RenderProvisionScript(p.scriptInput())
+
+	var st stageTracker
+	wrapped := func(stream, line string) {
+		st.observe(line)
+		if w != nil {
+			fmt.Fprintln(w, line)
 		}
-		fmt.Fprintf(w, "\n[step: %s]\n", step.name)
-		if err := step.fn(ctx, w); err != nil {
-			return &StepFailure{Step: step.name, Err: err}
+		if onLine != nil {
+			onLine(stream, line)
 		}
 	}
-	if p.firstBoot {
-		if err := p.writeMarker(ctx, w); err != nil {
-			return &StepFailure{Step: "write first-boot marker", Err: err}
-		}
+
+	exit, err := p.Tart.ExecStream(ctx, p.VMName, bytes.NewReader(body),
+		[]string{"bash", "-c", string(script)}, wrapped)
+	if err != nil {
+		return &StepFailure{Step: st.current(), Err: err}
+	}
+	if exit != 0 {
+		return &StepFailure{Step: st.current(), Err: fmt.Errorf("provisioning script exited %d", exit)}
 	}
 	return nil
 }
 
-// provisionedMarker is the path in the guest whose presence indicates
-// this VM has already completed first-boot provisioning.
-const provisionedMarker = "/var/lib/devm/provisioned"
-
-// markerExists reports whether the first-boot marker is present in the guest.
-//
-// ExecWithRetry, not Exec: this is the first guest call after boot, and a
-// transient guest-agent transport drop here would misclassify a restart as a
-// first boot — re-running the apt/install:/docker steps under enforced egress,
-// where they fail and tear down a healthy VM. A genuine "marker absent" is a
-// clean exit 1 (not a transport flake), so it is not retried.
-func (p *Provisioner) markerExists(ctx context.Context) bool {
-	return p.Tart.ExecWithRetry(ctx, p.VMName, []string{"test", "-f", provisionedMarker}).ExitCode == 0
-}
-
-// writeMarker records that first-boot provisioning completed.
-func (p *Provisioner) writeMarker(ctx context.Context, w io.Writer) error {
-	return p.execShell(ctx, w, "sudo mkdir -p /var/lib/devm && sudo touch "+provisionedMarker)
-}
-
-// exec runs the given argv via tart.ExecWithRetry (defends against
-// transient tart-guest-agent transport drops mid-provisioning), writes
-// captured stdout + stderr to w, and returns an error if exit code is
-// nonzero.
-func (p *Provisioner) exec(ctx context.Context, w io.Writer, argv ...string) error {
-	r := p.Tart.ExecWithRetry(ctx, p.VMName, argv)
-	if r.Stdout != "" {
-		_, _ = io.WriteString(w, r.Stdout)
+// scriptInput assembles the ProvisionScriptInput from the project config.
+func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
+	return render.ProvisionScriptInput{
+		FirstBoot:        p.firstBoot,
+		Packages:         p.Cfg.Packages,
+		Install:          p.Cfg.Install,
+		Docker:           p.Cfg.Docker,
+		InstallTemplates: p.hasTemplates(),
+		Startup:          p.Cfg.Startup,
+		Services:         p.serviceUnits(),
+		SvcIngressPorts:  nftscript.DirectPorts(p.Cfg),
+		Masks:            p.maskMounts(),
+		OpenNft:          openEgressRuleset,
+		EnforcedNft:      p.EnforcedNft,
 	}
-	if r.Stderr != "" {
-		_, _ = io.WriteString(w, r.Stderr)
-	}
-	if r.ExitCode != 0 {
-		return fmt.Errorf("tart exec %s: exit %d", strings.Join(argv, " "), r.ExitCode)
-	}
-	return nil
 }
 
-// execShell runs the given shell script via `bash -c "..."` for steps
-// that need pipes, redirection, or compound commands.
-func (p *Provisioner) execShell(ctx context.Context, w io.Writer, script string) error {
-	// -o errexit + -o pipefail so any pipeline component failing (not just
-	// the last) aborts the script. -o nounset would be nice but many user
-	// install steps rely on unset-vars-as-empty (e.g., ${FOO:-default}).
-	return p.exec(ctx, w, "bash", "-e", "-o", "pipefail", "-c", script)
-}
-
-// ExecShell is the exported entrypoint the docker package calls; wraps
-// the internal execShell.
-func (p *Provisioner) ExecShell(ctx context.Context, w io.Writer, script string) error {
-	return p.execShell(ctx, w, script)
-}
-
-// PipeIntoShell pipes stdin into a shell script running inside the VM.
-// Used for delivering payloads too large for a single tart-exec argv
-// (e.g., embedded binaries via `sudo tee <path>`).
-func (p *Provisioner) PipeIntoShell(ctx context.Context, w io.Writer, stdin io.Reader, script string) error {
-	argv := []string{"bash", "-e", "-o", "pipefail", "-c", script}
-	r := p.Tart.ExecStdin(ctx, p.VMName, stdin, argv)
-	if r.Stdout != "" {
-		_, _ = io.WriteString(w, r.Stdout)
-	}
-	if r.Stderr != "" {
-		_, _ = io.WriteString(w, r.Stderr)
-	}
-	if r.ExitCode != 0 {
-		return fmt.Errorf("tart exec -i %s: exit %d", strings.Join(argv, " "), r.ExitCode)
-	}
-	return nil
-}
-
-func (p *Provisioner) mkdirWorkspaceParents(ctx context.Context, w io.Writer) error {
-	parent := filepath.Dir(p.WorkspaceVMPath)
-	return p.exec(ctx, w, "sudo", "mkdir", "-p", parent)
-}
-
-// installDevmBundle builds the devm-owned artifact bundle (env file,
+// buildBundle builds the devm-owned artifact bundle tar (env file,
 // with-devm-env wrapper, install-templates.sh dispatcher, per-template
-// installers, install.sh) and pipes it into the guest, where install.sh
-// extracts it to /opt/devm and symlinks with-devm-env onto PATH. Runs
-// early — before "run install commands" and the docker feature — so
-// every later step that needs the wrapper finds it.
-func (p *Provisioner) installDevmBundle(ctx context.Context, w io.Writer) error {
+// installers, systemd units, ssh material, CA, docker shims when declared,
+// install.sh). The guest's install.sh extracts it to /opt/devm.
+func (p *Provisioner) buildBundle() ([]byte, error) {
 	in := devmbundle.BuildInput{
 		Cfg:                 p.Cfg,
 		RepoRoot:            p.WorkspaceVMPath,
@@ -257,261 +197,110 @@ func (p *Provisioner) installDevmBundle(ctx context.Context, w io.Writer) error 
 	}
 	body, err := devmbundle.Build(in)
 	if err != nil {
-		return fmt.Errorf("build devm bundle: %w", err)
+		return nil, fmt.Errorf("build devm bundle: %w", err)
 	}
-	return p.PipeIntoShell(ctx, w, bytes.NewReader(body), devmbundle.GuestInstallScript)
+	return body, nil
 }
 
-// setupBootEnforcement masks the stock firewall-first nftables.service
-// and enables devm-enforce.service + devm-startup.service instead, so
-// every project's boot order is network-online → devm-startup.service
-// (open egress) → devm-enforce.service (enforcement) → services. The
-// mechanism is always registered — unconditional and idempotent (mask
-// / enable are no-ops when already applied) — so it runs on every cold
-// start, not just first boot.
-func (p *Provisioner) setupBootEnforcement(ctx context.Context, w io.Writer) error {
-	return p.execShell(ctx, w,
-		"sudo systemctl mask nftables.service && "+
-			"sudo systemctl enable devm-enforce.service devm-startup.service")
-}
-
-// runStartupCommands starts devm-startup.service on every cold start.
-// /opt/devm/startup.sh (rendered from cfg.Startup) always exists — an
-// empty list renders a no-op script that exits 0 — so this call is
-// unconditional. `systemctl start` on an already-active
-// RemainAfterExit=yes oneshot is a no-op, so on a normal boot (where
-// systemd itself already ran the unit before this provisioning step
-// ever runs) this doesn't re-run the commands.
-func (p *Provisioner) runStartupCommands(ctx context.Context, w io.Writer) error {
-	return p.execShell(ctx, w, "sudo systemctl start devm-startup.service")
-}
-
-func (p *Provisioner) applyEgressEnforcement(ctx context.Context, w io.Writer) error {
-	if p.EnforceEgress == nil {
-		fmt.Fprintln(w, "(no EnforceEgress callback set — skipping)")
-		return nil
-	}
-	return p.EnforceEgress(ctx)
-}
-
-// applySvcIngressFirewall flush-rebuilds the svc_ingress nftables chain
-// from the project's direct-service ports, so Mac→container traffic for
-// `direct: true` published ports passes the forward hook's policy-drop.
-// Runs after applyEgressEnforcement — which is what scaffolds the
-// `jump svc_ingress` into the forward chain at cold-start — so the chain
-// this populates is already wired in. Skipped entirely for non-docker /
-// no-direct-service projects: DirectPorts returns nil and there's nothing
-// to open.
-func (p *Provisioner) applySvcIngressFirewall(ctx context.Context, w io.Writer) error {
-	ports := nftscript.DirectPorts(p.Cfg)
-	if len(ports) == 0 {
-		fmt.Fprintln(w, "(no direct docker services — skipping)")
-		return nil
-	}
-	return p.execShell(ctx, w, nftscript.BuildSvcIngressScript(ports))
-}
-
-func (p *Provisioner) reloadBaseServices(ctx context.Context, w io.Writer) error {
-	// caddy: reload-or-restart handles config change + first start.
-	if err := p.exec(ctx, w, "sudo", "systemctl", "reload-or-restart", "caddy"); err != nil {
-		return err
-	}
-	// ssh: the bundle install.sh already unmasked; enable+start turns
-	// it on now that per-project host key + authorized_keys are in place.
-	if err := p.exec(ctx, w, "sudo", "systemctl", "enable", "--now", "ssh"); err != nil {
-		return err
-	}
-	// Dnsmasq stays deferred — see applyEgressEnforcement (still holds
-	// :53 via systemd-resolved until the egress step masks it).
-	return nil
-}
-
-func (p *Provisioner) aptUpdate(ctx context.Context, w io.Writer) error {
-	// No packages declared → no point fetching the index. Skipping
-	// is also necessary under Ship 5: deb.debian.org isn't typically
-	// in the project's allow-list, so apt-get update would either
-	// hang on blocked DNS or fail outright once iron-proxy enforces.
-	if len(p.Cfg.Packages) == 0 {
-		fmt.Fprintln(w, "(no packages declared, skipping)")
-		return nil
-	}
-	return p.exec(ctx, w, "sudo", "apt-get", "update", "-y")
-}
-
-func (p *Provisioner) aptInstall(ctx context.Context, w io.Writer) error {
-	if len(p.Cfg.Packages) == 0 {
-		fmt.Fprintln(w, "(no packages declared)")
-		return nil
-	}
-	args := append([]string{"sudo", "apt-get", "install", "-y"}, p.Cfg.Packages...)
-	return p.exec(ctx, w, args...)
-}
-
-const defaultInstallStepTimeout = 600 * time.Second
-
-func (p *Provisioner) runInstallCommands(ctx context.Context, w io.Writer) error {
-	if len(p.Cfg.Install) == 0 {
-		fmt.Fprintln(w, "(no install commands)")
-		return nil
-	}
-	budget := defaultInstallStepTimeout
-	if v := os.Getenv("DEVM_INSTALL_STEP_TIMEOUT_S"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			budget = time.Duration(n) * time.Second
-		}
-	}
-	// Install commands run through the with-devm-env wrapper so the
-	// user's project env (WORKSPACE_DIR, path: entries, cfg.Env values)
-	// is sourced from .devm/.env before their command runs. Same wrapper
-	// as the interactive shell path in orchestrator/shell.go.
-	wrapper := devmbundle.GuestWrapper
-	for i, command := range p.Cfg.Install {
-		fmt.Fprintf(w, "[%d/%d] %s\n", i+1, len(p.Cfg.Install), command)
-		stepCtx, cancel := context.WithTimeout(ctx, budget)
-		err := p.exec(stepCtx, w, wrapper, "bash", "-e", "-o", "pipefail", "-c", command)
-		cancel()
-		if errors.Is(stepCtx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("install step %d (%q) timed out after %ds",
-				i+1, command, int(budget.Seconds()))
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// dockerFeature installs Docker Engine + devm-runc-shim + firewall rule
-// inside the VM when the project's devm.yaml declares `docker: true`.
-// No-op otherwise. The 15-minute deadline covers `curl get.docker.com | sh`
-// fetching upstream packages on a cold cache.
-func (p *Provisioner) dockerFeature(ctx context.Context, w io.Writer) error {
-	if !p.Cfg.Docker {
-		fmt.Fprintln(w, "(docker: false — skipping)")
-		return nil
-	}
-	stepCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
-	defer cancel()
-	return docker.Install(stepCtx, w, p)
-}
-
-// installTemplates runs the install-templates.sh dispatcher inside the VM,
-// which loops over /opt/devm/templates/*.sh and executes each per-template
-// installer. Each installer is idempotent (atomic rename over the target
-// path) so re-running on warm restart is safe.
-//
-// No-op when no templates are declared (empty /opt/devm/templates/ dir
-// causes the dispatcher to exit 0 immediately).
-//
-// Runs THROUGH with-devm-env for the auto-cd-to-$WORKSPACE + terminfo
-// setup it provides; the dispatcher itself reads a fixed /opt/devm path.
-func (p *Provisioner) installTemplates(ctx context.Context, w io.Writer) error {
-	anyTemplate := false
-	for _, svc := range p.Cfg.Services {
-		if len(svc.Templates) > 0 {
-			anyTemplate = true
-			break
-		}
-	}
-	if !anyTemplate {
-		fmt.Fprintln(w, "(no templates declared)")
-		return nil
-	}
-	wrapper := devmbundle.GuestWrapper
-	dispatcher := devmbundle.GuestDispatcher
-	return p.exec(ctx, w, wrapper, "bash", dispatcher)
-}
-
-func (p *Provisioner) daemonReload(ctx context.Context, w io.Writer) error {
-	return p.exec(ctx, w, "sudo", "systemctl", "daemon-reload")
-}
-
-const (
-	healthPollInterval = 500 * time.Millisecond
-	healthTotalBudget  = 10 * time.Second
-)
-
-func (p *Provisioner) enableStartServices(ctx context.Context, w io.Writer) error {
-	// Collect non-routing-only services (skipping ones with no Exec + no
-	// Systemd — those are proxy-routing declarations with no in-VM process).
-	// Split by lifecycle: long-running services need `active`; one-shot
-	// services (Restart == "no") ran-to-completion means `inactive` is OK
-	// and only `failed` counts as a failure.
-	type entry struct {
-		name    string
-		oneShot bool
-	}
-	var entries []entry
+// serviceUnits returns the sorted unit names of services with an actual
+// in-VM process (Exec or Systemd). Routing-only declarations (proxy
+// hostnames with no process) are skipped — there's no unit to start.
+func (p *Provisioner) serviceUnits() []string {
+	var names []string
 	for name, svc := range p.Cfg.Services {
 		if svc.Systemd == "" && len(svc.Exec) == 0 {
-			fmt.Fprintf(w, "(skip %s — routing-only declaration)\n", name)
 			continue
 		}
-		entries = append(entries, entry{name: name, oneShot: svc.Restart == "no"})
+		names = append(names, name)
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
-
-	for _, e := range entries {
-		unitName := e.name + ".service"
-		if err := p.exec(ctx, w, "sudo", "systemctl", "enable", "--now", unitName); err != nil {
-			return err
-		}
-	}
-
-	// Poll each service. Long-running: wait for `active`. One-shot: wait
-	// for a terminal state that isn't `failed` (usually `inactive`).
-	deadline := time.Now().Add(healthTotalBudget)
-	for _, e := range entries {
-		for {
-			r := p.Tart.Exec(ctx, p.VMName, []string{"systemctl", "is-active", e.name})
-			state := strings.TrimSpace(r.Stdout)
-			if state == "failed" {
-				return fmt.Errorf("service %q did not become active: status=%s", e.name, state)
-			}
-			if e.oneShot {
-				if state == "inactive" || r.ExitCode == 0 {
-					break
-				}
-			} else if r.ExitCode == 0 {
-				break
-			}
-			if time.Now().After(deadline) {
-				return fmt.Errorf("service %q did not become active: status=%s (timeout)", e.name, state)
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(healthPollInterval):
-			}
-		}
-	}
-	return nil
+	sort.Strings(names)
+	return names
 }
 
-func (p *Provisioner) applyMasks(ctx context.Context, w io.Writer) error {
-	for svcName, svc := range p.Cfg.Services {
-		// Chown to the user the service will run as (default devm). Without
-		// this the mask dir stays root-owned from `sudo mkdir` and a
-		// non-root service can't write into its own mask. Same default as
-		// render.RenderService's User=.
+// hasTemplates reports whether any service declares templates, so the
+// script runs the /opt/devm/scripts/install-templates.sh dispatcher.
+func (p *Provisioner) hasTemplates() bool {
+	for _, svc := range p.Cfg.Services {
+		if len(svc.Templates) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// maskMounts resolves every service mask into a MaskMount the script can
+// bind-mount: a per-service host dir (owned by the service's run-user)
+// bind-mounted over the workspace path. Sorted by service then mask path
+// for a deterministic script.
+func (p *Provisioner) maskMounts() []render.MaskMount {
+	var svcNames []string
+	for name := range p.Cfg.Services {
+		svcNames = append(svcNames, name)
+	}
+	sort.Strings(svcNames)
+
+	var mounts []render.MaskMount
+	for _, svcName := range svcNames {
+		svc := p.Cfg.Services[svcName]
+		// Chown to the user the service runs as (default devm) — same
+		// default as render.RenderService's User= — so a non-root service
+		// can write into its own mask.
 		owner := svc.User
 		if owner == "" {
 			owner = "devm"
 		}
-		for _, m := range svc.Masks {
-			maskHostPath := filepath.Join("/var/devm/masks",
-				p.Cfg.Project.Name, svcName, m.Path)
-			mountTarget := filepath.Join(p.WorkspaceVMPath, m.Path)
-			script := strings.Join([]string{
-				"sudo", "mkdir", "-p", maskHostPath, "&&",
-				"sudo", "chown", owner, maskHostPath, "&&",
-				"sudo", "mkdir", "-p", mountTarget, "&&",
-				"sudo", "mount", "--bind", maskHostPath, mountTarget,
-			}, " ")
-			if err := p.execShell(ctx, w, script); err != nil {
-				return err
-			}
+		masks := append([]schema.Mask(nil), svc.Masks...)
+		sort.Slice(masks, func(i, j int) bool { return masks[i].Path < masks[j].Path })
+		for _, m := range masks {
+			mounts = append(mounts, render.MaskMount{
+				HostPath:    filepath.Join("/var/devm/masks", p.Cfg.Project.Name, svcName, m.Path),
+				MountTarget: filepath.Join(p.WorkspaceVMPath, m.Path),
+				Owner:       owner,
+			})
 		}
 	}
-	return nil
+	return mounts
+}
+
+// provisionedMarker is the guest path whose presence indicates this VM has
+// already completed first-boot provisioning. The composed script writes it
+// on a successful first boot; markerExists reads it to set firstBoot.
+const provisionedMarker = "/var/lib/devm/provisioned"
+
+// markerExists reports whether the first-boot marker is present in the guest.
+//
+// ExecWithRetry, not Exec: this is the first guest call after boot, and a
+// transient guest-agent transport drop here would misclassify a restart as a
+// first boot — re-running the apt/install:/docker steps, where they fail and
+// tear down a healthy VM. A genuine "marker absent" is a clean exit 1 (not a
+// transport flake), so it is not retried.
+func (p *Provisioner) markerExists(ctx context.Context) bool {
+	return p.Tart.ExecWithRetry(ctx, p.VMName, []string{"test", "-f", provisionedMarker}).ExitCode == 0
+}
+
+// stageTracker records the most recent `::devm:stage:<name>::` marker seen
+// on the streamed output, so a script failure can be classified by the
+// stage it had reached. observe is called concurrently from the stdout and
+// stderr scan goroutines, so it locks.
+type stageTracker struct {
+	mu    sync.Mutex
+	stage string
+}
+
+func (s *stageTracker) observe(line string) {
+	const prefix = "::devm:stage:"
+	t := strings.TrimSpace(line)
+	if !strings.HasPrefix(t, prefix) || !strings.HasSuffix(t, "::") {
+		return
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(t, prefix), "::")
+	s.mu.Lock()
+	s.stage = name
+	s.mu.Unlock()
+}
+
+func (s *stageTracker) current() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stage
 }
