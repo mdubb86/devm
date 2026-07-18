@@ -190,24 +190,21 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// 127.0.0.1. Best-effort: if the VM isn't actually running
 		// (e.g. this call is a reconcile self-heal against a stopped
 		// VM with a stale config file), tart ip fails and whatever
-		// VMIP was already stashed is preserved instead. Docker is
-		// recovered from the state snapshot just persisted above.
+		// VMIP was already stashed is preserved instead.
 		existing, _ := ironProxyState.get(req.Name)
 		info.VMIP = existing.VMIP
 		if ip, err := tr.IP(r.Context(), req.Name); err == nil {
 			info.VMIP = ip
 		}
-		info.Docker = existing.Docker
-		// SSHHostPort, like Docker, isn't part of iron-proxy's own YAML
-		// config shape (loadIronProxyInfoFromConfig never sets it), so it
-		// must be carried forward explicitly or this call would silently
-		// zero out the running VM's SSH port on every allowlist/secret
+		// SSHHostPort isn't part of iron-proxy's own YAML config shape
+		// (loadIronProxyInfoFromConfig never sets it), so it must be
+		// carried forward explicitly or this call would silently zero
+		// out the running VM's SSH port on every allowlist/secret
 		// reconcile — breaking the next expose-map push and any
 		// already-emitted ssh_config.
 		info.SSHHostPort = existing.SSHHostPort
 		snap, _ := ReadStateSnapshot(req.Name)
 		if snap != nil {
-			info.Docker = snap.Cfg.Docker
 			info.SSHHostPort = snap.SSHHostPort
 		}
 

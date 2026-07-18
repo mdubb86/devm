@@ -33,7 +33,7 @@ func TestDiscoverSoftnet_RebuildsStateForRehydratedProjects(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", dir)
 
 	ironProxyState.put(projectID, ironProxyInfo{
-		MacHost: "192.168.64.1", HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
+		HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
 	})
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 	t.Cleanup(func() { softnetState.del(projectID) })

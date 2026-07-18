@@ -30,9 +30,9 @@ type MaskMount struct {
 }
 
 // ProvisionScriptInput is everything the composed guest provisioning script
-// needs baked in. The daemon builds this from schema.Config + the rendered
-// nft rule sets, then RenderProvisionOpenScript/RenderProvisionEnforcedScript
-// turn it into the two bash scripts run around the softnet ENFORCED flip.
+// needs baked in. The daemon builds this from schema.Config, then
+// RenderProvisionOpenScript/RenderProvisionEnforcedScript turn it into the
+// two bash scripts run around the softnet ENFORCED flip.
 type ProvisionScriptInput struct {
 	FirstBoot        bool
 	Packages         []string // apt packages (first boot only)
@@ -42,15 +42,11 @@ type ProvisionScriptInput struct {
 	Startup          []string // startup: commands (every boot)
 	Services         []string // service unit names to enable+start (health-polled)
 	Masks            []MaskMount
-	EnforcedNft      string // the real project allowlist ruleset
-	// DnsmasqScript points the guest's dnsmasq upstream at iron-proxy's
-	// DNS server; TimesyncdScript points systemd-timesyncd at the proxy
-	// sentinel so NTP resyncs through the same enforced path. Both are
-	// applied in the composed script's enforce phase alongside
-	// EnforcedNft — the daemon builds them from the same iron-proxy
-	// MAC_HOST/ports (serviceapi.Client.EnforcementConfig), reusing
-	// serviceapi's buildDnsmasqScript/buildTimesyncdScript.
-	DnsmasqScript   string
+	// TimesyncdScript points systemd-timesyncd at the proxy sentinel so
+	// NTP resyncs through the enforced path. Applied in the composed
+	// script's enforce phase — the daemon builds it from the same
+	// iron-proxy MAC_HOST/ports (serviceapi.Client.EnforcementConfig),
+	// reusing serviceapi's buildTimesyncdScript.
 	TimesyncdScript string
 
 	// StepTimeoutSeconds bounds every install:/startup: command (the
@@ -179,10 +175,10 @@ func RenderProvisionOpenScript(in ProvisionScriptInput) []byte {
 // provisioning, run immediately after RenderProvisionOpenScript succeeds
 // and softnet has been flipped to ENFORCED. It is delivered as `bash -c
 // '<this>'` with NO stdin — /opt/devm was already extracted by the open
-// script. It applies the real allowlist ruleset + DNS/NTP config, then
-// starts and health-polls user services, then activates devm.target, and
-// finally clears the in-progress marker the open script wrote — the LAST
-// line, so the marker's presence remains a genuine "provisioning not yet
+// script. It applies the NTP config, then starts and health-polls user
+// services, then activates devm.target, and finally clears the
+// in-progress marker the open script wrote — the LAST line, so the
+// marker's presence remains a genuine "provisioning not yet
 // fully complete" signal for the whole exec, not just this half.
 func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
 	var b strings.Builder
@@ -191,18 +187,14 @@ func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
 	p("#!/bin/bash")
 	p("set -eo pipefail")
 
-	// (3) enforce: apply the real allowlist ruleset, then the runtime
-	// DNS/NTP config that routes through the same enforced path, then
-	// masks. A failure here is the daemon's enforcement being broken (not
-	// the user's service) — the classifier treats it as teardown-worthy.
+	// (3) enforce: apply the runtime NTP config that routes through the
+	// enforced path, then masks. A failure here is the daemon's
+	// enforcement being broken (not the user's service) — the classifier
+	// treats it as teardown-worthy.
 	p("echo ::devm:stage:enforce::")
-	p("sudo nft -f - <<'DEVM_ENFORCE_NFT'\n%s\nDEVM_ENFORCE_NFT", in.EnforcedNft)
-	p("# EnforcedNft-applied-marker")
-	// dnsmasq (external hostname resolution) and timesyncd (NTP) both
-	// route through iron-proxy/the daemon behind the enforced nft
-	// ruleset — without these the guest's egress is correctly locked
-	// down but DNS and clock sync are broken at runtime.
-	p("%s", strings.TrimRight(in.DnsmasqScript, "\n"))
+	// timesyncd (NTP) routes through iron-proxy/the daemon behind
+	// softnet's enforced egress — without this the guest's egress is
+	// correctly locked down but clock sync is broken at runtime.
 	p("%s", strings.TrimRight(in.TimesyncdScript, "\n"))
 
 	// (4) services phase: masks (bind-mount overlays the services write into),

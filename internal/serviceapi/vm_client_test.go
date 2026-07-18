@@ -373,10 +373,9 @@ func TestVMStop_MethodNotAllowed(t *testing.T) {
 }
 
 // TestClientEnforcementConfig_ReadsResponse verifies GET
-// /vm/enforcement-config returns only the guest-side timesyncd config now
-// — egress allow-listing and DNS are enforced by softnet over the control
-// socket (POST /vm/apply-egress-enforcement), so NftRuleset and
-// DnsmasqScript are always empty.
+// /vm/enforcement-config returns only the guest-side timesyncd config —
+// egress allow-listing and DNS are enforced by softnet over the control
+// socket (POST /vm/apply-egress-enforcement).
 func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
@@ -388,7 +387,7 @@ func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {
 	t.Cleanup(func() { ironProxyState.del("proj-enf") })
 
 	ironProxyState.put("proj-enf", ironProxyInfo{
-		MacHost: "192.168.64.1", HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
+		HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
 	})
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -397,8 +396,6 @@ func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {
 
 	resp, err := c.EnforcementConfig(ctx, "proj-enf")
 	require.NoError(t, err)
-	assert.Empty(t, resp.NftRuleset)
-	assert.Empty(t, resp.DnsmasqScript)
 	assert.Contains(t, resp.TimesyncdScript, "/etc/systemd/timesyncd.conf.d/devm.conf")
 }
 
@@ -438,7 +435,7 @@ func TestClientIngressConfig_ReadsResponse(t *testing.T) {
 	t.Cleanup(func() { ironProxyState.del("proj-ingress") })
 
 	ironProxyState.put("proj-ingress", ironProxyInfo{
-		MacHost: "192.168.64.1", HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
+		HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
 		SSHHostPort: 2200,
 	})
 
@@ -558,7 +555,7 @@ func TestClientApplyEgressEnforcement_MissingSoftnetState(t *testing.T) {
 	defer cleanup()
 
 	ironProxyState.put("proj-enforce-nosock", ironProxyInfo{
-		MacHost: "192.168.64.1", HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
+		HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
 	})
 	t.Cleanup(func() { ironProxyState.del("proj-enforce-nosock") })
 

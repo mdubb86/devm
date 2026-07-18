@@ -303,11 +303,11 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		return d.teardownOnFail(ctx, cfg, vmName, err, "ensure project ssh host key")
 	}
 
-	// The enforcement config (nft allowlist + dnsmasq + timesyncd) is baked
-	// into the enforced provisioning script's enforce phase (RunEnforced),
-	// which runs after the softnet egress flip so DNS/NTP/egress all come up
-	// under enforcement. The daemon computes it per project from the
-	// iron-proxy MAC_HOST/ports stashed at StartVM.
+	// The enforcement config (timesyncd) is baked into the enforced
+	// provisioning script's enforce phase (RunEnforced), which runs after
+	// the softnet egress flip so DNS/NTP/egress all come up under
+	// enforcement. The daemon computes it per project from the iron-proxy
+	// MAC_HOST/ports stashed at StartVM.
 	enforcement, err := d.ServiceAPIClient.EnforcementConfig(ctx, cfg.Project.Name)
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "fetch enforcement config")
@@ -322,8 +322,6 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		SSHHostPriv:         hostPriv,
 		SSHHostPub:          hostPub,
 		WorkspaceVMPath:     repoRoot,
-		EnforcedNft:         enforcement.NftRuleset,
-		DnsmasqScript:       enforcement.DnsmasqScript,
 		TimesyncdScript:     enforcement.TimesyncdScript,
 		StepTimeoutSeconds:  installStepTimeoutSeconds(),
 	}

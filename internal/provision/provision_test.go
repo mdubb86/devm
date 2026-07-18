@@ -93,7 +93,6 @@ func baseProvisioner(f *fakeStreamTart, cfg schema.Config) *Provisioner {
 		Cfg:             cfg,
 		CARootPEM:       []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"),
 		WorkspaceVMPath: "/Users/test/myproj",
-		EnforcedNft:     "table inet devm_filter { policy drop }",
 	}
 }
 
@@ -140,7 +139,7 @@ func TestRunEnforced_ShipsExactlyOneExecStreamNoStdin(t *testing.T) {
 	script := scriptOf(t, f)
 
 	assert.Contains(t, script, "set -eo pipefail")
-	assert.Contains(t, script, "EnforcedNft-applied-marker")
+	assert.Contains(t, script, "::devm:stage:enforce::")
 	assert.Contains(t, script, "systemctl start devm.target")
 	assert.Contains(t, script, "touch /var/lib/devm/provisioned")
 	// Marker cleanup is the LAST line of the whole two-exec run.
@@ -276,48 +275,29 @@ func TestRunOpenThenEnforced_RestartOmitsFirstBootWork(t *testing.T) {
 	// And the completion marker is not re-written.
 	assert.NotContains(t, enforcedScript, "touch /var/lib/devm/provisioned")
 	// Enforcement + target still run every boot.
-	assert.Contains(t, enforcedScript, "EnforcedNft-applied-marker")
+	assert.Contains(t, enforcedScript, "::devm:stage:enforce::")
 	assert.Contains(t, enforcedScript, "systemctl start devm.target")
 }
 
-func TestRunEnforced_EnforcedNftBakedIntoScript(t *testing.T) {
+// TestRunEnforced_TimesyncdBakedIntoScript pins that the daemon-supplied
+// timesyncd config (fetched via serviceapi.Client.EnforcementConfig and set
+// on Provisioner by orchestrator.RunShell) flows through scriptInput into
+// the enforced script's enforce phase — the runtime NTP fix the
+// boot-integrity-gate rewrite had dropped.
+func TestRunEnforced_TimesyncdBakedIntoScript(t *testing.T) {
 	f := &fakeStreamTart{}
 	p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
-	p.EnforcedNft = "table inet devm_filter { chain output { policy drop } }"
-	require.NoError(t, p.RunEnforced(context.Background(), io.Discard, nil))
-
-	script := scriptOf(t, f)
-	assert.Contains(t, script, "table inet devm_filter { chain output { policy drop } }")
-	// Applied via nft before the target.
-	assert.Less(t, strings.Index(script, "DEVM_ENFORCE_NFT"),
-		strings.Index(script, "systemctl start devm.target"))
-}
-
-// TestRunEnforced_DnsmasqTimesyncdBakedIntoScript pins that the
-// daemon-supplied dnsmasq/timesyncd config (fetched via
-// serviceapi.Client.EnforcementConfig and set on Provisioner by
-// orchestrator.RunShell) flows through scriptInput into the enforced
-// script's enforce phase — the runtime DNS/NTP fix the boot-integrity-gate
-// rewrite had dropped.
-func TestRunEnforced_DnsmasqTimesyncdBakedIntoScript(t *testing.T) {
-	f := &fakeStreamTart{}
-	p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
-	p.DnsmasqScript = "sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<'DEVM_DNSMASQ'\nserver=192.168.64.1#53101\nDEVM_DNSMASQ\n"
 	p.TimesyncdScript = "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nNTP=192.0.2.1\nDEVM_TIMESYNCD\n"
 	require.NoError(t, p.RunEnforced(context.Background(), io.Discard, nil))
 
 	script := scriptOf(t, f)
-	assert.Contains(t, script, "/etc/dnsmasq.d/devm.conf")
-	assert.Contains(t, script, "server=192.168.64.1#53101")
 	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")
 	assert.Contains(t, script, "NTP=192.0.2.1")
-	// applied in the enforce phase — after the enforced nft ruleset,
-	// before services/target come up.
-	enforceIdx := strings.Index(script, "EnforcedNft-applied-marker")
+	// applied in the enforce phase, before services/target come up.
+	enforceIdx := strings.Index(script, "::devm:stage:enforce::")
 	require.Greater(t, enforceIdx, 0)
-	assert.Greater(t, strings.Index(script, "/etc/dnsmasq.d/devm.conf"), enforceIdx)
 	assert.Greater(t, strings.Index(script, "/etc/systemd/timesyncd.conf.d/devm.conf"), enforceIdx)
-	assert.Less(t, strings.Index(script, "/etc/dnsmasq.d/devm.conf"),
+	assert.Less(t, strings.Index(script, "/etc/systemd/timesyncd.conf.d/devm.conf"),
 		strings.Index(script, "systemctl start devm.target"))
 }
 

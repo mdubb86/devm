@@ -14,8 +14,8 @@ import (
 // TestSendSoftnetEnforced verifies that sendSoftnetEnforced, given a
 // stashed ironProxyInfo and an ntpPort, flips a project's softnet control
 // socket to ENFORCED with an iron_proxy endpoint built entirely from
-// loopback addresses — softnet dials iron-proxy host-side, so the
-// endpoint it forwards to is never MacHost.
+// loopback addresses — softnet dials iron-proxy host-side, not through a
+// vmnet bridge.
 //
 // Uses os.MkdirTemp (short prefix) rather than t.TempDir: a unix socket
 // path is capped at ~104 bytes on macOS, and t.TempDir embeds the full
@@ -42,7 +42,6 @@ func TestSendSoftnetEnforced(t *testing.T) {
 	}()
 
 	info := ironProxyInfo{
-		MacHost:   "192.168.64.5", // must NOT appear in the wire message
 		HTTPPort:  8080,
 		HTTPSPort: 8443,
 		DNSPort:   8053,
@@ -57,5 +56,4 @@ func TestSendSoftnetEnforced(t *testing.T) {
 	assert.Contains(t, line, `"https":"127.0.0.1:8443"`)
 	assert.Contains(t, line, `"dns":"127.0.0.1:8053"`)
 	assert.Contains(t, line, `"ntp":"127.0.0.1:51234"`)
-	assert.NotContains(t, line, "192.168.64.5", "must forward to loopback, never MacHost")
 }

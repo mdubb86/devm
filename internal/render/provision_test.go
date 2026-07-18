@@ -20,8 +20,6 @@ func TestRenderProvisionOpenScript_Structure(t *testing.T) {
 		Masks: []MaskMount{
 			{HostPath: "/var/devm/masks/p/web/data", MountTarget: "/Users/x/p/data", Owner: "devm"},
 		},
-		EnforcedNft:     "table inet devm_filter { policy drop }",
-		DnsmasqScript:   "sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<'DEVM_DNSMASQ'\nserver=192.168.64.1#53101\nDEVM_DNSMASQ\n",
 		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nNTP=192.0.2.1\nDEVM_TIMESYNCD\n",
 	}
 	s := string(RenderProvisionOpenScript(in))
@@ -40,11 +38,9 @@ func TestRenderProvisionOpenScript_Structure(t *testing.T) {
 	assert.NotContains(t, s, "::devm:stage:services::")
 	assert.NotContains(t, s, "systemctl start devm.target")
 	assert.NotContains(t, s, "systemctl start web.service")
-	assert.NotContains(t, s, "EnforcedNft-applied-marker")
 	assert.NotContains(t, s, "touch /var/lib/devm/provisioned")
 	// no mask/enforcement content leaks into the open half
 	assert.NotContains(t, s, "mount --bind")
-	assert.NotContains(t, s, "/etc/dnsmasq.d/devm.conf")
 	assert.NotContains(t, s, "/etc/systemd/timesyncd.conf.d/devm.conf")
 	// templates dispatcher runs through the wrapper, in the open window
 	assert.Contains(t, s, "/opt/devm/scripts/with-devm-env bash /opt/devm/scripts/install-templates.sh")
@@ -68,8 +64,6 @@ func TestRenderProvisionOpenScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
 	// open-stage work and no first-boot marker.
 	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
 		FirstBoot:       false,
-		EnforcedNft:     "table inet devm_filter { policy drop }",
-		DnsmasqScript:   "sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<'DEVM_DNSMASQ'\nDEVM_DNSMASQ\n",
 		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nDEVM_TIMESYNCD\n",
 	}))
 	assert.NotContains(t, s, "::devm:stage:startup::")
@@ -80,11 +74,9 @@ func TestRenderProvisionOpenScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
 	// lock must be cleared every boot even when no open-stage work runs,
 	// or a leftover policy-drop would drop softnet's own egress.
 	assert.Contains(t, s, "sudo nft flush ruleset")
-	// enforcement/DNS/NTP/target/marker-cleanup are the enforced script's
-	// job, not rendered here at all.
-	assert.NotContains(t, s, "EnforcedNft-applied-marker")
+	// enforcement/NTP/target/marker-cleanup are the enforced script's job,
+	// not rendered here at all.
 	assert.NotContains(t, s, "systemctl start devm.target")
-	assert.NotContains(t, s, "/etc/dnsmasq.d/devm.conf")
 	assert.NotContains(t, s, "/etc/systemd/timesyncd.conf.d/devm.conf")
 }
 
@@ -97,7 +89,6 @@ func TestRenderProvisionOpenScript_NftFlushUnconditionalAndBeforeOpenStage(t *te
 	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
 		FirstBoot:        true,
 		InstallTemplates: true,
-		EnforcedNft:      "table inet devm_filter { policy drop }",
 	}))
 	flushIdx := strings.Index(s, "sudo nft flush ruleset")
 	require.Greater(t, flushIdx, 0, "flush must be present")
@@ -115,7 +106,6 @@ func TestRenderProvisionOpenScript_StepTimeoutOverride(t *testing.T) {
 		FirstBoot:          true,
 		Install:            []string{"echo hi"},
 		Startup:            []string{"echo boot"},
-		EnforcedNft:        "table inet devm_filter { policy drop }",
 		StepTimeoutSeconds: 1,
 	}))
 	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
@@ -129,7 +119,6 @@ func TestRenderProvisionOpenScript_RestartWithTemplatesOpensWindow(t *testing.T)
 	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
 		FirstBoot:        false,
 		InstallTemplates: true,
-		EnforcedNft:      "table inet devm_filter { policy drop }",
 	}))
 	assert.Contains(t, s, "::devm:stage:open::")
 	assert.Contains(t, s, "::devm:stage:templates::")
@@ -145,8 +134,6 @@ func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 		Masks: []MaskMount{
 			{HostPath: "/var/devm/masks/p/web/data", MountTarget: "/Users/x/p/data", Owner: "devm"},
 		},
-		EnforcedNft:     "table inet devm_filter { policy drop }",
-		DnsmasqScript:   "sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<'DEVM_DNSMASQ'\nserver=192.168.64.1#53101\nDEVM_DNSMASQ\n",
 		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nNTP=192.0.2.1\nDEVM_TIMESYNCD\n",
 	}
 	s := string(RenderProvisionEnforcedScript(in))
@@ -162,7 +149,7 @@ func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 	assert.NotContains(t, s, "tar -x")
 	assert.NotContains(t, s, "nft flush ruleset")
 	// enforce BEFORE target; services BEFORE target
-	assert.Less(t, strings.Index(s, "EnforcedNft-applied-marker"),
+	assert.Less(t, strings.Index(s, "::devm:stage:enforce::"),
 		strings.Index(s, "systemctl start devm.target"))
 	assert.Less(t, strings.Index(s, "systemctl start web.service"),
 		strings.Index(s, "systemctl start devm.target"))
@@ -176,17 +163,12 @@ func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 	// first-boot completion marker written before the target
 	assert.Less(t, strings.Index(s, "touch /var/lib/devm/provisioned"),
 		strings.Index(s, "systemctl start devm.target"))
-	// dnsmasq + timesyncd config land in the enforce phase, AFTER the
-	// enforced nft ruleset and BEFORE services/target come up.
-	dnsmasqIdx := strings.Index(s, "/etc/dnsmasq.d/devm.conf")
+	// timesyncd config lands in the enforce phase, AFTER the enforce stage
+	// marker and BEFORE services/target come up.
 	timesyncdIdx := strings.Index(s, "/etc/systemd/timesyncd.conf.d/devm.conf")
-	require.Greater(t, dnsmasqIdx, 0)
 	require.Greater(t, timesyncdIdx, 0)
-	assert.Greater(t, dnsmasqIdx, strings.Index(s, "EnforcedNft-applied-marker"))
-	assert.Greater(t, timesyncdIdx, strings.Index(s, "EnforcedNft-applied-marker"))
-	assert.Less(t, dnsmasqIdx, strings.Index(s, "::devm:stage:services::"))
+	assert.Greater(t, timesyncdIdx, strings.Index(s, "::devm:stage:enforce::"))
 	assert.Less(t, timesyncdIdx, strings.Index(s, "::devm:stage:services::"))
-	assert.Less(t, dnsmasqIdx, strings.Index(s, "systemctl start devm.target"))
 	assert.Less(t, timesyncdIdx, strings.Index(s, "systemctl start devm.target"))
 	// service health check is a bounded poll (is-active AND is-failed),
 	// not a single is-failed snapshot — before the target.
@@ -199,17 +181,14 @@ func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 func TestRenderProvisionEnforcedScript_NotFirstBoot_NoCompletionMarker(t *testing.T) {
 	s := string(RenderProvisionEnforcedScript(ProvisionScriptInput{
 		FirstBoot:       false,
-		EnforcedNft:     "table inet devm_filter { policy drop }",
-		DnsmasqScript:   "sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<'DEVM_DNSMASQ'\nDEVM_DNSMASQ\n",
 		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nDEVM_TIMESYNCD\n",
 	}))
 	assert.NotContains(t, s, "touch /var/lib/devm/provisioned")
 	// enforcement + target still happen every boot
-	assert.Contains(t, s, "EnforcedNft-applied-marker")
+	assert.Contains(t, s, "::devm:stage:enforce::")
 	assert.Contains(t, s, "systemctl start devm.target")
-	// dnsmasq + timesyncd are applied every boot too, not just when the
-	// open window ran — DNS/NTP must work on a warm restart as well.
-	assert.Contains(t, s, "/etc/dnsmasq.d/devm.conf")
+	// timesyncd is applied every boot too, not just when the open window
+	// ran — NTP must work on a warm restart as well.
 	assert.Contains(t, s, "/etc/systemd/timesyncd.conf.d/devm.conf")
 	// marker cleanup still happens even with no first-boot work.
 	assert.Contains(t, s, "rm -f /run/devm/provisioning")
@@ -222,8 +201,7 @@ func TestRenderProvisionEnforcedScript_NotFirstBoot_NoCompletionMarker(t *testin
 // simple/forking/notify services.
 func TestRenderProvisionEnforcedScript_ServiceHealthPoll_OneShotAware(t *testing.T) {
 	s := string(RenderProvisionEnforcedScript(ProvisionScriptInput{
-		Services:    []string{"migrate"},
-		EnforcedNft: "table inet devm_filter { policy drop }",
+		Services: []string{"migrate"},
 	}))
 	assert.Contains(t, s, `systemctl show -p Result --value migrate.service`)
 	assert.Contains(t, s, `systemctl show -p ActiveState --value migrate.service`)

@@ -65,8 +65,6 @@ func (f *fakeVMAdmin) StartVM(_ context.Context, _ serviceapi.VMStartRequest) er
 
 func (f *fakeVMAdmin) EnforcementConfig(_ context.Context, _ string) (serviceapi.VMEnforcementConfigResponse, error) {
 	return serviceapi.VMEnforcementConfigResponse{
-		NftRuleset:      "table inet devm_filter { chain output { type filter hook output priority 0; policy drop; } }",
-		DnsmasqScript:   "sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<'DEVM_DNSMASQ'\nDEVM_DNSMASQ\n",
 		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nDEVM_TIMESYNCD\n",
 	}, nil
 }
@@ -863,8 +861,8 @@ exit 0
 // <script>`) that stage actually runs in, emits the given
 // `::devm:stage:<stage>::` marker on stdout and exits non-zero —
 // simulating a script failure at that stage. "enforce" and "services" run
-// in RunEnforced's exec (identified by the enforced-nft-applied marker
-// baked into its script); every other stage
+// in RunEnforced's exec (identified by the enforce-stage marker baked into
+// its script); every other stage
 // (open/packages/install/docker/templates/startup) runs in RunOpen's exec
 // (identified by the bundle-tar extraction baked into its script) — the
 // OTHER exec succeeds normally, exactly as the real split scripts behave.
@@ -877,7 +875,7 @@ func fakeTartBinStageFail(t *testing.T, dir, stage string) (*tart.Tart, string) 
 	logPath := filepath.Join(dir, "tart-invocations.log")
 	failMarker := `*"tar -xC /opt/devm"*` // RunOpen's exec
 	if stage == "enforce" || stage == "services" {
-		failMarker = `*"EnforcedNft-applied-marker"*` // RunEnforced's exec
+		failMarker = `*"::devm:stage:enforce::"*` // RunEnforced's exec
 	}
 	script := fmt.Sprintf(`#!/bin/sh
 echo "$*" >> %q

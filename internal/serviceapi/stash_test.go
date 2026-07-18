@@ -7,7 +7,7 @@ import (
 )
 
 func TestVMIPForProject(t *testing.T) {
-	ironProxyState.put("proj-x", ironProxyInfo{MacHost: "192.168.64.1", VMIP: "192.168.64.4"})
+	ironProxyState.put("proj-x", ironProxyInfo{VMIP: "192.168.64.4"})
 	t.Cleanup(func() { ironProxyState.del("proj-x") })
 
 	ip, ok := vmIPForProject("proj-x")
@@ -19,7 +19,7 @@ func TestVMIPForProject(t *testing.T) {
 }
 
 func TestVMIPForProject_StashedWithEmptyVMIP(t *testing.T) {
-	ironProxyState.put("proj-y", ironProxyInfo{MacHost: "192.168.64.1", VMIP: ""})
+	ironProxyState.put("proj-y", ironProxyInfo{VMIP: ""})
 	t.Cleanup(func() { ironProxyState.del("proj-y") })
 
 	ip, ok := vmIPForProject("proj-y")

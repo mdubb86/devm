@@ -105,12 +105,11 @@ func AdoptIronProxies(ctx context.Context, sup *supervisor.Supervisor, tr *tart.
 // recoverProjectState rebuilds the parts of a recovered project's
 // in-memory state that live outside ironProxyState's config-file
 // rehydration: the stashed VM IP (read fresh via `tart ip`, since the
-// config file iron-proxy was launched with doesn't record it), the
-// Docker flag and SSH host port (both read back from the last-applied
-// state snapshot, since neither is part of iron-proxy's own config
-// shape), and the project's direct routes. It's split out of
-// AdoptIronProxies's loop so it can be unit tested without shelling out
-// to `ps` (DiscoverIronProxies).
+// config file iron-proxy was launched with doesn't record it), the SSH
+// host port (read back from the last-applied state snapshot, since it
+// isn't part of iron-proxy's own config shape), and the project's direct
+// routes. It's split out of AdoptIronProxies's loop so it can be unit
+// tested without shelling out to `ps` (DiscoverIronProxies).
 //
 // Both pieces are best-effort and independent: a VM that isn't
 // running yet (tart ip fails) doesn't block rebuilding routes, and a
@@ -136,7 +135,6 @@ func recoverProjectState(ctx context.Context, tr *tart.Tart, routes *Routes, pro
 	}
 
 	info, _ := ironProxyState.get(projectID)
-	info.Docker = snap.Cfg.Docker
 	// SSHHostPort isn't part of iron-proxy's on-disk YAML config (it's
 	// not an iron-proxy concept), so loadIronProxyInfoFromConfig can't
 	// recover it. Restore it from the state snapshot instead — the
@@ -226,11 +224,7 @@ func parseIronProxyProjectID(command string) (string, bool) {
 }
 
 // loadIronProxyInfoFromConfig reads the YAML iron-proxy was launched
-// with and pulls back MacHost + HTTPPort + HTTPSPort + DNSPort. The
-// three listen strings are all "MacHost:port" (see IronProxyConfig.YAML
-// in ironproxy.go) and MacHost is the same across all three because a
-// single per-project iron-proxy binds all listeners on one vmnet
-// bridge IP.
+// with and pulls back HTTPPort + HTTPSPort + DNSPort.
 func loadIronProxyInfoFromConfig(path string) (ironProxyInfo, error) {
 	blob, err := os.ReadFile(path)
 	if err != nil {
@@ -248,7 +242,7 @@ func loadIronProxyInfoFromConfig(path string) (ironProxyInfo, error) {
 	if err := yaml.Unmarshal(blob, &raw); err != nil {
 		return ironProxyInfo{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	httpHost, httpPort, err := splitHostPortInt(raw.Proxy.HTTPListen)
+	_, httpPort, err := splitHostPortInt(raw.Proxy.HTTPListen)
 	if err != nil {
 		return ironProxyInfo{}, fmt.Errorf("proxy.http_listen: %w", err)
 	}
@@ -261,7 +255,6 @@ func loadIronProxyInfoFromConfig(path string) (ironProxyInfo, error) {
 		return ironProxyInfo{}, fmt.Errorf("dns.listen: %w", err)
 	}
 	return ironProxyInfo{
-		MacHost:   httpHost,
 		HTTPPort:  httpPort,
 		HTTPSPort: httpsPort,
 		DNSPort:   dnsPort,

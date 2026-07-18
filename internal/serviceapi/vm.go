@@ -75,14 +75,12 @@ type VMStopRequest struct {
 // provisioning script still bakes into its enforce phase. Egress
 // allow-listing and DNS resolution are enforced by softnet over the
 // control socket (POST /vm/apply-egress-enforcement), not by guest-side
-// nftables/dnsmasq, so NftRuleset and DnsmasqScript are always empty.
-// TimesyncdScript still points the guest's systemd-timesyncd at the proxy
-// sentinel — softnet's UDP forwarder catches outbound udp:123 regardless
-// of destination, but the guest must still be configured to send NTP
-// somewhere for that interception to matter.
+// nftables/dnsmasq. TimesyncdScript still points the guest's
+// systemd-timesyncd at the proxy sentinel — softnet's UDP forwarder
+// catches outbound udp:123 regardless of destination, but the guest must
+// still be configured to send NTP somewhere for that interception to
+// matter.
 type VMEnforcementConfigResponse struct {
-	NftRuleset      string `json:"nft_ruleset"`
-	DnsmasqScript   string `json:"dnsmasq_script"`
 	TimesyncdScript string `json:"timesyncd_script"`
 }
 
@@ -466,18 +464,17 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			HTTPPort:    httpPort,
 			HTTPSPort:   httpsPort,
 			DNSPort:     dnsPort,
-			Docker:      req.Docker,
 			SSHHostPort: sshHostPort,
 		})
 
 		// Apply VM-side config via tart exec — workspace mount, extra
 		// mounts, env only. The iron-proxy egress-enforcement config
-		// (nftables + dnsmasq→iron-proxy + timesyncd) is fetched by the
-		// CLI orchestrator via GET /vm/enforcement-config and baked into
-		// the composed provisioning script's enforce phase, so the
-		// user's install:, apt-get, and template-install steps still run
-		// with open egress — iron-proxy is meant to gate the
-		// workload/services, not the developer's provisioning phase.
+		// (timesyncd) is fetched by the CLI orchestrator via GET
+		// /vm/enforcement-config and baked into the composed provisioning
+		// script's enforce phase, so the user's install:, apt-get, and
+		// template-install steps still run with open egress — iron-proxy
+		// is meant to gate the workload/services, not the developer's
+		// provisioning phase.
 		//
 		// Workspace mount runs first so subsequent scripts can read files
 		// from the workspace (e.g. .devm/.env).
@@ -844,12 +841,10 @@ func endpointFrom(info ironProxyInfo, ntpPort int) *Endpoint {
 }
 
 type ironProxyInfo struct {
-	MacHost   string
 	VMIP      string // the guest's current DHCP IP (for direct-service DNS)
 	HTTPPort  int
 	HTTPSPort int
 	DNSPort   int
-	Docker    bool // cfg.Docker, preserved across /vm/apply-iron-proxy re-hydration
 	// SSHHostPort is the daemon-picked host port softnet forwards to the
 	// guest's :22, stashed here so both /vm/start's cold push and
 	// /vm/reconcile's live push can include SSH in the expose map

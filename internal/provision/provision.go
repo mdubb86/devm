@@ -59,19 +59,11 @@ type Provisioner struct {
 	// on the Mac (e.g., /Users/michael/projects/myproj).
 	WorkspaceVMPath string
 
-	// EnforcedNft is the enforced-egress allowlist ruleset (the `nft -f -`
-	// body) baked into the composed script's enforce phase, so services
-	// come up under enforcement. The daemon computes it per project from
-	// the iron-proxy MAC_HOST/ports (serviceapi.Client.EnforcementConfig).
-	EnforcedNft string
-
-	// DnsmasqScript and TimesyncdScript are the guest's runtime DNS
-	// resolution and NTP sync config, applied in the composed script's
-	// enforce phase alongside EnforcedNft — built by the daemon from the
-	// same iron-proxy MAC_HOST/ports (serviceapi.Client.EnforcementConfig).
-	// Without these the guest's egress is correctly locked down but
-	// external hostname resolution and NTP are broken at runtime.
-	DnsmasqScript   string
+	// TimesyncdScript is the guest's runtime NTP sync config, applied in
+	// the composed script's enforce phase — built by the daemon from the
+	// iron-proxy MAC_HOST/ports (serviceapi.Client.EnforcementConfig).
+	// Without it the guest's egress is correctly locked down but clock
+	// sync is broken at runtime.
 	TimesyncdScript string
 
 	// StepTimeoutSeconds bounds every install:/startup: command in the
@@ -202,8 +194,6 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		Startup:            p.Cfg.Startup,
 		Services:           p.serviceUnits(),
 		Masks:              p.maskMounts(),
-		EnforcedNft:        p.EnforcedNft,
-		DnsmasqScript:      p.DnsmasqScript,
 		TimesyncdScript:    p.TimesyncdScript,
 		StepTimeoutSeconds: p.StepTimeoutSeconds,
 	}
