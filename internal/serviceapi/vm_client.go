@@ -56,6 +56,32 @@ func (c *Client) EnforcementConfig(ctx context.Context, name string) (VMEnforcem
 	return resp, nil
 }
 
+// IngressConfig asks the daemon for the project's SSH host port —
+// allocated at /vm/start and stashed in ironProxyInfo. The orchestrator's
+// ssh_config emitter uses this to point Host blocks at
+// 127.0.0.1:<port> instead of the guest's (softnet-unroutable) IP.
+func (c *Client) IngressConfig(ctx context.Context, name string) (VMIngressConfigResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"http://localhost/vm/ingress-config?name="+name, nil)
+	if err != nil {
+		return VMIngressConfigResponse{}, err
+	}
+	r, err := c.httpClient.Do(req)
+	if err != nil {
+		return VMIngressConfigResponse{}, err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return VMIngressConfigResponse{}, fmt.Errorf("vm/ingress-config: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp VMIngressConfigResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return VMIngressConfigResponse{}, err
+	}
+	return resp, nil
+}
+
 // StopVM asks the daemon to stop the project VM. The daemon calls
 // `tart stop <name>` first so the guest gets a graceful shutdown before
 // the tart-run process is signalled.

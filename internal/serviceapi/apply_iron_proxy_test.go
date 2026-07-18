@@ -293,3 +293,64 @@ func TestApplyIronProxy_AdoptInPlace_RediscoversVMIP(t *testing.T) {
 	assert.Equal(t, guestVMIP, info.VMIP,
 		"VMIP must be re-discovered via the tart handle, not left at the zero value from the deleted prior entry")
 }
+
+// TestApplyIronProxy_PreservesSSHHostPort covers a reconcile-driven
+// BucketEgressRestart apply (allowlist/secret drift) against a VM that's
+// still running this daemon lifetime: ironProxyState already holds the
+// SSH host port /vm/start allocated. The handler rebuilds `info` from
+// iron-proxy's on-disk YAML config (loadIronProxyInfoFromConfig), which
+// has no notion of SSH — without carrying SSHHostPort forward from the
+// pre-existing entry (mirroring how VMIP and Docker are preserved just
+// above), this call would silently zero it out, and the next live
+// reconcile's expose-map push would drop the guest's SSH listener.
+func TestApplyIronProxy_PreservesSSHHostPort(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	srv := NewServer(SocketPath(), Build{})
+	sup := supervisor.New(t.TempDir())
+
+	const projectID = "p-preserve-ssh"
+	t.Cleanup(func() { ironProxyState.del(projectID) })
+
+	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
+	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg, SSHHostPort: 2200}))
+
+	macHost := "127.0.0.1"
+	httpPort, err := pickPort()
+	require.NoError(t, err)
+	httpsPort, err := pickPort()
+	require.NoError(t, err)
+	dnsPort, err := pickPort()
+	require.NoError(t, err)
+	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
+
+	// The VM is still running this daemon lifetime: ironProxyState
+	// already holds the SSH host port /vm/start allocated.
+	ironProxyState.put(projectID, ironProxyInfo{SSHHostPort: 2200})
+
+	origSpawn := spawnIronProxyFn
+	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
+	var ln net.Listener
+	spawnIronProxyFn = func(_ context.Context, _ *supervisor.Supervisor, _ string, cfg IronProxyConfig, _ *Denials) error {
+		var lerr error
+		ln, lerr = net.Listen("tcp", cfg.HTTPSListen)
+		return lerr
+	}
+
+	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+
+	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
+		Name:      projectID,
+		Allowlist: []string{"a.example.com"},
+	})
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/apply-iron-proxy", bytes.NewReader(reqBody)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	if ln != nil {
+		defer ln.Close()
+	}
+
+	info, ok := ironProxyState.get(projectID)
+	require.True(t, ok)
+	assert.Equal(t, 2200, info.SSHHostPort,
+		"SSHHostPort must be preserved across apply-iron-proxy, not zeroed")
+}

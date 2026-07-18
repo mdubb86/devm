@@ -92,6 +92,15 @@ type VMApplyEgressEnforcementRequest struct {
 	Name string `json:"name"`
 }
 
+// VMIngressConfigResponse is the body shape for GET /vm/ingress-config:
+// the per-project SSH host port softnet forwards to the guest's :22. The
+// CLI's ssh_config emitter fetches this instead of `tart ip` — under
+// softnet the guest IP isn't Mac-routable, so `HostName 127.0.0.1` +
+// this port is the only way in.
+type VMIngressConfigResponse struct {
+	SSHHostPort int `json:"ssh_host_port"`
+}
+
 // VMStatusResponse is the body shape for GET /vm/status.
 type VMStatusResponse struct {
 	Present bool   `json:"present"`
@@ -354,14 +363,24 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 
+		// Allocate the per-project SSH host port. Guest :22 can't be
+		// exposed on the Mac's own :22 — the host's sshd already owns it,
+		// and every project would collide on the same port besides.
+		// Stashed into ironProxyInfo below so GET /vm/ingress-config and
+		// the next reconcile's expose-map push can reuse it without
+		// re-allocating.
+		sshHostPort, err := pickPort()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("pick ssh host port: %v", err), http.StatusInternalServerError)
+			return
+		}
+
 		// Push the initial ingress expose map. Independent of egress
 		// state; listeners bind on the host and forward lazily once
-		// guest services come up. sshHostPort is 0 here — SSH isn't
-		// allocated yet — so it's simply omitted from the map until the
-		// next reconcile. Non-fatal: egress is the security boundary,
-		// ingress is convenience, and a failed push is re-attempted at
-		// the next reconcile.
-		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, 0)); err != nil {
+		// guest services come up. Non-fatal: egress is the security
+		// boundary, ingress is convenience, and a failed push is
+		// re-attempted at the next reconcile.
+		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, sshHostPort)); err != nil {
 			debuglog.Logf("serviceapi", "vm/start: push expose map for %s: %v", req.Name, err)
 		}
 
@@ -443,11 +462,12 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		// Stash port info + vmIP for VM env injection and the deferred
 		// egress-enforcement inject to read.
 		ironProxyState.put(req.Name, ironProxyInfo{
-			VMIP:      vmIP,
-			HTTPPort:  httpPort,
-			HTTPSPort: httpsPort,
-			DNSPort:   dnsPort,
-			Docker:    req.Docker,
+			VMIP:        vmIP,
+			HTTPPort:    httpPort,
+			HTTPSPort:   httpsPort,
+			DNSPort:     dnsPort,
+			Docker:      req.Docker,
+			SSHHostPort: sshHostPort,
 		})
 
 		// Apply VM-side config via tart exec — workspace mount, extra
@@ -516,6 +536,29 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		writeJSON(w, VMEnforcementConfigResponse{
 			TimesyncdScript: buildTimesyncdScript(),
 		})
+	})
+
+	// /vm/ingress-config returns the per-project SSH host port allocated
+	// at /vm/start, so the CLI's ssh_config emitter can point
+	// `devm-<project>` at 127.0.0.1:<port> without needing the guest's
+	// (now unroutable) softnet IP.
+	s.Register("/vm/ingress-config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+		info, ok := ironProxyState.get(name)
+		if !ok {
+			http.Error(w, "iron-proxy state missing — was /vm/start called for this project?",
+				http.StatusPreconditionFailed)
+			return
+		}
+		writeJSON(w, VMIngressConfigResponse{SSHHostPort: info.SSHHostPort})
 	})
 
 	// /vm/open-egress flips a project's softnet control socket to OPEN —

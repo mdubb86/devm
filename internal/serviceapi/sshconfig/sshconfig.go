@@ -32,7 +32,12 @@ var safeIdent = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 // Entry describes one Host block to emit.
 type Entry struct {
 	Name string // project name: host alias devm-<Name> + on-disk path lookups
-	VMIP string // current IP filled at emission time
+	// Host is the host-side address SSH dials — under softnet the guest
+	// isn't Mac-routable, so callers set this to softnet.HostLoopIP.
+	Host string
+	// Port is the project's daemon-allocated SSH host port, forwarded by
+	// softnet to the guest's :22.
+	Port int
 }
 
 const header = `# Managed by devm. Regenerated on VM lifecycle events; hand edits will be
@@ -42,9 +47,9 @@ const header = `# Managed by devm. Regenerated on VM lifecycle events; hand edit
 `
 
 const blockTmpl = `Host devm-{{.Name}}
-    HostName             {{.VMIP}}
+    HostName             {{.Host}}
     User                 devm
-    Port                 22
+    Port                 {{.Port}}
     IdentityFile         "{{.KeyPath}}"
     UserKnownHostsFile   "{{.KnownHostsPath}}"
     HostKeyAlias         devm-{{.Name}}
@@ -75,8 +80,11 @@ func Emit(entries []Entry) error {
 		if strings.Contains(e.Name, "..") {
 			return fmt.Errorf("unsafe name %q: path traversal not allowed", e.Name)
 		}
-		if net.ParseIP(e.VMIP) == nil {
-			return fmt.Errorf("unsafe VMIP %q: not a valid IP address", e.VMIP)
+		if net.ParseIP(e.Host) == nil {
+			return fmt.Errorf("unsafe host %q: not a valid IP address", e.Host)
+		}
+		if e.Port <= 0 || e.Port > 65535 {
+			return fmt.Errorf("unsafe port %d: out of range", e.Port)
 		}
 	}
 
@@ -85,9 +93,10 @@ func Emit(entries []Entry) error {
 	buf.WriteString(header)
 	for _, e := range sorted {
 		dir := sshkeys.ProjectDir(e.Name)
-		if err := tmpl.Execute(&buf, map[string]string{
+		if err := tmpl.Execute(&buf, map[string]any{
 			"Name":           e.Name,
-			"VMIP":           e.VMIP,
+			"Host":           e.Host,
+			"Port":           e.Port,
 			"KeyPath":        filepath.Join(dir, "id_ed25519"),
 			"KnownHostsPath": filepath.Join(dir, "known_hosts"),
 		}); err != nil {

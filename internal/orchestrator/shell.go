@@ -89,6 +89,12 @@ type VMAdminClient interface {
 	VMStatus(ctx context.Context, name string) (serviceapi.VMStatusResponse, error)
 	StartVM(ctx context.Context, req serviceapi.VMStartRequest) error
 	EnforcementConfig(ctx context.Context, name string) (serviceapi.VMEnforcementConfigResponse, error)
+	// IngressConfig fetches the project's daemon-allocated SSH host
+	// port, stashed at /vm/start. Used to seed the state snapshot's
+	// SSHHostPort (so a daemon restart can recover it) and by
+	// EmitSSHConfig to point ssh_config Host blocks at
+	// 127.0.0.1:<port>.
+	IngressConfig(ctx context.Context, name string) (serviceapi.VMIngressConfigResponse, error)
 	StopVM(ctx context.Context, name string) error
 	// ApplyIronProxy (re)spawns this project's iron-proxy on its
 	// existing MAC_HOST/ports without touching the VM — the same
@@ -272,7 +278,7 @@ func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName str
 	reporter.Step("ready", false)
 	reporter.Stop()
 	reporter.Clear()
-	if err := EmitSSHConfig(ctx, d.Tart); err != nil {
+	if err := EmitSSHConfig(ctx, d.Tart, d.ServiceAPIClient); err != nil {
 		log.Printf("ssh_config emit failed on warm attach: %v", err)
 	}
 	return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
@@ -396,17 +402,29 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "state: render templates for seed snapshot %s failed: %v\n", cfg.Project.Name, err)
 	}
+	// SSHHostPort was allocated by the daemon at StartVM; fetch it back
+	// so the seed snapshot carries it. Without this, a daemon restart
+	// before the next reconcile would find SSHHostPort unset in the
+	// snapshot and strand the running VM's ironProxyState.SSHHostPort at
+	// 0 (see recoverProjectState). Best-effort like the rest of this
+	// seed — a fetch failure just means the port resets to 0 on the
+	// next daemon restart, exactly as if this line didn't exist.
+	var sshHostPort int
+	if ingress, err := d.ServiceAPIClient.IngressConfig(ctx, cfg.Project.Name); err == nil {
+		sshHostPort = ingress.SSHHostPort
+	}
 	snap := serviceapi.StateSnapshot{
 		Cfg:              cfg,
 		TemplateContents: templateContents,
 		SecretHashes:     SecretHashesFromBindings(bindings),
 		ProxyVersion:     ironproxy.EmbeddedSha256(), // stamp the version that just provisioned
+		SSHHostPort:      sshHostPort,
 	}
 	if err := serviceapi.WriteStateSnapshot(cfg.Project.Name, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)
 	}
 
-	if err := EmitSSHConfig(ctx, d.Tart); err != nil {
+	if err := EmitSSHConfig(ctx, d.Tart, d.ServiceAPIClient); err != nil {
 		log.Printf("ssh_config emit failed after provisioning: %v", err)
 	}
 

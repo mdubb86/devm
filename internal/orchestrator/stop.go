@@ -28,8 +28,11 @@ const (
 
 // StopVMClient is the subset of *serviceapi.Client this orchestrator
 // uses. Defined here to allow test fakes; the real client satisfies it.
+// Embeds IngressConfigClient — RunStop re-emits ssh_config after
+// stopping, via the same EmitSSHConfig used by cold-start/warm-attach.
 type StopVMClient interface {
 	StopVM(ctx context.Context, name string) error
+	IngressConfigClient
 }
 
 // StopDeps wires collaborators for RunStop. In and Out drive the
@@ -84,7 +87,7 @@ func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness,
 	// before stop are lost (Bug J).
 	_ = d.ServiceAPIClient.StopVM(ctx, name)
 
-	if err := EmitSSHConfig(ctx, d.Tart); err != nil {
+	if err := EmitSSHConfig(ctx, d.Tart, d.ServiceAPIClient); err != nil {
 		log.Printf("ssh_config emit failed after stop: %v", err)
 	}
 

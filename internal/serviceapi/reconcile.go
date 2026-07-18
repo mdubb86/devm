@@ -196,7 +196,14 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				http.Error(w, fmt.Sprintf("render templates: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := WriteStateSnapshot(req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes}); err != nil {
+			// sshHostPort is read once here: it feeds both the snapshot
+			// (so a daemon restart's recoverProjectState can recover it —
+			// see StateSnapshot.SSHHostPort) and the expose-map push below.
+			sshHostPort := 0
+			if info, ok := ironProxyState.get(req.Name); ok {
+				sshHostPort = info.SSHHostPort
+			}
+			if err := WriteStateSnapshot(req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, SSHHostPort: sshHostPort}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}
@@ -204,10 +211,6 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 			// Ingress: re-push softnet's expose map from the current cfg so
 			// a live service/port change adds or drops host listeners.
 			// Independent of egress policy.
-			sshHostPort := 0
-			if info, ok := ironProxyState.get(req.Name); ok {
-				sshHostPort = info.SSHHostPort
-			}
 			if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, sshHostPort)); err != nil {
 				http.Error(w, fmt.Sprintf("push expose map: %v", err), http.StatusInternalServerError)
 				return

@@ -3,9 +3,9 @@
 #     Include "~/Library/Application Support/devm/ssh_config"
 
 Host devm-myproj
-    HostName             192.168.64.7
+    HostName             127.0.0.1
     User                 devm
-    Port                 22
+    Port                 2200
     IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/myproj/id_ed25519"
     UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/myproj/known_hosts"
     HostKeyAlias         devm-myproj

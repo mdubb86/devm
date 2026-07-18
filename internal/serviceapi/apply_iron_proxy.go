@@ -197,8 +197,16 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			info.VMIP = ip
 		}
 		info.Docker = existing.Docker
+		// SSHHostPort, like Docker, isn't part of iron-proxy's own YAML
+		// config shape (loadIronProxyInfoFromConfig never sets it), so it
+		// must be carried forward explicitly or this call would silently
+		// zero out the running VM's SSH port on every allowlist/secret
+		// reconcile — breaking the next expose-map push and any
+		// already-emitted ssh_config.
+		info.SSHHostPort = existing.SSHHostPort
 		if snap, serr := ReadStateSnapshot(req.Name); serr == nil && snap != nil {
 			info.Docker = snap.Cfg.Docker
+			info.SSHHostPort = snap.SSHHostPort
 		}
 		ironProxyState.put(req.Name, info)
 

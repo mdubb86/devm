@@ -71,6 +71,10 @@ func (f *fakeVMAdmin) EnforcementConfig(_ context.Context, _ string) (serviceapi
 	}, nil
 }
 
+func (f *fakeVMAdmin) IngressConfig(_ context.Context, _ string) (serviceapi.VMIngressConfigResponse, error) {
+	return serviceapi.VMIngressConfigResponse{SSHHostPort: 2200}, nil
+}
+
 func (f *fakeVMAdmin) StopVM(_ context.Context, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
