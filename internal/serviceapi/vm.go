@@ -53,10 +53,6 @@ type VMStartRequest struct {
 	// gigabytes at clone time (a per-project `disk:` override). Zero
 	// means the base image default. See schema.Config.DiskSizeGB.
 	DiskSizeGB int `json:"disk_size_gb,omitempty"`
-	// Docker mirrors cfg.Docker, stashed into ironProxyInfo so
-	// /vm/apply-iron-proxy's re-hydration path can recover it without
-	// re-reading the project's schema.Config.
-	Docker bool `json:"docker,omitempty"`
 	// Cfg is the project's full config, used to compute the initial
 	// softnet ingress expose map (see computeExposeMap) once the VM and
 	// its control socket are up.
@@ -894,14 +890,3 @@ func (s *ironProxyStore) keys() []string {
 }
 
 var ironProxyState = newIronProxyStore()
-
-// vmIPForProject returns the current stashed VM IP for a project, if the
-// VM has been started this daemon lifetime. Used by the DNS server to
-// answer direct-service hostnames.
-func vmIPForProject(project string) (string, bool) {
-	info, ok := ironProxyState.get(project)
-	if !ok || info.VMIP == "" {
-		return "", false
-	}
-	return info.VMIP, true
-}

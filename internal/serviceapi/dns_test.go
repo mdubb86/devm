@@ -11,10 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// noopResolver never resolves a project's VM IP — used by tests that
-// exercise the plain 127.0.0.1 behavior with no direct routes.
-func noopResolver(string) (string, bool) { return "", false }
-
 // startTestDNS spins up the DNS server on an ephemeral port and
 // returns its address. Test code dials that port directly.
 func startTestDNS(t *testing.T) (string, func()) {
@@ -24,7 +20,7 @@ func startTestDNS(t *testing.T) (string, func()) {
 	addr := pc.LocalAddr().String()
 	_ = pc.Close()
 
-	s := newDNSServerAt(addr, NewRoutes(), noopResolver)
+	s := newDNSServerAt(addr)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.Serve(ctx) }()
@@ -91,7 +87,7 @@ func TestDNS_PortInUse_ReturnsError(t *testing.T) {
 	addr := pc.LocalAddr().String()
 
 	// Now try to start our DNS server on the same port.
-	s := newDNSServerAt(addr, NewRoutes(), noopResolver)
+	s := newDNSServerAt(addr)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	err = s.Serve(ctx)
@@ -113,21 +109,7 @@ func (w *testResponseWriter) TsigTimersOnly(bool)       {}
 func (w *testResponseWriter) Hijack()                   {}
 
 func TestDNSAnswersLoopbackRegardlessOfRoute(t *testing.T) {
-	routes := NewRoutes()
-	routes.Apply("proj", []Route{
-		{Hostname: "db.test", BackendPort: 54322, Direct: true, Project: "proj"},
-		{Hostname: "web.test", BackendPort: 8080, Mode: ModeVM, Project: "proj"},
-	})
-	// resolver would answer a VM IP if handleTest still consulted it for
-	// direct routes; ingress moved to softnet's host-side listeners, so
-	// it must be ignored entirely.
-	resolver := func(project string) (string, bool) {
-		if project == "proj" {
-			return "192.168.64.4", true
-		}
-		return "", false
-	}
-	s := newDNSServerAt("127.0.0.1:0", routes, resolver)
+	s := newDNSServerAt("127.0.0.1:0")
 
 	assertA := func(name string) {
 		t.Helper()
@@ -146,22 +128,9 @@ func TestDNSAnswersLoopbackRegardlessOfRoute(t *testing.T) {
 }
 
 func TestHandleTest_DirectServiceAnswersLoopback(t *testing.T) {
-	// A direct route is registered, but ingress now flows entirely
-	// through softnet's host-side listeners — every .test name must
-	// answer loopback regardless of Direct/route status. The resolver
-	// callback would answer a VM IP if it were still consulted for
-	// direct routes; it must NOT be consulted anymore.
-	routes := NewRoutes()
-	routes.Apply("proj", []Route{
-		{Hostname: "db.test", BackendPort: 54322, Direct: true, Project: "proj"},
-	})
-	resolver := func(project string) (string, bool) {
-		if project == "proj" {
-			return "192.168.64.4", true
-		}
-		return "", false
-	}
-	s := newDNSServerAt("127.0.0.1:0", routes, resolver)
+	// Ingress flows entirely through softnet's host-side listeners —
+	// every .test name must answer loopback.
+	s := newDNSServerAt("127.0.0.1:0")
 
 	a := new(dns.Msg)
 	a.SetQuestion(dns.Fqdn("db.test"), dns.TypeA)

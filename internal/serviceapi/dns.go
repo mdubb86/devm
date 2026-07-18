@@ -37,30 +37,25 @@ func DNSAddr() string {
 	return defaultDNSAddr
 }
 
-// vmIPResolver returns a project's current VM IP, if known.
-type vmIPResolver func(project string) (string, bool)
-
 // DNSServer is the daemon's tiny *.test resolver. Every *.test name
 // answers 127.0.0.1 (A), TTL 0 — the host-local address where either
 // the daemon HTTP proxy (proxied services) or a softnet per-port
 // forward (direct services) listens. AAAA queries get NODATA:
 // softnet's ingress listeners bind v4 loopback only.
 type DNSServer struct {
-	server   *dns.Server
-	routes   *Routes
-	resolver vmIPResolver
+	server *dns.Server
 }
 
 // NewDNSServer builds a server bound to the address returned by
 // DNSAddr() — the default 127.0.0.1:51153 unless $DEVM_DNS_ADDR
 // overrides.
-func NewDNSServer(routes *Routes, resolver vmIPResolver) *DNSServer {
-	return newDNSServerAt(DNSAddr(), routes, resolver)
+func NewDNSServer() *DNSServer {
+	return newDNSServerAt(DNSAddr())
 }
 
 // newDNSServerAt is the testable inner — tests pass an ephemeral
 // address.
-func newDNSServerAt(addr string, routes *Routes, resolver vmIPResolver) *DNSServer {
+func newDNSServerAt(addr string) *DNSServer {
 	mux := dns.NewServeMux()
 	s := &DNSServer{
 		server: &dns.Server{
@@ -68,8 +63,6 @@ func newDNSServerAt(addr string, routes *Routes, resolver vmIPResolver) *DNSServ
 			Net:     "udp",
 			Handler: mux,
 		},
-		routes:   routes,
-		resolver: resolver,
 	}
 	mux.HandleFunc(testTLD, s.handleTest)
 	return s

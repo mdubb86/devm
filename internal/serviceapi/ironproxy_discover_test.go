@@ -169,9 +169,9 @@ func TestRecoverProjectState_StashesVMIPAndRebuildsDirectRoutes(t *testing.T) {
 	routes := NewRoutes()
 	recoverProjectState(context.Background(), tr, routes, projectID)
 
-	ip, ok := vmIPForProject(projectID)
+	info, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
-	assert.Equal(t, "192.168.64.9", ip)
+	assert.Equal(t, "192.168.64.9", info.VMIP)
 
 	route, ok := routes.DirectRoute("db.test")
 	require.True(t, ok)
@@ -202,9 +202,9 @@ func TestRecoverProjectState_MissingSnapshot_NoRoutesButVMIPStillStashed(t *test
 	routes := NewRoutes()
 	recoverProjectState(context.Background(), tr, routes, projectID)
 
-	ip, ok := vmIPForProject(projectID)
+	info, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
-	assert.Equal(t, "192.168.64.10", ip)
+	assert.Equal(t, "192.168.64.10", info.VMIP)
 
 	assert.Empty(t, routes.AllByProject()[projectID])
 }
@@ -232,8 +232,9 @@ func TestRecoverProjectState_VMNotRunning_RoutesStillRebuilt(t *testing.T) {
 	routes := NewRoutes()
 	recoverProjectState(context.Background(), tr, routes, projectID)
 
-	_, ok := vmIPForProject(projectID)
-	assert.False(t, ok)
+	info, ok := ironProxyState.get(projectID)
+	assert.True(t, ok)
+	assert.Empty(t, info.VMIP)
 
 	route, ok := routes.DirectRoute("db.test")
 	require.True(t, ok)
