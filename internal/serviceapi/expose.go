@@ -2,7 +2,9 @@ package serviceapi
 
 import (
 	"fmt"
+	"net"
 	"sort"
+	"strconv"
 
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/softnet"
@@ -44,11 +46,25 @@ func computeExposeMap(cfg schema.Config, sshHostPort int) []softnet.ExposePort {
 }
 
 // pushExposeMap sends the full expose map to a project's softnet control
-// socket. It is a no-op when the project has no softnet socket registered
-// (VM not started, or not softnet-backed) — ingress is re-pushed at the
-// next /vm/start. Ingress is independent of egress policy, so this is
-// safe to call in any egress state.
+// socket. It first reconciles the project's host-port claims against
+// every other running project's — a conflict (another project already
+// owns one of these bindIP:hostPort endpoints) is returned without
+// dispatching to softnet, so the colliding listener is never bound and
+// the misrouting `.test` DNS answer (which resolves every name to
+// loopback) never happens. The claim reconcile runs even when the
+// project has no softnet socket yet (VM not started), so claims track
+// intent before the socket exists; pushExposeMap is then a no-op until
+// the socket is registered — ingress is re-pushed at the next
+// /vm/start. Ingress is independent of egress policy, so this is safe
+// to call in any egress state.
 func pushExposeMap(projectID string, ports []softnet.ExposePort) error {
+	keys := make([]string, 0, len(ports))
+	for _, p := range ports {
+		keys = append(keys, net.JoinHostPort(p.BindIP, strconv.Itoa(p.HostPort)))
+	}
+	if err := exposeClaims.reconcile(projectID, keys); err != nil {
+		return err
+	}
 	sock := softnetState.get(projectID)
 	if sock == "" {
 		return nil

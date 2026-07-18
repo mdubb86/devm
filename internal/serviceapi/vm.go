@@ -685,6 +685,9 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		// than holding a persistent connection — so there's nothing to
 		// close here, only the daemon's record of the socket path to drop.
 		softnetState.del(req.Name)
+		// A stopped project frees its claimed host ports for other
+		// projects to take.
+		exposeClaims.release(req.Name)
 		if denials != nil {
 			denials.Reset(req.Name)
 		}
