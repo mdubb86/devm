@@ -58,14 +58,12 @@ func TestDNS_TestTLD_A_Returns127001(t *testing.T) {
 	assert.Equal(t, "127.0.0.1", a.A.String())
 }
 
-func TestDNS_TestTLD_AAAA_ReturnsLoopbackV6(t *testing.T) {
+func TestDNS_TestTLD_AAAA_ReturnsNoData(t *testing.T) {
 	server, cleanup := startTestDNS(t)
 	defer cleanup()
 	reply := queryUDP(t, server, "anything.test", dns.TypeAAAA)
-	require.Len(t, reply.Answer, 1)
-	aaaa, ok := reply.Answer[0].(*dns.AAAA)
-	require.True(t, ok, "expected AAAA record")
-	assert.Equal(t, "::1", aaaa.AAAA.String())
+	assert.Empty(t, reply.Answer, "AAAA queries should return NODATA (empty Answer)")
+	assert.Equal(t, dns.RcodeSuccess, reply.Rcode, "rcode must be NoError for NODATA")
 }
 
 func TestDNS_TestTLD_MX_NoData(t *testing.T) {
@@ -178,8 +176,6 @@ func TestHandleTest_DirectServiceAnswersLoopback(t *testing.T) {
 	aaaa.SetQuestion(dns.Fqdn("db.test"), dns.TypeAAAA)
 	recAAAA := &testResponseWriter{}
 	s.handleTest(recAAAA, aaaa)
-	require.Len(t, recAAAA.msg.Answer, 1)
-	aaaarec, ok := recAAAA.msg.Answer[0].(*dns.AAAA)
-	require.True(t, ok, "expected AAAA record")
-	assert.Equal(t, "::1", aaaarec.AAAA.String())
+	assert.Empty(t, recAAAA.msg.Answer, "AAAA queries should return NODATA (empty Answer)")
+	assert.Equal(t, dns.RcodeSuccess, recAAAA.msg.Rcode, "rcode must be NoError for NODATA")
 }

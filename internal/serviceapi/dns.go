@@ -41,9 +41,10 @@ func DNSAddr() string {
 type vmIPResolver func(project string) (string, bool)
 
 // DNSServer is the daemon's tiny *.test resolver. Every *.test name
-// answers 127.0.0.1 (A) / ::1 (AAAA), TTL 0 — the host-local address
-// where either the daemon HTTP proxy (proxied services) or a softnet
-// per-port forward (direct services) listens.
+// answers 127.0.0.1 (A), TTL 0 — the host-local address where either
+// the daemon HTTP proxy (proxied services) or a softnet per-port
+// forward (direct services) listens. AAAA queries get NODATA:
+// softnet's ingress listeners bind v4 loopback only.
 type DNSServer struct {
 	server   *dns.Server
 	routes   *Routes
@@ -106,11 +107,6 @@ func (s *DNSServer) handleTest(w dns.ResponseWriter, r *dns.Msg) {
 			msg.Answer = append(msg.Answer, &dns.A{
 				Hdr: dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 0},
 				A:   net.IPv4(127, 0, 0, 1),
-			})
-		case dns.TypeAAAA:
-			msg.Answer = append(msg.Answer, &dns.AAAA{
-				Hdr:  dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 0},
-				AAAA: net.ParseIP("::1"),
 			})
 		}
 		// All other query types fall through; Answer stays empty —
