@@ -126,18 +126,23 @@ func TestLoadIronProxyInfoFromConfig_MissingFile(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestRecoverProjectState_StashesVMIPAndRebuildsDirectRoutes covers the
-// daemon-restart adoption path (AdoptIronProxies calls this per
-// recovered project): with a fake `tart` binary standing in for a
-// running VM and a state snapshot on disk describing a direct
-// service, recoverProjectState should both re-stash the VM IP (so
-// vmIPForProject works again) and rebuild the project's direct routes
-// (so DNS keeps answering for it) — all without a daemon restart
-// actually having happened.
-func TestRecoverProjectState_StashesVMIPAndRebuildsDirectRoutes(t *testing.T) {
+// TestRecoverProjectState_RestoresSSHHostPortAndRebuildsDirectRoutes
+// covers the daemon-restart adoption path (AdoptIronProxies calls this
+// per recovered project, after already seeding ironProxyState from the
+// project's on-disk iron-proxy config): given a state snapshot on disk
+// describing a direct service and an SSH host port, recoverProjectState
+// should restore SSHHostPort onto the pre-seeded entry and rebuild the
+// project's direct routes (so DNS keeps answering for it) — all without
+// a daemon restart actually having happened.
+func TestRecoverProjectState_RestoresSSHHostPortAndRebuildsDirectRoutes(t *testing.T) {
 	const projectID = "recover-proj"
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
+
+	// Mirrors AdoptIronProxies having already rehydrated ironProxyState
+	// from the project's on-disk iron-proxy config before calling
+	// recoverProjectState.
+	ironProxyState.put(projectID, ironProxyInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})
 
 	snap := StateSnapshot{
 		Cfg: schema.Config{
@@ -156,22 +161,17 @@ func TestRecoverProjectState_StashesVMIPAndRebuildsDirectRoutes(t *testing.T) {
 				},
 			},
 		},
+		SSHHostPort: 2201,
 	}
 	require.NoError(t, WriteStateSnapshot(projectID, snap))
 
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "tart-fake")
-	script := "#!/bin/sh\necho 192.168.64.9\nexit 0\n"
-	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
-	tr := tart.New()
-	tr.Path = bin
-
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), tr, routes, projectID)
+	recoverProjectState(context.Background(), tart.New(), routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
-	assert.Equal(t, "192.168.64.9", info.VMIP)
+	assert.Equal(t, 2201, info.SSHHostPort, "SSHHostPort must be restored from the state snapshot")
+	assert.Equal(t, 59481, info.HTTPPort, "pre-seeded ports must survive the SSHHostPort restore")
 
 	route, ok := routes.DirectRoute("db.test")
 	require.True(t, ok)
@@ -182,37 +182,36 @@ func TestRecoverProjectState_StashesVMIPAndRebuildsDirectRoutes(t *testing.T) {
 	assert.False(t, ok, "non-direct service must not become a direct route")
 }
 
-// TestRecoverProjectState_MissingSnapshot_NoRoutesButVMIPStillStashed
-// covers a project whose config was never written to disk (or the
-// snapshot is malformed) — recoverProjectState should still stash the
-// VM IP (independent, unconditional) and simply have nothing to apply
-// to routes.
-func TestRecoverProjectState_MissingSnapshot_NoRoutesButVMIPStillStashed(t *testing.T) {
+// TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched covers a
+// project whose config was never written to disk (or the snapshot is
+// malformed) — recoverProjectState has nothing to restore or rebuild,
+// so it must return without touching the pre-seeded ironProxyState
+// entry or the routes table.
+func TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched(t *testing.T) {
 	const projectID = "no-snapshot-proj"
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "tart-fake")
-	script := "#!/bin/sh\necho 192.168.64.10\nexit 0\n"
-	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
-	tr := tart.New()
-	tr.Path = bin
+	seeded := ironProxyInfo{HTTPPort: 111, HTTPSPort: 222, DNSPort: 333}
+	ironProxyState.put(projectID, seeded)
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), tr, routes, projectID)
+	recoverProjectState(context.Background(), tart.New(), routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
-	assert.Equal(t, "192.168.64.10", info.VMIP)
+	assert.Equal(t, seeded, info, "no snapshot means nothing to restore — entry must be untouched")
 
 	assert.Empty(t, routes.AllByProject()[projectID])
 }
 
-// TestRecoverProjectState_VMNotRunning_RoutesStillRebuilt covers the
-// case where `tart ip` fails (VM not up yet) — the VM-IP stash must
-// be skipped without blocking the independent direct-route rebuild.
-func TestRecoverProjectState_VMNotRunning_RoutesStillRebuilt(t *testing.T) {
+// TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesSSHHostPortAndRoutes
+// covers the defensive case where ironProxyState holds no entry yet for
+// the project (e.g. called outside AdoptIronProxies's normal
+// config-rehydration-first order): given only a state snapshot,
+// recoverProjectState must still create an entry carrying SSHHostPort
+// and rebuild direct routes.
+func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesSSHHostPortAndRoutes(t *testing.T) {
 	const projectID = "vm-down-proj"
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
@@ -224,17 +223,15 @@ func TestRecoverProjectState_VMNotRunning_RoutesStillRebuilt(t *testing.T) {
 				"db": {Hostname: "db.test", Port: 5432, Direct: true},
 			},
 		},
+		SSHHostPort: 2202,
 	}))
 
-	tr := tart.New()
-	tr.Path = "false" // `tart ip` always fails
-
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), tr, routes, projectID)
+	recoverProjectState(context.Background(), tart.New(), routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
-	assert.Empty(t, info.VMIP)
+	assert.Equal(t, 2202, info.SSHHostPort)
 
 	route, ok := routes.DirectRoute("db.test")
 	require.True(t, ok)

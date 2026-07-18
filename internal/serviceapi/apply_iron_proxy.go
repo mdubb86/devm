@@ -181,21 +181,8 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// tore the previous iron-proxy down with it) would spawn a
 		// healthy iron-proxy yet still 412 on the very next
 		// EnforcementConfig fetch. Mirrors AdoptIronProxies'
-		// daemon-restart rehydration (ironproxy_discover.go). VMIP is
-		// re-discovered the same way recoverProjectState does on a
-		// daemon restart — via `tart ip` — because on the
-		// adopt-in-place path a prior `devm stop` already cleared any
-		// existing ironProxyState entry, so falling back to it would
-		// silently leave VMIP empty and misroute direct: services to
-		// 127.0.0.1. Best-effort: if the VM isn't actually running
-		// (e.g. this call is a reconcile self-heal against a stopped
-		// VM with a stale config file), tart ip fails and whatever
-		// VMIP was already stashed is preserved instead.
+		// daemon-restart rehydration (ironproxy_discover.go).
 		existing, _ := ironProxyState.get(req.Name)
-		info.VMIP = existing.VMIP
-		if ip, err := tr.IP(r.Context(), req.Name); err == nil {
-			info.VMIP = ip
-		}
 		// SSHHostPort isn't part of iron-proxy's own YAML config shape
 		// (loadIronProxyInfoFromConfig never sets it), so it must be
 		// carried forward explicitly or this call would silently zero

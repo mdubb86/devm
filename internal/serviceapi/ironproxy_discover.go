@@ -104,18 +104,14 @@ func AdoptIronProxies(ctx context.Context, sup *supervisor.Supervisor, tr *tart.
 
 // recoverProjectState rebuilds the parts of a recovered project's
 // in-memory state that live outside ironProxyState's config-file
-// rehydration: the stashed VM IP (read fresh via `tart ip`, since the
-// config file iron-proxy was launched with doesn't record it), the SSH
-// host port (read back from the last-applied state snapshot, since it
-// isn't part of iron-proxy's own config shape), and the project's direct
-// routes. It's split out of AdoptIronProxies's loop so it can be unit
-// tested without shelling out to `ps` (DiscoverIronProxies).
+// rehydration: the SSH host port (read back from the last-applied
+// state snapshot, since it isn't part of iron-proxy's own config
+// shape) and the project's direct routes. It's split out of
+// AdoptIronProxies's loop so it can be unit tested without shelling
+// out to `ps` (DiscoverIronProxies).
 //
-// Both pieces are best-effort and independent: a VM that isn't
-// running yet (tart ip fails) doesn't block rebuilding routes, and a
-// missing/malformed snapshot (or a project with no direct services)
-// doesn't block the VM-IP stash. There's simply nothing to recover
-// for the piece that failed.
+// Best-effort: a missing/malformed snapshot (or a project with no
+// direct services) simply leaves nothing to recover.
 //
 // Only Direct routes are rebuilt here. Proxied (non-direct) routes
 // depend on the VM's IP as BackendHost and are normally re-pushed by
@@ -123,12 +119,6 @@ func AdoptIronProxies(ctx context.Context, sup *supervisor.Supervisor, tr *tart.
 // here is out of scope for this recovery path — see buildRoutes in
 // cmd/devm/route.go for how the CLI constructs the full set.
 func recoverProjectState(ctx context.Context, tr *tart.Tart, routes *Routes, projectID string) {
-	if ip, err := tr.IP(ctx, projectID); err == nil {
-		info, _ := ironProxyState.get(projectID)
-		info.VMIP = ip
-		ironProxyState.put(projectID, info)
-	}
-
 	snap, err := ReadStateSnapshot(projectID)
 	if err != nil || snap == nil {
 		return

@@ -22,8 +22,7 @@ import (
 )
 
 // fakeTartIP returns a *tart.Tart whose `tart ip` always succeeds with
-// ip. Stands in for a running VM so the apply-iron-proxy handler's VMIP
-// rediscovery has something real to find.
+// ip. Stands in for a running VM.
 func fakeTartIP(t *testing.T, ip string) *tart.Tart {
 	t.Helper()
 	dir := t.TempDir()
@@ -221,77 +220,8 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	require.Contains(t, snap.SecretHashes, "github_token")
 	assert.Equal(t, seededCfg, snap.Cfg, "cfg must be preserved, not zeroed")
 
-	info, ok := ironProxyState.get(projectID)
-	require.True(t, ok)
-	assert.Equal(t, "192.168.64.50", info.VMIP, "VMIP must be re-discovered via tart ip, not left stale")
-}
-
-// TestApplyIronProxy_AdoptInPlace_RediscoversVMIP covers finding #1 from
-// the Task 9 review: on the adopt-in-place path, a prior `devm stop`
-// already called ironProxyState.del for this project, so there is no
-// pre-existing entry to carry VMIP forward from. The handler must
-// re-discover the real guest VMIP via the tart handle (mirroring
-// recoverProjectState's daemon-restart recovery) rather than leaving
-// ironProxyState.VMIP empty — an empty VMIP makes vmIPForProject return
-// ok=false, and the DNS server then silently resolves this project's
-// direct: services to 127.0.0.1 instead of the guest.
-func TestApplyIronProxy_AdoptInPlace_RediscoversVMIP(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	srv := NewServer(SocketPath(), Build{})
-	sup := supervisor.New(t.TempDir())
-
-	const projectID = "p-adopt"
-	t.Cleanup(func() { ironProxyState.del(projectID) })
-
-	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
-	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg}))
-
-	macHost := "127.0.0.1"
-	httpPort, err := pickPort()
-	require.NoError(t, err)
-	httpsPort, err := pickPort()
-	require.NoError(t, err)
-	dnsPort, err := pickPort()
-	require.NoError(t, err)
-	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
-
-	// No prior ironProxyState entry (simulates a prior `devm stop`
-	// having called ironProxyState.del), and the supervisor has never
-	// heard of this project's proxy key either — mirrors adopt-in-place,
-	// where StartVM (the only other thing that spawns iron-proxy) was
-	// skipped because the VM process is already up.
-	origSpawn := spawnIronProxyFn
-	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
-	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ *supervisor.Supervisor, _ string, cfg IronProxyConfig, _ *Denials) error {
-		var lerr error
-		ln, lerr = net.Listen("tcp", cfg.HTTPSListen)
-		return lerr
-	}
-
-	const guestVMIP = "192.168.64.42"
-	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, fakeTartIP(t, guestVMIP), nil)
-
-	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
-		Name:      projectID,
-		Allowlist: []string{"a.example.com"},
-	})
-	rec := httptest.NewRecorder()
-	srv.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/apply-iron-proxy", bytes.NewReader(reqBody)))
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	if ln != nil {
-		defer ln.Close()
-	}
-
-	var resp VMApplyIronProxyResponse
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	assert.True(t, resp.Applied)
-	assert.True(t, resp.Revived, "no prior live process — this is a revival")
-
-	info, ok := ironProxyState.get(projectID)
+	_, ok := ironProxyState.get(projectID)
 	require.True(t, ok, "ironProxyState must hold an entry for the project after a successful apply")
-	assert.Equal(t, guestVMIP, info.VMIP,
-		"VMIP must be re-discovered via the tart handle, not left at the zero value from the deleted prior entry")
 }
 
 // TestApplyIronProxy_PreservesSSHHostPort covers a reconcile-driven
@@ -300,9 +230,9 @@ func TestApplyIronProxy_AdoptInPlace_RediscoversVMIP(t *testing.T) {
 // SSH host port /vm/start allocated. The handler rebuilds `info` from
 // iron-proxy's on-disk YAML config (loadIronProxyInfoFromConfig), which
 // has no notion of SSH — without carrying SSHHostPort forward from the
-// pre-existing entry (mirroring how VMIP and Docker are preserved just
-// above), this call would silently zero it out, and the next live
-// reconcile's expose-map push would drop the guest's SSH listener.
+// pre-existing entry, this call would silently zero it out, and the
+// next live reconcile's expose-map push would drop the guest's SSH
+// listener.
 func TestApplyIronProxy_PreservesSSHHostPort(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	srv := NewServer(SocketPath(), Build{})

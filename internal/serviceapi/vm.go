@@ -395,20 +395,6 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			ironSecrets = append(ironSecrets, IronSecret{Name: b.Name, Value: b.Value, Hosts: b.Hosts})
 		}
 
-		// Discover the guest's softnet IP (192.168.127.x) — stashed for
-		// ssh-config generation and status reporting. iron-proxy itself
-		// binds loopback unconditionally (ironProxyListenAddr): softnet
-		// dials it host-side, and there's no vmnet bridge under
-		// --net-softnet for a Mac-routable address to matter for egress.
-		//
-		// The VM has an IP by now (waitVMExecReady already succeeded,
-		// which implies the guest agent is up).
-		vmIP, err := tr.IP(ctx, req.Name)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("discover VM ip: %v", err), http.StatusInternalServerError)
-			return
-		}
-
 		// Allocate three ephemeral ports on the Mac (HTTP + HTTPS + DNS).
 		httpPort, err := pickPort()
 		if err != nil {
@@ -452,10 +438,9 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 
-		// Stash port info + vmIP for VM env injection and the deferred
+		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read.
 		ironProxyState.put(req.Name, ironProxyInfo{
-			VMIP:        vmIP,
 			HTTPPort:    httpPort,
 			HTTPSPort:   httpsPort,
 			DNSPort:     dnsPort,
@@ -829,7 +814,6 @@ func endpointFrom(info ironProxyInfo, ntpPort int) *Endpoint {
 }
 
 type ironProxyInfo struct {
-	VMIP      string // the guest's current DHCP IP (for direct-service DNS)
 	HTTPPort  int
 	HTTPSPort int
 	DNSPort   int
