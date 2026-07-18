@@ -51,9 +51,9 @@ func RunService(ctx context.Context, build Build) error {
 
 	// SNTP responder — one daemon-wide instance, bound eagerly so /vm/start
 	// (and discoverSoftnet, below) know the port when they build a softnet
-	// endpoint. The guest DNATs its outbound UDP:123 (timesyncd →
-	// wherever) to MAC_HOST at this port; we answer from the host's wall
-	// clock. This is what heals guest-clock drift after a Mac sleep —
+	// endpoint. Under ENFORCED policy, softnet forwards the guest's
+	// outbound UDP:123 (timesyncd) to this port; we answer from the host's
+	// wall clock. This is what heals guest-clock drift after a Mac sleep —
 	// external NTP isn't reachable because our egress firewall doesn't
 	// proxy UDP, but the Mac itself is always time-correct. Bound ahead of
 	// AdoptIronProxies/discoverSoftnet so its port is ready for the

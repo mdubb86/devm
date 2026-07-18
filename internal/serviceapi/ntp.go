@@ -38,8 +38,9 @@ type NTPServer struct {
 
 // NewNTPServer prepares an SNTP responder bound to an ephemeral UDP port.
 // The port is picked eagerly (bind on 0.0.0.0:0) so Port() is stable to
-// read before Serve is called — /vm/start needs the port at nftables-
-// script build time, which can race Serve on daemon startup.
+// read before Serve is called — /vm/start needs the port when it builds
+// the softnet enforced-policy endpoint, which can race Serve on daemon
+// startup.
 func NewNTPServer() (*NTPServer, error) {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {

@@ -73,8 +73,7 @@ func TestBuildIronProxyConfig_EmptyAllowList_OmitsTransforms(t *testing.T) {
 
 func TestIronProxyListenAddr_UsesLoopback(t *testing.T) {
 	// softnet dials iron-proxy host-side — there's no vmnet bridge under
-	// --net-softnet, so iron-proxy must bind loopback regardless of the
-	// VM's MacHost.
+	// --net-softnet, so iron-proxy always binds loopback.
 	assert.Equal(t, "127.0.0.1:8080", ironProxyListenAddr(8080))
 	assert.Equal(t, "127.0.0.1:8443", ironProxyListenAddr(8443))
 }

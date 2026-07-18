@@ -110,12 +110,10 @@ EOF
 }
 
 // buildTimesyncdScript configures systemd-timesyncd to send NTP
-// traffic at the proxy sentinel IP. Sentinel — not MAC_HOST — because
-// the guest's `ip daddr <MAC_HOST> return` NAT bypass would otherwise
-// fire before our `udp dport 123 dnat` rule, and the packet would
-// reach MAC_HOST:123 (where nothing listens) instead of being
-// rewritten to the daemon's SNTP responder's random high port. Same
-// sentinel iron-proxy uses for DNS answers (see proxySentinelIP in
+// traffic at the proxy sentinel IP. Under ENFORCED policy softnet
+// forwards outbound UDP:123 to the daemon's SNTP responder regardless
+// of destination IP, so any valid IP here reaches it — this reuses the
+// same sentinel iron-proxy uses for DNS answers (see proxySentinelIP in
 // vm.go).
 //
 // Config choices:

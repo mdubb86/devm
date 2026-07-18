@@ -66,8 +66,8 @@ func DiscoverIronProxies(ctx context.Context) ([]DiscoveredIronProxy, error) {
 // The config file is the authoritative record of the ports iron-proxy
 // bound at spawn time; without rehydration, ironProxyState is empty at
 // daemon startup and a subsequent /vm/start would pick fresh ports
-// while the running VM's dnsmasq + nftables still point at the old
-// ones — silent DNS failure inside the guest.
+// while the running VM's dnsmasq still points at the old ones —
+// silent DNS failure inside the guest.
 //
 // Best-effort per-process: a project whose config file is missing,
 // unreadable, or malformed is adopted (so /vm/stop still finds it) but

@@ -71,10 +71,9 @@ func TestBuildEnvScript_SetsSystemWideEnvVars(t *testing.T) {
 func TestBuildTimesyncdScript_PointsAtProxySentinel(t *testing.T) {
 	script := buildTimesyncdScript()
 	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")
-	// Sentinel (not MAC_HOST): the ip-daddr-MAC_HOST-return NAT bypass
-	// would otherwise fire before our udp:123 DNAT and the packet
-	// would arrive at MAC_HOST:123 (no listener) instead of the
-	// daemon's SNTP responder.
+	// Sentinel: under ENFORCED policy softnet forwards outbound UDP:123
+	// to the daemon's SNTP responder regardless of destination IP, so
+	// any valid IP reaches it here.
 	assert.Contains(t, script, "NTP="+proxySentinelIP)
 	// Explicit empty FallbackNTP prevents timesyncd from ever trying
 	// the default pool.ntp.org list; egress firewall would deny it

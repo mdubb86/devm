@@ -60,7 +60,7 @@ type IronProxyEndpoint struct {
 	NTP   string `json:"ntp"`
 }
 
-// ExposePort is one host->guest ingress mapping (implemented in Plan 2).
+// ExposePort is one host->guest ingress mapping.
 type ExposePort struct {
 	GuestPort int    `json:"guest_port"`
 	BindIP    string `json:"bind_ip"`

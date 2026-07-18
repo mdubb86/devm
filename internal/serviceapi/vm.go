@@ -32,11 +32,11 @@ type SecretBinding struct {
 
 // proxySentinelIP is the address iron-proxy returns for every allow-listed
 // hostname. Chosen from RFC 5737 "documentation" space so it can never
-// collide with a real destination. The guest's default route sends it to
-// MAC_HOST via vmnet, where nftables DNAT catches `tcp dport 443/80` and
-// rewrites the packet to iron-proxy's actual listen address. Using MAC_HOST
-// itself here would trip the guest's `ip daddr <MAC_HOST> return` bypass
-// (a legit rule for guest→iron-proxy DNS traffic) and skip DNAT entirely.
+// collide with a real destination. Under ENFORCED policy, softnet forwards
+// outbound TCP:80/443 to iron-proxy's listeners purely by destination
+// port, regardless of destination IP, so traffic addressed to the
+// sentinel reaches iron-proxy the same way traffic to a real address
+// would.
 const proxySentinelIP = "192.0.2.1"
 
 // VMStartRequest is the body shape for POST /vm/start.
@@ -229,9 +229,9 @@ func vmRunning(vms []tart.VM, name string) bool {
 // queries. denials is the daemon-scoped tracker fed by the iron-proxy
 // audit tap — may be nil in tests that don't exercise denial paths.
 // ntpPort is the UDP port the daemon's SNTP responder is listening on;
-// the guest's nftables script DNATs its outbound UDP:123 to
-// MAC_HOST:ntpPort so systemd-timesyncd resyncs from the host clock
-// after a Mac sleep. Zero disables the NTP DNAT rule (useful in unit
+// under ENFORCED policy, softnet forwards the guest's outbound UDP:123
+// to this port so systemd-timesyncd resyncs from the host clock
+// after a Mac sleep. Zero disables NTP forwarding (useful in unit
 // tests that don't spin up an NTP responder). locks serializes
 // concurrent state-mutating calls for the same project; every handler
 // registered here that mutates VM/proxy state acquires it on entry.
@@ -437,11 +437,10 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			HTTPSListen: ironProxyListenAddr(httpsPort),
 			DNSListen:   ironProxyListenAddr(dnsPort),
 			// DNS answers with a sentinel IP (RFC 5737 documentation range,
-			// never a real destination) so the guest's nftables DNAT rules
-			// can catch the packet by port and rewrite to iron-proxy's real
-			// address. If we returned macIP here, the guest's `ip daddr
-			// <macIP> return` bypass would fire before DNAT and the packet
-			// would connect to nothing on macIP:443.
+			// never a real destination); softnet forwards outbound
+			// TCP:80/443 to iron-proxy purely by destination port under
+			// ENFORCED policy, so traffic to the sentinel reaches
+			// iron-proxy the same as any other allow-listed destination.
 			DNSProxyIP: proxySentinelIP,
 			CACertPath: filepath.Join(caDir, "ca", "root.crt"),
 			CAKeyPath:  filepath.Join(caDir, "ca", "root.key"),
@@ -777,18 +776,11 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 	})
 }
 
-// pickPort returns a free ephemeral TCP port by binding to :0 on
-// 0.0.0.0 (all interfaces) and immediately closing. There is a small
-// TOCTOU window between the close and iron-proxy's bind — standard on
-// darwin where SO_REUSEPORT can't be shared across processes.
-//
-// The listen address must be 0.0.0.0, not 127.0.0.1: iron-proxy binds
-// on MAC_HOST (a vmnet bridge IP like 192.168.64.1), not loopback. A
-// port free on 127.0.0.1 can be held by another process on
-// 192.168.64.1 — orphan iron-proxies from prior test runs, most
-// commonly. Binding on 0.0.0.0 means the kernel only hands back a
-// port free across every interface, so the subsequent iron-proxy bind
-// on MAC_HOST can't collide.
+// pickPort returns a free ephemeral TCP port: bind to :0 on 0.0.0.0
+// (all interfaces), read back the assigned port, and close. There is a
+// small TOCTOU window between the close and the subsequent bind
+// (iron-proxy's, or another caller's) — standard on darwin where
+// SO_REUSEPORT can't be shared across processes.
 func pickPort() (int, error) {
 	l, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
@@ -816,8 +808,8 @@ func prependPathEnv(env []string, dir string) []string {
 // sendSoftnetEnforced flips a project's softnet control socket to
 // ENFORCED, forwarding egress to iron-proxy's HTTP/HTTPS/DNS listeners and
 // the daemon's SNTP responder. All four addresses are loopback: softnet
-// dials iron-proxy and the NTP responder host-side, not through a vmnet
-// bridge, so MacHost never enters the endpoint it sends.
+// dials iron-proxy and the NTP responder host-side, so the endpoint it
+// sends is always loopback.
 func sendSoftnetEnforced(sock string, info ironProxyInfo, ntpPort int) error {
 	return newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
 }

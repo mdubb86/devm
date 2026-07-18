@@ -95,8 +95,8 @@ func TestLoadIronProxyInfoFromConfig(t *testing.T) {
 	// Round-trip: write an IronProxyConfig via YAML(), then read it back
 	// via loadIronProxyInfoFromConfig. Pins that the reader stays
 	// in sync with the writer — if either shifts, rehydration silently
-	// starts returning zero values and the daemon rebuilds nftables
-	// for the wrong ports after a restart.
+	// starts returning zero values and the daemon rebuilds the softnet
+	// enforced-policy endpoint with the wrong ports after a restart.
 	cfg := IronProxyConfig{
 		HTTPListen:  "192.168.64.1:59481",
 		HTTPSListen: "192.168.64.1:59482",

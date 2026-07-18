@@ -26,10 +26,10 @@ func fakeTartForApplyLive(t *testing.T, dir string) (*tart.Tart, string) {
 	bin := filepath.Join(dir, "fake-tart")
 	// argv goes to log (unchanged shape — countCalls' line-based counting
 	// depends on this file containing ONLY argv lines). Any piped stdin
-	// (binary bundle tars, the svc_ingress nft script, etc.) is dumped to
-	// a SEPARATE file — mixing it into log would let a coincidental
-	// substring match inside a bundle's tar payload (e.g. an embedded
-	// filename like "install-templates.sh") corrupt countCalls' counts.
+	// (binary bundle tars, etc.) is dumped to a SEPARATE file — mixing it
+	// into log would let a coincidental substring match inside a
+	// bundle's tar payload (e.g. an embedded filename like
+	// "install-templates.sh") corrupt countCalls' counts.
 	script := "#!/bin/sh\necho \"$*\" >> " + log + "\ncat >> " + stdinLog + "\nexec true\n"
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 	tr := tart.New()
@@ -44,8 +44,8 @@ func stdinLogPath(log string) string {
 }
 
 // logContains reports whether any stdin body piped to the fake tart
-// (e.g. the svc_ingress nft script delivered via ExecStdin) contains
-// substr. logPath is the argv-log path returned by fakeTartForApplyLive.
+// (e.g. a bundle tar delivered via ExecStdin) contains substr. logPath
+// is the argv-log path returned by fakeTartForApplyLive.
 func logContains(t *testing.T, logPath, substr string) bool {
 	t.Helper()
 	data, err := os.ReadFile(stdinLogPath(logPath))

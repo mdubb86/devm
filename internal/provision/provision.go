@@ -60,8 +60,8 @@ type Provisioner struct {
 	WorkspaceVMPath string
 
 	// TimesyncdScript is the guest's runtime NTP sync config, applied in
-	// the composed script's enforce phase — built by the daemon from the
-	// iron-proxy MAC_HOST/ports (serviceapi.Client.EnforcementConfig).
+	// the composed script's enforce phase — built by the daemon's
+	// per-project enforcement config (serviceapi.Client.EnforcementConfig).
 	// Without it the guest's egress is correctly locked down but clock
 	// sync is broken at runtime.
 	TimesyncdScript string

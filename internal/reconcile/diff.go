@@ -137,7 +137,7 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindServiceSystemdOverrideChange: BucketLive,
 	// Hostname: re-render Caddyfile, push to Mac proxy — live.
 	KindServiceHostnameChange: BucketLive,
-	// Direct: re-push routes (DNS), rebuild svc_ingress, re-render Caddyfile — live.
+	// Direct: re-push routes (DNS), re-push the softnet expose map, re-render Caddyfile — live.
 	KindServiceDirectChange: BucketLive,
 	// startup: re-rendered into /opt/devm/startup.sh; a live bundle
 	// re-pipe carries the new content to the guest, but it only takes

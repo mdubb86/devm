@@ -30,9 +30,11 @@ type IronProxyConfig struct {
 	HTTPSListen string
 	DNSListen   string
 	// DNSProxyIP is the IP iron-proxy answers with for every host in the
-	// allow list. The guest's nftables DNAT then rewrites traffic destined
-	// for that IP to iron-proxy's HTTP/HTTPS ports. Required by iron-proxy
-	// 0.45+; empty causes iron-proxy to exit with "dns.proxy_ip is required".
+	// allow list. softnet forwards outbound TCP:80/443 to iron-proxy's
+	// HTTP/HTTPS listeners by destination port under ENFORCED policy, so
+	// traffic addressed to that IP reaches iron-proxy the same as any
+	// other allow-listed destination. Required by iron-proxy 0.45+; empty
+	// causes iron-proxy to exit with "dns.proxy_ip is required".
 	DNSProxyIP string
 	CACertPath string
 	CAKeyPath  string
@@ -43,7 +45,7 @@ type IronProxyConfig struct {
 // ironProxyListenAddr is the address iron-proxy binds one of its HTTP,
 // HTTPS, or DNS listeners on. softnet dials iron-proxy host-side — under
 // --net-softnet there's no vmnet bridge for the guest to reach, so the
-// bind host is always loopback, independent of the VM's MacHost.
+// bind host is always loopback.
 func ironProxyListenAddr(port int) string {
 	return fmt.Sprintf("%s:%d", softnet.HostLoopIP, port)
 }

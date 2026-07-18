@@ -29,11 +29,12 @@ func (c *Client) StartVM(ctx context.Context, req VMStartRequest) error {
 }
 
 // EnforcementConfig asks the daemon for everything the boot-integrity-
-// gate composed provisioning script bakes into its enforce phase — the
-// enforced-egress nft ruleset, the dnsmasq upstream config, and the
-// timesyncd NTP config — computed from the iron-proxy MAC_HOST/ports
-// stashed at /vm/start. The orchestrator applies all three inside the
-// single composed script's enforce-phase.
+// gate composed provisioning script still bakes into its enforce phase
+// — the timesyncd NTP config, computed from the iron-proxy loopback
+// ports stashed at /vm/start. Egress allow-listing and DNS resolution
+// are enforced by softnet over the control socket, not by anything
+// baked into the guest. The orchestrator applies TimesyncdScript inside
+// the composed script's enforce-phase.
 func (c *Client) EnforcementConfig(ctx context.Context, name string) (VMEnforcementConfigResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		"http://localhost/vm/enforcement-config?name="+name, nil)

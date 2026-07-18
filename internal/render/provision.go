@@ -45,7 +45,7 @@ type ProvisionScriptInput struct {
 	// TimesyncdScript points systemd-timesyncd at the proxy sentinel so
 	// NTP resyncs through the enforced path. Applied in the composed
 	// script's enforce phase — the daemon builds it from the same
-	// iron-proxy MAC_HOST/ports (serviceapi.Client.EnforcementConfig),
+	// per-project enforcement config (serviceapi.Client.EnforcementConfig),
 	// reusing serviceapi's buildTimesyncdScript.
 	TimesyncdScript string
 
