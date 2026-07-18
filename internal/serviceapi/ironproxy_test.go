@@ -71,6 +71,14 @@ func TestBuildIronProxyConfig_EmptyAllowList_OmitsTransforms(t *testing.T) {
 	assert.False(t, hasTransforms, "transforms key should be absent when AllowList is empty")
 }
 
+func TestIronProxyListenAddr_UsesLoopback(t *testing.T) {
+	// softnet dials iron-proxy host-side — there's no vmnet bridge under
+	// --net-softnet, so iron-proxy must bind loopback regardless of the
+	// VM's MacHost.
+	assert.Equal(t, "127.0.0.1:8080", ironProxyListenAddr(8080))
+	assert.Equal(t, "127.0.0.1:8443", ironProxyListenAddr(8443))
+}
+
 func TestSecretEnvVarName(t *testing.T) {
 	assert.Equal(t, "DEVM_SECRET_GITHUB_TOKEN", secretEnvVarName("github_token"))
 	assert.Equal(t, "DEVM_SECRET_ANTHROPIC_API_KEY", secretEnvVarName("anthropic_api_key"))

@@ -344,9 +344,9 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 		proxyCfg := IronProxyConfig{
-			HTTPListen:  fmt.Sprintf("%s:%d", macIP, httpPort),
-			HTTPSListen: fmt.Sprintf("%s:%d", macIP, httpsPort),
-			DNSListen:   fmt.Sprintf("%s:%d", macIP, dnsPort),
+			HTTPListen:  ironProxyListenAddr(httpPort),
+			HTTPSListen: ironProxyListenAddr(httpsPort),
+			DNSListen:   ironProxyListenAddr(dnsPort),
 			// DNS answers with a sentinel IP (RFC 5737 documentation range,
 			// never a real destination) so the guest's nftables DNAT rules
 			// can catch the packet by port and rewrite to iron-proxy's real

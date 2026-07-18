@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/ironproxy"
+	"github.com/mdubb86/devm/internal/softnet"
 	"github.com/mdubb86/devm/internal/supervisor"
 	"gopkg.in/yaml.v3"
 )
@@ -37,6 +38,14 @@ type IronProxyConfig struct {
 	CAKeyPath  string
 	AllowList  []string
 	Secrets    []IronSecret
+}
+
+// ironProxyListenAddr is the address iron-proxy binds one of its HTTP,
+// HTTPS, or DNS listeners on. softnet dials iron-proxy host-side — under
+// --net-softnet there's no vmnet bridge for the guest to reach, so the
+// bind host is always loopback, independent of the VM's MacHost.
+func ironProxyListenAddr(port int) string {
+	return fmt.Sprintf("%s:%d", softnet.HostLoopIP, port)
 }
 
 // YAML returns the YAML blob iron-proxy reads from -config <path>.
