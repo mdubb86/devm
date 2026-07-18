@@ -590,6 +590,10 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 		ironProxyState.del(req.Name)
+		// The softnet client is stateless — it dials fresh per call rather
+		// than holding a persistent connection — so there's nothing to
+		// close here, only the daemon's record of the socket path to drop.
+		softnetState.del(req.Name)
 		if denials != nil {
 			denials.Reset(req.Name)
 		}
@@ -728,13 +732,21 @@ func prependPathEnv(env []string, dir string) []string {
 // dials iron-proxy and the NTP responder host-side, not through a vmnet
 // bridge, so MacHost never enters the endpoint it sends.
 func sendSoftnetEnforced(sock string, info ironProxyInfo, ntpPort int) error {
-	ep := &Endpoint{
+	return newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
+}
+
+// endpointFrom builds the loopback softnet Endpoint for a project's
+// stashed ironProxyInfo and the daemon's SNTP responder port. Shared by
+// sendSoftnetEnforced (the CLI-driven /vm/apply-egress-enforcement step)
+// and discoverSoftnet (the daemon-restart reconcile pass) so both push
+// the same wire shape.
+func endpointFrom(info ironProxyInfo, ntpPort int) *Endpoint {
+	return &Endpoint{
 		HTTP:  ironProxyListenAddr(info.HTTPPort),
 		HTTPS: ironProxyListenAddr(info.HTTPSPort),
 		DNS:   ironProxyListenAddr(info.DNSPort),
 		NTP:   ironProxyListenAddr(ntpPort),
 	}
-	return newSoftnetClient(sock).setPolicy("ENFORCED", ep)
 }
 
 type ironProxyInfo struct {
@@ -772,6 +784,19 @@ func (s *ironProxyStore) del(projectID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.m, projectID)
+}
+
+// keys returns every project id currently tracked. Used by
+// discoverSoftnet to walk the projects AdoptIronProxies has just
+// rehydrated on daemon restart and rebuild softnetState for each.
+func (s *ironProxyStore) keys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.m))
+	for k := range s.m {
+		out = append(out, k)
+	}
+	return out
 }
 
 var ironProxyState = newIronProxyStore()

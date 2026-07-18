@@ -48,6 +48,21 @@ func RunService(ctx context.Context, build Build) error {
 	// stop, teardown, reconcile). Serializes concurrent same-project
 	// calls inside the daemon instead of relying on the CLI-side flock.
 	locks := NewProjectLocks()
+
+	// SNTP responder — one daemon-wide instance, bound eagerly so /vm/start
+	// (and discoverSoftnet, below) know the port when they build a softnet
+	// endpoint. The guest DNATs its outbound UDP:123 (timesyncd →
+	// wherever) to MAC_HOST at this port; we answer from the host's wall
+	// clock. This is what heals guest-clock drift after a Mac sleep —
+	// external NTP isn't reachable because our egress firewall doesn't
+	// proxy UDP, but the Mac itself is always time-correct. Bound ahead of
+	// AdoptIronProxies/discoverSoftnet so its port is ready for the
+	// restart-adopt reconcile pass.
+	ntp, err := NewNTPServer()
+	if err != nil {
+		return fmt.Errorf("start ntp responder: %w", err)
+	}
+
 	// Adopt iron-proxy processes left running by a prior daemon
 	// instance. They survive daemon death by design (setsid on
 	// spawn); re-attaching here means /vm/stop and /vm/status
@@ -60,24 +75,19 @@ func RunService(ctx context.Context, build Build) error {
 	if err := AdoptIronProxies(ctx, sup, tr, routes); err != nil {
 		fmt.Fprintf(os.Stderr, "iron-proxy adopt: %v\n", err)
 	}
+	// Rehydrate softnetState for every project AdoptIronProxies just
+	// recovered, and best-effort re-push ENFORCED so the daemon's view
+	// and softnet's own policy reconcile after a restart. Must run after
+	// AdoptIronProxies — it walks ironProxyState, which the adopt pass
+	// above just populated.
+	discoverSoftnet(ctx, ntp.Port())
+
 	// Denials tracker — per-project counts of iron-proxy allow-list
 	// rejects, fed by the supervisor's log tap on iron-proxy stderr.
 	// Adopted iron-proxies from a prior daemon instance don't get tapped
 	// (we only have their PID, not their output stream), so counts
 	// start empty for them until the next SpawnIronProxy respawn.
 	denials := NewDenials()
-
-	// SNTP responder — one daemon-wide instance, bound eagerly so /vm/start
-	// knows the port when it builds the guest's nftables script. The guest
-	// DNATs its outbound UDP:123 (timesyncd → wherever) to MAC_HOST at
-	// this port; we answer from the host's wall clock. This is what heals
-	// guest-clock drift after a Mac sleep — external NTP isn't reachable
-	// because our egress firewall doesn't proxy UDP, but the Mac itself
-	// is always time-correct.
-	ntp, err := NewNTPServer()
-	if err != nil {
-		return fmt.Errorf("start ntp responder: %w", err)
-	}
 
 	RegisterVMHandlers(server, sup, tr, denials, ntp.Port(), locks)
 	RegisterReconcileHandler(server, locks, &realApplyLiver{tr: tr}, tr, sup)

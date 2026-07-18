@@ -166,6 +166,37 @@ func TestVMStop_WithVMName_PowersOffGuest(t *testing.T) {
 		"handler must power the guest off from the inside for a clean shutdown")
 }
 
+// TestVMStop_RemovesSoftnetState verifies /vm/stop clears the daemon's
+// softnetState entry for the project. softnetClient is stateless — it
+// dials fresh per call rather than holding a persistent connection to
+// the control socket — so teardown is just dropping the daemon's record
+// of the socket path.
+func TestVMStop_RemovesSoftnetState(t *testing.T) {
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	script := "#!/bin/sh\ncase \"$1\" in\n  list) echo '[]' ;;\nesac\nexit 0\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	softnetState.put("proj-stop-sn", "/tmp/does-not-matter.sock")
+	t.Cleanup(func() { softnetState.del("proj-stop-sn") })
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	require.NoError(t, c.StopVM(ctx, "proj-stop-sn"))
+
+	assert.Empty(t, softnetState.get("proj-stop-sn"),
+		"/vm/stop must clear the softnet control-socket record")
+}
+
 // TestVMStop_NotFound verifies /vm/stop is idempotent for an unknown
 // project (supervisor has no entry to stop).
 func TestVMStop_NotFound(t *testing.T) {
