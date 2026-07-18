@@ -141,7 +141,15 @@ func (n *network) startDNS(e *egress) error {
 	if err != nil {
 		return err
 	}
-	go func() { _ = server.Serve() }()
-	go func() { _ = server.ServeTCP() }()
+	go func() {
+		if err := server.Serve(); err != nil {
+			logf("dns serve: %v", err)
+		}
+	}()
+	go func() {
+		if err := server.ServeTCP(); err != nil {
+			logf("dns serve tcp: %v", err)
+		}
+	}()
 	return nil
 }

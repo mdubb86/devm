@@ -24,11 +24,13 @@ func attachUDP(n *network, e *egress) {
 		var wq waiter.Queue
 		ep, terr := r.CreateEndpoint(&wq)
 		if terr != nil {
+			logf("udp create endpoint: %v", terr)
 			return
 		}
 		guestConn := gonet.NewUDPConn(&wq, ep)
 		hostConn, err := net.Dial("udp", target)
 		if err != nil {
+			logf("udp dial %s: %v", target, err)
 			_ = guestConn.Close()
 			return
 		}

@@ -105,6 +105,10 @@ func startDHCP(config *types.Configuration, s *stack.Stack, ipPool *tap.IPPool) 
 	if err != nil {
 		return err
 	}
-	go func() { _ = server.Serve() }()
+	go func() {
+		if err := server.Serve(); err != nil {
+			logf("dhcp serve: %v", err)
+		}
+	}()
 	return nil
 }

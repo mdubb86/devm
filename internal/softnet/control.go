@@ -46,9 +46,12 @@ func serveControl(sockPath string, e *egress, ing *ingress) (io.Closer, error) {
 				for sc.Scan() {
 					var m ControlMsg
 					if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
+						logf("control unmarshal: %v", err)
 						continue
 					}
-					_ = applyControl(e, ing, m)
+					if err := applyControl(e, ing, m); err != nil {
+						logf("control apply %s: %v", m.Op, err)
+					}
 				}
 			}(conn)
 		}

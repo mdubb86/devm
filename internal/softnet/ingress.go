@@ -56,6 +56,7 @@ func (ing *ingress) apply(ports []ExposePort) {
 		}
 		ln, err := net.Listen("tcp", net.JoinHostPort(bind, fmt.Sprint(hp)))
 		if err != nil {
+			logf("ingress listen %s:%d: %v", bind, hp, err)
 			continue // best-effort; a bind conflict shouldn't crash softnet
 		}
 		el := &exposeListener{ln: ln, guestPort: uint16(p.GuestPort)}
@@ -87,6 +88,7 @@ func (ing *ingress) forward(hc net.Conn, guestPort uint16) {
 		Port: guestPort,
 	}, ipv4.ProtocolNumber)
 	if err != nil {
+		logf("ingress dial guest:%d: %v", guestPort, err)
 		_ = hc.Close()
 		return
 	}
