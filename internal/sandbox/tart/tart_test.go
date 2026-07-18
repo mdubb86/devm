@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -112,6 +113,21 @@ func TestTart_Run_DoesNotSetSetsid(t *testing.T) {
 		// sufficient for the unit test. If a later supervisor sets it,
 		// the SysProcAttr will be non-nil.
 		t.Fatal("Run() must not touch SysProcAttr; supervisor decides")
+	}
+}
+
+func TestRunEmitsNetSoftnet(t *testing.T) {
+	tr := New()
+	cmd, err := tr.Run(context.Background(), "vm", RunOpts{NoGraphics: true, NetSoftnet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "--net-softnet") {
+		t.Fatalf("expected --net-softnet, got %v", cmd.Args)
+	}
+	if cmd.Args[len(cmd.Args)-1] != "vm" {
+		t.Fatalf("name must be last positional arg, got %v", cmd.Args)
 	}
 }
 

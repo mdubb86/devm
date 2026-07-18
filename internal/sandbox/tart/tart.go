@@ -30,6 +30,7 @@ func New() *Tart { return &Tart{Path: "tart"} }
 type RunOpts struct {
 	NoGraphics bool       // adds --no-graphics
 	DirMounts  []DirMount // each becomes a --dir=<spec> arg
+	NetSoftnet bool       // adds --net-softnet
 }
 
 // DirMount is a virtio-fs shared directory.
@@ -85,6 +86,9 @@ func (t *Tart) Run(ctx context.Context, name string, opts RunOpts) (*exec.Cmd, e
 	}
 	for _, m := range opts.DirMounts {
 		args = append(args, t.formatDirArg(m))
+	}
+	if opts.NetSoftnet {
+		args = append(args, "--net-softnet")
 	}
 	args = append(args, name)
 	return exec.CommandContext(ctx, t.Path, args...), nil
