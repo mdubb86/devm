@@ -40,9 +40,10 @@ func DNSAddr() string {
 // vmIPResolver returns a project's current VM IP, if known.
 type vmIPResolver func(project string) (string, bool)
 
-// DNSServer is the daemon's tiny *.test resolver. Direct hostnames
-// answer with the owning project's current VM IP (A only, TTL 0);
-// everything else answers 127.0.0.1/::1, also TTL 0.
+// DNSServer is the daemon's tiny *.test resolver. Every *.test name
+// answers 127.0.0.1 (A) / ::1 (AAAA), TTL 0 — the host-local address
+// where either the daemon HTTP proxy (proxied services) or a softnet
+// per-port forward (direct services) listens.
 type DNSServer struct {
 	server   *dns.Server
 	routes   *Routes
@@ -51,8 +52,7 @@ type DNSServer struct {
 
 // NewDNSServer builds a server bound to the address returned by
 // DNSAddr() — the default 127.0.0.1:51153 unless $DEVM_DNS_ADDR
-// overrides. routes and resolver are consulted per-query to decide
-// whether a hostname is a direct service and, if so, its VM IP.
+// overrides.
 func NewDNSServer(routes *Routes, resolver vmIPResolver) *DNSServer {
 	return newDNSServerAt(DNSAddr(), routes, resolver)
 }
