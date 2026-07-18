@@ -57,6 +57,17 @@ def get_routes() -> dict[str, list]:
     return json.loads(resp.read())
 
 
+def ingress_config(project_id: str) -> dict:
+    """GET /vm/ingress-config?name=<project_id> from the daemon; returns
+    the decoded body (e.g. {"ssh_host_port": N})."""
+    conn = UnixSocketHTTP(socket_path())
+    conn.request("GET", f"/vm/ingress-config?name={project_id}")
+    resp = conn.getresponse()
+    body = resp.read()
+    assert resp.status == 200, f"GET /vm/ingress-config returned {resp.status}: {body!r}"
+    return json.loads(body)
+
+
 def dns_addr() -> tuple[str, int]:
     """Host/port of the daemon's *.test resolver (internal/serviceapi/dns.go
     DNSAddr()). Port 0 means the isolated lane's ephemeral bind — not
