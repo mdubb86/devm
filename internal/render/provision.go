@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/docker"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // Guest-side paths the composed provisioning script references. These
@@ -40,6 +41,12 @@ type ProvisionScriptInput struct {
 	Docker           bool     // run the docker feature (first boot only)
 	InstallTemplates bool     // run the template dispatcher (every open boot)
 	Startup          []string // startup: commands (every boot)
+	// Scripts is the resolved scripts library from Config.Scripts. Used
+	// to expand ">NAME" references in Install and Startup entries at
+	// render time. The map is passed as-is by the caller; validation
+	// (name shape, empty commands, undefined refs) has already happened
+	// in schema.Config.Validate — the renderer trusts what it receives.
+	Scripts map[string][]string
 	Services         []string // service unit names to enable+start (health-polled)
 	Masks            []MaskMount
 	// TimesyncdScript points systemd-timesyncd at the proxy sentinel so
@@ -133,7 +140,11 @@ func RenderProvisionOpenScript(in ProvisionScriptInput) []byte {
 				p("echo ::devm:stage:install::")
 				for i, cmd := range in.Install {
 					p("echo ::devm:progress:install:%d:%d::", i+1, len(in.Install))
-					p("timeout %d %s bash -eo pipefail -c %s", stepTimeout, guestWrapper, shellSingleQuoted(cmd))
+					body := cmd
+					if name, ok := schema.ParseScriptRef(cmd); ok {
+						body = strings.Join(in.Scripts[name], " && ")
+					}
+					p("timeout %d %s bash -eo pipefail -c %s", stepTimeout, guestWrapper, shellSingleQuoted(body))
 				}
 			}
 			if in.Docker {
