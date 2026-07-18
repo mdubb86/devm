@@ -118,7 +118,11 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         packages:
           - postgresql-client
         install:
-          - "curl -fsSL -o /tmp/supabase.deb https://github.com/supabase/cli/releases/latest/download/supabase_linux_arm64.deb && sudo dpkg -i /tmp/supabase.deb && rm /tmp/supabase.deb"
+          - |
+            TAG=$(curl -sIL -o /dev/null -w '%{{url_effective}}' https://github.com/supabase/cli/releases/latest | xargs basename) && \
+            curl -fsSL -o /tmp/supabase.deb "https://github.com/supabase/cli/releases/download/${{TAG}}/supabase_${{TAG#v}}_linux_arm64.deb" && \
+            sudo dpkg -i /tmp/supabase.deb && \
+            rm /tmp/supabase.deb
         services:
           supabase-api:
             port: 54321

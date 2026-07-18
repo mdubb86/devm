@@ -36,9 +36,16 @@ packages:
 
 install:
   # supabase CLI: canonical `.deb` per supabase's docs (Releases page).
-  # dpkg lands both binaries (`supabase` shim + `supabase-go`) in the
-  # right places and puts `supabase` on PATH automatically.
-  - "curl -fsSL -o /tmp/supabase.deb https://github.com/supabase/cli/releases/latest/download/supabase_linux_arm64.deb && sudo dpkg -i /tmp/supabase.deb && rm /tmp/supabase.deb"
+  # `.deb` releases only publish version-embedded names — no `latest`
+  # alias — so resolve the tag by following github.com's own
+  # /releases/latest → /releases/tag/vX.Y.Z redirect, then download
+  # the correctly-named `.deb`. dpkg tracks the package and future
+  # re-runs (new release) replace files cleanly.
+  - |
+    TAG=$(curl -sIL -o /dev/null -w '%{url_effective}' https://github.com/supabase/cli/releases/latest | xargs basename) && \
+    curl -fsSL -o /tmp/supabase.deb "https://github.com/supabase/cli/releases/download/${TAG}/supabase_${TAG#v}_linux_arm64.deb" && \
+    sudo dpkg -i /tmp/supabase.deb && \
+    rm /tmp/supabase.deb
 
 services:
   supabase-api:
