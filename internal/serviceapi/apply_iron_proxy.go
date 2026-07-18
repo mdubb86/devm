@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -204,11 +205,46 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// reconcile — breaking the next expose-map push and any
 		// already-emitted ssh_config.
 		info.SSHHostPort = existing.SSHHostPort
-		if snap, serr := ReadStateSnapshot(req.Name); serr == nil && snap != nil {
+		snap, _ := ReadStateSnapshot(req.Name)
+		if snap != nil {
 			info.Docker = snap.Cfg.Docker
 			info.SSHHostPort = snap.SSHHostPort
 		}
+
+		// Adopt-in-place (internal/orchestrator/shell.go's "pristine:
+		// running but never provisioned" branch — raw `tart run`
+		// adoption, or first-time adoption) calls this handler directly
+		// and never /vm/start, so no SSH host port was ever allocated
+		// for this project this daemon lifetime. Allocate one now so the
+		// adopted VM converges to the same ingress state as a cold
+		// start, instead of staying unreachable until an explicit stop +
+		// restart. A non-zero port carried forward above (already
+		// allocated by /vm/start, or by a prior call here) is left
+		// as-is — reallocating would diverge from an already-emitted
+		// ssh_config.
+		if info.SSHHostPort == 0 {
+			port, err := pickPort()
+			if err != nil {
+				http.Error(w, fmt.Sprintf("pick ssh host port: %v", err), http.StatusInternalServerError)
+				return
+			}
+			info.SSHHostPort = port
+		}
 		ironProxyState.put(req.Name, info)
+
+		// Push the ingress expose map from the project's persisted
+		// config — the daemon's source of truth for an adopted VM,
+		// which never sent a schema.Config in this request. Independent
+		// of egress policy; non-fatal like /vm/start's push (vm.go)
+		// because adopt-in-place must not fail just because ingress
+		// couldn't be pushed (e.g. a cross-project port-claim
+		// collision). Skipped when there's no persisted cfg yet —
+		// nothing to expose.
+		if snap != nil {
+			if err := pushExposeMap(req.Name, computeExposeMap(snap.Cfg, info.SSHHostPort)); err != nil {
+				debuglog.Logf("serviceapi", "apply-iron-proxy: push expose map for %s: %v", req.Name, err)
+			}
+		}
 
 		writeJSON(w, VMApplyIronProxyResponse{
 			Applied:   true,

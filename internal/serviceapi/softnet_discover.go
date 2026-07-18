@@ -28,6 +28,14 @@ import "context"
 //
 // ctx is accepted for parity with AdoptIronProxies and future-proofing
 // (a context-aware dial); the current softnetClient doesn't use it.
+//
+// Alongside the ENFORCED re-push, this also best-effort re-pushes the
+// ingress expose map from each project's persisted config — belt and
+// suspenders: softnet's child process retains its last-applied expose
+// map across a daemon-only restart (it isn't reset like the egress
+// policy can be), so this mainly rehydrates the daemon's in-memory view
+// and the port-claims registry pushExposeMap reconciles as a side
+// effect (see expose.go).
 func discoverSoftnet(ctx context.Context, ntpPort int) {
 	for _, id := range ironProxyState.keys() {
 		sock := SoftnetControlSock(id)
@@ -37,8 +45,11 @@ func discoverSoftnet(ctx context.Context, ntpPort int) {
 		if !ok {
 			continue
 		}
-		go func(sock string, info ironProxyInfo) {
+		go func(id, sock string, info ironProxyInfo) {
 			_ = newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
-		}(sock, info)
+			if snap, err := ReadStateSnapshot(id); err == nil && snap != nil {
+				_ = pushExposeMap(id, computeExposeMap(snap.Cfg, info.SSHHostPort))
+			}
+		}(id, sock, info)
 	}
 }

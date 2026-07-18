@@ -354,3 +354,67 @@ func TestApplyIronProxy_PreservesSSHHostPort(t *testing.T) {
 	assert.Equal(t, 2200, info.SSHHostPort,
 		"SSHHostPort must be preserved across apply-iron-proxy, not zeroed")
 }
+
+// TestApplyIronProxy_AllocatesSSHHostPortWhenUnset covers adopt-in-place
+// (internal/orchestrator/shell.go's "pristine: running but never
+// provisioned" branch): a raw `tart run` or first-time adoption calls
+// /vm/apply-iron-proxy directly, never /vm/start, so no SSH host port
+// was ever allocated for this project this daemon lifetime. Without
+// allocating one here, the adopted VM gets no ingress — SSH port stays
+// 0, no service listeners — until an explicit stop + cold-start.
+func TestApplyIronProxy_AllocatesSSHHostPortWhenUnset(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	srv := NewServer(SocketPath(), Build{})
+	sup := supervisor.New(t.TempDir())
+
+	const projectID = "p-adopt-in-place"
+	t.Cleanup(func() { ironProxyState.del(projectID) })
+
+	seededCfg := schema.Config{
+		Project: schema.Project{Name: projectID},
+		Services: map[string]schema.Service{
+			"db": {Port: 5432},
+		},
+	}
+	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg, SSHHostPort: 0}))
+
+	macHost := "127.0.0.1"
+	httpPort, err := pickPort()
+	require.NoError(t, err)
+	httpsPort, err := pickPort()
+	require.NoError(t, err)
+	dnsPort, err := pickPort()
+	require.NoError(t, err)
+	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
+
+	// Adopt-in-place: no prior ironProxyState entry for this project this
+	// daemon lifetime — mirrors the state before /vm/apply-iron-proxy is
+	// the first daemon call ever made for the adopted VM.
+
+	origSpawn := spawnIronProxyFn
+	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
+	var ln net.Listener
+	spawnIronProxyFn = func(_ context.Context, _ *supervisor.Supervisor, _ string, cfg IronProxyConfig, _ *Denials) error {
+		var lerr error
+		ln, lerr = net.Listen("tcp", cfg.HTTPSListen)
+		return lerr
+	}
+
+	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+
+	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
+		Name:      projectID,
+		Allowlist: []string{"a.example.com"},
+	})
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/apply-iron-proxy", bytes.NewReader(reqBody)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	if ln != nil {
+		defer ln.Close()
+	}
+
+	info, ok := ironProxyState.get(projectID)
+	require.True(t, ok)
+	assert.NotZero(t, info.SSHHostPort,
+		"apply-iron-proxy must allocate an SSH host port for an adopted VM that never went through /vm/start")
+}
