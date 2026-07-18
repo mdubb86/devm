@@ -14,7 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -55,6 +57,10 @@ type VMStartRequest struct {
 	// /vm/apply-iron-proxy's re-hydration path can recover it without
 	// re-reading the project's schema.Config.
 	Docker bool `json:"docker,omitempty"`
+	// Cfg is the project's full config, used to compute the initial
+	// softnet ingress expose map (see computeExposeMap) once the VM and
+	// its control socket are up.
+	Cfg schema.Config `json:"cfg"`
 }
 
 // VMStopRequest is the body shape for POST /vm/stop. The daemon calls
@@ -346,6 +352,17 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		if err := sup.Spawn(ctx, key, cmd); err != nil {
 			http.Error(w, fmt.Sprintf("supervisor spawn: %v", err), http.StatusInternalServerError)
 			return
+		}
+
+		// Push the initial ingress expose map. Independent of egress
+		// state; listeners bind on the host and forward lazily once
+		// guest services come up. sshHostPort is 0 here — SSH isn't
+		// allocated yet — so it's simply omitted from the map until the
+		// next reconcile. Non-fatal: egress is the security boundary,
+		// ingress is convenience, and a failed push is re-attempted at
+		// the next reconcile.
+		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, 0)); err != nil {
+			debuglog.Logf("serviceapi", "vm/start: push expose map for %s: %v", req.Name, err)
 		}
 
 		// Wait for the Tart Guest Agent to come up before injecting
@@ -787,6 +804,11 @@ type ironProxyInfo struct {
 	HTTPSPort int
 	DNSPort   int
 	Docker    bool // cfg.Docker, preserved across /vm/apply-iron-proxy re-hydration
+	// SSHHostPort is the daemon-picked host port softnet forwards to the
+	// guest's :22, stashed here so both /vm/start's cold push and
+	// /vm/reconcile's live push can include SSH in the expose map
+	// without re-allocating it. Zero until wired.
+	SSHHostPort int
 }
 
 type ironProxyStore struct {

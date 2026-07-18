@@ -43,37 +43,6 @@ func stdinLogPath(log string) string {
 	return log + ".stdin"
 }
 
-// fakeTartForApplyLiveFailingOn is fakeTartForApplyLive's evil twin: it
-// still records argv and dumps piped stdin the same way, but exits 1
-// instead of 0 whenever the piped stdin body contains failMarker. Used
-// to simulate a mid-script failure (e.g. `sudo nft -f -` rejecting a
-// rule) and assert that ApplyLive's `if r.ExitCode != 0 { return err }`
-// check actually sees it — i.e. the exit code the guest shell reports
-// back is what ApplyLive's error path keys on. This does NOT exercise
-// bash -e/-o pipefail semantics themselves (there's no real bash/nft
-// inside this fake); that inner-shell errexit behavior is covered by
-// the e2e suite against a real guest. It only pins that ApplyLive
-// propagates a nonzero ExecStdin exit as an error, which is the other
-// half of the fix.
-func fakeTartForApplyLiveFailingOn(t *testing.T, dir, failMarker string) (*tart.Tart, string) {
-	t.Helper()
-	log := filepath.Join(dir, "tart-calls.txt")
-	stdinLog := stdinLogPath(log)
-	bin := filepath.Join(dir, "fake-tart")
-	script := "#!/bin/sh\n" +
-		"echo \"$*\" >> " + log + "\n" +
-		"body=$(cat)\n" +
-		"printf '%s' \"$body\" >> " + stdinLog + "\n" +
-		"case \"$body\" in\n" +
-		"*" + failMarker + "*) exit 1 ;;\n" +
-		"esac\n" +
-		"exec true\n"
-	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
-	tr := tart.New()
-	tr.Path = bin
-	return tr, log
-}
-
 // logContains reports whether any stdin body piped to the fake tart
 // (e.g. the svc_ingress nft script delivered via ExecStdin) contains
 // substr. logPath is the argv-log path returned by fakeTartForApplyLive.
@@ -284,12 +253,12 @@ func TestApplyLive_TemplateChange_PipesBundleThenInvokesDispatcher(t *testing.T)
 	assert.True(t, os.IsNotExist(statErr), "ApplyLive must NOT write .devm/ to the workspace; got: %v", statErr)
 }
 
-// TestApplyLiveRebuildsSvcIngress is a regression test for Task 9: a
-// KindServiceDirectChange in the change set must flush-rebuild the
-// svc_ingress chain live via ExecStdin, from the CURRENT cfg's direct
-// ports — the single source of truth shared with the provisioner
-// (internal/nftscript.BuildSvcIngressScript + DirectPorts).
-func TestApplyLiveRebuildsSvcIngress(t *testing.T) {
+// TestApplyLive_ServiceDirectChangeAlone_DoesNotExec pins the softnet
+// cutover: a KindServiceDirectChange no longer applies anything in-guest
+// (no svc_ingress nft chain, no ExecStdin call at all) — ingress for
+// direct services is pushed to softnet's expose map by the daemon's
+// reconcile handler instead.
+func TestApplyLive_ServiceDirectChangeAlone_DoesNotExec(t *testing.T) {
 	dir := t.TempDir()
 	tr, log := fakeTartForApplyLive(t, dir)
 	cfg := schema.Config{
@@ -301,65 +270,12 @@ func TestApplyLiveRebuildsSvcIngress(t *testing.T) {
 	}
 	changes := []Change{{Kind: KindServiceDirectChange, Service: "db"}}
 	require.NoError(t, ApplyLive(tr, "p", changes, cfg, dir, nil, nil, nil, nil))
-	assert.True(t, logContains(t, log, "flush chain inet devm_filter svc_ingress"))
-	assert.True(t, logContains(t, log, "ct original proto-dst 54322 accept"))
+	assert.Equal(t, 0, countCalls(t, log, ""), "a direct-only change must not exec anything in-guest")
+	assert.False(t, logContains(t, log, "flush chain inet devm_filter svc_ingress"))
 }
 
-// TestApplyLiveRebuildsSvcIngress_NonDockerStillClosesChain pins the
-// no-explicit-gate behavior: DirectPorts returns nil for non-docker
-// projects, so a KindServiceDirectChange still fires the rebuild — it
-// just flushes to empty, closing any stale direct ingress rather than
-// leaving it open.
-func TestApplyLiveRebuildsSvcIngress_NonDockerStillClosesChain(t *testing.T) {
-	dir := t.TempDir()
-	tr, log := fakeTartForApplyLive(t, dir)
-	cfg := schema.Config{
-		Docker:  false,
-		Project: schema.Project{Name: "p"},
-		Services: map[string]schema.Service{
-			"db": {Port: 54322, Hostname: "db.test", Direct: true},
-		},
-	}
-	changes := []Change{{Kind: KindServiceDirectChange, Service: "db"}}
-	require.NoError(t, ApplyLive(tr, "p", changes, cfg, dir, nil, nil, nil, nil))
-	assert.True(t, logContains(t, log, "flush chain inet devm_filter svc_ingress"))
-	assert.False(t, logContains(t, log, "ct original proto-dst 54322 accept"))
-}
-
-// TestApplyLiveRebuildsSvcIngress_FailurePropagates is a regression
-// test for the code-review fix to Task 9: a nonzero exit from the
-// svc_ingress rebuild's ExecStdin call must surface as a non-nil error
-// from ApplyLive, not be silently swallowed. Before the fix, the
-// rebuild ran as `bash -e -o pipefail -c "cat | sudo bash"` — errexit
-// applied to the OUTER bash, but the nft script was interpreted by the
-// INNER, errexit-less `sudo bash`, so a failing mid-script command
-// (e.g. `nft -f -` rejecting a rule) didn't abort the script and the
-// reported exit code was just the last line's (a `list chain` snapshot
-// that typically succeeds regardless) — ApplyLive returned nil despite
-// a broken chain. This test doesn't exercise real bash/nft errexit
-// semantics (see fakeTartForApplyLiveFailingOn's doc comment); it pins
-// the other half: that ApplyLive actually returns an error when the
-// exit code IS nonzero, which is what the errexit fix now makes
-// possible for real mid-script nft failures.
-func TestApplyLiveRebuildsSvcIngress_FailurePropagates(t *testing.T) {
-	dir := t.TempDir()
-	tr, _ := fakeTartForApplyLiveFailingOn(t, dir, "flush chain inet devm_filter svc_ingress")
-	cfg := schema.Config{
-		Docker:  true,
-		Project: schema.Project{Name: "p"},
-		Services: map[string]schema.Service{
-			"db": {Port: 54322, Hostname: "db.test", Direct: true},
-		},
-	}
-	changes := []Change{{Kind: KindServiceDirectChange, Service: "db"}}
-	err := ApplyLive(tr, "p", changes, cfg, dir, nil, nil, nil, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "svc_ingress")
-}
-
-// TestApplyLive_NoDirectChange_DoesNotTouchSvcIngress ensures the
-// rebuild is gated strictly on KindServiceDirectChange being present —
-// unrelated change kinds must not fire an nft rebuild.
+// TestApplyLive_NoDirectChange_DoesNotTouchSvcIngress ensures unrelated
+// change kinds also never touch the (retired) svc_ingress chain.
 func TestApplyLive_NoDirectChange_DoesNotTouchSvcIngress(t *testing.T) {
 	dir := t.TempDir()
 	tr, log := fakeTartForApplyLive(t, dir)

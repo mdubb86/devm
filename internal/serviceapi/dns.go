@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"os"
-	"strings"
 
 	"github.com/miekg/dns"
 
@@ -99,34 +98,20 @@ func (s *DNSServer) handleTest(w dns.ResponseWriter, r *dns.Msg) {
 	msg.SetReply(r)
 	msg.Authoritative = true
 	for _, q := range r.Question {
-		host := strings.TrimSuffix(q.Name, ".")
-		// Direct services resolve to the current VM IP (v4-only); every
-		// other name stays loopback.
-		dr, isDirect := s.routes.DirectRoute(host)
-		ipv4 := net.IPv4(127, 0, 0, 1)
-		if isDirect {
-			if ip, ok := s.resolver(dr.Project); ok {
-				if parsed := net.ParseIP(ip).To4(); parsed != nil {
-					ipv4 = parsed
-				}
-			}
-		}
+		// Ingress flows entirely through softnet's host-side listeners
+		// (see computeExposeMap/pushExposeMap) — every .test name,
+		// direct or proxied, answers host loopback.
 		switch q.Qtype {
 		case dns.TypeA:
 			msg.Answer = append(msg.Answer, &dns.A{
 				Hdr: dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 0},
-				A:   ipv4,
+				A:   net.IPv4(127, 0, 0, 1),
 			})
 		case dns.TypeAAAA:
-			// Direct services are v4-only, so return NODATA for AAAA — a
-			// ::1 answer would send a v6-capable client to Mac loopback
-			// instead of the A-record VM IP. Non-direct names keep ::1.
-			if !isDirect {
-				msg.Answer = append(msg.Answer, &dns.AAAA{
-					Hdr:  dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 0},
-					AAAA: net.ParseIP("::1"),
-				})
-			}
+			msg.Answer = append(msg.Answer, &dns.AAAA{
+				Hdr:  dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 0},
+				AAAA: net.ParseIP("::1"),
+			})
 		}
 		// All other query types fall through; Answer stays empty —
 		// the client gets NOERROR + NODATA, which is what

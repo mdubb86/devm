@@ -5,11 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
-	"github.com/mdubb86/devm/internal/nftscript"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -40,7 +38,6 @@ import (
 func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
 	var templateChanges []Change
 	var bundleRebuildNeeded bool
-	var directChanged bool
 	for _, c := range changes {
 		if c.Bucket() != BucketLive {
 			continue
@@ -54,7 +51,8 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange:
 			bundleRebuildNeeded = true
 		case KindServiceDirectChange:
-			directChanged = true
+			// Ingress for direct services is pushed to softnet's
+			// declarative expose map by the daemon, not applied in-guest.
 		}
 	}
 
@@ -124,38 +122,5 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		}
 	}
 
-	if directChanged {
-		// Reuse the SAME helpers the provisioner uses at cold-start
-		// (internal/nftscript) — single source of truth for the
-		// svc_ingress chain contents. nftscript.DirectPorts returns nil
-		// for non-docker projects, so this is a no-op-shaped flush-to-
-		// empty that correctly closes any stale direct ingress; no
-		// explicit docker gate is needed here. Rebuilds from the
-		// CURRENT cfg, so a removed direct service drops out
-		// automatically.
-		//
-		// Piped straight to a single privileged errexit shell (precedent:
-		// internal/serviceapi/vm.go's `tart exec -i <vm> sudo bash -s`) —
-		// NOT `bash -c "cat | sudo bash"`. That double-shell form put
-		// -e/-o pipefail on the OUTER bash while the script itself ran in
-		// an INNER, errexit-less `sudo bash`; a failing mid-script command
-		// (e.g. `nft -f -` rejecting a rule) was silently swallowed and
-		// the script's exit code was just the last line's (a `list chain`
-		// snapshot that succeeds regardless), so ApplyLive returned nil on
-		// a partially-applied chain. Running `sudo bash -e -o pipefail -s`
-		// directly makes the shell that actually interprets the script
-		// errexit, so a failing command aborts it and the nonzero exit
-		// propagates to the check below. The script's own `sudo` prefixes
-		// become redundant-but-harmless (root re-invoking passwordless
-		// sudo).
-		script := nftscript.BuildSvcIngressScript(nftscript.DirectPorts(cfg))
-		r := tr.ExecStdin(context.Background(), vmName,
-			strings.NewReader(script),
-			[]string{"sudo", "bash", "-e", "-o", "pipefail", "-s"},
-		)
-		if r.ExitCode != 0 {
-			return fmt.Errorf("apply_live: svc_ingress: exit %d (stderr: %s)", r.ExitCode, r.Stderr)
-		}
-	}
 	return nil
 }

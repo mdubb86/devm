@@ -200,6 +200,18 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}
+
+			// Ingress: re-push softnet's expose map from the current cfg so
+			// a live service/port change adds or drops host listeners.
+			// Independent of egress policy.
+			sshHostPort := 0
+			if info, ok := ironProxyState.get(req.Name); ok {
+				sshHostPort = info.SSHHostPort
+			}
+			if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, sshHostPort)); err != nil {
+				http.Error(w, fmt.Sprintf("push expose map: %v", err), http.StatusInternalServerError)
+				return
+			}
 		}
 
 		resp := VMReconcileResponse{

@@ -238,6 +238,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		ExtraMounts:       extraMounts,
 		DiskSizeGB:        diskGB,
 		Docker:            cfg.Docker,
+		Cfg:               cfg,
 	}); err != nil {
 		return -1, fmt.Errorf("start vm: %w", err)
 	}
