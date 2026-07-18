@@ -371,3 +371,19 @@ func TestRunOpen_TemplatesTriggerDispatcher(t *testing.T) {
 	require.NoError(t, p.RunOpen(context.Background(), io.Discard, nil))
 	assert.Contains(t, scriptOf(t, f), "install-templates.sh")
 }
+
+func TestProvisioner_ScriptInput_PassesScripts(t *testing.T) {
+	p := &Provisioner{
+		Cfg: schema.Config{
+			Project: schema.Project{Name: "p"},
+			Install: []string{">install-supabase"},
+			Scripts: map[string][]string{
+				"install-supabase": {"echo one", "echo two"},
+			},
+		},
+		firstBoot: true,
+	}
+	in := p.scriptInput()
+	assert.Equal(t, []string{"echo one", "echo two"}, in.Scripts["install-supabase"])
+	assert.Equal(t, []string{">install-supabase"}, in.Install)
+}
