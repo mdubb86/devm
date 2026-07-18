@@ -104,11 +104,21 @@ func (t *Tart) Delete(ctx context.Context, name string) error {
 	return t.run(ctx, "delete", name).err
 }
 
-// IP returns the VM's current IPv4 address (typically a 192.168.64.x
-// for --net-shared). Returns an error if the VM isn't running or its
-// network isn't up yet — caller can retry with backoff.
+// IP returns the VM's current IPv4 address (a 192.168.127.x under
+// --net-softnet, the only NIC every VM we launch has). Returns an
+// error if the VM isn't running or its network isn't up yet — caller
+// can retry with backoff.
+//
+// --resolver=agent is required: the default "dhcp" resolver reads the
+// host's vmnet DHCP lease file, and the "arp" resolver reads the
+// host's ARP table — both are vmnet-bridge mechanisms with nothing to
+// read under softnet's private gvisor netstack (`tart ip` fails outright
+// with "no IP address found", and tart's own --help says as much: "arp
+// ... won't work for VMs using the Softnet networking"). "agent" asks
+// the in-guest tart-guest-agent directly over vsock, which works
+// regardless of NIC type.
 func (t *Tart) IP(ctx context.Context, name string) (string, error) {
-	r := t.run(ctx, "ip", name)
+	r := t.run(ctx, "ip", name, "--resolver=agent")
 	if r.err != nil {
 		return "", r.err
 	}

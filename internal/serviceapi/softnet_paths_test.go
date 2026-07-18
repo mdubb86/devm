@@ -15,8 +15,34 @@ func TestSoftnetControlSockDeterministic(t *testing.T) {
 	if a != b || filepath.Base(a) == "" {
 		t.Fatalf("non-deterministic: %q %q", a, b)
 	}
-	if !strings.HasPrefix(a, RuntimeDir()) {
-		t.Fatalf("control sock %q not under runtime dir %q", a, RuntimeDir())
+	// Deliberately NOT nested under RuntimeDir(): AF_UNIX sun_path is
+	// capped at 104 bytes on Darwin, and RuntimeDir() alone can already
+	// approach that under deep $TMPDIR paths (e.g. the e2e harness).
+	if !strings.HasPrefix(a, softnetSockDir) {
+		t.Fatalf("control sock %q not under fixed short dir %q", a, softnetSockDir)
+	}
+	if len(a) >= 104 {
+		t.Fatalf("control sock path %q (%d bytes) exceeds Darwin's 104-byte sun_path limit", a, len(a))
+	}
+
+	other := SoftnetControlSock("other-proj")
+	if other == a {
+		t.Fatalf("different project ids collided: %q", a)
+	}
+}
+
+func TestSoftnetControlSockDisambiguatesRuntimeDirs(t *testing.T) {
+	// Two different daemon instances (e.g. a real installed daemon and
+	// an isolated e2e daemon) using the same project name must not
+	// collide on the same control socket.
+	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	a := SoftnetControlSock("proj")
+
+	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	b := SoftnetControlSock("proj")
+
+	if a == b {
+		t.Fatalf("different runtime dirs collided on the same control sock: %q", a)
 	}
 }
 

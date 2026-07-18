@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mdubb86/devm/internal/mac"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
@@ -327,23 +326,17 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			ironSecrets = append(ironSecrets, IronSecret{Name: b.Name, Value: b.Value, Hosts: b.Hosts})
 		}
 
-		// Discover MAC_HOST (vmnet bridge IP that THIS VM is routed through).
-		// Apple Virtualization creates one bridge* interface per VM group; a
-		// Mac running several tart VMs can have several bridges, each with
-		// its own /24 subnet. We must bind iron-proxy on the bridge whose
-		// subnet contains OUR guest — otherwise the guest's default route
-		// can't reach iron-proxy at all (silent DNS + egress failure).
+		// Discover the guest's softnet IP (192.168.127.x) — stashed for
+		// ssh-config generation and status reporting. iron-proxy itself
+		// binds loopback unconditionally (ironProxyListenAddr): softnet
+		// dials it host-side, and there's no vmnet bridge under
+		// --net-softnet for a Mac-routable address to matter for egress.
 		//
-		// The VM has an IP by now (waitVMExecReady already succeeded, which
-		// implies both the vmnet handshake and the guest agent are up).
+		// The VM has an IP by now (waitVMExecReady already succeeded,
+		// which implies the guest agent is up).
 		vmIP, err := tr.IP(ctx, req.Name)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("discover VM ip: %v", err), http.StatusInternalServerError)
-			return
-		}
-		macIP, err := mac.HostForVM(vmIP)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("discover MAC_HOST for vm %s: %v", vmIP, err), http.StatusInternalServerError)
 			return
 		}
 
@@ -391,10 +384,9 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 
-		// Stash port info + macIP for VM env injection and the deferred
+		// Stash port info + vmIP for VM env injection and the deferred
 		// egress-enforcement inject to read.
 		ironProxyState.put(req.Name, ironProxyInfo{
-			MacHost:   macIP,
 			VMIP:      vmIP,
 			HTTPPort:  httpPort,
 			HTTPSPort: httpsPort,
