@@ -297,10 +297,10 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	}
 
 	// The enforcement config (nft allowlist + dnsmasq + timesyncd) is baked
-	// into the composed provisioning script's enforce phase (so DNS/NTP/
-	// egress all come up under enforcement in one exec). The daemon
-	// computes it per project from the iron-proxy MAC_HOST/ports stashed
-	// at StartVM.
+	// into the enforced provisioning script's enforce phase (RunEnforced),
+	// which runs after the softnet egress flip so DNS/NTP/egress all come up
+	// under enforcement. The daemon computes it per project from the
+	// iron-proxy MAC_HOST/ports stashed at StartVM.
 	enforcement, err := d.ServiceAPIClient.EnforcementConfig(ctx, cfg.Project.Name)
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "fetch enforcement config")

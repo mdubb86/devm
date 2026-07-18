@@ -41,8 +41,8 @@ type fakeVMAdmin struct {
 	applyEgressEnforcementCalled int
 	applyEgressEnforcementErr    error
 	// callOrder records the relative order OpenEgress/ApplyEgressEnforcement
-	// were invoked in, for asserting they bracket prov.Run's single exec —
-	// entries append "open-egress" / "apply-egress-enforcement".
+	// were invoked in, for asserting they bracket the RunOpen/RunEnforced
+	// execs — entries append "open-egress" / "apply-egress-enforcement".
 	callOrder []string
 	// logPath, when set, also appends the same markers into a shared file
 	// that the fake tart binary writes its own invocations into, so a test
@@ -414,7 +414,7 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 }
 
 // TestRunShellColdPath_PostInstallFail_KeepsVM verifies that a
-// service-phase failure (the composed script's `services` stage) leaves
+// service-phase failure (the enforced script's `services` stage) leaves
 // the VM running so the user can debug — install failures still tear down.
 func TestRunShellColdPath_PostInstallFail_KeepsVM(t *testing.T) {
 	repoRoot := t.TempDir()
@@ -460,7 +460,7 @@ func TestRunShellColdPath_ProvisionFail_TearsDownVM(t *testing.T) {
 		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
 	}
 
-	// The provisioning ExecStream emits the `install` stage marker then
+	// The RunOpen ExecStream emits the `install` stage marker then
 	// exits non-zero — an install-phase failure that must tear down.
 	tartBin, logPath := fakeTartBinStageFail(t, repoRoot, "install")
 
