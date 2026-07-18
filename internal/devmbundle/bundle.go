@@ -123,7 +123,7 @@ func Build(in BuildInput) ([]byte, error) {
 	// step (unlike systemd/*.service, which install.sh copies into
 	// /etc/systemd/system/). An empty cfg.Startup renders a no-op
 	// script that exits 0.
-	if err := writeEntry(tw, "startup.sh", 0o755, render.RenderStartupScript(in.Cfg.Startup)); err != nil {
+	if err := writeEntry(tw, "startup.sh", 0o755, render.RenderStartupScript(in.Cfg.Startup, in.Cfg.Scripts)); err != nil {
 		return nil, err
 	}
 
