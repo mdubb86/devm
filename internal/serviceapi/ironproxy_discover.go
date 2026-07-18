@@ -77,10 +77,10 @@ func DiscoverIronProxies(ctx context.Context) ([]DiscoveredIronProxy, error) {
 // contract callers expect.
 //
 // Beyond rehydrating ironProxyState, each recovered project also gets
-// its VM IP re-stashed and its direct routes rebuilt from the on-disk
-// state snapshot (recoverProjectState) — both are in-memory-only and
-// otherwise lost on daemon restart, breaking direct-service DNS for a
-// VM that's still running under an orphaned iron-proxy.
+// its SSH host port restored and its direct routes rebuilt from the
+// on-disk state snapshot (recoverProjectState) — both are in-memory-only
+// and otherwise lost on daemon restart, breaking ingress/DNS for a VM
+// that's still running under an orphaned iron-proxy.
 func AdoptIronProxies(ctx context.Context, sup *supervisor.Supervisor, tr *tart.Tart, routes *Routes) error {
 	procs, err := DiscoverIronProxies(ctx)
 	if err != nil {
