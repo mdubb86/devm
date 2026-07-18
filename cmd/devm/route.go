@@ -9,9 +9,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mdubb86/devm/internal/config"
-	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/softnet"
 )
 
 var routeCmd = &cobra.Command{
@@ -72,23 +72,11 @@ func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error 
 }
 
 // buildRoutes extracts Routes from the project config in the
-// requested mode. For vm mode, resolves the VM's IP via tart so the
-// proxy dials the VM directly instead of localhost — but only when a
-// route actually needs it (a non-direct service with hostname+port);
-// an all-direct project needs no backend IP and shouldn't error just
-// because the VM happens to be down.
+// requested mode. In vm mode, a proxied (non-direct) service's
+// BackendHost is the host-local softnet expose listener for its
+// guest port, not the VM's IP.
 func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) ([]serviceapi.Route, error) {
 	var out []serviceapi.Route
-	var vmIP string
-
-	if mode == serviceapi.ModeVM && needsVMIP(cfg) {
-		tr := tart.New()
-		ip, err := tr.IP(context.Background(), cfg.Project.Name)
-		if err != nil {
-			return nil, fmt.Errorf("get vm ip (is the VM running? `devm shell` first): %w", err)
-		}
-		vmIP = ip
-	}
 
 	for _, svc := range cfg.Services {
 		if svc.Hostname == "" || svc.Port == 0 {
@@ -101,27 +89,14 @@ func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) ([]serviceapi.Rou
 			Project:     cfg.Project.Name,
 		}
 		if svc.Direct {
-			// Direct services are DNS-only: no backend to dial, and the
-			// VM IP is resolved live by the daemon (not baked in here).
+			// Direct services are DNS-only: no backend to dial.
 			route.Direct = true
 		} else if mode == serviceapi.ModeVM {
-			route.BackendHost = vmIP
+			route.BackendHost = softnet.HostLoopIP
 		}
 		out = append(out, route)
 	}
 	return out, nil
-}
-
-// needsVMIP reports whether any service in cfg needs the VM's IP
-// baked into its route's BackendHost — i.e. a routed (non-direct)
-// service with both a hostname and a port set.
-func needsVMIP(cfg schema.Config) bool {
-	for _, svc := range cfg.Services {
-		if svc.Hostname != "" && svc.Port != 0 && !svc.Direct {
-			return true
-		}
-	}
-	return false
 }
 
 func init() {
