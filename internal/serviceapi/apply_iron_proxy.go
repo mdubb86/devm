@@ -127,9 +127,9 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// Build fresh config on the SAME MAC_HOST + ports pulled from
 		// the on-disk config above.
 		newCfg := IronProxyConfig{
-			HTTPListen:  fmt.Sprintf("%s:%d", info.MacHost, info.HTTPPort),
-			HTTPSListen: fmt.Sprintf("%s:%d", info.MacHost, info.HTTPSPort),
-			DNSListen:   fmt.Sprintf("%s:%d", info.MacHost, info.DNSPort),
+			HTTPListen:  ironProxyListenAddr(info.HTTPPort),
+			HTTPSListen: ironProxyListenAddr(info.HTTPSPort),
+			DNSListen:   ironProxyListenAddr(info.DNSPort),
 			DNSProxyIP:  proxySentinelIP,
 			CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
 			CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
@@ -159,7 +159,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			return
 		}
 
-		healthAddr := fmt.Sprintf("%s:%d", info.MacHost, info.HTTPSPort)
+		healthAddr := ironProxyListenAddr(info.HTTPSPort)
 		if !waitIronProxyHealthy(healthAddr) {
 			http.Error(w, fmt.Sprintf("iron-proxy spawned but did not bind %s within 2s", healthAddr),
 				http.StatusInternalServerError)

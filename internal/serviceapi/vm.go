@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -51,10 +52,9 @@ type VMStartRequest struct {
 	// gigabytes at clone time (a per-project `disk:` override). Zero
 	// means the base image default. See schema.Config.DiskSizeGB.
 	DiskSizeGB int `json:"disk_size_gb,omitempty"`
-	// Docker mirrors cfg.Docker — gates the 172.16/12 egress accept in
-	// buildNftablesScript so container traffic passes the default-deny
-	// output chain on every cold start, not just after the first-boot
-	// docker install step runs.
+	// Docker mirrors cfg.Docker, stashed into ironProxyInfo so
+	// /vm/apply-iron-proxy's re-hydration path can recover it without
+	// re-reading the project's schema.Config.
 	Docker bool `json:"docker,omitempty"`
 }
 
@@ -67,17 +67,24 @@ type VMStopRequest struct {
 
 // VMEnforcementConfigResponse is the body shape for GET
 // /vm/enforcement-config: everything the boot-integrity-gate composed
-// provisioning script bakes into its enforce phase, computed from the
-// iron-proxy MAC_HOST/ports stashed at /vm/start. NftRuleset is the
-// enforced-egress allowlist ruleset body (the `nft -f -` content, without
-// the /etc/nftables.conf persistence block); DnsmasqScript and
-// TimesyncdScript point the guest's runtime DNS resolution and NTP sync
-// at iron-proxy / the daemon's SNTP responder — without them the guest
-// can enforce egress but can't resolve hostnames or keep its clock synced.
+// provisioning script still bakes into its enforce phase. Egress
+// allow-listing and DNS resolution are enforced by softnet over the
+// control socket (POST /vm/apply-egress-enforcement), not by guest-side
+// nftables/dnsmasq, so NftRuleset and DnsmasqScript are always empty.
+// TimesyncdScript still points the guest's systemd-timesyncd at the proxy
+// sentinel — softnet's UDP forwarder catches outbound udp:123 regardless
+// of destination, but the guest must still be configured to send NTP
+// somewhere for that interception to matter.
 type VMEnforcementConfigResponse struct {
 	NftRuleset      string `json:"nft_ruleset"`
 	DnsmasqScript   string `json:"dnsmasq_script"`
 	TimesyncdScript string `json:"timesyncd_script"`
+}
+
+// VMApplyEgressEnforcementRequest is the body shape for POST
+// /vm/apply-egress-enforcement.
+type VMApplyEgressEnforcementRequest struct {
+	Name string `json:"name"`
 }
 
 // VMStatusResponse is the body shape for GET /vm/status.
@@ -237,9 +244,11 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			}
 		}
 
-		// Run options: net-shared, no graphics, workspace mount.
+		// Run options: softnet NIC, no graphics, workspace mount. softnet is
+		// the daemon's sole egress path for every VM it launches.
 		opts := tart.RunOpts{
 			NoGraphics: true,
+			NetSoftnet: true,
 		}
 		if req.WorkspaceHostPath != "" {
 			// Deliberate: no Name. A named share (`--dir=workspace:PATH`)
@@ -276,6 +285,24 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, fmt.Sprintf("tart run prep: %v", err), http.StatusInternalServerError)
 			return
 		}
+
+		// softnet is a symlink to this same devm binary; tart run
+		// --net-softnet resolves a binary literally named "softnet" on the
+		// child's $PATH and dispatches to softnet mode via argv[0].
+		// pexec builds the child env solely from cmd.Env (no implicit
+		// parent inheritance), so PATH and the control-socket location
+		// must be set here explicitly, starting from a full os.Environ().
+		binDir, err := ensureSoftnetSymlink()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("ensure softnet symlink: %v", err), http.StatusInternalServerError)
+			return
+		}
+		sock := SoftnetControlSock(req.Name)
+		env := os.Environ()
+		env = prependPathEnv(env, binDir)
+		env = append(env, "SOFTNET_CONTROL_SOCK="+sock)
+		cmd.Env = env
+		softnetState.put(req.Name, sock)
 
 		key := supervisor.Key{ProjectID: req.Name, Role: supervisor.RoleVM}
 		if err := sup.Spawn(ctx, key, cmd); err != nil {
@@ -418,14 +445,11 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// /vm/enforcement-config returns everything the boot-integrity-gate
-	// composed provisioning script bakes into its enforce phase — the
-	// enforced-egress nft ruleset, the dnsmasq upstream config, and the
-	// timesyncd NTP config — computed from the same iron-proxy
-	// MAC_HOST/ports the /vm/start handler stashed. Single source: the
-	// CLI orchestrator fetches this once per cold start and applies all
-	// three inside the same composed-script exec, rather than a separate
-	// post-provision inject.
+	// /vm/enforcement-config returns the guest-side config the boot-
+	// integrity-gate composed provisioning script still bakes into its
+	// enforce phase. Egress allow-listing and DNS are enforced by softnet
+	// over the control socket now (POST /vm/apply-egress-enforcement), so
+	// only TimesyncdScript is populated.
 	s.Register("/vm/enforcement-config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
@@ -436,17 +460,62 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
-		info, ok := ironProxyState.get(name)
-		if !ok {
+		if _, ok := ironProxyState.get(name); !ok {
 			http.Error(w, "iron-proxy state missing — was /vm/start called for this project?",
 				http.StatusPreconditionFailed)
 			return
 		}
 		writeJSON(w, VMEnforcementConfigResponse{
-			NftRuleset:      buildNftablesRuleset(info.MacHost, info.HTTPPort, info.HTTPSPort, info.DNSPort, ntpPort, info.Docker),
-			DnsmasqScript:   buildDnsmasqScript(info.MacHost, info.DNSPort),
 			TimesyncdScript: buildTimesyncdScript(),
 		})
+	})
+
+	// /vm/apply-egress-enforcement flips a project's softnet control
+	// socket to ENFORCED, pointing egress at iron-proxy's loopback
+	// endpoint and the daemon's SNTP responder. This is the sole egress
+	// gate under softnet — there is no guest-side nftables/dnsmasq step
+	// left to run here.
+	s.Register("/vm/apply-egress-enforcement", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMApplyEgressEnforcementRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		info, ok := ironProxyState.get(req.Name)
+		if !ok {
+			http.Error(w, "iron-proxy state missing — was /vm/start called for this project?",
+				http.StatusPreconditionFailed)
+			return
+		}
+
+		// timesyncd still needs to run in-guest: softnet's UDP forwarder
+		// catches outbound udp:123 regardless of destination, but the
+		// guest itself must be configured to send NTP for that to matter.
+		cmd := exec.Command("tart", "exec", "-i", req.Name, "sudo", "bash", "-s")
+		cmd.Stdin = strings.NewReader(buildTimesyncdScript())
+		if out, err := cmd.CombinedOutput(); err != nil {
+			http.Error(w, fmt.Sprintf("apply timesyncd: %v\n%s", err, out), http.StatusInternalServerError)
+			return
+		}
+
+		if err := sendSoftnetEnforced(softnetState.get(req.Name), info, ntpPort); err != nil {
+			http.Error(w, fmt.Sprintf("flip softnet enforced: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	s.Register("/vm/stop", func(w http.ResponseWriter, r *http.Request) {
@@ -593,13 +662,43 @@ func pickPort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
+// prependPathEnv returns env with dir prepended to the existing PATH
+// entry, or a new PATH entry appended if env has none. Used to put the
+// softnet symlink's directory ahead of the tart child's normal $PATH so
+// `tart run --net-softnet` resolves it before any other binary literally
+// named "softnet". Mutates and returns env in place.
+func prependPathEnv(env []string, dir string) []string {
+	for i, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			env[i] = "PATH=" + dir + ":" + strings.TrimPrefix(kv, "PATH=")
+			return env
+		}
+	}
+	return append(env, "PATH="+dir)
+}
+
+// sendSoftnetEnforced flips a project's softnet control socket to
+// ENFORCED, forwarding egress to iron-proxy's HTTP/HTTPS/DNS listeners and
+// the daemon's SNTP responder. All four addresses are loopback: softnet
+// dials iron-proxy and the NTP responder host-side, not through a vmnet
+// bridge, so MacHost never enters the endpoint it sends.
+func sendSoftnetEnforced(sock string, info ironProxyInfo, ntpPort int) error {
+	ep := &Endpoint{
+		HTTP:  ironProxyListenAddr(info.HTTPPort),
+		HTTPS: ironProxyListenAddr(info.HTTPSPort),
+		DNS:   ironProxyListenAddr(info.DNSPort),
+		NTP:   ironProxyListenAddr(ntpPort),
+	}
+	return newSoftnetClient(sock).setPolicy("ENFORCED", ep)
+}
+
 type ironProxyInfo struct {
 	MacHost   string
 	VMIP      string // the guest's current DHCP IP (for direct-service DNS)
 	HTTPPort  int
 	HTTPSPort int
 	DNSPort   int
-	Docker    bool // cfg.Docker — gates the 172.16/12 egress accept in buildNftablesScript
+	Docker    bool // cfg.Docker, preserved across /vm/apply-iron-proxy re-hydration
 }
 
 type ironProxyStore struct {

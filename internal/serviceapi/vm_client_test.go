@@ -340,12 +340,10 @@ func TestVMStop_MethodNotAllowed(t *testing.T) {
 }
 
 // TestClientEnforcementConfig_ReadsResponse verifies GET
-// /vm/enforcement-config returns all three enforce-phase config strings —
-// the nft ruleset, dnsmasq upstream config, and timesyncd NTP config —
-// computed from the same iron-proxy MAC_HOST/ports stashed at /vm/start.
-// This is the single source the composed provisioning script's enforce
-// phase bakes DNS/NTP config from; before this endpoint existed, only the
-// nft ruleset was ported and runtime DNS/NTP were silently broken.
+// /vm/enforcement-config returns only the guest-side timesyncd config now
+// — egress allow-listing and DNS are enforced by softnet over the control
+// socket (POST /vm/apply-egress-enforcement), so NftRuleset and
+// DnsmasqScript are always empty.
 func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
@@ -366,9 +364,8 @@ func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {
 
 	resp, err := c.EnforcementConfig(ctx, "proj-enf")
 	require.NoError(t, err)
-	assert.Contains(t, resp.NftRuleset, "add table inet devm_filter")
-	assert.Contains(t, resp.DnsmasqScript, "server=192.168.64.1#8053")
-	assert.Contains(t, resp.DnsmasqScript, "/etc/dnsmasq.d/devm.conf")
+	assert.Empty(t, resp.NftRuleset)
+	assert.Empty(t, resp.DnsmasqScript)
 	assert.Contains(t, resp.TimesyncdScript, "/etc/systemd/timesyncd.conf.d/devm.conf")
 }
 
