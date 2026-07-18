@@ -100,11 +100,14 @@ type VMAdminClient interface {
 	ApplyIronProxy(ctx context.Context, req serviceapi.VMApplyIronProxyRequest) (serviceapi.VMApplyIronProxyResponse, error)
 	// OpenEgress flips the project's softnet control socket to OPEN.
 	// softnet boots LOCKED, so provisionAndAttach calls this immediately
-	// before running the composed provisioning script.
+	// before running RunOpen (the open-egress half of provisioning).
 	OpenEgress(ctx context.Context, name string) error
-	// ApplyEgressEnforcement flips the project's softnet control socket
-	// to ENFORCED. provisionAndAttach calls this immediately after the
-	// composed provisioning script succeeds.
+	// ApplyEgressEnforcement flips the project's softnet control socket to
+	// ENFORCED. provisionAndAttach calls this immediately after RunOpen
+	// succeeds and BEFORE RunEnforced (which starts user services and
+	// devm.target) — the Critical fix: services must never start under
+	// open egress. warmAttach also calls it, idempotently, as a
+	// defense-in-depth re-assertion before attaching to an already-warm VM.
 	ApplyEgressEnforcement(ctx context.Context, name string) error
 }
 
@@ -255,6 +258,16 @@ func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName str
 	// Warm attach: reconcile is handled by the provisioner on cold start.
 	// For now the warm path just attaches directly.
 	reporter.Step("attaching to running vm", false)
+
+	// Defense-in-depth: re-assert ENFORCED before attaching, even though
+	// this VM should already be enforced from its own cold start.
+	// discoverSoftnet only re-pushes ENFORCED on daemon restart, so this is
+	// the belt-and-suspenders check on every plain warm attach too — the
+	// call is idempotent on softnet's side.
+	if err := d.ServiceAPIClient.ApplyEgressEnforcement(ctx, vmName); err != nil {
+		return -1, fmt.Errorf("apply egress enforcement: %w", err)
+	}
+
 	reporter.Step("ready", false)
 	reporter.Stop()
 	reporter.Clear()
@@ -310,10 +323,8 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	debuglog.Logf("shell", "provisioning %s", vmName)
 	reporter.Step("provisioning", false)
 
-	// softnet boots LOCKED. Flip it OPEN before the single composed exec
-	// runs, so apt/install:/templates/startup: have egress; the ENFORCED
-	// flip below (after prov.Run succeeds) locks it back down to the real
-	// allowlist before the shell attaches.
+	// softnet boots LOCKED. Flip it OPEN before the open-egress exec runs,
+	// so apt/install:/templates/startup: have egress.
 	if err := d.ServiceAPIClient.OpenEgress(ctx, vmName); err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "open egress")
 	}
@@ -325,13 +336,30 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	// this writer. pp drives the stage-marker spinner from ExecStream's
 	// line-by-line output.
 	pp := newProvisionProgress(reporter)
-	if err := prov.Run(ctx, os.Stderr, pp.Line); err != nil {
+	if err := prov.RunOpen(ctx, os.Stderr, pp.Line); err != nil {
+		fmt.Fprint(os.Stderr, pp.FailureOutput())
+		// Open-phase failures (apt/install:/docker/templates/startup:) tear
+		// down — the VM is in a cold-start-broken state and the user's fix
+		// belongs in devm.yaml (test_51: install failure = state=absent).
+		return d.teardownOnFail(ctx, cfg, vmName, err, "provision")
+	}
+	debuglog.Logf("shell", "open-egress provisioning done: %s", vmName)
+
+	// Lock softnet down to the project's real allowlist BEFORE services or
+	// devm.target come up — the Critical fix: services must never start
+	// under open (unenforced) egress.
+	if err := d.ServiceAPIClient.ApplyEgressEnforcement(ctx, vmName); err != nil {
+		return d.teardownOnFail(ctx, cfg, vmName, err, "apply egress enforcement")
+	}
+
+	if err := prov.RunEnforced(ctx, os.Stderr, pp.Line); err != nil {
 		fmt.Fprint(os.Stderr, pp.FailureOutput())
 		// Service-phase failures (unit install, daemon-reload, enable+start,
 		// apply masks) leave the VM in a debuggable state — user's fix is
 		// in devm.yaml, not in the VM. Surface the error but keep the VM
-		// alive so `tart exec <vm> systemctl status` etc. works. Pre-service
-		// failures tear down (test_51: install failure = state=absent).
+		// alive so `tart exec <vm> systemctl status` etc. works. Enforce-
+		// phase failures (the daemon's own enforcement broken) still tear
+		// down.
 		if provision.IsPostInstallFailure(err) {
 			debuglog.Logf("shell", "post-install failure — keeping VM: %v", err)
 			return -1, fmt.Errorf("provision: %w", err)
@@ -339,12 +367,6 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		return d.teardownOnFail(ctx, cfg, vmName, err, "provision")
 	}
 	debuglog.Logf("shell", "provisioning done: %s", vmName)
-
-	// Provisioning succeeded — lock softnet back down to the project's real
-	// allowlist before the shell attaches.
-	if err := d.ServiceAPIClient.ApplyEgressEnforcement(ctx, vmName); err != nil {
-		return d.teardownOnFail(ctx, cfg, vmName, err, "apply egress enforcement")
-	}
 
 	// Write initial snapshot so that subsequent `devm reconcile` calls have
 	// a baseline to diff against. Without this, ReadSnapshot returns "" which
@@ -360,8 +382,8 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	debuglog.Logf("shell", "snapshot written: %s", vmName)
 
 	// Seed the daemon-side state snapshot too, now that provisioning is
-	// fully green (provisioning AND egress enforcement, which runs as
-	// a step inside prov.Run, both succeeded). Without this, the first
+	// fully green (RunOpen, egress enforcement, and RunEnforced all
+	// succeeded). Without this, the first
 	// `devm reconcile` after `devm start` finds no baseline, diffs
 	// against schema.Config{}, and every teardown-bucket kind
 	// spuriously surfaces as pending — prompting the user to tear down

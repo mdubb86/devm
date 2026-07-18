@@ -187,8 +187,10 @@ func minimalCfg() schema.Config {
 
 // TestRunShellWarmPath_AttachesWithoutStart verifies that when the VM is
 // already running AND devm.target is active (fully provisioned), the
-// daemon is NOT asked to start it again, no provisioning runs, and the
-// user shell is spawned via tart exec.
+// daemon is NOT asked to start it again, no provisioning runs, the
+// user shell is spawned via tart exec, and — Fix 2, defense-in-depth —
+// ApplyEgressEnforcement is re-asserted before attach even though this VM
+// should already be enforced from its own cold start.
 func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
@@ -211,6 +213,8 @@ func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
 
 	admin.mu.Lock()
 	assert.Equal(t, 0, admin.startCalled, "StartVM must NOT be called on the warm path")
+	assert.Equal(t, 1, admin.applyEgressEnforcementCalled,
+		"warm attach must re-assert ENFORCED before attaching (belt-and-suspenders)")
 	admin.mu.Unlock()
 
 	logBytes, err := os.ReadFile(logPath)
@@ -331,16 +335,20 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	assert.Equal(t, minimalCfg().Project.Name, got.Cfg.Project.Name)
 }
 
-// TestRunShellColdPath_FlipsEgressAroundProvision verifies the daemon-side
-// softnet OPEN/ENFORCED flips bracket the single composed provisioning
-// exec: OpenEgress before, ApplyEgressEnforcement after. softnet boots
-// LOCKED, so without the OPEN flip apt/install:/startup: would run with no
-// egress at all; without the ENFORCED flip afterward the VM would stay
-// wide open once the shell attaches.
+// TestRunShellColdPath_FlipsEgressAroundProvision verifies the Critical fix:
+// the daemon-side softnet OPEN→ENFORCED flip happens BETWEEN the two
+// provisioning execs, not around a single one — OpenEgress, then RunOpen's
+// exec (apt/install:/templates/startup:), then ApplyEgressEnforcement, then
+// RunEnforced's exec (services + devm.target). Without this order services
+// would come up under open (unenforced) egress every boot.
 //
 // Both fakeVMAdmin (OpenEgress/ApplyEgressEnforcement) and the fake tart
-// binary (the provisioning ExecStream's `bash -c`) append markers to the
-// same log file, giving one ordered timeline across both fakes.
+// binary (the two provisioning ExecStreams' `bash -c`) append markers to the
+// same log file, giving one ordered timeline across both fakes. The fake
+// logs each invocation's full argv verbatim, and a multi-line script argv
+// spans several physical lines in the log — so the two `bash -c` execs are
+// told apart by ORDER (first occurrence = RunOpen, second = RunEnforced),
+// not by grepping a single line for script content.
 func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 	repoRoot := t.TempDir()
 	logPath := filepath.Join(repoRoot, "order.log")
@@ -376,24 +384,33 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
 
-	openIdx, provisionIdx, enforceIdx := -1, -1, -1
+	openIdx, runOpenIdx, enforceIdx, runEnforcedIdx := -1, -1, -1, -1
+	bashCSeen := 0
 	for i, line := range lines {
 		switch {
 		case line == "OPEN-EGRESS":
 			openIdx = i
-		case strings.Contains(line, "bash -c"):
-			if provisionIdx == -1 {
-				provisionIdx = i
-			}
 		case line == "APPLY-EGRESS-ENFORCEMENT":
 			enforceIdx = i
+		case strings.Contains(line, "bash -c"):
+			bashCSeen++
+			switch bashCSeen {
+			case 1:
+				runOpenIdx = i
+			case 2:
+				runEnforcedIdx = i
+			}
 		}
 	}
 	require.GreaterOrEqual(t, openIdx, 0, "OPEN-EGRESS marker must be present")
-	require.GreaterOrEqual(t, provisionIdx, 0, "provisioning bash -c exec must be present")
+	require.GreaterOrEqual(t, runOpenIdx, 0, "RunOpen's bash -c exec must be present")
 	require.GreaterOrEqual(t, enforceIdx, 0, "APPLY-EGRESS-ENFORCEMENT marker must be present")
-	assert.Less(t, openIdx, provisionIdx, "OpenEgress must run BEFORE the composed provisioning exec")
-	assert.Less(t, provisionIdx, enforceIdx, "ApplyEgressEnforcement must run AFTER the composed provisioning exec")
+	require.GreaterOrEqual(t, runEnforcedIdx, 0, "RunEnforced's bash -c exec must be present")
+	assert.Less(t, openIdx, runOpenIdx, "OpenEgress must run BEFORE RunOpen's exec")
+	assert.Less(t, runOpenIdx, enforceIdx, "ApplyEgressEnforcement must run AFTER RunOpen's exec")
+	assert.Less(t, enforceIdx, runEnforcedIdx,
+		"RunEnforced's exec (services + devm.target) must run AFTER ApplyEgressEnforcement — "+
+			"the Critical fix: services must never start under open egress")
 }
 
 // TestRunShellColdPath_PostInstallFail_KeepsVM verifies that a
@@ -838,24 +855,35 @@ exit 0
 }
 
 // fakeTartBinStageFail writes a fake tart binary that logs every
-// invocation and, for the single provisioning ExecStream (`bash -c
-// <script>`), emits the given `::devm:stage:<stage>::` marker on stdout
-// and exits non-zero — simulating a script failure at that stage. The
-// first-boot marker probe (`test -f /var/lib/devm/provisioned`) reports
+// invocation and, for the ONE of the two provisioning ExecStreams (`bash -c
+// <script>`) that stage actually runs in, emits the given
+// `::devm:stage:<stage>::` marker on stdout and exits non-zero —
+// simulating a script failure at that stage. "enforce" and "services" run
+// in RunEnforced's exec (identified by the enforced-nft-applied marker
+// baked into its script); every other stage
+// (open/packages/install/docker/templates/startup) runs in RunOpen's exec
+// (identified by the bundle-tar extraction baked into its script) — the
+// OTHER exec succeeds normally, exactly as the real split scripts behave.
+// The first-boot marker probe (`test -f /var/lib/devm/provisioned`) reports
 // absent so cold-start takes the first-boot path. Every other call
 // (waitVMReady `true`, teardown `delete`) succeeds / is logged.
 func fakeTartBinStageFail(t *testing.T, dir, stage string) (*tart.Tart, string) {
 	t.Helper()
 	bin := filepath.Join(dir, "tart-fake-stagefail")
 	logPath := filepath.Join(dir, "tart-invocations.log")
+	failMarker := `*"tar -xC /opt/devm"*` // RunOpen's exec
+	if stage == "enforce" || stage == "services" {
+		failMarker = `*"EnforcedNft-applied-marker"*` // RunEnforced's exec
+	}
 	script := fmt.Sprintf(`#!/bin/sh
 echo "$*" >> %q
 case "$*" in
   *"test -f /var/lib/devm/provisioned"*) exit 1 ;;
-  *"bash -c"*) echo "::devm:stage:%s::"; exit 1 ;;
+  %s) echo "::devm:stage:%s::"; exit 1 ;;
+  *"bash -c"*) exit 0 ;;
 esac
 exit 0
-`, logPath, stage)
+`, logPath, failMarker, stage)
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 	tr := tart.New()
 	tr.Path = bin

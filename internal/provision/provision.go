@@ -1,9 +1,11 @@
-// Package provision composes and ships the single guest provisioning
-// script for a Tart VM. The orchestrator calls Provisioner.Run after
-// StartVM + waitVMReady succeed; Run builds the devm bundle tar, renders
-// one bash script (render.RenderProvisionScript), and streams both to the
-// guest in a single `tart exec -i`. The script's exit code is the whole
-// provisioning result.
+// Package provision composes and ships the guest provisioning scripts for a
+// Tart VM, split into two execs around the daemon's softnet OPEN→ENFORCED
+// egress flip: RunOpen (render.RenderProvisionOpenScript, with the devm
+// bundle tar on stdin) runs while egress is OPEN, and RunEnforced (render.
+// RenderProvisionEnforcedScript, which starts user services and activates
+// devm.target) runs after the orchestrator has flipped softnet to ENFORCED —
+// so services never come up under open egress. Each script's exit code is
+// that half's provisioning result.
 package provision
 
 import (
@@ -75,7 +77,7 @@ type Provisioner struct {
 	// StepTimeoutSeconds bounds every install:/startup: command in the
 	// composed script (render.ProvisionScriptInput.StepTimeoutSeconds). The
 	// daemon fills this from DEVM_INSTALL_STEP_TIMEOUT_S; zero means
-	// "unset" and RenderProvisionScript falls back to its own default.
+	// "unset" and RenderProvisionOpenScript falls back to its own default.
 	StepTimeoutSeconds int
 
 	// firstBoot is true when /var/lib/devm/provisioned is absent — i.e.
@@ -131,14 +133,17 @@ func IsPostInstallFailure(err error) bool {
 	return stagesAfterInstall[sf.Step]
 }
 
-// Run composes the single guest provisioning script + bundle tar and
-// ships both in ONE streaming `tart exec -i`. Every streamed line is
-// written to w (diagnostic capture) and forwarded to onLine (stage-marker
-// parsing / spinner — may be nil). The script's exit code is the whole
-// provisioning result: a non-zero exit returns a *StepFailure classified
-// by the last stage the script reached, so callers can distinguish
-// install-phase from service-phase failures via IsPostInstallFailure.
-func (p *Provisioner) Run(ctx context.Context, w io.Writer, onLine func(stream, line string)) error {
+// RunOpen ships the OPEN-egress half of provisioning (render.
+// RenderProvisionOpenScript) plus the bundle tar in ONE streaming `tart exec
+// -i`, run while softnet is OPEN. It sets p.firstBoot (read by
+// RunEnforced's scriptInput too) from the guest's first-boot marker. Every
+// streamed line is written to w (diagnostic capture) and forwarded to
+// onLine (stage-marker parsing / spinner — may be nil). The script's exit
+// code is the whole result: a non-zero exit returns a *StepFailure
+// classified by the last stage the script reached, so callers can
+// distinguish install-phase from service-phase failures via
+// IsPostInstallFailure.
+func (p *Provisioner) RunOpen(ctx context.Context, w io.Writer, onLine func(stream, line string)) error {
 	p.firstBoot = !p.markerExists(ctx)
 
 	body, err := p.buildBundle()
@@ -146,8 +151,24 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer, onLine func(stream, 
 		return &StepFailure{Step: "extract", Err: err}
 	}
 
-	script := render.RenderProvisionScript(p.scriptInput())
+	script := render.RenderProvisionOpenScript(p.scriptInput())
+	return p.execScript(ctx, script, bytes.NewReader(body), w, onLine)
+}
 
+// RunEnforced ships the ENFORCED-egress half of provisioning (render.
+// RenderProvisionEnforcedScript) in ONE streaming `tart exec -i`, run
+// immediately after softnet has been flipped to ENFORCED. No bundle is sent
+// on stdin — /opt/devm was already extracted by RunOpen. Same
+// StepFailure classification and streaming behavior as RunOpen. Callers
+// must call RunOpen first so p.firstBoot is set from the guest's marker.
+func (p *Provisioner) RunEnforced(ctx context.Context, w io.Writer, onLine func(stream, line string)) error {
+	script := render.RenderProvisionEnforcedScript(p.scriptInput())
+	return p.execScript(ctx, script, nil, w, onLine)
+}
+
+// execScript is the shared ExecStream + stage-classification plumbing
+// RunOpen and RunEnforced both use.
+func (p *Provisioner) execScript(ctx context.Context, script []byte, stdin io.Reader, w io.Writer, onLine func(stream, line string)) error {
 	var st stageTracker
 	wrapped := func(stream, line string) {
 		st.observe(line)
@@ -159,7 +180,7 @@ func (p *Provisioner) Run(ctx context.Context, w io.Writer, onLine func(stream, 
 		}
 	}
 
-	exit, err := p.Tart.ExecStream(ctx, p.VMName, bytes.NewReader(body),
+	exit, err := p.Tart.ExecStream(ctx, p.VMName, stdin,
 		[]string{"bash", "-c", string(script)}, wrapped)
 	if err != nil {
 		return &StepFailure{Step: st.current(), Err: err}

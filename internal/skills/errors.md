@@ -56,19 +56,19 @@ Other pre-VM errors from `devm shell`:
 
 ## Provisioner failures
 
-After the VM starts, `devm shell` streams ONE composed bash script into the VM in a single `tart exec` (`internal/render/provision.go`'s `RenderProvisionScript`; the daemon no longer runs a per-step Go provisioner). The script emits a stage marker as it enters each phase:
+After the VM starts, `devm shell` streams TWO composed bash scripts into the VM, in two separate `tart exec` calls with the daemon's softnet ENFORCED flip in between (`internal/render/provision.go`'s `RenderProvisionOpenScript` then `RenderProvisionEnforcedScript`; the daemon no longer runs a per-step Go provisioner). softnet is OPEN for the first exec (`open`/`packages`/`install`/`docker`/`templates`/`startup` stages) and ENFORCED for the second (`enforce`/`services`) — user services and `devm.target` only ever come up under enforced egress. Each script emits a stage marker as it enters each phase:
 
 ```
 ::devm:stage:<name>::
 ```
 
-which drives the `devm shell` spinner. The whole script runs under `set -eo pipefail`, so any failing command aborts the script immediately — no later stage runs, and no access is granted. On failure the error line is:
+which drives the `devm shell` spinner. Each script runs under `set -eo pipefail`, so any failing command aborts THAT script immediately — no later stage in it runs, and (for the enforced script) no access is granted. A failure in the open script never runs the enforced script at all. On failure the error line is:
 
 ```
 provision: provision stage "<name>": provisioning script exited <N>
 ```
 
-`<name>` is the LAST stage marker the script reached before it aborted. `<N>` is the script's exit code — e.g. `124` means a `timeout`-wrapped `install:`/`startup:` command was killed for exceeding its budget. The output immediately above the error line is the captured non-marker stdout/stderr from the run; read that first.
+`<name>` is the LAST stage marker the failing script reached before it aborted. `<N>` is the script's exit code — e.g. `124` means a `timeout`-wrapped `install:`/`startup:` command was killed for exceeding its budget. The output immediately above the error line is the captured non-marker stdout/stderr from the run; read that first.
 
 ### Stage reference
 

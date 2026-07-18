@@ -19,6 +19,13 @@ import "context"
 // itself also restarted and came back up in its LOCKED boot default, and
 // it brings the daemon's in-memory view back in sync either way.
 //
+// softnetState.put is synchronous (an in-memory map write — fast), but the
+// setPolicy re-push dials a unix socket per project and can block for
+// seconds against a dead/unresponsive softnet child. RunService calls this
+// on the daemon's startup path, so that push runs in a goroutine — a slow
+// or dead socket for one project must not stall the whole daemon (and every
+// other project's `devm shell`) from coming up.
+//
 // ctx is accepted for parity with AdoptIronProxies and future-proofing
 // (a context-aware dial); the current softnetClient doesn't use it.
 func discoverSoftnet(ctx context.Context, ntpPort int) {
@@ -30,6 +37,8 @@ func discoverSoftnet(ctx context.Context, ntpPort int) {
 		if !ok {
 			continue
 		}
-		_ = newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
+		go func(sock string, info ironProxyInfo) {
+			_ = newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
+		}(sock, info)
 	}
 }

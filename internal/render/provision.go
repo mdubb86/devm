@@ -31,7 +31,8 @@ type MaskMount struct {
 
 // ProvisionScriptInput is everything the composed guest provisioning script
 // needs baked in. The daemon builds this from schema.Config + the rendered
-// nft rule sets, then RenderProvisionScript turns it into one bash script.
+// nft rule sets, then RenderProvisionOpenScript/RenderProvisionEnforcedScript
+// turn it into the two bash scripts run around the softnet ENFORCED flip.
 type ProvisionScriptInput struct {
 	FirstBoot        bool
 	Packages         []string // apt packages (first boot only)
@@ -77,13 +78,23 @@ const defaultStepTimeoutSeconds = 600
 // the old per-step provisioner's enableStartServices poll budget.
 const serviceHealthPollSeconds = 10
 
-// RenderProvisionScript composes the single guest provisioning script. It is
-// delivered as `bash -c '<this>'` with the bundle tar on stdin. Stages the CLI
-// surfaces are marked with `::devm:stage:<name>::` on stdout; the daemon
-// parses them to drive the spinner AND to classify a failure by the stage it
-// reached. `set -eo pipefail` makes any failing command abort before
-// `systemctl start devm.target`, so a failure never grants access.
-func RenderProvisionScript(in ProvisionScriptInput) []byte {
+// RenderProvisionOpenScript composes the OPEN-egress half of provisioning:
+// header, the in-progress marker WRITE, bundle extraction, the unconditional
+// guest-nft flush, and the entire open-egress work window (packages,
+// install:, docker, templates, startup:). It is delivered as `bash -c
+// '<this>'` with the bundle tar on stdin, run while softnet is OPEN — before
+// the ENFORCED flip. Stages are marked with `::devm:stage:<name>::` on
+// stdout; the daemon parses them to drive the spinner AND to classify a
+// failure by the stage it reached. `set -eo pipefail` makes any failing
+// command abort the script immediately.
+//
+// The in-progress marker it writes is cleaned up by
+// RenderProvisionEnforcedScript, not here: a crash between the two scripts
+// (host sleep, daemon restart, killed exec) must leave the marker set, so
+// the next `devm shell` sees a dirty VM and tears it down rather than
+// resuming onto an unknown intermediate state — this is what closes the
+// crash-hole where services could otherwise come up under open egress.
+func RenderProvisionOpenScript(in ProvisionScriptInput) []byte {
 	var b strings.Builder
 	p := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
 	stepTimeout := in.StepTimeoutSeconds
@@ -161,6 +172,25 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 		}
 	}
 
+	return []byte(b.String())
+}
+
+// RenderProvisionEnforcedScript composes the ENFORCED-egress half of
+// provisioning, run immediately after RenderProvisionOpenScript succeeds
+// and softnet has been flipped to ENFORCED. It is delivered as `bash -c
+// '<this>'` with NO stdin — /opt/devm was already extracted by the open
+// script. It applies the real allowlist ruleset + DNS/NTP config, then
+// starts and health-polls user services, then activates devm.target, and
+// finally clears the in-progress marker the open script wrote — the LAST
+// line, so the marker's presence remains a genuine "provisioning not yet
+// fully complete" signal for the whole exec, not just this half.
+func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
+	var b strings.Builder
+	p := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
+
+	p("#!/bin/bash")
+	p("set -eo pipefail")
+
 	// (3) enforce: apply the real allowlist ruleset, then the runtime
 	// DNS/NTP config that routes through the same enforced path, then
 	// masks. A failure here is the daemon's enforcement being broken (not
@@ -225,7 +255,8 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 	// dockerd come up (services already healthy), enforced. Access is granted
 	// ONLY after services are confirmed up.
 	p("sudo systemctl start devm.target")
-	// (7) cleanup marker on success
+	// (7) cleanup marker on success — clears the marker RenderProvisionOpenScript
+	// wrote, closing out the two-exec provisioning run.
 	p("sudo rm -f %s", inProgressMarker)
 
 	return []byte(b.String())
