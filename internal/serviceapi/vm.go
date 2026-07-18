@@ -164,12 +164,18 @@ func gracefulStopVM(ctx context.Context, tr vmStopper, name string) {
 	// reachability directly: `tart exec` rides the vsock guest-agent
 	// channel, which is independent of the softnet NIC, so once the guest
 	// actually halts the agent goes away and Exec starts failing. Require
-	// 2 consecutive failures before declaring the guest down so a single
-	// transient agent hiccup can't force-stop a still-live guest. Still
-	// check List first on every tick and return immediately on a reported
-	// stop — the fast path if tart list's Running flag ever does track
-	// guest state (e.g. non-softnet NICs).
-	const requiredConsecutiveFailures = 2
+	// 3 consecutive failures (1.5s at the 500ms poll interval) before
+	// declaring the guest down: a single transient agent hiccup — or even
+	// two, e.g. host contention while `systemctl poweroff` is mid-flush of
+	// docker's storage layers — can otherwise read as "halted" and trigger
+	// an ungraceful force-stop on a guest that's still very much alive,
+	// which is exactly the outcome this whole probe exists to avoid.
+	// Pathologically a longer stall could still misread as down; the 45s
+	// cap plus the caller's supervisor force-stop remain the backstop for
+	// that case. Still check List first on every tick and return
+	// immediately on a reported stop — the fast path if tart list's
+	// Running flag ever does track guest state (e.g. non-softnet NICs).
+	const requiredConsecutiveFailures = 3
 	consecutiveExecFailures := 0
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -323,6 +329,10 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		binDir, err := ensureSoftnetSymlink()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("ensure softnet symlink: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if err := ensureSoftnetSockDir(softnetSockDir()); err != nil {
+			http.Error(w, fmt.Sprintf("softnet sock dir: %v", err), http.StatusInternalServerError)
 			return
 		}
 		sock := SoftnetControlSock(req.Name)

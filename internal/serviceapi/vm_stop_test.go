@@ -103,6 +103,6 @@ func TestGracefulStopVM_DetectsStopViaExecUnreachable_UnderSoftnet(t *testing.T)
 
 	assert.Less(t, elapsed, 5*time.Second,
 		"must return promptly on guest-agent unreachability, not loop toward the 45s cap")
-	assert.GreaterOrEqual(t, f.execCalls, 4,
-		"must require 2 consecutive Exec failures (poweroff + at least 1 success + 2 failures)")
+	assert.GreaterOrEqual(t, f.execCalls, 5,
+		"must require 3 consecutive Exec failures (poweroff + at least 1 success + 3 failures)")
 }

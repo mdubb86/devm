@@ -26,32 +26,31 @@ func softnetSockDir() string {
 	return "/tmp/devm-softnet-" + strconv.Itoa(os.Getuid())
 }
 
-// ensureSoftnetSockDir creates (or verifies) softnetSockDir as a
-// 0700 directory owned by the current user, refusing to use it otherwise.
-// Because the dir name embeds the uid, a hostile pre-created directory
+// ensureSoftnetSockDir creates (or verifies) dir as a 0700 directory owned
+// by the current user, refusing to use it otherwise. Because the dir name
+// embeds the uid (see softnetSockDir), a hostile pre-created directory
 // would have to be planted by the same uid that's about to use it — but
 // verify ownership and mode anyway rather than trusting MkdirAll's no-op
 // silence on a pre-existing directory.
-func ensureSoftnetSockDir() (string, error) {
-	dir := softnetSockDir()
+func ensureSoftnetSockDir(dir string) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", fmt.Errorf("create softnet sock dir: %w", err)
+		return fmt.Errorf("create softnet sock dir: %w", err)
 	}
 	fi, err := os.Stat(dir)
 	if err != nil {
-		return "", fmt.Errorf("stat softnet sock dir: %w", err)
+		return fmt.Errorf("stat softnet sock dir: %w", err)
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
-		return "", fmt.Errorf("softnet sock dir %s: cannot verify ownership on this platform", dir)
+		return fmt.Errorf("softnet sock dir %s: cannot verify ownership on this platform", dir)
 	}
 	if st.Uid != uint32(os.Getuid()) {
-		return "", fmt.Errorf("softnet sock dir %s is owned by uid %d, not the current user (uid %d) — refusing to bind the control socket inside it", dir, st.Uid, os.Getuid())
+		return fmt.Errorf("softnet sock dir %s is owned by uid %d, not the current user (uid %d) — refusing to bind the control socket inside it", dir, st.Uid, os.Getuid())
 	}
 	if fi.Mode().Perm() != 0700 {
-		return "", fmt.Errorf("softnet sock dir %s has mode %o, want 0700 — refusing to bind the control socket inside it", dir, fi.Mode().Perm())
+		return fmt.Errorf("softnet sock dir %s has mode %o, want 0700 — refusing to bind the control socket inside it", dir, fi.Mode().Perm())
 	}
-	return dir, nil
+	return nil
 }
 
 // SoftnetControlSock returns the path to the Unix domain socket the
@@ -63,15 +62,12 @@ func ensureSoftnetSockDir() (string, error) {
 // the project name itself, both to keep it short regardless of project
 // name length and to disambiguate concurrent daemon instances (e.g. a
 // real installed daemon and an isolated e2e daemon) that might otherwise
-// pick the same project name. Ensures the parent directory exists as a
-// 0700, current-uid-owned dir as a best effort (logged, not returned —
-// keeping this a pure function of (RuntimeDir, projectID) so discoverSoftnet
-// can recompute the same path); callers that need to observe an ownership
-// or MkdirAll failure should call ensureSoftnetSockDir themselves.
+// pick the same project name. Pure: does not touch the filesystem, so
+// discoverSoftnet can recompute the same path on daemon restart without
+// re-running the ownership/mode check — /vm/start is the one caller that
+// creates and validates softnetSockDir, via ensureSoftnetSockDir, before
+// spawning softnet.
 func SoftnetControlSock(projectID string) string {
-	if _, err := ensureSoftnetSockDir(); err != nil {
-		fmt.Fprintf(os.Stderr, "softnet: %v\n", err)
-	}
 	sum := sha256.Sum256([]byte(RuntimeDir() + "\x00" + projectID))
 	return filepath.Join(softnetSockDir(), hex.EncodeToString(sum[:])[:20]+".sock")
 }

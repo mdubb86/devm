@@ -56,17 +56,15 @@ func TestSoftnetSockDir_PerUser(t *testing.T) {
 	}
 }
 
+// Uses a t.TempDir()-based path, never softnetSockDir() itself: that real
+// path is per-uid but shared process-wide (a live daemon running as this
+// same uid may have sockets bound under it right now), so a test that
+// creates or removes it could yank the rug out from under a real daemon.
 func TestEnsureSoftnetSockDir_CreatesOwnedDir(t *testing.T) {
-	dir := softnetSockDir()
-	defer os.RemoveAll(dir)
-	os.RemoveAll(dir) // start clean regardless of prior test/process state
+	dir := filepath.Join(t.TempDir(), "sockdir")
 
-	got, err := ensureSoftnetSockDir()
-	if err != nil {
+	if err := ensureSoftnetSockDir(dir); err != nil {
 		t.Fatal(err)
-	}
-	if got != dir {
-		t.Fatalf("got %q, want %q", got, dir)
 	}
 	fi, err := os.Stat(dir)
 	if err != nil {
@@ -84,21 +82,22 @@ func TestEnsureSoftnetSockDir_CreatesOwnedDir(t *testing.T) {
 	}
 }
 
-// A pre-existing dir at the well-known path with loose permissions (e.g.
-// planted by another local process before the daemon starts) must be
-// rejected rather than silently reused — MkdirAll on an existing dir is a
-// no-op and won't fix its mode, so ensureSoftnetSockDir must catch this
-// itself.
+// A pre-existing dir with loose permissions (e.g. planted by another local
+// process before the daemon starts) must be rejected rather than silently
+// reused — MkdirAll on an existing dir is a no-op and won't fix its mode,
+// so ensureSoftnetSockDir must catch this itself. This is also the
+// security property /vm/start now depends on directly: vm.go calls
+// ensureSoftnetSockDir(softnetSockDir()) before spawning softnet, and a
+// non-nil error here fails the request with 500 rather than binding the
+// control socket into an attacker-controlled directory.
 func TestEnsureSoftnetSockDir_RejectsLoosePermissions(t *testing.T) {
-	dir := softnetSockDir()
-	defer os.RemoveAll(dir)
-	os.RemoveAll(dir)
+	dir := filepath.Join(t.TempDir(), "sockdir")
 
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := ensureSoftnetSockDir(); err == nil {
+	if err := ensureSoftnetSockDir(dir); err == nil {
 		t.Fatal("expected an error for a pre-existing world-writable dir, got nil")
 	}
 }
