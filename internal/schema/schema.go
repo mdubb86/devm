@@ -410,7 +410,7 @@ func (p Project) Validate() error {
 func CheckUnknownKeys(data []byte) error {
 	knownTop := []string{
 		"project", "base_image", "docker", "network", "env",
-		"services", "install", "startup", "mounts", "path", "packages", "disk",
+		"services", "install", "startup", "scripts", "mounts", "path", "packages", "disk",
 	}
 	knownProject := []string{
 		"name", "proxy",
@@ -580,6 +580,19 @@ type Config struct {
 	// first boot) and services (every boot, enforced egress).
 	Startup []string `yaml:"startup,omitempty"`
 
+	// Scripts is the project's library of named multi-command shell
+	// snippets. A script's key must match [a-z][a-z0-9-]* (kebab-case,
+	// starts with a letter). Its value is an ordered list of shell
+	// commands. When referenced from install: or startup: as a string
+	// beginning with `>NAME`, the engine joins the commands with " && "
+	// and runs them under one `bash -eo pipefail -c` (install:) or
+	// emits them inline into startup.sh (startup: shares a shell
+	// already). Variables set in step N are visible in step N+1.
+	//
+	// V1 scope: refs only from install: and startup:. No parameters,
+	// no script-to-script calls.
+	Scripts map[string][]string `yaml:"scripts,omitempty"`
+
 	// Mounts are additional host paths shared into the VM at the same
 	// path inside the VM ("mirrored path" mode — same host and guest
 	// path). Each entry is a string of the form `HOST_PATH[:ro]`.
@@ -744,6 +757,46 @@ func (c Config) Validate() error {
 	for i, sc := range c.Startup {
 		if sc == "" {
 			return fmt.Errorf("startup[%d] must not be empty", i)
+		}
+	}
+	// Scripts: validate each script's name and body before checking refs.
+	{
+		names := make([]string, 0, len(c.Scripts))
+		for name := range c.Scripts {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if err := ValidateScriptName(name); err != nil {
+				return fmt.Errorf("scripts: %w", err)
+			}
+			for i, cmd := range c.Scripts[name] {
+				if cmd == "" {
+					return fmt.Errorf("scripts[%s][%d] must not be empty", name, i)
+				}
+			}
+		}
+		// Install: refs — check name resolves.
+		for i, entry := range c.Install {
+			if refName, ok := ParseScriptRef(entry); ok {
+				if err := ValidateScriptName(refName); err != nil {
+					return fmt.Errorf("install[%d]: %w", i, err)
+				}
+				if _, exists := c.Scripts[refName]; !exists {
+					return fmt.Errorf("install[%d]: reference to undefined script %q", i, refName)
+				}
+			}
+		}
+		// Startup: refs — same check.
+		for i, entry := range c.Startup {
+			if refName, ok := ParseScriptRef(entry); ok {
+				if err := ValidateScriptName(refName); err != nil {
+					return fmt.Errorf("startup[%d]: %w", i, err)
+				}
+				if _, exists := c.Scripts[refName]; !exists {
+					return fmt.Errorf("startup[%d]: reference to undefined script %q", i, refName)
+				}
+			}
 		}
 	}
 	for i, entry := range c.Mounts {

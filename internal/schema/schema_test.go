@@ -913,3 +913,110 @@ func TestDiskUnsetHasNoOverride(t *testing.T) {
 func TestCheckUnknownKeysAllowsDisk(t *testing.T) {
 	require.NoError(t, CheckUnknownKeys([]byte("disk: 64G\nproject:\n  name: x\n")))
 }
+
+// ---------- scripts: field tests ----------
+
+func TestValidate_Scripts_Valid(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Scripts: map[string][]string{
+			"install-supabase": {"echo one", "echo two"},
+		},
+		Install: []string{">install-supabase"},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidate_Scripts_InvalidName(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Scripts: map[string][]string{"Bad Name": {"echo one"}},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Bad Name")
+}
+
+func TestValidate_Scripts_EmptyCommand(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Scripts: map[string][]string{"foo": {"echo one", ""}},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scripts[foo][1]")
+}
+
+func TestValidate_Scripts_UndefinedRefInInstall(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Install: []string{">install-supabase"},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "install[0]")
+	assert.Contains(t, err.Error(), "install-supabase")
+}
+
+func TestValidate_Scripts_UndefinedRefInStartup(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Startup: []string{">boot"},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "startup[0]")
+	assert.Contains(t, err.Error(), "boot")
+}
+
+func TestValidate_Scripts_RefWithInvalidName(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Install: []string{"> Bad Name"},
+		Scripts: map[string][]string{"Bad Name": {"echo one"}},
+	}
+	// The invalid name error fires first (from the map key check).
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Bad Name")
+}
+
+func TestValidate_Scripts_UnusedScript_NoError(t *testing.T) {
+	// Unused is a warning-level condition; Validate does not error.
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Scripts: map[string][]string{"never-called": {"echo hi"}},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestScripts_YAMLRoundTrip(t *testing.T) {
+	in := []byte(`
+project:
+  name: p
+scripts:
+  install-supabase:
+    - echo one
+    - echo two
+install:
+  - ">install-supabase"
+`)
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal(in, &cfg))
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, []string{"echo one", "echo two"}, cfg.Scripts["install-supabase"])
+	assert.Equal(t, []string{">install-supabase"}, cfg.Install)
+}
+
+func TestScripts_UnknownTopLevelKey_Rejected(t *testing.T) {
+	in := []byte(`
+project:
+  name: p
+scriptz:
+  install-supabase:
+    - echo one
+`)
+	err := CheckUnknownKeys(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scriptz")
+}
