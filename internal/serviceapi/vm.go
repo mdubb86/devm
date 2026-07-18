@@ -155,12 +155,41 @@ func gracefulStopVM(ctx context.Context, tr vmStopper, name string) {
 	_ = tr.Exec(execCtx, name, []string{"sudo", "systemctl", "poweroff"})
 	execCancel()
 
+	// Poll for the guest actually going down. Under --net-softnet, `tart
+	// list`'s Running flag never reflects the in-guest poweroff (the tart
+	// process itself outlives the guest's network state — the same
+	// tart/softnet process-lifecycle gap this repo works around
+	// elsewhere), so a List-only poll would spin the full
+	// shutdownGraceTimeout on every stop. Instead probe guest-agent
+	// reachability directly: `tart exec` rides the vsock guest-agent
+	// channel, which is independent of the softnet NIC, so once the guest
+	// actually halts the agent goes away and Exec starts failing. Require
+	// 2 consecutive failures before declaring the guest down so a single
+	// transient agent hiccup can't force-stop a still-live guest. Still
+	// check List first on every tick and return immediately on a reported
+	// stop — the fast path if tart list's Running flag ever does track
+	// guest state (e.g. non-softnet NICs).
+	const requiredConsecutiveFailures = 2
+	consecutiveExecFailures := 0
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		if vms, err := tr.List(ctx); err == nil && !vmRunning(vms, name) {
 			return
 		}
+
+		probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
+		result := tr.Exec(probeCtx, name, []string{"true"})
+		probeCancel()
+		if result.ExitCode != 0 {
+			consecutiveExecFailures++
+			if consecutiveExecFailures >= requiredConsecutiveFailures {
+				return
+			}
+		} else {
+			consecutiveExecFailures = 0
+		}
+
 		select {
 		case <-ctx.Done():
 			return

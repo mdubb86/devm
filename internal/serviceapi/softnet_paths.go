@@ -6,16 +6,53 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"syscall"
 )
 
-// softnetSockDir is a short, fixed location for control sockets — NOT
+// softnetSockDir is a short, per-user location for control sockets — NOT
 // nested under RuntimeDir(). AF_UNIX sun_path is capped at 104 bytes on
 // Darwin (103 usable + NUL), and RuntimeDir() alone can already approach
 // that under the e2e harness (`mktemp -d -t devm-e2e-runtime.XXXX` lands
 // deep under macOS's per-user $TMPDIR). Rooting at /tmp instead of
 // os.TempDir() sidesteps $TMPDIR entirely, since $TMPDIR is exactly the
-// long path that overflows the limit.
-const softnetSockDir = "/tmp/devm-softnet"
+// long path that overflows the limit. The uid suffix keeps it per-user:
+// /tmp is world-writable, so a fixed shared name would let another local
+// user pre-create the dir (MkdirAll on an existing dir is a no-op and
+// won't fix its mode/owner) before the daemon runs, and the daemon would
+// then bind its control socket — the channel carrying LOCKED/OPEN/ENFORCED
+// egress-policy commands — inside a directory it doesn't control.
+func softnetSockDir() string {
+	return "/tmp/devm-softnet-" + strconv.Itoa(os.Getuid())
+}
+
+// ensureSoftnetSockDir creates (or verifies) softnetSockDir as a
+// 0700 directory owned by the current user, refusing to use it otherwise.
+// Because the dir name embeds the uid, a hostile pre-created directory
+// would have to be planted by the same uid that's about to use it — but
+// verify ownership and mode anyway rather than trusting MkdirAll's no-op
+// silence on a pre-existing directory.
+func ensureSoftnetSockDir() (string, error) {
+	dir := softnetSockDir()
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("create softnet sock dir: %w", err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return "", fmt.Errorf("stat softnet sock dir: %w", err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", fmt.Errorf("softnet sock dir %s: cannot verify ownership on this platform", dir)
+	}
+	if st.Uid != uint32(os.Getuid()) {
+		return "", fmt.Errorf("softnet sock dir %s is owned by uid %d, not the current user (uid %d) — refusing to bind the control socket inside it", dir, st.Uid, os.Getuid())
+	}
+	if fi.Mode().Perm() != 0700 {
+		return "", fmt.Errorf("softnet sock dir %s has mode %o, want 0700 — refusing to bind the control socket inside it", dir, fi.Mode().Perm())
+	}
+	return dir, nil
+}
 
 // SoftnetControlSock returns the path to the Unix domain socket the
 // daemon uses to reach the softnet control channel for projectID.
@@ -26,13 +63,17 @@ const softnetSockDir = "/tmp/devm-softnet"
 // the project name itself, both to keep it short regardless of project
 // name length and to disambiguate concurrent daemon instances (e.g. a
 // real installed daemon and an isolated e2e daemon) that might otherwise
-// pick the same project name. Ensures the parent directory exists (mode
-// 0700) as a best effort; callers that need to observe a MkdirAll
-// failure should stat the returned path themselves.
+// pick the same project name. Ensures the parent directory exists as a
+// 0700, current-uid-owned dir as a best effort (logged, not returned —
+// keeping this a pure function of (RuntimeDir, projectID) so discoverSoftnet
+// can recompute the same path); callers that need to observe an ownership
+// or MkdirAll failure should call ensureSoftnetSockDir themselves.
 func SoftnetControlSock(projectID string) string {
-	_ = os.MkdirAll(softnetSockDir, 0700)
+	if _, err := ensureSoftnetSockDir(); err != nil {
+		fmt.Fprintf(os.Stderr, "softnet: %v\n", err)
+	}
 	sum := sha256.Sum256([]byte(RuntimeDir() + "\x00" + projectID))
-	return filepath.Join(softnetSockDir, hex.EncodeToString(sum[:])[:20]+".sock")
+	return filepath.Join(softnetSockDir(), hex.EncodeToString(sum[:])[:20]+".sock")
 }
 
 // ensureSoftnetSymlink materializes <runtimeDir>/softnet-bin/softnet

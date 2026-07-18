@@ -11,14 +11,19 @@ import (
 )
 
 // fakeStopper is a vmStopper that records the poweroff exec and reports the
-// VM as running until its List has been polled stopAfter times.
+// VM as running until its List has been polled stopAfter times. If
+// execFailFrom is > 0, Exec calls from that call number onward (1-indexed,
+// counting the initial poweroff exec) return a non-zero ExitCode — standing
+// in for the guest-agent going unreachable once the guest actually halts.
 type fakeStopper struct {
-	mu        sync.Mutex
-	execName  string
-	execArgv  []string
-	listCalls int
-	stopAfter int
-	name      string
+	mu           sync.Mutex
+	execName     string
+	execArgv     []string
+	execCalls    int
+	execFailFrom int
+	listCalls    int
+	stopAfter    int
+	name         string
 }
 
 func (f *fakeStopper) Exec(_ context.Context, name string, argv []string) tart.ExecResult {
@@ -26,6 +31,10 @@ func (f *fakeStopper) Exec(_ context.Context, name string, argv []string) tart.E
 	defer f.mu.Unlock()
 	f.execName = name
 	f.execArgv = argv
+	f.execCalls++
+	if f.execFailFrom > 0 && f.execCalls >= f.execFailFrom {
+		return tart.ExecResult{ExitCode: -1, Stderr: "connection refused: guest agent unreachable"}
+	}
 	return tart.ExecResult{}
 }
 
@@ -62,4 +71,38 @@ func TestGracefulStopVM_ReturnsOnTimeoutWhenGuestNeverStops(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("gracefulStopVM did not return after its grace window; would block /vm/stop")
 	}
+}
+
+// Under --net-softnet, tart list's Running flag never reflects the guest
+// poweroff, so gracefulStopVM must detect the guest going down via
+// guest-agent (Exec) reachability instead — and return promptly, not after
+// the full 45s shutdownGraceTimeout. This models that: List always reports
+// running (the softnet gap), but Exec starts failing once the guest halts.
+func TestGracefulStopVM_DetectsStopViaExecUnreachable_UnderSoftnet(t *testing.T) {
+	f := &fakeStopper{
+		name:         "proj",
+		stopAfter:    1 << 30, // tart list never reports stopped (the softnet gap)
+		execFailFrom: 3,       // call 1 = poweroff; probes fail from call 3 onward
+	}
+
+	start := time.Now()
+	// Generous ceiling well under the 45s cap — if this test needs to wait
+	// anywhere near that long, the guest-agent-reachability detection isn't
+	// working and gracefulStopVM fell back to spinning on List.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() { gracefulStopVM(ctx, f, "proj"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("gracefulStopVM did not return once the guest agent became unreachable")
+	}
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, 5*time.Second,
+		"must return promptly on guest-agent unreachability, not loop toward the 45s cap")
+	assert.GreaterOrEqual(t, f.execCalls, 4,
+		"must require 2 consecutive Exec failures (poweroff + at least 1 success + 2 failures)")
 }
