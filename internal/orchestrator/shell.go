@@ -98,6 +98,14 @@ type VMAdminClient interface {
 	// adopted after a raw `tart run` may have no live iron-proxy even
 	// though the VM process itself is up.
 	ApplyIronProxy(ctx context.Context, req serviceapi.VMApplyIronProxyRequest) (serviceapi.VMApplyIronProxyResponse, error)
+	// OpenEgress flips the project's softnet control socket to OPEN.
+	// softnet boots LOCKED, so provisionAndAttach calls this immediately
+	// before running the composed provisioning script.
+	OpenEgress(ctx context.Context, name string) error
+	// ApplyEgressEnforcement flips the project's softnet control socket
+	// to ENFORCED. provisionAndAttach calls this immediately after the
+	// composed provisioning script succeeds.
+	ApplyEgressEnforcement(ctx context.Context, name string) error
 }
 
 // DefaultShellDeps returns deps wired for production.
@@ -301,6 +309,15 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	}
 	debuglog.Logf("shell", "provisioning %s", vmName)
 	reporter.Step("provisioning", false)
+
+	// softnet boots LOCKED. Flip it OPEN before the single composed exec
+	// runs, so apt/install:/templates/startup: have egress; the ENFORCED
+	// flip below (after prov.Run succeeds) locks it back down to the real
+	// allowlist before the shell attaches.
+	if err := d.ServiceAPIClient.OpenEgress(ctx, vmName); err != nil {
+		return d.teardownOnFail(ctx, cfg, vmName, err, "open egress")
+	}
+
 	// Provisioning output is DIAGNOSTIC — stage names, package install
 	// noise, etc. It belongs on stderr so `devm exec pwd` / `devm shell
 	// -- <cmd>` produce clean stdout that scripts can pipe. Failure details
@@ -322,6 +339,12 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		return d.teardownOnFail(ctx, cfg, vmName, err, "provision")
 	}
 	debuglog.Logf("shell", "provisioning done: %s", vmName)
+
+	// Provisioning succeeded — lock softnet back down to the project's real
+	// allowlist before the shell attaches.
+	if err := d.ServiceAPIClient.ApplyEgressEnforcement(ctx, vmName); err != nil {
+		return d.teardownOnFail(ctx, cfg, vmName, err, "apply egress enforcement")
+	}
 
 	// Write initial snapshot so that subsequent `devm reconcile` calls have
 	// a baseline to diff against. Without this, ReadSnapshot returns "" which

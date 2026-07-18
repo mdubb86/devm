@@ -128,6 +128,49 @@ func (c *Client) ApplyIronProxy(ctx context.Context, req VMApplyIronProxyRequest
 	return resp, nil
 }
 
+// OpenEgress calls POST /vm/open-egress, flipping the project's softnet
+// control socket to OPEN. The orchestrator calls this immediately before
+// running the composed provisioning script — softnet boots LOCKED, so
+// without this call apt/install:/templates/startup: would run with no
+// egress at all.
+func (c *Client) OpenEgress(ctx context.Context, name string) error {
+	body, err := json.Marshal(VMApplyEgressEnforcementRequest{Name: name})
+	if err != nil {
+		return err
+	}
+	r, err := c.post(ctx, "/vm/open-egress", body)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusNoContent {
+		msg, _ := io.ReadAll(r.Body)
+		return fmt.Errorf("vm/open-egress: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
+// ApplyEgressEnforcement calls POST /vm/apply-egress-enforcement, flipping
+// the project's softnet control socket to ENFORCED. The orchestrator calls
+// this immediately after the composed provisioning script succeeds, so
+// egress is locked down to the real allowlist before the shell attaches.
+func (c *Client) ApplyEgressEnforcement(ctx context.Context, name string) error {
+	body, err := json.Marshal(VMApplyEgressEnforcementRequest{Name: name})
+	if err != nil {
+		return err
+	}
+	r, err := c.post(ctx, "/vm/apply-egress-enforcement", body)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusNoContent {
+		msg, _ := io.ReadAll(r.Body)
+		return fmt.Errorf("vm/apply-egress-enforcement: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
 // Denials queries the daemon for iron-proxy allow-list rejects observed
 // this iron-proxy lifetime, per host. Sorted by count desc. Empty slice
 // (never nil) if the project hasn't triggered any denials yet, iron-proxy

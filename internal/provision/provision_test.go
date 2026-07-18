@@ -212,6 +212,10 @@ func TestRun_RestartOmitsFirstBootWork(t *testing.T) {
 	// Enforcement + target still run every boot.
 	assert.Contains(t, script, "EnforcedNft-applied-marker")
 	assert.Contains(t, script, "systemctl start devm.target")
+	// The guest-nft flush is unconditional — a restart with no first-boot
+	// or open-stage work still needs the base image's policy-drop lock
+	// cleared, or it would drop softnet's own egress.
+	assert.Contains(t, script, "sudo nft flush ruleset")
 }
 
 func TestRun_EnforcedNftBakedIntoScript(t *testing.T) {
@@ -323,17 +327,4 @@ func TestRun_TemplatesTriggerDispatcher(t *testing.T) {
 	p.WorkspaceVMPath = repoRoot
 	require.NoError(t, p.Run(context.Background(), io.Discard, nil))
 	assert.Contains(t, scriptOf(t, f), "install-templates.sh")
-}
-
-func TestRun_SvcIngressForDirectDockerPorts(t *testing.T) {
-	f := &fakeStreamTart{}
-	p := baseProvisioner(f, schema.Config{
-		Project: schema.Project{Name: "p"},
-		Docker:  true,
-		Services: map[string]schema.Service{
-			"api": {Exec: []string{"/bin/true"}, Direct: true, Port: 54321},
-		},
-	})
-	require.NoError(t, p.Run(context.Background(), io.Discard, nil))
-	assert.Contains(t, scriptOf(t, f), "ct original proto-dst 54321 accept")
 }

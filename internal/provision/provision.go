@@ -19,7 +19,6 @@ import (
 
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
-	"github.com/mdubb86/devm/internal/nftscript"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -31,13 +30,6 @@ type tartExecer interface {
 	ExecWithRetry(ctx context.Context, name string, argv []string) tart.ExecResult
 	ExecStream(ctx context.Context, name string, stdin io.Reader, argv []string, onLine func(stream, line string)) (int, error)
 }
-
-// openEgressRuleset clears the base boot-lock nftables ruleset to open
-// egress for the provisioning / install / startup window. Flushing the
-// ruleset drops the skeleton's policy-drop; the enforce phase re-installs
-// the real allowlist before access is granted. Centralized here so no
-// caller has to know the magic string.
-const openEgressRuleset = "flush ruleset"
 
 // Provisioner ships the composed provisioning script to a Tart VM.
 type Provisioner struct {
@@ -188,9 +180,7 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		InstallTemplates:   p.hasTemplates(),
 		Startup:            p.Cfg.Startup,
 		Services:           p.serviceUnits(),
-		SvcIngressPorts:    nftscript.DirectPorts(p.Cfg),
 		Masks:              p.maskMounts(),
-		OpenNft:            openEgressRuleset,
 		EnforcedNft:        p.EnforcedNft,
 		DnsmasqScript:      p.DnsmasqScript,
 		TimesyncdScript:    p.TimesyncdScript,

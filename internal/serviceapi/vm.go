@@ -470,6 +470,44 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		})
 	})
 
+	// /vm/open-egress flips a project's softnet control socket to OPEN —
+	// unrestricted egress for the provisioning window (apt, install:,
+	// templates, startup:) before the enforced allowlist is in place.
+	// softnet boots LOCKED, so cold-start provisioning would otherwise run
+	// with no egress at all.
+	s.Register("/vm/open-egress", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMApplyEgressEnforcementRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		sock := softnetState.get(req.Name)
+		if sock == "" {
+			http.Error(w, "softnet control socket missing — was /vm/start called for this project?",
+				http.StatusPreconditionFailed)
+			return
+		}
+
+		if err := newSoftnetClient(sock).setPolicy("OPEN", nil); err != nil {
+			http.Error(w, fmt.Sprintf("flip softnet open: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	// /vm/apply-egress-enforcement flips a project's softnet control
 	// socket to ENFORCED, pointing egress at iron-proxy's loopback
 	// endpoint and the daemon's SNTP responder. This is the sole egress
@@ -500,6 +538,13 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 
+		sock := softnetState.get(req.Name)
+		if sock == "" {
+			http.Error(w, "softnet control socket missing — was /vm/start called for this project?",
+				http.StatusPreconditionFailed)
+			return
+		}
+
 		// timesyncd still needs to run in-guest: softnet's UDP forwarder
 		// catches outbound udp:123 regardless of destination, but the
 		// guest itself must be configured to send NTP for that to matter.
@@ -510,7 +555,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 
-		if err := sendSoftnetEnforced(softnetState.get(req.Name), info, ntpPort); err != nil {
+		if err := sendSoftnetEnforced(sock, info, ntpPort); err != nil {
 			http.Error(w, fmt.Sprintf("flip softnet enforced: %v", err), http.StatusInternalServerError)
 			return
 		}

@@ -1,8 +1,10 @@
 package serviceapi
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -388,6 +390,107 @@ func TestClientEnforcementConfig_MissingProjectState(t *testing.T) {
 	_, err := c.EnforcementConfig(ctx, "nonexistent-project")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "enforcement-config")
+}
+
+// TestClientOpenEgress_SendsPolicyOpen verifies POST /vm/open-egress flips
+// the project's softnet control socket to OPEN with no iron_proxy endpoint
+// — the provisioning window's egress isn't routed through iron-proxy at
+// all, just unblocked.
+func TestClientOpenEgress_SendsPolicyOpen(t *testing.T) {
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	tr := tart.New()
+	tr.Path = "false"
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	sockDir, err := os.MkdirTemp("", "softnet-open")
+	require.NoError(t, err)
+	defer os.RemoveAll(sockDir)
+	sock := filepath.Join(sockDir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	defer ln.Close()
+
+	got := make(chan string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		line, _ := r.ReadString('\n')
+		got <- line
+	}()
+
+	softnetState.put("proj-open", sock)
+	t.Cleanup(func() { softnetState.del("proj-open") })
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	require.NoError(t, c.OpenEgress(ctx, "proj-open"))
+
+	line := <-got
+	assert.Contains(t, line, `"op":"setPolicy"`)
+	assert.Contains(t, line, `"policy":"OPEN"`)
+	assert.NotContains(t, line, "iron_proxy", "OPEN carries no iron-proxy endpoint")
+}
+
+// TestClientOpenEgress_MissingSoftnetState verifies /vm/open-egress 412s
+// when the softnet control socket was never registered for this project
+// (i.e. /vm/start was never called) — folds the T6-review finding that
+// softnetState.get was previously unchecked.
+func TestClientOpenEgress_MissingSoftnetState(t *testing.T) {
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	tr := tart.New()
+	tr.Path = "false"
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := c.OpenEgress(ctx, "nonexistent-project")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "vm/open-egress")
+	assert.Contains(t, err.Error(), "412")
+	assert.Contains(t, err.Error(), "softnet control socket missing")
+}
+
+// TestClientApplyEgressEnforcement_MissingSoftnetState verifies
+// /vm/apply-egress-enforcement 412s when softnetState has no entry for the
+// project, even though ironProxyState does — folds the T6-review finding
+// that softnetState.get was previously unchecked on this handler too.
+func TestClientApplyEgressEnforcement_MissingSoftnetState(t *testing.T) {
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	tr := tart.New()
+	tr.Path = "false"
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	ironProxyState.put("proj-enforce-nosock", ironProxyInfo{
+		MacHost: "192.168.64.1", HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
+	})
+	t.Cleanup(func() { ironProxyState.del("proj-enforce-nosock") })
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := c.ApplyEgressEnforcement(ctx, "proj-enforce-nosock")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "vm/apply-egress-enforcement")
+	assert.Contains(t, err.Error(), "412")
+	assert.Contains(t, err.Error(), "softnet control socket missing")
 }
 
 // TestClientApplyIronProxy_ReadsResponse verifies Client.ApplyIronProxy

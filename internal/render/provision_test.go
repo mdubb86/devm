@@ -17,11 +17,9 @@ func TestRenderProvisionScript_Structure(t *testing.T) {
 		InstallTemplates: true,
 		Startup:          []string{"echo boot"},
 		Services:         []string{"web"},
-		SvcIngressPorts:  []int{54321},
 		Masks: []MaskMount{
 			{HostPath: "/var/devm/masks/p/web/data", MountTarget: "/Users/x/p/data", Owner: "devm"},
 		},
-		OpenNft:         "flush ruleset", // allow-all for the open window
 		EnforcedNft:     "table inet devm_filter { policy drop }",
 		DnsmasqScript:   "sudo tee /etc/dnsmasq.d/devm.conf > /dev/null <<'DEVM_DNSMASQ'\nserver=192.168.64.1#53101\nDEVM_DNSMASQ\n",
 		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nNTP=192.0.2.1\nDEVM_TIMESYNCD\n",
@@ -48,13 +46,8 @@ func TestRenderProvisionScript_Structure(t *testing.T) {
 	// services start BEFORE the target (access) — broken service must be loud
 	assert.Less(t, strings.Index(s, "systemctl start web.service"),
 		strings.Index(s, "systemctl start devm.target"))
-	// enforced nft is applied BEFORE svc_ingress, which is BEFORE masks/services
-	assert.Less(t, strings.Index(s, "EnforcedNft-applied-marker"),
-		strings.Index(s, "svc_ingress"))
 	assert.Less(t, strings.Index(s, "::devm:stage:enforce::"),
 		strings.Index(s, "::devm:stage:services::"))
-	// svc_ingress opens the declared direct port
-	assert.Contains(t, s, "ct original proto-dst 54321 accept")
 	// mask overlay: chown BEFORE the bind mount, mounted at the workspace path
 	chownIdx := strings.Index(s, "chown devm '/var/devm/masks/p/web/data'")
 	mountIdx := strings.Index(s, "mount --bind '/var/devm/masks/p/web/data' '/Users/x/p/data'")
@@ -100,7 +93,7 @@ func TestRenderProvisionScript_Structure(t *testing.T) {
 
 func TestRenderProvisionScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
 	// restart, empty startup, no packages/install/docker/templates → no
-	// flush-to-allow-all and no first-boot marker.
+	// open-stage work and no first-boot marker.
 	s := string(RenderProvisionScript(ProvisionScriptInput{
 		FirstBoot:       false,
 		EnforcedNft:     "table inet devm_filter { policy drop }",
@@ -109,9 +102,12 @@ func TestRenderProvisionScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
 	}))
 	assert.NotContains(t, s, "::devm:stage:startup::")
 	assert.NotContains(t, s, "::devm:stage:open::")
-	assert.NotContains(t, s, "OpenNft") // the open block is omitted
 	// not first boot → no completion-marker write
 	assert.NotContains(t, s, "touch /var/lib/devm/provisioned")
+	// the guest-nft flush is UNCONDITIONAL — the base image's policy-drop
+	// lock must be cleared every boot even when no open-stage work runs,
+	// or a leftover policy-drop would drop softnet's own egress.
+	assert.Contains(t, s, "sudo nft flush ruleset")
 	// enforcement + target still happen every boot
 	assert.Contains(t, s, "EnforcedNft-applied-marker")
 	assert.Contains(t, s, "systemctl start devm.target")
@@ -119,6 +115,23 @@ func TestRenderProvisionScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
 	// open window runs — DNS/NTP must work on a warm restart as well.
 	assert.Contains(t, s, "/etc/dnsmasq.d/devm.conf")
 	assert.Contains(t, s, "/etc/systemd/timesyncd.conf.d/devm.conf")
+}
+
+// TestRenderProvisionScript_NftFlushUnconditionalAndBeforeOpenStage pins
+// that the guest-nft flush runs BEFORE the open-stage work (so any install/
+// startup/template steps that need egress see it already cleared) and
+// happens regardless of hasOpenWork() — the flush and the open-stage work
+// are independent now.
+func TestRenderProvisionScript_NftFlushUnconditionalAndBeforeOpenStage(t *testing.T) {
+	s := string(RenderProvisionScript(ProvisionScriptInput{
+		FirstBoot:        true,
+		InstallTemplates: true,
+		EnforcedNft:      "table inet devm_filter { policy drop }",
+	}))
+	flushIdx := strings.Index(s, "sudo nft flush ruleset")
+	require.Greater(t, flushIdx, 0, "flush must be present")
+	assert.Less(t, flushIdx, strings.Index(s, "::devm:stage:open::"),
+		"flush must run before the open-stage work begins")
 }
 
 // TestRenderProvisionScript_ServiceHealthPoll_OneShotAware pins that the
@@ -152,7 +165,6 @@ func TestRenderProvisionScript_StepTimeoutOverride(t *testing.T) {
 		FirstBoot:          true,
 		Install:            []string{"echo hi"},
 		Startup:            []string{"echo boot"},
-		OpenNft:            "flush ruleset",
 		EnforcedNft:        "table inet devm_filter { policy drop }",
 		StepTimeoutSeconds: 1,
 	}))
@@ -167,7 +179,6 @@ func TestRenderProvisionScript_RestartWithTemplatesOpensWindow(t *testing.T) {
 	s := string(RenderProvisionScript(ProvisionScriptInput{
 		FirstBoot:        false,
 		InstallTemplates: true,
-		OpenNft:          "flush ruleset",
 		EnforcedNft:      "table inet devm_filter { policy drop }",
 	}))
 	assert.Contains(t, s, "::devm:stage:open::")

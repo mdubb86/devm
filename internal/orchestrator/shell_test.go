@@ -35,6 +35,19 @@ type fakeVMAdmin struct {
 	applyIronProxyResp    serviceapi.VMApplyIronProxyResponse
 	applyIronProxyRespSet bool // distinguishes an explicit all-false resp from "unset"
 	applyIronProxyErr     error
+
+	openEgressCalled             int
+	openEgressErr                error
+	applyEgressEnforcementCalled int
+	applyEgressEnforcementErr    error
+	// callOrder records the relative order OpenEgress/ApplyEgressEnforcement
+	// were invoked in, for asserting they bracket prov.Run's single exec —
+	// entries append "open-egress" / "apply-egress-enforcement".
+	callOrder []string
+	// logPath, when set, also appends the same markers into a shared file
+	// that the fake tart binary writes its own invocations into, so a test
+	// can read one ordered timeline across both fakes.
+	logPath string
 }
 
 func (f *fakeVMAdmin) VMStatus(_ context.Context, _ string) (serviceapi.VMStatusResponse, error) {
@@ -80,6 +93,39 @@ func (f *fakeVMAdmin) ApplyIronProxy(_ context.Context, req serviceapi.VMApplyIr
 	// adopt-in-place tests that don't care about this call still
 	// pass through provisionAndAttach.
 	return serviceapi.VMApplyIronProxyResponse{Applied: true, VMRunning: true}, nil
+}
+
+func (f *fakeVMAdmin) OpenEgress(_ context.Context, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.openEgressCalled++
+	f.callOrder = append(f.callOrder, "open-egress")
+	f.appendLog("OPEN-EGRESS")
+	return f.openEgressErr
+}
+
+func (f *fakeVMAdmin) ApplyEgressEnforcement(_ context.Context, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.applyEgressEnforcementCalled++
+	f.callOrder = append(f.callOrder, "apply-egress-enforcement")
+	f.appendLog("APPLY-EGRESS-ENFORCEMENT")
+	return f.applyEgressEnforcementErr
+}
+
+// appendLog writes a marker line into f.logPath, if set, interleaving with
+// the fake tart binary's own invocation log so a test can read one ordered
+// timeline across both fakes. Caller must hold f.mu.
+func (f *fakeVMAdmin) appendLog(marker string) {
+	if f.logPath == "" {
+		return
+	}
+	fh, err := os.OpenFile(f.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer fh.Close()
+	fmt.Fprintln(fh, marker)
 }
 
 // stubSpawner records Start calls and hands out scripted SpawnedCmds
@@ -283,6 +329,71 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got, "cold start must seed the daemon state snapshot")
 	assert.Equal(t, minimalCfg().Project.Name, got.Cfg.Project.Name)
+}
+
+// TestRunShellColdPath_FlipsEgressAroundProvision verifies the daemon-side
+// softnet OPEN/ENFORCED flips bracket the single composed provisioning
+// exec: OpenEgress before, ApplyEgressEnforcement after. softnet boots
+// LOCKED, so without the OPEN flip apt/install:/startup: would run with no
+// egress at all; without the ENFORCED flip afterward the VM would stay
+// wide open once the shell attaches.
+//
+// Both fakeVMAdmin (OpenEgress/ApplyEgressEnforcement) and the fake tart
+// binary (the provisioning ExecStream's `bash -c`) append markers to the
+// same log file, giving one ordered timeline across both fakes.
+func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
+	repoRoot := t.TempDir()
+	logPath := filepath.Join(repoRoot, "order.log")
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+		logPath:    logPath,
+	}
+
+	tartBin := fakeTartBinWithLog(t, repoRoot, logPath)
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	writeFakeCA(t, repoRoot)
+
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	admin.mu.Lock()
+	assert.Equal(t, 1, admin.openEgressCalled, "OpenEgress must be called exactly once")
+	assert.Equal(t, 1, admin.applyEgressEnforcementCalled, "ApplyEgressEnforcement must be called exactly once")
+	assert.Equal(t, []string{"open-egress", "apply-egress-enforcement"}, admin.callOrder)
+	admin.mu.Unlock()
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+
+	openIdx, provisionIdx, enforceIdx := -1, -1, -1
+	for i, line := range lines {
+		switch {
+		case line == "OPEN-EGRESS":
+			openIdx = i
+		case strings.Contains(line, "bash -c"):
+			if provisionIdx == -1 {
+				provisionIdx = i
+			}
+		case line == "APPLY-EGRESS-ENFORCEMENT":
+			enforceIdx = i
+		}
+	}
+	require.GreaterOrEqual(t, openIdx, 0, "OPEN-EGRESS marker must be present")
+	require.GreaterOrEqual(t, provisionIdx, 0, "provisioning bash -c exec must be present")
+	require.GreaterOrEqual(t, enforceIdx, 0, "APPLY-EGRESS-ENFORCEMENT marker must be present")
+	assert.Less(t, openIdx, provisionIdx, "OpenEgress must run BEFORE the composed provisioning exec")
+	assert.Less(t, provisionIdx, enforceIdx, "ApplyEgressEnforcement must run AFTER the composed provisioning exec")
 }
 
 // TestRunShellColdPath_PostInstallFail_KeepsVM verifies that a
@@ -699,6 +810,27 @@ func fakeTartBin(t *testing.T, dir string) *tart.Tart {
 	t.Helper()
 	bin := filepath.Join(dir, "tart-fake")
 	script := "#!/bin/sh\nexec true\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+	return tr
+}
+
+// fakeTartBinWithLog writes a fake tart binary that succeeds for every
+// invocation and appends each one to the given (caller-supplied) logPath —
+// used to interleave with a fakeVMAdmin's own log writes into one ordered
+// timeline. The first-boot marker probe reports absent so cold-start takes
+// the first-boot path.
+func fakeTartBinWithLog(t *testing.T, dir, logPath string) *tart.Tart {
+	t.Helper()
+	bin := filepath.Join(dir, "tart-fake-log")
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$*" >> %q
+case "$*" in
+  *"test -f /var/lib/devm/provisioned"*) exit 1 ;;
+esac
+exit 0
+`, logPath)
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 	tr := tart.New()
 	tr.Path = bin

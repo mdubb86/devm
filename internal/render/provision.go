@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/docker"
-	"github.com/mdubb86/devm/internal/nftscript"
 )
 
 // Guest-side paths the composed provisioning script references. These
@@ -41,9 +40,7 @@ type ProvisionScriptInput struct {
 	InstallTemplates bool     // run the template dispatcher (every open boot)
 	Startup          []string // startup: commands (every boot)
 	Services         []string // service unit names to enable+start (health-polled)
-	SvcIngressPorts  []int    // direct docker service ports → svc_ingress chain
 	Masks            []MaskMount
-	OpenNft          string // allow-all ruleset for the open window
 	EnforcedNft      string // the real project allowlist ruleset
 	// DnsmasqScript points the guest's dnsmasq upstream at iron-proxy's
 	// DNS server; TimesyncdScript points systemd-timesyncd at the proxy
@@ -106,9 +103,15 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 	p("sudo tar -xC /opt/devm")    // consumes stdin
 	p("sudo /opt/devm/install.sh") // existing CA install + PATH symlink
 
+	// The base image bakes a policy-drop nftables lock (image/builder.go's
+	// nftables-locked.conf) into every fresh clone. softnet is the egress
+	// boundary now, not this guest ruleset, and a leftover policy-drop
+	// would drop softnet's own egress too — flushed unconditionally, every
+	// boot, regardless of whether this boot has an open work window.
+	p("sudo nft flush ruleset")
+
 	if in.hasOpenWork() {
 		p("echo ::devm:stage:open::")
-		p("sudo nft -f - <<'DEVM_OPEN_NFT'\n%s\nDEVM_OPEN_NFT", in.OpenNft)
 		if in.FirstBoot {
 			if len(in.Packages) > 0 {
 				p("echo ::devm:stage:packages::")
@@ -160,9 +163,8 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 
 	// (3) enforce: apply the real allowlist ruleset, then the runtime
 	// DNS/NTP config that routes through the same enforced path, then
-	// svc_ingress + masks. A failure here is the daemon's enforcement
-	// being broken (not the user's service) — the classifier treats it
-	// as teardown-worthy.
+	// masks. A failure here is the daemon's enforcement being broken (not
+	// the user's service) — the classifier treats it as teardown-worthy.
 	p("echo ::devm:stage:enforce::")
 	p("sudo nft -f - <<'DEVM_ENFORCE_NFT'\n%s\nDEVM_ENFORCE_NFT", in.EnforcedNft)
 	p("# EnforcedNft-applied-marker")
@@ -172,9 +174,6 @@ func RenderProvisionScript(in ProvisionScriptInput) []byte {
 	// down but DNS and clock sync are broken at runtime.
 	p("%s", strings.TrimRight(in.DnsmasqScript, "\n"))
 	p("%s", strings.TrimRight(in.TimesyncdScript, "\n"))
-	if len(in.SvcIngressPorts) > 0 {
-		p("%s", strings.TrimRight(nftscript.BuildSvcIngressScript(in.SvcIngressPorts), "\n"))
-	}
 
 	// (4) services phase: masks (bind-mount overlays the services write into),
 	// then start + health-poll services BEFORE granting access. A failure from
