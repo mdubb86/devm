@@ -770,9 +770,15 @@ func (c Config) Validate() error {
 			if err := ValidateScriptName(name); err != nil {
 				return fmt.Errorf("scripts: %w", err)
 			}
+			if len(c.Scripts[name]) == 0 {
+				return fmt.Errorf("scripts[%s]: script body must not be empty", name)
+			}
 			for i, cmd := range c.Scripts[name] {
 				if cmd == "" {
 					return fmt.Errorf("scripts[%s][%d] must not be empty", name, i)
+				}
+				if _, ok := ParseScriptRef(cmd); ok {
+					return fmt.Errorf("scripts[%s][%d]: script-to-script refs are not supported (V1)", name, i)
 				}
 			}
 		}

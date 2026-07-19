@@ -947,6 +947,30 @@ func TestValidate_Scripts_EmptyCommand(t *testing.T) {
 	assert.Contains(t, err.Error(), "scripts[foo][1]")
 }
 
+func TestValidate_Scripts_EmptyBody(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Scripts: map[string][]string{"foo": {}},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scripts[foo]")
+	assert.Contains(t, err.Error(), "empty")
+}
+
+func TestValidate_Scripts_ScriptToScriptRefRejected(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Scripts: map[string][]string{
+			"foo": {"echo one", ">bar"},
+		},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scripts[foo][1]")
+	assert.Contains(t, err.Error(), "script-to-script")
+}
+
 func TestValidate_Scripts_UndefinedRefInInstall(t *testing.T) {
 	cfg := &Config{
 		Project: Project{Name: "p"},
