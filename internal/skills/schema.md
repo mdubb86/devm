@@ -21,6 +21,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
+| `config_lock` | bool | n/a | Defaults `true`. While the VM runs the daemon makes `devm.yaml` (+ `devm.me.yaml`) host-immutable (`chflags uchg`) so a root guest can't tamper with the egress allowlist; it unlocks on `devm stop`. Set `false` to disable. Edit while running via `devm unlock` (auto re-locks after `--for`, default 5m) then `devm reconcile`/`devm lock`. Not overridable in `devm.me.yaml`. |
 
 ---
 
