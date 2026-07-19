@@ -271,8 +271,16 @@ func armRelockTimer(locks *ProjectLocks, tr TartLister, name string, d time.Dura
 			return // stopped/torn down since unlock — nothing to relock
 		}
 		vms, err := tr.List(context.Background())
-		if err != nil || !vmRunning(vms, name) {
-			return // don't lock a stopped (or unlistable) VM's file
+		if err != nil {
+			// Fail closed: a transient `tart list` error means we can't
+			// confirm the VM is stopped, so re-lock rather than leave a
+			// running VM's config writable (the invariant this lock exists
+			// for). Worst case is a stale lock on an already-stopped VM,
+			// which the next `devm stop`/`devm unlock` clears — recoverable,
+			// unlike a silently-unlocked running VM.
+			debuglog.Logf("configlock", "auto-relock %s: tart list failed, re-locking fail-closed: %v", name, err)
+		} else if !vmRunning(vms, name) {
+			return // VM confirmed stopped — don't strand a lock on it
 		}
 		if err := lockConfigFiles(e.repoRoot); err != nil {
 			debuglog.Logf("configlock", "auto-relock %s: %v", name, err)

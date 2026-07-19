@@ -4,6 +4,7 @@ package serviceapi
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -516,6 +517,33 @@ func TestArmRelockTimer_NoRelock_WhenVMNotRunning(t *testing.T) {
 	assert.Never(t, func() bool {
 		return isImmutable(t, cfgPath)
 	}, 300*time.Millisecond, 20*time.Millisecond, "a timer firing against a non-running VM must not re-lock")
+}
+
+// TestArmRelockTimer_ReLocksWhenListErrors verifies the fail-closed
+// behavior: if `tart list` errors at fire time (so the VM's running
+// state is indeterminate), the timer re-locks anyway rather than leave a
+// possibly-running VM's devm.yaml writable. A stale lock on an
+// already-stopped VM is recoverable (next stop/unlock); a silently
+// unlocked running VM is a security gap.
+func TestArmRelockTimer_ReLocksWhenListErrors(t *testing.T) {
+	const name = "relock-timer-list-error"
+	repoRoot := t.TempDir()
+	cfgPath := filepath.Join(repoRoot, "devm.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("project:\n  name: p\n"), 0o644))
+	t.Cleanup(func() { _ = unlockConfigFiles(repoRoot) })
+
+	configLockState.put(name, repoRoot)
+	t.Cleanup(func() { configLockState.del(name) })
+	require.False(t, isImmutable(t, cfgPath), "test setup must start unlocked")
+
+	locks := NewProjectLocks()
+	tr := fakeTartLister{err: errors.New("tart list boom")}
+
+	armRelockTimer(locks, tr, name, 50*time.Millisecond)
+
+	assert.Eventually(t, func() bool {
+		return isImmutable(t, cfgPath)
+	}, 2*time.Second, 20*time.Millisecond, "a list error must fail closed (re-lock), not leave the file writable")
 }
 
 // TestVMUnlockConfig_ArmsRelockTimer verifies the full /vm/unlock-config
