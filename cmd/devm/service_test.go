@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -32,6 +33,41 @@ func TestBuildUninstallScript_ReapsIronProxyChildren(t *testing.T) {
 	pkillIdx := strings.Index(script, "pkill -TERM -f 'iron-proxy")
 	require.Greater(t, pkillIdx, bootIdx,
 		"pkill iron-proxy must come after launchctl bootout; got:\n%s", script)
+}
+
+func TestBuildInstallScript_IncludesPortbinder(t *testing.T) {
+	script := buildInstallScript(installInputs{
+		DevmExe:       "/usr/local/bin/devm",
+		PortbinderExe: "/usr/local/libexec/devm-portbinder",
+		NeedsDaemon:   true,
+	})
+	assert.Contains(t, script, "dscl . -create /Groups/_devm")
+	assert.Contains(t, script, "/Library/LaunchDaemons/com.devm.portbinder.plist")
+	assert.Contains(t, script, "launchctl bootstrap system /Library/LaunchDaemons/com.devm.portbinder.plist")
+	assert.Contains(t, script, "/usr/local/libexec/devm-portbinder")
+}
+
+func TestBuildInstallScript_SkipsPortbinderWhenExeEmpty(t *testing.T) {
+	// Empty PortbinderExe means "not needed this run" (already
+	// installed and daemon in sync) — the block must not appear at
+	// all, not even the idempotent group-creation line.
+	script := buildInstallScript(installInputs{
+		DevmExe:     "/usr/local/bin/devm",
+		NeedsDaemon: true,
+	})
+	assert.NotContains(t, script, "_devm")
+	assert.NotContains(t, script, "com.devm.portbinder")
+}
+
+func TestBuildUninstallScript_RemovesAliases(t *testing.T) {
+	script := buildUninstallScript("/usr/local/bin/devm")
+	assert.Contains(t, script, "launchctl bootout system/com.devm.portbinder")
+	// Alias cleanup for all 20 addresses.
+	for n := 1; n <= 20; n++ {
+		assert.Contains(t, script, fmt.Sprintf("ifconfig lo0 -alias 127.42.0.%d", n))
+	}
+	assert.Contains(t, script, "rm -f /Library/LaunchDaemons/com.devm.portbinder.plist")
+	assert.Contains(t, script, "rm -f /usr/local/libexec/devm-portbinder")
 }
 
 func TestResolveInstallUser_UsesSudoUserWhenPresent(t *testing.T) {

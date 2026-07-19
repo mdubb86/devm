@@ -64,6 +64,12 @@ _RESOLVER_FILE = "/etc/resolver/test"
 _LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.service.plist")
 _LAUNCH_AGENT_PLIST = Path("~/Library/LaunchAgents/com.devm.service.plist").expanduser()
 
+# Task 6 (per-project bind isolation): the portbinder helper LaunchDaemon
+# installed/removed alongside the main service.
+_PORTBINDER_PLIST = Path("/Library/LaunchDaemons/com.devm.portbinder.plist")
+_PORTBINDER_BINARY = Path("/usr/local/libexec/devm-portbinder")
+_PORTBINDER_SOCKET = Path("/var/run/devm-portbinder.sock")
+
 
 def _runtime_dir() -> str:
     return os.path.expanduser("~/Library/Application Support/devm")
@@ -134,6 +140,28 @@ def test_install_uninstall_lifecycle(devm, workspace, sudo_capable):
         assert r.returncode == 0, (
             f"install failed:\nstdout={r.stdout.decode()!r}\n"
             f"stderr={r.stderr.decode()!r}"
+        )
+
+        # --- Portbinder block (Task 6: per-project bind isolation) ---
+        assert _PORTBINDER_PLIST.exists(), (
+            "portbinder LaunchDaemon plist not installed at "
+            f"{_PORTBINDER_PLIST}"
+        )
+        assert _PORTBINDER_BINARY.exists(), (
+            f"portbinder binary not installed at {_PORTBINDER_BINARY}"
+        )
+        # The helper's UDS is created by the running daemon; give it a beat.
+        time.sleep(1)
+        assert _PORTBINDER_SOCKET.exists(), (
+            f"portbinder UDS not present at {_PORTBINDER_SOCKET} after install"
+        )
+        # _devm group exists.
+        r_group = subprocess.run(
+            ["dscl", ".", "-read", "/Groups/_devm"],
+            capture_output=True, timeout=10,
+        )
+        assert r_group.returncode == 0, (
+            f"_devm group not created: {r_group.stderr.decode()!r}"
         )
 
         # --- DNS block (former test_39) ---
@@ -294,5 +322,19 @@ def test_install_uninstall_lifecycle(devm, workspace, sudo_capable):
         assert not os.path.exists(_runtime_dir()), (
             "devm runtime dir still present after uninstall"
         )
+
+        # --- Portbinder teardown (Task 6: per-project bind isolation) ---
+        assert not _PORTBINDER_PLIST.exists(), (
+            f"portbinder plist still present after uninstall: {_PORTBINDER_PLIST}"
+        )
+        assert not _PORTBINDER_BINARY.exists(), (
+            f"portbinder binary still present after uninstall: {_PORTBINDER_BINARY}"
+        )
+        # Aliases removed.
+        ifconfig = subprocess.check_output(["/sbin/ifconfig", "lo0"], text=True)
+        assert "127.42.0.1" not in ifconfig, (
+            f"loopback alias 127.42.0.1 still present after uninstall:\n{ifconfig}"
+        )
+
         # NOTE: no reinstall here — run.sh does one restore between
         # phase 2a and 2b.

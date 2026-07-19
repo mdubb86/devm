@@ -303,14 +303,116 @@ func tailLog(path string, n int) {
 	fmt.Fprintln(os.Stderr, "---")
 }
 
+// installInputs holds every already-computed decision for the
+// privileged install script: which steps are needed and the values
+// they act on. buildInstallScript is a pure function over this
+// struct — no filesystem or process access — so the assembled script
+// can be golden-tested without root or a real install.
+type installInputs struct {
+	// DevmExe is the CLI binary path baked into the LaunchDaemon plist
+	// by `_kardianos install`.
+	DevmExe string
+	// PortbinderExe is the built devm-portbinder binary to install at
+	// portbinderInstallPath. Empty skips the entire portbinder block
+	// (group creation, binary + plist install, bootstrap).
+	PortbinderExe string
+	// InstallUser is added to the _devm group's membership list.
+	// Ignored when PortbinderExe is empty.
+	InstallUser string
+
+	NeedsDNS         bool
+	ResolverContents string
+
+	NeedsCA      bool
+	RootCertPath string
+
+	NeedsDaemon bool
+}
+
+// buildInstallScript assembles the privileged install script from
+// already-computed inputs. Order: DNS resolver file, CA trust,
+// portbinder (group + binary + plist + bootstrap), then the main
+// daemon reload — matching runPrivilegedInstall's prior inline
+// ordering plus the new portbinder step inserted before the daemon
+// reload.
+func buildInstallScript(inputs installInputs) string {
+	var sb strings.Builder
+	sb.WriteString("set -e\n")
+
+	if inputs.NeedsDNS {
+		sb.WriteString("mkdir -p /etc/resolver\n")
+		fmt.Fprintf(&sb, "cat > %s <<'EOF'\n%sEOF\n",
+			serviceapi.ResolverFilePath, inputs.ResolverContents)
+	}
+	if inputs.NeedsCA {
+		fmt.Fprintf(&sb, "security add-trusted-cert -d -r trustRoot -k %s %s\n",
+			shellQuote(serviceapi.SystemKeychain), shellQuote(inputs.RootCertPath))
+	}
+	if inputs.PortbinderExe != "" {
+		// Create _devm group idempotently (safe re-run at every install).
+		sb.WriteString(`dscl . -read /Groups/_devm >/dev/null 2>&1 || dscl . -create /Groups/_devm PrimaryGroupID 800` + "\n")
+		if inputs.InstallUser != "" {
+			sb.WriteString("dscl . -append /Groups/_devm GroupMembership " + inputs.InstallUser + "\n")
+		}
+		fmt.Fprintf(&sb, "install -m 0755 %s %s\n", shellQuote(inputs.PortbinderExe), portbinderInstallPath)
+		fmt.Fprintf(&sb, "install -m 0644 /dev/stdin %s <<'EOF'\n%sEOF\n", portbinderPlistPath, portbinderPlistContent())
+		sb.WriteString("launchctl bootout system/com.devm.portbinder 2>/dev/null || true\n")
+		sb.WriteString("launchctl bootstrap system " + portbinderPlistPath + "\n")
+	}
+	if inputs.NeedsDaemon {
+		// Full reload path: unload any running daemon, wipe the plist
+		// so kardianos writes a fresh one pointing at THIS binary, then
+		// let _kardianos install write + bootstrap. `bootout` and `rm`
+		// use `|| true` so a first-time install (no plist, no daemon
+		// loaded) still succeeds.
+		sb.WriteString("launchctl bootout system/com.devm.service 2>/dev/null || true\n")
+		fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(launchdPlistPath))
+		fmt.Fprintf(&sb, "%s _kardianos install\n", shellQuote(inputs.DevmExe))
+	}
+
+	return sb.String()
+}
+
+// portbinderNeedsInstall reports whether the portbinder helper should
+// be (re)installed: missing plist, missing binary, or piggybacked on
+// a daemon reinstall (the two binaries are built together by `just
+// build`, so a CLI/daemon fingerprint mismatch means portbinder is
+// likely stale too).
+func portbinderNeedsInstall(needsDaemon bool) bool {
+	if needsDaemon {
+		return true
+	}
+	if _, err := os.Stat(portbinderInstallPath); err != nil {
+		return true
+	}
+	if _, err := os.Stat(portbinderPlistPath); err != nil {
+		return true
+	}
+	return false
+}
+
+// portbinderSourcePath returns the devm-portbinder binary expected to
+// sit alongside devmExe — the layout `just build` produces in bin/.
+func portbinderSourcePath(devmExe string) string {
+	return filepath.Join(filepath.Dir(devmExe), "devm-portbinder")
+}
+
+const (
+	portbinderInstallPath = "/usr/local/libexec/devm-portbinder"
+	portbinderPlistPath   = "/Library/LaunchDaemons/com.devm.portbinder.plist"
+)
+
 // runPrivilegedInstall composes and runs the install script that
 // touches root-owned state (DNS resolver file, CA trust, LaunchDaemon
-// plist). Each step is gated on whether it's actually needed:
+// plists, the _devm group). Each step is gated on whether it's
+// actually needed:
 //
 //   - DNS resolver file: skipped when already present with matching bytes
 //   - CA trust: skipped when the cert is already in the System Keychain
 //   - Daemon plist + bootstrap: skipped when the daemon is already
 //     running with a Fingerprint that matches this CLI's
+//   - Portbinder: skipped when its plist + binary are already present
+//     and the daemon doesn't need reinstalling
 //
 // When every step is a no-op, the function returns without escalating
 // to sudo at all — no Touch ID prompt for `devm install` when nothing
@@ -339,8 +441,9 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 	needsCA := !trusted
 
 	needsDaemon := !daemonInSyncWithCLI(ctx)
+	needsPortbinder := portbinderNeedsInstall(needsDaemon)
 
-	if !needsDNS && !needsCA && !needsDaemon {
+	if !needsDNS && !needsCA && !needsDaemon && !needsPortbinder {
 		return false, nil
 	}
 
@@ -358,33 +461,33 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 		rootCertPath = filepath.Join(runDir, "ca", "root.crt")
 	}
 
-	var sb strings.Builder
-	sb.WriteString("set -e\n")
-	if needsDNS {
-		if dnsState == serviceapi.ResolverFileDiverged {
-			fmt.Printf("note: %s exists but doesn't match — overwriting.\n",
-				serviceapi.ResolverFilePath)
-		}
-		sb.WriteString("mkdir -p /etc/resolver\n")
-		fmt.Fprintf(&sb, "cat > %s <<'EOF'\n%sEOF\n",
-			serviceapi.ResolverFilePath, serviceapi.CanonicalResolverContents())
-	}
-	if needsCA {
-		fmt.Fprintf(&sb, "security add-trusted-cert -d -r trustRoot -k %s %s\n",
-			shellQuote(serviceapi.SystemKeychain), shellQuote(rootCertPath))
-	}
-	if needsDaemon {
-		// Full reload path: unload any running daemon, wipe the plist
-		// so kardianos writes a fresh one pointing at THIS binary, then
-		// let _kardianos install write + bootstrap. `bootout` and `rm`
-		// use `|| true` so a first-time install (no plist, no daemon
-		// loaded) still succeeds.
-		sb.WriteString("launchctl bootout system/com.devm.service 2>/dev/null || true\n")
-		fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(launchdPlistPath))
-		fmt.Fprintf(&sb, "%s _kardianos install\n", shellQuote(exe))
+	if needsDNS && dnsState == serviceapi.ResolverFileDiverged {
+		fmt.Printf("note: %s exists but doesn't match — overwriting.\n",
+			serviceapi.ResolverFilePath)
 	}
 
-	c := exec.CommandContext(ctx, "sudo", "bash", "-c", sb.String())
+	inputs := installInputs{
+		DevmExe:          exe,
+		NeedsDNS:         needsDNS,
+		ResolverContents: serviceapi.CanonicalResolverContents(),
+		NeedsCA:          needsCA,
+		RootCertPath:     rootCertPath,
+		NeedsDaemon:      needsDaemon,
+	}
+	if needsPortbinder {
+		src := portbinderSourcePath(exe)
+		if _, statErr := os.Stat(src); statErr == nil {
+			inputs.PortbinderExe = src
+			if name, _, userErr := resolveInstallUser(nil); userErr == nil {
+				inputs.InstallUser = name
+			}
+		} else {
+			fmt.Fprintf(os.Stderr,
+				"note: devm-portbinder binary not found at %s; skipping network-isolation helper install\n", src)
+		}
+	}
+
+	c := exec.CommandContext(ctx, "sudo", "bash", "-c", buildInstallScript(inputs))
 	c.Stdout = out
 	c.Stderr = out
 	c.Stdin = os.Stdin
@@ -471,6 +574,11 @@ func runPrivilegedUninstall(out io.Writer) error {
 //
 // set +e: best-effort each step so partial state still cleans up.
 //
+// The main daemon is booted out before portbinder: the daemon holds
+// FDs it received from portbinder over SCM_RIGHTS for each bound
+// project port, and tearing the daemon down first releases those
+// before portbinder itself goes away.
+//
 // bootout deregisters + SIGTERMs the daemon synchronously. Must run
 // before kardianos's Stop, which uses `launchctl unload` — a legacy
 // subcommand that leaves KeepAlive daemons alive
@@ -481,15 +589,30 @@ func runPrivilegedUninstall(out io.Writer) error {
 // (see runner.go's AdoptIronProxies); nothing cleans them up on
 // uninstall unless we do it here. Match the daemon's own argv pattern
 // so the pkill can't hit unrelated processes.
+//
+// Loopback aliases (127.42.0.1-20, one per concurrent project — see
+// the per-project bind isolation design) are torn down best-effort;
+// a reboot clears them regardless. The _devm group is removed too —
+// it exists solely to grant devm-portbinder's GID access and is
+// recreated idempotently on the next install.
 func buildUninstallScript(exe string) string {
 	var sb strings.Builder
 	sb.WriteString("set +e\n")
 	sb.WriteString("launchctl bootout system/com.devm.service 2>/dev/null\n")
+	sb.WriteString("launchctl bootout system/com.devm.portbinder 2>/dev/null || true\n")
 	sb.WriteString("pkill -TERM -f 'iron-proxy -config .*/iron-proxy/.*\\.yaml' 2>/dev/null\n")
 	fmt.Fprintf(&sb, "%s _kardianos uninstall\n", shellQuote(exe))
 	fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(serviceapi.ResolverFilePath))
 	fmt.Fprintf(&sb, "security delete-certificate -c %s %s 2>/dev/null\n",
 		shellQuote(serviceapi.CATrustCertCN), shellQuote(serviceapi.SystemKeychain))
+
+	for n := 1; n <= 20; n++ {
+		fmt.Fprintf(&sb, "/sbin/ifconfig lo0 -alias 127.42.0.%d 2>/dev/null || true\n", n)
+	}
+	sb.WriteString("rm -f " + portbinderPlistPath + "\n")
+	sb.WriteString("rm -f " + portbinderInstallPath + "\n")
+	sb.WriteString(`dscl . -delete /Groups/_devm 2>/dev/null || true` + "\n")
+
 	return sb.String()
 }
 
