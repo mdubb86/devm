@@ -66,6 +66,21 @@ type VMStopRequest struct {
 	Name string `json:"name"`
 }
 
+// VMConfigLockRequest is the body shape for POST /vm/unlock-config and
+// POST /vm/lock-config.
+type VMConfigLockRequest struct {
+	Name string `json:"name"`
+}
+
+// VMConfigLockResponse is the response for POST /vm/unlock-config and
+// POST /vm/lock-config. WasLocked reports whether the project had a
+// configLockState entry — i.e. whether there was anything to
+// unlock/lock. false (with no error) means the VM isn't running or
+// config_lock is disabled for the project.
+type VMConfigLockResponse struct {
+	WasLocked bool `json:"was_locked"`
+}
+
 // VMEnforcementConfigResponse is the body shape for GET
 // /vm/enforcement-config: everything the boot-integrity-gate composed
 // provisioning script still bakes into its enforce phase. Egress
@@ -720,6 +735,75 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// /vm/unlock-config is the `devm unlock` escape hatch: it lifts the
+	// host-immutable flag on devm.yaml (+ devm.me.yaml) for a running
+	// project so the user can edit config without the daemon fighting
+	// them. `devm reconcile` re-locks on its next successful apply (see
+	// RegisterReconcileHandler); the relock timer that re-locks an
+	// unattended unlock is a later addition. A project with no
+	// configLockState entry (VM not running, or config_lock:false) is a
+	// no-op, not an error — WasLocked reports which case this was.
+	s.Register("/vm/unlock-config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMConfigLockRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		entry, ok := configLockState.get(req.Name)
+		if ok {
+			if err := unlockConfigFiles(entry.repoRoot); err != nil {
+				debuglog.Logf("configlock", "unlock config for %s: %v (continuing)", req.Name, err)
+			}
+			configLockState.stopTimer(req.Name)
+		}
+
+		writeJSON(w, VMConfigLockResponse{WasLocked: ok})
+	})
+
+	// /vm/lock-config is the `devm lock` command: re-locks devm.yaml on
+	// demand, ending a temporary unlock early instead of waiting for the
+	// relock timer.
+	s.Register("/vm/lock-config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMConfigLockRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		entry, ok := configLockState.get(req.Name)
+		if ok {
+			if err := lockConfigFiles(entry.repoRoot); err != nil {
+				debuglog.Logf("configlock", "lock config for %s: %v (continuing)", req.Name, err)
+			}
+			configLockState.stopTimer(req.Name)
+		}
+
+		writeJSON(w, VMConfigLockResponse{WasLocked: ok})
 	})
 
 	s.Register("/vm/status", func(w http.ResponseWriter, r *http.Request) {

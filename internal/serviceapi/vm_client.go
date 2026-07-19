@@ -102,6 +102,52 @@ func (c *Client) StopVM(ctx context.Context, name string) error {
 	return nil
 }
 
+// UnlockConfig calls POST /vm/unlock-config, lifting the host-immutable
+// flag on devm.yaml (+ devm.me.yaml) for a running project — the `devm
+// unlock` escape hatch. Returns whether the project actually had
+// anything locked (false when the VM isn't running or config_lock is
+// disabled — not an error in that case).
+func (c *Client) UnlockConfig(ctx context.Context, name string) (bool, error) {
+	body, err := json.Marshal(VMConfigLockRequest{Name: name})
+	if err != nil {
+		return false, err
+	}
+	r, err := c.post(ctx, "/vm/unlock-config", body)
+	if err != nil {
+		return false, err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return false, fmt.Errorf("vm/unlock-config: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp VMConfigLockResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return false, err
+	}
+	return resp.WasLocked, nil
+}
+
+// LockConfig calls POST /vm/lock-config, re-locking devm.yaml right
+// away — the `devm lock` command, for ending a temporary unlock before
+// its relock timer would have fired.
+func (c *Client) LockConfig(ctx context.Context, name string) error {
+	body, err := json.Marshal(VMConfigLockRequest{Name: name})
+	if err != nil {
+		return err
+	}
+	r, err := c.post(ctx, "/vm/lock-config", body)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return fmt.Errorf("vm/lock-config: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
 // Reconcile calls POST /vm/reconcile with cfg + workspace_host_path.
 // The daemon diffs cfg against the project's last-applied snapshot,
 // applies every live-bucket change in place, and returns what still

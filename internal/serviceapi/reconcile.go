@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -220,6 +221,22 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 			if err := WriteStateSnapshot(req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, SSHHostPort: sshHostPort, WorkspaceHostPath: req.WorkspaceHostPath}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
+			}
+
+			// Re-lock devm.yaml after a successful live apply, so an
+			// `unlock → edit → reconcile` cycle always ends locked
+			// rather than leaving the config writable indefinitely.
+			// Best-effort: a chflags failure must not fail the
+			// reconcile that already succeeded. stopTimer cancels any
+			// pending relock timer from the unlock this reconcile is
+			// closing out.
+			if req.Cfg.ConfigLockEnabled() {
+				if err := lockConfigFiles(req.WorkspaceHostPath); err != nil {
+					debuglog.Logf("configlock", "re-lock config for %s: %v (continuing)", req.Name, err)
+				} else {
+					configLockState.put(req.Name, req.WorkspaceHostPath)
+				}
+				configLockState.stopTimer(req.Name)
 			}
 		}
 
