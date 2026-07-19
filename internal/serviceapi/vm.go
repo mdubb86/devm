@@ -301,7 +301,12 @@ func armRelockTimer(locks *ProjectLocks, tr TartLister, name string, d time.Dura
 // tests that don't spin up an NTP responder). locks serializes
 // concurrent state-mutating calls for the same project; every handler
 // registered here that mutates VM/proxy state acquires it on entry.
-func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials, ntpPort int, locks *ProjectLocks) {
+// proxy is the daemon's HTTP/HTTPS reverse proxy; /vm/start binds its
+// per-project listeners once the project IP is allocated, and /vm/stop
+// tears them down. May be nil in tests that don't exercise the proxy
+// lifecycle — StartProjectListeners/StopProjectListeners are skipped
+// in that case.
+func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials, ntpPort int, locks *ProjectLocks, proxy *ProxyServer) {
 	s.Register("/vm/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -436,15 +441,15 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 
-		// Allocate the per-project SSH host port. Guest :22 can't be
-		// exposed on the Mac's own :22 — the host's sshd already owns it,
-		// and every project would collide on the same port besides.
-		// Stashed into projectInfo below so GET /vm/ingress-config and
-		// the next reconcile's expose-map push can reuse it without
-		// re-allocating.
-		sshHostPort, err := pickPort()
+		// Allocate the per-project loopback IP (127.42.0.N). All ingress
+		// listeners for this project — softnet's direct-service ports,
+		// softnet SSH on :22, and this daemon's own per-project HTTP/HTTPS
+		// proxy listeners — bind on this address. Idempotent: a project
+		// that already has one (e.g. re-`devm shell` on an already-running
+		// VM) keeps it.
+		projectIP, err := AllocateProjectIP(req.Name)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("pick ssh host port: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("allocate project ip: %v", err), http.StatusInternalServerError)
 			return
 		}
 
@@ -453,7 +458,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		// guest services come up. Non-fatal: egress is the security
 		// boundary, ingress is convenience, and a failed push is
 		// re-attempted at the next reconcile.
-		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, sshHostPort)); err != nil {
+		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, projectIP)); err != nil {
 			debuglog.Logf("serviceapi", "vm/start: push expose map for %s: %v", req.Name, err)
 		}
 
@@ -518,13 +523,15 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		}
 
 		// Stash port info for VM env injection and the deferred
-		// egress-enforcement inject to read.
-		ironProxyState.put(req.Name, projectInfo{
-			HTTPPort:    httpPort,
-			HTTPSPort:   httpsPort,
-			DNSPort:     dnsPort,
-			SSHHostPort: sshHostPort,
-		})
+		// egress-enforcement inject to read. Merge onto the existing
+		// entry rather than overwrite — AllocateProjectIP above already
+		// stashed ProjectIP, and a raw put here would silently clobber it
+		// back to empty.
+		info, _ := ironProxyState.get(req.Name)
+		info.HTTPPort = httpPort
+		info.HTTPSPort = httpsPort
+		info.DNSPort = dnsPort
+		ironProxyState.put(req.Name, info)
 
 		// Apply VM-side config via tart exec — workspace mount, extra
 		// mounts, env only. The iron-proxy egress-enforcement config
@@ -563,6 +570,17 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			if err != nil {
 				http.Error(w, fmt.Sprintf("vm inject step %d failed: %v\n%s", i, err, out), http.StatusInternalServerError)
 				return
+			}
+		}
+
+		// Bind this project's per-project HTTP/HTTPS proxy listeners on
+		// its ProjectIP via the portbinder helper. Non-fatal like the
+		// expose-map push above: ingress is convenience, not the security
+		// boundary, and a failed bind (e.g. the portbinder helper isn't
+		// installed) is re-attempted on the next /vm/start.
+		if proxy != nil {
+			if err := proxy.StartProjectListeners(ctx, req.Name, projectIP); err != nil {
+				debuglog.Logf("serviceapi", "vm/start: start project listeners for %s: %v", req.Name, err)
 			}
 		}
 
@@ -736,6 +754,14 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, fmt.Sprintf("stop iron-proxy: %v", err), http.StatusInternalServerError)
 			return
 		}
+		// Close this project's per-project HTTP/HTTPS proxy listeners
+		// before releasing its IP — the IP must not be handed to another
+		// project's /vm/start while this project might still be
+		// listening on it.
+		if proxy != nil {
+			proxy.StopProjectListeners(req.Name)
+		}
+		ReleaseProjectIP(req.Name)
 		ironProxyState.del(req.Name)
 		// The softnet client is stateless — it dials fresh per call rather
 		// than holding a persistent connection — so there's nothing to

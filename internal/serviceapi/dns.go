@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/miekg/dns"
 
@@ -38,24 +39,27 @@ func DNSAddr() string {
 }
 
 // DNSServer is the daemon's tiny *.test resolver. Every *.test name
-// answers 127.0.0.1 (A), TTL 0 — the host-local address where either
-// the daemon HTTP proxy (proxied services) or a softnet per-port
-// forward (direct services) listens. AAAA queries get NODATA:
-// softnet's ingress listeners bind v4 loopback only.
+// answers its owning project's allocated ProjectIP (A), TTL 0 —
+// isolation guarantee: a name only resolves while its project is
+// running and only to that project's own 127.42.0.N address. AAAA
+// queries get NODATA: softnet's ingress listeners bind v4 loopback
+// only.
 type DNSServer struct {
 	server *dns.Server
+	lookup func(project string) (string, bool)
 }
 
 // NewDNSServer builds a server bound to the address returned by
 // DNSAddr() — the default 127.0.0.1:51153 unless $DEVM_DNS_ADDR
-// overrides.
-func NewDNSServer() *DNSServer {
-	return newDNSServerAt(DNSAddr())
+// overrides. projectIPLookup returns (projectIP, true) for a known,
+// running project name; (_, false) for unknown or stopped projects.
+func NewDNSServer(projectIPLookup func(project string) (string, bool)) *DNSServer {
+	return newDNSServerAt(DNSAddr(), projectIPLookup)
 }
 
 // newDNSServerAt is the testable inner — tests pass an ephemeral
 // address.
-func newDNSServerAt(addr string) *DNSServer {
+func newDNSServerAt(addr string, projectIPLookup func(string) (string, bool)) *DNSServer {
 	mux := dns.NewServeMux()
 	s := &DNSServer{
 		server: &dns.Server{
@@ -63,6 +67,7 @@ func newDNSServerAt(addr string) *DNSServer {
 			Net:     "udp",
 			Handler: mux,
 		},
+		lookup: projectIPLookup,
 	}
 	mux.HandleFunc(testTLD, s.handleTest)
 	return s
@@ -92,19 +97,48 @@ func (s *DNSServer) handleTest(w dns.ResponseWriter, r *dns.Msg) {
 	msg.SetReply(r)
 	msg.Authoritative = true
 	for _, q := range r.Question {
-		// Ingress flows entirely through softnet's host-side listeners
-		// (see computeExposeMap/pushExposeMap) — every .test name,
-		// direct or proxied, answers host loopback.
-		switch q.Qtype {
-		case dns.TypeA:
+		if q.Qtype != dns.TypeA {
+			continue // AAAA and others: NODATA (Answer stays empty).
+		}
+		// devm-health-check.test is a reserved sentinel name (see
+		// dns_probe.go's CheckDNSHealth, used by `devm status`) that
+		// verifies *.test queries actually reach this resolver — it
+		// isn't a project and must always answer loopback, independent
+		// of the per-project lookup below.
+		if strings.EqualFold(strings.TrimSuffix(q.Name, "."), strings.TrimSuffix(dnsProbeName, ".")) {
 			msg.Answer = append(msg.Answer, &dns.A{
 				Hdr: dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 0},
 				A:   net.IPv4(127, 0, 0, 1),
 			})
+			continue
 		}
-		// All other query types fall through; Answer stays empty —
-		// the client gets NOERROR + NODATA, which is what
-		// well-behaved resolvers expect for "no record of this type".
+		project := extractProjectLabel(q.Name)
+		ip, ok := s.lookup(project)
+		if !ok {
+			msg.Rcode = dns.RcodeNameError // NXDOMAIN
+			continue
+		}
+		msg.Answer = append(msg.Answer, &dns.A{
+			Hdr: dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 0},
+			A:   net.ParseIP(ip).To4(),
+		})
 	}
 	_ = w.WriteMsg(msg)
+}
+
+// extractProjectLabel returns the project name from a *.test query.
+// "myapp.test."         → "myapp"
+// "api.myapp.test."     → "myapp"
+// "foo.bar.myapp.test." → "myapp"
+// Empty on malformed input; caller treats empty as unknown.
+func extractProjectLabel(qname string) string {
+	name := strings.ToLower(strings.TrimSuffix(qname, "."))
+	name = strings.TrimSuffix(name, ".test")
+	if name == "" {
+		return ""
+	}
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }

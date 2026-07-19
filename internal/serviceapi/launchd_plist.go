@@ -5,10 +5,11 @@ package serviceapi
 // The {{.Name}} and {{.Path}} placeholders are substituted by
 // kardianos's template engine.
 //
-// Why custom: kardianos's default plist doesn't include a Sockets
-// dict. We need that for Ship 3 — launchd pre-binds :80 and :443 as
-// root and hands the file descriptors to our user-level service via
-// launch_activate_socket.
+// Why custom: kardianos's default plist doesn't set UserName,
+// EnvironmentVariables, or explicit log paths, all of which the daemon
+// needs. No Sockets dict — since B3 (per-project bind isolation), all
+// daemon-proxy binds (:80/:443 per project IP) come from the
+// portbinder helper (internal/portbinder), not launchd socket handoff.
 const LaunchdPlistTemplate = `<?xml version='1.0' encoding='UTF-8'?>
 <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN"
 "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -42,27 +43,6 @@ const LaunchdPlistTemplate = `<?xml version='1.0' encoding='UTF-8'?>
     <string>__LOG_OUT__</string>
     <key>StandardErrorPath</key>
     <string>__LOG_ERR__</string>
-    <key>Sockets</key>
-    <dict>
-        <key>HTTPSocket</key>
-        <dict>
-            <key>SockNodeName</key>
-            <string>0.0.0.0</string>
-            <key>SockServiceName</key>
-            <string>80</string>
-            <key>SockType</key>
-            <string>stream</string>
-        </dict>
-        <key>HTTPSSocket</key>
-        <dict>
-            <key>SockNodeName</key>
-            <string>0.0.0.0</string>
-            <key>SockServiceName</key>
-            <string>443</string>
-            <key>SockType</key>
-            <string>stream</string>
-        </dict>
-    </dict>
 </dict>
 </plist>
 `

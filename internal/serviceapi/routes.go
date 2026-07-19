@@ -82,13 +82,22 @@ func (r *Routes) Remove(projectID string) {
 	delete(r.projectsToHostnames, projectID)
 }
 
-// Lookup returns the route for the given host (port stripped).
-func (r *Routes) Lookup(host string) (Route, bool) {
+// Lookup returns the route for the given host (port stripped), scoped
+// to project: a route whose Project doesn't match the caller's project
+// is refused even though the hostname exists — this is the isolation
+// guarantee that keeps one project's proxy dispatch from ever
+// reaching another project's backend. Pass "" to skip the project
+// check (used by callers that have already established project scope
+// some other way).
+func (r *Routes) Lookup(host, project string) (Route, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	route, ok := r.hostnameToRoute[host]
-	if ok && route.Direct {
+	if !ok || route.Direct {
 		return Route{}, false // direct services are never proxy-dialed
+	}
+	if project != "" && route.Project != project {
+		return Route{}, false // isolation guarantee: cross-project sneak-through denied
 	}
 	return route, ok
 }

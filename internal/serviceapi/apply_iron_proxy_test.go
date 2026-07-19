@@ -191,7 +191,7 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 		return lerr
 	}
 
-	t.Cleanup(func() { ironProxyState.del(projectID) })
+	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(projectID) })
 	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, fakeTartIP(t, "192.168.64.50"), nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
@@ -239,7 +239,7 @@ func TestApplyIronProxy_PreservesSSHHostPort(t *testing.T) {
 	sup := supervisor.New(t.TempDir())
 
 	const projectID = "p-preserve-ssh"
-	t.Cleanup(func() { ironProxyState.del(projectID) })
+	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(projectID) })
 
 	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
 	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg, SSHHostPort: 2200}))
@@ -285,20 +285,24 @@ func TestApplyIronProxy_PreservesSSHHostPort(t *testing.T) {
 		"SSHHostPort must be preserved across apply-iron-proxy, not zeroed")
 }
 
-// TestApplyIronProxy_AllocatesSSHHostPortWhenUnset covers adopt-in-place
+// TestApplyIronProxy_AllocatesProjectIPWhenUnset covers adopt-in-place
 // (internal/orchestrator/shell.go's "pristine: running but never
 // provisioned" branch): a raw `tart run` or first-time adoption calls
-// /vm/apply-iron-proxy directly, never /vm/start, so no SSH host port
+// /vm/apply-iron-proxy directly, never /vm/start, so no project IP
 // was ever allocated for this project this daemon lifetime. Without
-// allocating one here, the adopted VM gets no ingress — SSH port stays
-// 0, no service listeners — until an explicit stop + cold-start.
-func TestApplyIronProxy_AllocatesSSHHostPortWhenUnset(t *testing.T) {
+// allocating one here, the adopted VM gets no ingress — no DNS
+// resolution, no service listeners — until an explicit stop +
+// cold-start.
+func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	srv := NewServer(SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
 
 	const projectID = "p-adopt-in-place"
-	t.Cleanup(func() { ironProxyState.del(projectID) })
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		ReleaseProjectIP(projectID)
+	})
 
 	seededCfg := schema.Config{
 		Project: schema.Project{Name: projectID},
@@ -345,6 +349,6 @@ func TestApplyIronProxy_AllocatesSSHHostPortWhenUnset(t *testing.T) {
 
 	info, ok := ironProxyState.get(projectID)
 	require.True(t, ok)
-	assert.NotZero(t, info.SSHHostPort,
-		"apply-iron-proxy must allocate an SSH host port for an adopted VM that never went through /vm/start")
+	assert.NotEmpty(t, info.ProjectIP,
+		"apply-iron-proxy must allocate a project IP for an adopted VM that never went through /vm/start")
 }

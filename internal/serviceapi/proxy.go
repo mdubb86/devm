@@ -9,67 +9,179 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/mdubb86/devm/internal/debuglog"
+	"github.com/mdubb86/devm/internal/portbinder"
 )
 
-// ProxyServer is the daemon's HTTP+HTTPS reverse proxy. Listens
-// on the provided listeners (typically launchd-inherited via
-// sockact.Activate), routes by Host: header to backends from the
-// in-memory Routes table.
+// ProxyServer is the daemon's HTTP+HTTPS reverse proxy. Binds one
+// HTTP (:80) and one HTTPS (:443) listener per active project, on that
+// project's allocated ProjectIP, via the portbinder helper. Dispatches
+// by destination IP first (which project owns this connection), then
+// by Host: header (which route within that project) — see ServeHTTP.
 type ProxyServer struct {
 	routes *Routes
 	ca     *CA
+
+	mu      sync.Mutex
+	perProj map[string]projectListeners
+}
+
+// projectListeners is the pair of listeners (and their http.Servers,
+// so Shutdown can be called) bound for one project.
+type projectListeners struct {
+	http     net.Listener
+	https    net.Listener
+	httpSrv  *http.Server
+	httpsSrv *http.Server
 }
 
 func NewProxyServer(routes *Routes, ca *CA) *ProxyServer {
-	return &ProxyServer{routes: routes, ca: ca}
+	return &ProxyServer{routes: routes, ca: ca, perProj: make(map[string]projectListeners)}
 }
 
-// Serve binds the given listeners and serves until ctx is cancelled.
-// Either listener slice may be nil/empty.
-func (p *ProxyServer) Serve(ctx context.Context, httpListeners, httpsListeners []net.Listener) error {
-	httpSrv := &http.Server{Handler: p}
+// StartProjectListeners opens :80 and :443 listeners on projectIP via
+// the portbinder helper and starts serving on them. Idempotent: a
+// project that already has listeners registered is left untouched —
+// callers should StopProjectListeners first if they want to rebind.
+func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, projectIP string) error {
+	p.mu.Lock()
+	if _, ok := p.perProj[projectID]; ok {
+		p.mu.Unlock()
+		return nil
+	}
+	p.mu.Unlock()
+
+	httpLn, err := portbinder.BindTCP(projectIP, 80)
+	if err != nil {
+		return fmt.Errorf("bind :80 on %s: %w", projectIP, err)
+	}
+	httpsLn, err := portbinder.BindTCP(projectIP, 443)
+	if err != nil {
+		httpLn.Close()
+		return fmt.Errorf("bind :443 on %s: %w", projectIP, err)
+	}
+
+	httpSrv := &http.Server{Handler: p, ConnContext: p.stampLocalAddr}
 	httpsSrv := &http.Server{
-		Handler: p,
+		Handler:     p,
+		ConnContext: p.stampLocalAddr,
 		TLSConfig: &tls.Config{
 			GetCertificate: p.ca.GetCertificate,
 			NextProtos:     []string{"h2", "http/1.1"},
 		},
 	}
 
-	errCh := make(chan error, len(httpListeners)+len(httpsListeners))
-	for _, ln := range httpListeners {
-		ln := ln
-		debuglog.Logf("serviceapi", "proxy: HTTP listening on %s", ln.Addr())
-		go func() { errCh <- httpSrv.Serve(ln) }()
-	}
-	for _, ln := range httpsListeners {
-		ln := ln
-		debuglog.Logf("serviceapi", "proxy: HTTPS listening on %s", ln.Addr())
-		go func() { errCh <- httpsSrv.ServeTLS(ln, "", "") }()
-	}
-
-	select {
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(shutdownCtx)
-		_ = httpsSrv.Shutdown(shutdownCtx)
-		return nil
-	case err := <-errCh:
-		if err == http.ErrServerClosed {
-			return nil
+	debuglog.Logf("serviceapi", "proxy: HTTP listening on %s (project %s)", httpLn.Addr(), projectID)
+	go func() {
+		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
+			debuglog.Logf("serviceapi", "proxy: HTTP serve for %s: %v", projectID, err)
 		}
-		return err
+	}()
+	debuglog.Logf("serviceapi", "proxy: HTTPS listening on %s (project %s)", httpsLn.Addr(), projectID)
+	go func() {
+		if err := httpsSrv.ServeTLS(httpsLn, "", ""); err != nil && err != http.ErrServerClosed {
+			debuglog.Logf("serviceapi", "proxy: HTTPS serve for %s: %v", projectID, err)
+		}
+	}()
+
+	p.recordProjectListeners(projectID, httpLn, httpsLn, httpSrv, httpsSrv)
+	return nil
+}
+
+// StopProjectListeners closes the given project's HTTP/HTTPS listeners
+// (if any). Idempotent — a project with no registered listeners is a
+// no-op.
+func (p *ProxyServer) StopProjectListeners(projectID string) {
+	pl, ok := p.takeProjectListeners(projectID)
+	if !ok {
+		return
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if pl.httpSrv != nil {
+		_ = pl.httpSrv.Shutdown(shutdownCtx)
+	}
+	if pl.httpsSrv != nil {
+		_ = pl.httpsSrv.Shutdown(shutdownCtx)
 	}
 }
 
-// ServeHTTP routes by Host: to the registered backend.
+// StopAll closes every project's listeners. Called on daemon shutdown
+// so a graceful exit doesn't leak bound ports.
+func (p *ProxyServer) StopAll() {
+	p.mu.Lock()
+	ids := make([]string, 0, len(p.perProj))
+	for id := range p.perProj {
+		ids = append(ids, id)
+	}
+	p.mu.Unlock()
+	for _, id := range ids {
+		p.StopProjectListeners(id)
+	}
+}
+
+func (p *ProxyServer) recordProjectListeners(projectID string, httpLn, httpsLn net.Listener, httpSrv, httpsSrv *http.Server) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.perProj[projectID] = projectListeners{http: httpLn, https: httpsLn, httpSrv: httpSrv, httpsSrv: httpsSrv}
+}
+
+func (p *ProxyServer) takeProjectListeners(projectID string) (projectListeners, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pl, ok := p.perProj[projectID]
+	if ok {
+		delete(p.perProj, projectID)
+	}
+	return pl, ok
+}
+
+type ctxKey int
+
+const (
+	ctxKeyLocalAddr ctxKey = iota
+)
+
+// stampLocalAddr is the http.Server ConnContext hook: it stamps the
+// accepted connection's local address (the project IP the client
+// dialed) into the request context so ServeHTTP can dispatch by
+// destination IP.
+func (p *ProxyServer) stampLocalAddr(ctx context.Context, c net.Conn) context.Context {
+	return context.WithValue(ctx, ctxKeyLocalAddr, c.LocalAddr())
+}
+
+func localAddrFromCtx(ctx context.Context) (net.IP, bool) {
+	v := ctx.Value(ctxKeyLocalAddr)
+	if v == nil {
+		return nil, false
+	}
+	if ta, ok := v.(*net.TCPAddr); ok {
+		return ta.IP, true
+	}
+	return nil, false
+}
+
+// ServeHTTP dispatches by destination IP first (which project owns
+// this connection), then by Host: header (which route within that
+// project). A Host that doesn't belong to the dest-IP's project is a
+// 502, never a fall-through to another project — this is the
+// isolation guarantee.
 func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ip, ok := localAddrFromCtx(r.Context())
+	if !ok {
+		write502NoRoute(w, r.Host)
+		return
+	}
+	project := projectByIP(ip.String())
+	if project == "" {
+		write502NoProject(w, ip.String())
+		return
+	}
 	host := stripPort(r.Host)
-	route, ok := p.routes.Lookup(host)
+	route, ok := p.routes.Lookup(host, project)
 	if !ok {
 		write502NoRoute(w, host)
 		return
@@ -86,6 +198,17 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rev.ServeHTTP(w, r)
 }
 
+// projectByIP reverse-maps an IP string to the projectID that owns it.
+// Reads ironProxyState. Returns "" when no project claims the IP.
+func projectByIP(ip string) string {
+	for _, id := range ironProxyState.keys() {
+		if info, ok := ironProxyState.get(id); ok && info.ProjectIP == ip {
+			return id
+		}
+	}
+	return ""
+}
+
 func write502NoRoute(w http.ResponseWriter, host string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusBadGateway)
@@ -93,6 +216,12 @@ func write502NoRoute(w http.ResponseWriter, host string) {
 	fmt.Fprintf(w, "to add one:\n")
 	fmt.Fprintf(w, "  - declare service.hostname: %s in devm.yaml\n", host)
 	fmt.Fprintf(w, "  - run `devm route local` or `devm route vm`\n")
+}
+
+func write502NoProject(w http.ResponseWriter, ip string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusBadGateway)
+	fmt.Fprintf(w, "devm: no project bound at %s\n\ndid a project just get torn down?\n", ip)
 }
 
 func write502BackendDown(w http.ResponseWriter, host, backendHost string, port int, err error) {

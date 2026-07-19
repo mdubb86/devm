@@ -197,12 +197,14 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				http.Error(w, fmt.Sprintf("render templates: %v", err), http.StatusInternalServerError)
 				return
 			}
-			// sshHostPort is read once here: it feeds both the expose-map
-			// push and the snapshot (so a daemon restart's
-			// recoverProjectState can recover it — see
-			// StateSnapshot.SSHHostPort).
+			// projectIP is read once here: it feeds the expose-map push.
+			// sshHostPort still mirrors through to the snapshot for
+			// recoverProjectState (see StateSnapshot.SSHHostPort) — retires
+			// in Task 5.
+			var projectIP string
 			sshHostPort := 0
 			if info, ok := ironProxyState.get(req.Name); ok {
+				projectIP = info.ProjectIP
 				sshHostPort = info.SSHHostPort
 			}
 
@@ -214,11 +216,11 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 			// user's retry re-attempts the (idempotent, fully declarative)
 			// push instead of silently skipping it against an advanced
 			// baseline.
-			if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, sshHostPort)); err != nil {
+			if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, projectIP)); err != nil {
 				http.Error(w, fmt.Sprintf("push expose map: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := WriteStateSnapshot(req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, SSHHostPort: sshHostPort, WorkspaceHostPath: req.WorkspaceHostPath}); err != nil {
+			if err := WriteStateSnapshot(req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, SSHHostPort: sshHostPort, ProjectIP: projectIP, WorkspaceHostPath: req.WorkspaceHostPath}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}

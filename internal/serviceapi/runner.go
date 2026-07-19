@@ -2,14 +2,13 @@ package serviceapi
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 
 	"github.com/oklog/run"
 
+	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
-	"github.com/mdubb86/devm/internal/serviceapi/sockact"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -33,6 +32,13 @@ func RunService(ctx context.Context, build Build) error {
 
 	// Routes table — empty on startup; CLI populates via admin API.
 	routes := NewRoutes()
+
+	// Reverse proxy (Ship 3, per-project since B3). Binds one HTTP +
+	// one HTTPS listener per active project's ProjectIP, lazily via
+	// /vm/start (RegisterVMHandlers below) — no launchd-inherited
+	// sockets and no listeners at daemon startup for a project that
+	// isn't running.
+	proxy := NewProxyServer(routes, ca)
 
 	// HTTP API server (Ship 1) with the /routes/* admin endpoints
 	// registered on top.
@@ -82,6 +88,27 @@ func RunService(ctx context.Context, build Build) error {
 	// above just populated.
 	discoverSoftnet(ctx, ntp.Port())
 
+	// Re-bind this daemon's own per-project HTTP/HTTPS proxy listeners
+	// for every project AdoptIronProxies just recovered. A daemon
+	// restart tears down the previous process's listeners (portbinder
+	// hands out FDs per-request; they aren't inherited across a
+	// restart), so without this a recovered project would resolve in
+	// DNS but 502/refuse on the daemon proxy until its next /vm/start.
+	// Best-effort and non-blocking for the same reason discoverSoftnet's
+	// re-push is: a missing/unresponsive portbinder helper must not
+	// stall the rest of the daemon from coming up.
+	for _, id := range ironProxyState.keys() {
+		info, ok := ironProxyState.get(id)
+		if !ok || info.ProjectIP == "" {
+			continue
+		}
+		go func(id, ip string) {
+			if err := proxy.StartProjectListeners(ctx, id, ip); err != nil {
+				debuglog.Logf("serviceapi", "restart-adopt: start project listeners for %s: %v", id, err)
+			}
+		}(id, info.ProjectIP)
+	}
+
 	// Denials tracker — per-project counts of iron-proxy allow-list
 	// rejects, fed by the supervisor's log tap on iron-proxy stderr.
 	// Adopted iron-proxies from a prior daemon instance don't get tapped
@@ -89,24 +116,12 @@ func RunService(ctx context.Context, build Build) error {
 	// start empty for them until the next SpawnIronProxy respawn.
 	denials := NewDenials()
 
-	RegisterVMHandlers(server, sup, tr, denials, ntp.Port(), locks)
+	RegisterVMHandlers(server, sup, tr, denials, ntp.Port(), locks, proxy)
 	RegisterReconcileHandler(server, locks, &realApplyLiver{tr: tr}, tr, sup)
 	RegisterApplyIronProxyHandler(server, locks, sup, tr, denials)
 	RegisterHandshakeHandler(server, build, sup)
 	RegisterStatusAllHandler(server, sup, tr)
 
-	// Pull launchd-inherited listeners for :80 and :443. If the
-	// daemon was started outside launchd (e.g., `devm serve` from a
-	// shell), these come back as ErrNotActivated — we skip the
-	// proxy actor entirely, but the rest of the daemon still works.
-	httpListeners, err := sockact.Activate("HTTPSocket")
-	if err != nil && !errors.Is(err, sockact.ErrNotActivated) {
-		return fmt.Errorf("sockact HTTPSocket: %w", err)
-	}
-	httpsListeners, err := sockact.Activate("HTTPSSocket")
-	if err != nil && !errors.Is(err, sockact.ErrNotActivated) {
-		return fmt.Errorf("sockact HTTPSSocket: %w", err)
-	}
 	var g run.Group
 
 	// HTTP API server actor (Ship 1).
@@ -122,7 +137,13 @@ func RunService(ctx context.Context, build Build) error {
 	// DNS server actor (Ship 2).
 	{
 		dnsCtx, cancel := context.WithCancel(ctx)
-		dnsServer := NewDNSServer()
+		dnsServer := NewDNSServer(func(project string) (string, bool) {
+			info, ok := ironProxyState.get(project)
+			if !ok || info.ProjectIP == "" {
+				return "", false
+			}
+			return info.ProjectIP, true
+		})
 		g.Add(func() error {
 			return dnsServer.Serve(dnsCtx)
 		}, func(error) {
@@ -142,25 +163,23 @@ func RunService(ctx context.Context, build Build) error {
 		})
 	}
 
-	// Reverse proxy actor (Ship 3). Skipped if no listeners were
-	// inherited (e.g., `devm serve` from a shell — dev convenience).
+	// Reverse proxy readiness (Ship 3). There's no longer a single
+	// daemon-wide proxy actor to add to the run group — listeners are
+	// per-project and bound lazily by /vm/start (StartProjectListeners)
+	// via the portbinder helper, not launchd-inherited sockets. The
+	// proxy object itself always exists (constructed above), so
 	// SetProxyReady lets `devm status`'s /proxy-status probe report
-	// the actor's state instead of TCP-dialing 127.0.0.1:443 (which
-	// closes mid-handshake and spams "TLS handshake error … EOF" in
-	// the daemon log — the very bug this feedback loop caught).
-	if len(httpListeners)+len(httpsListeners) > 0 {
-		proxyCtx, cancel := context.WithCancel(ctx)
-		proxy := NewProxyServer(routes, ca)
-		server.SetProxyReady(true)
-		g.Add(func() error {
-			return proxy.Serve(proxyCtx, httpListeners, httpsListeners)
-		}, func(error) {
-			cancel()
-		})
-	}
+	// "the daemon can serve a proxy" unconditionally instead of
+	// TCP-dialing 127.0.0.1:443 (which closes mid-handshake and spams
+	// "TLS handshake error … EOF" in the daemon log — the very bug this
+	// feedback loop caught).
+	server.SetProxyReady(true)
 
 	// Context-cancel actor: when ctx is cancelled (parent signal),
-	// the group returns.
+	// the group returns. Also tears down every project's per-project
+	// HTTP/HTTPS proxy listeners so a graceful daemon exit doesn't leak
+	// bound ports — there's no oklog/run actor for the proxy anymore to
+	// do this via its own interrupt func.
 	{
 		ctxCancel := make(chan struct{})
 		g.Add(func() error {
@@ -172,6 +191,7 @@ func RunService(ctx context.Context, build Build) error {
 			}
 		}, func(error) {
 			close(ctxCancel)
+			proxy.StopAll()
 		})
 	}
 
