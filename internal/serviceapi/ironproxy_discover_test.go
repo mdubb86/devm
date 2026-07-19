@@ -238,6 +238,34 @@ func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesSSHHostPortAndRout
 	assert.Equal(t, projectID, route.Project)
 }
 
+// TestRecoverProjectState_RestoresProjectIP covers the same
+// daemon-restart adoption gap as the SSHHostPort recovery test above,
+// but for the allocated project IP: like SSHHostPort, ProjectIP isn't
+// part of iron-proxy's on-disk config, so without this recovery step a
+// daemon restart would strand a running project without its
+// 127.42.0.x address and AllocateProjectIP would hand out a second one
+// on the next /vm/start.
+func TestRecoverProjectState_RestoresProjectIP(t *testing.T) {
+	const projectID = "recover-ip-proj"
+	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Cleanup(func() { ironProxyState.del(projectID) })
+
+	ironProxyState.put(projectID, projectInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})
+
+	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{
+		Cfg:       schema.Config{Project: schema.Project{Name: projectID}},
+		ProjectIP: "127.42.0.7",
+	}))
+
+	routes := NewRoutes()
+	recoverProjectState(context.Background(), tart.New(), routes, projectID)
+
+	info, ok := ironProxyState.get(projectID)
+	require.True(t, ok)
+	assert.Equal(t, "127.42.0.7", info.ProjectIP)
+	assert.Equal(t, 59481, info.HTTPPort, "pre-seeded ports must survive the ProjectIP restore")
+}
+
 func TestLoadIronProxyInfoFromConfig_MalformedListen(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.yaml")

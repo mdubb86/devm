@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"fmt"
+	"sync"
 )
 
 const (
@@ -10,11 +11,22 @@ const (
 	projectIPPoolFmt   = "127.42.0.%d"
 )
 
+// allocMu serializes the read-state/decide/write critical section of
+// AllocateProjectIP and ReleaseProjectIP against each other. Without
+// it, concurrent /vm/start calls for different projects could both
+// read ironProxyState before either had written its choice, compute
+// the same lowest-free IP, and both write it — a TOCTOU race across
+// the three separate lock acquisitions (get, keys+get loop, put) on
+// the underlying projectInfoStore.
+var allocMu sync.Mutex
+
 // AllocateProjectIP returns projectID's existing ProjectIP if it has
 // one; otherwise picks the lowest-free address from 127.42.0.1..20,
 // records it in ironProxyState and StateSnapshot, and returns it.
 // Fails when the pool is exhausted (20 concurrent projects).
 func AllocateProjectIP(projectID string) (string, error) {
+	allocMu.Lock()
+	defer allocMu.Unlock()
 	if existing, ok := ironProxyState.get(projectID); ok && existing.ProjectIP != "" {
 		return existing.ProjectIP, nil
 	}
@@ -48,6 +60,8 @@ func AllocateProjectIP(projectID string) (string, error) {
 // ReleaseProjectIP clears projectID's ProjectIP from both projectInfo
 // and StateSnapshot. Idempotent — call at /vm/stop.
 func ReleaseProjectIP(projectID string) {
+	allocMu.Lock()
+	defer allocMu.Unlock()
 	info, ok := ironProxyState.get(projectID)
 	if ok && info.ProjectIP != "" {
 		info.ProjectIP = ""

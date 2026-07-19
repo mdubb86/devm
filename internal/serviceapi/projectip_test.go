@@ -1,6 +1,8 @@
 package serviceapi
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,6 +64,48 @@ func TestReleaseProjectIP_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 	ReleaseProjectIP("a")
 	ReleaseProjectIP("a")
+}
+
+// TestAllocateProjectIP_ConcurrentDistinct guards against the TOCTOU
+// race across AllocateProjectIP's three separate lock acquisitions on
+// ironProxyState (get, keys+get loop, put): without allocMu serializing
+// the read-decide-write critical section, concurrent /vm/start calls
+// for different projects could compute and write the same lowest-free
+// IP. Run with -race to also catch any unsynchronized access.
+func TestAllocateProjectIP_ConcurrentDistinct(t *testing.T) {
+	resetIronProxyState(t)
+	const N = 10
+	ips := make(chan string, N)
+	errs := make(chan error, N)
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			ip, err := AllocateProjectIP(id)
+			if err != nil {
+				errs <- err
+				return
+			}
+			ips <- ip
+		}(fmt.Sprintf("proj-%d", i))
+	}
+	wg.Wait()
+	close(ips)
+	close(errs)
+	for e := range errs {
+		t.Errorf("unexpected alloc error: %v", e)
+	}
+	seen := map[string]bool{}
+	for ip := range ips {
+		if seen[ip] {
+			t.Errorf("duplicate IP allocated: %s", ip)
+		}
+		seen[ip] = true
+	}
+	if len(seen) != N {
+		t.Errorf("expected %d distinct IPs, got %d", N, len(seen))
+	}
 }
 
 // resetIronProxyState clears the package-level ironProxyState between
