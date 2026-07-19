@@ -352,7 +352,8 @@ func buildInstallScript(inputs installInputs) string {
 		// Create _devm group idempotently (safe re-run at every install).
 		sb.WriteString(`dscl . -read /Groups/_devm >/dev/null 2>&1 || dscl . -create /Groups/_devm PrimaryGroupID 800` + "\n")
 		if inputs.InstallUser != "" {
-			sb.WriteString("dscl . -append /Groups/_devm GroupMembership " + inputs.InstallUser + "\n")
+			sb.WriteString("dscl . -read /Groups/_devm GroupMembership 2>/dev/null | grep -qw " + inputs.InstallUser +
+				" || dscl . -append /Groups/_devm GroupMembership " + inputs.InstallUser + "\n")
 		}
 		fmt.Fprintf(&sb, "install -m 0755 %s %s\n", shellQuote(inputs.PortbinderExe), portbinderInstallPath)
 		fmt.Fprintf(&sb, "install -m 0644 /dev/stdin %s <<'EOF'\n%sEOF\n", portbinderPlistPath, portbinderPlistContent())

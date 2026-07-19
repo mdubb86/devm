@@ -39,12 +39,20 @@ func TestBuildInstallScript_IncludesPortbinder(t *testing.T) {
 	script := buildInstallScript(installInputs{
 		DevmExe:       "/usr/local/bin/devm",
 		PortbinderExe: "/usr/local/libexec/devm-portbinder",
+		InstallUser:   "alice",
 		NeedsDaemon:   true,
 	})
 	assert.Contains(t, script, "dscl . -create /Groups/_devm")
 	assert.Contains(t, script, "/Library/LaunchDaemons/com.devm.portbinder.plist")
 	assert.Contains(t, script, "launchctl bootstrap system /Library/LaunchDaemons/com.devm.portbinder.plist")
 	assert.Contains(t, script, "/usr/local/libexec/devm-portbinder")
+
+	// The append must be guarded against duplicate GroupMembership
+	// entries across repeated install runs (dscl -append has no
+	// dedup of its own).
+	assert.Contains(t, script, "dscl . -read /Groups/_devm GroupMembership")
+	assert.Contains(t, script, "grep -qw")
+	assert.Contains(t, script, "|| dscl . -append /Groups/_devm GroupMembership")
 }
 
 func TestBuildInstallScript_SkipsPortbinderWhenExeEmpty(t *testing.T) {
