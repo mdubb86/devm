@@ -3,9 +3,9 @@
 #     Include "~/Library/Application Support/devm/ssh_config"
 
 Host devm-alpha
-    HostName             127.0.0.1
+    HostName             alpha.test
     User                 devm
-    Port                 2201
+    Port                 22
     IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/alpha/id_ed25519"
     UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/alpha/known_hosts"
     HostKeyAlias         devm-alpha
@@ -13,9 +13,9 @@ Host devm-alpha
     IdentitiesOnly       yes
 
 Host devm-bravo
-    HostName             127.0.0.1
+    HostName             bravo.test
     User                 devm
-    Port                 2202
+    Port                 22
     IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/bravo/id_ed25519"
     UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/bravo/known_hosts"
     HostKeyAlias         devm-bravo
@@ -23,9 +23,9 @@ Host devm-bravo
     IdentitiesOnly       yes
 
 Host devm-charlie
-    HostName             127.0.0.1
+    HostName             charlie.test
     User                 devm
-    Port                 2203
+    Port                 22
     IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/charlie/id_ed25519"
     UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/charlie/known_hosts"
     HostKeyAlias         devm-charlie

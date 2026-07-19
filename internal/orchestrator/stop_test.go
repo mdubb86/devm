@@ -35,10 +35,6 @@ func (f *fakeStopClient) StopVM(_ context.Context, name string) error {
 	return f.stopErr
 }
 
-func (f *fakeStopClient) IngressConfig(_ context.Context, _ string) (serviceapi.VMIngressConfigResponse, error) {
-	return serviceapi.VMIngressConfigResponse{}, nil
-}
-
 // ---------- RunStop tests ----------
 
 func TestRunStopPreserve_CallsStopVM(t *testing.T) {

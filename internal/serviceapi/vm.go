@@ -59,6 +59,17 @@ type VMStartRequest struct {
 	Cfg schema.Config `json:"cfg"`
 }
 
+// VMStartResponse is the body shape for POST /vm/start.
+type VMStartResponse struct {
+	// ProjectIP is the project's allocated 127.42/16 loopback IP
+	// (AllocateProjectIP), returned so the CLI can seed it into its
+	// cold-start StateSnapshot. Without this, a daemon crash between
+	// /vm/start and the first reconcile would leave ProjectIP unset in
+	// the snapshot, and recoverProjectState would find nothing to
+	// restore.
+	ProjectIP string `json:"project_ip"`
+}
+
 // VMStopRequest is the body shape for POST /vm/stop. The daemon calls
 // `tart stop <Name>` for a graceful guest shutdown before SIGTERM'ing the
 // supervised tart process.
@@ -106,15 +117,6 @@ type VMEnforcementConfigResponse struct {
 // /vm/apply-egress-enforcement.
 type VMApplyEgressEnforcementRequest struct {
 	Name string `json:"name"`
-}
-
-// VMIngressConfigResponse is the body shape for GET /vm/ingress-config:
-// the per-project SSH host port softnet forwards to the guest's :22. The
-// CLI's ssh_config emitter fetches this instead of `tart ip` — under
-// softnet the guest IP isn't Mac-routable, so `HostName 127.0.0.1` +
-// this port is the only way in.
-type VMIngressConfigResponse struct {
-	SSHHostPort int `json:"ssh_host_port"`
 }
 
 // VMStatusResponse is the body shape for GET /vm/status.
@@ -584,7 +586,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			}
 		}
 
-		w.WriteHeader(http.StatusNoContent)
+		writeJSON(w, VMStartResponse{ProjectIP: projectIP})
 	})
 
 	// /vm/enforcement-config returns the guest-side config the boot-
@@ -610,29 +612,6 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		writeJSON(w, VMEnforcementConfigResponse{
 			TimesyncdScript: buildTimesyncdScript(),
 		})
-	})
-
-	// /vm/ingress-config returns the per-project SSH host port allocated
-	// at /vm/start, so the CLI's ssh_config emitter can point
-	// `devm-<project>` at 127.0.0.1:<port> without needing the guest's
-	// (now unroutable) softnet IP.
-	s.Register("/vm/ingress-config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "GET only", http.StatusMethodNotAllowed)
-			return
-		}
-		name := r.URL.Query().Get("name")
-		if name == "" {
-			http.Error(w, "name required", http.StatusBadRequest)
-			return
-		}
-		info, ok := ironProxyState.get(name)
-		if !ok {
-			http.Error(w, "iron-proxy state missing — was /vm/start called for this project?",
-				http.StatusPreconditionFailed)
-			return
-		}
-		writeJSON(w, VMIngressConfigResponse{SSHHostPort: info.SSHHostPort})
 	})
 
 	// /vm/open-egress flips a project's softnet control socket to OPEN —
@@ -1029,10 +1008,6 @@ type projectInfo struct {
 	// AllocateProjectIP; released at /vm/stop via ReleaseProjectIP.
 	// Empty when the project is stopped.
 	ProjectIP string
-
-	// SSHHostPort is the daemon-picked host port softnet forwards to the
-	// guest's :22. Retires in Task 5 (SSH moves to :22 on ProjectIP).
-	SSHHostPort int
 }
 
 type projectInfoStore struct {

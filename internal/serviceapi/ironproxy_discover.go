@@ -106,11 +106,11 @@ func AdoptIronProxies(ctx context.Context, sup *supervisor.Supervisor, tr *tart.
 
 // recoverProjectState rebuilds the parts of a recovered project's
 // in-memory state that live outside ironProxyState's config-file
-// rehydration: the SSH host port and allocated project IP (both read
-// back from the last-applied state snapshot, since neither is part of
-// iron-proxy's own config shape) and the project's direct routes. It's
-// split out of AdoptIronProxies's loop so it can be unit tested
-// without shelling out to `ps` (DiscoverIronProxies).
+// rehydration: the allocated project IP (read back from the
+// last-applied state snapshot, since it isn't part of iron-proxy's own
+// config shape) and the project's direct routes. It's split out of
+// AdoptIronProxies's loop so it can be unit tested without shelling out
+// to `ps` (DiscoverIronProxies).
 //
 // Best-effort: a missing/malformed snapshot (or a project with no
 // direct services) simply leaves nothing to recover.
@@ -127,15 +127,7 @@ func recoverProjectState(ctx context.Context, tr *tart.Tart, routes *Routes, pro
 	}
 
 	info, _ := ironProxyState.get(projectID)
-	// SSHHostPort isn't part of iron-proxy's on-disk YAML config (it's
-	// not an iron-proxy concept), so loadIronProxyInfoFromConfig can't
-	// recover it. Restore it from the state snapshot instead — the
-	// orchestrator stamps the current value into every snapshot it
-	// writes — so a daemon restart doesn't strand a running VM's SSH
-	// port at 0 and force a re-allocation that would orphan any
-	// ssh_config already emitted with the old port.
-	info.SSHHostPort = snap.SSHHostPort
-	// ProjectIP is likewise not part of iron-proxy's on-disk config —
+	// ProjectIP is not part of iron-proxy's on-disk config —
 	// restore it from the snapshot too, or a daemon restart would
 	// silently strand a running project without its allocated
 	// 127.42.0.x address (AllocateProjectIP would then hand out a

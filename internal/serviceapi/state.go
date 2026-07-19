@@ -56,17 +56,6 @@ type StateSnapshot struct {
 	// build) and should be respawned on the current binary.
 	ProxyVersion string `json:"proxy_version,omitempty"`
 
-	// SSHHostPort is the daemon-picked host port softnet forwards to the
-	// guest's :22, mirrored here from projectInfo so a daemon restart
-	// can recover it. projectInfo itself is rebuilt on restart from the
-	// running iron-proxy's on-disk YAML config (AdoptIronProxies), which
-	// has no notion of SSH — without this copy the port would reset to 0
-	// on every restart, orphaning any ssh_config already emitted with the
-	// old port. recoverProjectState reads it back; the orchestrator's
-	// cold-start and live-reconcile snapshot writes both stamp the
-	// current value.
-	SSHHostPort int `json:"ssh_host_port,omitempty"`
-
 	// WorkspaceHostPath is the project repoRoot, stamped here so a daemon
 	// restart or `devm stop` can recover which files to (un)lock — the
 	// running iron-proxy config has no notion of it. It only arrives on

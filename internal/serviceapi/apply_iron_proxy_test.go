@@ -224,25 +224,25 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	require.True(t, ok, "ironProxyState must hold an entry for the project after a successful apply")
 }
 
-// TestApplyIronProxy_PreservesSSHHostPort covers a reconcile-driven
+// TestApplyIronProxy_PreservesProjectIP covers a reconcile-driven
 // BucketEgressRestart apply (allowlist/secret drift) against a VM that's
 // still running this daemon lifetime: ironProxyState already holds the
-// SSH host port /vm/start allocated. The handler rebuilds `info` from
+// project IP /vm/start allocated. The handler rebuilds `info` from
 // iron-proxy's on-disk YAML config (loadIronProxyInfoFromConfig), which
-// has no notion of SSH — without carrying SSHHostPort forward from the
+// has no notion of ProjectIP — without carrying it forward from the
 // pre-existing entry, this call would silently zero it out, and the
-// next live reconcile's expose-map push would drop the guest's SSH
-// listener.
-func TestApplyIronProxy_PreservesSSHHostPort(t *testing.T) {
+// next live reconcile's expose-map push would compute against no IP at
+// all.
+func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	srv := NewServer(SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
 
-	const projectID = "p-preserve-ssh"
+	const projectID = "p-preserve-ip"
 	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(projectID) })
 
 	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
-	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg, SSHHostPort: 2200}))
+	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg, ProjectIP: "127.42.0.9"}))
 
 	macHost := "127.0.0.1"
 	httpPort, err := pickPort()
@@ -254,8 +254,8 @@ func TestApplyIronProxy_PreservesSSHHostPort(t *testing.T) {
 	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
 
 	// The VM is still running this daemon lifetime: ironProxyState
-	// already holds the SSH host port /vm/start allocated.
-	ironProxyState.put(projectID, projectInfo{SSHHostPort: 2200})
+	// already holds the project IP /vm/start allocated.
+	ironProxyState.put(projectID, projectInfo{ProjectIP: "127.42.0.9"})
 
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
@@ -281,8 +281,8 @@ func TestApplyIronProxy_PreservesSSHHostPort(t *testing.T) {
 
 	info, ok := ironProxyState.get(projectID)
 	require.True(t, ok)
-	assert.Equal(t, 2200, info.SSHHostPort,
-		"SSHHostPort must be preserved across apply-iron-proxy, not zeroed")
+	assert.Equal(t, "127.42.0.9", info.ProjectIP,
+		"ProjectIP must be preserved across apply-iron-proxy, not zeroed")
 }
 
 // TestApplyIronProxy_AllocatesProjectIPWhenUnset covers adopt-in-place
@@ -310,7 +310,7 @@ func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 			"db": {Port: 5432},
 		},
 	}
-	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg, SSHHostPort: 0}))
+	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg}))
 
 	macHost := "127.0.0.1"
 	httpPort, err := pickPort()

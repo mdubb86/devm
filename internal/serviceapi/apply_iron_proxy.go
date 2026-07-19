@@ -43,6 +43,12 @@ type VMApplyIronProxyResponse struct {
 	Applied   bool `json:"applied"`
 	Revived   bool `json:"revived"`
 	VMRunning bool `json:"vm_running"`
+	// ProjectIP is the project's allocated 127.42/16 loopback IP,
+	// returned so the CLI can seed it into a state snapshot for
+	// adopt-in-place — mirrors VMStartResponse.ProjectIP for the
+	// cold-start path. Empty in the VM-never-started (VMRunning=false)
+	// case, since no IP is allocated there.
+	ProjectIP string `json:"project_ip,omitempty"`
 }
 
 // spawnIronProxyFn is the test-injection seam for SpawnIronProxy.
@@ -183,23 +189,12 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// EnforcementConfig fetch. Mirrors AdoptIronProxies'
 		// daemon-restart rehydration (ironproxy_discover.go).
 		existing, _ := ironProxyState.get(req.Name)
-		// SSHHostPort isn't part of iron-proxy's own YAML config shape
-		// (loadIronProxyInfoFromConfig never sets it), so it must be
-		// carried forward explicitly or this call would silently zero
-		// out the running VM's SSH port on every allowlist/secret
-		// reconcile — breaking the next expose-map push and any
-		// already-emitted ssh_config.
-		info.SSHHostPort = existing.SSHHostPort
-		// ProjectIP likewise isn't part of iron-proxy's own on-disk
-		// config, so carry it forward too — otherwise this put would
-		// clobber it back to empty even though AllocateProjectIP (below)
-		// treats the in-memory registry as the idempotency source of
-		// truth.
+		// ProjectIP isn't part of iron-proxy's own on-disk config, so
+		// carry it forward explicitly — otherwise this put would clobber
+		// it back to empty even though AllocateProjectIP (below) treats
+		// the in-memory registry as the idempotency source of truth.
 		info.ProjectIP = existing.ProjectIP
 		snap, _ := ReadStateSnapshot(req.Name)
-		if snap != nil {
-			info.SSHHostPort = snap.SSHHostPort
-		}
 		ironProxyState.put(req.Name, info)
 
 		// Adopt-in-place (internal/orchestrator/shell.go's "pristine:
@@ -236,6 +231,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			Applied:   true,
 			Revived:   !wasRunning,
 			VMRunning: true,
+			ProjectIP: projectIP,
 		})
 	})
 }

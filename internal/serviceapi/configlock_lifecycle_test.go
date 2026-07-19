@@ -98,7 +98,7 @@ func TestVMStart_LocksConfig_DefaultEnabled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err := c.StartVM(ctx, VMStartRequest{
+	_, err := c.StartVM(ctx, VMStartRequest{
 		Name:              name,
 		WorkspaceHostPath: repoRoot,
 		Cfg:               schema.Config{Project: schema.Project{Name: name}},
@@ -135,7 +135,7 @@ func TestVMStart_ConfigLockDisabled_NoLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err := c.StartVM(ctx, VMStartRequest{
+	_, err := c.StartVM(ctx, VMStartRequest{
 		Name:              name,
 		WorkspaceHostPath: repoRoot,
 		Cfg: schema.Config{
@@ -172,7 +172,7 @@ func TestVMStart_LockFailureIsBestEffort(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err := c.StartVM(ctx, VMStartRequest{
+	_, err := c.StartVM(ctx, VMStartRequest{
 		Name:              name,
 		WorkspaceHostPath: repoRoot,
 		Cfg:               schema.Config{Project: schema.Project{Name: name}},

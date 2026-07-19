@@ -1,6 +1,7 @@
 package sshconfig
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,7 +32,7 @@ func TestEmit_EmptyEntries_WritesHeaderOnly(t *testing.T) {
 func TestEmit_SingleEntry_GoldenFile(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
 	require.NoError(t, Emit([]Entry{
-		{Name: "myproj", Host: "127.0.0.1", Port: 2200},
+		{Name: "myproj"},
 	}))
 	got, err := os.ReadFile(Path())
 	require.NoError(t, err)
@@ -39,28 +40,32 @@ func TestEmit_SingleEntry_GoldenFile(t *testing.T) {
 	assert.Equal(t, want, string(got))
 }
 
-// TestEmit_SingleEntry_PointsAtHostLoopback verifies the block now emits
-// HostName 127.0.0.1 + the per-project SSH host port — under softnet the
-// guest IP isn't Mac-routable, so 127.0.0.1:<host port> is the only
-// address that reaches the VM's :22.
-func TestEmit_SingleEntry_PointsAtHostLoopback(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	require.NoError(t, Emit([]Entry{
-		{Name: "myproj", Host: "127.0.0.1", Port: 2200},
-	}))
-	got, err := os.ReadFile(Path())
+// TestEmit_UsesDNSHostname verifies the block points HostName at the
+// project's DNS name (<name>.test) on the fixed port 22 — softnet binds
+// every project's guest :22 on its allocated ProjectIP and DNS answers
+// <name>.test -> ProjectIP, so there is no more daemon-allocated host
+// port or loopback address to resolve.
+func TestEmit_UsesDNSHostname(t *testing.T) {
+	entries := []Entry{
+		{Name: "myapp", KeyPath: "/tmp/key", KnownHostsPath: "/tmp/known"},
+	}
+	var buf bytes.Buffer
+	err := emit(&buf, entries)
 	require.NoError(t, err)
-	assert.Contains(t, string(got), "HostName             127.0.0.1")
-	assert.Contains(t, string(got), "Port                 2200")
+	got := buf.String()
+	assert.Contains(t, got, "Host devm-myapp")
+	assert.Contains(t, got, "HostName             myapp.test")
+	assert.Contains(t, got, "Port                 22")
+	assert.NotContains(t, got, "127.0.0.1")
 }
 
 func TestEmit_MultipleEntries_SortedByName(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
 	// Unsorted input; expect output sorted by Name ascending.
 	require.NoError(t, Emit([]Entry{
-		{Name: "charlie", Host: "127.0.0.1", Port: 2203},
-		{Name: "alpha", Host: "127.0.0.1", Port: 2201},
-		{Name: "bravo", Host: "127.0.0.1", Port: 2202},
+		{Name: "charlie"},
+		{Name: "alpha"},
+		{Name: "bravo"},
 	}))
 	got, err := os.ReadFile(Path())
 	require.NoError(t, err)
@@ -71,7 +76,7 @@ func TestEmit_MultipleEntries_SortedByName(t *testing.T) {
 func TestEmit_AtomicWrite(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
 	require.NoError(t, Emit([]Entry{
-		{Name: "p", Host: "127.0.0.1", Port: 2200},
+		{Name: "p"},
 	}))
 	// Only ssh_config remains in RuntimeDir root; no temp files linger.
 	entries, err := os.ReadDir(filepath.Dir(Path()))
@@ -105,31 +110,8 @@ func TestEmit_RejectsUnsafeName(t *testing.T) {
 		"foo/bar", // slash escapes the project dir
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := Emit([]Entry{{Name: name, Host: "127.0.0.1", Port: 2200}})
+			err := Emit([]Entry{{Name: name}})
 			require.Error(t, err, "must reject name %q", name)
 		})
-	}
-}
-
-func TestEmit_RejectsUnsafeHost(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	for _, host := range []string{
-		"not-an-ip",
-		"1.2.3.4\n    ProxyCommand /bin/sh -c pwned",
-		"1.2.3.4 5.6.7.8",
-		"",
-	} {
-		t.Run(host, func(t *testing.T) {
-			err := Emit([]Entry{{Name: "p", Host: host, Port: 2200}})
-			require.Error(t, err, "must reject host %q", host)
-		})
-	}
-}
-
-func TestEmit_RejectsUnsafePort(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	for _, port := range []int{0, -1, 65536, 100000} {
-		err := Emit([]Entry{{Name: "p", Host: "127.0.0.1", Port: port}})
-		require.Error(t, err, "must reject port %d", port)
 	}
 }

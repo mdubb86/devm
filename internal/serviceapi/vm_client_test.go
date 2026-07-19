@@ -107,7 +107,7 @@ func TestVMStart_MissingName(t *testing.T) {
 	defer cancel()
 
 	// Missing name → 400.
-	err := c.StartVM(ctx, VMStartRequest{})
+	_, err := c.StartVM(ctx, VMStartRequest{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "vm/start")
 }
@@ -418,55 +418,6 @@ func TestClientEnforcementConfig_MissingProjectState(t *testing.T) {
 	_, err := c.EnforcementConfig(ctx, "nonexistent-project")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "enforcement-config")
-}
-
-// TestClientIngressConfig_ReadsResponse verifies GET /vm/ingress-config
-// returns the SSH host port stashed in ironProxyState at /vm/start — the
-// CLI's ssh_config emitter reads this instead of `tart ip` now that the
-// guest IP isn't Mac-routable under softnet.
-func TestClientIngressConfig_ReadsResponse(t *testing.T) {
-	logDir := t.TempDir()
-	sup := supervisor.New(logDir)
-	tr := tart.New()
-	tr.Path = "false"
-
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
-	defer cleanup()
-	t.Cleanup(func() { ironProxyState.del("proj-ingress") })
-
-	ironProxyState.put("proj-ingress", projectInfo{
-		HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
-		SSHHostPort: 2200,
-	})
-
-	c := NewClientWithSocket(srv.socketPath)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	resp, err := c.IngressConfig(ctx, "proj-ingress")
-	require.NoError(t, err)
-	assert.Equal(t, 2200, resp.SSHHostPort)
-}
-
-// TestClientIngressConfig_MissingProjectState verifies the endpoint 412s
-// (surfaced as a Client error) when /vm/start was never called for the
-// project — mirrors TestClientEnforcementConfig_MissingProjectState.
-func TestClientIngressConfig_MissingProjectState(t *testing.T) {
-	logDir := t.TempDir()
-	sup := supervisor.New(logDir)
-	tr := tart.New()
-	tr.Path = "false"
-
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
-	defer cleanup()
-
-	c := NewClientWithSocket(srv.socketPath)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := c.IngressConfig(ctx, "nonexistent-project")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ingress-config")
 }
 
 // TestClientOpenEgress_SendsPolicyOpen verifies POST /vm/open-egress flips

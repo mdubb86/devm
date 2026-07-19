@@ -7,7 +7,7 @@ package sshconfig
 import (
 	"bytes"
 	"fmt"
-	"net"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,15 +29,15 @@ import (
 // catches injection attempts.
 var safeIdent = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
-// Entry describes one Host block to emit.
+// Entry describes one Host block to emit. HostName and Port are no
+// longer independent fields — softnet binds every project's guest :22
+// on its allocated ProjectIP and DNS answers <Name>.test -> ProjectIP
+// (see internal/softnet), so the block always points at "<Name>.test"
+// on port 22; nothing daemon-side needs to be fetched to resolve it.
 type Entry struct {
-	Name string // project name: host alias devm-<Name> + on-disk path lookups
-	// Host is the host-side address SSH dials — under softnet the guest
-	// isn't Mac-routable, so callers set this to softnet.HostLoopIP.
-	Host string
-	// Port is the project's daemon-allocated SSH host port, forwarded by
-	// softnet to the guest's :22.
-	Port int
+	Name           string // project name: host alias devm-<Name> + on-disk path lookups
+	KeyPath        string // path to the project's SSH private key
+	KnownHostsPath string // path to the project's known_hosts file
 }
 
 const header = `# Managed by devm. Regenerated on VM lifecycle events; hand edits will be
@@ -47,9 +47,9 @@ const header = `# Managed by devm. Regenerated on VM lifecycle events; hand edit
 `
 
 const blockTmpl = `Host devm-{{.Name}}
-    HostName             {{.Host}}
+    HostName             {{.Name}}.test
     User                 devm
-    Port                 {{.Port}}
+    Port                 22
     IdentityFile         "{{.KeyPath}}"
     UserKnownHostsFile   "{{.KnownHostsPath}}"
     HostKeyAlias         devm-{{.Name}}
@@ -63,45 +63,36 @@ func Path() string {
 	return filepath.Join(serviceapi.RuntimeDir(), "ssh_config")
 }
 
-// Emit atomically replaces the ssh_config file with header + one block
-// per entry (sorted by Name ascending). Validates all entry fields to
-// prevent ssh_config injection attacks (newlines, quotes, control chars).
+// validateEntry rejects unsafe Name values to prevent ssh_config
+// injection attacks (newlines, quotes, control chars, path traversal).
 // This is the ONLY layer that validates these constraints — schema
-// validation only checks non-empty.
-func Emit(entries []Entry) error {
-	sorted := make([]Entry, len(entries))
-	copy(sorted, entries)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+// validation only checks non-empty. KeyPath/KnownHostsPath aren't
+// separately validated: Emit derives them from the already-validated
+// Name via sshkeys.ProjectDir, so they can't carry attacker input.
+func validateEntry(e Entry) error {
+	if !safeIdent.MatchString(e.Name) {
+		return fmt.Errorf("unsafe name %q: only [a-zA-Z0-9._-] allowed", e.Name)
+	}
+	if strings.Contains(e.Name, "..") {
+		return fmt.Errorf("unsafe name %q: path traversal not allowed", e.Name)
+	}
+	return nil
+}
 
-	for _, e := range sorted {
-		if !safeIdent.MatchString(e.Name) {
-			return fmt.Errorf("unsafe name %q: only [a-zA-Z0-9._-] allowed", e.Name)
-		}
-		if strings.Contains(e.Name, "..") {
-			return fmt.Errorf("unsafe name %q: path traversal not allowed", e.Name)
-		}
-		if net.ParseIP(e.Host) == nil {
-			return fmt.Errorf("unsafe host %q: not a valid IP address", e.Host)
-		}
-		if e.Port <= 0 || e.Port > 65535 {
-			return fmt.Errorf("unsafe port %d: out of range", e.Port)
-		}
+// Emit atomically replaces the ssh_config file with header + one block
+// per entry (sorted by Name ascending).
+func Emit(entries []Entry) error {
+	filled := make([]Entry, len(entries))
+	for i, e := range entries {
+		dir := sshkeys.ProjectDir(e.Name)
+		e.KeyPath = filepath.Join(dir, "id_ed25519")
+		e.KnownHostsPath = filepath.Join(dir, "known_hosts")
+		filled[i] = e
 	}
 
-	tmpl := template.Must(template.New("block").Parse(blockTmpl))
 	var buf bytes.Buffer
-	buf.WriteString(header)
-	for _, e := range sorted {
-		dir := sshkeys.ProjectDir(e.Name)
-		if err := tmpl.Execute(&buf, map[string]any{
-			"Name":           e.Name,
-			"Host":           e.Host,
-			"Port":           e.Port,
-			"KeyPath":        filepath.Join(dir, "id_ed25519"),
-			"KnownHostsPath": filepath.Join(dir, "known_hosts"),
-		}); err != nil {
-			return fmt.Errorf("render entry: %w", err)
-		}
+	if err := emit(&buf, filled); err != nil {
+		return err
 	}
 
 	dir := serviceapi.RuntimeDir()
@@ -128,4 +119,26 @@ func Emit(entries []Entry) error {
 		return err
 	}
 	return os.Rename(tmpPath, Path())
+}
+
+// emit is the pure rendering core: header + one validated, sorted block
+// per entry, written to w. Split out from Emit so tests can assert on
+// rendered content without touching the filesystem.
+func emit(w io.Writer, entries []Entry) error {
+	if _, err := io.WriteString(w, header); err != nil {
+		return err
+	}
+	sorted := make([]Entry, len(entries))
+	copy(sorted, entries)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	tmpl := template.Must(template.New("block").Parse(blockTmpl))
+	for _, e := range sorted {
+		if err := validateEntry(e); err != nil {
+			return err
+		}
+		if err := tmpl.Execute(w, e); err != nil {
+			return fmt.Errorf("render entry: %w", err)
+		}
+	}
+	return nil
 }

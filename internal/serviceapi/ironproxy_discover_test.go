@@ -126,15 +126,14 @@ func TestLoadIronProxyInfoFromConfig_MissingFile(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestRecoverProjectState_RestoresSSHHostPortAndRebuildsDirectRoutes
-// covers the daemon-restart adoption path (AdoptIronProxies calls this
-// per recovered project, after already seeding ironProxyState from the
-// project's on-disk iron-proxy config): given a state snapshot on disk
-// describing a direct service and an SSH host port, recoverProjectState
-// should restore SSHHostPort onto the pre-seeded entry and rebuild the
-// project's direct routes (so DNS keeps answering for it) — all without
-// a daemon restart actually having happened.
-func TestRecoverProjectState_RestoresSSHHostPortAndRebuildsDirectRoutes(t *testing.T) {
+// TestRecoverProjectState_RebuildsDirectRoutes covers the daemon-restart
+// adoption path (AdoptIronProxies calls this per recovered project,
+// after already seeding ironProxyState from the project's on-disk
+// iron-proxy config): given a state snapshot on disk describing a
+// direct service, recoverProjectState should rebuild the project's
+// direct routes (so DNS keeps answering for it) — all without a daemon
+// restart actually having happened.
+func TestRecoverProjectState_RebuildsDirectRoutes(t *testing.T) {
 	const projectID = "recover-proj"
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
@@ -161,7 +160,6 @@ func TestRecoverProjectState_RestoresSSHHostPortAndRebuildsDirectRoutes(t *testi
 				},
 			},
 		},
-		SSHHostPort: 2201,
 	}
 	require.NoError(t, WriteStateSnapshot(projectID, snap))
 
@@ -170,8 +168,7 @@ func TestRecoverProjectState_RestoresSSHHostPortAndRebuildsDirectRoutes(t *testi
 
 	info, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
-	assert.Equal(t, 2201, info.SSHHostPort, "SSHHostPort must be restored from the state snapshot")
-	assert.Equal(t, 59481, info.HTTPPort, "pre-seeded ports must survive the SSHHostPort restore")
+	assert.Equal(t, 59481, info.HTTPPort, "pre-seeded ports must survive recoverProjectState")
 
 	route, ok := routes.DirectRoute("db.test")
 	require.True(t, ok)
@@ -205,13 +202,13 @@ func TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched(t *testing.T) 
 	assert.Empty(t, routes.AllByProject()[projectID])
 }
 
-// TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesSSHHostPortAndRoutes
-// covers the defensive case where ironProxyState holds no entry yet for
-// the project (e.g. called outside AdoptIronProxies's normal
+// TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes covers
+// the defensive case where ironProxyState holds no entry yet for the
+// project (e.g. called outside AdoptIronProxies's normal
 // config-rehydration-first order): given only a state snapshot,
-// recoverProjectState must still create an entry carrying SSHHostPort
-// and rebuild direct routes.
-func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesSSHHostPortAndRoutes(t *testing.T) {
+// recoverProjectState must still create an entry and rebuild direct
+// routes.
+func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.T) {
 	const projectID = "vm-down-proj"
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
@@ -223,28 +220,25 @@ func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesSSHHostPortAndRout
 				"db": {Hostname: "db.test", Port: 5432, Direct: true},
 			},
 		},
-		SSHHostPort: 2202,
 	}))
 
 	routes := NewRoutes()
 	recoverProjectState(context.Background(), tart.New(), routes, projectID)
 
-	info, ok := ironProxyState.get(projectID)
+	_, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
-	assert.Equal(t, 2202, info.SSHHostPort)
 
 	route, ok := routes.DirectRoute("db.test")
 	require.True(t, ok)
 	assert.Equal(t, projectID, route.Project)
 }
 
-// TestRecoverProjectState_RestoresProjectIP covers the same
-// daemon-restart adoption gap as the SSHHostPort recovery test above,
-// but for the allocated project IP: like SSHHostPort, ProjectIP isn't
-// part of iron-proxy's on-disk config, so without this recovery step a
-// daemon restart would strand a running project without its
-// 127.42.0.x address and AllocateProjectIP would hand out a second one
-// on the next /vm/start.
+// TestRecoverProjectState_RestoresProjectIP covers the daemon-restart
+// adoption gap for the allocated project IP: ProjectIP isn't part of
+// iron-proxy's on-disk config, so without this recovery step a daemon
+// restart would strand a running project without its 127.42.0.x address
+// and AllocateProjectIP would hand out a second one on the next
+// /vm/start.
 func TestRecoverProjectState_RestoresProjectIP(t *testing.T) {
 	const projectID = "recover-ip-proj"
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())

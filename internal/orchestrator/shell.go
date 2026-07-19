@@ -87,14 +87,8 @@ type ShellDeps struct {
 // Extracted as an interface so tests can inject a fake.
 type VMAdminClient interface {
 	VMStatus(ctx context.Context, name string) (serviceapi.VMStatusResponse, error)
-	StartVM(ctx context.Context, req serviceapi.VMStartRequest) error
+	StartVM(ctx context.Context, req serviceapi.VMStartRequest) (serviceapi.VMStartResponse, error)
 	EnforcementConfig(ctx context.Context, name string) (serviceapi.VMEnforcementConfigResponse, error)
-	// IngressConfig fetches the project's daemon-allocated SSH host
-	// port, stashed at /vm/start. Used to seed the state snapshot's
-	// SSHHostPort (so a daemon restart can recover it) and by
-	// EmitSSHConfig to point ssh_config Host blocks at
-	// 127.0.0.1:<port>.
-	IngressConfig(ctx context.Context, name string) (serviceapi.VMIngressConfigResponse, error)
 	StopVM(ctx context.Context, name string) error
 	// ApplyIronProxy (re)spawns this project's iron-proxy on its
 	// existing MAC_HOST/ports without touching the VM — the same
@@ -205,7 +199,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 					"adopt-in-place: no iron-proxy record found for %q — this vm was never started by devm",
 					cfg.Project.Name)
 			}
-			return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, reporter)
+			return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, applyResp.ProjectIP, reporter)
 		}
 	}
 
@@ -236,7 +230,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	}
 
 	diskGB, _ := cfg.DiskSizeGB()
-	if err := d.ServiceAPIClient.StartVM(ctx, serviceapi.VMStartRequest{
+	startResp, err := d.ServiceAPIClient.StartVM(ctx, serviceapi.VMStartRequest{
 		Name:              cfg.Project.Name,
 		WorkspaceHostPath: repoRoot,
 		AllowList:         allowList,
@@ -244,7 +238,8 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		ExtraMounts:       extraMounts,
 		DiskSizeGB:        diskGB,
 		Cfg:               cfg,
-	}); err != nil {
+	})
+	if err != nil {
 		return -1, fmt.Errorf("start vm: %w", err)
 	}
 
@@ -255,7 +250,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	}
 	debuglog.Logf("shell", "cold-start: vm exec-ready")
 
-	return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, reporter)
+	return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, startResp.ProjectIP, reporter)
 }
 
 // warmAttach attaches to a VM that's already provisioned (devm.target
@@ -277,7 +272,7 @@ func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName str
 	reporter.Step("ready", false)
 	reporter.Stop()
 	reporter.Clear()
-	if err := EmitSSHConfig(ctx, d.Tart, d.ServiceAPIClient); err != nil {
+	if err := EmitSSHConfig(ctx, d.Tart); err != nil {
 		log.Printf("ssh_config emit failed on warm attach: %v", err)
 	}
 	return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
@@ -288,7 +283,13 @@ func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName str
 // directly — the VM is already running and exec-ready). Any failure here
 // tears the VM down unless it's a post-install failure, in which case the
 // VM is kept running for in-place debugging (test_51's contract).
-func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vmName, repoRoot, cmdName string, cmdArgs []string, bindings []serviceapi.SecretBinding, reporter status.Reporter) (int, error) {
+//
+// projectIP is the project's daemon-allocated 127.42/16 loopback IP —
+// from VMStartResponse on the cold-start path, VMApplyIronProxyResponse
+// on adopt-in-place — seeded into the cold-start StateSnapshot below so
+// a daemon crash before the next reconcile doesn't strand
+// recoverProjectState with nothing to restore.
+func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vmName, repoRoot, cmdName string, cmdArgs []string, bindings []serviceapi.SecretBinding, projectIP string, reporter status.Reporter) (int, error) {
 	caPEM, err := os.ReadFile(filepath.Join(caStorageDir(), "root.crt"))
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "read CA root")
@@ -399,30 +400,19 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "state: render templates for seed snapshot %s failed: %v\n", cfg.Project.Name, err)
 	}
-	// SSHHostPort was allocated by the daemon at StartVM; fetch it back
-	// so the seed snapshot carries it. Without this, a daemon restart
-	// before the next reconcile would find SSHHostPort unset in the
-	// snapshot and strand the running VM's ironProxyState.SSHHostPort at
-	// 0 (see recoverProjectState). Best-effort like the rest of this
-	// seed — a fetch failure just means the port resets to 0 on the
-	// next daemon restart, exactly as if this line didn't exist.
-	var sshHostPort int
-	if ingress, err := d.ServiceAPIClient.IngressConfig(ctx, cfg.Project.Name); err == nil {
-		sshHostPort = ingress.SSHHostPort
-	}
 	snap := serviceapi.StateSnapshot{
 		Cfg:               cfg,
 		TemplateContents:  templateContents,
 		SecretHashes:      SecretHashesFromBindings(bindings),
 		ProxyVersion:      ironproxy.EmbeddedSha256(), // stamp the version that just provisioned
-		SSHHostPort:       sshHostPort,
+		ProjectIP:         projectIP,
 		WorkspaceHostPath: repoRoot,
 	}
 	if err := serviceapi.WriteStateSnapshot(cfg.Project.Name, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)
 	}
 
-	if err := EmitSSHConfig(ctx, d.Tart, d.ServiceAPIClient); err != nil {
+	if err := EmitSSHConfig(ctx, d.Tart); err != nil {
 		log.Printf("ssh_config emit failed after provisioning: %v", err)
 	}
 

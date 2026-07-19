@@ -11,21 +11,25 @@ import (
 )
 
 // StartVM asks the daemon to clone (if absent) and start the project VM.
-func (c *Client) StartVM(ctx context.Context, req VMStartRequest) error {
+func (c *Client) StartVM(ctx context.Context, req VMStartRequest) (VMStartResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return VMStartResponse{}, err
 	}
 	r, err := c.post(ctx, "/vm/start", body)
 	if err != nil {
-		return err
+		return VMStartResponse{}, err
 	}
 	defer r.Body.Close()
-	if r.StatusCode != http.StatusNoContent {
+	if r.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(r.Body)
-		return fmt.Errorf("vm/start: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+		return VMStartResponse{}, fmt.Errorf("vm/start: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
 	}
-	return nil
+	var resp VMStartResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return VMStartResponse{}, err
+	}
+	return resp, nil
 }
 
 // EnforcementConfig asks the daemon for everything the boot-integrity-
@@ -53,32 +57,6 @@ func (c *Client) EnforcementConfig(ctx context.Context, name string) (VMEnforcem
 	var resp VMEnforcementConfigResponse
 	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
 		return VMEnforcementConfigResponse{}, err
-	}
-	return resp, nil
-}
-
-// IngressConfig asks the daemon for the project's SSH host port —
-// allocated at /vm/start and stashed in projectInfo. The orchestrator's
-// ssh_config emitter uses this to point Host blocks at
-// 127.0.0.1:<port> instead of the guest's (softnet-unroutable) IP.
-func (c *Client) IngressConfig(ctx context.Context, name string) (VMIngressConfigResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET",
-		"http://localhost/vm/ingress-config?name="+name, nil)
-	if err != nil {
-		return VMIngressConfigResponse{}, err
-	}
-	r, err := c.httpClient.Do(req)
-	if err != nil {
-		return VMIngressConfigResponse{}, err
-	}
-	defer r.Body.Close()
-	if r.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(r.Body)
-		return VMIngressConfigResponse{}, fmt.Errorf("vm/ingress-config: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
-	}
-	var resp VMIngressConfigResponse
-	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
-		return VMIngressConfigResponse{}, err
 	}
 	return resp, nil
 }

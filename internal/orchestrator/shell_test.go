@@ -28,6 +28,7 @@ type fakeVMAdmin struct {
 	statusErr             error
 	startCalled           int
 	startErr              error
+	startProjectIP        string
 	stopCalled            int
 	stopErr               error
 	applyIronProxyCalled  int
@@ -56,21 +57,20 @@ func (f *fakeVMAdmin) VMStatus(_ context.Context, _ string) (serviceapi.VMStatus
 	return f.statusResp, f.statusErr
 }
 
-func (f *fakeVMAdmin) StartVM(_ context.Context, _ serviceapi.VMStartRequest) error {
+func (f *fakeVMAdmin) StartVM(_ context.Context, _ serviceapi.VMStartRequest) (serviceapi.VMStartResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.startCalled++
-	return f.startErr
+	if f.startErr != nil {
+		return serviceapi.VMStartResponse{}, f.startErr
+	}
+	return serviceapi.VMStartResponse{ProjectIP: f.startProjectIP}, nil
 }
 
 func (f *fakeVMAdmin) EnforcementConfig(_ context.Context, _ string) (serviceapi.VMEnforcementConfigResponse, error) {
 	return serviceapi.VMEnforcementConfigResponse{
 		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nDEVM_TIMESYNCD\n",
 	}, nil
-}
-
-func (f *fakeVMAdmin) IngressConfig(_ context.Context, _ string) (serviceapi.VMIngressConfigResponse, error) {
-	return serviceapi.VMIngressConfigResponse{SSHHostPort: 2200}, nil
 }
 
 func (f *fakeVMAdmin) StopVM(_ context.Context, _ string) error {
@@ -291,7 +291,8 @@ func TestRunShellWarmPath_ForwardsHostTermEnvIntoTartExec(t *testing.T) {
 func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
-		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+		statusResp:     serviceapi.VMStatusResponse{Present: false, Running: false},
+		startProjectIP: "127.42.0.5",
 	}
 
 	// Write a fake CA so ReadFile succeeds.
@@ -335,6 +336,11 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got, "cold start must seed the daemon state snapshot")
 	assert.Equal(t, minimalCfg().Project.Name, got.Cfg.Project.Name)
+	// Regression: the seed snapshot must carry ProjectIP (from
+	// VMStartResponse) so a daemon crash between /vm/start and the next
+	// reconcile doesn't strand recoverProjectState with nothing to
+	// restore.
+	assert.Equal(t, "127.42.0.5", got.ProjectIP)
 }
 
 // TestRunShellColdPath_FlipsEgressAroundProvision verifies the Critical fix:

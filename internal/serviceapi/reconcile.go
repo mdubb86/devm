@@ -197,15 +197,11 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				http.Error(w, fmt.Sprintf("render templates: %v", err), http.StatusInternalServerError)
 				return
 			}
-			// projectIP is read once here: it feeds the expose-map push.
-			// sshHostPort still mirrors through to the snapshot for
-			// recoverProjectState (see StateSnapshot.SSHHostPort) — retires
-			// in Task 5.
+			// projectIP is read once here: it feeds the expose-map push
+			// and mirrors through to the snapshot for recoverProjectState.
 			var projectIP string
-			sshHostPort := 0
 			if info, ok := ironProxyState.get(req.Name); ok {
 				projectIP = info.ProjectIP
-				sshHostPort = info.SSHHostPort
 			}
 
 			// Ingress: re-push softnet's expose map from the current cfg so
@@ -220,7 +216,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				http.Error(w, fmt.Sprintf("push expose map: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := WriteStateSnapshot(req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, SSHHostPort: sshHostPort, ProjectIP: projectIP, WorkspaceHostPath: req.WorkspaceHostPath}); err != nil {
+			if err := WriteStateSnapshot(req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, ProjectIP: projectIP, WorkspaceHostPath: req.WorkspaceHostPath}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}

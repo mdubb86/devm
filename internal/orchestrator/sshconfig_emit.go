@@ -9,16 +9,7 @@ import (
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshconfig"
-	"github.com/mdubb86/devm/internal/softnet"
 )
-
-// IngressConfigClient is the subset of *serviceapi.Client EmitSSHConfig
-// needs: the project's daemon-allocated SSH host port. Embedded into
-// VMAdminClient and StopVMClient so both callers' real client
-// satisfies it without a separate wiring seam.
-type IngressConfigClient interface {
-	IngressConfig(ctx context.Context, name string) (serviceapi.VMIngressConfigResponse, error)
-}
 
 // EmitSSHConfig walks the daemon's state dir and asks tart which VMs
 // are currently running, then emits an ssh_config include with one
@@ -26,15 +17,15 @@ type IngressConfigClient interface {
 // (cold-start, warm-attach, stop) so `ssh devm-<vm-name>` reflects
 // the currently running set.
 //
-// Under softnet the guest IP isn't Mac-routable, so each Host block
-// points at 127.0.0.1 and the project's daemon-allocated SSH host
-// port (fetched via GET /vm/ingress-config) instead of a `tart ip`
-// lookup.
+// Softnet binds each project's guest :22 on its allocated ProjectIP
+// (per-project bind isolation) and DNS answers <project>.test ->
+// ProjectIP, so the Host block just needs the project name — no
+// daemon round trip to resolve a host port or loopback address.
 //
 // Errors are wrapped for logging by the caller; caller must decide
 // whether to fail loud or log-and-continue. In practice callers log
 // and continue — a stale ssh_config file doesn't block VM operation.
-func EmitSSHConfig(ctx context.Context, tr *tart.Tart, client IngressConfigClient) error {
+func EmitSSHConfig(ctx context.Context, tr *tart.Tart) error {
 	vms, err := tr.List(ctx)
 	if err != nil {
 		return fmt.Errorf("tart list: %w", err)
@@ -59,19 +50,7 @@ func EmitSSHConfig(ctx context.Context, tr *tart.Tart, client IngressConfigClien
 		if !running[name] {
 			continue
 		}
-		ingress, err := client.IngressConfig(ctx, name)
-		if err != nil || ingress.SSHHostPort == 0 {
-			// No SSH host port yet (VM mid-cold-start, or a transient
-			// daemon-restart window before recoverProjectState reloads
-			// it — see StateSnapshot.SSHHostPort). Skip, exactly as the
-			// prior `tart ip` lookup skipped a VM with no IP yet.
-			continue
-		}
-		out = append(out, sshconfig.Entry{
-			Name: name,
-			Host: softnet.HostLoopIP,
-			Port: ingress.SSHHostPort,
-		})
+		out = append(out, sshconfig.Entry{Name: name})
 	}
 	return sshconfig.Emit(out)
 }
