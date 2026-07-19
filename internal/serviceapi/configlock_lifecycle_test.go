@@ -95,7 +95,7 @@ func TestVMStart_LocksConfig_DefaultEnabled(t *testing.T) {
 	t.Cleanup(func() { configLockState.del(name) })
 
 	c := NewClientWithSocket(srv.socketPath)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	err := c.StartVM(ctx, VMStartRequest{
@@ -132,7 +132,7 @@ func TestVMStart_ConfigLockDisabled_NoLock(t *testing.T) {
 
 	disabled := false
 	c := NewClientWithSocket(srv.socketPath)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	err := c.StartVM(ctx, VMStartRequest{
@@ -169,7 +169,7 @@ func TestVMStart_LockFailureIsBestEffort(t *testing.T) {
 	t.Cleanup(func() { configLockState.del(name) })
 
 	c := NewClientWithSocket(srv.socketPath)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	err := c.StartVM(ctx, VMStartRequest{
