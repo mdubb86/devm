@@ -217,7 +217,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				http.Error(w, fmt.Sprintf("push expose map: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := WriteStateSnapshot(req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, SSHHostPort: sshHostPort}); err != nil {
+			if err := WriteStateSnapshot(req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, SSHHostPort: sshHostPort, WorkspaceHostPath: req.WorkspaceHostPath}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}

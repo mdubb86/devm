@@ -411,11 +411,12 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		sshHostPort = ingress.SSHHostPort
 	}
 	snap := serviceapi.StateSnapshot{
-		Cfg:              cfg,
-		TemplateContents: templateContents,
-		SecretHashes:     SecretHashesFromBindings(bindings),
-		ProxyVersion:     ironproxy.EmbeddedSha256(), // stamp the version that just provisioned
-		SSHHostPort:      sshHostPort,
+		Cfg:               cfg,
+		TemplateContents:  templateContents,
+		SecretHashes:      SecretHashesFromBindings(bindings),
+		ProxyVersion:      ironproxy.EmbeddedSha256(), // stamp the version that just provisioned
+		SSHHostPort:       sshHostPort,
+		WorkspaceHostPath: repoRoot,
 	}
 	if err := serviceapi.WriteStateSnapshot(cfg.Project.Name, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)

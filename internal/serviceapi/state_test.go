@@ -109,6 +109,16 @@ func TestStateSnapshotProxyVersionRoundTrips(t *testing.T) {
 	require.Equal(t, "abc123", got.ProxyVersion)
 }
 
+func TestStateSnapshotWorkspaceHostPathRoundTrips(t *testing.T) {
+	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	want := StateSnapshot{Cfg: schema.Config{Project: schema.Project{Name: "p"}}, WorkspaceHostPath: "/Users/dev/myproj"}
+	require.NoError(t, WriteStateSnapshot("p", want))
+	got, err := ReadStateSnapshot("p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "/Users/dev/myproj", got.WorkspaceHostPath)
+}
+
 func names(entries []os.DirEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {

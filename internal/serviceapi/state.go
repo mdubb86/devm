@@ -66,6 +66,16 @@ type StateSnapshot struct {
 	// cold-start and live-reconcile snapshot writes both stamp the
 	// current value.
 	SSHHostPort int `json:"ssh_host_port,omitempty"`
+
+	// WorkspaceHostPath is the project repoRoot, stamped here so a daemon
+	// restart or `devm stop` can recover which files to (un)lock — the
+	// running iron-proxy config has no notion of it. It only arrives on
+	// the /vm/start request (as StartVM's WorkspaceHostPath argument) and
+	// on /vm/reconcile (as VMReconcileRequest.WorkspaceHostPath); without
+	// this copy, those later paths have no repoRoot to work from. The
+	// orchestrator's cold-start and live-reconcile snapshot writes both
+	// stamp the current value.
+	WorkspaceHostPath string `json:"workspace_host_path,omitempty"`
 }
 
 // ReadStateSnapshot loads the persisted snapshot for a project. Returns
