@@ -41,7 +41,8 @@ func TestOverrideMirrorsBase(t *testing.T) {
 			base:     reflect.TypeOf(schema.Config{}),
 			override: reflect.TypeOf(schema.ConfigOverride{}),
 			denylist: map[string]string{
-				"BaseImage": "empty struct (no fields); base_image: key is still parsed for YAML compat but nothing is overridable",
+				"BaseImage":  "empty struct (no fields); base_image: key is still parsed for YAML compat but nothing is overridable",
+				"ConfigLock": "project-level security policy (host-immutability of devm.yaml/devm.me.yaml); not overridable per-developer, or devm.me.yaml could silently disable the lock the project owner intended",
 			},
 		},
 		{

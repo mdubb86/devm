@@ -913,3 +913,38 @@ func TestDiskUnsetHasNoOverride(t *testing.T) {
 func TestCheckUnknownKeysAllowsDisk(t *testing.T) {
 	require.NoError(t, CheckUnknownKeys([]byte("disk: 64G\nproject:\n  name: x\n")))
 }
+
+func TestConfigLockEnabled_DefaultsTrue(t *testing.T) {
+	if !(Config{}).ConfigLockEnabled() {
+		t.Fatal("absent config_lock must default to enabled (true)")
+	}
+	f := false
+	if (Config{ConfigLock: &f}).ConfigLockEnabled() {
+		t.Fatal("config_lock: false must disable")
+	}
+	tr := true
+	if !(Config{ConfigLock: &tr}).ConfigLockEnabled() {
+		t.Fatal("config_lock: true must enable")
+	}
+}
+
+func TestConfigLock_ParsesFromYAML(t *testing.T) {
+	src := `
+project:
+  name: p
+config_lock: false
+`
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal([]byte(src), &cfg))
+	assert.False(t, cfg.ConfigLockEnabled())
+
+	src = `
+project:
+  name: p
+`
+	var cfgNoKey Config
+	require.NoError(t, yaml.Unmarshal([]byte(src), &cfgNoKey))
+	assert.True(t, cfgNoKey.ConfigLockEnabled())
+
+	require.NoError(t, CheckUnknownKeys([]byte("config_lock: false\nproject:\n  name: x\n")))
+}

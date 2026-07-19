@@ -411,6 +411,7 @@ func CheckUnknownKeys(data []byte) error {
 	knownTop := []string{
 		"project", "base_image", "docker", "network", "env",
 		"services", "install", "startup", "mounts", "path", "packages", "disk",
+		"config_lock",
 	}
 	knownProject := []string{
 		"name", "proxy",
@@ -619,7 +620,18 @@ type Config struct {
 	// base clone at create time and tart resize is grow-only, so
 	// changing this field recreates the VM (teardown bucket).
 	Disk string `yaml:"disk,omitempty"`
+
+	// ConfigLock opts out of host-immutable devm.yaml when explicitly
+	// set to false. Pointer so absent (nil) is distinguishable from an
+	// explicit `config_lock: false` — see ConfigLockEnabled for the
+	// centralized default.
+	ConfigLock *bool `yaml:"config_lock,omitempty"`
 }
+
+// ConfigLockEnabled reports whether devm.yaml should be made host-immutable
+// (chflags uchg) while the VM runs. Default true; only an explicit
+// `config_lock: false` disables it.
+func (c Config) ConfigLockEnabled() bool { return c.ConfigLock == nil || *c.ConfigLock }
 
 // ResolveMount expands and absolute-resolves a single mounts[] entry
 // against the given project root. Returns the canonical form
