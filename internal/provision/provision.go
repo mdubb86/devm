@@ -192,6 +192,7 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		Docker:             p.Cfg.Docker,
 		InstallTemplates:   p.hasTemplates(),
 		Startup:            p.Cfg.Startup,
+		Scripts:            p.Cfg.Scripts,
 		Services:           p.serviceUnits(),
 		Masks:              p.maskMounts(),
 		TimesyncdScript:    p.TimesyncdScript,

@@ -18,6 +18,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `packages` | []string | recreate | Apt packages installed at VM creation time. |
 | `install` | []string | recreate | Shell commands run once at VM creation as root. |
 | `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as root, with open network — before egress enforcement is applied. Run inline by the daemon's single provisioning script; no separate unit. |
+| `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
 | `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
@@ -137,6 +138,29 @@ The open-egress window itself only runs when there's work for it: first boot, or
 A failing `startup:` command aborts the whole provisioning script (`set -eo pipefail`): egress enforcement is never applied and `devm.target` never starts, so the boot grants no access and the VM is torn down — the same failure class as a broken `install:` command, not fail-safe.
 
 The three hooks: `install:` = once, first boot, open network. `startup:` = every boot that opens the window, open network. Services (`exec:`/`systemd:`) = every boot, enforced egress — started (and health-polled) only after the `enforce` stage applies the real allowlist, and confirmed healthy before `devm.target` — and therefore access — comes up. Editing `startup:` (**restart** bucket) is deterministic: the daemon composes and runs the freshly-rendered `startup.sh` inside the same provisioning script on the applying `devm stop` + `devm shell` — the edit takes effect on that restart.
+
+---
+
+## `scripts`
+
+`map[string][]string` — bucket: none of its own; a change only takes effect through whichever hook references it (`install:` → recreate, `startup:` → restart).
+
+A named library of reusable multi-command shell snippets. Each key is the script name and must match `[a-z][a-z0-9-]*` (kebab-case, starting with a letter). Each value is an ordered list of shell commands.
+
+Reference a script from `install:` or `startup:` with a single string entry of the form `>NAME`:
+
+```yaml
+scripts:
+  install-supabase:
+    - curl -fsSL https://example.com/install.sh -o /tmp/install.sh
+    - bash /tmp/install.sh
+install:
+  - ">install-supabase"
+```
+
+When referenced from `install:`, the engine joins the script's commands with ` && ` and runs them under one `bash -eo pipefail -c` invocation. When referenced from `startup:`, the commands are emitted inline into `startup.sh` (which already runs under one shared shell), so variables set in one step are visible in later steps.
+
+V1 scope: refs are only resolved from `install:` and `startup:`. Scripts take no parameters and cannot call other scripts.
 
 ---
 

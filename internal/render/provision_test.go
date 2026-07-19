@@ -127,6 +127,27 @@ func TestRenderProvisionOpenScript_RestartWithTemplatesOpensWindow(t *testing.T)
 	assert.NotContains(t, s, "::devm:stage:docker::")
 }
 
+func TestRenderProvisionOpen_InstallScriptRef_Expands(t *testing.T) {
+	in := ProvisionScriptInput{
+		FirstBoot: true,
+		Install:   []string{"echo raw", ">install-supabase", "echo trailing"},
+		Scripts: map[string][]string{
+			"install-supabase": {"TAG=v1", "echo $TAG"},
+		},
+		StepTimeoutSeconds: 1,
+	}
+	s := string(RenderProvisionOpenScript(in))
+	// Raw entries render unchanged.
+	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo raw'")
+	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo trailing'")
+	// The ref expands to a single bash -c with commands joined by " && ".
+	assert.Contains(t, s, `timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'TAG=v1 && echo $TAG'`)
+	// Progress markers: three steps total (raw + ref + raw).
+	assert.Contains(t, s, "::devm:progress:install:1:3::")
+	assert.Contains(t, s, "::devm:progress:install:2:3::")
+	assert.Contains(t, s, "::devm:progress:install:3:3::")
+}
+
 func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 	in := ProvisionScriptInput{
 		FirstBoot: true,

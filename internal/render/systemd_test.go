@@ -96,7 +96,7 @@ func TestRenderService_Declarative_HostnameAndPortOnlyService(t *testing.T) {
 }
 
 func TestRenderStartupScript(t *testing.T) {
-	s := string(RenderStartupScript([]string{"echo a", "echo b"}))
+	s := string(RenderStartupScript([]string{"echo a", "echo b"}, nil))
 	assert.True(t, strings.HasPrefix(s, "#!/bin/bash\nset -eo pipefail\n"))
 	assert.Contains(t, s, "echo a\n")
 	assert.Contains(t, s, "echo b\n")
@@ -106,8 +106,28 @@ func TestRenderStartupScript(t *testing.T) {
 }
 
 func TestRenderStartupScript_Empty_IsNoOp(t *testing.T) {
-	s := string(RenderStartupScript(nil))
+	s := string(RenderStartupScript(nil, nil))
 	assert.Equal(t, "#!/bin/bash\nset -eo pipefail\n", s)
+}
+
+func TestRenderStartupScript_ScriptRef_ExpandsInline(t *testing.T) {
+	s := string(RenderStartupScript(
+		[]string{"echo raw", ">boot-fixup", "echo trailing"},
+		map[string][]string{"boot-fixup": {"FOO=bar", "echo $FOO"}},
+	))
+	assert.Contains(t, s, "echo raw\n")
+	assert.Contains(t, s, "FOO=bar\n")
+	assert.Contains(t, s, "echo $FOO\n")
+	assert.Contains(t, s, "echo trailing\n")
+	// No && joining; startup.sh already shares a shell.
+	assert.NotContains(t, s, "FOO=bar &&")
+}
+
+func TestRenderStartupScript_NoScriptsMap_Unchanged(t *testing.T) {
+	// Existing behavior preserved when there are no refs.
+	s := string(RenderStartupScript([]string{"echo a", "echo b"}, nil))
+	assert.Contains(t, s, "echo a\n")
+	assert.Contains(t, s, "echo b\n")
 }
 
 func TestSystemdQuoteArgv(t *testing.T) {

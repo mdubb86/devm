@@ -43,6 +43,7 @@ func TestOverrideMirrorsBase(t *testing.T) {
 			denylist: map[string]string{
 				"BaseImage":  "empty struct (no fields); base_image: key is still parsed for YAML compat but nothing is overridable",
 				"ConfigLock": "project-level security policy (host-immutability of devm.yaml/devm.me.yaml); not overridable per-developer, or devm.me.yaml could silently disable the lock the project owner intended",
+				"Scripts":    "not overridable per environment; scripts are a static definitional library shared across environments, referenced (and varied) via the already-overridable install:/startup: fields",
 			},
 		},
 		{
