@@ -45,7 +45,7 @@ func discoverSoftnet(ctx context.Context, ntpPort int) {
 		if !ok {
 			continue
 		}
-		go func(id, sock string, info ironProxyInfo) {
+		go func(id, sock string, info projectInfo) {
 			_ = newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
 			if snap, err := ReadStateSnapshot(id); err == nil && snap != nil {
 				_ = pushExposeMap(id, computeExposeMap(snap.Cfg, info.SSHHostPort))

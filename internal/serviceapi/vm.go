@@ -439,7 +439,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		// Allocate the per-project SSH host port. Guest :22 can't be
 		// exposed on the Mac's own :22 — the host's sshd already owns it,
 		// and every project would collide on the same port besides.
-		// Stashed into ironProxyInfo below so GET /vm/ingress-config and
+		// Stashed into projectInfo below so GET /vm/ingress-config and
 		// the next reconcile's expose-map push can reuse it without
 		// re-allocating.
 		sshHostPort, err := pickPort()
@@ -519,7 +519,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 
 		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read.
-		ironProxyState.put(req.Name, ironProxyInfo{
+		ironProxyState.put(req.Name, projectInfo{
 			HTTPPort:    httpPort,
 			HTTPSPort:   httpsPort,
 			DNSPort:     dnsPort,
@@ -970,16 +970,16 @@ func prependPathEnv(env []string, dir string) []string {
 // the daemon's SNTP responder. All four addresses are loopback: softnet
 // dials iron-proxy and the NTP responder host-side, so the endpoint it
 // sends is always loopback.
-func sendSoftnetEnforced(sock string, info ironProxyInfo, ntpPort int) error {
+func sendSoftnetEnforced(sock string, info projectInfo, ntpPort int) error {
 	return newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
 }
 
 // endpointFrom builds the loopback softnet Endpoint for a project's
-// stashed ironProxyInfo and the daemon's SNTP responder port. Shared by
+// stashed projectInfo and the daemon's SNTP responder port. Shared by
 // sendSoftnetEnforced (the CLI-driven /vm/apply-egress-enforcement step)
 // and discoverSoftnet (the daemon-restart reconcile pass) so both push
 // the same wire shape.
-func endpointFrom(info ironProxyInfo, ntpPort int) *Endpoint {
+func endpointFrom(info projectInfo, ntpPort int) *Endpoint {
 	return &Endpoint{
 		HTTP:  ironProxyListenAddr(info.HTTPPort),
 		HTTPS: ironProxyListenAddr(info.HTTPSPort),
@@ -988,40 +988,50 @@ func endpointFrom(info ironProxyInfo, ntpPort int) *Endpoint {
 	}
 }
 
-type ironProxyInfo struct {
+// projectInfo is the daemon's per-project state registry, keyed by
+// projectID in ironProxyState (kept its historical variable name for
+// diff hygiene). Fields survive daemon restart via StateSnapshot mirror
+// so AdoptIronProxies can rebuild after a crash.
+type projectInfo struct {
 	HTTPPort  int
 	HTTPSPort int
 	DNSPort   int
+
+	// ProjectIP is the project's allocated 127.42/16 loopback IP. All
+	// ingress listeners (softnet direct ports, softnet SSH, daemon HTTP
+	// proxy) bind on this IP. Allocated at /vm/start via
+	// AllocateProjectIP; released at /vm/stop via ReleaseProjectIP.
+	// Empty when the project is stopped.
+	ProjectIP string
+
 	// SSHHostPort is the daemon-picked host port softnet forwards to the
-	// guest's :22, stashed here so both /vm/start's cold push and
-	// /vm/reconcile's live push can include SSH in the expose map
-	// without re-allocating it. Zero until wired.
+	// guest's :22. Retires in Task 5 (SSH moves to :22 on ProjectIP).
 	SSHHostPort int
 }
 
-type ironProxyStore struct {
+type projectInfoStore struct {
 	mu sync.Mutex
-	m  map[string]ironProxyInfo
+	m  map[string]projectInfo
 }
 
-func newIronProxyStore() *ironProxyStore {
-	return &ironProxyStore{m: make(map[string]ironProxyInfo)}
+func newIronProxyStore() *projectInfoStore {
+	return &projectInfoStore{m: make(map[string]projectInfo)}
 }
 
-func (s *ironProxyStore) put(projectID string, info ironProxyInfo) {
+func (s *projectInfoStore) put(projectID string, info projectInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.m[projectID] = info
 }
 
-func (s *ironProxyStore) get(projectID string) (ironProxyInfo, bool) {
+func (s *projectInfoStore) get(projectID string) (projectInfo, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v, ok := s.m[projectID]
 	return v, ok
 }
 
-func (s *ironProxyStore) del(projectID string) {
+func (s *projectInfoStore) del(projectID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.m, projectID)
@@ -1030,7 +1040,7 @@ func (s *ironProxyStore) del(projectID string) {
 // keys returns every project id currently tracked. Used by
 // discoverSoftnet to walk the projects AdoptIronProxies has just
 // rehydrated on daemon restart and rebuild softnetState for each.
-func (s *ironProxyStore) keys() []string {
+func (s *projectInfoStore) keys() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]string, 0, len(s.m))

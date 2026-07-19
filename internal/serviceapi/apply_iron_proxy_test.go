@@ -255,7 +255,7 @@ func TestApplyIronProxy_PreservesSSHHostPort(t *testing.T) {
 
 	// The VM is still running this daemon lifetime: ironProxyState
 	// already holds the SSH host port /vm/start allocated.
-	ironProxyState.put(projectID, ironProxyInfo{SSHHostPort: 2200})
+	ironProxyState.put(projectID, projectInfo{SSHHostPort: 2200})
 
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })

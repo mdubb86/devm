@@ -60,7 +60,7 @@ type configLockEntry struct {
 }
 
 // configLockStore tracks each running project's config-lock state,
-// mirroring softnetStore/ironProxyStore's mutex-guarded map pattern.
+// mirroring softnetStore/projectInfoStore's mutex-guarded map pattern.
 type configLockStore struct {
 	mu sync.Mutex
 	m  map[string]configLockEntry

@@ -57,8 +57,8 @@ type StateSnapshot struct {
 	ProxyVersion string `json:"proxy_version,omitempty"`
 
 	// SSHHostPort is the daemon-picked host port softnet forwards to the
-	// guest's :22, mirrored here from ironProxyInfo so a daemon restart
-	// can recover it. ironProxyInfo itself is rebuilt on restart from the
+	// guest's :22, mirrored here from projectInfo so a daemon restart
+	// can recover it. projectInfo itself is rebuilt on restart from the
 	// running iron-proxy's on-disk YAML config (AdoptIronProxies), which
 	// has no notion of SSH — without this copy the port would reset to 0
 	// on every restart, orphaning any ssh_config already emitted with the
@@ -76,6 +76,12 @@ type StateSnapshot struct {
 	// orchestrator's cold-start and live-reconcile snapshot writes both
 	// stamp the current value.
 	WorkspaceHostPath string `json:"workspace_host_path,omitempty"`
+
+	// ProjectIP is the project's allocated 127.42/16 loopback IP, mirrored
+	// here from projectInfo so a daemon restart can recover it. Empty
+	// while the project is stopped; set at /vm/start, cleared at /vm/stop.
+	// AdoptIronProxies reads this back into projectInfo on daemon startup.
+	ProjectIP string `json:"project_ip,omitempty"`
 }
 
 // ReadStateSnapshot loads the persisted snapshot for a project. Returns

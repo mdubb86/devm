@@ -12,7 +12,7 @@ import (
 )
 
 // TestSendSoftnetEnforced verifies that sendSoftnetEnforced, given a
-// stashed ironProxyInfo and an ntpPort, flips a project's softnet control
+// stashed projectInfo and an ntpPort, flips a project's softnet control
 // socket to ENFORCED with an iron_proxy endpoint built entirely from
 // loopback addresses — softnet dials iron-proxy host-side, not through a
 // vmnet bridge.
@@ -41,7 +41,7 @@ func TestSendSoftnetEnforced(t *testing.T) {
 		got <- line
 	}()
 
-	info := ironProxyInfo{
+	info := projectInfo{
 		HTTPPort:  8080,
 		HTTPSPort: 8443,
 		DNSPort:   8053,

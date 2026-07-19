@@ -93,7 +93,7 @@ func (c *softnetClient) setExposeMap(ports []softnet.ExposePort) error {
 }
 
 // softnetStore tracks each running project's softnet control socket path,
-// mirroring ironProxyStore's mutex-guarded map pattern.
+// mirroring projectInfoStore's mutex-guarded map pattern.
 type softnetStore struct {
 	mu sync.Mutex
 	m  map[string]string

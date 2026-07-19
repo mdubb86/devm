@@ -231,10 +231,10 @@ func parseIronProxyProjectID(command string) (string, bool) {
 
 // loadIronProxyInfoFromConfig reads the YAML iron-proxy was launched
 // with and pulls back HTTPPort + HTTPSPort + DNSPort.
-func loadIronProxyInfoFromConfig(path string) (ironProxyInfo, error) {
+func loadIronProxyInfoFromConfig(path string) (projectInfo, error) {
 	blob, err := os.ReadFile(path)
 	if err != nil {
-		return ironProxyInfo{}, fmt.Errorf("read %s: %w", path, err)
+		return projectInfo{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	var raw struct {
 		DNS struct {
@@ -246,21 +246,21 @@ func loadIronProxyInfoFromConfig(path string) (ironProxyInfo, error) {
 		} `yaml:"proxy"`
 	}
 	if err := yaml.Unmarshal(blob, &raw); err != nil {
-		return ironProxyInfo{}, fmt.Errorf("parse %s: %w", path, err)
+		return projectInfo{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	_, httpPort, err := splitHostPortInt(raw.Proxy.HTTPListen)
 	if err != nil {
-		return ironProxyInfo{}, fmt.Errorf("proxy.http_listen: %w", err)
+		return projectInfo{}, fmt.Errorf("proxy.http_listen: %w", err)
 	}
 	_, httpsPort, err := splitHostPortInt(raw.Proxy.HTTPSListen)
 	if err != nil {
-		return ironProxyInfo{}, fmt.Errorf("proxy.https_listen: %w", err)
+		return projectInfo{}, fmt.Errorf("proxy.https_listen: %w", err)
 	}
 	_, dnsPort, err := splitHostPortInt(raw.DNS.Listen)
 	if err != nil {
-		return ironProxyInfo{}, fmt.Errorf("dns.listen: %w", err)
+		return projectInfo{}, fmt.Errorf("dns.listen: %w", err)
 	}
-	return ironProxyInfo{
+	return projectInfo{
 		HTTPPort:  httpPort,
 		HTTPSPort: httpsPort,
 		DNSPort:   dnsPort,

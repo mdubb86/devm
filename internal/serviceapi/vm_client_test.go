@@ -386,7 +386,7 @@ func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {
 	defer cleanup()
 	t.Cleanup(func() { ironProxyState.del("proj-enf") })
 
-	ironProxyState.put("proj-enf", ironProxyInfo{
+	ironProxyState.put("proj-enf", projectInfo{
 		HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
 	})
 
@@ -434,7 +434,7 @@ func TestClientIngressConfig_ReadsResponse(t *testing.T) {
 	defer cleanup()
 	t.Cleanup(func() { ironProxyState.del("proj-ingress") })
 
-	ironProxyState.put("proj-ingress", ironProxyInfo{
+	ironProxyState.put("proj-ingress", projectInfo{
 		HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
 		SSHHostPort: 2200,
 	})
@@ -554,7 +554,7 @@ func TestClientApplyEgressEnforcement_MissingSoftnetState(t *testing.T) {
 	srv, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
-	ironProxyState.put("proj-enforce-nosock", ironProxyInfo{
+	ironProxyState.put("proj-enforce-nosock", projectInfo{
 		HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
 	})
 	t.Cleanup(func() { ironProxyState.del("proj-enforce-nosock") })

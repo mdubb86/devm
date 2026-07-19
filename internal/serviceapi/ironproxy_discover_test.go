@@ -114,7 +114,7 @@ func TestLoadIronProxyInfoFromConfig(t *testing.T) {
 
 	info, err := loadIronProxyInfoFromConfig(path)
 	require.NoError(t, err)
-	assert.Equal(t, ironProxyInfo{
+	assert.Equal(t, projectInfo{
 		HTTPPort:  59481,
 		HTTPSPort: 59482,
 		DNSPort:   59483,
@@ -142,7 +142,7 @@ func TestRecoverProjectState_RestoresSSHHostPortAndRebuildsDirectRoutes(t *testi
 	// Mirrors AdoptIronProxies having already rehydrated ironProxyState
 	// from the project's on-disk iron-proxy config before calling
 	// recoverProjectState.
-	ironProxyState.put(projectID, ironProxyInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})
+	ironProxyState.put(projectID, projectInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})
 
 	snap := StateSnapshot{
 		Cfg: schema.Config{
@@ -192,7 +192,7 @@ func TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched(t *testing.T) 
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
-	seeded := ironProxyInfo{HTTPPort: 111, HTTPSPort: 222, DNSPort: 333}
+	seeded := projectInfo{HTTPPort: 111, HTTPSPort: 222, DNSPort: 333}
 	ironProxyState.put(projectID, seeded)
 
 	routes := NewRoutes()

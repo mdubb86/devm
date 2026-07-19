@@ -32,7 +32,7 @@ func TestDiscoverSoftnet_RebuildsStateForRehydratedProjects(t *testing.T) {
 	defer os.RemoveAll(dir)
 	t.Setenv("DEVM_RUNTIME_DIR", dir)
 
-	ironProxyState.put(projectID, ironProxyInfo{
+	ironProxyState.put(projectID, projectInfo{
 		HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
 	})
 	t.Cleanup(func() { ironProxyState.del(projectID) })

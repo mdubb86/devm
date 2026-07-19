@@ -58,7 +58,7 @@ func (c *Client) EnforcementConfig(ctx context.Context, name string) (VMEnforcem
 }
 
 // IngressConfig asks the daemon for the project's SSH host port —
-// allocated at /vm/start and stashed in ironProxyInfo. The orchestrator's
+// allocated at /vm/start and stashed in projectInfo. The orchestrator's
 // ssh_config emitter uses this to point Host blocks at
 // 127.0.0.1:<port> instead of the guest's (softnet-unroutable) IP.
 func (c *Client) IngressConfig(ctx context.Context, name string) (VMIngressConfigResponse, error) {
