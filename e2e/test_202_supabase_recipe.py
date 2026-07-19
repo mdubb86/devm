@@ -117,12 +117,14 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         docker: true
         packages:
           - postgresql-client
+        scripts:
+          install-supabase:
+            - TAG=$(curl -sIL -o /dev/null -w '%{{url_effective}}' https://github.com/supabase/cli/releases/latest | xargs basename)
+            - curl -fsSL -o /tmp/supabase.deb "https://github.com/supabase/cli/releases/download/${{TAG}}/supabase_${{TAG#v}}_linux_arm64.deb"
+            - sudo dpkg -i /tmp/supabase.deb
+            - rm /tmp/supabase.deb
         install:
-          - |
-            TAG=$(curl -sIL -o /dev/null -w '%{{url_effective}}' https://github.com/supabase/cli/releases/latest | xargs basename) && \
-            curl -fsSL -o /tmp/supabase.deb "https://github.com/supabase/cli/releases/download/${{TAG}}/supabase_${{TAG#v}}_linux_arm64.deb" && \
-            sudo dpkg -i /tmp/supabase.deb && \
-            rm /tmp/supabase.deb
+          - ">install-supabase"
         services:
           supabase-api:
             port: 54321
@@ -140,7 +142,6 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         network:
           allow:
           - github.com
-          - api.github.com
           - objects.githubusercontent.com
           - public.ecr.aws
           - "*.cloudfront.net"
@@ -207,7 +208,7 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         enabled = true
         port = 54323
 
-        [inbucket]
+        [local_smtp]
         enabled = true
         port = 54324
         smtp_port = 54325

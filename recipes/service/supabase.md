@@ -34,18 +34,23 @@ docker: true                          # supabase start spins up ~10 containers
 packages:
   - postgresql-client   # `psql` — handy for local queries, migrations, troubleshooting
 
-install:
+scripts:
   # supabase CLI: canonical `.deb` per supabase's docs (Releases page).
   # `.deb` releases only publish version-embedded names — no `latest`
   # alias — so resolve the tag by following github.com's own
-  # /releases/latest → /releases/tag/vX.Y.Z redirect, then download
-  # the correctly-named `.deb`. dpkg tracks the package and future
-  # re-runs (new release) replace files cleanly.
-  - |
-    TAG=$(curl -sIL -o /dev/null -w '%{url_effective}' https://github.com/supabase/cli/releases/latest | xargs basename) && \
-    curl -fsSL -o /tmp/supabase.deb "https://github.com/supabase/cli/releases/download/${TAG}/supabase_${TAG#v}_linux_arm64.deb" && \
-    sudo dpkg -i /tmp/supabase.deb && \
-    rm /tmp/supabase.deb
+  # /releases/latest → /releases/tag/vX.Y.Z redirect, then download the
+  # correctly-named `.deb`. dpkg tracks the package and future re-runs
+  # (new release) replace files cleanly. Broken into steps here because
+  # the tag has to survive between commands — `scripts:` runs them under
+  # one shell so `$TAG` stays live.
+  install-supabase:
+    - TAG=$(curl -sIL -o /dev/null -w '%{url_effective}' https://github.com/supabase/cli/releases/latest | xargs basename)
+    - curl -fsSL -o /tmp/supabase.deb "https://github.com/supabase/cli/releases/download/${TAG}/supabase_${TAG#v}_linux_arm64.deb"
+    - sudo dpkg -i /tmp/supabase.deb
+    - rm /tmp/supabase.deb
+
+install:
+  - ">install-supabase"
 
 services:
   supabase-api:
@@ -68,8 +73,7 @@ services:
 
 network:
   allow:
-    - github.com                          # supabase CLI release download
-    - api.github.com                      # /releases/latest lookup
+    - github.com                          # supabase CLI release download + /releases/latest redirect
     - objects.githubusercontent.com       # github redirects release assets here
     - public.ecr.aws                      # supabase container image registry (manifests)
     - "*.cloudfront.net"                  # ECR Public blob storage (image layers)
