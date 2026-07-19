@@ -67,18 +67,25 @@ type VMStopRequest struct {
 }
 
 // VMConfigLockRequest is the body shape for POST /vm/unlock-config and
-// POST /vm/lock-config.
+// POST /vm/lock-config. RelockSeconds is only meaningful to
+// /vm/unlock-config: how long to leave devm.yaml editable before the
+// daemon re-locks it automatically. Zero means "use
+// defaultRelockSeconds".
 type VMConfigLockRequest struct {
-	Name string `json:"name"`
+	Name          string `json:"name"`
+	RelockSeconds int    `json:"relock_seconds,omitempty"`
 }
 
 // VMConfigLockResponse is the response for POST /vm/unlock-config and
 // POST /vm/lock-config. WasLocked reports whether the project had a
 // configLockState entry — i.e. whether there was anything to
 // unlock/lock. false (with no error) means the VM isn't running or
-// config_lock is disabled for the project.
+// config_lock is disabled for the project. RelockSeconds is only set
+// by /vm/unlock-config when WasLocked: the duration the just-armed
+// auto-relock timer will wait before re-locking devm.yaml.
 type VMConfigLockResponse struct {
-	WasLocked bool `json:"was_locked"`
+	WasLocked     bool `json:"was_locked"`
+	RelockSeconds int  `json:"relock_seconds,omitempty"`
 }
 
 // VMEnforcementConfigResponse is the body shape for GET
@@ -236,6 +243,42 @@ func vmRunning(vms []tart.VM, name string) bool {
 		}
 	}
 	return false
+}
+
+// armRelockTimer schedules devm.yaml to be re-locked after d, the
+// bound `devm unlock --for <dur>` (or the default) puts on an
+// unattended unlock window. Installing it via configLockState.setTimer
+// stops+replaces whatever relock timer was already pending for name,
+// so repeated unlocks (or a lock/reconcile in between) never leave two
+// timers racing.
+//
+// The callback runs on its own goroutine (time.AfterFunc, not inline),
+// so taking locks.Lock(name) here is not nested under any handler's
+// lock. It re-checks configLockState and the VM's running state right
+// before locking — by the time it fires, the project may have been
+// stopped, torn down, or already re-locked by a `devm lock` or
+// `devm reconcile` in the interim, both of which call stopTimer and so
+// would have already cancelled this timer; the re-check is therefore
+// belt-and-suspenders against the timer having fired the instant
+// before a racing cancellation.
+func armRelockTimer(locks *ProjectLocks, tr TartLister, name string, d time.Duration) {
+	t := time.AfterFunc(d, func() {
+		unlock := locks.Lock(name)
+		defer unlock()
+
+		e, ok := configLockState.get(name)
+		if !ok {
+			return // stopped/torn down since unlock — nothing to relock
+		}
+		vms, err := tr.List(context.Background())
+		if err != nil || !vmRunning(vms, name) {
+			return // don't lock a stopped (or unlistable) VM's file
+		}
+		if err := lockConfigFiles(e.repoRoot); err != nil {
+			debuglog.Logf("configlock", "auto-relock %s: %v", name, err)
+		}
+	})
+	configLockState.setTimer(name, t)
 }
 
 // RegisterVMHandlers wires /vm/start, /vm/stop, /vm/status, and
@@ -740,11 +783,12 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 	// /vm/unlock-config is the `devm unlock` escape hatch: it lifts the
 	// host-immutable flag on devm.yaml (+ devm.me.yaml) for a running
 	// project so the user can edit config without the daemon fighting
-	// them. `devm reconcile` re-locks on its next successful apply (see
-	// RegisterReconcileHandler); the relock timer that re-locks an
-	// unattended unlock is a later addition. A project with no
-	// configLockState entry (VM not running, or config_lock:false) is a
-	// no-op, not an error — WasLocked reports which case this was.
+	// them, and arms a relock timer bounding how long it stays editable
+	// unattended (`--for <dur>`, default defaultRelockSeconds). `devm
+	// lock` or `devm reconcile` ends the window early and cancels this
+	// timer (stopTimer). A project with no configLockState entry (VM
+	// not running, or config_lock:false) is a no-op, not an error —
+	// WasLocked reports which case this was.
 	s.Register("/vm/unlock-config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -764,14 +808,20 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		defer unlock()
 
 		entry, ok := configLockState.get(req.Name)
+		relockSeconds := 0
 		if ok {
 			if err := unlockConfigFiles(entry.repoRoot); err != nil {
 				debuglog.Logf("configlock", "unlock config for %s: %v (continuing)", req.Name, err)
 			}
-			configLockState.stopTimer(req.Name)
+			d := time.Duration(req.RelockSeconds) * time.Second
+			if d <= 0 {
+				d = defaultRelockSeconds * time.Second
+			}
+			armRelockTimer(locks, tr, req.Name, d)
+			relockSeconds = int(d / time.Second)
 		}
 
-		writeJSON(w, VMConfigLockResponse{WasLocked: ok})
+		writeJSON(w, VMConfigLockResponse{WasLocked: ok, RelockSeconds: relockSeconds})
 	})
 
 	// /vm/lock-config is the `devm lock` command: re-locks devm.yaml on

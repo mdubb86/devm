@@ -19,8 +19,8 @@ var unlockCmd = &cobra.Command{
 VM is running, so a root guest can never tamper with its own trust
 boundary. This lifts that lock for manual edits.
 
-The lock comes back automatically the next time you run ` + "`devm reconcile`" + `,
-or immediately if you run ` + "`devm lock`" + `.`,
+The lock comes back automatically after ` + "`--for`" + ` (default 5m), or sooner
+if you run ` + "`devm reconcile`" + ` or ` + "`devm lock`" + `.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		repoRoot, err := os.Getwd()
@@ -38,7 +38,16 @@ or immediately if you run ` + "`devm lock`" + `.`,
 		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 		defer cancel()
 
-		wasLocked, err := serviceapi.NewClient().UnlockConfig(ctx, cfg.Project.Name)
+		forDur, err := cmd.Flags().GetDuration("for")
+		if err != nil {
+			return err
+		}
+		relockSeconds := 0
+		if forDur > 0 {
+			relockSeconds = int(forDur.Round(time.Second) / time.Second)
+		}
+
+		wasLocked, armedRelockSeconds, err := serviceapi.NewClient().UnlockConfig(ctx, cfg.Project.Name, relockSeconds)
 		if err != nil {
 			return fmt.Errorf("unlock config: %w", err)
 		}
@@ -46,7 +55,8 @@ or immediately if you run ` + "`devm lock`" + `.`,
 			fmt.Println("devm.yaml was not locked (VM not running, or config_lock is disabled for this project)")
 			return nil
 		}
-		fmt.Println("devm.yaml unlocked for editing — it re-locks on the next `devm reconcile` (or run `devm lock` to re-lock now)")
+		fmt.Printf("devm.yaml editable; auto re-locks in %s (or run `devm reconcile`/`devm lock`)\n",
+			(time.Duration(armedRelockSeconds) * time.Second).String())
 		return nil
 	},
 }
@@ -83,10 +93,6 @@ re-lock on its own.`,
 }
 
 func init() {
-	// --for is accepted but not yet sent to the daemon: the relock
-	// timer that would honor a temporary-unlock duration is a later
-	// addition. 0 means "use the daemon's default relock window" once
-	// that timer exists.
-	unlockCmd.Flags().Duration("for", 0, "How long to keep devm.yaml unlocked before it re-locks automatically (0 = daemon default; not yet enforced)")
+	unlockCmd.Flags().Duration("for", 0, "How long to keep devm.yaml unlocked before it re-locks automatically (0 = daemon default, 5m)")
 	rootCmd.AddCommand(unlockCmd, lockCmd)
 }

@@ -9,6 +9,10 @@ import (
 	"github.com/mdubb86/devm/internal/debuglog"
 )
 
+// defaultRelockSeconds is how long `devm unlock` leaves devm.yaml
+// editable when the caller doesn't specify `--for`.
+const defaultRelockSeconds = 300
+
 // configPaths returns devm.yaml and devm.me.yaml under repoRoot — the
 // files the daemon holds host-immutable while the project's VM runs
 // so a root guest can't tamper with them.

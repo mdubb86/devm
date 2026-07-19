@@ -104,28 +104,31 @@ func (c *Client) StopVM(ctx context.Context, name string) error {
 
 // UnlockConfig calls POST /vm/unlock-config, lifting the host-immutable
 // flag on devm.yaml (+ devm.me.yaml) for a running project — the `devm
-// unlock` escape hatch. Returns whether the project actually had
+// unlock` escape hatch. relockSeconds bounds how long it stays
+// editable before the daemon re-locks it automatically; 0 means "use
+// the daemon's default". Returns whether the project actually had
 // anything locked (false when the VM isn't running or config_lock is
-// disabled — not an error in that case).
-func (c *Client) UnlockConfig(ctx context.Context, name string) (bool, error) {
-	body, err := json.Marshal(VMConfigLockRequest{Name: name})
+// disabled — not an error in that case) and the relock window the
+// daemon actually armed (0 when wasLocked is false).
+func (c *Client) UnlockConfig(ctx context.Context, name string, relockSeconds int) (wasLocked bool, armedRelockSeconds int, err error) {
+	body, err := json.Marshal(VMConfigLockRequest{Name: name, RelockSeconds: relockSeconds})
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	r, err := c.post(ctx, "/vm/unlock-config", body)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	defer r.Body.Close()
 	if r.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(r.Body)
-		return false, fmt.Errorf("vm/unlock-config: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+		return false, 0, fmt.Errorf("vm/unlock-config: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	var resp VMConfigLockResponse
 	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
-		return false, err
+		return false, 0, err
 	}
-	return resp.WasLocked, nil
+	return resp.WasLocked, resp.RelockSeconds, nil
 }
 
 // LockConfig calls POST /vm/lock-config, re-locking devm.yaml right
