@@ -23,6 +23,13 @@ import struct
 
 import pytest
 
+from helpers.portbinder import helper_installed
+
+pytestmark = pytest.mark.skipif(
+    not helper_installed(),
+    reason="requires devm install (portbinder helper); run `devm install` on this machine to enable",
+)
+
 SOCK_PATH = "/var/run/devm-portbinder.sock"
 
 

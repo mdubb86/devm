@@ -58,8 +58,15 @@ import pytest
 from helpers import Devm, Workspace, registry
 from helpers.direct import dig_a, dns_addr, tcp_read_banner, wait_reachable
 from helpers.exec_retry import devm_exec_with_retry
+from helpers.portbinder import helper_installed
 
-pytestmark = pytest.mark.devm
+pytestmark = [
+    pytest.mark.devm,
+    pytest.mark.skipif(
+        not helper_installed(),
+        reason="requires devm install (portbinder helper); run `devm install` on this machine to enable",
+    ),
+]
 
 DIRECT_PORT = 5432
 

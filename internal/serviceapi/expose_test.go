@@ -17,7 +17,7 @@ func TestComputeExposeMap_ServicesAndSSH(t *testing.T) {
 		"web":    {Port: 3000, Hostname: "web.test"},
 		"noport": {}, // masks/exec-only service: no port -> not exposed
 	}}
-	got := computeExposeMap(cfg, "127.42.0.1")
+	got := computeExposeMap(cfg, "127.42.0.1", 0)
 
 	// Expect one entry per service WITH a port, plus SSH.
 	byGuest := map[int]softnet.ExposePort{}
@@ -42,7 +42,7 @@ func TestComputeExposeMap_SSHAlwaysPresent(t *testing.T) {
 	cfg := schema.Config{Services: map[string]schema.Service{
 		"db": {Port: 5432, Direct: true, Hostname: "db.test"},
 	}}
-	got := computeExposeMap(cfg, "127.42.0.3")
+	got := computeExposeMap(cfg, "127.42.0.3", 0)
 	haveSSH := false
 	for _, p := range got {
 		if p.GuestPort == 22 {
@@ -68,7 +68,7 @@ func TestComputeExposeMap_BindsProjectIP(t *testing.T) {
 			"db":  {Port: 5432, Hostname: "db.myapp.test", Direct: true},
 		},
 	}
-	ports := computeExposeMap(cfg, "127.42.0.1")
+	ports := computeExposeMap(cfg, "127.42.0.1", 0)
 	require.Len(t, ports, 3) // api, db, ssh
 	for _, p := range ports {
 		assert.Equal(t, "127.42.0.1", p.BindIP, "bind IP for %d", p.GuestPort)
@@ -91,12 +91,34 @@ func TestComputeExposeMap_BindIPFieldIgnoredNowUsesProjectIP(t *testing.T) {
 	cfg := schema.Config{Services: map[string]schema.Service{
 		"db": {Port: 5432, Direct: true, Hostname: "db.test", BindIP: "0.0.0.0"},
 	}}
-	got := computeExposeMap(cfg, "127.42.0.2")
+	got := computeExposeMap(cfg, "127.42.0.2", 0)
 	for _, p := range got {
 		if p.GuestPort == 5432 {
 			assert.Equal(t, "127.42.0.2", p.BindIP)
 		}
 	}
+}
+
+// TestComputeExposeMap_FallbackModeUsesPickedSSHPort pins fallback
+// mode's SSH shape: when AllocateSSHPort hands back a non-zero picked
+// host port (helperAvailable == false), the SSH entry's HostPort must
+// be that picked port, not the fixed 22 the real per-project-IP model
+// uses. GuestPort stays 22 either way — only where softnet forwards
+// the connection FROM changes.
+func TestComputeExposeMap_FallbackModeUsesPickedSSHPort(t *testing.T) {
+	cfg := schema.Config{Services: map[string]schema.Service{
+		"db": {Port: 5432, Direct: true, Hostname: "db.test"},
+	}}
+	got := computeExposeMap(cfg, "127.0.0.1", 54321)
+	haveSSH := false
+	for _, p := range got {
+		if p.GuestPort == 22 {
+			haveSSH = true
+			assert.Equal(t, 54321, p.HostPort, "ssh host port should be the picked port in fallback mode")
+			assert.Equal(t, "127.0.0.1", p.BindIP)
+		}
+	}
+	assert.True(t, haveSSH, "expected an SSH entry")
 }
 
 // TestPushExposeMap_ConflictRefusesDispatch pins the fail-loud contract:

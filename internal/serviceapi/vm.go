@@ -68,6 +68,16 @@ type VMStartResponse struct {
 	// the snapshot, and recoverProjectState would find nothing to
 	// restore.
 	ProjectIP string `json:"project_ip"`
+
+	// PickedSSHPort is 0 when the portbinder helper is available (SSH
+	// binds guest :22 on ProjectIP directly). In fallback mode
+	// (helperAvailable == false — see fallback.go) it's the ephemeral
+	// host port softnet binds guest :22 on instead, since ProjectIP is
+	// just 127.0.0.1 there and binding :22 on it needs root. The CLI
+	// seeds this into its cold-start StateSnapshot so ssh_config emits
+	// `HostName 127.0.0.1` + `Port <this>` instead of `<name>.test` +
+	// `Port 22`.
+	PickedSSHPort int `json:"picked_ssh_port,omitempty"`
 }
 
 // VMStopRequest is the body shape for POST /vm/stop. The daemon calls
@@ -455,12 +465,22 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			return
 		}
 
+		// Fallback-mode only (helperAvailable == false): pick the host
+		// port SSH will use instead of binding guest :22 on ProjectIP
+		// directly. Zero (no-op) when the portbinder helper is
+		// available. See AllocateSSHPort.
+		pickedSSHPort, err := AllocateSSHPort(req.Name)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("allocate ssh port: %v", err), http.StatusInternalServerError)
+			return
+		}
+
 		// Push the initial ingress expose map. Independent of egress
 		// state; listeners bind on the host and forward lazily once
 		// guest services come up. Non-fatal: egress is the security
 		// boundary, ingress is convenience, and a failed push is
 		// re-attempted at the next reconcile.
-		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, projectIP)); err != nil {
+		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, projectIP, pickedSSHPort)); err != nil {
 			debuglog.Logf("serviceapi", "vm/start: push expose map for %s: %v", req.Name, err)
 		}
 
@@ -586,7 +606,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			}
 		}
 
-		writeJSON(w, VMStartResponse{ProjectIP: projectIP})
+		writeJSON(w, VMStartResponse{ProjectIP: projectIP, PickedSSHPort: pickedSSHPort})
 	})
 
 	// /vm/enforcement-config returns the guest-side config the boot-
@@ -1008,6 +1028,14 @@ type projectInfo struct {
 	// AllocateProjectIP; released at /vm/stop via ReleaseProjectIP.
 	// Empty when the project is stopped.
 	ProjectIP string
+
+	// PickedSSHPort is set only in fallback mode (helperAvailable ==
+	// false — see fallback.go): a picked ephemeral host port softnet
+	// binds guest :22 on instead of the fixed :22-on-ProjectIP the real
+	// per-project-bind-isolation model uses. Zero when the portbinder
+	// helper is available. Allocated at /vm/start via AllocateSSHPort;
+	// cleared at /vm/stop alongside ProjectIP via ReleaseProjectIP.
+	PickedSSHPort int
 }
 
 type projectInfoStore struct {

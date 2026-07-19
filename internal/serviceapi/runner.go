@@ -20,6 +20,11 @@ import (
 // build is the daemon's build identity, reported via /version.
 // ctx is the shutdown signal: cancel it and every actor stops.
 func RunService(ctx context.Context, build Build) error {
+	// Detect once, up front: every B3 per-project-bind-isolation code
+	// path (AllocateProjectIP, SSH allocation, softnet ingress) branches
+	// on this for the lifetime of the daemon. See fallback.go.
+	helperAvailable = detectHelperAvailable()
+
 	if _, err := EnsureRuntimeDir(); err != nil {
 		return fmt.Errorf("ensure runtime dir: %w", err)
 	}

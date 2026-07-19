@@ -22,6 +22,11 @@ import (
 // ProjectIP, so the Host block just needs the project name — no
 // daemon round trip to resolve a host port or loopback address.
 //
+// In fallback mode (no portbinder helper — see internal/serviceapi's
+// helperAvailable), the persisted snapshot's PickedSSHPort is non-zero
+// and sshconfig.Entry carries it through as PickedPort, which flips the
+// emitted block to `HostName 127.0.0.1` + `Port <picked>` instead.
+//
 // Errors are wrapped for logging by the caller; caller must decide
 // whether to fail loud or log-and-continue. In practice callers log
 // and continue — a stale ssh_config file doesn't block VM operation.
@@ -50,7 +55,7 @@ func EmitSSHConfig(ctx context.Context, tr *tart.Tart) error {
 		if !running[name] {
 			continue
 		}
-		out = append(out, sshconfig.Entry{Name: name})
+		out = append(out, sshconfig.Entry{Name: name, PickedPort: snap.PickedSSHPort})
 	}
 	return sshconfig.Emit(out)
 }

@@ -108,6 +108,82 @@ func TestAllocateProjectIP_ConcurrentDistinct(t *testing.T) {
 	}
 }
 
+// TestAllocateProjectIP_ReverseDirection pins the B3 standalone-tests
+// e2e lane's collision-avoidance trick: DEVM_PROJECT_IP_ALLOC_DIRECTION
+// =reverse walks the pool from the top (127.42.0.20) down instead of
+// from the bottom, so a sandbox daemon sharing the real portbinder
+// helper with a production daemon on the same machine claims slots
+// from the opposite end of the pool.
+func TestAllocateProjectIP_ReverseDirection(t *testing.T) {
+	t.Setenv("DEVM_PROJECT_IP_ALLOC_DIRECTION", "reverse")
+	resetIronProxyState(t)
+	ip, err := AllocateProjectIP("myproj")
+	require.NoError(t, err)
+	assert.Equal(t, "127.42.0.20", ip)
+}
+
+// TestAllocateProjectIP_ReverseDirection_SkipsAssigned pairs with the
+// forward-direction TestAllocateProjectIP_SkipsAssigned: the second
+// project should get the pool's second-from-the-top slot.
+func TestAllocateProjectIP_ReverseDirection_SkipsAssigned(t *testing.T) {
+	t.Setenv("DEVM_PROJECT_IP_ALLOC_DIRECTION", "reverse")
+	resetIronProxyState(t)
+	_, err := AllocateProjectIP("a")
+	require.NoError(t, err)
+	ipB, err := AllocateProjectIP("b")
+	require.NoError(t, err)
+	assert.Equal(t, "127.42.0.19", ipB)
+}
+
+// TestAllocateProjectIP_Fallback pins Change 1's core primitive: when
+// the portbinder helper isn't available, every project gets the fixed
+// fallbackProjectIP regardless of the pool or allocation direction —
+// this is the pre-B3 behavior the isolated (no-sudo, no-helper) e2e
+// lane depends on.
+func TestAllocateProjectIP_Fallback(t *testing.T) {
+	resetIronProxyState(t)
+	old := helperAvailable
+	helperAvailable = false
+	t.Cleanup(func() { helperAvailable = old })
+
+	ipA, err := AllocateProjectIP("a")
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1", ipA)
+
+	// Idempotent, and every OTHER project gets the same fixed address
+	// too — fallback mode has no pool to exhaust.
+	ipB, err := AllocateProjectIP("b")
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1", ipB)
+
+	ipAAgain, err := AllocateProjectIP("a")
+	require.NoError(t, err)
+	assert.Equal(t, ipA, ipAAgain)
+}
+
+// TestAllocateSSHPort_Fallback pins AllocateSSHPort's two modes: a
+// no-op (always 0) when the helper is available, and an idempotent
+// picked ephemeral port when it isn't.
+func TestAllocateSSHPort_Fallback(t *testing.T) {
+	resetIronProxyState(t)
+	old := helperAvailable
+	t.Cleanup(func() { helperAvailable = old })
+
+	helperAvailable = true
+	port, err := AllocateSSHPort("proj-real")
+	require.NoError(t, err)
+	assert.Equal(t, 0, port, "helper available: no host port to pick")
+
+	helperAvailable = false
+	first, err := AllocateSSHPort("proj-fallback")
+	require.NoError(t, err)
+	assert.NotZero(t, first, "fallback mode: must pick a real port")
+
+	second, err := AllocateSSHPort("proj-fallback")
+	require.NoError(t, err)
+	assert.Equal(t, first, second, "idempotent — same projectID keeps the same picked port")
+}
+
 // resetIronProxyState clears the package-level ironProxyState between
 // tests so allocator tests don't leak state into each other.
 func resetIronProxyState(t *testing.T) {

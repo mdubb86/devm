@@ -33,6 +33,13 @@ import threading
 
 import pytest
 
+from helpers.portbinder import helper_installed
+
+pytestmark = pytest.mark.skipif(
+    not helper_installed(),
+    reason="requires devm install (portbinder helper); run `devm install` on this machine to enable",
+)
+
 # Test IPs in devm's chosen 127.42/16 signature block. Real product code
 # will allocate from 127.42.0.1..127.42.0.20 (20-project pool). We use
 # high-index addresses (240/241) inside that same second-octet space so

@@ -12,10 +12,16 @@ import (
 
 // computeExposeMap turns a project config into softnet's declarative
 // ingress map: one host listener per service port on the project's IP,
-// plus SSH on :22. Every entry binds on projectIP (the allocated
+// plus SSH on guest :22. Every entry binds on projectIP (the allocated
 // per-project loopback address from AllocateProjectIP). Sorted by guest
 // port for wire-stability.
-func computeExposeMap(cfg schema.Config, projectIP string) []softnet.ExposePort {
+//
+// pickedSSHPort is 0 in the normal (helperAvailable) case, where SSH's
+// host port is the fixed :22 alongside every other entry. In fallback
+// mode (see AllocateSSHPort) it's the ephemeral host port SSH forwards
+// through instead — binding :22 on a plain loopback address needs root,
+// which softnet (an unprivileged process) doesn't have.
+func computeExposeMap(cfg schema.Config, projectIP string, pickedSSHPort int) []softnet.ExposePort {
 	var ports []softnet.ExposePort
 	for _, svc := range cfg.Services {
 		if svc.Port == 0 {
@@ -27,11 +33,15 @@ func computeExposeMap(cfg schema.Config, projectIP string) []softnet.ExposePort 
 			HostPort:  svc.Port,
 		})
 	}
-	// SSH always exposed on :22 for every project.
+	// SSH always exposed for every project, on guest :22.
+	sshHostPort := 22
+	if pickedSSHPort != 0 {
+		sshHostPort = pickedSSHPort
+	}
 	ports = append(ports, softnet.ExposePort{
 		GuestPort: 22,
 		BindIP:    projectIP,
-		HostPort:  22,
+		HostPort:  sshHostPort,
 	})
 	sort.Slice(ports, func(i, j int) bool { return ports[i].GuestPort < ports[j].GuestPort })
 	return ports

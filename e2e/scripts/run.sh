@@ -104,6 +104,23 @@ if [ "${E2E_ISOLATE:-0}" = "1" ]; then
         exit 1
     fi
 
+    # EXTRA_DAEMON_ENV: optional space-separated KEY=VALUE pairs
+    # exported into this isolated daemon's environment before it
+    # starts. Used by the B3 standalone-tests lane (test_portbinder_
+    # contract.py et al, run via `just e2e-one` against a machine that
+    # already has `devm install`'d the real portbinder helper) to set
+    # DEVM_PROJECT_IP_ALLOC_DIRECTION=reverse, so this sandbox
+    # daemon — sharing that SAME real helper with any production
+    # daemon also running on this machine — claims 127.42.0.x slots
+    # from the top of the pool instead of the bottom. Harmless (unused)
+    # in fallback mode, where AllocateProjectIP never reaches the pool
+    # loop at all.
+    if [ -n "${EXTRA_DAEMON_ENV:-}" ]; then
+        for _kv in $EXTRA_DAEMON_ENV; do
+            export "$_kv"
+        done
+    fi
+
     # Foreground daemon in the background of this script. Uses its own
     # socket (under $DEVM_RUNTIME_DIR/devm.sock) so it can't conflict
     # with the user's real launchd-managed daemon. Not a LaunchDaemon
