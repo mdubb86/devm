@@ -44,7 +44,9 @@ func TestValidateIPInPool_OutOfRange_Errors(t *testing.T) {
 // itoa is a local helper to avoid importing strconv in the test file preamble;
 // keeps the test focused on the two functions under test.
 func itoa(n int) string {
-	if n == 0 { return "0" }
+	if n == 0 {
+		return "0"
+	}
 	var buf [8]byte
 	i := len(buf)
 	for n > 0 {

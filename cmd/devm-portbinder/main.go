@@ -13,6 +13,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -111,18 +115,14 @@ func handle(conn net.Conn) {
 		return
 	}
 
-	buf := make([]byte, 4096)
-	n, err := uc.Read(buf)
+	br := bufio.NewReader(uc)
+	line, err := br.ReadBytes('\n')
 	if err != nil {
 		return
 	}
-	req, err := parseRequest(buf[:n])
+	req, err := parseRequest(bytes.TrimRight(line, "\n"))
 	if err != nil {
 		writeErr(uc, err.Error())
-		return
-	}
-	if req.Op != "bind" {
-		writeErr(uc, "unknown op: "+req.Op)
 		return
 	}
 	if err := validateIPInPool(req.IP); err != nil {
@@ -205,12 +205,12 @@ func bindTCP(ip string, port int) (int, error) {
 	return fd, nil
 }
 
-// lookupDevmGroup returns the numeric gid for group "_devm". Returns
-// error if the group doesn't exist (install hasn't created it yet); the
-// caller falls back to root-only UDS access.
+// lookupDevmGroup returns the numeric gid for the _devm group.
+// Returns an error if the group doesn't exist (install hasn't run yet).
 func lookupDevmGroup() (int, error) {
-	// os/user.LookupGroup does the right thing on macOS via dscl.
-	// Deliberately imported inline here to keep the top of the file tidy
-	// with just syscall/net imports.
-	return lookupGroup("_devm")
+	g, err := user.LookupGroup("_devm")
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(g.Gid)
 }
