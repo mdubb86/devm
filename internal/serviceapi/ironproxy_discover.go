@@ -12,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -134,6 +135,21 @@ func recoverProjectState(ctx context.Context, tr *tart.Tart, routes *Routes, pro
 	// ssh_config already emitted with the old port.
 	info.SSHHostPort = snap.SSHHostPort
 	ironProxyState.put(projectID, info)
+
+	// Re-lock devm.yaml for a recovered running project: the daemon
+	// restart that brought us here wiped configLockState, so without
+	// this the config-lock registry stays empty (a subsequent /vm/stop
+	// has no repoRoot to unlock) and, worse, the file may have been left
+	// writable by whatever tore down the old daemon process. lockConfigFiles
+	// is idempotent, so re-applying it to an already-locked file is a
+	// no-op. Best-effort, gated the same way /vm/start gates it.
+	if snap.Cfg.ConfigLockEnabled() && snap.WorkspaceHostPath != "" {
+		if err := lockConfigFiles(snap.WorkspaceHostPath); err != nil {
+			debuglog.Logf("configlock", "relock config for %s: %v (continuing)", projectID, err)
+		} else {
+			configLockState.put(projectID, snap.WorkspaceHostPath)
+		}
+	}
 
 	var directRoutes []Route
 	for _, svc := range snap.Cfg.Services {

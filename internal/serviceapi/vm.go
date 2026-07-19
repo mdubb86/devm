@@ -323,6 +323,19 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 				Tag:      fmt.Sprintf("extra_%d", i),
 			})
 		}
+		// Make devm.yaml (+ devm.me.yaml) host-immutable before the guest
+		// ever boots, so a root guest never sees a writable window onto its
+		// own trust boundary. Best-effort: a chflags failure must not block
+		// the VM from starting; config_lock:false opts a project out
+		// entirely.
+		if req.Cfg.ConfigLockEnabled() {
+			if err := lockConfigFiles(req.WorkspaceHostPath); err != nil {
+				debuglog.Logf("configlock", "lock config for %s: %v (continuing)", req.Name, err)
+			} else {
+				configLockState.put(req.Name, req.WorkspaceHostPath)
+			}
+		}
+
 		cmd, err := tr.Run(ctx, req.Name, opts)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("tart run prep: %v", err), http.StatusInternalServerError)
@@ -668,6 +681,26 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		if denials != nil {
 			denials.Reset(req.Name)
 		}
+
+		// Unlock devm.yaml (+ devm.me.yaml) unconditionally-if-known: a
+		// no-op when locking was disabled (config_lock:false) or never
+		// happened, since no repoRoot resolves in that case. The registry
+		// is the normal source; the state snapshot's WorkspaceHostPath is
+		// the fallback for a project adopted across a daemon restart that
+		// hasn't gone through /vm/start (and thus recoverProjectState)
+		// again yet.
+		repoRoot := ""
+		if e, ok := configLockState.get(req.Name); ok {
+			repoRoot = e.repoRoot
+		} else if snap, _ := ReadStateSnapshot(req.Name); snap != nil {
+			repoRoot = snap.WorkspaceHostPath
+		}
+		if repoRoot != "" {
+			if err := unlockConfigFiles(repoRoot); err != nil {
+				debuglog.Logf("configlock", "unlock config for %s: %v", req.Name, err)
+			}
+		}
+		configLockState.del(req.Name)
 
 		// Power the guest off from the inside before force-terminating it.
 		// `tart stop` crashes the guest rather than shutting it down
