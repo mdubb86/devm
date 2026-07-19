@@ -36,7 +36,7 @@ nameserver 127.0.0.1
 port 51153
 ```
 
-macOS's system resolver reads this file and forwards every `*.test` DNS query to the daemon's DNS server at `127.0.0.1:51153`. The daemon DNS server answers A queries with `127.0.0.1`, so your browser connects to the daemon proxy on :80 or :443.
+macOS's system resolver reads this file and forwards every `*.test` DNS query to the daemon's DNS server at `127.0.0.1:51153`. The daemon DNS server doesn't answer every project with the same loopback address: each running project is allocated its own address from a pool of `127.42.0.1`..`127.42.0.20`, and the DNS server answers that project's `*.test` A queries with its allocated `127.42.0.N`. This is what lets two projects each run a service on the same port (say, both expose `db.test` on 5432) without colliding — every project's `db.test` resolves to a different IP. A query for an unknown hostname, or for a project that isn't currently running, gets NXDOMAIN rather than an address. Your browser then connects to the daemon proxy on :80 or :443 at that project's IP.
 
 The daemon proxy is a Go `httputil.ReverseProxy` that listens on :80 and :443 via launchd socket activation. It routes by the `Host:` request header. TLS is terminated by the daemon's built-in CA (see [The devm CA](#the-devm-ca) below).
 

@@ -350,7 +350,12 @@ func buildInstallScript(inputs installInputs) string {
 	}
 	if inputs.PortbinderExe != "" {
 		// Create _devm group idempotently (safe re-run at every install).
-		sb.WriteString(`dscl . -read /Groups/_devm >/dev/null 2>&1 || dscl . -create /Groups/_devm PrimaryGroupID 800` + "\n")
+		// GID 802: PrimaryGroupID collision fallback — pick your own if
+		// this collides with an existing group on your system (org
+		// management / MDM tools sometimes claim GIDs in the 300-999
+		// system range, and `dscl . -create` aborts under `set -e` if
+		// the GID is already taken).
+		sb.WriteString(`dscl . -read /Groups/_devm >/dev/null 2>&1 || dscl . -create /Groups/_devm PrimaryGroupID 802` + "\n")
 		if inputs.InstallUser != "" {
 			sb.WriteString("dscl . -read /Groups/_devm GroupMembership 2>/dev/null | grep -qw " + inputs.InstallUser +
 				" || dscl . -append /Groups/_devm GroupMembership " + inputs.InstallUser + "\n")

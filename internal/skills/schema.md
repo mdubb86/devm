@@ -205,7 +205,7 @@ Named service definitions. Each key is the service name.
 
 | Field | Type | Bucket | Purpose |
 |---|---|---|---|
-| `port` | int or "IP:PORT" | live | VM-side listen port. String form (`"0.0.0.0:8080"`) also sets the host bind IP; default bind is `127.0.0.1`. |
+| `port` | int or "IP:PORT" | live | VM-side listen port. String form (`"0.0.0.0:8080"`) is parsed for a bind IP, but in the current version that IP is silently ignored: every service's host-side listener binds on the project's allocated `127.42.0.N` address (its own loopback IP, one per project) rather than a configurable `bind_ip`. LAN exposure via an explicit bind IP is a planned follow-up, not yet wired up. |
 | `hostname` | string | live | Hostname for the Caddy reverse-proxy entry. Must end in `.test`. |
 | `direct` | bool | live | Route this service directly to the VM's IP (DNS + firewall) instead of through the daemon HTTP proxy + in-VM Caddy. For raw-TCP / non-HTTP services (e.g. Postgres). Requires `hostname`. Default `false`. |
 | `env` | map[string]EnvValue | live | Per-service environment variables (same `!secret` syntax as top-level `env`). |

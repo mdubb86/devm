@@ -18,8 +18,10 @@ import (
 )
 
 // SocketPath is the well-known UDS the portbinder helper listens on.
-// Installed at devm install time; see cmd/devm/service.go.
-const SocketPath = "/var/run/devm-portbinder.sock"
+// Installed at devm install time; see cmd/devm/service.go. A var (not
+// a const) so tests can point BindTCP at a mock helper socket instead
+// of the real root-owned one.
+var SocketPath = "/var/run/devm-portbinder.sock"
 
 // BindTCP requests the portbinder helper to bind a TCP listening socket
 // on ip:port and returns it as a net.Listener. ip must be in the devm

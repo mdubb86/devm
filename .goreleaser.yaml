@@ -44,6 +44,24 @@ builds:
       # path (see justfile + e2e/scripts/run.sh for the others).
       - -X main.Fingerprint={{.Env.FINGERPRINT}}
 
+  # The root port-binder helper (com.devm.portbinder LaunchDaemon).
+  # Installed alongside devm by `cmd/devm/service.go`'s privileged
+  # install script; ships as its own binary since it runs as root
+  # while the main devm binary runs as the user. No CGO or version
+  # ldflags: it has no cgo dependencies and doesn't carry the
+  # Version/Commit/Date/Fingerprint build-time vars devm does.
+  - id: devm-portbinder
+    main: ./cmd/devm-portbinder
+    binary: devm-portbinder
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    ldflags:
+      - -s -w
+
 # No explicit `signs:` block: the Go linker auto-applies an ad-hoc
 # signature to every darwin/arm64 binary at link time (mandatory on
 # Apple Silicon since Big Sur). `codesign -dvv` on the built binary
@@ -110,6 +128,10 @@ homebrew_casks:
       email: bot@goreleaser.com
     binaries:
       - devm
+      # portbinderSourcePath (cmd/devm/service.go) expects devm-portbinder
+      # to sit next to the devm binary, so it must be symlinked into the
+      # same HOMEBREW_PREFIX/bin directory.
+      - devm-portbinder
     # The binary is ad-hoc signed (no Apple Developer ID). Gatekeeper
     # still flags com.apple.quarantine on cask artifacts; strip the
     # xattr in a postflight hook so first-run doesn't pop the "cannot

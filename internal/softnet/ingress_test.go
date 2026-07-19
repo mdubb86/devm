@@ -1,10 +1,16 @@
 package softnet
 
 import (
+	"encoding/json"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/mdubb86/devm/internal/portbinder"
 )
 
 // itoa converts an int to its decimal string form.
@@ -88,4 +94,126 @@ func TestIngressReconcileSameHostPortChangedGuestPort(t *testing.T) {
 	if hostReachable(p) {
 		t.Fatalf("host port %d should be closed after close()", p)
 	}
+}
+
+// mockPortbinderHelper starts a UDS listener that mimics the root
+// devm-portbinder helper closely enough for apply()'s low-port branch:
+// it reads (and discards) one request, binds a real ephemeral TCP
+// socket, and hands the FD back via SCM_RIGHTS. Mirrors
+// internal/portbinder/client_test.go's mockHelper.
+func mockPortbinderHelper(t *testing.T) string {
+	t.Helper()
+	// os.MkdirTemp (not t.TempDir()) keeps the UDS path short enough to
+	// stay under macOS's ~104-byte UNIX_PATH_MAX; t.TempDir() embeds the
+	// test name and can overflow it.
+	dir, err := os.MkdirTemp("", "pb")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "helper.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen unix %s: %v", sock, err)
+	}
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		uc := conn.(*net.UnixConn)
+		buf := make([]byte, 4096)
+		_, _ = uc.Read(buf)
+		fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+		if err != nil {
+			return
+		}
+		addr := &syscall.SockaddrInet4{Port: 0}
+		copy(addr.Addr[:], []byte{127, 0, 0, 1})
+		if err := syscall.Bind(fd, addr); err != nil {
+			return
+		}
+		if err := syscall.Listen(fd, 8); err != nil {
+			return
+		}
+		defer syscall.Close(fd)
+		resp, _ := json.Marshal(struct {
+			OK bool `json:"ok"`
+		}{OK: true})
+		oob := syscall.UnixRights(fd)
+		_, _, _ = uc.WriteMsgUnix(resp, oob, nil)
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		os.Remove(sock)
+	})
+	return sock
+}
+
+// TestIngressApplyLowPortUsesPortbinder proves apply()'s branch for
+// HostPort<1024 goes through portbinder.BindTCP rather than a direct
+// net.Listen: softnet itself is unprivileged and a direct Listen on a
+// low port fails with EACCES on macOS (this is the C1 fix). We can't
+// actually bind :22 as a non-root test, so we point portbinder at a
+// mock helper and confirm apply() produces a working listener whose
+// address is the helper's ephemeral bind (not literally :22) — which
+// only happens if the low-port branch dialed the helper instead of
+// calling net.Listen directly (a direct net.Listen("tcp", ":22") would
+// simply fail with EACCES here, not succeed on a different port).
+func TestIngressApplyLowPortUsesPortbinder(t *testing.T) {
+	orig := portbinder.SocketPath
+	portbinder.SocketPath = mockPortbinderHelper(t)
+	defer func() { portbinder.SocketPath = orig }()
+
+	ing := newIngress(nil)
+	ing.apply([]ExposePort{{GuestPort: 22, BindIP: "127.42.0.5", HostPort: 22}})
+
+	ing.mu.Lock()
+	el, ok := ing.listeners[22]
+	ing.mu.Unlock()
+	if !ok {
+		t.Fatalf("expected a listener tracked for host port 22")
+	}
+	if !hostReachableAddr(el.ln.Addr().String()) {
+		t.Fatalf("listener for host port 22 (via mock portbinder) should be reachable")
+	}
+
+	ing.close()
+}
+
+// TestIngressApplyHighPortUsesDirectListen proves apply()'s branch for
+// HostPort>=1024 still calls net.Listen directly (no portbinder
+// round-trip): the resulting listener binds literally on the
+// requested host port, unlike the portbinder path above which hands
+// back a helper-chosen (ephemeral, in the mock) port.
+func TestIngressApplyHighPortUsesDirectListen(t *testing.T) {
+	ing := newIngress(nil)
+	p := freeTCPPort(t)
+
+	ing.apply([]ExposePort{{GuestPort: 5432, BindIP: "127.0.0.1", HostPort: p}})
+
+	ing.mu.Lock()
+	el, ok := ing.listeners[p]
+	ing.mu.Unlock()
+	if !ok {
+		t.Fatalf("expected a listener tracked for host port %d", p)
+	}
+	if got := el.ln.Addr().(*net.TCPAddr).Port; got != p {
+		t.Fatalf("expected direct listen on port %d, got %d", p, got)
+	}
+
+	ing.close()
+}
+
+// hostReachable dials the given address directly (used for listeners
+// whose bound port isn't known ahead of time, e.g. the mock
+// portbinder's ephemeral socket).
+func hostReachableAddr(addr string) bool {
+	c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
 }
