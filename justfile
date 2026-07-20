@@ -97,6 +97,27 @@ e2e-devm:
 e2e-install:
     @e2e/scripts/run.sh -m install
 
+# Build & install the parallel e2e devm. Idempotent-forward: always
+# ends in installed-and-running. First run prompts for TouchID (plist,
+# resolver file, keychain, lo0 aliases, group, base image build).
+# Doubles as the canonical single-scenario install test.
+e2e-bootstrap: (_build "e2e")
+    @sudo -v
+    @sudo install -m 755 bin/devm-e2e        /usr/local/bin/devm-e2e
+    @sudo install -m 755 bin/devm-e2e-helper /usr/local/bin/devm-e2e-helper
+    /usr/local/bin/devm-e2e install
+    @scripts/assert-e2e-installed.sh
+
+# Uninstall the parallel e2e devm and assert every trace is gone.
+# Doubles as the canonical single-scenario uninstall test.
+e2e-teardown:
+    @sudo -v
+    @if [ -x /usr/local/bin/devm-e2e ]; then \
+        /usr/local/bin/devm-e2e uninstall; \
+    fi
+    @sudo rm -f /usr/local/bin/devm-e2e /usr/local/bin/devm-e2e-helper
+    @scripts/assert-e2e-uninstalled.sh
+
 e2e-contract:
     @E2E_ISOLATE=1 e2e/scripts/run.sh -m contract
 

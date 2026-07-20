@@ -49,6 +49,7 @@ SOCK="$HOME/Library/Application Support/devm-e2e/devm.sock"
 # 9. Fingerprint match — daemon fingerprint == /usr/local/bin/devm-e2e's
 DEVM_BIN=/usr/local/bin/devm-e2e
 [ -x "$DEVM_BIN" ] || fail "missing $DEVM_BIN"
+command -v jq >/dev/null 2>&1 || fail "jq not installed (required for fingerprint check; brew install jq)"
 "$DEVM_BIN" status --json 2>/dev/null | \
     jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' \
     >/dev/null 2>&1 || fail "daemon not reachable or fingerprint mismatch"
