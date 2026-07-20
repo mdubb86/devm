@@ -15,6 +15,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"os/user"
 	"strconv"
 	"strings"
@@ -79,15 +81,29 @@ func provisionAliases() error {
 }
 
 // serve opens the UDS, handles one request per accepted connection, and
-// closes. Runs until process exit.
+// closes. Runs until a SIGTERM/SIGINT arrives (launchd's `bootout` sends
+// SIGTERM) or Accept fails outright.
 func serve() error {
-	socketPath := cfg.HelperSocketPath()
+	socketPath := cfg.HelperSocketPath
 	_ = os.Remove(socketPath) // remove any stale socket from a prior run
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", socketPath, err)
 	}
 	defer ln.Close()
+	defer os.Remove(socketPath)
+
+	// Without this, SIGTERM (what launchctl bootout sends) kills the
+	// process before any deferred cleanup runs, leaving the UDS file on
+	// disk — a stale socket a subsequent install/status probe trips
+	// over. Catching the signal lets serve return normally instead, so
+	// the defers above unlink the socket before we exit.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		ln.Close() // unblocks the Accept loop below
+	}()
 
 	// Chmod to 0660; chown to root:cfg.GroupName() (root is default; only
 	// chgrp needed). The group is created at install time; if it doesn't
@@ -103,6 +119,9 @@ func serve() error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil // graceful shutdown: ln.Close() above caused this Accept error
+			}
 			log.Printf("accept: %v", err)
 			continue
 		}

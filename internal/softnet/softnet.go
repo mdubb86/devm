@@ -10,6 +10,8 @@ import (
 	"syscall"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 type multiFlag []string
@@ -20,8 +22,10 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 // Run is the softnet entrypoint (invoked via the `softnet` argv[0] alias). It
 // parses tart's contract flags, assembles the netstack, egress, and DNS, then
 // serves guest frames on the vm-fd connection until it closes or a signal
-// arrives.
-func Run(args []string) error {
+// arrives. cfg is the daemon's compiled-in identity (prod vs. e2e) — it
+// selects which helper socket the low-port ingress branch dials, so an
+// e2e daemon's softnet binds through the e2e helper, not prod's.
+func Run(cfg identity.Config, args []string) error {
 	fs := flag.NewFlagSet("softnet", flag.ContinueOnError)
 	vmFD := fs.Int("vm-fd", -1, "fd carrying the guest NIC socket")
 	vmMac := fs.String("vm-mac-address", "", "guest NIC MAC")
@@ -56,7 +60,7 @@ func Run(args []string) error {
 		return fmt.Errorf("dns: %w", err)
 	}
 	attachUDP(n, e)
-	ing := newIngress(n)
+	ing := newIngress(cfg, n)
 	defer ing.close()
 	if sock := os.Getenv("SOFTNET_CONTROL_SOCK"); sock != "" {
 		closer, err := serveControl(sock, e, ing)

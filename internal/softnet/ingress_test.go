@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mdubb86/devm/internal/helper"
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // itoa converts an int to its decimal string form.
@@ -39,7 +39,7 @@ func hostReachable(port int) bool {
 }
 
 func TestIngressApplyReconciles(t *testing.T) {
-	ing := newIngress(nil) // apply's listener lifecycle doesn't need a live stack
+	ing := newIngress(identity.Prod, nil) // apply's listener lifecycle doesn't need a live stack
 	p1, p2 := freeTCPPort(t), freeTCPPort(t)
 
 	ing.apply([]ExposePort{{GuestPort: 5432, BindIP: "127.0.0.1", HostPort: p1}})
@@ -67,7 +67,7 @@ func TestIngressApplyReconciles(t *testing.T) {
 // This exercises an OS-timing wrinkle — apply immediately re-Listens on the
 // port it just closed, relying on Go's default SO_REUSEADDR.
 func TestIngressReconcileSameHostPortChangedGuestPort(t *testing.T) {
-	ing := newIngress(nil) // apply's listener lifecycle doesn't need a live stack
+	ing := newIngress(identity.Prod, nil) // apply's listener lifecycle doesn't need a live stack
 	p := freeTCPPort(t)
 
 	ing.apply([]ExposePort{{GuestPort: 5432, BindIP: "127.0.0.1", HostPort: p}})
@@ -152,21 +152,20 @@ func mockHelper(t *testing.T) string {
 }
 
 // TestIngressApplyLowPortUsesHelper proves apply()'s branch for
-// HostPort<1024 goes through helper.BindTCP rather than a direct
+// HostPort<1024 goes through the helper client rather than a direct
 // net.Listen: softnet itself is unprivileged and a direct Listen on a
 // low port fails with EACCES on macOS (this is the C1 fix). We can't
-// actually bind :22 as a non-root test, so we point helper at a
-// mock helper and confirm apply() produces a working listener whose
+// actually bind :22 as a non-root test, so we build ingress under a
+// test identity.Config whose HelperSocketPath points at a mock
+// helper, and confirm apply() produces a working listener whose
 // address is the helper's ephemeral bind (not literally :22) — which
 // only happens if the low-port branch dialed the helper instead of
 // calling net.Listen directly (a direct net.Listen("tcp", ":22") would
 // simply fail with EACCES here, not succeed on a different port).
 func TestIngressApplyLowPortUsesHelper(t *testing.T) {
-	orig := helper.SocketPath
-	helper.SocketPath = mockHelper(t)
-	defer func() { helper.SocketPath = orig }()
+	cfg := identity.Config{Name: "test-ingress", HelperSocketPath: mockHelper(t)}
 
-	ing := newIngress(nil)
+	ing := newIngress(cfg, nil)
 	ing.apply([]ExposePort{{GuestPort: 22, BindIP: "127.42.0.5", HostPort: 22}})
 
 	ing.mu.Lock()
@@ -188,7 +187,7 @@ func TestIngressApplyLowPortUsesHelper(t *testing.T) {
 // requested host port, unlike the helper path above which hands
 // back a helper-chosen (ephemeral, in the mock) port.
 func TestIngressApplyHighPortUsesDirectListen(t *testing.T) {
-	ing := newIngress(nil)
+	ing := newIngress(identity.Prod, nil)
 	p := freeTCPPort(t)
 
 	ing.apply([]ExposePort{{GuestPort: 5432, BindIP: "127.0.0.1", HostPort: p}})

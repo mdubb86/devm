@@ -12,15 +12,17 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 
 	"github.com/mdubb86/devm/internal/helper"
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // ingress manages host->guest port-forward listeners. apply() reconciles the
 // live set against a daemon-pushed expose map: each host listener injects an
 // accepted connection into the netstack toward GuestLeaseIP:GuestPort.
 type ingress struct {
-	n         *network
-	mu        sync.Mutex
-	listeners map[int]*exposeListener // keyed by host port
+	n            *network
+	helperClient *helper.Client
+	mu           sync.Mutex
+	listeners    map[int]*exposeListener // keyed by host port
 }
 
 type exposeListener struct {
@@ -28,8 +30,8 @@ type exposeListener struct {
 	guestPort uint16
 }
 
-func newIngress(n *network) *ingress {
-	return &ingress{n: n, listeners: map[int]*exposeListener{}}
+func newIngress(cfg identity.Config, n *network) *ingress {
+	return &ingress{n: n, helperClient: helper.NewClient(cfg), listeners: map[int]*exposeListener{}}
 }
 
 // apply reconciles the listener set to exactly `ports`.
@@ -66,7 +68,7 @@ func (ing *ingress) apply(ports []ExposePort) {
 		var ln net.Listener
 		var err error
 		if hp < 1024 {
-			ln, err = helper.BindTCP(bind, hp)
+			ln, err = ing.helperClient.BindTCP(bind, hp)
 		} else {
 			ln, err = net.Listen("tcp", net.JoinHostPort(bind, fmt.Sprint(hp)))
 		}

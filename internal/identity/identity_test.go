@@ -95,7 +95,7 @@ func TestDerivations(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := tt.cfg
 			got := map[string]string{
-				"HelperSocketPath":    c.HelperSocketPath(),
+				"HelperSocketPath":    c.HelperSocketPath,
 				"GroupName":           c.GroupName(),
 				"CACommonName":        c.CACommonName(),
 				"BaseImageName":       c.BaseImageName(),

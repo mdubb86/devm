@@ -1,13 +1,18 @@
 package serviceapi
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -66,7 +71,7 @@ func TestProxy_HTTP_RoutesByHostWithinProject(t *testing.T) {
 	require.NoError(t, err)
 
 	registerProject(t, "p1", "127.42.0.50")
-	proxy := NewProxyServer(routes, ca)
+	proxy := NewProxyServer(identity.Prod, routes, ca)
 
 	req := httptest.NewRequest(http.MethodGet, "http://app.test/", nil)
 	req.Host = "app.test"
@@ -85,7 +90,7 @@ func TestProxy_NoLocalAddrInContext_502(t *testing.T) {
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(routes, ca)
+	proxy := NewProxyServer(identity.Prod, routes, ca)
 
 	req := httptest.NewRequest(http.MethodGet, "http://unknown.test/", nil)
 	req.Host = "unknown.test"
@@ -103,7 +108,7 @@ func TestProxy_DestIPWithNoProject_502NoProject(t *testing.T) {
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(routes, ca)
+	proxy := NewProxyServer(identity.Prod, routes, ca)
 
 	req := httptest.NewRequest(http.MethodGet, "http://app.test/", nil)
 	req.Host = "app.test"
@@ -136,7 +141,7 @@ func TestProxy_HostMismatchAcrossProjects_502NotFallthrough(t *testing.T) {
 
 	registerProject(t, "p1", "127.42.0.50")
 	registerProject(t, "p2", "127.42.0.51")
-	proxy := NewProxyServer(routes, ca)
+	proxy := NewProxyServer(identity.Prod, routes, ca)
 
 	// Dial p2's IP but ask for p1's hostname.
 	req := httptest.NewRequest(http.MethodGet, "http://app.test/", nil)
@@ -161,7 +166,7 @@ func TestProxy_BackendUnreachable_502WithDiagnostic(t *testing.T) {
 	dir := t.TempDir()
 	ca, _ := loadOrGenerateCAAt(identity.Prod, dir)
 	registerProject(t, "p1", "127.42.0.52")
-	proxy := NewProxyServer(routes, ca)
+	proxy := NewProxyServer(identity.Prod, routes, ca)
 
 	req := httptest.NewRequest(http.MethodGet, "http://down.test/", nil)
 	req.Host = "down.test"
@@ -188,7 +193,7 @@ func TestProxy_BackendHost_ExplicitLocalhost(t *testing.T) {
 	require.NoError(t, err)
 
 	registerProject(t, "p1", "127.42.0.53")
-	proxy := NewProxyServer(routes, ca)
+	proxy := NewProxyServer(identity.Prod, routes, ca)
 
 	req := httptest.NewRequest(http.MethodGet, "http://app.test/", nil)
 	req.Host = "app.test"
@@ -200,4 +205,86 @@ func TestProxy_BackendHost_ExplicitLocalhost(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	assert.Equal(t, 200, resp.StatusCode)
 	assert.Equal(t, "from backend", string(body))
+}
+
+// mockHelperServer starts a UDS listener that mimics enough of the
+// root devm-helper's protocol to satisfy StartProjectListeners: for
+// every connection it reads (and discards) one newline-delimited
+// request, binds a real ephemeral TCP socket, and hands the FD back
+// via SCM_RIGHTS. Serves connections in a loop — StartProjectListeners
+// dials it twice (once for :80, once for :443).
+func mockHelperServer(t *testing.T) string {
+	t.Helper()
+	// os.MkdirTemp (not t.TempDir()) keeps the UDS path short enough to
+	// stay under macOS's ~104-byte UNIX_PATH_MAX; t.TempDir() embeds
+	// the test name and can overflow it.
+	dir, err := os.MkdirTemp("", "pxy")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "helper.sock")
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				uc := c.(*net.UnixConn)
+				if _, err := bufio.NewReader(uc).ReadBytes('\n'); err != nil {
+					return
+				}
+				fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+				if err != nil {
+					return
+				}
+				defer syscall.Close(fd)
+				addr := &syscall.SockaddrInet4{Port: 0}
+				copy(addr.Addr[:], []byte{127, 0, 0, 1})
+				if err := syscall.Bind(fd, addr); err != nil {
+					return
+				}
+				if err := syscall.Listen(fd, 8); err != nil {
+					return
+				}
+				resp, _ := json.Marshal(struct {
+					OK bool `json:"ok"`
+				}{OK: true})
+				oob := syscall.UnixRights(fd)
+				_, _, _ = uc.WriteMsgUnix(resp, oob, nil)
+			}(conn)
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		os.Remove(sock)
+	})
+	return sock
+}
+
+// TestProxyServer_DialsCfgHelperSocket_NotProdHardcoded is the C1
+// regression test: before the fix, helper.SocketPath was a
+// package-level var hardcoded to "/var/run/devm-helper.sock" and
+// StartProjectListeners always dialed it regardless of the daemon's
+// identity — an e2e daemon (or any non-Prod cfg) would dial prod's
+// helper socket (or fail outright, since prod's helper isn't installed
+// in a test/e2e sandbox). Here cfg.HelperSocketPath points at a scratch
+// UDS with an obviously non-prod Name; StartProjectListeners only
+// succeeds if ProxyServer actually threads cfg through to the helper
+// client instead of falling back to the old hardcoded path (which
+// doesn't exist in this test's sandbox).
+func TestProxyServer_DialsCfgHelperSocket_NotProdHardcoded(t *testing.T) {
+	sock := mockHelperServer(t)
+	cfg := identity.Config{Name: "test-proxy-not-prod", HelperSocketPath: sock}
+
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+
+	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
+	require.NoError(t, err, "StartProjectListeners must dial cfg.HelperSocketPath, not a hardcoded prod path")
+	t.Cleanup(func() { proxy.StopProjectListeners("p1") })
 }

@@ -2,11 +2,11 @@
 // helper (cmd/devm-helper).
 //
 // The helper runs as root, provisions lo0 aliases at boot, and serves
-// bind requests over a UDS. Clients call BindTCP with a devm pool IP
-// (127.42.0.1..20) and a port; the helper binds the socket and returns
-// the FD via SCM_RIGHTS. This lets the user-mode devm daemon bind low
-// ports (:22, :80, :443) on per-project loopback IPs without holding
-// root itself.
+// bind requests over a UDS. Clients call BindTCP with an IP in the
+// identity's pool (see identity.Config.PoolStart/PoolEnd) and a port;
+// the helper binds the socket and returns the FD via SCM_RIGHTS. This
+// lets the user-mode devm daemon bind low ports (:22, :80, :443) on
+// per-project loopback IPs without holding root itself.
 package helper
 
 import (
@@ -15,19 +15,28 @@ import (
 	"net"
 	"os"
 	"syscall"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
-// SocketPath is the well-known UDS the helper listens on.
-// Installed at devm install time; see cmd/devm/service.go. A var (not
-// a const) so tests can point BindTCP at a mock helper socket instead
-// of the real root-owned one.
-var SocketPath = "/var/run/devm-helper.sock"
+// Client dials one specific helper UDS. Constructed per-identity
+// (NewClient(cfg)) so a prod daemon dials the prod helper socket and
+// an e2e daemon dials the e2e helper socket — never the other's.
+type Client struct {
+	socketPath string
+}
 
-// BindTCP requests the helper to bind a TCP listening socket
-// on ip:port and returns it as a net.Listener. ip must be in the devm
-// pool (127.42.0.1..20).
-func BindTCP(ip string, port int) (net.Listener, error) {
-	return bindTCPViaSock(SocketPath, ip, port)
+// NewClient builds a Client bound to cfg's helper socket
+// (cfg.HelperSocketPath).
+func NewClient(cfg identity.Config) *Client {
+	return &Client{socketPath: cfg.HelperSocketPath}
+}
+
+// BindTCP requests the helper to bind a TCP listening socket on
+// ip:port and returns it as a net.Listener. ip must be in the
+// identity's pool (see identity.Config.PoolStart/PoolEnd).
+func (c *Client) BindTCP(ip string, port int) (net.Listener, error) {
+	return bindTCPViaSock(c.socketPath, ip, port)
 }
 
 // bindTCPViaSock is the seam BindTCP uses in tests to point at a mock

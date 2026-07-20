@@ -1,10 +1,14 @@
 package softnet
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/mdubb86/devm/internal/identity"
+)
 
 func TestApplyControlSetPolicy(t *testing.T) {
 	e := newEgress(nil)
-	err := applyControl(e, newIngress(nil), ControlMsg{
+	err := applyControl(e, newIngress(identity.Prod, nil), ControlMsg{
 		Op:        "setPolicy",
 		Policy:    "ENFORCED",
 		IronProxy: &IronProxyEndpoint{HTTPS: "127.0.0.1:8443"},
@@ -19,13 +23,13 @@ func TestApplyControlSetPolicy(t *testing.T) {
 
 func TestApplyControlUnknownOpIgnored(t *testing.T) {
 	e := newEgress(nil)
-	if err := applyControl(e, newIngress(nil), ControlMsg{Op: "bogus"}); err != nil {
+	if err := applyControl(e, newIngress(identity.Prod, nil), ControlMsg{Op: "bogus"}); err != nil {
 		t.Fatalf("unknown op must be ignored, got %v", err)
 	}
 }
 
 func TestApplyControlSetExposeMap(t *testing.T) {
-	ing := newIngress(nil)
+	ing := newIngress(identity.Prod, nil)
 	p := freeTCPPort(t)
 	err := applyControl(newEgress(nil), ing, ControlMsg{
 		Op:     "setExposeMap",

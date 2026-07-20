@@ -27,6 +27,13 @@ type Config struct {
 	DNSBindAddr      string // "127.0.0.1:51153" | "127.0.0.1:51154"
 	PoolStart        int    // lo0 alias pool low bound
 	PoolEnd          int    // lo0 alias pool high bound (inclusive)
+
+	// HelperSocketPath is the root helper's UDS. Root-owned; mode
+	// 0660, group c.GroupName(). Requesting clients must be in that
+	// group. A stored field (not derived from Name like GroupName/
+	// BaseImageName/Launchd*) so tests can point a Client at a
+	// scratch UDS instead of the real root-owned prod/e2e path.
+	HelperSocketPath string // "/var/run/devm-helper.sock" | "/var/run/devm-e2e-helper.sock"
 }
 
 // Profile selects between Prod and E2E at load time. Default value
@@ -43,6 +50,7 @@ var Prod = Config{
 	DNSBindAddr:      "127.0.0.1:51153",
 	PoolStart:        1,
 	PoolEnd:          20,
+	HelperSocketPath: "/var/run/devm-helper.sock",
 }
 
 // E2E is the identity the devm-e2e binary uses. Coexists with Prod on
@@ -55,6 +63,7 @@ var E2E = Config{
 	DNSBindAddr:      "127.0.0.1:51154",
 	PoolStart:        21,
 	PoolEnd:          40,
+	HelperSocketPath: "/var/run/devm-e2e-helper.sock",
 }
 
 // Load returns the Config selected by Profile. Panics on unknown
@@ -84,12 +93,6 @@ func (c Config) RuntimeDir() string {
 // SocketPath is the daemon's Unix domain socket path.
 func (c Config) SocketPath() string {
 	return filepath.Join(c.RuntimeDir(), "devm.sock")
-}
-
-// HelperSocketPath is the root helper's UDS. Root-owned; mode 0660,
-// group c.GroupName(). Requesting clients must be in that group.
-func (c Config) HelperSocketPath() string {
-	return "/var/run/" + c.Name + "-helper.sock"
 }
 
 // GroupName is the Unix group that gates access to the helper UDS.

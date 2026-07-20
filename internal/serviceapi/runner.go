@@ -41,7 +41,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// /vm/start (RegisterVMHandlers below) — no launchd-inherited
 	// sockets and no listeners at daemon startup for a project that
 	// isn't running.
-	proxy := NewProxyServer(routes, ca)
+	proxy := NewProxyServer(cfg, routes, ca)
 
 	// HTTP API server (Ship 1) with the /routes/* admin endpoints
 	// registered on top.

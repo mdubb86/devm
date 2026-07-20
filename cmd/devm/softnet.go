@@ -15,7 +15,7 @@ func IsSoftnetInvocation(argv0 string) bool {
 
 // runSoftnetAndExit runs softnet mode and never returns.
 func runSoftnetAndExit() {
-	if err := softnet.Run(os.Args[1:]); err != nil {
+	if err := softnet.Run(cfg, os.Args[1:]); err != nil {
 		// stderr, non-zero — the daemon/test reads the exit code.
 		os.Stderr.WriteString("softnet: " + err.Error() + "\n")
 		os.Exit(1)

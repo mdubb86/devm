@@ -14,6 +14,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/helper"
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // ProxyServer is the daemon's HTTP+HTTPS reverse proxy. Binds one
@@ -24,6 +25,10 @@ import (
 type ProxyServer struct {
 	routes *Routes
 	ca     *CA
+	// helperClient dials this daemon's own identity's helper socket
+	// (cfg.HelperSocketPath) — never a hardcoded prod path, so an e2e
+	// daemon binds through the e2e helper, not prod's.
+	helperClient *helper.Client
 
 	mu      sync.Mutex
 	perProj map[string]projectListeners
@@ -38,8 +43,13 @@ type projectListeners struct {
 	httpsSrv *http.Server
 }
 
-func NewProxyServer(routes *Routes, ca *CA) *ProxyServer {
-	return &ProxyServer{routes: routes, ca: ca, perProj: make(map[string]projectListeners)}
+func NewProxyServer(cfg identity.Config, routes *Routes, ca *CA) *ProxyServer {
+	return &ProxyServer{
+		routes:       routes,
+		ca:           ca,
+		helperClient: helper.NewClient(cfg),
+		perProj:      make(map[string]projectListeners),
+	}
 }
 
 // StartProjectListeners opens :80 and :443 listeners on projectIP via
@@ -54,11 +64,11 @@ func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, proj
 	}
 	p.mu.Unlock()
 
-	httpLn, err := helper.BindTCP(projectIP, 80)
+	httpLn, err := p.helperClient.BindTCP(projectIP, 80)
 	if err != nil {
 		return fmt.Errorf("bind :80 on %s: %w", projectIP, err)
 	}
-	httpsLn, err := helper.BindTCP(projectIP, 443)
+	httpsLn, err := p.helperClient.BindTCP(projectIP, 443)
 	if err != nil {
 		httpLn.Close()
 		return fmt.Errorf("bind :443 on %s: %w", projectIP, err)
