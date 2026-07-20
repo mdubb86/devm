@@ -19,6 +19,7 @@ func TestSocketPath_ContainsAppSupport(t *testing.T) {
 }
 
 func TestEnsureRuntimeDir_CreatesDirectory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir, err := EnsureRuntimeDir(identity.Prod)
 	require.NoError(t, err)
 	assert.NotEmpty(t, dir)

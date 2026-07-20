@@ -335,8 +335,13 @@ def test_install_uninstall_lifecycle(devm, workspace, sudo_capable):
         assert not _HELPER_PLIST.exists(), (
             f"helper plist still present after uninstall: {_HELPER_PLIST}"
         )
-        assert not _HELPER_BINARY.exists(), (
-            f"helper binary still present after uninstall: {_HELPER_BINARY}"
+        # NOTE: the helper binary itself isn't removed by `devm uninstall`
+        # — buildUninstallScript only bootouts the LaunchDaemons and
+        # cleans up state; binary removal is `just e2e-teardown`'s job.
+        # The socket IS removed by uninstall (bootout SIGTERMs the
+        # helper, which now unlinks its UDS on SIGTERM — see the I2 fix).
+        assert not _HELPER_SOCKET.exists(), (
+            f"helper socket still present after uninstall: {_HELPER_SOCKET}"
         )
         # Aliases removed. E2E's pool is 127.42.0.21-40 (identity.E2E.PoolStart/
         # PoolEnd) — distinct from prod's 127.42.0.1-20 — so this checks the

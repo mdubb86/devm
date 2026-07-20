@@ -96,7 +96,10 @@ func TestBuildInstallScript_NeedsAliasesAssertsWholePool(t *testing.T) {
 		DevmExe:      "/usr/local/bin/devm",
 		NeedsAliases: true,
 	})
-	for n := 1; n <= 20; n++ {
+	// cfg is the package identity (Prod under `go test`) — derived from
+	// it rather than hardcoded so this doesn't silently stop covering
+	// the actual pool if Prod's bounds ever change.
+	for n := cfg.PoolStart; n <= cfg.PoolEnd; n++ {
 		assert.Contains(t, script, fmt.Sprintf("ifconfig lo0 alias 127.42.0.%d", n))
 	}
 }
