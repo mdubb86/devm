@@ -32,39 +32,41 @@ SIGN_IDENTITY := "devm-dev"
 #    in e2e/scripts/run.sh's `go build` too.
 DEV_LDFLAGS := "-X main.Commit=$(git rev-parse --short=12 HEAD)$(git diff-index --quiet HEAD -- || echo -dirty) -X main.Fingerprint=$(head -c 8 /dev/urandom | xxd -p)"
 
-# Build the devm binary into ./bin/devm and codesign with the local
-# self-signed identity if available. The path matches what `devm
-# install` records in the LaunchDaemon plist, so a rebuild swaps the
-# binary in place — `devm service restart` picks it up.
-#
-# fetch-iron-proxy runs first: the ironproxy package's //go:embed
-# needs internal/ironproxy/embed/iron-proxy.gz to exist at compile time.
-build: fetch-iron-proxy
+# Private: build both binaries for the given profile.
+_build PROFILE:
     @mkdir -p bin internal/docker/embed
-    GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim
+    GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim   ./cmd/devm-runc-shim
     GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-docker-shim ./cmd/devm-docker-shim
-    go build -ldflags "{{DEV_LDFLAGS}}" -o bin/devm ./cmd/devm
-    @if security find-certificate -c '{{SIGN_IDENTITY}}' >/dev/null 2>&1; then \
-        codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime bin/devm && \
+    @case "{{PROFILE}}" in \
+        prod) daemon_out=bin/devm;     helper_out=bin/devm-helper ;; \
+        e2e)  daemon_out=bin/devm-e2e; helper_out=bin/devm-e2e-helper ;; \
+        *)    echo "unknown profile: {{PROFILE}}" >&2; exit 1 ;; \
+    esac; \
+    ldflags="{{DEV_LDFLAGS}} -X github.com/mdubb86/devm/internal/identity.Profile={{PROFILE}}"; \
+    go build -ldflags "$ldflags" -o "$daemon_out" ./cmd/devm && \
+    go build -ldflags "$ldflags" -o "$helper_out" ./cmd/devm-helper; \
+    if security find-certificate -c '{{SIGN_IDENTITY}}' >/dev/null 2>&1; then \
+        codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime "$daemon_out" "$helper_out" && \
         echo "signed with {{SIGN_IDENTITY}}"; \
     else \
         echo "warning: signing cert '{{SIGN_IDENTITY}}' not in keychain — every rebuild will re-prompt for keychain access"; \
         echo "         one-time fix: Keychain Access → Certificate Assistant → Create a Certificate (Name: {{SIGN_IDENTITY}}, Code Signing, Self Signed Root)"; \
     fi
-    just build-helper
 
-# Build the helper daemon. Signed with the same identity as devm for
-# consistent Gatekeeper behavior. Installed as a sibling of the devm
-# binary (same directory as os.Executable(), named <basename>-helper —
-# see helperSourcePath in cmd/devm/service.go), not to a fixed system path.
-build-helper:
-    @mkdir -p bin
-    go build -o bin/devm-helper ./cmd/devm-helper
-    @if security find-certificate -c '{{SIGN_IDENTITY}}' >/dev/null 2>&1; then \
-        codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime bin/devm-helper ; \
-    else \
-        echo "note: SIGN_IDENTITY {{SIGN_IDENTITY}} not found; skipping codesign" ; \
-    fi
+# Build the devm + devm-helper binaries into ./bin with prod identity,
+# and codesign with the local self-signed identity if available. The
+# path matches what `devm install` records in the LaunchDaemon plist,
+# so a rebuild swaps the binary in place — `devm service restart`
+# picks it up.
+#
+# fetch-iron-proxy runs first: the ironproxy package's //go:embed
+# needs internal/ironproxy/embed/iron-proxy.gz to exist at compile time.
+build: fetch-iron-proxy (_build "prod")
+
+# Build the devm-e2e + devm-e2e-helper binaries into ./bin with e2e
+# identity, so they run alongside — not clobber — a live prod install
+# (separate runtime dir, socket, LaunchDaemon label; see internal/identity).
+build-e2e: fetch-iron-proxy (_build "e2e")
 
 # Run Go unit tests.
 test:
