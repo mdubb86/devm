@@ -635,7 +635,7 @@ func runPrivilegedUninstall(out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("locate executable: %w", err)
 	}
-	script := buildUninstallScript(exe)
+	script := buildUninstallScript(cfg, exe)
 	c := exec.Command("sudo", "bash", "-c", script)
 	c.Stdout = out
 	c.Stderr = out
@@ -677,7 +677,15 @@ func runPrivilegedUninstall(out io.Writer) error {
 // .../devm/iron-proxy/, e2e's matches .../devm-e2e/iron-proxy/ —
 // disjoint, so `devm-e2e uninstall` can't reap the user's real
 // iron-proxy children (and vice versa).
-func buildUninstallScript(exe string) string {
+//
+// cfg.DeleteBaseImageOnUninstall (spec §8.3) gates a trailing
+// `tart delete` of cfg.BaseImageName(): true for e2e (its
+// base-lifecycle tests want a clean slate on uninstall), false for
+// prod (a user's base image is expensive to rebuild and shouldn't
+// vanish just because they ran `devm uninstall`). Placed last — every
+// other cleanup step above it is unconditional or best-effort, so
+// nothing downstream depends on the base image still existing.
+func buildUninstallScript(cfg identity.Config, exe string) string {
 	var sb strings.Builder
 	sb.WriteString("set +e\n")
 	sb.WriteString("launchctl bootout " + cfg.LaunchdTargetDaemon() + " 2>/dev/null\n")
@@ -694,6 +702,10 @@ func buildUninstallScript(exe string) string {
 	}
 	sb.WriteString("rm -f " + cfg.LaunchdPlistHelper() + "\n")
 	fmt.Fprintf(&sb, "dscl . -delete /Groups/%s 2>/dev/null || true\n", cfg.GroupName())
+
+	if cfg.DeleteBaseImageOnUninstall {
+		fmt.Fprintf(&sb, "tart delete %s 2>/dev/null || true\n", shellQuote(cfg.BaseImageName()))
+	}
 
 	return sb.String()
 }

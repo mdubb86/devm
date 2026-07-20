@@ -115,6 +115,19 @@ func TestDerivations(t *testing.T) {
 	}
 }
 
+// TestDeleteBaseImageOnUninstall pins the prod/e2e split for spec
+// §8.3: e2e's uninstall deletes its base image (its base-lifecycle
+// tests want a clean slate); prod's does not (a user's base image is
+// expensive to rebuild and shouldn't vanish on uninstall).
+func TestDeleteBaseImageOnUninstall(t *testing.T) {
+	if Prod.DeleteBaseImageOnUninstall {
+		t.Errorf("prod DeleteBaseImageOnUninstall = true, want false")
+	}
+	if !E2E.DeleteBaseImageOnUninstall {
+		t.Errorf("e2e DeleteBaseImageOnUninstall = false, want true")
+	}
+}
+
 func TestRuntimeDir(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	if got := Prod.RuntimeDir(); got != filepath.Join(home, "Library", "Application Support", "devm") {

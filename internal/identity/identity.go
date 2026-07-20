@@ -34,6 +34,13 @@ type Config struct {
 	// BaseImageName/Launchd*) so tests can point a Client at a
 	// scratch UDS instead of the real root-owned prod/e2e path.
 	HelperSocketPath string // "/var/run/devm-helper.sock" | "/var/run/devm-e2e-helper.sock"
+
+	// DeleteBaseImageOnUninstall selects whether `devm uninstall`
+	// also deletes cfg.BaseImageName() via `tart delete`. False for
+	// prod (a user's base image is expensive to rebuild and shouldn't
+	// vanish on uninstall); true for e2e (whose base-lifecycle tests
+	// want a clean slate — spec §8.3).
+	DeleteBaseImageOnUninstall bool
 }
 
 // Profile selects between Prod and E2E at load time. Default value
@@ -44,26 +51,28 @@ var Profile = "prod"
 
 // Prod is the identity the shipped devm binary uses.
 var Prod = Config{
-	Name:             "devm",
-	TLD:              "test",
-	ResolverFilePath: "/etc/resolver/test",
-	DNSBindAddr:      "127.0.0.1:51153",
-	PoolStart:        1,
-	PoolEnd:          20,
-	HelperSocketPath: "/var/run/devm-helper.sock",
+	Name:                       "devm",
+	TLD:                        "test",
+	ResolverFilePath:           "/etc/resolver/test",
+	DNSBindAddr:                "127.0.0.1:51153",
+	PoolStart:                  1,
+	PoolEnd:                    20,
+	HelperSocketPath:           "/var/run/devm-helper.sock",
+	DeleteBaseImageOnUninstall: false,
 }
 
 // E2E is the identity the devm-e2e binary uses. Coexists with Prod on
 // the same Mac without collision — different plists, different runtime
 // dir, different pool range, different TLD, different CA CN.
 var E2E = Config{
-	Name:             "devm-e2e",
-	TLD:              "e2e.test",
-	ResolverFilePath: "/etc/resolver/e2e.test",
-	DNSBindAddr:      "127.0.0.1:51154",
-	PoolStart:        21,
-	PoolEnd:          40,
-	HelperSocketPath: "/var/run/devm-e2e-helper.sock",
+	Name:                       "devm-e2e",
+	TLD:                        "e2e.test",
+	ResolverFilePath:           "/etc/resolver/e2e.test",
+	DNSBindAddr:                "127.0.0.1:51154",
+	PoolStart:                  21,
+	PoolEnd:                    40,
+	HelperSocketPath:           "/var/run/devm-e2e-helper.sock",
+	DeleteBaseImageOnUninstall: true,
 }
 
 // Load returns the Config selected by Profile. Panics on unknown

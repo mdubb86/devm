@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 func TestBuildUninstallScript_ReapsIronProxyChildren(t *testing.T) {
@@ -18,7 +20,7 @@ func TestBuildUninstallScript_ReapsIronProxyChildren(t *testing.T) {
 	// itself; without this the e2e harness has to reap orphans, and
 	// real users end up with iron-proxy processes sitting on
 	// MAC_HOST:port bindings that leak across uninstall/reinstall.
-	script := buildUninstallScript("/usr/local/bin/devm")
+	script := buildUninstallScript(cfg, "/usr/local/bin/devm")
 
 	require.True(t, strings.Contains(script, "launchctl bootout system/com.devm.service"),
 		"script must SIGTERM the daemon via launchctl bootout")
@@ -120,7 +122,7 @@ func TestHelperPlistContent_UsesResolvedProgramPathAndIdentity(t *testing.T) {
 }
 
 func TestBuildUninstallScript_RemovesAliases(t *testing.T) {
-	script := buildUninstallScript("/usr/local/bin/devm")
+	script := buildUninstallScript(cfg, "/usr/local/bin/devm")
 	assert.Contains(t, script, "launchctl bootout system/com.devm.helper")
 	// Alias cleanup for all 20 addresses.
 	for n := 1; n <= 20; n++ {
@@ -131,6 +133,21 @@ func TestBuildUninstallScript_RemovesAliases(t *testing.T) {
 	// points directly at the sibling binary next to the devm CLI, so
 	// there's nothing installed under /usr/local/libexec to remove.
 	assert.NotContains(t, script, "/usr/local/libexec/devm-helper")
+}
+
+// TestBuildUninstallScript_DeletesBaseImageForE2E pins spec §8.3: an
+// e2e uninstall also `tart delete`s its base image so e2e's
+// base-lifecycle tests get a clean slate. Prod does not get this line
+// — see TestBuildUninstallScript_KeepsBaseImageForProd — a user's base
+// image is expensive to rebuild and shouldn't vanish on uninstall.
+func TestBuildUninstallScript_DeletesBaseImageForE2E(t *testing.T) {
+	script := buildUninstallScript(identity.E2E, "/usr/local/bin/devm-e2e")
+	assert.Contains(t, script, "tart delete "+shellQuote(identity.E2E.BaseImageName()))
+}
+
+func TestBuildUninstallScript_KeepsBaseImageForProd(t *testing.T) {
+	script := buildUninstallScript(identity.Prod, "/usr/local/bin/devm")
+	assert.NotContains(t, script, "tart delete")
 }
 
 func TestResolveInstallUser_UsesSudoUserWhenPresent(t *testing.T) {
