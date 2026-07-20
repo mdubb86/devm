@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 func TestParseRequest_Bind_OK(t *testing.T) {
@@ -28,14 +30,21 @@ func TestParseRequest_UnknownOp_Errors(t *testing.T) {
 }
 
 func TestValidateIPInPool_OK(t *testing.T) {
-	for i := 1; i <= 20; i++ {
+	// validateIPInPool reads the package-level cfg, which defaults to
+	// identity.Prod (Profile is only overridden via an ldflag at build
+	// time, never in `go test`).
+	for i := identity.Prod.PoolStart; i <= identity.Prod.PoolEnd; i++ {
 		ip := "127.42.0." + itoa(i)
 		assert.NoError(t, validateIPInPool(ip), "IP %s should be in pool", ip)
 	}
 }
 
 func TestValidateIPInPool_OutOfRange_Errors(t *testing.T) {
-	for _, bad := range []string{"127.42.0.0", "127.42.0.21", "127.42.0.100", "127.0.0.1", "192.168.1.1", "notanip"} {
+	for _, bad := range []string{
+		"127.42.0." + itoa(identity.Prod.PoolStart-1),
+		"127.42.0." + itoa(identity.Prod.PoolEnd+1),
+		"127.42.0.100", "127.0.0.1", "192.168.1.1", "notanip",
+	} {
 		err := validateIPInPool(bad)
 		assert.Error(t, err, "IP %s should NOT be in pool", bad)
 	}

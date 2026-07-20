@@ -26,14 +26,16 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
-const (
-	socketPath = "/var/run/devm-helper.sock"
-	poolStart  = 1
-	poolEnd    = 20
-	poolFmt    = "127.42.0.%d"
-)
+// cfg is this binary's compiled-in daemon identity (prod vs. e2e),
+// loaded once at package init via the -X identity.Profile ldflag.
+var cfg = identity.Load()
+
+// poolFmt is a devm-wide convention (not per-profile identity).
+const poolFmt = "127.42.0.%d"
 
 type request struct {
 	Op    string `json:"op"`
@@ -65,7 +67,7 @@ func run() error {
 // provisionAliases adds each pool address as an lo0 alias. Idempotent:
 // re-adding an existing alias succeeds with no output on macOS.
 func provisionAliases() error {
-	for n := poolStart; n <= poolEnd; n++ {
+	for n := cfg.PoolStart; n <= cfg.PoolEnd; n++ {
 		ip := fmt.Sprintf(poolFmt, n)
 		cmd := exec.Command("/sbin/ifconfig", "lo0", "alias", ip, "up")
 		out, err := cmd.CombinedOutput()
@@ -79,6 +81,7 @@ func provisionAliases() error {
 // serve opens the UDS, handles one request per accepted connection, and
 // closes. Runs until process exit.
 func serve() error {
+	socketPath := cfg.HelperSocketPath()
 	_ = os.Remove(socketPath) // remove any stale socket from a prior run
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -86,9 +89,10 @@ func serve() error {
 	}
 	defer ln.Close()
 
-	// Chmod to 0660; chown to root:_devm (root is default; only chgrp needed).
-	// _devm group is created at install time; if it doesn't exist, chmod
-	// still applies and the UDS is root-only until install completes.
+	// Chmod to 0660; chown to root:cfg.GroupName() (root is default; only
+	// chgrp needed). The group is created at install time; if it doesn't
+	// exist, chmod still applies and the UDS is root-only until install
+	// completes.
 	if err := os.Chmod(socketPath, 0o660); err != nil {
 		return fmt.Errorf("chmod %s: %w", socketPath, err)
 	}
@@ -170,9 +174,9 @@ func parseRequest(raw []byte) (request, error) {
 }
 
 // validateIPInPool returns nil iff ip is exactly a devm pool address
-// (127.42.0.N for N in poolStart..poolEnd).
+// (127.42.0.N for N in cfg.PoolStart..cfg.PoolEnd).
 func validateIPInPool(ip string) error {
-	for n := poolStart; n <= poolEnd; n++ {
+	for n := cfg.PoolStart; n <= cfg.PoolEnd; n++ {
 		if ip == fmt.Sprintf(poolFmt, n) {
 			return nil
 		}
@@ -205,10 +209,10 @@ func bindTCP(ip string, port int) (int, error) {
 	return fd, nil
 }
 
-// lookupDevmGroup returns the numeric gid for the _devm group.
+// lookupDevmGroup returns the numeric gid for cfg's helper group.
 // Returns an error if the group doesn't exist (install hasn't run yet).
 func lookupDevmGroup() (int, error) {
-	g, err := user.LookupGroup("_devm")
+	g, err := user.LookupGroup(cfg.GroupName())
 	if err != nil {
 		return 0, err
 	}
