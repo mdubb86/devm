@@ -135,7 +135,7 @@ func TestRunReconcile_LiveChangeApplies(t *testing.T) {
 	newCfg := reconcileMinimalCfg()
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
 
-	rc, res, err := RunReconcile(newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, "applied", res.NextAction)
@@ -151,7 +151,7 @@ func TestRunReconcile_IdenticalBaseline_NothingToDo(t *testing.T) {
 	cfg := reconcileMinimalCfg()
 	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: cfg}))
 
-	rc, res, err := RunReconcile(cfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	rc, res, err := RunReconcile(identity.Prod, cfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, "nothing_to_do", res.NextAction)
@@ -170,7 +170,7 @@ func TestRunReconcile_TeardownRequired_ClassifiesFlavorAndSessions(t *testing.T)
 	newCfg := reconcileMinimalCfg()
 	newCfg.Packages = []string{"jq", "yq"}
 
-	rc, res, err := RunReconcile(newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, "needs_approval", res.NextAction)
@@ -189,7 +189,7 @@ func TestRunReconcile_DaemonUnreachable_ReturnsError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := reconcileMinimalCfg()
-	rc, res, err := RunReconcile(cfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	rc, res, err := RunReconcile(identity.Prod, cfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
 	require.Error(t, err)
 	assert.Equal(t, -1, rc)
 	assert.Equal(t, ReconcileResult{}, res)
@@ -262,7 +262,7 @@ func TestRunReconcile_DockerTrueCfg_AllowlistIncludesDockerHubHost(t *testing.T)
 	newCfg := oldCfg
 	newCfg.Network = schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}, {Host: "b.com"}}}
 
-	rc, res, err := RunReconcile(newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	require.NotEmpty(t, res.AppliedIronProxy, "network add is a BucketEgressRestart change")

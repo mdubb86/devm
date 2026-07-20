@@ -28,6 +28,7 @@ out what to add to ` + "`network.allow`" + ` in devm.yaml when a tool inside the
 sandbox is failing to reach an upstream.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		ident := cfg // capture package identity cfg before it's shadowed below
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return err
@@ -36,12 +37,12 @@ sandbox is failing to reach an upstream.`,
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), cfg); err != nil {
+		if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
 			return err
 		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 		defer cancel()
-		snap, err := serviceapi.NewClient().Denials(ctx, cfg.Project.Name)
+		snap, err := serviceapi.NewClient(ident).Denials(ctx, cfg.Project.Name)
 		if err != nil {
 			return fmt.Errorf("query denials: %w", err)
 		}

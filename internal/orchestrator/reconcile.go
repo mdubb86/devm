@@ -35,8 +35,11 @@ type ReconcileOptions struct{}
 // Return codes: 0 on success (regardless of whether a recreate is
 // pending — the caller inspects res.RecreateRequired), -1 when the
 // daemon call itself failed.
-func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts ReconcileOptions) (int, ReconcileResult, error) {
-	client := serviceapi.NewClient(identity.Prod)
+//
+// ident is the daemon identity (prod vs. e2e); named "ident" rather
+// than "cfg" here because cfg is already the project's schema.Config.
+func RunReconcile(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot string, opts ReconcileOptions) (int, ReconcileResult, error) {
+	client := serviceapi.NewClient(ident)
 
 	// Resolve secrets CLI-side for the hash map AND for the possible
 	// downstream ApplyIronProxy call. resolveSecretBindings walks env
@@ -48,11 +51,11 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 	hashes := SecretHashesFromBindings(bindings)
 
 	// Load SSH keys CLI-side and pass to the daemon.
-	authPub, err := sshkeys.EnsureProjectKeypair(identity.Prod, cfg.Project.Name)
+	authPub, err := sshkeys.EnsureProjectKeypair(ident, cfg.Project.Name)
 	if err != nil {
 		return -1, ReconcileResult{}, fmt.Errorf("ensure ssh keypair: %w", err)
 	}
-	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(identity.Prod, cfg.Project.Name)
+	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(ident, cfg.Project.Name)
 	if err != nil {
 		return -1, ReconcileResult{}, fmt.Errorf("ensure ssh host key: %w", err)
 	}

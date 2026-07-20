@@ -82,6 +82,10 @@ type ShellDeps struct {
 	// UserSpawner runs the interactive shell command. Production code
 	// uses ExecSpawner; tests use a stub.
 	UserSpawner Spawner
+	// Ident is the daemon identity (prod vs. e2e) this shell session
+	// operates under — threaded into every serviceapi/sshkeys call
+	// RunShell's methods make, instead of a hardcoded identity.Prod.
+	Ident identity.Config
 }
 
 // VMAdminClient is the subset of serviceapi.Client used by RunShell.
@@ -113,11 +117,12 @@ type VMAdminClient interface {
 }
 
 // DefaultShellDeps returns deps wired for production.
-func DefaultShellDeps(repoRoot string) ShellDeps {
+func DefaultShellDeps(cfg identity.Config, repoRoot string) ShellDeps {
 	return ShellDeps{
 		Tart:             tart.New(),
-		ServiceAPIClient: serviceapi.NewClient(identity.Prod),
+		ServiceAPIClient: serviceapi.NewClient(cfg),
 		UserSpawner:      &ExecSpawner{Interactive: true},
+		Ident:            cfg,
 	}
 }
 
@@ -273,7 +278,7 @@ func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName str
 	reporter.Step("ready", false)
 	reporter.Stop()
 	reporter.Clear()
-	if err := EmitSSHConfig(ctx, d.Tart); err != nil {
+	if err := EmitSSHConfig(ctx, d.Ident, d.Tart); err != nil {
 		log.Printf("ssh_config emit failed on warm attach: %v", err)
 	}
 	return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
@@ -291,15 +296,15 @@ func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName str
 // a daemon crash before the next reconcile doesn't strand
 // recoverProjectState with nothing to restore.
 func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vmName, repoRoot, cmdName string, cmdArgs []string, bindings []serviceapi.SecretBinding, projectIP string, reporter status.Reporter) (int, error) {
-	caPEM, err := os.ReadFile(filepath.Join(caStorageDir(), "root.crt"))
+	caPEM, err := os.ReadFile(filepath.Join(caStorageDir(d.Ident), "root.crt"))
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "read CA root")
 	}
-	authPub, err := sshkeys.EnsureProjectKeypair(identity.Prod, cfg.Project.Name)
+	authPub, err := sshkeys.EnsureProjectKeypair(d.Ident, cfg.Project.Name)
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "ensure project ssh keypair")
 	}
-	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(identity.Prod, cfg.Project.Name)
+	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(d.Ident, cfg.Project.Name)
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "ensure project ssh host key")
 	}
@@ -409,11 +414,11 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		ProjectIP:         projectIP,
 		WorkspaceHostPath: repoRoot,
 	}
-	if err := serviceapi.WriteStateSnapshot(identity.Prod, cfg.Project.Name, snap); err != nil {
+	if err := serviceapi.WriteStateSnapshot(d.Ident, cfg.Project.Name, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)
 	}
 
-	if err := EmitSSHConfig(ctx, d.Tart); err != nil {
+	if err := EmitSSHConfig(ctx, d.Ident, d.Tart); err != nil {
 		log.Printf("ssh_config emit failed after provisioning: %v", err)
 	}
 
@@ -560,6 +565,6 @@ func waitVMReady(ctx context.Context, tr *tart.Tart, vmName string, timeout time
 // consistent with Ship 3's CA location. Follows the daemon-side
 // $DEVM_RUNTIME_DIR override so an e2e-sandboxed CLI reads the CA
 // from the same isolated dir the sandboxed daemon writes to.
-func caStorageDir() string {
-	return filepath.Join(serviceapi.RuntimeDir(identity.Prod), "ca")
+func caStorageDir(cfg identity.Config) string {
+	return filepath.Join(serviceapi.RuntimeDir(cfg), "ca")
 }

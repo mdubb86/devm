@@ -9,6 +9,7 @@ import (
 
 	"github.com/mattn/go-isatty"
 	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/orchestrator"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -30,6 +31,7 @@ var reconcileCmd = &cobra.Command{
 		if err := requireDaemonInSync(cmd.Context()); err != nil {
 			return err
 		}
+		ident := cfg // capture package identity cfg before it's shadowed below
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return err
@@ -39,7 +41,7 @@ var reconcileCmd = &cobra.Command{
 			return err
 		}
 		tr := tart.New()
-		rc, res, err := orchestrator.RunReconcile(cfg, tr, repoRoot, orchestrator.ReconcileOptions{})
+		rc, res, err := orchestrator.RunReconcile(ident, cfg, tr, repoRoot, orchestrator.ReconcileOptions{})
 		if err != nil {
 			return err
 		}
@@ -55,7 +57,7 @@ var reconcileCmd = &cobra.Command{
 		// Best-effort: re-push routes so a `direct` flip made by this
 		// reconcile is reflected in the daemon's DNS answer right away,
 		// instead of waiting for the next `devm shell` auto-apply.
-		repushRoutes(cfg)
+		repushRoutes(ident, cfg)
 
 		if len(res.RecreateRequired) == 0 {
 			return nil
@@ -81,7 +83,8 @@ var reconcileCmd = &cobra.Command{
 
 		stopDeps := orchestrator.StopDeps{
 			Tart:             tr,
-			ServiceAPIClient: serviceapi.NewClient(),
+			ServiceAPIClient: serviceapi.NewClient(ident),
+			Ident:            ident,
 		}
 		mode := orchestrator.StopPreserve
 		if res.Flavor == reconcile.FlavorTeardownVM {
@@ -118,10 +121,13 @@ func init() {
 // isn't running — that's a normal skip (nothing live to update on a
 // stopped VM), not a failure. A down daemon or a push error must never
 // fail `devm reconcile` itself.
-func repushRoutes(cfg schema.Config) {
+//
+// ident is the daemon identity (prod vs. e2e); named "ident" rather
+// than "cfg" here because cfg is the caller's project schema.Config.
+func repushRoutes(ident identity.Config, cfg schema.Config) {
 	rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer rcancel()
-	c := serviceapi.NewClient()
+	c := serviceapi.NewClient(ident)
 	if !c.Available(rctx) {
 		return
 	}

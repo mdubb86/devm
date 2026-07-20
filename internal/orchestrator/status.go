@@ -13,30 +13,32 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RunStatus collects read-only state for `devm status`. cliFingerprint
-// is the CLI's own compiled-in Fingerprint constant, threaded through
-// so ProbeDaemon can report drift without orchestrator importing
-// cmd/devm.
-func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string) (StatusResult, error) {
+// RunStatus collects read-only state for `devm status`. ident is the
+// daemon identity (prod vs. e2e) this status probe operates under;
+// named "ident" rather than "cfg" here because cfg is already the
+// project's schema.Config. cliFingerprint is the CLI's own compiled-in
+// Fingerprint constant, threaded through so ProbeDaemon can report
+// drift without orchestrator importing cmd/devm.
+func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string) (StatusResult, error) {
 	vmName := cfg.Project.Name
 	res := StatusResult{
 		HasProject: true,
 		Sandbox:    vmName,
-		Daemon:     ProbeDaemon(context.Background(), cliFingerprint),
+		Daemon:     ProbeDaemon(context.Background(), ident, cliFingerprint),
 	}
 
 	// Routing status — query the daemon's /routes endpoint. Runs
 	// unconditionally so users see it whenever they `devm status`. On
 	// error we leave Routing zero-valued; the format layer renders that
 	// as proxy-unreachable without breaking the rest of status.
-	c := serviceapi.NewClient(identity.Prod)
+	c := serviceapi.NewClient(ident)
 	if routing, err := c.RoutingStatusFromDaemon(context.Background()); err == nil {
 		res.Routing = routing
 	}
 
 	dnsCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := serviceapi.CheckDNSHealth(dnsCtx, identity.Prod); err == nil {
+	if err := serviceapi.CheckDNSHealth(dnsCtx, ident); err == nil {
 		res.DNSHealthy = true
 	} else {
 		res.DNSHealthy = false
@@ -44,7 +46,7 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 	}
 
 	// CA trust state — read-only, no sudo.
-	trusted, _ := serviceapi.CheckCATrusted(identity.Prod)
+	trusted, _ := serviceapi.CheckCATrusted(ident)
 	res.CATrusted = trusted
 
 	// Proxy health: ask the daemon over the unix socket. Previously
@@ -125,7 +127,7 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 		}
 	}
 	var lastAppliedTemplates map[string]string
-	if stateSnap, sErr := serviceapi.ReadStateSnapshot(identity.Prod, cfg.Project.Name); sErr == nil && stateSnap != nil {
+	if stateSnap, sErr := serviceapi.ReadStateSnapshot(ident, cfg.Project.Name); sErr == nil && stateSnap != nil {
 		lastAppliedTemplates = stateSnap.TemplateContents
 	}
 	statusChanges, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot, lastAppliedTemplates, nil, nil)

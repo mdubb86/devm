@@ -23,6 +23,7 @@ The lock comes back automatically after ` + "`--for`" + ` (default 5m), or soone
 if you run ` + "`devm reconcile`" + ` or ` + "`devm lock`" + `.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		ident := cfg // capture package identity cfg before it's shadowed below
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)
@@ -31,7 +32,7 @@ if you run ` + "`devm reconcile`" + ` or ` + "`devm lock`" + `.`,
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), cfg); err != nil {
+		if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
 			return err
 		}
 
@@ -47,7 +48,7 @@ if you run ` + "`devm reconcile`" + ` or ` + "`devm lock`" + `.`,
 			relockSeconds = int(forDur.Round(time.Second) / time.Second)
 		}
 
-		wasLocked, armedRelockSeconds, err := serviceapi.NewClient().UnlockConfig(ctx, cfg.Project.Name, relockSeconds)
+		wasLocked, armedRelockSeconds, err := serviceapi.NewClient(ident).UnlockConfig(ctx, cfg.Project.Name, relockSeconds)
 		if err != nil {
 			return fmt.Errorf("unlock config: %w", err)
 		}
@@ -69,6 +70,7 @@ away, ending a temporary ` + "`devm unlock`" + ` early instead of waiting for it
 re-lock on its own.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		ident := cfg // capture package identity cfg before it's shadowed below
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)
@@ -77,14 +79,14 @@ re-lock on its own.`,
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), cfg); err != nil {
+		if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
 			return err
 		}
 
 		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 		defer cancel()
 
-		if err := serviceapi.NewClient().LockConfig(ctx, cfg.Project.Name); err != nil {
+		if err := serviceapi.NewClient(ident).LockConfig(ctx, cfg.Project.Name); err != nil {
 			return fmt.Errorf("lock config: %w", err)
 		}
 		fmt.Println("devm.yaml re-locked")

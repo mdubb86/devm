@@ -16,6 +16,7 @@ import (
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/image"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshconfig"
@@ -60,7 +61,7 @@ func (p *kardianosProgram) Start(_ service.Service) error {
 	p.cancel = cancel
 	p.done = make(chan error, 1)
 	go func() {
-		p.done <- serviceapi.RunService(ctx, serviceapi.Build{
+		p.done <- serviceapi.RunService(ctx, cfg, serviceapi.Build{
 			Version: Version, Commit: Commit, Date: Date, Fingerprint: Fingerprint,
 			BinaryPath: resolvedSelfPath(),
 		})
@@ -114,15 +115,18 @@ func newKardianosService() (service.Service, error) {
 	logDir := filepath.Join(home, "Library", "Logs")
 
 	plistText := strings.NewReplacer(
-		"__LOG_OUT__", filepath.Join(logDir, "com.devm.service.out.log"),
-		"__LOG_ERR__", filepath.Join(logDir, "com.devm.service.err.log"),
+		"__LOG_OUT__", filepath.Join(logDir, cfg.LaunchdLabelDaemon()+".out.log"),
+		"__LOG_ERR__", filepath.Join(logDir, cfg.LaunchdLabelDaemon()+".err.log"),
 		"__HOME__", home,
 		"__USER__", userName,
 	).Replace(serviceapi.LaunchdPlistTemplate)
 
 	prog := &kardianosProgram{}
-	cfg := &service.Config{
-		Name:        "com.devm.service",
+	// Named svcCfg (not cfg) — kardianos's service.Config, distinct
+	// from the package-level identity.Config cfg this function reads
+	// from above.
+	svcCfg := &service.Config{
+		Name:        cfg.LaunchdLabelDaemon(),
 		DisplayName: "devm",
 		Description: "devm reverse proxy + DNS + sandbox lifecycle",
 		Executable:  exe,
@@ -132,7 +136,7 @@ func newKardianosService() (service.Service, error) {
 			"UserService":   false, // Force LaunchDaemon path; Status() reads /Library/LaunchDaemons/ from any euid.
 		},
 	}
-	return service.New(prog, cfg)
+	return service.New(prog, svcCfg)
 }
 
 var serveCmd = &cobra.Command{
@@ -152,7 +156,7 @@ var serveCmd = &cobra.Command{
 			// RunService's oklog/run group unwinds cleanly.
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			return serviceapi.RunService(ctx, serviceapi.Build{
+			return serviceapi.RunService(ctx, cfg, serviceapi.Build{
 				Version: Version, Commit: Commit, Date: Date, Fingerprint: Fingerprint,
 				BinaryPath: resolvedSelfPath(),
 			})
@@ -182,15 +186,15 @@ var buildBaseIfNeededCmd = &cobra.Command{
 		if _, err := exec.LookPath("tart"); err != nil {
 			return fmt.Errorf("tart not found on PATH: %w", err)
 		}
-		needs, _, err := image.NeedsBuild()
+		needs, _, err := image.NeedsBuild(cfg)
 		if err != nil {
 			return fmt.Errorf("check base image state: %w", err)
 		}
 		if !needs {
 			return nil
 		}
-		fmt.Fprintln(os.Stderr, "devm _build-base-if-needed: base image drifted; rebuilding devm-base…")
-		return image.BuildBaseImage(cmd.Context(), os.Stderr)
+		fmt.Fprintf(os.Stderr, "devm _build-base-if-needed: base image drifted; rebuilding %s…\n", cfg.BaseImageName())
+		return image.BuildBaseImage(cmd.Context(), cfg, os.Stderr)
 	},
 }
 
@@ -240,10 +244,10 @@ func runInstallFlow(ctx context.Context) error {
 	// log). Spinner has the terminal to itself. The provisioning
 	// script is embedded in the binary via //go:embed, so no
 	// on-disk image/ directory is needed.
-	needs, _, _ := image.NeedsBuild()
+	needs, _, _ := image.NeedsBuild(cfg)
 	if needs {
-		reporter.Step("building devm-base", false)
-		if err := image.BuildBaseImage(ctx, logFile); err != nil {
+		reporter.Step("building "+cfg.BaseImageName(), false)
+		if err := image.BuildBaseImage(ctx, cfg, logFile); err != nil {
 			reporter.Fail()
 			tailLog(logPath, 30)
 			return fmt.Errorf("base image build failed; see %s", logPath)
@@ -252,11 +256,11 @@ func runInstallFlow(ctx context.Context) error {
 
 	reporter.Info("ready")
 
-	if !sshConfigIncluded(sshconfig.Path()) {
+	if !sshConfigIncluded(sshconfig.Path(cfg)) {
 		fmt.Fprintf(os.Stderr,
 			"[devm] to enable ssh access to your VMs, add this line to ~/.ssh/config:\n"+
 				"    Include \"%s\"\n",
-			sshconfig.Path())
+			sshconfig.Path(cfg))
 	}
 
 	return nil
@@ -312,12 +316,18 @@ type installInputs struct {
 	// DevmExe is the CLI binary path baked into the LaunchDaemon plist
 	// by `_kardianos install`.
 	DevmExe string
-	// HelperExe is the built devm-helper binary to install at
-	// helperInstallPath. Empty skips the entire helper block
-	// (group creation, binary + plist install, bootstrap).
+	// HelperExe is the resolved devm-helper binary path the helper's
+	// LaunchDaemon plist should point at directly (sibling of DevmExe
+	// — no system-path copy, same pattern kardianos uses for the main
+	// daemon). Empty skips the entire helper block (group creation,
+	// plist install, bootstrap).
 	HelperExe string
-	// InstallUser is added to the _devm group's membership list.
+	// HelperLogDir is the installing user's ~/Library/Logs, used to
+	// build the helper plist's StandardOutPath/StandardErrorPath.
 	// Ignored when HelperExe is empty.
+	HelperLogDir string
+	// InstallUser is added to the group's membership list.
+	// Ignored when HelperExe is empty and NeedsGroup is false.
 	InstallUser string
 
 	NeedsDNS         bool
@@ -327,6 +337,14 @@ type installInputs struct {
 	RootCertPath string
 
 	NeedsDaemon bool
+
+	// NeedsAliases is true when at least one lo0 loopback alias in
+	// cfg's pool (127.42.0.<PoolStart>..<PoolEnd>) is missing.
+	NeedsAliases bool
+
+	// NeedsGroup is true when cfg.GroupName() doesn't exist yet in
+	// Directory Services.
+	NeedsGroup bool
 }
 
 // buildInstallScript assembles the privileged install script from
@@ -342,28 +360,41 @@ func buildInstallScript(inputs installInputs) string {
 	if inputs.NeedsDNS {
 		sb.WriteString("mkdir -p /etc/resolver\n")
 		fmt.Fprintf(&sb, "cat > %s <<'EOF'\n%sEOF\n",
-			serviceapi.ResolverFilePath, inputs.ResolverContents)
+			cfg.ResolverFilePath, inputs.ResolverContents)
 	}
 	if inputs.NeedsCA {
 		fmt.Fprintf(&sb, "security add-trusted-cert -d -r trustRoot -k %s %s\n",
 			shellQuote(serviceapi.SystemKeychain), shellQuote(inputs.RootCertPath))
 	}
-	if inputs.HelperExe != "" {
-		// Create _devm group idempotently (safe re-run at every install).
+	// Group block runs whenever the group itself might be missing, or
+	// we're (re)installing the helper (which needs InstallUser in it).
+	if inputs.NeedsGroup || inputs.HelperExe != "" {
+		// Create the group idempotently (safe re-run at every install).
 		// GID 802: PrimaryGroupID collision fallback — pick your own if
 		// this collides with an existing group on your system (org
 		// management / MDM tools sometimes claim GIDs in the 300-999
 		// system range, and `dscl . -create` aborts under `set -e` if
 		// the GID is already taken).
-		sb.WriteString(`dscl . -read /Groups/_devm >/dev/null 2>&1 || dscl . -create /Groups/_devm PrimaryGroupID 802` + "\n")
+		group := cfg.GroupName()
+		fmt.Fprintf(&sb, "dscl . -read /Groups/%s >/dev/null 2>&1 || dscl . -create /Groups/%s PrimaryGroupID 802\n", group, group)
 		if inputs.InstallUser != "" {
-			sb.WriteString("dscl . -read /Groups/_devm GroupMembership 2>/dev/null | grep -qw " + inputs.InstallUser +
-				" || dscl . -append /Groups/_devm GroupMembership " + inputs.InstallUser + "\n")
+			fmt.Fprintf(&sb, "dscl . -read /Groups/%s GroupMembership 2>/dev/null | grep -qw %s || dscl . -append /Groups/%s GroupMembership %s\n",
+				group, inputs.InstallUser, group, inputs.InstallUser)
 		}
-		fmt.Fprintf(&sb, "install -m 0755 %s %s\n", shellQuote(inputs.HelperExe), helperInstallPath)
-		fmt.Fprintf(&sb, "install -m 0644 /dev/stdin %s <<'EOF'\n%sEOF\n", helperPlistPath, helperPlistContent())
-		sb.WriteString("launchctl bootout system/com.devm.helper 2>/dev/null || true\n")
-		sb.WriteString("launchctl bootstrap system " + helperPlistPath + "\n")
+	}
+	if inputs.HelperExe != "" {
+		// No system-path copy: the plist points directly at the
+		// resolved helper binary sitting alongside DevmExe, same
+		// pattern kardianos uses for the main daemon (Executable: exe).
+		fmt.Fprintf(&sb, "install -m 0644 /dev/stdin %s <<'EOF'\n%sEOF\n",
+			cfg.LaunchdPlistHelper(), helperPlistContent(inputs.HelperExe, inputs.HelperLogDir))
+		sb.WriteString("launchctl bootout " + cfg.LaunchdTargetHelper() + " 2>/dev/null || true\n")
+		sb.WriteString("launchctl bootstrap system " + cfg.LaunchdPlistHelper() + "\n")
+	}
+	if inputs.NeedsAliases {
+		for n := cfg.PoolStart; n <= cfg.PoolEnd; n++ {
+			fmt.Fprintf(&sb, "/sbin/ifconfig lo0 alias 127.42.0.%d 2>/dev/null || true\n", n)
+		}
 	}
 	if inputs.NeedsDaemon {
 		// Full reload path: unload any running daemon, wipe the plist
@@ -371,54 +402,78 @@ func buildInstallScript(inputs installInputs) string {
 		// let _kardianos install write + bootstrap. `bootout` and `rm`
 		// use `|| true` so a first-time install (no plist, no daemon
 		// loaded) still succeeds.
-		sb.WriteString("launchctl bootout system/com.devm.service 2>/dev/null || true\n")
-		fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(launchdPlistPath))
+		sb.WriteString("launchctl bootout " + cfg.LaunchdTargetDaemon() + " 2>/dev/null || true\n")
+		fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(cfg.LaunchdPlistDaemon()))
 		fmt.Fprintf(&sb, "%s _kardianos install\n", shellQuote(inputs.DevmExe))
 	}
 
 	return sb.String()
 }
 
-// helperNeedsInstall reports whether the helper should
-// be (re)installed: missing plist, missing binary, or piggybacked on
-// a daemon reinstall (the two binaries are built together by `just
-// build`, so a CLI/daemon fingerprint mismatch means helper is
-// likely stale too).
-func helperNeedsInstall(needsDaemon bool) bool {
+// helperNeedsInstall reports whether the helper's LaunchDaemon plist
+// needs to be (re)written: missing entirely, pointing at a stale
+// program path (the devm binary moved since the last install), or
+// piggybacked on a daemon reinstall (the two binaries are built
+// together by `just build`, so a CLI/daemon fingerprint mismatch means
+// helper is likely stale too).
+func helperNeedsInstall(needsDaemon bool, programPath string) bool {
 	if needsDaemon {
 		return true
 	}
-	if _, err := os.Stat(helperInstallPath); err != nil {
+	data, err := os.ReadFile(cfg.LaunchdPlistHelper())
+	if err != nil {
 		return true
 	}
-	if _, err := os.Stat(helperPlistPath); err != nil {
+	return !strings.Contains(string(data), programPath)
+}
+
+// helperSourcePath returns the devm-helper binary expected to sit
+// alongside devmExe — the layout `just build` produces in bin/. The
+// helper's LaunchDaemon plist points directly at this path (no
+// system-path copy), so a CLI built as "devm-e2e" resolves its own
+// "devm-e2e-helper" sibling rather than colliding with prod's.
+func helperSourcePath(devmExe string) string {
+	return filepath.Join(filepath.Dir(devmExe), filepath.Base(devmExe)+"-helper")
+}
+
+// aliasesNeedInstall reports whether at least one lo0 loopback alias
+// in cfg's per-project pool (127.42.0.<PoolStart>..<PoolEnd>) is
+// missing. ifconfig alias creation is idempotent (the install script
+// guards each with `|| true`), so on true the script just (re)asserts
+// every alias in range rather than diffing individually.
+func aliasesNeedInstall(cfg identity.Config) bool {
+	out, err := exec.Command("ifconfig", "lo0").Output()
+	if err != nil {
 		return true
+	}
+	text := string(out)
+	for n := cfg.PoolStart; n <= cfg.PoolEnd; n++ {
+		if !strings.Contains(text, fmt.Sprintf("127.42.0.%d ", n)) {
+			return true
+		}
 	}
 	return false
 }
 
-// helperSourcePath returns the devm-helper binary expected to
-// sit alongside devmExe — the layout `just build` produces in bin/.
-func helperSourcePath(devmExe string) string {
-	return filepath.Join(filepath.Dir(devmExe), "devm-helper")
+// groupExists reports whether cfg.GroupName() already exists in
+// Directory Services (`dscl . -read /Groups/<name>` exits 0).
+func groupExists(name string) bool {
+	return exec.Command("dscl", ".", "-read", "/Groups/"+name).Run() == nil
 }
-
-const (
-	helperInstallPath = "/usr/local/libexec/devm-helper"
-	helperPlistPath   = "/Library/LaunchDaemons/com.devm.helper.plist"
-)
 
 // runPrivilegedInstall composes and runs the install script that
 // touches root-owned state (DNS resolver file, CA trust, LaunchDaemon
-// plists, the _devm group). Each step is gated on whether it's
-// actually needed:
+// plists, the group, the lo0 alias pool). Each step is gated on
+// whether it's actually needed:
 //
 //   - DNS resolver file: skipped when already present with matching bytes
 //   - CA trust: skipped when the cert is already in the System Keychain
 //   - Daemon plist + bootstrap: skipped when the daemon is already
 //     running with a Fingerprint that matches this CLI's
-//   - Helper: skipped when its plist + binary are already present
-//     and the daemon doesn't need reinstalling
+//   - Helper: skipped when its plist is already present and points at
+//     the current helper binary, and the daemon doesn't need reinstalling
+//   - Aliases: skipped when every lo0 alias in the pool already exists
+//   - Group: skipped when cfg.GroupName() already exists
 //
 // When every step is a no-op, the function returns without escalating
 // to sudo at all — no Touch ID prompt for `devm install` when nothing
@@ -433,13 +488,18 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 		return false, fmt.Errorf("locate executable: %w", err)
 	}
 
-	dnsState, err := serviceapi.CheckResolverFile()
+	installUser, home, err := resolveInstallUser(nil)
 	if err != nil {
-		return false, fmt.Errorf("check %s: %w", serviceapi.ResolverFilePath, err)
+		return false, err
+	}
+
+	dnsState, err := serviceapi.CheckResolverFile(cfg)
+	if err != nil {
+		return false, fmt.Errorf("check %s: %w", cfg.ResolverFilePath, err)
 	}
 	needsDNS := dnsState != serviceapi.ResolverFileMatches
 
-	trusted, err := serviceapi.CheckCATrusted()
+	trusted, err := serviceapi.CheckCATrusted(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "note: could not check CA trust state: %v\n", err)
 		trusted = true
@@ -447,9 +507,12 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 	needsCA := !trusted
 
 	needsDaemon := !daemonInSyncWithCLI(ctx)
-	needsHelper := helperNeedsInstall(needsDaemon)
+	helperProgramPath := helperSourcePath(exe)
+	needsHelper := helperNeedsInstall(needsDaemon, helperProgramPath)
+	needsAliases := aliasesNeedInstall(cfg)
+	needsGroup := !groupExists(cfg.GroupName())
 
-	if !needsDNS && !needsCA && !needsDaemon && !needsHelper {
+	if !needsDNS && !needsCA && !needsDaemon && !needsHelper && !needsAliases && !needsGroup {
 		return false, nil
 	}
 
@@ -457,10 +520,10 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 	// the script has a cert file to point at.
 	var rootCertPath string
 	if needsCA {
-		if _, err := serviceapi.LoadOrGenerate(); err != nil {
+		if _, err := serviceapi.LoadOrGenerate(cfg); err != nil {
 			return false, fmt.Errorf("generate CA: %w", err)
 		}
-		runDir, err := serviceapi.EnsureRuntimeDir()
+		runDir, err := serviceapi.EnsureRuntimeDir(cfg)
 		if err != nil {
 			return false, fmt.Errorf("resolve CA cert path: %w", err)
 		}
@@ -469,27 +532,27 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 
 	if needsDNS && dnsState == serviceapi.ResolverFileDiverged {
 		fmt.Printf("note: %s exists but doesn't match — overwriting.\n",
-			serviceapi.ResolverFilePath)
+			cfg.ResolverFilePath)
 	}
 
 	inputs := installInputs{
 		DevmExe:          exe,
 		NeedsDNS:         needsDNS,
-		ResolverContents: serviceapi.CanonicalResolverContents(),
+		ResolverContents: cfg.CanonicalResolverContents(),
 		NeedsCA:          needsCA,
 		RootCertPath:     rootCertPath,
 		NeedsDaemon:      needsDaemon,
+		NeedsAliases:     needsAliases,
+		NeedsGroup:       needsGroup,
+		InstallUser:      installUser,
 	}
 	if needsHelper {
-		src := helperSourcePath(exe)
-		if _, statErr := os.Stat(src); statErr == nil {
-			inputs.HelperExe = src
-			if name, _, userErr := resolveInstallUser(nil); userErr == nil {
-				inputs.InstallUser = name
-			}
+		if _, statErr := os.Stat(helperProgramPath); statErr == nil {
+			inputs.HelperExe = helperProgramPath
+			inputs.HelperLogDir = filepath.Join(home, "Library", "Logs")
 		} else {
 			fmt.Fprintf(os.Stderr,
-				"note: devm-helper binary not found at %s; skipping network-isolation helper install\n", src)
+				"note: devm-helper binary not found at %s; skipping network-isolation helper install\n", helperProgramPath)
 		}
 	}
 
@@ -509,7 +572,7 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 // a different one. Used by `devm install` to skip the sudo escalation
 // when there's genuinely nothing to install.
 func daemonInSyncWithCLI(ctx context.Context) bool {
-	c := serviceapi.NewClient()
+	c := serviceapi.NewClient(cfg)
 	if !c.Available(ctx) {
 		return false
 	}
@@ -545,13 +608,13 @@ var uninstallCmd = &cobra.Command{
 			tailLog(logPath, 30)
 			return fmt.Errorf("privileged uninstall failed; see %s", logPath)
 		}
-		_ = os.Remove(serviceapi.SocketPath())
+		_ = os.Remove(cfg.SocketPath())
 		// Runtime dir is user-owned (holds the CA key, iron-proxy configs,
 		// and the socket parent). Wiping it makes uninstall a clean slate
 		// so a subsequent `devm install` regenerates the CA fresh; leaving
 		// stale keys around after uninstall would surprise users who ran
 		// uninstall to reset a broken setup.
-		runtimeDir := filepath.Dir(serviceapi.SocketPath())
+		runtimeDir := filepath.Dir(cfg.SocketPath())
 		if err := os.RemoveAll(runtimeDir); err != nil {
 			return fmt.Errorf("remove runtime dir %s: %w", runtimeDir, err)
 		}
@@ -596,28 +659,34 @@ func runPrivilegedUninstall(out io.Writer) error {
 // uninstall unless we do it here. Match the daemon's own argv pattern
 // so the pkill can't hit unrelated processes.
 //
-// Loopback aliases (127.42.0.1-20, one per concurrent project — see
+// Loopback aliases (one per concurrent project in cfg's pool — see
 // the per-project bind isolation design) are torn down best-effort;
-// a reboot clears them regardless. The _devm group is removed too —
-// it exists solely to grant devm-helper's GID access and is
-// recreated idempotently on the next install.
+// a reboot clears them regardless. cfg's group is removed too — it
+// exists solely to grant devm-helper's GID access and is recreated
+// idempotently on the next install.
+//
+// The pkill pattern is anchored on cfg.RuntimeDir() rather than a
+// shared "iron-proxy/*.yaml" glob: prod's pattern matches
+// .../devm/iron-proxy/, e2e's matches .../devm-e2e/iron-proxy/ —
+// disjoint, so `devm-e2e uninstall` can't reap the user's real
+// iron-proxy children (and vice versa).
 func buildUninstallScript(exe string) string {
 	var sb strings.Builder
 	sb.WriteString("set +e\n")
-	sb.WriteString("launchctl bootout system/com.devm.service 2>/dev/null\n")
-	sb.WriteString("launchctl bootout system/com.devm.helper 2>/dev/null || true\n")
-	sb.WriteString("pkill -TERM -f 'iron-proxy -config .*/iron-proxy/.*\\.yaml' 2>/dev/null\n")
+	sb.WriteString("launchctl bootout " + cfg.LaunchdTargetDaemon() + " 2>/dev/null\n")
+	sb.WriteString("launchctl bootout " + cfg.LaunchdTargetHelper() + " 2>/dev/null || true\n")
+	fmt.Fprintf(&sb, "pkill -TERM -f %s 2>/dev/null\n",
+		shellQuote(filepath.Join(cfg.RuntimeDir(), "iron-proxy")+"/"))
 	fmt.Fprintf(&sb, "%s _kardianos uninstall\n", shellQuote(exe))
-	fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(serviceapi.ResolverFilePath))
+	fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(cfg.ResolverFilePath))
 	fmt.Fprintf(&sb, "security delete-certificate -c %s %s 2>/dev/null\n",
-		shellQuote(serviceapi.CATrustCertCN), shellQuote(serviceapi.SystemKeychain))
+		shellQuote(cfg.CACommonName()), shellQuote(serviceapi.SystemKeychain))
 
-	for n := 1; n <= 20; n++ {
+	for n := cfg.PoolStart; n <= cfg.PoolEnd; n++ {
 		fmt.Fprintf(&sb, "/sbin/ifconfig lo0 -alias 127.42.0.%d 2>/dev/null || true\n", n)
 	}
-	sb.WriteString("rm -f " + helperPlistPath + "\n")
-	sb.WriteString("rm -f " + helperInstallPath + "\n")
-	sb.WriteString(`dscl . -delete /Groups/_devm 2>/dev/null || true` + "\n")
+	sb.WriteString("rm -f " + cfg.LaunchdPlistHelper() + "\n")
+	fmt.Fprintf(&sb, "dscl . -delete /Groups/%s 2>/dev/null || true\n", cfg.GroupName())
 
 	return sb.String()
 }

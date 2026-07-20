@@ -24,6 +24,7 @@ All installed state is lost. Use --yes (-y) to skip the prompt. The kit
 definition under .devm/ is not touched; devm shell will rebuild from scratch.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		ident := cfg // capture package identity cfg before it's shadowed below
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)
@@ -32,7 +33,7 @@ definition under .devm/ is not touched; devm shell will rebuild from scratch.`,
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), cfg); err != nil {
+		if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
 			return err
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -42,7 +43,7 @@ definition under .devm/ is not touched; devm shell will rebuild from scratch.`,
 		// silent if the daemon is down. The "I'm done with this
 		// project" signal per the Ship 3 design.
 		rctx, rcancel := context.WithTimeout(context.Background(), 2*time.Second)
-		c := serviceapi.NewClient()
+		c := serviceapi.NewClient(ident)
 		if c.Available(rctx) {
 			_ = c.RemoveRoutes(rctx, cfg.Project.Name)
 		}
@@ -51,6 +52,7 @@ definition under .devm/ is not touched; devm shell will rebuild from scratch.`,
 		deps := orchestrator.StopDeps{
 			Tart:             tart.New(),
 			ServiceAPIClient: c,
+			Ident:            ident,
 		}
 		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.Name, orchestrator.StopDestroy, teardownYes)
 		if err != nil {

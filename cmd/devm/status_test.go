@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -37,9 +38,9 @@ func startStatusAllDaemon(t *testing.T, running map[string]bool) func() {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	t.Setenv("DEVM_RUNTIME_DIR", dir)
 
-	srv := serviceapi.NewServer(serviceapi.SocketPath(), serviceapi.Build{Version: "dev"})
+	srv := serviceapi.NewServer(serviceapi.SocketPath(identity.Prod), serviceapi.Build{Version: "dev"})
 	sup := supervisor.New("")
-	serviceapi.RegisterStatusAllHandler(srv, sup, &fakeStatusTart{running: running})
+	serviceapi.RegisterStatusAllHandler(srv, identity.Prod, sup, &fakeStatusTart{running: running})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -66,11 +67,11 @@ func TestStatusAll_ClientRoundTrip(t *testing.T) {
 	cleanup := startStatusAllDaemon(t, map[string]bool{"p": true})
 	defer cleanup()
 
-	require.NoError(t, serviceapi.WriteStateSnapshot("p", serviceapi.StateSnapshot{
+	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "p", serviceapi.StateSnapshot{
 		Cfg: schema.Config{Project: schema.Project{Name: "p"}},
 	}))
 
-	rows, err := serviceapi.NewClient().StatusAll(context.Background())
+	rows, err := serviceapi.NewClient(identity.Prod).StatusAll(context.Background())
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "p", rows[0].Name)

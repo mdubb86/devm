@@ -26,7 +26,7 @@ import (
 // Errors are wrapped for logging by the caller; caller must decide
 // whether to fail loud or log-and-continue. In practice callers log
 // and continue — a stale ssh_config file doesn't block VM operation.
-func EmitSSHConfig(ctx context.Context, tr *tart.Tart) error {
+func EmitSSHConfig(ctx context.Context, cfg identity.Config, tr *tart.Tart) error {
 	vms, err := tr.List(ctx)
 	if err != nil {
 		return fmt.Errorf("tart list: %w", err)
@@ -37,13 +37,13 @@ func EmitSSHConfig(ctx context.Context, tr *tart.Tart) error {
 			running[v.Name] = true
 		}
 	}
-	projectIDs, err := listStateProjects()
+	projectIDs, err := listStateProjects(cfg)
 	if err != nil {
 		return fmt.Errorf("list state projects: %w", err)
 	}
 	var out []sshconfig.Entry
 	for _, id := range projectIDs {
-		snap, err := serviceapi.ReadStateSnapshot(identity.Prod, id)
+		snap, err := serviceapi.ReadStateSnapshot(cfg, id)
 		if err != nil || snap == nil {
 			continue
 		}
@@ -53,12 +53,12 @@ func EmitSSHConfig(ctx context.Context, tr *tart.Tart) error {
 		}
 		out = append(out, sshconfig.Entry{Name: name})
 	}
-	return sshconfig.Emit(identity.Prod, out)
+	return sshconfig.Emit(cfg, out)
 }
 
 // listStateProjects lists project IDs devm has state snapshots for.
-func listStateProjects() ([]string, error) {
-	entries, err := os.ReadDir(serviceapi.StateDir(identity.Prod))
+func listStateProjects(cfg identity.Config) ([]string, error) {
+	entries, err := os.ReadDir(serviceapi.StateDir(cfg))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

@@ -44,6 +44,7 @@ func TestRunStopPreserve_CallsStopVM(t *testing.T) {
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
+		Ident:            identity.Prod,
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
 		In:               in,
@@ -67,6 +68,7 @@ func TestRunStopDestroy_CallsStopVMThenDeletesDisk(t *testing.T) {
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
+		Ident:            identity.Prod,
 		Tart:             tr,
 		ServiceAPIClient: admin,
 		In:               in,
@@ -85,6 +87,7 @@ func TestRunStopRefusalWithNo(t *testing.T) {
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
+		Ident:            identity.Prod,
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
 		In:               in,
@@ -104,6 +107,7 @@ func TestRunStopAutoApproveSkipsPrompt(t *testing.T) {
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
+		Ident:            identity.Prod,
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
 		In:               in,
@@ -128,6 +132,7 @@ func TestRunStopDaemonFailContinuesForTeardown(t *testing.T) {
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
+		Ident:            identity.Prod,
 		Tart:             tr,
 		ServiceAPIClient: admin,
 		Out:              out,
@@ -154,6 +159,7 @@ func TestRunStopDestroy_RemovesStateSnapshot(t *testing.T) {
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
+		Ident:            identity.Prod,
 		Tart:             tr,
 		ServiceAPIClient: admin,
 		In:               strings.NewReader("y\n"),
@@ -191,6 +197,7 @@ func TestRunStopDestroy_RemovesSSHState(t *testing.T) {
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
+		Ident:            identity.Prod,
 		Tart:             tr,
 		ServiceAPIClient: admin,
 		In:               strings.NewReader("y\n"),
@@ -211,6 +218,7 @@ func TestRunStopPromptText(t *testing.T) {
 	inStop := strings.NewReader("n\n")
 	outStop := &bytes.Buffer{}
 	deps := StopDeps{
+		Ident:            identity.Prod,
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
 		In:               inStop,
@@ -224,6 +232,7 @@ func TestRunStopPromptText(t *testing.T) {
 	inTear := strings.NewReader("n\n")
 	outTear := &bytes.Buffer{}
 	deps2 := StopDeps{
+		Ident:            identity.Prod,
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: &fakeStopClient{},
 		In:               inTear,

@@ -22,15 +22,20 @@ func TestBuildUninstallScript_ReapsIronProxyChildren(t *testing.T) {
 
 	require.True(t, strings.Contains(script, "launchctl bootout system/com.devm.service"),
 		"script must SIGTERM the daemon via launchctl bootout")
-	pkill := `pkill -TERM -f 'iron-proxy -config .*/iron-proxy/.*\.yaml'`
+	// Anchored on cfg.RuntimeDir()+"/iron-proxy/" (not a shared
+	// "iron-proxy/*.yaml" glob): prod's pattern matches
+	// .../devm/iron-proxy/, e2e's matches .../devm-e2e/iron-proxy/ —
+	// disjoint, so `devm-e2e uninstall` can't reap the user's real
+	// iron-proxy children.
+	pkill := "pkill -TERM -f " + shellQuote(cfg.RuntimeDir()+"/iron-proxy/")
 	require.True(t, strings.Contains(script, pkill),
-		"script must pkill iron-proxy children with the daemon's own argv pattern; got:\n%s", script)
+		"script must pkill iron-proxy children anchored on this identity's runtime dir; got:\n%s", script)
 
 	// Ordering: bootout the daemon first, THEN pkill iron-proxies.
 	// The other order can race — daemon-supervisor might respawn a
 	// SIGTERM'd child before we've killed it.
 	bootIdx := strings.Index(script, "launchctl bootout")
-	pkillIdx := strings.Index(script, "pkill -TERM -f 'iron-proxy")
+	pkillIdx := strings.Index(script, "pkill -TERM -f")
 	require.Greater(t, pkillIdx, bootIdx,
 		"pkill iron-proxy must come after launchctl bootout; got:\n%s", script)
 }
@@ -67,6 +72,53 @@ func TestBuildInstallScript_SkipsHelperWhenExeEmpty(t *testing.T) {
 	assert.NotContains(t, script, "com.devm.helper")
 }
 
+// TestBuildInstallScript_NeedsGroupWithoutHelper pins the dedicated
+// needsGroup gate: the group can need (re)creating even when the
+// helper itself doesn't need reinstalling (e.g. the group was deleted
+// externally).
+func TestBuildInstallScript_NeedsGroupWithoutHelper(t *testing.T) {
+	script := buildInstallScript(installInputs{
+		DevmExe:    "/usr/local/bin/devm",
+		NeedsGroup: true,
+	})
+	assert.Contains(t, script, "dscl . -create /Groups/_devm")
+	assert.NotContains(t, script, "com.devm.helper", "helper block itself must stay skipped")
+}
+
+// TestBuildInstallScript_NeedsAliasesAssertsWholePool pins the
+// aliases gate: when true, the script (re)asserts every alias in
+// cfg's pool, not a diffed subset (ifconfig alias creation is
+// idempotent, so re-asserting present aliases is a harmless no-op).
+func TestBuildInstallScript_NeedsAliasesAssertsWholePool(t *testing.T) {
+	script := buildInstallScript(installInputs{
+		DevmExe:      "/usr/local/bin/devm",
+		NeedsAliases: true,
+	})
+	for n := 1; n <= 20; n++ {
+		assert.Contains(t, script, fmt.Sprintf("ifconfig lo0 alias 127.42.0.%d", n))
+	}
+}
+
+func TestBuildInstallScript_SkipsAliasesWhenNotNeeded(t *testing.T) {
+	script := buildInstallScript(installInputs{
+		DevmExe: "/usr/local/bin/devm",
+	})
+	assert.NotContains(t, script, "ifconfig lo0 alias")
+}
+
+// TestHelperPlistContent_UsesResolvedProgramPathAndIdentity pins the
+// no-system-copy plist design: ProgramArguments points directly at
+// the resolved sibling helper binary, and Label/GroupName/log paths
+// all derive from the package cfg identity.
+func TestHelperPlistContent_UsesResolvedProgramPathAndIdentity(t *testing.T) {
+	content := helperPlistContent("/usr/local/bin/devm-helper", "/Users/alice/Library/Logs")
+	assert.Contains(t, content, "<string>com.devm.helper</string>")
+	assert.Contains(t, content, "<string>/usr/local/bin/devm-helper</string>")
+	assert.Contains(t, content, "<string>_devm</string>")
+	assert.Contains(t, content, "/Users/alice/Library/Logs/com.devm.helper.out.log")
+	assert.Contains(t, content, "/Users/alice/Library/Logs/com.devm.helper.err.log")
+}
+
 func TestBuildUninstallScript_RemovesAliases(t *testing.T) {
 	script := buildUninstallScript("/usr/local/bin/devm")
 	assert.Contains(t, script, "launchctl bootout system/com.devm.helper")
@@ -75,7 +127,10 @@ func TestBuildUninstallScript_RemovesAliases(t *testing.T) {
 		assert.Contains(t, script, fmt.Sprintf("ifconfig lo0 -alias 127.42.0.%d", n))
 	}
 	assert.Contains(t, script, "rm -f /Library/LaunchDaemons/com.devm.helper.plist")
-	assert.Contains(t, script, "rm -f /usr/local/libexec/devm-helper")
+	// No system-path copy to clean up: the helper's LaunchDaemon plist
+	// points directly at the sibling binary next to the devm CLI, so
+	// there's nothing installed under /usr/local/libexec to remove.
+	assert.NotContains(t, script, "/usr/local/libexec/devm-helper")
 }
 
 func TestResolveInstallUser_UsesSudoUserWhenPresent(t *testing.T) {

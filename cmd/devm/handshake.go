@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
@@ -14,8 +15,14 @@ import (
 // Fingerprint var + resolvedSelfPath()) and, when the daemon reports this
 // project's iron-proxy unhealthy, warns on stderr — reporting only, never
 // mutating. `devm reconcile` is the sole heal path.
-func daemonHandshake(ctx context.Context, cfg schema.Config) error {
-	client := serviceapi.NewClient()
+//
+// ident is the daemon identity (prod vs. e2e); named "ident" rather
+// than "cfg" here because cfg is the caller's project schema.Config —
+// this function's own parameter is also named cfg, shadowing the
+// package-level identity cfg, so callers must pass their own captured
+// ident explicitly.
+func daemonHandshake(ctx context.Context, ident identity.Config, cfg schema.Config) error {
+	client := serviceapi.NewClient(ident)
 	hs, err := client.Handshake(ctx, cfg.Project.Name)
 	if err != nil {
 		return nil // daemon down/unreachable — tolerated

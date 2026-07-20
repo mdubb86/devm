@@ -37,6 +37,7 @@ func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error 
 		if err := requireDaemonInSync(cmd.Context()); err != nil {
 			return err
 		}
+		ident := cfg // capture package identity cfg before it's shadowed below
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return err
@@ -53,7 +54,7 @@ func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error 
 			fmt.Println("no services with hostname+port; nothing to route")
 			return nil
 		}
-		c := serviceapi.NewClient()
+		c := serviceapi.NewClient(ident)
 		ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
 		defer cancel()
 		if err := c.ApplyRoutes(ctx, cfg.Project.Name, routes); err != nil {

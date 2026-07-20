@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/orchestrator"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -75,6 +76,7 @@ TTY/PTY handling is auto-detected from the caller's stdin:
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		ident := cfg // capture package identity cfg before it's shadowed below
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)
@@ -87,7 +89,7 @@ TTY/PTY handling is auto-detected from the caller's stdin:
 		// NOT called here — runShellFlow does it below, before any real
 		// work. Calling it here too would run the check twice and print
 		// any iron-proxy-drift warning twice.
-		if err := requireRunningVM(cmd.Context(), cfg); err != nil {
+		if err := requireRunningVM(cmd.Context(), ident, cfg); err != nil {
 			return err
 		}
 		return runShellFlow(cmd, args[0], args[1:])
@@ -100,8 +102,11 @@ TTY/PTY handling is auto-detected from the caller's stdin:
 // requireRunningVM returns a clear error when the project's sandbox
 // isn't running — used by `devm exec` to enforce the docker-exec
 // convention (fail loud on stopped/absent, don't silently cold-start).
-func requireRunningVM(ctx context.Context, cfg schema.Config) error {
-	c := serviceapi.NewClient()
+//
+// ident is the daemon identity (prod vs. e2e); named "ident" rather
+// than "cfg" here because cfg is the caller's project schema.Config.
+func requireRunningVM(ctx context.Context, ident identity.Config, cfg schema.Config) error {
+	c := serviceapi.NewClient(ident)
 	st, err := c.VMStatus(ctx, cfg.Project.Name)
 	if err != nil {
 		return fmt.Errorf("query vm status: %w", err)
@@ -119,6 +124,7 @@ func requireRunningVM(ctx context.Context, cfg schema.Config) error {
 func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	// Past arg parsing — errors from here on are runtime, not usage.
 	cmd.SilenceUsage = true
+	ident := cfg // capture package identity cfg before it's shadowed below
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
@@ -127,7 +133,7 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	if err != nil {
 		return err
 	}
-	if err := daemonHandshake(cmd.Context(), cfg); err != nil {
+	if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
 		return err
 	}
 
@@ -168,7 +174,7 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 		}
 		rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer rcancel()
-		c := serviceapi.NewClient()
+		c := serviceapi.NewClient(ident)
 		if !c.Available(rctx) {
 			return
 		}
@@ -182,7 +188,7 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 		_ = c.ApplyRoutes(rctx, cfg.Project.Name, routes)
 	}()
 
-	deps := orchestrator.DefaultShellDeps(repoRoot)
+	deps := orchestrator.DefaultShellDeps(ident, repoRoot)
 	rc, err := orchestrator.RunShell(ctx, deps, cfg, repoRoot, cfg.Project.Name, cmdName, cmdArgs)
 	if err != nil {
 		// SIGINT during cold start cancels ctx. Suppress the noisy

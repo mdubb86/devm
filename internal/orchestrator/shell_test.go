@@ -206,6 +206,7 @@ func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
@@ -254,6 +255,7 @@ func TestRunShellWarmPath_ForwardsHostTermEnvIntoTartExec(t *testing.T) {
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
@@ -309,6 +311,7 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
@@ -373,6 +376,7 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
@@ -437,6 +441,7 @@ func TestRunShellColdPath_PostInstallFail_KeepsVM(t *testing.T) {
 
 	spawner := &stubSpawner{}
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
@@ -475,6 +480,7 @@ func TestRunShellColdPath_ProvisionFail_TearsDownVM(t *testing.T) {
 
 	spawner := &stubSpawner{}
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
@@ -508,6 +514,7 @@ func TestRunShellWarmPath_VMStatusError(t *testing.T) {
 	}
 
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
 		UserSpawner:      &stubSpawner{},
@@ -527,6 +534,7 @@ func TestRunShellColdPath_StartVMError(t *testing.T) {
 	}
 
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
 		UserSpawner:      &stubSpawner{},
@@ -554,6 +562,7 @@ func TestRunShellRunning_TargetInactiveNoMarker_AdoptsInPlace(t *testing.T) {
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
@@ -613,6 +622,7 @@ func TestRunShellRunning_AdoptInPlace_NoIronProxyRecord_FailsLoud(t *testing.T) 
 	spawner := &stubSpawner{}
 
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
@@ -648,6 +658,7 @@ func TestRunShellRunning_TargetInactiveMarkerPresent_TeardownAndColdStart(t *tes
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
@@ -688,6 +699,7 @@ func TestRunShellRunning_TargetProbeTransportFlake_RetriesThenWarmAttaches(t *te
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,
@@ -726,6 +738,7 @@ func TestRunShellRunning_DirtyProbeTransportFlake_RetriesThenAdoptsInPlace(t *te
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	deps := ShellDeps{
+		Ident:            identity.Prod,
 		Tart:             tartBin,
 		ServiceAPIClient: admin,
 		UserSpawner:      spawner,

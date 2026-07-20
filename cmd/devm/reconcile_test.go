@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/stretchr/testify/assert"
@@ -31,9 +32,9 @@ func TestRepushRoutes_Success(t *testing.T) {
 		},
 	}
 
-	repushRoutes(cfg)
+	repushRoutes(identity.Prod, cfg)
 
-	got, err := serviceapi.NewClient().ListRoutes(t.Context())
+	got, err := serviceapi.NewClient(identity.Prod).ListRoutes(t.Context())
 	require.NoError(t, err)
 	require.Contains(t, got, "p")
 	byHost := map[string]serviceapi.Route{}
@@ -64,11 +65,11 @@ func TestRepushRoutes_PreservesExistingLocalMode(t *testing.T) {
 
 	seeded, err := buildRoutes(cfg, serviceapi.ModeLocal)
 	require.NoError(t, err)
-	require.NoError(t, serviceapi.NewClient().ApplyRoutes(t.Context(), cfg.Project.Name, seeded))
+	require.NoError(t, serviceapi.NewClient(identity.Prod).ApplyRoutes(t.Context(), cfg.Project.Name, seeded))
 
-	repushRoutes(cfg)
+	repushRoutes(identity.Prod, cfg)
 
-	got, err := serviceapi.NewClient().ListRoutes(t.Context())
+	got, err := serviceapi.NewClient(identity.Prod).ListRoutes(t.Context())
 	require.NoError(t, err)
 	require.Contains(t, got, "p")
 	byHost := map[string]serviceapi.Route{}
@@ -94,7 +95,7 @@ func TestRepushRoutes_DaemonDown(t *testing.T) {
 	}
 
 	assert.NotPanics(t, func() {
-		repushRoutes(cfg)
+		repushRoutes(identity.Prod, cfg)
 	})
 }
 
@@ -111,7 +112,7 @@ func startRoutesDaemon(t *testing.T) func() {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	t.Setenv("DEVM_RUNTIME_DIR", dir)
 
-	srv := serviceapi.NewServer(serviceapi.SocketPath(), serviceapi.Build{Version: "dev"})
+	srv := serviceapi.NewServer(serviceapi.SocketPath(identity.Prod), serviceapi.Build{Version: "dev"})
 	routes := serviceapi.NewRoutes()
 	serviceapi.RegisterRoutesHandlers(srv, routes)
 

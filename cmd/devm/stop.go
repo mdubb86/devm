@@ -23,6 +23,7 @@ The VM filesystem and installed tools persist; only the running state is
 discarded. Re-launch with devm shell. Use --yes (-y) to skip the prompt.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		ident := cfg // capture package identity cfg before it's shadowed below
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)
@@ -31,7 +32,7 @@ discarded. Re-launch with devm shell. Use --yes (-y) to skip the prompt.`,
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), cfg); err != nil {
+		if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
 			return err
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -39,7 +40,8 @@ discarded. Re-launch with devm shell. Use --yes (-y) to skip the prompt.`,
 
 		deps := orchestrator.StopDeps{
 			Tart:             tart.New(),
-			ServiceAPIClient: serviceapi.NewClient(),
+			ServiceAPIClient: serviceapi.NewClient(ident),
+			Ident:            ident,
 			// In/Out left nil → os.Stdin/os.Stderr.
 		}
 		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.Name, orchestrator.StopPreserve, stopYes)

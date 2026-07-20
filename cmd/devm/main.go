@@ -7,9 +7,24 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/release"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
+
+// cfg is this binary's compiled-in daemon identity (prod vs. e2e),
+// loaded once at package init via the -X identity.Profile ldflag. It's
+// the CLI-side counterpart to the daemon's own identity.Load() call in
+// cmd/devm/service.go's RunService invocation — both must resolve to
+// the same profile for a CLI/daemon pair to agree on socket paths,
+// TLD, pool range, etc.
+//
+// Some command handlers also load a per-project schema.Config from
+// devm.yaml and bind it to a local `cfg` — that local shadows this
+// package var for the rest of the enclosing scope. Those handlers
+// capture this package cfg into a local `ident` before loading the
+// project config, so both remain reachable under distinct names.
+var cfg = identity.Load()
 
 // ExitDaemonDrift is the exit code `devm status` uses when the daemon
 // Fingerprint doesn't match the CLI's. Scripts can distinguish drift
@@ -114,7 +129,7 @@ func main() {
 // daemon (recipes, secret, skills, version) don't call this — they
 // work regardless of daemon state.
 func requireDaemonInSync(ctx context.Context) error {
-	c := serviceapi.NewClient()
+	c := serviceapi.NewClient(cfg)
 	daemon, err := c.BuildInfo(ctx)
 	if err != nil {
 		return nil

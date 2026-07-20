@@ -60,14 +60,14 @@ type DaemonStatus struct {
 // requiring any project context or privileges. cliFingerprint is the
 // CLI's own compiled-in Fingerprint constant — passed in rather than
 // read from a package var because orchestrator doesn't import cmd/devm.
-func ProbeDaemon(ctx context.Context, cliFingerprint string) DaemonStatus {
+func ProbeDaemon(ctx context.Context, cfg identity.Config, cliFingerprint string) DaemonStatus {
 	st := DaemonStatus{}
 
 	// First: is it running? Try /health. Cheap when the daemon is up,
 	// fast fail when it's down.
 	healthCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	c := serviceapi.NewClient(identity.Prod)
+	c := serviceapi.NewClient(cfg)
 	if err := c.Health(healthCtx); err == nil {
 		st.Running = true
 		// Ask the running daemon for its Fingerprint via /version.
@@ -79,7 +79,7 @@ func ProbeDaemon(ctx context.Context, cliFingerprint string) DaemonStatus {
 	// Read the LaunchDaemon plist regardless of Running — an installed-
 	// but-stopped daemon needs the binary path so we can shell out for
 	// the Fingerprint.
-	path, plistErr := daemonBinaryPathFromLaunchctl(ctx)
+	path, plistErr := daemonBinaryPathFromLaunchctl(ctx, cfg)
 	if plistErr == nil {
 		st.Installed = true
 		st.BinaryPath = path
@@ -104,13 +104,14 @@ func ProbeDaemon(ctx context.Context, cliFingerprint string) DaemonStatus {
 }
 
 // daemonBinaryPathFromLaunchctl parses `launchctl print
-// system/com.devm.service` output and extracts the plist's `program`
-// field. Read-only query — no privileges required. Returns an error
-// when the service is unknown to launchd.
-func daemonBinaryPathFromLaunchctl(ctx context.Context) (string, error) {
+// system/com.devm.service` (or the e2e equivalent target) output and
+// extracts the plist's `program` field. Read-only query — no
+// privileges required. Returns an error when the service is unknown
+// to launchd.
+func daemonBinaryPathFromLaunchctl(ctx context.Context, cfg identity.Config) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, "launchctl", "print", "system/com.devm.service").Output()
+	out, err := exec.CommandContext(cctx, "launchctl", "print", cfg.LaunchdTargetDaemon()).Output()
 	if err != nil {
 		return "", err
 	}

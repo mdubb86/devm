@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -50,9 +51,9 @@ func startHandshakeDaemon(t *testing.T, build serviceapi.Build) func() {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	t.Setenv("DEVM_RUNTIME_DIR", dir)
 
-	srv := serviceapi.NewServer(serviceapi.SocketPath(), build)
+	srv := serviceapi.NewServer(serviceapi.SocketPath(identity.Prod), build)
 	sup := supervisor.New("")
-	serviceapi.RegisterHandshakeHandler(srv, build, sup)
+	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, build, sup)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -79,7 +80,7 @@ func TestDaemonHandshake_FingerprintMatch_NoError(t *testing.T) {
 	defer cleanup()
 
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	err := daemonHandshake(context.Background(), cfg)
+	err := daemonHandshake(context.Background(), identity.Prod, cfg)
 	assert.NoError(t, err)
 }
 
@@ -92,7 +93,7 @@ func TestDaemonHandshake_FingerprintDrift_ReturnsActionableError(t *testing.T) {
 	defer cleanup()
 
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	err := daemonHandshake(context.Background(), cfg)
+	err := daemonHandshake(context.Background(), identity.Prod, cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "devm daemon is out of sync with this CLI")
 	assert.Contains(t, err.Error(), "fp-daemon")
@@ -103,7 +104,7 @@ func TestDaemonHandshake_FingerprintDrift_ReturnsActionableError(t *testing.T) {
 func TestDaemonHandshake_DaemonUnreachable_ToleratedNoError(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir()) // no daemon listening here
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	err := daemonHandshake(context.Background(), cfg)
+	err := daemonHandshake(context.Background(), identity.Prod, cfg)
 	assert.NoError(t, err)
 }
 
@@ -129,7 +130,7 @@ func TestDaemonHandshake_ProxyDrift_WarnsAndDoesNotHeal(t *testing.T) {
 
 	var err error
 	stderr := captureStderr(t, func() {
-		err = daemonHandshake(context.Background(), cfg)
+		err = daemonHandshake(context.Background(), identity.Prod, cfg)
 	})
 
 	assert.NoError(t, err, "drift must be reported, not surfaced as an error")
@@ -161,9 +162,9 @@ func TestDaemonHandshake_ProxyDrift_VMStopped_NoWarning(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", dir)
 
 	build := serviceapi.Build{Fingerprint: "fp-match"}
-	srv := serviceapi.NewServer(serviceapi.SocketPath(), build)
+	srv := serviceapi.NewServer(serviceapi.SocketPath(identity.Prod), build)
 	sup := supervisor.New("")
-	serviceapi.RegisterHandshakeHandler(srv, build, sup)
+	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, build, sup)
 	// Stub /vm/status returning "not running". No supervisor / tart
 	// wiring needed since daemonHandshake only reads the Running field.
 	srv.Register("/vm/status", func(w http.ResponseWriter, _ *http.Request) {
@@ -189,7 +190,7 @@ func TestDaemonHandshake_ProxyDrift_VMStopped_NoWarning(t *testing.T) {
 
 	var hsErr error
 	stderr := captureStderr(t, func() {
-		hsErr = daemonHandshake(context.Background(), cfg)
+		hsErr = daemonHandshake(context.Background(), identity.Prod, cfg)
 	})
 
 	assert.NoError(t, hsErr)

@@ -40,7 +40,7 @@ exit code.`,
 		cmd.SilenceUsage = true
 
 		if statusAll {
-			c := serviceapi.NewClient()
+			c := serviceapi.NewClient(cfg)
 			rows, err := c.StatusAll(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("daemon unreachable: %w", err)
@@ -61,6 +61,7 @@ exit code.`,
 			return nil
 		}
 
+		ident := cfg // capture package identity cfg before it's shadowed below
 		repoRoot, err := os.Getwd()
 		if err != nil {
 			return err
@@ -71,7 +72,7 @@ exit code.`,
 			// Project mode: full status including sandbox VM, routing,
 			// DNS, CA, proxy — plus daemon status via ProbeDaemon.
 			tr := tart.New()
-			res, err = orchestrator.RunStatus(cfg, tr, repoRoot, Fingerprint)
+			res, err = orchestrator.RunStatus(ident, cfg, tr, repoRoot, Fingerprint)
 			if err != nil {
 				return err
 			}
@@ -80,7 +81,7 @@ exit code.`,
 			// probe so `devm status` outside a project still works.
 			res = orchestrator.StatusResult{
 				HasProject: false,
-				Daemon:     orchestrator.ProbeDaemon(cmd.Context(), Fingerprint),
+				Daemon:     orchestrator.ProbeDaemon(cmd.Context(), ident, Fingerprint),
 			}
 		}
 
