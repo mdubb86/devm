@@ -85,17 +85,41 @@ clean:
 #   - contract:  declarative tart + iron-proxy invariants devm depends on
 #   - recipe:    end-to-end pins for a specific recipe (Docker, etc.)
 #
-# `E2E_ISOLATE=1` for everything EXCEPT install: run.sh spins up a
-# private daemon under /tmp with its own runtime dir so tests never
-# touch the user's real ~/Library/Application Support/devm/ (and
-# never uninstall/kill the user's real project iron-proxies).
-# e2e-install exercises the real launchd path — that's the point of
-# those tests — so it stays unisolated.
-e2e-devm:
-    @E2E_ISOLATE=1 e2e/scripts/run.sh -m "devm and not install"
+# Both recipes below accept zero or more test-name patterns: no args
+# runs the full marker slice, one or more args become a pytest -k
+# filter (OR-joined). Matching zero tests is a hard failure.
 
-e2e-install:
-    @e2e/scripts/run.sh -m install
+# Run devm e2e tests. No args = full suite. Args = pytest -k filter.
+# Requires bootstrap state. Hard-fails if NAMES match nothing.
+e2e *NAMES:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    scripts/assert-e2e-installed.sh || {
+        echo "e2e state not bootstrapped. Run: just e2e-bootstrap"
+        exit 1
+    }
+    args=(-m "devm and not install")
+    [ -n "{{NAMES}}" ] && args+=(-k "$(echo '{{NAMES}}' | sed 's/ / or /g')")
+    e2e/scripts/run.sh "${args[@]}"
+    rc=$?
+    if [ $rc -eq 5 ] && [ -n "{{NAMES}}" ]; then
+        echo "no tests matched: {{NAMES}}" >&2; exit 1
+    fi
+    exit $rc
+
+# Run install-marker tests. Tests manage their own binary placement,
+# sudo escalation, and install/uninstall lifecycle.
+e2e-install *NAMES: (_build "e2e")
+    #!/usr/bin/env bash
+    set -uo pipefail
+    args=(-m install)
+    [ -n "{{NAMES}}" ] && args+=(-k "$(echo '{{NAMES}}' | sed 's/ / or /g')")
+    e2e/scripts/run.sh "${args[@]}"
+    rc=$?
+    if [ $rc -eq 5 ] && [ -n "{{NAMES}}" ]; then
+        echo "no tests matched: {{NAMES}}" >&2; exit 1
+    fi
+    exit $rc
 
 # Build & install the parallel e2e devm. Idempotent-forward: always
 # ends in installed-and-running. First run prompts for TouchID (plist,
@@ -118,23 +142,6 @@ e2e-teardown:
     @sudo rm -f /usr/local/bin/devm-e2e /usr/local/bin/devm-e2e-helper
     @scripts/assert-e2e-uninstalled.sh
 
-e2e-contract:
-    @E2E_ISOLATE=1 e2e/scripts/run.sh -m contract
-
-# Exercise all recipe integrations end-to-end. Slow — each recipe's
-# install (Docker via get.docker.com, whatever the next recipe needs)
-# runs a real workload in a fresh VM. Kept out of `just e2e` because
-# these need public-internet egress and take minutes per test.
-e2e-recipe:
-    @E2E_ISOLATE=1 e2e/scripts/run.sh -m recipe
-
-# Run a single test by name (matches pytest -k pattern). Foreground (no -n).
-# Quote multi-word patterns: `just e2e-one "test_a or test_b"`.
-# Defaults to isolated mode; override with E2E_ISOLATE=0 when running
-# an install-marker test by name.
-e2e-one NAME:
-    @E2E_ISOLATE="${E2E_ISOLATE:-1}" e2e/scripts/run.sh -k '{{NAME}}'
-
 # List discovered tests without running them.
 e2e-list:
     cd e2e && uv sync --quiet && uv run pytest --collect-only -q
@@ -145,7 +152,7 @@ e2e-clean:
 
 # Cut a release: interactive picker (patch/minor/major), runs unit
 # tests + gh CI-green check, tags + pushes. CI takes over from there.
-# `just e2e-devm` is a manual pre-release step — it needs sudo/Touch
+# `just e2e` is a manual pre-release step — it needs sudo/Touch
 # ID and can't run under the release script's shell.
 release:
     @scripts/release.sh
