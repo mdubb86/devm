@@ -51,7 +51,6 @@ What it doesn't cover (tested elsewhere):
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -79,13 +78,9 @@ PROXY_SENTINEL_IP = "192.0.2.1"
 
 
 def _runtime_dir() -> Path:
-    """Same resolution as test_93_ssh_access.py: isolated e2e mode
-    points DEVM_RUNTIME_DIR at a private dir; otherwise the real one."""
-    if os.environ.get("E2E_ISOLATE") == "1":
-        isolated_dir = os.environ.get("DEVM_RUNTIME_DIR")
-        if isolated_dir:
-            return Path(isolated_dir)
-    return Path.home() / "Library/Application Support/devm"
+    """Same resolution as test_93_ssh_access.py: the bootstrapped
+    devm-e2e daemon's runtime directory."""
+    return Path.home() / "Library/Application Support/devm-e2e"
 
 
 @pytest.mark.slow

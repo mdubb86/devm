@@ -16,16 +16,17 @@ Collapsing to one lifecycle costs 3 Touch ID prompts (pre-clean
 uninstall + install + final uninstall) all clustered up front while the
 user is watching phase 2a start.
 
-Coverage preserved verbatim from the three former tests:
+Coverage preserved (adapted to the devm-e2e identity: TLD `e2e.test`,
+DNS `:51154`) from the three former tests:
 
   DNS (former test_39):
-    - `devm install` writes /etc/resolver/test with the expected content.
-    - `dig @127.0.0.1 -p 51153 anything.test` returns 127.0.0.1.
-    - System-resolver path: socket.gethostbyname("*.test") → 127.0.0.1.
-    - `devm uninstall` removes /etc/resolver/test.
+    - `devm install` writes /etc/resolver/e2e.test with the expected content.
+    - `dig @127.0.0.1 -p 51154 anything.e2e.test` returns 127.0.0.1.
+    - System-resolver path: socket.gethostbyname("*.e2e.test") → 127.0.0.1.
+    - `devm uninstall` removes /etc/resolver/e2e.test.
 
   HTTPS proxy (former test_40):
-    - CA install lets curl trust https://<hostname>.test.
+    - CA install lets curl trust https://<hostname>.e2e.test.
     - `devm route local` binds the hostname to a Mac-side backend.
     - HTTP (:80) and HTTPS (:443) both proxy through with 200 body.
     - Backend killed → 502 with "no service listening" diagnostic.
@@ -33,8 +34,9 @@ Coverage preserved verbatim from the three former tests:
   LaunchDaemon (former test_41 — subset):
     - LaunchDaemon plist at /Library/LaunchDaemons/, not the old
       LaunchAgent path (Ship 4.2 pin).
-    - `launchctl print system/com.devm.service` reaches `state = running`
-      within 10s, daemon runs as the invoking user (not root).
+    - `launchctl print system/com.devm.e2e.service` reaches
+      `state = running` within 10s, daemon runs as the invoking user
+      (not root).
     - Ports 80/443 are TCP-bindable (LaunchDaemon socket activation
       pins them — Ship 4.2 fix for the Ship 3/4 unbound-fd bug).
     - `devm uninstall` removes the LaunchDaemon plist and runtime dir.
@@ -43,6 +45,12 @@ Former test_41's cold-start-VM + teardown block is dropped here; that
 coverage is redundant with test_50 (cold-start brings VM to running,
 also guest identity after cold-start) and test_53 (teardown destroys
 VM).
+
+Runs against the bootstrapped devm-e2e identity throughout
+(internal/identity.E2E): TLD `e2e.test`, DNS `:51154`, group
+`_devm-e2e`, LaunchDaemon labels `com.devm.e2e.service` /
+`com.devm.e2e.helper` — distinct from prod's so this lifecycle test
+never collides with a real `devm install` on the same Mac.
 """
 from __future__ import annotations
 
@@ -60,19 +68,20 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
-_RESOLVER_FILE = "/etc/resolver/test"
-_LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.service.plist")
-_LAUNCH_AGENT_PLIST = Path("~/Library/LaunchAgents/com.devm.service.plist").expanduser()
+_RESOLVER_FILE = "/etc/resolver/e2e.test"
+_LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.e2e.service.plist")
+_LAUNCH_AGENT_PLIST = Path("~/Library/LaunchAgents/com.devm.e2e.service.plist").expanduser()
 
-# Task 6 (per-project bind isolation): the portbinder helper LaunchDaemon
-# installed/removed alongside the main service.
-_PORTBINDER_PLIST = Path("/Library/LaunchDaemons/com.devm.portbinder.plist")
-_PORTBINDER_BINARY = Path("/usr/local/libexec/devm-portbinder")
-_PORTBINDER_SOCKET = Path("/var/run/devm-portbinder.sock")
+# Task 6 (per-project bind isolation): the root helper LaunchDaemon
+# installed/removed alongside the main service — grants the lo0-alias
+# / loopback-bind privileges devm itself doesn't run as root for.
+_HELPER_PLIST = Path("/Library/LaunchDaemons/com.devm.e2e.helper.plist")
+_HELPER_BINARY = Path("/usr/local/bin/devm-e2e-helper")
+_HELPER_SOCKET = Path("/var/run/devm-e2e-helper.sock")
 
 
 def _runtime_dir() -> str:
-    return os.path.expanduser("~/Library/Application Support/devm")
+    return os.path.expanduser("~/Library/Application Support/devm-e2e")
 
 
 def _alloc_port() -> int:
@@ -126,7 +135,7 @@ def test_install_uninstall_lifecycle(devm, workspace, sudo_capable):
     subprocess.run([devm.path, "uninstall"], capture_output=True, timeout=30)
 
     backend_port = _alloc_port()
-    hostname = f"e2e-{backend_port}.test"
+    hostname = f"e2e-{backend_port}.e2e.test"
     backend = _spawn_backend(backend_port, "hello from backend")
 
     try:
@@ -142,44 +151,43 @@ def test_install_uninstall_lifecycle(devm, workspace, sudo_capable):
             f"stderr={r.stderr.decode()!r}"
         )
 
-        # --- Portbinder block (Task 6: per-project bind isolation) ---
-        assert _PORTBINDER_PLIST.exists(), (
-            "portbinder LaunchDaemon plist not installed at "
-            f"{_PORTBINDER_PLIST}"
+        # --- Root helper block (Task 6: per-project bind isolation) ---
+        assert _HELPER_PLIST.exists(), (
+            f"helper LaunchDaemon plist not installed at {_HELPER_PLIST}"
         )
-        assert _PORTBINDER_BINARY.exists(), (
-            f"portbinder binary not installed at {_PORTBINDER_BINARY}"
+        assert _HELPER_BINARY.exists(), (
+            f"helper binary not installed at {_HELPER_BINARY}"
         )
         # The helper's UDS is created by the running daemon; give it a beat.
         time.sleep(1)
-        assert _PORTBINDER_SOCKET.exists(), (
-            f"portbinder UDS not present at {_PORTBINDER_SOCKET} after install"
+        assert _HELPER_SOCKET.exists(), (
+            f"helper UDS not present at {_HELPER_SOCKET} after install"
         )
-        # _devm group exists.
+        # _devm-e2e group exists.
         r_group = subprocess.run(
-            ["dscl", ".", "-read", "/Groups/_devm"],
+            ["dscl", ".", "-read", "/Groups/_devm-e2e"],
             capture_output=True, timeout=10,
         )
         assert r_group.returncode == 0, (
-            f"_devm group not created: {r_group.stderr.decode()!r}"
+            f"_devm-e2e group not created: {r_group.stderr.decode()!r}"
         )
 
         # --- DNS block (former test_39) ---
         assert os.path.exists(_RESOLVER_FILE), "resolver file not created"
         with open(_RESOLVER_FILE) as f:
             contents = f.read()
-        assert contents == "nameserver 127.0.0.1\nport 51153\n", (
+        assert contents == "nameserver 127.0.0.1\nport 51154\n", (
             f"unexpected resolver file contents: {contents!r}"
         )
         r = subprocess.run(
-            ["dig", "@127.0.0.1", "-p", "51153", "anything.test", "+short"],
+            ["dig", "@127.0.0.1", "-p", "51154", "anything.e2e.test", "+short"],
             capture_output=True, timeout=10,
         )
         assert "127.0.0.1" in r.stdout.decode(), (
             f"direct DNS query failed: {r.stdout.decode()!r}"
         )
         time.sleep(1)  # macOS resolver cache settle
-        ip = socket.gethostbyname("anything-system-probe.test")
+        ip = socket.gethostbyname("anything-system-probe.e2e.test")
         assert ip == "127.0.0.1", (
             f"system resolver returned {ip!r}, expected 127.0.0.1"
         )
@@ -198,7 +206,7 @@ def test_install_uninstall_lifecycle(devm, workspace, sudo_capable):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             r = subprocess.run(
-                ["launchctl", "print", "system/com.devm.service"],
+                ["launchctl", "print", "system/com.devm.e2e.service"],
                 capture_output=True, text=True, timeout=10,
             )
             if r.returncode == 0 and "state = running" in r.stdout:
@@ -323,17 +331,19 @@ def test_install_uninstall_lifecycle(devm, workspace, sudo_capable):
             "devm runtime dir still present after uninstall"
         )
 
-        # --- Portbinder teardown (Task 6: per-project bind isolation) ---
-        assert not _PORTBINDER_PLIST.exists(), (
-            f"portbinder plist still present after uninstall: {_PORTBINDER_PLIST}"
+        # --- Root helper teardown (Task 6: per-project bind isolation) ---
+        assert not _HELPER_PLIST.exists(), (
+            f"helper plist still present after uninstall: {_HELPER_PLIST}"
         )
-        assert not _PORTBINDER_BINARY.exists(), (
-            f"portbinder binary still present after uninstall: {_PORTBINDER_BINARY}"
+        assert not _HELPER_BINARY.exists(), (
+            f"helper binary still present after uninstall: {_HELPER_BINARY}"
         )
-        # Aliases removed.
+        # Aliases removed. E2E's pool is 127.42.0.21-40 (identity.E2E.PoolStart/
+        # PoolEnd) — distinct from prod's 127.42.0.1-20 — so this checks the
+        # e2e install's own first alias, not prod's.
         ifconfig = subprocess.check_output(["/sbin/ifconfig", "lo0"], text=True)
-        assert "127.42.0.1" not in ifconfig, (
-            f"loopback alias 127.42.0.1 still present after uninstall:\n{ifconfig}"
+        assert "127.42.0.21" not in ifconfig, (
+            f"loopback alias 127.42.0.21 still present after uninstall:\n{ifconfig}"
         )
 
         # NOTE: no reinstall here — run.sh does one restore between

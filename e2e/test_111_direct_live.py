@@ -49,12 +49,7 @@ What it doesn't cover (tested elsewhere):
     firewall gate — test_112.
   - `direct: true` without hostname validation — test_113.
 
-KNOWN GAP #1 (DNS): identical to test_110 — the Mac-side DNS
-assertions self-skip when `$DEVM_DNS_ADDR` is the isolated lane's
-ephemeral `127.0.0.1:0` (no picked-port accessor exists for the DNS
-server). See test_110's module docstring.
-
-KNOWN GAP #2 (reconcile stdout): `internal/orchestrator/format.go`'s
+KNOWN GAP (reconcile stdout): `internal/orchestrator/format.go`'s
 `formatChange`/`changeKindJSON` switches enumerate every other
 `reconcile.Kind*` constant but have NO case for
 `KindServiceDirectChange` — a direct flip currently renders as the
@@ -135,16 +130,14 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
     assert pid_before is not None, "expected a running tart process for the VM"
 
     dns_host, dns_port = _dns_addr()
-    dns_testable = dns_port != 0
 
     # ---- Baseline (direct: false): DNS answers loopback; no
     # ---- svc_ingress rule for this port yet. ----
-    if dns_testable:
-        baseline = _dig_a(hostname, dns_host, dns_port)
-        assert baseline == "127.0.0.1", (
-            f"non-direct hostname {hostname!r} should resolve to "
-            f"127.0.0.1 before any direct flip; got {baseline!r}"
-        )
+    baseline = _dig_a(hostname, dns_host, dns_port)
+    assert baseline == "127.0.0.1", (
+        f"non-direct hostname {hostname!r} should resolve to "
+        f"127.0.0.1 before any direct flip; got {baseline!r}"
+    )
     assert f"proto-dst {DIRECT_PORT}" not in _svc_ingress(devm), (
         "svc_ingress should have no rule for this port before any "
         "direct flip"
@@ -187,12 +180,11 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
             f"{routes.get(project_id)}"
         )
 
-        if dns_testable:
-            answer = _dig_a(hostname, dns_host, dns_port)
-            assert answer == vm_ip, (
-                f"after live direct-add, DNS should answer VM IP "
-                f"{vm_ip!r} for {hostname!r}; got {answer!r}"
-            )
+        answer = _dig_a(hostname, dns_host, dns_port)
+        assert answer == vm_ip, (
+            f"after live direct-add, DNS should answer VM IP "
+            f"{vm_ip!r} for {hostname!r}; got {answer!r}"
+        )
 
         deadline = time.time() + 30
         nft_out = ""
@@ -233,12 +225,11 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
             f"stderr={reconcile.stderr.decode()!r}"
         )
 
-        if dns_testable:
-            answer = _dig_a(hostname, dns_host, dns_port)
-            assert answer == "127.0.0.1", (
-                f"after live direct-withdraw, DNS should revert to "
-                f"127.0.0.1 for {hostname!r}; got {answer!r}"
-            )
+        answer = _dig_a(hostname, dns_host, dns_port)
+        assert answer == "127.0.0.1", (
+            f"after live direct-withdraw, DNS should revert to "
+            f"127.0.0.1 for {hostname!r}; got {answer!r}"
+        )
 
         deadline = time.time() + 30
         nft_out = _svc_ingress(devm)

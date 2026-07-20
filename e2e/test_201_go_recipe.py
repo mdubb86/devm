@@ -36,8 +36,7 @@ recipe promise separately so a passing test can't be misinterpreted:
 Live-network test: needs go.dev, dl.google.com, proxy.golang.org,
 sum.golang.org, github.com. All egress goes through iron-proxy.
 
-LIVE RUN DEFERRED at branch-land time. Run via `just e2e-recipe`
-(E2E_ISOLATE=1).
+LIVE RUN DEFERRED at branch-land time. Run via `just e2e-recipe`.
 """
 from __future__ import annotations
 

@@ -4,9 +4,9 @@ Extracted from the per-file copies so the routes / DNS / TCP-reachability /
 svc_ingress probes live in one place. See each test module's docstring for
 what it pins.
 
-DNS note: `dns_addr()` honors `$DEVM_DNS_ADDR`. The isolated e2e lane sets it
-to `127.0.0.1:0` (ephemeral) and exposes no picked-port accessor, so callers
-treat port 0 as "not queryable" and soft-skip the Mac-side DNS sub-assertions.
+DNS note: `dns_addr()` returns the devm-e2e install's fixed DNS bind address
+(internal/identity.E2E.DNSBindAddr, `127.0.0.1:51154`) — distinct from prod's
+`:51153` so the two installs can coexist without colliding.
 """
 from __future__ import annotations
 
@@ -25,13 +25,9 @@ BANNER = b"devm-direct-e2e"
 
 
 def socket_path() -> str:
-    """Daemon Unix socket, honoring the isolated lane's DEVM_RUNTIME_DIR
-    (falls back to the installed daemon's default). See test_37_route_vm.py."""
+    """The bootstrapped devm-e2e daemon's Unix socket."""
     return os.path.join(
-        os.environ.get(
-            "DEVM_RUNTIME_DIR",
-            os.path.expanduser("~/Library/Application Support/devm"),
-        ),
+        os.path.expanduser("~/Library/Application Support/devm-e2e"),
         "devm.sock",
     )
 
@@ -69,12 +65,9 @@ def ingress_config(project_id: str) -> dict:
 
 
 def dns_addr() -> tuple[str, int]:
-    """Host/port of the daemon's *.test resolver (internal/serviceapi/dns.go
-    DNSAddr()). Port 0 means the isolated lane's ephemeral bind — not
-    queryable (see module docstring)."""
-    raw = os.environ.get("DEVM_DNS_ADDR", "127.0.0.1:51153")
-    host, _, port_s = raw.rpartition(":")
-    return (host or "127.0.0.1"), int(port_s)
+    """Host/port of the devm-e2e daemon's *.test resolver
+    (internal/identity.E2E.DNSBindAddr)."""
+    return "127.0.0.1", 51154
 
 
 def dig_a(hostname: str, dns_host: str, dns_port: int, timeout: float = 5.0) -> str:

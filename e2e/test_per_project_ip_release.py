@@ -28,7 +28,6 @@ able to bind anything, so this test runs the same whether or not
 from __future__ import annotations
 
 import json
-import os
 import secrets
 import shutil
 import subprocess
@@ -43,11 +42,7 @@ pytestmark = pytest.mark.devm
 
 
 def _runtime_dir() -> Path:
-    if os.environ.get("E2E_ISOLATE") == "1":
-        d = os.environ.get("DEVM_RUNTIME_DIR")
-        if d:
-            return Path(d)
-    return Path.home() / "Library" / "Application Support" / "devm"
+    return Path.home() / "Library" / "Application Support" / "devm-e2e"
 
 
 def _project_ip(project_id: str) -> str | None:

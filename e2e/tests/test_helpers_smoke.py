@@ -70,11 +70,8 @@ def test_workspace_patch_devmyaml(tmp_path):
 
 # --- devm ---
 
-def test_devm_path_uses_env(monkeypatch, tmp_path):
-    binary = tmp_path / "devm"
-    binary.write_text("")
-    monkeypatch.setenv("DEVM_BIN", str(binary))
-    assert Devm.from_env().path == str(binary)
+def test_devm_from_env_returns_bootstrapped_e2e_binary():
+    assert Devm.from_env().path == "/usr/local/bin/devm-e2e"
 
 
 def test_devm_reconcile_invokes_subprocess(monkeypatch, tmp_path):

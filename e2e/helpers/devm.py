@@ -6,7 +6,6 @@ subprocess with explicit timeouts. Non-zero exit raises DevmError
 with the full stdout/stderr so debugging is straightforward.
 """
 from __future__ import annotations
-import os
 import subprocess
 
 
@@ -28,10 +27,8 @@ class Devm:
 
     @classmethod
     def from_env(cls, cwd: str | None = None) -> "Devm":
-        bin_path = os.environ.get("DEVM_BIN")
-        if not bin_path:
-            raise RuntimeError("DEVM_BIN not set (run.sh sets it; check the wrapper)")
-        return cls(bin_path, cwd=cwd)
+        """Devm bound to the bootstrapped e2e binary (see `just e2e-bootstrap`)."""
+        return cls("/usr/local/bin/devm-e2e", cwd=cwd)
 
     def _run(self, args: list[str], timeout: float, check: bool = True) -> subprocess.CompletedProcess:
         full = [self.path, *args]

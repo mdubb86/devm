@@ -17,13 +17,10 @@ The project fixture declares:
     a known body, fronted (per Task 3) by a daemon route whose
     backend_host/backend_port point at the SAME host-local softnet
     listener mechanism as the direct service (softnet.HostLoopIP,
-    svc.Port) — the daemon's own :80/:443 reverse-proxy actor only
-    binds under launchd socket activation (see
-    internal/serviceapi/runner.go sockact.Activate), which isolated
-    `devm serve --foreground` (this e2e's E2E_ISOLATE=1 lane) never
-    gets; the outer Host-header hop is therefore out of scope here
-    (same boundary test_37_route_vm.py and run.sh's isolated-mode
-    docstring already draw) — what THIS test proves is the backend
+    svc.Port) — the outer daemon :80/:443 Host-header hop (via launchd
+    socket activation, internal/serviceapi/runner.go sockact.Activate)
+    is a separate concern from this test (same boundary
+    test_37_route_vm.py draws) — what THIS test proves is the backend
     dial target Task 3 rewired: GET /routes shows the softnet-listener
     backend, and an HTTP GET at that exact address returns the guest
     server's body.
@@ -172,22 +169,12 @@ def test_daemon_softnet_ingress(workspace, devm, sandbox_name):
     # DNS: `<direct_hostname>` resolves to 127.0.0.1 via the daemon's
     # *.test resolver (ingress is unified to host loopback under
     # softnet, direct or proxied — see internal/serviceapi/dns.go).
-    # Soft-skip when $DEVM_DNS_ADDR is the isolated lane's ephemeral
-    # 127.0.0.1:0 bind (same known gap test_110/111/112 document — the
-    # daemon doesn't expose its OS-picked DNS port anywhere queryable).
     dns_host, dns_port = _dns_addr()
-    if dns_port == 0:
-        print(
-            "WARNING: DEVM_DNS_ADDR is ephemeral in the isolated e2e "
-            "lane; skipping the Mac-side DNS sub-assertion for the "
-            "direct hostname (see test_110's module docstring KNOWN GAP)."
-        )
-    else:
-        answer = _dig_a(direct_hostname, dns_host, dns_port)
-        assert answer == "127.0.0.1", (
-            f"expected {direct_hostname!r} to resolve to 127.0.0.1 via "
-            f"the daemon's *.test resolver; got {answer!r}"
-        )
+    answer = _dig_a(direct_hostname, dns_host, dns_port)
+    assert answer == "127.0.0.1", (
+        f"expected {direct_hostname!r} to resolve to 127.0.0.1 via "
+        f"the daemon's *.test resolver; got {answer!r}"
+    )
 
     # ================================================================
     # Assertion 2: PROXIED service — GET /routes shows the softnet-

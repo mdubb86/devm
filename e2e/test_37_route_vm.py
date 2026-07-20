@@ -35,15 +35,10 @@ import pytest
 
 pytestmark = pytest.mark.devm
 
-# Honor the isolated e2e daemon's runtime dir (E2E_ISOLATE sets
-# DEVM_RUNTIME_DIR to a private /tmp dir); fall back to the installed
-# daemon's default location. Without this the isolated suite queries the
-# real installed daemon and sees unrelated live projects' routes.
+# The bootstrapped devm-e2e daemon's socket — distinct from any real
+# prod devm install's, so this test only ever sees this suite's routes.
 _SOCKET_PATH = os.path.join(
-    os.environ.get(
-        "DEVM_RUNTIME_DIR",
-        os.path.expanduser("~/Library/Application Support/devm"),
-    ),
+    os.path.expanduser("~/Library/Application Support/devm-e2e"),
     "devm.sock",
 )
 

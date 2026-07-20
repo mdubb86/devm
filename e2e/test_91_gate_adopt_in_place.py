@@ -239,27 +239,16 @@ def test_adopt_in_place(devm, workspace, sandbox_name):
             f"route for {hostname!r} not marked direct after adopt-in-place: {entry}"
         )
 
-        # Mac-side DNS: soft warn-and-continue under the isolated e2e
-        # lane's ephemeral $DEVM_DNS_ADDR (see test_110's module
-        # docstring KNOWN GAP) -- must not abort before the reachability
-        # check below, which is this assertion's main subject.
+        # Mac-side DNS: must reflect the re-discovered guest IP, not a
+        # stale pre-stop IP and not loopback.
         dns_host, dns_port = _dns_addr()
-        if dns_port == 0:
-            print(
-                "WARNING: DEVM_DNS_ADDR is ephemeral in the isolated "
-                "e2e lane; skipping the Mac-side DNS sub-assertion only "
-                "(see test_110's module docstring KNOWN GAP). "
-                "Continuing with the TCP reachability check against the "
-                "re-discovered VM IP directly."
-            )
-        else:
-            answer = _dig_a(hostname, dns_host, dns_port)
-            assert answer == vm_ip_after and answer != "127.0.0.1", (
-                f"after adopt-in-place, DNS should answer the "
-                f"re-discovered guest IP {vm_ip_after!r} for direct "
-                f"hostname {hostname!r} -- not a stale pre-stop IP "
-                f"({vm_ip_before!r}) and not loopback; got {answer!r}"
-            )
+        answer = _dig_a(hostname, dns_host, dns_port)
+        assert answer == vm_ip_after and answer != "127.0.0.1", (
+            f"after adopt-in-place, DNS should answer the "
+            f"re-discovered guest IP {vm_ip_after!r} for direct "
+            f"hostname {hostname!r} -- not a stale pre-stop IP "
+            f"({vm_ip_before!r}) and not loopback; got {answer!r}"
+        )
 
         got = None
         deadline = time.monotonic() + 30

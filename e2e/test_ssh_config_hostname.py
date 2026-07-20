@@ -8,10 +8,9 @@ verifies `ssh` actually connects using that config.
 
 Adapted from the task-7 brief's sketch:
   - The brief's draft read the ssh_config from a hardcoded
-    `~/Library/Application Support/devm/ssh_config`, which breaks
-    under the isolated e2e lane (E2E_ISOLATE=1, DEVM_RUNTIME_DIR
-    elsewhere) — this reuses test_93_ssh_access.py's already-proven
-    `_get_runtime_dir()` helper for that.
+    `~/Library/Application Support/devm/ssh_config` — this reuses
+    test_93_ssh_access.py's already-proven `_get_runtime_dir()` helper,
+    which points at the bootstrapped devm-e2e install's runtime dir.
   - The brief's connectivity check ran bare `ssh devm-<proj>`, which
     only works if the user's own `~/.ssh/config` already `Include`s
     devm's ssh_config (a one-time manual step, not guaranteed in a
@@ -25,7 +24,6 @@ Adapted from the task-7 brief's sketch:
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -36,17 +34,9 @@ pytestmark = pytest.mark.devm
 
 
 def _get_runtime_dir() -> Path:
-    """Get the devm runtime directory.
-
-    In isolated mode (E2E_ISOLATE=1), uses DEVM_RUNTIME_DIR from env.
-    Otherwise uses the default ~/Library/Application Support/devm.
-    Mirrors test_93_ssh_access.py's helper of the same name.
-    """
-    if os.environ.get("E2E_ISOLATE") == "1":
-        isolated_dir = os.environ.get("DEVM_RUNTIME_DIR")
-        if isolated_dir:
-            return Path(isolated_dir)
-    return Path.home() / "Library" / "Application Support" / "devm"
+    """The bootstrapped devm-e2e daemon's runtime directory. Mirrors
+    test_93_ssh_access.py's helper of the same name."""
+    return Path.home() / "Library" / "Application Support" / "devm-e2e"
 
 
 @pytest.mark.timeout(400)

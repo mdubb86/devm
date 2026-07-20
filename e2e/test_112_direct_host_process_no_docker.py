@@ -31,12 +31,6 @@ What it doesn't cover (tested elsewhere):
   - Live add/withdraw via reconcile without a shell — test_111.
   - `direct: true` without hostname validation — test_113.
 
-KNOWN GAP (DNS): identical to test_110/111 — the Mac-side DNS
-sub-assertion soft-warns-and-continues (NOT `pytest.skip`, which would
-abort the whole test before reaching the reachability/nft assertions
-that ARE this test's main subject) when `$DEVM_DNS_ADDR` is the
-isolated lane's ephemeral `127.0.0.1:0`. See test_110's module
-docstring.
 """
 from __future__ import annotations
 
@@ -101,20 +95,13 @@ def test_direct_host_process_no_docker_no_svc_ingress_rule(workspace, devm, sand
     # ---- Assertion: DNS answers VM_IP for a host-process direct
     # ---- service exactly like a container-published one — the DNS
     # ---- side doesn't distinguish docker vs host-process (only the
-    # ---- firewall side does). Soft warn-and-continue (see module
-    # ---- docstring KNOWN GAP). ----
+    # ---- firewall side does). ----
     dns_host, dns_port = _dns_addr()
-    if dns_port != 0:
-        answer = _dig_a(hostname, dns_host, dns_port)
-        assert answer == vm_ip, (
-            f"host-process direct hostname {hostname!r} should resolve "
-            f"to VM IP {vm_ip!r}; got {answer!r}"
-        )
-    else:
-        print(
-            "WARNING: DEVM_DNS_ADDR is ephemeral; skipping the Mac-side "
-            "DNS sub-assertion only (see module docstring KNOWN GAP)."
-        )
+    answer = _dig_a(hostname, dns_host, dns_port)
+    assert answer == vm_ip, (
+        f"host-process direct hostname {hostname!r} should resolve "
+        f"to VM IP {vm_ip!r}; got {answer!r}"
+    )
 
     # ---- Assertion: reachable from the Mac via the open INPUT hook —
     # ---- no forward-hook accept needed (SSH's own path). ----

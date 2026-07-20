@@ -62,14 +62,6 @@ What it doesn't cover (tested elsewhere):
   - The `direct: true` + no-hostname validation error — test_113 (no
     VM needed there).
 
-KNOWN GAP (see task-11-report.md): the Mac-side DNS assertion needs a
-non-ephemeral `$DEVM_DNS_ADDR`. The isolated e2e lane's daemon binds
-`127.0.0.1:0` (run.sh) and nothing exposes the OS-picked port back to
-a test process (unlike the NTP server's picked-port pattern in
-internal/serviceapi/ntp.go — the DNS server has no equivalent), so
-that one sub-assertion self-skips under `E2E_ISOLATE=1` and only runs
-when `$DEVM_DNS_ADDR` is a fixed, queryable port (e.g. the real
-installed daemon's default `:51153`, `E2E_ISOLATE=0`).
 """
 from __future__ import annotations
 
@@ -140,26 +132,12 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
     )
 
     # ---- Assertion 2: Mac-side DNS answers the VM's IP, not 127.0.0.1. ----
-    # NOTE: uses a soft warn-and-continue, NOT pytest.skip() — skipping
-    # here would abort the WHOLE test and never reach the nft/
-    # reachability assertions below, which are this test's main
-    # subject and don't depend on DNS at all.
     dns_host, dns_port = _dns_addr()
-    if dns_port == 0:
-        print(
-            "WARNING: DEVM_DNS_ADDR is ephemeral (127.0.0.1:0) in the "
-            "isolated e2e lane; the daemon's *.test resolver doesn't "
-            "expose its OS-picked UDP port anywhere queryable from a "
-            "test process (see module docstring KNOWN GAP). Skipping "
-            "the Mac-side DNS sub-assertion only; continuing with "
-            "nft/reachability checks against the VM IP directly."
-        )
-    else:
-        answer = _dig_a(hostname, dns_host, dns_port)
-        assert answer == vm_ip, (
-            f"expected DNS to answer the VM IP {vm_ip!r} for direct "
-            f"hostname {hostname!r}; got {answer!r}"
-        )
+    answer = _dig_a(hostname, dns_host, dns_port)
+    assert answer == vm_ip, (
+        f"expected DNS to answer the VM IP {vm_ip!r} for direct "
+        f"hostname {hostname!r}; got {answer!r}"
+    )
 
     # ---- Bring up a tiny busybox `nc` listener, published on the
     # ---- service's DECLARED port. Bare `-p PORT:CONTAINER_PORT` binds
@@ -299,22 +277,13 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
             f"svc_ingress not restored after stop/shell cycle:\n{nft_out}"
         )
 
-        # ---- Assertion: DNS answers the (possibly NEW) VM IP. Soft
-        # ---- warn-and-continue (see module docstring KNOWN GAP) —
-        # ---- must NOT abort before the reachability check below. ----
+        # ---- Assertion: DNS answers the (possibly NEW) VM IP. ----
         dns_host, dns_port = _dns_addr()
-        if dns_port == 0:
-            print(
-                "WARNING: DEVM_DNS_ADDR is ephemeral; skipping the "
-                "Mac-side DNS sub-assertion only (see module docstring "
-                "KNOWN GAP)."
-            )
-        else:
-            answer = _dig_a(hostname, dns_host, dns_port)
-            assert answer == vm_ip_after, (
-                f"after stop/shell, DNS should answer the current VM "
-                f"IP {vm_ip_after!r} for {hostname!r}; got {answer!r}"
-            )
+        answer = _dig_a(hostname, dns_host, dns_port)
+        assert answer == vm_ip_after, (
+            f"after stop/shell, DNS should answer the current VM "
+            f"IP {vm_ip_after!r} for {hostname!r}; got {answer!r}"
+        )
 
         # ---- Assertion: still reachable (container came back via its
         # ---- restart policy once docker re-enabled post-boot). ----

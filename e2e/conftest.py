@@ -6,17 +6,15 @@ BEFORE creating any resource. If a fixture's finalizer doesn't run
 the registry. See internal design notes.
 """
 from __future__ import annotations
-import json
 import os
 import re
 import secrets
 import shutil
-import signal
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Iterator
 
 import pytest
 
@@ -70,11 +68,8 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="session")
 def devm_path() -> str:
-    """Path to the freshly-built devm binary (run.sh exports DEVM_BIN)."""
-    p = os.environ.get("DEVM_BIN")
-    if not p:
-        raise RuntimeError("DEVM_BIN not set (run.sh sets it; check the wrapper)")
-    return p
+    """Path to the bootstrapped e2e devm binary."""
+    return "/usr/local/bin/devm-e2e"
 
 
 # --- per-test ---
@@ -204,7 +199,7 @@ def sudo_capable():
         pytest.skip("no /dev/tty — sudo can't prompt, skipping interactive test")
 
 
-_LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.service.plist")
+_LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.e2e.service.plist")
 
 
 def _daemon_program_path() -> str | None:
@@ -212,7 +207,7 @@ def _daemon_program_path() -> str | None:
     Returns None if no daemon is registered.
     """
     r = subprocess.run(
-        ["launchctl", "print", "system/com.devm.service"],
+        ["launchctl", "print", "system/com.devm.e2e.service"],
         capture_output=True, text=True, timeout=10,
     )
     if r.returncode != 0:
@@ -237,7 +232,7 @@ def _install_devm(devm_path: str) -> None:
         )
     deadline = time.monotonic() + 15
     sock = Path(os.path.expanduser(
-        "~/Library/Application Support/devm/devm.sock"
+        "~/Library/Application Support/devm-e2e/devm.sock"
     ))
     while time.monotonic() < deadline:
         if sock.exists():
@@ -255,11 +250,12 @@ def _uninstall_devm(devm_path: str) -> None:
 @pytest.fixture(autouse=True)
 def _daemon_matches_devm_bin(request, devm_path):
     """Verify-only safety net: the LaunchDaemon program path must match
-    DEVM_BIN. The actual install happens once up-front in run.sh; if we
-    ever get here and the daemon doesn't match, either a previous test
-    uninstalled it and didn't restore, or the install failed silently.
-    Either way, aborting the session immediately with an actionable
-    message is better than 40 misleading per-test failures.
+    the bootstrapped devm-e2e binary. The actual install happens once
+    up-front via `just e2e-bootstrap`; if we ever get here and the
+    daemon doesn't match, either bootstrap didn't run, or a previous
+    test uninstalled it and didn't restore it. Either way, aborting the
+    session immediately with an actionable message is better than 40
+    misleading per-test failures.
 
     Contract tests (marked `contract`) don't touch the devm daemon at
     all — they pin behavior of external tools like tart or iron-proxy
@@ -274,31 +270,18 @@ def _daemon_matches_devm_bin(request, devm_path):
         yield
         return
 
-    # Isolated mode: run.sh started a foreground `devm serve --foreground`
-    # in a private $DEVM_RUNTIME_DIR — there IS no LaunchDaemon plist for
-    # the test daemon, and the check below would spuriously find the
-    # user's REAL launchd-managed daemon (pointed at their real binary)
-    # and abort. Run.sh already health-checked the isolated daemon before
-    # invoking pytest, so no verification is needed here.
-    if os.environ.get("E2E_ISOLATE") == "1":
-        yield
-        return
-
     current_program = _daemon_program_path()
     if current_program == devm_path and _LAUNCH_DAEMON_PLIST.exists():
         yield
         return
 
     pytest.exit(
-        f"devm daemon doesn't match DEVM_BIN. Either run.sh's up-front\n"
-        f"`devm install` didn't run (running pytest directly?), or a\n"
-        f"previous test uninstalled the daemon without restoring it.\n\n"
+        f"e2e devm daemon doesn't match /usr/local/bin/devm-e2e.\n"
+        f"Either bootstrap didn't run, or a test left it in a broken state.\n\n"
         f"  DEVM_BIN            = {devm_path}\n"
         f"  daemon program path = {current_program!r}\n"
         f"  plist exists        = {_LAUNCH_DAEMON_PLIST.exists()}\n\n"
-        f"Fix by re-running the full suite via `just e2e-devm` (which\n"
-        f"invokes run.sh and does the pre-install), or manually run\n"
-        f"`{devm_path} install` before invoking pytest.",
+        f"Fix: `just e2e-bootstrap` (or `just e2e-teardown && just e2e-bootstrap`).",
         returncode=2,
     )
 
@@ -330,97 +313,6 @@ def tart_sandbox(devm, sandbox_name, workspace) -> TartSandbox:
     # handle to inspect state.
 
     yield TartSandbox(name=sandbox_name)
-
-
-@pytest.fixture
-def restart_isolated_daemon(devm_path) -> Callable[[], None]:
-    """Callable that kills and relaunches the isolated `devm serve
-    --foreground` daemon in place, against the same DEVM_RUNTIME_DIR /
-    DEVM_DNS_ADDR run.sh already exported.
-
-    Only meaningful in isolated e2e mode (`E2E_ISOLATE=1`) — there's no
-    launchd/sudo involved, so a plain kill+respawn stands in for what
-    `devm service restart` does in install mode (see test_44/test_73).
-    Relaunching re-runs the daemon's startup adoption path
-    (DiscoverIronProxies + Supervisor.Adopt), which is what puts a
-    still-running iron-proxy into the *adopted* state — per a verified
-    spike, adopted proxies are NOT auto-restarted by the supervisor if
-    they later die, unlike a freshly-spawned one. Skips (not fails)
-    when not in isolated mode, since it has nothing to act on there.
-    """
-    if os.environ.get("E2E_ISOLATE") != "1":
-        pytest.skip("restart_isolated_daemon requires E2E_ISOLATE=1")
-
-    runtime_dir = os.environ.get("DEVM_RUNTIME_DIR")
-    if not runtime_dir:
-        pytest.skip("DEVM_RUNTIME_DIR not set (expected in isolated mode)")
-    pid_file = Path(runtime_dir) / "daemon.pid"
-    log_file = Path(runtime_dir) / "daemon.log"
-
-    def _daemon_running() -> bool:
-        r = subprocess.run(
-            [devm_path, "status", "--json"],
-            capture_output=True, timeout=10,
-        )
-        if r.returncode != 0:
-            return False
-        try:
-            body = json.loads(r.stdout.decode())
-        except ValueError:
-            return False
-        return body.get("daemon", {}).get("running") is True
-
-    def _restart() -> None:
-        old_pid_text = pid_file.read_text().strip() if pid_file.exists() else ""
-        if old_pid_text:
-            old_pid = int(old_pid_text)
-            try:
-                os.kill(old_pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline:
-                try:
-                    os.kill(old_pid, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.2)
-            else:
-                try:
-                    os.kill(old_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-
-        # Relaunch against the SAME DEVM_RUNTIME_DIR/DEVM_DNS_ADDR — both
-        # already exported into this process's environ by run.sh, and
-        # subprocess.Popen inherits the current environ by default.
-        with open(log_file, "a", encoding="utf-8") as log_f:
-            log_f.write("\n=== e2e: restart_isolated_daemon relaunching ===\n")
-            log_f.flush()
-            proc = subprocess.Popen(
-                [devm_path, "serve", "--foreground"],
-                stdout=log_f, stderr=subprocess.STDOUT,
-            )
-        # Overwrite daemon.pid so both this fixture (on a second call)
-        # and run.sh's isolated on_exit trap reap the NEW pid instead
-        # of the one we just killed.
-        pid_file.write_text(str(proc.pid))
-
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            if _daemon_running():
-                return
-            if proc.poll() is not None:
-                raise RuntimeError(
-                    f"relaunched isolated daemon exited early (rc={proc.returncode}); "
-                    f"see {log_file}"
-                )
-            time.sleep(0.2)
-        raise RuntimeError(
-            f"relaunched isolated daemon never reported running; see {log_file}"
-        )
-
-    return _restart
 
 
 @pytest.fixture(scope="session")

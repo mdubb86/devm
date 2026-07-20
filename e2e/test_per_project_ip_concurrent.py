@@ -27,12 +27,8 @@ exist — see .superpowers/sdd/task-7-report.md for the full list):
     json:"project_ip").
   - Reachability is asserted by dialing each project's ProjectIP
     directly rather than resolving the `.test` hostname first, so the
-    core assertion doesn't inherit the Mac-side-DNS-under-isolation gap
-    already documented in test_110_direct_cold_start.py (the isolated
-    e2e lane's DEVM_DNS_ADDR is ephemeral and exposes no queryable
-    port). A soft, non-blocking DNS check is still included for the
-    common real-install case, matching test_110's warn-and-continue
-    pattern.
+    core assertion doesn't depend on DNS at all. A DNS check is still
+    included as a bonus assertion, matching test_110's pattern.
   - Reachability itself needs the 127.42.0.0/24 lo0 aliases actually
     provisioned (`devm install`'s portbinder LaunchDaemon) — this
     self-skips if 127.42.0.1 isn't bindable, same EADDRNOTAVAIL(49)
@@ -45,7 +41,6 @@ looping a project-specific marker on the declared port.
 from __future__ import annotations
 
 import json
-import os
 import secrets
 import shutil
 import socket
@@ -65,11 +60,7 @@ DIRECT_PORT = 5432
 
 
 def _runtime_dir() -> Path:
-    if os.environ.get("E2E_ISOLATE") == "1":
-        d = os.environ.get("DEVM_RUNTIME_DIR")
-        if d:
-            return Path(d)
-    return Path.home() / "Library" / "Application Support" / "devm"
+    return Path.home() / "Library" / "Application Support" / "devm-e2e"
 
 
 def _project_ip(project_id: str) -> str | None:
@@ -192,26 +183,16 @@ def test_per_project_ip_concurrent_isolation(devm_path):
                 f"or stale listener)"
             )
 
-        # ---- Soft bonus check: DNS answers each hostname with THAT
-        # ---- project's own IP, never the other's. Ephemeral
-        # ---- DEVM_DNS_ADDR under E2E_ISOLATE=1 exposes no queryable
-        # ---- port (see test_110's KNOWN GAP) — warn-and-continue,
-        # ---- since DNS correctness isn't this test's core subject
+        # ---- Bonus check: DNS answers each hostname with THAT project's
+        # ---- own IP, never the other's. Not this test's core subject
         # ---- (that's dns_test.go + test_110). ----
         dns_host, dns_port = dns_addr()
-        if dns_port == 0:
-            print(
-                "WARNING: DEVM_DNS_ADDR is ephemeral (127.0.0.1:0) in the "
-                "isolated e2e lane; skipping the Mac-side DNS sub-assertion "
-                "only (see test_110_direct_cold_start.py's KNOWN GAP)."
+        for ws, ip in ((a, ip_a), (b, ip_b)):
+            hostname = f"echo.{ws.slug}.test"
+            answer = dig_a(hostname, dns_host, dns_port)
+            assert answer == ip, (
+                f"DNS for {hostname!r} should answer {ip!r}; got {answer!r}"
             )
-        else:
-            for ws, ip in ((a, ip_a), (b, ip_b)):
-                hostname = f"echo.{ws.slug}.test"
-                answer = dig_a(hostname, dns_host, dns_port)
-                assert answer == ip, (
-                    f"DNS for {hostname!r} should answer {ip!r}; got {answer!r}"
-                )
     finally:
         _teardown_project(a, devm_a)
         _teardown_project(b, devm_b)

@@ -13,7 +13,7 @@ against the same still-dead proxy saves two VM boots while keeping all
 three distinct assertions intact.
 
 Sequence:
-  1. Cold-start, cross the adoption seam (`restart_isolated_daemon`),
+  1. Cold-start, cross the adoption seam (`devm service restart`),
      kill the proxy, confirm it stays dead.
   2. `devm status`: stdout reports `iron-proxy: MISSING (run 'devm
      reconcile')`, exit code is ExitReconcileRequired (4). Proxy still
@@ -41,7 +41,7 @@ _EXIT_RECONCILE_REQUIRED = 4
 
 
 @pytest.mark.timeout(300)
-def test_report_missing_proxy_no_heal(devm, workspace, sandbox_name, devm_installed, restart_isolated_daemon, tmp_path):
+def test_report_missing_proxy_no_heal(devm, workspace, sandbox_name, devm_installed, devm_path, tmp_path):
     workspace.write_devmyaml(
         install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
@@ -56,7 +56,12 @@ def test_report_missing_proxy_no_heal(devm, workspace, sandbox_name, devm_instal
 
     # Cross the adoption seam: a freshly-spawned proxy WOULD be
     # auto-restarted by the supervisor if killed; an adopted one won't.
-    restart_isolated_daemon()
+    r = subprocess.run(
+        [devm_path, "service", "restart"],
+        capture_output=True, timeout=60,
+    )
+    assert r.returncode == 0, f"service restart failed:\n{r.stderr.decode()}"
+    time.sleep(2)
     assert project_proxy_running(workspace.slug), (
         "iron-proxy should survive the daemon restart (adopted)"
     )

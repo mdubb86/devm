@@ -1,8 +1,6 @@
 """93: End-to-end SSH access to a devm VM via the emitted ssh_config.
 
-LIVE RUN DEFERRED at branch-land time.
-Run via `just e2e-devm e2e/test_93_ssh_access.py`.
-Requires sudo/Touch ID for the isolated daemon install.
+Run against the bootstrapped devm-e2e install via `just e2e`.
 
 Cold-starts a project, then pins the full SSH lifecycle:
   1. ssh_config file exists at RuntimeDir/ssh_config.
@@ -14,13 +12,12 @@ Cold-starts a project, then pins the full SSH lifecycle:
 
 Daemon-restart re-emission (does a crashed/restarted daemon rediscover
 running VMs and restore ssh_config?) is NOT covered here — it would
-need a real `devm service restart` (install mode, sudo) or the
-isolated kill/respawn seam (see test_73/test_100 for that pattern),
-not a second cold-start of the same already-destroyed project.
+need a real `devm service restart` (see test_73/test_100 for that
+pattern), not a second cold-start of the same already-destroyed
+project.
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -31,17 +28,8 @@ pytestmark = pytest.mark.devm
 
 
 def _get_runtime_dir() -> Path:
-    """Get the devm runtime directory.
-
-    In isolated mode (E2E_ISOLATE=1), uses DEVM_RUNTIME_DIR from env.
-    Otherwise uses the default ~/Library/Application Support/devm.
-    """
-    if os.environ.get("E2E_ISOLATE") == "1":
-        isolated_dir = os.environ.get("DEVM_RUNTIME_DIR")
-        if isolated_dir:
-            return Path(isolated_dir)
-    # Default location
-    return Path.home() / "Library/Application Support/devm"
+    """The bootstrapped devm-e2e daemon's runtime directory."""
+    return Path.home() / "Library/Application Support/devm-e2e"
 
 
 @pytest.mark.slow

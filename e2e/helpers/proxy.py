@@ -2,8 +2,8 @@
 
 Mirrors the inline `_iron_proxy_pid_for` pattern duplicated in
 test_44 and test_74 — pulled out here so heal e2e tests (and the
-restart_isolated_daemon seam test) can share it instead of
-reimplementing the ps-scan a third and fourth time.
+daemon-restart seam test) can share it instead of reimplementing the
+ps-scan a third and fourth time.
 """
 from __future__ import annotations
 
@@ -17,9 +17,9 @@ def project_proxy_pid(project_id: str) -> int | None:
 
     Matches on the `-config .../iron-proxy/<project_id>.yaml` argv
     fragment the daemon always spawns iron-proxy with (see
-    internal/serviceapi/ironproxy.go SpawnIronProxy). Works in both
-    isolated mode (config under a private runtime dir) and install
-    mode (config under ~/Library/Application Support/devm/).
+    internal/serviceapi/ironproxy.go SpawnIronProxy), regardless of the
+    runtime dir it's rooted under (~/Library/Application Support/devm-e2e/
+    for the bootstrapped e2e install).
     """
     r = subprocess.run(
         ["ps", "-axo", "pid=,command="],

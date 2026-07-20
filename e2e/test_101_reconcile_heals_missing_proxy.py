@@ -20,15 +20,14 @@ Sequence:
   2. Cold-start — confirm the on-disk iron-proxy config has the
      `secrets` transform and the VM env holds the opaque
      `__DEVM_SECRET_<name>__` token. Capture the proxy PID.
-  3. `restart_isolated_daemon()` — the proxy becomes *adopted*. A
-     verified spike (test_100) found the supervisor does NOT
-     auto-restart an adopted proxy if it dies, only a freshly-spawned
-     one — so we must cross this seam before killing it, or the
-     supervisor would silently undo the kill and the test would prove
-     nothing. Assert the PID is UNCHANGED across this restart — this
-     is test_106's entire assertion, for free, in the same boot,
-     before the kill happens: an adopted-but-alive proxy must not be
-     churned.
+  3. `devm service restart` — the proxy becomes *adopted*. A verified
+     spike (test_100) found the supervisor does NOT auto-restart an
+     adopted proxy if it dies, only a freshly-spawned one — so we must
+     cross this seam before killing it, or the supervisor would
+     silently undo the kill and the test would prove nothing. Assert
+     the PID is UNCHANGED across this restart — this is test_106's
+     entire assertion, for free, in the same boot, before the kill
+     happens: an adopted-but-alive proxy must not be churned.
   4. Kill the (now adopted) iron-proxy; confirm it stays dead.
   5. `devm reconcile` — assert it heals: the proxy PID reappears, the
      healed on-disk config still carries the secrets transform, the VM
@@ -51,25 +50,10 @@ from helpers.proxy import kill_project_proxy, project_proxy_pid, project_proxy_r
 
 pytestmark = pytest.mark.devm
 
-_RUNDIR_CANDIDATES = [
-    Path.home() / "Library" / "Application Support" / "devm",
-]
-
 
 def _runtime_dir() -> Path:
-    """Resolve the runtime dir the daemon under test writes into.
-
-    Isolated e2e mode points DEVM_RUNTIME_DIR at a private directory
-    (see conftest.restart_isolated_daemon); install mode uses the
-    real Application Support path. Mirrors test_74's _RUNDIR but
-    honors the isolated-mode override so this test works under
-    `just e2e-one` (E2E_ISOLATE=1 by default).
-    """
-    import os
-    env = os.environ.get("DEVM_RUNTIME_DIR")
-    if env:
-        return Path(env)
-    return _RUNDIR_CANDIDATES[0]
+    """The devm-e2e daemon's runtime dir (mirrors test_74's _RUNDIR)."""
+    return Path.home() / "Library" / "Application Support" / "devm-e2e"
 
 
 def _iron_proxy_config(project_id: str) -> dict | None:
@@ -91,7 +75,7 @@ def _has_secret_transform(config: dict, secret_name: str) -> bool:
 
 
 @pytest.mark.timeout(300)
-def test_reconcile_heals_missing_proxy(devm, workspace, sandbox_name, devm_installed, restart_isolated_daemon):
+def test_reconcile_heals_missing_proxy(devm, workspace, sandbox_name, devm_installed, devm_path):
     secret_name = f"e2e_secret_{sandbox_name.replace('-', '_')}"
     secret_value = "s3kr3tv4l"
     token_form = f"__DEVM_SECRET_{secret_name}__"
@@ -148,7 +132,12 @@ def test_reconcile_heals_missing_proxy(devm, workspace, sandbox_name, devm_insta
         # won't. Also asserts the negative-space case (test_106): an
         # adopted-but-alive proxy must not be churned by adoption
         # itself.
-        restart_isolated_daemon()
+        r = subprocess.run(
+            [devm_path, "service", "restart"],
+            capture_output=True, timeout=60,
+        )
+        assert r.returncode == 0, f"service restart failed:\n{r.stderr.decode()}"
+        time.sleep(2)
         assert project_proxy_running(workspace.slug), (
             "iron-proxy should survive the daemon restart (adopted)"
         )

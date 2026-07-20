@@ -36,12 +36,10 @@ Live-network test: needs internet access to cli.github.com (apt repo +
 keyring), api.github.com (recipe target), and httpbin.org (substitution
 witness). All egress goes through iron-proxy.
 
-LIVE RUN DEFERRED at branch-land time. Run via `just e2e-recipe`
-(E2E_ISOLATE=1). Isolated harness auto-heals a stale base image via
-`devm _build-base-if-needed` before starting. Uses the real macOS
-login keychain for the secret (cleaned up in a finally block, keyed
-under the fixture-generated project name so a killed run can be swept
-via `security find-generic-password -s devm`).
+LIVE RUN DEFERRED at branch-land time. Run via `just e2e-recipe`.
+Uses the real macOS login keychain for the secret (cleaned up in a
+finally block, keyed under the fixture-generated project name so a
+killed run can be swept via `security find-generic-password -s devm`).
 """
 from __future__ import annotations
 
