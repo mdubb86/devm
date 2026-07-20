@@ -18,7 +18,7 @@ Adapted from the task-7 brief's sketch (see
     (mirroring conftest.py's fixtures) rather than the singular
     `workspace`/`devm` fixtures (scoped to one project per test).
 
-No sudo, no portbinder helper required: AllocateProjectIP/
+No sudo, no devm-helper required: AllocateProjectIP/
 ReleaseProjectIP are unconditional in-memory + persisted-state
 operations on every /vm/start and /vm/stop (see vm.go) — they don't
 depend on the root port-binder helper actually being installed or

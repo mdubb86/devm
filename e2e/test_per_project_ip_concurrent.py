@@ -30,7 +30,7 @@ exist — see .superpowers/sdd/task-7-report.md for the full list):
     core assertion doesn't depend on DNS at all. A DNS check is still
     included as a bonus assertion, matching test_110's pattern.
   - Reachability itself needs the 127.42.0.0/24 lo0 aliases actually
-    provisioned (`devm install`'s portbinder LaunchDaemon) — this
+    provisioned (`devm install`'s helper LaunchDaemon) — this
     self-skips if 127.42.0.1 isn't bindable, same EADDRNOTAVAIL(49)
     signal test_loopback_contract.py pins.
 
@@ -79,7 +79,7 @@ def _project_ip(project_id: str) -> str | None:
 
 
 def _pool_alias_available() -> bool:
-    """True iff 127.42.0.1 is bindable, i.e. the portbinder helper's
+    """True iff 127.42.0.1 is bindable, i.e. the devm-helper's
     lo0-alias provisioning (`devm install`) has run since the last
     reboot. EADDRNOTAVAIL(49) means the alias is absent."""
     try:
