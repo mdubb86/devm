@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	baseimage "github.com/mdubb86/devm/image"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 )
 
@@ -67,7 +68,7 @@ func TestNeedsBuild_TrueWhenNoStoredHash(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	needs, hash, err := NeedsBuild()
+	needs, hash, err := NeedsBuild(identity.Prod)
 	require.NoError(t, err)
 	assert.True(t, needs, "no stored hash means a build is needed")
 	assert.Len(t, hash, 64)
@@ -94,7 +95,7 @@ func TestNeedsBuild_HashMatchesStored(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0700))
 	require.NoError(t, os.WriteFile(storePath, []byte(cur), 0644))
 
-	_, hash, err := NeedsBuild()
+	_, hash, err := NeedsBuild(identity.Prod)
 	require.NoError(t, err)
 	assert.Equal(t, cur, hash)
 }

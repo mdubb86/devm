@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -28,14 +29,14 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 	// unconditionally so users see it whenever they `devm status`. On
 	// error we leave Routing zero-valued; the format layer renders that
 	// as proxy-unreachable without breaking the rest of status.
-	c := serviceapi.NewClient()
+	c := serviceapi.NewClient(identity.Prod)
 	if routing, err := c.RoutingStatusFromDaemon(context.Background()); err == nil {
 		res.Routing = routing
 	}
 
 	dnsCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := serviceapi.CheckDNSHealth(dnsCtx); err == nil {
+	if err := serviceapi.CheckDNSHealth(dnsCtx, identity.Prod); err == nil {
 		res.DNSHealthy = true
 	} else {
 		res.DNSHealthy = false
@@ -43,7 +44,7 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 	}
 
 	// CA trust state — read-only, no sudo.
-	trusted, _ := serviceapi.CheckCATrusted()
+	trusted, _ := serviceapi.CheckCATrusted(identity.Prod)
 	res.CATrusted = trusted
 
 	// Proxy health: ask the daemon over the unix socket. Previously
@@ -124,7 +125,7 @@ func RunStatus(cfg schema.Config, tr *tart.Tart, repoRoot, cliFingerprint string
 		}
 	}
 	var lastAppliedTemplates map[string]string
-	if stateSnap, sErr := serviceapi.ReadStateSnapshot(cfg.Project.Name); sErr == nil && stateSnap != nil {
+	if stateSnap, sErr := serviceapi.ReadStateSnapshot(identity.Prod, cfg.Project.Name); sErr == nil && stateSnap != nil {
 		lastAppliedTemplates = stateSnap.TemplateContents
 	}
 	statusChanges, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot, lastAppliedTemplates, nil, nil)

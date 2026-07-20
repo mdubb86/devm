@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mdubb86/devm/internal/docker"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -35,7 +36,7 @@ type ReconcileOptions struct{}
 // pending — the caller inspects res.RecreateRequired), -1 when the
 // daemon call itself failed.
 func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts ReconcileOptions) (int, ReconcileResult, error) {
-	client := serviceapi.NewClient()
+	client := serviceapi.NewClient(identity.Prod)
 
 	// Resolve secrets CLI-side for the hash map AND for the possible
 	// downstream ApplyIronProxy call. resolveSecretBindings walks env
@@ -47,11 +48,11 @@ func RunReconcile(cfg schema.Config, tr *tart.Tart, repoRoot string, opts Reconc
 	hashes := SecretHashesFromBindings(bindings)
 
 	// Load SSH keys CLI-side and pass to the daemon.
-	authPub, err := sshkeys.EnsureProjectKeypair(cfg.Project.Name)
+	authPub, err := sshkeys.EnsureProjectKeypair(identity.Prod, cfg.Project.Name)
 	if err != nil {
 		return -1, ReconcileResult{}, fmt.Errorf("ensure ssh keypair: %w", err)
 	}
-	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(cfg.Project.Name)
+	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(identity.Prod, cfg.Project.Name)
 	if err != nil {
 		return -1, ReconcileResult{}, fmt.Errorf("ensure ssh host key: %w", err)
 	}

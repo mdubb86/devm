@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshconfig"
@@ -42,7 +43,7 @@ func EmitSSHConfig(ctx context.Context, tr *tart.Tart) error {
 	}
 	var out []sshconfig.Entry
 	for _, id := range projectIDs {
-		snap, err := serviceapi.ReadStateSnapshot(id)
+		snap, err := serviceapi.ReadStateSnapshot(identity.Prod, id)
 		if err != nil || snap == nil {
 			continue
 		}
@@ -52,12 +53,12 @@ func EmitSSHConfig(ctx context.Context, tr *tart.Tart) error {
 		}
 		out = append(out, sshconfig.Entry{Name: name})
 	}
-	return sshconfig.Emit(out)
+	return sshconfig.Emit(identity.Prod, out)
 }
 
 // listStateProjects lists project IDs devm has state snapshots for.
 func listStateProjects() ([]string, error) {
-	entries, err := os.ReadDir(serviceapi.StateDir())
+	entries, err := os.ReadDir(serviceapi.StateDir(identity.Prod))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -33,7 +34,7 @@ func (f *fakeStatusAllTart) List(ctx context.Context) ([]tart.VM, error) {
 
 func writeStatusAllSnapshot(t *testing.T, projectID string, cfg schema.Config) {
 	t.Helper()
-	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: cfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: cfg}))
 }
 
 func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
@@ -46,10 +47,10 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 		Project: schema.Project{Name: "stopped-proj"},
 	})
 
-	srv := NewServer(SocketPath(), Build{Version: "dev"})
+	srv := NewServer(SocketPath(identity.Prod), Build{Version: "dev"})
 	sup := supervisor.New("")
 	tr := &fakeStatusAllTart{running: map[string]bool{"running-proj": true}}
-	RegisterStatusAllHandler(srv, sup, tr)
+	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
@@ -79,10 +80,10 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 func TestStatusAll_NoSnapshots_EmptyList(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 
-	srv := NewServer(SocketPath(), Build{Version: "dev"})
+	srv := NewServer(SocketPath(identity.Prod), Build{Version: "dev"})
 	sup := supervisor.New("")
 	tr := &fakeStatusAllTart{running: map[string]bool{}}
-	RegisterStatusAllHandler(srv, sup, tr)
+	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
@@ -95,15 +96,15 @@ func TestStatusAll_NoSnapshots_EmptyList(t *testing.T) {
 
 func TestStatusAll_SkipsNonJSONAndMalformedFiles(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	require.NoError(t, os.MkdirAll(StateDir(), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(StateDir(), "notes.txt"), []byte("hi"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(StateDir(), "broken.json"), []byte("{not json"), 0o600))
+	require.NoError(t, os.MkdirAll(StateDir(identity.Prod), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(StateDir(identity.Prod), "notes.txt"), []byte("hi"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(StateDir(identity.Prod), "broken.json"), []byte("{not json"), 0o600))
 	writeStatusAllSnapshot(t, "good", schema.Config{Project: schema.Project{Name: "good"}})
 
-	srv := NewServer(SocketPath(), Build{Version: "dev"})
+	srv := NewServer(SocketPath(identity.Prod), Build{Version: "dev"})
 	sup := supervisor.New("")
 	tr := &fakeStatusAllTart{running: map[string]bool{}}
-	RegisterStatusAllHandler(srv, sup, tr)
+	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
@@ -118,9 +119,9 @@ func TestStatusAll_SkipsNonJSONAndMalformedFiles(t *testing.T) {
 func TestStatusAll_TartListError_Returns500(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 
-	srv := NewServer(SocketPath(), Build{Version: "dev"})
+	srv := NewServer(SocketPath(identity.Prod), Build{Version: "dev"})
 	sup := supervisor.New("")
-	RegisterStatusAllHandler(srv, sup, erroringTartLister{})
+	RegisterStatusAllHandler(srv, identity.Prod, sup, erroringTartLister{})
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))

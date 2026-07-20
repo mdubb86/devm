@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/debuglog"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -308,7 +309,7 @@ func armRelockTimer(locks *ProjectLocks, tr TartLister, name string, d time.Dura
 // tears them down. May be nil in tests that don't exercise the proxy
 // lifecycle — StartProjectListeners/StopProjectListeners are skipped
 // in that case.
-func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials, ntpPort int, locks *ProjectLocks, proxy *ProxyServer) {
+func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials, ntpPort int, locks *ProjectLocks, proxy *ProxyServer) {
 	s.Register("/vm/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -343,7 +344,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			}
 		}
 		if !exists {
-			if err := tr.Clone(ctx, "devm-base", req.Name); err != nil {
+			if err := tr.Clone(ctx, cfg.BaseImageName(), req.Name); err != nil {
 				http.Error(w, fmt.Sprintf("tart clone: %v", err), http.StatusInternalServerError)
 				return
 			}
@@ -421,7 +422,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		// pexec builds the child env solely from cmd.Env (no implicit
 		// parent inheritance), so PATH and the control-socket location
 		// must be set here explicitly, starting from a full os.Environ().
-		binDir, err := ensureSoftnetSymlink()
+		binDir, err := ensureSoftnetSymlink(cfg)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("ensure softnet symlink: %v", err), http.StatusInternalServerError)
 			return
@@ -430,7 +431,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			http.Error(w, fmt.Sprintf("softnet sock dir: %v", err), http.StatusInternalServerError)
 			return
 		}
-		sock := SoftnetControlSock(req.Name)
+		sock := SoftnetControlSock(cfg, req.Name)
 		env := os.Environ()
 		env = prependPathEnv(env, binDir)
 		env = append(env, "SOFTNET_CONTROL_SOCK="+sock)
@@ -449,7 +450,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		// proxy listeners — bind on this address. Idempotent: a project
 		// that already has one (e.g. re-`devm shell` on an already-running
 		// VM) keeps it.
-		projectIP, err := AllocateProjectIP(req.Name)
+		projectIP, err := AllocateProjectIP(cfg, req.Name)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("allocate project ip: %v", err), http.StatusInternalServerError)
 			return
@@ -499,7 +500,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		}
 
 		// Build iron-proxy config + spawn.
-		caDir, err := EnsureRuntimeDir()
+		caDir, err := EnsureRuntimeDir(cfg)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -519,7 +520,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 			AllowList:  req.AllowList,
 			Secrets:    ironSecrets,
 		}
-		if err := SpawnIronProxy(r.Context(), sup, req.Name, proxyCfg, denials); err != nil {
+		if err := SpawnIronProxy(r.Context(), cfg, sup, req.Name, proxyCfg, denials); err != nil {
 			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -740,7 +741,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		if proxy != nil {
 			proxy.StopProjectListeners(req.Name)
 		}
-		ReleaseProjectIP(req.Name)
+		ReleaseProjectIP(cfg, req.Name)
 		ironProxyState.del(req.Name)
 		// The softnet client is stateless — it dials fresh per call rather
 		// than holding a persistent connection — so there's nothing to
@@ -763,7 +764,7 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		repoRoot := ""
 		if e, ok := configLockState.get(req.Name); ok {
 			repoRoot = e.repoRoot
-		} else if snap, _ := ReadStateSnapshot(req.Name); snap != nil {
+		} else if snap, _ := ReadStateSnapshot(cfg, req.Name); snap != nil {
 			repoRoot = snap.WorkspaceHostPath
 		}
 		if repoRoot != "" {

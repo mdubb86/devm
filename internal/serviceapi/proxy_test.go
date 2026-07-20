@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // startBackend boots a tiny HTTP server on a random port that
@@ -60,7 +62,7 @@ func TestProxy_HTTP_RoutesByHostWithinProject(t *testing.T) {
 		{Hostname: "app.test", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
 	})
 	dir := t.TempDir()
-	ca, err := loadOrGenerateCAAt(dir)
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 
 	registerProject(t, "p1", "127.42.0.50")
@@ -81,7 +83,7 @@ func TestProxy_HTTP_RoutesByHostWithinProject(t *testing.T) {
 func TestProxy_NoLocalAddrInContext_502(t *testing.T) {
 	routes := NewRoutes()
 	dir := t.TempDir()
-	ca, err := loadOrGenerateCAAt(dir)
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 	proxy := NewProxyServer(routes, ca)
 
@@ -99,7 +101,7 @@ func TestProxy_NoLocalAddrInContext_502(t *testing.T) {
 func TestProxy_DestIPWithNoProject_502NoProject(t *testing.T) {
 	routes := NewRoutes()
 	dir := t.TempDir()
-	ca, err := loadOrGenerateCAAt(dir)
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 	proxy := NewProxyServer(routes, ca)
 
@@ -129,7 +131,7 @@ func TestProxy_HostMismatchAcrossProjects_502NotFallthrough(t *testing.T) {
 		{Hostname: "app.test", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
 	})
 	dir := t.TempDir()
-	ca, err := loadOrGenerateCAAt(dir)
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 
 	registerProject(t, "p1", "127.42.0.50")
@@ -157,7 +159,7 @@ func TestProxy_BackendUnreachable_502WithDiagnostic(t *testing.T) {
 		{Hostname: "down.test", BackendPort: 59999, Mode: ModeVM, Project: "p1"},
 	})
 	dir := t.TempDir()
-	ca, _ := loadOrGenerateCAAt(dir)
+	ca, _ := loadOrGenerateCAAt(identity.Prod, dir)
 	registerProject(t, "p1", "127.42.0.52")
 	proxy := NewProxyServer(routes, ca)
 
@@ -182,7 +184,7 @@ func TestProxy_BackendHost_ExplicitLocalhost(t *testing.T) {
 		{Hostname: "app.test", BackendHost: "127.0.0.1", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
 	})
 	dir := t.TempDir()
-	ca, err := loadOrGenerateCAAt(dir)
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 
 	registerProject(t, "p1", "127.42.0.53")

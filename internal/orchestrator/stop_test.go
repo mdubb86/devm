@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
@@ -143,7 +144,7 @@ func TestRunStopDestroy_RemovesStateSnapshot(t *testing.T) {
 	// into a subsequently recreated project. Teardown must wipe it so
 	// the next cold-start (or reconcile) starts from a clean baseline.
 	t.Setenv("HOME", t.TempDir())
-	require.NoError(t, serviceapi.WriteStateSnapshot("proj-123", serviceapi.StateSnapshot{
+	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "proj-123", serviceapi.StateSnapshot{
 		Cfg: schema.Config{Project: schema.Project{Name: "proj-123"}},
 	}))
 
@@ -162,7 +163,7 @@ func TestRunStopDestroy_RemovesStateSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 
-	got, err := serviceapi.ReadStateSnapshot("proj-123")
+	got, err := serviceapi.ReadStateSnapshot(identity.Prod, "proj-123")
 	require.NoError(t, err)
 	assert.Nil(t, got, "state snapshot must be removed after teardown")
 }
@@ -173,14 +174,14 @@ func TestRunStopDestroy_RemovesSSHState(t *testing.T) {
 	// ssh subtree so the next cold-start starts from a clean baseline.
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	require.NoError(t, serviceapi.WriteStateSnapshot("proj-123", serviceapi.StateSnapshot{
+	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "proj-123", serviceapi.StateSnapshot{
 		Cfg: schema.Config{Project: schema.Project{Name: "proj-123"}},
 	}))
-	_, err := sshkeys.EnsureProjectKeypair("proj-123")
+	_, err := sshkeys.EnsureProjectKeypair(identity.Prod, "proj-123")
 	require.NoError(t, err)
 
 	// Verify SSH directory exists before teardown
-	sshDir := sshkeys.ProjectDir("proj-123")
+	sshDir := sshkeys.ProjectDir(identity.Prod, "proj-123")
 	_, err = os.Stat(sshDir)
 	require.NoError(t, err, "ssh project dir must exist before teardown")
 

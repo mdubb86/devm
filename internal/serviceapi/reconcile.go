@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/mdubb86/devm/internal/debuglog"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -70,7 +71,7 @@ type TartLister interface {
 // RegisterReconcileHandler wires POST /vm/reconcile. sup is consulted
 // (only when the VM is running) to self-heal a missing/stale
 // iron-proxy: see the KindIronProxyDown emit below.
-func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, tr TartLister, sup *supervisor.Supervisor) {
+func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, tr TartLister, sup *supervisor.Supervisor) {
 	s.Register("/vm/reconcile", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -106,7 +107,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 
 		// Load baseline snapshot. Missing / malformed → nil, treated
 		// as "everything is new" by the diff engine.
-		oldSnap, err := ReadStateSnapshot(req.Name)
+		oldSnap, err := ReadStateSnapshot(cfg, req.Name)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read state: %v", err), http.StatusInternalServerError)
 			return
@@ -149,7 +150,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 		// /vm/apply-iron-proxy whenever AppliedIronProxy is non-empty.
 		// Gated on running: a stopped VM has no live iron-proxy to heal.
 		if running {
-			if computeProxyHealth(sup, req.Name).Status != ProxyOK {
+			if computeProxyHealth(cfg, sup, req.Name).Status != ProxyOK {
 				ironProxy = append(ironProxy, reconcile.Change{Kind: reconcile.KindIronProxyDown})
 			}
 		}
@@ -176,7 +177,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 		// Apply live changes. On failure, return error and don't
 		// touch the snapshot — same as if the request never happened.
 		if len(live) > 0 {
-			caPEM, err := os.ReadFile(filepath.Join(RuntimeDir(), "ca", "root.crt"))
+			caPEM, err := os.ReadFile(filepath.Join(RuntimeDir(cfg), "ca", "root.crt"))
 			if err != nil {
 				http.Error(w, fmt.Sprintf("read CA root: %v", err), http.StatusInternalServerError)
 				return
@@ -216,7 +217,7 @@ func RegisterReconcileHandler(s *Server, locks *ProjectLocks, apply ApplyLiver, 
 				http.Error(w, fmt.Sprintf("push expose map: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := WriteStateSnapshot(req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, ProjectIP: projectIP, WorkspaceHostPath: req.WorkspaceHostPath}); err != nil {
+			if err := WriteStateSnapshot(cfg, req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, ProjectIP: projectIP, WorkspaceHostPath: req.WorkspaceHostPath}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}

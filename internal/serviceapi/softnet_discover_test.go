@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // TestDiscoverSoftnet_RebuildsStateForRehydratedProjects covers the
@@ -40,7 +42,7 @@ func TestDiscoverSoftnet_RebuildsStateForRehydratedProjects(t *testing.T) {
 
 	// Stand in for the surviving softnet child so the best-effort
 	// setPolicy push has somewhere to land.
-	sock := SoftnetControlSock(projectID)
+	sock := SoftnetControlSock(identity.Prod, projectID)
 	ln, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 	defer ln.Close()
@@ -56,7 +58,7 @@ func TestDiscoverSoftnet_RebuildsStateForRehydratedProjects(t *testing.T) {
 		got <- line
 	}()
 
-	discoverSoftnet(context.Background(), 51234)
+	discoverSoftnet(context.Background(), identity.Prod, 51234)
 
 	assert.Equal(t, sock, softnetState.get(projectID),
 		"discoverSoftnet must re-put the deterministic control sock for every rehydrated project")
@@ -79,6 +81,6 @@ func TestDiscoverSoftnet_NoRehydratedProjects_NoOp(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", dir)
 
 	assert.NotPanics(t, func() {
-		discoverSoftnet(context.Background(), 51234)
+		discoverSoftnet(context.Background(), identity.Prod, 51234)
 	})
 }

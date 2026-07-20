@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 )
 
@@ -16,8 +17,8 @@ import (
 // on daemon startup, wiped on uninstall). Follows the same
 // $DEVM_RUNTIME_DIR override as SocketPath so an e2e-sandboxed daemon
 // keeps its state alongside its socket.
-func StateDir() string {
-	return filepath.Join(RuntimeDir(), "state")
+func StateDir(cfg identity.Config) string {
+	return filepath.Join(RuntimeDir(cfg), "state")
 }
 
 // validProjectID rejects project IDs that could escape StateDir() via
@@ -76,11 +77,11 @@ type StateSnapshot struct {
 // ReadStateSnapshot loads the persisted snapshot for a project. Returns
 // (nil, nil) when the file is absent or malformed — reconcile treats
 // both as "assume everything changed" and computes a full diff.
-func ReadStateSnapshot(projectID string) (*StateSnapshot, error) {
+func ReadStateSnapshot(cfg identity.Config, projectID string) (*StateSnapshot, error) {
 	if err := validProjectID(projectID); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(StateDir(), projectID+".json")
+	path := filepath.Join(StateDir(cfg), projectID+".json")
 	body, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -100,19 +101,19 @@ func ReadStateSnapshot(projectID string) (*StateSnapshot, error) {
 // WriteStateSnapshot persists snap as the last-applied snapshot for
 // projectID. Atomic via temp file + rename to survive daemon crashes
 // mid-write.
-func WriteStateSnapshot(projectID string, snap StateSnapshot) error {
+func WriteStateSnapshot(cfg identity.Config, projectID string, snap StateSnapshot) error {
 	if err := validProjectID(projectID); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(StateDir(), 0o700); err != nil {
+	if err := os.MkdirAll(StateDir(cfg), 0o700); err != nil {
 		return fmt.Errorf("mkdir state dir: %w", err)
 	}
 	body, err := json.Marshal(snap)
 	if err != nil {
 		return fmt.Errorf("marshal snapshot: %w", err)
 	}
-	path := filepath.Join(StateDir(), projectID+".json")
-	tmp, err := os.CreateTemp(StateDir(), projectID+".json.*")
+	path := filepath.Join(StateDir(cfg), projectID+".json")
+	tmp, err := os.CreateTemp(StateDir(cfg), projectID+".json.*")
 	if err != nil {
 		return fmt.Errorf("create tmp state file: %w", err)
 	}
@@ -131,11 +132,11 @@ func WriteStateSnapshot(projectID string, snap StateSnapshot) error {
 
 // RemoveStateCfg deletes the snapshot for projectID. Idempotent —
 // remove-of-missing is not an error.
-func RemoveStateCfg(projectID string) error {
+func RemoveStateCfg(cfg identity.Config, projectID string) error {
 	if err := validProjectID(projectID); err != nil {
 		return err
 	}
-	path := filepath.Join(StateDir(), projectID+".json")
+	path := filepath.Join(StateDir(cfg), projectID+".json")
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

@@ -7,13 +7,15 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 func TestSoftnetControlSockDeterministic(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 
-	a := SoftnetControlSock("proj")
-	b := SoftnetControlSock("proj")
+	a := SoftnetControlSock(identity.Prod, "proj")
+	b := SoftnetControlSock(identity.Prod, "proj")
 	if a != b || filepath.Base(a) == "" {
 		t.Fatalf("non-deterministic: %q %q", a, b)
 	}
@@ -27,7 +29,7 @@ func TestSoftnetControlSockDeterministic(t *testing.T) {
 		t.Fatalf("control sock path %q (%d bytes) exceeds Darwin's 104-byte sun_path limit", a, len(a))
 	}
 
-	other := SoftnetControlSock("other-proj")
+	other := SoftnetControlSock(identity.Prod, "other-proj")
 	if other == a {
 		t.Fatalf("different project ids collided: %q", a)
 	}
@@ -38,10 +40,10 @@ func TestSoftnetControlSockDisambiguatesRuntimeDirs(t *testing.T) {
 	// an isolated e2e daemon) using the same project name must not
 	// collide on the same control socket.
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	a := SoftnetControlSock("proj")
+	a := SoftnetControlSock(identity.Prod, "proj")
 
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	b := SoftnetControlSock("proj")
+	b := SoftnetControlSock(identity.Prod, "proj")
 
 	if a == b {
 		t.Fatalf("different runtime dirs collided on the same control sock: %q", a)
@@ -105,7 +107,7 @@ func TestEnsureSoftnetSockDir_RejectsLoosePermissions(t *testing.T) {
 func TestEnsureSoftnetSymlink(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 
-	dir, err := ensureSoftnetSymlink()
+	dir, err := ensureSoftnetSymlink(identity.Prod)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +116,7 @@ func TestEnsureSoftnetSymlink(t *testing.T) {
 	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("not a symlink: %v %v", fi, err)
 	}
-	if _, err := ensureSoftnetSymlink(); err != nil {
+	if _, err := ensureSoftnetSymlink(identity.Prod); err != nil {
 		t.Fatalf("not idempotent: %v", err)
 	}
 }

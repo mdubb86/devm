@@ -9,16 +9,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 func TestEnsureProjectKeypair_GeneratesOnFirstCall(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	pub, err := EnsureProjectKeypair("myproj")
+	pub, err := EnsureProjectKeypair(identity.Prod, "myproj")
 	require.NoError(t, err)
 	require.NotEmpty(t, pub)
 
 	// Files exist with expected modes.
-	dir := ProjectDir("myproj")
+	dir := ProjectDir(identity.Prod, "myproj")
 	priv, err := os.Stat(filepath.Join(dir, "id_ed25519"))
 	require.NoError(t, err)
 	assert.EqualValues(t, 0o600, priv.Mode().Perm())
@@ -34,9 +36,9 @@ func TestEnsureProjectKeypair_GeneratesOnFirstCall(t *testing.T) {
 
 func TestEnsureProjectKeypair_IdempotentOnSecondCall(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	first, err := EnsureProjectKeypair("p")
+	first, err := EnsureProjectKeypair(identity.Prod, "p")
 	require.NoError(t, err)
-	second, err := EnsureProjectKeypair("p")
+	second, err := EnsureProjectKeypair(identity.Prod, "p")
 	require.NoError(t, err)
 	assert.Equal(t, string(first), string(second),
 		"second call must return the same pubkey — no regeneration")
@@ -44,13 +46,13 @@ func TestEnsureProjectKeypair_IdempotentOnSecondCall(t *testing.T) {
 
 func TestEnsureProjectHostKey_WritesKnownHostsLine(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	priv, pub, err := EnsureProjectHostKey("p")
+	priv, pub, err := EnsureProjectHostKey(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotEmpty(t, priv)
 	require.NotEmpty(t, pub)
 
 	// known_hosts is one line: "devm-<name> ssh-ed25519 <base64>"
-	kh, err := os.ReadFile(filepath.Join(ProjectDir("p"), "known_hosts"))
+	kh, err := os.ReadFile(filepath.Join(ProjectDir(identity.Prod, "p"), "known_hosts"))
 	require.NoError(t, err)
 	line := strings.TrimSpace(string(kh))
 	assert.True(t, strings.HasPrefix(line, "devm-p ssh-ed25519 "),
@@ -63,9 +65,9 @@ func TestEnsureProjectHostKey_WritesKnownHostsLine(t *testing.T) {
 
 func TestEnsureProjectHostKey_Idempotent(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	priv1, pub1, err := EnsureProjectHostKey("p")
+	priv1, pub1, err := EnsureProjectHostKey(identity.Prod, "p")
 	require.NoError(t, err)
-	priv2, pub2, err := EnsureProjectHostKey("p")
+	priv2, pub2, err := EnsureProjectHostKey(identity.Prod, "p")
 	require.NoError(t, err)
 	assert.Equal(t, priv1, priv2)
 	assert.Equal(t, pub1, pub2)
@@ -73,11 +75,11 @@ func TestEnsureProjectHostKey_Idempotent(t *testing.T) {
 
 func TestRemove_Idempotent(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	require.NoError(t, Remove("nope"))
-	_, err := EnsureProjectKeypair("p")
+	require.NoError(t, Remove(identity.Prod, "nope"))
+	_, err := EnsureProjectKeypair(identity.Prod, "p")
 	require.NoError(t, err)
-	require.NoError(t, Remove("p"))
-	_, err = os.Stat(ProjectDir("p"))
+	require.NoError(t, Remove(identity.Prod, "p"))
+	_, err = os.Stat(ProjectDir(identity.Prod, "p"))
 	assert.True(t, os.IsNotExist(err), "project dir must be gone after Remove")
 }
 
@@ -85,7 +87,7 @@ func TestEnsureProjectKeypair_RejectsPathTraversal(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
 	for _, id := range []string{"../evil", "foo/bar", "..", "foo\\bar"} {
 		t.Run(id, func(t *testing.T) {
-			_, err := EnsureProjectKeypair(id)
+			_, err := EnsureProjectKeypair(identity.Prod, id)
 			require.Error(t, err)
 		})
 	}
@@ -93,13 +95,13 @@ func TestEnsureProjectKeypair_RejectsPathTraversal(t *testing.T) {
 
 func TestEnsureProjectKeypair_RegeneratesIfPrivkeyMissing(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	first, err := EnsureProjectKeypair("p")
+	first, err := EnsureProjectKeypair(identity.Prod, "p")
 	require.NoError(t, err)
 
 	// Simulate loss of the privkey while the pubkey remains on disk.
-	require.NoError(t, os.Remove(filepath.Join(ProjectDir("p"), "id_ed25519")))
+	require.NoError(t, os.Remove(filepath.Join(ProjectDir(identity.Prod, "p"), "id_ed25519")))
 
-	second, err := EnsureProjectKeypair("p")
+	second, err := EnsureProjectKeypair(identity.Prod, "p")
 	require.NoError(t, err)
 	assert.NotEqual(t, string(first), string(second),
 		"must regenerate when privkey is missing, not return the stale pubkey")
@@ -107,14 +109,14 @@ func TestEnsureProjectKeypair_RegeneratesIfPrivkeyMissing(t *testing.T) {
 
 func TestEnsureProjectHostKey_RecreatesKnownHostsIfMissing(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
-	_, _, err := EnsureProjectHostKey("p")
+	_, _, err := EnsureProjectHostKey(identity.Prod, "p")
 	require.NoError(t, err)
 
 	// Simulate loss of the known_hosts file.
-	khPath := filepath.Join(ProjectDir("p"), "known_hosts")
+	khPath := filepath.Join(ProjectDir(identity.Prod, "p"), "known_hosts")
 	require.NoError(t, os.Remove(khPath))
 
-	_, _, err = EnsureProjectHostKey("p")
+	_, _, err = EnsureProjectHostKey(identity.Prod, "p")
 	require.NoError(t, err)
 
 	// Must be recreated with the correct content.

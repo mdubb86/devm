@@ -1,6 +1,10 @@
 package serviceapi
 
-import "context"
+import (
+	"context"
+
+	"github.com/mdubb86/devm/internal/identity"
+)
 
 // discoverSoftnet rehydrates softnetState after a daemon restart.
 // `tart run --net-softnet` setsid's the VM process (see
@@ -36,9 +40,9 @@ import "context"
 // policy can be), so this mainly rehydrates the daemon's in-memory view
 // and the port-claims registry pushExposeMap reconciles as a side
 // effect (see expose.go).
-func discoverSoftnet(ctx context.Context, ntpPort int) {
+func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
 	for _, id := range ironProxyState.keys() {
-		sock := SoftnetControlSock(id)
+		sock := SoftnetControlSock(cfg, id)
 		softnetState.put(id, sock)
 
 		info, ok := ironProxyState.get(id)
@@ -47,7 +51,7 @@ func discoverSoftnet(ctx context.Context, ntpPort int) {
 		}
 		go func(id, sock string, info projectInfo) {
 			_ = newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
-			if snap, err := ReadStateSnapshot(id); err == nil && snap != nil {
+			if snap, err := ReadStateSnapshot(cfg, id); err == nil && snap != nil {
 				_ = pushExposeMap(id, computeExposeMap(snap.Cfg, info.ProjectIP))
 			}
 		}(id, sock, info)

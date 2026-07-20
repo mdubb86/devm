@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/softnet"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -142,8 +143,8 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 // config lands on disk. Mitigated by file mode 0600 under the user's
 // runtime dir (~/Library/Application Support/devm/). Future improvement:
 // contribute stdin support upstream and switch.
-func SpawnIronProxy(ctx context.Context, sup *supervisor.Supervisor, projectID string, cfg IronProxyConfig, denials *Denials) error {
-	runDir, err := EnsureRuntimeDir()
+func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, projectID string, proxyCfg IronProxyConfig, denials *Denials) error {
+	runDir, err := EnsureRuntimeDir(cfg)
 	if err != nil {
 		return fmt.Errorf("runtime dir: %w", err)
 	}
@@ -151,17 +152,17 @@ func SpawnIronProxy(ctx context.Context, sup *supervisor.Supervisor, projectID s
 	if err != nil {
 		return fmt.Errorf("locate iron-proxy: %w", err)
 	}
-	blob, err := cfg.YAML()
+	blob, err := proxyCfg.YAML()
 	if err != nil {
 		return fmt.Errorf("encode config: %w", err)
 	}
-	configPath, err := writeIronProxyConfig(projectID, blob)
+	configPath, err := writeIronProxyConfig(cfg, projectID, blob)
 	if err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 
 	cmd := exec.CommandContext(ctx, binary, "-config", configPath)
-	cmd.Env = append(os.Environ(), cfg.EnvVars()...)
+	cmd.Env = append(os.Environ(), proxyCfg.EnvVars()...)
 	key := supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}
 	if denials != nil {
 		denials.Reset(projectID)
@@ -201,8 +202,8 @@ func secretEnvVarName(name string) string {
 // ironProxyState from the running iron-proxy's config file. Callers
 // don't need the file to exist; they get the expected location so
 // they can read it or bail on ENOENT.
-func IronProxyConfigPath(projectID string) (string, error) {
-	runDir, err := EnsureRuntimeDir()
+func IronProxyConfigPath(cfg identity.Config, projectID string) (string, error) {
+	runDir, err := EnsureRuntimeDir(cfg)
 	if err != nil {
 		return "", err
 	}
@@ -213,8 +214,8 @@ func IronProxyConfigPath(projectID string) (string, error) {
 // so the supervisor can re-spawn iron-proxy after a crash without re-running
 // the daemon's config-build path. Returns the absolute path. File is written
 // mode 0600 to limit exposure of the config contents.
-func writeIronProxyConfig(projectID string, blob []byte) (string, error) {
-	path, err := IronProxyConfigPath(projectID)
+func writeIronProxyConfig(cfg identity.Config, projectID string, blob []byte) (string, error) {
+	path, err := IronProxyConfigPath(cfg, projectID)
 	if err != nil {
 		return "", err
 	}

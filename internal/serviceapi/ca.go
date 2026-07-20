@@ -16,10 +16,11 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 const (
-	caRootCN      = "devm Local CA"
 	caRootLifeYrs = 10
 	caLeafDaysVal = 90 // leaf cert validity
 )
@@ -37,33 +38,32 @@ type CA struct {
 	cache map[string]*tls.Certificate
 }
 
-// LoadOrGenerate returns a CA backed by ~/Library/Application
-// Support/devm/ca/. Generates on first call; subsequent calls
-// reload the same root.
-func LoadOrGenerate() (*CA, error) {
-	dir, err := caStorageDir()
+// LoadOrGenerate returns a CA backed by cfg.RuntimeDir()/ca/.
+// Generates on first call; subsequent calls reload the same root.
+func LoadOrGenerate(cfg identity.Config) (*CA, error) {
+	dir, err := caStorageDir(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return loadOrGenerateCAAt(dir)
+	return loadOrGenerateCAAt(cfg, dir)
 }
 
-func caStorageDir() (string, error) {
-	dir, err := EnsureRuntimeDir()
+func caStorageDir(cfg identity.Config) (string, error) {
+	dir, err := EnsureRuntimeDir(cfg)
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "ca"), nil
 }
 
-func loadOrGenerateCAAt(dir string) (*CA, error) {
+func loadOrGenerateCAAt(cfg identity.Config, dir string) (*CA, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("create ca dir %s: %w", dir, err)
 	}
 	if ca, err := loadCA(dir); err == nil {
 		return ca, nil
 	}
-	return generateCA(dir)
+	return generateCA(dir, cfg.CACommonName())
 }
 
 func loadCA(dir string) (*CA, error) {
@@ -99,7 +99,7 @@ func loadCA(dir string) (*CA, error) {
 	}, nil
 }
 
-func generateCA(dir string) (*CA, error) {
+func generateCA(dir, commonName string) (*CA, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate ca key: %w", err)
@@ -108,7 +108,7 @@ func generateCA(dir string) (*CA, error) {
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(now.UnixNano()),
 		Subject: pkix.Name{
-			CommonName:   caRootCN,
+			CommonName:   commonName,
 			Organization: []string{"devm"},
 		},
 		NotBefore:             now,

@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"os"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -30,14 +31,14 @@ type ProxyHealth struct {
 // proxy was spawned from a version stamp that differs from the current
 // embedded binary; else OK. NeedsSecrets when there is drift AND the
 // project injects secrets (only the CLI can resolve those).
-func computeProxyHealth(sup *supervisor.Supervisor, projectID string) ProxyHealth {
-	snap, _ := ReadStateSnapshot(projectID)
+func computeProxyHealth(cfg identity.Config, sup *supervisor.Supervisor, projectID string) ProxyHealth {
+	snap, _ := ReadStateSnapshot(cfg, projectID)
 	needsSecrets := false
 	if snap != nil {
 		needsSecrets = cfgHasSecretRefs(snap.Cfg)
 	}
 	st := sup.Status(supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy})
-	cfgPath, _ := IronProxyConfigPath(projectID)
+	cfgPath, _ := IronProxyConfigPath(cfg, projectID)
 	_, cfgErr := os.Stat(cfgPath)
 	if !st.Present || !st.Running || cfgErr != nil {
 		return ProxyHealth{Status: ProxyMissing, NeedsSecrets: needsSecrets}

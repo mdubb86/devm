@@ -7,29 +7,31 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 func TestAllocateProjectIP_LowestFree_FromEmpty(t *testing.T) {
 	resetIronProxyState(t)
-	ip, err := AllocateProjectIP("myapp")
+	ip, err := AllocateProjectIP(identity.Prod, "myapp")
 	require.NoError(t, err)
 	assert.Equal(t, "127.42.0.1", ip)
 }
 
 func TestAllocateProjectIP_Idempotent(t *testing.T) {
 	resetIronProxyState(t)
-	first, err := AllocateProjectIP("myapp")
+	first, err := AllocateProjectIP(identity.Prod, "myapp")
 	require.NoError(t, err)
-	second, err := AllocateProjectIP("myapp")
+	second, err := AllocateProjectIP(identity.Prod, "myapp")
 	require.NoError(t, err)
 	assert.Equal(t, first, second, "idempotent — same projectID returns same IP")
 }
 
 func TestAllocateProjectIP_SkipsAssigned(t *testing.T) {
 	resetIronProxyState(t)
-	_, err := AllocateProjectIP("a")
+	_, err := AllocateProjectIP(identity.Prod, "a")
 	require.NoError(t, err)
-	ipB, err := AllocateProjectIP("b")
+	ipB, err := AllocateProjectIP(identity.Prod, "b")
 	require.NoError(t, err)
 	assert.Equal(t, "127.42.0.2", ipB)
 }
@@ -37,33 +39,33 @@ func TestAllocateProjectIP_SkipsAssigned(t *testing.T) {
 func TestAllocateProjectIP_PoolExhaustion(t *testing.T) {
 	resetIronProxyState(t)
 	for i := 1; i <= 20; i++ {
-		_, err := AllocateProjectIP(itoaSA(i))
+		_, err := AllocateProjectIP(identity.Prod, itoaSA(i))
 		require.NoError(t, err)
 	}
-	_, err := AllocateProjectIP("overflow")
+	_, err := AllocateProjectIP(identity.Prod, "overflow")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pool exhausted")
 }
 
 func TestReleaseProjectIP_FreesSlot(t *testing.T) {
 	resetIronProxyState(t)
-	_, err := AllocateProjectIP("a")
+	_, err := AllocateProjectIP(identity.Prod, "a")
 	require.NoError(t, err)
-	_, err = AllocateProjectIP("b")
+	_, err = AllocateProjectIP(identity.Prod, "b")
 	require.NoError(t, err)
-	ReleaseProjectIP("a")
-	ipC, err := AllocateProjectIP("c")
+	ReleaseProjectIP(identity.Prod, "a")
+	ipC, err := AllocateProjectIP(identity.Prod, "c")
 	require.NoError(t, err)
 	assert.Equal(t, "127.42.0.1", ipC, "c should reuse a's freed slot")
 }
 
 func TestReleaseProjectIP_Idempotent(t *testing.T) {
 	resetIronProxyState(t)
-	ReleaseProjectIP("nonexistent") // must not panic
-	_, err := AllocateProjectIP("a")
+	ReleaseProjectIP(identity.Prod, "nonexistent") // must not panic
+	_, err := AllocateProjectIP(identity.Prod, "a")
 	require.NoError(t, err)
-	ReleaseProjectIP("a")
-	ReleaseProjectIP("a")
+	ReleaseProjectIP(identity.Prod, "a")
+	ReleaseProjectIP(identity.Prod, "a")
 }
 
 // TestAllocateProjectIP_ConcurrentDistinct guards against the TOCTOU
@@ -82,7 +84,7 @@ func TestAllocateProjectIP_ConcurrentDistinct(t *testing.T) {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			ip, err := AllocateProjectIP(id)
+			ip, err := AllocateProjectIP(identity.Prod, id)
 			if err != nil {
 				errs <- err
 				return

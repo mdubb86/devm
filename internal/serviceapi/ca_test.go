@@ -10,15 +10,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 func TestCA_GenerateThenLoad_Roundtrip(t *testing.T) {
 	dir := t.TempDir()
-	ca1, err := loadOrGenerateCAAt(dir)
+	ca1, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 	assert.NotEmpty(t, ca1.RootPEM())
 
-	ca2, err := loadOrGenerateCAAt(dir)
+	ca2, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 	assert.Equal(t, ca1.RootPEM(), ca2.RootPEM(),
 		"second load must reuse the persisted root, not regenerate")
@@ -26,7 +28,7 @@ func TestCA_GenerateThenLoad_Roundtrip(t *testing.T) {
 
 func TestCA_SignLeaf_VerifiesAgainstRoot(t *testing.T) {
 	dir := t.TempDir()
-	ca, err := loadOrGenerateCAAt(dir)
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 
 	cert, err := ca.GetCertificate(&tls.ClientHelloInfo{ServerName: "app.test"})
@@ -50,7 +52,7 @@ func TestCA_SignLeaf_VerifiesAgainstRoot(t *testing.T) {
 
 func TestCA_GetCertificate_RequiresSNI(t *testing.T) {
 	dir := t.TempDir()
-	ca, err := loadOrGenerateCAAt(dir)
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 
 	_, err = ca.GetCertificate(&tls.ClientHelloInfo{ServerName: ""})
@@ -59,7 +61,7 @@ func TestCA_GetCertificate_RequiresSNI(t *testing.T) {
 
 func TestCA_LeafCache_ReusesSignedCert(t *testing.T) {
 	dir := t.TempDir()
-	ca, err := loadOrGenerateCAAt(dir)
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 
 	c1, err := ca.GetCertificate(&tls.ClientHelloInfo{ServerName: "app.test"})
@@ -72,7 +74,7 @@ func TestCA_LeafCache_ReusesSignedCert(t *testing.T) {
 
 func TestCA_RootKey_Persisted0600(t *testing.T) {
 	dir := t.TempDir()
-	_, err := loadOrGenerateCAAt(dir)
+	_, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 	info, err := os.Stat(filepath.Join(dir, "root.key"))
 	require.NoError(t, err)
@@ -81,7 +83,7 @@ func TestCA_RootKey_Persisted0600(t *testing.T) {
 
 func TestCA_RootCertValidity_IsTenYears(t *testing.T) {
 	dir := t.TempDir()
-	ca, err := loadOrGenerateCAAt(dir)
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 
 	expectedLifetime := 10 * 365 * 24 * time.Hour

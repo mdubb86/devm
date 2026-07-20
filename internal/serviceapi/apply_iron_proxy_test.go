@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -46,7 +47,7 @@ func fakeTartIPFails() *tart.Tart {
 // per-project path so /vm/apply-iron-proxy can pull ports out of it.
 func writePreExistingIronProxyConfig(t *testing.T, projectID, macHost string, httpPort, httpsPort, dnsPort int) {
 	t.Helper()
-	path, err := IronProxyConfigPath(projectID)
+	path, err := IronProxyConfigPath(identity.Prod, projectID)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	body := []byte(
@@ -61,9 +62,9 @@ func writePreExistingIronProxyConfig(t *testing.T, projectID, macHost string, ht
 
 func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	srv := NewServer(SocketPath(), Build{})
+	srv := NewServer(SocketPath(identity.Prod), Build{})
 	sup := supervisor.New("")
-	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
 
 	// Simulate cold-start (`devm start` / `devm shell`) having already
 	// seeded the snapshot with the real schema.Config — a prior
@@ -71,7 +72,7 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 	// been written yet (e.g. VM was stopped again before ever spawning
 	// iron-proxy).
 	seededCfg := schema.Config{Project: schema.Project{Name: "p"}}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: seededCfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: seededCfg}))
 
 	// No config file exists → VM has never started iron-proxy. Snapshot
 	// should still update; response signals no live apply.
@@ -94,7 +95,7 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 	// so the next /vm/start writes iron-proxy config from the current
 	// schema without re-detecting the same drift. The seeded Cfg must
 	// be preserved, not clobbered with a zero value.
-	snap, err := ReadStateSnapshot("p")
+	snap, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	assert.Equal(t, seededCfg, snap.Cfg, "cfg must be preserved, not zeroed")
@@ -110,9 +111,9 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 // must fail loud instead of fabricating a snapshot.
 func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	srv := NewServer(SocketPath(), Build{})
+	srv := NewServer(SocketPath(identity.Prod), Build{})
 	sup := supervisor.New("")
-	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
 
 	body, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      "never-started",
@@ -122,7 +123,7 @@ func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/apply-iron-proxy", bytes.NewReader(body)))
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 
-	snap, err := ReadStateSnapshot("never-started")
+	snap, err := ReadStateSnapshot(identity.Prod, "never-started")
 	require.NoError(t, err)
 	assert.Nil(t, snap, "no snapshot should be fabricated on this failure path")
 }
@@ -138,14 +139,14 @@ func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
 // injection seam with a stub that just opens the expected listener.
 func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	srv := NewServer(SocketPath(), Build{})
+	srv := NewServer(SocketPath(identity.Prod), Build{})
 	sup := supervisor.New(t.TempDir())
 
 	const projectID = "p-running"
 	// Simulate cold-start having already seeded the snapshot with the
 	// real schema.Config; apply-iron-proxy requires this to exist (F3).
 	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
-	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg}))
 
 	macHost := "127.0.0.1"
 	httpPort, err := pickPort()
@@ -185,14 +186,14 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ *supervisor.Supervisor, _ string, cfg IronProxyConfig, _ *Denials) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *Denials) error {
 		var lerr error
-		ln, lerr = net.Listen("tcp", cfg.HTTPSListen)
+		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
 		return lerr
 	}
 
-	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(projectID) })
-	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, fakeTartIP(t, "192.168.64.50"), nil)
+	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID) })
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIP(t, "192.168.64.50"), nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      projectID,
@@ -214,7 +215,7 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	assert.False(t, resp.Revived, "was already running, so this is not a revival")
 	assert.True(t, resp.VMRunning)
 
-	snap, err := ReadStateSnapshot(projectID)
+	snap, err := ReadStateSnapshot(identity.Prod, projectID)
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	require.Contains(t, snap.SecretHashes, "github_token")
@@ -235,14 +236,14 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 // all.
 func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	srv := NewServer(SocketPath(), Build{})
+	srv := NewServer(SocketPath(identity.Prod), Build{})
 	sup := supervisor.New(t.TempDir())
 
 	const projectID = "p-preserve-ip"
-	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(projectID) })
+	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID) })
 
 	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
-	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg, ProjectIP: "127.42.0.9"}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg, ProjectIP: "127.42.0.9"}))
 
 	macHost := "127.0.0.1"
 	httpPort, err := pickPort()
@@ -260,13 +261,13 @@ func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ *supervisor.Supervisor, _ string, cfg IronProxyConfig, _ *Denials) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *Denials) error {
 		var lerr error
-		ln, lerr = net.Listen("tcp", cfg.HTTPSListen)
+		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
 		return lerr
 	}
 
-	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      projectID,
@@ -295,13 +296,13 @@ func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 // cold-start.
 func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	srv := NewServer(SocketPath(), Build{})
+	srv := NewServer(SocketPath(identity.Prod), Build{})
 	sup := supervisor.New(t.TempDir())
 
 	const projectID = "p-adopt-in-place"
 	t.Cleanup(func() {
 		ironProxyState.del(projectID)
-		ReleaseProjectIP(projectID)
+		ReleaseProjectIP(identity.Prod, projectID)
 	})
 
 	seededCfg := schema.Config{
@@ -310,7 +311,7 @@ func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 			"db": {Port: 5432},
 		},
 	}
-	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{Cfg: seededCfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg}))
 
 	macHost := "127.0.0.1"
 	httpPort, err := pickPort()
@@ -328,13 +329,13 @@ func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ *supervisor.Supervisor, _ string, cfg IronProxyConfig, _ *Denials) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *Denials) error {
 		var lerr error
-		ln, lerr = net.Listen("tcp", cfg.HTTPSListen)
+		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
 		return lerr
 	}
 
-	RegisterApplyIronProxyHandler(srv, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      projectID,

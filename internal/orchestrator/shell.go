@@ -14,6 +14,7 @@ import (
 	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/provision"
 	"github.com/mdubb86/devm/internal/render"
@@ -115,7 +116,7 @@ type VMAdminClient interface {
 func DefaultShellDeps(repoRoot string) ShellDeps {
 	return ShellDeps{
 		Tart:             tart.New(),
-		ServiceAPIClient: serviceapi.NewClient(),
+		ServiceAPIClient: serviceapi.NewClient(identity.Prod),
 		UserSpawner:      &ExecSpawner{Interactive: true},
 	}
 }
@@ -294,11 +295,11 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "read CA root")
 	}
-	authPub, err := sshkeys.EnsureProjectKeypair(cfg.Project.Name)
+	authPub, err := sshkeys.EnsureProjectKeypair(identity.Prod, cfg.Project.Name)
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "ensure project ssh keypair")
 	}
-	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(cfg.Project.Name)
+	hostPriv, hostPub, err := sshkeys.EnsureProjectHostKey(identity.Prod, cfg.Project.Name)
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "ensure project ssh host key")
 	}
@@ -408,7 +409,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		ProjectIP:         projectIP,
 		WorkspaceHostPath: repoRoot,
 	}
-	if err := serviceapi.WriteStateSnapshot(cfg.Project.Name, snap); err != nil {
+	if err := serviceapi.WriteStateSnapshot(identity.Prod, cfg.Project.Name, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)
 	}
 
@@ -560,5 +561,5 @@ func waitVMReady(ctx context.Context, tr *tart.Tart, vmName string, timeout time
 // $DEVM_RUNTIME_DIR override so an e2e-sandboxed CLI reads the CA
 // from the same isolated dir the sandboxed daemon writes to.
 func caStorageDir() string {
-	return filepath.Join(serviceapi.RuntimeDir(), "ca")
+	return filepath.Join(serviceapi.RuntimeDir(identity.Prod), "ca")
 }

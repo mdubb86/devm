@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // softnetSockDir is a short, per-user location for control sockets — NOT
@@ -67,8 +69,8 @@ func ensureSoftnetSockDir(dir string) error {
 // re-running the ownership/mode check — /vm/start is the one caller that
 // creates and validates softnetSockDir, via ensureSoftnetSockDir, before
 // spawning softnet.
-func SoftnetControlSock(projectID string) string {
-	sum := sha256.Sum256([]byte(RuntimeDir() + "\x00" + projectID))
+func SoftnetControlSock(cfg identity.Config, projectID string) string {
+	sum := sha256.Sum256([]byte(RuntimeDir(cfg) + "\x00" + projectID))
 	return filepath.Join(softnetSockDir(), hex.EncodeToString(sum[:])[:20]+".sock")
 }
 
@@ -80,13 +82,13 @@ func SoftnetControlSock(projectID string) string {
 // safe to call on every launch, and re-points the link if it's stale
 // (e.g. the devm binary moved after an upgrade). Returns binDir so
 // the caller can prepend it to the tart child's $PATH.
-func ensureSoftnetSymlink() (binDir string, err error) {
+func ensureSoftnetSymlink(cfg identity.Config) (binDir string, err error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("resolve devm executable: %w", err)
 	}
 
-	binDir = filepath.Join(RuntimeDir(), "softnet-bin")
+	binDir = filepath.Join(RuntimeDir(cfg), "softnet-bin")
 	if err := os.MkdirAll(binDir, 0700); err != nil {
 		return "", fmt.Errorf("create softnet bin dir: %w", err)
 	}

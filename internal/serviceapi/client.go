@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // Client talks to the devm service over its Unix domain socket.
@@ -17,8 +19,9 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// NewClient returns a Client targeting the default SocketPath().
-func NewClient() *Client { return NewClientWithSocket(SocketPath()) }
+// NewClient returns a Client targeting cfg.SocketPath() (honoring the
+// legacy $DEVM_RUNTIME_DIR override — see SocketPath).
+func NewClient(cfg identity.Config) *Client { return NewClientWithSocket(SocketPath(cfg)) }
 
 // NewClientWithSocket returns a Client targeting the given socket.
 // Tests use this with a temp socket.

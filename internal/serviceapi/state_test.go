@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,8 +16,8 @@ func TestWriteRead_RoundTrip(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "myproj"},
 	}
-	require.NoError(t, WriteStateSnapshot("myproj", StateSnapshot{Cfg: cfg}))
-	got, err := ReadStateSnapshot("myproj")
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "myproj", StateSnapshot{Cfg: cfg}))
+	got, err := ReadStateSnapshot(identity.Prod, "myproj")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, cfg.Project.Name, got.Cfg.Project.Name)
@@ -25,7 +26,7 @@ func TestWriteRead_RoundTrip(t *testing.T) {
 
 func TestReadStateSnapshot_Missing_ReturnsNilNil(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	got, err := ReadStateSnapshot("absent")
+	got, err := ReadStateSnapshot(identity.Prod, "absent")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
@@ -35,9 +36,9 @@ func TestReadStateSnapshot_Malformed_ReturnsNilNil(t *testing.T) {
 	// back to a full diff. Callers that log this get to notice; the
 	// hot path stays reliable.
 	t.Setenv("HOME", t.TempDir())
-	require.NoError(t, os.MkdirAll(StateDir(), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(StateDir(), "junk.json"), []byte("{oh no"), 0o600))
-	got, err := ReadStateSnapshot("junk")
+	require.NoError(t, os.MkdirAll(StateDir(identity.Prod), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(StateDir(identity.Prod), "junk.json"), []byte("{oh no"), 0o600))
+	got, err := ReadStateSnapshot(identity.Prod, "junk")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
@@ -45,12 +46,12 @@ func TestReadStateSnapshot_Malformed_ReturnsNilNil(t *testing.T) {
 func TestRemoveStateCfg_Idempotent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	// Remove of missing is not an error.
-	require.NoError(t, RemoveStateCfg("nope"))
-	require.NoError(t, WriteStateSnapshot("x", StateSnapshot{
+	require.NoError(t, RemoveStateCfg(identity.Prod, "nope"))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "x", StateSnapshot{
 		Cfg: schema.Config{Project: schema.Project{Name: "x"}},
 	}))
-	require.NoError(t, RemoveStateCfg("x"))
-	got, err := ReadStateSnapshot("x")
+	require.NoError(t, RemoveStateCfg(identity.Prod, "x"))
+	got, err := ReadStateSnapshot(identity.Prod, "x")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
@@ -63,9 +64,9 @@ func TestWriteStateSnapshot_Atomic(t *testing.T) {
 	// the final "<project-id>.json".
 	t.Setenv("HOME", t.TempDir())
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: cfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
 
-	entries, err := os.ReadDir(StateDir())
+	entries, err := os.ReadDir(StateDir(identity.Prod))
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "expected exactly one file in state dir, got: %v", names(entries))
 	assert.Equal(t, "p.json", entries[0].Name(),
@@ -76,10 +77,10 @@ func TestState_RejectsPathTraversal(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	for _, id := range []string{"../evil", "foo/bar", "..", "foo\\bar"} {
 		t.Run(id, func(t *testing.T) {
-			require.Error(t, WriteStateSnapshot(id, StateSnapshot{}))
-			_, err := ReadStateSnapshot(id)
+			require.Error(t, WriteStateSnapshot(identity.Prod, id, StateSnapshot{}))
+			_, err := ReadStateSnapshot(identity.Prod, id)
 			require.Error(t, err)
-			require.Error(t, RemoveStateCfg(id))
+			require.Error(t, RemoveStateCfg(identity.Prod, id))
 		})
 	}
 }
@@ -91,9 +92,9 @@ func TestStateSnapshot_SecretHashesRoundtrip(t *testing.T) {
 		Cfg:          schema.Config{Project: schema.Project{Name: "p"}},
 		SecretHashes: map[string]string{"TOK": "abc123"},
 	}
-	require.NoError(t, WriteStateSnapshot("p", snap))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", snap))
 
-	read, err := ReadStateSnapshot("p")
+	read, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, read)
 	assert.Equal(t, "abc123", read.SecretHashes["TOK"])
@@ -102,8 +103,8 @@ func TestStateSnapshot_SecretHashesRoundtrip(t *testing.T) {
 func TestStateSnapshotProxyVersionRoundTrips(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	want := StateSnapshot{Cfg: schema.Config{Project: schema.Project{Name: "p"}}, ProxyVersion: "abc123"}
-	require.NoError(t, WriteStateSnapshot("p", want))
-	got, err := ReadStateSnapshot("p")
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", want))
+	got, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Equal(t, "abc123", got.ProxyVersion)
@@ -112,8 +113,8 @@ func TestStateSnapshotProxyVersionRoundTrips(t *testing.T) {
 func TestStateSnapshotWorkspaceHostPathRoundTrips(t *testing.T) {
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	want := StateSnapshot{Cfg: schema.Config{Project: schema.Project{Name: "p"}}, WorkspaceHostPath: "/Users/dev/myproj"}
-	require.NoError(t, WriteStateSnapshot("p", want))
-	got, err := ReadStateSnapshot("p")
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", want))
+	got, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Equal(t, "/Users/dev/myproj", got.WorkspaceHostPath)

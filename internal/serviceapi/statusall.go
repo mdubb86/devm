@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -24,9 +25,9 @@ type ProjectStatus struct {
 // RegisterStatusAllHandler wires GET /status/all. sup is queried for
 // each project's iron-proxy health; tr supplies the running-VM set.
 // Purely a read-only report — it never spawns anything.
-func RegisterStatusAllHandler(s *Server, sup *supervisor.Supervisor, tr TartLister) {
+func RegisterStatusAllHandler(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr TartLister) {
 	s.Register("/status/all", func(w http.ResponseWriter, r *http.Request) {
-		out, err := listProjectStatuses(r.Context(), sup, tr)
+		out, err := listProjectStatuses(r.Context(), cfg, sup, tr)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -39,7 +40,7 @@ func RegisterStatusAllHandler(s *Server, sup *supervisor.Supervisor, tr TartList
 // listProjectStatuses enumerates every persisted StateSnapshot in
 // StateDir(), joins each against the running-VM set from tr.List, and
 // computes iron-proxy health per project.
-func listProjectStatuses(ctx context.Context, sup *supervisor.Supervisor, tr TartLister) ([]ProjectStatus, error) {
+func listProjectStatuses(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, tr TartLister) ([]ProjectStatus, error) {
 	vms, err := tr.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("tart list: %w", err)
@@ -51,7 +52,7 @@ func listProjectStatuses(ctx context.Context, sup *supervisor.Supervisor, tr Tar
 		}
 	}
 
-	entries, err := os.ReadDir(StateDir())
+	entries, err := os.ReadDir(StateDir(cfg))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []ProjectStatus{}, nil
@@ -67,14 +68,14 @@ func listProjectStatuses(ctx context.Context, sup *supervisor.Supervisor, tr Tar
 		}
 		projectID := strings.TrimSuffix(name, ".json")
 
-		snap, err := ReadStateSnapshot(projectID)
+		snap, err := ReadStateSnapshot(cfg, projectID)
 		if err != nil || snap == nil {
 			continue
 		}
 		out = append(out, ProjectStatus{
 			Name:      projectID,
 			VMRunning: running[projectID],
-			Proxy:     computeProxyHealth(sup, projectID),
+			Proxy:     computeProxyHealth(cfg, sup, projectID),
 		})
 	}
 	return out, nil

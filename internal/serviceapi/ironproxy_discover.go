@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/mdubb86/devm/internal/debuglog"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -43,8 +44,8 @@ type DiscoveredIronProxy struct {
 //
 // Matching is intentionally strict: the command must start with the
 // canonical iron-proxy binary path. We never adopt unrelated processes.
-func DiscoverIronProxies(ctx context.Context) ([]DiscoveredIronProxy, error) {
-	runDir, err := EnsureRuntimeDir()
+func DiscoverIronProxies(ctx context.Context, cfg identity.Config) ([]DiscoveredIronProxy, error) {
+	runDir, err := EnsureRuntimeDir(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("runtime dir: %w", err)
 	}
@@ -83,14 +84,14 @@ func DiscoverIronProxies(ctx context.Context) ([]DiscoveredIronProxy, error) {
 // — all of that is in-memory-only and otherwise lost on daemon
 // restart, breaking ingress/DNS for a VM that's still running under an
 // orphaned iron-proxy.
-func AdoptIronProxies(ctx context.Context, sup *supervisor.Supervisor, tr *tart.Tart, routes *Routes) error {
-	procs, err := DiscoverIronProxies(ctx)
+func AdoptIronProxies(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, routes *Routes) error {
+	procs, err := DiscoverIronProxies(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	for _, p := range procs {
 		sup.Adopt(supervisor.Key{ProjectID: p.ProjectID, Role: supervisor.RoleProxy}, p.PID)
-		path, err := IronProxyConfigPath(p.ProjectID)
+		path, err := IronProxyConfigPath(cfg, p.ProjectID)
 		if err != nil {
 			continue
 		}
@@ -99,7 +100,7 @@ func AdoptIronProxies(ctx context.Context, sup *supervisor.Supervisor, tr *tart.
 			continue
 		}
 		ironProxyState.put(p.ProjectID, info)
-		recoverProjectState(ctx, tr, routes, p.ProjectID)
+		recoverProjectState(ctx, cfg, tr, routes, p.ProjectID)
 	}
 	return nil
 }
@@ -120,8 +121,8 @@ func AdoptIronProxies(ctx context.Context, sup *supervisor.Supervisor, tr *tart.
 // the CLI (`devm shell` auto-apply, `devm reconcile`); rebuilding them
 // here is out of scope for this recovery path — see buildRoutes in
 // cmd/devm/route.go for how the CLI constructs the full set.
-func recoverProjectState(ctx context.Context, tr *tart.Tart, routes *Routes, projectID string) {
-	snap, err := ReadStateSnapshot(projectID)
+func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart, routes *Routes, projectID string) {
+	snap, err := ReadStateSnapshot(cfg, projectID)
 	if err != nil || snap == nil {
 		return
 	}

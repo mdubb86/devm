@@ -3,15 +3,13 @@ package serviceapi
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
-// ResolverFilePath is where macOS reads per-TLD forwarding rules
-// for *.test. Owned by root; reading is unprivileged but writing
-// requires sudo.
-const ResolverFilePath = "/etc/resolver/test"
-
-// ResolverFileState classifies what's currently at ResolverFilePath.
+// ResolverFileState classifies what's currently at cfg.ResolverFilePath.
 type ResolverFileState int
 
 const (
@@ -20,20 +18,23 @@ const (
 	ResolverFileDiverged                          // file exists but differs
 )
 
-// CanonicalResolverContents is exactly what we write. Bytes matter:
-// CheckResolverFile uses byte-equality. Exported so cmd/devm/service.go
-// can include it in the consolidated install shell script.
-func CanonicalResolverContents() string {
-	return "nameserver 127.0.0.1\nport 51153\n"
+// CanonicalResolverContents returns the resolver-file bytes for a
+// given DNS bind address. Bytes matter: CheckResolverFile uses
+// byte-equality. Primitive: takes the value it needs, not the whole
+// Config. Exported so cmd/devm/service.go can include it in the
+// consolidated install shell script.
+func CanonicalResolverContents(dnsBindAddr string) string {
+	host, port, _ := net.SplitHostPort(dnsBindAddr)
+	return "nameserver " + host + "\nport " + port + "\n"
 }
 
-// CheckResolverFile reads ResolverFilePath (no sudo needed) and
+// CheckResolverFile reads cfg.ResolverFilePath (no sudo needed) and
 // reports its state.
-func CheckResolverFile() (ResolverFileState, error) {
-	return checkResolverFileAt(ResolverFilePath)
+func CheckResolverFile(cfg identity.Config) (ResolverFileState, error) {
+	return checkResolverFileAt(cfg, cfg.ResolverFilePath)
 }
 
-func checkResolverFileAt(path string) (ResolverFileState, error) {
+func checkResolverFileAt(cfg identity.Config, path string) (ResolverFileState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -41,7 +42,7 @@ func checkResolverFileAt(path string) (ResolverFileState, error) {
 		}
 		return 0, fmt.Errorf("read %s: %w", path, err)
 	}
-	if string(data) == CanonicalResolverContents() {
+	if string(data) == CanonicalResolverContents(cfg.DNSBindAddr) {
 		return ResolverFileMatches, nil
 	}
 	return ResolverFileDiverged, nil

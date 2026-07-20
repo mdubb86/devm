@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
@@ -66,7 +67,7 @@ func ProbeDaemon(ctx context.Context, cliFingerprint string) DaemonStatus {
 	// fast fail when it's down.
 	healthCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	c := serviceapi.NewClient()
+	c := serviceapi.NewClient(identity.Prod)
 	if err := c.Health(healthCtx); err == nil {
 		st.Running = true
 		// Ask the running daemon for its Fingerprint via /version.

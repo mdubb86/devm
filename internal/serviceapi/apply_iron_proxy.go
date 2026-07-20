@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/debuglog"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -74,7 +75,7 @@ const (
 // health, or persisting the snapshot returns 500 and leaves the
 // snapshot untouched (except the two success/no-op paths, which
 // deliberately advance SecretHashes).
-func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials) {
+func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *ProjectLocks, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials) {
 	s.Register("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -98,7 +99,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// Read the existing iron-proxy config for ports + MAC_HOST. The
 		// dnsmasq inside the guest is already pointing at these ports;
 		// we must preserve them or DNS silently breaks.
-		cfgPath, err := IronProxyConfigPath(req.Name)
+		cfgPath, err := IronProxyConfigPath(cfg, req.Name)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("resolve config path: %v", err), http.StatusInternalServerError)
 			return
@@ -111,7 +112,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 				// but SecretHashes still needs to move forward so the
 				// next /vm/start renders iron-proxy config from the
 				// current schema without re-detecting this same drift.
-				if err := updateSnapshotAfterSpawn(req.Name, hashes, false); err != nil {
+				if err := updateSnapshotAfterSpawn(cfg, req.Name, hashes, false); err != nil {
 					http.Error(w, fmt.Sprintf("update snapshot: %v", err), http.StatusInternalServerError)
 					return
 				}
@@ -122,7 +123,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			return
 		}
 
-		caDir, err := EnsureRuntimeDir()
+		caDir, err := EnsureRuntimeDir(cfg)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -161,7 +162,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			}
 		}
 
-		if err := spawnIronProxyFn(r.Context(), sup, req.Name, newCfg, denials); err != nil {
+		if err := spawnIronProxyFn(r.Context(), cfg, sup, req.Name, newCfg, denials); err != nil {
 			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -173,7 +174,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			return
 		}
 
-		if err := updateSnapshotAfterSpawn(req.Name, hashes, true); err != nil {
+		if err := updateSnapshotAfterSpawn(cfg, req.Name, hashes, true); err != nil {
 			http.Error(w, fmt.Sprintf("update snapshot: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -194,7 +195,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// it back to empty even though AllocateProjectIP (below) treats
 		// the in-memory registry as the idempotency source of truth.
 		info.ProjectIP = existing.ProjectIP
-		snap, _ := ReadStateSnapshot(req.Name)
+		snap, _ := ReadStateSnapshot(cfg, req.Name)
 		ironProxyState.put(req.Name, info)
 
 		// Adopt-in-place (internal/orchestrator/shell.go's "pristine:
@@ -207,7 +208,7 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// adopted VM converges to the same ingress state as a cold
 		// start, instead of staying unreachable until an explicit stop +
 		// restart.
-		projectIP, err := AllocateProjectIP(req.Name)
+		projectIP, err := AllocateProjectIP(cfg, req.Name)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("allocate project ip: %v", err), http.StatusInternalServerError)
 			return
@@ -291,8 +292,8 @@ func secretHashesFromBindings(bindings []SecretBinding) map[string]string {
 // eventual cold-start cfg look like a pending change on the next
 // reconcile — a teardown-required storm. Fail loud instead and leave
 // the (nonexistent) snapshot untouched.
-func updateSnapshotAfterSpawn(projectID string, hashes map[string]string, stampVersion bool) error {
-	snap, err := ReadStateSnapshot(projectID)
+func updateSnapshotAfterSpawn(cfg identity.Config, projectID string, hashes map[string]string, stampVersion bool) error {
+	snap, err := ReadStateSnapshot(cfg, projectID)
 	if err != nil {
 		return err
 	}
@@ -303,7 +304,7 @@ func updateSnapshotAfterSpawn(projectID string, hashes map[string]string, stampV
 	if stampVersion {
 		snap.ProxyVersion = ironproxy.EmbeddedSha256()
 	}
-	return WriteStateSnapshot(projectID, *snap)
+	return WriteStateSnapshot(cfg, projectID, *snap)
 }
 
 // writeJSON writes body as JSON with 200 OK.

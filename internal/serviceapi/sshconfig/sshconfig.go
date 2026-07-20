@@ -15,6 +15,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 )
@@ -59,8 +60,8 @@ const blockTmpl = `Host devm-{{.Name}}
 `
 
 // Path returns the absolute path devm writes to.
-func Path() string {
-	return filepath.Join(serviceapi.RuntimeDir(), "ssh_config")
+func Path(cfg identity.Config) string {
+	return filepath.Join(serviceapi.RuntimeDir(cfg), "ssh_config")
 }
 
 // validateEntry rejects unsafe Name values to prevent ssh_config
@@ -81,10 +82,10 @@ func validateEntry(e Entry) error {
 
 // Emit atomically replaces the ssh_config file with header + one block
 // per entry (sorted by Name ascending).
-func Emit(entries []Entry) error {
+func Emit(cfg identity.Config, entries []Entry) error {
 	filled := make([]Entry, len(entries))
 	for i, e := range entries {
-		dir := sshkeys.ProjectDir(e.Name)
+		dir := sshkeys.ProjectDir(cfg, e.Name)
 		e.KeyPath = filepath.Join(dir, "id_ed25519")
 		e.KnownHostsPath = filepath.Join(dir, "known_hosts")
 		filled[i] = e
@@ -95,7 +96,7 @@ func Emit(entries []Entry) error {
 		return err
 	}
 
-	dir := serviceapi.RuntimeDir()
+	dir := serviceapi.RuntimeDir(cfg)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
@@ -118,7 +119,7 @@ func Emit(entries []Entry) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	return os.Rename(tmpPath, Path())
+	return os.Rename(tmpPath, Path(cfg))
 }
 
 // emit is the pure rendering core: header + one validated, sorted block

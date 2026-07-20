@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // dnsResolver is the small surface of net.Resolver that
@@ -13,31 +15,34 @@ type dnsResolver interface {
 }
 
 // dnsProbeName is the synthetic name we resolve to verify that
-// *.test resolution actually works through the system. The .test
-// TLD is reserved (RFC 6761) so this name is safe to use without
-// risk of accidental collision.
-const dnsProbeName = "devm-health-check.test"
+// *.<TLD> resolution actually works through the system. The .test /
+// .e2e.test TLDs are reserved (RFC 6761's .test) so this name is safe
+// to use without risk of accidental collision.
+func dnsProbeName(cfg identity.Config) string {
+	return "devm-health-check." + cfg.TLD
+}
 
-// CheckDNSHealth verifies that *.test queries return 127.0.0.1 via
+// CheckDNSHealth verifies that *.<TLD> queries return 127.0.0.1 via
 // the system resolver. Returns nil on success.
 //
 // Distinct from CheckResolverFile: the file can exist while the
 // daemon is down (port closed) or pointed at a different port.
 // Resolving an actual name catches both cases plus any other
 // breakage in the resolver chain.
-func CheckDNSHealth(ctx context.Context) error {
-	return checkDNSHealthWith(ctx, net.DefaultResolver)
+func CheckDNSHealth(ctx context.Context, cfg identity.Config) error {
+	return checkDNSHealthWith(ctx, cfg, net.DefaultResolver)
 }
 
-func checkDNSHealthWith(ctx context.Context, r dnsResolver) error {
-	ips, err := r.LookupIP(ctx, "ip4", dnsProbeName)
+func checkDNSHealthWith(ctx context.Context, cfg identity.Config, r dnsResolver) error {
+	name := dnsProbeName(cfg)
+	ips, err := r.LookupIP(ctx, "ip4", name)
 	if err != nil {
-		return fmt.Errorf("resolving %s: %w", dnsProbeName, err)
+		return fmt.Errorf("resolving %s: %w", name, err)
 	}
 	for _, ip := range ips {
 		if ip.Equal(net.IPv4(127, 0, 0, 1)) {
 			return nil
 		}
 	}
-	return fmt.Errorf("expected %s to resolve to 127.0.0.1, got %v", dnsProbeName, ips)
+	return fmt.Errorf("expected %s to resolve to 127.0.0.1, got %v", name, ips)
 }

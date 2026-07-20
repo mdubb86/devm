@@ -15,14 +15,15 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 // ProjectDir returns the per-project ssh state directory. Callers use
 // this to compute paths for the ssh_config emitter (IdentityFile,
 // UserKnownHostsFile).
-func ProjectDir(projectID string) string {
-	return filepath.Join(serviceapi.RuntimeDir(), "ssh", "projects", projectID)
+func ProjectDir(cfg identity.Config, projectID string) string {
+	return filepath.Join(serviceapi.RuntimeDir(cfg), "ssh", "projects", projectID)
 }
 
 // EnsureProjectKeypair returns the client keypair pubkey for projectID,
@@ -30,11 +31,11 @@ func ProjectDir(projectID string) string {
 // same on-disk pubkey without regenerating.
 //
 // Writes id_ed25519 (0600) and id_ed25519.pub (0644).
-func EnsureProjectKeypair(projectID string) ([]byte, error) {
+func EnsureProjectKeypair(cfg identity.Config, projectID string) ([]byte, error) {
 	if err := validProjectID(projectID); err != nil {
 		return nil, err
 	}
-	dir := ProjectDir(projectID)
+	dir := ProjectDir(cfg, projectID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
@@ -64,14 +65,14 @@ func EnsureProjectKeypair(projectID string) ([]byte, error) {
 //
 // Writes ssh_host_ed25519_key (0600), ssh_host_ed25519_key.pub (0644),
 // and known_hosts (0644, one line).
-func EnsureProjectHostKey(name string) (priv, pub []byte, err error) {
+func EnsureProjectHostKey(cfg identity.Config, name string) (priv, pub []byte, err error) {
 	if err := validProjectID(name); err != nil {
 		return nil, nil, err
 	}
 	if strings.ContainsAny(name, " \t\n\r") {
 		return nil, nil, fmt.Errorf("name %q: whitespace not allowed", name)
 	}
-	dir := ProjectDir(name)
+	dir := ProjectDir(cfg, name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
@@ -110,11 +111,11 @@ func EnsureProjectHostKey(name string) (priv, pub []byte, err error) {
 }
 
 // Remove wipes the project's ssh subtree. Idempotent.
-func Remove(projectID string) error {
+func Remove(cfg identity.Config, projectID string) error {
 	if err := validProjectID(projectID); err != nil {
 		return err
 	}
-	return os.RemoveAll(ProjectDir(projectID))
+	return os.RemoveAll(ProjectDir(cfg, projectID))
 }
 
 // generateEd25519Pair returns (openssh-authorized-key-format pubkey,

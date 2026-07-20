@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -253,7 +254,7 @@ func TestVMStop_UnlocksConfig_FromSnapshotFallback(t *testing.T) {
 	require.NoError(t, lockConfigFiles(repoRoot))
 	// Deliberately no configLockState.put — simulates a daemon restart
 	// that hasn't re-adopted this project yet.
-	require.NoError(t, WriteStateSnapshot(name, StateSnapshot{
+	require.NoError(t, WriteStateSnapshot(identity.Prod, name, StateSnapshot{
 		Cfg:               schema.Config{Project: schema.Project{Name: name}},
 		WorkspaceHostPath: repoRoot,
 	}))
@@ -286,13 +287,13 @@ func TestRecoverProjectState_RelocksConfig_WhenEnabled(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgPath, []byte("project:\n  name: p\n"), 0o644))
 	t.Cleanup(func() { _ = unlockConfigFiles(repoRoot) })
 
-	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
 		Cfg:               schema.Config{Project: schema.Project{Name: projectID}},
 		WorkspaceHostPath: repoRoot,
 	}))
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), tart.New(), routes, projectID)
+	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
 
 	assert.True(t, isImmutable(t, cfgPath), "recoverProjectState must re-lock a recovered running project's devm.yaml")
 	entry, ok := configLockState.get(projectID)
@@ -317,13 +318,13 @@ func TestRecoverProjectState_DoesNotRelock_WhenDisabled(t *testing.T) {
 	t.Cleanup(func() { _ = unlockConfigFiles(repoRoot) })
 
 	disabled := false
-	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
 		Cfg:               schema.Config{Project: schema.Project{Name: projectID}, ConfigLock: &disabled},
 		WorkspaceHostPath: repoRoot,
 	}))
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), tart.New(), routes, projectID)
+	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
 
 	assert.False(t, isImmutable(t, cfgPath), "config_lock:false must not be re-locked on adopt")
 	_, ok := configLockState.get(projectID)

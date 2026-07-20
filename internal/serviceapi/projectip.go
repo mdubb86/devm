@@ -3,13 +3,14 @@ package serviceapi
 import (
 	"fmt"
 	"sync"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
-const (
-	projectIPPoolStart = 1
-	projectIPPoolEnd   = 20
-	projectIPPoolFmt   = "127.42.0.%d"
-)
+// projectIPPoolFmt is the lo0 alias address format. Hardcoded — it's
+// a devm-wide convention, not per-profile identity like the pool
+// bounds (cfg.PoolStart / cfg.PoolEnd).
+const projectIPPoolFmt = "127.42.0.%d"
 
 // allocMu serializes the read-state/decide/write critical section of
 // AllocateProjectIP and ReleaseProjectIP against each other. Without
@@ -21,24 +22,24 @@ const (
 var allocMu sync.Mutex
 
 // AllocateProjectIP returns projectID's existing ProjectIP if it has
-// one; otherwise picks the lowest-free address from 127.42.0.1..20,
+// one; otherwise picks the lowest-free address from cfg's alias pool,
 // records it in ironProxyState and StateSnapshot, and returns it.
-// Fails when the pool is exhausted (20 concurrent projects).
-func AllocateProjectIP(projectID string) (string, error) {
+// Fails when the pool is exhausted.
+func AllocateProjectIP(cfg identity.Config, projectID string) (string, error) {
 	allocMu.Lock()
 	defer allocMu.Unlock()
 	if existing, ok := ironProxyState.get(projectID); ok && existing.ProjectIP != "" {
 		return existing.ProjectIP, nil
 	}
 	// Collect in-use IPs from all currently-tracked projects.
-	inUse := make(map[string]bool, projectIPPoolEnd)
+	inUse := make(map[string]bool, cfg.PoolEnd)
 	for _, id := range ironProxyState.keys() {
 		info, ok := ironProxyState.get(id)
 		if ok && info.ProjectIP != "" {
 			inUse[info.ProjectIP] = true
 		}
 	}
-	for n := projectIPPoolStart; n <= projectIPPoolEnd; n++ {
+	for n := cfg.PoolStart; n <= cfg.PoolEnd; n++ {
 		ip := fmt.Sprintf(projectIPPoolFmt, n)
 		if inUse[ip] {
 			continue
@@ -48,18 +49,18 @@ func AllocateProjectIP(projectID string) (string, error) {
 		info.ProjectIP = ip
 		ironProxyState.put(projectID, info)
 		// Mirror to StateSnapshot.
-		if snap, err := ReadStateSnapshot(projectID); err == nil && snap != nil {
+		if snap, err := ReadStateSnapshot(cfg, projectID); err == nil && snap != nil {
 			snap.ProjectIP = ip
-			_ = WriteStateSnapshot(projectID, *snap)
+			_ = WriteStateSnapshot(cfg, projectID, *snap)
 		}
 		return ip, nil
 	}
-	return "", fmt.Errorf("project IP pool exhausted (20 concurrent projects): free a slot with `devm stop`")
+	return "", fmt.Errorf("project IP pool exhausted (%d concurrent projects): free a slot with `devm stop`", cfg.PoolEnd-cfg.PoolStart+1)
 }
 
 // ReleaseProjectIP clears projectID's ProjectIP from both projectInfo
 // and StateSnapshot. Idempotent — call at /vm/stop.
-func ReleaseProjectIP(projectID string) {
+func ReleaseProjectIP(cfg identity.Config, projectID string) {
 	allocMu.Lock()
 	defer allocMu.Unlock()
 	info, ok := ironProxyState.get(projectID)
@@ -67,10 +68,10 @@ func ReleaseProjectIP(projectID string) {
 		info.ProjectIP = ""
 		ironProxyState.put(projectID, info)
 	}
-	if snap, err := ReadStateSnapshot(projectID); err == nil && snap != nil {
+	if snap, err := ReadStateSnapshot(cfg, projectID); err == nil && snap != nil {
 		if snap.ProjectIP != "" {
 			snap.ProjectIP = ""
-			_ = WriteStateSnapshot(projectID, *snap)
+			_ = WriteStateSnapshot(cfg, projectID, *snap)
 		}
 	}
 }

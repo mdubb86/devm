@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -49,7 +50,7 @@ func (f *fakeTartList) List(ctx context.Context) ([]tart.VM, error) {
 
 // startReconcileDaemon spins up a real serviceapi.Server with the
 // /vm/reconcile handler registered on a temp Unix socket, and points
-// HOME at a temp dir so serviceapi.SocketPath() (and therefore
+// HOME at a temp dir so serviceapi.SocketPath(identity.Prod) (and therefore
 // serviceapi.NewClient(), which RunReconcile calls internally) resolves
 // to it. Returns a cleanup func.
 func startReconcileDaemon(t *testing.T) func() {
@@ -70,13 +71,13 @@ func startReconcileDaemon(t *testing.T) func() {
 	caCert := filepath.Join(caDir, "root.crt")
 	require.NoError(t, os.WriteFile(caCert, []byte("-----BEGIN CERTIFICATE-----\nDUMMY\n-----END CERTIFICATE-----\n"), 0o644))
 
-	_, err = serviceapi.EnsureRuntimeDir()
+	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
 	require.NoError(t, err)
-	socket := serviceapi.SocketPath()
+	socket := serviceapi.SocketPath(identity.Prod)
 
 	sup := healthyIronProxySupervisor(t, "x")
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterReconcileHandler(srv, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: true, vmName: "x"}, sup)
+	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: true, vmName: "x"}, sup)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -106,7 +107,7 @@ func healthyIronProxySupervisor(t *testing.T, projectID string) *supervisor.Supe
 	t.Helper()
 	sup := supervisor.New("")
 	sup.Adopt(supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}, os.Getpid())
-	cfgPath, err := serviceapi.IronProxyConfigPath(projectID)
+	cfgPath, err := serviceapi.IronProxyConfigPath(identity.Prod, projectID)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(cfgPath), 0o755))
 	require.NoError(t, os.WriteFile(cfgPath, []byte("stub\n"), 0o600))
@@ -129,7 +130,7 @@ func TestRunReconcile_LiveChangeApplies(t *testing.T) {
 
 	oldCfg := reconcileMinimalCfg()
 	oldCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "old"}}
-	require.NoError(t, serviceapi.WriteStateSnapshot("x", serviceapi.StateSnapshot{Cfg: oldCfg}))
+	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := reconcileMinimalCfg()
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
@@ -148,7 +149,7 @@ func TestRunReconcile_IdenticalBaseline_NothingToDo(t *testing.T) {
 	defer cleanup()
 
 	cfg := reconcileMinimalCfg()
-	require.NoError(t, serviceapi.WriteStateSnapshot("x", serviceapi.StateSnapshot{Cfg: cfg}))
+	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: cfg}))
 
 	rc, res, err := RunReconcile(cfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
 	require.NoError(t, err)
@@ -164,7 +165,7 @@ func TestRunReconcile_TeardownRequired_ClassifiesFlavorAndSessions(t *testing.T)
 
 	oldCfg := reconcileMinimalCfg()
 	oldCfg.Packages = []string{"jq"}
-	require.NoError(t, serviceapi.WriteStateSnapshot("x", serviceapi.StateSnapshot{Cfg: oldCfg}))
+	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := reconcileMinimalCfg()
 	newCfg.Packages = []string{"jq", "yq"}
@@ -213,12 +214,12 @@ func startReconcileDaemonWithIronProxyCapture(t *testing.T, running bool) (clean
 	require.NoError(t, os.WriteFile(filepath.Join(caDir, "root.crt"),
 		[]byte("-----BEGIN CERTIFICATE-----\nDUMMY\n-----END CERTIFICATE-----\n"), 0o644))
 
-	_, err = serviceapi.EnsureRuntimeDir()
+	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
 	require.NoError(t, err)
-	socket := serviceapi.SocketPath()
+	socket := serviceapi.SocketPath(identity.Prod)
 
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterReconcileHandler(srv, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(""))
+	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(""))
 
 	req := &serviceapi.VMApplyIronProxyRequest{}
 	srv.Register("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {
@@ -256,7 +257,7 @@ func TestRunReconcile_DockerTrueCfg_AllowlistIncludesDockerHubHost(t *testing.T)
 	oldCfg := reconcileMinimalCfg()
 	oldCfg.Docker = true
 	oldCfg.Network = schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}}
-	require.NoError(t, serviceapi.WriteStateSnapshot("x", serviceapi.StateSnapshot{Cfg: oldCfg}))
+	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := oldCfg
 	newCfg.Network = schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}, {Host: "b.com"}}}

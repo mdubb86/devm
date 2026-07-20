@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mdubb86/devm/internal/docker"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/secret"
@@ -332,7 +333,7 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	// end of a fully-green cold start, so the first `devm reconcile`
 	// has a baseline instead of diffing against schema.Config{} (which
 	// spuriously surfaces every teardown-bucket kind as pending).
-	got, err := serviceapi.ReadStateSnapshot(minimalCfg().Project.Name)
+	got, err := serviceapi.ReadStateSnapshot(identity.Prod, minimalCfg().Project.Name)
 	require.NoError(t, err)
 	require.NotNil(t, got, "cold start must seed the daemon state snapshot")
 	assert.Equal(t, minimalCfg().Project.Name, got.Cfg.Project.Name)

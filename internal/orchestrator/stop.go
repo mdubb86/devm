@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
@@ -110,7 +111,7 @@ func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness,
 		// a stray snapshot only affects the first reconcile after
 		// recreation (degrades to the same "full diff" fallback used
 		// when no snapshot exists at all).
-		if err := serviceapi.RemoveStateCfg(name); err != nil {
+		if err := serviceapi.RemoveStateCfg(identity.Prod, name); err != nil {
 			fmt.Fprintf(d.Out, "warning: remove state snapshot for %s: %v\n", name, err)
 		}
 
@@ -118,7 +119,7 @@ func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness,
 		// recreated project with the same name inherits stale
 		// SSH keys. Best-effort: log but continue — leaked SSH material
 		// is inert without a matching authorized_keys in a fresh VM.
-		if err := sshkeys.Remove(name); err != nil {
+		if err := sshkeys.Remove(identity.Prod, name); err != nil {
 			log.Printf("sshkeys.Remove(%s): %v", name, err)
 		}
 	} else {

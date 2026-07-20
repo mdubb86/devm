@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -161,10 +162,10 @@ func TestRecoverProjectState_RebuildsDirectRoutes(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, WriteStateSnapshot(projectID, snap))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, snap))
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), tart.New(), routes, projectID)
+	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
@@ -193,7 +194,7 @@ func TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched(t *testing.T) 
 	ironProxyState.put(projectID, seeded)
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), tart.New(), routes, projectID)
+	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
@@ -213,7 +214,7 @@ func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.
 	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
-	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
 		Cfg: schema.Config{
 			Project: schema.Project{Name: projectID},
 			Services: map[string]schema.Service{
@@ -223,7 +224,7 @@ func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.
 	}))
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), tart.New(), routes, projectID)
+	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
 
 	_, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
@@ -246,13 +247,13 @@ func TestRecoverProjectState_RestoresProjectIP(t *testing.T) {
 
 	ironProxyState.put(projectID, projectInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})
 
-	require.NoError(t, WriteStateSnapshot(projectID, StateSnapshot{
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
 		Cfg:       schema.Config{Project: schema.Project{Name: projectID}},
 		ProjectIP: "127.42.0.7",
 	}))
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), tart.New(), routes, projectID)
+	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
 	require.True(t, ok)

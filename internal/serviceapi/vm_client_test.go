@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -29,7 +30,7 @@ func newTestServerWithVM(t *testing.T, sup *supervisor.Supervisor, tr *tart.Tart
 
 	socket := filepath.Join(dir, "s.sock")
 	srv := NewServer(socket, Build{Version: "test-version"})
-	RegisterVMHandlers(srv, sup, tr, nil, 0, NewProjectLocks(), nil)
+	RegisterVMHandlers(srv, identity.Prod, sup, tr, nil, 0, NewProjectLocks(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -278,7 +279,7 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 		Project: schema.Project{Name: "p"},
 		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
 	}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 	newCfg := oldCfg
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
 
@@ -288,7 +289,7 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	socket := filepath.Join(dir, "s.sock")
 
 	srv := NewServer(socket, Build{Version: "test-version"})
-	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
+	RegisterReconcileHandler(srv, identity.Prod, NewProjectLocks(), &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -329,7 +330,7 @@ func TestClientReconcile_MissingFields(t *testing.T) {
 	socket := filepath.Join(dir, "s.sock")
 
 	srv := NewServer(socket, Build{})
-	RegisterReconcileHandler(srv, NewProjectLocks(), &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
+	RegisterReconcileHandler(srv, identity.Prod, NewProjectLocks(), &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

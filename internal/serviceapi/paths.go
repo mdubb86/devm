@@ -10,42 +10,43 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
-// runtimeDirEnv is the environment variable that overrides the
-// default runtime directory. Used by e2e to sandbox the test daemon
-// away from the user's real `~/Library/Application Support/devm/` —
-// without it, running `just e2e-devm` runs `devm uninstall` on the
-// user's real daemon and wipes every project's iron-proxy config.
+// runtimeDirEnv is a legacy env-var override for the runtime dir,
+// retained temporarily so incremental commits compile. Used by e2e to
+// sandbox the test daemon away from the user's real `~/Library/
+// Application Support/devm/` — without it, running `just e2e-devm`
+// runs `devm uninstall` on the user's real daemon and wipes every
+// project's iron-proxy config. Removed in a later commit once every
+// caller passes cfg explicitly end-to-end (Task 6).
 const runtimeDirEnv = "DEVM_RUNTIME_DIR"
 
-// RuntimeDir returns the base directory devm reads and writes runtime
-// state to (socket, iron-proxy configs, state snapshots, CA material).
-// Respects $DEVM_RUNTIME_DIR when set; otherwise falls back to the
-// default per-user location. Exposed so CLI-side helpers (e.g. the
-// orchestrator's CA cert reader) resolve to the same location as the
-// daemon side without importing the whole paths module.
-func RuntimeDir() string {
+// RuntimeDir returns cfg's runtime dir, honoring $DEVM_RUNTIME_DIR
+// when set. Exported (rather than folded into EnsureRuntimeDir) so
+// sibling packages (sshconfig, sshkeys) and CLI-side helpers resolve
+// to the same location as the daemon without duplicating the
+// override logic. Legacy; removed in a later commit once every
+// caller passes cfg explicitly and the env override goes away.
+func RuntimeDir(cfg identity.Config) string {
 	if p := os.Getenv(runtimeDirEnv); p != "" {
 		return p
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "Application Support", "devm")
+	return cfg.RuntimeDir()
 }
 
-// SocketPath returns the absolute path to the Unix domain socket
-// the service listens on. 0600 perms enforced at bind time. Stable
-// across invocations so the CLI knows where to connect. Overridable
-// via $DEVM_RUNTIME_DIR.
-func SocketPath() string {
-	return filepath.Join(RuntimeDir(), "devm.sock")
+// SocketPath returns the absolute path to the Unix domain socket the
+// service listens on. 0600 perms enforced at bind time.
+func SocketPath(cfg identity.Config) string {
+	return filepath.Join(RuntimeDir(cfg), "devm.sock")
 }
 
-// EnsureRuntimeDir creates the runtime directory if it doesn't exist
-// (mode 0700). Returns the directory path. Called by the service at
-// startup before binding the socket.
-func EnsureRuntimeDir() (string, error) {
-	dir := RuntimeDir()
+// EnsureRuntimeDir creates cfg.RuntimeDir() if it doesn't exist (mode
+// 0700). Returns the directory path. Called by the service at startup
+// before binding the socket.
+func EnsureRuntimeDir(cfg identity.Config) (string, error) {
+	dir := RuntimeDir(cfg)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("create runtime dir %s: %w", dir, err)
 	}

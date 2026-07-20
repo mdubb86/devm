@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -42,15 +43,15 @@ func TestVMReconcile_NoSnapshotYet_TreatsAllAsFullDiff(t *testing.T) {
 		Packages: []string{"jq"},
 	}
 	// Simulate what cold-start does: write snapshot.
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: cfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
 
 	// Reconcile against unchanged cfg → nothing to do.
 	req := VMReconcileRequest{Name: "p", Cfg: cfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -72,7 +73,7 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 		Project: schema.Project{Name: "p"},
 		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
 	}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 
 	// New cfg: FOO=new (bucket=live).
 	newCfg := oldCfg
@@ -87,9 +88,9 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 	}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks /* fake apply */, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
+	RegisterReconcileHandler(server, identity.Prod, locks /* fake apply */, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -101,7 +102,7 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 	assert.Empty(t, resp.TeardownRequired)
 
 	// Snapshot persisted.
-	got, err := ReadStateSnapshot("p")
+	got, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "new", got.Cfg.Env["FOO"].Literal)
@@ -113,16 +114,16 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 		Project:  schema.Project{Name: "p"},
 		Packages: []string{"jq"},
 	}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 	newCfg := oldCfg
 	newCfg.Packages = []string{"jq", "yq"} // bucket=recreate
 
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -133,7 +134,7 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 	assert.NotEmpty(t, resp.TeardownRequired)
 
 	// Snapshot NOT overwritten with new_cfg (packages change is pending).
-	got, err := ReadStateSnapshot("p")
+	got, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, []string{"jq"}, got.Cfg.Packages, "packages change must not be persisted until user acts")
@@ -155,7 +156,7 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := oldCfg
 	newSvc := oldCfg.Services["web"]
@@ -165,15 +166,15 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 
-	got, err := ReadStateSnapshot("p")
+	got, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "b", got.Cfg.Services["web"].Env["OLD"].Literal,
@@ -196,7 +197,7 @@ func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testi
 			},
 		},
 	}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := oldCfg
 	newSvc := oldCfg.Services["web"]
@@ -210,15 +211,15 @@ func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testi
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 
-	got, err := ReadStateSnapshot("p")
+	got, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	// Live change (exec) landed in snapshot.
@@ -285,7 +286,7 @@ func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
 	// an existing secret ref rotates.
 	t.Setenv("HOME", t.TempDir())
 
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{
 		Cfg:          schema.Config{Project: schema.Project{Name: "p"}},
 		SecretHashes: map[string]string{"TOK": "old-hash"},
 	}))
@@ -297,9 +298,9 @@ func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
 	}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -329,7 +330,7 @@ func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
 		Project: schema.Project{Name: "p"},
 		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
 	}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{
 		Cfg:          oldCfg,
 		SecretHashes: map[string]string{"A": "h1"},
 	}))
@@ -345,9 +346,9 @@ func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
 	}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"))
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"))
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -359,7 +360,7 @@ func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
 	assert.Empty(t, resp.AppliedIronProxy, "no secret drift or network change; nothing for iron-proxy")
 	assert.Empty(t, resp.TeardownRequired)
 
-	snap, err := ReadStateSnapshot("p")
+	snap, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	assert.Equal(t, map[string]string{"A": "h1"}, snap.SecretHashes,
@@ -372,7 +373,7 @@ func TestVMReconcile_NetworkAddSurfacesAsAppliedIronProxy(t *testing.T) {
 	// via AppliedIronProxy (which the CLI dispatches to
 	// /vm/apply-iron-proxy), not Applied or TeardownRequired.
 	t.Setenv("HOME", t.TempDir())
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{
 		Cfg: schema.Config{
 			Project: schema.Project{Name: "p"},
 			Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}},
@@ -388,9 +389,9 @@ func TestVMReconcile_NetworkAddSurfacesAsAppliedIronProxy(t *testing.T) {
 	}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"))
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"))
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -412,17 +413,17 @@ func TestVMReconcile_MissingIronProxy_EmitsKindIronProxyDown(t *testing.T) {
 	// dispatch to /vm/apply-iron-proxy respawns it.
 	t.Setenv("HOME", t.TempDir())
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: cfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
 
 	req := VMReconcileRequest{Name: "p", Cfg: cfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
 	// A fresh supervisor with no adopted iron-proxy process reports the
 	// proxy as not Present/Running → computeProxyHealth returns MISSING.
 	sup := supervisor.New("")
-	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, sup)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, sup)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -441,15 +442,15 @@ func TestVMReconcile_StoppedVM_MissingIronProxy_DoesNotEmitKindIronProxyDown(t *
 	// path (there's nothing to respawn against).
 	t.Setenv("HOME", t.TempDir())
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: cfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
 
 	req := VMReconcileRequest{Name: "p", Cfg: cfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
 	sup := supervisor.New("")
-	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: false, vmName: "p"}, sup)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: false, vmName: "p"}, sup)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -472,7 +473,7 @@ func healthyIronProxySupervisor(t *testing.T, projectID string) *supervisor.Supe
 	t.Helper()
 	sup := supervisor.New("")
 	sup.Adopt(supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}, os.Getpid())
-	cfgPath, err := IronProxyConfigPath(projectID)
+	cfgPath, err := IronProxyConfigPath(identity.Prod, projectID)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(cfgPath), 0o755))
 	require.NoError(t, os.WriteFile(cfgPath, []byte("stub\n"), 0o600))
@@ -524,7 +525,7 @@ func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
 		Project: schema.Project{Name: "p"},
 		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
 	}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := oldCfg
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
@@ -532,12 +533,12 @@ func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
 	fake := &fakeApply{}
 	// Use a fake tart that reports p-vm as NOT running.
 	fakeTart := &fakeTartList{running: false, vmName: "p"}
-	RegisterReconcileHandler(server, locks, fake, fakeTart, supervisor.New(""))
+	RegisterReconcileHandler(server, identity.Prod, locks, fake, fakeTart, supervisor.New(""))
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -551,7 +552,7 @@ func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
 
 	// Snapshot preserved at old cfg — pending change re-surfaces
 	// next reconcile (or at cold-start).
-	got, err := ReadStateSnapshot("p")
+	got, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "old", got.Cfg.Env["FOO"].Literal,
@@ -571,7 +572,7 @@ func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
 		Project: schema.Project{Name: "p"},
 		// No Services at all — Services is nil.
 	}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := oldCfg
 	newCfg.Services = map[string]schema.Service{
@@ -580,16 +581,16 @@ func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 
 	// Snapshot must reflect the new port in the newly-created Services map.
-	got, err := ReadStateSnapshot("p")
+	got, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.NotNil(t, got.Cfg.Services, "Services should be initialized after live apply, not nil")
@@ -605,7 +606,7 @@ func TestVMReconcile_ForwardsSSHBytesToApplyLive(t *testing.T) {
 		Project: schema.Project{Name: "p"},
 		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
 	}
-	require.NoError(t, WriteStateSnapshot("p", StateSnapshot{Cfg: oldCfg}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := oldCfg
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
@@ -620,10 +621,10 @@ func TestVMReconcile_ForwardsSSHBytesToApplyLive(t *testing.T) {
 	}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(), Build{})
+	server := NewServer(SocketPath(identity.Prod), Build{})
 	locks := NewProjectLocks()
 	fake := &fakeApply{}
-	RegisterReconcileHandler(server, locks, fake, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
+	RegisterReconcileHandler(server, identity.Prod, locks, fake, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))

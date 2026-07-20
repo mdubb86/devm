@@ -9,6 +9,8 @@ import (
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // fixedLookup returns a lookup function for a single project name.
@@ -30,7 +32,7 @@ func startTestDNS(t *testing.T, lookup func(string) (string, bool)) (string, fun
 	addr := pc.LocalAddr().String()
 	_ = pc.Close()
 
-	s := newDNSServerAt(addr, lookup)
+	s := newDNSServerAt(identity.Prod, addr, lookup)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.Serve(ctx) }()
@@ -105,7 +107,7 @@ func TestDNS_PortInUse_ReturnsError(t *testing.T) {
 	addr := pc.LocalAddr().String()
 
 	// Now try to start our DNS server on the same port.
-	s := newDNSServerAt(addr, fixedLookup("myapp", "127.42.0.1"))
+	s := newDNSServerAt(identity.Prod, addr, fixedLookup("myapp", "127.42.0.1"))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	err = s.Serve(ctx)
@@ -135,7 +137,7 @@ func TestDNS_AnswersProjectIP(t *testing.T) {
 		}
 		return "", false
 	}
-	s := newDNSServerAt("127.0.0.1:0", lookup)
+	s := newDNSServerAt(identity.Prod, "127.0.0.1:0", lookup)
 	// Testing the handler directly avoids the ListenAndServe dance.
 	msg := new(dns.Msg)
 	msg.SetQuestion("api.myapp.test.", dns.TypeA)
@@ -149,7 +151,7 @@ func TestDNS_AnswersProjectIP(t *testing.T) {
 
 func TestDNS_NXDOMAIN_UnknownProject(t *testing.T) {
 	lookup := func(name string) (string, bool) { return "", false }
-	s := newDNSServerAt("127.0.0.1:0", lookup)
+	s := newDNSServerAt(identity.Prod, "127.0.0.1:0", lookup)
 	msg := new(dns.Msg)
 	msg.SetQuestion("foo.unknown.test.", dns.TypeA)
 	w := &memWriter{}
@@ -176,7 +178,7 @@ func TestExtractProjectLabel(t *testing.T) {
 		"MyApp.test.":         "myapp", // case-insensitive
 	}
 	for in, want := range cases {
-		assert.Equal(t, want, extractProjectLabel(in), "input %q", in)
+		assert.Equal(t, want, extractProjectLabel(in, identity.Prod.TLD), "input %q", in)
 	}
 }
 
@@ -185,9 +187,9 @@ func TestDNS_HealthCheckSentinel_AlwaysAnswersLoopback(t *testing.T) {
 	// (used by `devm status`) relies on it always resolving to
 	// 127.0.0.1 regardless of what's currently allocated, so a "no
 	// projects running" daemon still reports DNS healthy.
-	s := newDNSServerAt("127.0.0.1:0", func(string) (string, bool) { return "", false })
+	s := newDNSServerAt(identity.Prod, "127.0.0.1:0", func(string) (string, bool) { return "", false })
 	msg := new(dns.Msg)
-	msg.SetQuestion(dns.Fqdn(dnsProbeName), dns.TypeA)
+	msg.SetQuestion(dns.Fqdn(dnsProbeName(identity.Prod)), dns.TypeA)
 	w := &memWriter{}
 	s.handleTest(w, msg)
 	require.Len(t, w.msg.Answer, 1)
@@ -202,7 +204,7 @@ func TestHandleTest_UnknownProjectAnswersNXDOMAINNotLoopback(t *testing.T) {
 	// *.test name regardless of project. Post-B3, only a known,
 	// running project's own ProjectIP resolves; everything else is
 	// NXDOMAIN — the isolation guarantee.
-	s := newDNSServerAt("127.0.0.1:0", fixedLookup("myapp", "127.42.0.1"))
+	s := newDNSServerAt(identity.Prod, "127.0.0.1:0", fixedLookup("myapp", "127.42.0.1"))
 
 	a := new(dns.Msg)
 	a.SetQuestion(dns.Fqdn("db.myapp.test"), dns.TypeA)

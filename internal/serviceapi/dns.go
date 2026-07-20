@@ -9,59 +9,47 @@ import (
 	"github.com/miekg/dns"
 
 	"github.com/mdubb86/devm/internal/debuglog"
+	"github.com/mdubb86/devm/internal/identity"
 )
 
-const (
-	// defaultDNSAddr is the UDP socket the daemon listens on for
-	// *.test queries. Forwarded here by /etc/resolver/test written by
-	// `devm install`. Overridable via $DEVM_DNS_ADDR — e2e's isolated
-	// mode sets it to 127.0.0.1:0 (ephemeral port) so a second daemon
-	// can coexist with the user's real one without a port collision.
-	defaultDNSAddr = "127.0.0.1:51153"
+// dnsAddrEnv is a legacy env-var override for the DNS bind address,
+// retained temporarily so incremental commits compile. e2e's isolated
+// mode sets it to 127.0.0.1:0 (ephemeral port) so a second daemon can
+// coexist with the user's real one without a port collision. Removed
+// in a later commit once every caller passes cfg explicitly (Task 6).
+const dnsAddrEnv = "DEVM_DNS_ADDR"
 
-	// dnsAddrEnv is the environment variable that overrides
-	// defaultDNSAddr. See defaultDNSAddr.
-	dnsAddrEnv = "DEVM_DNS_ADDR"
-
-	// testTLD is the only suffix we serve. miekg/dns expects the
-	// trailing dot.
-	testTLD = "test."
-)
-
-// DNSAddr returns the address the daemon's *.test DNS server binds
-// to. Respects $DEVM_DNS_ADDR when set; otherwise returns the default
-// port that /etc/resolver/test points at.
-func DNSAddr() string {
-	if v := os.Getenv(dnsAddrEnv); v != "" {
-		return v
-	}
-	return defaultDNSAddr
-}
-
-// DNSServer is the daemon's tiny *.test resolver. Every *.test name
+// DNSServer is the daemon's tiny *.<TLD> resolver. Every *.<TLD> name
 // answers its owning project's allocated ProjectIP (A), TTL 0 —
 // isolation guarantee: a name only resolves while its project is
 // running and only to that project's own 127.42.0.N address. AAAA
 // queries get NODATA: softnet's ingress listeners bind v4 loopback
 // only.
 type DNSServer struct {
+	cfg    identity.Config
 	server *dns.Server
 	lookup func(project string) (string, bool)
 }
 
-// NewDNSServer builds a server bound to the address returned by
-// DNSAddr() — the default 127.0.0.1:51153 unless $DEVM_DNS_ADDR
-// overrides. projectIPLookup returns (projectIP, true) for a known,
-// running project name; (_, false) for unknown or stopped projects.
-func NewDNSServer(projectIPLookup func(project string) (string, bool)) *DNSServer {
-	return newDNSServerAt(DNSAddr(), projectIPLookup)
+// NewDNSServer builds a server bound to cfg.DNSBindAddr, serving
+// cfg.TLD queries. Honors $DEVM_DNS_ADDR during the transition; that
+// env override is removed in a later commit. projectIPLookup returns
+// (projectIP, true) for a known, running project name; (_, false) for
+// unknown or stopped projects.
+func NewDNSServer(cfg identity.Config, projectIPLookup func(project string) (string, bool)) *DNSServer {
+	addr := cfg.DNSBindAddr
+	if v := os.Getenv(dnsAddrEnv); v != "" {
+		addr = v
+	}
+	return newDNSServerAt(cfg, addr, projectIPLookup)
 }
 
 // newDNSServerAt is the testable inner — tests pass an ephemeral
 // address.
-func newDNSServerAt(addr string, projectIPLookup func(string) (string, bool)) *DNSServer {
+func newDNSServerAt(cfg identity.Config, addr string, projectIPLookup func(string) (string, bool)) *DNSServer {
 	mux := dns.NewServeMux()
 	s := &DNSServer{
+		cfg: cfg,
 		server: &dns.Server{
 			Addr:    addr,
 			Net:     "udp",
@@ -69,7 +57,8 @@ func newDNSServerAt(addr string, projectIPLookup func(string) (string, bool)) *D
 		},
 		lookup: projectIPLookup,
 	}
-	mux.HandleFunc(testTLD, s.handleTest)
+	// miekg/dns requires the trailing dot on the TLD suffix.
+	mux.HandleFunc(cfg.TLD+".", s.handleTest)
 	return s
 }
 
@@ -96,23 +85,24 @@ func (s *DNSServer) handleTest(w dns.ResponseWriter, r *dns.Msg) {
 	msg := new(dns.Msg)
 	msg.SetReply(r)
 	msg.Authoritative = true
+	probeName := dnsProbeName(s.cfg)
 	for _, q := range r.Question {
 		if q.Qtype != dns.TypeA {
 			continue // AAAA and others: NODATA (Answer stays empty).
 		}
-		// devm-health-check.test is a reserved sentinel name (see
-		// dns_probe.go's CheckDNSHealth, used by `devm status`) that
-		// verifies *.test queries actually reach this resolver — it
-		// isn't a project and must always answer loopback, independent
-		// of the per-project lookup below.
-		if strings.EqualFold(strings.TrimSuffix(q.Name, "."), strings.TrimSuffix(dnsProbeName, ".")) {
+		// probeName is a reserved sentinel name (see dns_probe.go's
+		// CheckDNSHealth, used by `devm status`) that verifies *.<TLD>
+		// queries actually reach this resolver — it isn't a project and
+		// must always answer loopback, independent of the per-project
+		// lookup below.
+		if strings.EqualFold(strings.TrimSuffix(q.Name, "."), strings.TrimSuffix(probeName, ".")) {
 			msg.Answer = append(msg.Answer, &dns.A{
 				Hdr: dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 0},
 				A:   net.IPv4(127, 0, 0, 1),
 			})
 			continue
 		}
-		project := extractProjectLabel(q.Name)
+		project := extractProjectLabel(q.Name, s.cfg.TLD)
 		ip, ok := s.lookup(project)
 		if !ok {
 			msg.Rcode = dns.RcodeNameError // NXDOMAIN
@@ -126,14 +116,15 @@ func (s *DNSServer) handleTest(w dns.ResponseWriter, r *dns.Msg) {
 	_ = w.WriteMsg(msg)
 }
 
-// extractProjectLabel returns the project name from a *.test query.
-// "myapp.test."         → "myapp"
+// extractProjectLabel returns the project name from a *.<tld> query.
+// "myapp.test."         → "myapp" (tld "test")
 // "api.myapp.test."     → "myapp"
 // "foo.bar.myapp.test." → "myapp"
-// Empty on malformed input; caller treats empty as unknown.
-func extractProjectLabel(qname string) string {
+// Empty on malformed input; caller treats empty as unknown. Primitive:
+// takes the TLD it needs, not the whole Config.
+func extractProjectLabel(qname, tld string) string {
 	name := strings.ToLower(strings.TrimSuffix(qname, "."))
-	name = strings.TrimSuffix(name, ".test")
+	name = strings.TrimSuffix(name, "."+tld)
 	if name == "" {
 		return ""
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/oklog/run"
 
 	"github.com/mdubb86/devm/internal/debuglog"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
@@ -17,15 +18,17 @@ import (
 // HTTP server; Ship 2 added DNS; Ship 3 adds the reverse proxy on
 // launchd-inherited :80 and :443.
 //
-// build is the daemon's build identity, reported via /version.
-// ctx is the shutdown signal: cancel it and every actor stops.
-func RunService(ctx context.Context, build Build) error {
-	if _, err := EnsureRuntimeDir(); err != nil {
+// cfg is the daemon's compile-time identity (TLD, runtime dir, pool
+// range, CA CN, base image name — prod vs. e2e). build is the
+// daemon's build identity, reported via /version. ctx is the
+// shutdown signal: cancel it and every actor stops.
+func RunService(ctx context.Context, cfg identity.Config, build Build) error {
+	if _, err := EnsureRuntimeDir(cfg); err != nil {
 		return fmt.Errorf("ensure runtime dir: %w", err)
 	}
 
 	// CA — generates the root on first launch, persists, reloads later.
-	ca, err := LoadOrGenerate()
+	ca, err := LoadOrGenerate(cfg)
 	if err != nil {
 		return fmt.Errorf("ca: %w", err)
 	}
@@ -42,7 +45,7 @@ func RunService(ctx context.Context, build Build) error {
 
 	// HTTP API server (Ship 1) with the /routes/* admin endpoints
 	// registered on top.
-	server := NewServer(SocketPath(), build)
+	server := NewServer(SocketPath(cfg), build)
 	RegisterRoutesHandlers(server, routes)
 
 	// VM lifecycle endpoints (Ship 4). Supervisor and tart wrapper are
@@ -78,7 +81,7 @@ func RunService(ctx context.Context, build Build) error {
 	// DNS keeps working for a VM that's still running.
 	// Best-effort — a failure (e.g., `ps` missing) shouldn't
 	// block daemon startup.
-	if err := AdoptIronProxies(ctx, sup, tr, routes); err != nil {
+	if err := AdoptIronProxies(ctx, cfg, sup, tr, routes); err != nil {
 		fmt.Fprintf(os.Stderr, "iron-proxy adopt: %v\n", err)
 	}
 	// Rehydrate softnetState for every project AdoptIronProxies just
@@ -86,7 +89,7 @@ func RunService(ctx context.Context, build Build) error {
 	// and softnet's own policy reconcile after a restart. Must run after
 	// AdoptIronProxies — it walks ironProxyState, which the adopt pass
 	// above just populated.
-	discoverSoftnet(ctx, ntp.Port())
+	discoverSoftnet(ctx, cfg, ntp.Port())
 
 	// Re-bind this daemon's own per-project HTTP/HTTPS proxy listeners
 	// for every project AdoptIronProxies just recovered. A daemon
@@ -116,11 +119,11 @@ func RunService(ctx context.Context, build Build) error {
 	// start empty for them until the next SpawnIronProxy respawn.
 	denials := NewDenials()
 
-	RegisterVMHandlers(server, sup, tr, denials, ntp.Port(), locks, proxy)
-	RegisterReconcileHandler(server, locks, &realApplyLiver{tr: tr}, tr, sup)
-	RegisterApplyIronProxyHandler(server, locks, sup, tr, denials)
-	RegisterHandshakeHandler(server, build, sup)
-	RegisterStatusAllHandler(server, sup, tr)
+	RegisterVMHandlers(server, cfg, sup, tr, denials, ntp.Port(), locks, proxy)
+	RegisterReconcileHandler(server, cfg, locks, &realApplyLiver{tr: tr}, tr, sup)
+	RegisterApplyIronProxyHandler(server, cfg, locks, sup, tr, denials)
+	RegisterHandshakeHandler(server, cfg, build, sup)
+	RegisterStatusAllHandler(server, cfg, sup, tr)
 
 	var g run.Group
 
@@ -137,7 +140,7 @@ func RunService(ctx context.Context, build Build) error {
 	// DNS server actor (Ship 2).
 	{
 		dnsCtx, cancel := context.WithCancel(ctx)
-		dnsServer := NewDNSServer(func(project string) (string, bool) {
+		dnsServer := NewDNSServer(cfg, func(project string) (string, bool) {
 			info, ok := ironProxyState.get(project)
 			if !ok || info.ProjectIP == "" {
 				return "", false

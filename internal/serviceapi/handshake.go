@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -20,12 +21,12 @@ type HandshakeResponse struct {
 
 // RegisterHandshakeHandler wires GET /handshake. build is the daemon's
 // identity (same value /version reports); sup is queried for proxy health.
-func RegisterHandshakeHandler(s *Server, build Build, sup *supervisor.Supervisor) {
+func RegisterHandshakeHandler(s *Server, cfg identity.Config, build Build, sup *supervisor.Supervisor) {
 	s.Register("/handshake", func(w http.ResponseWriter, r *http.Request) {
 		resp := HandshakeResponse{Build: build}
 		if name := r.URL.Query().Get("name"); name != "" {
 			if err := validProjectID(name); err == nil {
-				h := computeProxyHealth(sup, name)
+				h := computeProxyHealth(cfg, sup, name)
 				resp.Proxy = &h
 			}
 		}
