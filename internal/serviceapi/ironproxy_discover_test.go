@@ -136,7 +136,7 @@ func TestLoadIronProxyInfoFromConfig_MissingFile(t *testing.T) {
 // restart actually having happened.
 func TestRecoverProjectState_RebuildsDirectRoutes(t *testing.T) {
 	const projectID = "recover-proj"
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
 	// Mirrors AdoptIronProxies having already rehydrated ironProxyState
@@ -187,7 +187,7 @@ func TestRecoverProjectState_RebuildsDirectRoutes(t *testing.T) {
 // entry or the routes table.
 func TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched(t *testing.T) {
 	const projectID = "no-snapshot-proj"
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
 	seeded := projectInfo{HTTPPort: 111, HTTPSPort: 222, DNSPort: 333}
@@ -211,7 +211,7 @@ func TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched(t *testing.T) 
 // routes.
 func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.T) {
 	const projectID = "vm-down-proj"
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
@@ -242,7 +242,7 @@ func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.
 // /vm/start.
 func TestRecoverProjectState_RestoresProjectIP(t *testing.T) {
 	const projectID = "recover-ip-proj"
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
 	ironProxyState.put(projectID, projectInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})

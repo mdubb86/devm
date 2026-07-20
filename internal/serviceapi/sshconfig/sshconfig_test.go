@@ -19,11 +19,11 @@ func loadGolden(t *testing.T, name string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", name))
 	require.NoError(t, err)
-	return strings.ReplaceAll(string(raw), "{{RUNTIME_DIR}}", os.Getenv("DEVM_RUNTIME_DIR"))
+	return strings.ReplaceAll(string(raw), "{{RUNTIME_DIR}}", identity.Prod.RuntimeDir())
 }
 
 func TestEmit_EmptyEntries_WritesHeaderOnly(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	require.NoError(t, Emit(identity.Prod, nil))
 	got, err := os.ReadFile(Path(identity.Prod))
 	require.NoError(t, err)
@@ -32,7 +32,7 @@ func TestEmit_EmptyEntries_WritesHeaderOnly(t *testing.T) {
 }
 
 func TestEmit_SingleEntry_GoldenFile(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	require.NoError(t, Emit(identity.Prod, []Entry{
 		{Name: "myproj"},
 	}))
@@ -62,7 +62,7 @@ func TestEmit_UsesDNSHostname(t *testing.T) {
 }
 
 func TestEmit_MultipleEntries_SortedByName(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	// Unsorted input; expect output sorted by Name ascending.
 	require.NoError(t, Emit(identity.Prod, []Entry{
 		{Name: "charlie"},
@@ -76,7 +76,7 @@ func TestEmit_MultipleEntries_SortedByName(t *testing.T) {
 }
 
 func TestEmit_AtomicWrite(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	require.NoError(t, Emit(identity.Prod, []Entry{
 		{Name: "p"},
 	}))
@@ -94,7 +94,7 @@ func TestEmit_AtomicWrite(t *testing.T) {
 }
 
 func TestEmit_RejectsUnsafeName(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	for _, name := range []string{
 		"",
 		"bad name\nHost pwned",

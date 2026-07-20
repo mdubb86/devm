@@ -18,7 +18,7 @@ func TestCfgHasSecretRefs(t *testing.T) {
 }
 
 func TestComputeProxyHealth(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	sup := supervisor.New("")
 	// No proxy, no config file → MISSING.
 	h := computeProxyHealth(identity.Prod, sup, "p")

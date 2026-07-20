@@ -12,7 +12,7 @@ import (
 )
 
 func TestSoftnetControlSockDeterministic(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
 	a := SoftnetControlSock(identity.Prod, "proj")
 	b := SoftnetControlSock(identity.Prod, "proj")
@@ -39,10 +39,10 @@ func TestSoftnetControlSockDisambiguatesRuntimeDirs(t *testing.T) {
 	// Two different daemon instances (e.g. a real installed daemon and
 	// an isolated e2e daemon) using the same project name must not
 	// collide on the same control socket.
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	a := SoftnetControlSock(identity.Prod, "proj")
 
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	b := SoftnetControlSock(identity.Prod, "proj")
 
 	if a == b {
@@ -105,7 +105,7 @@ func TestEnsureSoftnetSockDir_RejectsLoosePermissions(t *testing.T) {
 }
 
 func TestEnsureSoftnetSymlink(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
 	dir, err := ensureSoftnetSymlink(identity.Prod)
 	if err != nil {

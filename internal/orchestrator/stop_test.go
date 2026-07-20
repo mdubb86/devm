@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -179,7 +178,6 @@ func TestRunStopDestroy_RemovesSSHState(t *testing.T) {
 	// subsequently recreated project. Teardown must wipe the per-project
 	// ssh subtree so the next cold-start starts from a clean baseline.
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
 	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "proj-123", serviceapi.StateSnapshot{
 		Cfg: schema.Config{Project: schema.Project{Name: "proj-123"}},
 	}))

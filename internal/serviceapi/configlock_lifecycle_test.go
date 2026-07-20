@@ -67,7 +67,7 @@ func newTestServerWithVMAndFakeTart(t *testing.T) (*Server, func()) {
 	t.Helper()
 	bin := fakeTartScript(t)
 	t.Setenv("PATH", filepath.Dir(bin)+":"+os.Getenv("PATH"))
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
@@ -193,7 +193,7 @@ func TestVMStart_LockFailureIsBestEffort(t *testing.T) {
 // host-immutable flag and drops the configLockState entry using the
 // registry populated at /vm/start — the normal (non-restart) path.
 func TestVMStop_UnlocksConfig_FromRegistry(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	bin := filepath.Join(t.TempDir(), "tart-fake")
@@ -233,7 +233,7 @@ func TestVMStop_UnlocksConfig_FromRegistry(t *testing.T) {
 // falls back to the persisted StateSnapshot's WorkspaceHostPath to find
 // what to unlock.
 func TestVMStop_UnlocksConfig_FromSnapshotFallback(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	bin := filepath.Join(t.TempDir(), "tart-fake")
@@ -275,7 +275,7 @@ func TestVMStop_UnlocksConfig_FromSnapshotFallback(t *testing.T) {
 // "running implies locked" holds again after a restart and a later
 // /vm/stop can find the repoRoot to unlock.
 func TestRecoverProjectState_RelocksConfig_WhenEnabled(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	const projectID = "adopt-relock-enabled"
 	t.Cleanup(func() {
 		ironProxyState.del(projectID)
@@ -305,7 +305,7 @@ func TestRecoverProjectState_RelocksConfig_WhenEnabled(t *testing.T) {
 // recovered project whose config opted out (`config_lock: false`) is
 // left unlocked across a daemon restart, mirroring /vm/start's gating.
 func TestRecoverProjectState_DoesNotRelock_WhenDisabled(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	const projectID = "adopt-relock-disabled"
 	t.Cleanup(func() {
 		ironProxyState.del(projectID)
@@ -337,7 +337,7 @@ func TestRecoverProjectState_DoesNotRelock_WhenDisabled(t *testing.T) {
 // cancels any pending relock timer without dropping the registry
 // entry (repoRoot is still needed for the next lock/reconcile).
 func TestVMUnlockConfig_ClearsImmutableFlag(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	bin := filepath.Join(t.TempDir(), "tart-fake")
@@ -378,7 +378,7 @@ func TestVMUnlockConfig_ClearsImmutableFlag(t *testing.T) {
 // (POST /vm/lock-config) re-applies the host-immutable flag on a
 // project that was previously unlocked.
 func TestVMLockConfig_ReLocksFile(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	bin := filepath.Join(t.TempDir(), "tart-fake")
@@ -415,7 +415,7 @@ func TestVMLockConfig_ReLocksFile(t *testing.T) {
 // not running, or config_lock:false) returns 200 was_locked=false
 // rather than an error.
 func TestVMUnlockConfig_UnknownProject_NoOpNoError(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	bin := filepath.Join(t.TempDir(), "tart-fake")
@@ -553,7 +553,7 @@ func TestArmRelockTimer_ReLocksWhenListErrors(t *testing.T) {
 // arms exactly that — proving the wiring from the wire request through
 // to a real timer that re-locks the file when it fires.
 func TestVMUnlockConfig_ArmsRelockTimer(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	bin := filepath.Join(t.TempDir(), "tart-fake")

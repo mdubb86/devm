@@ -86,7 +86,7 @@ func TestState_RejectsPathTraversal(t *testing.T) {
 }
 
 func TestStateSnapshot_SecretHashesRoundtrip(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 
 	snap := StateSnapshot{
 		Cfg:          schema.Config{Project: schema.Project{Name: "p"}},
@@ -101,7 +101,7 @@ func TestStateSnapshot_SecretHashesRoundtrip(t *testing.T) {
 }
 
 func TestStateSnapshotProxyVersionRoundTrips(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	want := StateSnapshot{Cfg: schema.Config{Project: schema.Project{Name: "p"}}, ProxyVersion: "abc123"}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", want))
 	got, err := ReadStateSnapshot(identity.Prod, "p")
@@ -111,7 +111,7 @@ func TestStateSnapshotProxyVersionRoundTrips(t *testing.T) {
 }
 
 func TestStateSnapshotWorkspaceHostPathRoundTrips(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	want := StateSnapshot{Cfg: schema.Config{Project: schema.Project{Name: "p"}}, WorkspaceHostPath: "/Users/dev/myproj"}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", want))
 	got, err := ReadStateSnapshot(identity.Prod, "p")

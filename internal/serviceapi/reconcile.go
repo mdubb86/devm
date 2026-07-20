@@ -177,7 +177,7 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 		// Apply live changes. On failure, return error and don't
 		// touch the snapshot — same as if the request never happened.
 		if len(live) > 0 {
-			caPEM, err := os.ReadFile(filepath.Join(RuntimeDir(cfg), "ca", "root.crt"))
+			caPEM, err := os.ReadFile(filepath.Join(cfg.RuntimeDir(), "ca", "root.crt"))
 			if err != nil {
 				http.Error(w, fmt.Sprintf("read CA root: %v", err), http.StatusInternalServerError)
 				return

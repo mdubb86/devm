@@ -562,9 +562,7 @@ func waitVMReady(ctx context.Context, tr *tart.Tart, vmName string, timeout time
 }
 
 // caStorageDir returns the ca/ directory alongside the socket,
-// consistent with Ship 3's CA location. Follows the daemon-side
-// $DEVM_RUNTIME_DIR override so an e2e-sandboxed CLI reads the CA
-// from the same isolated dir the sandboxed daemon writes to.
+// consistent with Ship 3's CA location.
 func caStorageDir(cfg identity.Config) string {
-	return filepath.Join(serviceapi.RuntimeDir(cfg), "ca")
+	return filepath.Join(cfg.RuntimeDir(), "ca")
 }

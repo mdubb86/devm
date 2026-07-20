@@ -3,7 +3,6 @@ package serviceapi
 import (
 	"errors"
 	"fmt"
-	"net"
 	"os"
 
 	"github.com/mdubb86/devm/internal/identity"
@@ -17,16 +16,6 @@ const (
 	ResolverFileMatches                           // file equals canonical
 	ResolverFileDiverged                          // file exists but differs
 )
-
-// CanonicalResolverContents returns the resolver-file bytes for a
-// given DNS bind address. Bytes matter: CheckResolverFile uses
-// byte-equality. Primitive: takes the value it needs, not the whole
-// Config. Exported so cmd/devm/service.go can include it in the
-// consolidated install shell script.
-func CanonicalResolverContents(dnsBindAddr string) string {
-	host, port, _ := net.SplitHostPort(dnsBindAddr)
-	return "nameserver " + host + "\nport " + port + "\n"
-}
 
 // CheckResolverFile reads cfg.ResolverFilePath (no sudo needed) and
 // reports its state.
@@ -42,7 +31,7 @@ func checkResolverFileAt(cfg identity.Config, path string) (ResolverFileState, e
 		}
 		return 0, fmt.Errorf("read %s: %w", path, err)
 	}
-	if string(data) == CanonicalResolverContents(cfg.DNSBindAddr) {
+	if string(data) == cfg.CanonicalResolverContents() {
 		return ResolverFileMatches, nil
 	}
 	return ResolverFileDiverged, nil

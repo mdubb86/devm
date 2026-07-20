@@ -61,8 +61,8 @@ func writePreExistingIronProxyConfig(t *testing.T, projectID, macHost string, ht
 }
 
 func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	srv := NewServer(SocketPath(identity.Prod), Build{})
+	t.Setenv("HOME", t.TempDir())
+	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New("")
 	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
 
@@ -110,8 +110,8 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 // teardown-required change on the very next reconcile. The handler
 // must fail loud instead of fabricating a snapshot.
 func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	srv := NewServer(SocketPath(identity.Prod), Build{})
+	t.Setenv("HOME", t.TempDir())
+	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New("")
 	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
 
@@ -138,8 +138,8 @@ func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
 // iron-proxy binary) so it's substituted via the spawnIronProxyFn
 // injection seam with a stub that just opens the expected listener.
 func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	srv := NewServer(SocketPath(identity.Prod), Build{})
+	t.Setenv("HOME", t.TempDir())
+	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
 
 	const projectID = "p-running"
@@ -235,8 +235,8 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 // next live reconcile's expose-map push would compute against no IP at
 // all.
 func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	srv := NewServer(SocketPath(identity.Prod), Build{})
+	t.Setenv("HOME", t.TempDir())
+	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
 
 	const projectID = "p-preserve-ip"
@@ -295,8 +295,8 @@ func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 // resolution, no service listeners — until an explicit stop +
 // cold-start.
 func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
-	srv := NewServer(SocketPath(identity.Prod), Build{})
+	t.Setenv("HOME", t.TempDir())
+	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
 
 	const projectID = "p-adopt-in-place"

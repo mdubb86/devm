@@ -146,23 +146,25 @@ func TestRunStatus_RunningEmptySnapshotIsInSync(t *testing.T) {
 
 // startHandshakeDaemon spins up a real serviceapi.Server with the
 // /handshake endpoint registered on a temp Unix socket, and points
-// $DEVM_RUNTIME_DIR at a temp dir so serviceapi.SocketPath(identity.Prod) (and
-// therefore RunStatus's internal serviceapi.NewClient()) resolves to
-// it. sup has no adopted iron-proxy PID for any project, so a
-// handshake for any project_id reports ProxyMissing — the daemon is
-// reachable, it just has nothing healthy to report. Returns a cleanup
-// func.
+// $HOME at a temp dir so identity.Prod.SocketPath() (and therefore
+// RunStatus's internal serviceapi.NewClient()) resolves to it. sup has
+// no adopted iron-proxy PID for any project, so a handshake for any
+// project_id reports ProxyMissing — the daemon is reachable, it just
+// has nothing healthy to report. Returns a cleanup func.
 func startHandshakeDaemon(t *testing.T) func() {
 	t.Helper()
 	// Unix domain socket paths are capped at ~104 bytes on macOS/BSD;
-	// t.TempDir() nests too deep once "devm.sock" is appended. Use a
-	// short /tmp-rooted dir instead.
+	// t.TempDir() nests too deep once "Library/Application
+	// Support/devm/devm.sock" is appended. Use a short /tmp-rooted dir
+	// instead.
 	rtDir, err := os.MkdirTemp("/tmp", "devm-rt-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(rtDir) })
-	t.Setenv("DEVM_RUNTIME_DIR", rtDir)
+	t.Setenv("HOME", rtDir)
 
-	socket := serviceapi.SocketPath(identity.Prod)
+	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
+	require.NoError(t, err)
+	socket := identity.Prod.SocketPath()
 	sup := supervisor.New("")
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
 	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, serviceapi.Build{Version: "test"}, sup)
@@ -222,7 +224,7 @@ func TestRunStatus_RoutingZeroWhenDaemonUnreachable(t *testing.T) {
 	// RunStatus leaves Routing zero-valued. RunStatus must not error out
 	// in this case — the format layer handles zero Routing as unreachable.
 	//
-	// Point HOME at a tmpdir so serviceapi.SocketPath(identity.Prod) resolves to a
+	// Point HOME at a tmpdir so identity.Prod.SocketPath() resolves to a
 	// nonexistent socket, simulating daemon-unreachable regardless of
 	// whether a real daemon is running on this machine.
 	t.Setenv("HOME", t.TempDir())

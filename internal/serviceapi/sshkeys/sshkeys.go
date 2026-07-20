@@ -1,5 +1,5 @@
 // Package sshkeys manages per-project SSH key material for devm-managed
-// VMs. All state lives under serviceapi.RuntimeDir()/ssh/projects/<id>/.
+// VMs. All state lives under cfg.RuntimeDir()/ssh/projects/<id>/.
 // Client privkeys never leave the Mac; the guest receives only the
 // pubkey and its own host key material.
 package sshkeys
@@ -16,14 +16,13 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 // ProjectDir returns the per-project ssh state directory. Callers use
 // this to compute paths for the ssh_config emitter (IdentityFile,
 // UserKnownHostsFile).
 func ProjectDir(cfg identity.Config, projectID string) string {
-	return filepath.Join(serviceapi.RuntimeDir(cfg), "ssh", "projects", projectID)
+	return filepath.Join(cfg.RuntimeDir(), "ssh", "projects", projectID)
 }
 
 // EnsureProjectKeypair returns the client keypair pubkey for projectID,

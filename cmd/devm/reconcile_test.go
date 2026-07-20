@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -85,7 +84,7 @@ func TestRepushRoutes_PreservesExistingLocalMode(t *testing.T) {
 // socket: no panic, no error to check (void function), no daemon to
 // have been talked to.
 func TestRepushRoutes_DaemonDown(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir()) // no daemon listening here
+	t.Setenv("HOME", t.TempDir()) // no daemon listening here
 
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
@@ -100,19 +99,22 @@ func TestRepushRoutes_DaemonDown(t *testing.T) {
 }
 
 // startRoutesDaemon spins a real serviceapi.Server with the /routes/*
-// admin endpoints registered, bound to a temp socket under
-// $DEVM_RUNTIME_DIR. repushRoutes talks to it via the default
-// serviceapi.NewClient(), which resolves the socket from that env
-// var. Same idiom as startHandshakeDaemon (handshake_test.go) and
-// startStatusAllDaemon (status_test.go).
+// admin endpoints registered, bound to a temp socket under a
+// $HOME-scoped runtime dir. repushRoutes talks to it via the default
+// serviceapi.NewClient(), which resolves the socket from
+// identity.Prod.SocketPath(). Same idiom as startHandshakeDaemon
+// (handshake_test.go) and startStatusAllDaemon (status_test.go).
 func startRoutesDaemon(t *testing.T) func() {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "sapi-rp-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	t.Setenv("DEVM_RUNTIME_DIR", dir)
+	t.Setenv("HOME", dir)
 
-	srv := serviceapi.NewServer(serviceapi.SocketPath(identity.Prod), serviceapi.Build{Version: "dev"})
+	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
+	require.NoError(t, err)
+	socket := identity.Prod.SocketPath()
+	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "dev"})
 	routes := serviceapi.NewRoutes()
 	serviceapi.RegisterRoutesHandlers(srv, routes)
 
@@ -122,12 +124,12 @@ func startRoutesDaemon(t *testing.T) func() {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(filepath.Join(dir, "devm.sock")); err == nil {
+		if _, err := os.Stat(socket); err == nil {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	require.FileExists(t, filepath.Join(dir, "devm.sock"))
+	require.FileExists(t, socket)
 
 	return func() { cancel(); <-errCh }
 }

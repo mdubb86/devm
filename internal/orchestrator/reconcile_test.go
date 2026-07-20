@@ -50,7 +50,7 @@ func (f *fakeTartList) List(ctx context.Context) ([]tart.VM, error) {
 
 // startReconcileDaemon spins up a real serviceapi.Server with the
 // /vm/reconcile handler registered on a temp Unix socket, and points
-// HOME at a temp dir so serviceapi.SocketPath(identity.Prod) (and therefore
+// HOME at a temp dir so identity.Prod.SocketPath() (and therefore
 // serviceapi.NewClient(), which RunReconcile calls internally) resolves
 // to it. Returns a cleanup func.
 func startReconcileDaemon(t *testing.T) func() {
@@ -73,7 +73,7 @@ func startReconcileDaemon(t *testing.T) func() {
 
 	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
 	require.NoError(t, err)
-	socket := serviceapi.SocketPath(identity.Prod)
+	socket := identity.Prod.SocketPath()
 
 	sup := healthyIronProxySupervisor(t, "x")
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
@@ -216,7 +216,7 @@ func startReconcileDaemonWithIronProxyCapture(t *testing.T, running bool) (clean
 
 	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
 	require.NoError(t, err)
-	socket := serviceapi.SocketPath(identity.Prod)
+	socket := identity.Prod.SocketPath()
 
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
 	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(""))

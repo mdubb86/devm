@@ -3,7 +3,6 @@ package serviceapi
 import (
 	"context"
 	"net"
-	"os"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -11,13 +10,6 @@ import (
 	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/identity"
 )
-
-// dnsAddrEnv is a legacy env-var override for the DNS bind address,
-// retained temporarily so incremental commits compile. e2e's isolated
-// mode sets it to 127.0.0.1:0 (ephemeral port) so a second daemon can
-// coexist with the user's real one without a port collision. Removed
-// in a later commit once every caller passes cfg explicitly (Task 6).
-const dnsAddrEnv = "DEVM_DNS_ADDR"
 
 // DNSServer is the daemon's tiny *.<TLD> resolver. Every *.<TLD> name
 // answers its owning project's allocated ProjectIP (A), TTL 0 —
@@ -32,16 +24,11 @@ type DNSServer struct {
 }
 
 // NewDNSServer builds a server bound to cfg.DNSBindAddr, serving
-// cfg.TLD queries. Honors $DEVM_DNS_ADDR during the transition; that
-// env override is removed in a later commit. projectIPLookup returns
-// (projectIP, true) for a known, running project name; (_, false) for
-// unknown or stopped projects.
+// cfg.TLD queries. projectIPLookup returns (projectIP, true) for a
+// known, running project name; (_, false) for unknown or stopped
+// projects.
 func NewDNSServer(cfg identity.Config, projectIPLookup func(project string) (string, bool)) *DNSServer {
-	addr := cfg.DNSBindAddr
-	if v := os.Getenv(dnsAddrEnv); v != "" {
-		addr = v
-	}
-	return newDNSServerAt(cfg, addr, projectIPLookup)
+	return newDNSServerAt(cfg, cfg.DNSBindAddr, projectIPLookup)
 }
 
 // newDNSServerAt is the testable inner — tests pass an ephemeral

@@ -19,9 +19,8 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// NewClient returns a Client targeting cfg.SocketPath() (honoring the
-// legacy $DEVM_RUNTIME_DIR override — see SocketPath).
-func NewClient(cfg identity.Config) *Client { return NewClientWithSocket(SocketPath(cfg)) }
+// NewClient returns a Client targeting cfg.SocketPath().
+func NewClient(cfg identity.Config) *Client { return NewClientWithSocket(cfg.SocketPath()) }
 
 // NewClientWithSocket returns a Client targeting the given socket.
 // Tests use this with a temp socket.

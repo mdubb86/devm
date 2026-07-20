@@ -11,12 +11,6 @@ import (
 	"github.com/mdubb86/devm/internal/identity"
 )
 
-func TestCanonicalResolverContents_IsStable(t *testing.T) {
-	got := CanonicalResolverContents(identity.Prod.DNSBindAddr)
-	assert.Equal(t, "nameserver 127.0.0.1\nport 51153\n", got,
-		"canonical contents changed — coordinate with any pinned consumers")
-}
-
 func TestCheckResolverFileAt_Missing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test")
@@ -28,7 +22,7 @@ func TestCheckResolverFileAt_Missing(t *testing.T) {
 func TestCheckResolverFileAt_Matches(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test")
-	require.NoError(t, os.WriteFile(path, []byte(CanonicalResolverContents(identity.Prod.DNSBindAddr)), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(identity.Prod.CanonicalResolverContents()), 0644))
 	state, err := checkResolverFileAt(identity.Prod, path)
 	require.NoError(t, err)
 	assert.Equal(t, ResolverFileMatches, state)

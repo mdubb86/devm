@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"net"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,16 +22,9 @@ import (
 // fresh /vm/start. It should also best-effort re-push ENFORCED so a
 // softnet that itself restarted (and came back up LOCKED) gets
 // reconciled.
-//
-// Uses os.MkdirTemp (short prefix) rather than t.TempDir: a unix socket
-// path is capped at ~104 bytes on macOS, and t.TempDir embeds the full
-// test name in the path.
 func TestDiscoverSoftnet_RebuildsStateForRehydratedProjects(t *testing.T) {
 	const projectID = "discover-proj"
-	dir, err := os.MkdirTemp("", "sn-discover")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
-	t.Setenv("DEVM_RUNTIME_DIR", dir)
+	t.Setenv("HOME", t.TempDir())
 
 	ironProxyState.put(projectID, projectInfo{
 		HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
@@ -75,10 +67,7 @@ func TestDiscoverSoftnet_RebuildsStateForRehydratedProjects(t *testing.T) {
 // daemon start with no VMs running, or one where AdoptIronProxies found
 // no surviving iron-proxies.
 func TestDiscoverSoftnet_NoRehydratedProjects_NoOp(t *testing.T) {
-	dir, err := os.MkdirTemp("", "sn-discover-empty")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
-	t.Setenv("DEVM_RUNTIME_DIR", dir)
+	t.Setenv("HOME", t.TempDir())
 
 	assert.NotPanics(t, func() {
 		discoverSoftnet(context.Background(), identity.Prod, 51234)

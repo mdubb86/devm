@@ -14,7 +14,7 @@ import (
 )
 
 func TestEnsureProjectKeypair_GeneratesOnFirstCall(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	pub, err := EnsureProjectKeypair(identity.Prod, "myproj")
 	require.NoError(t, err)
 	require.NotEmpty(t, pub)
@@ -35,7 +35,7 @@ func TestEnsureProjectKeypair_GeneratesOnFirstCall(t *testing.T) {
 }
 
 func TestEnsureProjectKeypair_IdempotentOnSecondCall(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	first, err := EnsureProjectKeypair(identity.Prod, "p")
 	require.NoError(t, err)
 	second, err := EnsureProjectKeypair(identity.Prod, "p")
@@ -45,7 +45,7 @@ func TestEnsureProjectKeypair_IdempotentOnSecondCall(t *testing.T) {
 }
 
 func TestEnsureProjectHostKey_WritesKnownHostsLine(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	priv, pub, err := EnsureProjectHostKey(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotEmpty(t, priv)
@@ -64,7 +64,7 @@ func TestEnsureProjectHostKey_WritesKnownHostsLine(t *testing.T) {
 }
 
 func TestEnsureProjectHostKey_Idempotent(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	priv1, pub1, err := EnsureProjectHostKey(identity.Prod, "p")
 	require.NoError(t, err)
 	priv2, pub2, err := EnsureProjectHostKey(identity.Prod, "p")
@@ -74,7 +74,7 @@ func TestEnsureProjectHostKey_Idempotent(t *testing.T) {
 }
 
 func TestRemove_Idempotent(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	require.NoError(t, Remove(identity.Prod, "nope"))
 	_, err := EnsureProjectKeypair(identity.Prod, "p")
 	require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestRemove_Idempotent(t *testing.T) {
 }
 
 func TestEnsureProjectKeypair_RejectsPathTraversal(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	for _, id := range []string{"../evil", "foo/bar", "..", "foo\\bar"} {
 		t.Run(id, func(t *testing.T) {
 			_, err := EnsureProjectKeypair(identity.Prod, id)
@@ -94,7 +94,7 @@ func TestEnsureProjectKeypair_RejectsPathTraversal(t *testing.T) {
 }
 
 func TestEnsureProjectKeypair_RegeneratesIfPrivkeyMissing(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	first, err := EnsureProjectKeypair(identity.Prod, "p")
 	require.NoError(t, err)
 
@@ -108,7 +108,7 @@ func TestEnsureProjectKeypair_RegeneratesIfPrivkeyMissing(t *testing.T) {
 }
 
 func TestEnsureProjectHostKey_RecreatesKnownHostsIfMissing(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", filepath.Join(t.TempDir(), "rd"))
+	t.Setenv("HOME", t.TempDir())
 	_, _, err := EnsureProjectHostKey(identity.Prod, "p")
 	require.NoError(t, err)
 

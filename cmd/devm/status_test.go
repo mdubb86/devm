@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -36,9 +35,12 @@ func startStatusAllDaemon(t *testing.T, running map[string]bool) func() {
 	dir, err := os.MkdirTemp("/tmp", "sapi-sa-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	t.Setenv("DEVM_RUNTIME_DIR", dir)
+	t.Setenv("HOME", dir)
 
-	srv := serviceapi.NewServer(serviceapi.SocketPath(identity.Prod), serviceapi.Build{Version: "dev"})
+	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
+	require.NoError(t, err)
+	socket := identity.Prod.SocketPath()
+	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "dev"})
 	sup := supervisor.New("")
 	serviceapi.RegisterStatusAllHandler(srv, identity.Prod, sup, &fakeStatusTart{running: running})
 
@@ -48,12 +50,12 @@ func startStatusAllDaemon(t *testing.T, running map[string]bool) func() {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(filepath.Join(dir, "devm.sock")); err == nil {
+		if _, err := os.Stat(socket); err == nil {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	require.FileExists(t, filepath.Join(dir, "devm.sock"))
+	require.FileExists(t, socket)
 
 	return func() { cancel(); <-errCh }
 }

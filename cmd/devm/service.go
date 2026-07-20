@@ -151,7 +151,7 @@ var serveCmd = &cobra.Command{
 			// svc.Run() on Darwin expects to be launched by launchd
 			// and exits silently when invoked from a normal shell — no
 			// use to us in e2e-isolated mode where we want a plain
-			// background process bound to $DEVM_RUNTIME_DIR/devm.sock.
+			// background process bound to cfg.SocketPath().
 			// Signal handling: cancel context on SIGTERM/SIGINT so
 			// RunService's oklog/run group unwinds cleanly.
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -895,7 +895,8 @@ var kardianosRestartCmd = &cobra.Command{
 func init() {
 	// --foreground routes `serve` directly through RunService (no
 	// kardianos). Used by e2e's isolated mode so a test daemon can
-	// run in a private DEVM_RUNTIME_DIR without touching launchd.
+	// run under the e2e identity's own runtime dir without touching
+	// launchd.
 	serveCmd.Flags().Bool("foreground", false, "run RunService directly, bypassing kardianos (e2e-isolated mode)")
 	rootCmd.AddCommand(serveCmd, installCmd, uninstallCmd, buildBaseIfNeededCmd)
 	serviceCmd.AddCommand(

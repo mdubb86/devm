@@ -38,7 +38,7 @@ func writeStatusAllSnapshot(t *testing.T, projectID string, cfg schema.Config) {
 }
 
 func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
 	writeStatusAllSnapshot(t, "running-proj", schema.Config{
 		Project: schema.Project{Name: "running-proj"},
@@ -47,7 +47,7 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 		Project: schema.Project{Name: "stopped-proj"},
 	})
 
-	srv := NewServer(SocketPath(identity.Prod), Build{Version: "dev"})
+	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
 	sup := supervisor.New("")
 	tr := &fakeStatusAllTart{running: map[string]bool{"running-proj": true}}
 	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
@@ -78,9 +78,9 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 }
 
 func TestStatusAll_NoSnapshots_EmptyList(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
-	srv := NewServer(SocketPath(identity.Prod), Build{Version: "dev"})
+	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
 	sup := supervisor.New("")
 	tr := &fakeStatusAllTart{running: map[string]bool{}}
 	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
@@ -95,13 +95,13 @@ func TestStatusAll_NoSnapshots_EmptyList(t *testing.T) {
 }
 
 func TestStatusAll_SkipsNonJSONAndMalformedFiles(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	require.NoError(t, os.MkdirAll(StateDir(identity.Prod), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(StateDir(identity.Prod), "notes.txt"), []byte("hi"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(StateDir(identity.Prod), "broken.json"), []byte("{not json"), 0o600))
 	writeStatusAllSnapshot(t, "good", schema.Config{Project: schema.Project{Name: "good"}})
 
-	srv := NewServer(SocketPath(identity.Prod), Build{Version: "dev"})
+	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
 	sup := supervisor.New("")
 	tr := &fakeStatusAllTart{running: map[string]bool{}}
 	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
@@ -117,9 +117,9 @@ func TestStatusAll_SkipsNonJSONAndMalformedFiles(t *testing.T) {
 }
 
 func TestStatusAll_TartListError_Returns500(t *testing.T) {
-	t.Setenv("DEVM_RUNTIME_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
-	srv := NewServer(SocketPath(identity.Prod), Build{Version: "dev"})
+	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
 	sup := supervisor.New("")
 	RegisterStatusAllHandler(srv, identity.Prod, sup, erroringTartLister{})
 

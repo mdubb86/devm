@@ -16,7 +16,6 @@ import (
 	"text/template"
 
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 )
 
@@ -61,7 +60,7 @@ const blockTmpl = `Host devm-{{.Name}}
 
 // Path returns the absolute path devm writes to.
 func Path(cfg identity.Config) string {
-	return filepath.Join(serviceapi.RuntimeDir(cfg), "ssh_config")
+	return filepath.Join(cfg.RuntimeDir(), "ssh_config")
 }
 
 // validateEntry rejects unsafe Name values to prevent ssh_config
@@ -96,7 +95,7 @@ func Emit(cfg identity.Config, entries []Entry) error {
 		return err
 	}
 
-	dir := serviceapi.RuntimeDir(cfg)
+	dir := cfg.RuntimeDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}

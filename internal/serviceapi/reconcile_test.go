@@ -49,7 +49,7 @@ func TestVMReconcile_NoSnapshotYet_TreatsAllAsFullDiff(t *testing.T) {
 	req := VMReconcileRequest{Name: "p", Cfg: cfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
@@ -88,7 +88,7 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 	}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	RegisterReconcileHandler(server, identity.Prod, locks /* fake apply */, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
@@ -121,7 +121,7 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
@@ -166,7 +166,7 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
@@ -211,7 +211,7 @@ func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testi
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
@@ -298,7 +298,7 @@ func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
 	}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
@@ -346,7 +346,7 @@ func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
 	}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"))
 
@@ -389,7 +389,7 @@ func TestVMReconcile_NetworkAddSurfacesAsAppliedIronProxy(t *testing.T) {
 	}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"))
 
@@ -418,7 +418,7 @@ func TestVMReconcile_MissingIronProxy_EmitsKindIronProxyDown(t *testing.T) {
 	req := VMReconcileRequest{Name: "p", Cfg: cfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	// A fresh supervisor with no adopted iron-proxy process reports the
 	// proxy as not Present/Running → computeProxyHealth returns MISSING.
@@ -447,7 +447,7 @@ func TestVMReconcile_StoppedVM_MissingIronProxy_DoesNotEmitKindIronProxyDown(t *
 	req := VMReconcileRequest{Name: "p", Cfg: cfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	sup := supervisor.New("")
 	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: false, vmName: "p"}, sup)
@@ -533,7 +533,7 @@ func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	fake := &fakeApply{}
 	// Use a fake tart that reports p-vm as NOT running.
@@ -581,7 +581,7 @@ func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))
 
@@ -621,7 +621,7 @@ func TestVMReconcile_ForwardsSSHBytesToApplyLive(t *testing.T) {
 	}
 	body, _ := json.Marshal(req)
 
-	server := NewServer(SocketPath(identity.Prod), Build{})
+	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	fake := &fakeApply{}
 	RegisterReconcileHandler(server, identity.Prod, locks, fake, &fakeTartList{running: true, vmName: "p"}, supervisor.New(""))

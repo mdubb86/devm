@@ -13,8 +13,8 @@ import (
 )
 
 // softnetSockDir is a short, per-user location for control sockets — NOT
-// nested under RuntimeDir(). AF_UNIX sun_path is capped at 104 bytes on
-// Darwin (103 usable + NUL), and RuntimeDir() alone can already approach
+// nested under cfg.RuntimeDir(). AF_UNIX sun_path is capped at 104 bytes on
+// Darwin (103 usable + NUL), and cfg.RuntimeDir() alone can already approach
 // that under the e2e harness (`mktemp -d -t devm-e2e-runtime.XXXX` lands
 // deep under macOS's per-user $TMPDIR). Rooting at /tmp instead of
 // os.TempDir() sidesteps $TMPDIR entirely, since $TMPDIR is exactly the
@@ -57,20 +57,20 @@ func ensureSoftnetSockDir(dir string) error {
 
 // SoftnetControlSock returns the path to the Unix domain socket the
 // daemon uses to reach the softnet control channel for projectID.
-// Deterministic: the same (RuntimeDir, projectID) pair always yields the
-// same path, so callers on either end of the socket (the daemon spawning
-// softnet, and softnet itself) agree on the location without
-// coordination. The path is a hash of RuntimeDir()+projectID rather than
-// the project name itself, both to keep it short regardless of project
-// name length and to disambiguate concurrent daemon instances (e.g. a
-// real installed daemon and an isolated e2e daemon) that might otherwise
-// pick the same project name. Pure: does not touch the filesystem, so
-// discoverSoftnet can recompute the same path on daemon restart without
-// re-running the ownership/mode check — /vm/start is the one caller that
-// creates and validates softnetSockDir, via ensureSoftnetSockDir, before
-// spawning softnet.
+// Deterministic: the same (cfg.RuntimeDir(), projectID) pair always
+// yields the same path, so callers on either end of the socket (the
+// daemon spawning softnet, and softnet itself) agree on the location
+// without coordination. The path is a hash of cfg.RuntimeDir()+projectID
+// rather than the project name itself, both to keep it short regardless
+// of project name length and to disambiguate concurrent daemon
+// instances (e.g. a real installed daemon and an isolated e2e daemon)
+// that might otherwise pick the same project name. Pure: does not touch
+// the filesystem, so discoverSoftnet can recompute the same path on
+// daemon restart without re-running the ownership/mode check —
+// /vm/start is the one caller that creates and validates
+// softnetSockDir, via ensureSoftnetSockDir, before spawning softnet.
 func SoftnetControlSock(cfg identity.Config, projectID string) string {
-	sum := sha256.Sum256([]byte(RuntimeDir(cfg) + "\x00" + projectID))
+	sum := sha256.Sum256([]byte(cfg.RuntimeDir() + "\x00" + projectID))
 	return filepath.Join(softnetSockDir(), hex.EncodeToString(sum[:])[:20]+".sock")
 }
 
@@ -88,7 +88,7 @@ func ensureSoftnetSymlink(cfg identity.Config) (binDir string, err error) {
 		return "", fmt.Errorf("resolve devm executable: %w", err)
 	}
 
-	binDir = filepath.Join(RuntimeDir(cfg), "softnet-bin")
+	binDir = filepath.Join(cfg.RuntimeDir(), "softnet-bin")
 	if err := os.MkdirAll(binDir, 0700); err != nil {
 		return "", fmt.Errorf("create softnet bin dir: %w", err)
 	}
