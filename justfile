@@ -33,6 +33,9 @@ SIGN_IDENTITY := "devm-dev"
 DEV_LDFLAGS := "-X main.Commit=$(git rev-parse --short=12 HEAD)$(git diff-index --quiet HEAD -- || echo -dirty) -X main.Fingerprint=$(head -c 8 /dev/urandom | xxd -p)"
 
 # Private: build both binaries for the given profile.
+# NOTE: this recipe body is one joined shell command. Build failures
+# MUST be explicit (`|| exit 1`) — otherwise a later step like the
+# codesign `if` block's exit code masks them.
 _build PROFILE:
     @mkdir -p bin internal/docker/embed
     GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim   ./cmd/devm-runc-shim
@@ -44,7 +47,7 @@ _build PROFILE:
     esac; \
     ldflags="{{DEV_LDFLAGS}} -X github.com/mdubb86/devm/internal/identity.Profile={{PROFILE}}"; \
     go build -ldflags "$ldflags" -o "$daemon_out" ./cmd/devm && \
-    go build -ldflags "$ldflags" -o "$helper_out" ./cmd/devm-helper; \
+    go build -ldflags "$ldflags" -o "$helper_out" ./cmd/devm-helper || exit 1; \
     if security find-certificate -c '{{SIGN_IDENTITY}}' >/dev/null 2>&1; then \
         codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime "$daemon_out" "$helper_out" && \
         echo "signed with {{SIGN_IDENTITY}}"; \
