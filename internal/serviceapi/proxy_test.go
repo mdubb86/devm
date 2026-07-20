@@ -35,7 +35,7 @@ func startBackend(t *testing.T, msg string) (port int, cleanup func()) {
 // as ProxyServer.stampLocalAddr does via ConnContext on a real
 // accepted connection — lets tests exercise the dest-IP dispatch path
 // without binding real per-project listeners (which requires the
-// portbinder helper).
+// helper).
 func withLocalAddr(r *http.Request, ip string) *http.Request {
 	ctx := context.WithValue(r.Context(), ctxKeyLocalAddr, &net.TCPAddr{IP: net.ParseIP(ip)})
 	return r.WithContext(ctx)

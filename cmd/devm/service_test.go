@@ -35,17 +35,17 @@ func TestBuildUninstallScript_ReapsIronProxyChildren(t *testing.T) {
 		"pkill iron-proxy must come after launchctl bootout; got:\n%s", script)
 }
 
-func TestBuildInstallScript_IncludesPortbinder(t *testing.T) {
+func TestBuildInstallScript_IncludesHelper(t *testing.T) {
 	script := buildInstallScript(installInputs{
-		DevmExe:       "/usr/local/bin/devm",
-		PortbinderExe: "/usr/local/libexec/devm-portbinder",
-		InstallUser:   "alice",
-		NeedsDaemon:   true,
+		DevmExe:     "/usr/local/bin/devm",
+		HelperExe:   "/usr/local/libexec/devm-helper",
+		InstallUser: "alice",
+		NeedsDaemon: true,
 	})
 	assert.Contains(t, script, "dscl . -create /Groups/_devm")
-	assert.Contains(t, script, "/Library/LaunchDaemons/com.devm.portbinder.plist")
-	assert.Contains(t, script, "launchctl bootstrap system /Library/LaunchDaemons/com.devm.portbinder.plist")
-	assert.Contains(t, script, "/usr/local/libexec/devm-portbinder")
+	assert.Contains(t, script, "/Library/LaunchDaemons/com.devm.helper.plist")
+	assert.Contains(t, script, "launchctl bootstrap system /Library/LaunchDaemons/com.devm.helper.plist")
+	assert.Contains(t, script, "/usr/local/libexec/devm-helper")
 
 	// The append must be guarded against duplicate GroupMembership
 	// entries across repeated install runs (dscl -append has no
@@ -55,8 +55,8 @@ func TestBuildInstallScript_IncludesPortbinder(t *testing.T) {
 	assert.Contains(t, script, "|| dscl . -append /Groups/_devm GroupMembership")
 }
 
-func TestBuildInstallScript_SkipsPortbinderWhenExeEmpty(t *testing.T) {
-	// Empty PortbinderExe means "not needed this run" (already
+func TestBuildInstallScript_SkipsHelperWhenExeEmpty(t *testing.T) {
+	// Empty HelperExe means "not needed this run" (already
 	// installed and daemon in sync) — the block must not appear at
 	// all, not even the idempotent group-creation line.
 	script := buildInstallScript(installInputs{
@@ -64,18 +64,18 @@ func TestBuildInstallScript_SkipsPortbinderWhenExeEmpty(t *testing.T) {
 		NeedsDaemon: true,
 	})
 	assert.NotContains(t, script, "_devm")
-	assert.NotContains(t, script, "com.devm.portbinder")
+	assert.NotContains(t, script, "com.devm.helper")
 }
 
 func TestBuildUninstallScript_RemovesAliases(t *testing.T) {
 	script := buildUninstallScript("/usr/local/bin/devm")
-	assert.Contains(t, script, "launchctl bootout system/com.devm.portbinder")
+	assert.Contains(t, script, "launchctl bootout system/com.devm.helper")
 	// Alias cleanup for all 20 addresses.
 	for n := 1; n <= 20; n++ {
 		assert.Contains(t, script, fmt.Sprintf("ifconfig lo0 -alias 127.42.0.%d", n))
 	}
-	assert.Contains(t, script, "rm -f /Library/LaunchDaemons/com.devm.portbinder.plist")
-	assert.Contains(t, script, "rm -f /usr/local/libexec/devm-portbinder")
+	assert.Contains(t, script, "rm -f /Library/LaunchDaemons/com.devm.helper.plist")
+	assert.Contains(t, script, "rm -f /usr/local/libexec/devm-helper")
 }
 
 func TestResolveInstallUser_UsesSudoUserWhenPresent(t *testing.T) {

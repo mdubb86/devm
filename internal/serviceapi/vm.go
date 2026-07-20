@@ -576,9 +576,9 @@ func RegisterVMHandlers(s *Server, sup *supervisor.Supervisor, tr *tart.Tart, de
 		}
 
 		// Bind this project's per-project HTTP/HTTPS proxy listeners on
-		// its ProjectIP via the portbinder helper. Non-fatal like the
+		// its ProjectIP via the helper. Non-fatal like the
 		// expose-map push above: ingress is convenience, not the security
-		// boundary, and a failed bind (e.g. the portbinder helper isn't
+		// boundary, and a failed bind (e.g. the helper isn't
 		// installed) is re-attempted on the next /vm/start.
 		if proxy != nil {
 			if err := proxy.StartProjectListeners(ctx, req.Name, projectIP); err != nil {

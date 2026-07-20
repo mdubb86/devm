@@ -13,12 +13,12 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/debuglog"
-	"github.com/mdubb86/devm/internal/portbinder"
+	"github.com/mdubb86/devm/internal/helper"
 )
 
 // ProxyServer is the daemon's HTTP+HTTPS reverse proxy. Binds one
 // HTTP (:80) and one HTTPS (:443) listener per active project, on that
-// project's allocated ProjectIP, via the portbinder helper. Dispatches
+// project's allocated ProjectIP, via the helper. Dispatches
 // by destination IP first (which project owns this connection), then
 // by Host: header (which route within that project) — see ServeHTTP.
 type ProxyServer struct {
@@ -43,7 +43,7 @@ func NewProxyServer(routes *Routes, ca *CA) *ProxyServer {
 }
 
 // StartProjectListeners opens :80 and :443 listeners on projectIP via
-// the portbinder helper and starts serving on them. Idempotent: a
+// the helper and starts serving on them. Idempotent: a
 // project that already has listeners registered is left untouched —
 // callers should StopProjectListeners first if they want to rebind.
 func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, projectIP string) error {
@@ -54,11 +54,11 @@ func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, proj
 	}
 	p.mu.Unlock()
 
-	httpLn, err := portbinder.BindTCP(projectIP, 80)
+	httpLn, err := helper.BindTCP(projectIP, 80)
 	if err != nil {
 		return fmt.Errorf("bind :80 on %s: %w", projectIP, err)
 	}
-	httpsLn, err := portbinder.BindTCP(projectIP, 443)
+	httpsLn, err := helper.BindTCP(projectIP, 443)
 	if err != nil {
 		httpLn.Close()
 		return fmt.Errorf("bind :443 on %s: %w", projectIP, err)

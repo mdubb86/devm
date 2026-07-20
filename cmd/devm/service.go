@@ -312,12 +312,12 @@ type installInputs struct {
 	// DevmExe is the CLI binary path baked into the LaunchDaemon plist
 	// by `_kardianos install`.
 	DevmExe string
-	// PortbinderExe is the built devm-portbinder binary to install at
-	// portbinderInstallPath. Empty skips the entire portbinder block
+	// HelperExe is the built devm-helper binary to install at
+	// helperInstallPath. Empty skips the entire helper block
 	// (group creation, binary + plist install, bootstrap).
-	PortbinderExe string
+	HelperExe string
 	// InstallUser is added to the _devm group's membership list.
-	// Ignored when PortbinderExe is empty.
+	// Ignored when HelperExe is empty.
 	InstallUser string
 
 	NeedsDNS         bool
@@ -331,9 +331,9 @@ type installInputs struct {
 
 // buildInstallScript assembles the privileged install script from
 // already-computed inputs. Order: DNS resolver file, CA trust,
-// portbinder (group + binary + plist + bootstrap), then the main
+// helper (group + binary + plist + bootstrap), then the main
 // daemon reload — matching runPrivilegedInstall's prior inline
-// ordering plus the new portbinder step inserted before the daemon
+// ordering plus the new helper step inserted before the daemon
 // reload.
 func buildInstallScript(inputs installInputs) string {
 	var sb strings.Builder
@@ -348,7 +348,7 @@ func buildInstallScript(inputs installInputs) string {
 		fmt.Fprintf(&sb, "security add-trusted-cert -d -r trustRoot -k %s %s\n",
 			shellQuote(serviceapi.SystemKeychain), shellQuote(inputs.RootCertPath))
 	}
-	if inputs.PortbinderExe != "" {
+	if inputs.HelperExe != "" {
 		// Create _devm group idempotently (safe re-run at every install).
 		// GID 802: PrimaryGroupID collision fallback — pick your own if
 		// this collides with an existing group on your system (org
@@ -360,10 +360,10 @@ func buildInstallScript(inputs installInputs) string {
 			sb.WriteString("dscl . -read /Groups/_devm GroupMembership 2>/dev/null | grep -qw " + inputs.InstallUser +
 				" || dscl . -append /Groups/_devm GroupMembership " + inputs.InstallUser + "\n")
 		}
-		fmt.Fprintf(&sb, "install -m 0755 %s %s\n", shellQuote(inputs.PortbinderExe), portbinderInstallPath)
-		fmt.Fprintf(&sb, "install -m 0644 /dev/stdin %s <<'EOF'\n%sEOF\n", portbinderPlistPath, portbinderPlistContent())
-		sb.WriteString("launchctl bootout system/com.devm.portbinder 2>/dev/null || true\n")
-		sb.WriteString("launchctl bootstrap system " + portbinderPlistPath + "\n")
+		fmt.Fprintf(&sb, "install -m 0755 %s %s\n", shellQuote(inputs.HelperExe), helperInstallPath)
+		fmt.Fprintf(&sb, "install -m 0644 /dev/stdin %s <<'EOF'\n%sEOF\n", helperPlistPath, helperPlistContent())
+		sb.WriteString("launchctl bootout system/com.devm.helper 2>/dev/null || true\n")
+		sb.WriteString("launchctl bootstrap system " + helperPlistPath + "\n")
 	}
 	if inputs.NeedsDaemon {
 		// Full reload path: unload any running daemon, wipe the plist
@@ -379,33 +379,33 @@ func buildInstallScript(inputs installInputs) string {
 	return sb.String()
 }
 
-// portbinderNeedsInstall reports whether the portbinder helper should
+// helperNeedsInstall reports whether the helper should
 // be (re)installed: missing plist, missing binary, or piggybacked on
 // a daemon reinstall (the two binaries are built together by `just
-// build`, so a CLI/daemon fingerprint mismatch means portbinder is
+// build`, so a CLI/daemon fingerprint mismatch means helper is
 // likely stale too).
-func portbinderNeedsInstall(needsDaemon bool) bool {
+func helperNeedsInstall(needsDaemon bool) bool {
 	if needsDaemon {
 		return true
 	}
-	if _, err := os.Stat(portbinderInstallPath); err != nil {
+	if _, err := os.Stat(helperInstallPath); err != nil {
 		return true
 	}
-	if _, err := os.Stat(portbinderPlistPath); err != nil {
+	if _, err := os.Stat(helperPlistPath); err != nil {
 		return true
 	}
 	return false
 }
 
-// portbinderSourcePath returns the devm-portbinder binary expected to
+// helperSourcePath returns the devm-helper binary expected to
 // sit alongside devmExe — the layout `just build` produces in bin/.
-func portbinderSourcePath(devmExe string) string {
-	return filepath.Join(filepath.Dir(devmExe), "devm-portbinder")
+func helperSourcePath(devmExe string) string {
+	return filepath.Join(filepath.Dir(devmExe), "devm-helper")
 }
 
 const (
-	portbinderInstallPath = "/usr/local/libexec/devm-portbinder"
-	portbinderPlistPath   = "/Library/LaunchDaemons/com.devm.portbinder.plist"
+	helperInstallPath = "/usr/local/libexec/devm-helper"
+	helperPlistPath   = "/Library/LaunchDaemons/com.devm.helper.plist"
 )
 
 // runPrivilegedInstall composes and runs the install script that
@@ -417,7 +417,7 @@ const (
 //   - CA trust: skipped when the cert is already in the System Keychain
 //   - Daemon plist + bootstrap: skipped when the daemon is already
 //     running with a Fingerprint that matches this CLI's
-//   - Portbinder: skipped when its plist + binary are already present
+//   - Helper: skipped when its plist + binary are already present
 //     and the daemon doesn't need reinstalling
 //
 // When every step is a no-op, the function returns without escalating
@@ -447,9 +447,9 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 	needsCA := !trusted
 
 	needsDaemon := !daemonInSyncWithCLI(ctx)
-	needsPortbinder := portbinderNeedsInstall(needsDaemon)
+	needsHelper := helperNeedsInstall(needsDaemon)
 
-	if !needsDNS && !needsCA && !needsDaemon && !needsPortbinder {
+	if !needsDNS && !needsCA && !needsDaemon && !needsHelper {
 		return false, nil
 	}
 
@@ -480,16 +480,16 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 		RootCertPath:     rootCertPath,
 		NeedsDaemon:      needsDaemon,
 	}
-	if needsPortbinder {
-		src := portbinderSourcePath(exe)
+	if needsHelper {
+		src := helperSourcePath(exe)
 		if _, statErr := os.Stat(src); statErr == nil {
-			inputs.PortbinderExe = src
+			inputs.HelperExe = src
 			if name, _, userErr := resolveInstallUser(nil); userErr == nil {
 				inputs.InstallUser = name
 			}
 		} else {
 			fmt.Fprintf(os.Stderr,
-				"note: devm-portbinder binary not found at %s; skipping network-isolation helper install\n", src)
+				"note: devm-helper binary not found at %s; skipping network-isolation helper install\n", src)
 		}
 	}
 
@@ -580,10 +580,10 @@ func runPrivilegedUninstall(out io.Writer) error {
 //
 // set +e: best-effort each step so partial state still cleans up.
 //
-// The main daemon is booted out before portbinder: the daemon holds
-// FDs it received from portbinder over SCM_RIGHTS for each bound
+// The main daemon is booted out before helper: the daemon holds
+// FDs it received from helper over SCM_RIGHTS for each bound
 // project port, and tearing the daemon down first releases those
-// before portbinder itself goes away.
+// before helper itself goes away.
 //
 // bootout deregisters + SIGTERMs the daemon synchronously. Must run
 // before kardianos's Stop, which uses `launchctl unload` — a legacy
@@ -599,13 +599,13 @@ func runPrivilegedUninstall(out io.Writer) error {
 // Loopback aliases (127.42.0.1-20, one per concurrent project — see
 // the per-project bind isolation design) are torn down best-effort;
 // a reboot clears them regardless. The _devm group is removed too —
-// it exists solely to grant devm-portbinder's GID access and is
+// it exists solely to grant devm-helper's GID access and is
 // recreated idempotently on the next install.
 func buildUninstallScript(exe string) string {
 	var sb strings.Builder
 	sb.WriteString("set +e\n")
 	sb.WriteString("launchctl bootout system/com.devm.service 2>/dev/null\n")
-	sb.WriteString("launchctl bootout system/com.devm.portbinder 2>/dev/null || true\n")
+	sb.WriteString("launchctl bootout system/com.devm.helper 2>/dev/null || true\n")
 	sb.WriteString("pkill -TERM -f 'iron-proxy -config .*/iron-proxy/.*\\.yaml' 2>/dev/null\n")
 	fmt.Fprintf(&sb, "%s _kardianos uninstall\n", shellQuote(exe))
 	fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(serviceapi.ResolverFilePath))
@@ -615,8 +615,8 @@ func buildUninstallScript(exe string) string {
 	for n := 1; n <= 20; n++ {
 		fmt.Fprintf(&sb, "/sbin/ifconfig lo0 -alias 127.42.0.%d 2>/dev/null || true\n", n)
 	}
-	sb.WriteString("rm -f " + portbinderPlistPath + "\n")
-	sb.WriteString("rm -f " + portbinderInstallPath + "\n")
+	sb.WriteString("rm -f " + helperPlistPath + "\n")
+	sb.WriteString("rm -f " + helperInstallPath + "\n")
 	sb.WriteString(`dscl . -delete /Groups/_devm 2>/dev/null || true` + "\n")
 
 	return sb.String()

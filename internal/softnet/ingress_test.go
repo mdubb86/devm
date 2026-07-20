@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mdubb86/devm/internal/portbinder"
+	"github.com/mdubb86/devm/internal/helper"
 )
 
 // itoa converts an int to its decimal string form.
@@ -96,12 +96,12 @@ func TestIngressReconcileSameHostPortChangedGuestPort(t *testing.T) {
 	}
 }
 
-// mockPortbinderHelper starts a UDS listener that mimics the root
-// devm-portbinder helper closely enough for apply()'s low-port branch:
+// mockHelper starts a UDS listener that mimics the root
+// devm-helper closely enough for apply()'s low-port branch:
 // it reads (and discards) one request, binds a real ephemeral TCP
 // socket, and hands the FD back via SCM_RIGHTS. Mirrors
-// internal/portbinder/client_test.go's mockHelper.
-func mockPortbinderHelper(t *testing.T) string {
+// internal/helper/client_test.go's mockHelper.
+func mockHelper(t *testing.T) string {
 	t.Helper()
 	// os.MkdirTemp (not t.TempDir()) keeps the UDS path short enough to
 	// stay under macOS's ~104-byte UNIX_PATH_MAX; t.TempDir() embeds the
@@ -151,20 +151,20 @@ func mockPortbinderHelper(t *testing.T) string {
 	return sock
 }
 
-// TestIngressApplyLowPortUsesPortbinder proves apply()'s branch for
-// HostPort<1024 goes through portbinder.BindTCP rather than a direct
+// TestIngressApplyLowPortUsesHelper proves apply()'s branch for
+// HostPort<1024 goes through helper.BindTCP rather than a direct
 // net.Listen: softnet itself is unprivileged and a direct Listen on a
 // low port fails with EACCES on macOS (this is the C1 fix). We can't
-// actually bind :22 as a non-root test, so we point portbinder at a
+// actually bind :22 as a non-root test, so we point helper at a
 // mock helper and confirm apply() produces a working listener whose
 // address is the helper's ephemeral bind (not literally :22) — which
 // only happens if the low-port branch dialed the helper instead of
 // calling net.Listen directly (a direct net.Listen("tcp", ":22") would
 // simply fail with EACCES here, not succeed on a different port).
-func TestIngressApplyLowPortUsesPortbinder(t *testing.T) {
-	orig := portbinder.SocketPath
-	portbinder.SocketPath = mockPortbinderHelper(t)
-	defer func() { portbinder.SocketPath = orig }()
+func TestIngressApplyLowPortUsesHelper(t *testing.T) {
+	orig := helper.SocketPath
+	helper.SocketPath = mockHelper(t)
+	defer func() { helper.SocketPath = orig }()
 
 	ing := newIngress(nil)
 	ing.apply([]ExposePort{{GuestPort: 22, BindIP: "127.42.0.5", HostPort: 22}})
@@ -176,16 +176,16 @@ func TestIngressApplyLowPortUsesPortbinder(t *testing.T) {
 		t.Fatalf("expected a listener tracked for host port 22")
 	}
 	if !hostReachableAddr(el.ln.Addr().String()) {
-		t.Fatalf("listener for host port 22 (via mock portbinder) should be reachable")
+		t.Fatalf("listener for host port 22 (via mock helper) should be reachable")
 	}
 
 	ing.close()
 }
 
 // TestIngressApplyHighPortUsesDirectListen proves apply()'s branch for
-// HostPort>=1024 still calls net.Listen directly (no portbinder
+// HostPort>=1024 still calls net.Listen directly (no helper
 // round-trip): the resulting listener binds literally on the
-// requested host port, unlike the portbinder path above which hands
+// requested host port, unlike the helper path above which hands
 // back a helper-chosen (ephemeral, in the mock) port.
 func TestIngressApplyHighPortUsesDirectListen(t *testing.T) {
 	ing := newIngress(nil)
@@ -208,7 +208,7 @@ func TestIngressApplyHighPortUsesDirectListen(t *testing.T) {
 
 // hostReachable dials the given address directly (used for listeners
 // whose bound port isn't known ahead of time, e.g. the mock
-// portbinder's ephemeral socket).
+// helper's ephemeral socket).
 func hostReachableAddr(addr string) bool {
 	c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
 	if err != nil {

@@ -90,12 +90,12 @@ func RunService(ctx context.Context, build Build) error {
 
 	// Re-bind this daemon's own per-project HTTP/HTTPS proxy listeners
 	// for every project AdoptIronProxies just recovered. A daemon
-	// restart tears down the previous process's listeners (portbinder
+	// restart tears down the previous process's listeners (helper
 	// hands out FDs per-request; they aren't inherited across a
 	// restart), so without this a recovered project would resolve in
 	// DNS but 502/refuse on the daemon proxy until its next /vm/start.
 	// Best-effort and non-blocking for the same reason discoverSoftnet's
-	// re-push is: a missing/unresponsive portbinder helper must not
+	// re-push is: a missing/unresponsive helper must not
 	// stall the rest of the daemon from coming up.
 	for _, id := range ironProxyState.keys() {
 		info, ok := ironProxyState.get(id)
@@ -166,7 +166,7 @@ func RunService(ctx context.Context, build Build) error {
 	// Reverse proxy readiness (Ship 3). There's no longer a single
 	// daemon-wide proxy actor to add to the run group — listeners are
 	// per-project and bound lazily by /vm/start (StartProjectListeners)
-	// via the portbinder helper, not launchd-inherited sockets. The
+	// via the helper, not launchd-inherited sockets. The
 	// proxy object itself always exists (constructed above), so
 	// SetProxyReady lets `devm status`'s /proxy-status probe report
 	// "the daemon can serve a proxy" unconditionally instead of

@@ -27,7 +27,7 @@ func TestLaunchdPlistTemplate_ContainsRequiredKeys(t *testing.T) {
 
 	// Since B3 (per-project bind isolation), the daemon no longer
 	// relies on launchd pre-binding :80/:443 and handing off the FDs —
-	// the portbinder helper does that per-project instead. The plist
+	// the helper does that per-project instead. The plist
 	// must not declare a Sockets dict.
 	assert.NotContains(t, plist, "<key>Sockets</key>")
 	assert.NotContains(t, plist, "<key>HTTPSocket</key>")

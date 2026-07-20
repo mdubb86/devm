@@ -1,9 +1,9 @@
-// Package main is the devm root port-binder helper.
+// Package main is the devm root helper daemon.
 //
-// Runs as a root LaunchDaemon (com.devm.portbinder). On startup it
+// Runs as a root LaunchDaemon (com.devm.helper). On startup it
 // provisions lo0 aliases for the devm project-IP pool (127.42.0.1..20),
 // then serves bind requests from the user-mode devm daemon over a UDS
-// at /var/run/devm-portbinder.sock. Each request is one line of JSON:
+// at /var/run/devm-helper.sock. Each request is one line of JSON:
 //
 //	{"op":"bind","ip":"127.42.0.5","port":80,"proto":"tcp"}
 //
@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	socketPath = "/var/run/devm-portbinder.sock"
+	socketPath = "/var/run/devm-helper.sock"
 	poolStart  = 1
 	poolEnd    = 20
 	poolFmt    = "127.42.0.%d"
@@ -48,7 +48,7 @@ type response struct {
 }
 
 func main() {
-	log.SetPrefix("devm-portbinder: ")
+	log.SetPrefix("devm-helper: ")
 	log.SetFlags(log.LstdFlags)
 	if err := run(); err != nil {
 		log.Fatal(err)

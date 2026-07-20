@@ -1,4 +1,4 @@
-package portbinder
+package helper
 
 import (
 	"bufio"
@@ -26,7 +26,7 @@ func shortTempDir(t *testing.T) string {
 	return dir
 }
 
-// mockHelper starts a UDS listener that mimics the portbinder helper:
+// mockHelper starts a UDS listener that mimics the helper:
 // reads one JSON request, binds a real TCP socket on the requested
 // address, sends back the FD via SCM_RIGHTS.
 func mockHelper(t *testing.T) string {
@@ -73,7 +73,7 @@ func mockHelper(t *testing.T) string {
 
 // mockHelperNewlineDelimited is a copy of mockHelper whose read side uses
 // bufio.NewReader(uc).ReadBytes('\n'), matching the real helper's
-// protocol (cmd/devm-portbinder reads with br.ReadBytes('\n')). This
+// protocol (cmd/devm-helper reads with br.ReadBytes('\n')). This
 // proves the client terminates its request with a newline as the real
 // helper requires.
 func mockHelperNewlineDelimited(t *testing.T) string {

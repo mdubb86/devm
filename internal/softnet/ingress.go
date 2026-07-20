@@ -11,7 +11,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 
-	"github.com/mdubb86/devm/internal/portbinder"
+	"github.com/mdubb86/devm/internal/helper"
 )
 
 // ingress manages host->guest port-forward listeners. apply() reconciles the
@@ -59,14 +59,14 @@ func (ing *ingress) apply(ports []ExposePort) {
 		// Ports <1024 need root on macOS. softnet runs as an unprivileged
 		// user process (spawned by `tart run --net-softnet` under the
 		// daemon's identity), so a direct net.Listen on a low port fails
-		// with EACCES. Route those through the root portbinder helper,
+		// with EACCES. Route those through the root helper,
 		// which pre-binds low ports on the devm pool IPs and hands back
 		// the FD over a UDS. High ports still bind directly — no need to
 		// round-trip through the helper for those.
 		var ln net.Listener
 		var err error
 		if hp < 1024 {
-			ln, err = portbinder.BindTCP(bind, hp)
+			ln, err = helper.BindTCP(bind, hp)
 		} else {
 			ln, err = net.Listen("tcp", net.JoinHostPort(bind, fmt.Sprint(hp)))
 		}

@@ -9,7 +9,7 @@ package serviceapi
 // EnvironmentVariables, or explicit log paths, all of which the daemon
 // needs. No Sockets dict — since B3 (per-project bind isolation), all
 // daemon-proxy binds (:80/:443 per project IP) come from the
-// portbinder helper (internal/portbinder), not launchd socket handoff.
+// helper (internal/helper), not launchd socket handoff.
 const LaunchdPlistTemplate = `<?xml version='1.0' encoding='UTF-8'?>
 <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN"
 "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

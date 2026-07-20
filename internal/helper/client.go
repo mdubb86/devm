@@ -1,5 +1,5 @@
-// Package portbinder is the daemon-side client for the devm root
-// port-binder helper (cmd/devm-portbinder).
+// Package helper is the daemon-side client for the devm root
+// helper (cmd/devm-helper).
 //
 // The helper runs as root, provisions lo0 aliases at boot, and serves
 // bind requests over a UDS. Clients call BindTCP with a devm pool IP
@@ -7,7 +7,7 @@
 // the FD via SCM_RIGHTS. This lets the user-mode devm daemon bind low
 // ports (:22, :80, :443) on per-project loopback IPs without holding
 // root itself.
-package portbinder
+package helper
 
 import (
 	"encoding/json"
@@ -17,13 +17,13 @@ import (
 	"syscall"
 )
 
-// SocketPath is the well-known UDS the portbinder helper listens on.
+// SocketPath is the well-known UDS the helper listens on.
 // Installed at devm install time; see cmd/devm/service.go. A var (not
 // a const) so tests can point BindTCP at a mock helper socket instead
 // of the real root-owned one.
-var SocketPath = "/var/run/devm-portbinder.sock"
+var SocketPath = "/var/run/devm-helper.sock"
 
-// BindTCP requests the portbinder helper to bind a TCP listening socket
+// BindTCP requests the helper to bind a TCP listening socket
 // on ip:port and returns it as a net.Listener. ip must be in the devm
 // pool (127.42.0.1..20).
 func BindTCP(ip string, port int) (net.Listener, error) {
@@ -35,7 +35,7 @@ func BindTCP(ip string, port int) (net.Listener, error) {
 func bindTCPViaSock(sockPath, ip string, port int) (net.Listener, error) {
 	uc, err := net.Dial("unix", sockPath)
 	if err != nil {
-		return nil, fmt.Errorf("dial portbinder: %w", err)
+		return nil, fmt.Errorf("dial helper: %w", err)
 	}
 	defer uc.Close()
 	unixConn := uc.(*net.UnixConn)
@@ -67,7 +67,7 @@ func bindTCPViaSock(sockPath, ip string, port int) (net.Listener, error) {
 		return nil, fmt.Errorf("decode reply: %w", err)
 	}
 	if !resp.OK {
-		return nil, fmt.Errorf("portbinder: %s", resp.Error)
+		return nil, fmt.Errorf("helper: %s", resp.Error)
 	}
 
 	msgs, err := syscall.ParseSocketControlMessage(oob[:oobn])
@@ -78,7 +78,7 @@ func bindTCPViaSock(sockPath, ip string, port int) (net.Listener, error) {
 	if err != nil || len(fds) == 0 {
 		return nil, fmt.Errorf("parse FDs: %w", err)
 	}
-	f := os.NewFile(uintptr(fds[0]), fmt.Sprintf("portbinder:%s:%d", ip, port))
+	f := os.NewFile(uintptr(fds[0]), fmt.Sprintf("helper:%s:%d", ip, port))
 	ln, err := net.FileListener(f)
 	if err != nil {
 		f.Close()

@@ -51,16 +51,16 @@ build: fetch-iron-proxy
         echo "warning: signing cert '{{SIGN_IDENTITY}}' not in keychain — every rebuild will re-prompt for keychain access"; \
         echo "         one-time fix: Keychain Access → Certificate Assistant → Create a Certificate (Name: {{SIGN_IDENTITY}}, Code Signing, Self Signed Root)"; \
     fi
-    just build-portbinder
+    just build-helper
 
-# Build the portbinder helper. Signed with the same identity as devm for
+# Build the helper daemon. Signed with the same identity as devm for
 # consistent Gatekeeper behavior. Landing point of the binary at install
-# time is /usr/local/libexec/devm-portbinder (chosen by cmd/devm/service.go).
-build-portbinder:
+# time is /usr/local/libexec/devm-helper (chosen by cmd/devm/service.go).
+build-helper:
     @mkdir -p bin
-    go build -o bin/devm-portbinder ./cmd/devm-portbinder
+    go build -o bin/devm-helper ./cmd/devm-helper
     @if security find-certificate -c '{{SIGN_IDENTITY}}' >/dev/null 2>&1; then \
-        codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime bin/devm-portbinder ; \
+        codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime bin/devm-helper ; \
     else \
         echo "note: SIGN_IDENTITY {{SIGN_IDENTITY}} not found; skipping codesign" ; \
     fi
