@@ -38,15 +38,8 @@ from pathlib import Path
 import pytest
 
 from helpers import Devm, Workspace, registry
-from helpers.portbinder import helper_installed
 
-pytestmark = [
-    pytest.mark.devm,
-    pytest.mark.skipif(
-        not helper_installed(),
-        reason="requires devm install (portbinder helper); run `devm install` on this machine to enable",
-    ),
-]
+pytestmark = pytest.mark.devm
 
 
 def _runtime_dir() -> Path:

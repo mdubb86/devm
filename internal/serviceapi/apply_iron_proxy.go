@@ -49,10 +49,6 @@ type VMApplyIronProxyResponse struct {
 	// cold-start path. Empty in the VM-never-started (VMRunning=false)
 	// case, since no IP is allocated there.
 	ProjectIP string `json:"project_ip,omitempty"`
-	// PickedSSHPort mirrors VMStartResponse.PickedSSHPort for the
-	// adopt-in-place path — see AllocateSSHPort. 0 unless the daemon is
-	// running in fallback mode (no portbinder helper).
-	PickedSSHPort int `json:"picked_ssh_port,omitempty"`
 }
 
 // spawnIronProxyFn is the test-injection seam for SpawnIronProxy.
@@ -193,13 +189,11 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// EnforcementConfig fetch. Mirrors AdoptIronProxies'
 		// daemon-restart rehydration (ironproxy_discover.go).
 		existing, _ := ironProxyState.get(req.Name)
-		// ProjectIP/PickedSSHPort aren't part of iron-proxy's own
-		// on-disk config, so carry them forward explicitly — otherwise
-		// this put would clobber them back to empty/zero even though
-		// AllocateProjectIP/AllocateSSHPort (below) treat the in-memory
-		// registry as the idempotency source of truth.
+		// ProjectIP isn't part of iron-proxy's own on-disk config, so
+		// carry it forward explicitly — otherwise this put would clobber
+		// it back to empty even though AllocateProjectIP (below) treats
+		// the in-memory registry as the idempotency source of truth.
 		info.ProjectIP = existing.ProjectIP
-		info.PickedSSHPort = existing.PickedSSHPort
 		snap, _ := ReadStateSnapshot(req.Name)
 		ironProxyState.put(req.Name, info)
 
@@ -218,11 +212,6 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 			http.Error(w, fmt.Sprintf("allocate project ip: %v", err), http.StatusInternalServerError)
 			return
 		}
-		pickedSSHPort, err := AllocateSSHPort(req.Name)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("allocate ssh port: %v", err), http.StatusInternalServerError)
-			return
-		}
 
 		// Push the ingress expose map from the project's persisted
 		// config — the daemon's source of truth for an adopted VM,
@@ -233,17 +222,16 @@ func RegisterApplyIronProxyHandler(s *Server, locks *ProjectLocks, sup *supervis
 		// collision). Skipped when there's no persisted cfg yet —
 		// nothing to expose.
 		if snap != nil {
-			if err := pushExposeMap(req.Name, computeExposeMap(snap.Cfg, projectIP, pickedSSHPort)); err != nil {
+			if err := pushExposeMap(req.Name, computeExposeMap(snap.Cfg, projectIP)); err != nil {
 				debuglog.Logf("serviceapi", "apply-iron-proxy: push expose map for %s: %v", req.Name, err)
 			}
 		}
 
 		writeJSON(w, VMApplyIronProxyResponse{
-			Applied:       true,
-			Revived:       !wasRunning,
-			VMRunning:     true,
-			ProjectIP:     projectIP,
-			PickedSSHPort: pickedSSHPort,
+			Applied:   true,
+			Revived:   !wasRunning,
+			VMRunning: true,
+			ProjectIP: projectIP,
 		})
 	})
 }

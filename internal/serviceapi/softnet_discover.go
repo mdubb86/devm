@@ -48,7 +48,7 @@ func discoverSoftnet(ctx context.Context, ntpPort int) {
 		go func(id, sock string, info projectInfo) {
 			_ = newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
 			if snap, err := ReadStateSnapshot(id); err == nil && snap != nil {
-				_ = pushExposeMap(id, computeExposeMap(snap.Cfg, info.ProjectIP, info.PickedSSHPort))
+				_ = pushExposeMap(id, computeExposeMap(snap.Cfg, info.ProjectIP))
 			}
 		}(id, sock, info)
 	}

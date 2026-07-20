@@ -67,22 +67,6 @@ func (ing *ingress) apply(ports []ExposePort) {
 		var err error
 		if hp < 1024 {
 			ln, err = portbinder.BindTCP(bind, hp)
-			if err != nil {
-				// Fallback mode (no portbinder helper installed, or it's
-				// unreachable): try a direct bind. This only succeeds
-				// when the process already has the privilege it needs
-				// (e.g. running as root itself); a genuinely unprivileged
-				// low-port request still fails with EACCES here exactly
-				// like it did pre-B3 — softnet was never able to bind
-				// those directly either. AllocateSSHPort (serviceapi)
-				// keeps SSH itself off this path entirely in fallback
-				// mode by picking a high port instead, so in practice
-				// this only matters for a user-declared low service port
-				// under an isolated/no-helper daemon.
-				if ln2, err2 := net.Listen("tcp", net.JoinHostPort(bind, fmt.Sprint(hp))); err2 == nil {
-					ln, err = ln2, nil
-				}
-			}
 		} else {
 			ln, err = net.Listen("tcp", net.JoinHostPort(bind, fmt.Sprint(hp)))
 		}

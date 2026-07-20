@@ -29,25 +29,15 @@ import (
 // catches injection attempts.
 var safeIdent = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
-// Entry describes one Host block to emit. In the normal case, HostName
-// and Port are no longer independent fields — softnet binds every
-// project's guest :22 on its allocated ProjectIP and DNS answers
-// <Name>.test -> ProjectIP (see internal/softnet), so the block just
-// points at "<Name>.test" on port 22; nothing daemon-side needs to be
-// fetched to resolve it.
-//
-// PickedPort is the fallback-mode (no portbinder helper — see
-// internal/serviceapi's helperAvailable) escape hatch: when the daemon
-// couldn't bind guest :22 on a dedicated ProjectIP alias, it picks an
-// ephemeral host port instead (serviceapi.AllocateSSHPort) and forwards
-// SSH through plain 127.0.0.1 there. Zero means "normal mode" — use
-// <Name>.test:22; non-zero means "fallback mode" — use
-// 127.0.0.1:PickedPort.
+// Entry describes one Host block to emit. HostName and Port are no
+// longer independent fields — softnet binds every project's guest :22
+// on its allocated ProjectIP and DNS answers <Name>.test -> ProjectIP
+// (see internal/softnet), so the block always points at "<Name>.test"
+// on port 22; nothing daemon-side needs to be fetched to resolve it.
 type Entry struct {
 	Name           string // project name: host alias devm-<Name> + on-disk path lookups
 	KeyPath        string // path to the project's SSH private key
 	KnownHostsPath string // path to the project's known_hosts file
-	PickedPort     int    // fallback-mode SSH host port; 0 in normal mode
 }
 
 const header = `# Managed by devm. Regenerated on VM lifecycle events; hand edits will be
@@ -57,9 +47,9 @@ const header = `# Managed by devm. Regenerated on VM lifecycle events; hand edit
 `
 
 const blockTmpl = `Host devm-{{.Name}}
-    HostName             {{if .PickedPort}}127.0.0.1{{else}}{{.Name}}.test{{end}}
+    HostName             {{.Name}}.test
     User                 devm
-    Port                 {{if .PickedPort}}{{.PickedPort}}{{else}}22{{end}}
+    Port                 22
     IdentityFile         "{{.KeyPath}}"
     UserKnownHostsFile   "{{.KnownHostsPath}}"
     HostKeyAlias         devm-{{.Name}}

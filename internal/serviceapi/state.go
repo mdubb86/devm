@@ -71,13 +71,6 @@ type StateSnapshot struct {
 	// while the project is stopped; set at /vm/start, cleared at /vm/stop.
 	// AdoptIronProxies reads this back into projectInfo on daemon startup.
 	ProjectIP string `json:"project_ip,omitempty"`
-
-	// PickedSSHPort mirrors projectInfo.PickedSSHPort — the fallback-mode
-	// (no portbinder helper) picked SSH host port. Zero except when the
-	// daemon ran in fallback mode when this project last started.
-	// AdoptIronProxies reads this back into projectInfo on daemon
-	// restart, same as ProjectIP.
-	PickedSSHPort int `json:"picked_ssh_port,omitempty"`
 }
 
 // ReadStateSnapshot loads the persisted snapshot for a project. Returns

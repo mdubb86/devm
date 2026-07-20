@@ -135,9 +135,6 @@ func recoverProjectState(ctx context.Context, tr *tart.Tart, routes *Routes, pro
 	if snap.ProjectIP != "" {
 		info.ProjectIP = snap.ProjectIP
 	}
-	if snap.PickedSSHPort != 0 {
-		info.PickedSSHPort = snap.PickedSSHPort
-	}
 	ironProxyState.put(projectID, info)
 
 	// Re-lock devm.yaml for a recovered running project: the daemon

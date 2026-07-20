@@ -199,7 +199,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 					"adopt-in-place: no iron-proxy record found for %q — this vm was never started by devm",
 					cfg.Project.Name)
 			}
-			return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, applyResp.ProjectIP, applyResp.PickedSSHPort, reporter)
+			return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, applyResp.ProjectIP, reporter)
 		}
 	}
 
@@ -250,7 +250,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	}
 	debuglog.Logf("shell", "cold-start: vm exec-ready")
 
-	return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, startResp.ProjectIP, startResp.PickedSSHPort, reporter)
+	return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, startResp.ProjectIP, reporter)
 }
 
 // warmAttach attaches to a VM that's already provisioned (devm.target
@@ -289,13 +289,7 @@ func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName str
 // on adopt-in-place — seeded into the cold-start StateSnapshot below so
 // a daemon crash before the next reconcile doesn't strand
 // recoverProjectState with nothing to restore.
-//
-// pickedSSHPort mirrors projectIP's provenance (VMStartResponse /
-// VMApplyIronProxyResponse) but is only non-zero in fallback mode (no
-// portbinder helper — see internal/serviceapi's helperAvailable);
-// seeded the same way so EmitSSHConfig can pick the right ssh_config
-// shape for this project after a daemon restart.
-func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vmName, repoRoot, cmdName string, cmdArgs []string, bindings []serviceapi.SecretBinding, projectIP string, pickedSSHPort int, reporter status.Reporter) (int, error) {
+func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vmName, repoRoot, cmdName string, cmdArgs []string, bindings []serviceapi.SecretBinding, projectIP string, reporter status.Reporter) (int, error) {
 	caPEM, err := os.ReadFile(filepath.Join(caStorageDir(), "root.crt"))
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "read CA root")
@@ -412,7 +406,6 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		SecretHashes:      SecretHashesFromBindings(bindings),
 		ProxyVersion:      ironproxy.EmbeddedSha256(), // stamp the version that just provisioned
 		ProjectIP:         projectIP,
-		PickedSSHPort:     pickedSSHPort,
 		WorkspaceHostPath: repoRoot,
 	}
 	if err := serviceapi.WriteStateSnapshot(cfg.Project.Name, snap); err != nil {
