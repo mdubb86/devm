@@ -182,3 +182,22 @@ func TestSSHConfigIncluded_DetectsPresence(t *testing.T) {
 		[]byte("Include \"/some/path/ssh_config\"\nHost github.com\n"), 0o600))
 	assert.True(t, sshConfigIncluded("/some/path/ssh_config"))
 }
+
+// TestLaunchdTargetIsIdentityAware and TestLaunchdPlistIsIdentityAware lock
+// the invariant that launchdBootstrap/launchdBootout compose their
+// launchctl arguments from the package-level cfg (identity.Config) rather
+// than a hardcoded prod string. These exist so that a regression back to
+// `const launchdTarget = "system/com.devm.service"` (etc.) has a test
+// sitting right next to the helpers pinning the identity-driven values.
+func TestLaunchdTargetIsIdentityAware(t *testing.T) {
+	// package cfg is set from identity.Load(); in tests, that's Prod.
+	want := "system/com.devm.service"
+	got := cfg.LaunchdTargetDaemon()
+	assert.Equal(t, want, got)
+}
+
+func TestLaunchdPlistIsIdentityAware(t *testing.T) {
+	want := "/Library/LaunchDaemons/com.devm.service.plist"
+	got := cfg.LaunchdPlistDaemon()
+	assert.Equal(t, want, got)
+}

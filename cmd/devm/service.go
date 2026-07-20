@@ -791,20 +791,14 @@ var kardianosCmd = &cobra.Command{
 	Hidden: true,
 }
 
-// launchdPlistPath is the system-wide LaunchDaemon plist path.
-const launchdPlistPath = "/Library/LaunchDaemons/com.devm.service.plist"
-
-// launchdTarget is the modern launchctl target for our service, used
-// with bootstrap/bootout.
-const launchdTarget = "system/com.devm.service"
-
 // launchdBootstrap loads the plist via modern `launchctl bootstrap`.
 // Replacement for kardianos's Start (`launchctl load` — deprecated on
 // modern macOS, fails with "Load failed: 5: Input/output error").
 func launchdBootstrap() error {
-	out, err := exec.Command("launchctl", "bootstrap", "system", launchdPlistPath).CombinedOutput()
+	plist := cfg.LaunchdPlistDaemon()
+	out, err := exec.Command("launchctl", "bootstrap", "system", plist).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("launchctl bootstrap system %s: %v: %s", launchdPlistPath, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("launchctl bootstrap system %s: %v: %s", plist, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -813,9 +807,10 @@ func launchdBootstrap() error {
 // `launchctl bootout`. Replacement for kardianos's Stop (`launchctl
 // unload` — deprecated, leaves KeepAlive daemons alive).
 func launchdBootout() error {
-	out, err := exec.Command("launchctl", "bootout", launchdTarget).CombinedOutput()
+	target := cfg.LaunchdTargetDaemon()
+	out, err := exec.Command("launchctl", "bootout", target).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("launchctl bootout %s: %v: %s", launchdTarget, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("launchctl bootout %s: %v: %s", target, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
