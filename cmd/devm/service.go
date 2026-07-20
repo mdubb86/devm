@@ -488,11 +488,6 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 		return false, fmt.Errorf("locate executable: %w", err)
 	}
 
-	installUser, home, err := resolveInstallUser(nil)
-	if err != nil {
-		return false, err
-	}
-
 	dnsState, err := serviceapi.CheckResolverFile(cfg)
 	if err != nil {
 		return false, fmt.Errorf("check %s: %w", cfg.ResolverFilePath, err)
@@ -514,6 +509,18 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 
 	if !needsDNS && !needsCA && !needsDaemon && !needsHelper && !needsAliases && !needsGroup {
 		return false, nil
+	}
+
+	// resolveInstallUser is only needed by the group and helper steps
+	// below; skip it (and tolerate its error) otherwise so that, e.g.,
+	// a `devm install` run as literal root with nothing to install
+	// stays a no-op rather than hard-failing on user lookup.
+	var installUser, home string
+	if needsGroup || needsHelper {
+		installUser, home, err = resolveInstallUser(nil)
+		if err != nil {
+			return false, err
+		}
 	}
 
 	// CA generation is unprivileged; do it before the sudo block so

@@ -54,8 +54,9 @@ build: fetch-iron-proxy
     just build-helper
 
 # Build the helper daemon. Signed with the same identity as devm for
-# consistent Gatekeeper behavior. Landing point of the binary at install
-# time is /usr/local/libexec/devm-helper (chosen by cmd/devm/service.go).
+# consistent Gatekeeper behavior. Installed as a sibling of the devm
+# binary (same directory as os.Executable(), named <basename>-helper —
+# see helperSourcePath in cmd/devm/service.go), not to a fixed system path.
 build-helper:
     @mkdir -p bin
     go build -o bin/devm-helper ./cmd/devm-helper
