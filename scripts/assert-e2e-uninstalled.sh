@@ -48,4 +48,10 @@ tart list 2>/dev/null | awk 'NR>1 {print $2}' | grep -qx devm-e2e-base && \
 [ ! -f /usr/local/bin/devm-e2e-helper ] || fail "binary still present: /usr/local/bin/devm-e2e-helper"
 [ ! -S /var/run/devm-e2e-helper.sock ]  || fail "helper socket still present"
 
+# 10. ~/.ssh/config Include line removed
+INCLUDE_LINE="Include \"$HOME/Library/Application Support/devm-e2e/ssh_config\""
+if grep -qF "$INCLUDE_LINE" "$HOME/.ssh/config" 2>/dev/null; then
+    fail "Include line still present in ~/.ssh/config: $INCLUDE_LINE"
+fi
+
 echo "assert-e2e-uninstalled: ok"

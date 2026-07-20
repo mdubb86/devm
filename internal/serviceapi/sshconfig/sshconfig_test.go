@@ -93,6 +93,134 @@ func TestEmit_AtomicWrite(t *testing.T) {
 	assert.Equal(t, []string{"ssh_config"}, names)
 }
 
+func TestEnsureInclude_CreatesFileAndDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	require.NoError(t, EnsureInclude(identity.Prod))
+
+	sshDir := filepath.Join(home, ".ssh")
+	info, err := os.Stat(sshDir)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+
+	cfgPath := filepath.Join(sshDir, "config")
+	got, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, `Include "`+Path(identity.Prod)+"\"\n", string(got))
+}
+
+func TestEnsureInclude_AppendsToExistingFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sshDir := filepath.Join(home, ".ssh")
+	require.NoError(t, os.MkdirAll(sshDir, 0o700))
+	cfgPath := filepath.Join(sshDir, "config")
+	existing := "Host example\n    HostName example.com\n"
+	require.NoError(t, os.WriteFile(cfgPath, []byte(existing), 0o600))
+
+	require.NoError(t, EnsureInclude(identity.Prod))
+
+	got, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	want := existing + `Include "` + Path(identity.Prod) + "\"\n"
+	assert.Equal(t, want, string(got))
+}
+
+func TestEnsureInclude_HandlesMissingTrailingNewline(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sshDir := filepath.Join(home, ".ssh")
+	require.NoError(t, os.MkdirAll(sshDir, 0o700))
+	cfgPath := filepath.Join(sshDir, "config")
+	existing := "Host example\n    HostName example.com" // no trailing \n
+	require.NoError(t, os.WriteFile(cfgPath, []byte(existing), 0o600))
+
+	require.NoError(t, EnsureInclude(identity.Prod))
+
+	got, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	want := existing + "\n" + `Include "` + Path(identity.Prod) + "\"\n"
+	assert.Equal(t, want, string(got))
+}
+
+func TestEnsureInclude_IdempotentSecondCall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	require.NoError(t, EnsureInclude(identity.Prod))
+	require.NoError(t, EnsureInclude(identity.Prod))
+
+	cfgPath := filepath.Join(home, ".ssh", "config")
+	got, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	want := `Include "` + Path(identity.Prod) + `"`
+	assert.Equal(t, 1, strings.Count(string(got), want))
+}
+
+func TestEnsureInclude_ProdAndE2ECoexist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	require.NoError(t, EnsureInclude(identity.Prod))
+	require.NoError(t, EnsureInclude(identity.E2E))
+
+	cfgPath := filepath.Join(home, ".ssh", "config")
+	got, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(got), `Include "`+Path(identity.Prod)+`"`)
+	assert.Contains(t, string(got), `Include "`+Path(identity.E2E)+`"`)
+}
+
+func TestRemoveInclude_RemovesOnlyMatchingLine(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sshDir := filepath.Join(home, ".ssh")
+	require.NoError(t, os.MkdirAll(sshDir, 0o700))
+	cfgPath := filepath.Join(sshDir, "config")
+	userLine := `Include "~/some/other/config"`
+	existing := userLine + "\n" +
+		`Include "` + Path(identity.Prod) + "\"\n" +
+		`Include "` + Path(identity.E2E) + "\"\n"
+	require.NoError(t, os.WriteFile(cfgPath, []byte(existing), 0o600))
+
+	require.NoError(t, RemoveInclude(identity.E2E))
+
+	got, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	gotStr := string(got)
+	assert.Contains(t, gotStr, userLine)
+	assert.Contains(t, gotStr, `Include "`+Path(identity.Prod)+`"`)
+	assert.NotContains(t, gotStr, `Include "`+Path(identity.E2E)+`"`)
+}
+
+func TestRemoveInclude_NoOpWhenAbsent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sshDir := filepath.Join(home, ".ssh")
+	require.NoError(t, os.MkdirAll(sshDir, 0o700))
+	cfgPath := filepath.Join(sshDir, "config")
+	existing := "Host example\n    HostName example.com\n"
+	require.NoError(t, os.WriteFile(cfgPath, []byte(existing), 0o600))
+
+	require.NoError(t, RemoveInclude(identity.Prod))
+
+	got, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, existing, string(got))
+}
+
+func TestRemoveInclude_NoOpWhenFileMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	err := RemoveInclude(identity.Prod)
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(filepath.Join(home, ".ssh", "config"))
+	assert.True(t, os.IsNotExist(statErr))
+}
+
 func TestEmit_RejectsUnsafeName(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	for _, name := range []string{

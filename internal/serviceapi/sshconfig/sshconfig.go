@@ -121,6 +121,111 @@ func Emit(cfg identity.Config, entries []Entry) error {
 	return os.Rename(tmpPath, Path(cfg))
 }
 
+// includeLine returns the exact `Include "<path>"` line devm writes
+// into (and matches against) ~/.ssh/config for cfg. Deliberately not
+// fmt.Sprintf("%q", ...) — Go's %q backslash-escapes characters that a
+// hand-typed ssh_config Include line never would, so %q could fail to
+// match a line the user typed themselves.
+func includeLine(cfg identity.Config) string {
+	return `Include "` + Path(cfg) + `"`
+}
+
+// userSSHConfigPath returns ~/.ssh/config for the current user.
+func userSSHConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".ssh", "config"), nil
+}
+
+// EnsureInclude appends `Include "<Path(cfg)>"` to ~/.ssh/config if not
+// already present, so the user's ssh config picks up devm's generated
+// Host blocks. Creates ~/.ssh (0700) and ~/.ssh/config (0600) if either
+// is missing. Idempotent: a second call after a successful first call
+// is a no-op. Any other content in ~/.ssh/config is preserved verbatim;
+// matching is by trimmed whole-line equality, not substring, so it
+// can't false-match a similar-looking Include line.
+func EnsureInclude(cfg identity.Config) error {
+	path, err := userSSHConfigPath()
+	if err != nil {
+		return err
+	}
+	line := includeLine(cfg)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		data = nil
+	} else {
+		for _, l := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(l) == line {
+				return nil // already present
+			}
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+	}
+
+	var buf bytes.Buffer
+	buf.Write(data)
+	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
+		buf.WriteByte('\n')
+	}
+	buf.WriteString(line)
+	buf.WriteByte('\n')
+
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+// RemoveInclude deletes the `Include "<Path(cfg)>"` line for cfg from
+// ~/.ssh/config, leaving every other line untouched. No-op if the file
+// doesn't exist or the line isn't present. Matching is by trimmed
+// whole-line equality, mirroring EnsureInclude, so a manually-added
+// Include line for a different (but textually similar) path is never
+// touched.
+func RemoveInclude(cfg identity.Config) error {
+	path, err := userSSHConfigPath()
+	if err != nil {
+		return err
+	}
+	line := includeLine(cfg)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	out := make([]string, 0, len(lines))
+	found := false
+	for _, l := range lines {
+		if strings.TrimSpace(l) == line {
+			found = true
+			continue
+		}
+		out = append(out, l)
+	}
+	if !found {
+		return nil
+	}
+
+	if err := os.WriteFile(path, []byte(strings.Join(out, "\n")), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
 // emit is the pure rendering core: header + one validated, sorted block
 // per entry, written to w. Split out from Emit so tests can assert on
 // rendered content without touching the filesystem.

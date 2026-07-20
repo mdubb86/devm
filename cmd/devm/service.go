@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -256,14 +257,30 @@ func runInstallFlow(ctx context.Context) error {
 
 	reporter.Info("ready")
 
-	if !sshConfigIncluded(sshconfig.Path(cfg)) {
-		fmt.Fprintf(os.Stderr,
-			"[devm] to enable ssh access to your VMs, add this line to ~/.ssh/config:\n"+
-				"    Include \"%s\"\n",
-			sshconfig.Path(cfg))
+	before, _ := os.ReadFile(userSSHConfigPathForLog())
+	if err := sshconfig.EnsureInclude(cfg); err != nil {
+		return fmt.Errorf("update ~/.ssh/config: %w", err)
+	}
+	after, _ := os.ReadFile(userSSHConfigPathForLog())
+	if !bytes.Equal(before, after) {
+		fmt.Fprintf(os.Stderr, "[devm] added ssh access include line to ~/.ssh/config\n")
 	}
 
 	return nil
+}
+
+// userSSHConfigPathForLog returns ~/.ssh/config purely so runInstallFlow
+// can diff before/after content and report whether EnsureInclude
+// actually wrote anything. Best-effort: an empty string (home dir
+// lookup failure) just makes the before/after comparison a no-op diff,
+// which is fine — sshconfig.EnsureInclude itself already surfaced any
+// real error.
+func userSSHConfigPathForLog() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".ssh", "config")
 }
 
 // openInstallLog opens ~/Library/Logs/devm/install.log for append. The
@@ -615,6 +632,16 @@ var uninstallCmd = &cobra.Command{
 			tailLog(logPath, 30)
 			return fmt.Errorf("privileged uninstall failed; see %s", logPath)
 		}
+
+		before, _ := os.ReadFile(userSSHConfigPathForLog())
+		if err := sshconfig.RemoveInclude(cfg); err != nil {
+			return fmt.Errorf("update ~/.ssh/config: %w", err)
+		}
+		after, _ := os.ReadFile(userSSHConfigPathForLog())
+		if !bytes.Equal(before, after) {
+			fmt.Fprintf(os.Stderr, "[devm] removed ssh access include line from ~/.ssh/config\n")
+		}
+
 		_ = os.Remove(cfg.SocketPath())
 		// Runtime dir is user-owned (holds the CA key, iron-proxy configs,
 		// and the socket parent). Wiping it makes uninstall a clean slate
@@ -708,21 +735,6 @@ func buildUninstallScript(cfg identity.Config, exe string) string {
 	}
 
 	return sb.String()
-}
-
-// sshConfigIncluded reports whether the user's ~/.ssh/config has an
-// Include line pointing at path. Missing file → treated as not included.
-func sshConfigIncluded(path string) bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".ssh", "config"))
-	if err != nil {
-		return false
-	}
-	needle := `Include "` + path + `"`
-	return strings.Contains(string(data), needle)
 }
 
 var serviceCmd = &cobra.Command{

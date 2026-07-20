@@ -2,9 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"os/user"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -181,26 +179,6 @@ func TestResolveInstallUser_RefusesRoot(t *testing.T) {
 	_, _, err := resolveInstallUser(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot install as root")
-}
-
-func TestSSHConfigIncluded_DetectsPresence(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	sshDir := filepath.Join(dir, ".ssh")
-	require.NoError(t, os.MkdirAll(sshDir, 0o700))
-
-	// Case 1: file absent → not included.
-	assert.False(t, sshConfigIncluded("/some/path/ssh_config"))
-
-	// Case 2: file present, no matching Include.
-	require.NoError(t, os.WriteFile(filepath.Join(sshDir, "config"),
-		[]byte("Host github.com\n    User git\n"), 0o600))
-	assert.False(t, sshConfigIncluded("/some/path/ssh_config"))
-
-	// Case 3: file present, matching Include line.
-	require.NoError(t, os.WriteFile(filepath.Join(sshDir, "config"),
-		[]byte("Include \"/some/path/ssh_config\"\nHost github.com\n"), 0o600))
-	assert.True(t, sshConfigIncluded("/some/path/ssh_config"))
 }
 
 // TestLaunchdTargetIsIdentityAware and TestLaunchdPlistIsIdentityAware lock

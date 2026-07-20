@@ -54,4 +54,9 @@ command -v jq >/dev/null 2>&1 || fail "jq not installed (required for fingerprin
     jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' \
     >/dev/null 2>&1 || fail "daemon not reachable or fingerprint mismatch"
 
+# 10. ~/.ssh/config Include line
+INCLUDE_LINE="Include \"$HOME/Library/Application Support/devm-e2e/ssh_config\""
+grep -qF "$INCLUDE_LINE" "$HOME/.ssh/config" 2>/dev/null || \
+    fail "missing Include line in ~/.ssh/config: $INCLUDE_LINE"
+
 echo "assert-e2e-installed: ok"
