@@ -36,7 +36,10 @@ exist — see .superpowers/sdd/task-7-report.md for the full list):
 
 Uses the proven `docker run busybox nc -l` scaffold from
 test_110_direct_cold_start.py: a tiny detached container per project,
-looping a project-specific marker on the declared port.
+looping a project-specific marker on the declared port. The banner
+read is wrapped in the same 30s retry loop test_110 uses (:184-196),
+since a bare `wait_reachable` only proves softnet's Mac-side listener
+exists — not that the guest's `nc -l` has bound the port yet.
 """
 from __future__ import annotations
 
@@ -46,6 +49,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -177,7 +181,13 @@ def test_per_project_ip_concurrent_isolation(devm_path):
             assert wait_reachable(ip, DIRECT_PORT, timeout=60), (
                 f"{ip}:{DIRECT_PORT} (project {ws.slug}) never became reachable"
             )
-            got = tcp_read_banner(ip, DIRECT_PORT, marker, timeout=5)
+            deadline = time.time() + 30
+            got = None
+            while time.time() < deadline:
+                got = tcp_read_banner(ip, DIRECT_PORT, marker, timeout=3)
+                if got == marker:
+                    break
+                time.sleep(1)
             assert got == marker, (
                 f"expected {marker!r} from {ip}:{DIRECT_PORT} ({ws.slug}), "
                 f"got {got!r} — bind isolation broken (cross-project bleed "
