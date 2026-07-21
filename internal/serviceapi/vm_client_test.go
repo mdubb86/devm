@@ -283,6 +283,8 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	newCfg := oldCfg
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
 
+	registerFakeSoftnet(t, "p")
+
 	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(dir) })

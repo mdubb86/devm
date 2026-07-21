@@ -214,6 +214,22 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 			return
 		}
 
+		// Adopt-in-place also never went through /vm/start's
+		// softnetState.put (vm.go), so the daemon's in-memory
+		// projectID -> softnet-control-socket map has no entry for
+		// this project either — /vm/apply-egress-enforcement and
+		// /vm/open-egress 412 ("softnet control socket missing") on
+		// the very next call, and the expose-map push below silently
+		// no-ops instead of actually reaching softnet (see
+		// pushExposeMap's softnetState.get check in expose.go).
+		// SoftnetControlSock is a pure function of
+		// (cfg.RuntimeDir(), projectID) — deterministic, no
+		// filesystem/process lookup needed — so this re-registration
+		// mirrors exactly what /vm/start (vm.go) and discoverSoftnet
+		// (the daemon-restart rehydration path) already do to
+		// populate the same map.
+		softnetState.put(req.Name, SoftnetControlSock(cfg, req.Name))
+
 		// Push the ingress expose map from the project's persisted
 		// config — the daemon's source of truth for an adopted VM,
 		// which never sent a schema.Config in this request. Independent

@@ -57,6 +57,7 @@ from helpers.direct import (
     get_routes as _get_routes,
     tcp_read_banner as _tcp_read_banner,
 )
+from helpers.softnet import env_with_softnet
 from helpers.tart import TartSandbox
 
 pytestmark = pytest.mark.devm
@@ -161,9 +162,18 @@ def test_adopt_in_place(devm, workspace, sandbox_name):
     assert stopped == "stopped", f"expected VM stopped after `devm stop`, got {stopped!r}"
 
     # ---- 3. Boot the SAME VM raw via `tart run`, bypassing the daemon. ----
+    # --net-softnet (+ the daemon's own PATH/SOFTNET_CONTROL_SOCK env
+    # setup, replicated here) is required even on this daemon-bypassing
+    # boot: adopt-in-place's /vm/apply-iron-proxy re-registers this
+    # project's deterministic softnet control socket in the daemon's
+    # in-memory state (softnetState) so the SAME path any prior
+    # /vm/start would have used -- with no --net-softnet here, no
+    # softnet process exists at all, and that re-registration would
+    # point at nothing.
     proc = subprocess.Popen(
-        ["tart", "run", "--no-graphics", sandbox_name],
+        ["tart", "run", "--no-graphics", "--net-softnet", sandbox_name],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env=env_with_softnet(project_id),
     )
     try:
         assert vm.wait_running(timeout=60.0), "raw `tart run` never reached running"
@@ -299,6 +309,7 @@ def test_teardown_dirty_recovers_with_fresh_cold_start(devm, workspace, sandbox_
     """
     workspace.write_devmyaml()
     vm = TartSandbox(name=sandbox_name)
+    project_id = workspace.slug
 
     # ---- 1. Normal cold-start: real provisioning, real disk state. ----
     r = subprocess.run(
@@ -324,9 +335,15 @@ def test_teardown_dirty_recovers_with_fresh_cold_start(devm, workspace, sandbox_
     # ---- 3. Boot the SAME VM raw via `tart run`, bypassing the daemon --
     # ---- reproduces the gate's locked/inert shape, same as
     # ---- test_adopt_in_place. ----
+    # --net-softnet + env for consistency with test_adopt_in_place, even
+    # though this branch's recovery path replaces the raw-booted process
+    # with a fresh /vm/start-spawned one (which brings its own
+    # --net-softnet regardless of how the raw boot was configured) --
+    # see the docstring above.
     proc = subprocess.Popen(
-        ["tart", "run", "--no-graphics", sandbox_name],
+        ["tart", "run", "--no-graphics", "--net-softnet", sandbox_name],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env=env_with_softnet(project_id),
     )
     try:
         assert vm.wait_running(timeout=60.0), "raw `tart run` never reached running"

@@ -44,11 +44,21 @@ func computeExposeMap(cfg schema.Config, projectIP string) []softnet.ExposePort 
 // dispatching to softnet, so the colliding listener is never bound and
 // the misrouting `.test` DNS answer (which resolves every name to
 // loopback) never happens. The claim reconcile runs even when the
-// project has no softnet socket yet (VM not started), so claims track
-// intent before the socket exists; pushExposeMap is then a no-op until
-// the socket is registered — ingress is re-pushed at the next
-// /vm/start. Ingress is independent of egress policy, so this is safe
-// to call in any egress state.
+// project has no softnet socket yet, so claims track intent before the
+// socket exists. Ingress is independent of egress policy, so this is
+// safe to call in any egress state.
+//
+// Fail-loud contract: every caller of this function is expected to run
+// on a path where /vm/start, /vm/apply-iron-proxy (adopt-in-place), or
+// discoverSoftnet (daemon-restart rehydration) has already registered
+// this project's softnet control socket. An empty softnetState here
+// means one of those registration steps was skipped — historically a
+// silent no-op ("VM not started, ingress will be re-pushed at the next
+// /vm/start"), which hid the exact adopt-in-place gap this comment now
+// warns about: pushExposeMap returning nil made it look like ingress
+// had been reconciled when nothing was ever dispatched. Return an
+// error instead so a missing registration surfaces immediately rather
+// than as a silently-unreachable service.
 func pushExposeMap(projectID string, ports []softnet.ExposePort) error {
 	keys := make([]string, 0, len(ports))
 	for _, p := range ports {
@@ -59,7 +69,7 @@ func pushExposeMap(projectID string, ports []softnet.ExposePort) error {
 	}
 	sock := softnetState.get(projectID)
 	if sock == "" {
-		return nil
+		return fmt.Errorf("push expose map for %s: softnet control socket not registered — /vm/start (or /vm/apply-iron-proxy for adopt-in-place) must be called first", projectID)
 	}
 	if err := newSoftnetClient(sock).setExposeMap(ports); err != nil {
 		return fmt.Errorf("push expose map for %s: %w", projectID, err)

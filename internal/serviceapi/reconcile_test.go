@@ -1,9 +1,11 @@
 package serviceapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +20,47 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// registerFakeSoftnet spins up a fake softnet control-socket listener
+// for projectID and registers it in softnetState, so a /vm/reconcile
+// live-apply's pushExposeMap call — which now loud-fails when
+// softnetState is empty instead of silently no-opping (see expose.go)
+// — has a real socket to dial. The listener accepts and discards every
+// line; these tests exercise the reconcile handler's control flow, not
+// the expose-map wire shape (that's softnet_control_test.go's job).
+// Registration is cleaned up via t.Cleanup so it doesn't leak into
+// other tests sharing the same project id against the package-global
+// softnetState map.
+func registerFakeSoftnet(t *testing.T, projectID string) {
+	t.Helper()
+	// AF_UNIX sun_path is capped at 104 bytes on Darwin. t.TempDir()
+	// nests under $TMPDIR *and* the full test name, which overflows
+	// that limit for several of this file's longer test names (see
+	// softnet_paths.go's softnetSockDir doc for the same constraint on
+	// the production code path). Root directly under /tmp with a short
+	// name instead, mirroring softnetSockDir's approach.
+	dir, err := os.MkdirTemp("/tmp", "devm-sn-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _ = bufio.NewReader(c).ReadString('\n')
+			}(c)
+		}
+	}()
+	softnetState.put(projectID, sock)
+	t.Cleanup(func() { softnetState.del(projectID) })
+}
 
 // createTestCA creates a dummy CA file in the test's HOME/.../ca/ directory.
 func createTestCA(t *testing.T) {
@@ -81,6 +124,8 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 
 	// Fake reconcile deps that record what would run without shelling out.
 	// Concrete wiring provided by an interface in the handler; see impl.
+
+	registerFakeSoftnet(t, "p")
 
 	req := VMReconcileRequest{
 		Name: "p", Cfg: newCfg,
@@ -163,6 +208,8 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 	newSvc.Env = map[string]schema.EnvValue{"OLD": {Literal: "b"}}
 	newCfg.Services = map[string]schema.Service{"web": newSvc}
 
+	registerFakeSoftnet(t, "p")
+
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
@@ -207,6 +254,8 @@ func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testi
 		{Path: "logs", Size: "5m"}, // teardown-required addition
 	}
 	newCfg.Services = map[string]schema.Service{"web": newSvc}
+
+	registerFakeSoftnet(t, "p")
 
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
@@ -338,6 +387,8 @@ func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
 	// New cfg: FOO=new (bucket=live). Same secret hash — no drift.
 	newCfg := oldCfg
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	registerFakeSoftnet(t, "p")
 
 	req := VMReconcileRequest{
 		Name: "p", Cfg: newCfg,
@@ -578,6 +629,9 @@ func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
 	newCfg.Services = map[string]schema.Service{
 		"api": {Port: 8080},
 	}
+
+	registerFakeSoftnet(t, "p")
+
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
 
@@ -620,6 +674,8 @@ func TestVMReconcile_ForwardsSSHBytesToApplyLive(t *testing.T) {
 		SSHHostPub:          []byte("ssh-ed25519 AAAA_host_pub_marker\n"),
 	}
 	body, _ := json.Marshal(req)
+
+	registerFakeSoftnet(t, "p")
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()

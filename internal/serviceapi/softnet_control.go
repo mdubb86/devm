@@ -138,3 +138,18 @@ func (s *softnetStore) del(projectID string) {
 }
 
 var softnetState = newSoftnetStore()
+
+// SetSoftnetControlSockForTest registers projectID's softnet control
+// socket directly in the daemon's in-memory softnetState map, bypassing
+// the normal /vm/start, /vm/apply-iron-proxy, and discoverSoftnet
+// registration paths. Test-only seam: softnetState only being populated
+// by those code paths is a real production contract (see expose.go's
+// pushExposeMap, which now fails loud on an unregistered project — the
+// adopt-in-place fix this seam exists to keep testable). It exists so
+// tests outside this package that drive a real serviceapi.Server (e.g.
+// internal/orchestrator's reconcile tests, via RunReconcile) can stand
+// in for that registration without wiring up a full iron-proxy config
+// + spawn just to satisfy pushExposeMap's fail-loud check.
+func SetSoftnetControlSockForTest(projectID, sock string) {
+	softnetState.put(projectID, sock)
+}

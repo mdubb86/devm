@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -75,6 +77,15 @@ func startReconcileDaemon(t *testing.T) func() {
 	require.NoError(t, err)
 	socket := identity.Prod.SocketPath()
 
+	// A running project's live-apply path pushes its ingress expose map
+	// (serviceapi.pushExposeMap), which now fails loud instead of
+	// silently no-opping when the project's softnet control socket was
+	// never registered (the adopt-in-place fix this test seam exists
+	// for). These orchestrator-level tests never spawn a real /vm/start
+	// or softnet process, so stand in with a fake listener registered
+	// directly via the test-only seam.
+	registerFakeSoftnetForOrchestratorTest(t, "x")
+
 	sup := healthyIronProxySupervisor(t, "x")
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
 	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: true, vmName: "x"}, sup)
@@ -93,6 +104,42 @@ func startReconcileDaemon(t *testing.T) func() {
 	require.FileExists(t, socket)
 
 	return func() { cancel(); <-errCh }
+}
+
+// registerFakeSoftnetForOrchestratorTest spins up a fake softnet
+// control-socket listener for projectID and registers it via
+// serviceapi.SetSoftnetControlSockForTest — the daemon's real
+// registration paths (/vm/start, /vm/apply-iron-proxy, discoverSoftnet)
+// never run in these orchestrator-level tests, which drive a bare
+// serviceapi.Server directly. The listener accepts and discards every
+// line; these tests exercise reconcile's control flow, not the
+// expose-map wire shape.
+func registerFakeSoftnetForOrchestratorTest(t *testing.T, projectID string) {
+	t.Helper()
+	// AF_UNIX sun_path is capped at 104 bytes on Darwin; root directly
+	// under /tmp with a short name rather than t.TempDir() (same
+	// reasoning as startReconcileDaemon's HOME handling above).
+	dir, err := os.MkdirTemp("/tmp", "devm-sn-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _ = bufio.NewReader(c).ReadString('\n')
+			}(c)
+		}
+	}()
+	serviceapi.SetSoftnetControlSockForTest(projectID, sock)
+	t.Cleanup(func() { serviceapi.SetSoftnetControlSockForTest(projectID, "") })
 }
 
 // healthyIronProxySupervisor returns a *supervisor.Supervisor that

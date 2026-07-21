@@ -106,8 +106,13 @@ func TestComputeExposeMap_BindIPFieldIgnoredNowUsesProjectIP(t *testing.T) {
 // never bound and the project can never silently misroute another
 // project's hostname. Project "conflict-b" is given a socket path that
 // doesn't exist; if pushExposeMap dialed it, the error returned would be
-// a dial/connect failure, not the portClaims conflict message.
+// a dial/connect failure, not the portClaims conflict message. Project
+// "conflict-a" needs a real listening socket registered — pushExposeMap
+// now loud-fails on an unregistered softnetState entry instead of
+// silently no-opping, so its "must succeed" push has to have somewhere
+// real to dial.
 func TestPushExposeMap_ConflictRefusesDispatch(t *testing.T) {
+	registerFakeSoftnet(t, "conflict-a")
 	t.Cleanup(func() {
 		exposeClaims.release("conflict-a")
 		exposeClaims.release("conflict-b")
@@ -127,6 +132,27 @@ func TestPushExposeMap_ConflictRefusesDispatch(t *testing.T) {
 	}
 	if got := err.Error(); !containsAll(got, "127.0.0.1:15432", "conflict-a") {
 		t.Fatalf("want conflict error naming the key and owning project, got: %v", got)
+	}
+}
+
+// TestPushExposeMap_ErrorsWhenSoftnetStateEmpty pins the loud-fail
+// contract itself (as opposed to the conflict-detection test above,
+// which exercises it incidentally via "conflict-b"): an unregistered
+// softnetState entry — no /vm/start, no /vm/apply-iron-proxy, no
+// discoverSoftnet rehydration ever ran for this project — must return
+// an error, not the old silent no-op. Regression coverage for the
+// adopt-in-place gap where this silence hid a real bug (see
+// apply_iron_proxy.go's softnetState.put and its comment).
+func TestPushExposeMap_ErrorsWhenSoftnetStateEmpty(t *testing.T) {
+	t.Cleanup(func() { exposeClaims.release("never-registered") })
+
+	ports := []softnet.ExposePort{{GuestPort: 22, BindIP: "127.0.0.1", HostPort: 2222}}
+	err := pushExposeMap("never-registered", ports)
+	if err == nil {
+		t.Fatal("want an error when softnetState has no entry for the project, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, "softnet control socket not registered") {
+		t.Fatalf("want an error naming the missing registration, got: %v", got)
 	}
 }
 
