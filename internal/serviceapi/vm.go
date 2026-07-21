@@ -751,13 +751,6 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 		ReleaseProjectIP(cfg, req.Name)
 		ironProxyState.del(req.Name)
-		// Ask softnet to exit before dropping our only record of how to
-		// reach it. softnet is a child `tart run --net-softnet` forks
-		// internally, not a process the supervisor spawns/tracks itself
-		// (see /vm/start), so stopping the VM's tart-run process below
-		// does not reliably reach it — see shutdownSoftnet.
-		shutdownSoftnet(req.Name)
-		softnetState.del(req.Name)
 		// A stopped project frees its claimed host ports for other
 		// projects to take.
 		exposeClaims.release(req.Name)
@@ -802,6 +795,18 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, fmt.Sprintf("supervisor stop: %v", err), http.StatusInternalServerError)
 			return
 		}
+		// Ask softnet to exit now that the guest is confirmed stopped and
+		// its tart-run process confirmed terminated above. softnet is a
+		// child `tart run --net-softnet` forks internally, not a process
+		// the supervisor spawns/tracks itself (see /vm/start), so stopping
+		// the VM's tart-run process does not reliably reach it — see
+		// shutdownSoftnet. Signalling it here, rather than before
+		// gracefulStopVM, means the guest keeps its network intact through
+		// its own in-guest poweroff sequence instead of losing it mid-
+		// shutdown (which stalled network-dependent systemd units and
+		// pushed gracefulStopVM toward its full grace-period ceiling).
+		shutdownSoftnet(req.Name)
+		softnetState.del(req.Name)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
