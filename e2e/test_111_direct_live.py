@@ -115,7 +115,7 @@ def _set_direct(workspace, devm, value: bool) -> None:
 @pytest.mark.slow
 @pytest.mark.timeout(600)
 def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
-    hostname = f"{sandbox_name}-nc.e2e.test"
+    hostname = f"nc.{sandbox_name}.e2e.test"
     workspace.write_devmyaml(
         docker=True,
         services={

@@ -180,3 +180,7 @@ fetch-iron-proxy:
       rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy ; \
     fi
     @echo "iron-proxy embedded at internal/ironproxy/embed/iron-proxy.gz"
+    @mkdir -p bin
+    @gunzip -kc internal/ironproxy/embed/iron-proxy.gz > bin/iron-proxy
+    @chmod +x bin/iron-proxy
+    @echo "iron-proxy binary extracted to bin/iron-proxy"

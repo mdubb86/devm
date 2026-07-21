@@ -96,7 +96,7 @@ def _wait_exec_ready(vm: TartSandbox, timeout: float = 90.0) -> bool:
 @pytest.mark.slow
 @pytest.mark.timeout(600)
 def test_adopt_in_place(devm, workspace, sandbox_name):
-    hostname = f"{sandbox_name}-direct.e2e.test"
+    hostname = f"direct.{sandbox_name}.e2e.test"
     # No `docker: true` -- a bare host-process direct service (test_112b's
     # shape), so the only extra first-boot cost is a quick apt install.
     # `packages:`/`install:` are first-boot-only (gated on the guest's own

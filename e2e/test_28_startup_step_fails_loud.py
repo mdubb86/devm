@@ -32,5 +32,4 @@ def test_failed_service_makes_devm_shell_exit_nonzero(workspace, devm):
         f"stderr={proc.stderr.decode()!r}"
     )
     err = proc.stderr.decode()
-    assert 'service "broken" did not become active' in err
-    assert "status=failed" in err
+    assert "service broken failed" in err
