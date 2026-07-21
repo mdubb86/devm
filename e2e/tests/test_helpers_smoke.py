@@ -1,4 +1,5 @@
 """Offline unit tests for helpers (no tart, no devm)."""
+import json
 import os
 import subprocess
 import tempfile
@@ -9,6 +10,7 @@ import yaml
 
 from helpers import registry
 from helpers.devm import Devm, DevmError
+from helpers.pool import pool_ip
 from helpers.workspace import Workspace
 
 
@@ -126,3 +128,24 @@ def test_add_systemd_service_idempotent_last_wins(tmp_path):
     cfg = yaml.safe_load(ws.devmyaml_path.read_text())
     assert cfg["services"]["svc"]["exec"] == ["/bin/b"]
     assert cfg["services"]["svc"]["restart"] == "no"
+
+
+# --- pool ---
+
+def test_pool_ip_reads_project_ip_from_state_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    state_dir = tmp_path / "Library" / "Application Support" / "devm-e2e" / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "my-project.json").write_text(json.dumps({"project_ip": "127.42.0.7"}))
+
+    assert pool_ip("my-project") == "127.42.0.7"
+
+
+def test_pool_ip_raises_when_no_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    try:
+        pool_ip("missing-project")
+    except RuntimeError as e:
+        assert "missing-project" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError")
