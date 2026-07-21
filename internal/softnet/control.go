@@ -9,7 +9,13 @@ import (
 	"os"
 )
 
-func applyControl(e *egress, ing *ingress, m ControlMsg) error {
+// applyControl handles one decoded control message. shutdown is invoked for
+// the "shutdown" op — the daemon's signal that this softnet process should
+// exit now (see /vm/stop in internal/serviceapi/vm.go). softnet is a child
+// `tart run --net-softnet` forks internally, invisible to the daemon's
+// process supervisor, so this control message — not a process signal — is
+// the reliable way the daemon reaches it at teardown.
+func applyControl(e *egress, ing *ingress, m ControlMsg, shutdown func()) error {
 	switch m.Op {
 	case "setPolicy":
 		p, err := ParsePolicy(m.Policy)
@@ -21,14 +27,22 @@ func applyControl(e *egress, ing *ingress, m ControlMsg) error {
 	case "setExposeMap":
 		ing.apply(m.Expose)
 		return nil
+	case "shutdown":
+		if shutdown != nil {
+			shutdown()
+		}
+		return nil
 	default:
 		return nil // unknown ops are ignored, not fatal
 	}
 }
 
 // serveControl listens on sockPath for newline-delimited JSON ControlMsgs and
-// applies them. Returns a Closer that stops the listener.
-func serveControl(sockPath string, e *egress, ing *ingress) (io.Closer, error) {
+// applies them. Returns a Closer that stops the listener. shutdown is
+// threaded through to applyControl's "shutdown" op handler (see Run in
+// softnet.go, which passes its own cancellation func so a shutdown message
+// unblocks the accept loop the same way a SIGTERM does).
+func serveControl(sockPath string, e *egress, ing *ingress, shutdown func()) (io.Closer, error) {
 	_ = os.Remove(sockPath)
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
@@ -49,7 +63,7 @@ func serveControl(sockPath string, e *egress, ing *ingress) (io.Closer, error) {
 						logf("control unmarshal: %v", err)
 						continue
 					}
-					if err := applyControl(e, ing, m); err != nil {
+					if err := applyControl(e, ing, m, shutdown); err != nil {
 						logf("control apply %s: %v", m.Op, err)
 					}
 				}

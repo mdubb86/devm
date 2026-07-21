@@ -1,13 +1,18 @@
 package serviceapi
 
 import (
+	"bufio"
 	"context"
+	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeStopper is a vmStopper that records the poweroff exec and reports the
@@ -105,4 +110,58 @@ func TestGracefulStopVM_DetectsStopViaExecUnreachable_UnderSoftnet(t *testing.T)
 		"must return promptly on guest-agent unreachability, not loop toward the 45s cap")
 	assert.GreaterOrEqual(t, f.execCalls, 5,
 		"must require 3 consecutive Exec failures (poweroff + at least 1 success + 3 failures)")
+}
+
+// TestShutdownSoftnet_SendsShutdownOnControlSocket locks the invariant
+// /vm/stop depends on to fix the orphan-softnet leak: when the daemon has a
+// control socket recorded for a project, shutdownSoftnet must send it a
+// "shutdown" control message. softnet is a child `tart run --net-softnet`
+// forks internally — not a process the supervisor tracks — so this control
+// message, not a process signal, is what actually reaches it at teardown.
+func TestShutdownSoftnet_SendsShutdownOnControlSocket(t *testing.T) {
+	const projectID = "stop-proj"
+	// AF_UNIX sun_path is capped at 104 bytes on Darwin; t.TempDir() nests
+	// under this (long) test name and can overflow that under macOS's
+	// per-user $TMPDIR (see softnetSockDir's doc comment for the same
+	// issue in production code). Root at /tmp directly to stay short.
+	dir, err := os.MkdirTemp("/tmp", "devm-softnet-shutdown-test")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	defer ln.Close()
+
+	got := make(chan string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		line, _ := r.ReadString('\n')
+		got <- line
+	}()
+
+	softnetState.put(projectID, sock)
+	t.Cleanup(func() { softnetState.del(projectID) })
+
+	shutdownSoftnet(projectID)
+
+	select {
+	case line := <-got:
+		assert.Contains(t, line, `"op":"shutdown"`)
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdownSoftnet did not send a shutdown message on the project's control socket")
+	}
+}
+
+// TestShutdownSoftnet_NoSocketRegistered_NoOp covers the common /vm/stop
+// case: a project whose VM never started (or was already stopped) has no
+// softnetState entry. shutdownSoftnet must not dial anything or panic.
+func TestShutdownSoftnet_NoSocketRegistered_NoOp(t *testing.T) {
+	assert.NotPanics(t, func() {
+		shutdownSoftnet("never-started-proj")
+	})
 }

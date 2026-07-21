@@ -292,6 +292,30 @@ func armRelockTimer(locks *ProjectLocks, tr TartLister, name string, d time.Dura
 	configLockState.setTimer(name, t)
 }
 
+// shutdownSoftnet asks projectID's softnet child to exit, over its control
+// socket, if the daemon has one recorded. Best-effort and silent when there
+// is nothing to shut down (projectID's VM was never started, or /vm/stop
+// already ran for it) — softnetState.get returning "" is the normal case
+// for a project whose softnet, if any, is already gone.
+//
+// This exists because softnet is not a process the daemon spawns/tracks
+// directly: `tart run --net-softnet` forks it internally as its own child,
+// so it's invisible to supervisor.Supervisor (which only knows about the
+// `tart run` process itself, registered under supervisor.RoleVM). Stopping
+// that process does not reliably stop softnet too — see the shutdown()
+// doc comment in softnet_control.go for why — so without this call softnet
+// outlives its owning VM as an orphan, still holding the project's bound
+// 127.42.0.N port for the next cold-start to collide with.
+func shutdownSoftnet(projectID string) {
+	sock := softnetState.get(projectID)
+	if sock == "" {
+		return
+	}
+	if err := newSoftnetClient(sock).shutdown(); err != nil {
+		debuglog.Logf("serviceapi", "vm/stop: softnet shutdown for %s: %v", projectID, err)
+	}
+}
+
 // RegisterVMHandlers wires /vm/start, /vm/stop, /vm/status, and
 // /denials onto the given server. sup manages the VM process
 // lifecycle; tr wraps the tart binary for clone, list, run, and IP
@@ -743,9 +767,12 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 		ReleaseProjectIP(cfg, req.Name)
 		ironProxyState.del(req.Name)
-		// The softnet client is stateless — it dials fresh per call rather
-		// than holding a persistent connection — so there's nothing to
-		// close here, only the daemon's record of the socket path to drop.
+		// Ask softnet to exit before dropping our only record of how to
+		// reach it. softnet is a child `tart run --net-softnet` forks
+		// internally, not a process the supervisor spawns/tracks itself
+		// (see /vm/start), so stopping the VM's tart-run process below
+		// does not reliably reach it — see shutdownSoftnet.
+		shutdownSoftnet(req.Name)
 		softnetState.del(req.Name)
 		// A stopped project frees its claimed host ports for other
 		// projects to take.

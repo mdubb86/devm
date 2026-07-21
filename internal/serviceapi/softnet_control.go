@@ -92,6 +92,22 @@ func (c *softnetClient) setExposeMap(ports []softnet.ExposePort) error {
 	return c.send(msg)
 }
 
+// shutdown asks softnet to exit now. softnet is a child process `tart run
+// --net-softnet` forks internally (see /vm/start's ensureSoftnetSymlink
+// comment) — the daemon's supervisor only manages the `tart run` process
+// itself, so a plain SIGTERM to that process doesn't reach softnet: pexec
+// only escalates to a process-group-wide signal if `tart run` outlives a
+// short grace window, and in practice it exits fast on SIGTERM, so softnet
+// is never actually signaled and survives as an orphan holding the
+// project's bound port. This control message is the reliable path; softnet
+// applies it in applyControl (internal/softnet/control.go) by cancelling
+// its own run context, which now (see softnet.go) also force-closes its
+// vm-fd connection so a blocked read can't leave it hung after the guest
+// has gone quiet.
+func (c *softnetClient) shutdown() error {
+	return c.send(map[string]any{"op": "shutdown"})
+}
+
 // softnetStore tracks each running project's softnet control socket path,
 // mirroring projectInfoStore's mutex-guarded map pattern.
 type softnetStore struct {
