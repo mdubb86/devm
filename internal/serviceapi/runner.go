@@ -84,6 +84,14 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	if err := AdoptIronProxies(ctx, cfg, sup, tr, routes); err != nil {
 		fmt.Fprintf(os.Stderr, "iron-proxy adopt: %v\n", err)
 	}
+
+	// Reap softnet processes left behind by a daemon that crashed or was
+	// killed mid-project (before /vm/stop's shutdownSoftnet could reach
+	// them) — see ReapOrphanSoftnets. Never touches a softnet still
+	// serving a live VM: only PPID==1 (parent tart-run already exited)
+	// qualifies. Runs in the background; must not block startup.
+	ReapOrphanSoftnets(ctx, cfg)
+
 	// Rehydrate softnetState for every project AdoptIronProxies just
 	// recovered, and best-effort re-push ENFORCED so the daemon's view
 	// and softnet's own policy reconcile after a restart. Must run after
