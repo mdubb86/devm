@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os/user"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,7 +51,13 @@ func TestBuildInstallScript_IncludesHelper(t *testing.T) {
 	})
 	assert.Contains(t, script, "dscl . -create /Groups/_devm")
 	assert.Contains(t, script, "/Library/LaunchDaemons/com.devm.helper.plist")
-	assert.Contains(t, script, "launchctl bootstrap system /Library/LaunchDaemons/com.devm.helper.plist")
+	// Bootstrap goes through our own retry-capable `_kardianos
+	// bootstrap-helper` (see launchdBootstrapPlist), not a bare
+	// `launchctl bootstrap` line — launchd can transiently EIO here
+	// right after the bootout above, and a bare shell invocation has
+	// no way to retry.
+	assert.Contains(t, script, "_kardianos bootstrap-helper")
+	assert.NotContains(t, script, "launchctl bootstrap system /Library/LaunchDaemons/com.devm.helper.plist")
 	assert.Contains(t, script, "/usr/local/libexec/devm-helper")
 
 	// The append must be guarded against duplicate GroupMembership
@@ -198,4 +206,80 @@ func TestLaunchdPlistIsIdentityAware(t *testing.T) {
 	want := "/Library/LaunchDaemons/com.devm.service.plist"
 	got := cfg.LaunchdPlistDaemon()
 	assert.Equal(t, want, got)
+}
+
+// withNoBootstrapBackoff replaces launchdBootstrapBackoff with an
+// all-zero schedule of the same length for the duration of a test, so
+// retry tests don't actually sleep. Package tests never run t.Parallel
+// (verified: no other test in this package does), so mutating the
+// package-level var is safe.
+func withNoBootstrapBackoff(t *testing.T) {
+	t.Helper()
+	orig := launchdBootstrapBackoff
+	zeroed := make([]time.Duration, len(orig))
+	launchdBootstrapBackoff = zeroed
+	t.Cleanup(func() { launchdBootstrapBackoff = orig })
+}
+
+// TestLaunchdBootstrapPlist_RetriesTransientEIO pins the fix for the
+// intermittent `launchctl bootstrap` failure right after a `bootout` +
+// plist rm on the same label: launchd needs a moment to clear its
+// internal registration state, and the identical command retried a
+// beat later succeeds with no other change. First call returns the
+// transient EIO signature; second call succeeds — launchdBootstrapPlist
+// must return nil having called run exactly twice.
+func TestLaunchdBootstrapPlist_RetriesTransientEIO(t *testing.T) {
+	withNoBootstrapBackoff(t)
+
+	var calls int
+	run := func(args ...string) (string, error) {
+		calls++
+		require.Equal(t, []string{"bootstrap", "system", "/Library/LaunchDaemons/com.devm.service.plist"}, args)
+		if calls == 1 {
+			return "Bootstrap failed: 5: Input/output error", errors.New("exit status 5")
+		}
+		return "", nil
+	}
+
+	err := launchdBootstrapPlist(cfg.LaunchdPlistDaemon(), run)
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls, "must retry exactly once after the transient EIO before succeeding")
+}
+
+// TestLaunchdBootstrapPlist_NonTransientErrorFailsFast pins that only
+// the known transient-EIO signature is retried — any other launchctl
+// failure (e.g. a genuinely malformed plist) must propagate on the
+// first attempt, not silently retry and mask a real problem.
+func TestLaunchdBootstrapPlist_NonTransientErrorFailsFast(t *testing.T) {
+	withNoBootstrapBackoff(t)
+
+	var calls int
+	run := func(args ...string) (string, error) {
+		calls++
+		return "Bootstrap failed: 22: Invalid argument", errors.New("exit status 22")
+	}
+
+	err := launchdBootstrapPlist(cfg.LaunchdPlistDaemon(), run)
+	require.Error(t, err)
+	assert.Equal(t, 1, calls, "non-transient errors must not be retried")
+	assert.Contains(t, err.Error(), "Invalid argument")
+}
+
+// TestLaunchdBootstrapPlist_ExhaustsRetriesOnPersistentEIO pins the
+// "give up eventually" side: if the EIO never clears, the function
+// must not retry forever — it stops after len(launchdBootstrapBackoff)
+// attempts and surfaces the last error, wrapped.
+func TestLaunchdBootstrapPlist_ExhaustsRetriesOnPersistentEIO(t *testing.T) {
+	withNoBootstrapBackoff(t)
+
+	var calls int
+	run := func(args ...string) (string, error) {
+		calls++
+		return "Bootstrap failed: 5: Input/output error", errors.New("exit status 5")
+	}
+
+	err := launchdBootstrapPlist(cfg.LaunchdPlistDaemon(), run)
+	require.Error(t, err)
+	assert.Equal(t, len(launchdBootstrapBackoff), calls)
+	assert.Contains(t, err.Error(), "failed after retries")
 }

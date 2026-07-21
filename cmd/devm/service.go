@@ -406,7 +406,11 @@ func buildInstallScript(inputs installInputs) string {
 		fmt.Fprintf(&sb, "install -m 0644 /dev/stdin %s <<'EOF'\n%sEOF\n",
 			cfg.LaunchdPlistHelper(), helperPlistContent(inputs.HelperExe, inputs.HelperLogDir))
 		sb.WriteString("launchctl bootout " + cfg.LaunchdTargetHelper() + " 2>/dev/null || true\n")
-		sb.WriteString("launchctl bootstrap system " + cfg.LaunchdPlistHelper() + "\n")
+		// Bootstrap via our own retry-capable helper (not a raw
+		// `launchctl bootstrap` line) — see launchdBootstrapPlist:
+		// launchd can transiently EIO here right after the bootout
+		// above, and a bare shell invocation has no way to retry.
+		fmt.Fprintf(&sb, "%s _kardianos bootstrap-helper\n", shellQuote(inputs.DevmExe))
 	}
 	if inputs.NeedsAliases {
 		for n := cfg.PoolStart; n <= cfg.PoolEnd; n++ {
@@ -815,16 +819,69 @@ var kardianosCmd = &cobra.Command{
 	Hidden: true,
 }
 
-// launchdBootstrap loads the plist via modern `launchctl bootstrap`.
-// Replacement for kardianos's Start (`launchctl load` — deprecated on
-// modern macOS, fails with "Load failed: 5: Input/output error").
-func launchdBootstrap() error {
-	plist := cfg.LaunchdPlistDaemon()
-	out, err := exec.Command("launchctl", "bootstrap", "system", plist).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("launchctl bootstrap system %s: %v: %s", plist, err, strings.TrimSpace(string(out)))
+// launchctlRunner abstracts a single `launchctl <args...>` invocation
+// (combined stdout+stderr, plus the process error — the same contract
+// as exec.Cmd.CombinedOutput). Injectable for testing retry behavior
+// without spawning real launchctl; nil means "use the real binary".
+//
+// Same shape as resolveInstallUser's injectable lookup func, for the
+// same reason: lets tests drive the retry loop deterministically.
+type launchctlRunner func(args ...string) (output string, err error)
+
+// runLaunchctl is the production launchctlRunner.
+func runLaunchctl(args ...string) (string, error) {
+	out, err := exec.Command("launchctl", args...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// launchdBootstrapBackoff is the wait before each retry attempt (the
+// first attempt is immediate). Three attempts total.
+var launchdBootstrapBackoff = []time.Duration{0, 500 * time.Millisecond, 1500 * time.Millisecond}
+
+// isTransientLaunchdError reports whether launchctl's combined output
+// indicates the transient EIO race rather than a real failure.
+// Observed reliably in the window right after `launchctl bootout` +
+// `rm` of a label's plist: launchd's internal registration cleanup
+// can lag the shell command's exit, so an immediate `bootstrap` on
+// the same label returns "Bootstrap failed: 5: Input/output error"
+// even though nothing is actually wrong. A retry a moment later
+// invariably succeeds with no code change in between.
+func isTransientLaunchdError(output string) bool {
+	return strings.Contains(output, "5: Input/output error") ||
+		strings.Contains(output, "Bootstrap failed: 5")
+}
+
+// launchdBootstrapPlist loads plist via `launchctl bootstrap system`,
+// retrying on isTransientLaunchdError per launchdBootstrapBackoff.
+// Non-transient errors return immediately without retrying. run is
+// injectable for testing; nil uses runLaunchctl.
+func launchdBootstrapPlist(plist string, run launchctlRunner) error {
+	if run == nil {
+		run = runLaunchctl
 	}
-	return nil
+	var lastErr error
+	for i, backoff := range launchdBootstrapBackoff {
+		if i > 0 {
+			time.Sleep(backoff)
+		}
+		outStr, err := run("bootstrap", "system", plist)
+		if err == nil {
+			return nil
+		}
+		lastErr = fmt.Errorf("launchctl bootstrap system %s: %v: %s", plist, err, outStr)
+		if !isTransientLaunchdError(outStr) {
+			return lastErr
+		}
+	}
+	return fmt.Errorf("launchctl bootstrap failed after retries: %w", lastErr)
+}
+
+// launchdBootstrap loads the daemon's plist via modern `launchctl
+// bootstrap`. Replacement for kardianos's Start (`launchctl load` —
+// deprecated on modern macOS, fails with "Load failed: 5:
+// Input/output error").
+func launchdBootstrap() error {
+	return launchdBootstrapPlist(cfg.LaunchdPlistDaemon(), nil)
 }
 
 // launchdBootout deregisters + SIGTERMs the service via modern
@@ -911,6 +968,23 @@ var kardianosRestartCmd = &cobra.Command{
 	},
 }
 
+// kardianosBootstrapHelperCmd loads the devm-helper's plist via
+// launchdBootstrapPlist (retry-capable). Invoked by buildInstallScript
+// from inside the sudo'd install script, right after that script has
+// bootout'd any prior helper — the same transient-EIO window
+// launchdBootstrap guards against for the main daemon, so the helper
+// gets the same retry rather than a bare `launchctl bootstrap` line
+// with no way to recover from it.
+var kardianosBootstrapHelperCmd = &cobra.Command{
+	Use:    "bootstrap-helper",
+	Short:  "[internal] launchctl bootstrap for devm-helper under sudo",
+	Hidden: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		return launchdBootstrapPlist(cfg.LaunchdPlistHelper(), nil)
+	},
+}
+
 func init() {
 	// --foreground routes `serve` directly through RunService (no
 	// kardianos). Used by e2e's isolated mode so a test daemon can
@@ -931,6 +1005,7 @@ func init() {
 		kardianosStartCmd,
 		kardianosStopCmd,
 		kardianosRestartCmd,
+		kardianosBootstrapHelperCmd,
 	)
 	rootCmd.AddCommand(kardianosCmd)
 	// Suppress signal for the long-running serve when run interactively.
