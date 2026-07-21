@@ -14,27 +14,48 @@ import (
 func TestComputeExposeMap_ServicesAndSSH(t *testing.T) {
 	cfg := schema.Config{Services: map[string]schema.Service{
 		"db":     {Port: 5432, Direct: true, Hostname: "db.test", BindIP: ""},
-		"web":    {Port: 3000, Hostname: "web.test"},
+		"web":    {Port: 3000, Hostname: "web.test"}, // not direct -> not exposed via softnet
 		"noport": {}, // masks/exec-only service: no port -> not exposed
 	}}
 	got := computeExposeMap(cfg, "127.42.0.1")
 
-	// Expect one entry per service WITH a port, plus SSH.
+	// Expect one entry per DIRECT service WITH a port, plus SSH. "web" is
+	// not direct, so it must NOT appear — it's reachable (if HTTP) via
+	// the daemon proxy on :80/:443 instead.
 	byGuest := map[int]softnet.ExposePort{}
 	for _, p := range got {
 		byGuest[p.GuestPort] = p
 	}
-	if len(got) != 3 {
-		t.Fatalf("want 3 expose ports (db, web, ssh), got %d: %+v", len(got), got)
+	if len(got) != 2 {
+		t.Fatalf("want 2 expose ports (db, ssh), got %d: %+v", len(got), got)
 	}
 	if p := byGuest[5432]; p.HostPort != 5432 || p.BindIP != "127.42.0.1" {
 		t.Errorf("db: want host 5432 bind 127.42.0.1, got %+v", p)
 	}
-	if p := byGuest[3000]; p.HostPort != 3000 || p.BindIP != "127.42.0.1" {
-		t.Errorf("web: want host 3000 bind 127.42.0.1, got %+v", p)
+	if _, ok := byGuest[3000]; ok {
+		t.Errorf("web is not direct: must not be exposed via softnet, got %+v", got)
 	}
 	if p := byGuest[22]; p.HostPort != 22 || p.BindIP != "127.42.0.1" {
 		t.Errorf("ssh: want host 22 bind 127.42.0.1, got %+v", p)
+	}
+}
+
+// TestComputeExposeMap_NonDirectServicesNotExposed pins the core fix:
+// a project with only non-direct services must expose nothing but SSH
+// via softnet. Non-direct HTTP services go through the daemon proxy on
+// :80/:443 (routes table); non-direct non-HTTP services aren't
+// reachable at all — softnet must never open a listener for them.
+func TestComputeExposeMap_NonDirectServicesNotExposed(t *testing.T) {
+	cfg := schema.Config{Services: map[string]schema.Service{
+		"web": {Port: 3000, Hostname: "web.test"},
+		"api": {Port: 4000, Hostname: "api.test"},
+	}}
+	got := computeExposeMap(cfg, "127.42.0.9")
+	if len(got) != 1 {
+		t.Fatalf("want only SSH exposed, got %d: %+v", len(got), got)
+	}
+	if got[0].GuestPort != 22 || got[0].HostPort != 22 || got[0].BindIP != "127.42.0.9" {
+		t.Fatalf("want SSH-only entry on 127.42.0.9:22, got %+v", got[0])
 	}
 }
 
@@ -64,12 +85,12 @@ func TestComputeExposeMap_BindsProjectIP(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "myapp"},
 		Services: map[string]schema.Service{
-			"api": {Port: 3000, Hostname: "api.myapp.test"},
+			"api": {Port: 3000, Hostname: "api.myapp.test"}, // not direct -> not exposed
 			"db":  {Port: 5432, Hostname: "db.myapp.test", Direct: true},
 		},
 	}
 	ports := computeExposeMap(cfg, "127.42.0.1")
-	require.Len(t, ports, 3) // api, db, ssh
+	require.Len(t, ports, 2) // db, ssh (api is not direct)
 	for _, p := range ports {
 		assert.Equal(t, "127.42.0.1", p.BindIP, "bind IP for %d", p.GuestPort)
 	}
