@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -59,10 +60,11 @@ type State struct {
 //     is tracked; no auto-restart, no log capture. Stop signals via
 //     SIGTERM by PID.
 type Supervisor struct {
-	pm      pexec.ProcessManager
-	mu      sync.Mutex
-	logDir  string
-	adopted map[Key]int // adopted-from-prior-daemon → PID
+	pm             pexec.ProcessManager
+	mu             sync.Mutex
+	logDir         string
+	adopted        map[Key]int // adopted-from-prior-daemon → PID
+	disableRestart sync.Map    // key.String() → *atomic.Bool; gates OnUnexpectedExit's respawn
 }
 
 // New returns a Supervisor that captures per-process logs under
@@ -139,19 +141,35 @@ func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd, taps ...io
 
 	backoff := newBackoff(time.Second, 30*time.Second)
 
+	// disable gates the backoff-respawn: DisableRestart(k) flips it before
+	// an expected exit (e.g. a guest's in-guest `systemctl poweroff` making
+	// `tart run` exit on its own), so the OnUnexpectedExit callback below
+	// short-circuits to "don't restart" instead of delegating to backoff.
+	// A fresh *atomic.Bool per Spawn — stored before AddProcessFromConfig
+	// starts the child, so there is no window where a fast-exiting child
+	// could hit onUnexpectedExit before the gate exists.
+	disable := &atomic.Bool{}
+	s.disableRestart.Store(k.String(), disable)
+
 	cfg := pexec.ProcessConfig{
-		ID:               k.String(),
-		Name:             cmd.Path,
-		Args:             argsAfterPath(cmd.Args),
-		CWD:              cmd.Dir,
-		Environment:      envMap(cmd.Env),
-		StopSignal:       syscall.SIGTERM,
-		StopTimeout:      10 * time.Second,
-		LogWriter:        out,
-		OnUnexpectedExit: backoff.onExit,
+		ID:          k.String(),
+		Name:        cmd.Path,
+		Args:        argsAfterPath(cmd.Args),
+		CWD:         cmd.Dir,
+		Environment: envMap(cmd.Env),
+		StopSignal:  syscall.SIGTERM,
+		StopTimeout: 10 * time.Second,
+		LogWriter:   out,
+		OnUnexpectedExit: func(ctx context.Context, exitCode int) bool {
+			if disable.Load() {
+				return false // expected exit — do not respawn
+			}
+			return backoff.onExit(ctx, exitCode)
+		},
 	}
 
 	if _, err := s.pm.AddProcessFromConfig(ctx, cfg); err != nil {
+		s.disableRestart.Delete(k.String())
 		return fmt.Errorf("supervisor.Spawn(%s): %w", k, err)
 	}
 	return nil
@@ -164,6 +182,7 @@ func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd, taps ...io
 func (s *Supervisor) Stop(ctx context.Context, k Key) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.disableRestart.Delete(k.String())
 	if pid, ok := s.adopted[k]; ok {
 		delete(s.adopted, k)
 		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
@@ -184,41 +203,21 @@ func (s *Supervisor) Stop(ctx context.Context, k Key) error {
 	return nil
 }
 
-// Deregister removes the entry for k from the supervisor's registry
-// WITHOUT signaling the underlying process. This disables the
-// OnUnexpectedExit auto-respawn for that entry, so callers that expect
-// the process to exit on its own (e.g., a graceful in-guest poweroff
-// triggering a `tart run` process exit) can let that happen without
-// triggering a backoff-respawn storm.
+// DisableRestart marks k's supervised process as expected to exit: the
+// next (or currently pending) OnUnexpectedExit callback for this key
+// returns false instead of delegating to the backoff, so pexec does not
+// respawn it. Callers invoke this immediately before triggering an
+// expected-but-external exit — e.g. an in-guest `systemctl poweroff`
+// that makes `tart run` exit on its own — so that natural exit isn't
+// misread as a crash and respawned.
 //
-// Callers still own the process's PID afterward — Deregister does NOT
-// kill it. If the process needs to be force-terminated, the caller can
-// syscall.Kill the returned PID. A PID of 0 means the process's PID
-// couldn't be determined (e.g., not yet started) even though the entry
-// was deregistered; that is not an error.
-//
-// Idempotent: unknown keys return (0, ErrNotFound) — same shape as Stop.
-// Adopted entries (Supervisor.Adopt path) also cleanly deregister.
-func (s *Supervisor) Deregister(k Key) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if pid, ok := s.adopted[k]; ok {
-		delete(s.adopted, k)
-		return pid, nil
+// Idempotent and a no-op for unknown or already-stopped keys (nothing
+// to gate). The flag is cleared on the next Stop or Spawn for the same
+// key.
+func (s *Supervisor) DisableRestart(k Key) {
+	if v, ok := s.disableRestart.Load(k.String()); ok {
+		v.(*atomic.Bool).Store(true)
 	}
-	p, ok := s.pm.RemoveProcessByID(k.String())
-	if !ok {
-		return 0, ErrNotFound
-	}
-	// pexec's RemoveProcessByID only deletes the registry entry — it
-	// does not signal or wait on the process, so the child (and its
-	// OnUnexpectedExit hook) is already fully detached from pexec by
-	// the time we get here.
-	pid, err := p.UnixPid()
-	if err != nil {
-		return 0, nil
-	}
-	return pid, nil
 }
 
 // Status reports basic state for `devm status`. Handles both

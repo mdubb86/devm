@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/mdubb86/devm/internal/debuglog"
@@ -176,11 +175,12 @@ const shutdownGraceTimeout = 45 * time.Second
 // `--restart` containers stuck "created" on the next boot; an in-guest
 // `systemctl poweroff` lets systemd stop services cleanly so docker records
 // them as running-on-boot. Best-effort: on timeout the caller force-
-// terminates the VM by PID (see the sup.Deregister call in /vm/stop —
-// callers MUST deregister the VM's tart-run process from the supervisor
-// before calling this, or the natural process exit that a successful
-// poweroff causes will be read as an unexpected crash and respawned,
-// defeating this function's poll and stalling it to the full timeout).
+// terminates the VM via the supervisor (see the sup.DisableRestart +
+// sup.Stop calls in /vm/stop — callers MUST call sup.DisableRestart for
+// the VM's tart-run process before calling this, or the natural process
+// exit that a successful poweroff causes will be read by the supervisor's
+// OnUnexpectedExit hook as an unexpected crash and respawned, defeating
+// this function's poll and stalling it to the full timeout).
 func gracefulStopVM(ctx context.Context, tr vmStopper, name string) {
 	ctx, cancel := context.WithTimeout(ctx, shutdownGraceTimeout)
 	defer cancel()
@@ -783,23 +783,18 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 		configLockState.del(req.Name)
 
-		// Deregister the VM's tart-run process from the supervisor BEFORE
-		// asking the guest to power off. gracefulStopVM's in-guest
-		// `systemctl poweroff` makes `tart run` exit on its own in ~5s;
-		// left registered, the supervisor's OnUnexpectedExit backoff
-		// hook reads that exit as unexpected and respawns tart run,
+		// Disable the supervisor's auto-respawn for the VM's tart-run
+		// process BEFORE asking the guest to power off. gracefulStopVM's
+		// in-guest `systemctl poweroff` makes `tart run` exit on its own
+		// in ~5s; without this gate, the supervisor's OnUnexpectedExit
+		// callback reads that exit as unexpected and respawns tart run,
 		// booting a new guest that gracefulStopVM's poll then dutifully
-		// waits out to the full shutdownGraceTimeout ceiling. Deregister
-		// removes the entry (and thus the auto-respawn) without
-		// signaling the process, so we still hold vmPID for a
-		// belt-and-suspenders force-kill below if the guest doesn't
-		// power off in time.
+		// waits out to the full shutdownGraceTimeout ceiling. DisableRestart
+		// flips a flag consulted by the still-armed callback — it does not
+		// touch the registry, so the belt-and-suspenders sup.Stop below
+		// still finds (and if needed force-kills) the entry.
 		key = supervisor.Key{ProjectID: req.Name, Role: supervisor.RoleVM}
-		vmPID, err := sup.Deregister(key)
-		if err != nil && !errors.Is(err, supervisor.ErrNotFound) {
-			http.Error(w, fmt.Sprintf("supervisor deregister: %v", err), http.StatusInternalServerError)
-			return
-		}
+		sup.DisableRestart(key)
 
 		// Power the guest off from the inside before force-terminating it.
 		// `tart stop` crashes the guest rather than shutting it down
@@ -807,17 +802,20 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// docker leaves its `--restart` containers stuck "created" on the
 		// next boot. An in-guest `systemctl poweroff` runs a clean shutdown —
 		// services stop, disk writes flush, docker records containers as
-		// running-on-boot. The force-kill below is a fallback if the guest
+		// running-on-boot. The sup.Stop below is a fallback if the guest
 		// doesn't power off within the grace window.
 		if req.Name != "" {
 			gracefulStopVM(r.Context(), tr, req.Name)
 		}
 
-		if vmPID > 0 {
-			if err := syscall.Kill(vmPID, 0); err == nil {
-				// Still alive after the grace window — force-terminate.
-				_ = syscall.Kill(vmPID, syscall.SIGKILL)
-			}
+		// Belt-and-suspenders: SIGTERM (then SIGKILL on timeout) whatever
+		// is left of the tart-run process. If gracefulStopVM's poweroff
+		// already made it exit, this is a fast no-op — pexec finds the
+		// process already reaped and returns immediately. ErrNotFound
+		// means /vm/start never ran (or a prior /vm/stop already reaped
+		// this key), which is fine.
+		if err := sup.Stop(r.Context(), key); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
+			debuglog.Logf("serviceapi", "vm/stop: supervisor stop for %s: %v", req.Name, err)
 		}
 		// Ask softnet to exit now that the guest is confirmed stopped and
 		// its tart-run process confirmed terminated above. softnet is a
