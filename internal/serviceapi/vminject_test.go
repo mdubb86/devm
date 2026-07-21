@@ -71,10 +71,10 @@ func TestBuildEnvScript_SetsSystemWideEnvVars(t *testing.T) {
 func TestBuildTimesyncdScript_PointsAtProxySentinel(t *testing.T) {
 	script := buildTimesyncdScript()
 	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")
-	// Sentinel: under ENFORCED policy softnet forwards outbound UDP:123
-	// to the daemon's SNTP responder regardless of destination IP, so
-	// any valid IP reaches it here.
-	assert.Contains(t, script, "NTP="+proxySentinelIP)
+	// interceptedEgressIP: under ENFORCED policy softnet forwards outbound
+	// UDP:123 to the daemon's SNTP responder regardless of destination IP,
+	// so any valid IP reaches it here.
+	assert.Contains(t, script, "NTP="+interceptedEgressIP)
 	// Explicit empty FallbackNTP prevents timesyncd from ever trying
 	// the default pool.ntp.org list; egress firewall would deny it
 	// anyway, but silencing the attempt keeps the log clean.

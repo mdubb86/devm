@@ -31,14 +31,14 @@ type SecretBinding struct {
 	Hosts []string `json:"hosts,omitempty"`
 }
 
-// proxySentinelIP is the address iron-proxy returns for every allow-listed
-// hostname. Chosen from RFC 5737 "documentation" space so it can never
+// interceptedEgressIP is the address the guest sees for every allow-listed
+// egress destination — iron-proxy answers DNS with it; timesyncd sends
+// NTP to it. Chosen from RFC 5737 "documentation" space so it can never
 // collide with a real destination. Under ENFORCED policy, softnet forwards
-// outbound TCP:80/443 to iron-proxy's listeners purely by destination
-// port, regardless of destination IP, so traffic addressed to the
-// sentinel reaches iron-proxy the same way traffic to a real address
-// would.
-const proxySentinelIP = "192.0.2.1"
+// outbound TCP:80/443/UDP:123 to iron-proxy / the daemon's SNTP responder
+// purely by destination port, regardless of destination IP, so traffic
+// addressed to this address reaches the right service.
+const interceptedEgressIP = "192.0.2.1"
 
 // VMStartRequest is the body shape for POST /vm/start.
 type VMStartRequest struct {
@@ -106,7 +106,7 @@ type VMConfigLockResponse struct {
 // allow-listing and DNS resolution are enforced by softnet over the
 // control socket (POST /vm/apply-egress-enforcement), not by guest-side
 // nftables/dnsmasq. TimesyncdScript still points the guest's
-// systemd-timesyncd at the proxy sentinel — softnet's UDP forwarder
+// systemd-timesyncd at interceptedEgressIP — softnet's UDP forwarder
 // catches outbound udp:123 regardless of destination, but the guest must
 // still be configured to send NTP somewhere for that interception to
 // matter.
@@ -533,12 +533,12 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			HTTPListen:  ironProxyListenAddr(httpPort),
 			HTTPSListen: ironProxyListenAddr(httpsPort),
 			DNSListen:   ironProxyListenAddr(dnsPort),
-			// DNS answers with a sentinel IP (RFC 5737 documentation range,
-			// never a real destination); softnet forwards outbound
+			// DNS answers with interceptedEgressIP (RFC 5737 documentation
+			// range, never a real destination); softnet forwards outbound
 			// TCP:80/443 to iron-proxy purely by destination port under
-			// ENFORCED policy, so traffic to the sentinel reaches
+			// ENFORCED policy, so traffic to that address reaches
 			// iron-proxy the same as any other allow-listed destination.
-			DNSProxyIP: proxySentinelIP,
+			DNSProxyIP: interceptedEgressIP,
 			CACertPath: filepath.Join(caDir, "ca", "root.crt"),
 			CAKeyPath:  filepath.Join(caDir, "ca", "root.key"),
 			AllowList:  req.AllowList,

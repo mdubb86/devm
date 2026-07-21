@@ -110,15 +110,15 @@ EOF
 }
 
 // buildTimesyncdScript configures systemd-timesyncd to send NTP
-// traffic at the proxy sentinel IP. Under ENFORCED policy softnet
+// traffic at interceptedEgressIP. Under ENFORCED policy softnet
 // forwards outbound UDP:123 to the daemon's SNTP responder regardless
 // of destination IP, so any valid IP here reaches it — this reuses the
-// same sentinel iron-proxy uses for DNS answers (see proxySentinelIP in
-// vm.go).
+// same address iron-proxy uses for DNS answers (see interceptedEgressIP
+// in vm.go).
 //
 // Config choices:
-//   - No DNS lookup: sentinel is an IP, so timesyncd doesn't resolve
-//     anything on every poll.
+//   - No DNS lookup: interceptedEgressIP is a literal IP, so timesyncd
+//     doesn't resolve anything on every poll.
 //   - PollIntervalMaxSec=64 caps the backoff so a Mac wake heals
 //     within ~64 seconds even if the previous poll succeeded.
 //   - Empty FallbackNTP prevents timesyncd from ever trying the
@@ -140,5 +140,5 @@ PollIntervalMaxSec=64
 EOF
 sudo systemctl enable --now systemd-timesyncd
 sudo systemctl restart systemd-timesyncd
-`, proxySentinelIP)
+`, interceptedEgressIP)
 }

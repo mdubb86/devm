@@ -138,7 +138,7 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 			HTTPListen:  ironProxyListenAddr(info.HTTPPort),
 			HTTPSListen: ironProxyListenAddr(info.HTTPSPort),
 			DNSListen:   ironProxyListenAddr(info.DNSPort),
-			DNSProxyIP:  proxySentinelIP,
+			DNSProxyIP:  interceptedEgressIP,
 			CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
 			CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
 			AllowList:   req.Allowlist,
