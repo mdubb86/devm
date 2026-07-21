@@ -19,7 +19,7 @@ import (
 // the currently running set.
 //
 // Softnet binds each project's guest :22 on its allocated ProjectIP
-// (per-project bind isolation) and DNS answers <project>.test ->
+// (per-project bind isolation) and DNS answers <project>.<TLD> ->
 // ProjectIP, so the Host block just needs the project name — no
 // daemon round trip to resolve a host port or loopback address.
 //

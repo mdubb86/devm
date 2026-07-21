@@ -31,9 +31,10 @@ var safeIdent = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
 // Entry describes one Host block to emit. HostName and Port are no
 // longer independent fields — softnet binds every project's guest :22
-// on its allocated ProjectIP and DNS answers <Name>.test -> ProjectIP
-// (see internal/softnet), so the block always points at "<Name>.test"
-// on port 22; nothing daemon-side needs to be fetched to resolve it.
+// on its allocated ProjectIP and DNS answers <Name>.<TLD> -> ProjectIP
+// (see internal/softnet), so the block always points at "<Name>.<TLD>"
+// on port 22 (TLD from the emitting identity.Config); nothing
+// daemon-side needs to be fetched to resolve it.
 type Entry struct {
 	Name           string // project name: host alias devm-<Name> + on-disk path lookups
 	KeyPath        string // path to the project's SSH private key
@@ -46,8 +47,17 @@ const header = `# Managed by devm. Regenerated on VM lifecycle events; hand edit
 
 `
 
+// blockData is the per-entry template data: Entry plus the TLD sourced
+// from identity.Config, so the same Entry can render under Prod
+// ("<name>.test") or E2E ("<name>.e2e.test") depending on which
+// identity emitted it.
+type blockData struct {
+	Entry
+	TLD string
+}
+
 const blockTmpl = `Host devm-{{.Name}}
-    HostName             {{.Name}}.test
+    HostName             {{.Name}}.{{.TLD}}
     User                 devm
     Port                 22
     IdentityFile         "{{.KeyPath}}"
@@ -91,7 +101,7 @@ func Emit(cfg identity.Config, entries []Entry) error {
 	}
 
 	var buf bytes.Buffer
-	if err := emit(&buf, filled); err != nil {
+	if err := emit(&buf, cfg, filled); err != nil {
 		return err
 	}
 
@@ -228,8 +238,10 @@ func RemoveInclude(cfg identity.Config) error {
 
 // emit is the pure rendering core: header + one validated, sorted block
 // per entry, written to w. Split out from Emit so tests can assert on
-// rendered content without touching the filesystem.
-func emit(w io.Writer, entries []Entry) error {
+// rendered content without touching the filesystem. cfg.TLD selects the
+// HostName suffix ("test" under Prod, "e2e.test" under E2E) so entries
+// render correctly under whichever identity is emitting them.
+func emit(w io.Writer, cfg identity.Config, entries []Entry) error {
 	if _, err := io.WriteString(w, header); err != nil {
 		return err
 	}
@@ -241,7 +253,7 @@ func emit(w io.Writer, entries []Entry) error {
 		if err := validateEntry(e); err != nil {
 			return err
 		}
-		if err := tmpl.Execute(w, e); err != nil {
+		if err := tmpl.Execute(w, blockData{Entry: e, TLD: cfg.TLD}); err != nil {
 			return fmt.Errorf("render entry: %w", err)
 		}
 	}

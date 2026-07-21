@@ -52,13 +52,29 @@ func TestEmit_UsesDNSHostname(t *testing.T) {
 		{Name: "myapp", KeyPath: "/tmp/key", KnownHostsPath: "/tmp/known"},
 	}
 	var buf bytes.Buffer
-	err := emit(&buf, entries)
+	err := emit(&buf, identity.Prod, entries)
 	require.NoError(t, err)
 	got := buf.String()
 	assert.Contains(t, got, "Host devm-myapp")
 	assert.Contains(t, got, "HostName             myapp.test")
 	assert.Contains(t, got, "Port                 22")
 	assert.NotContains(t, got, "127.0.0.1")
+}
+
+// TestEmit_E2EUsesE2ETLD verifies that emitting under identity.E2E
+// renders HostName with the e2e TLD ("<name>.e2e.test") instead of
+// Prod's "<name>.test" — the e2e resolver only handles /etc/resolver/
+// e2e.test, so a stray ".test" hostname would never resolve under e2e.
+func TestEmit_E2EUsesE2ETLD(t *testing.T) {
+	entries := []Entry{
+		{Name: "myapp", KeyPath: "/tmp/key", KnownHostsPath: "/tmp/known"},
+	}
+	var buf bytes.Buffer
+	err := emit(&buf, identity.E2E, entries)
+	require.NoError(t, err)
+	got := buf.String()
+	assert.Contains(t, got, "HostName             myapp.e2e.test")
+	assert.NotContains(t, got, "myapp.test\n")
 }
 
 func TestEmit_MultipleEntries_SortedByName(t *testing.T) {
