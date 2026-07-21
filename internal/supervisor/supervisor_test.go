@@ -221,6 +221,82 @@ func TestSupervisor_StopUnknownReturnsErrNotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestDeregister_RemovesEntryWithoutSignaling spawns a long-lived
+// child, Deregisters it, and confirms the process is still alive
+// afterward (Deregister must not signal it) and that the registry no
+// longer knows about the key.
+func TestDeregister_RemovesEntryWithoutSignaling(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+	defer func() { _ = s.pm.Stop() }()
+
+	k := Key{ProjectID: "long-lived", Role: RoleVM}
+	cmd := exec.Command("sleep", "5")
+	require.NoError(t, s.Spawn(context.Background(), k, cmd))
+
+	// Give the child a moment to actually start.
+	time.Sleep(200 * time.Millisecond)
+
+	pid, err := s.Deregister(k)
+	require.NoError(t, err)
+	require.Greater(t, pid, 0, "expected a real PID for a started process")
+	defer func() { _ = syscall.Kill(pid, syscall.SIGKILL) }()
+
+	// The entry should be gone from the registry.
+	state := s.Status(k)
+	assert.False(t, state.Present, "key should be gone from the registry after Deregister")
+
+	// The process itself must still be alive — Deregister must not signal it.
+	time.Sleep(500 * time.Millisecond)
+	err = syscall.Kill(pid, 0)
+	assert.NoError(t, err, "process should still be alive after Deregister")
+}
+
+// TestDeregister_UnknownKeyReturnsNotFound mirrors Stop's contract for
+// keys that were never registered.
+func TestDeregister_UnknownKeyReturnsNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+
+	pid, err := s.Deregister(Key{ProjectID: "nope", Role: RoleVM})
+	assert.ErrorIs(t, err, ErrNotFound)
+	assert.Equal(t, 0, pid)
+}
+
+// TestDeregister_DisablesRespawn spawns a child that starts, records
+// its start into a counter file, then exits non-zero shortly after —
+// exactly the shape that would normally trigger pexec's
+// OnUnexpectedExit backoff-respawn. Deregistering it before it exits
+// must prevent any respawn: the counter file should still show exactly
+// one start well after the process has exited and the backoff's base
+// delay (1s, per Spawn) has elapsed.
+func TestDeregister_DisablesRespawn(t *testing.T) {
+	tmp := t.TempDir()
+	counter := tmp + "/starts"
+
+	s := New(tmp)
+	defer func() { _ = s.pm.Stop() }()
+
+	k := Key{ProjectID: "flaky", Role: RoleVM}
+	cmd := exec.Command("sh", "-c", "echo start >> "+counter+"; sleep 0.3; exit 1")
+	require.NoError(t, s.Spawn(context.Background(), k, cmd))
+
+	// Deregister promptly, well before the child's 0.3s exit.
+	pid, err := s.Deregister(k)
+	require.NoError(t, err)
+	require.Greater(t, pid, 0)
+
+	// Wait past both the child's exit and the backoff's base restart
+	// delay (1s) so a respawn, if pexec still thought it owned this
+	// process, would have had time to happen and record a second start.
+	time.Sleep(2 * time.Second)
+
+	b, err := os.ReadFile(counter)
+	require.NoError(t, err)
+	starts := strings.Count(string(b), "start")
+	assert.Equal(t, 1, starts, "deregistered process must not be respawned on unexpected exit")
+}
+
 // TestSupervisor_ChildInheritsDaemonEnv would have caught the
 // 2026-06-27 bug where envMap(nil) returned nil → pexec gave the
 // child an empty env → `tart run` (and any other child) couldn't

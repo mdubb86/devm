@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/mdubb86/devm/internal/debuglog"
@@ -174,8 +175,12 @@ const shutdownGraceTimeout = 45 * time.Second
 // of shutting it down (cirruslabs/tart#582, #659), which leaves docker
 // `--restart` containers stuck "created" on the next boot; an in-guest
 // `systemctl poweroff` lets systemd stop services cleanly so docker records
-// them as running-on-boot. Best-effort: on timeout the caller's supervisor
-// stop force-terminates the VM.
+// them as running-on-boot. Best-effort: on timeout the caller force-
+// terminates the VM by PID (see the sup.Deregister call in /vm/stop —
+// callers MUST deregister the VM's tart-run process from the supervisor
+// before calling this, or the natural process exit that a successful
+// poweroff causes will be read as an unexpected crash and respawned,
+// defeating this function's poll and stalling it to the full timeout).
 func gracefulStopVM(ctx context.Context, tr vmStopper, name string) {
 	ctx, cancel := context.WithTimeout(ctx, shutdownGraceTimeout)
 	defer cancel()
@@ -778,22 +783,41 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 		configLockState.del(req.Name)
 
+		// Deregister the VM's tart-run process from the supervisor BEFORE
+		// asking the guest to power off. gracefulStopVM's in-guest
+		// `systemctl poweroff` makes `tart run` exit on its own in ~5s;
+		// left registered, the supervisor's OnUnexpectedExit backoff
+		// hook reads that exit as unexpected and respawns tart run,
+		// booting a new guest that gracefulStopVM's poll then dutifully
+		// waits out to the full shutdownGraceTimeout ceiling. Deregister
+		// removes the entry (and thus the auto-respawn) without
+		// signaling the process, so we still hold vmPID for a
+		// belt-and-suspenders force-kill below if the guest doesn't
+		// power off in time.
+		key = supervisor.Key{ProjectID: req.Name, Role: supervisor.RoleVM}
+		vmPID, err := sup.Deregister(key)
+		if err != nil && !errors.Is(err, supervisor.ErrNotFound) {
+			http.Error(w, fmt.Sprintf("supervisor deregister: %v", err), http.StatusInternalServerError)
+			return
+		}
+
 		// Power the guest off from the inside before force-terminating it.
 		// `tart stop` crashes the guest rather than shutting it down
 		// (cirruslabs/tart#582, #659), so systemd never stops services and
 		// docker leaves its `--restart` containers stuck "created" on the
 		// next boot. An in-guest `systemctl poweroff` runs a clean shutdown —
 		// services stop, disk writes flush, docker records containers as
-		// running-on-boot. The supervisor stop below force-terminates as a
-		// fallback if the guest doesn't power off within the grace window.
+		// running-on-boot. The force-kill below is a fallback if the guest
+		// doesn't power off within the grace window.
 		if req.Name != "" {
 			gracefulStopVM(r.Context(), tr, req.Name)
 		}
 
-		key = supervisor.Key{ProjectID: req.Name, Role: supervisor.RoleVM}
-		if err := sup.Stop(r.Context(), key); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
-			http.Error(w, fmt.Sprintf("supervisor stop: %v", err), http.StatusInternalServerError)
-			return
+		if vmPID > 0 {
+			if err := syscall.Kill(vmPID, 0); err == nil {
+				// Still alive after the grace window — force-terminate.
+				_ = syscall.Kill(vmPID, syscall.SIGKILL)
+			}
 		}
 		// Ask softnet to exit now that the guest is confirmed stopped and
 		// its tart-run process confirmed terminated above. softnet is a

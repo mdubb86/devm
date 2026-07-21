@@ -184,6 +184,43 @@ func (s *Supervisor) Stop(ctx context.Context, k Key) error {
 	return nil
 }
 
+// Deregister removes the entry for k from the supervisor's registry
+// WITHOUT signaling the underlying process. This disables the
+// OnUnexpectedExit auto-respawn for that entry, so callers that expect
+// the process to exit on its own (e.g., a graceful in-guest poweroff
+// triggering a `tart run` process exit) can let that happen without
+// triggering a backoff-respawn storm.
+//
+// Callers still own the process's PID afterward — Deregister does NOT
+// kill it. If the process needs to be force-terminated, the caller can
+// syscall.Kill the returned PID. A PID of 0 means the process's PID
+// couldn't be determined (e.g., not yet started) even though the entry
+// was deregistered; that is not an error.
+//
+// Idempotent: unknown keys return (0, ErrNotFound) — same shape as Stop.
+// Adopted entries (Supervisor.Adopt path) also cleanly deregister.
+func (s *Supervisor) Deregister(k Key) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if pid, ok := s.adopted[k]; ok {
+		delete(s.adopted, k)
+		return pid, nil
+	}
+	p, ok := s.pm.RemoveProcessByID(k.String())
+	if !ok {
+		return 0, ErrNotFound
+	}
+	// pexec's RemoveProcessByID only deletes the registry entry — it
+	// does not signal or wait on the process, so the child (and its
+	// OnUnexpectedExit hook) is already fully detached from pexec by
+	// the time we get here.
+	pid, err := p.UnixPid()
+	if err != nil {
+		return 0, nil
+	}
+	return pid, nil
+}
+
 // Status reports basic state for `devm status`. Handles both
 // pexec-managed and adopted entries; an adopted PID that no longer
 // exists is reaped from the map and reported as not present.
