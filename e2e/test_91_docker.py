@@ -9,8 +9,9 @@ Consolidated end-to-end proof of `docker: true`:
   - Container HTTPS to a NON-allow-listed host gets 403 from
     iron-proxy (not 000 / timeout).
   - Host process on the guest reaches a container's published port
-    on 127.0.0.1:<non-80/443>. Pins the 172.16.0.0/12 accept in the
-    cfg-derived `devm_filter output` chain.
+    on 127.0.0.1:<non-80/443>. Guest egress enforcement itself is
+    covered by test_softnet_20 (softnet is the egress boundary now,
+    not the guest's nftables ruleset).
   - `docker build` auto-receives the devm-ca buildkit secret —
     proves devm-docker-shim at /usr/local/bin/docker intercepts
     build subcommands and appends `--secret id=devm-ca,src=…`.
@@ -137,25 +138,6 @@ def test_docker_first_class_end_to_end(workspace, devm):
     # port 80/443 to iron-proxy AFTER Docker's own DNAT, so a container
     # listening on 80 would get hijacked even if the host side isn't 80.
     # hashicorp/http-echo takes -listen=:8080 so we sidestep that.
-    #
-    # The 172.16.0.0/12 accept that makes this reachable is emitted by
-    # the cfg-derived egress enforcement (buildNftablesScript), not the
-    # docker install step, so it's live on every cold start.
-    nft_output = devm_exec_with_retry(
-        devm.path,
-        ["sudo", "-n", "nft", "list", "chain", "inet", "devm_filter", "output"],
-        cwd=str(workspace.path), timeout=30,
-    )
-    assert nft_output.returncode == 0, (
-        f"nft list chain inet devm_filter output failed: "
-        f"rc={nft_output.returncode}\nstderr={nft_output.stderr.decode()!r}"
-    )
-    assert "172.16.0.0/12 accept" in nft_output.stdout.decode(), (
-        f"expected the host→container reachability accept in "
-        f"devm_filter's output chain (cfg-derived enforcement); got:\n"
-        f"{nft_output.stdout.decode()}"
-    )
-
     run = devm_exec_with_retry(
         devm.path,
         ["docker", "run", "-d", "--rm", "--name", "e2e-web",
@@ -193,8 +175,8 @@ def test_docker_first_class_end_to_end(workspace, devm):
         assert got_code == "200", (
             f"guest→127.0.0.1:12345→container:8080 should return 200 "
             f"(http-echo response); got {got_code!r}. 000 means the "
-            f"filter chain dropped the packet — the 172.16.0.0/12 accept "
-            f"in devm_filter's output chain is missing."
+            f"guest's local routing/DNAT to the container's published "
+            f"port is broken."
         )
     finally:
         subprocess.run(

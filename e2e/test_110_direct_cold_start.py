@@ -6,24 +6,24 @@ scaffold (`docker: true`, `devm exec docker run`,
 `helpers.exec_retry.devm_exec_with_retry`) — and test_37_route_vm.py
 (the daemon's Unix-socket `/routes` HTTP probe). A real CONTAINER is
 required here (not a host process): only a container-published port
-traverses the `forward` hook that `svc_ingress` guards, so this is the
-only way to actually exercise the firewall rule end to end.
+traverses Docker's own forward-hook DNAT, so this is the only way to
+actually exercise softnet's direct-service ingress path end to end.
 
 Uses a tiny `busybox` container running a persistent `nc -l -p <port>`
 listener instead of Postgres — cheap to pull, boots instantly, and the
 banner it emits on connect is enough to prove real data flow through
-the whole path (Mac → firewall → Docker DNAT → container), without
+the whole path (Mac → softnet → Docker DNAT → container), without
 needing a real database client. Declares a `docker: true` project with
 one `direct: true` service, cold-starts via `devm shell`, publishes
 the container on the service's declared port, then walks every leg of
 the design doc's "resulting model" table:
 
-  Mac → pool IP:<port> → firewall (`svc_ingress`) → container   (direct)
+  Mac → pool IP:<port> → softnet's direct listener → container  (direct)
   VM  → 127.0.0.1:<port> → loopback container                   (unchanged)
 
 ...then continues in the SAME boot into a `devm stop` + `devm shell`
 restart cycle on the same container (`--restart unless-stopped`, not
-`--rm`, so it survives) to pin firewall-rule persistence.
+`--rm`, so it survives) to pin reachability persistence.
 
 What this pins:
   - the daemon's `GET /routes` shows the hostname with `"direct": true`
@@ -31,9 +31,6 @@ What this pins:
   - a Mac-side DNS query for the hostname resolves the project's pool
     IP (`127.42.0.N`, the single Mac-side address for both direct and
     non-direct services post-B3), NOT `127.0.0.1`;
-  - `nft list chain inet devm_filter svc_ingress` inside the VM
-    contains a conntrack-original accept for the declared (pre-DNAT)
-    port — the container's actual listening port never appears;
   - the in-VM `/etc/caddy/Caddyfile` has NO block for the hostname —
     direct services are never HTTP-fronted;
   - `<pool_ip>:<port>` is reachable from the Mac AND the banner the
@@ -44,11 +41,7 @@ What this pins:
     from inside the VM via 127.0.0.1 (split-horizon: same URL works on
     both planes);
   - after `devm stop` + `devm shell` (VM reboot, same VM, not a
-    recreate), `svc_ingress` comes back from
-    `/etc/nftables.d/svc_ingress.conf` (systemd's `nftables.service`
-    restores it on guest boot) WITHOUT a fresh `devm reconcile`/
-    route-push being what re-opens the port;
-  - the service is still reachable at the same pool IP after restart
+    recreate), the service is still reachable at the same pool IP
     (container came back via its `--restart unless-stopped` policy
     once docker re-enabled post-boot).
 
@@ -76,7 +69,6 @@ from helpers.direct import (
     dig_a as _dig_a,
     dns_addr as _dns_addr,
     get_routes as _get_routes,
-    svc_ingress as _svc_ingress,
     tcp_read_banner as _tcp_read_banner,
     wait_reachable as _wait_reachable,
 )
@@ -85,10 +77,10 @@ from helpers.exec_retry import devm_exec_with_retry
 pytestmark = pytest.mark.devm
 
 # The service's DECLARED (pre-DNAT) port — what devm.yaml, /routes,
-# and the svc_ingress conntrack-original match all use.
+# and the pool_ip:port reachability checks below all use.
 DIRECT_PORT = 54322
-# The container's INTERNAL listening port — must never appear in the
-# svc_ingress chain (which matches the pre-DNAT port only).
+# The container's INTERNAL listening port — never exposed directly;
+# Docker's own prerouting DNAT maps DIRECT_PORT to this.
 CONTAINER_PORT = 9000
 
 
@@ -163,31 +155,6 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
     )
 
     try:
-        # ---- Assertion 3: svc_ingress carries the conntrack-original
-        # ---- accept for the DECLARED port, not the container's
-        # ---- internal listening port. ----
-        deadline = time.time() + 30
-        nft_out = ""
-        while time.time() < deadline:
-            nft = devm_exec_with_retry(
-                devm.path,
-                ["sudo", "-n", "nft", "list", "chain", "inet", "devm_filter", "svc_ingress"],
-                cwd=str(workspace.path), timeout=30,
-            )
-            nft_out = nft.stdout.decode()
-            if f"proto-dst {DIRECT_PORT}" in nft_out:
-                break
-            time.sleep(1)
-        assert f"ct original proto-dst {DIRECT_PORT} accept" in nft_out, (
-            f"svc_ingress chain missing conntrack-original accept for "
-            f"port {DIRECT_PORT}:\n{nft_out}"
-        )
-        assert str(CONTAINER_PORT) not in nft_out, (
-            f"svc_ingress should match the pre-DNAT declared port "
-            f"({DIRECT_PORT}), never the container's internal port "
-            f"({CONTAINER_PORT}):\n{nft_out}"
-        )
-
         # ---- Assertion 4: the in-VM Caddyfile has NO block for the
         # ---- direct hostname. ----
         caddyfile = devm_exec_with_retry(
@@ -203,9 +170,9 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
         )
 
         # ---- Assertion 5: reachable from the Mac at VM_IP:port, AND
-        # ---- the banner round-trips — proves the firewall accept +
-        # ---- Docker's forward-hook DNAT actually carry real data
-        # ---- through, not just a bare SYN/ACK. ----
+        # ---- the banner round-trips — proves softnet's Mac-side direct
+        # ---- listener + Docker's forward-hook DNAT actually carry real
+        # ---- data through, not just a bare SYN/ACK. ----
         deadline = time.time() + 30
         got = None
         while time.time() < deadline:
@@ -215,8 +182,8 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
             time.sleep(1)
         assert got == BANNER, (
             f"Mac could not read the expected banner from "
-            f"{pool}:{DIRECT_PORT} (got {got!r}) — svc_ingress accept "
-            f"or Docker's forward-hook DNAT is not letting the "
+            f"{pool}:{DIRECT_PORT} (got {got!r}) — softnet's direct "
+            f"listener or Docker's forward-hook DNAT is not letting the "
             f"connection through"
         )
 
@@ -243,9 +210,8 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
         # ---- `devm shell` again — same VM (not a recreate), Tart may
         # ---- hand out a new DHCP lease on reboot. Continues in this
         # ---- same boot rather than a fresh cold-start, since the
-        # ---- baseline state it needs (svc_ingress rule + reachable
-        # ---- container) was already established by assertions 3-6
-        # ---- above. ----
+        # ---- baseline state it needs (reachable container) was
+        # ---- already established by assertions 4-6 above. ----
         stop_and_wait_stopped(devm, sandbox_name)
 
         reshell = subprocess.run(
@@ -257,27 +223,12 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
             f"stderr={reshell.stderr.decode()!r}"
         )
 
-        # ---- Assertion: svc_ingress restored from
-        # ---- /etc/nftables.d/svc_ingress.conf on guest boot — no
-        # ---- fresh reconcile/route-push involved, just `devm shell`'s
-        # ---- normal /vm/start path. ----
-        deadline = time.time() + 30
-        nft_out = ""
-        while time.time() < deadline:
-            nft_out = _svc_ingress(devm)
-            if f"proto-dst {DIRECT_PORT}" in nft_out:
-                break
-            time.sleep(1)
-        assert f"ct original proto-dst {DIRECT_PORT} accept" in nft_out, (
-            f"svc_ingress not restored after stop/shell cycle:\n{nft_out}"
-        )
-
         # ---- Assertion: still reachable (container came back via its
         # ---- restart policy once docker re-enabled post-boot). ----
         assert _wait_reachable(pool, DIRECT_PORT, timeout=60), (
             f"{pool}:{DIRECT_PORT} not reachable after stop/shell "
-            f"cycle — svc_ingress or the container's restart policy "
-            f"didn't recover"
+            f"cycle — softnet's direct listener or the container's "
+            f"restart policy didn't recover"
         )
     finally:
         subprocess.run(

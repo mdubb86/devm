@@ -11,38 +11,37 @@ deferred to next cold-start" trap `KindPortAdd` falls into) — this
 test is the proof that flipping `direct` takes effect on the spot.
 
 A real CONTAINER is required (not a host process): only a
-container-published port traverses the `forward` hook that
-`svc_ingress` guards. A tiny `busybox nc` listener (see test_110) is
-started ONCE, published on the service's declared port, and left
-running for the whole test — the thing that changes across reconciles
-is purely the firewall/DNS/route state around it, isolating the
-assertions to the live-apply path itself.
+container-published port traverses Docker's own forward-hook DNAT. A
+tiny `busybox nc` listener (see test_110) is started ONCE, published
+on the service's declared port, and left running for the whole test —
+the thing that changes across reconciles is purely softnet's
+route/DNS state around it, isolating the assertions to the live-apply
+path itself.
 
 Sequence:
   1. `devm start` with `docker: true` + a service that has a hostname
      but `direct: false` (proxied — the default). Baseline: DNS
-     answers the project's pool IP (`127.42.0.N`), no `svc_ingress`
-     rule for the port.
+     answers the project's pool IP (`127.42.0.N`).
   2. Start the `nc` listener container, published at the declared port.
   3. Flip `direct: true`, `devm reconcile` (no shell). Assert: DNS
      still answers the pool IP (unchanged — post-B3 DNS never
-     distinguishes direct from non-direct); `svc_ingress` carries the
-     accept; the port's banner is readable from the Mac.
+     distinguishes direct from non-direct); the port's banner is
+     readable from the Mac.
   4. Flip back to `direct: false`, `devm reconcile`. Assert: DNS still
-     answers the pool IP; the `svc_ingress` rule is gone; the port is
-     NO LONGER reachable from the Mac (forward hook's default-drop
-     re-applies once the accept is withdrawn) — the direct/non-direct
-     signal lives in nftables + reachability, not DNS.
+     answers the pool IP; the port is NO LONGER reachable from the Mac
+     (softnet's direct listener is torn down once the route is
+     withdrawn) — the direct/non-direct signal lives in reachability,
+     not DNS.
 
 Throughout, the VM's `tart run` PID is checked unchanged (mirrors
 test_92's bounce-proof) — direct changes must never recreate the VM.
 
 What this pins:
-  - Live add: `svc_ingress` flush-rebuild + route re-push + DNS answer
-    change, all without `devm shell`/teardown.
-  - Live withdraw: the SAME machinery in reverse — DNS reverts, the
-    accept rule is gone, and (crucially) the port actually stops being
-    reachable, not just that the config LOOKS reverted.
+  - Live add: softnet route re-push + DNS answer change, all without
+    `devm shell`/teardown, made visible via Mac-side reachability.
+  - Live withdraw: the SAME machinery in reverse — DNS reverts, and
+    (crucially) the port actually stops being reachable, not just
+    that the config LOOKS reverted.
   - No VM bounce for either direction.
 
 What it doesn't cover (tested elsewhere):
@@ -60,7 +59,7 @@ literal string `"(unknown change)"` in `devm reconcile` output (text
 mode) and `"unknown"` (JSON mode), even though the underlying
 live-apply (this test's real subject) works. Filed as a follow-up;
 this test does not assert on `reconcile` stdout text for that reason —
-only on functional behavior (DNS/nft/reachability).
+only on functional behavior (DNS/reachability).
 """
 from __future__ import annotations
 
@@ -76,7 +75,6 @@ from helpers.direct import (
     dig_a as _dig_a,
     dns_addr as _dns_addr,
     get_routes as _get_routes,
-    svc_ingress as _svc_ingress,
     tcp_connect as _tcp_connect,
     tcp_read_banner as _tcp_read_banner,
 )
@@ -140,17 +138,12 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
 
     # ---- Baseline (direct: false): DNS answers the project's pool IP
     # ---- (same as direct — post-B3 there's no DNS-answer difference
-    # ---- between the two modes); no svc_ingress rule for this port
-    # ---- yet. ----
+    # ---- between the two modes). ----
     baseline = _dig_a(hostname, dns_host, dns_port)
     assert baseline == pool, (
         f"non-direct hostname {hostname!r} should resolve to the "
         f"project's pool IP {pool!r} before any direct flip; got "
         f"{baseline!r}"
-    )
-    assert f"proto-dst {DIRECT_PORT}" not in _svc_ingress(devm), (
-        "svc_ingress should have no rule for this port before any "
-        "direct flip"
     )
 
     # ---- Bring up the `nc` listener container ONCE, published at the
@@ -197,18 +190,6 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
         )
 
         deadline = time.time() + 30
-        nft_out = ""
-        while time.time() < deadline:
-            nft_out = _svc_ingress(devm)
-            if f"proto-dst {DIRECT_PORT}" in nft_out:
-                break
-            time.sleep(1)
-        assert f"ct original proto-dst {DIRECT_PORT} accept" in nft_out, (
-            f"svc_ingress missing accept for port {DIRECT_PORT} after "
-            f"live direct-add:\n{nft_out}"
-        )
-
-        deadline = time.time() + 30
         got = None
         while time.time() < deadline:
             got = _tcp_read_banner(pool, DIRECT_PORT, BANNER, timeout=3)
@@ -241,27 +222,13 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
             f"pool IP {pool!r} for {hostname!r}; got {answer!r}"
         )
 
-        deadline = time.time() + 30
-        nft_out = _svc_ingress(devm)
-        while (
-            f"proto-dst {DIRECT_PORT}" in nft_out
-            and time.time() < deadline
-        ):
-            time.sleep(1)
-            nft_out = _svc_ingress(devm)
-        assert f"proto-dst {DIRECT_PORT}" not in nft_out, (
-            f"svc_ingress still carries a rule for port {DIRECT_PORT} "
-            f"after live direct-withdraw:\n{nft_out}"
-        )
-
-        # Give the flush-rebuild a moment to actually close the port,
-        # then confirm the Mac can no longer reach it (not just that
-        # the rule text is gone).
+        # Give softnet's route withdrawal a moment to actually close the
+        # port, then confirm the Mac can no longer reach it.
         time.sleep(2)
         assert not _tcp_connect(pool, DIRECT_PORT, timeout=3), (
             f"Mac could still reach {pool}:{DIRECT_PORT} after live "
-            f"direct-withdraw — svc_ingress accept should have been "
-            f"withdrawn, restoring the forward hook's default drop"
+            f"direct-withdraw — softnet's direct listener should have "
+            f"been torn down"
         )
 
         assert _tart_pid(workspace.vm_name) == pid_before, (
