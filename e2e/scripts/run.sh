@@ -62,6 +62,25 @@ if [ "${#ORPHAN_VMS[@]}" -gt 0 ]; then
     done
 fi
 
+# Reap orphan softnet processes from prior runs — belt-and-suspenders
+# for the daemon-side fix (softnet's own shutdown handling now unblocks
+# reliably, and /vm/stop asks it to exit over its control socket; see
+# internal/softnet/softnet.go's acceptUntilShutdown and vm.go's
+# shutdownSoftnet). This still covers a run that died before teardown
+# ever ran — pytest SIGKILL'd mid-test, a laptop sleep, a CI job
+# cancel — the same class of gap the tart VM sweep above covers.
+#
+# softnet is a child `tart run --net-softnet` forks internally, so it
+# never shows up in tart's own process accounting; matched here purely
+# by argv path. `Application Support/devm-e2e/softnet-bin/softnet` is
+# ensureSoftnetSymlink's deterministic path under the e2e identity's
+# RuntimeDir() (internal/identity/identity.go) — matches ONLY e2e
+# softnets, never a real installed daemon's (`.../devm/softnet-bin/`).
+echo "=== e2e: reaping orphan softnet processes ===" >&2
+pkill -TERM -f "$HOME/Library/Application Support/devm-e2e/softnet-bin/softnet" 2>/dev/null || true
+sleep 1
+pkill -KILL -f "$HOME/Library/Application Support/devm-e2e/softnet-bin/softnet" 2>/dev/null || true
+
 set -m
 uv run pytest -p no:xdist "$@" &
 PYTEST_PID=$!
