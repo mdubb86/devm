@@ -35,8 +35,6 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(90)
 def test_stop(workspace, devm, tart_sandbox):
-    workspace.write_devmyaml()
-
     with Shell(devm, cwd=str(workspace.path)) as sh:
         sh.expect_prompt(timeout=60)
 
