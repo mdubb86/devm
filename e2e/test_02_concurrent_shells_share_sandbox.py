@@ -29,8 +29,6 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(90)
 def test_concurrent_shells_share_sandbox(workspace, devm, tart_sandbox):
-    workspace.write_devmyaml()
-
     with Shell(devm, cwd=str(workspace.path)) as first:
         first.expect_prompt(timeout=60)
         with Shell(devm, cwd=str(workspace.path)) as second:
