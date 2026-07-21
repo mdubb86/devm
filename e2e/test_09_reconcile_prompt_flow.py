@@ -49,7 +49,12 @@ def test_reconcile_prompt_flow(workspace, devm, tart_sandbox):
         sh.expect_prompt(timeout=90)
 
         # Add an install step -- an install change always requires TEARDOWN
-        # recreate regardless of VM state.
+        # recreate regardless of VM state. Config-lock holds devm.yaml
+        # host-immutable while the VM runs (tart_sandbox already cold-started
+        # it); unlock before editing -- the reconcile call below re-locks it,
+        # per the "unlock -> edit -> reconcile always ends locked" invariant
+        # (see test_120_config_lock.py).
+        devm.unlock()
         workspace.patch_devmyaml(install=["touch /tmp/reconcile-probe"])
 
         # Run reconcile --json with stdin from /dev/null (non-TTY).

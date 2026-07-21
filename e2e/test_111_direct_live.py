@@ -98,7 +98,12 @@ def _tart_pid(vm_name: str) -> int | None:
     return int(pids[0]) if pids else None
 
 
-def _set_direct(workspace, value: bool) -> None:
+def _set_direct(workspace, devm, value: bool) -> None:
+    # devm.yaml is host-immutable (config-lock) while the VM runs; unlock
+    # before editing. The `devm reconcile` each caller runs right after
+    # this re-locks it (unlock -> edit -> reconcile always ends locked,
+    # per test_120_config_lock.py), so each call needs its own unlock.
+    devm.unlock()
     cfg = yaml.safe_load(workspace.devmyaml_path.read_text())
     cfg["services"]["nc"]["direct"] = value
     workspace.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
@@ -162,7 +167,7 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
 
     try:
         # ================= LIVE ADD =================
-        _set_direct(workspace, True)
+        _set_direct(workspace, devm, True)
         reconcile = devm.reconcile(yes=True, timeout=120)
         assert reconcile.returncode == 0, (
             f"devm reconcile (flip to direct) failed:\n"
@@ -217,7 +222,7 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
         )
 
         # ================= LIVE WITHDRAW =================
-        _set_direct(workspace, False)
+        _set_direct(workspace, devm, False)
         reconcile = devm.reconcile(yes=True, timeout=120)
         assert reconcile.returncode == 0, (
             f"devm reconcile (flip back) failed:\n"

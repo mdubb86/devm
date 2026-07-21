@@ -69,6 +69,18 @@ class Devm:
             args.append("--yes")
         return self._run(args, timeout=timeout)
 
+    def unlock(self, *, duration: str | None = None, timeout: float = 30.0) -> subprocess.CompletedProcess:
+        """Lift config-lock's host-immutable devm.yaml while the VM runs, so
+        a test can edit it. `devm reconcile` (or the auto-relock timer, or
+        `devm lock`) re-establishes the lock -- see test_120_config_lock.py."""
+        args = ["unlock"]
+        if duration:
+            args += ["--for", duration]
+        return self._run(args, timeout=timeout)
+
+    def lock(self, *, timeout: float = 30.0) -> subprocess.CompletedProcess:
+        return self._run(["lock"], timeout=timeout)
+
     def status(
         self,
         *,

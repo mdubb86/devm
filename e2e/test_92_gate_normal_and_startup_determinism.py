@@ -174,6 +174,12 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
     assert vm.exec("test", "-f", DETERMINISM_SENTINEL).exit_code != 0, (
         "determinism sentinel should not exist before the edit"
     )
+    # devm.yaml is host-immutable (config-lock) while the VM runs; unlock
+    # before editing. The `devm stop` right below unlocks it anyway (stop
+    # always ends unlocked), and the restart's cold-start re-locks it —
+    # but the explicit unlock here is still required since this edit
+    # happens BEFORE the stop, while the VM (and the lock) is still up.
+    devm.unlock()
     workspace.patch_devmyaml(
         startup=[
             f"curl -sf -m 10 {NON_ALLOWLISTED_HOST} -o {STARTUP_FETCH_FILE} || true",

@@ -51,6 +51,11 @@ def test_install_change_recreate(workspace, devm, sandbox_name, phase):
         # Edit install — TEARDOWN-bucket field. Triggers a recreate (VM rm
         # + automatic relaunch within this same reconcile call — Task 7's
         # relaunch-on-yes flow, same as test_09's "yes" path).
+        #
+        # devm.yaml is host-immutable (config-lock) while the VM runs;
+        # unlock before editing — the recreate's relaunch re-locks it at
+        # cold-start, same as the initial boot did.
+        devm.unlock()
         workspace.patch_devmyaml(
             install=["touch /tmp/marker-b"],
         )

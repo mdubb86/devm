@@ -58,6 +58,11 @@ def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
     # Write env config; env/path vars are LIVE-bucket, but a running VM
     # only picks up live changes via an explicit reconcile — nothing
     # fires automatically on shell-attach.
+    #
+    # devm.yaml is host-immutable (config-lock) while the VM runs; unlock
+    # before editing — the reconcile call below re-locks it (unlock ->
+    # edit -> reconcile always ends locked, per test_120_config_lock.py).
+    devm.unlock()
     workspace.write_devmyaml(
         env={"PROJECT_VAR": "projhello"},
         services={
@@ -92,6 +97,10 @@ def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
         # LIVE change: env info -> debug AND add a path: entry, in one
         # devm.yaml edit. Explicit reconcile applies both to the
         # running VM; new shells see the new values.
+        #
+        # The prior reconcile (above) re-locked devm.yaml; unlock again
+        # before this second edit.
+        devm.unlock()
         workspace.patch_devmyaml(
             env={"PROJECT_VAR": "projhello"},
             services={

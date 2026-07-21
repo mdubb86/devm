@@ -90,7 +90,11 @@ def test_iron_proxy_reconcile_allowlist_add(workspace, devm):
     pid_before = _tart_pid(workspace.vm_name)
     assert pid_before is not None, "expected a running tart process for the VM"
 
-    # Add example.com to allow list and reconcile.
+    # Add example.com to allow list and reconcile. devm.yaml is
+    # host-immutable (config-lock) while the VM runs; unlock before
+    # editing — the reconcile call below re-locks it (unlock -> edit ->
+    # reconcile always ends locked, per test_120_config_lock.py).
+    devm.unlock()
     cfg = yaml.safe_load(workspace.devmyaml_path.read_text())
     cfg["network"]["allow"].append("example.com")
     workspace.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
