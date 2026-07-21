@@ -95,7 +95,7 @@ CONTAINER_PORT = 9000
 @pytest.mark.slow
 @pytest.mark.timeout(900)
 def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_name):
-    hostname = f"{sandbox_name}-nc.test"
+    hostname = f"{sandbox_name}-nc.e2e.test"
     workspace.write_devmyaml(
         docker=True,
         services={

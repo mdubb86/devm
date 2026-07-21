@@ -98,7 +98,7 @@ def _mk_project(devm_path: str, label: str) -> tuple[Workspace, Devm]:
     path = Path(tempfile.mkdtemp(prefix=f"devm-e2e-{name}-")).resolve()
     registry.append("workspace", str(path))
     ws = Workspace(path, slug=name, vm_name=name)
-    hostname = f"echo.{name}.test"
+    hostname = f"echo.{name}.e2e.test"
     ws.write_devmyaml(
         docker=True,
         services={
@@ -189,7 +189,7 @@ def test_per_project_ip_concurrent_isolation(devm_path):
         # ---- (that's dns_test.go + test_110). ----
         dns_host, dns_port = dns_addr()
         for ws, ip in ((a, ip_a), (b, ip_b)):
-            hostname = f"echo.{ws.slug}.test"
+            hostname = f"echo.{ws.slug}.e2e.test"
             answer = dig_a(hostname, dns_host, dns_port)
             assert answer == ip, (
                 f"DNS for {hostname!r} should answer {ip!r}; got {answer!r}"

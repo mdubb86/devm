@@ -80,7 +80,7 @@ def _remove_routes(project_id: str) -> None:
 
 @pytest.mark.timeout(60)
 def test_route_registers_and_removes(workspace, devm, sandbox_name):
-    hostname = f"{sandbox_name}-route.test"
+    hostname = f"{sandbox_name}-route.e2e.test"
     workspace.write_devmyaml(
         services={
             "web": {"port": 8080, "hostname": hostname},

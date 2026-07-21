@@ -64,7 +64,7 @@ def test_direct_without_hostname_fails_validation(devm, workspace):
 def test_direct_with_hostname_passes_validation(devm, workspace):
     workspace.write_devmyaml(
         services={
-            "db": {"port": 54322, "hostname": "db.test", "direct": True},
+            "db": {"port": 54322, "hostname": "db.e2e.test", "direct": True},
         },
     )
 

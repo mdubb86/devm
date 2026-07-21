@@ -55,7 +55,7 @@ HOSTPROC_PORT = 54622      # host-process nc listen port
 @pytest.mark.slow
 @pytest.mark.timeout(400)
 def test_direct_host_process_no_docker_no_svc_ingress_rule(workspace, devm, sandbox_name):
-    hostname = f"{sandbox_name}-web.test"
+    hostname = f"{sandbox_name}-web.e2e.test"
     # NOTE: no `docker: true` — this project never runs a container, so
     # the direct service below is a bare VM (host) process. `nc` isn't
     # in the base image; declare it via `packages:` (test_76's shape),
