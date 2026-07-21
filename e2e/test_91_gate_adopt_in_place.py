@@ -49,6 +49,7 @@ import time
 
 import pytest
 
+from helpers import pool_ip
 from helpers.direct import (
     BANNER,
     dig_a as _dig_a,
@@ -129,17 +130,20 @@ def test_adopt_in_place(devm, workspace, sandbox_name):
     # Baseline: the direct service works right after cold-start, before
     # the stop/raw-boot/adopt cycle -- isolates any post-adopt failure
     # to the adopt path itself rather than a broken direct-service setup.
-    vm_ip_before = vm.ip()
-    assert vm_ip_before, "could not get VM IP via `tart ip` after cold-start"
+    # Pool IP is stable across the whole test (allocated once per
+    # project, unaffected by stop/raw-boot/adopt), so a single `pool`
+    # constant covers the baseline check AND the post-adopt checks.
+    project_id = workspace.slug
+    pool = pool_ip(project_id)
     baseline = None
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        baseline = _tcp_read_banner(vm_ip_before, DIRECT_PORT, BANNER, timeout=3)
+        baseline = _tcp_read_banner(pool, DIRECT_PORT, BANNER, timeout=3)
         if baseline == BANNER:
             break
         time.sleep(1)
     assert baseline == BANNER, (
-        f"baseline: direct service not reachable at {vm_ip_before}:"
+        f"baseline: direct service not reachable at {pool}:"
         f"{DIRECT_PORT} right after cold-start (got {baseline!r})"
     )
 
@@ -218,17 +222,14 @@ def test_adopt_in_place(devm, workspace, sandbox_name):
             f"ok={sentinel.ok} stdout={sentinel.stdout!r} stderr={sentinel.stderr!r}"
         )
 
-        # ---- Direct-service routing after adopt: the VMIP re-discovery
-        # ---- fix (apply_iron_proxy.go re-discovers the guest IP via
-        # ---- `tart ip` on adopt, since a prior `devm stop` already
-        # ---- cleared any stashed ironProxyState.VMIP). The raw `tart
-        # ---- run` boot may have handed out a NEW DHCP lease, so this
-        # ---- must reflect the CURRENT IP, not the stale pre-stop one
-        # ---- and not loopback. ----
-        vm_ip_after = vm.ip()
-        assert vm_ip_after, "could not get VM IP via `tart ip` after adopt-in-place"
-
-        project_id = workspace.slug
+        # ---- Direct-service routing after adopt: internally, the VMIP
+        # ---- re-discovery fix (apply_iron_proxy.go re-discovers the
+        # ---- guest IP via `tart ip` on adopt, since a prior `devm
+        # ---- stop` already cleared any stashed ironProxyState.VMIP)
+        # ---- means the raw `tart run` boot's possibly-new DHCP lease
+        # ---- still routes correctly. Mac-side, none of that is
+        # ---- visible: the project's pool IP (`pool`) is the stable
+        # ---- address throughout, cold-start through adopt. ----
         routes = _get_routes()
         assert project_id in routes, f"no /routes entry for {project_id!r}: {routes}"
         entry = next((e for e in routes[project_id] if e["hostname"] == hostname), None)
@@ -239,27 +240,24 @@ def test_adopt_in_place(devm, workspace, sandbox_name):
             f"route for {hostname!r} not marked direct after adopt-in-place: {entry}"
         )
 
-        # Mac-side DNS: must reflect the re-discovered guest IP, not a
-        # stale pre-stop IP and not loopback.
+        # Mac-side DNS: must still answer the project's pool IP.
         dns_host, dns_port = _dns_addr()
         answer = _dig_a(hostname, dns_host, dns_port)
-        assert answer == vm_ip_after and answer != "127.0.0.1", (
-            f"after adopt-in-place, DNS should answer the "
-            f"re-discovered guest IP {vm_ip_after!r} for direct "
-            f"hostname {hostname!r} -- not a stale pre-stop IP "
-            f"({vm_ip_before!r}) and not loopback; got {answer!r}"
+        assert answer == pool, (
+            f"after adopt-in-place, DNS should answer the pool IP "
+            f"{pool!r} for direct hostname {hostname!r}; got {answer!r}"
         )
 
         got = None
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            got = _tcp_read_banner(vm_ip_after, DIRECT_PORT, BANNER, timeout=3)
+            got = _tcp_read_banner(pool, DIRECT_PORT, BANNER, timeout=3)
             if got == BANNER:
                 break
             time.sleep(1)
         assert got == BANNER, (
             f"Mac could not read the expected banner from the direct "
-            f"service at {vm_ip_after}:{DIRECT_PORT} after adopt-in-place "
+            f"service at {pool}:{DIRECT_PORT} after adopt-in-place "
             f"(got {got!r}) -- the re-discovered guest IP is not "
             f"actually routing to the service"
         )

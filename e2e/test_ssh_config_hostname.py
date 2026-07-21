@@ -1,4 +1,4 @@
-"""Verify the emitted ssh_config Host block uses `HostName <proj>.test`
+"""Verify the emitted ssh_config Host block uses `HostName <proj>.e2e.test`
 and `Port 22` (not a raw loopback IP / picked host port) — the B3
 retirement of `SSHHostPort` in favor of a fixed `:22` on the project's
 allocated ProjectIP, DNS-resolved (internal/serviceapi/sshconfig/
@@ -66,8 +66,8 @@ def test_ssh_config_uses_hostname_and_port_22(devm, workspace):
     assert f"Host devm-{workspace.vm_name}" in text, (
         f"expected Host devm-{workspace.vm_name} in {ssh_config}, got:\n{text}"
     )
-    assert f"HostName             {workspace.vm_name}.test" in text, (
-        f"expected HostName {workspace.vm_name}.test, got:\n{text}"
+    assert f"HostName             {workspace.vm_name}.e2e.test" in text, (
+        f"expected HostName {workspace.vm_name}.e2e.test, got:\n{text}"
     )
     assert "Port                 22" in text, (
         f"expected fixed Port 22, got:\n{text}"

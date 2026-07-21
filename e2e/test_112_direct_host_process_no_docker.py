@@ -38,12 +38,12 @@ import subprocess
 
 import pytest
 
+from helpers import pool_ip
 from helpers.direct import (
     BANNER,
     dig_a as _dig_a,
     dns_addr as _dns_addr,
     svc_ingress as _svc_ingress,
-    vm_ip as _vm_ip,
     wait_reachable as _wait_reachable,
 )
 
@@ -89,25 +89,24 @@ def test_direct_host_process_no_docker_no_svc_ingress_rule(workspace, devm, sand
         f"devm shell cold-start failed:\nstderr={shell.stderr.decode()!r}"
     )
 
-    vm_ip = _vm_ip(workspace.vm_name)
-    assert vm_ip, "could not get VM IP via `tart ip`"
+    pool = pool_ip(workspace.slug)
 
-    # ---- Assertion: DNS answers VM_IP for a host-process direct
+    # ---- Assertion: DNS answers the pool IP for a host-process direct
     # ---- service exactly like a container-published one — the DNS
     # ---- side doesn't distinguish docker vs host-process (only the
     # ---- firewall side does). ----
     dns_host, dns_port = _dns_addr()
     answer = _dig_a(hostname, dns_host, dns_port)
-    assert answer == vm_ip, (
+    assert answer == pool, (
         f"host-process direct hostname {hostname!r} should resolve "
-        f"to VM IP {vm_ip!r}; got {answer!r}"
+        f"to pool IP {pool!r}; got {answer!r}"
     )
 
     # ---- Assertion: reachable from the Mac via the open INPUT hook —
     # ---- no forward-hook accept needed (SSH's own path). ----
-    assert _wait_reachable(vm_ip, HOSTPROC_PORT), (
+    assert _wait_reachable(pool, HOSTPROC_PORT), (
         f"host-process direct service should be reachable at "
-        f"{vm_ip}:{HOSTPROC_PORT} via the VM's open INPUT hook"
+        f"{pool}:{HOSTPROC_PORT} via the VM's open INPUT hook"
     )
 
     # ---- Assertion: svc_ingress carries NO rule for this port (or

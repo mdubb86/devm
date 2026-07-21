@@ -21,15 +21,18 @@ assertions to the live-apply path itself.
 Sequence:
   1. `devm start` with `docker: true` + a service that has a hostname
      but `direct: false` (proxied — the default). Baseline: DNS
-     answers 127.0.0.1, no `svc_ingress` rule for the port.
+     answers the project's pool IP (`127.42.0.N`), no `svc_ingress`
+     rule for the port.
   2. Start the `nc` listener container, published at the declared port.
   3. Flip `direct: true`, `devm reconcile` (no shell). Assert: DNS
-     now answers the VM IP; `svc_ingress` carries the accept; the
-     port's banner is readable from the Mac.
-  4. Flip back to `direct: false`, `devm reconcile`. Assert: DNS
-     reverts to 127.0.0.1; the `svc_ingress` rule is gone; the port is
+     still answers the pool IP (unchanged — post-B3 DNS never
+     distinguishes direct from non-direct); `svc_ingress` carries the
+     accept; the port's banner is readable from the Mac.
+  4. Flip back to `direct: false`, `devm reconcile`. Assert: DNS still
+     answers the pool IP; the `svc_ingress` rule is gone; the port is
      NO LONGER reachable from the Mac (forward hook's default-drop
-     re-applies once the accept is withdrawn).
+     re-applies once the accept is withdrawn) — the direct/non-direct
+     signal lives in nftables + reachability, not DNS.
 
 Throughout, the VM's `tart run` PID is checked unchanged (mirrors
 test_92's bounce-proof) — direct changes must never recreate the VM.
@@ -67,6 +70,7 @@ import time
 import pytest
 import yaml
 
+from helpers import pool_ip
 from helpers.direct import (
     BANNER,
     dig_a as _dig_a,
@@ -75,7 +79,6 @@ from helpers.direct import (
     svc_ingress as _svc_ingress,
     tcp_connect as _tcp_connect,
     tcp_read_banner as _tcp_read_banner,
-    vm_ip as _vm_ip,
 )
 from helpers.exec_retry import devm_exec_with_retry
 
@@ -129,19 +132,21 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
     )
 
     project_id = workspace.slug
-    vm_ip = _vm_ip(workspace.vm_name)
-    assert vm_ip, "could not get VM IP via `tart ip`"
+    pool = pool_ip(project_id)
     pid_before = _tart_pid(workspace.vm_name)
     assert pid_before is not None, "expected a running tart process for the VM"
 
     dns_host, dns_port = _dns_addr()
 
-    # ---- Baseline (direct: false): DNS answers loopback; no
-    # ---- svc_ingress rule for this port yet. ----
+    # ---- Baseline (direct: false): DNS answers the project's pool IP
+    # ---- (same as direct — post-B3 there's no DNS-answer difference
+    # ---- between the two modes); no svc_ingress rule for this port
+    # ---- yet. ----
     baseline = _dig_a(hostname, dns_host, dns_port)
-    assert baseline == "127.0.0.1", (
-        f"non-direct hostname {hostname!r} should resolve to "
-        f"127.0.0.1 before any direct flip; got {baseline!r}"
+    assert baseline == pool, (
+        f"non-direct hostname {hostname!r} should resolve to the "
+        f"project's pool IP {pool!r} before any direct flip; got "
+        f"{baseline!r}"
     )
     assert f"proto-dst {DIRECT_PORT}" not in _svc_ingress(devm), (
         "svc_ingress should have no rule for this port before any "
@@ -186,9 +191,9 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
         )
 
         answer = _dig_a(hostname, dns_host, dns_port)
-        assert answer == vm_ip, (
-            f"after live direct-add, DNS should answer VM IP "
-            f"{vm_ip!r} for {hostname!r}; got {answer!r}"
+        assert answer == pool, (
+            f"after live direct-add, DNS should answer the pool IP "
+            f"{pool!r} for {hostname!r}; got {answer!r}"
         )
 
         deadline = time.time() + 30
@@ -206,13 +211,13 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
         deadline = time.time() + 30
         got = None
         while time.time() < deadline:
-            got = _tcp_read_banner(vm_ip, DIRECT_PORT, BANNER, timeout=3)
+            got = _tcp_read_banner(pool, DIRECT_PORT, BANNER, timeout=3)
             if got == BANNER:
                 break
             time.sleep(1)
         assert got == BANNER, (
             f"Mac could not read the expected banner from "
-            f"{vm_ip}:{DIRECT_PORT} after live direct-add (got {got!r}) "
+            f"{pool}:{DIRECT_PORT} after live direct-add (got {got!r}) "
             f"— expected reachable WITHOUT a shell/teardown"
         )
 
@@ -231,9 +236,9 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
         )
 
         answer = _dig_a(hostname, dns_host, dns_port)
-        assert answer == "127.0.0.1", (
-            f"after live direct-withdraw, DNS should revert to "
-            f"127.0.0.1 for {hostname!r}; got {answer!r}"
+        assert answer == pool, (
+            f"after live direct-withdraw, DNS should still answer the "
+            f"pool IP {pool!r} for {hostname!r}; got {answer!r}"
         )
 
         deadline = time.time() + 30
@@ -253,8 +258,8 @@ def test_direct_live_add_and_withdraw(workspace, devm, sandbox_name):
         # then confirm the Mac can no longer reach it (not just that
         # the rule text is gone).
         time.sleep(2)
-        assert not _tcp_connect(vm_ip, DIRECT_PORT, timeout=3), (
-            f"Mac could still reach {vm_ip}:{DIRECT_PORT} after live "
+        assert not _tcp_connect(pool, DIRECT_PORT, timeout=3), (
+            f"Mac could still reach {pool}:{DIRECT_PORT} after live "
             f"direct-withdraw — svc_ingress accept should have been "
             f"withdrawn, restoring the forward hook's default drop"
         )

@@ -18,8 +18,8 @@ one `direct: true` service, cold-starts via `devm shell`, publishes
 the container on the service's declared port, then walks every leg of
 the design doc's "resulting model" table:
 
-  Mac → VM_IP:<port> → firewall (`svc_ingress`) → container   (direct)
-  VM  → 127.0.0.1:<port> → loopback container                 (unchanged)
+  Mac → pool IP:<port> → firewall (`svc_ingress`) → container   (direct)
+  VM  → 127.0.0.1:<port> → loopback container                   (unchanged)
 
 ...then continues in the SAME boot into a `devm stop` + `devm shell`
 restart cycle on the same container (`--restart unless-stopped`, not
@@ -28,14 +28,15 @@ restart cycle on the same container (`--restart unless-stopped`, not
 What this pins:
   - the daemon's `GET /routes` shows the hostname with `"direct": true`
     (no `backend_host` — direct routes carry no dial target);
-  - a Mac-side DNS query for the hostname resolves the VM's current
-    `tart ip`, NOT `127.0.0.1`;
+  - a Mac-side DNS query for the hostname resolves the project's pool
+    IP (`127.42.0.N`, the single Mac-side address for both direct and
+    non-direct services post-B3), NOT `127.0.0.1`;
   - `nft list chain inet devm_filter svc_ingress` inside the VM
     contains a conntrack-original accept for the declared (pre-DNAT)
     port — the container's actual listening port never appears;
   - the in-VM `/etc/caddy/Caddyfile` has NO block for the hostname —
     direct services are never HTTP-fronted;
-  - `<vm_ip>:<port>` is reachable from the Mac AND the banner the
+  - `<pool_ip>:<port>` is reachable from the Mac AND the banner the
     container emits round-trips correctly (proves the firewall accept
     + Docker's prerouting DNAT let an EXTERNAL connection's data
     through — not just guest-local traffic);
@@ -47,10 +48,9 @@ What this pins:
     `/etc/nftables.d/svc_ingress.conf` (systemd's `nftables.service`
     restores it on guest boot) WITHOUT a fresh `devm reconcile`/
     route-push being what re-opens the port;
-  - DNS answers the (possibly NEW) VM IP after restart;
-  - the service is still reachable after restart (container came back
-    via its `--restart unless-stopped` policy once docker re-enabled
-    post-boot).
+  - the service is still reachable at the same pool IP after restart
+    (container came back via its `--restart unless-stopped` policy
+    once docker re-enabled post-boot).
 
 What it doesn't cover (tested elsewhere):
   - Live add/withdraw via reconcile without a shell — test_111.
@@ -70,7 +70,7 @@ import time
 
 import pytest
 
-from helpers import stop_and_wait_stopped
+from helpers import pool_ip, stop_and_wait_stopped
 from helpers.direct import (
     BANNER,
     dig_a as _dig_a,
@@ -78,7 +78,6 @@ from helpers.direct import (
     get_routes as _get_routes,
     svc_ingress as _svc_ingress,
     tcp_read_banner as _tcp_read_banner,
-    vm_ip as _vm_ip,
     wait_reachable as _wait_reachable,
 )
 from helpers.exec_retry import devm_exec_with_retry
@@ -113,8 +112,7 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
     )
 
     project_id = workspace.slug
-    vm_ip = _vm_ip(workspace.vm_name)
-    assert vm_ip, "could not get VM IP via `tart ip`"
+    pool = pool_ip(project_id)
 
     # ---- Assertion 1: GET /routes shows the hostname, marked direct,
     # ---- with no backend_host (direct routes carry no dial target). ----
@@ -131,11 +129,11 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
         f"direct route for {hostname!r} should carry no backend_host: {entry}"
     )
 
-    # ---- Assertion 2: Mac-side DNS answers the VM's IP, not 127.0.0.1. ----
+    # ---- Assertion 2: Mac-side DNS answers the project's pool IP. ----
     dns_host, dns_port = _dns_addr()
     answer = _dig_a(hostname, dns_host, dns_port)
-    assert answer == vm_ip, (
-        f"expected DNS to answer the VM IP {vm_ip!r} for direct "
+    assert answer == pool, (
+        f"expected DNS to answer the pool IP {pool!r} for direct "
         f"hostname {hostname!r}; got {answer!r}"
     )
 
@@ -211,13 +209,13 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
         deadline = time.time() + 30
         got = None
         while time.time() < deadline:
-            got = _tcp_read_banner(vm_ip, DIRECT_PORT, BANNER, timeout=3)
+            got = _tcp_read_banner(pool, DIRECT_PORT, BANNER, timeout=3)
             if got == BANNER:
                 break
             time.sleep(1)
         assert got == BANNER, (
             f"Mac could not read the expected banner from "
-            f"{vm_ip}:{DIRECT_PORT} (got {got!r}) — svc_ingress accept "
+            f"{pool}:{DIRECT_PORT} (got {got!r}) — svc_ingress accept "
             f"or Docker's forward-hook DNAT is not letting the "
             f"connection through"
         )
@@ -259,9 +257,6 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
             f"stderr={reshell.stderr.decode()!r}"
         )
 
-        vm_ip_after = _vm_ip(workspace.vm_name)
-        assert vm_ip_after, "could not get VM IP after restart"
-
         # ---- Assertion: svc_ingress restored from
         # ---- /etc/nftables.d/svc_ingress.conf on guest boot — no
         # ---- fresh reconcile/route-push involved, just `devm shell`'s
@@ -277,18 +272,10 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
             f"svc_ingress not restored after stop/shell cycle:\n{nft_out}"
         )
 
-        # ---- Assertion: DNS answers the (possibly NEW) VM IP. ----
-        dns_host, dns_port = _dns_addr()
-        answer = _dig_a(hostname, dns_host, dns_port)
-        assert answer == vm_ip_after, (
-            f"after stop/shell, DNS should answer the current VM "
-            f"IP {vm_ip_after!r} for {hostname!r}; got {answer!r}"
-        )
-
         # ---- Assertion: still reachable (container came back via its
         # ---- restart policy once docker re-enabled post-boot). ----
-        assert _wait_reachable(vm_ip_after, DIRECT_PORT, timeout=60), (
-            f"{vm_ip_after}:{DIRECT_PORT} not reachable after stop/shell "
+        assert _wait_reachable(pool, DIRECT_PORT, timeout=60), (
+            f"{pool}:{DIRECT_PORT} not reachable after stop/shell "
             f"cycle — svc_ingress or the container's restart policy "
             f"didn't recover"
         )
