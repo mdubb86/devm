@@ -69,6 +69,30 @@ SSHD_CONF
 # unmasks before the provisioner enables + starts ssh.
 systemctl mask ssh
 
+# --- devm-managed systemd-timesyncd config (Ship 5) ---
+# The guest's NTP client points at interceptedEgressIP (192.0.2.1,
+# RFC 5737 documentation range). Under ENFORCED policy, softnet
+# intercepts outbound UDP:123 by destination port and forwards to the
+# daemon's SNTP responder. Baked into the base image because the config
+# is static — no per-project or per-install variation. Previously
+# applied in cmd/devm/serviceapi/vm.go's /vm/apply-egress-enforcement
+# handler; moved here to avoid systemd's StartLimitBurst rate limit
+# under repeated warm attaches (see fix commit).
+#
+# PollIntervalMaxSec caps the backoff so a Mac wake heals within ~64s.
+# Empty FallbackNTP prevents any accidental leak to the public pool
+# (the egress firewall would deny it anyway; silencing keeps logs clean).
+# See internal/serviceapi/vm.go: const interceptedEgressIP
+mkdir -p /etc/systemd/timesyncd.conf.d
+cat > /etc/systemd/timesyncd.conf.d/devm.conf <<'DEVM_TIMESYNCD'
+[Time]
+NTP=192.0.2.1
+FallbackNTP=
+PollIntervalMinSec=32
+PollIntervalMaxSec=64
+DEVM_TIMESYNCD
+systemctl enable systemd-timesyncd
+
 # --- Boot-integrity gate floor ---
 # Lock: replace the stock nftables.conf with the devm locked skeleton and
 # enable nftables.service firewall-first (unmasked — it IS the boot lock now).

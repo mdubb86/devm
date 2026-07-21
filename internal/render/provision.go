@@ -46,15 +46,9 @@ type ProvisionScriptInput struct {
 	// render time. The map is passed as-is by the caller; validation
 	// (name shape, empty commands, undefined refs) has already happened
 	// in schema.Config.Validate — the renderer trusts what it receives.
-	Scripts map[string][]string
-	Services         []string // service unit names to enable+start (health-polled)
-	Masks            []MaskMount
-	// TimesyncdScript points systemd-timesyncd at the proxy sentinel so
-	// NTP resyncs through the enforced path. Applied in the composed
-	// script's enforce phase — the daemon builds it from the same
-	// per-project enforcement config (serviceapi.Client.EnforcementConfig),
-	// reusing serviceapi's buildTimesyncdScript.
-	TimesyncdScript string
+	Scripts  map[string][]string
+	Services []string // service unit names to enable+start (health-polled)
+	Masks    []MaskMount
 
 	// StepTimeoutSeconds bounds every install:/startup: command (the
 	// `timeout %d` wrapping both stages). Zero means "unset" and falls back
@@ -186,11 +180,11 @@ func RenderProvisionOpenScript(in ProvisionScriptInput) []byte {
 // provisioning, run immediately after RenderProvisionOpenScript succeeds
 // and softnet has been flipped to ENFORCED. It is delivered as `bash -c
 // '<this>'` with NO stdin — /opt/devm was already extracted by the open
-// script. It applies the NTP config, then starts and health-polls user
-// services, then activates devm.target, and finally clears the
-// in-progress marker the open script wrote — the LAST line, so the
-// marker's presence remains a genuine "provisioning not yet
-// fully complete" signal for the whole exec, not just this half.
+// script. It starts and health-polls user services, then activates
+// devm.target, and finally clears the in-progress marker the open script
+// wrote — the LAST line, so the marker's presence remains a genuine
+// "provisioning not yet fully complete" signal for the whole exec, not
+// just this half.
 func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
 	var b strings.Builder
 	p := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
@@ -198,15 +192,14 @@ func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
 	p("#!/bin/bash")
 	p("set -eo pipefail")
 
-	// (3) enforce: apply the runtime NTP config that routes through the
-	// enforced path, then masks. A failure here is the daemon's
-	// enforcement being broken (not the user's service) — the classifier
-	// treats it as teardown-worthy.
+	// (3) enforce: stage boundary marking the classifier's teardown/
+	// debuggable-VM split (stagesAfterInstall in provision.Provisioner) —
+	// a failure at or before this point is the daemon's own enforcement
+	// being broken, not the user's service. timesyncd's NTP config used
+	// to be applied here at runtime; it's now baked into the base image
+	// (image/provision-base.sh), so this stage has no work of its own
+	// left, only masks below.
 	p("echo ::devm:stage:enforce::")
-	// timesyncd (NTP) routes through iron-proxy/the daemon behind
-	// softnet's enforced egress — without this the guest's egress is
-	// correctly locked down but clock sync is broken at runtime.
-	p("%s", strings.TrimRight(in.TimesyncdScript, "\n"))
 
 	// (4) services phase: masks (bind-mount overlays the services write into),
 	// then start + health-poll services BEFORE granting access. A failure from

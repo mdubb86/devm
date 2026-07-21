@@ -108,37 +108,3 @@ NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt
 EOF
 `
 }
-
-// buildTimesyncdScript configures systemd-timesyncd to send NTP
-// traffic at interceptedEgressIP. Under ENFORCED policy softnet
-// forwards outbound UDP:123 to the daemon's SNTP responder regardless
-// of destination IP, so any valid IP here reaches it — this reuses the
-// same address iron-proxy uses for DNS answers (see interceptedEgressIP
-// in vm.go).
-//
-// Config choices:
-//   - No DNS lookup: interceptedEgressIP is a literal IP, so timesyncd
-//     doesn't resolve anything on every poll.
-//   - PollIntervalMaxSec=64 caps the backoff so a Mac wake heals
-//     within ~64 seconds even if the previous poll succeeded.
-//   - Empty FallbackNTP prevents timesyncd from ever trying the
-//     public pool.ntp.org list — the egress firewall would deny it
-//     anyway, but silencing the attempt keeps the log clean.
-//
-// timesyncd is a systemd built-in; no install step needed on Debian.
-// `restart` (not `reload`) because timesyncd re-reads its config on
-// SIGHUP but not always the drop-in path — a restart is cheap and
-// unambiguous.
-func buildTimesyncdScript() string {
-	return fmt.Sprintf(`sudo mkdir -p /etc/systemd/timesyncd.conf.d
-sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<EOF
-[Time]
-NTP=%s
-FallbackNTP=
-PollIntervalMinSec=32
-PollIntervalMaxSec=64
-EOF
-sudo systemctl enable --now systemd-timesyncd
-sudo systemctl restart systemd-timesyncd
-`, interceptedEgressIP)
-}

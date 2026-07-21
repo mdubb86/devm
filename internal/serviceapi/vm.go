@@ -101,18 +101,16 @@ type VMConfigLockResponse struct {
 }
 
 // VMEnforcementConfigResponse is the body shape for GET
-// /vm/enforcement-config: everything the boot-integrity-gate composed
-// provisioning script still bakes into its enforce phase. Egress
-// allow-listing and DNS resolution are enforced by softnet over the
-// control socket (POST /vm/apply-egress-enforcement), not by guest-side
-// nftables/dnsmasq. TimesyncdScript still points the guest's
-// systemd-timesyncd at interceptedEgressIP — softnet's UDP forwarder
-// catches outbound udp:123 regardless of destination, but the guest must
-// still be configured to send NTP somewhere for that interception to
-// matter.
-type VMEnforcementConfigResponse struct {
-	TimesyncdScript string `json:"timesyncd_script"`
-}
+// /vm/enforcement-config. Egress allow-listing and DNS resolution are
+// enforced by softnet over the control socket (POST
+// /vm/apply-egress-enforcement), not by guest-side nftables/dnsmasq.
+// timesyncd's NTP config used to be applied here at runtime
+// (TimesyncdScript); it's now baked into the base image at
+// image/provision-base.sh, since it's static — no per-project or
+// per-install variation. The handler is kept as a precondition check
+// (this project's iron-proxy state must exist) that callers can probe
+// before provisioning proceeds.
+type VMEnforcementConfigResponse struct{}
 
 // VMApplyEgressEnforcementRequest is the body shape for POST
 // /vm/apply-egress-enforcement.
@@ -561,13 +559,11 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		ironProxyState.put(req.Name, info)
 
 		// Apply VM-side config via tart exec — workspace mount, extra
-		// mounts, env only. The iron-proxy egress-enforcement config
-		// (timesyncd) is fetched by the CLI orchestrator via GET
-		// /vm/enforcement-config and baked into the composed provisioning
-		// script's enforce phase, so the user's install:, apt-get, and
-		// template-install steps still run with open egress — iron-proxy
-		// is meant to gate the workload/services, not the developer's
-		// provisioning phase.
+		// mounts, env only. timesyncd's NTP config is baked into the base
+		// image (image/provision-base.sh), not applied here — the user's
+		// install:, apt-get, and template-install steps still run with
+		// open egress; iron-proxy is meant to gate the workload/services,
+		// not the developer's provisioning phase.
 		//
 		// Workspace mount runs first so subsequent scripts can read files
 		// from the workspace (e.g. .devm/.env).
@@ -614,11 +610,11 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		writeJSON(w, VMStartResponse{ProjectIP: projectIP})
 	})
 
-	// /vm/enforcement-config returns the guest-side config the boot-
-	// integrity-gate composed provisioning script still bakes into its
-	// enforce phase. Egress allow-listing and DNS are enforced by softnet
-	// over the control socket now (POST /vm/apply-egress-enforcement), so
-	// only TimesyncdScript is populated.
+	// /vm/enforcement-config is a precondition check that this project's
+	// iron-proxy state exists (the orchestrator calls it before
+	// provisioning proceeds). It used to also return the guest-side
+	// timesyncd config; that's now baked into the base image, so the
+	// response body carries nothing.
 	s.Register("/vm/enforcement-config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
@@ -634,9 +630,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				http.StatusPreconditionFailed)
 			return
 		}
-		writeJSON(w, VMEnforcementConfigResponse{
-			TimesyncdScript: buildTimesyncdScript(),
-		})
+		writeJSON(w, VMEnforcementConfigResponse{})
 	})
 
 	// /vm/open-egress flips a project's softnet control socket to OPEN —
@@ -711,16 +705,6 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		if sock == "" {
 			http.Error(w, "softnet control socket missing — was /vm/start called for this project?",
 				http.StatusPreconditionFailed)
-			return
-		}
-
-		// timesyncd still needs to run in-guest: softnet's UDP forwarder
-		// catches outbound udp:123 regardless of destination, but the
-		// guest itself must be configured to send NTP for that to matter.
-		cmd := exec.Command("tart", "exec", "-i", req.Name, "sudo", "bash", "-s")
-		cmd.Stdin = strings.NewReader(buildTimesyncdScript())
-		if out, err := cmd.CombinedOutput(); err != nil {
-			http.Error(w, fmt.Sprintf("apply timesyncd: %v\n%s", err, out), http.StatusInternalServerError)
 			return
 		}
 

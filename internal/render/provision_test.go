@@ -20,7 +20,6 @@ func TestRenderProvisionOpenScript_Structure(t *testing.T) {
 		Masks: []MaskMount{
 			{HostPath: "/var/devm/masks/p/web/data", MountTarget: "/Users/x/p/data", Owner: "devm"},
 		},
-		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nNTP=192.0.2.1\nDEVM_TIMESYNCD\n",
 	}
 	s := string(RenderProvisionOpenScript(in))
 
@@ -41,7 +40,6 @@ func TestRenderProvisionOpenScript_Structure(t *testing.T) {
 	assert.NotContains(t, s, "touch /var/lib/devm/provisioned")
 	// no mask/enforcement content leaks into the open half
 	assert.NotContains(t, s, "mount --bind")
-	assert.NotContains(t, s, "/etc/systemd/timesyncd.conf.d/devm.conf")
 	// templates dispatcher runs through the wrapper, in the open window
 	assert.Contains(t, s, "/opt/devm/scripts/with-devm-env bash /opt/devm/scripts/install-templates.sh")
 	// install commands run through the with-devm-env wrapper (correct path)
@@ -63,8 +61,7 @@ func TestRenderProvisionOpenScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
 	// restart, empty startup, no packages/install/docker/templates → no
 	// open-stage work and no first-boot marker.
 	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
-		FirstBoot:       false,
-		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nDEVM_TIMESYNCD\n",
+		FirstBoot: false,
 	}))
 	assert.NotContains(t, s, "::devm:stage:startup::")
 	assert.NotContains(t, s, "::devm:stage:open::")
@@ -74,10 +71,9 @@ func TestRenderProvisionOpenScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
 	// lock must be cleared every boot even when no open-stage work runs,
 	// or a leftover policy-drop would drop softnet's own egress.
 	assert.Contains(t, s, "sudo nft flush ruleset")
-	// enforcement/NTP/target/marker-cleanup are the enforced script's job,
+	// enforcement/target/marker-cleanup are the enforced script's job,
 	// not rendered here at all.
 	assert.NotContains(t, s, "systemctl start devm.target")
-	assert.NotContains(t, s, "/etc/systemd/timesyncd.conf.d/devm.conf")
 }
 
 // TestRenderProvisionOpenScript_NftFlushUnconditionalAndBeforeOpenStage pins
@@ -155,7 +151,6 @@ func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 		Masks: []MaskMount{
 			{HostPath: "/var/devm/masks/p/web/data", MountTarget: "/Users/x/p/data", Owner: "devm"},
 		},
-		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nNTP=192.0.2.1\nDEVM_TIMESYNCD\n",
 	}
 	s := string(RenderProvisionEnforcedScript(in))
 
@@ -184,13 +179,9 @@ func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 	// first-boot completion marker written before the target
 	assert.Less(t, strings.Index(s, "touch /var/lib/devm/provisioned"),
 		strings.Index(s, "systemctl start devm.target"))
-	// timesyncd config lands in the enforce phase, AFTER the enforce stage
-	// marker and BEFORE services/target come up.
-	timesyncdIdx := strings.Index(s, "/etc/systemd/timesyncd.conf.d/devm.conf")
-	require.Greater(t, timesyncdIdx, 0)
-	assert.Greater(t, timesyncdIdx, strings.Index(s, "::devm:stage:enforce::"))
-	assert.Less(t, timesyncdIdx, strings.Index(s, "::devm:stage:services::"))
-	assert.Less(t, timesyncdIdx, strings.Index(s, "systemctl start devm.target"))
+	// timesyncd is baked into the base image now (image/provision-base.sh)
+	// — no timesyncd content is rendered into the composed script at all.
+	assert.NotContains(t, s, "/etc/systemd/timesyncd.conf.d/devm.conf")
 	// service health check is a bounded poll (is-active AND is-failed),
 	// not a single is-failed snapshot — before the target.
 	assert.Contains(t, s, "systemctl is-active --quiet web.service")
@@ -201,16 +192,12 @@ func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 
 func TestRenderProvisionEnforcedScript_NotFirstBoot_NoCompletionMarker(t *testing.T) {
 	s := string(RenderProvisionEnforcedScript(ProvisionScriptInput{
-		FirstBoot:       false,
-		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nDEVM_TIMESYNCD\n",
+		FirstBoot: false,
 	}))
 	assert.NotContains(t, s, "touch /var/lib/devm/provisioned")
 	// enforcement + target still happen every boot
 	assert.Contains(t, s, "::devm:stage:enforce::")
 	assert.Contains(t, s, "systemctl start devm.target")
-	// timesyncd is applied every boot too, not just when the open window
-	// ran — NTP must work on a warm restart as well.
-	assert.Contains(t, s, "/etc/systemd/timesyncd.conf.d/devm.conf")
 	// marker cleanup still happens even with no first-boot work.
 	assert.Contains(t, s, "rm -f /run/devm/provisioning")
 }

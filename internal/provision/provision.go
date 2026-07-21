@@ -59,13 +59,6 @@ type Provisioner struct {
 	// on the Mac (e.g., /Users/michael/projects/myproj).
 	WorkspaceVMPath string
 
-	// TimesyncdScript is the guest's runtime NTP sync config, applied in
-	// the composed script's enforce phase — built by the daemon's
-	// per-project enforcement config (serviceapi.Client.EnforcementConfig).
-	// Without it the guest's egress is correctly locked down but clock
-	// sync is broken at runtime.
-	TimesyncdScript string
-
 	// StepTimeoutSeconds bounds every install:/startup: command in the
 	// composed script (render.ProvisionScriptInput.StepTimeoutSeconds). The
 	// daemon fills this from DEVM_INSTALL_STEP_TIMEOUT_S; zero means
@@ -195,7 +188,6 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		Scripts:            p.Cfg.Scripts,
 		Services:           p.serviceUnits(),
 		Masks:              p.maskMounts(),
-		TimesyncdScript:    p.TimesyncdScript,
 		StepTimeoutSeconds: p.StepTimeoutSeconds,
 	}
 }

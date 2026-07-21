@@ -309,13 +309,12 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		return d.teardownOnFail(ctx, cfg, vmName, err, "ensure project ssh host key")
 	}
 
-	// The enforcement config (timesyncd) is baked into the enforced
-	// provisioning script's enforce phase (RunEnforced), which runs after
-	// the softnet egress flip so DNS/NTP/egress all come up under
-	// enforcement. The daemon computes it per project from the iron-proxy
-	// MAC_HOST/ports stashed at StartVM.
-	enforcement, err := d.ServiceAPIClient.EnforcementConfig(ctx, cfg.Project.Name)
-	if err != nil {
+	// timesyncd's NTP config is baked into the base image now (image/
+	// provision-base.sh), not fetched/applied here. EnforcementConfig is
+	// still called as a precondition check — this project's iron-proxy
+	// state must exist before provisioning proceeds — mirroring the same
+	// check ApplyEgressEnforcement/OpenEgress make just below.
+	if _, err := d.ServiceAPIClient.EnforcementConfig(ctx, cfg.Project.Name); err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "fetch enforcement config")
 	}
 
@@ -328,7 +327,6 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		SSHHostPriv:         hostPriv,
 		SSHHostPub:          hostPub,
 		WorkspaceVMPath:     repoRoot,
-		TimesyncdScript:     enforcement.TimesyncdScript,
 		StepTimeoutSeconds:  installStepTimeoutSeconds(),
 	}
 	debuglog.Logf("shell", "provisioning %s", vmName)

@@ -67,20 +67,3 @@ func TestBuildEnvScript_SetsSystemWideEnvVars(t *testing.T) {
 	assert.NotContains(t, script, "HTTPS_PROXY=http")
 	assert.NotContains(t, script, "HTTP_PROXY=http")
 }
-
-func TestBuildTimesyncdScript_PointsAtProxySentinel(t *testing.T) {
-	script := buildTimesyncdScript()
-	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")
-	// interceptedEgressIP: under ENFORCED policy softnet forwards outbound
-	// UDP:123 to the daemon's SNTP responder regardless of destination IP,
-	// so any valid IP reaches it here.
-	assert.Contains(t, script, "NTP="+interceptedEgressIP)
-	// Explicit empty FallbackNTP prevents timesyncd from ever trying
-	// the default pool.ntp.org list; egress firewall would deny it
-	// anyway, but silencing the attempt keeps the log clean.
-	assert.Contains(t, script, "FallbackNTP=")
-	// Poll interval cap: even if timesyncd's exponential backoff
-	// climbs, the max is bounded — post-wake heal is ~64s worst case.
-	assert.Contains(t, script, "PollIntervalMaxSec=64")
-	assert.Contains(t, script, "systemctl restart systemd-timesyncd")
-}

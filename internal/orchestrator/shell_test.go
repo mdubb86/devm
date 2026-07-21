@@ -69,9 +69,7 @@ func (f *fakeVMAdmin) StartVM(_ context.Context, _ serviceapi.VMStartRequest) (s
 }
 
 func (f *fakeVMAdmin) EnforcementConfig(_ context.Context, _ string) (serviceapi.VMEnforcementConfigResponse, error) {
-	return serviceapi.VMEnforcementConfigResponse{
-		TimesyncdScript: "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nDEVM_TIMESYNCD\n",
-	}, nil
+	return serviceapi.VMEnforcementConfigResponse{}, nil
 }
 
 func (f *fakeVMAdmin) StopVM(_ context.Context, _ string) error {

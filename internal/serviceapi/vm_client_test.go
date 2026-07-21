@@ -374,9 +374,11 @@ func TestVMStop_MethodNotAllowed(t *testing.T) {
 }
 
 // TestClientEnforcementConfig_ReadsResponse verifies GET
-// /vm/enforcement-config returns only the guest-side timesyncd config —
-// egress allow-listing and DNS are enforced by softnet over the control
-// socket (POST /vm/apply-egress-enforcement).
+// /vm/enforcement-config succeeds (200) once this project's iron-proxy
+// state exists — egress allow-listing and DNS are enforced by softnet
+// over the control socket (POST /vm/apply-egress-enforcement), and
+// timesyncd's NTP config is baked into the base image, so the response
+// body itself carries nothing; the endpoint is a precondition check.
 func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
@@ -395,9 +397,8 @@ func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	resp, err := c.EnforcementConfig(ctx, "proj-enf")
+	_, err := c.EnforcementConfig(ctx, "proj-enf")
 	require.NoError(t, err)
-	assert.Contains(t, resp.TimesyncdScript, "/etc/systemd/timesyncd.conf.d/devm.conf")
 }
 
 // TestClientEnforcementConfig_MissingProjectState verifies the endpoint

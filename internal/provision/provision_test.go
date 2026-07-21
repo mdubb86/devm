@@ -279,28 +279,6 @@ func TestRunOpenThenEnforced_RestartOmitsFirstBootWork(t *testing.T) {
 	assert.Contains(t, enforcedScript, "systemctl start devm.target")
 }
 
-// TestRunEnforced_TimesyncdBakedIntoScript pins that the daemon-supplied
-// timesyncd config (fetched via serviceapi.Client.EnforcementConfig and set
-// on Provisioner by orchestrator.RunShell) flows through scriptInput into
-// the enforced script's enforce phase — the runtime NTP fix the
-// boot-integrity-gate rewrite had dropped.
-func TestRunEnforced_TimesyncdBakedIntoScript(t *testing.T) {
-	f := &fakeStreamTart{}
-	p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
-	p.TimesyncdScript = "sudo tee /etc/systemd/timesyncd.conf.d/devm.conf > /dev/null <<'DEVM_TIMESYNCD'\nNTP=192.0.2.1\nDEVM_TIMESYNCD\n"
-	require.NoError(t, p.RunEnforced(context.Background(), io.Discard, nil))
-
-	script := scriptOf(t, f)
-	assert.Contains(t, script, "/etc/systemd/timesyncd.conf.d/devm.conf")
-	assert.Contains(t, script, "NTP=192.0.2.1")
-	// applied in the enforce phase, before services/target come up.
-	enforceIdx := strings.Index(script, "::devm:stage:enforce::")
-	require.Greater(t, enforceIdx, 0)
-	assert.Greater(t, strings.Index(script, "/etc/systemd/timesyncd.conf.d/devm.conf"), enforceIdx)
-	assert.Less(t, strings.Index(script, "/etc/systemd/timesyncd.conf.d/devm.conf"),
-		strings.Index(script, "systemctl start devm.target"))
-}
-
 func TestRunEnforced_RoutingOnlyServiceOmittedButProcessServicesStarted(t *testing.T) {
 	f := &fakeStreamTart{}
 	p := baseProvisioner(f, schema.Config{
