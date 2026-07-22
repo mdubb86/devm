@@ -61,7 +61,7 @@ network:
 
 With this config, iron-proxy substitutes the real value only on requests destined for `api.anthropic.com`. Requests to any other host carry the opaque token unchanged.
 
-A secret referenced in `env:` but not named under any allow entry's `secrets:` is omitted from iron-proxy's config entirely — it is **never injected**. (`internal/serviceapi/ironproxy.go`: `if len(s.Hosts) > 0` — only secrets with a non-empty host list are included in the `secrets` transform.)
+A secret referenced in `env:` but not named under any allow entry's `secrets:` is omitted from iron-proxy's config entirely — it is **never injected**.
 
 You may bind one secret across multiple hosts by listing it in multiple allow entries; iron-proxy receives the union of those hosts as the injection scope.
 
@@ -73,20 +73,10 @@ You may bind one secret across multiple hosts by listing it in multiple allow en
 devm shell
   │
   ├─ reads devm.yaml → finds !secret refs
-  ├─ calls macOS keychain: Get("<project-id>/<name>") for each ref
+  ├─ calls macOS keychain for each ref
   ├─ collects host bindings from network.allow[*].secrets
-  │     anthropic_key → ["api.anthropic.com"]
   │
-  ├─ calls daemon: StartVM { Secrets: [{Name, Value, Hosts}, ...] }
-  │
-  └─ daemon spawns iron-proxy:
-       ├─ config YAML declares a `secrets` transform (host-scoped):
-       │     proxy_value: "__DEVM_SECRET_anthropic_key__"
-       │     source: { type: env, var: "DEVM_SECRET_ANTHROPIC_KEY" }
-       │     match_headers: []  (all headers)
-       │     rules: [{ host: "api.anthropic.com" }]
-       └─ real values injected into iron-proxy's process env
-            (never written to the on-disk config file)
+  └─ hands the resolved secrets to the daemon at start time
 
 VM env:
   ANTHROPIC_API_KEY=__DEVM_SECRET_anthropic_key__   ← workload sees this
@@ -96,9 +86,9 @@ Outbound HTTP from VM → iron-proxy:
   → iron-proxy substitutes → Authorization: Bearer sk-ant-...
 ```
 
-Token format: `__DEVM_SECRET_<name>__` (e.g. `__DEVM_SECRET_anthropic_key__`). The token is deterministic — the same secret name always produces the same token, so iron-proxy restarts don't strand stale tokens in the VM's environment.
+Token format: `__DEVM_SECRET_<name>__` (e.g. `__DEVM_SECRET_anthropic_key__`). Deterministic — the same secret name always produces the same token — so iron-proxy restarts don't strand stale tokens in the VM's environment.
 
-Real values are passed to iron-proxy exclusively through its process environment (one env var per secret, named `DEVM_SECRET_<UPPERCASED_NAME>`). The on-disk config file contains only the token strings and is written mode 0600.
+Real credential values are never written to disk; they live only in iron-proxy's process memory.
 
 ---
 
