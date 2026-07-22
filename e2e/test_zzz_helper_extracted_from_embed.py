@@ -15,6 +15,7 @@ any install-marker test that runs after it.
 """
 from __future__ import annotations
 
+import hashlib
 import platform
 import subprocess
 from pathlib import Path
@@ -26,6 +27,12 @@ pytestmark = pytest.mark.devm
 
 _DEVM_E2E_HELPER = Path("/usr/local/bin/devm-e2e-helper")
 _DEVM_E2E_HELPER_SIDECAR = Path("/usr/local/bin/devm-e2e-helper.sha256")
+# The sidecar records the sha256 of the gzipped embed blob at
+# internal/helper/embed/devm-helper.gz — not the extracted binary.
+# The worktree's blob is what the devm-e2e binary under test was
+# built from, so we can compute the expected value directly rather
+# than settling for a weaker "looks like hex" check.
+_EMBED_BLOB = Path(__file__).parent.parent / "internal" / "helper" / "embed" / "devm-helper.gz"
 
 
 @pytest.mark.slow
@@ -71,15 +78,12 @@ def test_helper_extracted_from_embed(devm, sudo_capable):
             f"devm-helper mode is {oct(mode)}, expected 0o755"
         )
 
-        # The sidecar records the sha256 of the gzipped embed blob, not
-        # the extracted binary, so we can't cheaply re-derive it here
-        # without shelling into devm to print helper.EmbeddedSha256.
-        # Settle for: the sidecar exists and is 64 hex chars.
+        expected_sha = hashlib.sha256(_EMBED_BLOB.read_bytes()).hexdigest()
         sidecar_content = _DEVM_E2E_HELPER_SIDECAR.read_text().strip()
-        assert len(sidecar_content) == 64, (
-            f"sidecar content is {len(sidecar_content)} chars, expected 64 (hex sha256)"
+        assert sidecar_content == expected_sha, (
+            f"sidecar content {sidecar_content!r} != expected {expected_sha!r} "
+            f"(computed from {_EMBED_BLOB})"
         )
-        int(sidecar_content, 16)  # must parse as hex; raises ValueError otherwise
 
         # The on-disk helper must be a valid Mach-O executable — a
         # cheap validity check that catches "we wrote garbage."
