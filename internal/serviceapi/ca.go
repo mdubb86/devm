@@ -63,7 +63,7 @@ func loadOrGenerateCAAt(cfg identity.Config, dir string) (*CA, error) {
 	if ca, err := loadCA(dir); err == nil {
 		return ca, nil
 	}
-	return generateCA(dir, cfg.CACommonName())
+	return generateCA(cfg, dir)
 }
 
 func loadCA(dir string) (*CA, error) {
@@ -99,7 +99,7 @@ func loadCA(dir string) (*CA, error) {
 	}, nil
 }
 
-func generateCA(dir, commonName string) (*CA, error) {
+func generateCA(cfg identity.Config, dir string) (*CA, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate ca key: %w", err)
@@ -108,8 +108,8 @@ func generateCA(dir, commonName string) (*CA, error) {
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(now.UnixNano()),
 		Subject: pkix.Name{
-			CommonName:   commonName,
-			Organization: []string{"devm"},
+			CommonName:   cfg.CACommonName(),
+			Organization: []string{cfg.Name},
 		},
 		NotBefore:             now,
 		NotAfter:              now.Add(caRootLifeYrs * 365 * 24 * time.Hour),

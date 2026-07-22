@@ -81,6 +81,22 @@ func TestCA_RootKey_Persisted0600(t *testing.T) {
 	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
 }
 
+// TestCA_RootCertSubject_ScopedByProfile pins that the generated root
+// cert's CommonName and Organization are derived from cfg — under E2E
+// they must not read "devm"/"devm Local CA" (prod's values), so the
+// system keychain can tell the two profiles' trust chains apart.
+func TestCA_RootCertSubject_ScopedByProfile(t *testing.T) {
+	prodCA, err := loadOrGenerateCAAt(identity.Prod, t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, "devm Local CA", prodCA.rootCert.Subject.CommonName)
+	assert.Equal(t, []string{"devm"}, prodCA.rootCert.Subject.Organization)
+
+	e2eCA, err := loadOrGenerateCAAt(identity.E2E, t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, "devm-e2e Local CA", e2eCA.rootCert.Subject.CommonName)
+	assert.Equal(t, []string{"devm-e2e"}, e2eCA.rootCert.Subject.Organization)
+}
+
 func TestCA_RootCertValidity_IsTenYears(t *testing.T) {
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
