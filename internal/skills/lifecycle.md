@@ -45,20 +45,20 @@ If the VM is stopped or absent (or was just torn down as a dirty adopt-in-place 
 
 ### The boot-integrity gate
 
-The base image boots **locked and inert**: `nftables.service` applies a default-drop skeleton firewall-first, before anything else starts, so the VM is egress-locked from the first instant it's up. `devm.target` — the unit that pulls in ssh, caddy, dnsmasq, and dockerd — is installed but not enabled; nothing user-facing starts on a bare boot. A VM the daemon didn't drive through provisioning (direct `tart run`, or a crash before provisioning began) therefore stays inert and locked: no ssh, no caddy, no egress, nothing reachable.
+The base image boots **locked and inert**. Two locks compose. On the Mac side, softnet — the userspace network stack `tart run --net-softnet` spawns to terminate the guest's virtio NIC — starts in `LOCKED` policy: every outbound flow from the guest is dropped until the daemon flips it. Inside the guest, `nftables.service` applies a default-drop skeleton firewall-first, before anything else starts (allowing only loopback, established, the vmnet host gateway for the tart guest-agent, and DNS to the local resolver), so the guest is a belt-and-suspenders backstop even if softnet were somehow bypassed. `devm.target` — the unit that pulls in ssh, caddy, dnsmasq, and dockerd — is installed but not enabled; nothing user-facing starts on a bare boot. A VM the daemon didn't drive through provisioning (direct `tart run`, or a crash before provisioning began) therefore stays inert and locked: no ssh, no caddy, no egress, nothing reachable.
 
 Provisioning is the daemon's job, not the guest's own boot sequence: it ships and runs **one composed bash script** over a single streaming `tart exec` (the devm bundle tar piped in on stdin) that walks:
 
 | Stage | When | What it does |
 |---|---|---|
 | _(preamble)_ | every run | Write the `/run/devm/provisioning` in-progress marker; extract the devm bundle tar to `/opt/devm`; run `install.sh` (CA install, `PATH` symlink). |
-| `open` | first boot, or `startup:` non-empty, or any service declares `templates:` | Flush the locked skeleton ruleset — fully open egress for this window. |
+| `open` | first boot, or `startup:` non-empty, or any service declares `templates:` | Daemon has already flipped softnet to OPEN before the exec starts. The stage marker echoes here; the unconditional `sudo nft flush ruleset` at the top of provisioning has already dropped the guest boot lock too, so egress is fully open for this window. |
 | `packages` | first boot only, if `packages:` set | `apt-get update` + `apt-get install -y <packages>`. |
 | `install` | first boot only, if `install:` set | Run each `install:` command in order, open network. |
 | `docker` | first boot only, if `docker: true` | Install the Docker engine + runc shim; join `docker.service` to `devm.target` (disabled at boot, gated with everything else). |
 | `templates` | every boot, if any service declares `templates:` | Run the template installer dispatcher. |
 | `startup` | every boot, if `startup:` is non-empty | Run `/opt/devm/startup.sh`, open network. |
-| `enforce` | every boot | Apply the real nft allowlist; point dnsmasq and timesyncd at iron-proxy; apply the `svc_ingress` firewall for `direct: true` docker services. |
+| `enforce` | every boot | Stage boundary marking the classifier's teardown/debuggable split — a failure at or before this point is devm's own enforcement being broken, not a user service. The actual policy flip (softnet OPEN → ENFORCED) happens on the Mac side between the two composed scripts; NTP + timesyncd config is baked into the base image; direct-service listeners are set up by softnet's ingress. This stage has no in-guest work of its own left — only masks, in `services` below. |
 | `services` | every boot | Bind-mount mask overlays; enable + start each declared service unit; health-poll each until active/healthy or timeout — **before** `devm.target` starts. |
 | _(finish)_ | first boot only | Write the `/var/lib/devm/provisioned` marker. |
 | _(finish)_ | every boot | `systemctl start devm.target` — brings up ssh, caddy, dnsmasq, and dockerd (services are already healthy), all under enforcement. **Access is granted only now.** |
