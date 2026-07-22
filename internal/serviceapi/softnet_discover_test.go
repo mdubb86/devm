@@ -33,7 +33,11 @@ func TestDiscoverSoftnet_RebuildsStateForRehydratedProjects(t *testing.T) {
 	t.Cleanup(func() { softnetState.del(projectID) })
 
 	// Stand in for the surviving softnet child so the best-effort
-	// setPolicy push has somewhere to land.
+	// setPolicy push has somewhere to land. Production /vm/start
+	// ensures softnetSockDir before binding (a fresh CI runner has no
+	// prior devm run to create the /tmp/devm-softnet-<uid>/ dir); the
+	// test skips /vm/start so it must create the dir itself.
+	require.NoError(t, ensureSoftnetSockDir(softnetSockDir()))
 	sock := SoftnetControlSock(identity.Prod, projectID)
 	ln, err := net.Listen("unix", sock)
 	require.NoError(t, err)
