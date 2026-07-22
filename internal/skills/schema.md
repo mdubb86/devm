@@ -17,7 +17,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `services` | map[string]Service | varies | Named service definitions; bucket depends on which sub-field changes (see Services section). |
 | `packages` | []string | recreate | Apt packages installed at VM creation time. |
 | `install` | []string | recreate | Shell commands run once at VM creation as root. |
-| `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as root, with open network — before egress enforcement is applied. Run inline by the daemon's single provisioning script; no separate unit. |
+| `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as root, with open network — before egress enforcement is applied. |
 | `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
 | `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
@@ -131,13 +131,13 @@ Note: `--` in a command's argv is consumed by the internal wrapper; quote it or 
 
 `[]string` — bucket: **restart** (VM stop + cold start; no teardown, no data loss).
 
-Shell commands run on **every** boot where the open-egress window runs, in order, as root, with **open** network — before egress enforcement is applied. Rendered verbatim (one command per line, no shell escaping needed) into `/opt/devm/startup.sh` — mode 0755, root-owned. The daemon's single composed provisioning script executes it directly (through the `with-devm-env` wrapper, under a 600s timeout) inside the open-egress window, alongside first-boot `install:`/`packages:` and the template installer — there is no separate systemd unit or boot-ordering trick. Use it for per-boot setup that needs unrestricted network (fetch/refresh something, register the VM, warm a cache).
+Shell commands run on **every** boot where the open-egress window runs, in order, as root, with **open** network — before egress enforcement is applied. Runs under one shared shell (exports/`cd` persist between lines), 600s timeout for the whole block (override with `DEVM_INSTALL_STEP_TIMEOUT_S`). Use it for per-boot setup that needs unrestricted network (fetch/refresh something, register the VM, warm a cache).
 
-The open-egress window itself only runs when there's work for it: first boot, or `startup:` is non-empty, or any service declares `templates:`. A project with no `startup:` and no `templates:` skips the window entirely on a later cold start and goes straight from the locked skeleton firewall to the enforced allowlist. An empty (or unset) `startup:` is a no-op — it contributes nothing to that decision.
+The open-egress window itself only runs when there's work for it: first boot, or `startup:` is non-empty, or any service declares `templates:`. A project with no `startup:` and no `templates:` skips the window entirely on a later cold start and goes straight to the enforced allowlist.
 
-A failing `startup:` command aborts the whole provisioning script (`set -eo pipefail`): egress enforcement is never applied and `devm.target` never starts, so the boot grants no access and the VM is torn down — the same failure class as a broken `install:` command, not fail-safe.
+A failing `startup:` command aborts provisioning: `devm.target` never starts, no access is granted, and the VM is torn down — same failure class as a broken `install:` command, not fail-safe.
 
-The three hooks: `install:` = once, first boot, open network. `startup:` = every boot that opens the window, open network. Services (`exec:`/`systemd:`) = every boot, enforced egress — started (and health-polled) only after the `enforce` stage applies the real allowlist, and confirmed healthy before `devm.target` — and therefore access — comes up. Editing `startup:` (**restart** bucket) is deterministic: the daemon composes and runs the freshly-rendered `startup.sh` inside the same provisioning script on the applying `devm stop` + `devm shell` — the edit takes effect on that restart.
+The three hooks: `install:` = once, first boot, open network. `startup:` = every boot that opens the window, open network. Services (`exec:`/`systemd:`) = every boot, enforced egress — started and health-polled after the allowlist is applied, confirmed healthy before `devm.target` (and therefore access) comes up. Editing `startup:` (**restart** bucket) is deterministic: the freshly-rendered `startup:` runs on the applying `devm stop` + `devm shell` — the edit takes effect on that restart.
 
 ---
 
@@ -239,13 +239,11 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 ## Bucket glossary
 
-**live** — Devm applies the change to the running VM without stopping it or ending active sessions (env/path/template via a bundle re-pipe to `/opt/devm/`; service, port, and hostname via targeted `tart exec`). Network (`allow`) changes are classified live per the `changeBucket` map but the detection and apply path is not currently wired; they take effect on the next cold start.
+**live** — Devm applies the change to the running VM without stopping it or ending active sessions. Currently wired for env, path, and template changes. Network (`allow`) changes are classified live but the apply path isn't currently wired; they take effect on the next cold start.
 
-**restart** (internally: `BucketRestartVM`, `String()` = `"restart"`) — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Currently only `startup:` sits in this bucket: an edit is re-rendered into a fresh `/opt/devm/startup.sh` and run by the composed provisioning script on the applying `devm stop` + `devm shell` — deterministic, takes effect on that restart.
+**restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Currently only `startup:` sits in this bucket: the edit takes effect on the applying restart, deterministically.
 
-**recreate** (internally: `BucketTeardownVM`, `String()` = `"teardown"`) — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `packages`, `mounts` (virtio-fs shares set at `tart run` time), `masks` (bind mounts applied at boot), `base_image`, and `project` identity fields.
-
-The classification of every change kind is the `changeBucket` map in `internal/reconcile/diff.go`.
+**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `packages`, `mounts`, `masks`, `base_image`, and `project` identity fields.
 
 ---
 
