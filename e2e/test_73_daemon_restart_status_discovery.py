@@ -21,7 +21,7 @@ pytestmark = pytest.mark.devm
 def _unix_vm_status(name: str) -> dict:
     """Hit /vm/status on the daemon's Unix socket and return the parsed body."""
     sock_path = str(
-        Path.home() / "Library" / "Application Support" / "devm" / "devm.sock"
+        Path.home() / "Library" / "Application Support" / "devm-e2e" / "devm.sock"
     )
 
     class UnixHTTPConnection(http.client.HTTPConnection):

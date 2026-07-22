@@ -43,7 +43,7 @@ import yaml
 
 pytestmark = pytest.mark.devm
 
-_RUNDIR = Path.home() / "Library" / "Application Support" / "devm"
+_RUNDIR = Path.home() / "Library" / "Application Support" / "devm-e2e"
 
 
 def _iron_proxy_pid_for(project_id: str) -> int | None:
