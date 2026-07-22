@@ -32,8 +32,8 @@ def pytest_collection_modifyitems(config, items):
 
       - `install`: exercises devm's install lifecycle — `devm install`,
         `devm uninstall`, or `devm service restart` — which mutates
-        global system state (LaunchDaemon plist, /etc/resolver/test,
-        the system CA, the tart devm-base image). Concurrent runs of
+        global system state (LaunchDaemon plist, /etc/resolver/e2e.test,
+        the system CA, the tart devm-e2e-base image). Concurrent runs of
         these tests step on each other's install/uninstall sequences.
         Semantic pair of the `devm` marker: install = installing devm
         itself; devm = using it. Run via `just e2e-install`.
@@ -361,15 +361,15 @@ def inspector_vm() -> Iterator[TartSandbox]:
 
 @pytest.fixture
 def base_clone() -> Iterator[str]:
-    """Clones `devm-base` raw — NO daemon, NO provisioning — and boots
+    """Clones `devm-e2e-base` raw — NO daemon, NO provisioning — and boots
     it headless via `tart run`. Yields the clone's name so a test can
     `tart exec` against the pre-daemon boot-integrity gate floor: a
-    bare boot of devm-base itself, not a devm-managed project VM.
+    bare boot of devm-e2e-base itself, not a devm-managed project VM.
 
     Unlike `tart_sandbox` (which goes through `devm shell` and full
     provisioning), this fixture never touches the devm daemon — it's
     the raw-clone pattern also used by the session-scoped
-    `inspector_vm` fixture, just cloning devm-base instead of the
+    `inspector_vm` fixture, just cloning devm-e2e-base instead of the
     upstream template and scoped per-test (each test wants its own
     untouched floor).
 
@@ -386,11 +386,11 @@ def base_clone() -> Iterator[str]:
     registry.append("sandbox", name)
     try:
         r = subprocess.run(
-            ["tart", "clone", "devm-base", name],
+            ["tart", "clone", "devm-e2e-base", name],
             capture_output=True, timeout=60,
         )
         assert r.returncode == 0, (
-            f"tart clone devm-base failed: {r.stderr.decode(errors='replace')}"
+            f"tart clone devm-e2e-base failed: {r.stderr.decode(errors='replace')}"
         )
 
         proc = subprocess.Popen(
