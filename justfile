@@ -107,11 +107,15 @@ e2e *NAMES:
     fi
     exit $rc
 
-# Run install-marker tests. Tests manage their own binary placement,
-# sudo escalation, and install/uninstall lifecycle.
+# Run install-marker tests. Each test exercises `devm-e2e install`/
+# `devm-e2e uninstall` themselves; those invocations need sudo. Prime
+# the timestamp up-front so tests don't hit an interactive prompt in
+# the first ~5 minutes; later tests will re-prompt as the sudo
+# timestamp expires (macOS default: 5 min).
 e2e-install *NAMES: (_build "e2e")
     #!/usr/bin/env bash
     set -uo pipefail
+    sudo -v
     args=(-m install)
     [ -n "{{NAMES}}" ] && args+=(-k "$(echo '{{NAMES}}' | sed 's/ / or /g')")
     e2e/scripts/run.sh "${args[@]}"
