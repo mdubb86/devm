@@ -56,32 +56,28 @@ Other pre-VM errors from `devm shell`:
 
 ## Provisioner failures
 
-After the VM starts, `devm shell` streams TWO composed bash scripts into the VM, in two separate `tart exec` calls with the daemon's softnet ENFORCED flip in between (`internal/render/provision.go`'s `RenderProvisionOpenScript` then `RenderProvisionEnforcedScript`; the daemon no longer runs a per-step Go provisioner). softnet is OPEN for the first exec (`open`/`packages`/`install`/`docker`/`templates`/`startup` stages) and ENFORCED for the second (`enforce`/`services`) — user services and `devm.target` only ever come up under enforced egress. Each script emits a stage marker as it enters each phase:
+After the VM starts, provisioning walks a series of stages. Each stage emits a marker (`::devm:stage:<name>::`) that drives the `devm shell` spinner. Egress is OPEN through the `open`→`startup` stages and switches to ENFORCED before `enforce`/`services`, so user services always come up under the enforced allowlist.
 
-```
-::devm:stage:<name>::
-```
-
-which drives the `devm shell` spinner. Each script runs under `set -eo pipefail`, so any failing command aborts THAT script immediately — no later stage in it runs, and (for the enforced script) no access is granted. A failure in the open script never runs the enforced script at all. On failure the error line is:
+Any failing command aborts provisioning immediately. On failure the error line is:
 
 ```
 provision: provision stage "<name>": provisioning script exited <N>
 ```
 
-`<name>` is the LAST stage marker the failing script reached before it aborted. `<N>` is the script's exit code — e.g. `124` means a `timeout`-wrapped `install:`/`startup:` command was killed for exceeding its budget. The output immediately above the error line is the captured non-marker stdout/stderr from the run; read that first.
+`<name>` is the LAST stage marker reached before the abort. `<N>` is the exit code — e.g. `124` means a `timeout`-wrapped `install:`/`startup:` command was killed for exceeding its budget. The output immediately above the error line is the captured non-marker stdout/stderr from the run; read that first.
 
 ### Stage reference
 
 | Stage | What it does | Common failure | Fix |
 |---|---|---|---|
-| `open` | The daemon has already flipped softnet to OPEN before this exec starts, and provisioning itself runs `sudo nft flush ruleset` unconditionally at the top (dropping the guest boot lock). The stage marker echoes the start of the open work window. Runs whenever there's open-window work to do (first boot, `startup:` commands, or templates); skipped on a warm restart with nothing to run. | Rare | n/a |
-| `packages` | `sudo apt-get update -y && apt-get install -y <packages>` (first boot only; skipped if `packages:` is empty) | Package name not found, or `deb.debian.org` not in `network.allow` | Add `deb.debian.org` to `network.allow` in `devm.yaml`; verify package names |
-| `install` | Runs each `install:` command in order, each individually wrapped in `timeout <N> <with-devm-env wrapper>` so `$WORKSPACE`, `cfg.env`, and `path:` are in scope (first boot only). `<N>` defaults to 600s, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | User command exits non-zero, or a step exceeds its timeout (`timeout` kills it, exit 124) | Read the captured output above the error; fix the failing command. For long installs, raise `DEVM_INSTALL_STEP_TIMEOUT_S`. |
-| `docker` | Installs the Docker engine + runc-shim registration via `daemon.json` (only when `docker: true`; first boot only) | docker-proxy or docker socket unavailable on the Mac | Verify `docker: true` is set and Docker is running on the Mac |
-| `templates` | Runs `install-templates.sh` (through the with-devm-env wrapper) to render every `services[*].templates` entry into its declared output path. Runs on ANY boot that has templates declared, not just first boot — a warm restart re-runs the (idempotent) dispatcher. | Template output path unwritable (e.g. `/etc/foo` without `sudo: true` on the template) or template source render error | Add `sudo: true` to the template if the output is under a root-owned dir; otherwise fix the template source |
-| `startup` | Runs every `startup:` command in ONE shared bash process (exports/`cd` from an earlier line are visible to later ones), the whole thing wrapped in a single aggregate `timeout <N>` — same default/override as `install`. | A command exits non-zero, or the combined script exceeds its timeout | Read the captured output above the error; fix the failing command, or raise `DEVM_INSTALL_STEP_TIMEOUT_S` |
-| `enforce` | Stage marker only. The softnet OPEN→ENFORCED policy flip happens on the Mac side between the two composed scripts; timesyncd is preconfigured in the base image; direct-service listeners are set up by softnet's ingress on the Mac. This stage does no in-guest work — masks are in `services` below. | Should not fail | n/a |
-| `services` | Bind-mounts per-service mask directories from `/var/devm/masks/<project>/<service>/<path>` over workspace paths, then `systemctl enable --now` each declared service and health-polls it before `devm.target` (and therefore access) is granted | Service failed to start (port in use, missing binary, bad config), or a mask's mount target doesn't exist | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>`; check `services[*].masks` paths in `devm.yaml` |
+| `open` | Marker for the start of the open-egress work window. Runs whenever there's open-window work to do (first boot, `startup:` commands, or templates); skipped on a warm restart with nothing to run. | Rare | n/a |
+| `packages` | `apt-get update` + `apt-get install -y <packages>` (first boot only; skipped if `packages:` is empty) | Package name not found, or `deb.debian.org` not in `network.allow` | Add `deb.debian.org` to `network.allow` in `devm.yaml`; verify package names |
+| `install` | Runs each `install:` command in order, with `$WORKSPACE`, `cfg.env`, and `path:` in scope (first boot only). Each command has a 600s timeout, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | User command exits non-zero, or a step exceeds its timeout (exit 124) | Read the captured output above the error; fix the failing command. For long installs, raise `DEVM_INSTALL_STEP_TIMEOUT_S`. |
+| `docker` | Installs the Docker engine + shim (only when `docker: true`; first boot only) | Docker install failure | Read the captured output; if `network.allow` is missing a Docker registry host, add it |
+| `templates` | Renders every `services[*].templates` entry into its declared output path. Runs on ANY boot that has templates declared. | Template output path unwritable (e.g. `/etc/foo` without `sudo: true` on the template) or template source render error | Add `sudo: true` to the template if the output is under a root-owned dir; otherwise fix the template source |
+| `startup` | Runs every `startup:` command in one shared bash process (exports/`cd` persist between lines), wrapped in a single aggregate `timeout` — default 600s, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | A command exits non-zero, or the combined script exceeds its timeout | Read the captured output above the error; fix the failing command, or raise `DEVM_INSTALL_STEP_TIMEOUT_S` |
+| `enforce` | Stage marker only — no in-guest work. Marks the point after which egress is enforced. | Should not fail | n/a |
+| `services` | Applies per-service mask overlays, then enables + starts each declared service unit and health-polls it before `devm.target` (and therefore access) is granted. | Service failed to start (port in use, missing binary, bad config), or a mask's mount target doesn't exist | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>`; check `services[*].masks` paths in `devm.yaml` |
 
 A failure at `open` through `enforce` leaves the VM in a bad cold-start state — `devm shell` tears it down (the next `devm shell` starts clean). A failure at `templates` or `services` leaves a basically-good VM whose user-declared service/template is what's broken, so `devm shell` surfaces the error but keeps the VM running for in-place debugging via `tart exec`.
 
@@ -98,17 +94,17 @@ curl: (7) Failed to connect to api.example.com port 443: Connection refused
 curl: (6) Could not resolve host: api.example.com
 ```
 
-All outbound TCP/UDP from the VM crosses vsock to softnet on the Mac, which under the enforced policy forwards :80/:443 to iron-proxy on the project's `127.42.0.N` and drops every other TCP port (RST). Iron-proxy then applies `network.allow`. Two things can produce this symptom:
+Under the enforced egress policy, only HTTPS (:443), HTTP (:80), and NTP (:123) leave the VM. HTTP/HTTPS goes through iron-proxy on the Mac, which applies `network.allow`. Two things can produce a connection-refused symptom:
 
-1. **iron-proxy blocked it.** The destination is not listed under `network.allow` in `devm.yaml`, so iron-proxy dropped the request with a 502. Fix: add the host to `network.allow` (or change to `- "*"` for open egress if you actually want no allowlist).
-2. **softnet dropped it (non-HTTP port).** The workload tried to open an outbound TCP flow to a port other than 80 or 443 (e.g. 5432, 3306, 6379). Under ENFORCED policy those are RST'd — iron-proxy never sees them, and there's nothing to add to `network.allow` that would help. Fix: front the external service with an HTTPS endpoint, or (for peer VMs on the same Mac) use `direct: true` and `127.42.0.N` addressing.
+1. **iron-proxy blocked it.** The destination is not listed under `network.allow` in `devm.yaml`, so iron-proxy dropped the request. Fix: add the host to `network.allow` (or change to `- "*"` for open egress if you actually want no allowlist).
+2. **The workload tried a non-HTTP port.** Outbound to a port other than 80 or 443 (e.g. 5432, 3306, 6379 for talking to external Postgres/MySQL/Redis) is dropped before iron-proxy sees it — there's nothing to add to `network.allow` that would help. Fix: front the external service with an HTTPS endpoint, or (for peer VMs on the same Mac) use `direct: true` on the target service and address it by hostname.
 
 Check:
 
 1. `devm.yaml` — confirm the host appears under `network.allow`.
-2. Iron-proxy log at `~/Library/Logs/devm/<project-id>-proxy.log` — logs every :80/:443 request decision. Replace `<project-id>` with the value of `project.name` in your `devm.yaml`. If the failing flow isn't logged there at all, softnet dropped it before iron-proxy saw it (case 2 above).
+2. Iron-proxy log at `~/Library/Logs/devm/<project-id>-proxy.log` — logs every :80/:443 request decision. Replace `<project-id>` with the value of `project.name` in your `devm.yaml`. If the failing flow isn't logged there at all, it was dropped before iron-proxy saw it (case 2 above).
 
-See `devm skills get routing` for the full softnet + iron-proxy network model and allow-list syntax.
+See `devm skills get routing` for `network.allow` syntax and how routing works.
 
 ### HTTPS certificate errors
 
