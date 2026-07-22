@@ -128,6 +128,21 @@ func TestDeleteBaseImageOnUninstall(t *testing.T) {
 	}
 }
 
+// TestGroupGID_Distinct pins that Prod and E2E use different GIDs.
+// dscl -create won't let two Groups share a PrimaryGroupID — the
+// second install collides with eDSRecordAlreadyExists on the GID
+// attribute (leaving a partial group record). Both values are in the
+// system-reserved 1..999 range; the exact values here (802, 803) are
+// arbitrary but must be distinct.
+func TestGroupGID_Distinct(t *testing.T) {
+	if Prod.GroupGID == E2E.GroupGID {
+		t.Errorf("Prod and E2E must not share GroupGID (both = %d) — dscl -create will collide", Prod.GroupGID)
+	}
+	if Prod.GroupGID == 0 || E2E.GroupGID == 0 {
+		t.Errorf("GroupGID must be non-zero: Prod=%d, E2E=%d", Prod.GroupGID, E2E.GroupGID)
+	}
+}
+
 func TestRuntimeDir(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	if got := Prod.RuntimeDir(); got != filepath.Join(home, "Library", "Application Support", "devm") {

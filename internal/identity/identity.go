@@ -35,6 +35,17 @@ type Config struct {
 	// scratch UDS instead of the real root-owned prod/e2e path.
 	HelperSocketPath string // "/var/run/devm-helper.sock" | "/var/run/devm-e2e-helper.sock"
 
+	// GroupGID is the numeric PrimaryGroupID `dscl . -create /Groups/
+	// <GroupName>` assigns at install time. Prod and E2E must differ:
+	// two Directory Services records cannot share a GID, so a shared
+	// value collides on the second install and dscl bails with
+	// eDSRecordAlreadyExists on the GID attribute (leaving a partial
+	// group record). Both values are in the macOS system-reserved
+	// range (1..999); pick your own if either collides with an
+	// existing group (org MDM tools sometimes claim GIDs in this
+	// range).
+	GroupGID int // 802 | 803
+
 	// DeleteBaseImageOnUninstall selects whether `devm uninstall`
 	// also deletes cfg.BaseImageName() via `tart delete`. False for
 	// prod (a user's base image is expensive to rebuild and shouldn't
@@ -58,12 +69,14 @@ var Prod = Config{
 	PoolStart:                  1,
 	PoolEnd:                    20,
 	HelperSocketPath:           "/var/run/devm-helper.sock",
+	GroupGID:                   802,
 	DeleteBaseImageOnUninstall: false,
 }
 
 // E2E is the identity the devm-e2e binary uses. Coexists with Prod on
 // the same Mac without collision — different plists, different runtime
-// dir, different pool range, different TLD, different CA CN.
+// dir, different pool range, different TLD, different CA CN, different
+// group GID.
 var E2E = Config{
 	Name:                       "devm-e2e",
 	TLD:                        "e2e.test",
@@ -72,6 +85,7 @@ var E2E = Config{
 	PoolStart:                  21,
 	PoolEnd:                    40,
 	HelperSocketPath:           "/var/run/devm-e2e-helper.sock",
+	GroupGID:                   803,
 	DeleteBaseImageOnUninstall: true,
 }
 

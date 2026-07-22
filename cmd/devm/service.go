@@ -379,13 +379,16 @@ func buildInstallScript(inputs installInputs) string {
 	// we're (re)installing the helper (which needs InstallUser in it).
 	if inputs.NeedsGroup || inputs.HelperExe != "" {
 		// Create the group idempotently (safe re-run at every install).
-		// GID 802: PrimaryGroupID collision fallback — pick your own if
-		// this collides with an existing group on your system (org
-		// management / MDM tools sometimes claim GIDs in the 300-999
-		// system range, and `dscl . -create` aborts under `set -e` if
-		// the GID is already taken).
+		// GID from cfg.GroupGID: prod and e2e use different GIDs so both
+		// records can coexist — two Directory Services groups cannot
+		// share a PrimaryGroupID, so a shared value collides on the
+		// second install and dscl bails with eDSRecordAlreadyExists on
+		// the GID attribute, leaving a partial group record. Override
+		// cfg.GroupGID if either value collides with an existing group
+		// on the host (org MDM tools sometimes claim GIDs in the
+		// system-reserved 1..999 range).
 		group := cfg.GroupName()
-		fmt.Fprintf(&sb, "dscl . -read /Groups/%s >/dev/null 2>&1 || dscl . -create /Groups/%s PrimaryGroupID 802\n", group, group)
+		fmt.Fprintf(&sb, "dscl . -read /Groups/%s >/dev/null 2>&1 || dscl . -create /Groups/%s PrimaryGroupID %d\n", group, group, cfg.GroupGID)
 		if inputs.InstallUser != "" {
 			fmt.Fprintf(&sb, "dscl . -read /Groups/%s GroupMembership 2>/dev/null | grep -qw %s || dscl . -append /Groups/%s GroupMembership %s\n",
 				group, inputs.InstallUser, group, inputs.InstallUser)
