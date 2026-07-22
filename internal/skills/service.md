@@ -64,7 +64,7 @@ Stops then starts the daemon. Requires sudo (Touch ID prompt).
 
 The entry point for the daemon process itself. Launchd invokes `devm serve` automatically when the service starts; you do not run this yourself under normal use.
 
-It is useful for ad-hoc foreground debugging: running `devm serve` directly in a terminal starts the daemon in-process (attached to your terminal's stdout/stderr) without launchd's socket activation. The reverse proxy actors are skipped when launchd socket inheritance is absent, but the HTTP API, DNS server, and VM lifecycle endpoints all work normally.
+Useful for ad-hoc foreground debugging: running `devm serve` directly in a terminal starts the daemon attached to your terminal's stdout/stderr so you can watch logs live.
 
 ---
 
