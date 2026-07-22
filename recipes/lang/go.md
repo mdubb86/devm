@@ -29,8 +29,18 @@ path:
 env:
   GOBIN: /home/devm/go/bin
 
+scripts:
+  # go.dev only publishes version-embedded tarball names — no `latest`
+  # alias — so resolve the current stable release from `/VERSION?m=text`
+  # first, then build the download URL from it. Broken into steps here
+  # because the version has to survive between commands — `scripts:`
+  # runs them under one shell so `$VER` stays live.
+  install-go-toolchain:
+    - VER=$(curl -sSL https://go.dev/VERSION?m=text | head -1)
+    - curl -fsSL "https://go.dev/dl/${VER}.linux-arm64.tar.gz" | sudo tar -xz -C /usr/local
+
 install:
-  - 'VER=$(curl -sSL https://go.dev/VERSION?m=text | head -1) && curl -fsSL "https://go.dev/dl/${VER}.linux-arm64.tar.gz" | sudo tar -xz -C /usr/local'
+  - ">install-go-toolchain"
   - "go install golang.org/x/tools/gopls@latest"
 
 network:
