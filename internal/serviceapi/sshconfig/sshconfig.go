@@ -41,11 +41,17 @@ type Entry struct {
 	KnownHostsPath string // path to the project's known_hosts file
 }
 
-const header = `# Managed by devm. Regenerated on VM lifecycle events; hand edits will be
+// header returns the comment block written atop cfg's ssh_config file.
+// The Include example points at cfg's own Path(cfg) — under E2E that's
+// a different runtime dir than Prod's, so the two identities must not
+// share this string.
+func header(cfg identity.Config) string {
+	return fmt.Sprintf(`# Managed by devm. Regenerated on VM lifecycle events; hand edits will be
 # overwritten. Include from ~/.ssh/config as:
-#     Include "~/Library/Application Support/devm/ssh_config"
+#     Include "%s"
 
-`
+`, Path(cfg))
+}
 
 // blockData is the per-entry template data: Entry plus the TLD sourced
 // from identity.Config, so the same Entry can render under Prod
@@ -242,7 +248,7 @@ func RemoveInclude(cfg identity.Config) error {
 // HostName suffix ("test" under Prod, "e2e.test" under E2E) so entries
 // render correctly under whichever identity is emitting them.
 func emit(w io.Writer, cfg identity.Config, entries []Entry) error {
-	if _, err := io.WriteString(w, header); err != nil {
+	if _, err := io.WriteString(w, header(cfg)); err != nil {
 		return err
 	}
 	sorted := make([]Entry, len(entries))

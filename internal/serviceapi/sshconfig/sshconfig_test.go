@@ -77,6 +77,19 @@ func TestEmit_E2EUsesE2ETLD(t *testing.T) {
 	assert.NotContains(t, got, "myapp.test\n")
 }
 
+// TestEmit_HeaderIncludeLineMatchesCfg verifies the header's Include
+// example points at the emitting cfg's own Path(cfg) — under E2E that's
+// .../devm-e2e/ssh_config, a different runtime dir than Prod's
+// .../devm/ssh_config, so an e2e-emitted file must not tell users to
+// include prod's path.
+func TestEmit_HeaderIncludeLineMatchesCfg(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, emit(&buf, identity.E2E, nil))
+	got := buf.String()
+	assert.Contains(t, got, `Include "`+Path(identity.E2E)+`"`)
+	assert.NotContains(t, got, Path(identity.Prod))
+}
+
 func TestEmit_MultipleEntries_SortedByName(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	// Unsorted input; expect output sorted by Name ascending.

@@ -1,4 +1,4 @@
 # Managed by devm. Regenerated on VM lifecycle events; hand edits will be
 # overwritten. Include from ~/.ssh/config as:
-#     Include "~/Library/Application Support/devm/ssh_config"
+#     Include "{{RUNTIME_DIR}}/ssh_config"
 
