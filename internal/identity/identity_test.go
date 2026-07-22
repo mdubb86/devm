@@ -138,6 +138,16 @@ func TestRuntimeDir(t *testing.T) {
 	}
 }
 
+func TestLogDir(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	if got := Prod.LogDir(); got != filepath.Join(home, "Library", "Logs", "devm") {
+		t.Errorf("prod LogDir = %q", got)
+	}
+	if got := E2E.LogDir(); got != filepath.Join(home, "Library", "Logs", "devm-e2e") {
+		t.Errorf("e2e LogDir = %q", got)
+	}
+}
+
 func TestSocketPath(t *testing.T) {
 	if !strings.HasSuffix(Prod.SocketPath(), "/devm/devm.sock") {
 		t.Errorf("prod SocketPath suffix wrong: %q", Prod.SocketPath())

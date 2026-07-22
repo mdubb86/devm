@@ -165,7 +165,7 @@ func startHandshakeDaemon(t *testing.T) func() {
 	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
 	require.NoError(t, err)
 	socket := identity.Prod.SocketPath()
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
 	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, serviceapi.Build{Version: "test"}, sup)
 

@@ -55,7 +55,7 @@ func startHandshakeDaemon(t *testing.T, build serviceapi.Build) func() {
 	require.NoError(t, err)
 	socket := identity.Prod.SocketPath()
 	srv := serviceapi.NewServer(socket, build)
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, build, sup)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -169,7 +169,7 @@ func TestDaemonHandshake_ProxyDrift_VMStopped_NoWarning(t *testing.T) {
 	socket := identity.Prod.SocketPath()
 	build := serviceapi.Build{Fingerprint: "fp-match"}
 	srv := serviceapi.NewServer(socket, build)
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, build, sup)
 	// Stub /vm/status returning "not running". No supervisor / tart
 	// wiring needed since daemonHandshake only reads the Running field.

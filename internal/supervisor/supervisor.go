@@ -68,7 +68,8 @@ type Supervisor struct {
 }
 
 // New returns a Supervisor that captures per-process logs under
-// ~/Library/Logs/devm/. logDir overrides that location if non-empty.
+// logDir. Callers pass identity.Config.LogDir() in production; tests
+// pass t.TempDir().
 func New(logDir string) *Supervisor {
 	pm := pexec.NewProcessManager(zap.NewNop().Sugar())
 	// Flip the manager into "started" mode so AddProcessFromConfig
@@ -76,7 +77,7 @@ func New(logDir string) *Supervisor {
 	_ = pm.Start(context.Background())
 	return &Supervisor{
 		pm:      pm,
-		logDir:  defaultLogDir(logDir),
+		logDir:  logDir,
 		adopted: map[Key]int{},
 	}
 }
@@ -90,14 +91,6 @@ func (s *Supervisor) Adopt(k Key, pid int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.adopted[k] = pid
-}
-
-func defaultLogDir(override string) string {
-	if override != "" {
-		return override
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "Logs", "devm")
 }
 
 // Spawn registers and starts a managed child. cmd is a prepared

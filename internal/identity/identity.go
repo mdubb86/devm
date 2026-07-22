@@ -104,6 +104,16 @@ func (c Config) SocketPath() string {
 	return filepath.Join(c.RuntimeDir(), "devm.sock")
 }
 
+// LogDir is where the daemon and its supervised child processes
+// (Tart VMs, iron-proxy) write log files, and where install/uninstall
+// redirect subprocess output. ~/Library/Logs/<Name>/. Kept separate
+// from RuntimeDir (~/Library/Application Support/<Name>/) so prod and
+// e2e logs never land in the same directory.
+func (c Config) LogDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "Library", "Logs", c.Name)
+}
+
 // GroupName is the Unix group that gates access to the helper UDS.
 // Created at install time via dscl.
 func (c Config) GroupName() string {

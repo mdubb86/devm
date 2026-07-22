@@ -152,7 +152,7 @@ func registerFakeSoftnetForOrchestratorTest(t *testing.T, projectID string) {
 // healthy baseline so it stays out of their way.
 func healthyIronProxySupervisor(t *testing.T, projectID string) *supervisor.Supervisor {
 	t.Helper()
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	sup.Adopt(supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}, os.Getpid())
 	cfgPath, err := serviceapi.IronProxyConfigPath(identity.Prod, projectID)
 	require.NoError(t, err)
@@ -266,7 +266,7 @@ func startReconcileDaemonWithIronProxyCapture(t *testing.T, running bool) (clean
 	socket := identity.Prod.SocketPath()
 
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(""))
+	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(t.TempDir()))
 
 	req := &serviceapi.VMApplyIronProxyRequest{}
 	srv.Register("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {

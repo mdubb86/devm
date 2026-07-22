@@ -52,7 +52,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// daemon-scoped singletons; the supervisor manages the per-project VM
 	// processes and survives across CLI invocations.
 	tr := tart.New()
-	sup := supervisor.New("")
+	sup := supervisor.New(cfg.LogDir())
 	// Per-project mutex for every state-mutating VM endpoint (start,
 	// stop, teardown, reconcile). Serializes concurrent same-project
 	// calls inside the daemon instead of relying on the CLI-side flock.

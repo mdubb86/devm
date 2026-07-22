@@ -63,7 +63,7 @@ func writePreExistingIronProxyConfig(t *testing.T, projectID, macHost string, ht
 func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	srv := NewServer(identity.Prod.SocketPath(), Build{})
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
 
 	// Simulate cold-start (`devm start` / `devm shell`) having already
@@ -112,7 +112,7 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	srv := NewServer(identity.Prod.SocketPath(), Build{})
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
 
 	body, _ := json.Marshal(VMApplyIronProxyRequest{

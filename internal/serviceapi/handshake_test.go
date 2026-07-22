@@ -16,7 +16,7 @@ func TestHandshake_WithProjectID(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	build := Build{Version: "dev", Commit: "abc123", Fingerprint: "fp1"}
 	srv := NewServer(identity.Prod.SocketPath(), build)
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	RegisterHandshakeHandler(srv, identity.Prod, build, sup)
 
 	rec := httptest.NewRecorder()
@@ -34,7 +34,7 @@ func TestHandshake_NoProjectID(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	build := Build{Version: "dev", Commit: "abc123", Fingerprint: "fp1"}
 	srv := NewServer(identity.Prod.SocketPath(), build)
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	RegisterHandshakeHandler(srv, identity.Prod, build, sup)
 
 	rec := httptest.NewRecorder()

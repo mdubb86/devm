@@ -48,7 +48,7 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 	})
 
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	tr := &fakeStatusAllTart{running: map[string]bool{"running-proj": true}}
 	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
 
@@ -81,7 +81,7 @@ func TestStatusAll_NoSnapshots_EmptyList(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	tr := &fakeStatusAllTart{running: map[string]bool{}}
 	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
 
@@ -102,7 +102,7 @@ func TestStatusAll_SkipsNonJSONAndMalformedFiles(t *testing.T) {
 	writeStatusAllSnapshot(t, "good", schema.Config{Project: schema.Project{Name: "good"}})
 
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	tr := &fakeStatusAllTart{running: map[string]bool{}}
 	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
 
@@ -120,7 +120,7 @@ func TestStatusAll_TartListError_Returns500(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
-	sup := supervisor.New("")
+	sup := supervisor.New(t.TempDir())
 	RegisterStatusAllHandler(srv, identity.Prod, sup, erroringTartLister{})
 
 	rec := httptest.NewRecorder()

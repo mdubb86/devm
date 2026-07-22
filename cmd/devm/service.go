@@ -222,7 +222,7 @@ func runInstallFlow(ctx context.Context) error {
 	reporter := status.New(os.Stderr)
 	defer reporter.Stop()
 
-	logPath, logFile, err := openInstallLog()
+	logPath, logFile, err := openInstallLog(cfg)
 	if err != nil {
 		return err
 	}
@@ -283,16 +283,16 @@ func userSSHConfigPathForLog() string {
 	return filepath.Join(home, ".ssh", "config")
 }
 
-// openInstallLog opens ~/Library/Logs/devm/install.log for append. The
-// install/uninstall flows redirect verbose subprocess output here so
-// the user only sees clean step lines on success; on error, tailLog
-// surfaces the tail for diagnosis.
-func openInstallLog() (string, *os.File, error) {
+// openInstallLog opens ~/Library/Logs/<cfg.Name>/install.log for
+// append. The install/uninstall flows redirect verbose subprocess
+// output here so the user only sees clean step lines on success; on
+// error, tailLog surfaces the tail for diagnosis.
+func openInstallLog(cfg identity.Config) (string, *os.File, error) {
 	_, home, err := resolveInstallUser(nil)
 	if err != nil {
 		return "", nil, err
 	}
-	dir := filepath.Join(home, "Library", "Logs", "devm")
+	dir := filepath.Join(home, "Library", "Logs", cfg.Name)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", nil, fmt.Errorf("create log dir %s: %w", dir, err)
 	}
@@ -626,7 +626,7 @@ var uninstallCmd = &cobra.Command{
 		reporter := status.New(os.Stderr)
 		defer reporter.Stop()
 
-		logPath, logFile, err := openInstallLog()
+		logPath, logFile, err := openInstallLog(cfg)
 		if err != nil {
 			return err
 		}
