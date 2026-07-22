@@ -55,9 +55,21 @@ func TestDefinitionHash_MatchesFormula(t *testing.T) {
 }
 
 func TestHashStorePath_HomeRelative(t *testing.T) {
-	p, err := HashStorePath()
+	p, err := HashStorePath(identity.Prod)
 	require.NoError(t, err)
 	assert.Contains(t, p, "Library/Caches/devm/base-image.hash")
+}
+
+// TestHashStorePath_ScopedByProfile pins that prod and e2e cache
+// separate hash files — sharing one would cross-trigger 5-min base
+// rebuilds between the two profiles.
+func TestHashStorePath_ScopedByProfile(t *testing.T) {
+	prodPath, err := HashStorePath(identity.Prod)
+	require.NoError(t, err)
+	e2ePath, err := HashStorePath(identity.E2E)
+	require.NoError(t, err)
+	assert.NotEqual(t, prodPath, e2ePath)
+	assert.Contains(t, e2ePath, "Library/Caches/devm-e2e/base-image.hash")
 }
 
 // NeedsBuild's "VM absent" branch depends on Tart being installed
@@ -90,7 +102,7 @@ func TestNeedsBuild_HashMatchesStored(t *testing.T) {
 	cur, err := DefinitionHash()
 	require.NoError(t, err)
 
-	storePath, err := HashStorePath()
+	storePath, err := HashStorePath(identity.Prod)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0700))
 	require.NoError(t, os.WriteFile(storePath, []byte(cur), 0644))

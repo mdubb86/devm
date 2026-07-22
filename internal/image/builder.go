@@ -80,12 +80,14 @@ func DefinitionHash() (string, error) {
 // runtime-dir cleanup doesn't wipe the build cache — losing the hash
 // would falsely trigger a base-image rebuild on every subsequent
 // install, which takes ~5 min and thrashes the tart image cache.
-func HashStorePath() (string, error) {
+// Scoped by cfg.Name so prod and e2e cache separate hashes and don't
+// cross-trigger each other's rebuilds.
+func HashStorePath(cfg identity.Config) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, "Library", "Caches", "devm",
+	return filepath.Join(home, "Library", "Caches", cfg.Name,
 		"base-image.hash"), nil
 }
 
@@ -101,7 +103,7 @@ func NeedsBuild(cfg identity.Config) (bool, string, error) {
 		return false, "", err
 	}
 
-	storePath, err := HashStorePath()
+	storePath, err := HashStorePath(cfg)
 	if err != nil {
 		return false, "", err
 	}
@@ -478,7 +480,7 @@ func BuildBaseImage(ctx context.Context, cfg identity.Config, w io.Writer) error
 
 	fmt.Fprintf(w, ">>> %s built (cloned from %s).\n", name, template)
 
-	storePath, err := HashStorePath()
+	storePath, err := HashStorePath(cfg)
 	if err != nil {
 		return err
 	}
