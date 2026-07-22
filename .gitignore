@@ -21,6 +21,10 @@ docs/superpowers/
 .tmp/
 bin/
 
+# Local Claude Code scratch — settings, worktrees, session artifacts.
+# Personal, per-machine, never committed.
+.claude/
+
 # devm-runc-shim and devm-docker-shim compiled artifacts (sources
 # are cmd/devm-runc-shim/ + cmd/devm-docker-shim/, compiled at build
 # time and embedded via internal/docker/embed.go).
