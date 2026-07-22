@@ -56,6 +56,19 @@ _build PROFILE:
         echo "         one-time fix: Keychain Access → Certificate Assistant → Create a Certificate (Name: {{SIGN_IDENTITY}}, Code Signing, Self Signed Root)"; \
     fi
 
+# Build the darwin/arm64 devm-helper binary and gzip it into the embed
+# directory. `//go:embed embed/devm-helper.gz` in internal/helper/embed.go
+# requires this file at compile time; `_build` depends on this recipe.
+# Rebuilds on every invocation (fast; devm-helper is small) so any
+# change to cmd/devm-helper/ is reflected in the next devm build without
+# needing a manual clean.
+_build-helper-embed:
+    @mkdir -p internal/helper/embed
+    @GOOS=darwin GOARCH=arm64 go build -o /tmp/devm-helper.raw ./cmd/devm-helper
+    @gzip -c /tmp/devm-helper.raw > internal/helper/embed/devm-helper.gz
+    @rm /tmp/devm-helper.raw
+    @echo "devm-helper embedded at internal/helper/embed/devm-helper.gz"
+
 # Build the devm + devm-helper binaries into ./bin with prod identity,
 # and codesign with the local self-signed identity if available. The
 # path matches what `devm install` records in the LaunchDaemon plist,
@@ -64,12 +77,12 @@ _build PROFILE:
 #
 # fetch-iron-proxy runs first: the ironproxy package's //go:embed
 # needs internal/ironproxy/embed/iron-proxy.gz to exist at compile time.
-build: fetch-iron-proxy (_build "prod")
+build: fetch-iron-proxy _build-helper-embed (_build "prod")
 
 # Build the devm-e2e + devm-e2e-helper binaries into ./bin with e2e
 # identity, so they run alongside — not clobber — a live prod install
 # (separate runtime dir, socket, LaunchDaemon label; see internal/identity).
-build-e2e: fetch-iron-proxy (_build "e2e")
+build-e2e: fetch-iron-proxy _build-helper-embed (_build "e2e")
 
 # Run Go unit tests.
 test:

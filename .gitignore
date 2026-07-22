@@ -34,3 +34,7 @@ internal/docker/embed/devm-docker-shim
 # iron-proxy binary embedded (gzipped) into devm at build time.
 # Populated by `just fetch-iron-proxy` and by the goreleaser before-hook.
 internal/ironproxy/embed/iron-proxy.gz
+
+# devm-helper binary embedded (gzipped) into devm at build time.
+# Populated by `just _build-helper-embed`.
+internal/helper/embed/devm-helper.gz
