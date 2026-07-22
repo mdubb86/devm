@@ -22,8 +22,18 @@ func loadGolden(t *testing.T, name string) string {
 	return strings.ReplaceAll(string(raw), "{{RUNTIME_DIR}}", identity.Prod.RuntimeDir())
 }
 
-func TestEmit_EmptyEntries_WritesHeaderOnly(t *testing.T) {
+// setupRuntimeDir points HOME at a tempdir and creates the daemon's
+// runtime dir inside it — Emit no-ops when the dir doesn't exist (see
+// its docstring), which is the daemon-uninstalled case; every test
+// below exercises the daemon-running case, so we create the dir.
+func setupRuntimeDir(t *testing.T, cfg identity.Config) {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, os.MkdirAll(cfg.RuntimeDir(), 0o700))
+}
+
+func TestEmit_EmptyEntries_WritesHeaderOnly(t *testing.T) {
+	setupRuntimeDir(t, identity.Prod)
 	require.NoError(t, Emit(identity.Prod, nil))
 	got, err := os.ReadFile(Path(identity.Prod))
 	require.NoError(t, err)
@@ -32,7 +42,7 @@ func TestEmit_EmptyEntries_WritesHeaderOnly(t *testing.T) {
 }
 
 func TestEmit_SingleEntry_GoldenFile(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setupRuntimeDir(t, identity.Prod)
 	require.NoError(t, Emit(identity.Prod, []Entry{
 		{Name: "myproj"},
 	}))
@@ -40,6 +50,19 @@ func TestEmit_SingleEntry_GoldenFile(t *testing.T) {
 	require.NoError(t, err)
 	want := loadGolden(t, "one_entry.golden")
 	assert.Equal(t, want, string(got))
+}
+
+// TestEmit_NoOpWhenRuntimeDirMissing pins the "don't resurrect
+// uninstalled state" contract: if cfg.RuntimeDir() doesn't exist,
+// Emit returns nil without creating anything. Prevents a stop/teardown
+// invoked right after uninstall from silently re-materializing the
+// runtime dir + ssh_config file.
+func TestEmit_NoOpWhenRuntimeDirMissing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// Deliberately NOT creating identity.Prod.RuntimeDir().
+	require.NoError(t, Emit(identity.Prod, []Entry{{Name: "x"}}))
+	_, err := os.Stat(identity.Prod.RuntimeDir())
+	assert.True(t, os.IsNotExist(err), "Emit must not create the runtime dir when it doesn't exist")
 }
 
 // TestEmit_UsesDNSHostname verifies the block points HostName at the
@@ -91,7 +114,7 @@ func TestEmit_HeaderIncludeLineMatchesCfg(t *testing.T) {
 }
 
 func TestEmit_MultipleEntries_SortedByName(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setupRuntimeDir(t, identity.Prod)
 	// Unsorted input; expect output sorted by Name ascending.
 	require.NoError(t, Emit(identity.Prod, []Entry{
 		{Name: "charlie"},
@@ -105,7 +128,7 @@ func TestEmit_MultipleEntries_SortedByName(t *testing.T) {
 }
 
 func TestEmit_AtomicWrite(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setupRuntimeDir(t, identity.Prod)
 	require.NoError(t, Emit(identity.Prod, []Entry{
 		{Name: "p"},
 	}))

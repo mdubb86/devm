@@ -96,13 +96,19 @@ func validateEntry(e Entry) error {
 }
 
 // Emit atomically replaces the ssh_config file with header + one block
-// per entry (sorted by Name ascending).
+// per entry (sorted by Name ascending). No-op if cfg.RuntimeDir()
+// doesn't exist — the daemon is uninstalled and there's nothing to
+// write into; MkdirAll'ing here would resurrect state that
+// `devm uninstall` just removed (a `devm teardown` chained after
+// `devm uninstall` would otherwise recreate the runtime dir + ssh_config).
+// Every legitimate caller runs against a live daemon, which has
+// already ensured the runtime dir at startup.
 func Emit(cfg identity.Config, entries []Entry) error {
 	filled := make([]Entry, len(entries))
 	for i, e := range entries {
-		dir := sshkeys.ProjectDir(cfg, e.Name)
-		e.KeyPath = filepath.Join(dir, "id_ed25519")
-		e.KnownHostsPath = filepath.Join(dir, "known_hosts")
+		kdir := sshkeys.ProjectDir(cfg, e.Name)
+		e.KeyPath = filepath.Join(kdir, "id_ed25519")
+		e.KnownHostsPath = filepath.Join(kdir, "known_hosts")
 		filled[i] = e
 	}
 
@@ -111,9 +117,17 @@ func Emit(cfg identity.Config, entries []Entry) error {
 		return err
 	}
 
+	// After validation (emit rejects unsafe names), but before the
+	// write: if the daemon's runtime dir doesn't exist, no-op. Keeps
+	// the security-check contract from TestEmit_RejectsUnsafeName while
+	// preventing a stop/teardown chained after uninstall from
+	// resurrecting the runtime dir + ssh_config.
 	dir := cfg.RuntimeDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dir, err)
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", dir, err)
 	}
 	tmp, err := os.CreateTemp(dir, "ssh_config.*.tmp")
 	if err != nil {
