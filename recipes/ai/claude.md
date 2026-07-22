@@ -17,8 +17,21 @@ Claude Code needs is listed here.
 ## devm.yaml additions
 
 ```yaml
+scripts:
+  # The native installer drops the binary at a version-embedded path
+  # under /root/.local/share/claude/versions/ (install runs as root);
+  # the next step's glob resolves that exact path, and the two steps
+  # after relocate it onto the devm user's PATH. Grouped as one named
+  # script so the four-step chain stays reviewable as a single unit
+  # instead of one long `&&`-joined line.
+  install-claude-cli:
+    - curl -fsSL https://claude.ai/install.sh | bash
+    - install -m 755 /root/.local/share/claude/versions/* /usr/local/bin/claude
+    - install -d -o devm -g devm /home/devm/.local/bin
+    - ln -sf /usr/local/bin/claude /home/devm/.local/bin/claude
+
 install:
-  - curl -fsSL https://claude.ai/install.sh | bash && install -m 755 /root/.local/share/claude/versions/* /usr/local/bin/claude && install -d -o devm -g devm /home/devm/.local/bin && ln -sf /usr/local/bin/claude /home/devm/.local/bin/claude
+  - ">install-claude-cli"
 
 env:
   CLAUDE_CONFIG_DIR: $WORKSPACE/.devm/.claude
