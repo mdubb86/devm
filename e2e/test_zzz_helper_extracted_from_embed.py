@@ -8,16 +8,15 @@ non-brew install ($HOME/.local/bin/devm) emitted:
 Because the release tarball only shipped devm, not devm-helper. The
 fix embeds devm-helper into devm and extracts it at install time.
 
-Named `test_zz_…` so it sorts LAST — its finally-block uninstalls
+Named `test_zzz_…` so it sorts LAST, after
+test_zz_install_uninstall_lifecycle.py — its finally-block uninstalls
 devm-e2e, which trips `_daemon_matches_devm_bin`'s session-abort for
-any install-marker test that runs after it (same reason
-test_zz_install_uninstall_lifecycle.py sorts last).
+any install-marker test that runs after it.
 """
 from __future__ import annotations
 
 import platform
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -59,9 +58,6 @@ def test_helper_extracted_from_embed(devm, sudo_capable):
             f"install failed:\nstdout={r.stdout.decode()!r}\n"
             f"stderr={r.stderr.decode()!r}"
         )
-
-        # Give launchd a beat to bootstrap the helper daemon.
-        time.sleep(1)
 
         # --- ASSERTIONS ---
         assert _DEVM_E2E_HELPER.exists(), (
