@@ -144,19 +144,21 @@ func TestBuildUninstallScript_RemovesAliases(t *testing.T) {
 	assert.NotContains(t, script, "/usr/local/libexec/devm-helper")
 }
 
-// TestBuildUninstallScript_DeletesBaseImageForE2E pins spec §8.3: an
-// e2e uninstall also `tart delete`s its base image so e2e's
-// base-lifecycle tests get a clean slate. Prod does not get this line
-// — see TestBuildUninstallScript_KeepsBaseImageForProd — a user's base
-// image is expensive to rebuild and shouldn't vanish on uninstall.
-func TestBuildUninstallScript_DeletesBaseImageForE2E(t *testing.T) {
-	script := buildUninstallScript(identity.E2E, "/usr/local/bin/devm-e2e")
-	assert.Contains(t, script, "tart delete "+shellQuote(identity.E2E.BaseImageName()))
-}
-
-func TestBuildUninstallScript_KeepsBaseImageForProd(t *testing.T) {
-	script := buildUninstallScript(identity.Prod, "/usr/local/bin/devm")
-	assert.NotContains(t, script, "tart delete")
+// TestBuildUninstallScript_NoTartDelete regression-pins that tart
+// delete never appears in the root-scoped uninstall script. tart
+// images live in the invoking user's ~/.tart/, so a `tart delete`
+// inside `sudo bash -c "$script"` would look in /var/root/.tart/,
+// silently find nothing, and leave the user's base image behind. The
+// actual base-image deletion (gated on cfg.DeleteBaseImageOnUninstall,
+// spec §8.3) lives in runPrivilegedUninstall, unprivileged, as the
+// invoking user. Covered end-to-end by e2e/scripts/assert-e2e-
+// uninstalled.sh.
+func TestBuildUninstallScript_NoTartDelete(t *testing.T) {
+	for _, cfg := range []identity.Config{identity.Prod, identity.E2E} {
+		script := buildUninstallScript(cfg, "/usr/local/bin/"+cfg.Name)
+		assert.NotContainsf(t, script, "tart delete",
+			"buildUninstallScript(%s) must not include `tart delete` — moved to runPrivilegedUninstall", cfg.Name)
+	}
 }
 
 func TestResolveInstallUser_UsesSudoUserWhenPresent(t *testing.T) {

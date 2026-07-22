@@ -674,6 +674,17 @@ func runPrivilegedUninstall(out io.Writer) error {
 	if err := c.Run(); err != nil {
 		return fmt.Errorf("privileged uninstall: %w", err)
 	}
+	// tart images live in the invoking user's ~/.tart/, so `tart
+	// delete` must run as the user, not as root inside the sudo
+	// block above (which would look in /var/root/.tart/ and silently
+	// find nothing). Best-effort — a stale base image doesn't block
+	// uninstall itself.
+	if cfg.DeleteBaseImageOnUninstall {
+		td := exec.Command("tart", "delete", cfg.BaseImageName())
+		td.Stdout = out
+		td.Stderr = out
+		_ = td.Run()
+	}
 	return nil
 }
 
@@ -709,13 +720,10 @@ func runPrivilegedUninstall(out io.Writer) error {
 // disjoint, so `devm-e2e uninstall` can't reap the user's real
 // iron-proxy children (and vice versa).
 //
-// cfg.DeleteBaseImageOnUninstall (spec §8.3) gates a trailing
-// `tart delete` of cfg.BaseImageName(): true for e2e (its
-// base-lifecycle tests want a clean slate on uninstall), false for
-// prod (a user's base image is expensive to rebuild and shouldn't
-// vanish just because they ran `devm uninstall`). Placed last — every
-// other cleanup step above it is unconditional or best-effort, so
-// nothing downstream depends on the base image still existing.
+// The base image deletion gated on cfg.DeleteBaseImageOnUninstall
+// (spec §8.3) runs OUTSIDE this script — see runPrivilegedUninstall.
+// tart images live in the invoking user's ~/.tart/, so `tart delete`
+// must run as the user, not inside this root-scoped block.
 func buildUninstallScript(cfg identity.Config, exe string) string {
 	var sb strings.Builder
 	sb.WriteString("set +e\n")
@@ -733,11 +741,6 @@ func buildUninstallScript(cfg identity.Config, exe string) string {
 	}
 	sb.WriteString("rm -f " + cfg.LaunchdPlistHelper() + "\n")
 	fmt.Fprintf(&sb, "dscl . -delete /Groups/%s 2>/dev/null || true\n", cfg.GroupName())
-
-	if cfg.DeleteBaseImageOnUninstall {
-		fmt.Fprintf(&sb, "tart delete %s 2>/dev/null || true\n", shellQuote(cfg.BaseImageName()))
-	}
-
 	return sb.String()
 }
 
