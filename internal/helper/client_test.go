@@ -20,7 +20,7 @@ import (
 // causing "bind: invalid argument". os.MkdirTemp keeps the path short.
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "pb")
+	dir, err := os.MkdirTemp("", "helper")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	return dir

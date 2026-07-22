@@ -106,7 +106,7 @@ func mockHelper(t *testing.T) string {
 	// os.MkdirTemp (not t.TempDir()) keeps the UDS path short enough to
 	// stay under macOS's ~104-byte UNIX_PATH_MAX; t.TempDir() embeds the
 	// test name and can overflow it.
-	dir, err := os.MkdirTemp("", "pb")
+	dir, err := os.MkdirTemp("", "helper")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
