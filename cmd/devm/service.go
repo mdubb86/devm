@@ -399,6 +399,8 @@ func buildInstallScript(inputs installInputs) string {
 		// it, then remove the tempfile + its sha256 sidecar.
 		fmt.Fprintf(&sb, "install -m 0755 %s %s\n",
 			shellQuote(inputs.HelperExe), shellQuote(inputs.HelperFinalPath))
+		fmt.Fprintf(&sb, "install -m 0644 %s %s\n",
+			shellQuote(inputs.HelperExe+".sha256"), shellQuote(inputs.HelperFinalPath+".sha256"))
 		fmt.Fprintf(&sb, "rm -f %s %s\n",
 			shellQuote(inputs.HelperExe), shellQuote(inputs.HelperExe+".sha256"))
 		// The plist's ProgramArguments must point at HelperFinalPath,
@@ -449,11 +451,13 @@ func helperNeedsInstall(needsDaemon bool, programPath string) bool {
 	return !strings.Contains(string(data), programPath)
 }
 
-// helperSourcePath returns the devm-helper binary expected to sit
-// alongside devmExe — the layout `just build` produces in bin/. The
-// helper's LaunchDaemon plist points directly at this path (no
-// system-path copy), so a CLI built as "devm-e2e" resolves its own
-// "devm-e2e-helper" sibling rather than colliding with prod's.
+// helperSourcePath returns the on-disk location of the devm-helper
+// binary, sibling of devmExe — both the `just build` dev layout in
+// bin/ and the installed layout (install extracts the embedded helper
+// blob onto this same path; see buildInstallScript). The helper's
+// LaunchDaemon plist ProgramArguments points at this path, so a CLI
+// built as "devm-e2e" resolves its own "devm-e2e-helper" sibling
+// rather than colliding with prod's.
 func helperSourcePath(devmExe string) string {
 	return filepath.Join(filepath.Dir(devmExe), filepath.Base(devmExe)+"-helper")
 }
@@ -756,6 +760,12 @@ func buildUninstallScript(cfg identity.Config, exe string) string {
 		fmt.Fprintf(&sb, "/sbin/ifconfig lo0 -alias 127.42.0.%d 2>/dev/null || true\n", n)
 	}
 	sb.WriteString("rm -f " + cfg.LaunchdPlistHelper() + "\n")
+	// Reap the helper binary + sha256 sidecar that install extracted
+	// onto helperSourcePath(exe) (sibling of the devm binary) — install
+	// re-extracts from the embed on next `devm install`, so nothing is
+	// lost by removing it here.
+	helperPath := helperSourcePath(exe)
+	fmt.Fprintf(&sb, "rm -f %s %s\n", shellQuote(helperPath), shellQuote(helperPath+".sha256"))
 	fmt.Fprintf(&sb, "dscl . -delete /Groups/%s 2>/dev/null || true\n", cfg.GroupName())
 	return sb.String()
 }

@@ -63,13 +63,21 @@ func TestBuildInstallScript_IncludesHelper(t *testing.T) {
 	// The tempfile (HelperExe) is installed onto the final on-disk
 	// path (HelperFinalPath) and then removed, before the plist is
 	// written — the plist must reference the FINAL path, since
-	// launchd invokes it long after the tempfile is gone.
+	// launchd invokes it long after the tempfile is gone. The
+	// .sha256 sidecar is installed too — right after the binary,
+	// before the tempfile cleanup — so a fresh install has a sidecar
+	// at the destination for Extract's idempotency check on the next
+	// run (and for e2e's install-marker assertion).
 	installIdx := strings.Index(script, "install -m 0755 '/tmp/devm-helper.stage-123' '/usr/local/libexec/devm-helper'")
 	require.GreaterOrEqual(t, installIdx, 0, "script must install the staged tempfile onto HelperFinalPath; got:\n%s", script)
+	sidecarInstallIdx := strings.Index(script, "install -m 0644 '/tmp/devm-helper.stage-123.sha256' '/usr/local/libexec/devm-helper.sha256'")
+	require.GreaterOrEqual(t, sidecarInstallIdx, 0, "script must install the sha256 sidecar onto HelperFinalPath+.sha256; got:\n%s", script)
+	require.Less(t, installIdx, sidecarInstallIdx, "sidecar must be installed after the binary")
 	rmIdx := strings.Index(script, "rm -f '/tmp/devm-helper.stage-123' '/tmp/devm-helper.stage-123.sha256'")
 	require.GreaterOrEqual(t, rmIdx, 0, "script must remove the staged tempfile + sha256 sidecar; got:\n%s", script)
+	require.Less(t, sidecarInstallIdx, rmIdx, "both installs must happen before the tempfile cleanup")
 	plistIdx := strings.Index(script, "/Library/LaunchDaemons/com.devm.helper.plist")
-	require.Less(t, installIdx, plistIdx, "helper binary must be installed before the plist references it")
+	require.Less(t, rmIdx, plistIdx, "helper binary + sidecar must be installed (and tempfiles cleaned) before the plist references the final path")
 
 	assert.Contains(t, script, "/usr/local/libexec/devm-helper")
 	assert.NotContains(t, script, "<string>/tmp/devm-helper.stage-123</string>",
@@ -133,9 +141,9 @@ func TestBuildInstallScript_SkipsAliasesWhenNotNeeded(t *testing.T) {
 }
 
 // TestHelperPlistContent_UsesResolvedProgramPathAndIdentity pins the
-// no-system-copy plist design: ProgramArguments points directly at
-// the resolved sibling helper binary, and Label/GroupName/log paths
-// all derive from the package cfg identity.
+// plist design: ProgramArguments points at the sibling helper binary
+// path (where install extracted it from the embed), and
+// Label/GroupName/log paths all derive from the package cfg identity.
 func TestHelperPlistContent_UsesResolvedProgramPathAndIdentity(t *testing.T) {
 	content := helperPlistContent("/usr/local/bin/devm-helper", "/Users/alice/Library/Logs")
 	assert.Contains(t, content, "<string>com.devm.helper</string>")
@@ -153,10 +161,10 @@ func TestBuildUninstallScript_RemovesAliases(t *testing.T) {
 		assert.Contains(t, script, fmt.Sprintf("ifconfig lo0 -alias 127.42.0.%d", n))
 	}
 	assert.Contains(t, script, "rm -f /Library/LaunchDaemons/com.devm.helper.plist")
-	// No system-path copy to clean up: the helper's LaunchDaemon plist
-	// points directly at the sibling binary next to the devm CLI, so
-	// there's nothing installed under /usr/local/libexec to remove.
-	assert.NotContains(t, script, "/usr/local/libexec/devm-helper")
+	// The helper binary + sha256 sidecar were extracted onto
+	// helperSourcePath(exe) (sibling of the devm binary) at install
+	// time; uninstall must reap both, not just the plist.
+	assert.Contains(t, script, "rm -f '/usr/local/bin/devm-helper' '/usr/local/bin/devm-helper.sha256'")
 }
 
 // TestBuildUninstallScript_NoTartDelete regression-pins that tart
