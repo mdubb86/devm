@@ -12,7 +12,7 @@ devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-proje
 ## Three-process model
 
 - **`devm` CLI** — the command you type in your terminal. Reads `devm.yaml`, renders `.devm/` from the current config, then talks to the daemon over a Unix socket to start or query the VM. Once the VM is up, it attaches your terminal to a shell inside the guest.
-- **the devm daemon** (LaunchDaemon `com.devm.service`, managed via `devm service` subcommands) — owns the VM lifecycle (start, stop) and drives iron-proxy on the Mac. Secrets from the macOS login keychain are resolved CLI-side and handed to the daemon at start time, because the LaunchDaemon cannot access the login keychain directly.
+- **the devm daemon** — owns the VM lifecycle (start, stop) and drives iron-proxy on the Mac. Managed with `devm service`.
 - **The Tart VM** — runs your code on a Debian Linux base image. It has no direct path to the internet: every outbound flow is intercepted on the Mac. Under the enforced egress policy, only allowlisted HTTPS hosts and NTP reach the outside; everything else is dropped.
 
 ## Where the allowlist lives
@@ -28,15 +28,13 @@ Two projects that expose the same hostname (e.g. both use `api.test:443`) don't 
 ```
 brew install cirruslabs/cli/tart            # Tart is a prerequisite
 brew install --cask mdubb86/tap/devm
-devm install                                # registers the LaunchDaemon; requires sudo
+devm install                                # requires sudo
 devm shell                                  # cold-starts the VM, drops you in
 ```
 
-`devm install` prompts for Touch ID / password twice — one prompt for each of the LaunchDaemons devm installs.
-
 ## Where to look next
 
-- `devm skills get schema` — every `devm.yaml` field, its type, and which change bucket it falls in. Includes `scripts:` for reusable multi-command shell snippets referenced from `install:`/`startup:`.
+- `devm skills get schema` — every `devm.yaml` field, its type, and which change bucket it falls in.
 - `devm skills get lifecycle` — when to use `devm shell`, `reconcile`, `stop`, `teardown`, and `validate`.
 - `devm skills get service` — managing the background service (install, uninstall, restart, logs).
 - `devm skills get routing` — how port declarations, `devm route` commands, and `*.test` hostnames work on the Mac and inside the VM.

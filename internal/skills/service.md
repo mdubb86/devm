@@ -22,13 +22,11 @@ Registers the daemon with launchd. It:
 3. Generates a local CA (if none exists) and trusts it in the System Keychain.
 4. Bootstraps the daemon and starts it immediately.
 
-`devm install` requires `sudo` for the launchctl and resolver steps; it will prompt for your password (or Touch ID) once.
-
 ```
 devm uninstall
 ```
 
-Removes the plist, unregisters the daemon from launchd, removes `/etc/resolver/test`, and removes the CA certificate from the System Keychain. Requires `sudo`.
+Removes the plist, unregisters the daemon, removes `/etc/resolver/test`, and removes the CA certificate from the System Keychain.
 
 ---
 
@@ -38,25 +36,15 @@ Removes the plist, unregisters the daemon from launchd, removes `/etc/resolver/t
 devm service status
 ```
 
-Prints `running`, `stopped`, or `not installed`. No sudo required.
+Prints `running`, `stopped`, or `not installed`.
 
 ```
 devm service start
-```
-
-Starts the daemon via launchctl. Requires sudo (Touch ID prompt).
-
-```
 devm service stop
-```
-
-Stops the daemon via launchctl. Requires sudo (Touch ID prompt).
-
-```
 devm service restart
 ```
 
-Stops then starts the daemon. Requires sudo (Touch ID prompt).
+Start, stop, or restart the running daemon.
 
 ---
 

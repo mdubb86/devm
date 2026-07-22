@@ -92,16 +92,6 @@ Real credential values are never written to disk; they live only in iron-proxy's
 
 ---
 
-## Why the daemon can't read your keychain
-
-The daemon runs as a macOS LaunchDaemon. Even though the plist sets `UserName` to your account, launchd does not give LaunchDaemon processes access to the user's login keychain — that session context is only available to processes launched after you log in interactively.
-
-The CLI (`devm shell`) runs as you with full login keychain access, so all keychain reads happen there before the `StartVM` call. The daemon receives only the resolved proxy-token map; it never touches the keychain.
-
-See `devm skills get service` for the full daemon overview.
-
----
-
 ## Failure mode: missing secret
 
 If a `!secret` reference in `devm.yaml` has no matching entry in the keychain, `devm shell` fails immediately with:
@@ -117,5 +107,5 @@ The error names every missing key. Run `devm secret set <name>` for each one, th
 ## See also
 
 - `devm skills get schema` — `!secret` tag syntax and the `env:` field.
-- `devm skills get service` — daemon install and the LaunchDaemon context.
+- `devm skills get service` — daemon install and management.
 - `devm skills get routing` — iron-proxy egress allowlist and network model.
