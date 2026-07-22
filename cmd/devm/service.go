@@ -591,6 +591,7 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 		tmpHelper.Close()
 		if _, err := helper.Extract(tmpHelper.Name()); err != nil {
 			os.Remove(tmpHelper.Name())
+			os.Remove(tmpHelper.Name() + ".sha256")
 			return false, fmt.Errorf("stage devm-helper: %w", err)
 		}
 		// Defer cleanup: buildInstallScript will `install -m 755 <src>
