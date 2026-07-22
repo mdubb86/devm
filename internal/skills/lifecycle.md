@@ -24,7 +24,7 @@ Queries the daemon for the VM's running state via `VMStatus`, then does one of t
 
 ### Warm attach
 
-If the VM is running (`Running=true`), `devm shell` probes `systemctl is-active devm.target` inside the guest — the gate unit that provisioning starts last, once ssh/caddy/dnsmasq/dockerd/services are all up under enforcement. If it's active, the VM is fully provisioned: `devm shell` skips provisioning and attaches directly via `tart exec`. The shell exits but the VM keeps running.
+If the VM is running (`Running=true`), `devm shell` checks whether `devm.target` is active — the gate unit that provisioning starts last, once all services are healthy under enforced egress. If it's active, the VM is fully provisioned: `devm shell` skips provisioning and attaches directly. The shell exits but the VM keeps running.
 
 ### Adopt-in-place
 
@@ -45,26 +45,24 @@ If the VM is stopped or absent (or was just torn down as a dirty adopt-in-place 
 
 ### The boot-integrity gate
 
-The base image boots **locked and inert**. Two locks compose. On the Mac side, softnet — the userspace network stack `tart run --net-softnet` spawns to terminate the guest's virtio NIC — starts in `LOCKED` policy: every outbound flow from the guest is dropped until the daemon flips it. Inside the guest, `nftables.service` applies a default-drop skeleton firewall-first, before anything else starts (allowing only loopback, established, the vmnet host gateway for the tart guest-agent, and DNS to the local resolver), so the guest is a belt-and-suspenders backstop even if softnet were somehow bypassed. `devm.target` — the unit that pulls in ssh, caddy, dnsmasq, and dockerd — is installed but not enabled; nothing user-facing starts on a bare boot. A VM the daemon didn't drive through provisioning (direct `tart run`, or a crash before provisioning began) therefore stays inert and locked: no ssh, no caddy, no egress, nothing reachable.
+The base image boots **locked and inert**. Egress is locked from the moment the VM comes up; `devm.target` — the unit that gates access to services and the shell — is installed but not enabled. Nothing user-facing starts on a bare boot. A VM the daemon didn't drive through provisioning (direct `tart run`, or a crash before provisioning began) therefore stays inert and locked: no ssh, no reachable services, no egress.
 
-Provisioning is the daemon's job, not the guest's own boot sequence: it ships and runs **one composed bash script** over a single streaming `tart exec` (the devm bundle tar piped in on stdin) that walks:
+Provisioning is the daemon's job, not the guest's own boot sequence. It walks the guest through these stages:
 
 | Stage | When | What it does |
 |---|---|---|
-| _(preamble)_ | every run | Write the `/run/devm/provisioning` in-progress marker; extract the devm bundle tar to `/opt/devm`; run `install.sh` (CA install, `PATH` symlink). |
-| `open` | first boot, or `startup:` non-empty, or any service declares `templates:` | Daemon has already flipped softnet to OPEN before the exec starts. The stage marker echoes here; the unconditional `sudo nft flush ruleset` at the top of provisioning has already dropped the guest boot lock too, so egress is fully open for this window. |
+| _(preamble)_ | every run | Set up devm's in-guest state and the CA trust. |
+| `open` | first boot, or `startup:` non-empty, or any service declares `templates:` | Egress opens fully for this window so `apt-get`, `curl … \| bash`, and friends work. |
 | `packages` | first boot only, if `packages:` set | `apt-get update` + `apt-get install -y <packages>`. |
 | `install` | first boot only, if `install:` set | Run each `install:` command in order, open network. |
-| `docker` | first boot only, if `docker: true` | Install the Docker engine + runc shim; join `docker.service` to `devm.target` (disabled at boot, gated with everything else). |
-| `templates` | every boot, if any service declares `templates:` | Run the template installer dispatcher. |
-| `startup` | every boot, if `startup:` is non-empty | Run `/opt/devm/startup.sh`, open network. |
-| `enforce` | every boot | Stage boundary marking the classifier's teardown/debuggable split — a failure at or before this point is devm's own enforcement being broken, not a user service. The actual policy flip (softnet OPEN → ENFORCED) happens on the Mac side between the two composed scripts; NTP + timesyncd config is baked into the base image; direct-service listeners are set up by softnet's ingress. This stage has no in-guest work of its own left — only masks, in `services` below. |
-| `services` | every boot | Bind-mount mask overlays; enable + start each declared service unit; health-poll each until active/healthy or timeout — **before** `devm.target` starts. |
-| _(finish)_ | first boot only | Write the `/var/lib/devm/provisioned` marker. |
-| _(finish)_ | every boot | `systemctl start devm.target` — brings up ssh, caddy, dnsmasq, and dockerd (services are already healthy), all under enforcement. **Access is granted only now.** |
-| _(cleanup)_ | every run, on success | Remove the `/run/devm/provisioning` marker. |
+| `docker` | first boot only, if `docker: true` | Install the Docker engine + runc shim; gate docker with everything else so it only starts after enforcement. |
+| `templates` | every boot, if any service declares `templates:` | Render every declared template file into its output path. |
+| `startup` | every boot, if `startup:` is non-empty | Run each `startup:` command, open network. |
+| `enforce` | every boot | Stage boundary marking the classifier's teardown/debuggable split — a failure at or before this point is devm's own enforcement being broken, not a user service. Does no in-guest work — the egress policy flip happens on the Mac side. |
+| `services` | every boot | Apply per-service mask overlays; enable + start each declared service unit; health-poll each until active/healthy or timeout — **before** `devm.target` starts. |
+| _(finish)_ | every boot | `systemctl start devm.target` — brings up the gated services (ssh, in-VM reverse-proxy, docker, and your service units), all under enforcement. **Access is granted only now.** |
 
-`set -eo pipefail` makes any failing command abort the whole script before `devm.target` starts, so a failure never grants access. A failure at the `templates` or `services` stage leaves the VM running for in-place debugging (the user's service/template definition is what's broken); any earlier-stage failure (`open` through `enforce`) tears the VM down — `devm shell` promises loud failure, never a half-created VM left behind.
+Any failing command aborts the whole provisioning run before `devm.target` starts, so a failure never grants access. A failure at the `templates` or `services` stage leaves the VM running for in-place debugging (the user's service/template definition is what's broken); any earlier-stage failure (`open` through `enforce`) tears the VM down — `devm shell` promises loud failure, never a half-created VM left behind.
 
 `packages`/`install`/`docker` are gated by the `/var/lib/devm/provisioned` marker and only run once, on first boot; they're skipped on a later cold start (`devm stop` + `devm shell` reuses the same disk, so installed tools and built artifacts are still there). `startup:` and `templates` run on every boot that opens the window. Restart-time workload otherwise comes back via systemd — enabled units auto-start when `devm.target` activates, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
 
