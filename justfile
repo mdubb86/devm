@@ -109,13 +109,19 @@ e2e *NAMES:
 
 # Run install-marker tests. Each test exercises `devm-e2e install`/
 # `devm-e2e uninstall` themselves; those invocations need sudo. Prime
-# the timestamp up-front so tests don't hit an interactive prompt in
-# the first ~5 minutes; later tests will re-prompt as the sudo
-# timestamp expires (macOS default: 5 min).
+# the timestamp up-front, then spawn a background refresher that keeps
+# it warm for the whole run — macOS's default 5-min sudo timestamp
+# would otherwise expire mid-suite, and the subprocess `capture_output`
+# swallows the resulting `Password:` prompt with no way to type at it.
+# The refresher is killed on any exit path (normal, error, ^C via
+# trap).
 e2e-install *NAMES: (_build "e2e")
     #!/usr/bin/env bash
     set -uo pipefail
     sudo -v
+    ( while true; do sudo -n -v 2>/dev/null || exit; sleep 60; done ) &
+    sudo_pid=$!
+    trap 'kill "$sudo_pid" 2>/dev/null || true' EXIT INT TERM
     args=(-m install)
     [ -n "{{NAMES}}" ] && args+=(-k "$(echo '{{NAMES}}' | sed 's/ / or /g')")
     e2e/scripts/run.sh "${args[@]}"
