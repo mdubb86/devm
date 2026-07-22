@@ -16,9 +16,12 @@ before:
     - sh -c 'mkdir -p internal/docker/embed && GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim'
     - sh -c 'mkdir -p internal/docker/embed && GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-docker-shim ./cmd/devm-docker-shim'
     # Compile devm-helper for darwin_arm64 and gzip into the embed dir.
-    # Mirrors the just _build-helper-embed recipe. Runs before the main
-    # devm build so //go:embed picks up the freshly-produced blob.
-    - sh -c 'mkdir -p internal/helper/embed && GOOS=darwin GOARCH=arm64 go build -o /tmp/devm-helper.raw ./cmd/devm-helper && gzip -c /tmp/devm-helper.raw > internal/helper/embed/devm-helper.gz && rm /tmp/devm-helper.raw'
+    # Mirrors the just _build-helper-embed recipe (including the
+    # identity.Profile ldflag — goreleaser only ever builds "prod", so
+    # it's hardcoded here). Runs before the main devm build so
+    # //go:embed picks up the freshly-produced blob. mktemp avoids a
+    # race with any concurrent build sharing /tmp.
+    - sh -c 'mkdir -p internal/helper/embed && raw="$(mktemp -t devm-helper-raw.XXXXXX)" && GOOS=darwin GOARCH=arm64 go build -ldflags "-X github.com/mdubb86/devm/internal/identity.Profile=prod" -o "$raw" ./cmd/devm-helper && gzip -c "$raw" > internal/helper/embed/devm-helper.gz && rm "$raw"'
 
 builds:
   # Tart requires Apple Silicon; amd64 macOS isn't a supported target.

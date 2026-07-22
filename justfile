@@ -56,18 +56,34 @@ _build PROFILE:
         echo "         one-time fix: Keychain Access → Certificate Assistant → Create a Certificate (Name: {{SIGN_IDENTITY}}, Code Signing, Self Signed Root)"; \
     fi
 
-# Build the darwin/arm64 devm-helper binary and gzip it into the embed
-# directory. `//go:embed embed/devm-helper.gz` in internal/helper/embed.go
-# requires this file at compile time; `_build` depends on this recipe.
-# Rebuilds on every invocation (fast; devm-helper is small) so any
-# change to cmd/devm-helper/ is reflected in the next devm build without
-# needing a manual clean.
-_build-helper-embed:
+# Build the darwin/arm64 devm-helper binary for PROFILE ("prod" or
+# "e2e") and gzip it into the embed directory. `//go:embed
+# embed/devm-helper.gz` in internal/helper/embed.go requires this file
+# at compile time; `_build` depends on this recipe. Rebuilds on every
+# invocation (fast; devm-helper is small) so any change to
+# cmd/devm-helper/ is reflected in the next devm build without needing
+# a manual clean.
+#
+# Must inject identity.Profile via -ldflags, same as `_build` does for
+# the daemon/CLI binaries — otherwise the embedded helper always runs
+# under the default Profile="prod" (socket /var/run/devm-helper.sock,
+# group _devm, lo0 pool 1-20) regardless of which profile embedded it,
+# cross-contaminating prod and e2e installs.
+#
+# NOTE: `just build` and `just build-e2e` both write to the same
+# internal/helper/embed/devm-helper.gz — last one run wins. Acceptable:
+# the on-disk bin/ output is the canonical per-profile artifact: the
+# blob only matters for the immediately-following `_build` in the same
+# recipe chain.
+_build-helper-embed PROFILE:
     @mkdir -p internal/helper/embed
-    @GOOS=darwin GOARCH=arm64 go build -o /tmp/devm-helper.raw ./cmd/devm-helper
-    @gzip -c /tmp/devm-helper.raw > internal/helper/embed/devm-helper.gz
-    @rm /tmp/devm-helper.raw
-    @echo "devm-helper embedded at internal/helper/embed/devm-helper.gz"
+    @raw="$(mktemp -t devm-helper-raw.XXXXXX)" && \
+      GOOS=darwin GOARCH=arm64 go build \
+          -ldflags "-X github.com/mdubb86/devm/internal/identity.Profile={{PROFILE}}" \
+          -o "$raw" ./cmd/devm-helper && \
+      gzip -c "$raw" > internal/helper/embed/devm-helper.gz && \
+      rm "$raw"
+    @echo "devm-helper ({{PROFILE}}) embedded at internal/helper/embed/devm-helper.gz"
 
 # Build the devm + devm-helper binaries into ./bin with prod identity,
 # and codesign with the local self-signed identity if available. The
@@ -77,12 +93,12 @@ _build-helper-embed:
 #
 # fetch-iron-proxy runs first: the ironproxy package's //go:embed
 # needs internal/ironproxy/embed/iron-proxy.gz to exist at compile time.
-build: fetch-iron-proxy _build-helper-embed (_build "prod")
+build: fetch-iron-proxy (_build-helper-embed "prod") (_build "prod")
 
 # Build the devm-e2e + devm-e2e-helper binaries into ./bin with e2e
 # identity, so they run alongside — not clobber — a live prod install
 # (separate runtime dir, socket, LaunchDaemon label; see internal/identity).
-build-e2e: fetch-iron-proxy _build-helper-embed (_build "e2e")
+build-e2e: fetch-iron-proxy (_build-helper-embed "e2e") (_build "e2e")
 
 # Run Go unit tests.
 test:
