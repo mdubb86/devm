@@ -17,6 +17,7 @@ import (
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 
+	"github.com/mdubb86/devm/internal/helper"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/image"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -318,12 +319,18 @@ type installInputs struct {
 	// DevmExe is the CLI binary path baked into the LaunchDaemon plist
 	// by `_kardianos install`.
 	DevmExe string
-	// HelperExe is the resolved devm-helper binary path the helper's
-	// LaunchDaemon plist should point at directly (sibling of DevmExe
-	// — no system-path copy, same pattern kardianos uses for the main
-	// daemon). Empty skips the entire helper block (group creation,
-	// plist install, bootstrap).
+	// HelperExe is the path to the extracted-from-embed devm-helper
+	// tempfile, staged unprivileged before the sudo block runs. The
+	// script `install`s it onto HelperFinalPath (root-owned, 0755) and
+	// removes the tempfile. Empty skips the entire helper block (group
+	// creation, plist install, bootstrap).
 	HelperExe string
+	// HelperFinalPath is the on-disk location the sudo script installs
+	// HelperExe onto (root-owned, 0755). Sibling of the devm binary.
+	// The helper's LaunchDaemon plist ProgramArguments points here —
+	// not at HelperExe, which is a tempfile gone by the time launchd
+	// invokes it. Ignored when HelperExe is empty.
+	HelperFinalPath string
 	// HelperLogDir is the installing user's ~/Library/Logs, used to
 	// build the helper plist's StandardOutPath/StandardErrorPath.
 	// Ignored when HelperExe is empty.
@@ -385,11 +392,20 @@ func buildInstallScript(inputs installInputs) string {
 		}
 	}
 	if inputs.HelperExe != "" {
-		// No system-path copy: the plist points directly at the
-		// resolved helper binary sitting alongside DevmExe, same
-		// pattern kardianos uses for the main daemon (Executable: exe).
+		// HelperExe is an unprivileged tempfile staged by
+		// runPrivilegedInstall (extracted from the embedded blob).
+		// Install it onto its final on-disk location — root-owned,
+		// 0755, sibling of DevmExe — before the plist below references
+		// it, then remove the tempfile + its sha256 sidecar.
+		fmt.Fprintf(&sb, "install -m 0755 %s %s\n",
+			shellQuote(inputs.HelperExe), shellQuote(inputs.HelperFinalPath))
+		fmt.Fprintf(&sb, "rm -f %s %s\n",
+			shellQuote(inputs.HelperExe), shellQuote(inputs.HelperExe+".sha256"))
+		// The plist's ProgramArguments must point at HelperFinalPath,
+		// not HelperExe: launchd invokes it later, long after the
+		// tempfile above is gone.
 		fmt.Fprintf(&sb, "install -m 0644 /dev/stdin %s <<'EOF'\n%sEOF\n",
-			cfg.LaunchdPlistHelper(), helperPlistContent(inputs.HelperExe, inputs.HelperLogDir))
+			cfg.LaunchdPlistHelper(), helperPlistContent(inputs.HelperFinalPath, inputs.HelperLogDir))
 		sb.WriteString("launchctl bootout " + cfg.LaunchdTargetHelper() + " 2>/dev/null || true\n")
 		// Bootstrap via our own retry-capable helper (not a raw
 		// `launchctl bootstrap` line) — see launchdBootstrapPlist:
@@ -560,13 +576,28 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 		InstallUser:      installUser,
 	}
 	if needsHelper {
-		if _, statErr := os.Stat(helperProgramPath); statErr == nil {
-			inputs.HelperExe = helperProgramPath
-			inputs.HelperLogDir = filepath.Join(home, "Library", "Logs")
-		} else {
-			fmt.Fprintf(os.Stderr,
-				"note: devm-helper binary not found at %s; skipping network-isolation helper install\n", helperProgramPath)
+		// Extract the embedded helper to a tempfile in userland; the
+		// sudo script below installs it (0755, root-owned) at
+		// helperProgramPath. helperProgramPath is the final on-disk
+		// location: sibling of the devm binary (see helperSourcePath).
+		tmpHelper, err := os.CreateTemp("", "devm-helper.stage-*")
+		if err != nil {
+			return false, fmt.Errorf("stage devm-helper: create tempfile: %w", err)
 		}
+		tmpHelper.Close()
+		if _, err := helper.Extract(tmpHelper.Name()); err != nil {
+			os.Remove(tmpHelper.Name())
+			return false, fmt.Errorf("stage devm-helper: %w", err)
+		}
+		// Defer cleanup: buildInstallScript will `install -m 755 <src>
+		// <dst>` + `rm <src>` inside the sudo block, so this defer is a
+		// safety net if the sudo block fails before it deletes.
+		defer os.Remove(tmpHelper.Name())
+		defer os.Remove(tmpHelper.Name() + ".sha256")
+
+		inputs.HelperExe = tmpHelper.Name()
+		inputs.HelperFinalPath = helperProgramPath
+		inputs.HelperLogDir = filepath.Join(home, "Library", "Logs")
 	}
 
 	c := exec.CommandContext(ctx, "sudo", "bash", "-c", buildInstallScript(inputs))

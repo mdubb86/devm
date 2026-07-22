@@ -44,10 +44,11 @@ func TestBuildUninstallScript_ReapsIronProxyChildren(t *testing.T) {
 
 func TestBuildInstallScript_IncludesHelper(t *testing.T) {
 	script := buildInstallScript(installInputs{
-		DevmExe:     "/usr/local/bin/devm",
-		HelperExe:   "/usr/local/libexec/devm-helper",
-		InstallUser: "alice",
-		NeedsDaemon: true,
+		DevmExe:         "/usr/local/bin/devm",
+		HelperExe:       "/tmp/devm-helper.stage-123",
+		HelperFinalPath: "/usr/local/libexec/devm-helper",
+		InstallUser:     "alice",
+		NeedsDaemon:     true,
 	})
 	assert.Contains(t, script, "dscl . -create /Groups/_devm")
 	assert.Contains(t, script, "/Library/LaunchDaemons/com.devm.helper.plist")
@@ -58,7 +59,21 @@ func TestBuildInstallScript_IncludesHelper(t *testing.T) {
 	// no way to retry.
 	assert.Contains(t, script, "_kardianos bootstrap-helper")
 	assert.NotContains(t, script, "launchctl bootstrap system /Library/LaunchDaemons/com.devm.helper.plist")
+
+	// The tempfile (HelperExe) is installed onto the final on-disk
+	// path (HelperFinalPath) and then removed, before the plist is
+	// written — the plist must reference the FINAL path, since
+	// launchd invokes it long after the tempfile is gone.
+	installIdx := strings.Index(script, "install -m 0755 '/tmp/devm-helper.stage-123' '/usr/local/libexec/devm-helper'")
+	require.GreaterOrEqual(t, installIdx, 0, "script must install the staged tempfile onto HelperFinalPath; got:\n%s", script)
+	rmIdx := strings.Index(script, "rm -f '/tmp/devm-helper.stage-123' '/tmp/devm-helper.stage-123.sha256'")
+	require.GreaterOrEqual(t, rmIdx, 0, "script must remove the staged tempfile + sha256 sidecar; got:\n%s", script)
+	plistIdx := strings.Index(script, "/Library/LaunchDaemons/com.devm.helper.plist")
+	require.Less(t, installIdx, plistIdx, "helper binary must be installed before the plist references it")
+
 	assert.Contains(t, script, "/usr/local/libexec/devm-helper")
+	assert.NotContains(t, script, "<string>/tmp/devm-helper.stage-123</string>",
+		"plist ProgramArguments must reference HelperFinalPath, not the HelperExe tempfile")
 
 	// The append must be guarded against duplicate GroupMembership
 	// entries across repeated install runs (dscl -append has no
