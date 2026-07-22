@@ -22,10 +22,6 @@ import (
 // is a same-filesystem operation (POSIX-atomic). A failed extraction
 // leaves the tempfile behind for diagnosis and returns an error naming
 // targetPath and the underlying cause.
-//
-// Callers responsible for ensuring the target directory exists and is
-// writable by the current process — Extract MkdirAlls the directory if
-// missing (0755) but does not attempt privileged operations.
 func Extract(targetPath string) (string, error) {
 	sidecar := targetPath + ".sha256"
 
