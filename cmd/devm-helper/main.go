@@ -10,6 +10,10 @@
 // The helper binds the requested socket and hands the FD back via
 // SCM_RIGHTS. Access control: UDS mode 0660, group _devm; requesting
 // process EUID must be a member of _devm.
+//
+// (prod identity values shown above; e2e install uses
+// com.devm.e2e.helper, /var/run/devm-e2e-helper.sock, _devm-e2e, and
+// 127.42.0.21..40 — see internal/identity.E2E.)
 package main
 
 import (
