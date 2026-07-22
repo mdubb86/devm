@@ -175,14 +175,3 @@ func (c Config) CanonicalResolverContents() string {
 	host, port, _ := net.SplitHostPort(c.DNSBindAddr)
 	return "nameserver " + host + "\nport " + port + "\n"
 }
-
-// HelperBinaryPath returns the install-time extraction path for the
-// embedded helper binary. Derived from os.Executable(): the helper is
-// installed side-by-side with the daemon binary, named
-// <basename>-helper. Works uniformly whether the daemon is at
-// /usr/local/bin/devm, /opt/homebrew/bin/devm, or bin/devm-e2e in a
-// repo checkout.
-func HelperBinaryPath() string {
-	exe, _ := os.Executable()
-	return filepath.Join(filepath.Dir(exe), filepath.Base(exe)+"-helper")
-}
