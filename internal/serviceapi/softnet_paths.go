@@ -63,9 +63,9 @@ func ensureSoftnetSockDir(dir string) error {
 // without coordination. The path is a hash of cfg.RuntimeDir()+projectID
 // rather than the project name itself, both to keep it short regardless
 // of project name length and to disambiguate concurrent daemon
-// instances (e.g. a real installed daemon and an isolated e2e daemon)
-// that might otherwise pick the same project name. Pure: does not touch
-// the filesystem, so discoverSoftnet can recompute the same path on
+// instances (e.g. the installed prod daemon and the installed e2e
+// daemon) that might otherwise pick the same project name. Pure: does
+// not touch the filesystem, so discoverSoftnet can recompute the same path on
 // daemon restart without re-running the ownership/mode check —
 // /vm/start is the one caller that creates and validates
 // softnetSockDir, via ensureSoftnetSockDir, before spawning softnet.

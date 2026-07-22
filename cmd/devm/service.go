@@ -146,22 +146,6 @@ var serveCmd = &cobra.Command{
 	Hidden: true, // not user-facing; launchd calls this
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		foreground, _ := cmd.Flags().GetBool("foreground")
-		if foreground {
-			// Bypass kardianos and run RunService directly. Kardianos'
-			// svc.Run() on Darwin expects to be launched by launchd
-			// and exits silently when invoked from a normal shell — no
-			// use to us in e2e-isolated mode where we want a plain
-			// background process bound to cfg.SocketPath().
-			// Signal handling: cancel context on SIGTERM/SIGINT so
-			// RunService's oklog/run group unwinds cleanly.
-			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-			defer cancel()
-			return serviceapi.RunService(ctx, cfg, serviceapi.Build{
-				Version: Version, Commit: Commit, Date: Date, Fingerprint: Fingerprint,
-				BinaryPath: resolvedSelfPath(),
-			})
-		}
 		svc, err := newKardianosService()
 		if err != nil {
 			return err
@@ -170,11 +154,12 @@ var serveCmd = &cobra.Command{
 	},
 }
 
-// buildBaseIfNeededCmd rebuilds devm-base when its provisioning-script
-// hash has drifted (or the image is missing). Hidden: not part of the
-// user surface — called by the e2e harness (`e2e/scripts/run.sh`) so
-// isolated runs auto-heal after any branch that changes
-// image/provision-base.sh, without needing `devm install`'s sudo path.
+// buildBaseIfNeededCmd rebuilds cfg.BaseImageName() when its
+// provisioning-script hash has drifted (or the image is missing).
+// Hidden: not part of the user surface — called by the e2e harness
+// (`e2e/scripts/run.sh`) so the e2e base image auto-heals after any
+// branch that changes image/provision-base.sh, without needing `devm
+// install`'s sudo path.
 //
 // Safe to invoke anywhere tart is on PATH: touches only tart's local
 // image cache. No LaunchDaemon, no DNS, no CA writes.
@@ -989,11 +974,6 @@ var kardianosBootstrapHelperCmd = &cobra.Command{
 }
 
 func init() {
-	// --foreground routes `serve` directly through RunService (no
-	// kardianos). Used by e2e's isolated mode so a test daemon can
-	// run under the e2e identity's own runtime dir without touching
-	// launchd.
-	serveCmd.Flags().Bool("foreground", false, "run RunService directly, bypassing kardianos (e2e-isolated mode)")
 	rootCmd.AddCommand(serveCmd, installCmd, uninstallCmd, buildBaseIfNeededCmd)
 	serviceCmd.AddCommand(
 		serviceStatusCmd,
