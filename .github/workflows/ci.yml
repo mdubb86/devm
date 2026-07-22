@@ -30,6 +30,15 @@ jobs:
           tar -xzf /tmp/iron-proxy.tar.gz -C /tmp iron-proxy
           gzip -c /tmp/iron-proxy > internal/ironproxy/embed/iron-proxy.gz
           rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy
+      - name: Build + gzip devm-helper (darwin/arm64) for go:embed
+        run: |
+          mkdir -p internal/helper/embed
+          raw="$(mktemp -t devm-helper-raw.XXXXXX)"
+          GOOS=darwin GOARCH=arm64 go build \
+            -ldflags "-X github.com/mdubb86/devm/internal/identity.Profile=prod" \
+            -o "$raw" ./cmd/devm-helper
+          gzip -c "$raw" > internal/helper/embed/devm-helper.gz
+          rm "$raw"
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build ./...
