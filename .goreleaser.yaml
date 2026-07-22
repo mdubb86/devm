@@ -15,6 +15,10 @@ before:
     - sh -c 'IRON_PROXY_VERSION="${IRON_PROXY_VERSION:-v0.45.0}" && ver="$(echo "$IRON_PROXY_VERSION" | sed "s/^v//")" && mkdir -p internal/ironproxy/embed && curl -fsSL -o /tmp/iron-proxy.tar.gz "https://github.com/ironsh/iron-proxy/releases/download/${IRON_PROXY_VERSION}/iron-proxy_${ver}_darwin_arm64.tar.gz" && tar -xzf /tmp/iron-proxy.tar.gz -C /tmp iron-proxy && gzip -c /tmp/iron-proxy > internal/ironproxy/embed/iron-proxy.gz && rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy'
     - sh -c 'mkdir -p internal/docker/embed && GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim'
     - sh -c 'mkdir -p internal/docker/embed && GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-docker-shim ./cmd/devm-docker-shim'
+    # Compile devm-helper for darwin_arm64 and gzip into the embed dir.
+    # Mirrors the just _build-helper-embed recipe. Runs before the main
+    # devm build so //go:embed picks up the freshly-produced blob.
+    - sh -c 'mkdir -p internal/helper/embed && GOOS=darwin GOARCH=arm64 go build -o /tmp/devm-helper.raw ./cmd/devm-helper && gzip -c /tmp/devm-helper.raw > internal/helper/embed/devm-helper.gz && rm /tmp/devm-helper.raw'
 
 builds:
   # Tart requires Apple Silicon; amd64 macOS isn't a supported target.
@@ -43,24 +47,6 @@ builds:
       # daemon wasn't restarted." Must be injected on every build
       # path (see justfile + e2e/scripts/run.sh for the others).
       - -X main.Fingerprint={{.Env.FINGERPRINT}}
-
-  # The root helper daemon (com.devm.helper LaunchDaemon).
-  # Installed alongside devm by `cmd/devm/service.go`'s privileged
-  # install script; ships as its own binary since it runs as root
-  # while the main devm binary runs as the user. No CGO or version
-  # ldflags: it has no cgo dependencies and doesn't carry the
-  # Version/Commit/Date/Fingerprint build-time vars devm does.
-  - id: devm-helper
-    main: ./cmd/devm-helper
-    binary: devm-helper
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - darwin
-    goarch:
-      - arm64
-    ldflags:
-      - -s -w
 
 # No explicit `signs:` block: the Go linker auto-applies an ad-hoc
 # signature to every darwin/arm64 binary at link time (mandatory on
@@ -128,10 +114,6 @@ homebrew_casks:
       email: bot@goreleaser.com
     binaries:
       - devm
-      # helperSourcePath (cmd/devm/service.go) expects devm-helper
-      # to sit next to the devm binary, so it must be symlinked into the
-      # same HOMEBREW_PREFIX/bin directory.
-      - devm-helper
     # The binary is ad-hoc signed (no Apple Developer ID). Gatekeeper
     # still flags com.apple.quarantine on cask artifacts; strip the
     # xattr in a postflight hook so first-run doesn't pop the "cannot

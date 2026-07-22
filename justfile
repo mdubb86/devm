@@ -150,8 +150,7 @@ e2e-install *NAMES: (_build "e2e")
 # Doubles as the canonical single-scenario install test.
 e2e-bootstrap: (_build "e2e")
     @sudo -v
-    @sudo install -m 755 bin/devm-e2e        /usr/local/bin/devm-e2e
-    @sudo install -m 755 bin/devm-e2e-helper /usr/local/bin/devm-e2e-helper
+    @sudo install -m 755 bin/devm-e2e /usr/local/bin/devm-e2e
     /usr/local/bin/devm-e2e install
     @scripts/assert-e2e-installed.sh
 
