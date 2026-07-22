@@ -74,13 +74,13 @@ provision: provision stage "<name>": provisioning script exited <N>
 
 | Stage | What it does | Common failure | Fix |
 |---|---|---|---|
-| `open` | Flushes the boot-lock nftables ruleset to allow-all for the provisioning window. Runs whenever there's open-window work to do (first boot, `startup:` commands, or templates); skipped on a warm restart with nothing to run. | Rare | n/a |
+| `open` | The daemon has already flipped softnet to OPEN before this exec starts, and provisioning itself runs `sudo nft flush ruleset` unconditionally at the top (dropping the guest boot lock). The stage marker echoes the start of the open work window. Runs whenever there's open-window work to do (first boot, `startup:` commands, or templates); skipped on a warm restart with nothing to run. | Rare | n/a |
 | `packages` | `sudo apt-get update -y && apt-get install -y <packages>` (first boot only; skipped if `packages:` is empty) | Package name not found, or `deb.debian.org` not in `network.allow` | Add `deb.debian.org` to `network.allow` in `devm.yaml`; verify package names |
 | `install` | Runs each `install:` command in order, each individually wrapped in `timeout <N> <with-devm-env wrapper>` so `$WORKSPACE`, `cfg.env`, and `path:` are in scope (first boot only). `<N>` defaults to 600s, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | User command exits non-zero, or a step exceeds its timeout (`timeout` kills it, exit 124) | Read the captured output above the error; fix the failing command. For long installs, raise `DEVM_INSTALL_STEP_TIMEOUT_S`. |
 | `docker` | Installs the Docker engine + runc-shim registration via `daemon.json` (only when `docker: true`; first boot only) | docker-proxy or docker socket unavailable on the Mac | Verify `docker: true` is set and Docker is running on the Mac |
 | `templates` | Runs `install-templates.sh` (through the with-devm-env wrapper) to render every `services[*].templates` entry into its declared output path. Runs on ANY boot that has templates declared, not just first boot — a warm restart re-runs the (idempotent) dispatcher. | Template output path unwritable (e.g. `/etc/foo` without `sudo: true` on the template) or template source render error | Add `sudo: true` to the template if the output is under a root-owned dir; otherwise fix the template source |
 | `startup` | Runs every `startup:` command in ONE shared bash process (exports/`cd` from an earlier line are visible to later ones), the whole thing wrapped in a single aggregate `timeout <N>` — same default/override as `install`. | A command exits non-zero, or the combined script exceeds its timeout | Read the captured output above the error; fix the failing command, or raise `DEVM_INSTALL_STEP_TIMEOUT_S` |
-| `enforce` | Applies the real egress allowlist (`nft -f -`), then points dnsmasq/timesyncd at the same enforced path, then `svc_ingress` for direct docker service ports | Script failure or nftables unavailable | Should not fail on a healthy base image; check nftables kernel support |
+| `enforce` | Stage marker only. The softnet OPEN→ENFORCED policy flip happens on the Mac side between the two composed scripts; timesyncd is preconfigured in the base image; direct-service listeners are set up by softnet's ingress on the Mac. This stage does no in-guest work — masks are in `services` below. | Should not fail | n/a |
 | `services` | Bind-mounts per-service mask directories from `/var/devm/masks/<project>/<service>/<path>` over workspace paths, then `systemctl enable --now` each declared service and health-polls it before `devm.target` (and therefore access) is granted | Service failed to start (port in use, missing binary, bad config), or a mask's mount target doesn't exist | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>`; check `services[*].masks` paths in `devm.yaml` |
 
 A failure at `open` through `enforce` leaves the VM in a bad cold-start state — `devm shell` tears it down (the next `devm shell` starts clean). A failure at `templates` or `services` leaves a basically-good VM whose user-declared service/template is what's broken, so `devm shell` surfaces the error but keeps the VM running for in-place debugging via `tart exec`.
@@ -98,12 +98,17 @@ curl: (7) Failed to connect to api.example.com port 443: Connection refused
 curl: (6) Could not resolve host: api.example.com
 ```
 
-All outbound traffic from the VM is routed through iron-proxy on the Mac. If the destination is not listed under `network.allow` in `devm.yaml`, iron-proxy blocks it. Check:
+All outbound TCP/UDP from the VM crosses vsock to softnet on the Mac, which under the enforced policy forwards :80/:443 to iron-proxy on the project's `127.42.0.N` and drops every other TCP port (RST). Iron-proxy then applies `network.allow`. Two things can produce this symptom:
+
+1. **iron-proxy blocked it.** The destination is not listed under `network.allow` in `devm.yaml`, so iron-proxy dropped the request with a 502. Fix: add the host to `network.allow` (or change to `- "*"` for open egress if you actually want no allowlist).
+2. **softnet dropped it (non-HTTP port).** The workload tried to open an outbound TCP flow to a port other than 80 or 443 (e.g. 5432, 3306, 6379). Under ENFORCED policy those are RST'd — iron-proxy never sees them, and there's nothing to add to `network.allow` that would help. Fix: front the external service with an HTTPS endpoint, or (for peer VMs on the same Mac) use `direct: true` and `127.42.0.N` addressing.
+
+Check:
 
 1. `devm.yaml` — confirm the host appears under `network.allow`.
-2. Iron-proxy log at `~/Library/Logs/devm/<project-id>-proxy.log` — logs every request decision. Replace `<project-id>` with the value of `project.name` in your `devm.yaml`.
+2. Iron-proxy log at `~/Library/Logs/devm/<project-id>-proxy.log` — logs every :80/:443 request decision. Replace `<project-id>` with the value of `project.name` in your `devm.yaml`. If the failing flow isn't logged there at all, softnet dropped it before iron-proxy saw it (case 2 above).
 
-See `devm skills get routing` for the full iron-proxy network model and allow-list syntax.
+See `devm skills get routing` for the full softnet + iron-proxy network model and allow-list syntax.
 
 ### HTTPS certificate errors
 
