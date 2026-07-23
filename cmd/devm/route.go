@@ -11,7 +11,6 @@ import (
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
-	"github.com/mdubb86/devm/internal/softnet"
 )
 
 var routeCmd = &cobra.Command{
@@ -57,11 +56,12 @@ func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error 
 		c := serviceapi.NewClient(ident)
 		ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
 		defer cancel()
-		if _, err := c.ApplyRoutes(ctx, cfg.Project.Name, routes); err != nil {
+		resolved, err := c.ApplyRoutes(ctx, cfg.Project.Name, routes)
+		if err != nil {
 			return fmt.Errorf("apply routes: %w", err)
 		}
 		fmt.Printf("Routing set to %s.\n", mode)
-		for _, r := range routes {
+		for _, r := range resolved {
 			host := r.BackendHost
 			if host == "" {
 				host = "localhost"
@@ -74,8 +74,8 @@ func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error 
 
 // buildRoutes extracts Routes from the project config in the
 // requested mode. In vm mode, a proxied (non-direct) service's
-// BackendHost is the host-local softnet expose listener for its
-// guest port, not the VM's IP.
+// BackendHost is left unset: the daemon substitutes the project's
+// allocated IP at /routes/apply time.
 func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) ([]serviceapi.Route, error) {
 	var out []serviceapi.Route
 
@@ -89,12 +89,17 @@ func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) ([]serviceapi.Rou
 			Mode:        mode,
 			Project:     cfg.Project.Name,
 		}
+		// For mode==vm && !svc.Direct, the daemon substitutes BackendHost with
+		// the project's allocated projectIP at /routes/apply time (based on
+		// Mode + Direct fields — see internal/serviceapi/routes.go). We leave
+		// BackendHost as zero-value here on purpose.
 		if svc.Direct {
 			// Direct services are DNS-only: no backend to dial.
 			route.Direct = true
-		} else if mode == serviceapi.ModeVM {
-			route.BackendHost = softnet.HostLoopIP
 		}
+		// mode == ModeLocal + !Direct: BackendHost stays "" → daemon's
+		// ProxyServer default of "localhost" (proxy.go) resolves it. That's
+		// correct for local-mode services running on the Mac.
 		out = append(out, route)
 	}
 	return out, nil

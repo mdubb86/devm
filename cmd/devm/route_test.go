@@ -8,7 +8,6 @@ import (
 
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
-	"github.com/mdubb86/devm/internal/softnet"
 )
 
 func TestBuildRoutesEmitsDirect(t *testing.T) {
@@ -53,11 +52,9 @@ func TestBuildRoutesAllDirectModeVMSkipsVMIP(t *testing.T) {
 }
 
 // TestBuildRoutesModeVMDialsSoftnetLoopback asserts that a proxied
-// (non-direct) ModeVM route dials the host-local softnet expose
-// listener, not the VM's IP: BackendHost is softnet.HostLoopIP and
-// BackendPort is the service's guest port. The project name matches
-// no running VM, so if buildRoutes still tried to resolve a VM IP
-// this would fail here.
+// (non-direct) ModeVM route leaves BackendHost unset: the daemon
+// substitutes the project's allocated IP at /routes/apply time (see
+// internal/serviceapi/routes.go), based on Mode + Direct fields.
 func TestBuildRoutesModeVMDialsSoftnetLoopback(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "proj-no-such-vm"},
@@ -68,6 +65,40 @@ func TestBuildRoutesModeVMDialsSoftnetLoopback(t *testing.T) {
 	routes, err := buildRoutes(cfg, serviceapi.ModeVM)
 	require.NoError(t, err)
 	require.Len(t, routes, 1)
-	assert.Equal(t, softnet.HostLoopIP, routes[0].BackendHost)
+	assert.Empty(t, routes[0].BackendHost, "vm-mode non-direct routes MUST leave BackendHost unset — daemon substitutes")
 	assert.Equal(t, 8080, routes[0].BackendPort)
+}
+
+// TestBuildRoutes_VMNonDirect_LeavesBackendHostEmpty asserts that a
+// proxied (non-direct) ModeVM route leaves BackendHost as zero-value:
+// the daemon substitutes the project's allocated IP at apply time.
+func TestBuildRoutes_VMNonDirect_LeavesBackendHostEmpty(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "myproj"},
+		Services: map[string]schema.Service{
+			"api": {Hostname: "api.test", Port: 8080},
+		},
+	}
+	got, err := buildRoutes(cfg, serviceapi.ModeVM)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "api.test", got[0].Hostname)
+	assert.Empty(t, got[0].BackendHost,
+		"vm-mode non-direct routes MUST leave BackendHost unset — daemon substitutes")
+	assert.Equal(t, serviceapi.ModeVM, got[0].Mode)
+}
+
+func TestBuildRoutes_VMDirect_LeavesBackendHostEmpty(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "myproj"},
+		Services: map[string]schema.Service{
+			"db": {Hostname: "db.test", Port: 5432, Direct: true},
+		},
+	}
+	got, err := buildRoutes(cfg, serviceapi.ModeVM)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.True(t, got[0].Direct)
+	assert.Empty(t, got[0].BackendHost,
+		"direct routes never carry BackendHost")
 }
