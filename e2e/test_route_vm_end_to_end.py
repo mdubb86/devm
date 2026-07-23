@@ -75,7 +75,7 @@ def test_route_vm_reaches_guest_http_service(workspace, devm, sandbox_name):
     )
 
     # curl from the Mac.
-    # Retry loop: iron-proxy warm-up + container's own listener readiness
+    # Retry loop: daemon ProxyServer + softnet + container listener chain
     # can add ~1-2s past `docker run` returning.
     deadline = time.time() + 30
     last = None

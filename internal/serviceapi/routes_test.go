@@ -245,6 +245,8 @@ func TestApplyRoutes_DirectVMPassthrough(t *testing.T) {
 	srv.mux.ServeHTTP(rr, httptest.NewRequest("POST", "/routes/apply", bytes.NewReader(body)))
 
 	require.Equal(t, http.StatusOK, rr.Code)
-	stored, _ := routes.Lookup("db.test", "proj-d")
-	assert.Empty(t, stored.BackendHost, "direct routes are not substituted")
+	var resp ApplyResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Routes, 1)
+	assert.Empty(t, resp.Routes[0].BackendHost, "direct routes are not substituted")
 }
