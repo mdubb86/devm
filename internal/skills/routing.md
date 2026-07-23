@@ -41,7 +41,7 @@ devm route vm
 
 `devm` sends the routes to the daemon; for each non-direct service, the daemon substitutes `BackendHost = 127.42.0.N` (the project's allocated loopback IP) at apply time — softnet has bound the service's port on that address, so the ProxyServer's dial reaches the guest via softnet's forward.
 
-If the VM isn't running yet (no `127.42.0.N` allocated for this project), `devm route vm` fails loudly: `route vm: no projectIP allocated for <project> — start the VM first: devm start`.
+If the VM isn't running yet (no `127.42.0.N` allocated for this project), `devm route vm` fails loudly with an error naming the project and pointing at `devm start` — the daemon rejects the apply with `no projectIP allocated for "<project>" — start the VM first: \`devm start\``, which the CLI surfaces wrapped as `apply routes: routes/apply: status 400: ...`.
 
 ### Auto-routing on `devm shell`
 

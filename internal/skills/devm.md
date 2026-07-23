@@ -12,7 +12,7 @@ devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-proje
 ## Three-process model
 
 - **`devm` CLI** — the command you type in your terminal. Reads `devm.yaml`, renders `.devm/` from the current config, then talks to the daemon over a Unix socket to start or query the VM. Once the VM is up, it attaches your terminal to a shell inside the guest.
-- **the devm daemon** — owns the VM lifecycle (start, stop) and drives iron-proxy on the Mac. Managed with `devm service`.
+- **the devm daemon** — owns the VM lifecycle (start, stop), runs its own built-in ProxyServer for `*.test` ingress on the Mac, and spawns per-project iron-proxy for egress enforcement. Managed with `devm service`.
 - **The Tart VM** — runs your code on a Debian Linux base image. It has no direct path to the internet: every outbound flow is intercepted on the Mac. Under the enforced egress policy, only allowlisted HTTPS hosts and NTP reach the outside; everything else is dropped.
 
 ## Where the allowlist lives
@@ -21,7 +21,7 @@ devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-proje
 
 Iron-proxy also terminates TLS: it re-signs upstream certs with the devm CA, which is trusted inside the VM at first boot, so HTTPS to any allowlisted destination validates transparently.
 
-Two projects that expose the same hostname (e.g. both use `api.test:443`) don't collide — each project's `*.test` DNS answer is that project's own address, and iron-proxy binds each project's listeners on that address independently.
+Two projects that expose the same hostname (e.g. both use `api.test:443`) don't collide — each project's `*.test` DNS answer is that project's own address, and the daemon's built-in ProxyServer binds each project's listeners on that address independently.
 
 ## Quickstart
 
