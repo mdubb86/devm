@@ -59,4 +59,14 @@ INCLUDE_LINE="Include \"$HOME/Library/Application Support/devm-e2e/ssh_config\""
 grep -qF "$INCLUDE_LINE" "$HOME/.ssh/config" 2>/dev/null || \
     fail "missing Include line in ~/.ssh/config: $INCLUDE_LINE"
 
+# 11. Embed-profile pin (v0.9.3): the extracted helper binary must carry
+# the identity.Profile=e2e ldflag. A wrong-profile helper (Profile=prod
+# embedded in devm-e2e — e.g. because just build-e2e didn't chain
+# _build-helper-embed "e2e") silently binds prod's socket path and
+# collides with a real prod install.
+HELPER_STRINGS="$(strings /usr/local/bin/devm-e2e-helper 2>/dev/null)"
+if ! grep -q 'identity.Profile=e2e' <<<"$HELPER_STRINGS"; then
+    fail "/usr/local/bin/devm-e2e-helper does not carry identity.Profile=e2e ldflag — was the embed blob rebuilt with e2e profile?"
+fi
+
 echo "assert-e2e-installed: ok"
