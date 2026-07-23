@@ -5,35 +5,42 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
+	"strings"
 )
 
 // ApplyRoutes pushes the project's routes to the daemon. Replaces
-// any previous set for this project.
-func (c *Client) ApplyRoutes(ctx context.Context, name string, routes []Route) error {
+// any previous set for this project. Returns the routes as the daemon
+// resolved them — for vm-mode non-direct routes, BackendHost is
+// populated with the substituted projectIP (see routes.go's handler).
+func (c *Client) ApplyRoutes(ctx context.Context, name string, routes []Route) ([]Route, error) {
 	body, err := json.Marshal(ApplyRequest{Name: name, Routes: routes})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		"http://localhost/routes/apply", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
-	// The handler now returns 200 with the resolved routes (BackendHost
-	// substituted for vm-mode non-direct routes) instead of 204. This
-	// client doesn't consume that body yet — that's a follow-up task.
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("routes/apply: status %d", resp.StatusCode)
+		// Read the daemon's error body so the CLI can surface it verbatim.
+		msg, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("routes/apply: status %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
-	return nil
+	var out ApplyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("routes/apply: decode response: %w", err)
+	}
+	return out.Routes, nil
 }
 
 // RemoveRoutes drops the project's routes.
@@ -91,7 +98,7 @@ func (c *Client) RoutingStatusFromDaemon(ctx context.Context) (RoutingStatus, er
 			modes[r.Mode]++
 			out.Routes = append(out.Routes, RouteStatus{
 				Hostname: r.Hostname,
-				Dial:     fmt.Sprintf("localhost:%d", r.BackendPort),
+				Dial:     dialFromRoute(r),
 				Mode:     r.Mode.String(),
 			})
 		}
@@ -107,6 +114,17 @@ func (c *Client) RoutingStatusFromDaemon(ctx context.Context) (RoutingStatus, er
 		out.Mode = "mixed (drift)"
 	}
 	return out, nil
+}
+
+// dialFromRoute returns the visible "host:port" for a resolved route.
+// Empty BackendHost implies local-mode default of localhost — kept for
+// backwards compat with existing local-mode routes stored pre-substitution.
+func dialFromRoute(r Route) string {
+	host := r.BackendHost
+	if host == "" {
+		host = "localhost"
+	}
+	return fmt.Sprintf("%s:%d", host, r.BackendPort)
 }
 
 // ListRoutes returns all routes the daemon knows about, keyed by

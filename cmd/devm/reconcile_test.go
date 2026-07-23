@@ -64,7 +64,8 @@ func TestRepushRoutes_PreservesExistingLocalMode(t *testing.T) {
 
 	seeded, err := buildRoutes(cfg, serviceapi.ModeLocal)
 	require.NoError(t, err)
-	require.NoError(t, serviceapi.NewClient(identity.Prod).ApplyRoutes(t.Context(), cfg.Project.Name, seeded))
+	_, err = serviceapi.NewClient(identity.Prod).ApplyRoutes(t.Context(), cfg.Project.Name, seeded)
+	require.NoError(t, err)
 
 	repushRoutes(identity.Prod, cfg)
 

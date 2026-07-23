@@ -185,7 +185,7 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 		if _, present := existing[cfg.Project.Name]; present {
 			return
 		}
-		_ = c.ApplyRoutes(rctx, cfg.Project.Name, routes)
+		_, _ = c.ApplyRoutes(rctx, cfg.Project.Name, routes)
 	}()
 
 	deps := orchestrator.DefaultShellDeps(ident, repoRoot)

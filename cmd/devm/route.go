@@ -57,7 +57,7 @@ func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error 
 		c := serviceapi.NewClient(ident)
 		ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
 		defer cancel()
-		if err := c.ApplyRoutes(ctx, cfg.Project.Name, routes); err != nil {
+		if _, err := c.ApplyRoutes(ctx, cfg.Project.Name, routes); err != nil {
 			return fmt.Errorf("apply routes: %w", err)
 		}
 		fmt.Printf("Routing set to %s.\n", mode)

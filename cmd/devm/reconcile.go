@@ -143,7 +143,7 @@ func repushRoutes(ident identity.Config, cfg schema.Config) {
 	if err != nil {
 		return
 	}
-	if err := c.ApplyRoutes(rctx, cfg.Project.Name, routes); err != nil {
+	if _, err := c.ApplyRoutes(rctx, cfg.Project.Name, routes); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: re-push routes after reconcile: %v\n", err)
 	}
 }

@@ -58,12 +58,56 @@ func TestClient_ApplyAndListRoutes_Roundtrip(t *testing.T) {
 		{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM},
 		{Hostname: "api.test", BackendPort: 51002, Mode: ModeVM},
 	}
-	require.NoError(t, c.ApplyRoutes(ctx, "p1", in))
+	_, err := c.ApplyRoutes(ctx, "p1", in)
+	require.NoError(t, err)
 
 	got, err := c.ListRoutes(ctx)
 	require.NoError(t, err)
 	require.Contains(t, got, "p1")
 	assert.Len(t, got["p1"], 2)
+}
+
+// TestApplyRoutes_ReturnsResolvedRoutes verifies ApplyRoutes surfaces the
+// daemon's resolved routes (BackendHost substituted for vm-mode non-direct
+// routes) instead of just an error.
+func TestApplyRoutes_ReturnsResolvedRoutes(t *testing.T) {
+	srv, _, cleanup := newTestServerWithRoutes(t)
+	defer cleanup()
+
+	ironProxyState.put("proj", projectInfo{ProjectIP: "127.42.0.7"})
+	t.Cleanup(func() { ironProxyState.del("proj") })
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	got, err := c.ApplyRoutes(ctx, "proj", []Route{
+		{Hostname: "api.test", BackendPort: 8080, Mode: ModeVM},
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "127.42.0.7", got[0].BackendHost)
+}
+
+// TestRoutingStatusFromDaemon_DialUsesBackendHost verifies a resolved
+// vm-mode route's Dial reflects its BackendHost, not a hardcoded
+// "localhost".
+func TestRoutingStatusFromDaemon_DialUsesBackendHost(t *testing.T) {
+	srv, routes, cleanup := newTestServerWithRoutes(t)
+	defer cleanup()
+
+	routes.Apply("proj", []Route{
+		{Hostname: "api.test", BackendHost: "127.42.0.7", BackendPort: 8080, Mode: ModeVM},
+	})
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	rs, err := c.RoutingStatusFromDaemon(ctx)
+	require.NoError(t, err)
+	require.Len(t, rs.Routes, 1)
+	assert.Equal(t, "127.42.0.7:8080", rs.Routes[0].Dial)
 }
 
 func TestClient_RemoveRoutes(t *testing.T) {
@@ -79,8 +123,9 @@ func TestClient_RemoveRoutes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	require.NoError(t, c.ApplyRoutes(ctx, "p1",
-		[]Route{{Hostname: "x.test", BackendPort: 1, Mode: ModeVM}}))
+	_, err := c.ApplyRoutes(ctx, "p1",
+		[]Route{{Hostname: "x.test", BackendPort: 1, Mode: ModeVM}})
+	require.NoError(t, err)
 	require.NoError(t, c.RemoveRoutes(ctx, "p1"))
 
 	got, err := c.ListRoutes(ctx)
