@@ -1,13 +1,13 @@
 ---
 name: routing
-description: devm routing — making *.test domains reach your VM's services (or your Mac's) for development. Covers `devm route local`/`vm`, direct services, and the devm CA.
+description: devm routing — making *.test domains reach your VM's services (or your Mac's) for development. Covers `devm route local`/`vm`, direct services, the devm CA, and the two Mac-side proxies (the daemon's built-in ProxyServer for `.test` ingress and iron-proxy for VM-outbound allowlist enforcement).
 ---
 
 # devm routing reference
 
 ## The two destinations
 
-`devm route local` points iron-proxy at a service running on your Mac (upstream = `localhost:port`). `devm route vm` points it at a service running inside the Tart VM (upstream = the VM's IP + declared port). In both cases the client-facing side is iron-proxy on the Mac at the project's `*.test` hostname; the two commands only change what iron-proxy dials as its upstream.
+`devm route local` and `devm route vm` both configure the **daemon's built-in ProxyServer** (a reverse proxy the devm daemon runs on `127.42.0.N:80/443` for each project). They only differ in what the ProxyServer dials as its upstream: `local` = `localhost:port` on the Mac; `vm` = the project's own `127.42.0.N:port` (which softnet forwards to the guest). This is a different process from **iron-proxy** — iron-proxy is a per-project subprocess that handles VM **outbound** traffic (allowlist + secret injection); it is NOT involved in client-side ingress to `*.test` hostnames.
 
 ---
 
@@ -21,11 +21,11 @@ devm route local
 
 `devm` reads `devm.yaml`, collects every service that declares both `hostname` and `port`, and sends the routes to the daemon. The daemon's in-memory route table is updated immediately — no restart needed.
 
-Subsequent HTTPS requests to `https://api.test` on the Mac hit iron-proxy, which looks up `api.test` and reverse-proxies to `localhost:3000` (or whatever port you declared).
+Subsequent HTTPS requests to `https://api.test` on the Mac hit the daemon's ProxyServer, which looks up `api.test` and reverse-proxies to `localhost:3000` (or whatever port you declared).
 
-### How `*.test` reaches iron-proxy on the Mac
+### How `*.test` reaches the daemon proxy on the Mac
 
-`devm install` writes `/etc/resolver/test` so macOS's system resolver forwards every `*.test` DNS query to the devm daemon's DNS server. Each running project is allocated its own address from the `127.42.0.1..20` loopback pool; the daemon answers that project's `*.test` A queries with its own `127.42.0.N`, so two projects that both expose `db.test` on 5432 don't collide — each project's `db.test` resolves to a different IP. Iron-proxy on the Mac binds each project's `:80`/`:443` on its own address and routes by `Host:` header, terminating TLS with the devm CA (see [The devm CA](#the-devm-ca) below).
+`devm install` writes `/etc/resolver/test` so macOS's system resolver forwards every `*.test` DNS query to the devm daemon's DNS server. Each running project is allocated its own address from the `127.42.0.1..20` loopback pool; the daemon answers that project's `*.test` A queries with its own `127.42.0.N`, so two projects that both expose `db.test` on 5432 don't collide — each project's `db.test` resolves to a different IP. The daemon's ProxyServer binds each project's `:80`/`:443` on its own `127.42.0.N` and dispatches by `Host:` header, terminating TLS with the devm CA (see [The devm CA](#the-devm-ca) below).
 
 A query for an unknown hostname, or for a project that isn't currently running, gets NXDOMAIN.
 
@@ -39,7 +39,9 @@ Run this from the project directory when your service runs inside the VM:
 devm route vm
 ```
 
-`devm` looks up the VM's IP address and sends routes to the daemon with the VM's IP + your declared service port as the upstream. iron-proxy now dials the VM directly for that hostname.
+`devm` sends the routes to the daemon; for each non-direct service, the daemon substitutes `BackendHost = 127.42.0.N` (the project's allocated loopback IP) at apply time — softnet has bound the service's port on that address, so the ProxyServer's dial reaches the guest via softnet's forward.
+
+If the VM isn't running yet (no `127.42.0.N` allocated for this project), `devm route vm` fails loudly: `route vm: no projectIP allocated for <project> — start the VM first: devm start`.
 
 ### Auto-routing on `devm shell`
 
@@ -49,9 +51,9 @@ devm route vm
 
 ## Direct services (`direct: true`)
 
-A service with `direct: true` is reached **directly on the project's `127.42.0.N`**, bypassing iron-proxy and the in-VM reverse-proxy. Use it for raw-TCP / non-HTTP services (e.g. Postgres) that an HTTP reverse proxy can't front.
+A service with `direct: true` is reached **directly on the project's `127.42.0.N`**, bypassing the daemon's ProxyServer and the in-VM Caddy reverse-proxy. The `direct:` flag doesn't control whether the port is exposed (every service with a `hostname` + `port` is exposed on `127.42.0.N:port` via softnet); it controls whether the service is HTTP-fronted or raw-TCP end-to-end. Use it for non-HTTP protocols (Postgres, gRPC, custom TCP) that a reverse proxy can't front.
 
-- DNS answers the service's `hostname` with the project's `127.42.0.N` (same as any other hostname on that project), so `psql -h db.test` from the Mac connects to `127.42.0.N:5432` — no iron-proxy hop, no TLS.
+- DNS answers the service's `hostname` with the project's `127.42.0.N` (same as any other hostname on that project), so `psql -h db.test` from the Mac connects to `127.42.0.N:5432` — no ProxyServer hop, no TLS.
 - The Mac opens a TCP listener on `127.42.0.N:<port>` and forwards accepted connections into the VM.
 - No in-VM reverse-proxy block for the hostname; the workload speaks raw TCP end-to-end.
 
@@ -59,7 +61,7 @@ Rules:
 
 - `direct: true` requires a `hostname` ending in `.test`.
 - Adding or removing `direct` is a **live** change: `devm reconcile` applies it on a running VM.
-- Non-direct service with a `hostname` → HTTP-fronted (iron-proxy → in-VM reverse-proxy → your service). Direct service → raw TCP to the same `127.42.0.N`, different port.
+- Non-direct service with a `hostname` → HTTP-fronted (daemon's ProxyServer → in-VM reverse-proxy → your service). Direct service → raw TCP to the same `127.42.0.N`, different port.
 
 ---
 
@@ -83,7 +85,7 @@ Under enforced egress, outbound traffic to external destinations is restricted: 
 
 The devm CA is a self-signed root generated once at first daemon start and trusted in the macOS System Keychain (via `devm install`) and inside the VM at first boot. This makes HTTPS to `*.test` names trust-chain-clean in browsers, `curl`, language runtimes, etc. — no cert warnings.
 
-iron-proxy signs a leaf cert on demand for whatever SNI the client sends (90-day validity, cached, auto-renewed) using the CA's private key.
+The daemon's ProxyServer signs a leaf cert on demand for whatever SNI the client sends (90-day validity, cached, auto-renewed) using the CA's private key.
 
 ---
 
