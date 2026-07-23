@@ -144,7 +144,7 @@ e2e *NAMES:
 # swallows the resulting `Password:` prompt with no way to type at it.
 # The refresher is killed on any exit path (normal, error, ^C via
 # trap).
-e2e-install *NAMES: (_build "e2e")
+e2e-install *NAMES: (_build-helper-embed "e2e") (_build "e2e")
     #!/usr/bin/env bash
     set -uo pipefail
     sudo -v
@@ -164,7 +164,7 @@ e2e-install *NAMES: (_build "e2e")
 # ends in installed-and-running. First run prompts for TouchID (plist,
 # resolver file, keychain, lo0 aliases, group, base image build).
 # Doubles as the canonical single-scenario install test.
-e2e-bootstrap: (_build "e2e")
+e2e-bootstrap: (_build-helper-embed "e2e") (_build "e2e")
     @sudo -v
     @sudo install -m 755 bin/devm-e2e /usr/local/bin/devm-e2e
     /usr/local/bin/devm-e2e install
