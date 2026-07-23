@@ -27,7 +27,10 @@ func (c *Client) ApplyRoutes(ctx context.Context, name string, routes []Route) e
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
+	// The handler now returns 200 with the resolved routes (BackendHost
+	// substituted for vm-mode non-direct routes) instead of 204. This
+	// client doesn't consume that body yet — that's a follow-up task.
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("routes/apply: status %d", resp.StatusCode)
 	}
 	return nil

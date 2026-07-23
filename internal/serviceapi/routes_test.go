@@ -1,10 +1,15 @@
 package serviceapi
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRoutes_Apply_AddsEntries(t *testing.T) {
@@ -128,4 +133,118 @@ func TestRoutes_ConcurrentReadWrite_NoRace(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestApplyRoutes_SubstitutesProjectIP_ForVMNonDirect(t *testing.T) {
+	// Set up ironProxyState with a project allocated 127.42.0.7.
+	ironProxyState = newIronProxyStore()
+	ironProxyState.put("proj-a", projectInfo{ProjectIP: "127.42.0.7"})
+	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
+
+	routes := NewRoutes()
+	srv := &Server{mux: http.NewServeMux()}
+	RegisterRoutesHandlers(srv, routes)
+
+	// Client sends a vm-mode non-direct route with NO BackendHost.
+	req := ApplyRequest{
+		Name: "proj-a",
+		Routes: []Route{
+			{Hostname: "api.test", BackendPort: 8080, Mode: ModeVM, Project: "proj-a"},
+		},
+	}
+	body, _ := json.Marshal(req)
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, httptest.NewRequest("POST", "/routes/apply", bytes.NewReader(body)))
+
+	require.Equal(t, http.StatusOK, rr.Code, "want 200, got %d: %s", rr.Code, rr.Body.String())
+
+	var resp ApplyResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Routes, 1)
+	assert.Equal(t, "127.42.0.7", resp.Routes[0].BackendHost,
+		"BackendHost must be substituted to the project's allocated IP")
+
+	// The stored route (what proxy.go will dial) has the same substituted value.
+	stored, ok := routes.Lookup("api.test", "proj-a")
+	require.True(t, ok)
+	assert.Equal(t, "127.42.0.7", stored.BackendHost)
+}
+
+func TestApplyRoutes_ErrorsWhenProjectIPUnallocated(t *testing.T) {
+	// ironProxyState has no entry for "proj-b" — VM never started.
+	ironProxyState = newIronProxyStore()
+	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
+
+	routes := NewRoutes()
+	srv := &Server{mux: http.NewServeMux()}
+	RegisterRoutesHandlers(srv, routes)
+
+	req := ApplyRequest{
+		Name: "proj-b",
+		Routes: []Route{
+			{Hostname: "api.test", BackendPort: 8080, Mode: ModeVM, Project: "proj-b"},
+		},
+	}
+	body, _ := json.Marshal(req)
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, httptest.NewRequest("POST", "/routes/apply", bytes.NewReader(body)))
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "no projectIP allocated")
+	assert.Contains(t, rr.Body.String(), "proj-b")
+	assert.Contains(t, rr.Body.String(), "devm start",
+		"error must include the fix hint")
+
+	// Nothing was stored.
+	_, ok := routes.Lookup("api.test", "proj-b")
+	assert.False(t, ok, "no route should be stored when substitution fails")
+}
+
+func TestApplyRoutes_LocalModePassthrough(t *testing.T) {
+	// Local-mode routes are untouched — BackendHost stays as CLI set (or unset).
+	ironProxyState = newIronProxyStore()
+	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
+
+	routes := NewRoutes()
+	srv := &Server{mux: http.NewServeMux()}
+	RegisterRoutesHandlers(srv, routes)
+
+	req := ApplyRequest{
+		Name: "proj-c",
+		Routes: []Route{
+			{Hostname: "api.test", BackendPort: 8080, Mode: ModeLocal, Project: "proj-c"},
+		},
+	}
+	body, _ := json.Marshal(req)
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, httptest.NewRequest("POST", "/routes/apply", bytes.NewReader(body)))
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	stored, _ := routes.Lookup("api.test", "proj-c")
+	assert.Empty(t, stored.BackendHost, "local mode leaves BackendHost as sent")
+}
+
+func TestApplyRoutes_DirectVMPassthrough(t *testing.T) {
+	// Direct services in vm mode are NOT substituted — DNS handles them.
+	ironProxyState = newIronProxyStore()
+	ironProxyState.put("proj-d", projectInfo{ProjectIP: "127.42.0.9"})
+	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
+
+	routes := NewRoutes()
+	srv := &Server{mux: http.NewServeMux()}
+	RegisterRoutesHandlers(srv, routes)
+
+	req := ApplyRequest{
+		Name: "proj-d",
+		Routes: []Route{
+			{Hostname: "db.test", BackendPort: 5432, Mode: ModeVM, Direct: true, Project: "proj-d"},
+		},
+	}
+	body, _ := json.Marshal(req)
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, httptest.NewRequest("POST", "/routes/apply", bytes.NewReader(body)))
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	stored, _ := routes.Lookup("db.test", "proj-d")
+	assert.Empty(t, stored.BackendHost, "direct routes are not substituted")
 }

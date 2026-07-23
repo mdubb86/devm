@@ -158,6 +158,14 @@ type ApplyRequest struct {
 	Routes []Route `json:"routes"`
 }
 
+// ApplyResponse is the 200 body from POST /routes/apply. Routes carries
+// the routes as the daemon stored them — for vm-mode non-direct routes,
+// BackendHost is now populated with the substituted projectIP so the
+// CLI can print the real upstream, not "localhost".
+type ApplyResponse struct {
+	Routes []Route `json:"routes"`
+}
+
 // RemoveRequest is the body shape for POST /routes/remove.
 type RemoveRequest struct {
 	Name string `json:"name"`
@@ -197,8 +205,27 @@ func RegisterRoutesHandlers(s *Server, routes *Routes) {
 			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
-		routes.Apply(req.Name, req.Routes)
-		w.WriteHeader(http.StatusNoContent)
+		// Substitute BackendHost = projectIP for vm-mode non-direct routes.
+		// Rule is driven by Mode + Direct — the CLI-side rule that leaves
+		// BackendHost unset for these routes is a *consequence* of this
+		// substitution rule, not a signal to it.
+		resolved := make([]Route, 0, len(req.Routes))
+		for _, rt := range req.Routes {
+			if rt.Mode == ModeVM && !rt.Direct {
+				info, ok := ironProxyState.get(req.Name)
+				if !ok || info.ProjectIP == "" {
+					http.Error(w,
+						fmt.Sprintf("no projectIP allocated for %q — start the VM first: `devm start`", req.Name),
+						http.StatusBadRequest)
+					return
+				}
+				rt.BackendHost = info.ProjectIP
+			}
+			resolved = append(resolved, rt)
+		}
+		routes.Apply(req.Name, resolved)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ApplyResponse{Routes: resolved})
 	})
 
 	s.Register("/routes/remove", func(w http.ResponseWriter, r *http.Request) {

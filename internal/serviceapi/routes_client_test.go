@@ -45,6 +45,11 @@ func TestClient_ApplyAndListRoutes_Roundtrip(t *testing.T) {
 	srv, _, cleanup := newTestServerWithRoutes(t)
 	defer cleanup()
 
+	// vm-mode non-direct routes require an allocated projectIP — the
+	// handler substitutes it into BackendHost (see routes.go).
+	ironProxyState.put("p1", projectInfo{ProjectIP: "127.42.0.1"})
+	t.Cleanup(func() { ironProxyState.del("p1") })
+
 	c := NewClientWithSocket(srv.socketPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -64,6 +69,11 @@ func TestClient_ApplyAndListRoutes_Roundtrip(t *testing.T) {
 func TestClient_RemoveRoutes(t *testing.T) {
 	srv, _, cleanup := newTestServerWithRoutes(t)
 	defer cleanup()
+
+	// vm-mode non-direct routes require an allocated projectIP — the
+	// handler substitutes it into BackendHost (see routes.go).
+	ironProxyState.put("p1", projectInfo{ProjectIP: "127.42.0.2"})
+	t.Cleanup(func() { ironProxyState.del("p1") })
 
 	c := NewClientWithSocket(srv.socketPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
