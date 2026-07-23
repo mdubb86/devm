@@ -11,16 +11,16 @@ import (
 )
 
 // computeExposeMap turns a project config into softnet's declarative
-// ingress map: one host listener per DIRECT service port on the
-// project's IP, plus SSH on :22. Non-direct services are not exposed
-// via softnet — they're reachable (if HTTP) via the daemon proxy on
-// :80/:443 instead, or not reachable at all. Every entry binds on
-// projectIP (the allocated per-project loopback address from
-// AllocateProjectIP). Sorted by guest port for wire-stability.
+// ingress map: one host listener on the project's IP per service that
+// declares hostname+port (direct: true services are exposed the same
+// way; the `direct:` flag only controls whether the daemon's built-in
+// ProxyServer HTTP-fronts the service, not whether it's exposed at all).
+// SSH is always exposed on :22 for every project. Sorted by guest port
+// for wire-stability.
 func computeExposeMap(cfg schema.Config, projectIP string) []softnet.ExposePort {
 	var ports []softnet.ExposePort
 	for _, svc := range cfg.Services {
-		if svc.Port == 0 || !svc.Direct {
+		if svc.Port == 0 || svc.Hostname == "" {
 			continue
 		}
 		ports = append(ports, softnet.ExposePort{
