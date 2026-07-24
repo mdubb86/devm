@@ -53,6 +53,9 @@ func Build(in BuildInput) ([]byte, error) {
 	if err := writeEntry(tw, "scripts/install-templates.sh", 0o755, []byte(scripts.InstallTemplates)); err != nil {
 		return nil, err
 	}
+	if err := writeEntry(tw, "profile.d/devm.sh", 0o644, []byte(scripts.EtcProfileDevm)); err != nil {
+		return nil, err
+	}
 
 	templates, err := render.RenderTemplates(in.Cfg, in.RepoRoot)
 	if err != nil {

@@ -10,3 +10,6 @@ var WithDevmEnv string
 
 //go:embed install.sh
 var Install string
+
+//go:embed etc-profile-devm.sh
+var EtcProfileDevm string

@@ -356,6 +356,24 @@ func TestBuild_AlwaysEmitsStartupScript_WhenStartupUnset(t *testing.T) {
 		"declared service units join devm.target, startup: set or not")
 }
 
+// TestBuild_IncludesEtcProfileDevm proves the bundle carries the
+// login-shell PATH restorer that install.sh drops at
+// /etc/profile.d/devm.sh. Regression pin: without it, `bash -lc
+// <cmd>` inside the guest can't find devm's tools.
+func TestBuild_IncludesEtcProfileDevm(t *testing.T) {
+	body, err := Build(BuildInput{
+		Cfg: schema.Config{
+			Project: schema.Project{Name: "p"},
+		},
+	})
+	require.NoError(t, err)
+	entries := readTar(t, body)
+	entry, ok := entries["profile.d/devm.sh"]
+	require.True(t, ok, "bundle must contain profile.d/devm.sh")
+	assert.Equal(t, int64(0o644), entry.mode)
+	assert.Contains(t, string(entry.body), "/opt/devm/.env")
+}
+
 func TestBuild_TarContainsSSHMaterial(t *testing.T) {
 	blob, err := Build(BuildInput{
 		Cfg:                 schema.Config{Project: schema.Project{Name: "p"}},

@@ -30,6 +30,13 @@ if [ -f /opt/devm/dnsmasq/devm-test.conf ] && ! cmp -s /opt/devm/dnsmasq/devm-te
         /etc/dnsmasq.d/devm-test.conf
 fi
 
+# --- login-shell PATH restorer: sourced by /etc/profile at bash -l ---
+if [ -f /opt/devm/profile.d/devm.sh ] && ! cmp -s /opt/devm/profile.d/devm.sh /etc/profile.d/devm.sh; then
+    install -o root -g root -m 0644 \
+        /opt/devm/profile.d/devm.sh \
+        /etc/profile.d/devm.sh
+fi
+
 # --- systemd unit files: one per user-declared service with Exec or Systemd. ---
 if [ -d /opt/devm/systemd ]; then
     for f in /opt/devm/systemd/*.service; do
