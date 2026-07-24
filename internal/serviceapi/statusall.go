@@ -25,9 +25,9 @@ type ProjectStatus struct {
 // RegisterStatusAllHandler wires GET /status/all. sup is queried for
 // each project's iron-proxy health; tr supplies the running-VM set.
 // Purely a read-only report — it never spawns anything.
-func RegisterStatusAllHandler(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr TartLister) {
+func RegisterStatusAllHandler(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr TartLister, proxy *ProxyServer) {
 	s.Register("/status/all", func(w http.ResponseWriter, r *http.Request) {
-		out, err := listProjectStatuses(r.Context(), cfg, sup, tr)
+		out, err := listProjectStatuses(r.Context(), cfg, sup, tr, proxy)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -40,7 +40,7 @@ func RegisterStatusAllHandler(s *Server, cfg identity.Config, sup *supervisor.Su
 // listProjectStatuses enumerates every persisted StateSnapshot in
 // StateDir(), joins each against the running-VM set from tr.List, and
 // computes iron-proxy health per project.
-func listProjectStatuses(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, tr TartLister) ([]ProjectStatus, error) {
+func listProjectStatuses(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, tr TartLister, proxy *ProxyServer) ([]ProjectStatus, error) {
 	vms, err := tr.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("tart list: %w", err)
@@ -75,7 +75,7 @@ func listProjectStatuses(ctx context.Context, cfg identity.Config, sup *supervis
 		out = append(out, ProjectStatus{
 			Name:      projectID,
 			VMRunning: running[projectID],
-			Proxy:     computeProxyHealth(cfg, sup, projectID),
+			Proxy:     computeProxyHealth(cfg, sup, proxy, projectID),
 		})
 	}
 	return out, nil

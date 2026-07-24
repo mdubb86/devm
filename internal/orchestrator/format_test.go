@@ -422,6 +422,26 @@ func TestFormatStatusAllText_StaleShowsReconcileRequired(t *testing.T) {
 	assert.Regexp(t, `p\s+running\s+STALE\s+required`, out)
 }
 
+// TestFormatStatusAllText_StuckRebindShowsUnbound proves a failed
+// startup rebind surfaces as UNBOUND (not the underlying proxy
+// Status), with "restart" instead of "required" — `devm reconcile`
+// can't heal a stuck rebind, only `devm stop && devm start` can.
+func TestFormatStatusAllText_StuckRebindShowsUnbound(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{
+			Name:      "p",
+			VMRunning: true,
+			Proxy: serviceapi.ProxyHealth{
+				Status: serviceapi.ProxyOK,
+				Rebind: &serviceapi.RebindReport{State: serviceapi.RebindFailed, Attempts: 3, LastError: "boom"},
+			},
+		},
+	}
+	UseColor = false
+	out := FormatStatusAllText(rows)
+	assert.Regexp(t, `p\s+running\s+UNBOUND\s+restart`, out)
+}
+
 func TestFormatStatusAllText_Empty(t *testing.T) {
 	UseColor = false
 	out := FormatStatusAllText(nil)
@@ -488,4 +508,45 @@ func TestFormatChange_Startup(t *testing.T) {
 	change := reconcile.Change{Kind: reconcile.KindStartupChange}
 	assert.Equal(t, "~ startup commands", formatChange(change))
 	assert.Equal(t, "startup_change", changeKindJSON(reconcile.KindStartupChange))
+}
+
+func TestFormatStatusText_UnboundRebindShowsRecovery(t *testing.T) {
+	ph := &serviceapi.ProxyHealth{
+		Status: serviceapi.ProxyOK,
+		Rebind: &serviceapi.RebindReport{
+			State:     serviceapi.RebindFailed,
+			Attempts:  3,
+			LastError: "bind :80 on 127.42.0.1: helper: connection refused",
+		},
+	}
+	r := StatusResult{
+		HasProject:   true,
+		DNSHealthy:   true,
+		CATrusted:    true,
+		ProxyHealthy: true,
+		ProxyHealth:  ph,
+		State:        "running",
+	}
+	out := FormatStatusText(r)
+	assert.Contains(t, out, "proxy listeners: UNBOUND")
+	assert.Contains(t, out, "helper: connection refused")
+	assert.Contains(t, out, "Recovery: `devm stop")
+}
+
+func TestFormatStatusText_HealthyRebindNoWarning(t *testing.T) {
+	ph := &serviceapi.ProxyHealth{
+		Status: serviceapi.ProxyOK,
+		Rebind: &serviceapi.RebindReport{State: serviceapi.RebindOK, Attempts: 1},
+	}
+	r := StatusResult{
+		HasProject:   true,
+		DNSHealthy:   true,
+		CATrusted:    true,
+		ProxyHealthy: true,
+		ProxyHealth:  ph,
+		State:        "running",
+	}
+	out := FormatStatusText(r)
+	assert.NotContains(t, out, "UNBOUND")
+	assert.NotContains(t, out, "Recovery:")
 }

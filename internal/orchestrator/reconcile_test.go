@@ -88,7 +88,7 @@ func startReconcileDaemon(t *testing.T) func() {
 
 	sup := healthyIronProxySupervisor(t, "x")
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: true, vmName: "x"}, sup)
+	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: true, vmName: "x"}, sup, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -266,7 +266,7 @@ func startReconcileDaemonWithIronProxyCapture(t *testing.T, running bool) (clean
 	socket := identity.Prod.SocketPath()
 
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(t.TempDir()))
+	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(t.TempDir()), nil)
 
 	req := &serviceapi.VMApplyIronProxyRequest{}
 	srv.Register("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {

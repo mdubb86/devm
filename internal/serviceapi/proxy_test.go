@@ -339,3 +339,23 @@ func TestRebindProjectListeners_RetriesUntilHelperReady(t *testing.T) {
 		"expected more than one attempt (helper unavailable at start)")
 	t.Cleanup(func() { proxy.StopProjectListeners("p1") })
 }
+
+// TestStopProjectListeners_ClearsRebindStatus proves a torn-down
+// project's rebind history doesn't leak forever in rebindStatus —
+// otherwise a later /status read could report a stale RebindOK for a
+// project that no longer exists (carried-Minor from Task 1's review).
+func TestStopProjectListeners_ClearsRebindStatus(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+
+	proxy.RecordRebindStatus("p1", RebindStatus{State: RebindOK, Attempts: 1})
+	_, ok := proxy.RebindStatus("p1")
+	require.True(t, ok, "sanity: rebind status must be recorded before StopProjectListeners")
+
+	proxy.StopProjectListeners("p1")
+
+	_, ok = proxy.RebindStatus("p1")
+	assert.False(t, ok, "StopProjectListeners must clear the recorded rebind status")
+}

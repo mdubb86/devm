@@ -136,6 +136,17 @@ func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, proj
 // no-op.
 func (p *ProxyServer) StopProjectListeners(projectID string) {
 	pl, ok := p.takeProjectListeners(projectID)
+
+	// Clear the recorded rebind outcome unconditionally (even when
+	// there were no live listeners to shut down — a rebind can fail
+	// before ever populating perProj) so a torn-down project doesn't
+	// leak forever in rebindStatus and a later /status read doesn't
+	// report a stale RebindOK/RebindFailed for a project that no
+	// longer exists.
+	p.rebindMu.Lock()
+	delete(p.rebindStatus, projectID)
+	p.rebindMu.Unlock()
+
 	if !ok {
 		return
 	}

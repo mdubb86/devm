@@ -50,7 +50,7 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
 	sup := supervisor.New(t.TempDir())
 	tr := &fakeStatusAllTart{running: map[string]bool{"running-proj": true}}
-	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
+	RegisterStatusAllHandler(srv, identity.Prod, sup, tr, nil)
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
@@ -83,7 +83,7 @@ func TestStatusAll_NoSnapshots_EmptyList(t *testing.T) {
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
 	sup := supervisor.New(t.TempDir())
 	tr := &fakeStatusAllTart{running: map[string]bool{}}
-	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
+	RegisterStatusAllHandler(srv, identity.Prod, sup, tr, nil)
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
@@ -104,7 +104,7 @@ func TestStatusAll_SkipsNonJSONAndMalformedFiles(t *testing.T) {
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
 	sup := supervisor.New(t.TempDir())
 	tr := &fakeStatusAllTart{running: map[string]bool{}}
-	RegisterStatusAllHandler(srv, identity.Prod, sup, tr)
+	RegisterStatusAllHandler(srv, identity.Prod, sup, tr, nil)
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
@@ -121,7 +121,7 @@ func TestStatusAll_TartListError_Returns500(t *testing.T) {
 
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
 	sup := supervisor.New(t.TempDir())
-	RegisterStatusAllHandler(srv, identity.Prod, sup, erroringTartLister{})
+	RegisterStatusAllHandler(srv, identity.Prod, sup, erroringTartLister{}, nil)
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))

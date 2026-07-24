@@ -233,6 +233,11 @@ func formatIronProxyHealth(r StatusResult) string {
 	default:
 		fmt.Fprintf(&b, "\niron-proxy: unknown (%s)\n", r.ProxyHealth.Status)
 	}
+	if r.ProxyHealth.Rebind != nil && r.ProxyHealth.Rebind.State == serviceapi.RebindFailed {
+		fmt.Fprintf(&b, "\nproxy listeners: UNBOUND — %s\n",
+			r.ProxyHealth.Rebind.LastError)
+		b.WriteString("  Recovery: `devm stop <project> && devm start`\n")
+	}
 	return b.String()
 }
 
@@ -259,7 +264,11 @@ func red(s string) string {
 // reconcile is required. The iron-proxy/reconcile columns show "—"
 // for stopped VMs — proxy health isn't actionable until the VM is up
 // (same reasoning as ExitReconcileRequired only firing for running
-// VMs). Honors UseColor: green "ok", red "MISSING"/"STALE".
+// VMs). A project whose startup rebind pass failed shows "UNBOUND" in
+// the iron-proxy column and "restart" (not "required") in the
+// reconcile column — `devm reconcile` doesn't heal a stuck rebind, only
+// `devm stop && devm start` does. Honors UseColor: green "ok", red
+// "MISSING"/"STALE"/"UNBOUND".
 func FormatStatusAllText(rows []serviceapi.ProjectStatus) string {
 	if len(rows) == 0 {
 		return "No projects found.\n"
@@ -293,6 +302,13 @@ func FormatStatusAllText(rows []serviceapi.ProjectStatus) string {
 				proxyCol, reconcileCol, colored = "STALE", "required", "bad"
 			default:
 				proxyCol = string(r.Proxy.Status)
+			}
+			// A stuck rebind means :80/:443 never got bound, regardless of
+			// what the proxy process itself reports — `devm reconcile`
+			// can't heal this (it's not config drift), so the column
+			// points at the actual recovery path instead.
+			if r.Proxy.Rebind != nil && r.Proxy.Rebind.State == serviceapi.RebindFailed {
+				proxyCol, reconcileCol, colored = "UNBOUND", "restart", "bad"
 			}
 		}
 		lines[i] = line{project: r.Name, vm: vmState, proxy: proxyCol, reconcile: reconcileCol, colored: colored}

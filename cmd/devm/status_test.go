@@ -42,7 +42,7 @@ func startStatusAllDaemon(t *testing.T, running map[string]bool) func() {
 	socket := identity.Prod.SocketPath()
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "dev"})
 	sup := supervisor.New(t.TempDir())
-	serviceapi.RegisterStatusAllHandler(srv, identity.Prod, sup, &fakeStatusTart{running: running})
+	serviceapi.RegisterStatusAllHandler(srv, identity.Prod, sup, &fakeStatusTart{running: running}, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

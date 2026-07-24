@@ -71,7 +71,7 @@ type TartLister interface {
 // RegisterReconcileHandler wires POST /vm/reconcile. sup is consulted
 // (only when the VM is running) to self-heal a missing/stale
 // iron-proxy: see the KindIronProxyDown emit below.
-func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, tr TartLister, sup *supervisor.Supervisor) {
+func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer) {
 	s.Register("/vm/reconcile", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -150,7 +150,7 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 		// /vm/apply-iron-proxy whenever AppliedIronProxy is non-empty.
 		// Gated on running: a stopped VM has no live iron-proxy to heal.
 		if running {
-			if computeProxyHealth(cfg, sup, req.Name).Status != ProxyOK {
+			if computeProxyHealth(cfg, sup, proxy, req.Name).Status != ProxyOK {
 				ironProxy = append(ironProxy, reconcile.Change{Kind: reconcile.KindIronProxyDown})
 			}
 		}

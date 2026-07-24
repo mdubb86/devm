@@ -197,10 +197,10 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	denials := NewDenials()
 
 	RegisterVMHandlers(server, cfg, sup, tr, denials, ntp.Port(), locks, proxy)
-	RegisterReconcileHandler(server, cfg, locks, &realApplyLiver{tr: tr}, tr, sup)
+	RegisterReconcileHandler(server, cfg, locks, &realApplyLiver{tr: tr}, tr, sup, proxy)
 	RegisterApplyIronProxyHandler(server, cfg, locks, sup, tr, denials)
-	RegisterHandshakeHandler(server, cfg, build, sup)
-	RegisterStatusAllHandler(server, cfg, sup, tr)
+	RegisterHandshakeHandler(server, cfg, build, sup, proxy)
+	RegisterStatusAllHandler(server, cfg, sup, tr, proxy)
 
 	var g run.Group
 
