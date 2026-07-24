@@ -79,29 +79,9 @@ def test_route_vm_reaches_guest_http_service(workspace, devm, sandbox_name):
         f"CLI must NOT print localhost/127.0.0.1 for vm mode, got:\n{out}"
     )
 
-    # Wait for the container to actually answer inside the guest before
-    # firing Mac-side curl. `docker run -d` returns as soon as the container
-    # is created, not when nginx is ready to serve — the previous
-    # test-flake mode was Mac curl racing container startup and getting
-    # 000 (connection failure at :443, no HTTP response).
-    guest_ready_deadline = time.time() + 30
-    while time.time() < guest_ready_deadline:
-        probe = devm_exec_with_retry(
-            devm.path,
-            ["bash", "-c", f"exec 3<>/dev/tcp/127.0.0.1/{HOST_BACKEND_PORT} && echo ready"],
-            cwd=str(workspace.path), timeout=10,
-        )
-        if probe.returncode == 0 and b"ready" in probe.stdout:
-            break
-        time.sleep(1)
-    else:
-        pytest.fail(
-            f"nginx container never bound guest:{HOST_BACKEND_PORT} within 30s"
-        )
-
-    # Mac-side curl. Retry loop still present in case the daemon
-    # ProxyServer + softnet listener setup lags the guest container's
-    # readiness.
+    # curl from the Mac.
+    # Retry loop: daemon ProxyServer + softnet + container listener chain
+    # can add ~1-2s past `docker run` returning.
     deadline = time.time() + 30
     last = None
     while time.time() < deadline:
