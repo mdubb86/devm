@@ -47,6 +47,15 @@ func Build(in BuildInput) ([]byte, error) {
 	if err := writeEntry(tw, ".env", 0o644, []byte(envBody)); err != nil {
 		return nil, err
 	}
+
+	etcEnvBody, err := render.RenderEtcEnvironment(in.Cfg)
+	if err != nil {
+		return nil, fmt.Errorf("render /etc/environment: %w", err)
+	}
+	if err := writeEntry(tw, "etc/environment", 0o644, []byte(etcEnvBody)); err != nil {
+		return nil, err
+	}
+
 	if err := writeEntry(tw, "scripts/with-devm-env", 0o755, []byte(scripts.WithDevmEnv)); err != nil {
 		return nil, err
 	}

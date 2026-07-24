@@ -374,6 +374,39 @@ func TestBuild_IncludesEtcProfileDevm(t *testing.T) {
 	assert.Contains(t, string(entry.body), "/opt/devm/.env")
 }
 
+// TestBuild_IncludesEtcEnvironment proves the bundle carries the
+// machine-wide env file that install.sh drops at /etc/environment,
+// where pam_env sources it for every ssh session (including raw
+// non-interactive `ssh host cmd`). Without this, devm's PATH and
+// cfg.Env don't reach non-wrapper shells.
+func TestBuild_IncludesEtcEnvironment(t *testing.T) {
+	body, err := Build(BuildInput{
+		Cfg: schema.Config{Project: schema.Project{Name: "p"}},
+	})
+	require.NoError(t, err)
+	entries := readTar(t, body)
+	entry, ok := entries["etc/environment"]
+	require.True(t, ok, "bundle must contain etc/environment")
+	assert.Equal(t, int64(0o644), entry.mode)
+	assert.Contains(t, string(entry.body), "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt")
+	assert.Contains(t, string(entry.body), "PATH=")
+}
+
+// TestBuild_EtcEnvironmentErrorPropagates proves an invalid env value
+// (raw newline — pam_env unrepresentable) causes Build to return the
+// render error rather than emit a subtly broken /etc/environment.
+func TestBuild_EtcEnvironmentErrorPropagates(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env: map[string]schema.EnvValue{
+			"BAD": {Literal: "line1\nline2"},
+		},
+	}
+	_, err := Build(BuildInput{Cfg: cfg})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BAD")
+}
+
 func TestBuild_TarContainsSSHMaterial(t *testing.T) {
 	blob, err := Build(BuildInput{
 		Cfg:                 schema.Config{Project: schema.Project{Name: "p"}},

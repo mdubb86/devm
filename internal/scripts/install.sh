@@ -30,6 +30,13 @@ if [ -f /opt/devm/dnsmasq/devm-test.conf ] && ! cmp -s /opt/devm/dnsmasq/devm-te
         /etc/dnsmasq.d/devm-test.conf
 fi
 
+# --- machine-wide env (pam_env source for ssh sessions + systemd) ---
+if [ -f /opt/devm/etc/environment ] && ! cmp -s /opt/devm/etc/environment /etc/environment; then
+    install -o root -g root -m 0644 \
+        /opt/devm/etc/environment \
+        /etc/environment
+fi
+
 # --- login-shell PATH restorer: sourced by /etc/profile at bash -l ---
 if [ -f /opt/devm/profile.d/devm.sh ] && ! cmp -s /opt/devm/profile.d/devm.sh /etc/profile.d/devm.sh; then
     install -o root -g root -m 0644 \
