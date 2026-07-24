@@ -20,7 +20,11 @@ from helpers.exec_retry import devm_exec_with_retry
 
 pytestmark = pytest.mark.devm
 
-BACKEND_PORT = 8080
+# Guest-facing port that softnet exposes and the daemon proxy dials.
+# nginx:alpine listens on :80 inside the container, so the port
+# mapping is HOST_PORT:CONTAINER_PORT = HOST_BACKEND_PORT:80.
+HOST_BACKEND_PORT = 8080
+CONTAINER_PORT = 80
 
 
 @pytest.mark.slow
@@ -30,7 +34,7 @@ def test_route_vm_reaches_guest_http_service(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
         docker=True,
         services={
-            "api": {"port": BACKEND_PORT, "hostname": hostname},  # not direct
+            "api": {"port": HOST_BACKEND_PORT, "hostname": hostname},  # not direct
         },
     )
 
@@ -42,12 +46,13 @@ def test_route_vm_reaches_guest_http_service(workspace, devm, sandbox_name):
         f"devm start failed:\nstderr={r.stderr.decode()!r}"
     )
 
-    # Run nginx in the guest to answer :8080. `docker run --rm -d` returns
-    # once the container is up.
+    # Run nginx in the guest. Maps host_port:container_port —
+    # HOST_BACKEND_PORT is what softnet+the daemon proxy dial;
+    # CONTAINER_PORT is where nginx:alpine actually listens (default 80).
     run = devm_exec_with_retry(
         devm.path,
         ["docker", "run", "-d", "--name", "nginx",
-         "-p", f"{BACKEND_PORT}:{BACKEND_PORT}",
+         "-p", f"{HOST_BACKEND_PORT}:{CONTAINER_PORT}",
          "nginx:alpine"],
         cwd=str(workspace.path), timeout=120,
     )
