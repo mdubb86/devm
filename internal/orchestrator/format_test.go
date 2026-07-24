@@ -482,7 +482,7 @@ func TestFormatStatusAllText_StuckRebindShowsUnbound(t *testing.T) {
 	assert.Regexp(t, `p\s+running\s+ok\s+—`, out)
 	// Rebind failure surfaced separately, with the real error and recovery command.
 	assert.Contains(t, out, "Note: project p has proxy listeners UNBOUND — boom")
-	assert.Contains(t, out, "Recovery: `devm stop && devm start`")
+	assert.Contains(t, out, "Recovery: cd to project p's directory, then `devm stop && devm start`")
 }
 
 // TestFormatStatusAllText_IronProxyColumnUnaffectedByRebindState proves
@@ -508,6 +508,7 @@ func TestFormatStatusAllText_IronProxyColumnUnaffectedByRebindState(t *testing.T
 	lines := strings.Split(out, "\n")
 	require.Regexp(t, `^p\s+running\s+MISSING\s+required\s*$`, lines[1])
 	assert.Contains(t, out, "Note: project p has proxy listeners UNBOUND — bind :80: address in use")
+	assert.Contains(t, out, "Recovery: cd to project p's directory, then `devm stop && devm start`")
 }
 
 func TestFormatStatusAllText_Empty(t *testing.T) {
@@ -598,7 +599,7 @@ func TestFormatStatusText_UnboundRebindShowsRecovery(t *testing.T) {
 	out := FormatStatusText(r)
 	assert.Contains(t, out, "proxy listeners: UNBOUND")
 	assert.Contains(t, out, "helper: connection refused")
-	assert.Contains(t, out, "Recovery: `devm stop")
+	assert.Contains(t, out, "Recovery: `devm stop && devm start` (from the project directory)")
 }
 
 func TestFormatStatusText_HealthyRebindNoWarning(t *testing.T) {

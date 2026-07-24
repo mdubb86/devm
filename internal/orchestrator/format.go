@@ -236,7 +236,7 @@ func formatIronProxyHealth(r StatusResult) string {
 	if r.ProxyHealth.Rebind != nil && r.ProxyHealth.Rebind.State == serviceapi.RebindFailed {
 		fmt.Fprintf(&b, "\nproxy listeners: UNBOUND — %s\n",
 			r.ProxyHealth.Rebind.LastError)
-		b.WriteString("  Recovery: `devm stop <project> && devm start`\n")
+		b.WriteString("  Recovery: `devm stop && devm start` (from the project directory)\n")
 	}
 	return b.String()
 }
@@ -348,8 +348,8 @@ func FormatStatusAllText(rows []serviceapi.ProjectStatus) string {
 			fmt.Fprintln(&b)
 			notePrinted = true
 		}
-		note := fmt.Sprintf("Note: project %s has proxy listeners UNBOUND — %s — Recovery: `devm stop && devm start`",
-			r.Name, r.Proxy.Rebind.LastError)
+		note := fmt.Sprintf("Note: project %s has proxy listeners UNBOUND — %s — Recovery: cd to project %s's directory, then `devm stop && devm start`",
+			r.Name, r.Proxy.Rebind.LastError, r.Name)
 		fmt.Fprintln(&b, red(note))
 	}
 	return b.String()

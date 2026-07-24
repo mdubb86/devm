@@ -23,11 +23,12 @@ func TestExecCmd_StripLeadingDashDash_NoOpWhenAbsent(t *testing.T) {
 
 func TestExecCmd_StripLeadingDashDash_OnlyStripsLeading(t *testing.T) {
 	// A `--` mid-args is a legitimate arg to the guest command
-	// (e.g. `devm exec -- sh -c "echo -- foo"`). We only strip the
+	// (e.g. `devm exec -- grep -- pattern`). We only strip the
 	// first `--` that immediately follows `exec`, which cobra
-	// presents as the first positional arg.
-	got := stripLeadingDashDash([]string{"sh", "-c", "echo -- foo"})
-	assert.Equal(t, []string{"sh", "-c", "echo -- foo"}, got)
+	// presents as the first positional arg — a second, mid-args `--`
+	// must survive untouched.
+	got := stripLeadingDashDash([]string{"--", "grep", "--", "pattern"})
+	assert.Equal(t, []string{"grep", "--", "pattern"}, got)
 }
 
 // TestExecCmd_HelpFlagPrintsUsage proves `devm exec --help` prints
