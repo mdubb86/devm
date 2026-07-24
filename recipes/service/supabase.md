@@ -31,6 +31,13 @@ works from the Mac AND from inside the VM, unchanged.
 ```yaml
 docker: true                          # supabase start spins up ~10 containers
 
+env:
+  # The CLI POSTs telemetry on every invocation. That host isn't in the
+  # egress allowlist below, so iron-proxy 403s it and the CLI prints a
+  # stacktrace over the output of every `supabase` command. Opting out
+  # is cleaner than allowing the egress.
+  DO_NOT_TRACK: "1"
+
 packages:
   - postgresql-client   # `psql` — handy for local queries, migrations, troubleshooting
 
