@@ -166,18 +166,22 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// above just populated.
 	discoverSoftnet(ctx, cfg, ntp.Port())
 
-	// Wait briefly for the helper socket to come up before firing
-	// the rebind pass. Both daemon and helper get bootstrapped by
-	// the same install script, so the daemon can win the race here
-	// and see "connection refused" on BindTCP. Timeout is bounded;
-	// the retry loop below covers late helpers.
-	waitForHelperReady(ctx, cfg.HelperSocketPath, helperReadinessTimeout)
+	// When there are recovered projects to rebind, wait briefly for the
+	// helper socket — otherwise skip the gate so first-boot (no projects)
+	// doesn't pay the readiness latency. Both daemon and helper get
+	// bootstrapped by the same install script, so the daemon can win the
+	// race here and see "connection refused" on BindTCP. Timeout is
+	// bounded; the retry loop below covers late helpers.
+	ids := ironProxyState.keys()
+	if len(ids) > 0 {
+		waitForHelperReady(ctx, cfg.HelperSocketPath, helperReadinessTimeout)
+	}
 
 	// Re-bind this daemon's own per-project HTTP/HTTPS proxy listeners
 	// for every project AdoptIronProxies just recovered. Per-project
 	// goroutines with a bounded retry — a transient helper hiccup
 	// won't strand :80/:443 for the daemon's lifetime.
-	for _, id := range ironProxyState.keys() {
+	for _, id := range ids {
 		info, ok := ironProxyState.get(id)
 		if !ok || info.ProjectIP == "" {
 			continue
