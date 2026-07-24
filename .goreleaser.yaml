@@ -126,10 +126,18 @@ homebrew_casks:
       postflight do
         system_command "/usr/bin/xattr",
                        args: ["-rd", "com.apple.quarantine", staged_path]
-        # If the devm service is installed, restart it so it picks up
-        # this newly-installed binary. Best-effort — silent when the
-        # service isn't registered (a fresh install) or isn't running.
+        # After the binary swap, run `devm install` to bootout+bootstrap
+        # both the daemon and helper plists on the new binary. Same as
+        # what `devm upgrade` does for direct-install users (upgrade.go
+        # re-execs the new binary as `devm install`) — this keeps the
+        # brew and direct-install upgrade paths converged. Requires
+        # sudo/TouchID; brew inherits the terminal's TTY when invoked
+        # via `brew upgrade`, so the prompt surfaces to the user.
+        # must_succeed: false — a headless brew run without a TTY
+        # skips silently; the CLI's Fingerprint drift check then
+        # catches the user on their next daemon-touching command
+        # with the actionable "run `devm install`" message.
         system_command "#{HOMEBREW_PREFIX}/bin/devm",
-                       args: ["restart"],
+                       args: ["install"],
                        must_succeed: false
       end
