@@ -71,8 +71,12 @@ func etcEnvironmentQuote(v string) (string, error) {
 // Emitted lines, in this order:
 //  1. NO_PROXY=*
 //  2. NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt
-//  3. PATH=<cfg.Path entries>:<guestSystemPATH> (or just guestSystemPATH
-//     with /opt/devm/scripts prepended when cfg.Path is empty)
+//  3. PATH="<cfg.Path[0]>:<cfg.Path[1]>:...:/opt/devm/scripts:<guestSystemPATH>"
+//     (always double-quoted; cfg.Path may be empty, in which case the
+//     join begins at /opt/devm/scripts). PATH is always emitted
+//     double-quoted — matching Debian's shipped /etc/environment
+//     convention — even when its characters would allow bare emission
+//     per etcEnvironmentQuote.
 //  4. cfg.Env entries (including WORKSPACE, IS_SANDBOX), sorted by key
 //  5. Per-service NAME_KEY entries, sorted by name then key
 //
