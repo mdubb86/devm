@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -207,12 +208,10 @@ func TestProxy_BackendHost_ExplicitLocalhost(t *testing.T) {
 	assert.Equal(t, "from backend", string(body))
 }
 
-// mockHelperServer starts a UDS listener that mimics enough of the
-// root devm-helper's protocol to satisfy StartProjectListeners: for
-// every connection it reads (and discards) one newline-delimited
-// request, binds a real ephemeral TCP socket, and hands the FD back
-// via SCM_RIGHTS. Serves connections in a loop — StartProjectListeners
-// dials it twice (once for :80, once for :443).
+// mockHelperServer starts a UDS listener at a fresh scratch path that
+// mimics enough of the root devm-helper's protocol to satisfy
+// StartProjectListeners. See startMockHelperAt for the protocol
+// details.
 func mockHelperServer(t *testing.T) string {
 	t.Helper()
 	// os.MkdirTemp (not t.TempDir()) keeps the UDS path short enough to
@@ -222,7 +221,21 @@ func mockHelperServer(t *testing.T) string {
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "helper.sock")
-	ln, err := net.Listen("unix", sock)
+	return startMockHelperAt(t, sock)
+}
+
+// startMockHelperAt starts a UDS listener at sockPath that mimics
+// enough of the root devm-helper's protocol to satisfy
+// StartProjectListeners: for every connection it reads (and discards)
+// one newline-delimited request, binds a real ephemeral TCP socket,
+// and hands the FD back via SCM_RIGHTS. Serves connections in a loop —
+// StartProjectListeners dials it twice (once for :80, once for :443).
+// Callers pick sockPath so tests can start the helper late (e.g. to
+// exercise the rebind retry loop against an initially-unreachable
+// helper).
+func startMockHelperAt(t *testing.T, sockPath string) string {
+	t.Helper()
+	ln, err := net.Listen("unix", sockPath)
 	require.NoError(t, err)
 	go func() {
 		for {
@@ -259,9 +272,9 @@ func mockHelperServer(t *testing.T) string {
 	}()
 	t.Cleanup(func() {
 		ln.Close()
-		os.Remove(sock)
+		os.Remove(sockPath)
 	})
-	return sock
+	return sockPath
 }
 
 // TestProxyServer_DialsCfgHelperSocket_NotProdHardcoded is the C1
@@ -286,5 +299,43 @@ func TestProxyServer_DialsCfgHelperSocket_NotProdHardcoded(t *testing.T) {
 	proxy := NewProxyServer(cfg, NewRoutes(), ca)
 	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
 	require.NoError(t, err, "StartProjectListeners must dial cfg.HelperSocketPath, not a hardcoded prod path")
+	t.Cleanup(func() { proxy.StopProjectListeners("p1") })
+}
+
+// TestStartProjectListeners_RetriesOnHelperUnreachable proves the
+// retry wrapper (in runner.go's rebindProjectListeners) hits
+// StartProjectListeners multiple times when the helper dial fails
+// then succeeds. This is the fix for the v0.9.3 finding: after
+// daemon+helper bootout+bootstrap, the rebind goroutine could fire
+// before the helper socket was accepting connections.
+func TestRebindProjectListeners_RetriesUntilHelperReady(t *testing.T) {
+	// Start a helper only AFTER a delay so the first attempt fails
+	// and the retry succeeds.
+	dir, err := os.MkdirTemp("", "pxy-late")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "helper.sock")
+	// Do not start the helper yet — first attempt should fail.
+
+	cfg := identity.Config{Name: "test-rebind-retry", HelperSocketPath: sock}
+	caDir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, caDir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+
+	// Start helper after 800ms — inside the 3-attempt window
+	// (0/500ms/1500ms) but after the first attempt.
+	go func() {
+		time.Sleep(800 * time.Millisecond)
+		// Reuse the same body as mockHelperServer but bind to our
+		// pre-chosen path.
+		startMockHelperAt(t, sock)
+	}()
+
+	status := rebindProjectListeners(context.Background(), proxy, cfg, "p1", "127.0.0.1")
+	assert.Equal(t, RebindOK, status.State,
+		"expected retry to succeed; got State=%s LastError=%q", status.State, status.LastError)
+	assert.Greater(t, status.Attempts, 1,
+		"expected more than one attempt (helper unavailable at start)")
 	t.Cleanup(func() { proxy.StopProjectListeners("p1") })
 }

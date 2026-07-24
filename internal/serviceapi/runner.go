@@ -3,7 +3,9 @@ package serviceapi
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"time"
 
 	"github.com/oklog/run"
 
@@ -12,6 +14,71 @@ import (
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
+
+// rebindBackoff is the wait before each retry attempt (the first
+// attempt is immediate). Three attempts total, matching the
+// launchdBootstrapBackoff pattern.
+var rebindBackoff = []time.Duration{0, 500 * time.Millisecond, 1500 * time.Millisecond}
+
+// helperReadinessTimeout is the max time waitForHelperReady blocks
+// before proceeding. Retry in rebindProjectListeners covers slow
+// helpers past this window.
+const helperReadinessTimeout = 2 * time.Second
+
+// waitForHelperReady blocks until a UDS dial to socketPath succeeds
+// or timeout elapses. Best-effort; a timeout is not fatal — the
+// retry loop in rebindProjectListeners covers late-arriving helper.
+func waitForHelperReady(ctx context.Context, socketPath string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		c, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond)
+		if err == nil {
+			c.Close()
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// rebindProjectListeners calls proxy.StartProjectListeners for one
+// project with bounded retry. Returns the final RebindStatus (also
+// recorded on proxy). Called concurrently, one goroutine per
+// recovered project.
+func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identity.Config, projectID, projectIP string) RebindStatus {
+	proxy.RecordRebindStatus(projectID, RebindStatus{State: RebindPending, Attempts: 0})
+	var lastErr error
+	for i, backoff := range rebindBackoff {
+		if backoff > 0 {
+			select {
+			case <-ctx.Done():
+				s := RebindStatus{State: RebindFailed, Attempts: i, LastError: "context canceled"}
+				proxy.RecordRebindStatus(projectID, s)
+				return s
+			case <-time.After(backoff):
+			}
+		}
+		attempts := i + 1
+		proxy.RecordRebindStatus(projectID, RebindStatus{State: RebindPending, Attempts: attempts})
+		err := proxy.StartProjectListeners(ctx, projectID, projectIP)
+		if err == nil {
+			s := RebindStatus{State: RebindOK, Attempts: attempts}
+			proxy.RecordRebindStatus(projectID, s)
+			return s
+		}
+		lastErr = err
+	}
+	s := RebindStatus{State: RebindFailed, Attempts: len(rebindBackoff), LastError: lastErr.Error()}
+	proxy.RecordRebindStatus(projectID, s)
+	debuglog.Logf("serviceapi", "rebind: project %s FAILED after %d attempts: %v", projectID, len(rebindBackoff), lastErr)
+	return s
+}
 
 // RunService composes the service's goroutines into an oklog/run
 // group and blocks until any actor returns. Ship 1 only ran the
@@ -99,25 +166,23 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// above just populated.
 	discoverSoftnet(ctx, cfg, ntp.Port())
 
+	// Wait briefly for the helper socket to come up before firing
+	// the rebind pass. Both daemon and helper get bootstrapped by
+	// the same install script, so the daemon can win the race here
+	// and see "connection refused" on BindTCP. Timeout is bounded;
+	// the retry loop below covers late helpers.
+	waitForHelperReady(ctx, cfg.HelperSocketPath, helperReadinessTimeout)
+
 	// Re-bind this daemon's own per-project HTTP/HTTPS proxy listeners
-	// for every project AdoptIronProxies just recovered. A daemon
-	// restart tears down the previous process's listeners (helper
-	// hands out FDs per-request; they aren't inherited across a
-	// restart), so without this a recovered project would resolve in
-	// DNS but 502/refuse on the daemon proxy until its next /vm/start.
-	// Best-effort and non-blocking for the same reason discoverSoftnet's
-	// re-push is: a missing/unresponsive helper must not
-	// stall the rest of the daemon from coming up.
+	// for every project AdoptIronProxies just recovered. Per-project
+	// goroutines with a bounded retry — a transient helper hiccup
+	// won't strand :80/:443 for the daemon's lifetime.
 	for _, id := range ironProxyState.keys() {
 		info, ok := ironProxyState.get(id)
 		if !ok || info.ProjectIP == "" {
 			continue
 		}
-		go func(id, ip string) {
-			if err := proxy.StartProjectListeners(ctx, id, ip); err != nil {
-				debuglog.Logf("serviceapi", "restart-adopt: start project listeners for %s: %v", id, err)
-			}
-		}(id, info.ProjectIP)
+		go rebindProjectListeners(ctx, proxy, cfg, id, info.ProjectIP)
 	}
 
 	// Denials tracker — per-project counts of iron-proxy allow-list

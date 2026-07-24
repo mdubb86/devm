@@ -32,6 +32,13 @@ type ProxyServer struct {
 
 	mu      sync.Mutex
 	perProj map[string]projectListeners
+
+	// rebindMu guards rebindStatus. Separate from mu because the
+	// status is read from /status handlers on the request path, and
+	// holding perProj's mu across those reads would serialize them
+	// behind StartProjectListeners.
+	rebindMu     sync.Mutex
+	rebindStatus map[string]RebindStatus
 }
 
 // projectListeners is the pair of listeners (and their http.Servers,
@@ -43,12 +50,35 @@ type projectListeners struct {
 	httpsSrv *http.Server
 }
 
+// RebindState is one of the outcomes of the daemon-startup rebind pass
+// (runner.go's restart-adopt loop). Read by /status to surface a
+// stuck project to the user instead of silent limbo.
+type RebindState string
+
+const (
+	RebindNotAttempted RebindState = "not_attempted"
+	RebindPending      RebindState = "pending"
+	RebindOK           RebindState = "ok"
+	RebindFailed       RebindState = "failed"
+)
+
+// RebindStatus is the per-project outcome of the startup rebind pass.
+// Attempts is the number of StartProjectListeners calls made (retries
+// increment). LastError is the final error string when State ==
+// RebindFailed; empty otherwise.
+type RebindStatus struct {
+	State     RebindState
+	Attempts  int
+	LastError string
+}
+
 func NewProxyServer(cfg identity.Config, routes *Routes, ca *CA) *ProxyServer {
 	return &ProxyServer{
 		routes:       routes,
 		ca:           ca,
 		helperClient: helper.NewClient(cfg),
 		perProj:      make(map[string]projectListeners),
+		rebindStatus: make(map[string]RebindStatus),
 	}
 }
 
@@ -147,6 +177,24 @@ func (p *ProxyServer) takeProjectListeners(projectID string) (projectListeners, 
 		delete(p.perProj, projectID)
 	}
 	return pl, ok
+}
+
+// RecordRebindStatus stores the outcome of the startup rebind pass
+// for projectID. Called by the runner's rebind loop; read by /status.
+func (p *ProxyServer) RecordRebindStatus(projectID string, s RebindStatus) {
+	p.rebindMu.Lock()
+	defer p.rebindMu.Unlock()
+	p.rebindStatus[projectID] = s
+}
+
+// RebindStatus returns the recorded outcome for projectID. The second
+// return is false when no rebind was attempted (e.g. the project
+// wasn't recovered by AdoptIronProxies).
+func (p *ProxyServer) RebindStatus(projectID string) (RebindStatus, bool) {
+	p.rebindMu.Lock()
+	defer p.rebindMu.Unlock()
+	s, ok := p.rebindStatus[projectID]
+	return s, ok
 }
 
 type ctxKey int
