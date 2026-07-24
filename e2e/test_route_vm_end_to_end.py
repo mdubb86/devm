@@ -79,9 +79,29 @@ def test_route_vm_reaches_guest_http_service(workspace, devm, sandbox_name):
         f"CLI must NOT print localhost/127.0.0.1 for vm mode, got:\n{out}"
     )
 
-    # curl from the Mac.
-    # Retry loop: daemon ProxyServer + softnet + container listener chain
-    # can add ~1-2s past `docker run` returning.
+    # Wait for the container to actually answer inside the guest before
+    # firing Mac-side curl. `docker run -d` returns as soon as the container
+    # is created, not when nginx is ready to serve — the previous
+    # test-flake mode was Mac curl racing container startup and getting
+    # 000 (connection failure at :443, no HTTP response).
+    guest_ready_deadline = time.time() + 30
+    while time.time() < guest_ready_deadline:
+        probe = devm_exec_with_retry(
+            devm.path,
+            ["bash", "-c", f"exec 3<>/dev/tcp/127.0.0.1/{HOST_BACKEND_PORT} && echo ready"],
+            cwd=str(workspace.path), timeout=10,
+        )
+        if probe.returncode == 0 and b"ready" in probe.stdout:
+            break
+        time.sleep(1)
+    else:
+        pytest.fail(
+            f"nginx container never bound guest:{HOST_BACKEND_PORT} within 30s"
+        )
+
+    # Mac-side curl. Retry loop still present in case the daemon
+    # ProxyServer + softnet listener setup lags the guest container's
+    # readiness.
     deadline = time.time() + 30
     last = None
     while time.time() < deadline:
@@ -94,34 +114,8 @@ def test_route_vm_reaches_guest_http_service(workspace, devm, sandbox_name):
         if last == "200":
             break
         time.sleep(1)
-    if last != "200":
-        # Collect diagnostics BEFORE the workspace fixture tears down the VM.
-        # Distinguish TLS/TCP/DNS failure (000) from backend-dead (502) from
-        # something else, and prove where the container actually is inside
-        # the VM.
-        diag_curl = subprocess.run(
-            ["curl", "-v", "-sS", "-o", "/dev/null", "--max-time", "5",
-             f"https://{hostname}/"],
-            capture_output=True, text=True,
-        )
-        diag_dns = subprocess.run(
-            ["dig", "+short", "@127.0.0.1", "-p", "51154", hostname],
-            capture_output=True, text=True,
-        )
-        diag_ps = subprocess.run(
-            [devm.path, "exec", "docker", "ps", "-a"],
-            cwd=str(workspace.path), capture_output=True, text=True, timeout=15,
-        )
-        diag_listen = subprocess.run(
-            [devm.path, "exec", "bash", "-c", "ss -tlnp 2>/dev/null | head"],
-            cwd=str(workspace.path), capture_output=True, text=True, timeout=15,
-        )
-        pytest.fail(
-            f"curl https://{hostname}/ expected 200, got {last!r}\n"
-            f"--- curl -v ---\n{diag_curl.stderr}\n"
-            f"--- dig @127.0.0.1:51154 {hostname} ---\n{diag_dns.stdout!r}\n"
-            f"--- guest docker ps -a ---\n{diag_ps.stdout}{diag_ps.stderr}\n"
-            f"--- guest listeners (ss -tlnp) ---\n{diag_listen.stdout}{diag_listen.stderr}"
-        )
+    assert last == "200", (
+        f"curl https://{hostname}/ expected 200, got {last!r}"
+    )
 
     # Cleanup handled by workspace fixture (devm teardown --yes).
