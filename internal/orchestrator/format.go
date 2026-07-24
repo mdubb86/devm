@@ -264,11 +264,16 @@ func red(s string) string {
 // reconcile is required. The iron-proxy/reconcile columns show "—"
 // for stopped VMs — proxy health isn't actionable until the VM is up
 // (same reasoning as ExitReconcileRequired only firing for running
-// VMs). A project whose startup rebind pass failed shows "UNBOUND" in
-// the iron-proxy column and "restart" (not "required") in the
-// reconcile column — `devm reconcile` doesn't heal a stuck rebind, only
-// `devm stop && devm start` does. Honors UseColor: green "ok", red
-// "MISSING"/"STALE"/"UNBOUND".
+// VMs). IRON-PROXY always reflects the iron-proxy subsystem's own
+// verdict (r.Proxy.Status) — a stuck startup rebind is a *different*
+// subsystem (the daemon's ProxyServer listeners on :80/:443) and is
+// never folded into that column, so a project with healthy iron-proxy
+// but a failed rebind doesn't misleadingly read as iron-proxy being
+// broken. Instead, failed rebinds are called out in a footer block
+// below the table (mirroring formatIronProxyHealth's single-project
+// "proxy listeners: UNBOUND" line), since the per-project error text
+// and recovery command don't fit in a terse column value. Honors
+// UseColor: green "ok", red "MISSING"/"STALE" and the footer note.
 func FormatStatusAllText(rows []serviceapi.ProjectStatus) string {
 	if len(rows) == 0 {
 		return "No projects found.\n"
@@ -303,13 +308,6 @@ func FormatStatusAllText(rows []serviceapi.ProjectStatus) string {
 			default:
 				proxyCol = string(r.Proxy.Status)
 			}
-			// A stuck rebind means :80/:443 never got bound, regardless of
-			// what the proxy process itself reports — `devm reconcile`
-			// can't heal this (it's not config drift), so the column
-			// points at the actual recovery path instead.
-			if r.Proxy.Rebind != nil && r.Proxy.Rebind.State == serviceapi.RebindFailed {
-				proxyCol, reconcileCol, colored = "UNBOUND", "restart", "bad"
-			}
 		}
 		lines[i] = line{project: r.Name, vm: vmState, proxy: proxyCol, reconcile: reconcileCol, colored: colored}
 		widths[0] = max(widths[0], utf8.RuneCountInString(lines[i].project))
@@ -335,6 +333,24 @@ func FormatStatusAllText(rows []serviceapi.ProjectStatus) string {
 		}
 		fmt.Fprintf(&b, "%-*s  %-*s  %s%s  %-*s\n",
 			widths[0], l.project, widths[1], l.vm, proxy, strings.Repeat(" ", pad), widths[3], l.reconcile)
+	}
+
+	// Failed rebinds are a distinct subsystem from iron-proxy (see doc
+	// comment above) — call them out per-project below the table
+	// rather than overloading IRON-PROXY, mirroring the single-project
+	// "proxy listeners: UNBOUND" line formatIronProxyHealth emits.
+	notePrinted := false
+	for _, r := range rows {
+		if !r.VMRunning || r.Proxy.Rebind == nil || r.Proxy.Rebind.State != serviceapi.RebindFailed {
+			continue
+		}
+		if !notePrinted {
+			fmt.Fprintln(&b)
+			notePrinted = true
+		}
+		note := fmt.Sprintf("Note: project %s has proxy listeners UNBOUND — %s — Recovery: `devm stop && devm start`",
+			r.Name, r.Proxy.Rebind.LastError)
+		fmt.Fprintln(&b, red(note))
 	}
 	return b.String()
 }
@@ -462,8 +478,9 @@ func FormatStatusJSON(r StatusResult) string {
 		ProxyError   string `json:"proxy_error,omitempty"`
 	}
 	type ironProxy struct {
-		Status       string `json:"status"`
-		NeedsSecrets bool   `json:"needs_secrets"`
+		Status       string                   `json:"status"`
+		NeedsSecrets bool                     `json:"needs_secrets"`
+		Rebind       *serviceapi.RebindReport `json:"rebind,omitempty"`
 	}
 	type project struct {
 		Sandbox        string                   `json:"sandbox"`
@@ -523,6 +540,7 @@ func FormatStatusJSON(r StatusResult) string {
 			b.Project.IronProxy = &ironProxy{
 				Status:       string(r.ProxyHealth.Status),
 				NeedsSecrets: r.ProxyHealth.NeedsSecrets,
+				Rebind:       r.ProxyHealth.Rebind,
 			}
 		}
 	}

@@ -359,3 +359,37 @@ func TestStopProjectListeners_ClearsRebindStatus(t *testing.T) {
 	_, ok = proxy.RebindStatus("p1")
 	assert.False(t, ok, "StopProjectListeners must clear the recorded rebind status")
 }
+
+// TestStopProjectListeners_ClearsRebindStatus_WithLiveListeners covers
+// the populated-perProj case the empty-perProj test above doesn't
+// reach: a project that actually bound listeners (StartProjectListeners
+// succeeded) must have both its listeners torn down AND its rebind
+// status cleared by StopProjectListeners, and a second StopProjectListeners
+// call must be a safe no-op (idempotent, no panic).
+func TestStopProjectListeners_ClearsRebindStatus_WithLiveListeners(t *testing.T) {
+	sock := mockHelperServer(t)
+	cfg := identity.Config{Name: "test-stop-clears-rebind", HelperSocketPath: sock}
+
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+
+	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
+	require.NoError(t, err, "sanity: StartProjectListeners must succeed via the mock helper")
+
+	proxy.RecordRebindStatus("p1", RebindStatus{State: RebindOK, Attempts: 1})
+	_, ok := proxy.RebindStatus("p1")
+	require.True(t, ok, "sanity: rebind status must be recorded before StopProjectListeners")
+
+	proxy.StopProjectListeners("p1")
+
+	_, ok = proxy.RebindStatus("p1")
+	assert.False(t, ok, "StopProjectListeners must clear the recorded rebind status even when listeners existed")
+
+	_, ok = proxy.takeProjectListeners("p1")
+	assert.False(t, ok, "StopProjectListeners must have torn down the live listeners")
+
+	assert.NotPanics(t, func() { proxy.StopProjectListeners("p1") },
+		"StopProjectListeners must be idempotent-safe on an already-stopped project")
+}

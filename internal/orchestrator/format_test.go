@@ -181,6 +181,43 @@ func TestFormatStatusJSON_IronProxyNilOmitted(t *testing.T) {
 	assert.NotContains(t, proj, "iron_proxy")
 }
 
+// TestFormatStatusJSON_RebindPresentWhenSet proves the single-project
+// `devm status --json` output carries the rebind report — /status/all's
+// JSON already did, but /status's local `ironProxy` struct dropped it,
+// leaving machine consumers unable to detect a stuck rebind.
+func TestFormatStatusJSON_RebindPresentWhenSet(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		ProxyHealth: &serviceapi.ProxyHealth{
+			Status: serviceapi.ProxyOK,
+			Rebind: &serviceapi.RebindReport{State: serviceapi.RebindFailed, Attempts: 3, LastError: "boom"},
+		},
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	ironProxy := proj["iron_proxy"].(map[string]any)
+	rebind := ironProxy["rebind"].(map[string]any)
+	assert.Equal(t, "failed", rebind["state"])
+	assert.Equal(t, float64(3), rebind["attempts"])
+	assert.Equal(t, "boom", rebind["last_error"])
+}
+
+// TestFormatStatusJSON_RebindOmittedWhenNil proves the rebind field is
+// omitted (not emitted as null) when no rebind was attempted, matching
+// the omitempty behavior of the other optional health fields.
+func TestFormatStatusJSON_RebindOmittedWhenNil(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		ProxyHealth: &serviceapi.ProxyHealth{Status: serviceapi.ProxyOK},
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	ironProxy := proj["iron_proxy"].(map[string]any)
+	assert.NotContains(t, ironProxy, "rebind")
+}
+
 func TestFormatReconcileJSON(t *testing.T) {
 	js := FormatReconcileJSON(ReconcileResult{
 		Rendered: true, SandboxState: "running",
@@ -423,9 +460,11 @@ func TestFormatStatusAllText_StaleShowsReconcileRequired(t *testing.T) {
 }
 
 // TestFormatStatusAllText_StuckRebindShowsUnbound proves a failed
-// startup rebind surfaces as UNBOUND (not the underlying proxy
-// Status), with "restart" instead of "required" — `devm reconcile`
-// can't heal a stuck rebind, only `devm stop && devm start` can.
+// startup rebind is surfaced via a footer note (not by overloading the
+// IRON-PROXY column), and that the IRON-PROXY column keeps showing the
+// real r.Proxy.Status — iron-proxy and the rebind are different
+// subsystems, and a project with healthy iron-proxy but a failed
+// rebind must not read as iron-proxy itself being broken.
 func TestFormatStatusAllText_StuckRebindShowsUnbound(t *testing.T) {
 	rows := []serviceapi.ProjectStatus{
 		{
@@ -439,7 +478,36 @@ func TestFormatStatusAllText_StuckRebindShowsUnbound(t *testing.T) {
 	}
 	UseColor = false
 	out := FormatStatusAllText(rows)
-	assert.Regexp(t, `p\s+running\s+UNBOUND\s+restart`, out)
+	// IRON-PROXY column unchanged: still "ok", still under RECONCILE "—".
+	assert.Regexp(t, `p\s+running\s+ok\s+—`, out)
+	// Rebind failure surfaced separately, with the real error and recovery command.
+	assert.Contains(t, out, "Note: project p has proxy listeners UNBOUND — boom")
+	assert.Contains(t, out, "Recovery: `devm stop && devm start`")
+}
+
+// TestFormatStatusAllText_IronProxyColumnUnaffectedByRebindState proves
+// the IRON-PROXY column always reflects the underlying r.Proxy.Status
+// verdict regardless of rebind state — MISSING/STALE still show
+// "required" under RECONCILE even when a rebind also failed, and the
+// column text is never clobbered with "UNBOUND".
+func TestFormatStatusAllText_IronProxyColumnUnaffectedByRebindState(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{
+			Name:      "p",
+			VMRunning: true,
+			Proxy: serviceapi.ProxyHealth{
+				Status: serviceapi.ProxyMissing,
+				Rebind: &serviceapi.RebindReport{State: serviceapi.RebindFailed, Attempts: 2, LastError: "bind :80: address in use"},
+			},
+		},
+	}
+	UseColor = false
+	out := FormatStatusAllText(rows)
+	// Table row: IRON-PROXY column shows MISSING, RECONCILE shows required —
+	// the column is driven solely by r.Proxy.Status, never by rebind state.
+	lines := strings.Split(out, "\n")
+	require.Regexp(t, `^p\s+running\s+MISSING\s+required\s*$`, lines[1])
+	assert.Contains(t, out, "Note: project p has proxy listeners UNBOUND — bind :80: address in use")
 }
 
 func TestFormatStatusAllText_Empty(t *testing.T) {
