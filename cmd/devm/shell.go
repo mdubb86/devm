@@ -57,6 +57,30 @@ The sandbox stays running until ` + "`devm stop`" + ` or ` + "`devm teardown`" +
 	},
 }
 
+// stripLeadingDashDash removes a leading "--" from args. With
+// DisableFlagParsing: true, cobra passes the standard end-of-flags
+// marker through as a literal arg; strip it so the guest command
+// (args[0] after strip) isn't "--".
+func stripLeadingDashDash(args []string) []string {
+	if len(args) > 0 && args[0] == "--" {
+		return args[1:]
+	}
+	return args
+}
+
+// handleExecHelpFlag prints usage and returns true when args is
+// exactly {"--help"} — the shape a user would type to request help.
+// Any other shape (e.g. `--help extra`) is passed through: the user
+// might genuinely be running a guest command called "--help" or
+// passing --help to a guest tool.
+func handleExecHelpFlag(args []string, cmd *cobra.Command) bool {
+	if len(args) == 1 && args[0] == "--help" {
+		_ = cmd.Help()
+		return true
+	}
+	return false
+}
+
 var execCmd = &cobra.Command{
 	Use:   "exec [--] COMMAND [ARGS...]",
 	Short: "Run a one-shot command inside a running sandbox",
@@ -76,6 +100,13 @@ TTY/PTY handling is auto-detected from the caller's stdin:
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		if handleExecHelpFlag(args, cmd) {
+			return nil
+		}
+		args = stripLeadingDashDash(args)
+		if len(args) == 0 {
+			return fmt.Errorf("exec requires a COMMAND — see `devm exec --help`")
+		}
 		ident := cfg // capture package identity cfg before it's shadowed below
 		repoRoot, err := os.Getwd()
 		if err != nil {
