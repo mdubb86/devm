@@ -54,6 +54,13 @@ func RenderService(name string, svc schema.Service) []byte {
 		user = "devm"
 	}
 	fmt.Fprintf(&b, "User=%s\n", user)
+	// EnvironmentFile=-/etc/environment sources machine-wide env
+	// (PATH, cfg.Env, NODE_EXTRA_CA_CERTS, etc.) written by the bundle
+	// install path. Leading `-` makes it non-fatal if the file hasn't
+	// landed yet (first-boot edge case). Ordering: EnvironmentFile=
+	// values are applied first, then any Environment= lines below
+	// override for the same key — so per-service env still wins.
+	b.WriteString("EnvironmentFile=-/etc/environment\n")
 	// Sorted env keys so the rendered output is deterministic — the
 	// Caddyfile renderer made the same choice and tests rely on it.
 	if len(svc.Env) > 0 {

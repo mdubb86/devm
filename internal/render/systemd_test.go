@@ -95,6 +95,38 @@ func TestRenderService_Declarative_HostnameAndPortOnlyService(t *testing.T) {
 	assert.NotContains(t, got, "ExecStart=")
 }
 
+func TestRenderService_DeclarativeIncludesEnvironmentFile(t *testing.T) {
+	svc := schema.Service{Exec: []string{"run"}}
+	got := string(RenderService("api", svc))
+	assert.Contains(t, got, "EnvironmentFile=-/etc/environment\n")
+}
+
+func TestRenderService_FullOverride_NoEnvironmentFileAdded(t *testing.T) {
+	// User-provided full override is verbatim — devm doesn't inject.
+	svc := schema.Service{Systemd: "[Unit]\nDescription=raw\n\n[Service]\nExecStart=/bin/true\n"}
+	got := string(RenderService("api", svc))
+	assert.NotContains(t, got, "EnvironmentFile=-/etc/environment")
+}
+
+func TestRenderService_EnvironmentFileBeforeEnvironment(t *testing.T) {
+	// Ordering matters: EnvironmentFile= is applied first, then
+	// Environment= lines override for the same key. Per-service env
+	// must beat /etc/environment.
+	svc := schema.Service{
+		Exec: []string{"run"},
+		Env: map[string]schema.EnvValue{
+			"PORT": {Literal: "8080"},
+		},
+	}
+	got := string(RenderService("api", svc))
+	envFileIdx := strings.Index(got, "EnvironmentFile=-/etc/environment")
+	envLineIdx := strings.Index(got, "Environment=PORT=8080")
+	require.NotEqual(t, -1, envFileIdx)
+	require.NotEqual(t, -1, envLineIdx)
+	assert.Less(t, envFileIdx, envLineIdx,
+		"EnvironmentFile= must appear before Environment= so per-service env overrides /etc/environment")
+}
+
 func TestRenderStartupScript(t *testing.T) {
 	s := string(RenderStartupScript([]string{"echo a", "echo b"}, nil))
 	assert.True(t, strings.HasPrefix(s, "#!/bin/bash\nset -eo pipefail\n"))
