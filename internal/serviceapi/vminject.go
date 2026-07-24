@@ -84,27 +84,3 @@ PATH=/usr/sbin:/sbin:$PATH growpart /dev/vda 1 || true
 PATH=/usr/sbin:/sbin:$PATH resize2fs /dev/vda1
 `
 }
-
-// buildEnvScript wipes any HTTPS_PROXY/HTTP_PROXY env that Ship 5
-// previously set — the transparent-proxy model doesn't use them.
-// /etc/environment becomes a placeholder file with no proxy vars
-// (anything else the user had set is preserved by Linux's default
-// /etc/environment merging from PAM).
-//
-// Setting NO_PROXY in case the workload's image happens to have
-// HTTPS_PROXY set from a base image we don't control — NO_PROXY=*
-// disables it.
-//
-// NODE_EXTRA_CA_CERTS points node at devm's iron-proxy CA. Interactive
-// devm.yaml env inheritance covers `devm shell` sessions, but tools that
-// SSH in with a raw command (Orca's relay, plain `ssh devm-<vm> <cmd>`)
-// bypass that layer. /etc/environment is read by pam_env on ANY PAM
-// session, including non-interactive SSH commands, so setting it here
-// makes the node trust root system-wide.
-func buildEnvScript() string {
-	return `sudo tee /etc/environment > /dev/null <<'EOF'
-NO_PROXY=*
-NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt
-EOF
-`
-}

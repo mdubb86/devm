@@ -1,6 +1,7 @@
 package serviceapi
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -55,15 +56,15 @@ func TestBuildExtraMountScript_ReadOnly(t *testing.T) {
 	assert.Contains(t, script, "extra_1 /Users/x/ro-thing virtiofs ro,_netdev 0 0")
 }
 
-func TestBuildEnvScript_SetsSystemWideEnvVars(t *testing.T) {
-	script := buildEnvScript()
-	assert.Contains(t, script, "NO_PROXY=*")
-	// NODE_EXTRA_CA_CERTS makes non-interactive SSH sessions (Orca's
-	// relay, plain `ssh devm-<vm> <cmd>`) trust iron-proxy's re-signed
-	// certs without inheriting from devm.yaml's `env:` block.
-	assert.Contains(t, script, "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt")
-	// Old HTTPS_PROXY-style assertions removed — the transparent
-	// model doesn't use env vars.
-	assert.NotContains(t, script, "HTTPS_PROXY=http")
-	assert.NotContains(t, script, "HTTP_PROXY=http")
+// TestVminject_NoDirectEtcEnvironmentWrite pins that vminject.go
+// contains no `tee /etc/environment` — /etc/environment travels
+// with the bundle now (see internal/devmbundle + install.sh). A
+// future refactor that reintroduces a direct write would create
+// a race with the bundle install and split the source of truth
+// for env transport.
+func TestVminject_NoDirectEtcEnvironmentWrite(t *testing.T) {
+	src, err := os.ReadFile("vminject.go")
+	require.NoError(t, err)
+	assert.NotContains(t, string(src), "/etc/environment",
+		"vminject.go must not write /etc/environment directly — use bundle path instead")
 }
