@@ -65,6 +65,8 @@ func TestBuildExtraMountScript_ReadOnly(t *testing.T) {
 func TestVminject_NoDirectEtcEnvironmentWrite(t *testing.T) {
 	src, err := os.ReadFile("vminject.go")
 	require.NoError(t, err)
-	assert.NotContains(t, string(src), "/etc/environment",
-		"vminject.go must not write /etc/environment directly — use bundle path instead")
+	assert.NotContains(t, string(src), "tee /etc/environment",
+		"vminject.go must not shell out to `tee /etc/environment` — use bundle path")
+	assert.NotContains(t, string(src), "> /etc/environment",
+		"vminject.go must not redirect to /etc/environment — use bundle path")
 }
