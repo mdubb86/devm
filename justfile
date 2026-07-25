@@ -198,7 +198,7 @@ release:
 # Run goreleaser locally in dry-run mode against the current commit.
 # Useful for validating .goreleaser.yaml without cutting a real release.
 release-dry:
-    goreleaser release --snapshot --clean --skip=publish
+    FINGERPRINT="${FINGERPRINT:-devlocal}" goreleaser release --snapshot --clean --skip=publish
 
 IRON_PROXY_VERSION := "v0.45.0"
 
