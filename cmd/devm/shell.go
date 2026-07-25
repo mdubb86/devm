@@ -69,12 +69,13 @@ func stripLeadingDashDash(args []string) []string {
 }
 
 // handleExecHelpFlag prints usage and returns true when args is
-// exactly {"--help"} — the shape a user would type to request help.
-// Any other shape (e.g. `--help extra`) is passed through: the user
-// might genuinely be running a guest command called "--help" or
-// passing --help to a guest tool.
+// exactly {"--help"} or {"-h"} — the shape a user would type to
+// request help. Any other shape (e.g. `--help extra` or `-h extra`)
+// is passed through: the user might genuinely be running a guest
+// command called "--help" or "-h", or passing --help/-h to a guest
+// tool.
 func handleExecHelpFlag(args []string, cmd *cobra.Command) bool {
-	if len(args) == 1 && args[0] == "--help" {
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		_ = cmd.Help()
 		return true
 	}

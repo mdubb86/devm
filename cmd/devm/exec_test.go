@@ -50,3 +50,24 @@ func TestExecCmd_HelpFlag_NotClaimedWhenMoreArgs(t *testing.T) {
 	handled := handleExecHelpFlag([]string{"--help", "extra"}, execCmd)
 	assert.False(t, handled, "with additional args, --help is passed to guest")
 }
+
+// TestExecCmd_ShortHelpFlagPrintsUsage — `-h` is the common shorthand for --help.
+// Before v0.9.6 it fell through to the guest, which tried to exec `-h`
+// with no output. Same short-circuit as --help.
+func TestExecCmd_ShortHelpFlagPrintsUsage(t *testing.T) {
+	var buf bytes.Buffer
+	execCmd.SetOut(&buf)
+	t.Cleanup(func() { execCmd.SetOut(nil) })
+
+	handled := handleExecHelpFlag([]string{"-h"}, execCmd)
+	assert.True(t, handled, "handleExecHelpFlag must claim -h")
+	assert.NotEmpty(t, buf.String(), "expected help text to be written")
+	assert.Contains(t, buf.String(), "Runs COMMAND inside the sandbox")
+}
+
+// TestExecCmd_ShortHelpFlag_NotClaimedWhenMoreArgs — same semantics as --help:
+// `-h`-followed-by-more is a guest command flag, not a devm request.
+func TestExecCmd_ShortHelpFlag_NotClaimedWhenMoreArgs(t *testing.T) {
+	handled := handleExecHelpFlag([]string{"-h", "extra"}, execCmd)
+	assert.False(t, handled, "with additional args, -h is passed to guest")
+}
