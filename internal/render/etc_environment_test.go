@@ -49,6 +49,7 @@ func TestRenderEtcEnvironment_DefaultCfg(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, body, "NO_PROXY=*\n")
 	assert.Contains(t, body, "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt\n")
+	assert.Contains(t, body, "UV_SYSTEM_CERTS=1\n")
 	// No cfg.Path → PATH = /opt/devm/scripts:<guestSystemPATH>
 	assert.Contains(t, body, `PATH="/opt/devm/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games"`+"\n")
 }

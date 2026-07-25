@@ -71,14 +71,15 @@ func etcEnvironmentQuote(v string) (string, error) {
 // Emitted lines, in this order:
 //  1. NO_PROXY=*
 //  2. NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt
-//  3. PATH="<cfg.Path[0]>:<cfg.Path[1]>:...:/opt/devm/scripts:<guestSystemPATH>"
+//  3. UV_SYSTEM_CERTS=1
+//  4. PATH="<cfg.Path[0]>:<cfg.Path[1]>:...:/opt/devm/scripts:<guestSystemPATH>"
 //     (always double-quoted; cfg.Path may be empty, in which case the
 //     join begins at /opt/devm/scripts). PATH is always emitted
 //     double-quoted — matching Debian's shipped /etc/environment
 //     convention — even when its characters would allow bare emission
 //     per etcEnvironmentQuote.
-//  4. cfg.Env entries (including WORKSPACE, IS_SANDBOX), sorted by key
-//  5. Per-service NAME_KEY entries, sorted by name then key
+//  5. cfg.Env entries (including WORKSPACE, IS_SANDBOX), sorted by key
+//  6. Per-service NAME_KEY entries, sorted by name then key
 //
 // Returns error if any value contains a raw newline/CR/NUL — the caller
 // should surface it to the user (invalid devm.yaml value).
@@ -88,6 +89,7 @@ func RenderEtcEnvironment(cfg schema.Config) (string, error) {
 	// Fixed vars (bare, no quoting needed).
 	b.WriteString("NO_PROXY=*\n")
 	b.WriteString("NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt\n")
+	b.WriteString("UV_SYSTEM_CERTS=1\n")
 
 	// PATH — cfg.Path entries prepended in front of /opt/devm/scripts
 	// and guestSystemPATH. cfg.Path is already validated + $WORKSPACE-
