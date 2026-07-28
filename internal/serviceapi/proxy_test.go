@@ -417,10 +417,23 @@ func TestProxyServer_StopLANListener_ReleasesPort(t *testing.T) {
 	require.NoError(t, proxy.StartLANListener(context.Background(), port))
 	proxy.StopLANListener()
 
-	// After stop, a fresh bind on same port should succeed.
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	require.NoError(t, err, "port should be released after Stop")
-	ln.Close()
+	// After Stop the port should be reusable — but on Linux the closed
+	// socket lingers briefly in TIME_WAIT. Retry the rebind for up to
+	// a couple seconds. macOS releases immediately; Linux takes ~1s
+	// under the CI runner's TCP stack. Failing this assertion after
+	// the retry window means Stop genuinely leaked the listener.
+	deadline := time.Now().Add(3 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			ln.Close()
+			return
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("port %d not released after Stop within 3s: %v", port, lastErr)
 }
 
 func TestProxyServer_ServeLAN_ReturnsNoRouteFor502(t *testing.T) {
