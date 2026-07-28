@@ -166,7 +166,9 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 		})
 	}
 	if len(directRoutes) > 0 {
-		routes.Apply(projectID, directRoutes)
+		if err := routes.Apply(projectID, directRoutes); err != nil {
+			debuglog.Logf("routes", "recover direct routes for %s: %v (continuing)", projectID, err)
+		}
 	}
 }
 

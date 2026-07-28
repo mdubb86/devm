@@ -36,6 +36,9 @@ type Route struct {
 	// The HTTP proxy refuses to dial it; DNS answers VM_IP for it.
 	Direct  bool   `json:"direct,omitempty"`
 	Project string `json:"project,omitempty"` // owning project; used by DNS to find the VM IP
+	// ExposeHost mirrors Service.ExposeHost — true when this route
+	// participates in the shared LAN dispatcher (0.0.0.0:42000).
+	ExposeHost bool `json:"expose_host,omitempty"`
 }
 
 // Routes is the daemon's thread-safe in-memory route table. The
@@ -48,28 +51,56 @@ type Routes struct {
 	projectsToHostnames map[string][]string
 	// hostnameToRoute is the lookup path the proxy hits per request.
 	hostnameToRoute map[string]Route
+	// lanHostnameToRoute is the parallel opt-in map read by the LAN
+	// dispatcher. Populated in Apply for routes with ExposeHost=true.
+	lanHostnameToRoute map[string]Route
 }
 
 func NewRoutes() *Routes {
 	return &Routes{
 		projectsToHostnames: make(map[string][]string),
 		hostnameToRoute:     make(map[string]Route),
+		lanHostnameToRoute:  make(map[string]Route),
 	}
 }
 
-// Apply replaces the named project's routes with the given set.
-func (r *Routes) Apply(projectID string, items []Route) {
+// Apply replaces the named project's routes with the given set. Returns
+// an error — without mutating any state — if any incoming hostname is
+// already owned by a different project.
+func (r *Routes) Apply(projectID string, items []Route) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Collision check first — atomic. If any incoming hostname is
+	// already owned by a different project, reject the whole batch
+	// without mutating either map.
+	for _, item := range items {
+		if existing, ok := r.hostnameToRoute[item.Hostname]; ok {
+			if existing.Project != projectID {
+				return fmt.Errorf(
+					"hostname %q already registered by project %q — cannot register under %q",
+					item.Hostname, existing.Project, projectID,
+				)
+			}
+		}
+	}
+
+	// Clear this project's prior hostnames from both maps.
 	for _, h := range r.projectsToHostnames[projectID] {
 		delete(r.hostnameToRoute, h)
+		delete(r.lanHostnameToRoute, h)
 	}
+
 	hostnames := make([]string, 0, len(items))
 	for _, item := range items {
 		r.hostnameToRoute[item.Hostname] = item
+		if item.ExposeHost {
+			r.lanHostnameToRoute[item.Hostname] = item
+		}
 		hostnames = append(hostnames, item.Hostname)
 	}
 	r.projectsToHostnames[projectID] = hostnames
+	return nil
 }
 
 // Remove drops all routes for the project.
@@ -78,8 +109,27 @@ func (r *Routes) Remove(projectID string) {
 	defer r.mu.Unlock()
 	for _, h := range r.projectsToHostnames[projectID] {
 		delete(r.hostnameToRoute, h)
+		delete(r.lanHostnameToRoute, h)
 	}
 	delete(r.projectsToHostnames, projectID)
+}
+
+// LANLookup returns the route for host from the LAN opt-in map — no
+// per-project scope filter (LAN dispatch is Host-header only).
+func (r *Routes) LANLookup(host string) (Route, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	route, ok := r.lanHostnameToRoute[host]
+	return route, ok
+}
+
+// CountLANRoutes returns the number of routes currently opted into the
+// LAN dispatcher. Used by the LAN-listener lifecycle reconciler to
+// decide whether the listener should be bound.
+func (r *Routes) CountLANRoutes() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.lanHostnameToRoute)
 }
 
 // Lookup returns the route for the given host (port stripped), scoped
@@ -223,7 +273,10 @@ func RegisterRoutesHandlers(s *Server, routes *Routes) {
 			}
 			resolved = append(resolved, rt)
 		}
-		routes.Apply(req.Name, resolved)
+		if err := routes.Apply(req.Name, resolved); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(ApplyResponse{Routes: resolved})
 	})

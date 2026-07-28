@@ -96,9 +96,9 @@ func TestRoutingStatusFromDaemon_DialUsesBackendHost(t *testing.T) {
 	srv, routes, cleanup := newTestServerWithRoutes(t)
 	defer cleanup()
 
-	routes.Apply("proj", []Route{
+	require.NoError(t, routes.Apply("proj", []Route{
 		{Hostname: "api.test", BackendHost: "127.42.0.7", BackendPort: 8080, Mode: ModeVM},
-	})
+	}))
 
 	c := NewClientWithSocket(srv.socketPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

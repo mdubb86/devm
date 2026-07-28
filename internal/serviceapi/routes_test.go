@@ -14,9 +14,9 @@ import (
 
 func TestRoutes_Apply_AddsEntries(t *testing.T) {
 	r := NewRoutes()
-	r.Apply("p1", []Route{
+	require.NoError(t, r.Apply("p1", []Route{
 		{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM},
-	})
+	}))
 	got, ok := r.Lookup("app.test", "")
 	assert.True(t, ok)
 	assert.Equal(t, 51001, got.BackendPort)
@@ -25,13 +25,13 @@ func TestRoutes_Apply_AddsEntries(t *testing.T) {
 
 func TestRoutes_Apply_ReplacesProjectEntries(t *testing.T) {
 	r := NewRoutes()
-	r.Apply("p1", []Route{
-		{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM},
-		{Hostname: "api.test", BackendPort: 51002, Mode: ModeVM},
-	})
-	r.Apply("p1", []Route{
-		{Hostname: "app.test", BackendPort: 51001, Mode: ModeLocal},
-	})
+	require.NoError(t, r.Apply("p1", []Route{
+		{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM, Project: "p1"},
+		{Hostname: "api.test", BackendPort: 51002, Mode: ModeVM, Project: "p1"},
+	}))
+	require.NoError(t, r.Apply("p1", []Route{
+		{Hostname: "app.test", BackendPort: 51001, Mode: ModeLocal, Project: "p1"},
+	}))
 	_, ok := r.Lookup("api.test", "")
 	assert.False(t, ok, "api.test should have been removed")
 	got, ok := r.Lookup("app.test", "")
@@ -41,9 +41,9 @@ func TestRoutes_Apply_ReplacesProjectEntries(t *testing.T) {
 
 func TestRoutes_Apply_DoesNotTouchOtherProjects(t *testing.T) {
 	r := NewRoutes()
-	r.Apply("p1", []Route{{Hostname: "p1.test", BackendPort: 51001, Mode: ModeVM}})
-	r.Apply("p2", []Route{{Hostname: "p2.test", BackendPort: 51002, Mode: ModeVM}})
-	r.Apply("p1", []Route{{Hostname: "p1-new.test", BackendPort: 51003, Mode: ModeVM}})
+	require.NoError(t, r.Apply("p1", []Route{{Hostname: "p1.test", BackendPort: 51001, Mode: ModeVM}}))
+	require.NoError(t, r.Apply("p2", []Route{{Hostname: "p2.test", BackendPort: 51002, Mode: ModeVM}}))
+	require.NoError(t, r.Apply("p1", []Route{{Hostname: "p1-new.test", BackendPort: 51003, Mode: ModeVM}}))
 
 	_, ok := r.Lookup("p2.test", "")
 	assert.True(t, ok, "p2 routes should be untouched when p1 re-applies")
@@ -51,8 +51,8 @@ func TestRoutes_Apply_DoesNotTouchOtherProjects(t *testing.T) {
 
 func TestRoutes_Remove_DropsProjectEntries(t *testing.T) {
 	r := NewRoutes()
-	r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM}})
-	r.Apply("p2", []Route{{Hostname: "other.test", BackendPort: 51002, Mode: ModeVM}})
+	require.NoError(t, r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM}}))
+	require.NoError(t, r.Apply("p2", []Route{{Hostname: "other.test", BackendPort: 51002, Mode: ModeVM}}))
 	r.Remove("p1")
 	_, ok := r.Lookup("app.test", "")
 	assert.False(t, ok)
@@ -62,9 +62,9 @@ func TestRoutes_Remove_DropsProjectEntries(t *testing.T) {
 
 func TestRoutes_BackendHost_PreservedInLookup(t *testing.T) {
 	r := NewRoutes()
-	r.Apply("p1", []Route{
+	require.NoError(t, r.Apply("p1", []Route{
 		{Hostname: "app.test", BackendHost: "192.168.64.5", BackendPort: 3000, Mode: ModeVM},
-	})
+	}))
 	got, ok := r.Lookup("app.test", "")
 	assert.True(t, ok)
 	assert.Equal(t, "192.168.64.5", got.BackendHost)
@@ -73,10 +73,10 @@ func TestRoutes_BackendHost_PreservedInLookup(t *testing.T) {
 
 func TestRoutesLookupExcludesDirect(t *testing.T) {
 	r := NewRoutes()
-	r.Apply("proj", []Route{
+	require.NoError(t, r.Apply("proj", []Route{
 		{Hostname: "web.test", BackendPort: 8080, Mode: ModeVM, Project: "proj"},
 		{Hostname: "db.test", BackendPort: 54322, Direct: true, Project: "proj"},
-	})
+	}))
 
 	// Proxy dial path: proxied host resolves, direct host does NOT.
 	_, ok := r.Lookup("web.test", "")
@@ -99,9 +99,9 @@ func TestRoutesLookupExcludesDirect(t *testing.T) {
 
 func TestRoutes_Lookup_ScopedByProject(t *testing.T) {
 	r := NewRoutes()
-	r.Apply("p1", []Route{
+	require.NoError(t, r.Apply("p1", []Route{
 		{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM, Project: "p1"},
-	})
+	}))
 
 	// Correct project — resolves.
 	got, ok := r.Lookup("app.test", "p1")
@@ -121,7 +121,7 @@ func TestRoutes_Lookup_ScopedByProject(t *testing.T) {
 
 func TestRoutes_ConcurrentReadWrite_NoRace(t *testing.T) {
 	r := NewRoutes()
-	r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM}})
+	require.NoError(t, r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM, Project: "p1"}}))
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -129,7 +129,7 @@ func TestRoutes_ConcurrentReadWrite_NoRace(t *testing.T) {
 		go func() { defer wg.Done(); r.Lookup("app.test", "") }()
 		go func() {
 			defer wg.Done()
-			r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM}})
+			_ = r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM, Project: "p1"}})
 		}()
 	}
 	wg.Wait()
@@ -249,4 +249,55 @@ func TestApplyRoutes_DirectVMPassthrough(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
 	require.Len(t, resp.Routes, 1)
 	assert.Empty(t, resp.Routes[0].BackendHost, "direct routes are not substituted")
+}
+
+func TestRoutes_Apply_CollisionRejectsSecondProject(t *testing.T) {
+	r := NewRoutes()
+	err := r.Apply("alpha", []Route{{Hostname: "api.shared.test", Project: "alpha"}})
+	require.NoError(t, err)
+
+	err = r.Apply("beta", []Route{{Hostname: "api.shared.test", Project: "beta"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "api.shared.test")
+	assert.Contains(t, err.Error(), "alpha") // names owning project
+	assert.Contains(t, err.Error(), "beta")  // names attempting project
+
+	// Alpha's route survives — Apply was atomic.
+	got, ok := r.hostnameToRoute["api.shared.test"]
+	require.True(t, ok)
+	assert.Equal(t, "alpha", got.Project)
+}
+
+func TestRoutes_Apply_SameProjectReapplyAllowed(t *testing.T) {
+	r := NewRoutes()
+	require.NoError(t, r.Apply("alpha", []Route{{Hostname: "api.alpha.test", Project: "alpha"}}))
+	// Reapply with a different set — allowed.
+	require.NoError(t, r.Apply("alpha", []Route{{Hostname: "web.alpha.test", Project: "alpha"}}))
+	_, oldOK := r.hostnameToRoute["api.alpha.test"]
+	_, newOK := r.hostnameToRoute["web.alpha.test"]
+	assert.False(t, oldOK, "reapply should clear old hostnames")
+	assert.True(t, newOK)
+}
+
+func TestRoutes_Apply_LANMapPopulatedForExposeHost(t *testing.T) {
+	r := NewRoutes()
+	require.NoError(t, r.Apply("alpha", []Route{
+		{Hostname: "public.alpha.test", Project: "alpha", ExposeHost: true},
+		{Hostname: "private.alpha.test", Project: "alpha", ExposeHost: false},
+	}))
+	_, publicLAN := r.LANLookup("public.alpha.test")
+	_, privateLAN := r.LANLookup("private.alpha.test")
+	assert.True(t, publicLAN, "ExposeHost=true should register in LAN map")
+	assert.False(t, privateLAN, "ExposeHost=false should NOT be in LAN map")
+	assert.Equal(t, 1, r.CountLANRoutes())
+}
+
+func TestRoutes_Remove_ClearsLANMap(t *testing.T) {
+	r := NewRoutes()
+	require.NoError(t, r.Apply("alpha", []Route{{Hostname: "x.alpha.test", Project: "alpha", ExposeHost: true}}))
+	assert.Equal(t, 1, r.CountLANRoutes())
+	r.Remove("alpha")
+	assert.Equal(t, 0, r.CountLANRoutes())
+	_, ok := r.LANLookup("x.alpha.test")
+	assert.False(t, ok)
 }

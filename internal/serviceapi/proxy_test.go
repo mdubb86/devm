@@ -64,9 +64,9 @@ func TestProxy_HTTP_RoutesByHostWithinProject(t *testing.T) {
 	defer cleanup()
 
 	routes := NewRoutes()
-	routes.Apply("p1", []Route{
+	require.NoError(t, routes.Apply("p1", []Route{
 		{Hostname: "app.test", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
-	})
+	}))
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
@@ -133,9 +133,9 @@ func TestProxy_HostMismatchAcrossProjects_502NotFallthrough(t *testing.T) {
 	defer cleanup()
 
 	routes := NewRoutes()
-	routes.Apply("p1", []Route{
+	require.NoError(t, routes.Apply("p1", []Route{
 		{Hostname: "app.test", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
-	})
+	}))
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
@@ -160,10 +160,10 @@ func TestProxy_HostMismatchAcrossProjects_502NotFallthrough(t *testing.T) {
 
 func TestProxy_BackendUnreachable_502WithDiagnostic(t *testing.T) {
 	routes := NewRoutes()
-	routes.Apply("p1", []Route{
+	require.NoError(t, routes.Apply("p1", []Route{
 		// Port unlikely to be in use — high in the dynamic range.
 		{Hostname: "down.test", BackendPort: 59999, Mode: ModeVM, Project: "p1"},
-	})
+	}))
 	dir := t.TempDir()
 	ca, _ := loadOrGenerateCAAt(identity.Prod, dir)
 	registerProject(t, "p1", "127.42.0.52")
@@ -186,9 +186,9 @@ func TestProxy_BackendHost_ExplicitLocalhost(t *testing.T) {
 	defer cleanup()
 
 	routes := NewRoutes()
-	routes.Apply("p1", []Route{
+	require.NoError(t, routes.Apply("p1", []Route{
 		{Hostname: "app.test", BackendHost: "127.0.0.1", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
-	})
+	}))
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
