@@ -409,8 +409,17 @@ func buildInstallScript(inputs installInputs) string {
 		// The plist's ProgramArguments must point at HelperFinalPath,
 		// not HelperExe: launchd invokes it later, long after the
 		// tempfile above is gone.
-		fmt.Fprintf(&sb, "install -m 0644 /dev/stdin %s <<'EOF'\n%sEOF\n",
-			cfg.LaunchdPlistHelper(), helperPlistContent(inputs.HelperFinalPath, inputs.HelperLogDir))
+		//
+		// macOS 26's BSD install(1) rejects /dev/stdin when its stdin
+		// is a pipe (as bash heredocs are) with "Inappropriate file
+		// type or format" — silently breaks fresh installs. Route the
+		// heredoc through an intermediate tempfile so install(1) sees
+		// a regular file source. Works across all macOS versions.
+		fmt.Fprintf(&sb, "__plist_tmp=$(mktemp) && cat > \"$__plist_tmp\" <<'EOF'\n%sEOF\n",
+			helperPlistContent(inputs.HelperFinalPath, inputs.HelperLogDir))
+		fmt.Fprintf(&sb, "install -m 0644 \"$__plist_tmp\" %s\n",
+			shellQuote(cfg.LaunchdPlistHelper()))
+		sb.WriteString("rm -f \"$__plist_tmp\"\n")
 		sb.WriteString("launchctl bootout " + cfg.LaunchdTargetHelper() + " 2>/dev/null || true\n")
 		// Bootstrap via our own retry-capable helper (not a raw
 		// `launchctl bootstrap` line) — see launchdBootstrapPlist:

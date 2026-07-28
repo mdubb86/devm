@@ -83,6 +83,13 @@ func TestBuildInstallScript_IncludesHelper(t *testing.T) {
 	assert.NotContains(t, script, "<string>/tmp/devm-helper.stage-123</string>",
 		"plist ProgramArguments must reference HelperFinalPath, not the HelperExe tempfile")
 
+	// Regression pin: macOS 26's BSD install(1) rejects /dev/stdin when
+	// its stdin is a pipe (bash heredocs) — "Inappropriate file type or
+	// format". Fresh installs silently break. The plist must land via
+	// an intermediate tempfile, not `install /dev/stdin <<EOF`.
+	assert.NotContains(t, script, "install -m 0644 /dev/stdin",
+		"BSD install on macOS 26+ refuses /dev/stdin from a pipe — use a tempfile intermediate")
+
 	// The append must be guarded against duplicate GroupMembership
 	// entries across repeated install runs (dscl -append has no
 	// dedup of its own).
