@@ -116,6 +116,7 @@ func FormatStatusText(r StatusResult) string {
 	b.WriteString(formatCAHealth(r))
 	b.WriteString(formatProxyHealth(r))
 	b.WriteString(formatIronProxyHealth(r))
+	b.WriteString(formatLANListener(r.Routing))
 	return b.String()
 }
 
@@ -239,6 +240,23 @@ func formatIronProxyHealth(r StatusResult) string {
 		b.WriteString("  Recovery: `devm stop && devm start` (from the project directory)\n")
 	}
 	return b.String()
+}
+
+// formatLANListener renders the shared LAN dispatcher's bind state —
+// daemon-scope, not per-project (see internal/serviceapi/lan.go): the
+// listener binds once, for as long as any project has at least one
+// ExposeHost route, so this is a single top-level row rather than one
+// per project/route. r.Routing.LANExposedCount is a count across all
+// projects (computed client-side in RoutingStatusFromDaemon from the
+// /routes response), and reconcileLAN's own invariant — bound iff that
+// count is > 0 — is what lets this render "bound"/"not bound" without
+// a dedicated daemon endpoint.
+func formatLANListener(r serviceapi.RoutingStatus) string {
+	if r.LANExposedCount == 0 {
+		return "\nLAN listener: not bound\n"
+	}
+	return fmt.Sprintf("\nLAN listener: bound on 0.0.0.0:%d (%d hostnames exposed)\n",
+		serviceapi.LANDispatchPort, r.LANExposedCount)
 }
 
 // green wraps s in an ANSI green escape when UseColor is set.

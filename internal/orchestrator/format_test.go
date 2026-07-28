@@ -411,6 +411,29 @@ func TestFormatStatusText_IronProxyHealth_NilOmitsLine(t *testing.T) {
 	assert.NotContains(t, out, "iron-proxy:")
 }
 
+func TestFormatStatusText_LANListener_NotBound(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Routing: serviceapi.RoutingStatus{Proxy: "devm", ProxyReachable: true},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "LAN listener: not bound")
+}
+
+func TestFormatStatusText_LANListener_Bound(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Routing: serviceapi.RoutingStatus{
+			Proxy: "devm", ProxyReachable: true, Mode: "vm",
+			Routes: []serviceapi.RouteStatus{
+				{Hostname: "api.foo.test", Dial: "127.42.0.1:8080", Mode: "vm"},
+			},
+			LANExposedCount: 3,
+		},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "LAN listener: bound on 0.0.0.0:42000 (3 hostnames exposed)")
+	assert.NotContains(t, out, "not bound")
+}
+
 func TestFormatDaemonStatus_MismatchColor(t *testing.T) {
 	d := DaemonStatus{
 		Running: true, BinaryPath: "/opt/devm/bin/devm",

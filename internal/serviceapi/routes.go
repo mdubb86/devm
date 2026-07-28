@@ -228,6 +228,15 @@ type RoutingStatus struct {
 	ProxyReachable bool          `json:"proxy_reachable"`
 	Mode           string        `json:"mode"`
 	Routes         []RouteStatus `json:"routes"`
+	// LANExposedCount is the number of routes (across all projects)
+	// with ExposeHost=true — i.e. how many hostnames are opted into
+	// the shared LAN dispatcher (0.0.0.0:LANDispatchPort). Daemon-scope,
+	// not per-project: reconcileLAN binds the listener whenever this is
+	// > 0 and stops it when it drops to 0, so the count alone tells the
+	// CLI whether the listener is bound. Computed client-side from
+	// /routes (see RoutingStatusFromDaemon) rather than a dedicated
+	// endpoint — the data's already in that response.
+	LANExposedCount int `json:"lan_exposed_count"`
 }
 
 // RouteStatus is one row of the routing section in `devm status`.

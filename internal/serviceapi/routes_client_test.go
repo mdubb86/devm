@@ -113,6 +113,30 @@ func TestRoutingStatusFromDaemon_DialUsesBackendHost(t *testing.T) {
 	assert.Equal(t, "127.42.0.7:8080", rs.Routes[0].Dial)
 }
 
+// TestRoutingStatusFromDaemon_CountsLANExposedRoutes verifies
+// LANExposedCount reflects the number of ExposeHost routes across all
+// projects — the signal `devm status`'s LAN listener row renders from.
+func TestRoutingStatusFromDaemon_CountsLANExposedRoutes(t *testing.T) {
+	srv, routes, cleanup := newTestServerWithRoutes(t)
+	defer cleanup()
+
+	require.NoError(t, routes.Apply("proj-a", []Route{
+		{Hostname: "api.test", BackendPort: 8080, Mode: ModeLocal, ExposeHost: true},
+		{Hostname: "internal.test", BackendPort: 9090, Mode: ModeLocal},
+	}))
+	require.NoError(t, routes.Apply("proj-b", []Route{
+		{Hostname: "web.test", BackendPort: 3000, Mode: ModeLocal, ExposeHost: true},
+	}))
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	rs, err := c.RoutingStatusFromDaemon(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, rs.LANExposedCount)
+}
+
 func TestClient_RemoveRoutes(t *testing.T) {
 	srv, _, cleanup := newTestServerWithRoutes(t)
 	defer cleanup()

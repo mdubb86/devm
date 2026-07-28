@@ -88,6 +88,32 @@ func TestBuildRoutes_VMNonDirect_LeavesBackendHostEmpty(t *testing.T) {
 	assert.Equal(t, serviceapi.ModeVM, got[0].Mode)
 }
 
+func TestBuildRoutes_PropagatesExposeHost(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "alpha"},
+		Services: map[string]schema.Service{
+			"api": {
+				Port:       80,
+				Hostname:   "api.alpha.test",
+				ExposeHost: true,
+			},
+			"internal": {
+				Port:       8080,
+				Hostname:   "internal.alpha.test",
+				ExposeHost: false,
+			},
+		},
+	}
+	routes, err := buildRoutes(cfg, serviceapi.ModeVM)
+	require.NoError(t, err)
+	byHost := make(map[string]serviceapi.Route)
+	for _, r := range routes {
+		byHost[r.Hostname] = r
+	}
+	assert.True(t, byHost["api.alpha.test"].ExposeHost)
+	assert.False(t, byHost["internal.alpha.test"].ExposeHost)
+}
+
 func TestBuildRoutes_VMDirect_LeavesBackendHostEmpty(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "myproj"},

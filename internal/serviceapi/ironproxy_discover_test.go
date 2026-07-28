@@ -180,6 +180,85 @@ func TestRecoverProjectState_RebuildsDirectRoutes(t *testing.T) {
 	assert.False(t, ok, "non-direct service must not become a direct route")
 }
 
+// TestRecoverProjectState_RebuildsExposeHostRoutes covers the
+// daemon-restart recovery gap for the shared LAN dispatcher: given a
+// state snapshot describing an expose_host:true service, recoverProjectState
+// should rebuild that service's route with ExposeHost set (so the
+// startup reconcileLAN pass in runner.go sees CountLANRoutes() > 0 and
+// rebinds the listener), while a non-exposed service must not show up
+// in the LAN opt-in map.
+func TestRecoverProjectState_RebuildsExposeHostRoutes(t *testing.T) {
+	const projectID = "recover-lan-proj"
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() { ironProxyState.del(projectID) })
+
+	ironProxyState.put(projectID, projectInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})
+
+	snap := StateSnapshot{
+		Cfg: schema.Config{
+			Project: schema.Project{Name: projectID},
+			Services: map[string]schema.Service{
+				"api": {
+					Hostname:   "api.recover-lan-proj.test",
+					Port:       8080,
+					ExposeHost: true,
+				},
+				"internal": {
+					// Not exposed; must NOT show up in the LAN opt-in map.
+					Hostname: "internal.recover-lan-proj.test",
+					Port:     9090,
+				},
+			},
+		},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, snap))
+
+	routes := NewRoutes()
+	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
+
+	route, ok := routes.LANLookup("api.recover-lan-proj.test")
+	require.True(t, ok, "expose_host service must be recovered into the LAN opt-in map")
+	assert.Equal(t, 8080, route.BackendPort)
+	assert.Equal(t, projectID, route.Project)
+	assert.True(t, route.ExposeHost)
+
+	_, ok = routes.LANLookup("internal.recover-lan-proj.test")
+	assert.False(t, ok, "non-exposed service must not become a LAN route")
+
+	assert.Equal(t, 1, routes.CountLANRoutes())
+}
+
+// TestRecoverProjectState_DirectAndExposeHostRoutesCoexist covers the
+// merge step in recoverProjectState: a project with both a direct
+// service and an expose_host service must recover both — a single
+// Apply call carrying the union — rather than the second Apply
+// silently wiping out the first's routes (Routes.Apply replaces a
+// project's entire route set per call).
+func TestRecoverProjectState_DirectAndExposeHostRoutesCoexist(t *testing.T) {
+	const projectID = "recover-mixed-proj"
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() { ironProxyState.del(projectID) })
+
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
+		Cfg: schema.Config{
+			Project: schema.Project{Name: projectID},
+			Services: map[string]schema.Service{
+				"db":  {Hostname: "db.recover-mixed-proj.test", Port: 5432, Direct: true},
+				"api": {Hostname: "api.recover-mixed-proj.test", Port: 8080, ExposeHost: true},
+			},
+		},
+	}))
+
+	routes := NewRoutes()
+	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
+
+	_, ok := routes.DirectRoute("db.recover-mixed-proj.test")
+	assert.True(t, ok, "direct route must survive being merged with the ExposeHost recovery")
+
+	_, ok = routes.LANLookup("api.recover-mixed-proj.test")
+	assert.True(t, ok, "ExposeHost route must survive being merged with the direct recovery")
+}
+
 // TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched covers a
 // project whose config was never written to disk (or the snapshot is
 // malformed) — recoverProjectState has nothing to restore or rebuild,

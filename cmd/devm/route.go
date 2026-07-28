@@ -88,6 +88,7 @@ func buildRoutes(cfg schema.Config, mode serviceapi.RouteMode) ([]serviceapi.Rou
 			BackendPort: svc.Port,
 			Mode:        mode,
 			Project:     cfg.Project.Name,
+			ExposeHost:  svc.ExposeHost,
 		}
 		// For mode==vm && !svc.Direct, the daemon substitutes BackendHost with
 		// the project's allocated projectIP at /routes/apply time (based on

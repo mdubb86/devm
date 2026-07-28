@@ -116,11 +116,16 @@ func AdoptIronProxies(ctx context.Context, cfg identity.Config, sup *supervisor.
 // Best-effort: a missing/malformed snapshot (or a project with no
 // direct services) simply leaves nothing to recover.
 //
-// Only Direct routes are rebuilt here. Proxied (non-direct) routes
-// depend on the VM's IP as BackendHost and are normally re-pushed by
-// the CLI (`devm shell` auto-apply, `devm reconcile`); rebuilding them
-// here is out of scope for this recovery path — see buildRoutes in
-// cmd/devm/route.go for how the CLI constructs the full set.
+// Direct and ExposeHost routes are rebuilt here. Direct is DNS-only
+// (no backend to dial), and ExposeHost's shared LAN dispatcher needs
+// its opt-in route restored so a recovered project's LAN reachability
+// doesn't silently go dark until the next `devm reconcile` or `devm
+// shell` — see reconcileLAN. All other proxied (non-direct,
+// non-ExposeHost) routes depend on the VM's IP as BackendHost and are
+// normally re-pushed by the CLI (`devm shell` auto-apply, `devm
+// reconcile`); rebuilding those here is out of scope for this recovery
+// path — see buildRoutes in cmd/devm/route.go for how the CLI
+// constructs the full set.
 func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart, routes *Routes, projectID string) {
 	snap, err := ReadStateSnapshot(cfg, projectID)
 	if err != nil || snap == nil {
@@ -165,9 +170,28 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 			Project:     projectID,
 		})
 	}
-	if len(directRoutes) > 0 {
-		if err := routes.Apply(projectID, directRoutes); err != nil {
-			debuglog.Logf("routes", "recover direct routes for %s: %v (continuing)", projectID, err)
+
+	var exposeHostRoutes []Route
+	for _, svc := range snap.Cfg.Services {
+		if !svc.ExposeHost || svc.Hostname == "" {
+			continue
+		}
+		exposeHostRoutes = append(exposeHostRoutes, Route{
+			Hostname:    svc.Hostname,
+			BackendPort: svc.Port,
+			ExposeHost:  true,
+			Project:     projectID,
+		})
+	}
+
+	// Routes.Apply replaces the project's entire route set in one call —
+	// two separate Apply calls here would make the second silently wipe
+	// out the first's routes, so direct + ExposeHost are merged before
+	// the single Apply below.
+	recovered := append(directRoutes, exposeHostRoutes...)
+	if len(recovered) > 0 {
+		if err := routes.Apply(projectID, recovered); err != nil {
+			debuglog.Logf("routes", "recover routes for %s: %v (continuing)", projectID, err)
 		}
 	}
 }
