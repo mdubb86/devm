@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 func TestRoutes_Apply_AddsEntries(t *testing.T) {
@@ -143,7 +145,8 @@ func TestApplyRoutes_SubstitutesProjectIP_ForVMNonDirect(t *testing.T) {
 
 	routes := NewRoutes()
 	srv := &Server{mux: http.NewServeMux()}
-	RegisterRoutesHandlers(srv, routes)
+	proxy := NewProxyServer(identity.Prod, routes, nil)
+	RegisterRoutesHandlers(srv, routes, proxy)
 
 	// Client sends a vm-mode non-direct route with NO BackendHost.
 	req := ApplyRequest{
@@ -177,7 +180,8 @@ func TestApplyRoutes_ErrorsWhenProjectIPUnallocated(t *testing.T) {
 
 	routes := NewRoutes()
 	srv := &Server{mux: http.NewServeMux()}
-	RegisterRoutesHandlers(srv, routes)
+	proxy := NewProxyServer(identity.Prod, routes, nil)
+	RegisterRoutesHandlers(srv, routes, proxy)
 
 	req := ApplyRequest{
 		Name: "proj-b",
@@ -207,7 +211,8 @@ func TestApplyRoutes_LocalModePassthrough(t *testing.T) {
 
 	routes := NewRoutes()
 	srv := &Server{mux: http.NewServeMux()}
-	RegisterRoutesHandlers(srv, routes)
+	proxy := NewProxyServer(identity.Prod, routes, nil)
+	RegisterRoutesHandlers(srv, routes, proxy)
 
 	req := ApplyRequest{
 		Name: "proj-c",
@@ -232,7 +237,8 @@ func TestApplyRoutes_DirectVMPassthrough(t *testing.T) {
 
 	routes := NewRoutes()
 	srv := &Server{mux: http.NewServeMux()}
-	RegisterRoutesHandlers(srv, routes)
+	proxy := NewProxyServer(identity.Prod, routes, nil)
+	RegisterRoutesHandlers(srv, routes, proxy)
 
 	req := ApplyRequest{
 		Name: "proj-d",

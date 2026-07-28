@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // newTestServerWithRoutes returns a Server with routes handlers
@@ -23,7 +25,8 @@ func newTestServerWithRoutes(t *testing.T) (*Server, *Routes, func()) {
 	socket := filepath.Join(dir, "s.sock")
 	srv := NewServer(socket, Build{Version: "test-version"})
 	routes := NewRoutes()
-	RegisterRoutesHandlers(srv, routes)
+	proxy := NewProxyServer(identity.Prod, routes, nil)
+	RegisterRoutesHandlers(srv, routes, proxy)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

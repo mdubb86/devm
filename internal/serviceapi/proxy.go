@@ -17,6 +17,13 @@ import (
 	"github.com/mdubb86/devm/internal/identity"
 )
 
+// LANDispatchPort is the fixed port for the shared LAN dispatcher —
+// binds on 0.0.0.0 so a LAN device (or a reverse proxy like NPM on a
+// separate box) can reach devm's HTTP proxy without a per-project
+// loopback address. Not configurable in v0.9.6; a collision surfaces
+// as a bind error from /routes/apply.
+const LANDispatchPort = 42000
+
 // ProxyServer is the daemon's HTTP+HTTPS reverse proxy. Binds one
 // HTTP (:80) and one HTTPS (:443) listener per active project, on that
 // project's allocated ProjectIP, via the helper. Dispatches
@@ -32,6 +39,14 @@ type ProxyServer struct {
 
 	mu      sync.Mutex
 	perProj map[string]projectListeners
+
+	// lanMu guards lanListener + lanSrv. Separate from mu because
+	// /status calls that read rebindStatus also read from ProxyServer;
+	// keeping lifecycle mutexes disjoint prevents accidental
+	// cross-contamination.
+	lanMu       sync.Mutex
+	lanListener net.Listener
+	lanSrv      *http.Server
 
 	// rebindMu guards rebindStatus. Separate from mu because the
 	// status is read from /status handlers on the request path, and
@@ -255,6 +270,15 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		write502NoRoute(w, host)
 		return
 	}
+	p.dispatch(w, r, route)
+}
+
+// dispatch is the shared reverse-proxy mechanics — dial the route's
+// backend and copy the response — factored out of ServeHTTP so
+// serveLAN (LAN dispatch, Host-header only, no per-project dest-IP
+// scope) can reuse it instead of duplicating the reverse-proxy setup.
+func (p *ProxyServer) dispatch(w http.ResponseWriter, r *http.Request, route Route) {
+	host := stripPort(r.Host)
 	backendHost := route.BackendHost
 	if backendHost == "" {
 		backendHost = "localhost"
@@ -265,6 +289,59 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		write502BackendDown(w, host, backendHost, route.BackendPort, err)
 	}
 	rev.ServeHTTP(w, r)
+}
+
+// StartLANListener binds 0.0.0.0:lanPort and starts serving the shared
+// LAN dispatcher. Idempotent — a second call while already bound
+// returns nil. Called by reconcileLAN when the first ExposeHost route
+// enters the table.
+func (p *ProxyServer) StartLANListener(ctx context.Context, lanPort int) error {
+	p.lanMu.Lock()
+	defer p.lanMu.Unlock()
+	if p.lanListener != nil {
+		return nil
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", lanPort))
+	if err != nil {
+		return fmt.Errorf("bind LAN listener :%d: %w", lanPort, err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(p.serveLAN)}
+	p.lanListener = ln
+	p.lanSrv = srv
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			debuglog.Logf("serviceapi", "LAN listener serve: %v", err)
+		}
+	}()
+	debuglog.Logf("serviceapi", "LAN listener bound on 0.0.0.0:%d", lanPort)
+	return nil
+}
+
+// StopLANListener closes the LAN listener. Idempotent — a second call
+// when not bound is a no-op. Called when the last ExposeHost route
+// leaves the table.
+func (p *ProxyServer) StopLANListener() {
+	p.lanMu.Lock()
+	defer p.lanMu.Unlock()
+	if p.lanSrv == nil {
+		return
+	}
+	_ = p.lanSrv.Shutdown(context.Background())
+	p.lanListener = nil
+	p.lanSrv = nil
+}
+
+// serveLAN dispatches a LAN request by Host header only — no
+// per-project dest-IP scope filter, since the destination IP here is
+// the Mac's shared LAN interface, not a per-project loopback address.
+func (p *ProxyServer) serveLAN(w http.ResponseWriter, r *http.Request) {
+	host := stripPort(r.Host)
+	route, ok := p.routes.LANLookup(host)
+	if !ok {
+		write502NoRoute(w, host)
+		return
+	}
+	p.dispatch(w, r, route)
 }
 
 // projectByIP reverse-maps an IP string to the projectID that owns it.

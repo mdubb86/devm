@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -392,4 +393,54 @@ func TestStopProjectListeners_ClearsRebindStatus_WithLiveListeners(t *testing.T)
 
 	assert.NotPanics(t, func() { proxy.StopProjectListeners("p1") },
 		"StopProjectListeners must be idempotent-safe on an already-stopped project")
+}
+
+func TestProxyServer_StartLANListener_BindsAndServes(t *testing.T) {
+	proxy := NewProxyServer(identity.Prod, NewRoutes(), nil)
+	// Ephemeral port to avoid collisions in test env.
+	port := freeTCPPort(t)
+	require.NoError(t, proxy.StartLANListener(context.Background(), port))
+	t.Cleanup(func() { proxy.StopLANListener() })
+
+	// Second call is a no-op.
+	require.NoError(t, proxy.StartLANListener(context.Background(), port))
+
+	// Actually bound?
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 500*time.Millisecond)
+	require.NoError(t, err, "LAN listener should be reachable")
+	conn.Close()
+}
+
+func TestProxyServer_StopLANListener_ReleasesPort(t *testing.T) {
+	proxy := NewProxyServer(identity.Prod, NewRoutes(), nil)
+	port := freeTCPPort(t)
+	require.NoError(t, proxy.StartLANListener(context.Background(), port))
+	proxy.StopLANListener()
+
+	// After stop, a fresh bind on same port should succeed.
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	require.NoError(t, err, "port should be released after Stop")
+	ln.Close()
+}
+
+func TestProxyServer_ServeLAN_ReturnsNoRouteFor502(t *testing.T) {
+	routes := NewRoutes()
+	proxy := NewProxyServer(identity.Prod, routes, nil)
+	port := freeTCPPort(t)
+	require.NoError(t, proxy.StartLANListener(context.Background(), port))
+	t.Cleanup(func() { proxy.StopLANListener() })
+
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/", port))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	return port
 }

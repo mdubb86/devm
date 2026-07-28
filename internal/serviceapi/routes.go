@@ -239,8 +239,10 @@ type RouteStatus struct {
 
 // RegisterRoutesHandlers adds the three /routes endpoints to the
 // given server's mux. Called once from runner.go after the Routes
-// instance is created.
-func RegisterRoutesHandlers(s *Server, routes *Routes) {
+// instance is created. proxy is threaded through so a successful
+// Apply/Remove can reconcile the LAN listener's lifecycle against the
+// resulting ExposeHost route count.
+func RegisterRoutesHandlers(s *Server, routes *Routes, proxy *ProxyServer) {
 	s.Register("/routes/apply", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -277,6 +279,10 @@ func RegisterRoutesHandlers(s *Server, routes *Routes) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if err := reconcileLAN(r.Context(), proxy, routes, LANDispatchPort); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(ApplyResponse{Routes: resolved})
 	})
@@ -296,6 +302,10 @@ func RegisterRoutesHandlers(s *Server, routes *Routes) {
 			return
 		}
 		routes.Remove(req.Name)
+		if err := reconcileLAN(r.Context(), proxy, routes, LANDispatchPort); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 

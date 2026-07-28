@@ -113,7 +113,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// HTTP API server (Ship 1) with the /routes/* admin endpoints
 	// registered on top.
 	server := NewServer(cfg.SocketPath(), build)
-	RegisterRoutesHandlers(server, routes)
+	RegisterRoutesHandlers(server, routes, proxy)
 
 	// VM lifecycle endpoints (Ship 4). Supervisor and tart wrapper are
 	// daemon-scoped singletons; the supervisor manages the per-project VM
@@ -150,6 +150,16 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// block daemon startup.
 	if err := AdoptIronProxies(ctx, cfg, sup, tr, routes); err != nil {
 		fmt.Fprintf(os.Stderr, "iron-proxy adopt: %v\n", err)
+	}
+
+	// Bind the LAN listener if the adopt+rehydrate pass above recovered
+	// any ExposeHost routes — otherwise a recovered project's LAN
+	// dispatch would stay dark until the next `devm reconcile` or
+	// `devm shell` re-applies its routes. Best-effort: a bind failure
+	// here (port taken) shouldn't block daemon startup; it'll retry on
+	// the next Apply/Remove reconcile.
+	if err := reconcileLAN(ctx, proxy, routes, LANDispatchPort); err != nil {
+		debuglog.Logf("serviceapi", "startup LAN reconcile: %v", err)
 	}
 
 	// Reap softnet processes left behind by a daemon that crashed or was
