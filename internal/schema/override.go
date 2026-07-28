@@ -20,32 +20,34 @@ type ServiceOverride struct {
 	BindIP    *string `yaml:"-"`
 	PortIsSet bool    `yaml:"-"`
 
-	Hostname  *string             `yaml:"hostname,omitempty"`
-	Direct    *bool               `yaml:"direct,omitempty"`
-	Env       map[string]EnvValue `yaml:"env,omitempty"`
-	Masks     *[]Mask             `yaml:"masks,omitempty"`
-	Templates *[]Template         `yaml:"templates,omitempty"`
-	Exec      *[]string           `yaml:"exec,omitempty"`
-	WorkDir   *string             `yaml:"workdir,omitempty"`
-	Restart   *string             `yaml:"restart,omitempty"`
-	After     *[]string           `yaml:"after,omitempty"`
-	User      *string             `yaml:"user,omitempty"`
-	Systemd   *string             `yaml:"systemd,omitempty"`
+	Hostname   *string             `yaml:"hostname,omitempty"`
+	Direct     *bool               `yaml:"direct,omitempty"`
+	ExposeHost *bool               `yaml:"expose_host,omitempty"`
+	Env        map[string]EnvValue `yaml:"env,omitempty"`
+	Masks      *[]Mask             `yaml:"masks,omitempty"`
+	Templates  *[]Template         `yaml:"templates,omitempty"`
+	Exec       *[]string           `yaml:"exec,omitempty"`
+	WorkDir    *string             `yaml:"workdir,omitempty"`
+	Restart    *string             `yaml:"restart,omitempty"`
+	After      *[]string           `yaml:"after,omitempty"`
+	User       *string             `yaml:"user,omitempty"`
+	Systemd    *string             `yaml:"systemd,omitempty"`
 }
 
 type serviceOverrideYAML struct {
-	Port      yaml.Node           `yaml:"port,omitempty"`
-	Hostname  *string             `yaml:"hostname,omitempty"`
-	Direct    *bool               `yaml:"direct,omitempty"`
-	Env       map[string]EnvValue `yaml:"env,omitempty"`
-	Masks     *[]Mask             `yaml:"masks,omitempty"`
-	Templates *[]Template         `yaml:"templates,omitempty"`
-	Exec      *[]string           `yaml:"exec,omitempty"`
-	WorkDir   *string             `yaml:"workdir,omitempty"`
-	Restart   *string             `yaml:"restart,omitempty"`
-	After     *[]string           `yaml:"after,omitempty"`
-	User      *string             `yaml:"user,omitempty"`
-	Systemd   *string             `yaml:"systemd,omitempty"`
+	Port       yaml.Node           `yaml:"port,omitempty"`
+	Hostname   *string             `yaml:"hostname,omitempty"`
+	Direct     *bool               `yaml:"direct,omitempty"`
+	ExposeHost *bool               `yaml:"expose_host,omitempty"`
+	Env        map[string]EnvValue `yaml:"env,omitempty"`
+	Masks      *[]Mask             `yaml:"masks,omitempty"`
+	Templates  *[]Template         `yaml:"templates,omitempty"`
+	Exec       *[]string           `yaml:"exec,omitempty"`
+	WorkDir    *string             `yaml:"workdir,omitempty"`
+	Restart    *string             `yaml:"restart,omitempty"`
+	After      *[]string           `yaml:"after,omitempty"`
+	User       *string             `yaml:"user,omitempty"`
+	Systemd    *string             `yaml:"systemd,omitempty"`
 }
 
 func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
@@ -55,6 +57,7 @@ func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
 	}
 	o.Hostname = raw.Hostname
 	o.Direct = raw.Direct
+	o.ExposeHost = raw.ExposeHost
 	o.Env = raw.Env
 	o.Masks = raw.Masks
 	o.Templates = raw.Templates

@@ -365,6 +365,54 @@ func TestServiceDirectYAMLRoundTrip(t *testing.T) {
 	assert.True(t, roundTripped.Direct, "direct must survive marshal/unmarshal round-trip (snapshot storage relies on this)")
 }
 
+// TestServiceExposeHostYAMLRoundTrip exercises the `expose_host:` field
+// through the real custom decode/encode path (serviceKnownFields,
+// serviceYAML.ExposeHost, Service.UnmarshalYAML, Service.MarshalYAML)
+// rather than Go struct literals — same risk as TestServiceDirectYAMLRoundTrip.
+func TestServiceExposeHostYAMLRoundTrip(t *testing.T) {
+	var withExpose Service
+	require.NoError(t, yaml.Unmarshal([]byte("port: 80\nhostname: api.test\nexpose_host: true\n"), &withExpose))
+	assert.True(t, withExpose.ExposeHost)
+
+	var withoutExpose Service
+	require.NoError(t, yaml.Unmarshal([]byte("port: 80\nhostname: api.test\n"), &withoutExpose))
+	assert.False(t, withoutExpose.ExposeHost)
+
+	out, err := yaml.Marshal(withExpose)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "expose_host: true")
+
+	var roundTripped Service
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.True(t, roundTripped.ExposeHost, "expose_host must survive marshal/unmarshal round-trip (snapshot storage relies on this)")
+}
+
+func TestService_Validate_ExposeHostRequiresHostname(t *testing.T) {
+	svc := Service{
+		Port:       80,
+		ExposeHost: true,
+		// no Hostname
+	}
+	err := svc.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "expose_host")
+	assert.Contains(t, err.Error(), "hostname")
+}
+
+func TestService_Validate_ExposeHostWithHostnameOK(t *testing.T) {
+	svc := Service{
+		Port:       80,
+		Hostname:   "api.myapp.test",
+		ExposeHost: true,
+	}
+	assert.NoError(t, svc.Validate())
+}
+
+func TestService_Validate_ExposeHostFalseIsFine(t *testing.T) {
+	svc := Service{Port: 80}
+	assert.NoError(t, svc.Validate()) // no hostname, expose_host default false — ok
+}
+
 func TestServiceValidatePortBindCoupling(t *testing.T) {
 	// BindIP without Port is invalid.
 	bad := Service{BindIP: "0.0.0.0"}

@@ -164,7 +164,14 @@ type Service struct {
 	// Direct routes this service directly to the VM's IP instead of
 	// through the daemon HTTP proxy + in-VM Caddy. For raw-TCP / non-HTTP
 	// services (e.g. Postgres). Requires a hostname.
-	Direct    bool                `yaml:"direct,omitempty"`
+	Direct bool `yaml:"direct,omitempty"`
+
+	// ExposeHost, when true, opts the service's hostname into devm's
+	// shared LAN dispatcher (0.0.0.0:42000). Only valid when Hostname
+	// is set — Service.Validate rejects otherwise. Independent of
+	// Direct (direct:true on LAN is a future release).
+	ExposeHost bool `yaml:"expose_host,omitempty"`
+
 	Env       map[string]EnvValue `yaml:"env,omitempty"`
 	Masks     []Mask              `yaml:"masks,omitempty"`
 	Templates []Template          `yaml:"templates,omitempty"`
@@ -183,25 +190,26 @@ type Service struct {
 // can decode it as either int or string and populate both Service.Port
 // and Service.BindIP from a single field.
 type serviceYAML struct {
-	Port      yaml.Node           `yaml:"port,omitempty"`
-	Hostname  string              `yaml:"hostname,omitempty"`
-	Direct    bool                `yaml:"direct,omitempty"`
-	Env       map[string]EnvValue `yaml:"env,omitempty"`
-	Masks     []Mask              `yaml:"masks,omitempty"`
-	Templates []Template          `yaml:"templates,omitempty"`
-	Exec      []string            `yaml:"exec,omitempty"`
-	WorkDir   string              `yaml:"workdir,omitempty"`
-	Restart   string              `yaml:"restart,omitempty"`
-	After     []string            `yaml:"after,omitempty"`
-	User      string              `yaml:"user,omitempty"`
-	Systemd   string              `yaml:"systemd,omitempty"`
+	Port       yaml.Node           `yaml:"port,omitempty"`
+	Hostname   string              `yaml:"hostname,omitempty"`
+	Direct     bool                `yaml:"direct,omitempty"`
+	ExposeHost bool                `yaml:"expose_host,omitempty"`
+	Env        map[string]EnvValue `yaml:"env,omitempty"`
+	Masks      []Mask              `yaml:"masks,omitempty"`
+	Templates  []Template          `yaml:"templates,omitempty"`
+	Exec       []string            `yaml:"exec,omitempty"`
+	WorkDir    string              `yaml:"workdir,omitempty"`
+	Restart    string              `yaml:"restart,omitempty"`
+	After      []string            `yaml:"after,omitempty"`
+	User       string              `yaml:"user,omitempty"`
+	Systemd    string              `yaml:"systemd,omitempty"`
 }
 
 // serviceKnownFields lists the yaml keys serviceYAML accepts. Kept in
 // sync with the tags on serviceYAML above; enforced by
 // TestService_KnownFieldsMatchStruct so it never drifts.
 var serviceKnownFields = []string{
-	"port", "hostname", "direct", "env", "masks", "templates",
+	"port", "hostname", "direct", "expose_host", "env", "masks", "templates",
 	"exec", "workdir", "restart", "after", "user", "systemd",
 }
 
@@ -235,6 +243,7 @@ func (s *Service) UnmarshalYAML(node *yaml.Node) error {
 	}
 	s.Hostname = raw.Hostname
 	s.Direct = raw.Direct
+	s.ExposeHost = raw.ExposeHost
 	s.Env = raw.Env
 	s.Masks = raw.Masks
 	s.Templates = raw.Templates
@@ -284,30 +293,32 @@ func (s *Service) decodePortNode(n yaml.Node) error {
 // machinery sees the same shape the user wrote.
 func (s Service) MarshalYAML() (interface{}, error) {
 	out := struct {
-		Port      interface{}         `yaml:"port,omitempty"`
-		Hostname  string              `yaml:"hostname,omitempty"`
-		Direct    bool                `yaml:"direct,omitempty"`
-		Env       map[string]EnvValue `yaml:"env,omitempty"`
-		Masks     []Mask              `yaml:"masks,omitempty"`
-		Templates []Template          `yaml:"templates,omitempty"`
-		Exec      []string            `yaml:"exec,omitempty"`
-		WorkDir   string              `yaml:"workdir,omitempty"`
-		Restart   string              `yaml:"restart,omitempty"`
-		After     []string            `yaml:"after,omitempty"`
-		User      string              `yaml:"user,omitempty"`
-		Systemd   string              `yaml:"systemd,omitempty"`
+		Port       interface{}         `yaml:"port,omitempty"`
+		Hostname   string              `yaml:"hostname,omitempty"`
+		Direct     bool                `yaml:"direct,omitempty"`
+		ExposeHost bool                `yaml:"expose_host,omitempty"`
+		Env        map[string]EnvValue `yaml:"env,omitempty"`
+		Masks      []Mask              `yaml:"masks,omitempty"`
+		Templates  []Template          `yaml:"templates,omitempty"`
+		Exec       []string            `yaml:"exec,omitempty"`
+		WorkDir    string              `yaml:"workdir,omitempty"`
+		Restart    string              `yaml:"restart,omitempty"`
+		After      []string            `yaml:"after,omitempty"`
+		User       string              `yaml:"user,omitempty"`
+		Systemd    string              `yaml:"systemd,omitempty"`
 	}{
-		Hostname:  s.Hostname,
-		Direct:    s.Direct,
-		Env:       s.Env,
-		Masks:     s.Masks,
-		Templates: s.Templates,
-		Exec:      s.Exec,
-		WorkDir:   s.WorkDir,
-		Restart:   s.Restart,
-		After:     s.After,
-		User:      s.User,
-		Systemd:   s.Systemd,
+		Hostname:   s.Hostname,
+		Direct:     s.Direct,
+		ExposeHost: s.ExposeHost,
+		Env:        s.Env,
+		Masks:      s.Masks,
+		Templates:  s.Templates,
+		Exec:       s.Exec,
+		WorkDir:    s.WorkDir,
+		Restart:    s.Restart,
+		After:      s.After,
+		User:       s.User,
+		Systemd:    s.Systemd,
 	}
 	if s.Port != 0 {
 		if s.BindIP == "" {
@@ -329,6 +340,9 @@ func (s Service) ResolveBind() string {
 }
 
 func (s Service) Validate() error {
+	if s.ExposeHost && s.Hostname == "" {
+		return fmt.Errorf("expose_host: true requires hostname on service")
+	}
 	if s.Hostname != "" && !strings.HasSuffix(s.Hostname, ".test") {
 		return fmt.Errorf("service.hostname: must end in .test (got %q)", s.Hostname)
 	}

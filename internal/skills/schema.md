@@ -208,6 +208,7 @@ Named service definitions. Each key is the service name.
 | `port` | int or "IP:PORT" | live | VM-side listen port. String form (`"0.0.0.0:8080"`) is parsed for a bind IP, but in the current version that IP is silently ignored: every service's host-side listener binds on the project's allocated `127.42.0.N` address (its own loopback IP, one per project) rather than a configurable `bind_ip`. LAN exposure via an explicit bind IP is a planned follow-up, not yet wired up. |
 | `hostname` | string | live | Hostname for the Caddy reverse-proxy entry. Must end in `.test`. |
 | `direct` | bool | live | Treat this service as raw TCP end-to-end instead of HTTP-fronted: skips the in-VM Caddy reverse-proxy block and the daemon's ProxyServer hostname dispatch. DNS still answers `hostname` with the project's `127.42.0.N`, and the client connects to `127.42.0.N:port` directly (softnet forwards to the guest) — every service with `hostname` + `port` is exposed on softnet regardless of `direct`; this flag only controls how it's fronted. Use for non-HTTP protocols (Postgres, gRPC) a reverse proxy can't front. Requires `hostname`. Default `false`. |
+| `expose_host` | bool | live | Opt this service's `hostname` into devm's shared LAN dispatcher (host `0.0.0.0:42000`), so other devices on the LAN can reach it by hostname. Requires `hostname`. Independent of `direct`. Default `false`. |
 | `env` | map[string]EnvValue | live | Per-service environment variables (same `!secret` syntax as top-level `env`). |
 | `masks` | []Mask | recreate | `mount --bind` overlays applied at boot. Each has `path` (relative to repo root) and `size` (e.g. `100m`). |
 | `templates` | []Template | live | Files rendered from source scripts and written into the VM. Each has `source` (project-relative path), `output` (absolute path in VM), and optional `sudo` (default `false`; set `true` when `output` is under a root-owned dir like `/etc` so the installer escalates and the resulting file lands root-owned). |
@@ -222,6 +223,7 @@ Validation rules:
 - A service must define at least one of `port`, `masks`, `exec`, or `systemd`.
 - `hostname` must end in `.test`.
 - `direct: true` requires a `hostname`.
+- `expose_host: true` requires a `hostname`.
 - Port values must be in range 1–65535; no two services may share a port or a hostname.
 - Mask `path` must be relative to the repo root; absolute paths, `~`, `$VAR`, and `../` traversal are rejected.
 - Template `source` must be project-relative (no `../` traversal); `output` must be absolute.
