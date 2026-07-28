@@ -73,6 +73,24 @@ To switch routing mode without tearing down (e.g., from `vm` to `local`), just r
 
 ---
 
+## Reaching services from the LAN (`expose_host: true`)
+
+Uncommon; use only when a LAN device (phone, tablet, other laptop) needs to hit a dev service by hostname. devm's CA isn't trusted on those devices and installing it there is annoying, so the pattern is: run a LAN-side reverse proxy that already has a trusted cert (Nginx Proxy Manager, Caddy, Traefik, etc.), and have it forward to devm's shared LAN dispatcher on `0.0.0.0:42000`, preserving the `Host` header. devm dispatches by Host to the right service; TLS is the reverse proxy's problem, not devm's.
+
+```yaml
+services:
+  everstone:
+    port: 80
+    hostname: everstone.buzztrack.test
+    expose_host: true    # reachable via <mac-lan-ip>:42000
+```
+
+- Requires `hostname` (dispatch is Host-header only). Non-direct services only.
+- Listener is shared across projects and bound lazily — no `expose_host` opt-in anywhere means no listener. Two projects both claiming the same hostname is rejected at `route apply`.
+- `devm status` shows the listener's bound state and hostname count.
+
+---
+
 ## Inside the VM: reaching your own services
 
 `*.test` hostnames resolve locally inside the VM to a reverse-proxy that dispatches to `localhost:<port>` for each service you declared. A workload inside the VM that curls `http://api.test/` never leaves the VM — DNS answers loopback, the in-VM proxy dispatches to your service on its declared port.
