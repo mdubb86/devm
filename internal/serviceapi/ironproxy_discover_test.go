@@ -228,6 +228,40 @@ func TestRecoverProjectState_RebuildsExposeHostRoutes(t *testing.T) {
 	assert.Equal(t, 1, routes.CountLANRoutes())
 }
 
+// TestRecoverProjectState_ExposeHostRouteHasBackendHostFromProjectIP pins
+// the v0.9.6 fix for a real correctness bug: recovered ExposeHost routes
+// left BackendHost="" would fall back to "localhost" at dispatch time,
+// producing a 502 (or a silent misroute to whatever happened to be
+// listening on Mac:<port>) once the daemon restarted. Recovery must
+// substitute BackendHost = info.ProjectIP, mirroring the /routes/apply
+// handler's v0.9.3 vm-mode substitution — recoverProjectState calls
+// routes.Apply directly, bypassing that handler.
+func TestRecoverProjectState_ExposeHostRouteHasBackendHostFromProjectIP(t *testing.T) {
+	const projectID = "recover-backendhost-proj"
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() { ironProxyState.del(projectID) })
+
+	ironProxyState.put(projectID, projectInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})
+
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
+		Cfg: schema.Config{
+			Project: schema.Project{Name: projectID},
+			Services: map[string]schema.Service{
+				"api": {Hostname: "api.recover-backendhost-proj.test", Port: 8080, ExposeHost: true},
+			},
+		},
+		ProjectIP: "127.42.0.9",
+	}))
+
+	routes := NewRoutes()
+	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
+
+	route, ok := routes.LANLookup("api.recover-backendhost-proj.test")
+	require.True(t, ok)
+	assert.Equal(t, "127.42.0.9", route.BackendHost, "recovered ExposeHost route must carry the ProjectIP substitution, not an empty BackendHost")
+	assert.Equal(t, 8080, route.BackendPort)
+}
+
 // TestRecoverProjectState_DirectAndExposeHostRoutesCoexist covers the
 // merge step in recoverProjectState: a project with both a direct
 // service and an expose_host service must recover both — a single

@@ -176,12 +176,23 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 		if !svc.ExposeHost || svc.Hostname == "" {
 			continue
 		}
-		exposeHostRoutes = append(exposeHostRoutes, Route{
+		rt := Route{
 			Hostname:    svc.Hostname,
 			BackendPort: svc.Port,
 			ExposeHost:  true,
 			Project:     projectID,
-		})
+		}
+		// Mirror the /routes/apply handler's v0.9.3 substitution: a
+		// vm-mode (default), non-direct route dials BackendHost:BackendPort
+		// at dispatch time. Left empty, dispatch falls back to
+		// "localhost" — a Mac-side 502 (or silent misroute) instead of
+		// reaching the VM. recoverProjectState calls routes.Apply
+		// directly, bypassing that handler, so the substitution has to
+		// happen here too.
+		if info.ProjectIP != "" {
+			rt.BackendHost = info.ProjectIP
+		}
+		exposeHostRoutes = append(exposeHostRoutes, rt)
 	}
 
 	// Routes.Apply replaces the project's entire route set in one call —
