@@ -38,3 +38,7 @@ internal/ironproxy/embed/iron-proxy.gz
 # devm-helper binary embedded (gzipped) into devm at build time.
 # Populated by `just _build-helper-embed`.
 internal/helper/embed/devm-helper.gz
+
+# devm-setsid-shim binary embedded (gzipped) into devm at build time.
+# Populated by `just _build-setsid-shim-embed`.
+internal/setsidshim/embed/devm-setsid-shim.gz

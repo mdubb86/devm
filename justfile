@@ -85,6 +85,18 @@ _build-helper-embed PROFILE:
       rm "$raw"
     @echo "devm-helper ({{PROFILE}}) embedded at internal/helper/embed/devm-helper.gz"
 
+# Build the devm-setsid-shim binary for darwin/arm64 and gzip it
+# into internal/setsidshim/embed/. `//go:embed embed/devm-setsid-shim.gz`
+# in internal/setsidshim/embed.go requires this file at compile time;
+# `_build` depends on this recipe. Identity-agnostic (no ldflags).
+_build-setsid-shim-embed:
+    @mkdir -p internal/setsidshim/embed
+    @raw="$(mktemp -t devm-setsid-shim-raw.XXXXXX)" && \
+      GOOS=darwin GOARCH=arm64 go build -o "$raw" ./cmd/devm-setsid-shim && \
+      gzip -c "$raw" > internal/setsidshim/embed/devm-setsid-shim.gz && \
+      rm "$raw"
+    @echo "devm-setsid-shim embedded at internal/setsidshim/embed/devm-setsid-shim.gz"
+
 # Build the devm + devm-helper binaries into ./bin with prod identity,
 # and codesign with the local self-signed identity if available. The
 # path matches what `devm install` records in the LaunchDaemon plist,
@@ -93,12 +105,12 @@ _build-helper-embed PROFILE:
 #
 # fetch-iron-proxy runs first: the ironproxy package's //go:embed
 # needs internal/ironproxy/embed/iron-proxy.gz to exist at compile time.
-build: fetch-iron-proxy (_build-helper-embed "prod") (_build "prod")
+build: fetch-iron-proxy (_build-helper-embed "prod") (_build-setsid-shim-embed) (_build "prod")
 
 # Build the devm-e2e + devm-e2e-helper binaries into ./bin with e2e
 # identity, so they run alongside — not clobber — a live prod install
 # (separate runtime dir, socket, LaunchDaemon label; see internal/identity).
-build-e2e: fetch-iron-proxy (_build-helper-embed "e2e") (_build "e2e")
+build-e2e: fetch-iron-proxy (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build "e2e")
 
 # Run Go unit tests.
 test:
