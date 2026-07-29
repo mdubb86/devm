@@ -61,15 +61,6 @@ func TestKey_String(t *testing.T) {
 	assert.Equal(t, "acme/proxy", Key{ProjectID: "acme", Role: RoleProxy}.String())
 }
 
-func TestSetsid_AppliesOnDarwin(t *testing.T) {
-	cmd := exec.Command("true")
-	applySetsid(cmd)
-	// On darwin, SysProcAttr is non-nil and Setsid is true.
-	// On other OSes, applySetsid is a no-op (cmd.SysProcAttr stays nil).
-	// Non-nil SysProcAttr is a sufficient proxy on darwin.
-	_ = cmd
-}
-
 func TestEnvMap_EmptyForwardsDaemonEnv(t *testing.T) {
 	// Contract: when cmd.Env is empty/nil, envMap forwards the
 	// daemon's own environment so spawned children inherit it.

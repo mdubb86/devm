@@ -35,12 +35,13 @@ type DiscoveredIronProxy struct {
 // binary path matches the one this daemon would launch, paired with
 // its project id and the on-disk config file it was launched with.
 //
-// Spawned iron-proxies are intentionally setsid'd (see
-// internal/supervisor/setsid_darwin.go) so they survive daemon
-// death. Without re-attachment, a daemon restart would leave them
-// running but unmanaged — stop/status would say "not present" while
-// the process kept enforcing egress. Discovery on startup closes
-// that gap.
+// Spawned iron-proxies survive daemon death because SpawnIronProxy
+// wraps them in the devm-setsid-shim, which starts iron-proxy in a
+// new session detached from the daemon's process tree — see
+// internal/setsidshim. Without re-attachment, a daemon restart would
+// leave them running but unmanaged — stop/status would say "not
+// present" while the process kept enforcing egress. Discovery on
+// startup closes that gap.
 //
 // Matching is intentionally strict: the command must start with the
 // canonical iron-proxy binary path. We never adopt unrelated processes.

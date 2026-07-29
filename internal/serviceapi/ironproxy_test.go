@@ -1,12 +1,63 @@
 package serviceapi
 
 import (
+	"context"
+	"io"
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/ironproxy"
+	"github.com/mdubb86/devm/internal/setsidshim"
+	"github.com/mdubb86/devm/internal/supervisor"
 )
+
+// TestSpawnIronProxy_WrapsWithSetsidShim pins that iron-proxy is
+// started via the setsid shim (not directly). Without the shim,
+// iron-proxy runs in the daemon's session and dies on `launchctl
+// bootout` during devm upgrade.
+func TestSpawnIronProxy_WrapsWithSetsidShim(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Substitute the low-level spawn seam so this test never execs the
+	// shim or iron-proxy — it only inspects the *exec.Cmd that
+	// SpawnIronProxy built.
+	var gotCmd *exec.Cmd
+	origSpawn := ironProxySpawn
+	t.Cleanup(func() { ironProxySpawn = origSpawn })
+	ironProxySpawn = func(_ context.Context, _ *supervisor.Supervisor, _ supervisor.Key, cmd *exec.Cmd, _ ...io.Writer) error {
+		gotCmd = cmd
+		return nil
+	}
+
+	sup := supervisor.New(t.TempDir())
+	proxyCfg := IronProxyConfig{
+		HTTPListen:  "127.0.0.1:0",
+		HTTPSListen: "127.0.0.1:0",
+		CACertPath:  "/tmp/ca.crt",
+		CAKeyPath:   "/tmp/ca.key",
+	}
+	err := SpawnIronProxy(context.Background(), identity.Prod, sup, "p-shim-test", proxyCfg, nil)
+	require.NoError(t, err)
+	require.NotNil(t, gotCmd)
+
+	runDir, err := EnsureRuntimeDir(identity.Prod)
+	require.NoError(t, err)
+	shimPath, err := setsidshim.Ensure(runDir)
+	require.NoError(t, err)
+	binaryPath, err := ironproxy.Ensure(runDir)
+	require.NoError(t, err)
+
+	assert.Equal(t, shimPath, gotCmd.Path, "argv[0] (Path) must be the setsid shim")
+	require.GreaterOrEqual(t, len(gotCmd.Args), 4, "want shim, binary, -config, path")
+	assert.Equal(t, shimPath, gotCmd.Args[0])
+	assert.Equal(t, binaryPath, gotCmd.Args[1], "argv[1] must be the iron-proxy binary path")
+	assert.Equal(t, "-config", gotCmd.Args[2])
+}
 
 func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 	cfg := IronProxyConfig{

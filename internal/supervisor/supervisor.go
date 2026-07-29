@@ -1,8 +1,7 @@
 // Package supervisor manages the daemon's long-lived child processes:
 // per-project Tart VMs in Ship 4, and per-project iron-proxy
 // instances in Ship 5. It wraps go.viam.com/utils/pexec for the
-// core lifecycle and adds a setsid shim so children survive a daemon
-// crash.
+// core lifecycle.
 package supervisor
 
 import (
@@ -94,10 +93,13 @@ func (s *Supervisor) Adopt(k Key, pid int) {
 }
 
 // Spawn registers and starts a managed child. cmd is a prepared
-// exec.Cmd (e.g., from tart.Run). The supervisor pre-binds
-// SysProcAttr.Setsid (darwin only) so the child detaches into its own
-// process group, then hands the underlying state to pexec for
-// lifecycle management.
+// exec.Cmd (e.g., from tart.Run), then hands the underlying state to
+// pexec for lifecycle management.
+//
+// Detaching a child from the daemon's session (so it survives the
+// daemon's own death) is not done here — it's handled at a higher
+// level via a setsid shim for iron-proxy specifically; see
+// internal/setsidshim + SpawnIronProxy.
 //
 // Optional taps receive an io.MultiWriter fanout of the child's combined
 // stdout+stderr alongside the on-disk log file. Used by the daemon to
@@ -106,8 +108,6 @@ func (s *Supervisor) Adopt(k Key, pid int) {
 func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd, taps ...io.Writer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	applySetsid(cmd)
 
 	if err := os.MkdirAll(s.logDir, 0700); err != nil {
 		return fmt.Errorf("supervisor logDir %s: %w", s.logDir, err)

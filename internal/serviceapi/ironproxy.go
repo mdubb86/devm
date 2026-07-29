@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,10 +11,20 @@ import (
 
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
+	"github.com/mdubb86/devm/internal/setsidshim"
 	"github.com/mdubb86/devm/internal/softnet"
 	"github.com/mdubb86/devm/internal/supervisor"
 	"gopkg.in/yaml.v3"
 )
+
+// ironProxySpawn is the test-injection seam for the actual process
+// spawn inside SpawnIronProxy. Production always delegates to
+// sup.Spawn; tests substitute a fake to capture the constructed
+// *exec.Cmd (argv, path) without actually exec'ing the shim or
+// iron-proxy.
+var ironProxySpawn = func(ctx context.Context, sup *supervisor.Supervisor, key supervisor.Key, cmd *exec.Cmd, taps ...io.Writer) error {
+	return sup.Spawn(ctx, key, cmd, taps...)
+}
 
 // IronSecret is one host-scoped secret to substitute. Value is the real
 // secret (goes into iron-proxy's process env, never the on-disk YAML).
@@ -152,6 +163,10 @@ func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Su
 	if err != nil {
 		return fmt.Errorf("locate iron-proxy: %w", err)
 	}
+	shim, err := setsidshim.Ensure(runDir)
+	if err != nil {
+		return fmt.Errorf("locate setsid shim: %w", err)
+	}
 	blob, err := proxyCfg.YAML()
 	if err != nil {
 		return fmt.Errorf("encode config: %w", err)
@@ -161,14 +176,18 @@ func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Su
 		return fmt.Errorf("write config: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, binary, "-config", configPath)
+	// iron-proxy is started via the devm-setsid-shim (argv[0]) rather
+	// than directly, so it lands in its own session — detached from
+	// the daemon's process tree — and survives launchctl bootout of
+	// the daemon during devm install/upgrade. See internal/setsidshim.
+	cmd := exec.CommandContext(ctx, shim, binary, "-config", configPath)
 	cmd.Env = append(os.Environ(), proxyCfg.EnvVars()...)
 	key := supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}
 	if denials != nil {
 		denials.Reset(projectID)
-		return sup.Spawn(ctx, key, cmd, denials.TapWriter(projectID))
+		return ironProxySpawn(ctx, sup, key, cmd, denials.TapWriter(projectID))
 	}
-	return sup.Spawn(ctx, key, cmd)
+	return ironProxySpawn(ctx, sup, key, cmd)
 }
 
 // EnvVars returns KEY=VALUE strings for iron-proxy's process env, one per
