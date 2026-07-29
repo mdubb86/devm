@@ -9,7 +9,7 @@ import (
 func TestParseEtcEnvironment(t *testing.T) {
 	body := `# comment line
 NO_PROXY=*
-NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt
+NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 PATH="/opt/devm/scripts:/usr/local/bin:/usr/bin"
 
 WORKSPACE="/workspace/foo"
@@ -17,7 +17,7 @@ UV_SYSTEM_CERTS=1
 `
 	got := parseEtcEnvironment(body)
 	assert.Equal(t, "*", got["NO_PROXY"])
-	assert.Equal(t, "/usr/local/share/ca-certificates/devm.crt", got["NODE_EXTRA_CA_CERTS"])
+	assert.Equal(t, "/etc/ssl/certs/ca-certificates.crt", got["NODE_EXTRA_CA_CERTS"])
 	assert.Equal(t, "/opt/devm/scripts:/usr/local/bin:/usr/bin", got["PATH"]) // quotes stripped
 	assert.Equal(t, "/workspace/foo", got["WORKSPACE"])
 	assert.Equal(t, "1", got["UV_SYSTEM_CERTS"])

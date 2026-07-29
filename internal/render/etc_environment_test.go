@@ -48,7 +48,17 @@ func TestRenderEtcEnvironment_DefaultCfg(t *testing.T) {
 	body, err := RenderEtcEnvironment(cfg)
 	require.NoError(t, err)
 	assert.Contains(t, body, "NO_PROXY=*\n")
-	assert.Contains(t, body, "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt\n")
+	// CA trust: every var points at the merged bundle so Python (ssl/
+	// httpx/requests), Node, curl, AWS SDKs, and uv all trust devm's CA
+	// without per-project config. Also verifies containers get a working
+	// path — the previous per-file /usr/local/share/ca-certificates/
+	// devm.crt existed in the guest but was dangling inside containers.
+	assert.Contains(t, body, "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt\n")
+	assert.Contains(t, body, "SSL_CERT_DIR=/etc/ssl/certs\n")
+	assert.Contains(t, body, "REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt\n")
+	assert.Contains(t, body, "CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt\n")
+	assert.Contains(t, body, "AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt\n")
+	assert.Contains(t, body, "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt\n")
 	assert.Contains(t, body, "UV_SYSTEM_CERTS=1\n")
 	// No cfg.Path → PATH = /opt/devm/scripts:<guestSystemPATH>
 	assert.Contains(t, body, `PATH="/opt/devm/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games"`+"\n")

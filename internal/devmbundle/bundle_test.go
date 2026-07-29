@@ -388,7 +388,7 @@ func TestBuild_IncludesEtcEnvironment(t *testing.T) {
 	entry, ok := entries["etc/environment"]
 	require.True(t, ok, "bundle must contain etc/environment")
 	assert.Equal(t, int64(0o644), entry.mode)
-	assert.Contains(t, string(entry.body), "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt")
+	assert.Contains(t, string(entry.body), "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt")
 	assert.Contains(t, string(entry.body), "PATH=")
 }
 
