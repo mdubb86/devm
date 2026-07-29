@@ -15,6 +15,11 @@ Consolidated end-to-end proof of `docker: true`:
   - `docker build` auto-receives the devm-ca buildkit secret —
     proves devm-docker-shim at /usr/local/bin/docker intercepts
     build subcommands and appends `--secret id=devm-ca,src=…`.
+  - Container inherits CA/proxy env from /etc/environment via the
+    shim's `-e KEY=VAL` injection — proves language runtimes (Python
+    certifi, Node, uv) inside containers trust iron-proxy's MITM CA
+    without per-image config. User `-e KEY=VAL` on the command still
+    wins over the shim's injection.
 
 Single test — cold-start is ~5 min; splitting triples cost for no
 coverage gain.
@@ -183,6 +188,54 @@ def test_docker_first_class_end_to_end(workspace, devm):
             [devm.path, "exec", "docker", "rm", "-f", "e2e-web"],
             cwd=str(workspace.path), capture_output=True, timeout=30,
         )
+
+    # ---- Assertion 6: devm-docker-shim injects CA env vars from
+    # ---- /etc/environment into containers via `docker run -e KEY=VAL ...`
+    # ---- Runs `env` in a bare alpine container and greps for the
+    # ---- injected vars — no image-specific setup needed.
+    env_out = devm_exec_with_retry(
+        devm.path,
+        ["docker", "run", "--rm", "alpine:latest", "env"],
+        cwd=str(workspace.path), timeout=60,
+    )
+    assert env_out.returncode == 0, (
+        f"docker run alpine env failed: rc={env_out.returncode}\n"
+        f"stderr={env_out.stderr.decode()!r}"
+    )
+    env_text = env_out.stdout.decode()
+    # NODE_EXTRA_CA_CERTS and UV_SYSTEM_CERTS are both present in
+    # /etc/environment as of v0.9.5/6, so both must show up injected.
+    # NO_PROXY=* is also always present.
+    assert "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt" in env_text, (
+        f"container env missing NODE_EXTRA_CA_CERTS — shim did not inject "
+        f"or /etc/environment lost it. env output:\n{env_text}"
+    )
+    assert "UV_SYSTEM_CERTS=1" in env_text, (
+        f"container env missing UV_SYSTEM_CERTS. env output:\n{env_text}"
+    )
+    assert "NO_PROXY=*" in env_text, (
+        f"container env missing NO_PROXY. env output:\n{env_text}"
+    )
+
+    # ---- Assertion 6b: user's -e KEY=VAL wins over the shim's injection.
+    override_out = devm_exec_with_retry(
+        devm.path,
+        ["docker", "run", "--rm",
+         "-e", "NODE_EXTRA_CA_CERTS=/user-supplied/path",
+         "alpine:latest", "env"],
+        cwd=str(workspace.path), timeout=60,
+    )
+    assert override_out.returncode == 0
+    override_text = override_out.stdout.decode()
+    assert "NODE_EXTRA_CA_CERTS=/user-supplied/path" in override_text, (
+        f"user -e override for NODE_EXTRA_CA_CERTS didn't win. env output:\n"
+        f"{override_text}"
+    )
+    # Make sure the shim's own value isn't ALSO there (would be a duplicate).
+    assert "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt" not in override_text, (
+        f"shim injected its own NODE_EXTRA_CA_CERTS despite user override. "
+        f"env output:\n{override_text}"
+    )
 
     # ---- Assertion 5: devm-docker-shim intercepts `docker build` and
     # ---- appends `--secret id=devm-ca,src=…`. The Dockerfile mounts
