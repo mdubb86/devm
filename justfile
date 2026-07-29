@@ -97,6 +97,29 @@ _build-setsid-shim-embed:
       rm "$raw"
     @echo "devm-setsid-shim embedded at internal/setsidshim/embed/devm-setsid-shim.gz"
 
+# Build the devm-runc-shim + devm-docker-shim binaries for linux/arm64
+# and drop them into internal/docker/embed/. `//go:embed
+# embed/devm-runc-shim` and `//go:embed embed/devm-docker-shim` in
+# internal/docker/embed.go require these files at compile time.
+# `_build` inlines this build (it's part of the same shell chain that
+# does the codesign), but this standalone recipe exists so `embeds`
+# and CI can prep the docker embeds without invoking the full `_build`
+# (which would also compile + codesign the main devm binary — Mac-only
+# concerns unnecessary for `go test`/`go vet`).
+_build-docker-shims-embed:
+    @mkdir -p internal/docker/embed
+    GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim   ./cmd/devm-runc-shim
+    GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-docker-shim ./cmd/devm-docker-shim
+
+# Prep every `//go:embed` blob the daemon needs, so subsequent `go
+# test` / `go vet` / `go build` can compile. This is the "just embed
+# prep, no main binary compile" recipe — used by CI (which only needs
+# to run tests, doesn't need bin/devm) and by scripts/release.sh
+# (which runs `go test ./...` as a pre-tag guard). `_build-helper-embed`
+# uses the prod identity here; `build-e2e` overrides with an "e2e"
+# helper build afterwards for local e2e installs.
+embeds: fetch-iron-proxy (_build-helper-embed "prod") _build-setsid-shim-embed _build-docker-shims-embed
+
 # Build the devm + devm-helper binaries into ./bin with prod identity,
 # and codesign with the local self-signed identity if available. The
 # path matches what `devm install` records in the LaunchDaemon plist,

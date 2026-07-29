@@ -71,6 +71,14 @@ else
 fi
 
 # ---- guards ----
+# Prep every //go:embed blob first — .gz/binary embeds are gitignored
+# (rebuilt per build), so `go test` fails with "no matching files"
+# on a fresh checkout without a prior `just build`. The `embeds`
+# recipe covers all embeds without also compiling the main devm
+# binary (that's `_build`'s job and needs codesign etc.).
+log "prepping //go:embed blobs (just embeds)"
+just embeds >&2
+
 log "running go test ./..."
 go test ./...
 

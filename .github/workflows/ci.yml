@@ -13,39 +13,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
       - run: go mod download
-      - name: Pre-build devm-runc-shim + devm-docker-shim (linux/arm64) for go:embed
-        run: |
-          mkdir -p internal/docker/embed
-          GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim
-          GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-docker-shim ./cmd/devm-docker-shim
-      - name: Fetch + gzip iron-proxy for go:embed
-        env:
-          IRON_PROXY_VERSION: v0.45.0
-        run: |
-          mkdir -p internal/ironproxy/embed
-          ver="${IRON_PROXY_VERSION#v}"
-          curl -fsSL -o /tmp/iron-proxy.tar.gz \
-            "https://github.com/ironsh/iron-proxy/releases/download/${IRON_PROXY_VERSION}/iron-proxy_${ver}_darwin_arm64.tar.gz"
-          tar -xzf /tmp/iron-proxy.tar.gz -C /tmp iron-proxy
-          gzip -c /tmp/iron-proxy > internal/ironproxy/embed/iron-proxy.gz
-          rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy
-      - name: Build + gzip devm-helper (darwin/arm64) for go:embed
-        run: |
-          mkdir -p internal/helper/embed
-          raw="$(mktemp -t devm-helper-raw.XXXXXX)"
-          GOOS=darwin GOARCH=arm64 go build \
-            -ldflags "-X github.com/mdubb86/devm/internal/identity.Profile=prod" \
-            -o "$raw" ./cmd/devm-helper
-          gzip -c "$raw" > internal/helper/embed/devm-helper.gz
-          rm "$raw"
-      - name: Build + gzip devm-setsid-shim (darwin/arm64) for go:embed
-        run: |
-          mkdir -p internal/setsidshim/embed
-          raw="$(mktemp -t devm-setsid-shim-raw.XXXXXX)"
-          GOOS=darwin GOARCH=arm64 go build -o "$raw" ./cmd/devm-setsid-shim
-          gzip -c "$raw" > internal/setsidshim/embed/devm-setsid-shim.gz
-          rm "$raw"
+      # Prep every //go:embed blob via `just embeds` — single source
+      # of truth for embed builds. When adding a new embed, update the
+      # `embeds` recipe in justfile and this step needs no change.
+      # Previous CI duplicated each embed-build shell inline; drift
+      # across justfile/CI shipped bugs (v0.9.8 tag rebuild failed
+      # because devm-setsid-shim was in justfile but not CI).
+      - run: just embeds
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build ./...
