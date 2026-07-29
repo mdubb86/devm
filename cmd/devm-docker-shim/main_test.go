@@ -2,7 +2,11 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestShouldInjectSecret(t *testing.T) {
@@ -33,6 +37,61 @@ func TestShouldInjectSecret(t *testing.T) {
 			if got := shouldInjectSecret(tc.argv); got != tc.want {
 				t.Errorf("shouldInjectSecret(%v) = %v, want %v", tc.argv, got, tc.want)
 			}
+		})
+	}
+}
+
+// TestRun_InjectsContainerEnvForRunCreateExec proves that docker run/create/exec
+// invocations get -e KEY=VAL args prepended right after the subcommand,
+// drawing values from /etc/environment. Uses a synthetic /etc/env body
+// via test seam.
+func TestRun_InjectsContainerEnvForRunCreateExec(t *testing.T) {
+	orig := etcEnvironmentReader
+	t.Cleanup(func() { etcEnvironmentReader = orig })
+	etcEnvironmentReader = func() (string, error) {
+		return "NODE_EXTRA_CA_CERTS=/x\nUV_SYSTEM_CERTS=1\n", nil
+	}
+
+	cases := []struct {
+		name string
+		argv []string
+	}{
+		{name: "run", argv: []string{"run", "-it", "nginx"}},
+		{name: "create", argv: []string{"create", "--name", "foo", "nginx"}},
+		{name: "exec", argv: []string{"exec", "-it", "container", "bash"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := transformArgv(tc.argv)
+			// Position: our -e args come RIGHT AFTER the subcommand,
+			// before positional (image / container / cmd).
+			require.GreaterOrEqual(t, len(got), 5)
+			assert.Equal(t, tc.argv[0], got[0], "subcommand at position 0")
+			// Look for our injected -e entries anywhere between position 1 and
+			// the end of the injected block.
+			joined := strings.Join(got, " ")
+			assert.Contains(t, joined, "-e NODE_EXTRA_CA_CERTS=/x")
+			assert.Contains(t, joined, "-e UV_SYSTEM_CERTS=1")
+			// Original tail preserved.
+			for _, orig := range tc.argv[1:] {
+				assert.Contains(t, got, orig)
+			}
+		})
+	}
+}
+
+func TestRun_DoesNotInjectForNonContainerSubcommands(t *testing.T) {
+	orig := etcEnvironmentReader
+	t.Cleanup(func() { etcEnvironmentReader = orig })
+	etcEnvironmentReader = func() (string, error) {
+		return "NODE_EXTRA_CA_CERTS=/x\n", nil
+	}
+
+	for _, cmd := range []string{"ps", "images", "logs", "pull"} {
+		t.Run(cmd, func(t *testing.T) {
+			argv := []string{cmd}
+			got := transformArgv(argv)
+			assert.Equal(t, argv, got, "argv should be unchanged for %q", cmd)
 		})
 	}
 }

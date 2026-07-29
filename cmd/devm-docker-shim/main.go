@@ -50,10 +50,71 @@ func main() {
 }
 
 func run(argv []string) error {
+	return execDocker(transformArgv(argv))
+}
+
+// transformArgv applies devm's docker-shim injections in order:
+// (1) build-secret for `docker build`/`buildx build`
+// (2) container env vars for `docker run`/`create`/`exec`
+// Returns the argv the shim will exec docker with.
+func transformArgv(argv []string) []string {
 	if shouldInjectSecret(argv) {
 		argv = append(argv, "--secret", "id="+secretID+",src="+caPath)
 	}
-	return execDocker(argv)
+	if shouldInjectContainerEnv(argv) {
+		body, err := etcEnvironmentReader()
+		if err == nil {
+			injected := containerInheritArgs(argv, body)
+			if len(injected) > 0 {
+				argv = insertAfterSubcommand(argv, injected)
+			}
+		}
+		// If etcEnvironmentReader fails, silently continue —
+		// missing /etc/environment shouldn't break docker.
+	}
+	return argv
+}
+
+// etcEnvironmentReader is a test seam. Production reads /etc/environment.
+var etcEnvironmentReader = func() (string, error) {
+	b, err := os.ReadFile("/etc/environment")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// shouldInjectContainerEnv returns true for `docker run`/`create`/`exec` —
+// the subcommands where `-e KEY=VAL` is a valid option.
+func shouldInjectContainerEnv(argv []string) bool {
+	first, _, ok := firstPositional(argv)
+	if !ok {
+		return false
+	}
+	switch first {
+	case "run", "create", "exec":
+		return true
+	}
+	return false
+}
+
+// insertAfterSubcommand inserts extra args right after the subcommand
+// token in argv. Assumes the subcommand is argv[0] (i.e. the argv is
+// os.Args[1:], not the full command line).
+func insertAfterSubcommand(argv []string, extra []string) []string {
+	// Find the subcommand token — the first non-flag arg.
+	for i, a := range argv {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		// argv[i] is the subcommand. Insert extras right after.
+		out := make([]string, 0, len(argv)+len(extra))
+		out = append(out, argv[:i+1]...)
+		out = append(out, extra...)
+		out = append(out, argv[i+1:]...)
+		return out
+	}
+	return argv // no positional found; unchanged
 }
 
 // shouldInjectSecret reports whether argv is a `docker build` or
