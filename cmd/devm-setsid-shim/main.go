@@ -36,13 +36,19 @@ func main() {
 	cmd.Env = os.Environ()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
+	// Register signal handlers BEFORE Start(): a signal arriving between
+	// Start() and Notify() would hit the shim's default Go disposition
+	// (terminates on SIGTERM/INT/HUP/QUIT) instead of being forwarded —
+	// leaving the child (already in a new session) orphaned without a
+	// forwarded stop signal.
+	sigCh := make(chan os.Signal, 4)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGQUIT)
+
 	if err := cmd.Start(); err != nil {
 		fatalf("start: %v", err)
 	}
 
 	// Forward pexec's stop signals so iron-proxy sees them.
-	sigCh := make(chan os.Signal, 4)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGQUIT)
 	go func() {
 		for sig := range sigCh {
 			_ = cmd.Process.Signal(sig)
