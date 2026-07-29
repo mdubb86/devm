@@ -99,22 +99,27 @@ func shouldInjectContainerEnv(argv []string) bool {
 }
 
 // insertAfterSubcommand inserts extra args right after the subcommand
-// token in argv. Assumes the subcommand is argv[0] (i.e. the argv is
-// os.Args[1:], not the full command line).
+// token — where -e/--env etc. must go for it to be a subcommand flag,
+// not a docker global flag or container-side argument.
+//
+// Uses firstPositional's semantics so global valued flags like
+// `--context myctx` or `--host tcp://...` are correctly skipped when
+// finding the subcommand token.
 func insertAfterSubcommand(argv []string, extra []string) []string {
-	// Find the subcommand token — the first non-flag arg.
-	for i, a := range argv {
-		if strings.HasPrefix(a, "-") {
-			continue
-		}
-		// argv[i] is the subcommand. Insert extras right after.
-		out := make([]string, 0, len(argv)+len(extra))
-		out = append(out, argv[:i+1]...)
-		out = append(out, extra...)
-		out = append(out, argv[i+1:]...)
-		return out
+	_, rest, ok := firstPositional(argv)
+	if !ok {
+		return argv // no subcommand found; unchanged
 	}
-	return argv // no positional found; unchanged
+	// Subcommand index in argv: everything after it is `rest`.
+	// So insertion point = argv position of subcommand + 1
+	// = (len(argv) - len(rest) - 1) + 1
+	// = len(argv) - len(rest)
+	insertAt := len(argv) - len(rest)
+	out := make([]string, 0, len(argv)+len(extra))
+	out = append(out, argv[:insertAt]...)
+	out = append(out, extra...)
+	out = append(out, argv[insertAt:]...)
+	return out
 }
 
 // shouldInjectSecret reports whether argv is a `docker build` or

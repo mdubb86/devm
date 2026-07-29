@@ -135,3 +135,50 @@ func TestFirstPositional(t *testing.T) {
 		})
 	}
 }
+
+// TestRun_InjectsAfterSubcommand_HonorsGlobalValuedFlags proves the
+// insertion respects docker's valued global flags (--context, --host,
+// --config, --log-level, and their short forms). Without this, `docker
+// --context foo run ...` would get `-e` inserted BEFORE `run`, where
+// it's an invalid docker global flag and docker rejects the whole
+// command.
+func TestRun_InjectsAfterSubcommand_HonorsGlobalValuedFlags(t *testing.T) {
+	orig := etcEnvironmentReader
+	t.Cleanup(func() { etcEnvironmentReader = orig })
+	etcEnvironmentReader = func() (string, error) {
+		return "NODE_EXTRA_CA_CERTS=/x\n", nil
+	}
+
+	cases := []struct {
+		name string
+		argv []string
+	}{
+		{name: "--context", argv: []string{"--context", "myctx", "run", "-it", "nginx"}},
+		{name: "--host", argv: []string{"--host", "tcp://localhost:2375", "run", "nginx"}},
+		{name: "-H short", argv: []string{"-H", "tcp://localhost:2375", "run", "nginx"}},
+		{name: "-c short", argv: []string{"-c", "myctx", "run", "nginx"}},
+		{name: "--log-level", argv: []string{"--log-level", "debug", "run", "nginx"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := transformArgv(tc.argv)
+			// Find "run" position in output.
+			runIdx := -1
+			for i, a := range got {
+				if a == "run" {
+					runIdx = i
+					break
+				}
+			}
+			require.NotEqual(t, -1, runIdx, "expected 'run' in output %v", got)
+			// -e must come AFTER "run", not before.
+			for i, a := range got {
+				if a == "-e" {
+					assert.Greater(t, i, runIdx,
+						"'-e' at position %d must come AFTER 'run' at position %d; got argv %v",
+						i, runIdx, got)
+				}
+			}
+		})
+	}
+}
