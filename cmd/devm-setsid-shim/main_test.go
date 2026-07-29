@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -75,6 +76,80 @@ func TestShim_UsageErrorWhenNoArgs(t *testing.T) {
 	exitErr, ok := err.(*exec.ExitError)
 	require.True(t, ok)
 	assert.NotEqual(t, 0, exitErr.ExitCode())
+}
+
+// TestShim_ChildSurvivesShimDeath proves the shim's core job: when
+// the shim itself dies (SIGKILL — mirrors launchctl bootout killing
+// the daemon), the child it spawned continues running because it's
+// in a new session, detached from the shim's process tree.
+//
+// Without the shim's Setsid: killing the shim would take the child
+// with it (same session cleanup).
+func TestShim_ChildSurvivesShimDeath(t *testing.T) {
+	shim := buildShim(t)
+
+	// Launch shim with a sleep long enough to observe post-shim-death survival.
+	cmd := exec.Command(shim, "sleep", "30")
+	require.NoError(t, cmd.Start())
+
+	// Find the sleep child (grandchild from shim's exec.Cmd perspective).
+	// The shim is `cmd.Process.Pid`; the sleep child is a child OF the shim.
+	// Poll rather than a fixed sleep: fork+exec+setsid timing varies under load.
+	var childPID int
+	deadlineStart := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadlineStart) {
+		childPID = findSleepChildOf(t, cmd.Process.Pid)
+		if childPID != 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	require.NotZero(t, childPID, "expected to find sleep child of shim %d", cmd.Process.Pid)
+
+	// Sanity: child is alive.
+	require.NoError(t, syscall.Kill(childPID, 0), "child should be alive before shim killed")
+
+	// Verify child is in a different session — sanity that setsid ran.
+	shimSID, _ := syscall.Getsid(cmd.Process.Pid)
+	childSID, _ := syscall.Getsid(childPID)
+	require.NotEqual(t, shimSID, childSID,
+		"shim SID=%d child SID=%d — setsid didn't detach the child", shimSID, childSID)
+
+	// SIGKILL the shim — mirrors what launchctl bootout does to the devm daemon.
+	require.NoError(t, cmd.Process.Kill())
+	_ = cmd.Wait()
+
+	// Poll: child should still be alive. If we don't detach via setsid,
+	// the child would die with the shim. With setsid, child survives.
+	// Give it a couple of seconds; polling accounts for scheduling jitter.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(childPID, 0); err != nil {
+			t.Fatalf("child (pid %d) died with shim: %v — setsid detach failed", childPID, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Cleanup: kill the child (it's a real sleep process now orphaned to launchd).
+	_ = syscall.Kill(childPID, syscall.SIGTERM)
+}
+
+// findSleepChildOf returns the PID of the sleep process that's a direct
+// child of parentPID. Uses `pgrep -P <parent> sleep`. Returns 0 if none.
+func findSleepChildOf(t *testing.T, parentPID int) int {
+	t.Helper()
+	out, err := exec.Command("pgrep", "-P", strconv.Itoa(parentPID), "sleep").CombinedOutput()
+	if err != nil {
+		// pgrep returns exit 1 when no match; treat as zero rather than error
+		return 0
+	}
+	lines := strings.Fields(strings.TrimSpace(string(out)))
+	if len(lines) == 0 {
+		return 0
+	}
+	pid, err := strconv.Atoi(lines[0])
+	require.NoError(t, err)
+	return pid
 }
 
 // buildShim compiles the shim into a temp dir and returns its path.
