@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 // TestShim_ChildRunsInNewSession proves the shim's core promise:
@@ -19,7 +20,7 @@ import (
 // itself. Without Setsid, both would share the caller's session
 // and launchctl bootout of a parent daemon would kill both.
 //
-// Session id is checked via syscall.Getsid rather than `ps`: on this
+// Session id is checked via unix.Getsid rather than `ps`: on this
 // platform's BSD ps, the SESS column (the closest analog to GNU ps's
 // `sid` keyword, which BSD ps doesn't have at all) reports a stale/
 // unpopulated 0 for every process, making it useless as a signal here.
@@ -42,10 +43,10 @@ func TestShim_ChildRunsInNewSession(t *testing.T) {
 	childPID, err := strconv.Atoi(strings.TrimSpace(line))
 	require.NoError(t, err, "parsing child PID %q", line)
 
-	childSID, err := syscall.Getsid(childPID)
+	childSID, err := unix.Getsid(childPID)
 	require.NoError(t, err)
 
-	ownSID, err := syscall.Getsid(0)
+	ownSID, err := unix.Getsid(0)
 	require.NoError(t, err)
 
 	assert.NotEqual(t, ownSID, childSID,
@@ -110,8 +111,8 @@ func TestShim_ChildSurvivesShimDeath(t *testing.T) {
 	require.NoError(t, syscall.Kill(childPID, 0), "child should be alive before shim killed")
 
 	// Verify child is in a different session — sanity that setsid ran.
-	shimSID, _ := syscall.Getsid(cmd.Process.Pid)
-	childSID, _ := syscall.Getsid(childPID)
+	shimSID, _ := unix.Getsid(cmd.Process.Pid)
+	childSID, _ := unix.Getsid(childPID)
 	require.NotEqual(t, shimSID, childSID,
 		"shim SID=%d child SID=%d — setsid didn't detach the child", shimSID, childSID)
 
