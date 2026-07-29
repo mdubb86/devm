@@ -39,6 +39,13 @@ jobs:
             -o "$raw" ./cmd/devm-helper
           gzip -c "$raw" > internal/helper/embed/devm-helper.gz
           rm "$raw"
+      - name: Build + gzip devm-setsid-shim (darwin/arm64) for go:embed
+        run: |
+          mkdir -p internal/setsidshim/embed
+          raw="$(mktemp -t devm-setsid-shim-raw.XXXXXX)"
+          GOOS=darwin GOARCH=arm64 go build -o "$raw" ./cmd/devm-setsid-shim
+          gzip -c "$raw" > internal/setsidshim/embed/devm-setsid-shim.gz
+          rm "$raw"
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build ./...
