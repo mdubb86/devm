@@ -145,14 +145,20 @@ done
 	pamVals := map[string]string{}
 	shellVals := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// Skip any container-side noise (docker pull progress, useradd
+		// warnings, etc.) that isn't a probe-emitted result line. The
+		// probe always emits lines matching `^K_\w+ <b64> <b64>$`.
+		if !strings.HasPrefix(line, "K_") {
+			continue
+		}
 		fields := strings.Fields(line)
 		if len(fields) != 3 {
 			continue
 		}
 		p, err1 := base64.StdEncoding.DecodeString(fields[1])
+		require.NoError(t, err1, "pam base64 decode failed for line %q — full container output:\n%s", line, string(out))
 		s, err2 := base64.StdEncoding.DecodeString(fields[2])
-		require.NoError(t, err1)
-		require.NoError(t, err2)
+		require.NoError(t, err2, "shell base64 decode failed for line %q — full container output:\n%s", line, string(out))
 		pamVals[fields[0]] = string(p)
 		shellVals[fields[0]] = string(s)
 	}
