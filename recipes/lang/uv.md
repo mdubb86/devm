@@ -28,7 +28,7 @@ CPython fetch happens in the boot-time open-egress window, so
 
 ```yaml
 env:
-  UV_PYTHON_DOWNLOADS: never  # interpreters are pre-seeded below; a runtime fetch now fails LOUD
+  UV_PYTHON_DOWNLOADS: manual  # blocks *implicit* runtime auto-fetches; explicit `uv python install` (preseed-python below) still works
 
 scripts:
   install-uv:
@@ -110,11 +110,11 @@ env:
 ## Notes
 
 - **`UV_SYSTEM_CERTS=1` is auto-set.** devm ships it in `/etc/environment`
-  since v0.9.6 so uv (which is Rust/rustls and ignores the OpenSSL trust store)
-  reads the merged system CA bundle at `/etc/ssl/certs/ca-certificates.crt`
-  where devm has installed its CA. No project config needed. On older devm,
-  add `UV_SYSTEM_CERTS: "1"` to `env:` — otherwise uv fails TLS with
-  `invalid peer certificate: UnknownIssuer`.
+  since v0.9.6 so uv (Rust/rustls, ignores the OpenSSL trust store) reads
+  the merged system CA bundle at `/etc/ssl/certs/ca-certificates.crt` where
+  devm has installed its CA. Reaches every guest process (SSH, systemd, and
+  `devm exec`/`devm shell` via the wrapper's `set -a; . /etc/environment`
+  since v0.9.10). No project config needed.
 - **`python3` apt package is optional.** uv manages its own interpreters; only
   add `python3` to `packages:` if the project needs a *system* python for other
   reasons.
