@@ -133,7 +133,10 @@ done
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "probe.sh"), []byte(probe), 0o755))
 
-	cmd := exec.Command("docker", "run", "--rm", "--platform", "linux/arm64",
+	// No --platform pin: encoder behavior depends on bash + pam_env text
+	// parsing, not on architecture. Host-native arch runs on both arm64
+	// dev boxes and amd64 CI without QEMU.
+	cmd := exec.Command("docker", "run", "--rm",
 		"-v", dir+":/work:ro",
 		"debian:trixie", "bash", "/work/probe.sh")
 	out, err := cmd.CombinedOutput()
