@@ -81,7 +81,7 @@ Sandbox stopped; config changes will apply on next `devm shell`.
 **VM running:** reads the in-VM snapshot (last-applied `schema.Config`), diffs it against the current config via `ComputeAllChanges`, and splits changes by bucket:
 
 - **BucketLive changes** are passed to `ApplyLive` and reported as applied. Two kinds are actively wired today:
-  - Per-service `env` add / remove / change — daemon pipes an updated bundle into the guest at `/opt/devm/.env`.
+  - Per-service `env` add / remove / change — daemon pipes an updated bundle into the guest, rewriting `/etc/environment`.
   - `template` add / change / remove — re-runs the installer dispatcher script inside the VM via `tart exec`.
   
   All other BucketLive kinds (ports, path, service unit fields) have no apply path in `ApplyLive` and take effect at the next cold start, even though reconcile reports them as applied.
@@ -153,7 +153,7 @@ Currently wired in `ApplyLive` (changes take effect immediately):
 
 | Kind | Mechanism |
 |---|---|
-| Per-service env add / remove / change | Daemon pipes an updated bundle into the guest at `/opt/devm/.env` |
+| Per-service env add / remove / change | Daemon pipes an updated bundle into the guest, rewriting `/etc/environment` |
 | Template add / change / remove | Runs installer dispatcher script in the VM via `tart exec` |
 
 Classified BucketLive but no apply path in `ApplyLive` (take effect at next cold start):

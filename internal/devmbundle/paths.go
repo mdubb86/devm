@@ -8,7 +8,6 @@ package devmbundle
 // constants; nothing else knows the layout.
 const (
 	GuestRoot         = "/opt/devm"
-	GuestEnv          = GuestRoot + "/.env"
 	GuestWrapper      = GuestRoot + "/scripts/with-devm-env"
 	GuestDispatcher   = GuestRoot + "/scripts/install-templates.sh"
 	GuestTemplatesDir = GuestRoot + "/templates"

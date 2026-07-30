@@ -136,5 +136,4 @@ If an API call fails with unexpected credentials or a 401, check whether iron-pr
 
 The `.devm/` directory in your project root is maintained by the CLI and is not committed to version control. It contains:
 
-- `.devm/.env` — rendered environment file; shell-sourceable; sourced by the VM shell on attach
 - `.devm/templates/` — installer scripts generated from `devm.yaml` template declarations

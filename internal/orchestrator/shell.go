@@ -499,7 +499,7 @@ func (d ShellDeps) teardownOnFail(ctx context.Context, cfg schema.Config, vmName
 // instead of exiting on EOF.
 //
 // The user command is invoked via the with-devm-env wrapper so the
-// project env (/opt/devm/.env) is sourced before argv runs. The wrapper
+// project env (/etc/environment) is sourced before argv runs. The wrapper
 // lives in the guest at devmbundle.GuestWrapper, installed by the
 // provisioner's "install devm bundle" step.
 func (d ShellDeps) attachShell(ctx context.Context, vmName, repoRoot, cmdName string, cmdArgs []string) (int, error) {

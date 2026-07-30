@@ -40,14 +40,6 @@ func Build(in BuildInput) ([]byte, error) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 
-	envBody, err := render.RenderEnv(in.Cfg)
-	if err != nil {
-		return nil, fmt.Errorf("render env: %w", err)
-	}
-	if err := writeEntry(tw, ".env", 0o644, []byte(envBody)); err != nil {
-		return nil, err
-	}
-
 	etcEnvBody, err := render.RenderEtcEnvironment(in.Cfg)
 	if err != nil {
 		return nil, fmt.Errorf("render /etc/environment: %w", err)

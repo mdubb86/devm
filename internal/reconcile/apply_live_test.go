@@ -102,7 +102,7 @@ func TestApplyLive_PortKindsAreNoOps(t *testing.T) {
 
 // TestApplyLive_EnvChange_PipesBundle_NoWorkspaceWrite is a regression
 // test for the bundle refactor: ApplyLive on an env change must pipe a
-// bundle to the guest via ExecStdin — NOT write repoRoot/.devm/.env on
+// bundle to the guest via ExecStdin — NOT write repoRoot/.devm/ files on
 // the host. If we ever regress and write to the workspace, the user's
 // project tree gets devm-internal state, which the whole bundle
 // refactor exists to prevent.
@@ -162,11 +162,11 @@ func TestApplyLive_MultipleEnvChanges_SingleBundlePipe(t *testing.T) {
 // TestApplyLive_PathChange_PipesBundle_NoWorkspaceWrite is a regression
 // test for test_35 (e2e): a path-only change (no accompanying env
 // change) must still trigger the bundle rebuild + pipe, because
-// render.RenderEnv folds cfg.Path into the same .env's PATH= line —
-// there's no separate path-only artifact. Before this fix, ApplyLive's
-// switch had no case for KindPathChange, so a path-only reconcile
-// silently did nothing: the guest's /opt/devm/.env was never rewritten
-// and the next shell never saw the new PATH.
+// render.RenderEtcEnvironment folds cfg.Path into /etc/environment's
+// PATH= line — there's no separate path-only artifact. Before this
+// fix, ApplyLive's switch had no case for KindPathChange, so a
+// path-only reconcile silently did nothing: the guest's /etc/environment
+// was never rewritten and the next shell never saw the new PATH.
 func TestApplyLive_PathChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
 	dir := t.TempDir()
 	tr, log := fakeTartForApplyLive(t, dir)

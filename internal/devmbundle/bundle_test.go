@@ -26,7 +26,7 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 
 	entries := readTar(t, body)
 	want := map[string]int64{
-		".env":                         0o644,
+		"etc/environment":              0o644,
 		"scripts/with-devm-env":        0o755,
 		"scripts/install-templates.sh": 0o755,
 		"install.sh":                   0o755,
@@ -52,7 +52,7 @@ func TestBuild_EnvReflectsConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	entries := readTar(t, body)
-	envBody := string(entries[".env"].body)
+	envBody := string(entries["etc/environment"].body)
 	assert.Contains(t, envBody, "MYVAR")
 	assert.Contains(t, envBody, "myval")
 }
@@ -125,7 +125,7 @@ func TestBuild_TakesBuildInput_Compat(t *testing.T) {
 	require.NotEmpty(t, got)
 	// Assert the tar has the pre-existing entries and no new junk yet.
 	names := tarEntryNames(t, got)
-	assert.Contains(t, names, ".env")
+	assert.Contains(t, names, "etc/environment")
 	assert.Contains(t, names, "install.sh")
 	assert.Contains(t, names, "scripts/with-devm-env")
 }

@@ -125,7 +125,7 @@ var changeBucket = map[ChangeKind]Bucket{
 	// change recreates from base and re-applies the new size.
 	KindDiskChange:     BucketTeardownVM,
 	KindTemplateChange: BucketLive,
-	// Path is materialized in .devm/.env (same fan-out as Env) — live.
+	// Path is materialized in /etc/environment (same fan-out as Env) — live.
 	KindPathChange: BucketLive,
 	// Service unit changes: re-render unit, daemon-reload, restart unit
 	// via tart exec — no VM recreate needed.
@@ -329,7 +329,7 @@ func pathEqual(a, b []string) bool {
 // distinct from computeEnvChanges below which diffs each service's own
 // env block. Service is left empty on these Change entries to mark
 // them as global-scoped — ApplyLive pipes cfg.Env unprefixed into
-// /opt/devm/.env via the devmbundle, so a global-scope change is real
+// /etc/environment via the devmbundle, so a global-scope change is real
 // and must surface for reconcile to pick up.
 func computeGlobalEnvChanges(old, new schema.Config) []Change {
 	oEnv := globalEnvOf(old)

@@ -624,10 +624,10 @@ type Config struct {
 	// Path is a list of directories prepended to PATH inside the
 	// sandbox. Reaches all four executable entrypoints (install,
 	// startup foreground, startup background, interactive shell) via
-	// the same .devm/.env fan-out as cfg.Env.
+	// the same /etc/environment fan-out as cfg.Env.
 	//
 	// Final PATH shape inside the sandbox:
-	//   <Path[0]>:<Path[1]>:...:$WORKSPACE/.devm/scripts:$PATH
+	//   <Path[0]>:<Path[1]>:...:/opt/devm/scripts:<system PATH>
 	//
 	// User entries win precedence over devm-internal scripts AND over
 	// container defaults. Substitution: $WORKSPACE (or ${WORKSPACE})

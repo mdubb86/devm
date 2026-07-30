@@ -57,7 +57,7 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketLive, KindServiceSystemdOverrideChange.Bucket())
 	assert.Equal(t, BucketLive, KindServiceHostnameChange.Bucket())
 
-	// Live: path (same fan-out as env via .devm/.env)
+	// Live: path (same fan-out as env via /etc/environment)
 	assert.Equal(t, BucketLive, KindPathChange.Bucket())
 
 }

@@ -3,6 +3,9 @@ set -e
 ln -sfn /opt/devm/scripts/with-devm-env /usr/local/bin/with-devm-env
 chmod 0755 /opt/devm/scripts/*.sh
 
+# --- one-time cleanup of legacy /opt/devm/.env (v0.9.10 consolidated to /etc/environment). ---
+rm -f /opt/devm/.env
+
 # --- CA install: trust devm's CA so guest processes accept iron-proxy's re-signed certs. ---
 if [ -f /opt/devm/ca/devm.crt ] && ! cmp -s /opt/devm/ca/devm.crt /usr/local/share/ca-certificates/devm.crt; then
     install -o root -g root -m 0644 \

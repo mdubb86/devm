@@ -571,7 +571,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// not the developer's provisioning phase.
 		//
 		// Workspace mount runs first so subsequent scripts can read files
-		// from the workspace (e.g. .devm/.env).
+		// from the workspace (e.g. devm-owned metadata under .devm/).
 		scripts := []string{}
 		// Extra mounts must land BEFORE the env script so scripts that
 		// read files from an extra mount can find them. Order among

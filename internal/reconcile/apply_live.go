@@ -24,7 +24,7 @@ import (
 // guest at /opt/devm/ before the dispatcher runs, so the sandbox always
 // executes the latest rendered content — nothing is written to the host
 // workspace. Path changes ride the same rebuild as env changes because
-// render.RenderEnv folds cfg.Path into the same .env's PATH= line
+// render.RenderEtcEnvironment folds cfg.Path into /etc/environment's PATH= line
 // (there's no separate path-only artifact to pipe). KindStartupChange is
 // NOT live-applied — it's BucketRestartVM, not BucketLive, so the caller
 // routes it through the recreate path (VM stop + cold start; see
@@ -60,7 +60,7 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		// Rebuild the bundle and pipe it into the guest at /opt/devm/ —
 		// same mechanism the provisioner uses at cold-start. Nothing is
 		// written to the host workspace; with-devm-env sources the new
-		// .env on every subsequent exec, and (for template changes) the
+		// /etc/environment on every subsequent exec, and (for template changes) the
 		// dispatcher below reads the freshly-piped installers. Running
 		// shells keep their old env until they re-exec — hence BucketLive.
 		in := devmbundle.BuildInput{
@@ -90,7 +90,7 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 
 	if len(templateChanges) > 0 {
 		// Single dispatcher invocation re-runs all installers already piped
-		// in above. Wrapper sources /opt/devm/.env (sets $WORKSPACE etc.)
+		// in above. Wrapper sources /etc/environment (sets $WORKSPACE etc.)
 		// and cd's into the workspace before exec'ing the dispatcher, which
 		// itself reads the fixed /opt/devm/templates path.
 		wrapperPath := devmbundle.GuestWrapper
