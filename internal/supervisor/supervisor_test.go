@@ -167,6 +167,15 @@ func TestSupervisor_AdoptedStatusAndStop(t *testing.T) {
 
 	require.NoError(t, s.Stop(context.Background(), k))
 
+	// After Stop returns, the adopted process must ALREADY be gone —
+	// not "will be gone soon." Regression: apply-iron-proxy immediately
+	// rebinds the process's ports; a not-yet-dead process holds them
+	// and rebind fails with EADDRINUSE. Verified by kill(pid, 0)
+	// returning ESRCH (no such process).
+	err := syscall.Kill(pid, 0)
+	assert.ErrorIs(t, err, syscall.ESRCH,
+		"expected pid %d to be gone by the time Stop returned, got err=%v", pid, err)
+
 	// Confirm SIGTERM landed: child exits and reports signal=SIGTERM.
 	select {
 	case err := <-exitCh:
@@ -290,4 +299,118 @@ func TestSupervisor_ChildInheritsDaemonEnv(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("child never wrote env marker")
+}
+
+// TestSupervisor_AdoptedStop_SIGKILLEscalation pins the second half of
+// the adopted-Stop contract: a child that ignores SIGTERM must be
+// SIGKILL'd after the grace window. iron-proxy's tokio shutdown can
+// take up to 10s but this test uses `trap "" TERM` to hard-ignore so
+// the escalation path is what actually kills it.
+func TestSupervisor_AdoptedStop_SIGKILLEscalation(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+	defer func() { _ = s.pm.Stop() }()
+
+	// sh -c 'trap "" TERM; touch <marker>; sleep 30' — child ignores
+	// SIGTERM, so only SIGKILL escalation can end it. The marker file
+	// is polled below before signaling: without it, SIGTERM can race
+	// the shell's own trap installation and kill the process before
+	// the trap takes effect, making the test flaky.
+	marker := tmp + "/trap-installed"
+	cmd := exec.Command("sh", "-c", `trap "" TERM; touch `+marker+`; sleep 30`)
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	exitCh := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		exitCh <- cmd.Wait()
+		close(done)
+	}()
+	defer func() {
+		select {
+		case <-done:
+		default:
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			<-done
+		}
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, marker, "trap was never installed by the child")
+
+	k := Key{ProjectID: "ignores-sigterm", Role: RoleProxy}
+	s.Adopt(k, pid)
+
+	start := time.Now()
+	require.NoError(t, s.Stop(context.Background(), k))
+	elapsed := time.Since(start)
+
+	// Stop must have waited the full adoptedStopGrace before SIGKILL,
+	// so total elapsed is at least adoptedStopGrace. Upper bound is
+	// adoptedStopGrace + sigkillGrace + slack for scheduling.
+	assert.GreaterOrEqual(t, elapsed, adoptedStopGrace,
+		"Stop returned in %v, expected at least %v (grace not honored)", elapsed, adoptedStopGrace)
+	assert.Less(t, elapsed, adoptedStopGrace+sigkillGrace+2*time.Second,
+		"Stop took %v, expected at most %v (escalation not firing)", elapsed, adoptedStopGrace+sigkillGrace+2*time.Second)
+
+	// Process must be gone right after Stop returns.
+	err := syscall.Kill(pid, 0)
+	assert.ErrorIs(t, err, syscall.ESRCH,
+		"expected pid %d to be gone after SIGKILL escalation, got err=%v", pid, err)
+
+	// Confirm the child was killed by SIGKILL specifically.
+	select {
+	case err := <-exitCh:
+		var exitErr *exec.ExitError
+		require.ErrorAs(t, err, &exitErr)
+		ws := exitErr.Sys().(syscall.WaitStatus)
+		assert.True(t, ws.Signaled())
+		assert.Equal(t, syscall.SIGKILL, ws.Signal(),
+			"expected SIGKILL signal, got %v", ws.Signal())
+	case <-time.After(3 * time.Second):
+		t.Fatal("SIGKILL'd child did not reach exit within observation window")
+	}
+}
+
+// TestWaitProcessGone pins the helper's contract: returns true when
+// kill(pid, 0) sees ESRCH within the timeout; false when the process
+// outlives the timeout. Uses `true` (immediate exit) and `sleep`
+// (long-lived) as the two directions.
+func TestWaitProcessGone_ProcessAlreadyGone(t *testing.T) {
+	cmd := exec.Command("true")
+	require.NoError(t, cmd.Run()) // exits immediately, PID reaped
+	pid := cmd.Process.Pid
+
+	// Already gone — should return true almost instantly.
+	start := time.Now()
+	got := waitProcessGone(pid, 1*time.Second)
+	elapsed := time.Since(start)
+
+	assert.True(t, got, "waitProcessGone should return true for a reaped PID")
+	assert.Less(t, elapsed, 100*time.Millisecond, "should return fast, took %v", elapsed)
+}
+
+func TestWaitProcessGone_ProcessOutlivesTimeout(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	defer func() {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		_, _ = cmd.Process.Wait()
+	}()
+
+	// Sleep is alive; short timeout — should return false after ~200ms.
+	start := time.Now()
+	got := waitProcessGone(pid, 200*time.Millisecond)
+	elapsed := time.Since(start)
+
+	assert.False(t, got, "waitProcessGone should return false for a live PID that outlives the timeout")
+	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond, "should wait the full timeout, took %v", elapsed)
+	assert.Less(t, elapsed, 500*time.Millisecond, "should return promptly after timeout, took %v", elapsed)
 }

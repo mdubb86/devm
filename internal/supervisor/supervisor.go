@@ -21,6 +21,19 @@ import (
 	"go.viam.com/utils/pexec"
 )
 
+// adoptedStopGrace is how long Stop's adopted-path waits for SIGTERM
+// to actually kill the process before escalating to SIGKILL. Matches
+// pexec's StopTimeout (see ProcessConfig.StopTimeout below) so shutdown
+// budget is uniform across managed and adopted entries — callers like
+// apply-iron-proxy that immediately re-bind the process's ports need
+// this to be a real wait, not a fire-and-forget SIGTERM.
+const adoptedStopGrace = 10 * time.Second
+
+// sigkillGrace is the additional wait after SIGKILL escalation. SIGKILL
+// is instant at the kernel level, but user-space visible port release
+// on macOS can take a few hundred ms in pathological cases.
+const sigkillGrace = 2 * time.Second
+
 // ErrNotFound is returned by Stop/Status when the key isn't registered.
 var ErrNotFound = errors.New("supervisor: key not found")
 
@@ -184,6 +197,14 @@ func (s *Supervisor) Stop(ctx context.Context, k Key) error {
 			}
 			return fmt.Errorf("supervisor.Stop(%s): kill adopted pid %d: %w", k, pid, err)
 		}
+		// Wait for actual death — callers rebind the process's ports
+		// immediately (apply-iron-proxy) and hit EADDRINUSE if we
+		// return while iron-proxy is still shutting down (its tokio
+		// deadline is 10s). Escalate to SIGKILL if grace exhausted.
+		if !waitProcessGone(pid, adoptedStopGrace) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			_ = waitProcessGone(pid, sigkillGrace)
+		}
 		return nil
 	}
 	p, ok := s.pm.RemoveProcessByID(k.String())
@@ -307,4 +328,25 @@ func (b *backoffState) onExit(_ context.Context, exitCode int) bool {
 	time.Sleep(b.delay)
 	b.lastStart = time.Now()
 	return true
+}
+
+// waitProcessGone polls kill(pid, 0) until it returns ESRCH (no such
+// process) or the timeout expires. Returns true iff the process was
+// observed gone. 50ms poll interval — small enough that a fast-exiting
+// process doesn't idle the caller, coarse enough not to burn CPU.
+//
+// Only signal-safe cross-process liveness check available without
+// becoming the process's parent (POSIX waitpid requires being the
+// parent). PID reuse over a 10-second window on macOS's >99999 PID
+// space is a non-concern for the single caller (Stop's adopted-path
+// after a SIGTERM to that same PID).
+func waitProcessGone(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return errors.Is(err, syscall.ESRCH)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
 }
