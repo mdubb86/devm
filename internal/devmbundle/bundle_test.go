@@ -371,9 +371,11 @@ func TestBuild_IncludesEtcProfileDevm(t *testing.T) {
 	entry, ok := entries["profile.d/devm.sh"]
 	require.True(t, ok, "bundle must contain profile.d/devm.sh")
 	assert.Equal(t, int64(0o644), entry.mode)
-	// Regression: /etc/profile.d/devm.sh sources /etc/environment via
-	// `set -a` so login shells inherit devm's env. This replaced the
-	// legacy /opt/devm/.env sourcing in v0.9.10.
+	// Regression: /etc/profile.d/devm.sh must source /etc/environment
+	// via `set -a` so every login shell inherits devm's env — the PATH
+	// restore after /etc/profile rebuild, CA trust vars, UV_SYSTEM_CERTS.
+	// The `. /etc/environment` and `set -a` assertions pin the loader
+	// mechanism directly since it's what makes downstream consumers work.
 	assert.Contains(t, string(entry.body), ". /etc/environment")
 	assert.Contains(t, string(entry.body), "set -a")
 }
