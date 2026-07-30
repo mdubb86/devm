@@ -7,11 +7,11 @@ package render
 // `set -a; .` (with-devm-env wrapper, /etc/profile.d/devm.sh) — return
 // the exact input bytes.
 //
-// This is load-bearing: if it passes, /etc/environment is a viable
-// single canonical env transport (no separate /opt/devm/.env needed).
-// If it fails, the value has an unencoded/undecoded round trip and we
-// cannot consolidate. This test pins production RenderEtcEnvironment's
-// encoder (etc_environment.go) directly.
+// This is load-bearing: /etc/environment is the single canonical env
+// transport, and this test proves both delivery paths decode it
+// identically. If it fails, the value has an unencoded/undecoded round
+// trip and the consolidation breaks. This test pins production
+// RenderEtcEnvironment's encoder (etc_environment.go) directly.
 //
 // Skips (with reason) if docker is not on PATH. Runs on Linux CI
 // where docker is always present and on dev boxes with OrbStack/

@@ -25,8 +25,8 @@ var containerInheritVars = []string{
 
 // parseEtcEnvironment parses the KEY=VALUE format used by
 // /etc/environment (pam_env-compatible). Handles quoted values
-// (double-quoted only), ignores blanks and comment lines. Malformed
-// lines (no `=`) are silently skipped.
+// (double- or single-quoted, matching ends only), ignores blanks and
+// comment lines. Malformed lines (no `=`) are silently skipped.
 func parseEtcEnvironment(body string) map[string]string {
 	out := make(map[string]string)
 	for _, line := range strings.Split(body, "\n") {
@@ -41,6 +41,8 @@ func parseEtcEnvironment(body string) map[string]string {
 		key := trimmed[:eq]
 		val := trimmed[eq+1:]
 		if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
+			val = val[1 : len(val)-1]
+		} else if len(val) >= 2 && val[0] == '\'' && val[len(val)-1] == '\'' {
 			val = val[1 : len(val)-1]
 		}
 		out[key] = val

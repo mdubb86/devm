@@ -80,6 +80,14 @@ func TestRenderEtcEnvironment_PathPrepend(t *testing.T) {
 	assert.Contains(t, body, "PATH=/workspace/bin:/home/devm/.fnm/aliases/default/bin:/opt/devm/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games\n")
 }
 
+func TestRenderEtcEnvironment_RejectsBadPathEntry(t *testing.T) {
+	cfg := schema.Config{Path: []string{"/good/bin", "/bad#dir/bin"}}
+	_, err := RenderEtcEnvironment(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cfg.Path[1]")
+	assert.Contains(t, err.Error(), "/bad#dir/bin")
+}
+
 func TestRenderEtcEnvironment_UserEnv_BareAndQuoted(t *testing.T) {
 	cfg := schema.Config{
 		Env: map[string]schema.EnvValue{

@@ -25,6 +25,13 @@ UV_SYSTEM_CERTS=1
 	assert.False(t, hasComment)
 }
 
+func TestParseEtcEnvironment_SingleQuoted(t *testing.T) {
+	body := "TEST_SPACE='hello world'\nTEST_DOLLAR='cost $50'\n"
+	got := parseEtcEnvironment(body)
+	assert.Equal(t, "hello world", got["TEST_SPACE"])
+	assert.Equal(t, "cost $50", got["TEST_DOLLAR"])
+}
+
 func TestParseEtcEnvironment_Malformed_Skipped(t *testing.T) {
 	body := "GOOD=value\nno_equals_here\nALSO_GOOD=x\n"
 	got := parseEtcEnvironment(body)

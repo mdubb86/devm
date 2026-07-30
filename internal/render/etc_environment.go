@@ -133,6 +133,11 @@ func RenderEtcEnvironment(cfg schema.Config) (string, error) {
 	// guestSystemPATH. cfg.Path is validated + $WORKSPACE-expanded by
 	// schema.ResolveEnv. Uses the standard encoder like every other
 	// value; the common case (all chars bare-safe) emits bare.
+	for i, entry := range cfg.Path {
+		if _, err := encodeEtcEnvValue(entry); err != nil {
+			return "", fmt.Errorf("encoding cfg.Path[%d] %q: %w", i, entry, err)
+		}
+	}
 	pathParts := make([]string, 0, len(cfg.Path)+2)
 	pathParts = append(pathParts, cfg.Path...)
 	pathParts = append(pathParts, "/opt/devm/scripts")
