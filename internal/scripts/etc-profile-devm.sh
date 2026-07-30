@@ -2,8 +2,19 @@
 # bundle sync.
 #
 # Login shells (bash -l, ssh non-interactive commands, cron with
-# BASH_ENV) rebuild PATH via /etc/profile before user-level rc
-# files run, so devm's PATH additions in /opt/devm/.env are
-# otherwise lost. This drop-in runs at login-shell init after
-# /etc/profile itself, restoring devm's env in every login shell.
-[ -f /opt/devm/.env ] && . /opt/devm/.env
+# BASH_ENV) rebuild PATH via /etc/profile before user-level rc files
+# run, so devm's PATH additions in /etc/environment would be lost.
+# This drop-in runs at login-shell init after /etc/profile itself,
+# re-sourcing /etc/environment via `set -a` so every assignment is
+# auto-exported.
+#
+# The set -a idiom is safe because the encoder in
+# internal/render/etc_environment.go (encodeEtcEnvValue) constrains
+# /etc/environment values so that shell `set -a; .` and pam_env give
+# identical bytes — pinned by
+# internal/render/etc_environment_contract_test.go.
+if [ -r /etc/environment ]; then
+    set -a
+    . /etc/environment
+    set +a
+fi

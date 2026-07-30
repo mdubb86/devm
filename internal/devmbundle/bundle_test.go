@@ -371,7 +371,11 @@ func TestBuild_IncludesEtcProfileDevm(t *testing.T) {
 	entry, ok := entries["profile.d/devm.sh"]
 	require.True(t, ok, "bundle must contain profile.d/devm.sh")
 	assert.Equal(t, int64(0o644), entry.mode)
-	assert.Contains(t, string(entry.body), "/opt/devm/.env")
+	// Regression: /etc/profile.d/devm.sh sources /etc/environment via
+	// `set -a` so login shells inherit devm's env. This replaced the
+	// legacy /opt/devm/.env sourcing in v0.9.10.
+	assert.Contains(t, string(entry.body), ". /etc/environment")
+	assert.Contains(t, string(entry.body), "set -a")
 }
 
 // TestBuild_IncludesEtcEnvironment proves the bundle carries the
