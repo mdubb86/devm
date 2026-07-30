@@ -13,13 +13,6 @@
 # produce identical bytes — pinned by
 # internal/render/etc_environment_contract_test.go.
 if [ -r /etc/environment ]; then
-    # Apple Virtualization's virtiofs has a guest-side attr/data cache;
-    # a fresh read within ~100ms of a host-side rewrite can see a stale
-    # truncated view (symptom: `Syntax error: Unterminated quoted string`
-    # inside `. /etc/environment`). A brief wait forces the cache to age
-    # out. 200ms is small enough to not matter for shell startup, big
-    # enough to be robust across observed timings.
-    sleep 0.2
     set -a
     . /etc/environment
     set +a
