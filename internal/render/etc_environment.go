@@ -26,26 +26,57 @@ const guestSystemPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin
 // (see recipes/lang/uv.md: "The SSL_CERT_FILE trap").
 const caBundlePath = "/etc/ssl/certs/ca-certificates.crt"
 
-// bareRunes is the set of characters that can appear in an unquoted
-// pam_env value. Conservative: everything outside this set gets
-// double-quoted. Excludes shell/pam_env special characters ($, #,
-// space, quotes, backslash) and anything ambiguous. Callers that need
-// broader freedom fall through the quoted path.
+// bareRunes is the set of chars that appear unquoted in /etc/environment
+// AND survive both pam_env and shell `set -a; .` unchanged. Conservative:
+// excludes shell metachars (space, |, &, ;, <, >, (, ), quotes, backslash,
+// dollar, backtick, #) and any char with ambiguous parsing. Values just
+// outside this set get single-quoted (safe in both parsers).
 const bareRunes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_/.:@-"
 
-// etcEnvironmentQuote encodes v for a single KEY=value line in
-// /etc/environment. Returns bare when v matches [A-Za-z0-9_/.:@-]*,
-// otherwise returns a double-quoted form with \, ", \n, \t escaped.
-// Returns an error for values containing raw newline, carriage return,
-// or NUL — pam_env can't safely represent them.
-func etcEnvironmentQuote(v string) (string, error) {
+// encodeEtcEnvValue returns v formatted for a single KEY=value line in
+// /etc/environment such that BOTH pam_env AND shell `set -a; . /etc/
+// environment` produce v verbatim. Returns error if v cannot be safely
+// encoded — the caller surfaces the error message to the user (invalid
+// devm.yaml value). Contract pinned by internal/render/
+// etc_environment_contract_test.go, which round-trips every accept-set
+// value through a Debian 13 container matching the devm guest.
+//
+// Reject set:
+//  1. \n, \r, or NUL — pam_env can't represent (line-terminator or
+//     C-string terminator).
+//  2. '#' anywhere — pam_env treats # as a comment marker even inside
+//     quotes; there is no encoding that survives.
+//  3. ' combined with $, \, ", or backtick — no encoding survives:
+//     the ' wrap can't hold ', and the " wrap would trigger shell
+//     escape/expansion/command-substitution while pam_env keeps them
+//     literal.
+//
+// Encoding rules (in order):
+//   - Contains ' (guaranteed no $, \, ", or backtick per rejects above)
+//     → double-quote: "don't stop" — both parsers strip outer ", no
+//     inner char is shell-special so no escape/expansion happens.
+//   - Empty string → a pair of single quotes (two ' characters)
+//   - Only bare-safe chars per bareRunes → emit bare: KEY=value
+//   - Otherwise → single-quote: 'has $ or \ or " or backtick' — single
+//     quotes are literal in both parsers.
+func encodeEtcEnvValue(v string) (string, error) {
 	for _, r := range v {
-		if r == '\n' || r == '\r' || r == 0 {
-			return "", fmt.Errorf("value contains unsupported control character (newline/CR/NUL)")
+		switch r {
+		case '\n', '\r', 0:
+			return "", fmt.Errorf("value contains control character (newline/CR/NUL)")
+		case '#':
+			return "", fmt.Errorf("value contains '#' — pam_env truncates at '#' even inside quotes")
 		}
 	}
+	hasApos := strings.ContainsRune(v, '\'')
+	if hasApos {
+		if strings.ContainsAny(v, "$\\\"`") {
+			return "", fmt.Errorf("value contains ' combined with one of $ \\ \" or backtick — no encoding survives both pam_env and shell")
+		}
+		return `"` + v + `"`, nil
+	}
 	if v == "" {
-		return `""`, nil
+		return `''`, nil
 	}
 	bare := true
 	for _, r := range v {
@@ -57,51 +88,38 @@ func etcEnvironmentQuote(v string) (string, error) {
 	if bare {
 		return v, nil
 	}
-	var b strings.Builder
-	b.Grow(len(v) + 2)
-	b.WriteByte('"')
-	for _, r := range v {
-		switch r {
-		case '\\', '"':
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		case '\t':
-			b.WriteString(`\t`)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	b.WriteByte('"')
-	return b.String(), nil
+	return `'` + v + `'`, nil
 }
 
 // RenderEtcEnvironment returns the body of /etc/environment for cfg.
-// Same source as RenderEnv (which produces the shell-format /opt/devm/.env)
-// — cfg is expected to have been through schema.ResolveEnv so WORKSPACE
+// This is devm's single canonical env-delivery file: reached by pam_env
+// (SSH login, `su -`, systemd via EnvironmentFile=) AND by shell
+// `set -a; . /etc/environment` (with-devm-env wrapper for devm exec/
+// shell, /etc/profile.d/devm.sh for login shells). The contract test
+// at etc_environment_contract_test.go pins the round-trip on our target
+// guest.
+//
+// cfg is expected to have been through schema.ResolveEnv so WORKSPACE
 // and IS_SANDBOX are in cfg.Env.
 //
 // Emitted lines, in this order:
 //  1. NO_PROXY=*
 //  2. CA trust vars — SSL_CERT_FILE, SSL_CERT_DIR, REQUESTS_CA_BUNDLE,
 //     CURL_CA_BUNDLE, AWS_CA_BUNDLE, NODE_EXTRA_CA_CERTS all pointing
-//     at caBundlePath, plus UV_SYSTEM_CERTS=1. Kept as one block so
-//     Python (ssl/httpx/requests), Node, curl, AWS SDKs, and uv all
-//     trust the merged bundle without per-project env config.
-//  3. PATH="<cfg.Path[0]>:<cfg.Path[1]>:...:/opt/devm/scripts:<guestSystemPATH>"
-//     (always double-quoted; cfg.Path may be empty, in which case the
-//     join begins at /opt/devm/scripts). PATH is always emitted
-//     double-quoted — matching Debian's shipped /etc/environment
-//     convention — even when its characters would allow bare emission
-//     per etcEnvironmentQuote.
-//  4. cfg.Env entries (including WORKSPACE, IS_SANDBOX), sorted by key
-//  5. Per-service NAME_KEY entries, sorted by name then key
+//     at caBundlePath, plus UV_SYSTEM_CERTS=1.
+//  3. PATH=<cfg.Path[0]>:<cfg.Path[1]>:...:/opt/devm/scripts:<guestSystemPATH>
+//     — encoded via encodeEtcEnvValue like every other value; bare
+//     emission for the common case (all chars bare-safe), single-quoted
+//     if a user cfg.Path entry contains non-bare chars.
+//  4. cfg.Env entries (including WORKSPACE, IS_SANDBOX), sorted by key.
+//  5. Per-service NAME_KEY entries, sorted by name then key.
 //
-// Returns error if any value contains a raw newline/CR/NUL — the caller
-// should surface it to the user (invalid devm.yaml value).
+// Returns error if any value fails encodeEtcEnvValue — the caller
+// surfaces it to the user (invalid devm.yaml value).
 func RenderEtcEnvironment(cfg schema.Config) (string, error) {
 	var b strings.Builder
 
-	// Fixed vars (bare, no quoting needed).
+	// Fixed vars (bare-safe, no quoting needed).
 	b.WriteString("NO_PROXY=*\n")
 	fmt.Fprintf(&b, "SSL_CERT_FILE=%s\n", caBundlePath)
 	b.WriteString("SSL_CERT_DIR=/etc/ssl/certs\n")
@@ -111,28 +129,20 @@ func RenderEtcEnvironment(cfg schema.Config) (string, error) {
 	fmt.Fprintf(&b, "NODE_EXTRA_CA_CERTS=%s\n", caBundlePath)
 	b.WriteString("UV_SYSTEM_CERTS=1\n")
 
-	// PATH — cfg.Path entries prepended in front of /opt/devm/scripts
-	// and guestSystemPATH. cfg.Path is already validated + $WORKSPACE-
-	// expanded by schema.ResolveEnv.
+	// PATH — cfg.Path prepended in front of /opt/devm/scripts and
+	// guestSystemPATH. cfg.Path is validated + $WORKSPACE-expanded by
+	// schema.ResolveEnv. Uses the standard encoder like every other
+	// value; the common case (all chars bare-safe) emits bare.
 	pathParts := make([]string, 0, len(cfg.Path)+2)
 	pathParts = append(pathParts, cfg.Path...)
 	pathParts = append(pathParts, "/opt/devm/scripts")
 	pathParts = append(pathParts, guestSystemPATH)
 	pathVal := strings.Join(pathParts, ":")
-	quoted, err := etcEnvironmentQuote(pathVal)
+	pathEncoded, err := encodeEtcEnvValue(pathVal)
 	if err != nil {
 		return "", fmt.Errorf("encoding PATH: %w", err)
 	}
-	// PATH is always double-quoted in /etc/environment, matching the
-	// convention Debian ships in the file's default contents — even
-	// though PATH's characters (letters, digits, /, :, -, ., _) fall
-	// within bareRunes and etcEnvironmentQuote would otherwise leave
-	// it unquoted. Bare output never contains ", \, or control chars,
-	// so wrapping it here is safe.
-	if !strings.HasPrefix(quoted, `"`) {
-		quoted = `"` + quoted + `"`
-	}
-	fmt.Fprintf(&b, "PATH=%s\n", quoted)
+	fmt.Fprintf(&b, "PATH=%s\n", pathEncoded)
 
 	// cfg.Env — sorted, resolved values.
 	envKeys := make([]string, 0, len(cfg.Env))
@@ -141,7 +151,7 @@ func RenderEtcEnvironment(cfg schema.Config) (string, error) {
 	}
 	sort.Strings(envKeys)
 	for _, k := range envKeys {
-		q, err := etcEnvironmentQuote(cfg.Env[k].Render())
+		q, err := encodeEtcEnvValue(cfg.Env[k].Render())
 		if err != nil {
 			return "", fmt.Errorf("encoding env %q: %w", k, err)
 		}
@@ -164,7 +174,7 @@ func RenderEtcEnvironment(cfg schema.Config) (string, error) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			q, err := etcEnvironmentQuote(svc.Env[k].Render())
+			q, err := encodeEtcEnvValue(svc.Env[k].Render())
 			if err != nil {
 				return "", fmt.Errorf("encoding service %q env %q: %w", name, k, err)
 			}
