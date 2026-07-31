@@ -93,12 +93,15 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 
 	// Snapshot's SecretHashes must still update even with no live VM,
 	// so the next /vm/start writes iron-proxy config from the current
-	// schema without re-detecting the same drift. The seeded Cfg must
-	// be preserved, not clobbered with a zero value.
+	// schema without re-detecting the same drift. Likewise snap.Cfg
+	// must fold in the applied allowlist, not stay frozen at the seeded
+	// value — otherwise a future /vm/start would re-detect this same
+	// allow-list change as pending drift.
 	snap, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, snap)
-	assert.Equal(t, seededCfg, snap.Cfg, "cfg must be preserved, not zeroed")
+	require.Len(t, snap.Cfg.Network.Allow, 1, "allow list must have merged the applied entry")
+	assert.Equal(t, "a.example.com", snap.Cfg.Network.Allow[0].Host)
 }
 
 // TestApplyIronProxy_NeverColdStarted_FailsLoud covers F3: if
@@ -219,7 +222,12 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	require.Contains(t, snap.SecretHashes, "github_token")
-	assert.Equal(t, seededCfg, snap.Cfg, "cfg must be preserved, not zeroed")
+	// snap.Cfg must advance to reflect what apply-iron-proxy just wrote
+	// to iron-proxy's config on disk. Without this, removals from allow
+	// (or secret refs) are silently no-op'd on the next reconcile: diff
+	// engine compares against a stale snap.Cfg and sees no change.
+	require.Len(t, snap.Cfg.Network.Allow, 1, "allow list must have merged the applied entry")
+	assert.Equal(t, "a.example.com", snap.Cfg.Network.Allow[0].Host)
 
 	_, ok := ironProxyState.get(projectID)
 	require.True(t, ok, "ironProxyState must hold an entry for the project after a successful apply")
@@ -352,4 +360,75 @@ func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 	require.True(t, ok)
 	assert.NotEmpty(t, info.ProjectIP,
 		"apply-iron-proxy must allocate a project IP for an adopted VM that never went through /vm/start")
+}
+
+// TestMergeAllowlistAndSecrets_RebuildsAllowFromApplied pins that the
+// merge helper's allow-list handling: the returned Cfg's Network.Allow
+// exactly reflects the applied list, with per-host secret scope
+// preserved for hosts that already existed in snapCfg.
+func TestMergeAllowlistAndSecrets_RebuildsAllowFromApplied(t *testing.T) {
+	snapCfg := schema.Config{
+		Network: schema.Network{
+			Allow: []schema.AllowEntry{
+				{Host: "keep.example.com", Secrets: []string{"scoped_secret"}},
+				{Host: "remove.example.com"},
+			},
+		},
+	}
+	applied := []string{"keep.example.com", "new.example.com"}
+
+	got := mergeAllowlistAndSecrets(snapCfg, applied, nil)
+
+	require.Len(t, got.Network.Allow, 2)
+	// Order matches applied.
+	assert.Equal(t, "keep.example.com", got.Network.Allow[0].Host)
+	assert.Equal(t, []string{"scoped_secret"}, got.Network.Allow[0].Secrets,
+		"per-host secret scope must be preserved for hosts that already existed")
+	assert.Equal(t, "new.example.com", got.Network.Allow[1].Host)
+	assert.Nil(t, got.Network.Allow[1].Secrets, "new hosts get empty scope")
+	// remove.example.com is gone.
+	for _, e := range got.Network.Allow {
+		assert.NotEqual(t, "remove.example.com", e.Host)
+	}
+}
+
+// TestMergeAllowlistAndSecrets_ClearsUnboundSecretRefs pins that env
+// values whose secret name is not in the applied secret bindings are
+// dropped from snap.Cfg.Env and snap.Cfg.Services[*].Env. Literal env
+// values are untouched.
+func TestMergeAllowlistAndSecrets_ClearsUnboundSecretRefs(t *testing.T) {
+	snapCfg := schema.Config{
+		Env: map[string]schema.EnvValue{
+			"KEEP_LITERAL":  {Literal: "hello"},
+			"KEEP_SECRET":   {Secret: &schema.SecretRef{Name: "bound_secret"}},
+			"REMOVE_SECRET": {Secret: &schema.SecretRef{Name: "unbound_secret"}},
+		},
+		Services: map[string]schema.Service{
+			"svc": {
+				Env: map[string]schema.EnvValue{
+					"SVC_KEEP":   {Literal: "world"},
+					"SVC_SECRET": {Secret: &schema.SecretRef{Name: "unbound_secret"}},
+				},
+			},
+		},
+	}
+	appliedSecrets := []SecretBinding{
+		{Name: "bound_secret", Value: "s3cr3t"},
+	}
+
+	got := mergeAllowlistAndSecrets(snapCfg, nil, appliedSecrets)
+
+	// Global Env: literal preserved, bound secret ref preserved,
+	// unbound secret ref dropped.
+	assert.Equal(t, "hello", got.Env["KEEP_LITERAL"].Literal)
+	require.NotNil(t, got.Env["KEEP_SECRET"].Secret)
+	assert.Equal(t, "bound_secret", got.Env["KEEP_SECRET"].Secret.Name)
+	_, hasRemoved := got.Env["REMOVE_SECRET"]
+	assert.False(t, hasRemoved, "REMOVE_SECRET (unbound) must be dropped")
+
+	// Per-service Env: same treatment.
+	svc := got.Services["svc"]
+	assert.Equal(t, "world", svc.Env["SVC_KEEP"].Literal)
+	_, hasSvcSecret := svc.Env["SVC_SECRET"]
+	assert.False(t, hasSvcSecret, "SVC_SECRET (unbound) must be dropped")
 }

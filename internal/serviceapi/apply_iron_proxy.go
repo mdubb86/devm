@@ -16,6 +16,7 @@ import (
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -112,7 +113,7 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 				// but SecretHashes still needs to move forward so the
 				// next /vm/start renders iron-proxy config from the
 				// current schema without re-detecting this same drift.
-				if err := updateSnapshotAfterSpawn(cfg, req.Name, hashes, false); err != nil {
+				if err := updateSnapshotAfterSpawn(cfg, req.Name, hashes, false, req.Allowlist, req.Secrets); err != nil {
 					http.Error(w, fmt.Sprintf("update snapshot: %v", err), http.StatusInternalServerError)
 					return
 				}
@@ -174,7 +175,7 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 			return
 		}
 
-		if err := updateSnapshotAfterSpawn(cfg, req.Name, hashes, true); err != nil {
+		if err := updateSnapshotAfterSpawn(cfg, req.Name, hashes, true, req.Allowlist, req.Secrets); err != nil {
 			http.Error(w, fmt.Sprintf("update snapshot: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -289,11 +290,12 @@ func secretHashesFromBindings(bindings []SecretBinding) map[string]string {
 }
 
 // updateSnapshotAfterSpawn loads the current StateSnapshot for
-// projectID, overwrites SecretHashes, and persists it — preserving Cfg
-// and TemplateContents as-is. Used on every success path — including
-// the VM-stopped no-op — so the daemon's drift baseline always
-// reflects the secrets the CLI most recently resolved from the
-// keychain.
+// projectID, folds the just-applied allowlist + secret bindings into
+// snap.Cfg via mergeAllowlistAndSecrets, updates SecretHashes /
+// ProxyVersion, and persists it. Advancing snap.Cfg here is what makes
+// subsequent reconciles diff against the just-applied state instead of
+// a stale baseline — without it, allow-list and !secret-ref removals
+// are silently no-op'd on the next reconcile.
 //
 // When stampVersion is true (a spawn actually happened), also sets
 // ProxyVersion = ironproxy.EmbeddedSha256() so a later STALE check can
@@ -308,7 +310,14 @@ func secretHashesFromBindings(bindings []SecretBinding) map[string]string {
 // eventual cold-start cfg look like a pending change on the next
 // reconcile — a teardown-required storm. Fail loud instead and leave
 // the (nonexistent) snapshot untouched.
-func updateSnapshotAfterSpawn(cfg identity.Config, projectID string, hashes map[string]string, stampVersion bool) error {
+func updateSnapshotAfterSpawn(
+	cfg identity.Config,
+	projectID string,
+	hashes map[string]string,
+	stampVersion bool,
+	appliedAllowlist []string,
+	appliedSecrets []SecretBinding,
+) error {
 	snap, err := ReadStateSnapshot(cfg, projectID)
 	if err != nil {
 		return err
@@ -320,6 +329,7 @@ func updateSnapshotAfterSpawn(cfg identity.Config, projectID string, hashes map[
 	if stampVersion {
 		snap.ProxyVersion = ironproxy.EmbeddedSha256()
 	}
+	snap.Cfg = mergeAllowlistAndSecrets(snap.Cfg, appliedAllowlist, appliedSecrets)
 	return WriteStateSnapshot(cfg, projectID, *snap)
 }
 
@@ -328,4 +338,83 @@ func writeJSON(w http.ResponseWriter, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// mergeAllowlistAndSecrets returns snapCfg with Network.Allow rebuilt
+// from allowlist and secret refs in Env / Services[*].Env cleared when
+// their referenced secret name is no longer in secrets. All other Cfg
+// fields are preserved — apply-iron-proxy's scope is egress policy only.
+//
+// Per-host secret scope: each schema.AllowEntry carries {Host, Secrets
+// []string}. allowlist is []string, so per-host scope isn't in the
+// input. Preserve it by copying from the current snapCfg.Network.Allow
+// when a host matches. New hosts get empty scope (no per-host secret
+// binding).
+//
+// Secret refs: for each EnvValue whose Secret != nil, drop the ref
+// (leaving a zero-value EnvValue) if the referenced name is not in
+// secrets. A later live-bucket reconcile will surface the actual
+// replacement (literal or removal), which mergeLiveApplied then
+// applies. This keeps the snapshot from LYING about an active secret
+// binding that's been removed.
+func mergeAllowlistAndSecrets(snapCfg schema.Config, allowlist []string, secrets []SecretBinding) schema.Config {
+	// Index existing allow entries by host so we can preserve per-host
+	// secret scope on rebuild.
+	oldByHost := make(map[string]schema.AllowEntry, len(snapCfg.Network.Allow))
+	for _, e := range snapCfg.Network.Allow {
+		oldByHost[e.Host] = e
+	}
+	newAllow := make([]schema.AllowEntry, 0, len(allowlist))
+	for _, host := range allowlist {
+		if prev, ok := oldByHost[host]; ok {
+			newAllow = append(newAllow, prev)
+			continue
+		}
+		newAllow = append(newAllow, schema.AllowEntry{Host: host})
+	}
+	snapCfg.Network.Allow = newAllow
+
+	// Set of currently-bound secret names.
+	bound := make(map[string]struct{}, len(secrets))
+	for _, s := range secrets {
+		bound[s.Name] = struct{}{}
+	}
+
+	// Clear any secret refs no longer bound. Global Env.
+	if len(snapCfg.Env) > 0 {
+		newEnv := make(map[string]schema.EnvValue, len(snapCfg.Env))
+		for k, v := range snapCfg.Env {
+			if v.IsSecret() {
+				if _, ok := bound[v.Secret.Name]; !ok {
+					continue // drop the key — literal replacement (if any) surfaces via a subsequent Live reconcile
+				}
+			}
+			newEnv[k] = v
+		}
+		snapCfg.Env = newEnv
+	}
+
+	// Per-service Env. Copy the services map before mutating so we don't
+	// alias the input.
+	if len(snapCfg.Services) > 0 {
+		newServices := make(map[string]schema.Service, len(snapCfg.Services))
+		for name, svc := range snapCfg.Services {
+			if len(svc.Env) > 0 {
+				newSvcEnv := make(map[string]schema.EnvValue, len(svc.Env))
+				for k, v := range svc.Env {
+					if v.IsSecret() {
+						if _, ok := bound[v.Secret.Name]; !ok {
+							continue
+						}
+					}
+					newSvcEnv[k] = v
+				}
+				svc.Env = newSvcEnv
+			}
+			newServices[name] = svc
+		}
+		snapCfg.Services = newServices
+	}
+
+	return snapCfg
 }
