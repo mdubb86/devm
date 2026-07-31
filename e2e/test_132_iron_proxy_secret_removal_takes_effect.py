@@ -184,13 +184,16 @@ env:
             f"got names: {snap_names}"
         )
     finally:
-        # Best-effort keychain cleanup — devm may or may not expose an
-        # `unset` subcommand; fall back to `security` if not.
-        subprocess.run(
-            ["security", "delete-generic-password", "-s", f"devm-secret-{secret_name}"],
-            capture_output=True, timeout=15,
-        )
         subprocess.run(
             [devm.path, "teardown", "--yes"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
+        )
+        # Keychain cleanup via devm's first-class subcommand — same
+        # account naming as `devm secret set` (projectID/secretName under
+        # kSecAttrService="devm"). Matches test_101's cleanup pattern.
+        # Runs after teardown; workspace.path + devm.yaml still exist so
+        # `currentProjectID()` can read the project name.
+        subprocess.run(
+            [devm.path, "secret", "delete", secret_name],
+            cwd=str(workspace.path), capture_output=True, timeout=15,
         )
