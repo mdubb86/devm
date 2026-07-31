@@ -110,9 +110,10 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 			if errors.Is(err, os.ErrNotExist) {
 				// No config file → the VM has never started an
 				// iron-proxy for this project. Nothing to apply live,
-				// but SecretHashes still needs to move forward so the
-				// next /vm/start renders iron-proxy config from the
-				// current schema without re-detecting this same drift.
+				// but SecretHashes and snap.Cfg still need to move
+				// forward so the next /vm/start renders iron-proxy
+				// config from the current schema without re-detecting
+				// this same drift.
 				if err := updateSnapshotAfterSpawn(cfg, req.Name, hashes, false, req.Allowlist, req.Secrets); err != nil {
 					http.Error(w, fmt.Sprintf("update snapshot: %v", err), http.StatusInternalServerError)
 					return
@@ -349,7 +350,11 @@ func writeJSON(w http.ResponseWriter, body any) {
 // []string}. allowlist is []string, so per-host scope isn't in the
 // input. Preserve it by copying from the current snapCfg.Network.Allow
 // when a host matches. New hosts get empty scope (no per-host secret
-// binding).
+// binding). A per-host-scope-only change (same hosts, different
+// per-host secret binding) is a pre-existing diff-engine blind spot —
+// computeNetworkChanges diffs Domains() only, not scope, so scope-only
+// changes never trigger BucketEgressRestart and never reach this
+// merge. Track separately if that gap needs closing.
 //
 // Secret refs: for each EnvValue whose Secret != nil, drop the ref
 // (leaving a zero-value EnvValue) if the referenced name is not in
