@@ -26,6 +26,13 @@ Sequence:
 Distinct from test_44 (service restart) and test_zz_install_uninstall_lifecycle
 (install lifecycle without a live project). This is specifically:
 'does iron-proxy for a running project survive the install cycle?'.
+
+Note on Touch ID prompts: test_zz_install_uninstall_lifecycle batches
+install/uninstall to minimize Touch ID prompts per suite run. This
+test's `devm install` adds an extra prompt. That's intentional — the
+whole point of this test is to exercise the install-cycle behavior for
+a project with a live iron-proxy, which test_zz's install-only-in-
+isolation cannot do. Do not consolidate this test into test_zz.
 """
 from __future__ import annotations
 
@@ -38,10 +45,16 @@ pytestmark = pytest.mark.devm
 
 
 def _iron_proxy_pid_for(project_id: str) -> int | None:
-    """Return the PID of the iron-proxy process for this project, or None.
+    """Return the iron-proxy CHILD PID (not the setsid shim's PID) for
+    this project, or None if not running.
 
-    Same pattern as test_44 — match on the config path in the command
-    (unambiguous per project).
+    Differs from test_44's helper: test_44 returns the first match (which
+    happens to be the shim, since ps orders by PID and shim is spawned
+    first). We explicitly want the child here because it's the process
+    that enforces egress — asserting on the shim's PID would still pass
+    even if iron-proxy itself died and got respawned by the shim's Wait
+    loop (which shouldn't happen with setsid detachment, but making the
+    assertion robust to that case matters for THIS test).
     """
     r = subprocess.run(
         ["ps", "-axo", "pid=,command="],
@@ -98,12 +111,23 @@ def test_iron_proxy_survives_devm_install(devm, workspace, sandbox_name, devm_in
         # to protect iron-proxy across the install cycle — that's the
         # buzztrack Bug B.
         pid_after = _iron_proxy_pid_for(workspace.slug)
-        assert pid_after == pid_before, (
-            f"iron-proxy PID changed across `devm install`: "
-            f"before={pid_before} after={pid_after}.\n"
-            f"Either setsid didn't protect iron-proxy across the install cycle,\n"
-            f"or adoption failed to re-attach the surviving process."
-        )
+        # Split the assertion so a CI failure points at the right diagnosis.
+        if pid_after is None:
+            raise AssertionError(
+                f"iron-proxy is GONE after `devm install`: pid_before={pid_before}, "
+                f"pid_after=None. Setsid didn't protect iron-proxy across the install "
+                f"cycle — investigate what signal reached iron-proxy despite the setsid "
+                f"shim (bootout kill semantics, cascade-kill on the daemon's session)."
+            )
+        if pid_after != pid_before:
+            raise AssertionError(
+                f"iron-proxy RESPAWNED across `devm install`: pid_before={pid_before}, "
+                f"pid_after={pid_after}. Original process died (setsid protection issue) "
+                f"AND a new one was spawned — either pexec backoff auto-restarted it, or "
+                f"reconcile fired apply-iron-proxy during install. Adoption to preserve "
+                f"the original PID clearly failed. Investigate DiscoverIronProxies + "
+                f"AdoptIronProxies for why the surviving process wasn't picked up."
+            )
     finally:
         subprocess.run(
             [devm.path, "teardown", "--yes"],

@@ -10,29 +10,22 @@ This test exercises the adopted path (via `devm service restart`)
 because that's where the observed bug lives. Pexec-managed variant
 isn't tested here — pexec respawns iron-proxy in <500ms after death,
 so any window where status could lie is tiny and racy to catch.
-The adopted path has no auto-respawn — once dead, iron-proxy stays
-dead until reconcile, giving a wide window for the false-positive OK.
 
-Sequence:
-  1. Cold-start (iron-proxy pexec-managed).
-  2. `devm service restart` (iron-proxy now adopted at same PID —
-     verified by the assertion that PID is unchanged after restart).
-  3. SIGKILL iron-proxy (also kill the shim so pexec/launchd doesn't
-     restart it — adopted processes have no auto-restart contract).
-  4. Poll `devm status` output every 200ms for up to 5s.
-     Assertion: at some point within 5s, status must report MISSING
-     (or STALE, but MISSING is expected). If status keeps reporting
-     `ok` for the entire 5-second window while pgrep confirms
-     iron-proxy is truly gone, that's the bug.
+Sequence: cold-start → devm service restart (iron-proxy now adopted) →
+SIGKILL both shim + child → poll devm status every 200ms for 5s →
+assert never lies (status=ok while pgrep confirms iron-proxy dead) and
+eventually reports MISSING.
 
-Note on PID reuse: the primary failure mode of the observed bug is
-PID reuse — after iron-proxy dies, macOS recycles its PID to another
-process, and `kill(pid, 0)` succeeds for the wrong process. The
-test doesn't force reuse (impossible to do deterministically on
-macOS), but ANY case where status returns `ok` for a dead iron-proxy
-— including a naturally-occurring PID reuse — fails the test. If
-this test starts failing, sup.Status needs process-identity
-verification (see spec §"Fix scope").
+Caveat about coverage: the observed bug is PID reuse — after iron-proxy
+dies, macOS recycles the PID to some other process and kill(pid, 0)
+succeeds for the wrong process. This test does NOT force reuse
+(deterministic PID reassignment is impossible on macOS), so on machines
+without natural churn during the 5-second window, the test passes even
+if Bug A is live. What this test DOES reliably catch: any regression
+where sup.Status returns Present=true for an adopted PID that returned
+ESRCH from kill(0), or where the daemon fails to remove the adopted
+entry after Stop, or a similar code-path bug that manifests without
+requiring PID reuse. Consider this a code-path pin, not a repro.
 """
 from __future__ import annotations
 
@@ -75,10 +68,18 @@ def _iron_proxy_child_pid(project_id: str) -> int | None:
 
 
 def _status_iron_proxy_line(devm_path: str, workspace_path: str) -> str:
-    """Run `devm status` in the project workspace, return the iron-proxy line."""
+    """Run `devm status` in the project workspace, return the iron-proxy line.
+    Raises AssertionError if `devm status` exits non-zero — a daemon crash
+    mid-test is itself a bug and should surface with a clear diagnostic, not
+    be swallowed into a misleading "no MISSING observed" assertion.
+    """
     r = subprocess.run(
         [devm_path, "status"],
         cwd=workspace_path, capture_output=True, timeout=30, check=False,
+    )
+    assert r.returncode == 0, (
+        f"`devm status` failed (rc={r.returncode}) mid-test — likely daemon "
+        f"crash. stdout={r.stdout.decode()!r} stderr={r.stderr.decode()!r}"
     )
     for line in r.stdout.decode().splitlines():
         if "iron-proxy:" in line:
@@ -135,8 +136,18 @@ def test_devm_status_reflects_adopted_iron_proxy_death(
             except ProcessLookupError:
                 pass  # already gone
 
-        # 4. Poll for 5 seconds. Assert status eventually reports
-        # something other than "iron-proxy: ok" WHILE pgrep confirms
+        # Settle: wait for kernel to actually reap the killed processes so ps
+        # no longer shows them (avoids a race where the first poll iteration
+        # still sees zombies and prematurely triggers the "respawned" branch).
+        settle_deadline = time.monotonic() + 3.0
+        while time.monotonic() < settle_deadline:
+            if not _iron_proxy_pids_for(workspace.slug):
+                break
+            time.sleep(0.1)
+
+        # 4. Poll for 5 seconds. Assert status eventually reports MISSING
+        # (STALE is unreachable here — it requires Present+Running with a
+        # version mismatch, not a dead process) WHILE pgrep confirms
         # iron-proxy is actually dead. A single observation of "ok"
         # while pgrep is empty is the bug.
         deadline = time.monotonic() + 5.0
@@ -148,7 +159,10 @@ def test_devm_status_reflects_adopted_iron_proxy_death(
             status_line = _status_iron_proxy_line(devm.path, str(workspace.path))
 
             if not alive_pids and "iron-proxy: ok" in status_line:
-                # LIE: no iron-proxy alive, but status says ok.
+                # LIE: no iron-proxy alive, but status says ok. Under this
+                # test's harness, this can only fire via naturally-occurring
+                # PID reuse (see module docstring's coverage caveat) — we
+                # don't force reuse, so a pass here doesn't rule out Bug A.
                 saw_lie = True
                 if not first_lie_snapshot:
                     first_lie_snapshot = (
