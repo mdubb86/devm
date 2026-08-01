@@ -69,13 +69,24 @@ type State struct {
 //     SpawnWithStdin. Get full lifecycle, auto-restart with backoff,
 //     log capture.
 //   - adopted: discovered post-daemon-restart via Adopt. Only the PID
-//     is tracked; no auto-restart, no log capture. Stop signals via
-//     SIGTERM by PID.
+//     is tracked; no auto-restart, no log capture.
+//
+// For iron-proxy, pexec-managed entries wrap the child in a setsid
+// shim (see internal/setsidshim). The shim is what pexec sees; the
+// actual iron-proxy is the shim's grandchild in a different session.
+// Stop signals iron-proxy's PID directly (not the shim) — the shim
+// deliberately ignores SIGTERM so launchd's bootout of the daemon
+// can't reach through it to kill iron-proxy. Callers who spawn via
+// a shim must therefore call SetChildPID after Spawn to teach the
+// supervisor the grandchild PID; Adopt already records the correct
+// PID (post-restart, the shim's grandchild is what DiscoverIronProxies
+// finds by matching the iron-proxy binary in argv[0]).
 type Supervisor struct {
 	pm             pexec.ProcessManager
 	mu             sync.Mutex
 	logDir         string
 	adopted        map[Key]int // adopted-from-prior-daemon → PID
+	childPIDs      map[Key]int // pexec-managed spawn's grandchild (real iron-proxy behind the shim) → PID
 	disableRestart sync.Map    // key.String() → *atomic.Bool; gates OnUnexpectedExit's respawn
 }
 
@@ -88,10 +99,25 @@ func New(logDir string) *Supervisor {
 	// actually starts the child instead of just registering it.
 	_ = pm.Start(context.Background())
 	return &Supervisor{
-		pm:      pm,
-		logDir:  logDir,
-		adopted: map[Key]int{},
+		pm:        pm,
+		logDir:    logDir,
+		adopted:   map[Key]int{},
+		childPIDs: map[Key]int{},
 	}
+}
+
+// SetChildPID records the grandchild PID for a pexec-managed entry
+// whose direct pexec-visible process is a wrapping shim (iron-proxy
+// via internal/setsidshim). Called by the spawner AFTER Spawn returns
+// and the grandchild has been discovered (typically via
+// serviceapi.DiscoverIronProxies). Overwrites any prior value for the
+// key. Callers who do NOT use a shim (VMs via tart.Run) need not call
+// this — Stop falls back to pexec's own Stop, which signals the direct
+// child.
+func (s *Supervisor) SetChildPID(k Key, pid int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.childPIDs[k] = pid
 }
 
 // Adopt registers an externally-running process (e.g., one inherited
@@ -182,31 +208,74 @@ func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd, taps ...io
 }
 
 // Stop signals + waits for graceful shutdown. Removes the entry from
-// the registry. Handles both pexec-managed and adopted entries; for
-// adopted, SIGTERM is delivered by PID and ESRCH (already-dead) is
-// treated as success.
+// the registry.
+//
+// Two disposition classes:
+//
+//   - Iron-proxy (pexec-managed via a setsid shim, OR adopted from a
+//     prior daemon): a tracked child PID exists (childPIDs[k] for
+//     pexec-managed, adopted[k] for adopted). Signal that PID
+//     directly with SIGTERM — do NOT signal the shim. The shim
+//     ignores SIGTERM by design so launchd's bootout can't reach
+//     iron-proxy through it; the flip side is that we must reach
+//     iron-proxy ourselves here. Wait for actual death (ports
+//     released before apply-iron-proxy rebinds), escalate to SIGKILL
+//     on grace exhaustion. For pexec-managed, the shim's Wait()
+//     returns naturally once iron-proxy dies; disable restart first
+//     so pexec's OnUnexpectedExit doesn't respawn it.
+//
+//   - VMs / anything without a tracked child PID: fall back to
+//     pexec's own Stop, which signals the direct child.
+//
+// ESRCH (already dead) is treated as success in both paths.
 func (s *Supervisor) Stop(ctx context.Context, k Key) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer s.disableRestart.Delete(k.String())
-	if pid, ok := s.adopted[k]; ok {
-		delete(s.adopted, k)
-		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-			if errors.Is(err, syscall.ESRCH) {
-				return nil
-			}
-			return fmt.Errorf("supervisor.Stop(%s): kill adopted pid %d: %w", k, pid, err)
+
+	// Prefer adopted → childPIDs, so a key that was adopted and later
+	// re-spawned (unlikely today, but defensible) uses the freshest PID.
+	pid, wasAdopted := s.adopted[k]
+	if !wasAdopted {
+		pid = s.childPIDs[k]
+	}
+
+	if pid != 0 {
+		// Suppress pexec's respawn for pexec-managed entries: the shim
+		// will exit naturally once iron-proxy exits, and pexec's
+		// OnUnexpectedExit must not treat that as a crash to restart.
+		// No-op for adopted entries (no disable gate registered).
+		if v, ok := s.disableRestart.Load(k.String()); ok {
+			v.(*atomic.Bool).Store(true)
 		}
-		// Wait for actual death — callers rebind the process's ports
-		// immediately (apply-iron-proxy) and hit EADDRINUSE if we
-		// return while iron-proxy is still shutting down (its tokio
-		// deadline is 10s). Escalate to SIGKILL if grace exhausted.
-		if !waitProcessGone(pid, adoptedStopGrace) {
+
+		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+			if !errors.Is(err, syscall.ESRCH) {
+				return fmt.Errorf("supervisor.Stop(%s): kill pid %d: %w", k, pid, err)
+			}
+		} else if !waitProcessGone(pid, adoptedStopGrace) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			_ = waitProcessGone(pid, sigkillGrace)
 		}
+
+		if wasAdopted {
+			delete(s.adopted, k)
+			return nil
+		}
+		delete(s.childPIDs, k)
+		// Reap the pexec entry (shim). RemoveProcessByID takes it out
+		// of pexec's registry; the shim has (or will imminently) exit
+		// naturally as its Wait() on iron-proxy returns. p.Stop is a
+		// no-op if the shim's already gone; if not, it sends SIGTERM
+		// (which the shim ignores) then SIGKILL after StopTimeout.
+		if p, ok := s.pm.RemoveProcessByID(k.String()); ok {
+			_ = p.Stop()
+		}
 		return nil
 	}
+
+	// No tracked child PID — pexec's direct child IS the process to
+	// stop (VMs via tart.Run).
 	p, ok := s.pm.RemoveProcessByID(k.String())
 	if !ok {
 		return fmt.Errorf("supervisor.Stop(%s): %w", k, ErrNotFound)

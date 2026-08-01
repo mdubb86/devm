@@ -1,7 +1,7 @@
 // devm-setsid-shim wraps iron-proxy spawn so the child runs in a new
 // session detached from the daemon's process tree. Without this,
 // `launchctl bootout` of the daemon (during `devm install`/upgrade)
-// kills iron-proxy too, dropping egress for all guest containers.
+// would kill iron-proxy too, dropping egress for all guest containers.
 //
 // The shim's own SysProcAttr can't Setsid (pexec makes the shim a
 // process group leader before exec, and setsid(2) refuses process
@@ -11,8 +11,18 @@
 // is inherited from the shim). setsid() succeeds; the child becomes
 // session leader in a new session.
 //
-// The shim then blocks on Wait() and forwards signals so pexec's
-// SIGTERM stop-flow reaches iron-proxy through the shim.
+// The shim then blocks on Wait() and does nothing else. It IGNORES
+// termination signals (SIGTERM/HUP/INT/QUIT) because launchctl bootout
+// of the daemon walks the daemon's session and delivers SIGTERM to
+// every descendant sharing that session — including this shim. If the
+// shim forwarded that signal to iron-proxy, iron-proxy would die on
+// every devm install/upgrade, defeating the whole reason for the
+// setsid: iron-proxy is meant to survive daemon restarts (see
+// serviceapi.AdoptIronProxies). Iron-proxy IS in its own session and
+// won't receive the launchd SIGTERM directly; the shim's job is just
+// to keep out of the way. If someone wants iron-proxy to stop, they
+// signal iron-proxy's PID directly (supervisor.Stop does this via
+// serviceapi.DiscoverIronProxies), NOT the shim.
 package main
 
 import (
@@ -29,6 +39,16 @@ func main() {
 		fatalf("usage: devm-setsid-shim <cmd> [args...]")
 	}
 
+	// Ignore termination signals — see the package doc for the
+	// launchctl-bootout rationale. signal.Ignore installs SIG_IGN
+	// for the listed signals; Go's runtime never dispatches them
+	// to any handler, and they don't kill the shim.
+	//
+	// Must be installed BEFORE cmd.Start(): a signal arriving between
+	// Start and Ignore would hit Go's default disposition (kill the
+	// shim on SIGTERM/HUP/INT/QUIT), leaving iron-proxy orphaned.
+	signal.Ignore(syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT)
+
 	cmd := exec.Command(os.Args[1], os.Args[2:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -36,24 +56,9 @@ func main() {
 	cmd.Env = os.Environ()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
-	// Register signal handlers BEFORE Start(): a signal arriving between
-	// Start() and Notify() would hit the shim's default Go disposition
-	// (terminates on SIGTERM/INT/HUP/QUIT) instead of being forwarded —
-	// leaving the child (already in a new session) orphaned without a
-	// forwarded stop signal.
-	sigCh := make(chan os.Signal, 4)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGQUIT)
-
 	if err := cmd.Start(); err != nil {
 		fatalf("start: %v", err)
 	}
-
-	// Forward pexec's stop signals so iron-proxy sees them.
-	go func() {
-		for sig := range sigCh {
-			_ = cmd.Process.Signal(sig)
-		}
-	}()
 
 	err := cmd.Wait()
 	if err == nil {

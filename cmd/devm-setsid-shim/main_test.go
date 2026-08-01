@@ -135,6 +135,59 @@ func TestShim_ChildSurvivesShimDeath(t *testing.T) {
 	_ = syscall.Kill(childPID, syscall.SIGTERM)
 }
 
+// TestShim_IgnoresSIGTERM: the shim's contract post-fix — it MUST
+// ignore SIGTERM (and HUP/INT/QUIT) and MUST NOT forward it to the
+// child. When launchctl bootout tears down the daemon, launchd
+// walks the daemon's session and delivers SIGTERM to every
+// descendant sharing that session, including this shim. If the
+// shim exits (Go's default) or forwards (the pre-fix behavior),
+// iron-proxy dies on every devm install/upgrade — the exact bug
+// buzztrack/everstone observed. Post-fix: shim keeps running,
+// child keeps running.
+func TestShim_IgnoresSIGTERM(t *testing.T) {
+	shim := buildShim(t)
+
+	// Same probe shape as TestShim_ChildSurvivesShimDeath.
+	cmd := exec.Command(shim, "sleep", "30")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	var childPID int
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		childPID = findSleepChildOf(t, cmd.Process.Pid)
+		if childPID != 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	require.NotZero(t, childPID, "expected sleep child of shim %d", cmd.Process.Pid)
+	t.Cleanup(func() { _ = syscall.Kill(childPID, syscall.SIGTERM) })
+
+	// SIGTERM the shim — mirrors launchd's bootout signaling the shim
+	// as a descendant of the daemon's session.
+	require.NoError(t, syscall.Kill(cmd.Process.Pid, syscall.SIGTERM))
+
+	// Poll for a second: BOTH shim and child must remain alive.
+	// A pre-fix shim would exit here (Go default = die on SIGTERM),
+	// and its old forwarding goroutine would have also SIGTERMed the
+	// child (which sleep respects → dies).
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(cmd.Process.Pid, 0); err != nil {
+			t.Fatalf("shim (pid %d) exited on SIGTERM — should have ignored it: %v",
+				cmd.Process.Pid, err)
+		}
+		if err := syscall.Kill(childPID, 0); err != nil {
+			t.Fatalf("child (pid %d) died — shim must NOT forward SIGTERM: %v",
+				childPID, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // findSleepChildOf returns the PID of the sleep process that's a direct
 // child of parentPID. Uses `pgrep -P <parent> sleep`. Returns 0 if none.
 func findSleepChildOf(t *testing.T, parentPID int) int {

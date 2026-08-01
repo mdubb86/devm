@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
@@ -183,11 +184,48 @@ func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Su
 	cmd := exec.CommandContext(ctx, shim, binary, "-config", configPath)
 	cmd.Env = append(os.Environ(), proxyCfg.EnvVars()...)
 	key := supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}
+	var spawnErr error
 	if denials != nil {
 		denials.Reset(projectID)
-		return ironProxySpawn(ctx, sup, key, cmd, denials.TapWriter(projectID))
+		spawnErr = ironProxySpawn(ctx, sup, key, cmd, denials.TapWriter(projectID))
+	} else {
+		spawnErr = ironProxySpawn(ctx, sup, key, cmd)
 	}
-	return ironProxySpawn(ctx, sup, key, cmd)
+	if spawnErr != nil {
+		return spawnErr
+	}
+
+	// Discover the grandchild iron-proxy PID (the actual process behind
+	// the shim) and teach the supervisor about it. This is what lets
+	// supervisor.Stop signal iron-proxy directly instead of the shim,
+	// which is critical: the shim ignores SIGTERM by design so
+	// launchd's bootout of the daemon can't reach through it. Without
+	// this handoff, supervisor.Stop would signal the shim (no-op),
+	// wait pexec's StopTimeout, then SIGKILL the shim — leaving
+	// iron-proxy orphaned to init rather than gracefully stopped.
+	//
+	// Poll DiscoverIronProxies because iron-proxy takes ~500ms to
+	// appear in ps (fork+exec+setsid, then arg-parse before it's
+	// long-lived enough to matter). Bounded wait; if it never appears
+	// the spawn is broken and Stop will fall back to pexec's Stop
+	// (slow but correct).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		procs, err := DiscoverIronProxies(ctx, cfg)
+		if err == nil {
+			for _, p := range procs {
+				if p.ProjectID == projectID {
+					sup.SetChildPID(key, p.PID)
+					return nil
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Grandchild not found within grace. Non-fatal: Spawn succeeded
+	// (the shim is running); Stop will fall back to pexec's path.
+	// Something else has probably gone wrong that will surface soon.
+	return nil
 }
 
 // EnvVars returns KEY=VALUE strings for iron-proxy's process env, one per
