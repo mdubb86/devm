@@ -36,3 +36,13 @@ var NftablesLockedConf string
 //
 //go:embed devm.target
 var DevmTarget string
+
+// DnsmasqDevmTestConf is the dnsmasq drop-in config baked into the
+// base image so dnsmasq answers on 127.0.0.1:53 from the moment the
+// guest boots — before devm's per-project provisioning runs any
+// install steps that need DNS (apt-get, curl, etc.). Must stay
+// byte-identical with render.DnsmasqConfig; a Go unit test in
+// internal/render asserts parity.
+//
+//go:embed dnsmasq-devm-test.conf
+var DnsmasqDevmTestConf string

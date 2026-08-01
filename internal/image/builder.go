@@ -66,6 +66,8 @@ func DefinitionHash() (string, error) {
 	h.Write([]byte{0})
 	io.WriteString(h, baseimage.DevmTarget)
 	h.Write([]byte{0})
+	io.WriteString(h, baseimage.DnsmasqDevmTestConf)
+	h.Write([]byte{0})
 	io.WriteString(h, cleanupScript)
 	h.Write([]byte{0})
 	io.WriteString(h, definitionVersion)
@@ -159,12 +161,13 @@ func runTart(ctx context.Context, w io.Writer, args ...string) error {
 
 // stageImageAssetsScript returns a shell fragment that (re)creates
 // assetStagingDir on the guest and writes the embedded image/ assets
-// (nftables-locked.conf, devm.target) into it. ProvisionBaseScript's
-// `install -o root -g root -m 0644 "$SCRIPT_DIR/..."` lines expect
-// these files to already be on disk, so this runs as a separate
-// tartExecStdin call BEFORE ProvisionBaseScript itself — the script
-// is piped over stdin (no on-disk image/ directory ships with the
-// binary), so there's nothing else to `install` from.
+// (nftables-locked.conf, devm.target, dnsmasq-devm-test.conf) into
+// it. ProvisionBaseScript's `install -o root -g root -m 0644
+// "$SCRIPT_DIR/..."` lines expect these files to already be on disk,
+// so this runs as a separate tartExecStdin call BEFORE
+// ProvisionBaseScript itself — the script is piped over stdin (no
+// on-disk image/ directory ships with the binary), so there's
+// nothing else to `install` from.
 func stageImageAssetsScript() string {
 	return fmt.Sprintf(`set -euo pipefail
 mkdir -p %s
@@ -174,7 +177,13 @@ DEVM_ASSET_NFTABLES_EOF
 cat > %s/devm.target <<'DEVM_ASSET_TARGET_EOF'
 %s
 DEVM_ASSET_TARGET_EOF
-`, assetStagingDir, assetStagingDir, baseimage.NftablesLockedConf, assetStagingDir, baseimage.DevmTarget)
+cat > %s/dnsmasq-devm-test.conf <<'DEVM_ASSET_DNSMASQ_EOF'
+%s
+DEVM_ASSET_DNSMASQ_EOF
+`, assetStagingDir,
+		assetStagingDir, baseimage.NftablesLockedConf,
+		assetStagingDir, baseimage.DevmTarget,
+		assetStagingDir, baseimage.DnsmasqDevmTestConf)
 }
 
 // tartExecStdin runs `tart exec -i <name> sudo bash -s`, piping

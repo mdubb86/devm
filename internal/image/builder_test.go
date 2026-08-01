@@ -42,6 +42,8 @@ func TestDefinitionHash_MatchesFormula(t *testing.T) {
 	h.Write([]byte{0})
 	io.WriteString(h, baseimage.DevmTarget)
 	h.Write([]byte{0})
+	io.WriteString(h, baseimage.DnsmasqDevmTestConf)
+	h.Write([]byte{0})
 	io.WriteString(h, cleanupScript)
 	h.Write([]byte{0})
 	io.WriteString(h, definitionVersion)

@@ -52,26 +52,36 @@ apt-get install -y -qq --no-install-recommends \
 sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
 locale-gen en_US.UTF-8
 
-# --- Neutralize systemd-resolved so dnsmasq owns :53 ---
+# --- Neutralize systemd-resolved and hand DNS to dnsmasq ---
 # Cirruslabs' Debian ships systemd-resolved enabled; it binds
 # 127.0.0.53:53 and rewrites /etc/resolv.conf as a symlink to its own
-# stub, which knows nothing about our *.test drop-in. devm's dnsmasq
-# (installed above, configured via /etc/dnsmasq.d/devm-test.conf) is
-# the guest resolver — anything from inside the guest resolving
-# `foo.test` needs to hit dnsmasq, not systemd-resolved.
+# stub, which knows nothing about our *.test drop-in.
+#
+# We want dnsmasq to own :53 from the moment the guest boots — before
+# devm's per-project provisioning runs any install steps that need
+# DNS (apt-get, curl, …). Three parts:
+#
+#   1. Install the dnsmasq drop-in NOW from the staged asset so the
+#      config is on disk before dnsmasq first starts. Content-identity
+#      with render.DnsmasqConfig is enforced by a Go unit test
+#      (internal/render/dnsmasq_test.go).
+#   2. Mask systemd-resolved so nothing can start it later.
+#   3. Enable dnsmasq at boot AND point /etc/resolv.conf at 127.0.0.1.
+#      dnsmasq's drop-in carries `no-resolv` + explicit upstream
+#      (softnet gateway 192.168.127.1), so the loopback pointer
+#      doesn't create a query loop.
 #
 # Ordering matters: this MUST run after `apt-get install` above (that
 # step needs working DNS via systemd-resolved). The rest of this
 # script is local-only — no more network access needed.
-#
-# resolv.conf becomes a real file pointing at 127.0.0.1 (dnsmasq's
-# default bind). dnsmasq's drop-in carries `no-resolv` + explicit
-# upstream (softnet gateway 192.168.127.1), so this loopback pointer
-# doesn't create a query loop when dnsmasq starts at real-boot time.
+install -o root -g root -m 0644 \
+    "$SCRIPT_DIR/dnsmasq-devm-test.conf" \
+    /etc/dnsmasq.d/devm-test.conf
 systemctl mask --now systemd-resolved.service
 rm -f /etc/resolv.conf
 echo 'nameserver 127.0.0.1' > /etc/resolv.conf
 chmod 0644 /etc/resolv.conf
+systemctl enable dnsmasq.service
 
 # --- devm sshd hardening ---
 # Base image sshd config override. Managed by devm; see
@@ -123,9 +133,11 @@ systemctl enable nftables.service
 # Gate: install devm.target (NOT enabled — nothing pulls it at boot).
 install -o root -g root -m 0644 "$SCRIPT_DIR/devm.target" /etc/systemd/system/devm.target
 
-# Take caddy + dnsmasq out of the boot chain; devm.target Wants= them.
+# Take caddy out of the boot chain; devm.target Wants= it.
 # (ssh is already masked above; the provisioner unmasks + leaves disabled.)
-systemctl disable caddy.service dnsmasq.service
+# dnsmasq stays enabled — it must be up before install-step
+# provisioning runs, well before devm.target activates.
+systemctl disable caddy.service
 
 # --- Drop the unused `debian` user (uid 1001) ---
 userdel -r debian 2>/dev/null || true
