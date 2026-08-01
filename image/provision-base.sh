@@ -52,6 +52,27 @@ apt-get install -y -qq --no-install-recommends \
 sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
 locale-gen en_US.UTF-8
 
+# --- Neutralize systemd-resolved so dnsmasq owns :53 ---
+# Cirruslabs' Debian ships systemd-resolved enabled; it binds
+# 127.0.0.53:53 and rewrites /etc/resolv.conf as a symlink to its own
+# stub, which knows nothing about our *.test drop-in. devm's dnsmasq
+# (installed above, configured via /etc/dnsmasq.d/devm-test.conf) is
+# the guest resolver — anything from inside the guest resolving
+# `foo.test` needs to hit dnsmasq, not systemd-resolved.
+#
+# Ordering matters: this MUST run after `apt-get install` above (that
+# step needs working DNS via systemd-resolved). The rest of this
+# script is local-only — no more network access needed.
+#
+# resolv.conf becomes a real file pointing at 127.0.0.1 (dnsmasq's
+# default bind). dnsmasq's drop-in carries `no-resolv` + explicit
+# upstream (softnet gateway 192.168.127.1), so this loopback pointer
+# doesn't create a query loop when dnsmasq starts at real-boot time.
+systemctl mask --now systemd-resolved.service
+rm -f /etc/resolv.conf
+echo 'nameserver 127.0.0.1' > /etc/resolv.conf
+chmod 0644 /etc/resolv.conf
+
 # --- devm sshd hardening ---
 # Base image sshd config override. Managed by devm; see
 # docs/superpowers/specs/2026-07-14-ssh-access-design.md.
