@@ -37,30 +37,38 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
-# Mirrors internal/render/etc_environment_contract_test.go's acceptCases.
-# Keep in sync — the encoder is the same in both places, and drift here
-# would silently narrow coverage. Long-value case is included for
-# completeness; it's the same 500-byte pattern the Go unit uses.
+# Cases as (name, yaml_input, expected_shell_value). Most shapes are
+# identity round-trips, so yaml_input == expected_shell_value; the
+# dollar cases differ because devm.yaml's env resolver treats `$` as
+# a variable-reference sigil and requires `$$` for a literal.
+#
+# These are a SUPERSET of the Go unit test's acceptCases: this test
+# exercises devm.yaml → resolve → encode → deliver, whereas the Go
+# encoder test in internal/render/ covers encoder shape alone. Keep
+# the identity cases in sync with that file; drift is caught by
+# review.
 ACCEPT_CASES = [
-    ("bare_alnum", "hello_world"),
-    ("bare_path", "/opt/devm/bin"),
-    ("bare_url_hostport", "user@host:8080/path.v2-alpha_x"),
-    ("bare_empty", ""),
-    ("space", "hello world"),
-    ("leading_space", " leading"),
-    ("trailing_space", "trailing "),
-    ("tab", "col1\tcol2"),
-    ("apostrophe_only", "don't stop"),
-    ("apostrophes_multi", "it's what's happening"),
-    ("dollar_only", "cost $50 or ${VAR}"),
-    ("backslash_only", "a\\b\\c"),
-    ("dquote_only", 'he said "hi"'),
-    ("backtick_only", "output `cmd` here"),
-    ("star_bang_semi", "has * ! ; chars"),
-    ("json_like", '{"key":"value","n":1}'),
-    ("url_with_query", "https://example.com/a?b=1&c=2"),
-    ("unicode", "héllo wörld"),
-    ("long_value", "x" * 500),
+    ("bare_alnum", "hello_world", "hello_world"),
+    ("bare_path", "/opt/devm/bin", "/opt/devm/bin"),
+    ("bare_url_hostport", "user@host:8080/path.v2-alpha_x", "user@host:8080/path.v2-alpha_x"),
+    ("bare_empty", "", ""),
+    ("space", "hello world", "hello world"),
+    ("leading_space", " leading", " leading"),
+    ("trailing_space", "trailing ", "trailing "),
+    ("tab", "col1\tcol2", "col1\tcol2"),
+    ("apostrophe_only", "don't stop", "don't stop"),
+    ("apostrophes_multi", "it's what's happening", "it's what's happening"),
+    # devm.yaml `$` sigil: `$$` → literal `$`. Proves both the escape
+    # AND that the resolved literal survives /etc/environment.
+    ("dollar_escaped", "cost $$50 or $${VAR}", "cost $50 or ${VAR}"),
+    ("backslash_only", "a\\b\\c", "a\\b\\c"),
+    ("dquote_only", 'he said "hi"', 'he said "hi"'),
+    ("backtick_only", "output `cmd` here", "output `cmd` here"),
+    ("star_bang_semi", "has * ! ; chars", "has * ! ; chars"),
+    ("json_like", '{"key":"value","n":1}', '{"key":"value","n":1}'),
+    ("url_with_query", "https://example.com/a?b=1&c=2", "https://example.com/a?b=1&c=2"),
+    ("unicode", "héllo wörld", "héllo wörld"),
+    ("long_value", "x" * 500, "x" * 500),
 ]
 
 
@@ -92,10 +100,10 @@ done
 @pytest.mark.timeout(600)
 @pytest.mark.slow
 def test_etc_environment_roundtrip(devm, workspace, sandbox_name):
-    # Build env: {K_<name>: <value>} for every accept case. YAML
+    # Build env: {K_<name>: <yaml_input>} for every accept case. YAML
     # serialization handles quoting for us; PyYAML round-trips these
     # shapes correctly (verified by write_devmyaml + reconcile).
-    env_map = {f"K_{name}": value for name, value in ACCEPT_CASES}
+    env_map = {f"K_{name}": yaml_input for name, yaml_input, _ in ACCEPT_CASES}
     workspace.write_devmyaml(
         install=["true"],
         env=env_map,
@@ -129,7 +137,9 @@ def test_etc_environment_roundtrip(devm, workspace, sandbox_name):
         for line in r.stdout.decode().splitlines():
             if not line.startswith("K_RESULT "):
                 continue
-            fields = line.split()
+            # split(" ") preserves empty base64 fields (bare_empty case);
+            # default str.split() would collapse them and drop the line.
+            fields = line.split(" ")
             if len(fields) != 4:
                 continue
             _, key, pb64, sb64 = fields
@@ -137,7 +147,7 @@ def test_etc_environment_roundtrip(devm, workspace, sandbox_name):
             shell_vals[key] = base64.b64decode(sb64).decode()
 
         missing = [
-            f"K_{name}" for name, _ in ACCEPT_CASES
+            f"K_{name}" for name, _, _ in ACCEPT_CASES
             if f"K_{name}" not in pam_vals
         ]
         assert not missing, (
@@ -146,15 +156,15 @@ def test_etc_environment_roundtrip(devm, workspace, sandbox_name):
         )
 
         mismatches: list[str] = []
-        for name, value in ACCEPT_CASES:
+        for name, _, expected in ACCEPT_CASES:
             key = f"K_{name}"
-            if pam_vals[key] != value:
+            if pam_vals[key] != expected:
                 mismatches.append(
-                    f"{key} pam: got {pam_vals[key]!r}, want {value!r}"
+                    f"{key} pam: got {pam_vals[key]!r}, want {expected!r}"
                 )
-            if shell_vals[key] != value:
+            if shell_vals[key] != expected:
                 mismatches.append(
-                    f"{key} shell: got {shell_vals[key]!r}, want {value!r}"
+                    f"{key} shell: got {shell_vals[key]!r}, want {expected!r}"
                 )
         assert not mismatches, "\n".join(mismatches)
     finally:
