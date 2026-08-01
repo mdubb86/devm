@@ -69,17 +69,16 @@ def _iron_proxy_child_pid(project_id: str) -> int | None:
 
 def _status_iron_proxy_line(devm_path: str, workspace_path: str) -> str:
     """Run `devm status` in the project workspace, return the iron-proxy line.
-    Raises AssertionError if `devm status` exits non-zero — a daemon crash
-    mid-test is itself a bug and should surface with a clear diagnostic, not
-    be swallowed into a misleading "no MISSING observed" assertion.
+
+    `devm status` uses non-zero exit codes as semantic signals (e.g. rc=4
+    for a MISSING iron-proxy is expected and CORRECT — the whole point of
+    this test is to observe that state). Parse the output regardless of
+    exit code. Missing iron-proxy line in output signals daemon
+    unreachability — the caller's polling logic surfaces that.
     """
     r = subprocess.run(
         [devm_path, "status"],
         cwd=workspace_path, capture_output=True, timeout=30, check=False,
-    )
-    assert r.returncode == 0, (
-        f"`devm status` failed (rc={r.returncode}) mid-test — likely daemon "
-        f"crash. stdout={r.stdout.decode()!r} stderr={r.stderr.decode()!r}"
     )
     for line in r.stdout.decode().splitlines():
         if "iron-proxy:" in line:
