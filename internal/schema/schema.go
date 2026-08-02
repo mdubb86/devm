@@ -166,7 +166,7 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 		byPath[path] = name
 	}
 
-	// Third: no overlap with any service's mask target. Masks live
+	// Third: no overlap with any top-level mask target. Masks live
 	// under the workspace root; volume target is absolute. Checked
 	// before the workspace-root overlap below (mask targets are always
 	// workspace subpaths) so a volume colliding with a mask reports the
@@ -176,14 +176,12 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 	if workspaceRoot == "" {
 		return nil
 	}
-	for svcName, svc := range c.Services {
-		for _, m := range svc.Masks {
-			maskAbs := filepath.Join(workspaceRoot, m.Path)
-			for _, name := range names {
-				if c.Volumes[name] == maskAbs {
-					return fmt.Errorf(`volumes.%s: guest path %q overlaps mask %q (service %q)`,
-						name, c.Volumes[name], m.Path, svcName)
-				}
+	for _, maskPath := range c.Masks {
+		maskAbs := filepath.Join(workspaceRoot, maskPath)
+		for _, name := range names {
+			if c.Volumes[name] == maskAbs {
+				return fmt.Errorf(`volumes.%s: guest path %q overlaps mask %q`,
+					name, c.Volumes[name], maskPath)
 			}
 		}
 	}
@@ -200,6 +198,48 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 		if vp == cleanedRoot || strings.HasPrefix(vp, rootPrefix) {
 			return fmt.Errorf(`volumes.%s: guest path %q overlaps the workspace mount root %q`,
 				name, c.Volumes[name], cleanedRoot)
+		}
+	}
+	return nil
+}
+
+// validateMasks checks the top-level Masks list. Called by both
+// Validate() (shape checks only) and ValidateWithRoot (shape +
+// overlap with declared volumes).
+func (c Config) validateMasks(workspaceRoot string) error {
+	if len(c.Masks) == 0 {
+		return nil
+	}
+	seen := map[string]int{} // path → first index where seen
+	for i, path := range c.Masks {
+		if path == "" {
+			return fmt.Errorf("masks[%d]: path must not be empty", i)
+		}
+		if filepath.IsAbs(path) || strings.HasPrefix(path, "~") || strings.HasPrefix(path, "$") {
+			return fmt.Errorf(`masks[%d]: path %q must be relative to the workspace (no leading /, ~, or $)`, i, path)
+		}
+		cleaned := filepath.Clean(path)
+		if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+			return fmt.Errorf(`masks[%d]: path %q: path traversal outside the workspace is not allowed`, i, path)
+		}
+		if prior, dup := seen[path]; dup {
+			return fmt.Errorf(`masks[%d]: path %q is already declared (first at masks[%d])`, i, path, prior)
+		}
+		seen[path] = i
+	}
+	// Overlap check requires a workspace root — same convention as
+	// validateVolumes.
+	if workspaceRoot == "" {
+		return nil
+	}
+	volumeByPath := map[string]string{}
+	for name, guestPath := range c.Volumes {
+		volumeByPath[guestPath] = name
+	}
+	for i, path := range c.Masks {
+		abs := filepath.Join(workspaceRoot, path)
+		if volName, ok := volumeByPath[abs]; ok {
+			return fmt.Errorf(`masks[%d]: path %q overlaps volume %q (guest path %q)`, i, path, volName, abs)
 		}
 	}
 	return nil
@@ -517,7 +557,7 @@ func CheckUnknownKeys(data []byte) error {
 	knownTop := []string{
 		"project", "base_image", "docker", "network", "env",
 		"services", "install", "startup", "scripts", "mounts", "path", "packages", "disk",
-		"config_lock", "volumes",
+		"config_lock", "volumes", "masks",
 	}
 	knownProject := []string{
 		"name", "proxy",
@@ -672,6 +712,15 @@ type Config struct {
 	// and survives `devm teardown`. See docs/superpowers/specs/
 	// 2026-08-01-persistent-volumes-design.md.
 	Volumes map[string]string `yaml:"volumes,omitempty"`
+
+	// Masks are workspace-relative paths whose contents are overlaid
+	// by a private per-project guest ext4 directory, so Mac and Linux
+	// versions of platform-specific content (node_modules with native
+	// binaries, .venv wheels, .cargo build artefacts) don't step on
+	// each other. Storage lives on the VM disk at
+	// /var/devm/masks/<project>/<path>/ and dies with the VM on
+	// teardown — masks aren't for persistence (see volumes:).
+	Masks []string `yaml:"masks,omitempty"`
 
 	// Packages is a list of apt package names installed automatically
 	// via `apt-get install -y` during Tart VM provisioning.
@@ -862,6 +911,9 @@ func (c Config) ValidateWithRoot(projectRoot string) error {
 	if err := c.validateVolumes(projectRoot); err != nil {
 		return err
 	}
+	if err := c.validateMasks(projectRoot); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -978,6 +1030,9 @@ func (c Config) Validate() error {
 		}
 	}
 	if err := c.validateVolumes(""); err != nil {
+		return err
+	}
+	if err := c.validateMasks(""); err != nil {
 		return err
 	}
 	return nil

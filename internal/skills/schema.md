@@ -21,6 +21,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
 | `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
 | `volumes` | map[string]string | restart | Per-project named persistent stores. Key = volume name; value = absolute guest path where the volume is mounted. Data lives on the Mac side under `~/Library/Application Support/devm/volumes/<project>/<name>/` and survives `devm teardown`. See the `volumes` section below. |
+| `masks` | []string | live | Workspace-relative paths overlaid by a private per-project guest ext4 directory. Isolates platform-differing content (Mac's `node_modules` vs Linux's) so both platforms have their own copies. See the `masks` section below. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
 | `config_lock` | bool | n/a | Defaults `true`. While the VM runs the daemon makes `devm.yaml` (+ `devm.me.yaml`) host-immutable (`chflags uchg`) so a root guest can't tamper with the egress allowlist; it unlocks on `devm stop`. Set `false` to disable. Edit while running via `devm unlock` (auto re-locks after `--for`, default 5m) then `devm reconcile`/`devm lock`. Not overridable in `devm.me.yaml`. |
@@ -252,6 +253,24 @@ Add / remove / retarget a volume ⇒ **restart** bucket: Tart's `--dir` args are
 On first attach with existing content at the guest target (e.g. Postgres has already run `initdb`), the daemon **adopts**: copies the target content into the empty volume dir via the same virtiofs share, then bind-mounts the volume at the target. If both the Mac side and the guest target already have content, the daemon errors and asks the user to clear one side.
 
 Discovery: `devm volume ls` lists the current project's volumes with name, guest path, Mac path, and size. Deletion is manual (`rm -rf` at the Mac path), or `devm purge` for orphan cleanup of projects that no longer exist.
+
+---
+
+## `masks`
+
+Workspace-relative paths whose contents are shadowed by a private per-project guest ext4 directory. Purpose: platform-content isolation — `node_modules`, `companion/.venv`, `.cargo`, `dist`, and similar paths whose files differ between macOS and Linux. Without a mask, `npm install` on the Mac fills the directory with Mac-only binaries; the Linux guest's `npm install` corrupts it back to Linux-only. Masks give the guest its own private view.
+
+```yaml
+masks:
+  - node_modules
+  - companion/.venv
+```
+
+- **Path shape**: workspace-relative only (leading `/`, `~`, `$`, or `..` traversal rejected at load).
+- **Storage**: guest-side ext4 at `/var/devm/masks/<project>/<path>/`. Owned by `devm`.
+- **Persistence**: mask contents die with the VM on `devm teardown`. Not for persistent data — that's what `volumes` is for.
+
+Add / remove / retarget a mask ⇒ **live** bucket: guest-side `mount --bind` (add) or `umount` (remove), no VM restart. Live-add silently shadows any pre-existing workspace content (that's the point of the feature). Live-remove errors if a running service holds a file open under the mount; stop the service and re-run.
 
 ---
 

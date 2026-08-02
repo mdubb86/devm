@@ -45,6 +45,7 @@ func TestOverrideMirrorsBase(t *testing.T) {
 				"ConfigLock": "project-level security policy (host-immutability of devm.yaml/devm.me.yaml); not overridable per-developer, or devm.me.yaml could silently disable the lock the project owner intended",
 				"Scripts":    "not overridable per environment; scripts are a static definitional library shared across environments, referenced (and varied) via the already-overridable install:/startup: fields",
 				"Volumes":    "not overridable per environment; volume identity (name + guest path) is project-wide by design (docs/superpowers/specs/2026-08-01-persistent-volumes-design.md) — no cross-project sharing, no anonymous volumes, no per-dev variance",
+				"Masks":      "not overridable per environment; masks are project-wide platform-content-isolation declarations (docs/superpowers/specs/2026-08-02-masks-top-level-live-design.md) — no per-dev variance",
 			},
 		},
 		{
