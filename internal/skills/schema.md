@@ -282,9 +282,9 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 ## Bucket glossary
 
-**live** — Devm applies the change to the running VM without stopping it or ending active sessions. Currently wired for env, path, and template changes. Network (`allow`) changes are classified live but the apply path isn't currently wired; they take effect on the next cold start.
+**live** — Devm applies the change to the running VM without stopping it or ending active sessions. Currently wired for env, path, template, and mask changes. Network (`allow`) changes are classified live but the apply path isn't currently wired; they take effect on the next cold start.
 
-**restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Currently only `startup:` sits in this bucket: the edit takes effect on the applying restart, deterministically.
+**restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Sits here: `startup:` (edit takes effect on the applying restart) and `volumes:` (adds/removes require re-issuing `tart run` with new `--dir` args, since AVF doesn't hot-plug virtiofs shares).
 
 **recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `packages`, `mounts`, `base_image`, and `project` identity fields.
 

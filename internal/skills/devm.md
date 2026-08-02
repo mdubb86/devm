@@ -1,6 +1,6 @@
 ---
 name: devm
-description: Configure and edit devm.yaml — a Mac+Tart-VM dev workspace tool with iron-proxy egress enforcement. Use when the user wants to set up devm in a project, add ports / services / env / install steps / mounts, integrate tools, or understand devm's process model.
+description: Configure and edit devm.yaml — a Mac+Tart-VM dev workspace tool with iron-proxy egress enforcement. Use when the user wants to set up devm in a project, add ports / services / env / install steps / mounts / masks / volumes, integrate tools, or understand devm's process model.
 ---
 
 # devm
