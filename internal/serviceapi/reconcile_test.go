@@ -228,12 +228,12 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 		"snapshot must reflect per-service env change; otherwise it re-surfaces every reconcile")
 }
 
-func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testing.T) {
-	// One reconcile carries BOTH a live change (service exec) AND a
-	// teardown-required change (top-level packages). Applying the live
-	// exec must not silently absorb the pending packages change into
-	// the snapshot. Next reconcile must still surface the packages
-	// change as teardown_required.
+func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *testing.T) {
+	// One reconcile carries BOTH a per-service live change (service
+	// exec) AND a top-level teardown-required change (packages).
+	// Applying the live exec must not silently absorb the pending
+	// packages change into the snapshot. Next reconcile must still
+	// surface the packages change as teardown_required.
 	t.Setenv("HOME", t.TempDir())
 	createTestCA(t)
 	oldCfg := schema.Config{
