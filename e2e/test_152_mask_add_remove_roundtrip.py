@@ -54,9 +54,11 @@ def test_mask_add_remove_roundtrip(devm, workspace, sandbox_name):
         )
         assert r.returncode == 0
 
-        # Live-remove.
+        # Live-remove. Use write_devmyaml (full replace) so the masks
+        # key is dropped from the yaml; patch_devmyaml is additive and
+        # would leave the previously-set masks in place.
         devm.unlock()
-        workspace.patch_devmyaml(install=["true"])
+        workspace.write_devmyaml(install=["true"])
         r = subprocess.run(
             [devm.path, "reconcile", "--yes"],
             cwd=str(workspace.path), capture_output=True, timeout=60,

@@ -49,8 +49,11 @@ def test_mask_remove_ebusy_errors_clearly(devm, workspace, sandbox_name):
         assert r.returncode == 0, "holder service didn't start"
 
         # Try to live-remove the mask — should error with EBUSY message.
+        # write_devmyaml (full replace) drops the masks key; patch_devmyaml
+        # is additive and would leave the previously-set masks in place,
+        # so reconcile would see no change and no umount would be attempted.
         devm.unlock()
-        workspace.patch_devmyaml(
+        workspace.write_devmyaml(
             install=["true"],
             services={
                 "holder": {
