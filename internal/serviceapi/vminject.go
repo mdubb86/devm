@@ -119,14 +119,19 @@ if [ -n "$(ls -A %s 2>/dev/null)" ]; then
     # bind. On cp failure, wipe the partial copy so the Mac dir
     # returns to empty (clean-or-nothing) and abort.
     #
-    # --no-preserve=timestamps: virtiofs (Apple Virtualization
-    # Framework) rejects utimensat on shared files with EPERM. Keep
-    # everything else -a preserves (mode, ownership, xattrs, symlinks,
-    # hardlinks) — atime/mtime are the least-load-bearing metadata a
-    # persistent volume carries, and dropping them costs nothing that
-    # matters (Postgres, npm cache, credentials caches all key off
-    # mtime for their own things but recompute it on write).
-    if ! cp -a --no-preserve=timestamps %s/. %s/; then
+    # cp -RP (recursive + preserve-symlink-nature, NO metadata
+    # preservation): virtiofs (Apple Virtualization Framework)
+    # rejects utimensat AND fchmod on shared files with EPERM, so any
+    # cp -a / --preserve=* attempt aborts the copy partway.
+    # Dropping all metadata preservation is actually correct here:
+    # virtiofs surfaces every file with fixed guest-visible ownership
+    # (the exec user) and default mode regardless of what is stored
+    # on the Mac side — see the comment in buildWorkspaceMountScript.
+    # Guest metadata cannot be preserved through virtiofs even if we
+    # tried. Postgres-style workloads that require specific mode/uid
+    # on data files do not work through virtiofs mounts at all today
+    # — a separate limitation, out of scope for this feature.
+    if ! cp -RP %s/. %s/; then
         find %s -mindepth 1 -delete
         echo "volume adopt failed for %s (target=%s); Mac dir rolled back to empty" >&2
         exit 1
