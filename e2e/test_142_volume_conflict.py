@@ -64,8 +64,8 @@ def test_volume_conflict_errors_clearly(devm, workspace, sandbox_name):
             ],
             volumes={"scratch": "/var/lib/scratch"},
         )
-        # Start (not shell) so we get a clean exit-code + stderr
-        # without the interactive shell prompt.
+        # Attempt to bring the sandbox up. The volume mount script must
+        # fail loudly, exiting non-zero before the shell attaches.
         r = subprocess.run(
             [devm.path, "shell", "--", "true"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
