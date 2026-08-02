@@ -973,5 +973,71 @@ func (c Config) Validate() error {
 	if err := c.validateMasks(); err != nil {
 		return err
 	}
+	if err := c.validateSecretBindings(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateSecretBindings checks that every secret is named on both sides
+// of the config: `env:` (which delivers the opaque token into the guest)
+// and `network.allow[].secrets` (which scopes the hosts iron-proxy may
+// substitute it for). Either half alone is inert, and inert in a way
+// that surfaces as an upstream 401 rather than as a devm error —
+// requests carry the literal `__DEVM_SECRET_<name>__` token.
+//
+// The two halves aren't redundant: `env:` binds a secret to one or more
+// environment variable names (GH_TOKEN and GITHUB_TOKEN can both carry
+// one github_token), while `network.allow` binds it to hosts. Only the
+// name is shared, so only the name can be cross-checked.
+func (c Config) validateSecretBindings() error {
+	envRefs := map[string]bool{}
+	collect := func(env map[string]EnvValue) {
+		for _, v := range env {
+			if v.IsSecret() {
+				envRefs[v.Secret.Name] = true
+			}
+		}
+	}
+	collect(c.Env)
+	for _, svc := range c.Services {
+		collect(svc.Env)
+	}
+
+	hosts := c.Network.SecretHosts()
+
+	unscoped := make([]string, 0, len(envRefs))
+	for name := range envRefs {
+		if len(hosts[name]) == 0 {
+			unscoped = append(unscoped, name)
+		}
+	}
+	sort.Strings(unscoped)
+	if len(unscoped) > 0 {
+		return fmt.Errorf(
+			"secret %s referenced in env but bound to no host — add it to a network.allow entry's secrets: list, or requests will carry the unsubstituted token",
+			strings.Join(quoteAll(unscoped), ", "))
+	}
+
+	undelivered := make([]string, 0, len(hosts))
+	for name := range hosts {
+		if !envRefs[name] {
+			undelivered = append(undelivered, name)
+		}
+	}
+	sort.Strings(undelivered)
+	if len(undelivered) > 0 {
+		return fmt.Errorf(
+			"secret %s bound to a host in network.allow but never referenced by an env value — add `SOME_VAR: !secret <name>` under env:, or it is never delivered to the guest",
+			strings.Join(quoteAll(undelivered), ", "))
+	}
+	return nil
+}
+
+func quoteAll(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = strconv.Quote(n)
+	}
+	return out
 }

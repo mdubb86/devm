@@ -1023,3 +1023,85 @@ scriptz:
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "scriptz")
 }
+
+func secretEnv(name string, keys ...string) map[string]EnvValue {
+	env := map[string]EnvValue{}
+	for _, k := range keys {
+		env[k] = EnvValue{Secret: &SecretRef{Name: name}}
+	}
+	return env
+}
+
+func TestValidate_Secrets_BoundBothSides_OK(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Env:     secretEnv("github_token", "GH_TOKEN"),
+		Network: Network{Allow: []AllowEntry{
+			{Host: "api.github.com", Secrets: []string{"github_token"}},
+		}},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+// One secret may back several env var names — gh reads GH_TOKEN, other
+// tooling reads GITHUB_TOKEN. Naming it once under network.allow covers
+// both; the fan-out must not be mistaken for an unbound secret.
+func TestValidate_Secrets_ManyEnvNamesOneSecret_OK(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Env:     secretEnv("github_token", "GH_TOKEN", "GITHUB_TOKEN"),
+		Network: Network{Allow: []AllowEntry{
+			{Host: "api.github.com", Secrets: []string{"github_token"}},
+		}},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidate_Secrets_EnvRefWithNoHost_Rejected(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Env:     secretEnv("anthropic_key", "ANTHROPIC_API_KEY"),
+		Network: Network{Allow: []AllowEntry{{Host: "api.anthropic.com"}}},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"anthropic_key"`)
+	assert.Contains(t, err.Error(), "bound to no host")
+}
+
+func TestValidate_Secrets_HostBoundButNotInEnv_Rejected(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Network: Network{Allow: []AllowEntry{
+			{Host: "api.github.com", Secrets: []string{"github_token"}},
+		}},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"github_token"`)
+	assert.Contains(t, err.Error(), "never referenced by an env value")
+}
+
+// Per-service env is a delivery site too — a secret referenced only
+// inside services.<name>.env is still delivered to the guest.
+func TestValidate_Secrets_ServiceEnvCounts(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Services: map[string]Service{
+			"web": {Port: 3000, Env: secretEnv("api_key", "API_KEY")},
+		},
+		Network: Network{Allow: []AllowEntry{
+			{Host: "api.example.com", Secrets: []string{"api_key"}},
+		}},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidate_Secrets_NoSecretsAnywhere_OK(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Env:     map[string]EnvValue{"PLAIN": {Literal: "value"}},
+		Network: Network{Allow: []AllowEntry{{Host: "example.com"}}},
+	}
+	assert.NoError(t, cfg.Validate())
+}

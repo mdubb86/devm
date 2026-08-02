@@ -61,7 +61,22 @@ network:
 
 With this config, iron-proxy substitutes the real value only on requests destined for `api.anthropic.com`. Requests to any other host carry the opaque token unchanged.
 
-A secret referenced in `env:` but not named under any allow entry's `secrets:` is omitted from iron-proxy's config entirely — it is **never injected**.
+Both halves are required, and `devm` rejects a config that has only one:
+
+- A secret in `env:` but under no allow entry has no host scope, so it is omitted from iron-proxy's config entirely and requests would carry the raw token to the upstream.
+- A secret under an allow entry but in no `env:` value is never delivered to the guest, so no request ever contains the token for iron-proxy to substitute.
+
+Neither half is redundant. `env:` maps a secret to one or more **variable names**; `network.allow` maps it to **hosts**. One secret can back several variables — `gh` reads `GH_TOKEN`, other tooling reads `GITHUB_TOKEN`, and both can carry the same `github_token`:
+
+```yaml
+env:
+  GH_TOKEN: !secret github_token
+  GITHUB_TOKEN: !secret github_token
+network:
+  allow:
+    - host: api.github.com
+      secrets: [github_token]
+```
 
 You may bind one secret across multiple hosts by listing it in multiple allow entries; iron-proxy receives the union of those hosts as the injection scope.
 
@@ -88,6 +103,12 @@ Outbound HTTP from VM → iron-proxy:
 
 Token format: `__DEVM_SECRET_<name>__` (e.g. `__DEVM_SECRET_anthropic_key__`). Deterministic — the same secret name always produces the same token — so iron-proxy restarts don't strand stale tokens in the VM's environment.
 
+## Where the token is substituted
+
+Request **headers** (all of them, including cookies) and **query parameters**. A token that reaches an API as `?api_key=__DEVM_SECRET_foo__` is swapped just like one in `Authorization`, and the substituted value is re-encoded, so a credential containing `&`, `=`, `+` or `/` can't break out of its parameter.
+
+Request **paths and bodies are not** substituted. A token embedded in a URL path segment reaches the upstream unchanged.
+
 Real credential values are never written to disk; they live only in iron-proxy's process memory.
 
 ---
@@ -101,6 +122,24 @@ missing secrets in keychain: [<name>] (set with `devm secret set <name>`)
 ```
 
 The error names every missing key. Run `devm secret set <name>` for each one, then retry.
+
+---
+
+## Failure mode: half-declared secret
+
+A secret named on only one side is rejected at config load:
+
+```
+secret "anthropic_key" referenced in env but bound to no host — add it to a
+network.allow entry's secrets: list, or requests will carry the unsubstituted token
+```
+
+```
+secret "github_token" bound to a host in network.allow but never referenced by an
+env value — add `SOME_VAR: !secret <name>` under env:, or it is never delivered to the guest
+```
+
+Without this check the misconfiguration is silent: the sandbox starts, the workload runs, and the upstream returns 401 because it received the literal `__DEVM_SECRET_<name>__` string.
 
 ---
 
