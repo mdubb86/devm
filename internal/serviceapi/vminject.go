@@ -118,7 +118,15 @@ if [ -n "$(ls -A %s 2>/dev/null)" ]; then
     # into the volume share (which writes to Mac via virtiofs), then
     # bind. On cp failure, wipe the partial copy so the Mac dir
     # returns to empty (clean-or-nothing) and abort.
-    if ! cp -a %s/. %s/; then
+    #
+    # --no-preserve=timestamps: virtiofs (Apple Virtualization
+    # Framework) rejects utimensat on shared files with EPERM. Keep
+    # everything else -a preserves (mode, ownership, xattrs, symlinks,
+    # hardlinks) — atime/mtime are the least-load-bearing metadata a
+    # persistent volume carries, and dropping them costs nothing that
+    # matters (Postgres, npm cache, credentials caches all key off
+    # mtime for their own things but recompute it on write).
+    if ! cp -a --no-preserve=timestamps %s/. %s/; then
         find %s -mindepth 1 -delete
         echo "volume adopt failed for %s (target=%s); Mac dir rolled back to empty" >&2
         exit 1
