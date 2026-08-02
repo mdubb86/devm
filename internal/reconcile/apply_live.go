@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
@@ -37,6 +38,7 @@ import (
 // after a failure so the snapshot stays coherent on retry.
 func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
 	var templateChanges []Change
+	var maskChanges []Change
 	var bundleRebuildNeeded bool
 	for _, c := range changes {
 		if c.Bucket() != BucketLive {
@@ -53,6 +55,8 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		case KindServiceDirectChange:
 			// Ingress for direct services is pushed to softnet's
 			// declarative expose map by the daemon, not applied in-guest.
+		case KindMaskChange:
+			maskChanges = append(maskChanges, c)
 		}
 	}
 
@@ -122,5 +126,89 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		}
 	}
 
+	if len(maskChanges) > 0 {
+		workspaceVMPath := repoRoot // mirrored path; repoRoot equals both host and guest path
+		if err := applyMaskChanges(tr, vmName, cfg.Project.Name, workspaceVMPath, maskChanges); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// buildMaskAddScript is the guest-side shell that establishes one
+// mask: mkdir the guest-ext4 backing dir with correct ownership,
+// mkdir the workspace target (which may not exist yet if this is a
+// fresh live-add), then bind-mount. Idempotent: mountpoint check on
+// the target short-circuits if the bind is already active.
+func buildMaskAddScript(projectName, maskPath, workspaceVMPath string) string {
+	hostPath := "/var/devm/masks/" + projectName + "/" + maskPath
+	targetPath := workspaceVMPath + "/" + maskPath
+	return fmt.Sprintf(`set -e
+sudo mkdir -p %s
+sudo chown devm:devm %s
+sudo mkdir -p %s
+if mountpoint -q %s; then
+    exit 0
+fi
+sudo mount --bind %s %s
+`, hostPath, hostPath, targetPath, targetPath, hostPath, targetPath)
+}
+
+// buildMaskRemoveScript unmounts a mask. Idempotent: mountpoint
+// check short-circuits if the mount is already gone (e.g. someone
+// unmounted it by hand). The backing dir under /var/devm/masks/ is
+// NOT deleted -- mask contents are preserved for a possible future
+// re-attach.
+func buildMaskRemoveScript(maskPath, workspaceVMPath string) string {
+	targetPath := workspaceVMPath + "/" + maskPath
+	return fmt.Sprintf(`set -e
+if ! mountpoint -q %s; then
+    exit 0
+fi
+sudo umount %s
+`, targetPath, targetPath)
+}
+
+// applyMaskChanges runs one guest exec per mask add/remove. EBUSY
+// on umount surfaces the spec's exact error message. Runs
+// sequentially -- mask ops are cheap.
+func applyMaskChanges(tr *tart.Tart, vmName, projectName, workspaceVMPath string, changes []Change) error {
+	for _, c := range changes {
+		if c.Kind != KindMaskChange {
+			continue
+		}
+		var script string
+		var opDesc string
+		switch {
+		case c.Old == "" && c.New != "":
+			script = buildMaskAddScript(projectName, c.New, workspaceVMPath)
+			opDesc = "add"
+		case c.Old != "" && c.New == "":
+			script = buildMaskRemoveScript(c.Old, workspaceVMPath)
+			opDesc = "remove"
+		default:
+			continue
+		}
+		r := tr.ExecStdin(context.Background(), vmName,
+			strings.NewReader(script),
+			[]string{"bash", "-e", "-o", "pipefail"})
+		if r.ExitCode != 0 {
+			// EBUSY on umount -> structured error per spec.
+			stderrLower := strings.ToLower(r.Stderr)
+			if opDesc == "remove" &&
+				(strings.Contains(stderrLower, "target is busy") ||
+					strings.Contains(stderrLower, "device is busy")) {
+				return fmt.Errorf(
+					"cannot unmount mask `%s`: %s/%s is in use.\n"+
+						"Stop whatever process is holding a file open under it (devm shell → check\n"+
+						"your running services) and re-run devm reconcile",
+					c.Old, workspaceVMPath, c.Old,
+				)
+			}
+			return fmt.Errorf("apply_live: mask %s %q: exit %d (stderr: %s)",
+				opDesc, c.Key, r.ExitCode, r.Stderr)
+		}
+	}
 	return nil
 }
