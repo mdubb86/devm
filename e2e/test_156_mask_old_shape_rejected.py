@@ -46,7 +46,7 @@ services:
         # CheckUnknownKeys produces "unknown field" messages naming
         # the offending path.
         assert "masks" in stderr, f"error doesn't mention masks:\n{stderr}"
-        assert "services" in stderr.lower() or "api" in stderr.lower(), (
+        assert "service" in stderr.lower(), (
             f"error doesn't scope the failure to the service subtree:\n{stderr}"
         )
     finally:
