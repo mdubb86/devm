@@ -242,36 +242,23 @@ func (p *Provisioner) hasTemplates() bool {
 	return false
 }
 
-// maskMounts resolves every service mask into a MaskMount the script can
-// bind-mount: a per-service host dir (owned by the service's run-user)
-// bind-mounted over the workspace path. Sorted by service then mask path
-// for a deterministic script.
+// maskMounts resolves every declared mask into a MaskMount the
+// script can bind-mount over the workspace path. Sorted by mask
+// path for a deterministic script. Storage lives at
+// /var/devm/masks/<project>/<path>/ — no per-service dimension
+// (masks became top-level in v0.9.18, decoupled from services).
 func (p *Provisioner) maskMounts() []render.MaskMount {
-	var svcNames []string
-	for name := range p.Cfg.Services {
-		svcNames = append(svcNames, name)
+	if len(p.Cfg.Masks) == 0 {
+		return nil
 	}
-	sort.Strings(svcNames)
-
-	var mounts []render.MaskMount
-	for _, svcName := range svcNames {
-		svc := p.Cfg.Services[svcName]
-		// Chown to the user the service runs as (default devm) — same
-		// default as render.RenderService's User= — so a non-root service
-		// can write into its own mask.
-		owner := svc.User
-		if owner == "" {
-			owner = "devm"
-		}
-		masks := append([]schema.Mask(nil), svc.Masks...)
-		sort.Slice(masks, func(i, j int) bool { return masks[i].Path < masks[j].Path })
-		for _, m := range masks {
-			mounts = append(mounts, render.MaskMount{
-				HostPath:    filepath.Join("/var/devm/masks", p.Cfg.Project.Name, svcName, m.Path),
-				MountTarget: filepath.Join(p.WorkspaceVMPath, m.Path),
-				Owner:       owner,
-			})
-		}
+	paths := append([]string(nil), p.Cfg.Masks...)
+	sort.Strings(paths)
+	mounts := make([]render.MaskMount, 0, len(paths))
+	for _, path := range paths {
+		mounts = append(mounts, render.MaskMount{
+			HostPath:    filepath.Join("/var/devm/masks", p.Cfg.Project.Name, path),
+			MountTarget: filepath.Join(p.WorkspaceVMPath, path),
+		})
 	}
 	return mounts
 }

@@ -63,9 +63,6 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 					svc.Env[k] = v
 				}
 			}
-			if soverride.Masks != nil {
-				svc.Masks = *soverride.Masks
-			}
 			if soverride.Templates != nil {
 				svc.Templates = *soverride.Templates
 			}

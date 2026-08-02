@@ -59,7 +59,7 @@ Provisioning is the daemon's job, not the guest's own boot sequence. It walks th
 | `templates` | every boot, if any service declares `templates:` | Render every declared template file into its output path. |
 | `startup` | every boot, if `startup:` is non-empty | Run each `startup:` command, open network. |
 | `enforce` | every boot | Stage boundary marking the classifier's teardown/debuggable split — a failure at or before this point is devm's own enforcement being broken, not a user service. Does no in-guest work — the egress policy flip happens on the Mac side. |
-| `services` | every boot | Apply per-service mask overlays; enable + start each declared service unit; health-poll each until active/healthy or timeout — **before** `devm.target` starts. |
+| `services` | every boot | Apply mask overlays; enable + start each declared service unit; health-poll each until active/healthy or timeout — **before** `devm.target` starts. |
 | _(finish)_ | every boot | `systemctl start devm.target` — brings up the gated services (ssh, in-VM reverse-proxy, docker, and your service units), all under enforcement. **Access is granted only now.** |
 
 Any failing command aborts the whole provisioning run before `devm.target` starts, so a failure never grants access. A failure at the `templates` or `services` stage leaves the VM running for in-place debugging (the user's service/template definition is what's broken); any earlier-stage failure (`open` through `enforce`) tears the VM down — `devm shell` promises loud failure, never a half-created VM left behind.
@@ -164,6 +164,7 @@ Classified BucketLive but no apply path in `ApplyLive` (take effect at next cold
 | Network `allow` add / remove | No apply code in `ApplyLive` — the allow-list is applied at `StartVM` time, so changes land on the next cold start |
 | `path` change | No apply code in `ApplyLive` |
 | Service `exec`, `restart`, `after`, `workdir`, `user`, `systemd` override, `hostname` | No apply code in `ApplyLive` |
+| Mask add / remove | Top-level `masks:` list differs. Path must be relative to the workspace (absolute paths, `~`, `$VAR`, and `../` traversal are rejected at `devm validate`). No apply code in `ApplyLive` yet — lands in a follow-up. |
 
 ### BucketTeardownVM
 
@@ -174,7 +175,6 @@ The VM must be fully deleted and recreated. `devm reconcile` surfaces these as p
 | `install` change | `install:` command list differs |
 | `packages` change | `packages:` list differs |
 | Mount add / remove | `mounts:` list differs |
-| Mask add / remove | Per-service `masks:` list differs. mask `path` must be relative to the repo root (absolute paths, `~`, and `$VAR` are rejected at `devm validate`). |
 | Image change | `base_image:` field differs. Note: `BaseImage` is an empty struct with no fields; structural equality is always true, so `KindImageChange` cannot fire from a `devm.yaml` edit. |
 | Identity change | `project:` identity fields differ |
 

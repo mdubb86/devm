@@ -57,7 +57,13 @@ const (
 	KindEnvChange
 	KindInstallChange
 	KindPackagesChange
-	KindMaskAddRemove
+	// KindMaskChange fires when the top-level `masks:` list differs
+	// between old and new config. Emitted once per changed path; Key
+	// = mask path (workspace-relative), Old = path in old config (or
+	// empty if new-only), New = path in new (or empty if removed).
+	// Bucket: BucketLive — mask add/remove is a guest-side mount --bind
+	// or umount, no VM restart needed.
+	KindMaskChange
 	KindImageChange
 	KindIdentityChange
 	KindDockerToggle
@@ -121,8 +127,9 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindPackagesChange: BucketTeardownVM,
 	// virtio-fs mounts are set at tart run time; requires full recreate.
 	KindMountAddRemove: BucketTeardownVM,
-	// mount --bind masks are applied at boot; requires full recreate.
-	KindMaskAddRemove:  BucketTeardownVM,
+	// mount --bind masks are applied inside the running guest — no VM
+	// restart needed.
+	KindMaskChange:     BucketLive,
 	KindImageChange:    BucketTeardownVM,
 	KindIdentityChange: BucketTeardownVM,
 	KindDockerToggle:   BucketTeardownVM,
@@ -296,7 +303,7 @@ func ComputeAllChanges(
 	out = append(out, computePackagesChange(old, new)...)
 	out = append(out, computeMountAddRemove(old, new)...)
 	out = append(out, computeVolumeChanges(old, new)...)
-	out = append(out, computeMaskAddRemove(old, new)...)
+	out = append(out, computeMaskChanges(old, new)...)
 	out = append(out, computeImageChange(old, new)...)
 	out = append(out, computeIdentityChange(old, new)...)
 	out = append(out, computeDockerChange(old, new)...)
@@ -496,26 +503,52 @@ func computeVolumeChanges(old, new schema.Config) []Change {
 	return out
 }
 
-func computeMaskAddRemove(old, new schema.Config) []Change {
+// computeMaskChanges emits one KindMaskChange per path that
+// differs between old and new. Removes have Old set, New empty;
+// adds have Old empty, New set. Sorted by path for deterministic
+// output.
+func computeMaskChanges(old, new schema.Config) []Change {
+	oldSet := map[string]struct{}{}
+	newSet := map[string]struct{}{}
+	for _, p := range old.Masks {
+		oldSet[p] = struct{}{}
+	}
+	for _, p := range new.Masks {
+		newSet[p] = struct{}{}
+	}
+	all := map[string]struct{}{}
+	for p := range oldSet {
+		all[p] = struct{}{}
+	}
+	for p := range newSet {
+		all[p] = struct{}{}
+	}
+	if len(all) == 0 {
+		return nil
+	}
+	sorted := make([]string, 0, len(all))
+	for p := range all {
+		sorted = append(sorted, p)
+	}
+	sort.Strings(sorted)
+
 	var out []Change
-	for _, svc := range unionServiceNames(old.Services, new.Services) {
-		if !masksEqual(old.Services[svc].Masks, new.Services[svc].Masks) {
-			out = append(out, Change{Kind: KindMaskAddRemove, Service: svc})
+	for _, p := range sorted {
+		_, oldHas := oldSet[p]
+		_, newHas := newSet[p]
+		if oldHas == newHas {
+			continue // both set or both unset → no change
 		}
+		change := Change{Kind: KindMaskChange, Key: p}
+		if oldHas {
+			change.Old = p
+		}
+		if newHas {
+			change.New = p
+		}
+		out = append(out, change)
 	}
 	return out
-}
-
-func masksEqual(a, b []schema.Mask) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func computeImageChange(old, new schema.Config) []Change {

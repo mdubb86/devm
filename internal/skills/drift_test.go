@@ -13,7 +13,7 @@ import (
 
 // TestSchemaSkillMentionsAllConfigFields fails when a new field is
 // added to schema.Config OR any struct reachable from it (Service,
-// Template, Mask, etc.) but schema.md forgets to mention it. The
+// Template, etc.) but schema.md forgets to mention it. The
 // check is over `yaml:` tag names (the user-facing names), not Go
 // field names.
 //

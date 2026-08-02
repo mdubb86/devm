@@ -212,7 +212,6 @@ Named service definitions. Each key is the service name.
 | `direct` | bool | live | Treat this service as raw TCP end-to-end instead of HTTP-fronted: skips the in-VM Caddy reverse-proxy block and the daemon's ProxyServer hostname dispatch. DNS still answers `hostname` with the project's `127.42.0.N`, and the client connects to `127.42.0.N:port` directly (softnet forwards to the guest) — every service with `hostname` + `port` is exposed on softnet regardless of `direct`; this flag only controls how it's fronted. Use for non-HTTP protocols (Postgres, gRPC) a reverse proxy can't front. Requires `hostname`. Default `false`. |
 | `expose_host` | bool | live | Opt this service's `hostname` into devm's shared LAN dispatcher (host `0.0.0.0:42000`), so other devices on the LAN can reach it by hostname. Requires `hostname`. Independent of `direct`. Default `false`. |
 | `env` | map[string]EnvValue | live | Per-service environment variables (same `!secret` syntax as top-level `env`). |
-| `masks` | []Mask | recreate | `mount --bind` overlays applied at boot. Each has `path` (relative to repo root) and `size` (e.g. `100m`). |
 | `templates` | []Template | live | Files rendered from source scripts and written into the VM. Each has `source` (project-relative path), `output` (absolute path in VM), and optional `sudo` (default `false`; set `true` when `output` is under a root-owned dir like `/etc` so the installer escalates and the resulting file lands root-owned). |
 | `exec` | []string | live | Command and arguments to run as the service process. |
 | `workdir` | string | live | Working directory for the service process. |
@@ -222,12 +221,11 @@ Named service definitions. Each key is the service name.
 | `systemd` | string | live | Name of an existing systemd unit to manage. Mutually exclusive with `exec`, `restart`, `after`, `workdir`, and `user`. |
 
 Validation rules:
-- A service must define at least one of `port`, `masks`, `exec`, or `systemd`.
+- A service must define at least one of `port`, `exec`, or `systemd`.
 - `hostname` must end in `.test`.
 - `direct: true` requires a `hostname`.
 - `expose_host: true` requires a `hostname`.
 - Port values must be in range 1–65535; no two services may share a port or a hostname.
-- Mask `path` must be relative to the repo root; absolute paths, `~`, `$VAR`, and `../` traversal are rejected.
 - Template `source` must be project-relative (no `../` traversal); `output` must be absolute.
 - Template `sudo` defaults to `false` (installer runs as the guest user, file lands owned by that user). Set `true` for outputs under `/etc`, `/usr`, `/var` where the guest user cannot write; the installer then uses `sudo install -o root -g root` and the file lands root-owned.
 
@@ -244,7 +242,7 @@ volumes:
 ```
 
 - **Name** (the map key): must match `[a-z0-9][a-z0-9._-]*`. Scoped to the project — different projects can reuse the same name without collision.
-- **Guest path** (the value): absolute; no `..` traversal; can't overlap the workspace mount root or any service's mask target.
+- **Guest path** (the value): absolute; no `..` traversal; can't overlap the workspace mount root or any top-level mask target.
 
 Storage lives Mac-side at `~/Library/Application Support/devm/volumes/<project>/<name>/`. Delivery is virtiofs — one `tart run --dir` per declared volume — so `devm teardown` (which wipes the VM disk) leaves volume data alone. A subsequent cold-start reattaches the same Mac dir at the declared guest path.
 
@@ -288,7 +286,7 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 **restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Currently only `startup:` sits in this bucket: the edit takes effect on the applying restart, deterministically.
 
-**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `packages`, `mounts`, `masks`, `base_image`, and `project` identity fields.
+**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `packages`, `mounts`, `base_image`, and `project` identity fields.
 
 ---
 

@@ -20,14 +20,14 @@ const (
 	inProgressMarker = "/run/devm/provisioning"
 )
 
-// MaskMount is one resolved service mask overlay: a per-service host dir
-// bind-mounted over a workspace path, owned by the service's run-user.
-// The daemon resolves the paths + owner (it holds the workspace path and
-// project name); the script only emits the mkdir/chown/mount.
+// MaskMount is one resolved top-level mask overlay: a host dir
+// bind-mounted over a workspace path. The daemon resolves the paths
+// (it holds the workspace path and project name); the script only
+// emits the mkdir/chown/mount. Owner is always devm — no
+// per-service run-user concept at this scope.
 type MaskMount struct {
-	HostPath    string // /var/devm/masks/<project>/<service>/<path>
+	HostPath    string // /var/devm/masks/<project>/<path>
 	MountTarget string // <workspace>/<path>
-	Owner       string // service run-user (default devm)
 }
 
 // ProvisionScriptInput is everything the composed guest provisioning script
@@ -208,7 +208,8 @@ func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
 	p("echo ::devm:stage:services::")
 	for _, m := range in.Masks {
 		p("sudo mkdir -p %s", shellSingleQuoted(m.HostPath))
-		p("sudo chown %s %s", m.Owner, shellSingleQuoted(m.HostPath))
+		// Owner is always devm — masks are project-wide, no service-user concept.
+		p("sudo chown devm:devm %s", shellSingleQuoted(m.HostPath))
 		p("sudo mkdir -p %s", shellSingleQuoted(m.MountTarget))
 		p("sudo mount --bind %s %s", shellSingleQuoted(m.HostPath), shellSingleQuoted(m.MountTarget))
 	}

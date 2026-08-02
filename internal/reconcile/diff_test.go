@@ -39,10 +39,9 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
 
-	// Teardown+shell: install, packages, masks, mounts, image, identity
+	// Teardown+shell: install, packages, mounts, image, identity
 	assert.Equal(t, BucketTeardownVM, KindInstallChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindPackagesChange.Bucket())
-	assert.Equal(t, BucketTeardownVM, KindMaskAddRemove.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindImageChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindIdentityChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindMountAddRemove.Bucket())
@@ -359,23 +358,8 @@ func TestDiff_PackagesChange_IsBucketTeardownVM(t *testing.T) {
 	assert.True(t, found, "expected KindPackagesChange")
 }
 
-func TestDiff_MaskAddRemove_IsBucketTeardownVM(t *testing.T) {
-	old := cfgWithServices(map[string]schema.Service{
-		"db": {Masks: []schema.Mask{{Path: "data", Size: "10G"}}},
-	})
-	new := cfgWithServices(map[string]schema.Service{
-		"db": {Masks: []schema.Mask{{Path: "data", Size: "20G"}}},
-	})
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
-	require.NoError(t, err)
-	found := false
-	for _, c := range changes {
-		if c.Kind == KindMaskAddRemove {
-			found = true
-			assert.Equal(t, BucketTeardownVM, c.Bucket())
-		}
-	}
-	assert.True(t, found, "expected KindMaskAddRemove")
+func TestDiff_MaskChange_IsBucketLive(t *testing.T) {
+	assert.Equal(t, BucketLive, KindMaskChange.Bucket())
 }
 
 func TestDiff_MountAddRemove_IsBucketTeardownVM(t *testing.T) {
@@ -420,17 +404,43 @@ func TestComputeStartupChanges(t *testing.T) {
 	}
 }
 
-func TestComputeMaskAddRemove(t *testing.T) {
-	old := cfgWithServices(map[string]schema.Service{
-		"db": {Masks: []schema.Mask{{Path: "data", Size: "10G"}}},
-	})
-	new := cfgWithServices(map[string]schema.Service{
-		"db": {Masks: []schema.Mask{{Path: "data", Size: "20G"}}},
-	})
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
-	require.NoError(t, err)
+func TestComputeMaskChanges_NoChange(t *testing.T) {
+	old := schema.Config{Masks: []string{"node_modules"}}
+	new := schema.Config{Masks: []string{"node_modules"}}
+	assert.Empty(t, computeMaskChanges(old, new))
+}
+
+func TestComputeMaskChanges_Add(t *testing.T) {
+	old := schema.Config{}
+	new := schema.Config{Masks: []string{"node_modules"}}
+	changes := computeMaskChanges(old, new)
 	assert.Len(t, changes, 1)
-	assert.Equal(t, KindMaskAddRemove, changes[0].Kind)
+	assert.Equal(t, KindMaskChange, changes[0].Kind)
+	assert.Equal(t, "node_modules", changes[0].Key)
+	assert.Equal(t, "", changes[0].Old)
+	assert.Equal(t, "node_modules", changes[0].New)
+}
+
+func TestComputeMaskChanges_Remove(t *testing.T) {
+	old := schema.Config{Masks: []string{"node_modules"}}
+	new := schema.Config{}
+	changes := computeMaskChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindMaskChange, changes[0].Kind)
+	assert.Equal(t, "node_modules", changes[0].Key)
+	assert.Equal(t, "node_modules", changes[0].Old)
+	assert.Equal(t, "", changes[0].New)
+}
+
+func TestComputeMaskChanges_MultipleSortedDeterministic(t *testing.T) {
+	old := schema.Config{Masks: []string{"a"}}
+	new := schema.Config{Masks: []string{"c", "b"}}
+	changes := computeMaskChanges(old, new)
+	assert.Len(t, changes, 3)
+	// Sorted by name: a (remove), b (add), c (add).
+	assert.Equal(t, "a", changes[0].Key)
+	assert.Equal(t, "b", changes[1].Key)
+	assert.Equal(t, "c", changes[2].Key)
 }
 
 func TestComputeImageChange(t *testing.T) {

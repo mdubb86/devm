@@ -24,7 +24,6 @@ type ServiceOverride struct {
 	Direct     *bool               `yaml:"direct,omitempty"`
 	ExposeHost *bool               `yaml:"expose_host,omitempty"`
 	Env        map[string]EnvValue `yaml:"env,omitempty"`
-	Masks      *[]Mask             `yaml:"masks,omitempty"`
 	Templates  *[]Template         `yaml:"templates,omitempty"`
 	Exec       *[]string           `yaml:"exec,omitempty"`
 	WorkDir    *string             `yaml:"workdir,omitempty"`
@@ -40,7 +39,6 @@ type serviceOverrideYAML struct {
 	Direct     *bool               `yaml:"direct,omitempty"`
 	ExposeHost *bool               `yaml:"expose_host,omitempty"`
 	Env        map[string]EnvValue `yaml:"env,omitempty"`
-	Masks      *[]Mask             `yaml:"masks,omitempty"`
 	Templates  *[]Template         `yaml:"templates,omitempty"`
 	Exec       *[]string           `yaml:"exec,omitempty"`
 	WorkDir    *string             `yaml:"workdir,omitempty"`
@@ -59,7 +57,6 @@ func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
 	o.Direct = raw.Direct
 	o.ExposeHost = raw.ExposeHost
 	o.Env = raw.Env
-	o.Masks = raw.Masks
 	o.Templates = raw.Templates
 	o.Exec = raw.Exec
 	o.WorkDir = raw.WorkDir

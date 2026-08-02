@@ -673,8 +673,8 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "startup_change"
 	case reconcile.KindPackagesChange:
 		return "packages_change"
-	case reconcile.KindMaskAddRemove:
-		return "mask_add_remove"
+	case reconcile.KindMaskChange:
+		return "mask_change"
 	case reconcile.KindImageChange:
 		return "image_change"
 	case reconcile.KindIdentityChange:
@@ -744,8 +744,15 @@ func formatChange(c reconcile.Change) string {
 		return "~ packages"
 	case reconcile.KindMountAddRemove:
 		return "~ mounts"
-	case reconcile.KindMaskAddRemove:
-		return fmt.Sprintf("~ volumes: %s", c.Service)
+	case reconcile.KindMaskChange:
+		switch {
+		case c.Old == "" && c.New != "":
+			return fmt.Sprintf("+ mask %s", c.New)
+		case c.Old != "" && c.New == "":
+			return fmt.Sprintf("- mask %s", c.Old)
+		default:
+			return fmt.Sprintf("~ mask %s", c.Key)
+		}
 	case reconcile.KindServiceExecChange:
 		return fmt.Sprintf("~ service exec: %s", c.Service)
 	case reconcile.KindServiceRestartChange:

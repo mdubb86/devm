@@ -18,7 +18,7 @@ func TestRenderProvisionOpenScript_Structure(t *testing.T) {
 		Startup:          []string{"echo boot"},
 		Services:         []string{"web"},
 		Masks: []MaskMount{
-			{HostPath: "/var/devm/masks/p/web/data", MountTarget: "/Users/x/p/data", Owner: "devm"},
+			{HostPath: "/var/devm/masks/p/data", MountTarget: "/Users/x/p/data"},
 		},
 	}
 	s := string(RenderProvisionOpenScript(in))
@@ -149,7 +149,7 @@ func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 		FirstBoot: true,
 		Services:  []string{"web"},
 		Masks: []MaskMount{
-			{HostPath: "/var/devm/masks/p/web/data", MountTarget: "/Users/x/p/data", Owner: "devm"},
+			{HostPath: "/var/devm/masks/p/data", MountTarget: "/Users/x/p/data"},
 		},
 	}
 	s := string(RenderProvisionEnforcedScript(in))
@@ -172,8 +172,8 @@ func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 	assert.Less(t, strings.Index(s, "::devm:stage:enforce::"),
 		strings.Index(s, "::devm:stage:services::"))
 	// mask overlay: chown BEFORE the bind mount, mounted at the workspace path
-	chownIdx := strings.Index(s, "chown devm '/var/devm/masks/p/web/data'")
-	mountIdx := strings.Index(s, "mount --bind '/var/devm/masks/p/web/data' '/Users/x/p/data'")
+	chownIdx := strings.Index(s, "chown devm:devm '/var/devm/masks/p/data'")
+	mountIdx := strings.Index(s, "mount --bind '/var/devm/masks/p/data' '/Users/x/p/data'")
 	assert.Greater(t, chownIdx, 0)
 	assert.Greater(t, mountIdx, chownIdx)
 	// first-boot completion marker written before the target

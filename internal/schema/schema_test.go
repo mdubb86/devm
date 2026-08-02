@@ -12,98 +12,17 @@ import (
 
 // ---------- EnvValue / SecretRef tests ----------
 
-func TestMaskRequiredFields(t *testing.T) {
-	m := Mask{Path: "node_modules", Size: "2G"}
-	assert.NoError(t, m.Validate())
-
-	missingPath := Mask{Size: "2G"}
-	assert.Error(t, missingPath.Validate())
-
-	missingSize := Mask{Path: "node_modules"}
-	assert.Error(t, missingSize.Validate())
-}
-
-func TestMaskPathRejectsAbsolute(t *testing.T) {
-	// Masks live under the workspace; absolute paths escape it.
-	m := Mask{Path: "/etc/foo", Size: "1G"}
-	err := m.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "relative")
-}
-
-func TestMaskPathRejectsExpansionVariables(t *testing.T) {
-	// No $WORKSPACE expansion happens for mask paths (the renderer
-	// already prepends repoRoot). Silent acceptance produces a broken
-	// mount at <repoRoot>/$WORKSPACE/... — reject with a hint.
-	cases := []string{
-		"$WORKSPACE/ts/node_modules",
-		"${WORKSPACE}/ts/node_modules",
-		"$HOME/foo",
-	}
-	for _, p := range cases {
-		t.Run(p, func(t *testing.T) {
-			err := Mask{Path: p, Size: "1G"}.Validate()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "relative")
-		})
-	}
-}
-
-func TestMaskPathRejectsHomeShortcut(t *testing.T) {
-	// `~` isn't expanded for masks. Reject for the same reason as $.
-	err := Mask{Path: "~/foo", Size: "1G"}.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "relative")
-}
-
-func TestMaskPathRejectsTraversal(t *testing.T) {
-	// `../escape` walks outside the repo root — masks must stay inside.
-	cases := []string{
-		"../escape",
-		"..",
-		"foo/../../escape",
-	}
-	for _, p := range cases {
-		t.Run(p, func(t *testing.T) {
-			err := Mask{Path: p, Size: "1G"}.Validate()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "traversal")
-		})
-	}
-}
-
-func TestMaskPathAllowsCleanRelative(t *testing.T) {
-	// Nested relative paths, dot-prefixed paths, and inert traversal
-	// (a/../b → b) all clean to valid repo-relative paths and must pass.
-	cases := []string{
-		"node_modules",
-		"ts/node_modules",
-		"./node_modules",
-		"py/.venv",
-		"a/../b",
-	}
-	for _, p := range cases {
-		t.Run(p, func(t *testing.T) {
-			assert.NoError(t, Mask{Path: p, Size: "1G"}.Validate())
-		})
-	}
-}
-
 func TestServiceValidate(t *testing.T) {
 	// Minimum valid: just canonical port
 	s := Service{Port: 3000}
 	assert.NoError(t, s.Validate())
 
-	// Workspace pseudo-service: no port OK, but must have at least one mask
-	workspace := Service{Masks: []Mask{{Path: "node_modules", Size: "2G"}}}
-	assert.NoError(t, workspace.Validate())
-
-	// exec-only service: no port, no masks, just exec
+	// exec-only service: no port, just exec
 	execOnly := Service{Exec: []string{"/usr/bin/redis-server"}}
 	assert.NoError(t, execOnly.Validate())
 
 	emptyWorkspace := Service{}
-	assert.Error(t, emptyWorkspace.Validate(), "service must have canonical, mask, exec, or systemd")
+	assert.Error(t, emptyWorkspace.Validate(), "service must have canonical, exec, or systemd")
 }
 
 func TestServiceHostnameMustEndInDotTest(t *testing.T) {
@@ -666,31 +585,6 @@ func TestService_Restart_ValidValues(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestConfig_MaskMustBeInsideShare(t *testing.T) {
-	cfg := Config{
-		Project: Project{Name: "x"},
-		Services: map[string]Service{
-			"api": {
-				Exec:  []string{"/bin/true"},
-				Masks: []Mask{{Path: "node_modules", Size: "1G"}},
-			},
-		},
-	}
-	require.NoError(t, cfg.Validate(), "relative path is workspace-relative; should pass")
-
-	cfg.Services["api"] = Service{
-		Exec:  []string{"/bin/true"},
-		Masks: []Mask{{Path: "../escape", Size: "1G"}},
-	}
-	require.Error(t, cfg.Validate(), "../escape should be rejected")
-
-	cfg.Services["api"] = Service{
-		Exec:  []string{"/bin/true"},
-		Masks: []Mask{{Path: "/tmp/outside", Size: "1G"}},
-	}
-	require.Error(t, cfg.Validate(), "absolute path not under any mount should be rejected")
 }
 
 func TestPackages_TopLevelAccepted(t *testing.T) {

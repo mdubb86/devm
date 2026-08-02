@@ -87,33 +87,6 @@ func (e EnvValue) Render() string {
 	return e.Literal
 }
 
-type Mask struct {
-	Path string `yaml:"path"`
-	Size string `yaml:"size"`
-}
-
-func (m Mask) Validate() error {
-	if m.Path == "" {
-		return fmt.Errorf("mask.path is required")
-	}
-	if m.Size == "" {
-		return fmt.Errorf("mask.size is required")
-	}
-	// Mask paths overlay locations inside the workspace; the renderer
-	// prepends repoRoot. Reject anything that would silently produce
-	// a broken mount: absolute paths, unexpanded shell-style variables
-	// ($VAR, ${VAR}) and ~ (no expansion happens here), and traversal
-	// that escapes the repo root.
-	if filepath.IsAbs(m.Path) || strings.HasPrefix(m.Path, "~") || strings.HasPrefix(m.Path, "$") {
-		return fmt.Errorf("mask.path %q must be relative to the repo root (no leading /, ~, or $)", m.Path)
-	}
-	cleaned := filepath.Clean(m.Path)
-	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-		return fmt.Errorf("mask.path %q: path traversal outside the repo root is not allowed", m.Path)
-	}
-	return nil
-}
-
 // volumeNameRE matches valid volume names. Enforced at load time
 // because names become the mount tag suffix (`vol_<name>`) and a
 // filesystem path segment; both need to be safe.
@@ -290,7 +263,6 @@ type Service struct {
 	ExposeHost bool `yaml:"expose_host,omitempty"`
 
 	Env       map[string]EnvValue `yaml:"env,omitempty"`
-	Masks     []Mask              `yaml:"masks,omitempty"`
 	Templates []Template          `yaml:"templates,omitempty"`
 
 	// Tart-era service execution fields. Systemd is mutually exclusive
@@ -312,7 +284,6 @@ type serviceYAML struct {
 	Direct     bool                `yaml:"direct,omitempty"`
 	ExposeHost bool                `yaml:"expose_host,omitempty"`
 	Env        map[string]EnvValue `yaml:"env,omitempty"`
-	Masks      []Mask              `yaml:"masks,omitempty"`
 	Templates  []Template          `yaml:"templates,omitempty"`
 	Exec       []string            `yaml:"exec,omitempty"`
 	WorkDir    string              `yaml:"workdir,omitempty"`
@@ -326,7 +297,7 @@ type serviceYAML struct {
 // sync with the tags on serviceYAML above; enforced by
 // TestService_KnownFieldsMatchStruct so it never drifts.
 var serviceKnownFields = []string{
-	"port", "hostname", "direct", "expose_host", "env", "masks", "templates",
+	"port", "hostname", "direct", "expose_host", "env", "templates",
 	"exec", "workdir", "restart", "after", "user", "systemd",
 }
 
@@ -362,7 +333,6 @@ func (s *Service) UnmarshalYAML(node *yaml.Node) error {
 	s.Direct = raw.Direct
 	s.ExposeHost = raw.ExposeHost
 	s.Env = raw.Env
-	s.Masks = raw.Masks
 	s.Templates = raw.Templates
 	s.Exec = raw.Exec
 	s.WorkDir = raw.WorkDir
@@ -415,7 +385,6 @@ func (s Service) MarshalYAML() (interface{}, error) {
 		Direct     bool                `yaml:"direct,omitempty"`
 		ExposeHost bool                `yaml:"expose_host,omitempty"`
 		Env        map[string]EnvValue `yaml:"env,omitempty"`
-		Masks      []Mask              `yaml:"masks,omitempty"`
 		Templates  []Template          `yaml:"templates,omitempty"`
 		Exec       []string            `yaml:"exec,omitempty"`
 		WorkDir    string              `yaml:"workdir,omitempty"`
@@ -428,7 +397,6 @@ func (s Service) MarshalYAML() (interface{}, error) {
 		Direct:     s.Direct,
 		ExposeHost: s.ExposeHost,
 		Env:        s.Env,
-		Masks:      s.Masks,
 		Templates:  s.Templates,
 		Exec:       s.Exec,
 		WorkDir:    s.WorkDir,
@@ -469,8 +437,8 @@ func (s Service) Validate() error {
 	if s.BindIP != "" && s.Port == 0 {
 		return fmt.Errorf("port bind interface requires a sandbox port")
 	}
-	if s.Port == 0 && len(s.Masks) == 0 && len(s.Exec) == 0 && s.Systemd == "" {
-		return fmt.Errorf("service must define a port, at least one mask, exec, or systemd")
+	if s.Port == 0 && len(s.Exec) == 0 && s.Systemd == "" {
+		return fmt.Errorf("service must define a port, exec, or systemd")
 	}
 
 	// systemd override is mutually exclusive with declarative fields.
@@ -489,11 +457,6 @@ func (s Service) Validate() error {
 		return fmt.Errorf("service.restart: must be one of: no, on-failure, always (got %q)", s.Restart)
 	}
 
-	for i, m := range s.Masks {
-		if err := m.Validate(); err != nil {
-			return fmt.Errorf("masks[%d]: %w", i, err)
-		}
-	}
 	for i, t := range s.Templates {
 		if err := t.Validate(); err != nil {
 			return fmt.Errorf("templates[%d]: %w", i, err)
@@ -1004,16 +967,6 @@ func (c Config) Validate() error {
 			seenPorts[svc.Port] = name
 		}
 	}
-	// Mask paths must resolve inside a virtio-fs share — workspace or a
-	// configured mounts entry. Absolute paths must be under a mounts host
-	// path; relative paths are workspace-relative and always inside.
-	for name, svc := range c.Services {
-		for i, m := range svc.Masks {
-			if !maskPathInsideShare(m.Path, c) {
-				return fmt.Errorf("services.%s.masks[%d]: path %q is not inside any virtio-fs share (workspace or a mounts entry)", name, i, m.Path)
-			}
-		}
-	}
 	if err := c.validateVolumes(""); err != nil {
 		return err
 	}
@@ -1021,40 +974,4 @@ func (c Config) Validate() error {
 		return err
 	}
 	return nil
-}
-
-// maskPathInsideShare returns true if path resolves inside the
-// workspace (relative paths) or under a configured mounts entry
-// (absolute paths). Rejects paths that escape via "..".
-func maskPathInsideShare(path string, cfg Config) bool {
-	if path == "" {
-		return false
-	}
-	cleaned := filepath.Clean(path)
-	if strings.HasPrefix(cleaned, "..") {
-		return false
-	}
-	if !filepath.IsAbs(cleaned) {
-		// Relative paths are workspace-relative.
-		return true
-	}
-	// Absolute paths must be under a mounts entry's host path.
-	for _, m := range cfg.Mounts {
-		host := splitMountHost(m)
-		if host == "" {
-			continue
-		}
-		cleanedHost := filepath.Clean(host)
-		if cleaned == cleanedHost || strings.HasPrefix(cleaned, cleanedHost+"/") {
-			return true
-		}
-	}
-	return false
-}
-
-func splitMountHost(m string) string {
-	if idx := strings.Index(m, ":"); idx >= 0 {
-		return m[:idx]
-	}
-	return m
 }

@@ -295,41 +295,26 @@ func TestRunEnforced_RoutingOnlyServiceOmittedButProcessServicesStarted(t *testi
 	assert.NotContains(t, script, "routing-only.service")
 }
 
-func TestRunEnforced_MaskChownedToServiceUserBeforeMount(t *testing.T) {
-	tests := []struct {
-		name      string
-		svcUser   string
-		wantOwner string
-	}{
-		{"default user is devm", "", "devm"},
-		{"explicit user", "e2euser", "e2euser"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			f := &fakeStreamTart{}
-			p := baseProvisioner(f, schema.Config{
-				Project: schema.Project{Name: "p"},
-				Services: map[string]schema.Service{
-					"svc": {
-						Exec:  []string{"/bin/true"},
-						User:  tc.svcUser,
-						Masks: []schema.Mask{{Path: "data", Size: "10m"}},
-					},
-				},
-			})
-			p.WorkspaceVMPath = "/Users/x/proj"
-			require.NoError(t, p.RunEnforced(context.Background(), io.Discard, nil))
+func TestRunEnforced_MaskChownedToDevmBeforeMount(t *testing.T) {
+	f := &fakeStreamTart{}
+	p := baseProvisioner(f, schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"svc": {Exec: []string{"/bin/true"}},
+		},
+		Masks: []string{"data"},
+	})
+	p.WorkspaceVMPath = "/Users/x/proj"
+	require.NoError(t, p.RunEnforced(context.Background(), io.Discard, nil))
 
-			script := scriptOf(t, f)
-			chown := "chown " + tc.wantOwner + " '/var/devm/masks/p/svc/data'"
-			assert.Contains(t, script, chown)
-			// chown must precede the bind mount, or the mount covers the target.
-			chownIdx := strings.Index(script, chown)
-			mountIdx := strings.Index(script, "mount --bind '/var/devm/masks/p/svc/data'")
-			require.Greater(t, chownIdx, 0)
-			assert.Greater(t, mountIdx, chownIdx)
-		})
-	}
+	script := scriptOf(t, f)
+	chown := "chown devm:devm '/var/devm/masks/p/data'"
+	assert.Contains(t, script, chown)
+	// chown must precede the bind mount, or the mount covers the target.
+	chownIdx := strings.Index(script, chown)
+	mountIdx := strings.Index(script, "mount --bind '/var/devm/masks/p/data'")
+	require.Greater(t, chownIdx, 0)
+	assert.Greater(t, mountIdx, chownIdx)
 }
 
 func TestRunOpen_TemplatesTriggerDispatcher(t *testing.T) {

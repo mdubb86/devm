@@ -229,31 +229,29 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 }
 
 func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testing.T) {
-	// Same service has BOTH a live change (exec) AND a teardown-required
-	// change (masks). Applying the live exec must not silently absorb
-	// the pending masks change into the snapshot. Next reconcile must
-	// still surface the masks change as teardown_required.
+	// One reconcile carries BOTH a live change (service exec) AND a
+	// teardown-required change (top-level packages). Applying the live
+	// exec must not silently absorb the pending packages change into
+	// the snapshot. Next reconcile must still surface the packages
+	// change as teardown_required.
 	t.Setenv("HOME", t.TempDir())
 	createTestCA(t)
 	oldCfg := schema.Config{
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"web": {
-				Exec:  []string{"/bin/true"},
-				Masks: []schema.Mask{{Path: "data", Size: "10m"}},
+				Exec: []string{"/bin/true"},
 			},
 		},
+		Packages: []string{"jq"},
 	}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := oldCfg
 	newSvc := oldCfg.Services["web"]
 	newSvc.Exec = []string{"/bin/echo", "hi"} // live change
-	newSvc.Masks = []schema.Mask{
-		{Path: "data", Size: "10m"},
-		{Path: "logs", Size: "5m"}, // teardown-required addition
-	}
 	newCfg.Services = map[string]schema.Service{"web": newSvc}
+	newCfg.Packages = []string{"jq", "ripgrep"} // teardown-required addition
 
 	registerFakeSoftnet(t, "p")
 
@@ -273,9 +271,9 @@ func TestVMReconcile_MixedLiveAndTeardownOnSameService_PreservesPending(t *testi
 	require.NotNil(t, got)
 	// Live change (exec) landed in snapshot.
 	assert.Equal(t, []string{"/bin/echo", "hi"}, got.Cfg.Services["web"].Exec)
-	// Pending masks change did NOT land — old masks preserved so
-	// next reconcile still surfaces masks add as teardown_required.
-	assert.Equal(t, []schema.Mask{{Path: "data", Size: "10m"}}, got.Cfg.Services["web"].Masks)
+	// Pending packages change did NOT land — old packages preserved so
+	// next reconcile still surfaces the packages add as teardown_required.
+	assert.Equal(t, []string{"jq"}, got.Cfg.Packages)
 }
 
 func TestMergeLiveApplied_Direct(t *testing.T) {
