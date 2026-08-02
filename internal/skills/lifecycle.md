@@ -155,6 +155,7 @@ Currently wired in `ApplyLive` (changes take effect immediately):
 |---|---|
 | Per-service env add / remove / change | Daemon pipes an updated bundle into the guest, rewriting `/etc/environment` |
 | Template add / change / remove | Runs installer dispatcher script in the VM via `tart exec` |
+| Mask add / remove | Top-level `masks:` list differs. Path must be relative to the workspace (absolute paths, `~`, `$VAR`, and `../` traversal are rejected at `devm validate`). Guest-side `mount --bind` (add) or `umount` (remove) via `tart exec`; idempotent via mountpoint guard; umount EBUSY surfaces the spec's structured error. |
 
 Classified BucketLive but no apply path in `ApplyLive` (take effect at next cold start):
 
@@ -164,7 +165,6 @@ Classified BucketLive but no apply path in `ApplyLive` (take effect at next cold
 | Network `allow` add / remove | No apply code in `ApplyLive` — the allow-list is applied at `StartVM` time, so changes land on the next cold start |
 | `path` change | No apply code in `ApplyLive` |
 | Service `exec`, `restart`, `after`, `workdir`, `user`, `systemd` override, `hostname` | No apply code in `ApplyLive` |
-| Mask add / remove | Top-level `masks:` list differs. Path must be relative to the workspace (absolute paths, `~`, `$VAR`, and `../` traversal are rejected at `devm validate`). No apply code in `ApplyLive` yet — lands in a follow-up. |
 
 ### BucketTeardownVM
 
