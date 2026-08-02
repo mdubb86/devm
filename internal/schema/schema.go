@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -109,6 +110,97 @@ func (m Mask) Validate() error {
 	cleaned := filepath.Clean(m.Path)
 	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
 		return fmt.Errorf("mask.path %q: path traversal outside the repo root is not allowed", m.Path)
+	}
+	return nil
+}
+
+// volumeNameRE matches valid volume names. Enforced at load time
+// because names become the mount tag suffix (`vol_<name>`) and a
+// filesystem path segment; both need to be safe.
+var volumeNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// validateVolumes checks the top-level Volumes map. Emitted errors
+// name the offending volume key so users see exactly which entry to
+// fix.
+func (c Config) validateVolumes(workspaceRoot string) error {
+	if len(c.Volumes) == 0 {
+		return nil
+	}
+	// Sort for deterministic error messages under Go's random map order.
+	names := make([]string, 0, len(c.Volumes))
+	for n := range c.Volumes {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	// First: name/path shape checks per entry.
+	for _, name := range names {
+		if name == "" {
+			return fmt.Errorf("volumes: name must not be empty")
+		}
+		if !volumeNameRE.MatchString(name) {
+			return fmt.Errorf(`volumes: name %q must match [a-z0-9][a-z0-9._-]*`, name)
+		}
+		path := c.Volumes[name]
+		if path == "" {
+			return fmt.Errorf("volumes.%s: guest path must not be empty", name)
+		}
+		if !filepath.IsAbs(path) {
+			return fmt.Errorf(`volumes.%s: guest path %q must be absolute`, name, path)
+		}
+		if strings.Contains(path, "..") {
+			return fmt.Errorf(`volumes.%s: guest path %q must not contain ..`, name, path)
+		}
+	}
+
+	// Second: cross-entry uniqueness of guest paths. Two volumes on
+	// the same guest target would collide at mount time.
+	byPath := map[string]string{}
+	for _, name := range names {
+		path := c.Volumes[name]
+		if prior, ok := byPath[path]; ok {
+			// Report the pair in name-sorted order — deterministic
+			// message regardless of which name Go's iterator saw first.
+			return fmt.Errorf(`volumes.%s: guest path %q already declared by volume %q`, name, path, prior)
+		}
+		byPath[path] = name
+	}
+
+	// Third: no overlap with any service's mask target. Masks live
+	// under the workspace root; volume target is absolute. Checked
+	// before the workspace-root overlap below (mask targets are always
+	// workspace subpaths) so a volume colliding with a mask reports the
+	// more specific mask conflict rather than the generic workspace one.
+	// Only enforceable when workspaceRoot is known (ValidateWithRoot);
+	// plain Validate() with empty workspaceRoot skips this check.
+	if workspaceRoot == "" {
+		return nil
+	}
+	for svcName, svc := range c.Services {
+		for _, m := range svc.Masks {
+			maskAbs := filepath.Join(workspaceRoot, m.Path)
+			for _, name := range names {
+				if c.Volumes[name] == maskAbs {
+					return fmt.Errorf(`volumes.%s: guest path %q overlaps mask %q (service %q)`,
+						name, c.Volumes[name], m.Path, svcName)
+				}
+			}
+		}
+	}
+
+	// Fourth: no overlap with the workspace mount root. The workspace
+	// is virtiofs-mounted at the same absolute path in the guest as
+	// on the Mac (mirrored per vm.go). A volume mounted at the
+	// workspace root or any subpath would collide with the workspace
+	// bind.
+	cleanedRoot := filepath.Clean(workspaceRoot)
+	rootPrefix := cleanedRoot + string(filepath.Separator)
+	for _, name := range names {
+		vp := filepath.Clean(c.Volumes[name])
+		if vp == cleanedRoot || strings.HasPrefix(vp, rootPrefix) {
+			return fmt.Errorf(`volumes.%s: guest path %q overlaps the workspace mount root %q`,
+				name, c.Volumes[name], cleanedRoot)
+		}
 	}
 	return nil
 }
@@ -573,6 +665,14 @@ type Config struct {
 	Env      map[string]EnvValue `yaml:"env,omitempty"`
 	Services map[string]Service  `yaml:"services,omitempty"`
 
+	// Volumes are per-project named persistent stores. Each key is a
+	// volume name; each value is the absolute guest path where the
+	// volume is mounted. Data lives on the Mac side under
+	// ~/Library/Application Support/<daemon>/volumes/<project>/<name>/
+	// and survives `devm teardown`. See docs/superpowers/specs/
+	// 2026-08-01-persistent-volumes-design.md.
+	Volumes map[string]string `yaml:"volumes,omitempty"`
+
 	// Packages is a list of apt package names installed automatically
 	// via `apt-get install -y` during Tart VM provisioning.
 	Packages []string `yaml:"packages,omitempty"`
@@ -759,6 +859,9 @@ func (c Config) ValidateWithRoot(projectRoot string) error {
 			return fmt.Errorf("mounts[%d]: host path %q: %w", i, hostPath, err)
 		}
 	}
+	if err := c.validateVolumes(projectRoot); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -873,6 +976,9 @@ func (c Config) Validate() error {
 				return fmt.Errorf("services.%s.masks[%d]: path %q is not inside any virtio-fs share (workspace or a mounts entry)", name, i, m.Path)
 			}
 		}
+	}
+	if err := c.validateVolumes(""); err != nil {
+		return err
 	}
 	return nil
 }

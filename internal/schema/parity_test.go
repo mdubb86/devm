@@ -44,6 +44,7 @@ func TestOverrideMirrorsBase(t *testing.T) {
 				"BaseImage":  "empty struct (no fields); base_image: key is still parsed for YAML compat but nothing is overridable",
 				"ConfigLock": "project-level security policy (host-immutability of devm.yaml/devm.me.yaml); not overridable per-developer, or devm.me.yaml could silently disable the lock the project owner intended",
 				"Scripts":    "not overridable per environment; scripts are a static definitional library shared across environments, referenced (and varied) via the already-overridable install:/startup: fields",
+				"Volumes":    "not overridable per environment; volume identity (name + guest path) is project-wide by design (docs/superpowers/specs/2026-08-01-persistent-volumes-design.md) — no cross-project sharing, no anonymous volumes, no per-dev variance",
 			},
 		},
 		{
