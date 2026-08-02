@@ -5,6 +5,13 @@
 # means one "Always Allow" click ever (vs. one per build with no
 # stable identity).
 #
+# `_build` passes --identifier com.mdubb86.devm (and .helper) to
+# codesign so macOS TCC treats every rebuild as the SAME app — one
+# Full Disk Access entry instead of one per rebuild. Without this,
+# codesign auto-derives the identifier from the binary name (Go's
+# linker-signed default is literally "a.out") and TCC accumulates a
+# fresh entry every install.
+#
 # One-time setup (only needed for stable keychain access during dev):
 #   open Keychain Access → Certificate Assistant → Create a Certificate
 #     Name: devm-dev
@@ -12,7 +19,8 @@
 #     Certificate Type: Code Signing
 #
 # If the cert doesn't exist, `just build` still produces a working
-# binary; you'll just get keychain prompts on each rebuild.
+# binary, still with the stable --identifier, just ad-hoc signed
+# instead of self-signed — so TCC entries still collapse to one.
 SIGN_IDENTITY := "devm-dev"
 
 # ldflags injected into every dev build:
@@ -49,11 +57,14 @@ _build PROFILE:
     go build -ldflags "$ldflags" -o "$daemon_out" ./cmd/devm && \
     go build -ldflags "$ldflags" -o "$helper_out" ./cmd/devm-helper || exit 1; \
     if security find-certificate -c '{{SIGN_IDENTITY}}' >/dev/null 2>&1; then \
-        codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime "$daemon_out" "$helper_out" && \
+        codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime --identifier com.mdubb86.devm        "$daemon_out" && \
+        codesign --sign '{{SIGN_IDENTITY}}' --force --options=runtime --identifier com.mdubb86.devm.helper "$helper_out" && \
         echo "signed with {{SIGN_IDENTITY}}"; \
     else \
-        echo "warning: signing cert '{{SIGN_IDENTITY}}' not in keychain — every rebuild will re-prompt for keychain access"; \
+        echo "warning: signing cert '{{SIGN_IDENTITY}}' not in keychain — falling back to ad-hoc sign (still with stable --identifier)"; \
         echo "         one-time fix: Keychain Access → Certificate Assistant → Create a Certificate (Name: {{SIGN_IDENTITY}}, Code Signing, Self Signed Root)"; \
+        codesign --sign - --force --options=runtime --identifier com.mdubb86.devm        "$daemon_out" && \
+        codesign --sign - --force --options=runtime --identifier com.mdubb86.devm.helper "$helper_out"; \
     fi
 
 # Build the darwin/arm64 devm-helper binary for PROFILE ("prod" or

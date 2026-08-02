@@ -55,14 +55,18 @@ builds:
       # daemon wasn't restarted." Must be injected on every build
       # path (see justfile + e2e/scripts/run.sh for the others).
       - -X main.Fingerprint={{.Env.FINGERPRINT}}
-
-# No explicit `signs:` block: the Go linker auto-applies an ad-hoc
-# signature to every darwin/arm64 binary at link time (mandatory on
-# Apple Silicon since Big Sur). `codesign -dvv` on the built binary
-# shows `flags=0x20002(adhoc,linker-signed)`. That's enough for
-# Gatekeeper to treat the binary as "cannot verify developer"
-# (right-click → Open dismissable) instead of "unidentified developer".
-# An explicit codesign step would be a no-op and is omitted.
+    hooks:
+      # Re-sign ad-hoc WITH a stable --identifier so macOS TCC treats
+      # every rebuild as the SAME app. The Go linker's default
+      # ad-hoc signature carries `Identifier=a.out`, and macOS keys
+      # TCC entries (Full Disk Access, etc.) on (identifier, cdhash) —
+      # so every `devm upgrade` was previously creating a fresh
+      # entry. With a stable identifier, all builds collapse to one
+      # entry. `--sign -` = ad-hoc; no Developer ID cert required in
+      # the CI runner. Same identifier is applied to dev builds in
+      # justfile._build.
+      post:
+        - codesign --sign - --force --options=runtime --identifier com.mdubb86.devm '{{ .Path }}'
 
 archives:
   - id: default
