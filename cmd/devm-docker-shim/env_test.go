@@ -107,6 +107,26 @@ CFG_UNRELATED=leakme
 	assertNoKey(t, got, "CFG_UNRELATED")
 }
 
+// TestContainerInheritArgs_ProjectsAllPerLibraryEnvs pins the per-library
+// CA env vars — the ones added specifically because their tool ignores
+// SSL_CERT_FILE / REQUESTS_CA_BUNDLE. A regression here (removing one
+// from caenv.Vars, or breaking caenv.Keys ordering) would silently drop
+// CA trust for that tool inside every container.
+func TestContainerInheritArgs_ProjectsAllPerLibraryEnvs(t *testing.T) {
+	body := `HTTPLIB2_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
+GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+CARGO_HTTP_CAINFO=/etc/ssl/certs/ca-certificates.crt
+PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+`
+	got := containerInheritArgs([]string{"run", "img"}, body)
+	assertContainsPair(t, got, "HTTPLIB2_CA_CERTS", "/etc/ssl/certs/ca-certificates.crt")
+	assertContainsPair(t, got, "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH", "/etc/ssl/certs/ca-certificates.crt")
+	assertContainsPair(t, got, "GIT_SSL_CAINFO", "/etc/ssl/certs/ca-certificates.crt")
+	assertContainsPair(t, got, "CARGO_HTTP_CAINFO", "/etc/ssl/certs/ca-certificates.crt")
+	assertContainsPair(t, got, "PIP_CERT", "/etc/ssl/certs/ca-certificates.crt")
+}
+
 func TestContainerInheritArgs_SkipsKeysMissingFromEtcEnv(t *testing.T) {
 	body := "NODE_EXTRA_CA_CERTS=/x\n" // only one of the opt-in keys is present
 	got := containerInheritArgs([]string{"run", "img"}, body)

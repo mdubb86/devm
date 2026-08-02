@@ -32,6 +32,39 @@ That's the whole setup. `devm shell` provisions:
 
 Any other registries or hosts you pull/push to still need to be added to `network.allow`.
 
+## Runtime CA env vars (auto-injected into every container)
+
+On top of the CA bind-mount, the docker-shim projects a fixed set of CA-trust env vars from the guest's `/etc/environment` into every `docker run`, `docker create`, and `docker exec`. This covers libraries that ignore the system store and check a specific env var instead. Current list (single source: `internal/caenv/vars.go`):
+
+| Env var | Consumer |
+|---|---|
+| `SSL_CERT_FILE`, `SSL_CERT_DIR` | Python `ssl`, curl (via OpenSSL) |
+| `REQUESTS_CA_BUNDLE` | Python `requests`, urllib3 |
+| `CURL_CA_BUNDLE` | curl (direct) |
+| `AWS_CA_BUNDLE` | boto3, aws-cli |
+| `NODE_EXTRA_CA_CERTS` | Node.js, Bun |
+| `UV_SYSTEM_CERTS=1` | uv (opt-in to system store) |
+| `HTTPLIB2_CA_CERTS` | httplib2 → google-api-python-client transport |
+| `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` | gRPC (all languages) |
+| `GIT_SSL_CAINFO` | git over HTTPS |
+| `CARGO_HTTP_CAINFO` | cargo registry + crate fetches |
+| `PIP_CERT` | pip |
+| `NO_PROXY=*` | disable HTTP proxy vars (iron-proxy is transparent) |
+
+**User overrides win.** If your `docker run` (or the Dockerfile's `ENV`) already sets one of these, the shim does not re-inject it.
+
+## Libraries that hardcode certifi (Python-only edge case)
+
+A handful of Python libraries hardcode `certifi.where()` and ignore every env var above. Trafilatura is the canonical example; the google-api-python-client stack ONLY fails this way if httplib2 is bypassed (httplib2 itself honors `HTTPLIB2_CA_CERTS`).
+
+There is no env-var fix — this is an [explicit certifi maintainer decision](https://github.com/certifi/python-certifi/issues/200). The drop-in workaround is `pip-system-certs`:
+
+```
+pip install pip-system-certs
+```
+
+Its `.pth` file monkey-patches `ssl` at Python startup to use the system trust store (via [truststore](https://truststore.readthedocs.io/)), which teaches EVERY certifi-hardcoding library on that Python to trust devm's CA — no per-app code changes. Install it once in your dev image (guard it to dev only if the same image runs in prod, where you don't want the monkey-patch).
+
 ## Two egress paths (why runtime "just works" and builds don't)
 
 Understanding these matters when debugging cert-verify failures:

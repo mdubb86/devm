@@ -2,26 +2,21 @@ package main
 
 import (
 	"strings"
+
+	"github.com/mdubb86/devm/internal/caenv"
 )
 
 // containerInheritVars is the set of env vars devm-docker-shim projects
-// from /etc/environment into every `docker run`/`create`/`exec`. Explicit
-// opt-in prevents per-service prefixed env (POSTGRES_PASSWORD etc.) and
-// user cfg.Env from leaking into every container. Values come from
-// /etc/environment at invocation time — a future devm version that
-// changes a value (or adds a new one to /etc/environment) does not
-// require touching this list, only vars in both this list AND
-// /etc/environment get injected.
-var containerInheritVars = []string{
-	"SSL_CERT_FILE",
-	"SSL_CERT_DIR",
-	"REQUESTS_CA_BUNDLE",
-	"NODE_EXTRA_CA_CERTS",
-	"UV_SYSTEM_CERTS",
-	"CURL_CA_BUNDLE",
-	"AWS_CA_BUNDLE",
-	"NO_PROXY",
-}
+// from /etc/environment into every `docker run`/`create`/`exec`. Sourced
+// from caenv.Keys() so this whitelist stays in lockstep with the values
+// devm wrote into /etc/environment on the guest (via RenderEtcEnvironment).
+// Adding a new CA-trust env var means touching internal/caenv/vars.go only.
+//
+// The whitelist itself is the security boundary: /etc/environment also
+// carries PATH, WORKSPACE, per-service NAME_KEY secrets, and cfg.Env —
+// none of which we want to leak into every container. Only keys in this
+// list AND present in /etc/environment get injected.
+var containerInheritVars = caenv.Keys()
 
 // parseEtcEnvironment parses the KEY=VALUE format used by
 // /etc/environment (pam_env-compatible). Handles quoted values

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/caenv"
 	"github.com/mdubb86/devm/internal/schema"
 )
 
@@ -13,18 +14,6 @@ import (
 // root sessions get sbin — /etc/environment is machine-wide, not
 // user-scoped. cfg.Path entries are prepended by RenderEtcEnvironment.
 const guestSystemPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games"
-
-// caBundlePath is the merged system trust store — Mozilla's set plus
-// devm's CA, produced by update-ca-certificates. Every CA-env var
-// points here so the same value works both in the guest (where the
-// bundle sits at this path) and inside containers (where the shim
-// bind-mounts the same bundle at the same path).
-//
-// Never point CA envs at /usr/local/share/ca-certificates/devm.crt —
-// that path only exists in the guest, and for SSL_CERT_FILE/
-// REQUESTS_CA_BUNDLE it REPLACES the trust set with just one cert
-// (see recipes/lang/uv.md: "The SSL_CERT_FILE trap").
-const caBundlePath = "/etc/ssl/certs/ca-certificates.crt"
 
 // bareRunes is the set of chars that appear unquoted in /etc/environment
 // AND survive both pam_env and shell `set -a; .` unchanged. Conservative:
@@ -103,31 +92,28 @@ func encodeEtcEnvValue(v string) (string, error) {
 // and IS_SANDBOX are in cfg.Env.
 //
 // Emitted lines, in this order:
-//  1. NO_PROXY=*
-//  2. CA trust vars — SSL_CERT_FILE, SSL_CERT_DIR, REQUESTS_CA_BUNDLE,
-//     CURL_CA_BUNDLE, AWS_CA_BUNDLE, NODE_EXTRA_CA_CERTS all pointing
-//     at caBundlePath, plus UV_SYSTEM_CERTS=1.
-//  3. PATH=<cfg.Path[0]>:<cfg.Path[1]>:...:/opt/devm/scripts:<guestSystemPATH>
+//  1. caenv.Vars — NO_PROXY plus every CA-file env var devm exports
+//     (see internal/caenv/vars.go for the canonical list, which is
+//     also what devm-docker-shim projects into every container).
+//  2. PATH=<cfg.Path[0]>:<cfg.Path[1]>:...:/opt/devm/scripts:<guestSystemPATH>
 //     — encoded via encodeEtcEnvValue like every other value; bare
 //     emission for the common case (all chars bare-safe), single-quoted
 //     if a user cfg.Path entry contains non-bare chars.
-//  4. cfg.Env entries (including WORKSPACE, IS_SANDBOX), sorted by key.
-//  5. Per-service NAME_KEY entries, sorted by name then key.
+//  3. cfg.Env entries (including WORKSPACE, IS_SANDBOX), sorted by key.
+//  4. Per-service NAME_KEY entries, sorted by name then key.
 //
 // Returns error if any value fails encodeEtcEnvValue — the caller
 // surfaces it to the user (invalid devm.yaml value).
 func RenderEtcEnvironment(cfg schema.Config) (string, error) {
 	var b strings.Builder
 
-	// Fixed vars (bare-safe, no quoting needed).
-	b.WriteString("NO_PROXY=*\n")
-	fmt.Fprintf(&b, "SSL_CERT_FILE=%s\n", caBundlePath)
-	b.WriteString("SSL_CERT_DIR=/etc/ssl/certs\n")
-	fmt.Fprintf(&b, "REQUESTS_CA_BUNDLE=%s\n", caBundlePath)
-	fmt.Fprintf(&b, "CURL_CA_BUNDLE=%s\n", caBundlePath)
-	fmt.Fprintf(&b, "AWS_CA_BUNDLE=%s\n", caBundlePath)
-	fmt.Fprintf(&b, "NODE_EXTRA_CA_CERTS=%s\n", caBundlePath)
-	b.WriteString("UV_SYSTEM_CERTS=1\n")
+	// CA / NO_PROXY block — sourced from caenv.Vars so this and
+	// the docker-shim's inheritance whitelist stay in lockstep.
+	// All values are bare-safe (paths of [A-Za-z0-9_/.:-*] or "1"),
+	// so no encodeEtcEnvValue call is needed.
+	for _, v := range caenv.Vars {
+		fmt.Fprintf(&b, "%s=%s\n", v.Key, v.Value)
+	}
 
 	// PATH — cfg.Path prepended in front of /opt/devm/scripts and
 	// guestSystemPATH. cfg.Path is validated + $WORKSPACE-expanded by

@@ -68,6 +68,13 @@ func TestRenderEtcEnvironment_DefaultCfg(t *testing.T) {
 	assert.Contains(t, body, "AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt\n")
 	assert.Contains(t, body, "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt\n")
 	assert.Contains(t, body, "UV_SYSTEM_CERTS=1\n")
+	// Per-library env vars — libraries that hardcode their own CA path
+	// and ignore SSL_CERT_FILE / REQUESTS_CA_BUNDLE.
+	assert.Contains(t, body, "HTTPLIB2_CA_CERTS=/etc/ssl/certs/ca-certificates.crt\n")
+	assert.Contains(t, body, "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt\n")
+	assert.Contains(t, body, "GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt\n")
+	assert.Contains(t, body, "CARGO_HTTP_CAINFO=/etc/ssl/certs/ca-certificates.crt\n")
+	assert.Contains(t, body, "PIP_CERT=/etc/ssl/certs/ca-certificates.crt\n")
 	// No cfg.Path → PATH = /opt/devm/scripts:<guestSystemPATH>. Bare
 	// emission (all chars in bareRunes), no quoting.
 	assert.Contains(t, body, "PATH=/opt/devm/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games\n")
