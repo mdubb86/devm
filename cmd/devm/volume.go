@@ -64,9 +64,9 @@ func runVolumeLs(ident identity.Config, userCfg schema.Config, out io.Writer) er
 }
 
 // dirSize returns the total byte count of everything under path,
-// treating a missing path as 0. Symlinks are followed once; failure
-// on any file is silently skipped so a permissions oddity doesn't
-// mask the rest of the tree.
+// treating a missing path as 0. Symlinks are not followed; a
+// symlinked file contributes 0 bytes. Failure on any file is silently
+// skipped so a permissions oddity doesn't mask the rest of the tree.
 func dirSize(path string) int64 {
 	var total int64
 	filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
