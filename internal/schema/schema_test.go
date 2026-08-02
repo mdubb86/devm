@@ -537,13 +537,13 @@ func TestCheckUnknownKeys_TopLevel_Rejected(t *testing.T) {
 	yamlBlob := []byte(`
 project:
   name: foo
-volumes:
+volumez:
   /data: 1G
 `)
 	err := CheckUnknownKeys(yamlBlob)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `unknown field`)
-	assert.Contains(t, err.Error(), `volumes`)
+	assert.Contains(t, err.Error(), `volumez`)
 	// Valid fields should be listed (so the user knows what IS allowed).
 	assert.Contains(t, err.Error(), `services`)
 }
@@ -582,6 +582,8 @@ path:
   - $WORKSPACE/bin
 packages:
   - jq
+volumes:
+  data: /var/data
 `)
 	require.NoError(t, CheckUnknownKeys(yamlBlob))
 }

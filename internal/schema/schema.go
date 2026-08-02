@@ -517,7 +517,7 @@ func CheckUnknownKeys(data []byte) error {
 	knownTop := []string{
 		"project", "base_image", "docker", "network", "env",
 		"services", "install", "startup", "scripts", "mounts", "path", "packages", "disk",
-		"config_lock",
+		"config_lock", "volumes",
 	}
 	knownProject := []string{
 		"name", "proxy",

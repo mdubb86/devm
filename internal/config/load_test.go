@@ -122,14 +122,14 @@ func TestLoad_RejectsUnknownTopLevelField_InBase(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   name: foo
-volumes:
+volumez:
   /data: 1G
 `)
 
 	_, err := Load(dir)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), `unknown field`)
-	assert.Contains(t, err.Error(), `volumes`)
+	assert.Contains(t, err.Error(), `volumez`)
 	assert.Contains(t, err.Error(), `devm.yaml`,
 		"error should identify which file is offending")
 }
@@ -141,7 +141,7 @@ project:
   name: foo
 `)
 	writeFile(t, dir, "devm.me.yaml", `
-volumes:
+volumez:
   /data: 1G
 `)
 
