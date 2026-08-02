@@ -203,10 +203,10 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 	return nil
 }
 
-// validateMasks checks the top-level Masks list. Called by both
-// Validate() (shape checks only) and ValidateWithRoot (shape +
-// overlap with declared volumes).
-func (c Config) validateMasks(workspaceRoot string) error {
+// validateMasks checks the top-level Masks list: shape, and
+// duplicate/traversal rejection. Overlap with declared volumes is
+// validateVolumes' responsibility (single source of truth).
+func (c Config) validateMasks() error {
 	if len(c.Masks) == 0 {
 		return nil
 	}
@@ -226,21 +226,6 @@ func (c Config) validateMasks(workspaceRoot string) error {
 			return fmt.Errorf(`masks[%d]: path %q is already declared (first at masks[%d])`, i, path, prior)
 		}
 		seen[path] = i
-	}
-	// Overlap check requires a workspace root — same convention as
-	// validateVolumes.
-	if workspaceRoot == "" {
-		return nil
-	}
-	volumeByPath := map[string]string{}
-	for name, guestPath := range c.Volumes {
-		volumeByPath[guestPath] = name
-	}
-	for i, path := range c.Masks {
-		abs := filepath.Join(workspaceRoot, path)
-		if volName, ok := volumeByPath[abs]; ok {
-			return fmt.Errorf(`masks[%d]: path %q overlaps volume %q (guest path %q)`, i, path, volName, abs)
-		}
 	}
 	return nil
 }
@@ -911,7 +896,7 @@ func (c Config) ValidateWithRoot(projectRoot string) error {
 	if err := c.validateVolumes(projectRoot); err != nil {
 		return err
 	}
-	if err := c.validateMasks(projectRoot); err != nil {
+	if err := c.validateMasks(); err != nil {
 		return err
 	}
 	return nil
@@ -1032,7 +1017,7 @@ func (c Config) Validate() error {
 	if err := c.validateVolumes(""); err != nil {
 		return err
 	}
-	if err := c.validateMasks(""); err != nil {
+	if err := c.validateMasks(); err != nil {
 		return err
 	}
 	return nil

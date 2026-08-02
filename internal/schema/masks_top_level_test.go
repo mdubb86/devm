@@ -1,7 +1,6 @@
 package schema
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -88,14 +87,8 @@ func TestMasks_RejectsOverlapWithVolume(t *testing.T) {
 	}
 	err := c.ValidateWithRoot("/Users/michael/workspace/p")
 	require.Error(t, err)
-	// Either side's overlap check may fire first depending on Config.Validate ordering;
-	// accept either message as long as it names the overlapping pair.
-	msg := err.Error()
-	assert.True(t,
-		strings.Contains(msg, `volumes.clash: guest path "/Users/michael/workspace/p/data" overlaps mask "data"`) ||
-			strings.Contains(msg, `masks[0]: path "data" overlaps volume "clash"`),
-		"unexpected message: %s", msg,
-	)
+	assert.Contains(t, err.Error(),
+		`volumes.clash: guest path "/Users/michael/workspace/p/data" overlaps mask "data"`)
 }
 
 func TestMasks_YAMLRoundTrip(t *testing.T) {
