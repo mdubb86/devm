@@ -711,6 +711,8 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "secret_change"
 	case reconcile.KindIronProxyDown:
 		return "iron_proxy_down"
+	case reconcile.KindVolumeChange:
+		return "volume_change"
 	}
 	return "unknown"
 }
@@ -780,6 +782,15 @@ func formatChange(c reconcile.Change) string {
 			return fmt.Sprintf("- template: %s (sandbox file persists; recreate to wipe)", c.Detail)
 		default:
 			return fmt.Sprintf("~ template: %s → %s", c.Service, c.Detail)
+		}
+	case reconcile.KindVolumeChange:
+		switch {
+		case c.Old == "" && c.New != "":
+			return fmt.Sprintf("+ volume %s at %s", c.Key, c.New)
+		case c.Old != "" && c.New == "":
+			return fmt.Sprintf("- volume %s (was at %s)", c.Key, c.Old)
+		default:
+			return fmt.Sprintf("~ volume %s target: %s → %s", c.Key, c.Old, c.New)
 		}
 	}
 	return "(unknown change)"

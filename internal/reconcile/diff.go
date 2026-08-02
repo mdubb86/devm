@@ -93,6 +93,11 @@ const (
 	// BucketEgressRestart / AppliedIronProxy path that respawns
 	// iron-proxy.
 	KindIronProxyDown
+	// KindVolumeChange fires when the top-level `volumes:` map differs
+	// between old and new config (add, remove, or retarget). Emitted
+	// once per changed volume; Key=volume name, Old/New=guest path.
+	// Bucket: BucketRestartVM — tart takes --dir args at run time.
+	KindVolumeChange
 )
 
 // changeBucket is the single source of truth that maps each ChangeKind
@@ -152,6 +157,9 @@ var changeBucket = map[ChangeKind]Bucket{
 	// Synthetic heal signal — same bucket as the rest of the
 	// egress-restart family since it's applied the same way.
 	KindIronProxyDown: BucketEgressRestart,
+	// Volumes are tart --dir args at run time; Apple Virtualization
+	// Framework doesn't hot-plug virtiofs shares.
+	KindVolumeChange: BucketRestartVM,
 }
 
 // Bucket returns the bucket this ChangeKind belongs to.
@@ -287,6 +295,7 @@ func ComputeAllChanges(
 	out = append(out, computeStartupChanges(old, new)...)
 	out = append(out, computePackagesChange(old, new)...)
 	out = append(out, computeMountAddRemove(old, new)...)
+	out = append(out, computeVolumeChanges(old, new)...)
 	out = append(out, computeMaskAddRemove(old, new)...)
 	out = append(out, computeImageChange(old, new)...)
 	out = append(out, computeIdentityChange(old, new)...)
@@ -469,6 +478,44 @@ func computeMountAddRemove(old, new schema.Config) []Change {
 		return nil
 	}
 	return []Change{{Kind: KindMountAddRemove}}
+}
+
+// computeVolumeChanges emits one KindVolumeChange per name whose
+// declared guest path differs between old and new. Removes surface as
+// Old set, New empty; adds as Old empty, New set; retargets as both
+// populated. Sorted by name for deterministic output.
+func computeVolumeChanges(old, new schema.Config) []Change {
+	names := map[string]struct{}{}
+	for n := range old.Volumes {
+		names[n] = struct{}{}
+	}
+	for n := range new.Volumes {
+		names[n] = struct{}{}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sorted := make([]string, 0, len(names))
+	for n := range names {
+		sorted = append(sorted, n)
+	}
+	sort.Strings(sorted)
+
+	var out []Change
+	for _, n := range sorted {
+		oldPath := old.Volumes[n]
+		newPath := new.Volumes[n]
+		if oldPath == newPath {
+			continue
+		}
+		out = append(out, Change{
+			Kind: KindVolumeChange,
+			Key:  n,
+			Old:  oldPath,
+			New:  newPath,
+		})
+	}
+	return out
 }
 
 func computeMaskAddRemove(old, new schema.Config) []Change {
