@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -424,6 +425,46 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				Tag:      fmt.Sprintf("extra_%d", i),
 			})
 		}
+		// Persistent volumes — one --dir per declared volume. Each
+		// share is Mac-side (RuntimeDir/volumes/<project>/<name>/,
+		// created if missing) and lands in the guest at /mnt/vol_<name>/,
+		// which the volume mount script bind-mounts at the declared
+		// target path. Data survives `devm teardown` — the disk goes
+		// but the Mac dir doesn't.
+		//
+		// volumeState captures the observed Mac-side empty state per
+		// volume before the guest boots; buildVolumeMountScript reads
+		// it later to pick the four-case action (mount / adopt /
+		// error).
+		type volumeState struct {
+			name     string
+			target   string
+			macPath  string
+			wasEmpty bool
+		}
+		var volumes []volumeState
+		// Sort volume names for deterministic mount order across boots
+		// (no functional effect, but makes logs comparable).
+		volNames := make([]string, 0, len(req.Cfg.Volumes))
+		for n := range req.Cfg.Volumes {
+			volNames = append(volNames, n)
+		}
+		sort.Strings(volNames)
+		for _, name := range volNames {
+			target := req.Cfg.Volumes[name]
+			macPath, wasEmpty, err := ensureVolumeMacDir(cfg, req.Name, name)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("ensure volume dir %s: %v", name, err), http.StatusInternalServerError)
+				return
+			}
+			opts.DirMounts = append(opts.DirMounts, tart.DirMount{
+				HostPath: macPath,
+				Tag:      "vol_" + name,
+			})
+			volumes = append(volumes, volumeState{
+				name: name, target: target, macPath: macPath, wasEmpty: wasEmpty,
+			})
+		}
 		// Make devm.yaml (+ devm.me.yaml) host-immutable before the guest
 		// ever boots, so a root guest never sees a writable window onto its
 		// own trust boundary. Best-effort: a chflags failure must not block
@@ -583,6 +624,15 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 		if req.WorkspaceHostPath != "" {
 			scripts = append([]string{buildWorkspaceMountScript(req.WorkspaceHostPath)}, scripts...)
+		}
+		// Volume mount scripts. Run after workspace (so /mnt is stable)
+		// and before any user-side provisioning. Each script substitutes
+		// the Mac-side path into the conflict message so the user sees
+		// where their data lives.
+		for _, v := range volumes {
+			script := buildVolumeMountScript(v.name, v.target, v.wasEmpty)
+			script = strings.ReplaceAll(script, "$MAC_VOLUME_DIR", v.macPath)
+			scripts = append(scripts, script)
 		}
 		// On a freshly-cloned VM that got a disk override, grow the guest
 		// filesystem first so subsequent steps see the full disk.
