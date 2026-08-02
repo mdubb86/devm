@@ -29,6 +29,10 @@ func TestBuildVolumeMountScript_EmptyMac_TargetHasContent_Adopts(t *testing.T) {
 	script := buildVolumeMountScript("pg-data", "/var/lib/postgresql/data", true)
 	// cp -a runs FROM target INTO the volume share (before bind):
 	assert.Contains(t, script, "cp -a /var/lib/postgresql/data/. /mnt/vol_pg-data/")
+	// After a successful cp, the original target must be evacuated so
+	// the next boot (bind mount doesn't survive reboot) sees an empty
+	// target + non-empty Mac volume, not a both-non-empty conflict:
+	assert.Contains(t, script, "rm -rf /var/lib/postgresql/data/*")
 	// Then bind:
 	assert.Contains(t, script, "mount --bind /mnt/vol_pg-data /var/lib/postgresql/data")
 }
