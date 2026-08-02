@@ -26,10 +26,7 @@ def test_mask_remove_ebusy_errors_clearly(devm, workspace, sandbox_name):
         masks=["scratch"],
         services={
             "holder": {
-                "exec": ["/bin/sh", "-c",
-                         "mkdir -p /Users/*/workspace/*/scratch; cd " +
-                         "$(ls -d /Users/*/workspace/*/scratch); " +
-                         "sleep infinity"],
+                "exec": ["/bin/sh", "-c", f"cd {workspace.path}/scratch && sleep infinity"],
                 "restart": "always",
             },
         },
@@ -42,10 +39,11 @@ def test_mask_remove_ebusy_errors_clearly(devm, workspace, sandbox_name):
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
 
-        # Confirm the service is holding a file open under the mask.
+        # Confirm the holder is cd'd into the mask target (its cwd will
+        # be the target path, which is proof it's holding the mount).
         r = subprocess.run(
             [devm.path, "shell", "--", "sh", "-c",
-             "sleep 2; ps -eo pid,cmd | grep 'sleep infinity' | grep -v grep"],
+             "sleep 2; pgrep -af 'sleep infinity'"],
             cwd=str(workspace.path), capture_output=True, timeout=30,
         )
         assert r.returncode == 0, "holder service didn't start"
@@ -56,8 +54,7 @@ def test_mask_remove_ebusy_errors_clearly(devm, workspace, sandbox_name):
             install=["true"],
             services={
                 "holder": {
-                    "exec": ["/bin/sh", "-c",
-                             "cd $(ls -d /Users/*/workspace/*/scratch); sleep infinity"],
+                    "exec": ["/bin/sh", "-c", f"cd {workspace.path}/scratch && sleep infinity"],
                     "restart": "always",
                 },
             },
