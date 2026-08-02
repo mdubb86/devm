@@ -128,7 +128,13 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 
 	if len(maskChanges) > 0 {
 		workspaceVMPath := repoRoot // mirrored path; repoRoot equals both host and guest path
-		if err := applyMaskChanges(tr, vmName, cfg.Project.Name, workspaceVMPath, maskChanges); err != nil {
+		execFn := func(script string) (int, string) {
+			r := tr.ExecStdin(context.Background(), vmName,
+				strings.NewReader(script),
+				[]string{"bash", "-e", "-o", "pipefail"})
+			return r.ExitCode, r.Stderr
+		}
+		if err := applyMaskChanges(execFn, cfg.Project.Name, workspaceVMPath, maskChanges); err != nil {
 			return err
 		}
 	}
@@ -181,10 +187,16 @@ func shellSingleQuoted(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// maskExecFn runs a guest-side shell script and reports its exit code
+// and stderr. The production path wraps *tart.Tart.ExecStdin; tests
+// inject a fake to exercise the EBUSY / generic-failure branches
+// without a live VM.
+type maskExecFn func(script string) (exitCode int, stderr string)
+
 // applyMaskChanges runs one guest exec per mask add/remove. EBUSY
 // on umount surfaces the spec's exact error message. Runs
 // sequentially -- mask ops are cheap.
-func applyMaskChanges(tr *tart.Tart, vmName, projectName, workspaceVMPath string, changes []Change) error {
+func applyMaskChanges(exec maskExecFn, projectName, workspaceVMPath string, changes []Change) error {
 	for _, c := range changes {
 		if c.Kind != KindMaskChange {
 			continue
@@ -201,12 +213,10 @@ func applyMaskChanges(tr *tart.Tart, vmName, projectName, workspaceVMPath string
 		default:
 			continue
 		}
-		r := tr.ExecStdin(context.Background(), vmName,
-			strings.NewReader(script),
-			[]string{"bash", "-e", "-o", "pipefail"})
-		if r.ExitCode != 0 {
+		exitCode, stderr := exec(script)
+		if exitCode != 0 {
 			// EBUSY on umount -> structured error per spec.
-			stderrLower := strings.ToLower(r.Stderr)
+			stderrLower := strings.ToLower(stderr)
 			if opDesc == "remove" &&
 				(strings.Contains(stderrLower, "target is busy") ||
 					strings.Contains(stderrLower, "device is busy")) {
@@ -218,7 +228,7 @@ func applyMaskChanges(tr *tart.Tart, vmName, projectName, workspaceVMPath string
 				)
 			}
 			return fmt.Errorf("apply_live: mask %s %q: exit %d (stderr: %s)",
-				opDesc, c.Key, r.ExitCode, r.Stderr)
+				opDesc, c.Key, exitCode, stderr)
 		}
 	}
 	return nil
