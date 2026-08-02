@@ -144,6 +144,8 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 func buildMaskAddScript(projectName, maskPath, workspaceVMPath string) string {
 	hostPath := "/var/devm/masks/" + projectName + "/" + maskPath
 	targetPath := workspaceVMPath + "/" + maskPath
+	qHostPath := shellSingleQuoted(hostPath)
+	qTargetPath := shellSingleQuoted(targetPath)
 	return fmt.Sprintf(`set -e
 sudo mkdir -p %s
 sudo chown devm:devm %s
@@ -152,7 +154,7 @@ if mountpoint -q %s; then
     exit 0
 fi
 sudo mount --bind %s %s
-`, hostPath, hostPath, targetPath, targetPath, hostPath, targetPath)
+`, qHostPath, qHostPath, qTargetPath, qTargetPath, qHostPath, qTargetPath)
 }
 
 // buildMaskRemoveScript unmounts a mask. Idempotent: mountpoint
@@ -162,12 +164,21 @@ sudo mount --bind %s %s
 // re-attach.
 func buildMaskRemoveScript(maskPath, workspaceVMPath string) string {
 	targetPath := workspaceVMPath + "/" + maskPath
+	qTargetPath := shellSingleQuoted(targetPath)
 	return fmt.Sprintf(`set -e
 if ! mountpoint -q %s; then
     exit 0
 fi
 sudo umount %s
-`, targetPath, targetPath)
+`, qTargetPath, qTargetPath)
+}
+
+// shellSingleQuoted wraps s in single quotes for use as a bash literal,
+// matching internal/render's cold-start quoting so mask paths containing
+// spaces or shell metacharacters (schema.validateMasks allows both) can't
+// break out of the generated script.
+func shellSingleQuoted(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // applyMaskChanges runs one guest exec per mask add/remove. EBUSY
