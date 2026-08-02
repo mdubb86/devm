@@ -305,6 +305,8 @@ func mergeLiveApplied(old, new schema.Config, applied []reconcile.Change) schema
 			}
 		case reconcile.KindPathChange:
 			merged.Path = new.Path
+		case reconcile.KindMaskChange:
+			merged.Masks = new.Masks
 		case reconcile.KindNetworkAdd, reconcile.KindNetworkRemove:
 			merged.Network = new.Network
 		case reconcile.KindTemplateChange:
