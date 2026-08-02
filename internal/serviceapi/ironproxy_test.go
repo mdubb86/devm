@@ -179,6 +179,9 @@ func TestIronProxy_SecretEmission_ReplaceNestingAndRules(t *testing.T) {
 	rep := e["replace"].(map[string]any)
 	assert.Equal(t, "__DEVM_SECRET_github_token__", rep["proxy_value"])
 	assert.Equal(t, []any{}, rep["match_headers"]) // [] = all headers
+	assert.Equal(t, true, rep["match_query"], "query params must be substituted too")
+	assert.Nil(t, rep["match_path"], "path substitution does not escape / — must stay off")
+	assert.Nil(t, rep["match_body"], "body substitution forces request buffering — must stay off")
 	assert.Nil(t, e["proxy_value"], "proxy_value must be under replace:, not top-level")
 
 	// rules: one {host} per bound host, sibling of source/replace

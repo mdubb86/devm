@@ -114,6 +114,9 @@ class IronProxyConfig:
                     "replace": {
                         "proxy_value": token,
                         "match_headers": [],  # [] = all headers
+                        # bool, not a list. match_path/match_body stay off
+                        # — see internal/serviceapi/ironproxy.go.
+                        "match_query": True,
                     },
                     "rules": [{"host": h} for h in hosts],
                 })

@@ -119,9 +119,22 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 				},
 				// match_* fields MUST nest under `replace:`; at top level
 				// iron-proxy silently ignores match_query/body/path.
+				//
+				// match_query is a bool (a list fails to unmarshal). It
+				// covers APIs that take the credential as a query param.
+				// Safe because iron-proxy re-encodes query values after
+				// substitution, so a secret containing &, =, + or / can't
+				// break out of its parameter.
+				//
+				// match_path is deliberately NOT set: path substitution
+				// writes through url.URL.Path, which does not escape "/",
+				// so a secret containing a slash would silently become an
+				// extra path segment. match_body is off too — it forces
+				// the proxy to buffer request bodies.
 				"replace": map[string]any{
 					"proxy_value":   secretToken(s.Name),
 					"match_headers": []string{}, // [] = scan all request headers (incl. cookies)
+					"match_query":   true,
 				},
 				"rules": rules,
 			})

@@ -15,6 +15,7 @@ Shape pinned:
               var: DEVM_SECRET_FOO
             proxy_value: __DEVM_SECRET_FOO__
             match_headers: [Authorization]
+            match_query: true
             rules:
               - host: "*"
 
@@ -102,6 +103,67 @@ def test_token_substitution(tmp_path):
 
         assert received["authorization"] == "Bearer real-secret-value", (
             f"expected substituted secret, got: {received['authorization']!r}"
+        )
+    finally:
+        backend.shutdown()
+
+
+@pytest.mark.contract
+def test_query_param_substitution_and_path_left_alone(tmp_path):
+    """Query values are substituted and re-encoded; paths are not touched."""
+    received: dict[str, str | None] = {"path": None}
+
+    class EchoHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            received["path"] = self.path
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args, **kwargs):
+            pass
+
+    backend_port = free_ports(1)[0]
+    backend = HTTPServer(("127.0.0.1", backend_port), EchoHandler)
+    threading.Thread(target=backend.serve_forever, daemon=True).start()
+
+    try:
+        ca_cert, ca_key = _generate_ca(tmp_path)
+        http_port, https_port = free_ports(2)
+
+        cfg = IronProxyConfig(
+            http_listen=f"127.0.0.1:{http_port}",
+            https_listen=f"127.0.0.1:{https_port}",
+            ca_cert_path=str(ca_cert),
+            ca_key_path=str(ca_key),
+            allow_domains=["127.0.0.1"],
+            secret_tokens={"__DEVM_SECRET_FOO__": "DEVM_SECRET_FOO"},
+        )
+
+        # Value carries the URL-special characters a real credential can
+        # contain — standard-alphabet base64 includes "/" and "+".
+        secret = "a&b=c+d/e"
+        with spawn(cfg, env={"DEVM_SECRET_FOO": secret}):
+            conn = http.client.HTTPConnection("127.0.0.1", http_port, timeout=5)
+            conn.request(
+                "GET",
+                f"http://127.0.0.1:{backend_port}"
+                f"/api/__DEVM_SECRET_FOO__?token=__DEVM_SECRET_FOO__",
+            )
+            resp = conn.getresponse()
+            assert resp.status == 200, f"proxy returned {resp.status}"
+
+        path = received["path"]
+        assert path is not None, "backend never received a request"
+
+        # Query: substituted AND percent-encoded, so the value cannot
+        # break out of its parameter.
+        assert "token=a%26b%3Dc%2Bd%2Fe" in path, (
+            f"query param not substituted+escaped, got: {path!r}"
+        )
+
+        # Path: deliberately untouched — the raw token reaches upstream.
+        assert "/api/__DEVM_SECRET_FOO__" in path, (
+            f"path must NOT be substituted (match_path is off), got: {path!r}"
         )
     finally:
         backend.shutdown()
