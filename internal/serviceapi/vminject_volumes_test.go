@@ -31,8 +31,10 @@ func TestBuildVolumeMountScript_EmptyMac_TargetHasContent_Adopts(t *testing.T) {
 	assert.Contains(t, script, "cp -a /var/lib/postgresql/data/. /mnt/vol_pg-data/")
 	// After a successful cp, the original target must be evacuated so
 	// the next boot (bind mount doesn't survive reboot) sees an empty
-	// target + non-empty Mac volume, not a both-non-empty conflict:
-	assert.Contains(t, script, "rm -rf /var/lib/postgresql/data/*")
+	// target + non-empty Mac volume, not a both-non-empty conflict.
+	// find -mindepth 1 -delete (not rm -rf dir/*) so dotfiles are
+	// also evacuated:
+	assert.Contains(t, script, "find /var/lib/postgresql/data -mindepth 1 -delete")
 	// Then bind:
 	assert.Contains(t, script, "mount --bind /mnt/vol_pg-data /var/lib/postgresql/data")
 }
@@ -66,11 +68,23 @@ func TestBuildVolumeMountScript_AdoptFailure_CleansUpVolumeDir(t *testing.T) {
 	// then exit non-zero. Any half-copied files must not survive.
 	script := buildVolumeMountScript("pg-data", "/var/lib/postgresql/data", true)
 	// The script has an explicit trap or explicit failure branch that
-	// wipes /mnt/vol_pg-data/ contents on cp failure:
-	assert.Contains(t, script, "rm -rf /mnt/vol_pg-data/")
+	// wipes /mnt/vol_pg-data/ contents on cp failure. find -mindepth 1
+	// -delete (not rm -rf dir/*) so dotfiles are also wiped:
+	assert.Contains(t, script, "find /mnt/vol_pg-data -mindepth 1 -delete")
 	// And exits non-zero on that path:
 	assert.True(t, strings.Contains(script, "exit 1") || strings.Contains(script, "exit 2"),
 		"failure branch must exit non-zero")
+}
+
+func TestBuildVolumeMountScript_CleanupHandlesDotfiles(t *testing.T) {
+	// Regression: cp -a copies dotfiles, but rm -rf dir/* does NOT match
+	// dotfiles under bash's default globbing (dotglob off). The spec's
+	// headline use case (~/.claude, a dot-directory with only hidden
+	// contents) would silently fail to evacuate/roll back. All cleanup
+	// sites must use `find <path> -mindepth 1 -delete` instead.
+	script := buildVolumeMountScript("pg-data", "/var/lib/postgresql/data", true)
+	assert.NotContains(t, script, "rm -rf /var/lib/postgresql/data/*")
+	assert.NotContains(t, script, "rm -rf /mnt/vol_pg-data/*")
 }
 
 func TestBuildVolumeMountScript_Idempotent(t *testing.T) {

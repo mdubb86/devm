@@ -82,15 +82,16 @@ grep -q '^workspace' /etc/fstab || echo 'workspace %s virtiofs rw,_netdev 0 0' |
 // so the daemon threads this bit in through the script.
 //
 // Adopt failure is atomic (spec § adopt failure): cp -a runs and its
-// failure wipes /mnt/vol_<name>/* back to empty and exits non-zero.
-// The Mac dir returns to its pre-attempt state, and provisioning
-// aborts. On cp success, the guest target is also evacuated (rm -rf
-// its contents) so a subsequent boot — where the bind mount has not
-// survived the reboot but the now-adopted Mac content has — sees an
-// empty target and a non-empty Mac volume, i.e. a clean bind rather
-// than a false both-non-empty conflict. If that evacuation itself
-// fails, the Mac side is rolled back and provisioning aborts, same
-// as a cp failure.
+// failure wipes /mnt/vol_<name>/ back to empty (via `find -delete`,
+// which — unlike `rm -rf dir/*` — also removes dotfiles) and exits
+// non-zero. The Mac dir returns to its pre-attempt state, and
+// provisioning aborts. On cp success, the guest target is also
+// evacuated the same way so a subsequent boot — where the bind mount
+// has not survived the reboot but the now-adopted Mac content has —
+// sees an empty target and a non-empty Mac volume, i.e. a clean bind
+// rather than a false both-non-empty conflict. If that evacuation
+// itself fails, the Mac side is rolled back and provisioning aborts,
+// same as a cp failure.
 //
 // Idempotent on repeat calls: the outer mountpoint check on the
 // target path short-circuits if the bind mount is already present
@@ -118,7 +119,7 @@ if [ -n "$(ls -A %s 2>/dev/null)" ]; then
     # bind. On cp failure, wipe the partial copy so the Mac dir
     # returns to empty (clean-or-nothing) and abort.
     if ! cp -a %s/. %s/; then
-        rm -rf %s/*
+        find %s -mindepth 1 -delete
         echo "volume adopt failed for %s (target=%s); Mac dir rolled back to empty" >&2
         exit 1
     fi
@@ -126,8 +127,8 @@ if [ -n "$(ls -A %s 2>/dev/null)" ]; then
     # it as empty (the bind doesn't persist across guest reboots — only
     # the virtiofs share does — so without this, the next boot hits the
     # both-non-empty conflict path).
-    if ! rm -rf %s/*; then
-        rm -rf %s/*
+    if ! find %s -mindepth 1 -delete; then
+        find %s -mindepth 1 -delete
         echo "volume adopt failed for %s: could not evacuate target %s; Mac dir rolled back" >&2
         exit 1
     fi
@@ -139,8 +140,8 @@ if [ -n "$(ls -A %s 2>/dev/null)" ]; then
     cat >&2 <<'CONFLICT_EOF'
 mount conflict: volume %s has existing content on the Mac side and
 the guest target %s also has content. Resolve one side:
-  - clear guest content: devm shell -- sudo rm -rf %s/*
-  - clear Mac volume:    rm -rf '$MAC_VOLUME_DIR'
+  - clear guest content: devm shell -- sudo find %s -mindepth 1 -delete
+  - clear Mac volume:    find '$MAC_VOLUME_DIR' -mindepth 1 -delete
 CONFLICT_EOF
     exit 1
 fi
