@@ -88,6 +88,49 @@ func TestTransformArgv_BuildxBuildRespectsUserBuilderEqualsForm(t *testing.T) {
 	)
 }
 
+// TestUserSetBuilder_ArityAware pins the arity-tracking behavior:
+// a `--builder` token that is CONSUMED as the value of a preceding
+// valued flag (e.g. `-f --builder .` where -f=Dockerfile-named-"--builder")
+// must NOT trigger userSetBuilder — otherwise the shim would skip
+// injection and route to embedded BuildKit, breaking transparent build.
+func TestUserSetBuilder_ArityAware(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+		want bool
+	}{
+		{"real user --builder", []string{"buildx", "build", "--builder", "mine", "."}, true},
+		{"real user --builder= form", []string{"buildx", "build", "--builder=mine", "."}, true},
+		{"--builder as -f's value (contrived)", []string{"buildx", "build", "-f", "--builder", "."}, false},
+		{"--builder as --file's value", []string{"buildx", "build", "--file", "--builder", "."}, false},
+		{"--builder as -t's value", []string{"buildx", "build", "-t", "--builder", "."}, false},
+		{"real --builder after -f Dockerfile", []string{"buildx", "build", "-f", "Dockerfile", "--builder", "mine", "."}, true},
+		{"real --builder after boolean flag", []string{"buildx", "build", "--no-cache", "--builder", "mine", "."}, true},
+		{"docker global --context then --builder", []string{"--context", "myctx", "buildx", "build", "--builder", "mine", "."}, true},
+		{"--builder as --context's value (contrived)", []string{"--context", "--builder", "buildx", "build", "."}, false},
+		{"no --builder anywhere", []string{"buildx", "build", "-t", "img", "."}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := userSetBuilder(tc.argv)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestTransformArgv_BuildxBuildFValueBuilderInjectsCorrectly is the
+// end-to-end sibling of TestUserSetBuilder_ArityAware: -f --builder
+// should NOT prevent devm from injecting its own --builder devm.
+func TestTransformArgv_BuildxBuildFValueBuilderInjectsCorrectly(t *testing.T) {
+	stubVerify(t)
+	got, err := transformArgv([]string{"buildx", "build", "-f", "--builder", "."})
+	require.NoError(t, err)
+	assert.Equal(t,
+		[]string{"buildx", "build", "--builder", "devm", "-f", "--builder", "."},
+		got,
+	)
+}
+
 func TestTransformArgv_RunPassesThroughUnchanged(t *testing.T) {
 	verifyBuilderHealthyFn = func() error {
 		t.Fatal("verifyBuilderHealthy called for docker run")

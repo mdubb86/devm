@@ -110,17 +110,44 @@ func injectBuilder(argv []string) []string {
 	return argv // unreachable when called after the buildx/build match
 }
 
+// buildxBuildValuedFlags names docker global + `docker buildx build`
+// flags that take a value in the next argv token, for the subset whose
+// value could plausibly be the literal string "--builder" (a filename
+// via -f, a tag via -t, a docker context path). Any flag NOT in this
+// map is treated as boolean/self-contained-value for arity purposes.
+// Newer buildx versions may add more valued flags; the worst case of
+// a missing entry is the same class of false-positive this map exists
+// to prevent — a duplicate --builder gets injected and docker errors
+// loudly, not silently.
+var buildxBuildValuedFlags = map[string]bool{
+	// Docker global flags (can precede `buildx`).
+	"--config": true, "--context": true, "-c": true,
+	"--host": true, "-H": true,
+	"--log-level": true, "-l": true,
+	// `docker buildx build` valued flags whose value could be "--builder".
+	"-f": true, "--file": true,
+	"-t": true, "--tag": true,
+}
+
 // userSetBuilder reports whether argv contains an explicit --builder
-// or --builder= flag anywhere. If yes, we respect the user's choice
-// and skip our injection entirely.
+// or --builder= flag at flag position (not swallowed as a value by
+// a preceding valued flag like -f or -t). If yes, we respect the
+// user's choice and skip our injection entirely.
 func userSetBuilder(argv []string) bool {
-	for i, a := range argv {
+	i := 0
+	for i < len(argv) {
+		a := argv[i]
 		if a == "--builder" && i+1 < len(argv) {
 			return true
 		}
 		if strings.HasPrefix(a, "--builder=") {
 			return true
 		}
+		if buildxBuildValuedFlags[a] && i+1 < len(argv) {
+			i += 2
+			continue
+		}
+		i++
 	}
 	return false
 }
