@@ -9,10 +9,10 @@ since: recipes-v1.0.0
 
 # Claude Code
 
-Uses the official native installer (no Node dependency) and relocates
-all `~/.claude` state onto the host-side workspace bind-mount so it
-survives `devm teardown`. The allow list is explicit — every domain
-Claude Code needs is listed here.
+Uses the official native installer (no Node dependency) and persists all
+`~/.claude` state — OAuth login, transcripts, memory, settings — in a
+devm volume so it survives `devm teardown`. The allow list is explicit —
+every domain Claude Code needs is listed here.
 
 ## devm.yaml additions
 
@@ -29,8 +29,13 @@ install:
   - ">install-claude-cli"
 
 env:
-  CLAUDE_CONFIG_DIR: $WORKSPACE/.devm/.claude
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+
+volumes:
+  # Claude's ~/.claude: OAuth (.credentials.json), transcripts, memory,
+  # settings. Mounted AT the default path so no CLAUDE_CONFIG_DIR
+  # override is needed — Claude runs on its own default location.
+  claude: /home/devm/.claude
 
 network:
   allow:
@@ -56,13 +61,9 @@ network:
   installer re-runs on every cold-start (`install:` runs once per
   VM lifetime).
 - **State** is everything Claude stores under `~/.claude`: OAuth at
-  `.credentials.json`, conversation transcripts under
-  `projects/<repo>/<session>.jsonl`, memory, history, settings.
-  `CLAUDE_CONFIG_DIR` relocates all of it to `$WORKSPACE/.devm/.claude`.
-- **Why `.devm/.claude`:** `.devm/` is gitignored by devm convention,
-  so OAuth tokens stay off git automatically. `.devm/` lives on the
-  workspace bind-mount → host-side → survives `devm teardown`. devm
-  never prunes anything under `.devm/` outside its own scripts dir.
+  `.credentials.json`, conversation transcripts, memory, settings.
+  The `claude` volume mounts at Claude's native default path so no
+  `CLAUDE_CONFIG_DIR` override is needed. Survives `devm teardown`.
 - **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`** kills Sentry error
   reporting + telemetry. Cleaner than allowlisting `*.sentry.io`.
 - **`raw.githubusercontent.com`** is needed for plugin marketplace
