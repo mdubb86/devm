@@ -12,14 +12,14 @@ Consolidated end-to-end proof of `docker: true`:
     on 127.0.0.1:<non-80/443>. Guest egress enforcement itself is
     covered by test_softnet_20 (softnet is the egress boundary now,
     not the guest's nftables ruleset).
-  - `docker build` auto-receives the devm-ca buildkit secret —
-    proves devm-docker-shim at /usr/local/bin/docker intercepts
-    build subcommands and appends `--secret id=devm-ca,src=…`.
-  - Container inherits CA/proxy env from /etc/environment via the
-    shim's `-e KEY=VAL` injection — proves language runtimes (Python
-    certifi, Node, uv) inside containers trust iron-proxy's MITM CA
-    without per-image config. User `-e KEY=VAL` on the command still
-    wins over the shim's injection.
+  - `devm` buildx builder registered post-install — proves the docker
+    install script's buildkit deploy + builder-create steps ran. Full
+    transparent-build coverage lives in test_147_docker_build_transparent.
+  - Container inherits CA/proxy env from /etc/environment via
+    devm-runc-shim's OCI process.env mutation — proves language
+    runtimes (Python certifi, Node, uv) inside containers trust
+    iron-proxy's MITM CA without per-image config. User `-e KEY=VAL`
+    on the command still wins over the shim's injection.
 
 Single test — cold-start is ~5 min; splitting triples cost for no
 coverage gain.
@@ -206,9 +206,9 @@ def test_docker_first_class_end_to_end(workspace, devm):
     # NODE_EXTRA_CA_CERTS and UV_SYSTEM_CERTS are both present in
     # /etc/environment as of v0.9.5/6, so both must show up injected.
     # NO_PROXY=* is also always present.
-    assert "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt" in env_text, (
-        f"container env missing NODE_EXTRA_CA_CERTS — shim did not inject "
-        f"or /etc/environment lost it. env output:\n{env_text}"
+    assert "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt" in env_text, (
+        f"container env missing NODE_EXTRA_CA_CERTS — runc-shim did not "
+        f"inject or /etc/environment lost it. env output:\n{env_text}"
     )
     assert "UV_SYSTEM_CERTS=1" in env_text, (
         f"container env missing UV_SYSTEM_CERTS. env output:\n{env_text}"
@@ -232,34 +232,22 @@ def test_docker_first_class_end_to_end(workspace, devm):
         f"{override_text}"
     )
     # Make sure the shim's own value isn't ALSO there (would be a duplicate).
-    assert "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/devm.crt" not in override_text, (
-        f"shim injected its own NODE_EXTRA_CA_CERTS despite user override. "
+    assert "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt" not in override_text, (
+        f"runc-shim injected its own NODE_EXTRA_CA_CERTS despite user override. "
         f"env output:\n{override_text}"
     )
 
-    # ---- Assertion 5: devm-docker-shim intercepts `docker build` and
-    # ---- appends `--secret id=devm-ca,src=…`. The Dockerfile mounts
-    # ---- the secret with required=false, then a follow-up RUN fails
-    # ---- loud if the mount was empty. Without the shim, buildkit
-    # ---- sees no --secret flag → required=false makes the mount
-    # ---- silently empty → the `[ -s ]` test fails → build fails,
-    # ---- pinpointing the shim as the regression source.
-    build_ctx = workspace.path / "shim-e2e"
-    build_ctx.mkdir()
-    (build_ctx / "Dockerfile").write_text(
-        "# syntax=docker/dockerfile:1\n"
-        "FROM alpine:latest\n"
-        "RUN --mount=type=secret,id=devm-ca,dst=/tmp/devm-ca,required=false \\\n"
-        "    [ -s /tmp/devm-ca ] || { echo 'FAIL: devm-docker-shim did not inject --secret'; exit 1; }\n"
+    # ---- Assertion 5: devm-docker-shim rewrites `docker build` to
+    # ---- route through the devm-managed buildx builder. The full
+    # ---- transparent-build path (RUN steps hitting HTTPS through
+    # ---- iron-proxy's MITM without a user-side CA install) is
+    # ---- covered by test_147_docker_build_transparent; here we
+    # ---- just prove the builder was registered by devm install.
+    inspect = devm_exec_with_retry(
+        devm.path, ["docker", "buildx", "inspect", "devm"],
+        cwd=str(workspace.path), timeout=30,
     )
-    build = devm_exec_with_retry(
-        devm.path,
-        ["docker", "build", "-t", "devm-shim-e2e", "shim-e2e"],
-        cwd=str(workspace.path), timeout=300,
-    )
-    assert build.returncode == 0, (
-        f"docker build failed — shim likely did not inject "
-        f"--secret id=devm-ca into the build invocation:\n"
-        f"stderr={build.stderr.decode()!r}\n"
-        f"stdout={build.stdout.decode()!r}"
+    assert inspect.returncode == 0, (
+        f"docker buildx inspect devm failed — install script did not "
+        f"register the builder:\nstderr={inspect.stderr.decode()!r}"
     )
