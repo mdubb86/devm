@@ -35,7 +35,7 @@ func TestInstallScript_ContainsRequiredPieces(t *testing.T) {
 		// devm user from dialing the buildkit socket; test_147's docker
 		// build then times out with "waiting for connection".
 		"SocketGroup=docker",
-		"systemctl enable --now buildkit.socket",
+		"systemctl enable --now buildkit.socket buildkit.service",
 		"docker buildx inspect devm",
 		"docker buildx create",
 		"--driver remote",
