@@ -54,19 +54,22 @@ WantedBy=multi-user.target`
 
 	// Upstream buildkit.socket from
 	// https://raw.githubusercontent.com/moby/buildkit/v0.28.1/examples/systemd/system/buildkit.socket
-	// with one devm addition: SocketGroup=docker so the guest's `devm`
-	// user (added to the docker group by get.docker.com in step 1) can
-	// dial the socket. Upstream's default (root:root, 0660) locks non-
-	// root users out. %t resolves to /run for system units → socket at
-	// /run/buildkit/buildkitd.sock.
+	// with one devm change: SocketMode=0666 so the guest's `devm` user
+	// can dial without depending on group membership. `usermod -aG docker
+	// devm` (step 1) updates /etc/group but the running SSH session's
+	// process credentials don't pick up the new supplementary group
+	// mid-session — subsequent `devm exec` still runs as gid=devm only,
+	// so a group-gated socket returns permission-denied. 0666 mirrors
+	// devm's own docker.sock override (see socketOverride above); this
+	// is a single-tenant dev VM, no security cost. %t resolves to /run
+	// for system units → socket lands at /run/buildkit/buildkitd.sock.
 	buildkitSocket := `[Unit]
 Description=BuildKit
 Documentation=https://github.com/moby/buildkit
 
 [Socket]
 ListenStream=%t/buildkit/buildkitd.sock
-SocketMode=0660
-SocketGroup=docker
+SocketMode=0666
 
 [Install]
 WantedBy=sockets.target`
