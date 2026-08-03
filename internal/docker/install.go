@@ -37,10 +37,12 @@ ExecStartPost=/bin/chmod 666 /run/docker.sock`
   binary = "/usr/local/bin/devm-runc-shim"
   # RUN steps run in the guest's network namespace so DNS goes through
   # iron-proxy's dnsmasq (guest /etc/resolv.conf) and HTTPS gets MITM'd
-  # by iron-proxy — matching docker run's egress path. Default "sandbox"
-  # (CNI-managed netns) has no route to iron-proxy's DNS and fails apt-
-  # get with "Temporary failure resolving …".
-  network = "host"`
+  # by iron-proxy — matching docker run's egress path. Default (CNI-
+  # managed netns) has no route to iron-proxy's DNS and fails apt-get
+  # with "Temporary failure resolving …". Key is networkMode (not
+  # network) per NetworkConfig struct tag in v0.28.1's cmd/buildkitd/
+  # config/config.go — unknown keys silently no-op.
+  networkMode = "host"`
 
 	// Verbatim upstream buildkit.service from
 	// https://raw.githubusercontent.com/moby/buildkit/v0.28.1/examples/systemd/system/buildkit.service

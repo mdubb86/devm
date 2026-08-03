@@ -26,10 +26,12 @@ func TestInstallScript_ContainsRequiredPieces(t *testing.T) {
 		"github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-arm64.tar.gz",
 		"/etc/buildkit/buildkitd.toml",
 		`binary = "/usr/local/bin/devm-runc-shim"`,
-		// network=host in the OCI worker so RUN steps use the guest's
+		// networkMode=host in the OCI worker so RUN steps use the guest's
 		// netns, DNS resolves via iron-proxy's dnsmasq, HTTPS is MITM'd —
 		// otherwise builds fail with "Temporary failure resolving …".
-		`network = "host"`,
+		// Key is `networkMode` (not `network`) per buildkit v0.28.1's
+		// NetworkConfig struct — wrong keys silently no-op.
+		`networkMode = "host"`,
 		// Inline upstream systemd units (tarball ships bin/ only).
 		"tee /etc/systemd/system/buildkit.service",
 		"tee /etc/systemd/system/buildkit.socket",
