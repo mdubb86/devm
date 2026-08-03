@@ -7,8 +7,12 @@ import (
 
 // InstallScript returns the shell script the provisioner runs inside
 // the guest VM to install Docker Engine, register devm-runc-shim as
-// the default OCI runtime, add the socket-permission drop-in, and
-// restart docker.
+// the default OCI runtime, add the socket-permission drop-in, restart
+// docker, install upstream buildkitd (pinned to BUILDKIT_VERSION in
+// the script) with systemd units from the release tarball, wire its
+// OCI worker at devm-runc-shim via /etc/buildkit/buildkitd.toml, and
+// register the "devm" buildx builder against the buildkitd unix
+// socket.
 //
 // The shim binaries (devm-runc-shim and docker CLI shim) are delivered
 // via the devmbundle; this script assumes /usr/local/bin/devm-runc-shim
@@ -27,6 +31,9 @@ func InstallScript() string {
 
 	socketOverride := `[Service]
 ExecStartPost=/bin/chmod 666 /run/docker.sock`
+
+	buildkitdToml := `[worker.oci]
+  binary = "/usr/local/bin/devm-runc-shim"`
 
 	var b strings.Builder
 	fmt.Fprintln(&b, "set -e")
@@ -52,5 +59,28 @@ ExecStartPost=/bin/chmod 666 /run/docker.sock`
 	fmt.Fprintln(&b, "# 6. Reload systemd + restart docker so the drop-in + daemon.json apply.")
 	fmt.Fprintln(&b, "sudo systemctl daemon-reload")
 	fmt.Fprintln(&b, "sudo systemctl restart docker")
+	fmt.Fprintln(&b, "# 7. Fetch upstream buildkitd tarball (ships systemd units in-tree).")
+	fmt.Fprintln(&b, "BUILDKIT_VERSION=v0.28.1")
+	fmt.Fprintln(&b, `curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-arm64.tar.gz" \`)
+	fmt.Fprintln(&b, "  | sudo tar -xz -C /usr/local")
+	fmt.Fprintln(&b, "# 8. Install unmodified upstream systemd units.")
+	fmt.Fprintln(&b, "sudo cp /usr/local/examples/systemd/system/buildkit.service /etc/systemd/system/")
+	fmt.Fprintln(&b, "sudo cp /usr/local/examples/systemd/system/buildkit.socket  /etc/systemd/system/")
+	fmt.Fprintln(&b, "# 9. Configure buildkitd's OCI worker to use devm-runc-shim.")
+	fmt.Fprintln(&b, "sudo install -d /etc/buildkit")
+	fmt.Fprintln(&b, "sudo tee /etc/buildkit/buildkitd.toml >/dev/null <<'DEVM_BUILDKITD_TOML'")
+	fmt.Fprintln(&b, buildkitdToml)
+	fmt.Fprintln(&b, "DEVM_BUILDKITD_TOML")
+	fmt.Fprintln(&b, "# 10. Enable + start via socket activation.")
+	fmt.Fprintln(&b, "sudo systemctl daemon-reload")
+	fmt.Fprintln(&b, "sudo systemctl enable --now buildkit.socket")
+	fmt.Fprintln(&b, "# 11. Idempotent buildx builder registration.")
+	fmt.Fprintln(&b, "if ! docker buildx inspect devm >/dev/null 2>&1; then")
+	fmt.Fprintln(&b, "  docker buildx create \\")
+	fmt.Fprintln(&b, "    --driver remote \\")
+	fmt.Fprintln(&b, "    --name devm \\")
+	fmt.Fprintln(&b, "    --use \\")
+	fmt.Fprintln(&b, "    unix:///run/buildkit/buildkitd.sock")
+	fmt.Fprintln(&b, "fi")
 	return b.String()
 }
