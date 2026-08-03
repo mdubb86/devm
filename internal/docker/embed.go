@@ -21,6 +21,8 @@ func Shim() []byte { return shimBinary }
 
 // DockerShim returns the bytes of the compiled linux/arm64
 // devm-docker-shim. Provisioner writes these to /usr/local/bin/docker
-// in the guest so `docker build` invocations auto-inject the
-// buildkit secret that mounts devm's CA into RUN steps.
+// in the guest so `docker build` invocations get rewritten to route
+// through the `devm` buildx builder (a devm-managed buildkitd whose
+// OCI worker is devm-runc-shim), which bind-mounts the CA + appends
+// caenv env vars to every RUN step's OCI spec transparently.
 func DockerShim() []byte { return dockerShimBinary }

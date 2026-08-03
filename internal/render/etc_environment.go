@@ -94,7 +94,9 @@ func encodeEtcEnvValue(v string) (string, error) {
 // Emitted lines, in this order:
 //  1. caenv.Vars — NO_PROXY plus every CA-file env var devm exports
 //     (see internal/caenv/vars.go for the canonical list, which is
-//     also what devm-docker-shim projects into every container).
+//     also what devm-runc-shim appends to every OCI spec's
+//     process.env at container start (see
+//     cmd/devm-runc-shim/injectEnvVars)).
 //  2. PATH=<cfg.Path[0]>:<cfg.Path[1]>:...:/opt/devm/scripts:<guestSystemPATH>
 //     — encoded via encodeEtcEnvValue like every other value; bare
 //     emission for the common case (all chars bare-safe), single-quoted
@@ -108,7 +110,7 @@ func RenderEtcEnvironment(cfg schema.Config) (string, error) {
 	var b strings.Builder
 
 	// CA / NO_PROXY block — sourced from caenv.Vars so this and
-	// the docker-shim's inheritance whitelist stay in lockstep.
+	// devm-runc-shim's OCI process.env injection stay in lockstep.
 	// All values are bare-safe (paths of [A-Za-z0-9_/.:-*] or "1"),
 	// so no encodeEtcEnvValue call is needed.
 	for _, v := range caenv.Vars {

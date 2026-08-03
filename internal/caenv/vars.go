@@ -1,6 +1,6 @@
 // Package caenv is the single source of truth for CA-trust env vars
 // devm exports — both into the guest's /etc/environment (RenderEtcEnvironment)
-// and into containers via devm-docker-shim's inheritance whitelist.
+// and into containers via devm-runc-shim's OCI `process.env` mutation.
 // Adding a new entry here reaches both call sites automatically.
 package caenv
 
@@ -58,15 +58,4 @@ var Vars = []Var{
 	{Key: "GIT_SSL_CAINFO", Value: bundlePath},
 	{Key: "CARGO_HTTP_CAINFO", Value: bundlePath},
 	{Key: "PIP_CERT", Value: bundlePath},
-}
-
-// Keys returns the KEY column of Vars in order — used by
-// devm-docker-shim's inheritance whitelist, which projects only
-// keys (values come from /etc/environment at container-start time).
-func Keys() []string {
-	ks := make([]string, len(Vars))
-	for i, v := range Vars {
-		ks[i] = v.Key
-	}
-	return ks
 }

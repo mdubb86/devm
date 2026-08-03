@@ -48,11 +48,3 @@ func TestVars_CAFileEnvsPointAtBundle(t *testing.T) {
 		}
 	}
 }
-
-func TestKeys_MatchesVarsOrder(t *testing.T) {
-	ks := Keys()
-	assert.Len(t, ks, len(Vars))
-	for i, v := range Vars {
-		assert.Equal(t, v.Key, ks[i])
-	}
-}

@@ -35,7 +35,7 @@ Any other registries or hosts you pull/push to still need to be added to `networ
 
 ## Runtime CA env vars (auto-injected into every container)
 
-On top of the CA bind-mount, the docker-shim projects a fixed set of CA-trust env vars from the guest's `/etc/environment` into every `docker run`, `docker create`, and `docker exec`. This covers libraries that ignore the system store and check a specific env var instead. Current list (single source: `internal/caenv/vars.go`):
+On top of the CA bind-mount, `devm-runc-shim` injects a fixed set of CA-trust env vars by mutating the OCI spec's `process.env` before the container starts. This applies to EVERY container start — `docker run`, `docker create`, `docker exec` — and to every `RUN` step in `docker build` (since those steps run under the same shim via the devm buildx builder's OCI worker). This covers libraries that ignore the system store and check a specific env var instead. Current list (single source: `internal/caenv/vars.go`):
 
 | Env var | Consumer |
 |---|---|
@@ -52,7 +52,7 @@ On top of the CA bind-mount, the docker-shim projects a fixed set of CA-trust en
 | `PIP_CERT` | pip |
 | `NO_PROXY=*` | disable HTTP proxy vars (iron-proxy is transparent) |
 
-**User overrides win.** If your `docker run` (or the Dockerfile's `ENV`) already sets one of these, the shim does not re-inject it.
+**User overrides win.** If your `docker run` (or the Dockerfile's `ENV`, or a buildkitd config) already sets one of these, the runc-shim leaves it as-is.
 
 ## Libraries that hardcode certifi (Python-only edge case)
 
