@@ -42,7 +42,18 @@ ExecStartPost=/bin/chmod 666 /run/docker.sock`
   # with "Temporary failure resolving …". Key is networkMode (not
   # network) per NetworkConfig struct tag in v0.28.1's cmd/buildkitd/
   # config/config.go — unknown keys silently no-op.
-  networkMode = "host"`
+  networkMode = "host"
+
+[dns]
+  # buildkit rewrites the container's /etc/resolv.conf unconditionally
+  # (even in network=host mode) and REPLACES any 127.x.x.x nameserver
+  # with Google DNS as a "safety" fallback — a docker-legacy behavior
+  # for bridge-mode containers where 127.0.0.1 wouldn't reach anything.
+  # With network=host the container IS in the guest netns so 127.0.0.1
+  # DOES reach the guest's dnsmasq (which is where iron-proxy egress
+  # resolution happens). Force buildkit to use it explicitly here so
+  # the rewrite doesn't silently break apt-get and every other HTTPS.
+  nameservers = ["127.0.0.1"]`
 
 	// Verbatim upstream buildkit.service from
 	// https://raw.githubusercontent.com/moby/buildkit/v0.28.1/examples/systemd/system/buildkit.service

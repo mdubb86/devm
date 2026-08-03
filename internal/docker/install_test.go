@@ -32,6 +32,12 @@ func TestInstallScript_ContainsRequiredPieces(t *testing.T) {
 		// Key is `networkMode` (not `network`) per buildkit v0.28.1's
 		// NetworkConfig struct — wrong keys silently no-op.
 		`networkMode = "host"`,
+		// [dns] nameservers = ["127.0.0.1"] pins buildkit's per-container
+		// resolv.conf at the guest's dnsmasq (reachable via host netns),
+		// bypassing buildkit's default "127.x.x.x → 8.8.8.8" rewrite that
+		// otherwise silently breaks DNS resolution during RUN steps.
+		`[dns]`,
+		`nameservers = ["127.0.0.1"]`,
 		// Inline upstream systemd units (tarball ships bin/ only).
 		"tee /etc/systemd/system/buildkit.service",
 		"tee /etc/systemd/system/buildkit.socket",
