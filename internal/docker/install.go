@@ -23,11 +23,24 @@ import (
 // a devm-managed service — get.docker.com enables it internally.
 func InstallScript() string {
 	// daemon.json content — full write, no merge. devm owns this file.
+	//
+	// "dns" pins containers on the default bridge network to the docker
+	// bridge gateway (172.17.0.1), where the guest's dnsmasq already
+	// listens (0.0.0.0:53). Without this, docker synthesizes container
+	// /etc/resolv.conf and REPLACES the guest's "nameserver 127.0.0.1"
+	// with Google DNS 8.8.8.8 as a "safety" fallback (since 127.x from
+	// a bridge container wouldn't reach the host resolver). Iron-proxy
+	// blocks egress to 8.8.8.8 → container DNS lookups time out → curl
+	// rc=6 "Couldn't resolve host". 172.17.0.1 IS reachable from the
+	// bridge and IS where dnsmasq listens, so DNS goes through iron-
+	// proxy's allowlist normally. Same class of fix as buildkit's [dns]
+	// section (see buildkitdToml below).
 	daemon := `{
   "runtimes": {
     "devm": { "path": "/usr/local/bin/devm-runc-shim" }
   },
-  "default-runtime": "devm"
+  "default-runtime": "devm",
+  "dns": ["172.17.0.1"]
 }`
 
 	socketOverride := `[Service]

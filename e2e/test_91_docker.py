@@ -87,14 +87,19 @@ def test_docker_first_class_end_to_end(workspace, devm):
     # ---- unlocks — container's TLS client MUST trust the mounted
     # ---- devm CA bundle.
     #
-    # `-e CURL_CA_BUNDLE=` clears an image-specific env in
-    # curlimages/curl that pins curl to a bundled /cacert.pem and
-    # bypasses the OS trust store. Real workloads use the OS store
-    # (which is what the shim's bind-mount populates); we mirror that
-    # by asking curl to fall back to its compile-time default here.
+    # `-e CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt` points
+    # curl at the guest's merged trust bundle — bind-mounted into
+    # every container by devm-runc-shim, and the store devm's caenv
+    # env-var injection targets by default. Overrides curlimages/curl's
+    # image-baked ENV CURL_CA_BUNDLE=/cacert.pem, which pins curl to
+    # a bundled cert store that does NOT include devm's CA. Clearing
+    # the var to empty (as an older revision of this test tried) makes
+    # curl fall through to its compile-time default, which on this
+    # image is also not the merged bundle → cert verify fails.
     allowed = devm_exec_with_retry(
         devm.path,
-        ["docker", "run", "--rm", "-e", "CURL_CA_BUNDLE=",
+        ["docker", "run", "--rm",
+         "-e", "CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt",
          "curlimages/curl:latest",
          "-s", "-o", "/dev/null", "-w", "%{http_code}",
          "-A", "Mozilla/5.0",
@@ -119,7 +124,8 @@ def test_docker_first_class_end_to_end(workspace, devm):
     # ---- layer; 000 = escaped through Docker's forward hook.
     blocked = devm_exec_with_retry(
         devm.path,
-        ["docker", "run", "--rm", "-e", "CURL_CA_BUNDLE=",
+        ["docker", "run", "--rm",
+         "-e", "CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt",
          "curlimages/curl:latest",
          "-s", "-o", "/dev/null", "-w", "%{http_code}",
          "-A", "Mozilla/5.0",

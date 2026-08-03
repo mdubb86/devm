@@ -16,6 +16,11 @@ func TestInstallScript_ContainsRequiredPieces(t *testing.T) {
 		"/etc/docker/daemon.json",
 		`"default-runtime": "devm"`,
 		`"path": "/usr/local/bin/devm-runc-shim"`,
+		// dns: docker synthesizes container /etc/resolv.conf and
+		// rewrites 127.x → 8.8.8.8 (unreachable through iron-proxy);
+		// point containers at the docker bridge gateway where dnsmasq
+		// listens so DNS goes through iron-proxy's allowlist normally.
+		`"dns": ["172.17.0.1"]`,
 		"systemctl daemon-reload",
 		"systemctl restart docker",
 		"test -x /usr/bin/runc",
