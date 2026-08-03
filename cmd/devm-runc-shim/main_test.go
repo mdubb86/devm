@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/mdubb86/devm/internal/caenv"
 )
 
 // helper: minimal valid OCI config.json with a rootfs directory
@@ -129,6 +132,148 @@ func TestBundleFromArgs_FindsFlag(t *testing.T) {
 				t.Errorf("bundleFromArgs(%v): want %q, got %q", tc.argv, tc.want, got)
 			}
 		})
+	}
+}
+
+// helper: minimal spec with process.env already populated.
+func mkBundleWithProcessEnv(t *testing.T, env []string) string {
+	t.Helper()
+	bundle := t.TempDir()
+	rootfs := filepath.Join(bundle, "rootfs")
+	if err := os.MkdirAll(filepath.Join(rootfs, "etc/ssl/certs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	envAny := make([]any, len(env))
+	for i, e := range env {
+		envAny[i] = e
+	}
+	spec := map[string]any{
+		"ociVersion": "1.0.0",
+		"root":       map[string]any{"path": rootfs},
+		"process":    map[string]any{"env": envAny},
+		"mounts":     []any{},
+	}
+	body, _ := json.MarshalIndent(spec, "", "  ")
+	if err := os.WriteFile(filepath.Join(bundle, "config.json"), body, 0644); err != nil {
+		t.Fatal(err)
+	}
+	return bundle
+}
+
+func readProcessEnv(t *testing.T, bundle string) []string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(bundle, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(body, &spec); err != nil {
+		t.Fatal(err)
+	}
+	process, _ := spec["process"].(map[string]any)
+	envAny, _ := process["env"].([]any)
+	out := make([]string, 0, len(envAny))
+	for _, e := range envAny {
+		if s, ok := e.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func TestInjectEnvVars_AppendsAllMissingCaenvVars(t *testing.T) {
+	bundle := mkBundleWithProcessEnv(t, []string{"PATH=/usr/bin"})
+	if err := injectEnvVars(bundle); err != nil {
+		t.Fatalf("injectEnvVars: %v", err)
+	}
+	env := readProcessEnv(t, bundle)
+
+	// Pre-existing entry preserved.
+	found := false
+	for _, e := range env {
+		if e == "PATH=/usr/bin" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("PATH=/usr/bin dropped by injectEnvVars; got %v", env)
+	}
+
+	// Every caenv.Vars entry present.
+	for _, v := range caenv.Vars {
+		want := v.Key + "=" + v.Value
+		found := false
+		for _, e := range env {
+			if e == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected %q in process.env; got %v", want, env)
+		}
+	}
+}
+
+func TestInjectEnvVars_UserSetKeyPreserved(t *testing.T) {
+	userSet := "REQUESTS_CA_BUNDLE=/user/custom.pem"
+	bundle := mkBundleWithProcessEnv(t, []string{userSet})
+	if err := injectEnvVars(bundle); err != nil {
+		t.Fatal(err)
+	}
+	env := readProcessEnv(t, bundle)
+
+	// User's entry preserved.
+	found := false
+	for _, e := range env {
+		if e == userSet {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("user-set REQUESTS_CA_BUNDLE dropped; got %v", env)
+	}
+
+	// No second REQUESTS_CA_BUNDLE=... entry from caenv.
+	count := 0
+	for _, e := range env {
+		if strings.HasPrefix(e, "REQUESTS_CA_BUNDLE=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected 1 REQUESTS_CA_BUNDLE entry, got %d; env=%v", count, env)
+	}
+}
+
+func TestInjectEnvVars_Idempotent(t *testing.T) {
+	bundle := mkBundleWithProcessEnv(t, []string{})
+	if err := injectEnvVars(bundle); err != nil {
+		t.Fatal(err)
+	}
+	first := readProcessEnv(t, bundle)
+	if err := injectEnvVars(bundle); err != nil {
+		t.Fatal(err)
+	}
+	second := readProcessEnv(t, bundle)
+	if len(first) != len(second) {
+		t.Errorf("second injectEnvVars must be no-op: first=%d entries, second=%d entries", len(first), len(second))
+	}
+}
+
+func TestInjectEnvVars_MissingProcess_ReturnsError(t *testing.T) {
+	bundle := t.TempDir()
+	spec := map[string]any{"ociVersion": "1.0.0"}
+	body, _ := json.MarshalIndent(spec, "", "  ")
+	if err := os.WriteFile(filepath.Join(bundle, "config.json"), body, 0644); err != nil {
+		t.Fatal(err)
+	}
+	err := injectEnvVars(bundle)
+	if err == nil {
+		t.Errorf("injectEnvVars on spec without .process: want error, got nil")
+		return
+	}
+	if !strings.Contains(err.Error(), "process") {
+		t.Errorf("error should mention 'process'; got %v", err)
 	}
 }
 

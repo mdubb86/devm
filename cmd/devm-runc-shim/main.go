@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/mdubb86/devm/internal/caenv"
 )
 
 const (
@@ -42,6 +44,9 @@ func run(argv []string) error {
 	}
 	if err := injectCA(bundle); err != nil {
 		return fmt.Errorf("inject CA into %s: %w", bundle, err)
+	}
+	if err := injectEnvVars(bundle); err != nil {
+		return fmt.Errorf("inject env vars into %s: %w", bundle, err)
 	}
 	return execRunc(argv)
 }
@@ -145,6 +150,73 @@ func injectCA(bundle string) error {
 	}
 
 	// Atomic write: temp file in same dir + rename.
+	tmp, err := os.CreateTemp(bundle, "config.json.*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(newBody); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, cfgPath)
+}
+
+// injectEnvVars reads config.json in the bundle, appends every caenv.Vars
+// entry to process.env whose Key is not already present, and atomically
+// writes back. User overrides win: keys set via docker's -e KEY=VAL or
+// buildkitd's ENV directive land in process.env before we run, and we
+// leave them alone.
+func injectEnvVars(bundle string) error {
+	cfgPath := filepath.Join(bundle, "config.json")
+	body, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return err
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(body, &spec); err != nil {
+		return fmt.Errorf("parse config.json: %w", err)
+	}
+
+	process, ok := spec["process"].(map[string]any)
+	if !ok {
+		return errors.New("spec.process missing")
+	}
+	envSlice, _ := process["env"].([]any)
+
+	present := make(map[string]bool, len(envSlice))
+	for _, e := range envSlice {
+		s, ok := e.(string)
+		if !ok {
+			continue
+		}
+		if eq := strings.IndexByte(s, '='); eq > 0 {
+			present[s[:eq]] = true
+		}
+	}
+
+	changed := false
+	for _, v := range caenv.Vars {
+		if present[v.Key] {
+			continue
+		}
+		envSlice = append(envSlice, v.Key+"="+v.Value)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	process["env"] = envSlice
+
+	newBody, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		return fmt.Errorf("re-marshal spec: %w", err)
+	}
 	tmp, err := os.CreateTemp(bundle, "config.json.*")
 	if err != nil {
 		return err
