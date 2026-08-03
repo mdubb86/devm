@@ -37,6 +37,7 @@ ExecStartPost=/bin/chmod 666 /run/docker.sock`
 
 	var b strings.Builder
 	fmt.Fprintln(&b, "set -e")
+	fmt.Fprintln(&b, "set -o pipefail")
 	fmt.Fprintln(&b, "# 1. Install Docker Engine via upstream installer.")
 	fmt.Fprintln(&b, "curl -fsSL https://get.docker.com | sh")
 	fmt.Fprintln(&b, "sudo usermod -aG docker devm")

@@ -8,6 +8,7 @@ import (
 func TestInstallScript_ContainsRequiredPieces(t *testing.T) {
 	script := InstallScript()
 	musts := []string{
+		"set -o pipefail",
 		"curl -fsSL https://get.docker.com | sh",
 		"usermod -aG docker devm",
 		"/etc/systemd/system/docker.service.d/override.conf",
@@ -46,6 +47,20 @@ func TestInstallScript_UsesFailFast(t *testing.T) {
 	// rather than the provisioner silently succeeding halfway through.
 	if !strings.HasPrefix(strings.TrimSpace(InstallScript()), "set -e") {
 		t.Errorf("InstallScript must begin with `set -e`, got:\n%s", InstallScript())
+	}
+}
+
+func TestInstallScript_PipefailFollowsFailFast(t *testing.T) {
+	// `set -o pipefail` must immediately follow `set -e` so a failed
+	// curl in a `curl | tar` or `curl | sh` pipe (steps 1 and 7) can't
+	// be masked by the downstream command exiting 0 on bad/empty input.
+	lines := strings.Split(strings.TrimSpace(InstallScript()), "\n")
+	if len(lines) < 2 || lines[0] != "set -e" || lines[1] != "set -o pipefail" {
+		got := lines
+		if len(got) > 2 {
+			got = got[:2]
+		}
+		t.Errorf("InstallScript's first two lines must be `set -e` then `set -o pipefail`, got: %v", got)
 	}
 }
 
