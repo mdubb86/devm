@@ -1,22 +1,12 @@
-// devm-docker-shim intercepts docker CLI invocations inside the devm
-// sandbox and appends `--secret id=devm-ca,src=/etc/ssl/certs/devm.crt`
-// on `docker build` / `docker buildx build`. On every other subcommand
-// it exec-forwards the argv unchanged.
+// devm-docker-shim intercepts docker CLI invocations and routes bare
+// `docker build` through the devm-managed buildx builder ("devm").
+// That builder runs a devm-controlled buildkitd whose OCI worker is
+// devm-runc-shim, so every RUN-step container gets iron-proxy CA
+// trust plus caenv.Vars env-var injection transparently — same shim
+// path as docker run/create/exec.
 //
-// The shim is installed at /usr/local/bin/docker so it shadows the
-// real docker at /usr/bin/docker via the standard PATH order
-// (/usr/local/bin first). At exec time we strip our own directory
-// from PATH and look up "docker" in what's left — no hardcoded path,
-// portable across distro changes.
-//
-// Why the daemon+shim split: BuildKit's build sandbox goes through
-// iron-proxy's MITM path (unlike plain `docker run`, which uses
-// SNI-passthrough on the bridge). Users write one Dockerfile RUN
-// block that mounts a `type=secret,id=devm-ca` and installs it —
-// this shim guarantees the flag is present so the mount is populated
-// inside the sandbox, and stays a portable no-op on Mac/CI where the
-// user runs plain docker without the shim (required=false on the
-// mount + a shell test that skips the update when the file is empty).
+// On every other subcommand (including `buildx build` where the user
+// passed their own --builder) the shim exec-forwards argv unchanged.
 package main
 
 import (
@@ -28,122 +18,134 @@ import (
 	"syscall"
 )
 
-// caPath is where devm's CA cert lands inside the guest (bundle-carried
-// via internal/scripts/install.sh's CA section, installed by
-// update-ca-certificates on cold start and after CA rotation). This
-// source file is untouched by update-ca-certificates and stays
-// stable across devm versions and reprovisions. Do NOT switch to
-// /etc/ssl/certs/devm.crt — update-ca-certificates creates
-// hash-named symlinks (openssl-style) there, not the friendly name.
-const caPath = "/usr/local/share/ca-certificates/devm.crt"
-
-// secretID is the buildkit secret id the injected flag exposes.
-// Users reference this from Dockerfile's RUN --mount=type=secret,id=.
-const secretID = "devm-ca"
+// builderName is the fixed buildx builder devm installs and routes
+// builds through. Registered by internal/docker/install.go.
+const builderName = "devm"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "devm-docker-shim: %v\n", err)
 		os.Exit(1)
 	}
-	// unreachable: run() always either exec's or returns an error.
+	// unreachable: run() either exec's or returns an error.
 }
 
 func run(argv []string) error {
-	return execDocker(transformArgv(argv))
-}
-
-// transformArgv applies devm's docker-shim injections in order:
-// (1) build-secret for `docker build`/`buildx build`
-// (2) container env vars for `docker run`/`create`/`exec`
-// Returns the argv the shim will exec docker with.
-func transformArgv(argv []string) []string {
-	if shouldInjectSecret(argv) {
-		argv = append(argv, "--secret", "id="+secretID+",src="+caPath)
-	}
-	if shouldInjectContainerEnv(argv) {
-		body, err := etcEnvironmentReader()
-		if err == nil {
-			injected := containerInheritArgs(argv, body)
-			if len(injected) > 0 {
-				argv = insertAfterSubcommand(argv, injected)
-			}
-		}
-		// If etcEnvironmentReader fails, silently continue —
-		// missing /etc/environment shouldn't break docker.
-	}
-	return argv
-}
-
-// etcEnvironmentReader is a test seam. Production reads /etc/environment.
-var etcEnvironmentReader = func() (string, error) {
-	b, err := os.ReadFile("/etc/environment")
+	rewritten, err := transformArgv(argv)
 	if err != nil {
-		return "", err
+		return err
 	}
-	return string(b), nil
+	return execDocker(rewritten)
 }
 
-// shouldInjectContainerEnv returns true for `docker run`/`create`/`exec` —
-// the subcommands where `-e KEY=VAL` is a valid option.
-func shouldInjectContainerEnv(argv []string) bool {
-	first, _, ok := firstPositional(argv)
-	if !ok {
-		return false
-	}
-	switch first {
-	case "run", "create", "exec":
-		return true
-	}
-	return false
-}
-
-// insertAfterSubcommand inserts extra args right after the subcommand
-// token — where -e/--env etc. must go for it to be a subcommand flag,
-// not a docker global flag or container-side argument.
+// transformArgv rewrites bare `docker build …` → `docker buildx build
+// --builder devm …`, and injects `--builder devm` into `docker buildx
+// build …` when the user hasn't set one. Every other subcommand
+// (including buildx subcommands other than build, and buildx build
+// with a user-set --builder) passes through unchanged.
 //
-// Uses firstPositional's semantics so global valued flags like
-// `--context myctx` or `--host tcp://...` are correctly skipped when
-// finding the subcommand token.
-func insertAfterSubcommand(argv []string, extra []string) []string {
-	_, rest, ok := firstPositional(argv)
-	if !ok {
-		return argv // no subcommand found; unchanged
-	}
-	// Subcommand index in argv: everything after it is `rest`.
-	// So insertion point = argv position of subcommand + 1
-	// = (len(argv) - len(rest) - 1) + 1
-	// = len(argv) - len(rest)
-	insertAt := len(argv) - len(rest)
-	out := make([]string, 0, len(argv)+len(extra))
-	out = append(out, argv[:insertAt]...)
-	out = append(out, extra...)
-	out = append(out, argv[insertAt:]...)
-	return out
-}
-
-// shouldInjectSecret reports whether argv is a `docker build` or
-// `docker buildx build` invocation — the two forms where BuildKit
-// runs RUN steps in the sandbox that MITMs through iron-proxy.
-//
-// argv here is os.Args[1:], so argv[0] is the first arg after
-// `docker`. We skip global docker CLI flags (things like `--context`,
-// `--host`, `-l`, etc.) to find the first positional token; that's
-// the subcommand. For `buildx`, we then peek at the next positional
-// to catch the `build` subsubcommand.
-func shouldInjectSecret(argv []string) bool {
+// Returns an error only when the rewrite would land on a builder that
+// isn't currently healthy — verifyBuilderHealthy checks `docker buildx
+// inspect devm` and fails loud with a "run devm reconcile" message.
+// No auto-repair.
+func transformArgv(argv []string) ([]string, error) {
 	first, rest, ok := firstPositional(argv)
 	if !ok {
-		return false
+		return argv, nil
 	}
 	switch first {
 	case "build":
-		return true
+		if err := verifyBuilderHealthy(); err != nil {
+			return nil, err
+		}
+		return rewriteBuild(argv, rest), nil
 	case "buildx":
 		second, _, ok := firstPositional(rest)
-		return ok && second == "build"
+		if !ok || second != "build" {
+			return argv, nil
+		}
+		if userSetBuilder(argv) {
+			return argv, nil
+		}
+		if err := verifyBuilderHealthy(); err != nil {
+			return nil, err
+		}
+		return injectBuilder(argv), nil
+	default:
+		return argv, nil
+	}
+}
+
+// rewriteBuild replaces the `build` subcommand token with the sequence
+// `buildx build --builder devm`, leaving preceding global flags and
+// following args intact.
+func rewriteBuild(argv, rest []string) []string {
+	// argv[insertAt] == "build". Everything after "build" is `rest`.
+	insertAt := len(argv) - len(rest) - 1
+	out := make([]string, 0, len(argv)+3)
+	out = append(out, argv[:insertAt]...)
+	out = append(out, "buildx", "build", "--builder", builderName)
+	out = append(out, rest...)
+	return out
+}
+
+// injectBuilder finds the `build` token that follows `buildx` and
+// inserts `--builder devm` immediately after it. The user's argv is
+// otherwise unchanged.
+func injectBuilder(argv []string) []string {
+	for i, a := range argv {
+		if a != "buildx" {
+			continue
+		}
+		for j := i + 1; j < len(argv); j++ {
+			if argv[j] == "build" && !strings.HasPrefix(argv[j], "-") {
+				out := make([]string, 0, len(argv)+2)
+				out = append(out, argv[:j+1]...)
+				out = append(out, "--builder", builderName)
+				out = append(out, argv[j+1:]...)
+				return out
+			}
+		}
+	}
+	return argv // unreachable when called after the buildx/build match
+}
+
+// userSetBuilder reports whether argv contains an explicit --builder
+// or --builder= flag anywhere. If yes, we respect the user's choice
+// and skip our injection entirely.
+func userSetBuilder(argv []string) bool {
+	for i, a := range argv {
+		if a == "--builder" && i+1 < len(argv) {
+			return true
+		}
+		if strings.HasPrefix(a, "--builder=") {
+			return true
+		}
 	}
 	return false
+}
+
+// verifyBuilderHealthyFn is a test seam. Production shells out to
+// `docker buildx inspect devm` and checks exit status.
+var verifyBuilderHealthyFn = realVerifyBuilderHealthy
+
+func verifyBuilderHealthy() error { return verifyBuilderHealthyFn() }
+
+func realVerifyBuilderHealthy() error {
+	real, err := resolveRealDocker()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(real, "buildx", "inspect", builderName)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf(
+			"buildx builder %q not found or unhealthy.\nRun 'devm reconcile' to restore it",
+			builderName,
+		)
+	}
+	return nil
 }
 
 // firstPositional returns the first non-flag token in argv, the slice
@@ -151,14 +153,10 @@ func shouldInjectSecret(argv []string) bool {
 // "--flag value" and "--flag=value" forms; for "--flag value" we skip
 // the value when the flag is known to take one.
 //
-// Docker's global flags that take a value: --config, --context, -c,
-// --host, -H, --log-level, -l, --tls-verify-tunnel-hostname (rare
-// enterprise ones excluded). Anything else is treated as boolean —
-// worst case we treat a value token as a subcommand and miss the
-// injection; the build then goes through without --secret, users
-// hit the same "no CA in sandbox" error and know to reach for
-// documentation. Better to miss an injection than inject at the wrong
-// spot in the argv.
+// Docker global flags that take a value: --config, --context/-c,
+// --host/-H, --log-level/-l. Anything else is treated as boolean —
+// worst case we treat a value token as a subcommand; the argv passes
+// through unchanged and docker itself errors.
 func firstPositional(argv []string) (string, []string, bool) {
 	valuedFlags := map[string]bool{
 		"--config":    true,
@@ -175,10 +173,10 @@ func firstPositional(argv []string) (string, []string, bool) {
 			return a, argv[i+1:], true
 		}
 		if strings.Contains(a, "=") {
-			continue // --flag=value: one token, already covered.
+			continue
 		}
 		if valuedFlags[a] && i+1 < len(argv) {
-			i++ // skip the value token.
+			i++
 		}
 	}
 	return "", nil, false
@@ -197,19 +195,13 @@ func execDocker(argv []string) error {
 	if err := syscall.Exec(real, full, os.Environ()); err != nil {
 		return fmt.Errorf("exec %s: %w", real, err)
 	}
-	return nil // unreachable — syscall.Exec on success does not return.
+	return nil
 }
 
 // resolveRealDocker finds the docker binary that the shim is
 // shadowing. os.Args[0]'s directory is our own install dir
 // (/usr/local/bin under normal install); strip it from PATH and
 // exec.LookPath("docker") in what remains.
-//
-// Robust to base image changes that move docker between /usr/bin,
-// /usr/local/bin (unlikely — that'd be a self-reference), or an
-// alternative location: as long as the real docker is on PATH, we
-// find it. Falls back to a clear error if the search yields nothing
-// or resolves back to our own binary.
 func resolveRealDocker() (string, error) {
 	selfExe, err := os.Executable()
 	if err != nil {
