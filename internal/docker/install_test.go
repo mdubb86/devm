@@ -26,8 +26,11 @@ func TestInstallScript_ContainsRequiredPieces(t *testing.T) {
 		"github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-arm64.tar.gz",
 		"/etc/buildkit/buildkitd.toml",
 		`binary = "/usr/local/bin/devm-runc-shim"`,
-		"/usr/local/examples/systemd/system/buildkit.service",
-		"/usr/local/examples/systemd/system/buildkit.socket",
+		// Inline upstream systemd units (tarball ships bin/ only).
+		"tee /etc/systemd/system/buildkit.service",
+		"tee /etc/systemd/system/buildkit.socket",
+		"ExecStart=/usr/local/bin/buildkitd --addr fd://",
+		"ListenStream=%t/buildkit/buildkitd.sock",
 		"systemctl enable --now buildkit.socket",
 		"docker buildx inspect devm",
 		"docker buildx create",
