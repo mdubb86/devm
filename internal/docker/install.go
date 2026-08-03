@@ -52,9 +52,13 @@ ExecStart=/usr/local/bin/buildkitd --addr fd://
 [Install]
 WantedBy=multi-user.target`
 
-	// Verbatim upstream buildkit.socket from
+	// Upstream buildkit.socket from
 	// https://raw.githubusercontent.com/moby/buildkit/v0.28.1/examples/systemd/system/buildkit.socket
-	// %t = /run for system units; sock ends up at /run/buildkit/buildkitd.sock.
+	// with one devm addition: SocketGroup=docker so the guest's `devm`
+	// user (added to the docker group by get.docker.com in step 1) can
+	// dial the socket. Upstream's default (root:root, 0660) locks non-
+	// root users out. %t resolves to /run for system units → socket at
+	// /run/buildkit/buildkitd.sock.
 	buildkitSocket := `[Unit]
 Description=BuildKit
 Documentation=https://github.com/moby/buildkit
@@ -62,6 +66,7 @@ Documentation=https://github.com/moby/buildkit
 [Socket]
 ListenStream=%t/buildkit/buildkitd.sock
 SocketMode=0660
+SocketGroup=docker
 
 [Install]
 WantedBy=sockets.target`

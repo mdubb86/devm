@@ -31,6 +31,10 @@ func TestInstallScript_ContainsRequiredPieces(t *testing.T) {
 		"tee /etc/systemd/system/buildkit.socket",
 		"ExecStart=/usr/local/bin/buildkitd --addr fd://",
 		"ListenStream=%t/buildkit/buildkitd.sock",
+		// SocketGroup=docker: without this, root:root 0660 blocks the
+		// devm user from dialing the buildkit socket; test_147's docker
+		// build then times out with "waiting for connection".
+		"SocketGroup=docker",
 		"systemctl enable --now buildkit.socket",
 		"docker buildx inspect devm",
 		"docker buildx create",
