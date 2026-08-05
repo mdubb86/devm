@@ -18,12 +18,10 @@ every domain Claude Code needs is listed here.
 
 ```yaml
 scripts:
-  # Install the Claude CLI and expose it on the devm user's PATH.
+  # Install the Claude CLI and expose it on the system PATH.
   install-claude-cli:
     - curl -fsSL https://claude.ai/install.sh | bash
-    - install -m 755 /root/.local/share/claude/versions/* /usr/local/bin/claude
-    - install -d -o devm -g devm /home/devm/.local/bin
-    - ln -sf /usr/local/bin/claude /home/devm/.local/bin/claude
+    - sudo install -m 755 /home/devm/.local/bin/claude /usr/local/bin/claude
 
 install:
   - ">install-claude-cli"
@@ -48,18 +46,12 @@ network:
 
 ## Notes
 
-- **Why the install command is three steps:** the installer drops the
-  binary at `/root/.local/share/claude/versions/*` (install runs as
-  root), which isn't on the devm user's PATH. First `install -m 755`
-  relocates the binary to `/usr/local/bin/claude` (system PATH, works
-  for any user). Then `install -d -o devm` + `ln -sf` creates
-  `~/.local/bin/claude` as a symlink to it — Claude Code does a
-  self-check that expects its binary at that canonical user path, and
-  warns/refuses some operations without it.
-- **Binary** lands at `/usr/local/bin/claude` (real file) with
-  `/home/devm/.local/bin/claude` → it (symlink). Ephemeral — the
-  installer re-runs on every cold-start (`install:` runs once per
-  VM lifetime).
+- **Install steps**: `install.sh` runs as the devm user and lands the
+  binary at `/home/devm/.local/bin/claude` (Claude's self-check
+  canonical user path — must stay there). Second step copies it to
+  `/usr/local/bin/claude` so it's on the system PATH for any user.
+  Ephemeral — the installer re-runs on every cold-start (`install:`
+  runs once per VM lifetime).
 - **State** is everything Claude stores under `~/.claude`: OAuth at
   `.credentials.json`, conversation transcripts, memory, settings.
   The `claude` volume mounts at Claude's native default path so no
