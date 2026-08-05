@@ -1,6 +1,14 @@
 package serviceapi
 
-import "testing"
+import (
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+)
 
 func TestGuestOriginBackendPinsToGuest(t *testing.T) {
 	routes := NewRoutes()
@@ -66,5 +74,52 @@ func TestGuestOriginBackendRejects(t *testing.T) {
 	// Host header carrying a port still resolves.
 	if got, ok := guestOriginBackend(routes, "api.test:443", "proj", "127.42.0.3"); !ok || got != "127.42.0.3:3000" {
 		t.Fatalf("host:port = %q,%v want 127.42.0.3:3000,true", got, ok)
+	}
+}
+
+// TestGuestOriginHandlerDispatch drives the guest-origin HTTP handler directly
+// against a stub backend, confirming it reaches the guest and reports a clean
+// 502 for an unknown host.
+func TestGuestOriginHandlerDispatch(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "hello from the guest")
+	}))
+	defer backend.Close()
+
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(backend.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split backend addr: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parse backend port: %v", err)
+	}
+
+	routes := NewRoutes()
+	if err := routes.Apply("proj", []Route{
+		{Hostname: "api.test", BackendPort: port, Mode: ModeVM, Project: "proj"},
+	}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	h := &guestOriginHandler{routes: routes, projectID: "proj", projectIP: "127.0.0.1"}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "http://api.test/", nil)
+	req.Host = "api.test"
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "hello from the guest") {
+		t.Fatalf("body = %q", body)
+	}
+
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest("GET", "http://nope.test/", nil)
+	req2.Host = "nope.test"
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusBadGateway {
+		t.Fatalf("unknown host status = %d want 502", rec2.Code)
 	}
 }

@@ -51,7 +51,16 @@ func waitForHelperReady(ctx context.Context, socketPath string, timeout time.Dur
 // project with bounded retry. Returns the final RebindStatus (also
 // recorded on proxy). Called concurrently, one goroutine per
 // recovered project.
-func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identity.Config, projectID, projectIP string) RebindStatus {
+//
+// On success it also rebinds the guest-origin listener pair and
+// re-pushes ENFORCED so softnet learns the fresh ports —
+// discoverSoftnet already pushed ENFORCED with zero-valued guest
+// targets before this runs (see the ordering hazard note in the
+// in-vm-https task-5 brief), so this push corrects it. Both the
+// guest-origin bind and the re-push are best-effort: logged on
+// failure rather than folded into the returned RebindStatus, matching
+// the surrounding best-effort restart semantics.
+func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identity.Config, projectID, projectIP string, ntpPort int) RebindStatus {
 	proxy.RecordRebindStatus(projectID, RebindStatus{State: RebindPending, Attempts: 0})
 	var lastErr error
 	for i, backoff := range rebindBackoff {
@@ -68,6 +77,22 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 		proxy.RecordRebindStatus(projectID, RebindStatus{State: RebindPending, Attempts: attempts})
 		err := proxy.StartProjectListeners(ctx, projectID, projectIP)
 		if err == nil {
+			guestHTTPPort, guestHTTPSPort, gerr := proxy.StartGuestOriginListeners(ctx, projectID, projectIP)
+			if gerr != nil {
+				debuglog.Logf("serviceapi", "guest-origin rebind for %s: %v", projectID, gerr)
+			} else {
+				info, ok := ironProxyState.get(projectID)
+				if ok {
+					info.GuestHTTPPort = guestHTTPPort
+					info.GuestHTTPSPort = guestHTTPSPort
+					ironProxyState.put(projectID, info)
+					if sock := softnetState.get(projectID); sock != "" {
+						if err := newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort)); err != nil {
+							debuglog.Logf("serviceapi", "guest-origin re-push for %s: %v", projectID, err)
+						}
+					}
+				}
+			}
 			s := RebindStatus{State: RebindOK, Attempts: attempts}
 			proxy.RecordRebindStatus(projectID, s)
 			return s
@@ -196,7 +221,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		if !ok || info.ProjectIP == "" {
 			continue
 		}
-		go rebindProjectListeners(ctx, proxy, cfg, id, info.ProjectIP)
+		go rebindProjectListeners(ctx, proxy, cfg, id, info.ProjectIP, ntp.Port())
 	}
 
 	// Denials tracker — per-project counts of iron-proxy allow-list

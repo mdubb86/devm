@@ -707,6 +707,15 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			if err := proxy.StartProjectListeners(ctx, req.Name, projectIP); err != nil {
 				debuglog.Logf("serviceapi", "vm/start: start project listeners for %s: %v", req.Name, err)
 			}
+
+			guestHTTPPort, guestHTTPSPort, err := proxy.StartGuestOriginListeners(ctx, req.Name, projectIP)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("start guest-origin listeners: %v", err), http.StatusInternalServerError)
+				return
+			}
+			info.GuestHTTPPort = guestHTTPPort
+			info.GuestHTTPSPort = guestHTTPSPort
+			ironProxyState.put(req.Name, info)
 		}
 
 		writeJSON(w, VMStartResponse{ProjectIP: projectIP})
@@ -765,7 +774,13 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			return
 		}
 
-		if err := newSoftnetClient(sock).setPolicy("OPEN", nil); err != nil {
+		// Full ForwardTargets on every push — setPolicy keeps the previous
+		// endpoint on nil, so a partial push would silently clobber fields.
+		// Under OPEN only the guest-origin fields are consulted (`.test`
+		// works during the provisioning window); the egress fields ride
+		// along inert.
+		openInfo, _ := ironProxyState.get(req.Name)
+		if err := newSoftnetClient(sock).setPolicy("OPEN", endpointFrom(openInfo, ntpPort)); err != nil {
 			http.Error(w, fmt.Sprintf("flip softnet open: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -1122,10 +1137,12 @@ func sendSoftnetEnforced(sock string, info projectInfo, ntpPort int) error {
 // the same wire shape.
 func endpointFrom(info projectInfo, ntpPort int) *Endpoint {
 	return &Endpoint{
-		HTTP:  ironProxyListenAddr(info.HTTPPort),
-		HTTPS: ironProxyListenAddr(info.HTTPSPort),
-		DNS:   ironProxyListenAddr(info.DNSPort),
-		NTP:   ironProxyListenAddr(ntpPort),
+		HTTP:       ironProxyListenAddr(info.HTTPPort),
+		HTTPS:      ironProxyListenAddr(info.HTTPSPort),
+		DNS:        ironProxyListenAddr(info.DNSPort),
+		NTP:        ironProxyListenAddr(ntpPort),
+		GuestHTTP:  ironProxyListenAddr(info.GuestHTTPPort),
+		GuestHTTPS: ironProxyListenAddr(info.GuestHTTPSPort),
 	}
 }
 
@@ -1137,6 +1154,13 @@ type projectInfo struct {
 	HTTPPort  int
 	HTTPSPort int
 	DNSPort   int
+
+	// GuestHTTPPort / GuestHTTPSPort are the daemon's guest-origin listener
+	// pair for this project — where softnet forwards `.test` traffic.
+	// In-memory only: the listeners die with the daemon, so a restart
+	// rebinds a fresh pair and re-pushes it (see rebindProjectListeners).
+	GuestHTTPPort  int
+	GuestHTTPSPort int
 
 	// ProjectIP is the project's allocated 127.42/16 loopback IP. All
 	// ingress listeners (softnet direct ports, softnet SSH, daemon HTTP

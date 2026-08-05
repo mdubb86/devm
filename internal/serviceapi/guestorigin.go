@@ -1,8 +1,16 @@
 package serviceapi
 
 import (
+	"context"
+	"crypto/tls"
+	"fmt"
 	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
+
+	"github.com/mdubb86/devm/internal/debuglog"
 )
 
 // guestOriginBackend resolves a Host header from guest-originated `.test`
@@ -27,4 +35,77 @@ func guestOriginBackend(routes *Routes, host, projectID, projectIP string) (stri
 		return "", false
 	}
 	return net.JoinHostPort(projectIP, strconv.Itoa(route.BackendPort)), true
+}
+
+// guestOriginHandler serves guest-originated `.test` traffic for one project.
+// Unlike ProxyServer.ServeHTTP it needs no destination-IP dispatch: the
+// listener is per-project, so the project is fixed at construction.
+type guestOriginHandler struct {
+	routes    *Routes
+	projectID string
+	projectIP string
+}
+
+func (h *guestOriginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	host := stripPort(r.Host)
+	backend, ok := guestOriginBackend(h.routes, r.Host, h.projectID, h.projectIP)
+	if !ok {
+		write502NoRoute(w, host)
+		return
+	}
+	target, _ := url.Parse("http://" + backend)
+	rev := httputil.NewSingleHostReverseProxy(target)
+	rev.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintf(w, "devm: no service listening at %s → %s\n\n", host, backend)
+		fmt.Fprintf(w, "is the service running inside the VM?\n\n(%v)\n", err)
+	}
+	rev.ServeHTTP(w, r)
+}
+
+// StartGuestOriginListeners binds this project's guest-origin HTTP and HTTPS
+// listeners on Mac loopback and returns the ports the kernel assigned.
+// softnet dials them from the Mac side, so no helper-brokered privileged bind
+// is needed. Ports are ephemeral: the daemon-restart path rebinds and
+// re-pushes them to softnet together (see rebindProjectListeners).
+func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, projectIP string) (int, int, error) {
+	h := &guestOriginHandler{routes: p.routes, projectID: projectID, projectIP: projectIP}
+
+	httpLn, err := net.Listen("tcp", ironProxyListenAddr(0))
+	if err != nil {
+		return 0, 0, fmt.Errorf("bind guest-origin http: %w", err)
+	}
+	httpsLn, err := net.Listen("tcp", ironProxyListenAddr(0))
+	if err != nil {
+		httpLn.Close()
+		return 0, 0, fmt.Errorf("bind guest-origin https: %w", err)
+	}
+	httpPort := httpLn.Addr().(*net.TCPAddr).Port
+	httpsPort := httpsLn.Addr().(*net.TCPAddr).Port
+
+	httpSrv := &http.Server{Handler: h}
+	httpsSrv := &http.Server{
+		Handler: h,
+		TLSConfig: &tls.Config{
+			GetCertificate: p.ca.GetCertificate,
+			NextProtos:     []string{"h2", "http/1.1"},
+		},
+	}
+
+	go func() {
+		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
+			debuglog.Logf("serviceapi", "guest-origin HTTP serve for %s: %v", projectID, err)
+		}
+	}()
+	go func() {
+		if err := httpsSrv.ServeTLS(httpsLn, "", ""); err != nil && err != http.ErrServerClosed {
+			debuglog.Logf("serviceapi", "guest-origin HTTPS serve for %s: %v", projectID, err)
+		}
+	}()
+
+	p.recordGuestOriginListeners(projectID, httpSrv, httpsSrv)
+	debuglog.Logf("serviceapi", "guest-origin listening on %s/%s (project %s)",
+		httpLn.Addr(), httpsLn.Addr(), projectID)
+	return httpPort, httpsPort, nil
 }

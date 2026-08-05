@@ -63,6 +63,9 @@ type projectListeners struct {
 	https    net.Listener
 	httpSrv  *http.Server
 	httpsSrv *http.Server
+
+	guestHTTPSrv  *http.Server
+	guestHTTPSSrv *http.Server
 }
 
 // RebindState is one of the outcomes of the daemon-startup rebind pass
@@ -173,6 +176,12 @@ func (p *ProxyServer) StopProjectListeners(projectID string) {
 	if pl.httpsSrv != nil {
 		_ = pl.httpsSrv.Shutdown(shutdownCtx)
 	}
+	if pl.guestHTTPSrv != nil {
+		_ = pl.guestHTTPSrv.Shutdown(shutdownCtx)
+	}
+	if pl.guestHTTPSSrv != nil {
+		_ = pl.guestHTTPSSrv.Shutdown(shutdownCtx)
+	}
 }
 
 // StopAll closes every project's listeners. Called on daemon shutdown
@@ -192,7 +201,21 @@ func (p *ProxyServer) StopAll() {
 func (p *ProxyServer) recordProjectListeners(projectID string, httpLn, httpsLn net.Listener, httpSrv, httpsSrv *http.Server) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.perProj[projectID] = projectListeners{http: httpLn, https: httpsLn, httpSrv: httpSrv, httpsSrv: httpsSrv}
+	pl := p.perProj[projectID]
+	pl.http = httpLn
+	pl.https = httpsLn
+	pl.httpSrv = httpSrv
+	pl.httpsSrv = httpsSrv
+	p.perProj[projectID] = pl
+}
+
+func (p *ProxyServer) recordGuestOriginListeners(projectID string, httpSrv, httpsSrv *http.Server) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pl := p.perProj[projectID]
+	pl.guestHTTPSrv = httpSrv
+	pl.guestHTTPSSrv = httpsSrv
+	p.perProj[projectID] = pl
 }
 
 func (p *ProxyServer) takeProjectListeners(projectID string) (projectListeners, bool) {

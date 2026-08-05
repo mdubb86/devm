@@ -333,7 +333,7 @@ func TestRebindProjectListeners_RetriesUntilHelperReady(t *testing.T) {
 		startMockHelperAt(t, sock)
 	}()
 
-	status := rebindProjectListeners(context.Background(), proxy, cfg, "p1", "127.0.0.1")
+	status := rebindProjectListeners(context.Background(), proxy, cfg, "p1", "127.0.0.1", 0)
 	assert.Equal(t, RebindOK, status.State,
 		"expected retry to succeed; got State=%s LastError=%q", status.State, status.LastError)
 	assert.Greater(t, status.Attempts, 1,
