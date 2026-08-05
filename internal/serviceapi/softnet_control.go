@@ -10,14 +10,17 @@ import (
 	"github.com/mdubb86/devm/internal/softnet"
 )
 
-// Endpoint mirrors softnet's IronProxyEndpoint exactly (op/policy on the
-// envelope; http/https/dns/ntp here) so a setPolicy message marshals into
-// the wire format softnet's control listener expects.
+// Endpoint mirrors softnet's ForwardTargets exactly (op/policy on the
+// envelope; the targets here) so a setPolicy message marshals into the wire
+// format softnet's control listener expects.
 type Endpoint struct {
 	HTTP  string `json:"http"`
 	HTTPS string `json:"https"`
 	DNS   string `json:"dns"`
 	NTP   string `json:"ntp"`
+
+	GuestHTTP  string `json:"guest_http,omitempty"`
+	GuestHTTPS string `json:"guest_https,omitempty"`
 }
 
 // softnetClient is the daemon-side handle to one VM's softnet control
@@ -69,15 +72,15 @@ func (c *softnetClient) send(msg map[string]any) error {
 }
 
 // setPolicy tells softnet to switch its coarse egress policy. ep is the
-// iron-proxy endpoint to forward to when pol is ENFORCED; nil for
-// LOCKED/OPEN, in which case the iron_proxy key is omitted entirely.
+// forward targets to forward to when pol is ENFORCED; nil for LOCKED/OPEN,
+// in which case the forward_targets key is omitted entirely.
 func (c *softnetClient) setPolicy(pol string, ep *Endpoint) error {
 	msg := map[string]any{
 		"op":     "setPolicy",
 		"policy": pol,
 	}
 	if ep != nil {
-		msg["iron_proxy"] = ep
+		msg["forward_targets"] = ep
 	}
 	return c.send(msg)
 }
@@ -90,6 +93,15 @@ func (c *softnetClient) setExposeMap(ports []softnet.ExposePort) error {
 		"expose": ports,
 	}
 	return c.send(msg)
+}
+
+// setTestHosts pushes the set of direct-service hostnames softnet's .test
+// DNS answers with loopback. Replace-not-merge on the softnet side.
+func (c *softnetClient) setTestHosts(hosts []string) error {
+	return c.send(map[string]any{
+		"op":                "setTestHosts",
+		"direct_test_hosts": hosts,
+	})
 }
 
 // shutdown asks softnet to exit now. softnet is a child process `tart run

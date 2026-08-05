@@ -578,6 +578,9 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, projectIP)); err != nil {
 			debuglog.Logf("serviceapi", "vm/start: push expose map for %s: %v", req.Name, err)
 		}
+		if err := pushTestHosts(req.Name, computeDirectTestHosts(req.Cfg)); err != nil {
+			debuglog.Logf("serviceapi", "vm/start: push test hosts for %s: %v", req.Name, err)
+		}
 
 		// Wait for the Tart Guest Agent to come up before injecting
 		// scripts via `tart exec`. Fresh VMs take a few seconds for

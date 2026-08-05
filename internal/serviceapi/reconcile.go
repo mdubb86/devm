@@ -217,6 +217,10 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 				http.Error(w, fmt.Sprintf("push expose map: %v", err), http.StatusInternalServerError)
 				return
 			}
+			if err := pushTestHosts(req.Name, computeDirectTestHosts(req.Cfg)); err != nil {
+				http.Error(w, fmt.Sprintf("push test hosts: %v", err), http.StatusInternalServerError)
+				return
+			}
 			if err := WriteStateSnapshot(cfg, req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, ProjectIP: projectIP, WorkspaceHostPath: req.WorkspaceHostPath}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return

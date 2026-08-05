@@ -244,6 +244,9 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 			if err := pushExposeMap(req.Name, computeExposeMap(snap.Cfg, projectIP)); err != nil {
 				debuglog.Logf("serviceapi", "apply-iron-proxy: push expose map for %s: %v", req.Name, err)
 			}
+			if err := pushTestHosts(req.Name, computeDirectTestHosts(snap.Cfg)); err != nil {
+				debuglog.Logf("serviceapi", "apply-iron-proxy: push test hosts for %s: %v", req.Name, err)
+			}
 		}
 
 		writeJSON(w, VMApplyIronProxyResponse{

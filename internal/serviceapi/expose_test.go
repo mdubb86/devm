@@ -151,6 +151,25 @@ func TestComputeExposeMap_BindIPFieldIgnoredNowUsesProjectIP(t *testing.T) {
 	}
 }
 
+// TestComputeDirectTestHosts pins the direct-host extraction: only services
+// with both Direct and a hostname, sorted for deterministic pushes.
+func TestComputeDirectTestHosts(t *testing.T) {
+	cfg := schema.Config{Services: map[string]schema.Service{
+		"db":    {Hostname: "db.test", Port: 5432, Direct: true},
+		"cache": {Hostname: "cache.test", Port: 6379, Direct: true},
+		"api":   {Hostname: "api.test", Port: 3000},
+		"jobs":  {Port: 9000, Direct: true}, // no hostname -> excluded
+	}}
+	got := computeDirectTestHosts(cfg)
+	want := []string{"cache.test", "db.test"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("= %v want %v", got, want)
+	}
+	if len(computeDirectTestHosts(schema.Config{})) != 0 {
+		t.Fatal("empty config must yield no hosts")
+	}
+}
+
 // TestPushExposeMap_ConflictRefusesDispatch pins the fail-loud contract:
 // when a second project's expose map collides with a first project's
 // already-claimed host port, pushExposeMap must return the conflict

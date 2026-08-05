@@ -39,6 +39,33 @@ func computeExposeMap(cfg schema.Config, projectIP string) []softnet.ExposePort 
 	return ports
 }
 
+// computeDirectTestHosts lists the hostnames softnet's .test DNS must answer
+// with loopback: services declaring both direct and a hostname. Sorted so
+// pushes are deterministic. Derived from the same cfg as computeExposeMap
+// and pushed at the same lifecycle points — direct add/remove is a live
+// change.
+func computeDirectTestHosts(cfg schema.Config) []string {
+	var hosts []string
+	for _, svc := range cfg.Services {
+		if svc.Direct && svc.Hostname != "" {
+			hosts = append(hosts, svc.Hostname)
+		}
+	}
+	sort.Strings(hosts)
+	return hosts
+}
+
+// pushTestHosts sends the direct-host set to a project's softnet control
+// socket. Same registration contract as pushExposeMap: an empty softnetState
+// entry means a lifecycle registration step was skipped — fail loud.
+func pushTestHosts(projectID string, hosts []string) error {
+	sock := softnetState.get(projectID)
+	if sock == "" {
+		return fmt.Errorf("no softnet control socket registered for %q", projectID)
+	}
+	return newSoftnetClient(sock).setTestHosts(hosts)
+}
+
 // pushExposeMap sends the full expose map to a project's softnet control
 // socket. It first reconciles the project's host-port claims against
 // every other running project's — a conflict (another project already

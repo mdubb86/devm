@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"bufio"
+	"encoding/json"
 	"net"
 	"path/filepath"
 	"strings"
@@ -101,6 +102,40 @@ func TestSetExposeMapWire(t *testing.T) {
 	line := <-got
 	if !strings.Contains(line, `"op":"setExposeMap"`) || !strings.Contains(line, `"guest_port":22`) || !strings.Contains(line, `"host_port":2222`) {
 		t.Fatalf("bad wire: %s", line)
+	}
+}
+
+// TestEndpointDecodesIntoForwardTargets pins the wire contract between the
+// daemon's Endpoint and softnet's ForwardTargets. They are separate structs in
+// separate packages; only this round-trip keeps them honest.
+func TestEndpointDecodesIntoForwardTargets(t *testing.T) {
+	ep := &Endpoint{
+		HTTP:       "127.0.0.1:1",
+		HTTPS:      "127.0.0.1:2",
+		DNS:        "127.0.0.1:3",
+		NTP:        "127.0.0.1:4",
+		GuestHTTP:  "127.0.0.1:5",
+		GuestHTTPS: "127.0.0.1:6",
+	}
+	msg := map[string]any{"op": "setPolicy", "policy": "ENFORCED", "forward_targets": ep}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var got softnet.ControlMsg
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.ForwardTargets == nil {
+		t.Fatal("forward_targets did not decode")
+	}
+	if got.ForwardTargets.GuestHTTP != ep.GuestHTTP || got.ForwardTargets.GuestHTTPS != ep.GuestHTTPS {
+		t.Fatalf("guest targets = %q/%q want %q/%q",
+			got.ForwardTargets.GuestHTTP, got.ForwardTargets.GuestHTTPS, ep.GuestHTTP, ep.GuestHTTPS)
+	}
+	if got.ForwardTargets.HTTPS != ep.HTTPS {
+		t.Fatalf("HTTPS = %q want %q", got.ForwardTargets.HTTPS, ep.HTTPS)
 	}
 }
 
