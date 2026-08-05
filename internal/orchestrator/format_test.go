@@ -642,3 +642,21 @@ func TestFormatStatusText_HealthyRebindNoWarning(t *testing.T) {
 	assert.NotContains(t, out, "UNBOUND")
 	assert.NotContains(t, out, "Recovery:")
 }
+
+func TestFormatChange_KindMemoryChange(t *testing.T) {
+	ch := reconcile.Change{
+		Kind: reconcile.KindMemoryChange,
+		Old:  "(default)",
+		New:  "8G",
+	}
+	assert.Equal(t, "~ memory: (default) → 8G", formatChange(ch))
+}
+
+func TestFormatChange_KindCpuChange(t *testing.T) {
+	ch := reconcile.Change{
+		Kind: reconcile.KindCpuChange,
+		Old:  "6",
+		New:  "(default)",
+	}
+	assert.Equal(t, "~ cpu: 6 → (default)", formatChange(ch))
+}

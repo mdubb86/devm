@@ -68,6 +68,8 @@ const (
 	KindIdentityChange
 	KindDockerToggle
 	KindDiskChange
+	KindMemoryChange
+	KindCpuChange
 	KindTemplateChange
 	KindMountAddRemove
 	KindPathChange
@@ -135,7 +137,11 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindDockerToggle:   BucketTeardownVM,
 	// Disk size is baked at clone / `tart set` time; grow-only, so a
 	// change recreates from base and re-applies the new size.
-	KindDiskChange:     BucketTeardownVM,
+	KindDiskChange: BucketTeardownVM,
+	// Memory and Cpu are boot params applied via `tart set` on the
+	// stopped VM — no full recreate required.
+	KindMemoryChange:   BucketRestartVM,
+	KindCpuChange:      BucketRestartVM,
 	KindTemplateChange: BucketLive,
 	// Path is materialized in /etc/environment (same fan-out as Env) — live.
 	KindPathChange: BucketLive,
@@ -308,6 +314,7 @@ func ComputeAllChanges(
 	out = append(out, computeIdentityChange(old, new)...)
 	out = append(out, computeDockerChange(old, new)...)
 	out = append(out, computeDiskChange(old, new)...)
+	out = append(out, computeResourceChange(old, new)...)
 	out = append(out, computePathChange(old, new)...)
 	tmplChanges, err := ComputeTemplateChanges(new, repoRoot, lastAppliedTemplates)
 	if err != nil {
@@ -597,6 +604,68 @@ func computeDiskChange(old, new schema.Config) []Change {
 		Old:  fmt.Sprintf("%dG", o),
 		New:  fmt.Sprintf("%dG", n),
 	}}
+}
+
+// computeResourceChange diffs Memory and Cpu independently, emitting
+// one Change per field that transitioned (nil→non-nil, non-nil→nil,
+// or non-nil→different-non-nil).
+//
+// Display formatting: nil is rendered as "(default)" so a
+// nil→non-nil transition reads "(default) → 8G".
+func computeResourceChange(old, new schema.Config) []Change {
+	var out []Change
+
+	if !memoryEqual(old.Memory, new.Memory) {
+		out = append(out, Change{
+			Kind: KindMemoryChange,
+			Old:  formatMemory(old.Memory),
+			New:  formatMemory(new.Memory),
+		})
+	}
+
+	if !cpuEqual(old.Cpu, new.Cpu) {
+		out = append(out, Change{
+			Kind: KindCpuChange,
+			Old:  formatCpu(old.Cpu),
+			New:  formatCpu(new.Cpu),
+		})
+	}
+
+	return out
+}
+
+func memoryEqual(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func cpuEqual(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func formatMemory(p *string) string {
+	if p == nil {
+		return "(default)"
+	}
+	return *p
+}
+
+func formatCpu(p *int) string {
+	if p == nil {
+		return "(default)"
+	}
+	return fmt.Sprintf("%d", *p)
 }
 
 // computeNetworkChanges diffs cfg.Network.Domains() between old and

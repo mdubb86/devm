@@ -795,3 +795,83 @@ func TestDiskChangeKindBucket(t *testing.T) {
 func TestIronProxyDownKindBucket(t *testing.T) {
 	assert.Equal(t, BucketEgressRestart, KindIronProxyDown.Bucket())
 }
+
+func TestComputeResourceChange_Memory(t *testing.T) {
+	s := func(v string) *string { return &v }
+	cases := []struct {
+		name       string
+		old, new   *string
+		expectKind bool
+	}{
+		{"nil→nil", nil, nil, false},
+		{"nil→8G", nil, s("8G"), true},
+		{"8G→nil", s("8G"), nil, true},
+		{"8G→16G", s("8G"), s("16G"), true},
+		{"8G→8G", s("8G"), s("8G"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			old := schema.Config{Memory: tc.old}
+			new := schema.Config{Memory: tc.new}
+			out := computeResourceChange(old, new)
+			hasMemChange := false
+			for _, ch := range out {
+				if ch.Kind == KindMemoryChange {
+					hasMemChange = true
+				}
+			}
+			assert.Equal(t, tc.expectKind, hasMemChange)
+		})
+	}
+}
+
+func TestComputeResourceChange_Cpu(t *testing.T) {
+	i := func(v int) *int { return &v }
+	cases := []struct {
+		name       string
+		old, new   *int
+		expectKind bool
+	}{
+		{"nil→nil", nil, nil, false},
+		{"nil→6", nil, i(6), true},
+		{"6→nil", i(6), nil, true},
+		{"6→8", i(6), i(8), true},
+		{"6→6", i(6), i(6), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			old := schema.Config{Cpu: tc.old}
+			new := schema.Config{Cpu: tc.new}
+			out := computeResourceChange(old, new)
+			hasCpuChange := false
+			for _, ch := range out {
+				if ch.Kind == KindCpuChange {
+					hasCpuChange = true
+				}
+			}
+			assert.Equal(t, tc.expectKind, hasCpuChange)
+		})
+	}
+}
+
+func TestComputeResourceChange_BothTogether(t *testing.T) {
+	s := func(v string) *string { return &v }
+	i := func(v int) *int { return &v }
+	old := schema.Config{Memory: nil, Cpu: nil}
+	new := schema.Config{Memory: s("8G"), Cpu: i(6)}
+	out := computeResourceChange(old, new)
+	kinds := make(map[ChangeKind]bool)
+	for _, ch := range out {
+		kinds[ch.Kind] = true
+	}
+	assert.True(t, kinds[KindMemoryChange], "expected KindMemoryChange")
+	assert.True(t, kinds[KindCpuChange], "expected KindCpuChange")
+}
+
+func TestKindMemoryChange_BucketRestartVM(t *testing.T) {
+	assert.Equal(t, BucketRestartVM, KindMemoryChange.Bucket())
+}
+
+func TestKindCpuChange_BucketRestartVM(t *testing.T) {
+	assert.Equal(t, BucketRestartVM, KindCpuChange.Bucket())
+}

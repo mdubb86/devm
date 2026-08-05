@@ -683,6 +683,10 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "docker_toggle"
 	case reconcile.KindDiskChange:
 		return "disk_change"
+	case reconcile.KindMemoryChange:
+		return "memory_change"
+	case reconcile.KindCpuChange:
+		return "cpu_change"
 	case reconcile.KindTemplateChange:
 		return "template_change"
 	case reconcile.KindMountAddRemove:
@@ -781,6 +785,10 @@ func formatChange(c reconcile.Change) string {
 		return "~ docker"
 	case reconcile.KindDiskChange:
 		return fmt.Sprintf("~ disk: %s → %s", c.Old, c.New)
+	case reconcile.KindMemoryChange:
+		return fmt.Sprintf("~ memory: %s → %s", c.Old, c.New)
+	case reconcile.KindCpuChange:
+		return fmt.Sprintf("~ cpu: %s → %s", c.Old, c.New)
 	case reconcile.KindTemplateChange:
 		switch {
 		case c.Old == "" && c.New != "":
