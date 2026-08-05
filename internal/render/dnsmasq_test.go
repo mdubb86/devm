@@ -10,18 +10,16 @@ import (
 )
 
 func TestDnsmasqConfig_Directives(t *testing.T) {
-	got := string(DnsmasqConfig())
-	assert.True(t, strings.HasSuffix(got, "\n"), "trailing newline")
-	lines := strings.Split(strings.TrimSpace(got), "\n")
+	out := string(DnsmasqConfig())
+	lines := strings.Split(strings.TrimSpace(out), "\n")
 
-	// Wildcard *.test → 127.0.0.1 (in-guest caddy target).
-	assert.Contains(t, lines, "address=/test/127.0.0.1")
-	// Do not read /etc/resolv.conf for upstream — that file points at
-	// 127.0.0.1 (this dnsmasq), which would loop.
+	// No .test wildcard: softnet's gateway DNS answers .test (loopback for
+	// direct services, the hairpin address otherwise). The guest carries
+	// zero .test knowledge.
+	assert.NotContains(t, out, "address=")
 	assert.Contains(t, lines, "no-resolv")
-	// Explicit upstream = softnet gateway. Kept in sync with
-	// softnet.GatewayIP (internal/softnet/config.go).
 	assert.Contains(t, lines, "server=192.168.127.1")
+	assert.Len(t, lines, 2)
 }
 
 // TestDnsmasqConfig_BaseImageParity: the drop-in baked into the base
