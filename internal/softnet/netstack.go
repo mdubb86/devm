@@ -36,7 +36,6 @@ func newNetwork() (*network, error) {
 		GatewayIP:         GatewayIP,
 		GatewayMacAddress: GatewayMAC,
 		GatewayVirtualIPs: []string{NATAliasIP},
-		NAT:               map[string]string{NATAliasIP: HostLoopIP},
 	}
 
 	_, subnet, err := net.ParseCIDR(config.Subnet)

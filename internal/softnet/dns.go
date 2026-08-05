@@ -19,15 +19,15 @@ const dnsZoneName = "devm.test."
 // upstreamFor picks the DNS upstream for the current policy. useHost=true means
 // resolve via the Mac's own resolver (net.DefaultResolver) for direct
 // provisioning; otherwise dial addr (iron-proxy's DNS). ok=false => drop.
-func upstreamFor(pol Policy, ip *IronProxyEndpoint) (addr string, useHost bool, ok bool) {
+func upstreamFor(pol Policy, ft *ForwardTargets) (addr string, useHost bool, ok bool) {
 	switch pol {
 	case PolicyOpen:
 		return "", true, true
 	case PolicyEnforced:
-		if ip == nil || ip.DNS == "" {
+		if ft == nil || ft.DNS == "" {
 			return "", false, false
 		}
-		return ip.DNS, false, true
+		return ft.DNS, false, true
 	default:
 		return "", false, false
 	}
@@ -45,8 +45,8 @@ type policyResolver struct{ e *egress }
 // error when the policy says to drop (LOCKED, or ENFORCED with no DNS
 // configured), which the dns package surfaces as a lookup failure (NXDOMAIN).
 func (r *policyResolver) resolver() (*net.Resolver, error) {
-	pol, ip := r.e.snapshot()
-	addr, useHost, ok := upstreamFor(pol, ip)
+	pol, ft := r.e.snapshot()
+	addr, useHost, ok := upstreamFor(pol, ft)
 	if !ok {
 		return nil, fmt.Errorf("softnet: dns upstream dropped by policy %s", pol)
 	}

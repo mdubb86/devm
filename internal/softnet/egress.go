@@ -20,51 +20,73 @@ type egress struct {
 	n   *network
 	mu  sync.RWMutex
 	pol Policy
-	ip  *IronProxyEndpoint
+	ft  *ForwardTargets
 }
 
 func newEgress(n *network) *egress { return &egress{n: n, pol: PolicyLocked} }
 
-func (e *egress) setPolicy(p Policy, ip *IronProxyEndpoint) {
+func (e *egress) setPolicy(p Policy, ft *ForwardTargets) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.pol = p
-	if ip != nil {
-		e.ip = ip
+	if ft != nil {
+		e.ft = ft
 	}
 }
 
-// snapshot returns the current policy and iron-proxy endpoint under e.mu, for
+// snapshot returns the current policy and forward targets under e.mu, for
 // readers (e.g. target, startDNS's policyResolver) that need a consistent
 // pair without holding the lock across their own work.
-func (e *egress) snapshot() (Policy, *IronProxyEndpoint) {
+func (e *egress) snapshot() (Policy, *ForwardTargets) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.pol, e.ip
+	return e.pol, e.ft
 }
 
 // target maps an outbound TCP flow to a host dial address per current policy.
 // ok=false => RST the flow. Pure; unit-tested.
 func (e *egress) target(dstIP string, dport uint16) (string, bool) {
-	pol, ip := e.snapshot()
+	pol, ft := e.snapshot()
 	if dstIP == NATAliasIP {
 		dstIP = HostLoopIP
 	}
-	switch pol {
-	case PolicyOpen:
-		return fmt.Sprintf("%s:%d", dstIP, dport), true
-	case PolicyEnforced:
-		if ip == nil {
+	if pol == PolicyLocked {
+		return "", false
+	}
+
+	// `.test` loops back into this project's own services via the daemon's
+	// guest-origin listener. Decided ahead of the policy switch so it works
+	// during the provisioning window (OPEN) as well as under ENFORCED.
+	// Non-80/443 ports are denied: direct services resolve to 127.0.0.1 and
+	// never reach this address.
+	if dstIP == InterceptedTestIP {
+		if ft == nil {
 			return "", false
 		}
 		switch dport {
 		case 80:
-			return ip.HTTP, true
+			return ft.GuestHTTP, ft.GuestHTTP != ""
 		case 443:
-			return ip.HTTPS, true
+			return ft.GuestHTTPS, ft.GuestHTTPS != ""
 		}
 		return "", false
-	default: // LOCKED
+	}
+
+	switch pol {
+	case PolicyOpen:
+		return fmt.Sprintf("%s:%d", dstIP, dport), true
+	case PolicyEnforced:
+		if ft == nil {
+			return "", false
+		}
+		switch dport {
+		case 80:
+			return ft.HTTP, ft.HTTP != ""
+		case 443:
+			return ft.HTTPS, ft.HTTPS != ""
+		}
+		return "", false
+	default:
 		return "", false
 	}
 }
@@ -73,7 +95,7 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 // policy. Mirrors target() but only NTP (:123) is forwarded when ENFORCED;
 // DNS is served by a bound gateway:53 endpoint, not here. ok=false => drop.
 func (e *egress) udpTarget(dstIP string, dport uint16) (string, bool) {
-	pol, ip := e.snapshot()
+	pol, ft := e.snapshot()
 	if dstIP == NATAliasIP {
 		dstIP = HostLoopIP
 	}
@@ -81,8 +103,8 @@ func (e *egress) udpTarget(dstIP string, dport uint16) (string, bool) {
 	case PolicyOpen:
 		return fmt.Sprintf("%s:%d", dstIP, dport), true
 	case PolicyEnforced:
-		if dport == 123 && ip != nil && ip.NTP != "" {
-			return ip.NTP, true
+		if dport == 123 && ft != nil && ft.NTP != "" {
+			return ft.NTP, true
 		}
 		return "", false
 	default: // LOCKED

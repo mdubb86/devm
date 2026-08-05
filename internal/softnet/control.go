@@ -22,7 +22,7 @@ func applyControl(e *egress, ing *ingress, m ControlMsg, shutdown func()) error 
 		if err != nil {
 			return err
 		}
-		e.setPolicy(p, m.IronProxy)
+		e.setPolicy(p, m.ForwardTargets)
 		return nil
 	case "setExposeMap":
 		ing.apply(m.Expose)

@@ -33,7 +33,7 @@ func TestPolicyResolverPerQuery(t *testing.T) {
 
 	// ENFORCED with a configured DNS endpoint: custom resolver dialing
 	// iron-proxy's DNS address, not the host resolver.
-	e.setPolicy(PolicyEnforced, &IronProxyEndpoint{DNS: "127.0.0.1:5353"})
+	e.setPolicy(PolicyEnforced, &ForwardTargets{DNS: "127.0.0.1:5353"})
 	res, err = r.resolver()
 	if err != nil {
 		t.Fatalf("ENFORCED: unexpected error: %v", err)
@@ -46,7 +46,7 @@ func TestPolicyResolverPerQuery(t *testing.T) {
 	}
 
 	// ENFORCED with no DNS endpoint configured: drop.
-	e.setPolicy(PolicyEnforced, &IronProxyEndpoint{})
+	e.setPolicy(PolicyEnforced, &ForwardTargets{})
 	if res, err := r.resolver(); err == nil {
 		t.Fatalf("ENFORCED (empty endpoint): want error (drop), got resolver %v", res)
 	}
@@ -65,16 +65,16 @@ func TestPolicyResolverPerQuery(t *testing.T) {
 }
 
 func TestUpstreamFor(t *testing.T) {
-	ip := &IronProxyEndpoint{DNS: "127.0.0.1:8053"}
+	ft := &ForwardTargets{DNS: "127.0.0.1:8053"}
 
-	if _, _, ok := upstreamFor(PolicyLocked, ip); ok {
+	if _, _, ok := upstreamFor(PolicyLocked, ft); ok {
 		t.Fatal("LOCKED: no DNS upstream")
 	}
-	if _, useHost, ok := upstreamFor(PolicyOpen, ip); !ok || !useHost {
+	if _, useHost, ok := upstreamFor(PolicyOpen, ft); !ok || !useHost {
 		t.Fatal("OPEN: must use the host resolver")
 	}
-	addr, useHost, ok := upstreamFor(PolicyEnforced, ip)
-	if !ok || useHost || addr != ip.DNS {
-		t.Fatalf("ENFORCED: want iron-proxy DNS %s, got %q useHost=%v ok=%v", ip.DNS, addr, useHost, ok)
+	addr, useHost, ok := upstreamFor(PolicyEnforced, ft)
+	if !ok || useHost || addr != ft.DNS {
+		t.Fatalf("ENFORCED: want iron-proxy DNS %s, got %q useHost=%v ok=%v", ft.DNS, addr, useHost, ok)
 	}
 }

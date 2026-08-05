@@ -9,9 +9,9 @@ import (
 func TestApplyControlSetPolicy(t *testing.T) {
 	e := newEgress(nil)
 	err := applyControl(e, newIngress(identity.Prod, nil), ControlMsg{
-		Op:        "setPolicy",
-		Policy:    "ENFORCED",
-		IronProxy: &IronProxyEndpoint{HTTPS: "127.0.0.1:8443"},
+		Op:             "setPolicy",
+		Policy:         "ENFORCED",
+		ForwardTargets: &ForwardTargets{HTTPS: "127.0.0.1:8443"},
 	}, nil)
 	if err != nil {
 		t.Fatalf("applyControl: %v", err)
