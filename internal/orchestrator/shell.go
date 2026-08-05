@@ -242,6 +242,17 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 			return -1, fmt.Errorf("parse disk: %w", err)
 		}
 	}
+	var memoryMB int
+	if cfg.Memory != nil {
+		memoryMB, err = schema.ParseMemorySize(*cfg.Memory)
+		if err != nil {
+			return -1, fmt.Errorf("parse memory: %w", err)
+		}
+	}
+	var cpuCount int
+	if cfg.Cpu != nil {
+		cpuCount = *cfg.Cpu
+	}
 	startResp, err := d.ServiceAPIClient.StartVM(ctx, serviceapi.VMStartRequest{
 		Name:              cfg.Project.Name,
 		WorkspaceHostPath: repoRoot,
@@ -249,6 +260,8 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		Secrets:           bindings,
 		ExtraMounts:       extraMounts,
 		DiskSizeGB:        diskGB,
+		MemoryMB:          memoryMB,
+		CpuCount:          cpuCount,
 		Cfg:               cfg,
 	})
 	if err != nil {

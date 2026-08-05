@@ -74,6 +74,21 @@ func (t *Tart) SetDiskSize(ctx context.Context, name string, gib int) error {
 	return t.run(ctx, "set", name, "--disk-size", strconv.Itoa(gib)).err
 }
 
+// SetMemory sets the VM's memory to mb megabytes via
+// `tart set <name> --memory <mb>`. The VM must be stopped. tart
+// rejects values exceeding host RAM or below the platform floor;
+// devm surfaces the error unchanged.
+func (t *Tart) SetMemory(ctx context.Context, name string, mb int) error {
+	return t.run(ctx, "set", name, "--memory", strconv.Itoa(mb)).err
+}
+
+// SetCPU sets the VM's CPU count to n via `tart set <name> --cpu <n>`.
+// The VM must be stopped. tart rejects n larger than host CPU count;
+// devm surfaces the error unchanged.
+func (t *Tart) SetCPU(ctx context.Context, name string, n int) error {
+	return t.run(ctx, "set", name, "--cpu", strconv.Itoa(n)).err
+}
+
 // Run prepares an unstarted exec.Cmd for `tart run`. The caller (a
 // supervisor) decides how to start, detach, log, and reap it. We DON'T
 // set SysProcAttr.Setsid here — that's the supervisor's job (different

@@ -55,6 +55,14 @@ type VMStartRequest struct {
 	// gigabytes at clone time (a per-project `disk:` override). Zero
 	// means the base image default.
 	DiskSizeGB int `json:"disk_size_gb,omitempty"`
+	// MemoryMB, when > 0, sets the VM's memory to the given megabytes
+	// via `tart set --memory` at start (a per-project `memory:`
+	// override). Zero means the base image default.
+	MemoryMB int `json:"memory_mb,omitempty"`
+	// CpuCount, when > 0, sets the VM's CPU count via
+	// `tart set --cpu` at start (a per-project `cpu:` override).
+	// Zero means the base image default.
+	CpuCount int `json:"cpu_count,omitempty"`
 	// Cfg is the project's full config, used to compute the initial
 	// softnet ingress expose map (see computeExposeMap) once the VM and
 	// its control socket are up.
@@ -386,6 +394,24 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 					http.Error(w, fmt.Sprintf("tart set --disk-size: %v", err), http.StatusInternalServerError)
 					return
 				}
+			}
+		}
+
+		// Memory/CPU overrides apply on every start, not just clone: a
+		// changed `memory:`/`cpu:` reconciles as BucketRestartVM (VM stop
+		// + cold start, no reclone), so this VM may already exist and
+		// just be stopped. tart set requires a stopped VM, which holds
+		// here — /vm/start is only called against a non-running sandbox.
+		if req.MemoryMB > 0 {
+			if err := tr.SetMemory(ctx, req.Name, req.MemoryMB); err != nil {
+				http.Error(w, fmt.Sprintf("tart set --memory: %v", err), http.StatusInternalServerError)
+				return
+			}
+		}
+		if req.CpuCount > 0 {
+			if err := tr.SetCPU(ctx, req.Name, req.CpuCount); err != nil {
+				http.Error(w, fmt.Sprintf("tart set --cpu: %v", err), http.StatusInternalServerError)
+				return
 			}
 		}
 

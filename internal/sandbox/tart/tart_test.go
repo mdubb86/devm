@@ -151,3 +151,39 @@ func TestExecStream_StreamsLinesAndExit(t *testing.T) {
 	require.Contains(t, got, "stderr:err1")
 	require.Contains(t, got, "stdout:out2")
 }
+
+func TestTart_SetMemory_PassesArgvCorrectly(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	writeFakeTart(t, dir, `echo "$@" > `+argsFile+`; exit 0`)
+	tr := New()
+	require.NoError(t, tr.SetMemory(context.Background(), "myproj-sbx", 8192))
+	got, _ := os.ReadFile(argsFile)
+	assert.Equal(t, "set myproj-sbx --memory 8192\n", string(got))
+}
+
+func TestTart_SetCPU_PassesArgvCorrectly(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	writeFakeTart(t, dir, `echo "$@" > `+argsFile+`; exit 0`)
+	tr := New()
+	require.NoError(t, tr.SetCPU(context.Background(), "myproj-sbx", 6))
+	got, _ := os.ReadFile(argsFile)
+	assert.Equal(t, "set myproj-sbx --cpu 6\n", string(got))
+}
+
+func TestTart_SetMemory_PropagatesError(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeTart(t, dir, `>&2 echo "vm not found"; exit 1`)
+	tr := New()
+	err := tr.SetMemory(context.Background(), "missing", 8192)
+	require.Error(t, err)
+}
+
+func TestTart_SetCPU_PropagatesError(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeTart(t, dir, `>&2 echo "vm not found"; exit 1`)
+	tr := New()
+	err := tr.SetCPU(context.Background(), "missing", 6)
+	require.Error(t, err)
+}
