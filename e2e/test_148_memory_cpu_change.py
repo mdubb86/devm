@@ -23,6 +23,8 @@ import subprocess
 
 import pytest
 
+pytestmark = pytest.mark.devm
+
 
 def _guest_memory_mb(devm_path: str, workspace_path: str) -> int:
     """Return MemTotal in MB as reported by `free -m` inside the guest."""
