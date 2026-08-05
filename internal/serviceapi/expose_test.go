@@ -227,6 +227,21 @@ func TestPushExposeMap_ErrorsWhenSoftnetStateEmpty(t *testing.T) {
 	}
 }
 
+// TestPushTestHosts_ErrorsWhenSoftnetStateEmpty mirrors
+// TestPushExposeMap_ErrorsWhenSoftnetStateEmpty: an unregistered
+// softnetState entry — no /vm/start, no /vm/apply-iron-proxy, no
+// discoverSoftnet rehydration ever ran for this project — must return an
+// error, not the old silent no-op.
+func TestPushTestHosts_ErrorsWhenSoftnetStateEmpty(t *testing.T) {
+	err := pushTestHosts("never-registered", []string{"db.test"})
+	if err == nil {
+		t.Fatal("want an error when softnetState has no entry for the project, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, "no softnet control socket registered") {
+		t.Fatalf("want an error naming the missing registration, got: %v", got)
+	}
+}
+
 func containsAll(s string, substrs ...string) bool {
 	for _, sub := range substrs {
 		if !strings.Contains(s, sub) {

@@ -105,6 +105,37 @@ func TestSetExposeMapWire(t *testing.T) {
 	}
 }
 
+func TestSetTestHostsWire(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	got := make(chan string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		line, _ := r.ReadString('\n')
+		got <- line
+	}()
+
+	if err := newSoftnetClient(sock).setTestHosts([]string{"db.test", "cache.test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	line := <-got
+	if !strings.Contains(line, `"op":"setTestHosts"`) || !strings.Contains(line, `"direct_test_hosts":["db.test","cache.test"]`) {
+		t.Fatalf("bad wire: %s", line)
+	}
+}
+
 // TestEndpointDecodesIntoForwardTargets pins the wire contract between the
 // daemon's Endpoint and softnet's ForwardTargets. They are separate structs in
 // separate packages; only this round-trip keeps them honest.
