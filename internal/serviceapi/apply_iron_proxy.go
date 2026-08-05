@@ -76,7 +76,7 @@ const (
 // health, or persisting the snapshot returns 500 and leaves the
 // snapshot untouched (except the two success/no-op paths, which
 // deliberately advance SecretHashes).
-func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *ProjectLocks, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials) {
+func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *ProjectLocks, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials, proxy *ProxyServer) {
 	s.Register("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -105,7 +105,7 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 			http.Error(w, fmt.Sprintf("resolve config path: %v", err), http.StatusInternalServerError)
 			return
 		}
-		info, err := loadIronProxyInfoFromConfig(cfgPath)
+		diskInfo, err := loadIronProxyInfoFromConfig(cfgPath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				// No config file → the VM has never started an
@@ -137,9 +137,9 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		// Build fresh config on the SAME MAC_HOST + ports pulled from
 		// the on-disk config above.
 		newCfg := IronProxyConfig{
-			HTTPListen:  ironProxyListenAddr(info.HTTPPort),
-			HTTPSListen: ironProxyListenAddr(info.HTTPSPort),
-			DNSListen:   ironProxyListenAddr(info.DNSPort),
+			HTTPListen:  ironProxyListenAddr(diskInfo.HTTPPort),
+			HTTPSListen: ironProxyListenAddr(diskInfo.HTTPSPort),
+			DNSListen:   ironProxyListenAddr(diskInfo.DNSPort),
 			DNSProxyIP:  interceptedEgressIP,
 			CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
 			CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
@@ -169,7 +169,7 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 			return
 		}
 
-		healthAddr := ironProxyListenAddr(info.HTTPSPort)
+		healthAddr := ironProxyListenAddr(diskInfo.HTTPSPort)
 		if !waitIronProxyHealthy(healthAddr) {
 			http.Error(w, fmt.Sprintf("iron-proxy spawned but did not bind %s within 2s", healthAddr),
 				http.StatusInternalServerError)
@@ -191,14 +191,22 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		// healthy iron-proxy yet still 412 on the very next
 		// EnforcementConfig fetch. Mirrors AdoptIronProxies'
 		// daemon-restart rehydration (ironproxy_discover.go).
-		existing, _ := ironProxyState.get(req.Name)
-		// ProjectIP isn't part of iron-proxy's own on-disk config, so
-		// carry it forward explicitly — otherwise this put would clobber
-		// it back to empty even though AllocateProjectIP (below) treats
-		// the in-memory registry as the idempotency source of truth.
-		info.ProjectIP = existing.ProjectIP
-		snap, _ := ReadStateSnapshot(cfg, req.Name)
+		//
+		// Merge onto the existing registry entry rather than overwrite
+		// it with diskInfo — iron-proxy's on-disk YAML only carries
+		// HTTP/HTTPS/DNS ports, not ProjectIP or the guest-origin
+		// listener pair, both of which live only in the registry. Start
+		// from the existing entry and overlay just the fields diskInfo
+		// actually knows, mirroring /vm/start's own merge (vm.go): a
+		// field added to projectInfo later is preserved by default
+		// instead of needing its own carry-forward line here.
+		info, _ := ironProxyState.get(req.Name)
+		info.HTTPPort = diskInfo.HTTPPort
+		info.HTTPSPort = diskInfo.HTTPSPort
+		info.DNSPort = diskInfo.DNSPort
 		ironProxyState.put(req.Name, info)
+
+		snap, _ := ReadStateSnapshot(cfg, req.Name)
 
 		// Adopt-in-place (internal/orchestrator/shell.go's "pristine:
 		// running but never provisioned" branch — raw `tart run`
@@ -209,11 +217,36 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		// /vm/start or a prior call here already allocated one — so the
 		// adopted VM converges to the same ingress state as a cold
 		// start, instead of staying unreachable until an explicit stop +
-		// restart.
+		// restart. Called after the put above so AllocateProjectIP's own
+		// merge-onto-existing-entry logic (projectip.go) has the
+		// HTTP/HTTPS/DNS ports already in place to merge onto.
 		projectIP, err := AllocateProjectIP(cfg, req.Name)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("allocate project ip: %v", err), http.StatusInternalServerError)
 			return
+		}
+
+		// Adopt-in-place never calls /vm/start, so this project's
+		// guest-origin listener pair may never have been started this
+		// daemon lifetime — nothing is listening on the other end of
+		// softnet's `.test` hairpin. Start it here too, mirroring
+		// /vm/start (vm.go): idempotent (a live pair is left untouched
+		// and its existing ports returned), and its ports are recorded
+		// in the registry before any endpoint push can read them. proxy
+		// is nil only in tests that don't exercise this path; production
+		// always wires one (runner.go). This deliberately does not call
+		// StartProjectListeners — the browser-facing :80/:443 bind is
+		// Mac-side and out of scope here.
+		if proxy != nil {
+			guestHTTPPort, guestHTTPSPort, gerr := proxy.StartGuestOriginListeners(r.Context(), req.Name, projectIP)
+			if gerr != nil {
+				http.Error(w, fmt.Sprintf("start guest-origin listeners: %v", gerr), http.StatusInternalServerError)
+				return
+			}
+			info, _ = ironProxyState.get(req.Name)
+			info.GuestHTTPPort = guestHTTPPort
+			info.GuestHTTPSPort = guestHTTPSPort
+			ironProxyState.put(req.Name, info)
 		}
 
 		// Adopt-in-place also never went through /vm/start's

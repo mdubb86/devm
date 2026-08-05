@@ -1137,15 +1137,28 @@ func sendSoftnetEnforced(sock string, info projectInfo, ntpPort int) error {
 // complete: setPolicy keeps the previous endpoint on a nil push, so a
 // caller building a partial Endpoint by hand would silently clobber
 // whichever fields it left zero.
+//
+// GuestHTTP/GuestHTTPS are left "" when the corresponding port is 0
+// (the guest-origin listener pair hasn't bound yet) rather than
+// resolved through ironProxyListenAddr, which would otherwise produce
+// "127.0.0.1:0" — a value that dials nothing but isn't empty either, so
+// softnet's ft.GuestHTTP != "" deny guard can never fire on it. An
+// empty string is unambiguous: softnet denies guest-originated `.test`
+// traffic cleanly instead of the guest hanging on a dial to :0.
 func endpointFrom(info projectInfo, ntpPort int) *Endpoint {
-	return &Endpoint{
-		HTTP:       ironProxyListenAddr(info.HTTPPort),
-		HTTPS:      ironProxyListenAddr(info.HTTPSPort),
-		DNS:        ironProxyListenAddr(info.DNSPort),
-		NTP:        ironProxyListenAddr(ntpPort),
-		GuestHTTP:  ironProxyListenAddr(info.GuestHTTPPort),
-		GuestHTTPS: ironProxyListenAddr(info.GuestHTTPSPort),
+	e := &Endpoint{
+		HTTP:  ironProxyListenAddr(info.HTTPPort),
+		HTTPS: ironProxyListenAddr(info.HTTPSPort),
+		DNS:   ironProxyListenAddr(info.DNSPort),
+		NTP:   ironProxyListenAddr(ntpPort),
 	}
+	if info.GuestHTTPPort != 0 {
+		e.GuestHTTP = ironProxyListenAddr(info.GuestHTTPPort)
+	}
+	if info.GuestHTTPSPort != 0 {
+		e.GuestHTTPS = ironProxyListenAddr(info.GuestHTTPSPort)
+	}
+	return e
 }
 
 // projectInfo is the daemon's per-project state registry, keyed by

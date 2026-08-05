@@ -40,6 +40,20 @@ import (
 // policy can be), so this mainly rehydrates the daemon's in-memory view
 // and the port-claims registry pushExposeMap reconciles as a side
 // effect (see expose.go).
+//
+// ENFORCED re-push ordering vs. rebindProjectListeners (runner.go): a
+// project with a ProjectIP gets its guest-origin listener pair rebound
+// by a rebindProjectListeners goroutine later in the daemon-restart
+// sequence, which re-pushes ENFORCED once that pair is bound. Nothing
+// orders that goroutine against this one, so pushing ENFORCED here too
+// would race it. Rather than sequence the two passes (which would make
+// this function block on a live softnet dial per project — exactly
+// what the comment above says it must not do), this function skips its
+// own ENFORCED push for any project with a ProjectIP and leaves the
+// rebind pass as the sole post-restart pusher for it. A project with no
+// ProjectIP never goes through rebindProjectListeners, so this push
+// stays the only one it gets — daemon-restart semantics are unchanged
+// for that class.
 func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
 	for _, id := range ironProxyState.keys() {
 		sock := SoftnetControlSock(cfg, id)
@@ -49,8 +63,11 @@ func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
 		if !ok {
 			continue
 		}
+		needsEnforcedPush := info.ProjectIP == ""
 		go func(id, sock string, info projectInfo) {
-			_ = newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
+			if needsEnforcedPush {
+				_ = newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
+			}
 			if snap, err := ReadStateSnapshot(cfg, id); err == nil && snap != nil {
 				_ = pushExposeMap(id, computeExposeMap(snap.Cfg, info.ProjectIP))
 				_ = pushTestHosts(id, computeDirectTestHosts(snap.Cfg))

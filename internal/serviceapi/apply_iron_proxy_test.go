@@ -64,7 +64,7 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil, nil)
 
 	// Simulate cold-start (`devm start` / `devm shell`) having already
 	// seeded the snapshot with the real schema.Config — a prior
@@ -116,7 +116,7 @@ func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil, nil)
 
 	body, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      "never-started",
@@ -196,7 +196,7 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	}
 
 	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID) })
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIP(t, "192.168.64.50"), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIP(t, "192.168.64.50"), nil, nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      projectID,
@@ -275,7 +275,7 @@ func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 		return lerr
 	}
 
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil, nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      projectID,
@@ -343,7 +343,7 @@ func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 		return lerr
 	}
 
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil, nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      projectID,
@@ -360,6 +360,137 @@ func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 	require.True(t, ok)
 	assert.NotEmpty(t, info.ProjectIP,
 		"apply-iron-proxy must allocate a project IP for an adopted VM that never went through /vm/start")
+}
+
+// TestApplyIronProxy_PreservesGuestOriginPorts covers F1: a
+// reconcile-driven apply (allowlist/secret drift) against a project
+// whose guest-origin listener pair was already started and stashed in
+// ironProxyState (by a prior /vm/start or apply-iron-proxy call this
+// daemon lifetime). loadIronProxyInfoFromConfig's on-disk YAML has no
+// notion of GuestHTTPPort/GuestHTTPSPort — without carrying them
+// forward from the pre-existing entry the way ProjectIP already is,
+// this call would silently zero them, and the next warm `devm shell`'s
+// endpoint push would carry dead guest ports.
+func TestApplyIronProxy_PreservesGuestOriginPorts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	srv := NewServer(identity.Prod.SocketPath(), Build{})
+	sup := supervisor.New(t.TempDir())
+
+	const projectID = "p-preserve-guest-ports"
+	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID) })
+
+	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg, ProjectIP: "127.42.0.9"}))
+
+	macHost := "127.0.0.1"
+	httpPort, err := pickPort()
+	require.NoError(t, err)
+	httpsPort, err := pickPort()
+	require.NoError(t, err)
+	dnsPort, err := pickPort()
+	require.NoError(t, err)
+	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
+
+	// Simulate a prior /vm/start (or apply-iron-proxy) having already
+	// started and stashed this project's guest-origin listener pair.
+	ironProxyState.put(projectID, projectInfo{ProjectIP: "127.42.0.9", GuestHTTPPort: 55001, GuestHTTPSPort: 55002})
+
+	origSpawn := spawnIronProxyFn
+	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
+	var ln net.Listener
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *Denials) error {
+		var lerr error
+		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
+		return lerr
+	}
+
+	// proxy is nil here — this test pins the merge itself, independent
+	// of whether a *ProxyServer is wired (F4 covers that separately).
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil, nil)
+
+	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
+		Name:      projectID,
+		Allowlist: []string{"a.example.com"},
+	})
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/apply-iron-proxy", bytes.NewReader(reqBody)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	if ln != nil {
+		defer ln.Close()
+	}
+
+	info, ok := ironProxyState.get(projectID)
+	require.True(t, ok)
+	assert.Equal(t, 55001, info.GuestHTTPPort,
+		"GuestHTTPPort must be preserved across apply-iron-proxy, not zeroed")
+	assert.Equal(t, 55002, info.GuestHTTPSPort,
+		"GuestHTTPSPort must be preserved across apply-iron-proxy, not zeroed")
+}
+
+// TestApplyIronProxy_AdoptInPlace_StartsGuestOriginListeners covers F4:
+// adopt-in-place (shell.go's "pristine: running but never provisioned"
+// branch) calls /vm/apply-iron-proxy directly and never /vm/start, so
+// nothing has ever started this project's guest-origin listener pair —
+// in-guest `.test` would hairpin to softnet's gateway address with
+// nothing on the other end. With a real *ProxyServer wired in (mirrors
+// runner.go's production wiring), the handler must start the pair
+// itself and record the ports in the registry.
+func TestApplyIronProxy_AdoptInPlace_StartsGuestOriginListeners(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	srv := NewServer(identity.Prod.SocketPath(), Build{})
+	sup := supervisor.New(t.TempDir())
+
+	const projectID = "p-adopt-guest-listeners"
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		ReleaseProjectIP(identity.Prod, projectID)
+	})
+
+	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg}))
+
+	macHost := "127.0.0.1"
+	httpPort, err := pickPort()
+	require.NoError(t, err)
+	httpsPort, err := pickPort()
+	require.NoError(t, err)
+	dnsPort, err := pickPort()
+	require.NoError(t, err)
+	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
+
+	origSpawn := spawnIronProxyFn
+	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
+	var ln net.Listener
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *Denials) error {
+		var lerr error
+		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
+		return lerr
+	}
+
+	ca, err := loadOrGenerateCAAt(identity.Prod, t.TempDir())
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+	t.Cleanup(proxy.StopAll)
+
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil, proxy)
+
+	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
+		Name:      projectID,
+		Allowlist: []string{"a.example.com"},
+	})
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/apply-iron-proxy", bytes.NewReader(reqBody)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	if ln != nil {
+		defer ln.Close()
+	}
+
+	info, ok := ironProxyState.get(projectID)
+	require.True(t, ok)
+	assert.NotZero(t, info.GuestHTTPPort,
+		"apply-iron-proxy must start the guest-origin HTTP listener for an adopted VM and record its port")
+	assert.NotZero(t, info.GuestHTTPSPort,
+		"apply-iron-proxy must start the guest-origin HTTPS listener for an adopted VM and record its port")
 }
 
 // TestMergeAllowlistAndSecrets_RebuildsAllowFromApplied pins that the

@@ -235,7 +235,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 
 	RegisterVMHandlers(server, cfg, sup, tr, denials, ntp.Port(), locks, proxy)
 	RegisterReconcileHandler(server, cfg, locks, &realApplyLiver{tr: tr}, tr, sup, proxy)
-	RegisterApplyIronProxyHandler(server, cfg, locks, sup, tr, denials)
+	RegisterApplyIronProxyHandler(server, cfg, locks, sup, tr, denials, proxy)
 	RegisterHandshakeHandler(server, cfg, build, sup, proxy)
 	RegisterStatusAllHandler(server, cfg, sup, tr, proxy)
 
