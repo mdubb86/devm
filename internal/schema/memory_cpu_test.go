@@ -16,7 +16,7 @@ func TestParseMemorySize_Accept(t *testing.T) {
 	}{
 		{"1G", 1024},
 		{"8G", 8192},
-		{"8g", 8192},   // case-insensitive suffix, matches ParseDiskSize
+		{"8g", 8192}, // case-insensitive suffix, matches ParseDiskSize
 		{"16G", 16384},
 		{"64G", 65536},
 		{"8GB", 8192},
@@ -33,14 +33,14 @@ func TestParseMemorySize_Accept(t *testing.T) {
 
 func TestParseMemorySize_Reject(t *testing.T) {
 	cases := []string{
-		"8",       // no suffix
-		"8M",      // wrong unit
-		"8T",      // wrong unit
-		"0G",      // non-positive
-		"-8G",     // negative
-		"abc",     // garbage
-		"",        // empty (callers should nil-check, but parser must still reject)
-		"G",       // suffix alone, no magnitude
+		"8",   // no suffix
+		"8M",  // wrong unit
+		"8T",  // wrong unit
+		"0G",  // non-positive
+		"-8G", // negative
+		"abc", // garbage
+		"",    // empty (callers should nil-check, but parser must still reject)
+		"G",   // suffix alone, no magnitude
 	}
 	for _, s := range cases {
 		t.Run(s, func(t *testing.T) {

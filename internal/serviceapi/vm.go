@@ -402,6 +402,26 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// + cold start, no reclone), so this VM may already exist and
 		// just be stopped. tart set requires a stopped VM, which holds
 		// here — /vm/start is only called against a non-running sandbox.
+		//
+		// Reject an override the host can't satisfy before handing it to
+		// tart, so the failure is a friendly 400 instead of a lower-level
+		// tart error surfacing later in the clone/start pipeline.
+		if req.MemoryMB > 0 || req.CpuCount > 0 {
+			memBytes, cpus, err := hostCapacity()
+			if err != nil {
+				debuglog.Logf("serviceapi", "vm/start: host-capacity check skipped: %v", err)
+			} else {
+				hostMemMB := memBytes / (1024 * 1024)
+				if req.MemoryMB > 0 && uint64(req.MemoryMB) > hostMemMB {
+					http.Error(w, fmt.Sprintf("memory: %d MB exceeds host capacity (%d MB)", req.MemoryMB, hostMemMB), http.StatusBadRequest)
+					return
+				}
+				if req.CpuCount > 0 && uint32(req.CpuCount) > cpus {
+					http.Error(w, fmt.Sprintf("cpu: %d exceeds host count (%d)", req.CpuCount, cpus), http.StatusBadRequest)
+					return
+				}
+			}
+		}
 		if req.MemoryMB > 0 {
 			if err := tr.SetMemory(ctx, req.Name, req.MemoryMB); err != nil {
 				http.Error(w, fmt.Sprintf("tart set --memory: %v", err), http.StatusInternalServerError)

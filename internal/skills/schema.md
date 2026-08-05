@@ -24,8 +24,8 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `masks` | []string | live | Workspace-relative paths overlaid by a private per-project guest ext4 directory. Isolates platform-differing content (Mac's `node_modules` vs Linux's) so both platforms have their own copies. See the `masks` section below. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
-| `memory` | string | restart | Override the VM's RAM, e.g. `"8G"`, `"16G"`. Unset uses the base image default. Requires a G/GB suffix; the magnitude must be a positive integer. |
-| `cpu` | int | restart | Override the VM's virtual CPU count. Unset uses the base image default. Must be a positive integer. |
+| `memory` | string | restart | Override the VM's RAM, e.g. `"8G"`, `"16G"`. Unset uses the base image default. Requires a G/GB suffix; the magnitude must be a positive integer. Removing this field from devm.yaml does not revert the running VM's tart config; the previously-set value persists across reconcile-restarts. Use `devm teardown` to fully reset to the base image default. Not overridable in `devm.me.yaml`. |
+| `cpu` | int | restart | Override the VM's virtual CPU count. Unset uses the base image default. Must be a positive integer. Removing this field from devm.yaml does not revert the running VM's tart config; the previously-set value persists across reconcile-restarts. Use `devm teardown` to fully reset to the base image default. Not overridable in `devm.me.yaml`. |
 | `config_lock` | bool | n/a | Defaults `true`. While the VM runs the daemon makes `devm.yaml` (+ `devm.me.yaml`) host-immutable (`chflags uchg`) so a root guest can't tamper with the egress allowlist; it unlocks on `devm stop`. Set `false` to disable. Edit while running via `devm unlock` (auto re-locks after `--for`, default 5m) then `devm reconcile`/`devm lock`. Not overridable in `devm.me.yaml`. |
 
 ---
