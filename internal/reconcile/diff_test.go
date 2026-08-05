@@ -765,7 +765,11 @@ func TestComputeAllChanges_IncludesNetworkAndSecretChanges(t *testing.T) {
 
 func TestComputeDiskChange(t *testing.T) {
 	mk := func(disk string) schema.Config {
-		return schema.Config{Project: schema.Project{Name: "x"}, Disk: disk}
+		cfg := schema.Config{Project: schema.Project{Name: "x"}}
+		if disk != "" {
+			cfg.Disk = &disk
+		}
+		return cfg
 	}
 	// unset -> unset: no change
 	assert.Empty(t, computeDiskChange(mk(""), mk("")))

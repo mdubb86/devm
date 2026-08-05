@@ -576,8 +576,12 @@ func computeDockerChange(old, new schema.Config) []Change {
 // `disk:` override when set, else the base image default. Comparing
 // effective sizes means adding `disk: 32G` (equal to the default) is
 // not treated as a change.
+//
+// schema.ParseDiskSize's error is intentionally ignored — Config.Validate
+// at load time rejects malformed strings before this ever runs.
 func effectiveDiskGB(c schema.Config) int {
-	if n, ok := c.DiskSizeGB(); ok {
+	if c.Disk != nil {
+		n, _ := schema.ParseDiskSize(*c.Disk)
 		return n
 	}
 	return schema.DefaultDiskSizeGB

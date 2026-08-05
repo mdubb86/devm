@@ -16,7 +16,7 @@ func TestParseMemorySize_Accept(t *testing.T) {
 	}{
 		{"1G", 1024},
 		{"8G", 8192},
-		{"8g", 8192},   // case-insensitive suffix, matches parseDiskSize
+		{"8g", 8192},   // case-insensitive suffix, matches ParseDiskSize
 		{"16G", 16384},
 		{"64G", 65536},
 		{"8GB", 8192},

@@ -235,7 +235,13 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		extraMounts = append(extraMounts, resolved)
 	}
 
-	diskGB, _ := cfg.DiskSizeGB()
+	var diskGB int
+	if cfg.Disk != nil {
+		diskGB, err = schema.ParseDiskSize(*cfg.Disk)
+		if err != nil {
+			return -1, fmt.Errorf("parse disk: %w", err)
+		}
+	}
 	startResp, err := d.ServiceAPIClient.StartVM(ctx, serviceapi.VMStartRequest{
 		Name:              cfg.Project.Name,
 		WorkspaceHostPath: repoRoot,

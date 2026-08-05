@@ -154,20 +154,26 @@ func TestMerge_DockerOverrideAbsentPreserves(t *testing.T) {
 }
 
 func TestMerge_DiskOverride(t *testing.T) {
-	base := schema.Config{Disk: "32G"}
+	base := schema.Config{Disk: strPtr("32G")}
 	disk := "64G"
 	override := schema.ConfigOverride{Disk: &disk}
 
 	out, err := Merge(base, override)
 	require.NoError(t, err)
-	assert.Equal(t, "64G", out.Disk, "Disk: want 64G after override")
+	require.NotNil(t, out.Disk)
+	assert.Equal(t, "64G", *out.Disk, "Disk: want 64G after override")
+	// Merge copies the value rather than aliasing the override's pointer.
+	assert.NotSame(t, &disk, out.Disk)
 }
 
 func TestMerge_DiskOverrideAbsentPreserves(t *testing.T) {
-	base := schema.Config{Disk: "64G"}
+	base := schema.Config{Disk: strPtr("64G")}
 	override := schema.ConfigOverride{} // no Disk override
 
 	out, err := Merge(base, override)
 	require.NoError(t, err)
-	assert.Equal(t, "64G", out.Disk, "Disk: want preserved 64G")
+	require.NotNil(t, out.Disk)
+	assert.Equal(t, "64G", *out.Disk, "Disk: want preserved 64G")
 }
+
+func strPtr(s string) *string { return &s }

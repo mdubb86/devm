@@ -150,6 +150,10 @@ func expectedOverrideType(baseType reflect.Type) reflect.Type {
 			}
 		}
 		return baseType
+	case reflect.Ptr:
+		// Pointer-typed base field is already absence-distinguishable
+		// (nil vs non-nil). Override field uses the same pointer type.
+		return baseType
 	default:
 		// Scalar (string, int, bool, etc.) → *T
 		return reflect.PtrTo(baseType)

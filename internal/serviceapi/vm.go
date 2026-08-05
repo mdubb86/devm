@@ -53,7 +53,7 @@ type VMStartRequest struct {
 	ExtraMounts []string `json:"extra_mounts,omitempty"`
 	// DiskSizeGB, when > 0, grows this VM's virtual disk to the given
 	// gigabytes at clone time (a per-project `disk:` override). Zero
-	// means the base image default. See schema.Config.DiskSizeGB.
+	// means the base image default.
 	DiskSizeGB int `json:"disk_size_gb,omitempty"`
 	// Cfg is the project's full config, used to compute the initial
 	// softnet ingress expose map (see computeExposeMap) once the VM and

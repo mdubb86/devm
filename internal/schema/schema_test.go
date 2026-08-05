@@ -810,7 +810,7 @@ docker: "banana"
 	}
 }
 
-func TestDiskSizeParsingAndGetter(t *testing.T) {
+func TestDiskSizeParsing(t *testing.T) {
 	cases := []struct {
 		in    string
 		gib   int
@@ -826,21 +826,22 @@ func TestDiskSizeParsingAndGetter(t *testing.T) {
 		{"abcG", 0, false},  // non-numeric magnitude
 	}
 	for _, c := range cases {
-		cfg := Config{Project: Project{Name: "x"}, Disk: c.in}
+		cfg := Config{Project: Project{Name: "x"}, Disk: strPtr(c.in)}
 		err := cfg.Validate()
 		if !c.valid {
 			assert.Error(t, err, "expected %q rejected", c.in)
 			continue
 		}
 		require.NoError(t, err, "expected %q accepted", c.in)
-		gib, set := cfg.DiskSizeGB()
-		assert.True(t, set)
+		require.NotNil(t, cfg.Disk)
+		gib, err := ParseDiskSize(*cfg.Disk)
+		require.NoError(t, err)
 		assert.Equal(t, c.gib, gib)
 	}
 }
 
 func TestDiskSizeBelowFloorRejected(t *testing.T) {
-	cfg := Config{Project: Project{Name: "x"}, Disk: "16G"}
+	cfg := Config{Project: Project{Name: "x"}, Disk: strPtr("16G")}
 	err := cfg.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "minimum")
@@ -849,9 +850,7 @@ func TestDiskSizeBelowFloorRejected(t *testing.T) {
 func TestDiskUnsetHasNoOverride(t *testing.T) {
 	cfg := Config{Project: Project{Name: "x"}}
 	require.NoError(t, cfg.Validate())
-	gib, set := cfg.DiskSizeGB()
-	assert.False(t, set)
-	assert.Equal(t, 0, gib)
+	assert.Nil(t, cfg.Disk)
 }
 
 func TestCheckUnknownKeysAllowsDisk(t *testing.T) {
@@ -1105,3 +1104,5 @@ func TestValidate_Secrets_NoSecretsAnywhere_OK(t *testing.T) {
 	}
 	assert.NoError(t, cfg.Validate())
 }
+
+func strPtr(s string) *string { return &s }
