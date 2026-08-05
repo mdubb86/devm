@@ -9,10 +9,10 @@ since: recipes-v1.0.0
 
 # Claude Code
 
-Uses the official native installer (no Node dependency) and persists all
-`~/.claude` state — OAuth login, transcripts, memory, settings — in a
-devm volume so it survives `devm teardown`. The allow list is explicit —
-every domain Claude Code needs is listed here.
+Uses the official native installer (no Node dependency) and persists
+Claude Code's full state — OAuth login, tokens, transcripts, memory,
+settings, MCP servers, per-project trust — across `devm teardown`. The
+allow list is explicit.
 
 ## devm.yaml additions
 
@@ -23,39 +23,78 @@ scripts:
     - curl -fsSL https://claude.ai/install.sh | bash
     - sudo install -m 755 /home/devm/.local/bin/claude /usr/local/bin/claude
 
+  # Persist ~/.claude.json (login/account/history) via a volume-backed
+  # symlink, re-linked every boot. Not CLAUDE_CONFIG_DIR: the VS Code
+  # extension and Orca ignore that env var and read/write the default
+  # ~/.claude.json regardless, so the default path must stay canonical.
+  link-claude-config:
+    # save-back if a session clobbered the symlink into a real file
+    # (oauthAccount gate stops a fresh onboarding stub overwriting the
+    # real login), then re-link.
+    - if [ -f /home/devm/.claude.json ] && [ ! -L /home/devm/.claude.json ] && grep -q '"oauthAccount"' /home/devm/.claude.json 2>/dev/null; then cp -f /home/devm/.claude.json /home/devm/.claude/.claude.json; fi
+    - ln -sf /home/devm/.claude/.claude.json /home/devm/.claude.json
+
 install:
   - ">install-claude-cli"
+
+startup:
+  # BucketRestartVM: re-links on cold-start AND every restart, since
+  # $HOME is fresh after teardown but the symlink target inside the
+  # volume persists.
+  - ">link-claude-config"
 
 env:
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
 
 volumes:
-  # Claude's ~/.claude: OAuth (.credentials.json), transcripts, memory,
-  # settings. Mounted AT the default path so no CLAUDE_CONFIG_DIR
-  # override is needed — Claude runs on its own default location.
+  # Claude's ~/.claude: settings, transcripts, memory, plugins, tokens
+  # (.credentials.json), and — via the link-claude-config symlink —
+  # ~/.claude.json (login/account/project trust). Mounted AT the
+  # default path so no CLAUDE_CONFIG_DIR override is needed.
   claude: /home/devm/.claude
 
 network:
   allow:
     - api.anthropic.com         # Claude API (core)
-    - claude.ai                 # OAuth login + install.sh
-    - platform.claude.com       # Console account auth
+    - claude.ai                 # OAuth login redirect + install.sh
+    - console.anthropic.com     # OAuth token refresh (claude.ai accounts)
+    - platform.claude.com       # OAuth token exchange + revoke
     - downloads.claude.ai       # native installer + plugin downloads
     - raw.githubusercontent.com # plugin marketplace + /release-notes
 ```
 
 ## Notes
 
+- **Two-file persistence.** Claude Code splits its state across
+  `~/.claude/` (settings, transcripts, plugins, `.credentials.json`
+  tokens) AND `~/.claude.json` at `$HOME` root (OAuth account,
+  onboarding state, per-project trust, project history). The volume
+  covers the directory; `link-claude-config` symlinks the sibling file
+  into the same volume so both survive teardown. Persisting only
+  `~/.claude` logs you out on every teardown — Claude finds tokens but
+  no account and treats it as a fresh install.
+- **Why not `CLAUDE_CONFIG_DIR`.** It would move both files into the
+  volume, but the VS Code extension and Orca ignore that env var and
+  read/write the default `~/.claude.json` regardless. Keep the default
+  path canonical and use the symlink.
+- **Save-back guard.** If a running session ever clobbers the symlink
+  into a real file (atomic temp+rename), the guard folds it back into
+  the volume before re-linking. The `oauthAccount` grep prevents a
+  fresh onboarding stub from overwriting a real login. Residual risk:
+  a mid-session clobber followed by a `devm teardown` (not a restart)
+  before the next boot loses that session's `.claude.json` deltas.
+- **`console.anthropic.com` matters.** For claude.ai accounts, OAuth
+  token refresh hits this host. Without it in the allowlist every
+  refresh 403s, Claude blanks the stored tokens
+  (`accessToken`/`refreshToken` → empty, `expiresAt` → 0), and the
+  user is silently logged out. `devm denials` will show it if in
+  doubt.
 - **Install steps**: `install.sh` runs as the devm user and lands the
   binary at `/home/devm/.local/bin/claude` (Claude's self-check
   canonical user path — must stay there). Second step copies it to
   `/usr/local/bin/claude` so it's on the system PATH for any user.
   Ephemeral — the installer re-runs on every cold-start (`install:`
   runs once per VM lifetime).
-- **State** is everything Claude stores under `~/.claude`: OAuth at
-  `.credentials.json`, conversation transcripts, memory, settings.
-  The `claude` volume mounts at Claude's native default path so no
-  `CLAUDE_CONFIG_DIR` override is needed. Survives `devm teardown`.
 - **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`** kills Sentry error
   reporting + telemetry. Cleaner than allowlisting `*.sentry.io`.
 - **`raw.githubusercontent.com`** is needed for plugin marketplace
