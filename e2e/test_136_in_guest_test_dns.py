@@ -1,4 +1,4 @@
-"""136: `.test` hostnames resolve to 127.0.0.1 from INSIDE the guest.
+"""136: `.test` hostnames resolve to softnet's hairpin from INSIDE the guest.
 
 Regression pin for the buzztrack-observed break: cirruslabs' Debian
 ships systemd-resolved enabled, which binds 127.0.0.53:53 and
@@ -8,15 +8,19 @@ hosts foo.test` returns NXDOMAIN.
 
 The fix is baked into provision-base.sh: mask systemd-resolved,
 write /etc/resolv.conf → 127.0.0.1, and dnsmasq's drop-in has
-`no-resolv` + explicit upstream so it doesn't loop.
+`no-resolv` + explicit upstream (softnet's gateway, 192.168.127.1) so
+it doesn't loop and so `.test` queries actually reach softnet's own
+resolver instead of NXDOMAIN-ing locally.
 
 Prior tests exercised `.test` from the Mac side (via macOS's
 /etc/resolver/ mechanism, which doesn't touch the guest) — no
 in-guest coverage until this test.
 
 The assertion is `getent hosts <name>.test` from inside the guest
-returns 127.0.0.1. `getent hosts` walks nsswitch (files → dns)
-so it exercises the same path a real process would.
+returns 192.0.2.2 — softnet's hairpin answer for a non-direct `.test`
+name, forwarded to the daemon's guest-origin listeners (see
+internal/serviceapi/guestorigin.go). `getent hosts` walks nsswitch
+(files → dns) so it exercises the same path a real process would.
 """
 from __future__ import annotations
 
@@ -57,9 +61,12 @@ def test_dot_test_resolves_to_loopback_in_guest(devm, workspace, sandbox_name):
         out = r.stdout.decode().strip()
         # getent output: "<ip>\t<canonical>  [<aliases…>]"
         first_field = out.split()[0] if out else ""
-        assert first_field == "127.0.0.1", (
+        assert first_field == "192.0.2.2", (
             f"getent hosts arbitrary.test resolved to {first_field!r}, "
-            f"want 127.0.0.1. Full output: {out!r}"
+            f"want 192.0.2.2 (softnet's hairpin). A wrong answer here "
+            f"means dnsmasq isn't forwarding `.test` queries to the "
+            f"softnet gateway (192.168.127.1) — the systemd-resolved-hijack "
+            f"regression this test exists to catch. Full output: {out!r}"
         )
     finally:
         subprocess.run(

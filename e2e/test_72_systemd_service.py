@@ -4,13 +4,12 @@ Pin: services declared via services.X.exec: end up enabled under
 systemd, become active after cold-start (the provisioner's service-health
 assertion guarantees this), and the running unit serves HTTP traffic.
 
-The workload is a host-process `nc` loop (test_157's pattern), not
-caddy: caddy is no longer in the base image (in-VM `.test` routing is
-the daemon's job now, not an in-guest caddy — see
-docs/superpowers/specs/2026-08-05-in-vm-https-design.md), and this
-test's subject is systemd service lifecycle, not the workload itself.
-`netcat-openbsd` is declared via `packages:` (test_112's shape), with
-`network.allow` for the Debian mirrors the apt install needs.
+The workload is a host-process `nc` loop (test_157's pattern) rather
+than a real HTTP daemon: nothing HTTP-serving ships in the base image
+anymore, and this test's subject is systemd service lifecycle, not the
+workload itself. `netcat-openbsd` is declared via `packages:`
+(test_112's shape), with `network.allow` for the Debian mirrors the apt
+install needs.
 
 NOTE: these are literal two-character `\\r`/`\\n` escapes (doubled
 backslashes), not actual CR/LF bytes — the string below becomes a

@@ -20,6 +20,7 @@ func TestDnsmasqConfig_Directives(t *testing.T) {
 	assert.Contains(t, lines, "no-resolv")
 	assert.Contains(t, lines, "server=192.168.127.1")
 	assert.Len(t, lines, 2)
+	assert.True(t, strings.HasSuffix(out, "\n"), "trailing newline")
 }
 
 // TestDnsmasqConfig_BaseImageParity: the drop-in baked into the base

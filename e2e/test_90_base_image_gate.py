@@ -3,7 +3,7 @@ egress-locked.
 
 Boots a raw `devm-base` clone (NO daemon, NO provisioning) and asserts
 the pre-daemon floor the boot-integrity gate depends on: egress is
-default-drop, devm.target is inactive, and ssh/caddy/dnsmasq are not
+default-drop, devm.target is inactive, and ssh/dnsmasq are not
 running.
 """
 from __future__ import annotations
@@ -18,8 +18,8 @@ def test_daemon_less_boot_is_locked_and_inert(base_clone):
 
     # devm.target inactive (nothing user-facing was pulled in)
     assert x("systemctl","is-active","devm.target").stdout.strip() != "active"
-    # ssh / caddy / dnsmasq NOT running
-    for unit in ("ssh","caddy","dnsmasq"):
+    # ssh / dnsmasq NOT running
+    for unit in ("ssh","dnsmasq"):
         assert x("systemctl","is-active",unit).stdout.strip() != "active", f"{unit} should be down"
     # egress locked: a curl to a public host fails (default-drop)
     r = x("curl","-sS","-m","5","https://example.com")
