@@ -60,7 +60,7 @@ Provisioning is the daemon's job, not the guest's own boot sequence. It walks th
 | `startup` | every boot, if `startup:` is non-empty | Run each `startup:` command, open network. |
 | `enforce` | every boot | Stage boundary marking the classifier's teardown/debuggable split — a failure at or before this point is devm's own enforcement being broken, not a user service. Does no in-guest work — the egress policy flip happens on the Mac side. |
 | `services` | every boot | Apply mask overlays; enable + start each declared service unit; health-poll each until active/healthy or timeout — **before** `devm.target` starts. |
-| _(finish)_ | every boot | `systemctl start devm.target` — brings up the gated services (ssh, dnsmasq, docker, and your service units), all under enforcement. **Access is granted only now.** |
+| _(finish)_ | every boot | `systemctl start devm.target` — brings up the gated services (ssh, docker, and your service units), all under enforcement. **Access is granted only now.** |
 
 Any failing command aborts the whole provisioning run before `devm.target` starts, so a failure never grants access. A failure at the `templates` or `services` stage leaves the VM running for in-place debugging (the user's service/template definition is what's broken); any earlier-stage failure (`open` through `enforce`) tears the VM down — `devm shell` promises loud failure, never a half-created VM left behind.
 

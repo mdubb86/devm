@@ -37,9 +37,9 @@ Required. Identifies the project and configures the local reverse proxy.
 | Field | Type | Required | Purpose |
 |---|---|---|---|
 | `name` | string | yes | Project name. Serves as both the devm-owned identity namespace (secrets, routes, state, iron-proxy, ssh keys) and the literal Tart VM instance name. Must contain no whitespace, `/`, `\`, or `..`. |
-| `proxy` | string | no | Empty (default, `.test` routing enabled) or `none`. With `none`, `devm route` subcommands print a disabled message and exit 0. |
+| `proxy` | string | no | Empty or `caddy` (both mean the default: `.test` routing enabled) or `none`. With `none`, `devm route` subcommands print a disabled message and exit 0. |
 
-Validation: `name` is required; `proxy` must be empty or `none`.
+Validation: `name` is required; `proxy` must be empty, `caddy`, or `none` — empty and `caddy` are equivalent.
 
 Changing any `project` field is in the **recreate** bucket — the VM must be deleted and recreated from scratch.
 
