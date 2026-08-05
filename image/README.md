@@ -11,7 +11,7 @@ embedded into the devm binary at compile time.
 ## Files
 
 - `provision-base.sh` — runs inside the freshly-cloned VM. Installs
-  Caddy / dnsmasq / nftables, masks the apt auto-updaters, drops the
+  dnsmasq / nftables, masks the apt auto-updaters, drops the
   unused `debian` user, and installs the `admin → devm` rename
   one-shot systemd unit (fires on the next boot before
   tart-guest-agent starts). `//go:embed`ded by `image/embed.go`;

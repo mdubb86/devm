@@ -51,17 +51,17 @@ If the VM isn't running yet (no `127.42.0.N` allocated for this project), `devm 
 
 ## Direct services (`direct: true`)
 
-A service with `direct: true` is reached **directly on the project's `127.42.0.N`**, bypassing the daemon's ProxyServer and the in-VM Caddy reverse-proxy. The `direct:` flag doesn't control whether the port is exposed (every service with a `hostname` + `port` is exposed on `127.42.0.N:port` via softnet); it controls whether the service is HTTP-fronted or raw-TCP end-to-end. Use it for non-HTTP protocols (Postgres, gRPC, custom TCP) that a reverse proxy can't front.
+A service with `direct: true` is reached **directly on the project's `127.42.0.N`**, bypassing the daemon's ProxyServer entirely. The `direct:` flag doesn't control whether the port is exposed (every service with a `hostname` + `port` is exposed on `127.42.0.N:port` via softnet); it controls whether the service is HTTP-fronted or raw-TCP end-to-end. Use it for non-HTTP protocols (Postgres, gRPC, custom TCP) that a reverse proxy can't front.
 
 - DNS answers the service's `hostname` with the project's `127.42.0.N` (same as any other hostname on that project), so `psql -h db.test` from the Mac connects to `127.42.0.N:5432` — no ProxyServer hop, no TLS.
 - The Mac opens a TCP listener on `127.42.0.N:<port>` and forwards accepted connections into the VM.
-- No in-VM reverse-proxy block for the hostname; the workload speaks raw TCP end-to-end.
+- No HTTP front for the hostname; the workload speaks raw TCP end-to-end, on the Mac and inside the VM alike.
 
 Rules:
 
 - `direct: true` requires a `hostname` ending in `.test`.
 - Adding or removing `direct` is a **live** change: `devm reconcile` applies it on a running VM.
-- Non-direct service with a `hostname` → HTTP-fronted (daemon's ProxyServer → in-VM reverse-proxy → your service). Direct service → raw TCP to the same `127.42.0.N`, different port.
+- Non-direct service with a `hostname` → HTTP-fronted: the daemon's ProxyServer (from the Mac) or its guest-origin listener (from inside the VM) dials the service's port directly — no in-VM proxy hop either way. Direct service → raw TCP to the same `127.42.0.N`, different port.
 
 ---
 
@@ -75,7 +75,7 @@ To switch routing mode without tearing down (e.g., from `vm` to `local`), just r
 
 ## Reaching services from the LAN (`expose_host: true`)
 
-Uncommon; use only when a LAN device (phone, tablet, other laptop) needs to hit a dev service by hostname. devm's CA isn't trusted on those devices and installing it there is annoying, so the pattern is: run a LAN-side reverse proxy that already has a trusted cert (Nginx Proxy Manager, Caddy, Traefik, etc.), and have it forward to devm's shared LAN dispatcher on `0.0.0.0:42000`, preserving the `Host` header. devm dispatches by Host to the right service; TLS is the reverse proxy's problem, not devm's.
+Uncommon; use only when a LAN device (phone, tablet, other laptop) needs to hit a dev service by hostname. devm's CA isn't trusted on those devices and installing it there is annoying, so the pattern is: run a LAN-side reverse proxy that already has a trusted cert (Nginx Proxy Manager, Traefik, etc.), and have it forward to devm's shared LAN dispatcher on `0.0.0.0:42000`, preserving the `Host` header. devm dispatches by Host to the right service; TLS is the reverse proxy's problem, not devm's.
 
 ```yaml
 services:
@@ -93,7 +93,13 @@ services:
 
 ## Inside the VM: reaching your own services
 
-`*.test` hostnames resolve locally inside the VM to a reverse-proxy that dispatches to `localhost:<port>` for each service you declared. A workload inside the VM that curls `http://api.test/` never leaves the VM — DNS answers loopback, the in-VM proxy dispatches to your service on its declared port.
+The guest carries no `.test` configuration of its own. Its DNS queries forward to softnet, which answers every `*.test` name itself: a `direct: true` hostname gets `127.0.0.1` (raw TCP, never leaves the guest); everything else gets a hairpin address that softnet forwards to the daemon's guest-origin listener on the Mac. That listener terminates TLS with the same devm CA the Mac-facing ProxyServer uses — same signer, same chain, the identical cert a Mac browser would get for the same hostname — and dials back into the guest at `127.42.0.N:<service-port>` to reach your service. No key material or signing capability exists inside the VM.
+
+Both `http://api.test` and `https://api.test` work from inside the VM, matching the Mac. This holds under the OPEN policy (the provisioning window) and under ENFORCED; under LOCKED it's denied along with everything else.
+
+`*.devm.test` is a separate, always-on zone: it resolves inside the VM to softnet's NAT alias for the Mac's own loopback (`192.168.127.254`), independent of the `.test` handling above. It's used by softnet's own e2e tests.
+
+In-guest `.test` traffic depends on the daemon and softnet being up — a query answered by softnet still needs the daemon's guest-origin listener alive on the other end of the hairpin.
 
 Under enforced egress, outbound traffic to external destinations is restricted: only HTTPS (:443), HTTP (:80), and NTP (:123) leave the VM. Everything else (arbitrary TCP ports, other UDP) is dropped. HTTP/HTTPS goes through iron-proxy on the Mac and hits the `network.allow` check. During the provisioning window (first boot / `startup:` / template installs), egress is open so `apt-get install` and `curl … | bash` work.
 
@@ -103,7 +109,7 @@ Under enforced egress, outbound traffic to external destinations is restricted: 
 
 The devm CA is a self-signed root generated once at first daemon start and trusted in the macOS System Keychain (via `devm install`) and inside the VM at first boot. This makes HTTPS to `*.test` names trust-chain-clean in browsers, `curl`, language runtimes, etc. — no cert warnings.
 
-The daemon's ProxyServer signs a leaf cert on demand for whatever SNI the client sends (90-day validity, cached, auto-renewed) using the CA's private key.
+The daemon holds the CA's private key and signs a leaf cert on demand for whatever SNI the client sends (90-day validity, cached, auto-renewed) — both the Mac-facing ProxyServer and the per-project guest-origin listener draw from the same CA instance, so a leaf issued to a Mac browser and one issued to an in-guest curl for the same hostname share the identical chain.
 
 ---
 

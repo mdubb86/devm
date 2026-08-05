@@ -37,9 +37,9 @@ Required. Identifies the project and configures the local reverse proxy.
 | Field | Type | Required | Purpose |
 |---|---|---|---|
 | `name` | string | yes | Project name. Serves as both the devm-owned identity namespace (secrets, routes, state, iron-proxy, ssh keys) and the literal Tart VM instance name. Must contain no whitespace, `/`, `\`, or `..`. |
-| `proxy` | string | no | `caddy` (default) or `none`. With `none`, `devm route` subcommands print a disabled message and exit 0. |
+| `proxy` | string | no | Empty (default, `.test` routing enabled) or `none`. With `none`, `devm route` subcommands print a disabled message and exit 0. |
 
-Validation: `name` is required; `proxy` must be empty, `caddy`, or `none`.
+Validation: `name` is required; `proxy` must be empty or `none`.
 
 Changing any `project` field is in the **recreate** bucket — the VM must be deleted and recreated from scratch.
 
@@ -210,8 +210,8 @@ Named service definitions. Each key is the service name.
 | Field | Type | Bucket | Purpose |
 |---|---|---|---|
 | `port` | int or "IP:PORT" | live | VM-side listen port. String form (`"0.0.0.0:8080"`) is parsed for a bind IP, but that IP is silently ignored: every service's host-side listener binds on the project's allocated `127.42.0.N` address (its own loopback IP, one per project). For LAN reachability of a service's hostname, use `expose_host: true` (below) — that opts the hostname into devm's shared LAN dispatcher on `0.0.0.0:42000`, which is the correct mechanism. |
-| `hostname` | string | live | Hostname for the Caddy reverse-proxy entry. Must end in `.test`. |
-| `direct` | bool | live | Treat this service as raw TCP end-to-end instead of HTTP-fronted: skips the in-VM Caddy reverse-proxy block and the daemon's ProxyServer hostname dispatch. DNS still answers `hostname` with the project's `127.42.0.N`, and the client connects to `127.42.0.N:port` directly (softnet forwards to the guest) — every service with `hostname` + `port` is exposed on softnet regardless of `direct`; this flag only controls how it's fronted. Use for non-HTTP protocols (Postgres, gRPC) a reverse proxy can't front. Requires `hostname`. Default `false`. |
+| `hostname` | string | live | Hostname this service answers to, dispatched by the daemon's ProxyServer (from the Mac) and its guest-origin listener (from inside the VM). Must end in `.test`. |
+| `direct` | bool | live | Treat this service as raw TCP end-to-end instead of HTTP-fronted: skips the daemon's ProxyServer hostname dispatch and its guest-origin listener. DNS still answers `hostname` with the project's `127.42.0.N` on the Mac (and `127.0.0.1` inside the VM), and the client connects directly — every service with `hostname` + `port` is exposed on softnet regardless of `direct`; this flag only controls how it's fronted. Use for non-HTTP protocols (Postgres, gRPC) a reverse proxy can't front. Requires `hostname`. Default `false`. |
 | `expose_host` | bool | live | Opt this service's `hostname` into devm's shared LAN dispatcher (host `0.0.0.0:42000`), so other devices on the LAN can reach it by hostname. Requires `hostname`. Independent of `direct`. Default `false`. |
 | `env` | map[string]EnvValue | live | Per-service environment variables (same `!secret` syntax as top-level `env`). |
 | `templates` | []Template | live | Files rendered from source scripts and written into the VM. Each has `source` (project-relative path), `output` (absolute path in VM), and optional `sudo` (default `false`; set `true` when `output` is under a root-owned dir like `/etc` so the installer escalates and the resulting file lands root-owned). |
