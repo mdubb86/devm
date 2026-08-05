@@ -504,7 +504,7 @@ func (p Project) Validate() error {
 func CheckUnknownKeys(data []byte) error {
 	knownTop := []string{
 		"project", "base_image", "docker", "network", "env",
-		"services", "install", "startup", "scripts", "mounts", "path", "packages", "disk",
+		"services", "install", "startup", "scripts", "mounts", "path", "packages", "disk", "memory", "cpu",
 		"config_lock", "volumes", "masks",
 	}
 	knownProject := []string{
@@ -745,6 +745,17 @@ type Config struct {
 	// changing this field recreates the VM (teardown bucket).
 	Disk string `yaml:"disk,omitempty"`
 
+	// Memory optionally overrides the VM's RAM, e.g. "8G", "16G".
+	// nil = use image default (baked into devm-base). Applied via
+	// `tart set --memory` at VM start; a change reconciles as
+	// BucketRestartVM.
+	Memory *string `yaml:"memory,omitempty"`
+
+	// Cpu optionally overrides the VM's virtual CPU count.
+	// nil = use image default. Applied via `tart set --cpu` at VM
+	// start; a change reconciles as BucketRestartVM.
+	Cpu *int `yaml:"cpu,omitempty"`
+
 	// ConfigLock opts out of host-immutable devm.yaml when explicitly
 	// set to false. Pointer so absent (nil) is distinguishable from an
 	// explicit `config_lock: false` — see ConfigLockEnabled for the
@@ -824,6 +835,30 @@ func parseDiskSize(s string) (int, error) {
 	return n, nil
 }
 
+// ParseMemorySize parses a `memory:` value like "8G" or "64GB" into an
+// integer number of megabytes. The suffix is required and
+// case-insensitive; the magnitude must be a positive integer.
+// Exported for use in internal/reconcile after Config.Validate has
+// guaranteed parseability at load time.
+func ParseMemorySize(s string) (int, error) {
+	raw := strings.TrimSpace(s)
+	num := raw
+	upper := strings.ToUpper(num)
+	switch {
+	case strings.HasSuffix(upper, "GB"):
+		num = num[:len(num)-2]
+	case strings.HasSuffix(upper, "G"):
+		num = num[:len(num)-1]
+	default:
+		return 0, fmt.Errorf("memory: %q must use a gigabyte suffix, e.g. \"8G\"", s)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(num))
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("memory: %q must be a positive integer number of gigabytes, e.g. \"8G\"", s)
+	}
+	return n * 1024, nil
+}
+
 // DiskSizeGB returns the parsed disk override in gigabytes and whether
 // the user set `disk:` in devm.yaml. When unset, gib is 0 and set is
 // false — callers treat that as "use DefaultDiskSizeGB". The string is
@@ -876,6 +911,16 @@ func (c Config) Validate() error {
 		}
 		if gib < DefaultDiskSizeGB {
 			return fmt.Errorf("disk: %dG is below the %dG minimum (the base image default)", gib, DefaultDiskSizeGB)
+		}
+	}
+	if c.Memory != nil {
+		if _, err := ParseMemorySize(*c.Memory); err != nil {
+			return err
+		}
+	}
+	if c.Cpu != nil {
+		if *c.Cpu <= 0 {
+			return fmt.Errorf("cpu: %d must be a positive integer", *c.Cpu)
 		}
 	}
 	for i, ic := range c.Install {
