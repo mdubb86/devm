@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/services/dns"
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
@@ -63,11 +64,31 @@ func (r *policyResolver) resolver() (*net.Resolver, error) {
 }
 
 func (r *policyResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	if ip, ok := r.e.testAnswer(host); ok {
+		return []net.IPAddr{{IP: ip}}, nil
+	}
 	res, err := r.resolver()
 	if err != nil {
 		return nil, err
 	}
 	return res.LookupIPAddr(ctx, host)
+}
+
+// testAnswerIP is the .test answer table. fqdn arrives in miekg form with a
+// trailing dot. Direct hostnames answer HostLoopIP; every other name in (or
+// equal to) the test TLD answers InterceptedTestIP; anything else is not
+// intercepted (ok=false) and falls through to the policy upstream. Names
+// matching a vendored DNS zone (e.g. *.devm.test) never reach this function
+// — zone matching runs first in the handler.
+func testAnswerIP(fqdn string, direct map[string]struct{}) (net.IP, bool) {
+	name := strings.TrimSuffix(fqdn, ".")
+	if name != "test" && !strings.HasSuffix(name, ".test") {
+		return nil, false
+	}
+	if _, ok := direct[name]; ok {
+		return net.ParseIP(HostLoopIP), true
+	}
+	return net.ParseIP(InterceptedTestIP), true
 }
 
 func (r *policyResolver) LookupCNAME(ctx context.Context, host string) (string, error) {

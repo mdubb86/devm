@@ -27,6 +27,9 @@ func applyControl(e *egress, ing *ingress, m ControlMsg, shutdown func()) error 
 	case "setExposeMap":
 		ing.apply(m.Expose)
 		return nil
+	case "setTestHosts":
+		e.setDirectTestHosts(m.DirectTestHosts)
+		return nil
 	case "shutdown":
 		if shutdown != nil {
 			shutdown()

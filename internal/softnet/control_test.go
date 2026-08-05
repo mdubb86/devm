@@ -1,6 +1,7 @@
 package softnet
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/identity"
@@ -59,6 +60,18 @@ func TestApplyControlShutdownInvokesCallback(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("shutdown op must invoke the shutdown callback")
+	}
+}
+
+// TestControlSetTestHosts pins the wire shape of the setTestHosts op.
+func TestControlSetTestHosts(t *testing.T) {
+	var m ControlMsg
+	line := `{"op":"setTestHosts","direct_test_hosts":["db.test","cache.test"]}`
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if m.Op != "setTestHosts" || len(m.DirectTestHosts) != 2 || m.DirectTestHosts[0] != "db.test" {
+		t.Fatalf("decoded %+v", m)
 	}
 }
 

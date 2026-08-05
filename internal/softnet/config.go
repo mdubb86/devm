@@ -82,10 +82,12 @@ type ExposePort struct {
 }
 
 // ControlMsg is one line of the daemon->softnet control protocol (JSON per
-// line over the unix socket). Op is "setPolicy" or "setExposeMap".
+// line over the unix socket). Op is "setPolicy", "setExposeMap", or
+// "setTestHosts".
 type ControlMsg struct {
-	Op             string          `json:"op"`
-	Policy         string          `json:"policy,omitempty"`
-	ForwardTargets *ForwardTargets `json:"forward_targets,omitempty"`
-	Expose         []ExposePort    `json:"expose,omitempty"`
+	Op              string          `json:"op"`
+	Policy          string          `json:"policy,omitempty"`
+	ForwardTargets  *ForwardTargets `json:"forward_targets,omitempty"`
+	Expose          []ExposePort    `json:"expose,omitempty"`
+	DirectTestHosts []string        `json:"direct_test_hosts,omitempty"`
 }

@@ -21,6 +21,12 @@ type egress struct {
 	mu  sync.RWMutex
 	pol Policy
 	ft  *ForwardTargets
+
+	// directTest is the set of `direct: true` hostnames (no trailing dot).
+	// The .test DNS intercept answers HostLoopIP for these — their traffic
+	// stays in-guest, raw TCP end-to-end — and InterceptedTestIP for every
+	// other .test name. Pushed by the daemon via the setTestHosts control op.
+	directTest map[string]struct{}
 }
 
 func newEgress(n *network) *egress { return &egress{n: n, pol: PolicyLocked} }
@@ -41,6 +47,25 @@ func (e *egress) snapshot() (Policy, *ForwardTargets) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.pol, e.ft
+}
+
+// setDirectTestHosts replaces the direct-hostname set. Replace, not merge:
+// a removed direct service must stop answering loopback on the next push.
+func (e *egress) setDirectTestHosts(hosts []string) {
+	m := make(map[string]struct{}, len(hosts))
+	for _, h := range hosts {
+		m[h] = struct{}{}
+	}
+	e.mu.Lock()
+	e.directTest = m
+	e.mu.Unlock()
+}
+
+// testAnswer resolves a .test FQDN against the current direct set.
+func (e *egress) testAnswer(fqdn string) (net.IP, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return testAnswerIP(fqdn, e.directTest)
 }
 
 // target maps an outbound TCP flow to a host dial address per current policy.

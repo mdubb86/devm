@@ -1,6 +1,7 @@
 package softnet
 
 import (
+	"context"
 	"net"
 	"testing"
 )
@@ -76,5 +77,73 @@ func TestUpstreamFor(t *testing.T) {
 	addr, useHost, ok := upstreamFor(PolicyEnforced, ft)
 	if !ok || useHost || addr != ft.DNS {
 		t.Fatalf("ENFORCED: want iron-proxy DNS %s, got %q useHost=%v ok=%v", ft.DNS, addr, useHost, ok)
+	}
+}
+
+// TestTestAnswerIP pins the .test DNS answer table. Names arrive in miekg
+// FQDN form (trailing dot). Direct hostnames answer loopback so raw TCP
+// stays in-guest; every other .test name answers the hairpin address; non
+// .test names are not intercepted and fall through to the policy upstream.
+func TestTestAnswerIP(t *testing.T) {
+	direct := map[string]struct{}{"db.test": {}}
+
+	cases := []struct {
+		fqdn string
+		want string // "" => not intercepted
+	}{
+		{"api.test.", InterceptedTestIP},
+		{"foo.bar.test.", InterceptedTestIP},
+		{"test.", InterceptedTestIP},
+		{"db.test.", HostLoopIP},
+		{"pretest.", ""},
+		{"example.com.", ""},
+		{"test.example.com.", ""},
+	}
+	for _, c := range cases {
+		ip, ok := testAnswerIP(c.fqdn, direct)
+		if c.want == "" {
+			if ok {
+				t.Fatalf("%s must not be intercepted, got %v", c.fqdn, ip)
+			}
+			continue
+		}
+		if !ok || ip.String() != c.want {
+			t.Fatalf("%s = %v,%v want %s,true", c.fqdn, ip, ok, c.want)
+		}
+	}
+}
+
+// TestPolicyResolverAnswersTestUnderAnyPolicy pins that .test resolves even
+// under LOCKED — DNS answers, then the TCP flow is RST by policy. Matches
+// the previous behavior where guest dnsmasq answered locally regardless.
+func TestPolicyResolverAnswersTestUnderAnyPolicy(t *testing.T) {
+	e := newEgress(nil)
+	e.setDirectTestHosts([]string{"db.test"})
+	r := &policyResolver{e: e}
+
+	for _, pol := range []Policy{PolicyLocked, PolicyOpen, PolicyEnforced} {
+		e.setPolicy(pol, nil)
+		addrs, err := r.LookupIPAddr(context.Background(), "api.test.")
+		if err != nil || len(addrs) != 1 || addrs[0].IP.String() != InterceptedTestIP {
+			t.Fatalf("%s api.test = %v,%v want [%s]", pol, addrs, err, InterceptedTestIP)
+		}
+		addrs, err = r.LookupIPAddr(context.Background(), "db.test.")
+		if err != nil || len(addrs) != 1 || addrs[0].IP.String() != HostLoopIP {
+			t.Fatalf("%s db.test = %v,%v want [%s]", pol, addrs, err, HostLoopIP)
+		}
+	}
+}
+
+// TestSetDirectTestHostsReplaces pins replace (not merge) semantics so a
+// removed direct service stops answering loopback on the next push.
+func TestSetDirectTestHostsReplaces(t *testing.T) {
+	e := newEgress(nil)
+	e.setDirectTestHosts([]string{"db.test"})
+	e.setDirectTestHosts([]string{"cache.test"})
+	if ip, _ := e.testAnswer("db.test."); ip.String() != InterceptedTestIP {
+		t.Fatalf("db.test after removal = %v want %s", ip, InterceptedTestIP)
+	}
+	if ip, _ := e.testAnswer("cache.test."); ip.String() != HostLoopIP {
+		t.Fatalf("cache.test = %v want %s", ip, HostLoopIP)
 	}
 }
