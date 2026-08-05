@@ -64,8 +64,10 @@ type projectListeners struct {
 	httpSrv  *http.Server
 	httpsSrv *http.Server
 
-	guestHTTPSrv  *http.Server
-	guestHTTPSSrv *http.Server
+	guestHTTPSrv   *http.Server
+	guestHTTPSSrv  *http.Server
+	guestHTTPPort  int
+	guestHTTPSPort int
 }
 
 // RebindState is one of the outcomes of the daemon-startup rebind pass
@@ -104,9 +106,15 @@ func NewProxyServer(cfg identity.Config, routes *Routes, ca *CA) *ProxyServer {
 // the helper and starts serving on them. Idempotent: a
 // project that already has listeners registered is left untouched —
 // callers should StopProjectListeners first if they want to rebind.
+//
+// The guard checks httpSrv specifically, not mere presence of a
+// perProj entry — StartGuestOriginListeners can populate that entry
+// independently (e.g. it succeeds on a retry where this call
+// previously failed), and an entry-presence check would then skip the
+// ingress bind forever.
 func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, projectIP string) error {
 	p.mu.Lock()
-	if _, ok := p.perProj[projectID]; ok {
+	if pl, ok := p.perProj[projectID]; ok && pl.httpSrv != nil {
 		p.mu.Unlock()
 		return nil
 	}
@@ -209,12 +217,14 @@ func (p *ProxyServer) recordProjectListeners(projectID string, httpLn, httpsLn n
 	p.perProj[projectID] = pl
 }
 
-func (p *ProxyServer) recordGuestOriginListeners(projectID string, httpSrv, httpsSrv *http.Server) {
+func (p *ProxyServer) recordGuestOriginListeners(projectID string, httpSrv, httpsSrv *http.Server, httpPort, httpsPort int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	pl := p.perProj[projectID]
 	pl.guestHTTPSrv = httpSrv
 	pl.guestHTTPSSrv = httpsSrv
+	pl.guestHTTPPort = httpPort
+	pl.guestHTTPSPort = httpsPort
 	p.perProj[projectID] = pl
 }
 

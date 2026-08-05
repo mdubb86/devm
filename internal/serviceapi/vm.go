@@ -1131,10 +1131,12 @@ func sendSoftnetEnforced(sock string, info projectInfo, ntpPort int) error {
 }
 
 // endpointFrom builds the loopback softnet Endpoint for a project's
-// stashed projectInfo and the daemon's SNTP responder port. Shared by
-// sendSoftnetEnforced (the CLI-driven /vm/apply-egress-enforcement step)
-// and discoverSoftnet (the daemon-restart reconcile pass) so both push
-// the same wire shape.
+// stashed projectInfo and the daemon's SNTP responder port. Every
+// setPolicy push — OPEN or ENFORCED, CLI-driven or daemon-restart
+// reconcile — goes through this builder so the wire shape is always
+// complete: setPolicy keeps the previous endpoint on a nil push, so a
+// caller building a partial Endpoint by hand would silently clobber
+// whichever fields it left zero.
 func endpointFrom(info projectInfo, ntpPort int) *Endpoint {
 	return &Endpoint{
 		HTTP:       ironProxyListenAddr(info.HTTPPort),

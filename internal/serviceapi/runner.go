@@ -53,13 +53,15 @@ func waitForHelperReady(ctx context.Context, socketPath string, timeout time.Dur
 // recovered project.
 //
 // On success it also rebinds the guest-origin listener pair and
-// re-pushes ENFORCED so softnet learns the fresh ports —
-// discoverSoftnet already pushed ENFORCED with zero-valued guest
-// targets before this runs (see the ordering hazard note in the
-// in-vm-https task-5 brief), so this push corrects it. Both the
-// guest-origin bind and the re-push are best-effort: logged on
-// failure rather than folded into the returned RebindStatus, matching
-// the surrounding best-effort restart semantics.
+// re-pushes ENFORCED so softnet learns the fresh ports. Ordering
+// hazard: discoverSoftnet (called earlier in the daemon-restart
+// sequence, before this goroutine's retry loop even starts) already
+// pushed ENFORCED with zero-valued guest targets, since the
+// guest-origin pair didn't exist yet at that point — this push
+// corrects it once the pair is bound. Both the guest-origin bind and
+// the re-push are best-effort: logged on failure rather than folded
+// into the returned RebindStatus, matching the surrounding
+// best-effort restart semantics.
 func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identity.Config, projectID, projectIP string, ntpPort int) RebindStatus {
 	proxy.RecordRebindStatus(projectID, RebindStatus{State: RebindPending, Attempts: 0})
 	var lastErr error

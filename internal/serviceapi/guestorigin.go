@@ -69,7 +69,21 @@ func (h *guestOriginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // softnet dials them from the Mac side, so no helper-brokered privileged bind
 // is needed. Ports are ephemeral: the daemon-restart path rebinds and
 // re-pushes them to softnet together (see rebindProjectListeners).
+//
+// Idempotent like StartProjectListeners: a project that already has a live
+// guest-origin pair is left untouched and its existing ports are returned —
+// otherwise a retried /vm/start (e.g. after a CLI timeout) would rebind a
+// fresh pair and orphan the previous *http.Server goroutines and fds, since
+// nothing ever closes a pair that isn't reachable through perProj anymore.
 func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, projectIP string) (int, int, error) {
+	p.mu.Lock()
+	if pl, ok := p.perProj[projectID]; ok && pl.guestHTTPSrv != nil {
+		httpPort, httpsPort := pl.guestHTTPPort, pl.guestHTTPSPort
+		p.mu.Unlock()
+		return httpPort, httpsPort, nil
+	}
+	p.mu.Unlock()
+
 	h := &guestOriginHandler{routes: p.routes, projectID: projectID, projectIP: projectIP}
 
 	httpLn, err := net.Listen("tcp", ironProxyListenAddr(0))
@@ -104,7 +118,7 @@ func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, 
 		}
 	}()
 
-	p.recordGuestOriginListeners(projectID, httpSrv, httpsSrv)
+	p.recordGuestOriginListeners(projectID, httpSrv, httpsSrv, httpPort, httpsPort)
 	debuglog.Logf("serviceapi", "guest-origin listening on %s/%s (project %s)",
 		httpLn.Addr(), httpsLn.Addr(), projectID)
 	return httpPort, httpsPort, nil

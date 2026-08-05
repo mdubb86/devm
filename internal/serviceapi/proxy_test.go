@@ -303,6 +303,69 @@ func TestProxyServer_DialsCfgHelperSocket_NotProdHardcoded(t *testing.T) {
 	t.Cleanup(func() { proxy.StopProjectListeners("p1") })
 }
 
+// TestStartProjectListeners_NotSkippedByGuestOriginOnlyEntry pins the
+// task-5 review's Critical fix: StartProjectListeners's idempotency
+// guard used to key off mere presence of a perProj entry, but
+// recordGuestOriginListeners can populate that entry on its own —
+// StartGuestOriginListeners succeeding while a prior
+// StartProjectListeners call failed non-fatally (e.g. a transient
+// helper hiccup) leaves exactly this state. Before the fix, the next
+// StartProjectListeners call would see the entry, skip the ingress
+// bind, and never open :80/:443 for that project — silently, forever.
+// The guard must key off the ingress-specific httpSrv field instead.
+func TestStartProjectListeners_NotSkippedByGuestOriginOnlyEntry(t *testing.T) {
+	sock := mockHelperServer(t)
+	cfg := identity.Config{Name: "test-guest-only-entry", HelperSocketPath: sock}
+
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+
+	// Simulate the guest-origin-only perProj entry a prior
+	// StartGuestOriginListeners success (with StartProjectListeners
+	// never having succeeded) leaves behind.
+	proxy.recordGuestOriginListeners("p1", &http.Server{}, &http.Server{}, 39101, 39102)
+
+	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
+	require.NoError(t, err)
+
+	pl, ok := proxy.takeProjectListeners("p1")
+	require.True(t, ok)
+	require.NotNil(t, pl.httpSrv, "ingress HTTP must actually be bound, not skipped because of the guest-origin-only entry")
+	require.NotNil(t, pl.httpsSrv, "ingress HTTPS must actually be bound, not skipped because of the guest-origin-only entry")
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = pl.httpSrv.Shutdown(ctx)
+		_ = pl.httpsSrv.Shutdown(ctx)
+	})
+}
+
+// TestStartGuestOriginListeners_IdempotentOnRetry pins the task-5
+// review's Important fix: a retried /vm/start (e.g. after a CLI
+// timeout) must not rebind a fresh guest-origin pair over a live one —
+// that would orphan the previous *http.Server goroutines and fds,
+// since nothing else ever closes a pair no longer reachable through
+// perProj.
+func TestStartGuestOriginListeners_IdempotentOnRetry(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+	t.Cleanup(func() { proxy.StopProjectListeners("p1") })
+
+	httpPort1, httpsPort1, err := proxy.StartGuestOriginListeners(context.Background(), "p1", "127.0.0.1")
+	require.NoError(t, err)
+	require.NotZero(t, httpPort1)
+	require.NotZero(t, httpsPort1)
+
+	httpPort2, httpsPort2, err := proxy.StartGuestOriginListeners(context.Background(), "p1", "127.0.0.1")
+	require.NoError(t, err)
+	assert.Equal(t, httpPort1, httpPort2, "retry must return the already-bound port, not rebind fresh")
+	assert.Equal(t, httpsPort1, httpsPort2, "retry must return the already-bound port, not rebind fresh")
+}
+
 // TestStartProjectListeners_RetriesOnHelperUnreachable proves the
 // retry wrapper (in runner.go's rebindProjectListeners) hits
 // StartProjectListeners multiple times when the helper dial fails

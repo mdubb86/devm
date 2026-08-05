@@ -425,9 +425,12 @@ func TestClientEnforcementConfig_MissingProjectState(t *testing.T) {
 }
 
 // TestClientOpenEgress_SendsPolicyOpen verifies POST /vm/open-egress flips
-// the project's softnet control socket to OPEN with no iron_proxy endpoint
-// — the provisioning window's egress isn't routed through iron-proxy at
-// all, just unblocked.
+// the project's softnet control socket to OPEN and carries the full
+// forward_targets endpoint — including the guest-origin ports — so `.test`
+// resolves inside the guest during the provisioning window, before
+// /vm/apply-egress-enforcement ever runs. Egress itself is unblocked under
+// OPEN regardless of forward_targets; only the guest-origin fields are
+// consulted while the policy is OPEN.
 func TestClientOpenEgress_SendsPolicyOpen(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
@@ -460,6 +463,12 @@ func TestClientOpenEgress_SendsPolicyOpen(t *testing.T) {
 	softnetState.put("proj-open", sock)
 	t.Cleanup(func() { softnetState.del("proj-open") })
 
+	// Non-zero guest-origin ports so the assertion below proves the
+	// actual stashed values ride along on the wire, not just that the
+	// keys are present.
+	ironProxyState.put("proj-open", projectInfo{GuestHTTPPort: 39001, GuestHTTPSPort: 39002})
+	t.Cleanup(func() { ironProxyState.del("proj-open") })
+
 	c := NewClientWithSocket(srv.socketPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -469,7 +478,15 @@ func TestClientOpenEgress_SendsPolicyOpen(t *testing.T) {
 	line := <-got
 	assert.Contains(t, line, `"op":"setPolicy"`)
 	assert.Contains(t, line, `"policy":"OPEN"`)
-	assert.NotContains(t, line, "iron_proxy", "OPEN carries no iron-proxy endpoint")
+
+	var msg struct {
+		ForwardTargets Endpoint `json:"forward_targets"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(line), &msg))
+	assert.Equal(t, ironProxyListenAddr(39001), msg.ForwardTargets.GuestHTTP,
+		"OPEN must carry the guest-origin HTTP port so `.test` resolves during provisioning")
+	assert.Equal(t, ironProxyListenAddr(39002), msg.ForwardTargets.GuestHTTPS,
+		"OPEN must carry the guest-origin HTTPS port so `.test` resolves during provisioning")
 }
 
 // TestClientOpenEgress_MissingSoftnetState verifies /vm/open-egress 412s
