@@ -46,8 +46,9 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		}
 		switch c.Kind {
 		case KindPortAdd, KindPortRemove, KindPortChange:
-			// Port changes in Tart world trigger Caddyfile reload via the
-			// provisioner pattern; no host-side port publishing needed.
+			// No guest-side action needed: host<->guest port publishing is
+			// softnet's ingress listeners, reconciled off the merged config
+			// snapshot elsewhere — not applied here.
 		case KindTemplateChange:
 			templateChanges = append(templateChanges, c)
 		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange:

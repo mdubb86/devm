@@ -80,11 +80,6 @@ func Build(in BuildInput) ([]byte, error) {
 		}
 	}
 
-	caddyfile := render.Caddyfile(in.Cfg)
-	if err := writeEntry(tw, "caddy/Caddyfile", 0o644, []byte(caddyfile)); err != nil {
-		return nil, err
-	}
-
 	if err := writeEntry(tw, "dnsmasq/devm-test.conf", 0o644, render.DnsmasqConfig()); err != nil {
 		return nil, err
 	}

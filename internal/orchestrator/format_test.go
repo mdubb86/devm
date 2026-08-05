@@ -571,16 +571,16 @@ func TestFormatStatusAllJSON(t *testing.T) {
 
 func TestFormatChange_Template(t *testing.T) {
 	// Added template.
-	added := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "web", Detail: "/etc/caddy/Caddyfile", New: "installed"}
-	assert.Equal(t, "+ template: web → /etc/caddy/Caddyfile", formatChange(added))
+	added := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "web", Detail: "/etc/nginx/nginx.conf", New: "installed"}
+	assert.Equal(t, "+ template: web → /etc/nginx/nginx.conf", formatChange(added))
 
 	// Changed template.
-	changed := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "web", Detail: "/etc/caddy/Caddyfile", Old: "previous", New: "updated"}
-	assert.Equal(t, "~ template: web → /etc/caddy/Caddyfile", formatChange(changed))
+	changed := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "web", Detail: "/etc/nginx/nginx.conf", Old: "previous", New: "updated"}
+	assert.Equal(t, "~ template: web → /etc/nginx/nginx.conf", formatChange(changed))
 
 	// Removed template.
-	removed := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "", Detail: "00-web-Caddyfile.sh", Old: "previous"}
-	assert.Equal(t, "- template: 00-web-Caddyfile.sh (sandbox file persists; recreate to wipe)", formatChange(removed))
+	removed := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "", Detail: "00-web-nginx.conf.sh", Old: "previous"}
+	assert.Equal(t, "- template: 00-web-nginx.conf.sh (sandbox file persists; recreate to wipe)", formatChange(removed))
 
 	// JSON mapping.
 	assert.Equal(t, "template_change", changeKindJSON(reconcile.KindTemplateChange))

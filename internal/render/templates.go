@@ -79,7 +79,7 @@ func RenderTemplates(cfg schema.Config, repoRoot string) (map[string]string, err
 }
 
 // RenderTemplatesByBasename renders cfg's templates like RenderTemplates
-// but keys the result by basename (e.g. "00-web-Caddyfile.sh") instead of
+// but keys the result by basename (e.g. "00-web-nginx.conf.sh") instead of
 // full path. This is the keying reconcile.ComputeTemplateChanges expects
 // for its last-applied baseline (serviceapi.StateSnapshot.TemplateContents),
 // since that baseline is persisted independently of any particular

@@ -248,7 +248,7 @@ func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
 		p("sudo touch %s", provisionedMark)
 	}
 
-	// (6) LAST functional line: activate the target — ssh + caddy + dnsmasq +
+	// (6) LAST functional line: activate the target — ssh + dnsmasq +
 	// dockerd come up (services already healthy), enforced. Access is granted
 	// ONLY after services are confirmed up.
 	p("sudo systemctl start devm.target")

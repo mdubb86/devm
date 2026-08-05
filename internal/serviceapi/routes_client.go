@@ -69,7 +69,7 @@ func (c *Client) RemoveRoutes(ctx context.Context, name string) error {
 // RoutingStatusFromDaemon queries the daemon's /routes endpoint and
 // composes a RoutingStatus suitable for `devm status` rendering.
 // The daemon being reachable implies the proxy is alive; we report
-// "proxy: devm" (instead of "caddy") and ProxyReachable: true.
+// "proxy: devm" and ProxyReachable: true.
 //
 // When the daemon is down or returns an error, the caller should
 // substitute a zero RoutingStatus (Proxy: "" + ProxyReachable: false)

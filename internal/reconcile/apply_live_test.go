@@ -89,7 +89,8 @@ func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
 
 func TestApplyLive_PortKindsAreNoOps(t *testing.T) {
 	// Port kinds no longer trigger sbx publish; they are silently accepted
-	// (Caddyfile reload happens via the provisioner pattern, not here).
+	// (host<->guest port publishing is softnet's ingress listeners, not
+	// applied here).
 	dir := t.TempDir()
 	tr, _ := fakeTartForApplyLive(t, dir)
 	err := ApplyLive(tr, "x", []Change{

@@ -19,13 +19,6 @@ if [ -f /opt/devm/ca/devm.crt ] && ! cmp -s /opt/devm/ca/devm.crt /usr/local/sha
     }
 fi
 
-# --- Caddyfile: reverse-proxy config for hostname-declared services. ---
-if [ -f /opt/devm/caddy/Caddyfile ] && ! cmp -s /opt/devm/caddy/Caddyfile /etc/caddy/Caddyfile; then
-    install -o root -g root -m 0644 \
-        /opt/devm/caddy/Caddyfile \
-        /etc/caddy/Caddyfile
-fi
-
 # --- dnsmasq drop-in: devm-test.conf configures local resolver behavior. ---
 if [ -f /opt/devm/dnsmasq/devm-test.conf ] && ! cmp -s /opt/devm/dnsmasq/devm-test.conf /etc/dnsmasq.d/devm-test.conf; then
     install -o root -g root -m 0644 \

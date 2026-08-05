@@ -179,18 +179,22 @@ func readTarEntry(t *testing.T, blob []byte, name string) []byte {
 	return nil
 }
 
-func TestBuild_TarContainsCaddyfile(t *testing.T) {
-	cfg := schema.Config{
-		Project: schema.Project{Name: "p"},
-		Services: map[string]schema.Service{
-			"web": {Hostname: "web.local", Port: 8080},
-		},
+// TestBuild_TarHasNoCaddy pins Caddy's removal: `.test` routing is the
+// daemon's guest-origin listener, so no Caddyfile should ever enter the
+// bundle.
+func TestBuild_TarHasNoCaddy(t *testing.T) {
+	cfg := schema.Config{Services: map[string]schema.Service{
+		"api": {Hostname: "api.test", Port: 3000},
+	}}
+	b, err := Build(BuildInput{Cfg: cfg})
+	if err != nil {
+		t.Fatalf("build: %v", err)
 	}
-	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
-	require.NoError(t, err)
-	body := readTarEntry(t, blob, "caddy/Caddyfile")
-	assert.Contains(t, string(body), "web.local")
-	assert.Contains(t, string(body), "8080")
+	for _, name := range tarEntryNames(t, b) {
+		if strings.Contains(name, "caddy") {
+			t.Fatalf("bundle still carries a caddy entry: %s", name)
+		}
+	}
 }
 
 func TestBuild_TarContainsDnsmasqDropIn(t *testing.T) {

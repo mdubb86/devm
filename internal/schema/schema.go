@@ -252,7 +252,7 @@ type Service struct {
 
 	Hostname string `yaml:"hostname,omitempty"`
 	// Direct routes this service directly to the VM's IP instead of
-	// through the daemon HTTP proxy + in-VM Caddy. For raw-TCP / non-HTTP
+	// through the daemon's guest-origin listener. For raw-TCP / non-HTTP
 	// services (e.g. Postgres). Requires a hostname.
 	Direct bool `yaml:"direct,omitempty"`
 

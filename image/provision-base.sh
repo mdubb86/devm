@@ -27,7 +27,7 @@ systemctl mask --now \
 PATH=/usr/sbin:/sbin:$PATH growpart /dev/vda 1 || true
 PATH=/usr/sbin:/sbin:$PATH resize2fs /dev/vda1
 
-# --- Install base packages (Caddy, dnsmasq, ncurses-term, locales) ---
+# --- Install base packages (dnsmasq, ncurses-term, locales) ---
 #
 # ncurses-term: ships terminfo for hundreds of modern terminals (ghostty,
 # kitty, alacritty, wezterm, …). Without it the base image only knows ~9
@@ -43,7 +43,6 @@ PATH=/usr/sbin:/sbin:$PATH resize2fs /dev/vda1
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
-  caddy \
   dnsmasq \
   nftables \
   ncurses-term \
@@ -132,12 +131,6 @@ systemctl enable nftables.service
 
 # Gate: install devm.target (NOT enabled — nothing pulls it at boot).
 install -o root -g root -m 0644 "$SCRIPT_DIR/devm.target" /etc/systemd/system/devm.target
-
-# Take caddy out of the boot chain; devm.target Wants= it.
-# (ssh is already masked above; the provisioner unmasks + leaves disabled.)
-# dnsmasq stays enabled — it must be up before install-step
-# provisioning runs, well before devm.target activates.
-systemctl disable caddy.service
 
 # --- Drop the unused `debian` user (uid 1001) ---
 userdel -r debian 2>/dev/null || true

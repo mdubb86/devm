@@ -36,7 +36,7 @@ func RenderService(name string, svc schema.Service) []byte {
 	b.WriteString("[Unit]\n")
 	fmt.Fprintf(&b, "Description=devm service: %s\n", name)
 	// devm-ready.target is the base infrastructure target written by
-	// the base image (Task 4). Includes dnsmasq + Caddy + network.
+	// the base image, gating declared services on network readiness.
 	after := append([]string{"devm-ready.target"}, svc.After...)
 	fmt.Fprintf(&b, "After=%s\n", strings.Join(after, " "))
 	b.WriteString("Requires=devm-ready.target\n")
@@ -61,8 +61,8 @@ func RenderService(name string, svc schema.Service) []byte {
 	// values are applied first, then any Environment= lines below
 	// override for the same key — so per-service env still wins.
 	b.WriteString("EnvironmentFile=-/etc/environment\n")
-	// Sorted env keys so the rendered output is deterministic — the
-	// Caddyfile renderer made the same choice and tests rely on it.
+	// Sorted env keys so the rendered output is deterministic — tests
+	// rely on it.
 	if len(svc.Env) > 0 {
 		keys := make([]string, 0, len(svc.Env))
 		for k := range svc.Env {

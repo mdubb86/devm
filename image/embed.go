@@ -31,7 +31,7 @@ var ProvisionBaseScript string
 var NftablesLockedConf string
 
 // DevmTarget is the verbatim content of devm.target, the gate unit
-// that pulls in ssh/caddy/dnsmasq once the daemon activates it.
+// that pulls in ssh/dnsmasq once the daemon activates it.
 // Staged onto the guest the same way as NftablesLockedConf.
 //
 //go:embed devm.target
