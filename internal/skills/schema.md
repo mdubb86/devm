@@ -9,7 +9,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 
 | Field | Type | Bucket | Purpose |
 |---|---|---|---|
-| `project` | object | recreate | Project identity and proxy settings (required). |
+| `project` | object | recreate | Project identity (required). |
 | `base_image` | object | recreate | Accepted for YAML compatibility; has no active fields. |
 | `docker` | bool | recreate | Installs Docker in the VM and makes container egress trust iron-proxy transparently. Defaults `false`. |
 | `network` | object | live | Iron-proxy outbound allowlist. |
@@ -32,14 +32,13 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 
 ## `project`
 
-Required. Identifies the project and configures the local reverse proxy.
+Required. Identifies the project.
 
 | Field | Type | Required | Purpose |
 |---|---|---|---|
 | `name` | string | yes | Project name. Serves as both the devm-owned identity namespace (secrets, routes, state, iron-proxy, ssh keys) and the literal Tart VM instance name. Must contain no whitespace, `/`, `\`, or `..`. |
-| `proxy` | string | no | Empty or `caddy` (both mean the default: `.test` routing enabled) or `none`. With `none`, `devm route` subcommands print a disabled message and exit 0. |
 
-Validation: `name` is required; `proxy` must be empty, `caddy`, or `none` — empty and `caddy` are equivalent.
+Validation: `name` is required.
 
 Changing any `project` field is in the **recreate** bucket — the VM must be deleted and recreated from scratch.
 

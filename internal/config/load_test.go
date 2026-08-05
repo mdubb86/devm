@@ -32,22 +32,6 @@ services:
 	assert.Equal(t, 3000, cfg.Services["webapp"].Port)
 }
 
-func TestLoadWithOverride_Proxy(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, dir, "devm.yaml", `
-project:
-  name: test
-`)
-	writeFile(t, dir, "devm.me.yaml", `
-project:
-  proxy: none
-`)
-
-	cfg, err := Load(dir)
-	assert.NoError(t, err)
-	assert.Equal(t, "none", cfg.Project.Proxy)
-}
-
 func TestLoadResolvesEnvAndInjectsWorkspaceAndIsSandbox(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
@@ -192,6 +176,18 @@ project:
 `,
 			wantIn: "proxxy",
 		},
+		{
+			// project.proxy was removed (F13): a devm.yaml still
+			// carrying it must fail loud via the same unknown-field
+			// path as any other removed/typo'd key, not silently no-op.
+			name: "removed project.proxy field",
+			yaml: `
+project:
+  name: foo
+  proxy: caddy
+`,
+			wantIn: "proxy",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -209,7 +205,6 @@ func TestLoadStrictFailsOnMissingRequiredField(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
-  proxy: caddy
   # missing name
 `)
 

@@ -64,6 +64,8 @@ type projectListeners struct {
 	httpSrv  *http.Server
 	httpsSrv *http.Server
 
+	guestHTTP      net.Listener
+	guestHTTPS     net.Listener
 	guestHTTPSrv   *http.Server
 	guestHTTPSSrv  *http.Server
 	guestHTTPPort  int
@@ -184,11 +186,22 @@ func (p *ProxyServer) StopProjectListeners(projectID string) {
 	if pl.httpsSrv != nil {
 		_ = pl.httpsSrv.Shutdown(shutdownCtx)
 	}
+	// Shut down via the *http.Server when one was recorded — Shutdown
+	// closes the listener it's serving on. Fall back to closing the raw
+	// listener directly when it isn't: guestHTTP/guestHTTPS are recorded
+	// at bind time, before the *http.Server goroutine's Serve call is
+	// even known to have started, so a listener can be present here with
+	// no server ever having been recorded for it. Without this fallback
+	// that fd would never close.
 	if pl.guestHTTPSrv != nil {
 		_ = pl.guestHTTPSrv.Shutdown(shutdownCtx)
+	} else if pl.guestHTTP != nil {
+		_ = pl.guestHTTP.Close()
 	}
 	if pl.guestHTTPSSrv != nil {
 		_ = pl.guestHTTPSSrv.Shutdown(shutdownCtx)
+	} else if pl.guestHTTPS != nil {
+		_ = pl.guestHTTPS.Close()
 	}
 }
 
@@ -217,10 +230,12 @@ func (p *ProxyServer) recordProjectListeners(projectID string, httpLn, httpsLn n
 	p.perProj[projectID] = pl
 }
 
-func (p *ProxyServer) recordGuestOriginListeners(projectID string, httpSrv, httpsSrv *http.Server, httpPort, httpsPort int) {
+func (p *ProxyServer) recordGuestOriginListeners(projectID string, httpLn, httpsLn net.Listener, httpSrv, httpsSrv *http.Server, httpPort, httpsPort int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	pl := p.perProj[projectID]
+	pl.guestHTTP = httpLn
+	pl.guestHTTPS = httpsLn
 	pl.guestHTTPSrv = httpSrv
 	pl.guestHTTPSSrv = httpsSrv
 	pl.guestHTTPPort = httpPort

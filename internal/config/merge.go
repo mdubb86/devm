@@ -10,9 +10,6 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 		if override.Project.Name != nil {
 			out.Project.Name = *override.Project.Name
 		}
-		if override.Project.Proxy != nil {
-			out.Project.Proxy = *override.Project.Proxy
-		}
 	}
 	if override.Docker != nil {
 		out.Docker = *override.Docker

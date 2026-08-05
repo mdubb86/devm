@@ -262,14 +262,6 @@ func TestFormatReconcileJSON_RestartRequired_SeparateFromRecreate(t *testing.T) 
 	assert.Equal(t, "packages_change", recreateChanges[0].(map[string]any)["kind"])
 }
 
-func TestFormatStatusText_ProxyNone(t *testing.T) {
-	res := StatusResult{HasProject: true,
-		Routing: serviceapi.RoutingStatus{Proxy: "none"},
-	}
-	text := FormatStatusText(res)
-	assert.Contains(t, text, "proxy: none (devm route disabled)")
-}
-
 func TestFormatStatusText_ProxyUnreachable(t *testing.T) {
 	res := StatusResult{HasProject: true,
 		Routing: serviceapi.RoutingStatus{Proxy: "devm", ProxyReachable: false},

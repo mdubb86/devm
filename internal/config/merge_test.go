@@ -8,19 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMerge_OverridesProxy(t *testing.T) {
-	base := schema.Config{
-		Project: schema.Project{Name: "p", Proxy: "caddy"},
-	}
-	proxy := "none"
-	override := schema.ConfigOverride{
-		Project: &schema.ProjectOverride{Proxy: &proxy},
-	}
-	out, err := Merge(base, override)
-	require.NoError(t, err)
-	assert.Equal(t, "none", out.Project.Proxy)
-}
-
 func TestMergeOverridesService(t *testing.T) {
 	base := schema.Config{
 		Project: schema.Project{Name: "p"},

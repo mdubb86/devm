@@ -3,8 +3,7 @@ package schema
 import "gopkg.in/yaml.v3"
 
 type ProjectOverride struct {
-	Name  *string `yaml:"name,omitempty"`
-	Proxy *string `yaml:"proxy,omitempty"`
+	Name *string `yaml:"name,omitempty"`
 }
 
 type NetworkOverride struct {

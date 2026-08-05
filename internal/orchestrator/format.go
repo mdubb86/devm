@@ -157,10 +157,6 @@ func formatDaemonStatus(d DaemonStatus) string {
 func formatRouting(r serviceapi.RoutingStatus) string {
 	var b strings.Builder
 	b.WriteString("\nRouting:\n")
-	if r.Proxy == "none" {
-		b.WriteString("  proxy: none (devm route disabled)\n")
-		return b.String()
-	}
 	if !r.ProxyReachable {
 		fmt.Fprintf(&b, "  proxy: %s (unreachable)\n", r.Proxy)
 		return b.String()

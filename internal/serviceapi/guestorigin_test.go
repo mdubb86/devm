@@ -51,6 +51,8 @@ func TestGuestOriginBackendRejects(t *testing.T) {
 		{Hostname: "api.test", BackendPort: 3000, Mode: ModeVM, Project: "proj"},
 		{Hostname: "db.test", BackendPort: 5432, Mode: ModeVM, Project: "proj", Direct: true},
 		{Hostname: "other.test", BackendPort: 4000, Mode: ModeVM, Project: "elsewhere"},
+		{Hostname: "http-pin.test", BackendPort: 80, Mode: ModeVM, Project: "proj"},
+		{Hostname: "https-pin.test", BackendPort: 443, Mode: ModeVM, Project: "proj"},
 	}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -70,6 +72,21 @@ func TestGuestOriginBackendRejects(t *testing.T) {
 	// No project IP allocated.
 	if _, ok := guestOriginBackend(routes, "api.test", "proj", ""); ok {
 		t.Fatal("missing project IP must not resolve")
+	}
+	// No project ID — Routes.Lookup with an empty project would skip
+	// isolation; the security function must defend itself too (F12).
+	if _, ok := guestOriginBackend(routes, "api.test", "", "127.42.0.3"); ok {
+		t.Fatal("missing project ID must not resolve")
+	}
+	// Port 80/443 on projectIP belongs to the browser-facing
+	// ProxyServer's own listeners, never a guest service — reflecting
+	// guest traffic into that listener would let route-local mode leak
+	// a Mac localhost backend to the guest (F5).
+	if _, ok := guestOriginBackend(routes, "http-pin.test", "proj", "127.42.0.3"); ok {
+		t.Fatal("port 80 must not resolve — reserved for the browser-facing listener")
+	}
+	if _, ok := guestOriginBackend(routes, "https-pin.test", "proj", "127.42.0.3"); ok {
+		t.Fatal("port 443 must not resolve — reserved for the browser-facing listener")
 	}
 	// Host header carrying a port still resolves.
 	if got, ok := guestOriginBackend(routes, "api.test:443", "proj", "127.42.0.3"); !ok || got != "127.42.0.3:3000" {

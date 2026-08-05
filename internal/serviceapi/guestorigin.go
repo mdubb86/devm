@@ -27,11 +27,20 @@ import (
 // end-to-end; softnet's .test DNS answers loopback for them and their
 // traffic never leaves the guest.
 func guestOriginBackend(routes *Routes, host, projectID, projectIP string) (string, bool) {
-	if projectIP == "" {
+	if projectID == "" || projectIP == "" {
 		return "", false
 	}
 	route, ok := routes.Lookup(stripPort(host), projectID)
 	if !ok {
+		return "", false
+	}
+	// :80 and :443 on projectIP are the browser-facing ProxyServer's own
+	// listeners (StartProjectListeners), never a guest service's — a
+	// non-direct service declared with port: 80 or port: 443 must not
+	// resolve here, or guest traffic would be reflected into that
+	// listener, whose dispatch honors route.BackendHost (Mac localhost
+	// in route-local mode) instead of staying guest-pinned.
+	if route.BackendPort == 80 || route.BackendPort == 443 {
 		return "", false
 	}
 	return net.JoinHostPort(projectIP, strconv.Itoa(route.BackendPort)), true
@@ -118,7 +127,7 @@ func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, 
 		}
 	}()
 
-	p.recordGuestOriginListeners(projectID, httpSrv, httpsSrv, httpPort, httpsPort)
+	p.recordGuestOriginListeners(projectID, httpLn, httpsLn, httpSrv, httpsSrv, httpPort, httpsPort)
 	debuglog.Logf("serviceapi", "guest-origin listening on %s/%s (project %s)",
 		httpLn.Addr(), httpsLn.Addr(), projectID)
 	return httpPort, httpsPort, nil

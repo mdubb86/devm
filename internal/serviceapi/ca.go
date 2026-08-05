@@ -23,6 +23,16 @@ import (
 const (
 	caRootLifeYrs = 10
 	caLeafDaysVal = 90 // leaf cert validity
+
+	// caLeafCacheMax bounds the leaf-cert cache. Guest-originated
+	// `.test` traffic (the guest-origin listeners) can drive this
+	// cache through arbitrary SNIs now, not just the browser-facing
+	// listener's known route table — an unbounded cache would let a
+	// guest process grow daemon memory without limit and hold the
+	// shared mutex longer on every handshake. 4096 comfortably covers
+	// any real project's hostname count with headroom while keeping
+	// worst-case memory to a few MB of certificates.
+	caLeafCacheMax = 4096
 )
 
 // CA is the daemon's local certificate authority. Root key is
@@ -172,6 +182,18 @@ func (c *CA) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error
 	cert, err := c.signLeaf(name)
 	if err != nil {
 		return nil, err
+	}
+	if len(c.cache) >= caLeafCacheMax {
+		// Evict one arbitrary entry — Go's randomized map iteration
+		// order makes this a cheap stand-in for random eviction with no
+		// extra bookkeeping (no LRU list, no access counters). Good
+		// enough for a single-user daemon: the cache exists to avoid
+		// re-signing on every handshake, not to guarantee a hit rate
+		// under adversarial SNI churn.
+		for k := range c.cache {
+			delete(c.cache, k)
+			break
+		}
 	}
 	c.cache[name] = cert
 	return cert, nil

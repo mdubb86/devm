@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,6 +71,62 @@ func TestCA_LeafCache_ReusesSignedCert(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Same(t, c1, c2)
+}
+
+// TestCA_LeafCache_BoundedUnderManyDistinctSNIs covers F6: guest-origin
+// listeners let guest-originated traffic drive GetCertificate through
+// arbitrary SNIs, so the leaf cache must never grow past its cap no
+// matter how many distinct hostnames are requested.
+func TestCA_LeafCache_BoundedUnderManyDistinctSNIs(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+
+	for i := 0; i < caLeafCacheMax*2; i++ {
+		host := fmt.Sprintf("host-%d.test", i)
+		_, err := ca.GetCertificate(&tls.ClientHelloInfo{ServerName: host})
+		require.NoError(t, err)
+
+		ca.mu.Lock()
+		size := len(ca.cache)
+		ca.mu.Unlock()
+		require.LessOrEqual(t, size, caLeafCacheMax, "cache must never exceed its cap")
+	}
+}
+
+// TestCA_LeafCache_ServesHostAfterUnrelatedEvictions pins that a host
+// requested before a wave of evictions is still servable afterward —
+// either because it survived (arbitrary eviction can spare it) or
+// because GetCertificate transparently re-signs it. Either way the
+// caller must get back a cert that verifies against this CA's root.
+func TestCA_LeafCache_ServesHostAfterUnrelatedEvictions(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+
+	_, err = ca.GetCertificate(&tls.ClientHelloInfo{ServerName: "keep.test"})
+	require.NoError(t, err)
+
+	// Churn enough distinct SNIs to force the cap to evict repeatedly.
+	for i := 0; i < caLeafCacheMax*2; i++ {
+		host := fmt.Sprintf("churn-%d.test", i)
+		_, err := ca.GetCertificate(&tls.ClientHelloInfo{ServerName: host})
+		require.NoError(t, err)
+	}
+
+	again, err := ca.GetCertificate(&tls.ClientHelloInfo{ServerName: "keep.test"})
+	require.NoError(t, err)
+	leaf, err := x509.ParseCertificate(again.Certificate[0])
+	require.NoError(t, err)
+
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.rootCert)
+	_, err = leaf.Verify(x509.VerifyOptions{
+		Roots:     roots,
+		DNSName:   "keep.test",
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
+	assert.NoError(t, err, "keep.test must still verify whether cached or re-signed")
 }
 
 func TestCA_RootKey_Persisted0600(t *testing.T) {

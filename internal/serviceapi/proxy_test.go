@@ -325,7 +325,7 @@ func TestStartProjectListeners_NotSkippedByGuestOriginOnlyEntry(t *testing.T) {
 	// Simulate the guest-origin-only perProj entry a prior
 	// StartGuestOriginListeners success (with StartProjectListeners
 	// never having succeeded) leaves behind.
-	proxy.recordGuestOriginListeners("p1", &http.Server{}, &http.Server{}, 39101, 39102)
+	proxy.recordGuestOriginListeners("p1", nil, nil, &http.Server{}, &http.Server{}, 39101, 39102)
 
 	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
 	require.NoError(t, err)
@@ -340,6 +340,35 @@ func TestStartProjectListeners_NotSkippedByGuestOriginOnlyEntry(t *testing.T) {
 		_ = pl.httpSrv.Shutdown(ctx)
 		_ = pl.httpsSrv.Shutdown(ctx)
 	})
+}
+
+// TestStopProjectListeners_ClosesGuestListenerWithoutServer covers F10:
+// recordGuestOriginListeners stores the raw net.Listeners alongside the
+// *http.Servers, mirroring recordProjectListeners. When a listener is
+// recorded but no server ever was (the partial-failure shape this
+// guards against — a listener bound successfully but its *http.Server
+// goroutine never got recorded), StopProjectListeners must close the
+// raw listener directly instead of leaking its fd.
+func TestStopProjectListeners_ClosesGuestListenerWithoutServer(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+
+	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	httpsLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	// No *http.Server for either — simulates the fallback path.
+	proxy.recordGuestOriginListeners("p1", httpLn, httpsLn, nil, nil, 0, 0)
+
+	proxy.StopProjectListeners("p1")
+
+	_, err = net.Listen("tcp", httpLn.Addr().String())
+	assert.NoError(t, err, "guest-origin HTTP listener must be closed by StopProjectListeners")
+	_, err = net.Listen("tcp", httpsLn.Addr().String())
+	assert.NoError(t, err, "guest-origin HTTPS listener must be closed by StopProjectListeners")
 }
 
 // TestStartGuestOriginListeners_IdempotentOnRetry pins the task-5

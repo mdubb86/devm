@@ -466,8 +466,7 @@ func (s Service) Validate() error {
 }
 
 type Project struct {
-	Name  string `yaml:"name"`
-	Proxy string `yaml:"proxy,omitempty"` // "caddy" (default) or "none"
+	Name string `yaml:"name"`
 }
 
 func (p Project) Validate() error {
@@ -482,11 +481,6 @@ func (p Project) Validate() error {
 	}
 	if strings.ContainsAny(p.Name, "/\\") || strings.Contains(p.Name, "..") {
 		return fmt.Errorf("project.name %q: '/', '\\', and '..' not allowed", p.Name)
-	}
-	switch p.Proxy {
-	case "", "caddy", "none":
-	default:
-		return fmt.Errorf("project.proxy: must be empty, 'caddy', or 'none' (got %q)", p.Proxy)
 	}
 	return nil
 }

@@ -382,30 +382,6 @@ func TestConfigValidateWithRootChecksExistence(t *testing.T) {
 	require.NoError(t, relCfg.ValidateWithRoot(tmp))
 }
 
-func TestProject_Proxy_Validation(t *testing.T) {
-	cases := []struct {
-		name    string
-		value   string
-		wantErr bool
-	}{
-		{"empty defaults to caddy", "", false},
-		{"caddy is valid", "caddy", false},
-		{"none is valid", "none", false},
-		{"unknown is invalid", "nginx", true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			p := Project{Name: "x", Proxy: c.value}
-			err := p.Validate()
-			if c.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
 func TestCheckUnknownKeys_NetworkChild_Rejected(t *testing.T) {
 	// network.allowed_domains was renamed to network.allow; with no
 	// legacy-migration layer it surfaces as a plain unknown-field error.
