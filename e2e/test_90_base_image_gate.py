@@ -3,8 +3,15 @@ egress-locked.
 
 Boots a raw `devm-base` clone (NO daemon, NO provisioning) and asserts
 the pre-daemon floor the boot-integrity gate depends on: egress is
-default-drop, devm.target is inactive, and ssh/dnsmasq are not
+default-drop, devm.target is inactive, and ssh (the gated unit) is not
 running.
+
+dnsmasq is deliberately NOT in that list: image/provision-base.sh
+enables it at image-build time so first-boot provisioning (the
+apt-get/curl install steps devm.target's own units depend on) has
+working DNS before devm.target ever activates. dnsmasq running at this
+gate is designed behavior — it's ordered ahead of devm.target, not
+gated by it — not a gate leak.
 """
 from __future__ import annotations
 import subprocess, pytest
@@ -18,8 +25,8 @@ def test_daemon_less_boot_is_locked_and_inert(base_clone):
 
     # devm.target inactive (nothing user-facing was pulled in)
     assert x("systemctl","is-active","devm.target").stdout.strip() != "active"
-    # ssh / dnsmasq NOT running
-    for unit in ("ssh","dnsmasq"):
+    # ssh NOT running (gated unit; dnsmasq is intentionally up at boot — see module docstring)
+    for unit in ("ssh",):
         assert x("systemctl","is-active",unit).stdout.strip() != "active", f"{unit} should be down"
     # egress locked: a curl to a public host fails (default-drop)
     r = x("curl","-sS","-m","5","https://example.com")
