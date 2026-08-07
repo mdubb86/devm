@@ -198,6 +198,53 @@ Wants=network-online.target
 WantedBy=multi-user.target
 EOF
 
+# --- Guest swap (insurance against OOM) ---
+# Size = 50% of MemTotal — which reflects tart --memory, so `memory: 8G`
+# in devm.yaml yields a 4G swapfile, `memory: 16G` yields 8G, etc.
+# vm.swappiness=10 keeps hot pages in RAM; swap is a backstop against
+# OOM kills under memory pressure, not a cache-vs-swap balancer.
+#
+# The setup script recomputes target size every boot and resizes
+# /swapfile if it doesn't match — so a `memory:` change in devm.yaml
+# propagates on next VM restart without leaving a stale swapfile.
+cat > /etc/sysctl.d/60-devm-swap.conf <<'EOF'
+vm.swappiness=10
+EOF
+
+cat > /usr/local/sbin/devm-swap-setup <<'SCRIPT'
+#!/bin/bash
+set -eu
+mem_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+target_mb=$((mem_kb / 2048))  # 50% of RAM, in MB
+current_mb=0
+[ -f /swapfile ] && current_mb=$(( $(stat -c%s /swapfile) / 1024 / 1024 ))
+if [ "$current_mb" -ne "$target_mb" ]; then
+  swapoff /swapfile 2>/dev/null || true
+  rm -f /swapfile
+  fallocate -l "${target_mb}M" /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+fi
+swapon --show=NAME --noheadings | grep -Fxq /swapfile || swapon /swapfile
+SCRIPT
+chmod +x /usr/local/sbin/devm-swap-setup
+
+cat > /etc/systemd/system/devm-swap.service <<'EOF'
+[Unit]
+Description=devm guest swap (50% of RAM, recomputed on every boot)
+DefaultDependencies=no
+After=local-fs.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/devm-swap-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # One daemon-reload after ALL unit files are written, then enable them.
 # Enabling a unit systemd doesn't yet know about generally works (enable
 # reads [Install] from the file directly), but keeping this order
@@ -206,6 +253,7 @@ EOF
 systemctl daemon-reload
 systemctl enable devm-rename-user.service
 systemctl enable devm-ready.target
+systemctl enable devm-swap.service
 
 # --- Clean up ---
 apt-get clean
