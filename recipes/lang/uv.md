@@ -46,6 +46,11 @@ install:
 
 startup:
   - ">preseed-python"    # restart-bucket: re-runs every boot in the open window (cheap when cached)
+
+path:
+  # login shells get ~/.local/bin via ~/.profile; scripts, services, and
+  # `devm shell -- cmd` only see it with this entry
+  - /home/devm/.local/bin
 ```
 
 - `install:` (uv binary) is **recreate-bucket** — changing it needs a rebuild.
@@ -133,6 +138,7 @@ env:
 ## Verifying
 
 ```
+devm shell -- uv --version   # non-login — proves the `path:` entry, not ~/.profile
 devm shell
 $ uv --version
 $ uv python list                       # pre-seeded interpreter present, marked as managed
@@ -140,10 +146,10 @@ $ uv run python -c "import sys; print(sys.version)"
 $ uvx datamodel-code-generator --version   # exercises rustls TLS through the proxy end-to-end
 ```
 
-Verified live on uv 0.11.32 / Debian 13 arm64: the startup pre-seed downloads
-CPython in the open window (no `release-assets` runtime host); `uv python
-install 3.12` completes in ~8s; uv's TLS handshake through iron-proxy succeeds
-via the auto-set `UV_SYSTEM_CERTS=1`.
+Verified live on uv 0.12.2 / Debian 13 arm64: the startup pre-seed downloads
+CPython in the open window (no `release-assets` runtime host); uv's TLS
+handshake through iron-proxy succeeds via the auto-set `UV_SYSTEM_CERTS=1`;
+without the `path:` entry, non-login `uv` is `not found` (127).
 
 Upstream: <https://docs.astral.sh/uv/> · network/CA docs:
 <https://docs.astral.sh/uv/reference/environment/>
