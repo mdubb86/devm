@@ -20,6 +20,12 @@ allow list is explicit.
 scripts:
   # Install the Claude CLI and expose it on the system PATH.
   install-claude-cli:
+    # Symlink FIRST — the installer runs `claude`, which writes ~/.claude.json.
+    # With the symlink in place it writes through into the volume (or reads the
+    # persisted config); without it, a fresh stub lands at $HOME root and the
+    # startup save-back would copy it over the volume config on every
+    # re-provision (install: always precedes startup:).
+    - ln -sf /home/devm/.claude/.claude.json /home/devm/.claude.json
     - curl -fsSL https://claude.ai/install.sh | bash
     - sudo install -m 755 /home/devm/.local/bin/claude /usr/local/bin/claude
 
@@ -28,10 +34,11 @@ scripts:
   # extension and Orca ignore that env var and read/write the default
   # ~/.claude.json regardless, so the default path must stay canonical.
   link-claude-config:
-    # save-back if a session clobbered the symlink into a real file
-    # (oauthAccount gate stops a fresh onboarding stub overwriting the
-    # real login), then re-link.
-    - if [ -f /home/devm/.claude.json ] && [ ! -L /home/devm/.claude.json ] && grep -q '"oauthAccount"' /home/devm/.claude.json 2>/dev/null; then cp -f /home/devm/.claude.json /home/devm/.claude/.claude.json; fi
+    # Restore-only save-back: fold a real ~/.claude.json to the volume only if
+    # it's genuinely onboarded (hasCompletedOnboarding — a fresh install stub
+    # has oauthAccount too, so that's no discriminator) or the volume has no
+    # config yet; then re-link.
+    - if [ -f /home/devm/.claude.json ] && [ ! -L /home/devm/.claude.json ]; then if grep -qE '"hasCompletedOnboarding"[[:space:]]*:[[:space:]]*true' /home/devm/.claude.json 2>/dev/null || [ ! -f /home/devm/.claude/.claude.json ]; then cp -f /home/devm/.claude.json /home/devm/.claude/.claude.json; fi; fi
     - ln -sf /home/devm/.claude/.claude.json /home/devm/.claude.json
 
 install:
@@ -79,8 +86,9 @@ network:
   path canonical and use the symlink.
 - **Save-back guard.** If a running session ever clobbers the symlink
   into a real file (atomic temp+rename), the guard folds it back into
-  the volume before re-linking. The `oauthAccount` grep prevents a
-  fresh onboarding stub from overwriting a real login. Residual risk:
+  the volume before re-linking — but only when it's genuinely onboarded
+  (`hasCompletedOnboarding: true`) or the volume is empty. A fresh
+  install stub can never overwrite good persisted state. Residual risk:
   a mid-session clobber followed by a `devm teardown` (not a restart)
   before the next boot loses that session's `.claude.json` deltas.
 - **`console.anthropic.com` matters.** For claude.ai accounts, OAuth
