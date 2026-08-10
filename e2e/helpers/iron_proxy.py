@@ -88,10 +88,11 @@ class IronProxyConfig:
                 "ca_cert": self.ca_cert_path,
                 "ca_key": self.ca_key_path,
             },
-            # Metrics on an ephemeral port so parallel contract tests (or a
-            # concurrent devm iron-proxy) don't collide on iron-proxy's
-            # default :9090.
-            "metrics": {"listen": ":0"},
+            # Metrics on a loopback ephemeral port. Matches production's
+            # 127.0.0.1:0 bind (see internal/serviceapi/ironproxy.go); mirrors
+            # here so contract tests fail loud if the shape drifts. Ephemeral
+            # avoids collision with a concurrent devm iron-proxy on :9090.
+            "metrics": {"listen": "127.0.0.1:0"},
         }
         if self.dns_enabled:
             cfg["dns"]["listen"] = self.dns_listen

@@ -83,11 +83,15 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 			"ca_cert": c.CACertPath,
 			"ca_key":  c.CAKeyPath,
 		},
-		// Metrics listen on an ephemeral port so per-project iron-proxy
-		// instances don't fight over the built-in default of :9090. devm
-		// doesn't consume the metrics; iron-proxy just needs a valid bind.
+		// Metrics listen on a loopback ephemeral port. Loopback-only
+		// because iron-proxy v0.45.0's metrics server exposes only
+		// /healthz (no /metrics, no /debug/pprof) — nothing worth
+		// reaching from LAN, and no reason to publish even /healthz
+		// there. Ephemeral port because per-project iron-proxy
+		// instances would otherwise fight over the built-in default
+		// of :9090.
 		"metrics": map[string]any{
-			"listen": ":0",
+			"listen": "127.0.0.1:0",
 		},
 	}
 	var transforms []any
