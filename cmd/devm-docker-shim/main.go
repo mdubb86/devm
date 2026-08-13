@@ -78,15 +78,52 @@ func transformArgv(argv []string) ([]string, error) {
 
 // rewriteBuild replaces the `build` subcommand token with the sequence
 // `buildx build --builder devm`, leaving preceding global flags and
-// following args intact.
+// following args intact. Also auto-appends `--load` when the user
+// hasn't specified an output form of their own — see loadNeeded for
+// why bare `docker build` requires it under the devm builder.
 func rewriteBuild(argv, rest []string) []string {
 	// argv[insertAt] == "build". Everything after "build" is `rest`.
 	insertAt := len(argv) - len(rest) - 1
-	out := make([]string, 0, len(argv)+3)
+	out := make([]string, 0, len(argv)+5)
 	out = append(out, argv[:insertAt]...)
 	out = append(out, "buildx", "build", "--builder", builderName)
+	if loadNeeded(rest) {
+		out = append(out, "--load")
+	}
 	out = append(out, rest...)
 	return out
+}
+
+// loadNeeded reports whether we should auto-inject `--load` into a
+// rewritten `docker build`. Bare `docker build` (legacy CLI) always
+// puts the built image in the local image store — that's the whole
+// point of `docker build && docker run <tag>`. Under buildx's `remote`
+// driver (which the devm builder uses), the default output is nothing
+// but the build cache: the tag never lands in the local image store
+// and any subsequent `docker run <tag>` fails "image not found". So
+// preserve the legacy semantic by auto-adding --load — UNLESS the
+// user has already told buildx where to send the result (--load,
+// --push, -o / --output). Second-guessing an explicit --push or
+// --output would conflict with the user's intent or with docker
+// itself (--push + --load isn't valid; --output type=tar and --load
+// point in different directions).
+func loadNeeded(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch a {
+		case "--load", "--push", "-o", "--output":
+			return false
+		}
+		if strings.HasPrefix(a, "--output=") || strings.HasPrefix(a, "-o=") {
+			return false
+		}
+		// Skip a valued flag's value so we don't misread e.g. `-t -o`
+		// (tag literally "-o") as an output flag.
+		if buildxBuildValuedFlags[a] && i+1 < len(args) {
+			i++
+		}
+	}
+	return true
 }
 
 // injectBuilder finds the `build` token that follows `buildx` and
