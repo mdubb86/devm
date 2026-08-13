@@ -201,6 +201,26 @@ project:
 	}
 }
 
+func TestLoadMissingConfigIsErrNoConfig(t *testing.T) {
+	_, err := Load(t.TempDir())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoConfig)
+}
+
+func TestLoadInvalidConfigIsNotErrNoConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  name: test
+  vm_name: legacy
+`)
+
+	_, err := Load(dir)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrNoConfig,
+		"an invalid devm.yaml must not be mistaken for a missing one")
+}
+
 func TestLoadStrictFailsOnMissingRequiredField(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `

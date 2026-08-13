@@ -2,13 +2,22 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
 	"github.com/mdubb86/devm/internal/schema"
 	"gopkg.in/yaml.v3"
 )
+
+// ErrNoConfig means dir has no devm.yaml at all. Callers that treat
+// "not in a project" as a benign mode (e.g. `devm status` daemon-only
+// output) must match on this sentinel — any other Load error means a
+// devm.yaml exists but is unreadable or invalid, and must be surfaced,
+// not swallowed as "no project here".
+var ErrNoConfig = errors.New("no devm.yaml")
 
 // strictDecode runs yaml.v3 with KnownFields(true) so ANY unknown key
 // — top-level, nested, or deeply nested — hard-fails with a yaml-native
@@ -32,6 +41,9 @@ func Load(dir string) (schema.Config, error) {
 	basePath := filepath.Join(dir, "devm.yaml")
 	baseBytes, err := os.ReadFile(basePath)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return schema.Config{}, fmt.Errorf("%w in %s", ErrNoConfig, dir)
+		}
 		return schema.Config{}, fmt.Errorf("read %s: %w", basePath, err)
 	}
 	if err := schema.CheckUnknownKeys(baseBytes); err != nil {

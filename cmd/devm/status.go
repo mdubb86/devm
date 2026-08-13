@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -68,7 +69,8 @@ exit code.`,
 		}
 
 		var res orchestrator.StatusResult
-		if cfg, cfgErr := config.Load(repoRoot); cfgErr == nil {
+		switch cfg, cfgErr := config.Load(repoRoot); {
+		case cfgErr == nil:
 			// Project mode: full status including sandbox VM, routing,
 			// DNS, CA, proxy — plus daemon status via ProbeDaemon.
 			tr := tart.New()
@@ -76,13 +78,17 @@ exit code.`,
 			if err != nil {
 				return err
 			}
-		} else {
+		case errors.Is(cfgErr, config.ErrNoConfig):
 			// No devm.yaml — daemon-only mode. Report just the daemon
 			// probe so `devm status` outside a project still works.
 			res = orchestrator.StatusResult{
 				HasProject: false,
 				Daemon:     orchestrator.ProbeDaemon(cmd.Context(), ident, Fingerprint),
 			}
+		default:
+			// devm.yaml exists but is unreadable or invalid — that's an
+			// error the user needs to see, not a "no project" situation.
+			return cfgErr
 		}
 
 		if statusJSON {

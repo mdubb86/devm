@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -80,6 +81,23 @@ func TestStatusAll_ClientRoundTrip(t *testing.T) {
 	assert.True(t, rows[0].VMRunning)
 	assert.Equal(t, serviceapi.ProxyMissing, rows[0].Proxy.Status)
 	assert.True(t, anyProjectNeedsReconcile(rows))
+}
+
+// TestStatus_InvalidConfigSurfacesError: a devm.yaml that exists but
+// fails validation must error out of `devm status`, not silently fall
+// back to daemon-only mode (which prints the misleading "no devm.yaml
+// in cwd" line).
+func TestStatus_InvalidConfigSurfacesError(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),
+		[]byte("project:\n  name: p\n  vm_name: legacy\n"), 0o644))
+	t.Chdir(dir)
+	t.Setenv("HOME", t.TempDir())
+
+	statusCmd.SetContext(context.Background())
+	err := statusCmd.RunE(statusCmd, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "vm_name")
 }
 
 // TestAnyProjectNeedsReconcile covers the exit-4 decision `devm status
