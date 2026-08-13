@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"log"
+
 	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/helper"
 	"github.com/mdubb86/devm/internal/identity"
@@ -142,16 +144,22 @@ func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, proj
 		},
 	}
 
+	// Serve-loop errors go to unconditional stderr, not debuglog: a
+	// silent Serve() exit for one project's listener leaves the FD bound
+	// (helper owns the socket) but nothing accepting — clients see raw
+	// RSTs with no daemon-side breadcrumb. Prod runs without DEVM_DEBUG,
+	// so a debuglog-only line would vanish. See buzztrack :80 outage,
+	// 2026-08-12: RST-on-first-byte with no daemon log to correlate.
 	debuglog.Logf("serviceapi", "proxy: HTTP listening on %s (project %s)", httpLn.Addr(), projectID)
 	go func() {
 		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
-			debuglog.Logf("serviceapi", "proxy: HTTP serve for %s: %v", projectID, err)
+			log.Printf("serviceapi: proxy HTTP serve for %s exited: %v", projectID, err)
 		}
 	}()
 	debuglog.Logf("serviceapi", "proxy: HTTPS listening on %s (project %s)", httpsLn.Addr(), projectID)
 	go func() {
 		if err := httpsSrv.ServeTLS(httpsLn, "", ""); err != nil && err != http.ErrServerClosed {
-			debuglog.Logf("serviceapi", "proxy: HTTPS serve for %s: %v", projectID, err)
+			log.Printf("serviceapi: proxy HTTPS serve for %s exited: %v", projectID, err)
 		}
 	}()
 
@@ -358,7 +366,7 @@ func (p *ProxyServer) StartLANListener(ctx context.Context, lanPort int) error {
 	p.lanSrv = srv
 	go func() {
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			debuglog.Logf("serviceapi", "LAN listener serve: %v", err)
+			log.Printf("serviceapi: LAN listener serve exited: %v", err)
 		}
 	}()
 	debuglog.Logf("serviceapi", "LAN listener bound on 0.0.0.0:%d", lanPort)

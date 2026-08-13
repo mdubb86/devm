@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -118,12 +119,12 @@ func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, 
 
 	go func() {
 		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
-			debuglog.Logf("serviceapi", "guest-origin HTTP serve for %s: %v", projectID, err)
+			log.Printf("serviceapi: guest-origin HTTP serve for %s exited: %v", projectID, err)
 		}
 	}()
 	go func() {
 		if err := httpsSrv.ServeTLS(httpsLn, "", ""); err != nil && err != http.ErrServerClosed {
-			debuglog.Logf("serviceapi", "guest-origin HTTPS serve for %s: %v", projectID, err)
+			log.Printf("serviceapi: guest-origin HTTPS serve for %s exited: %v", projectID, err)
 		}
 	}()
 
