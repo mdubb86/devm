@@ -10,6 +10,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+
+	"github.com/mdubb86/devm/internal/daemonlog"
 )
 
 // guestOriginBackend resolves a Host header from guest-originated `.test`
@@ -117,12 +119,12 @@ func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, 
 
 	go func() {
 		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
-			log.Printf("serviceapi: guest-origin HTTP serve for %s exited: %v", projectID, err)
+			daemonlog.Errorf("serviceapi: guest-origin HTTP serve for %s exited: %v", projectID, err)
 		}
 	}()
 	go func() {
 		if err := httpsSrv.ServeTLS(httpsLn, "", ""); err != nil && err != http.ErrServerClosed {
-			log.Printf("serviceapi: guest-origin HTTPS serve for %s exited: %v", projectID, err)
+			daemonlog.Errorf("serviceapi: guest-origin HTTPS serve for %s exited: %v", projectID, err)
 		}
 	}()
 

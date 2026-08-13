@@ -80,13 +80,25 @@ checkout only at the end.
   block; no explaining devm's own schema in a recipe.
 - **Optional schema fields are nullable pointers.** Never `""`/`0` as an
   "unset" sentinel. `*string`, `*int`, `*bool`.
+- **Daemon logging is severity-split (stdout / stderr).** Inside the
+  daemon (any code reachable from `serviceapi.RunService`):
+  - **Info / lifecycle events** → `log.Printf("category: …")` — routed
+    to stdout, lands in `~/Library/Logs/com.devm.service.out.log`.
+  - **Errors** → `daemonlog.Errorf("category: …: %v", err)` — routed to
+    stderr with the current goroutine's stack trace appended, lands in
+    `~/Library/Logs/com.devm.service.err.log`. Use for anything that's
+    a genuine failure — a goroutine exited, an operation you swallowed
+    (a "continuing" branch), an invariant broken. The stack helps a
+    3am operator identify which goroutine surfaced the error.
+  - CLI-side code (`cmd/devm/*.go`, `internal/orchestrator/*.go`)
+    stays on `log.Printf` (both info and error) — the CLI's stderr is
+    for user-facing status, not for a log-file collector, and stack
+    traces there would just be noise.
 - **`debuglog.Logf` is for HIGH-VOLUME paths only** — per-request,
   per-connection, per-DNS-query, anything that would drown out useful
-  signal if always on. Every lifecycle-event log line (VM start/stop,
-  iron-proxy respawn, softnet reap, project rebind, config lock/unlock,
-  listener startup) belongs on unconditional `log.Printf` with a
-  `"category: "` prefix. When in doubt, use `log.Printf` — a silent
-  daemon is the failure mode we keep re-discovering the hard way.
+  signal if always on. Currently no such site exists; the package is
+  kept for future needs. If in doubt, use `log.Printf` or
+  `daemonlog.Errorf`.
 
 ## Where the internal specs / plans / gap matrices live
 

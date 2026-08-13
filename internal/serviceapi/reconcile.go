@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/render"
@@ -240,14 +240,14 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 		if req.WorkspaceHostPath != "" {
 			if req.Cfg.ConfigLockEnabled() {
 				if err := lockConfigFiles(req.WorkspaceHostPath); err != nil {
-					log.Printf("configlock: re-lock config for %s: %v (continuing)", req.Name, err)
+					daemonlog.Errorf("configlock: re-lock config for %s: %v (continuing)", req.Name, err)
 				} else {
 					configLockState.put(req.Name, req.WorkspaceHostPath)
 				}
 				configLockState.stopTimer(req.Name)
 			} else {
 				if err := unlockConfigFiles(req.WorkspaceHostPath); err != nil {
-					log.Printf("configlock: unlock config for %s (config_lock off): %v (continuing)", req.Name, err)
+					daemonlog.Errorf("configlock: unlock config for %s (config_lock off): %v (continuing)", req.Name, err)
 				}
 				configLockState.del(req.Name)
 			}

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
@@ -78,7 +79,7 @@ func healIronProxies(
 			continue
 		}
 		if err := respawnIronProxyFromState(ctx, cfg, sup, locks, denials, projectID); err != nil {
-			log.Printf("serviceapi: iron-proxy watchdog: respawn %s: %v", projectID, err)
+			daemonlog.Errorf("serviceapi: iron-proxy watchdog: respawn %s: %v", projectID, err)
 			continue
 		}
 		log.Printf("serviceapi: iron-proxy watchdog: respawned %s (was missing)", projectID)

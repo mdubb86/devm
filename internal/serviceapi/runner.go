@@ -3,13 +3,13 @@ package serviceapi
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"time"
 
 	"github.com/oklog/run"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -81,7 +81,7 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 		if err == nil {
 			guestHTTPPort, guestHTTPSPort, gerr := proxy.StartGuestOriginListeners(ctx, projectID, projectIP)
 			if gerr != nil {
-				log.Printf("serviceapi: guest-origin rebind for %s: %v", projectID, gerr)
+				daemonlog.Errorf("serviceapi: guest-origin rebind for %s: %v", projectID, gerr)
 			} else {
 				info, ok := ironProxyState.get(projectID)
 				if ok {
@@ -90,7 +90,7 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 					ironProxyState.put(projectID, info)
 					if sock := softnetState.get(projectID); sock != "" {
 						if err := newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort)); err != nil {
-							log.Printf("serviceapi: guest-origin re-push for %s: %v", projectID, err)
+							daemonlog.Errorf("serviceapi: guest-origin re-push for %s: %v", projectID, err)
 						}
 					}
 				}
@@ -103,7 +103,7 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 	}
 	s := RebindStatus{State: RebindFailed, Attempts: len(rebindBackoff), LastError: lastErr.Error()}
 	proxy.RecordRebindStatus(projectID, s)
-	log.Printf("serviceapi: rebind: project %s FAILED after %d attempts: %v", projectID, len(rebindBackoff), lastErr)
+	daemonlog.Errorf("serviceapi: rebind: project %s FAILED after %d attempts: %v", projectID, len(rebindBackoff), lastErr)
 	return s
 }
 
@@ -186,7 +186,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// here (port taken) shouldn't block daemon startup; it'll retry on
 	// the next Apply/Remove reconcile.
 	if err := reconcileLAN(ctx, proxy, routes, LANDispatchPort); err != nil {
-		log.Printf("serviceapi: startup LAN reconcile: %v", err)
+		daemonlog.Errorf("serviceapi: startup LAN reconcile: %v", err)
 	}
 
 	// Reap softnet processes left behind by a daemon that crashed or was

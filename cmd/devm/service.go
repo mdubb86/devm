@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -147,6 +148,14 @@ var serveCmd = &cobra.Command{
 	Hidden: true, // not user-facing; launchd calls this
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		// Route the daemon's info-level `log.Printf` to stdout so
+		// launchd's StandardOutPath (~/Library/Logs/com.devm.service.out.log)
+		// captures lifecycle events. Errors go to stderr via
+		// internal/daemonlog.Errorf so .err.log stays a real error
+		// monitor. Go's stdlib defaults `log` to stderr; that mixes
+		// events and errors and is exactly the noise-hides-signal
+		// pattern we don't want.
+		log.SetOutput(os.Stdout)
 		svc, err := newKardianosService()
 		if err != nil {
 			return err

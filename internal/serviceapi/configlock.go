@@ -2,10 +2,11 @@ package serviceapi
 
 import (
 	"fmt"
-	"log"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/mdubb86/devm/internal/daemonlog"
 )
 
 // defaultRelockSeconds is how long `devm unlock` leaves devm.yaml
@@ -32,7 +33,7 @@ func lockConfigFiles(repoRoot string) error {
 		return fmt.Errorf("lock devm.yaml: %w", err)
 	}
 	if err := setImmutable(paths[1], true); err != nil {
-		log.Printf("configlock: lock devm.me.yaml: %v", err)
+		daemonlog.Errorf("configlock: lock devm.me.yaml: %v", err)
 	}
 	return nil
 }

@@ -8,6 +8,8 @@ import (
 	"net"
 	"sync/atomic"
 	"time"
+
+	"github.com/mdubb86/devm/internal/daemonlog"
 )
 
 // ntpUnixEpochOffset converts between UNIX (1970-01-01) and NTP (1900-01-01)
@@ -80,7 +82,7 @@ func (s *NTPServer) Serve(ctx context.Context) error {
 		recvTime := time.Now()
 		reply := buildSNTPReply(buf[:sntpPacketLen], recvTime, time.Now())
 		if _, err := s.conn.WriteToUDP(reply, addr); err != nil {
-			log.Printf("ntp: write reply to %s: %v", addr, err)
+			daemonlog.Errorf("ntp: write reply to %s: %v", addr, err)
 		}
 	}
 }

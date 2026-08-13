@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -13,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -153,7 +153,7 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 	// no-op. Best-effort, gated the same way /vm/start gates it.
 	if snap.Cfg.ConfigLockEnabled() && snap.WorkspaceHostPath != "" {
 		if err := lockConfigFiles(snap.WorkspaceHostPath); err != nil {
-			log.Printf("configlock: relock config for %s: %v (continuing)", projectID, err)
+			daemonlog.Errorf("configlock: relock config for %s: %v (continuing)", projectID, err)
 		} else {
 			configLockState.put(projectID, snap.WorkspaceHostPath)
 		}
@@ -203,7 +203,7 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 	recovered := append(directRoutes, exposeHostRoutes...)
 	if len(recovered) > 0 {
 		if err := routes.Apply(projectID, recovered); err != nil {
-			log.Printf("routes: recover routes for %s: %v (continuing)", projectID, err)
+			daemonlog.Errorf("routes: recover routes for %s: %v (continuing)", projectID, err)
 		}
 	}
 }

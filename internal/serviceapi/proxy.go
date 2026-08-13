@@ -14,6 +14,7 @@ import (
 
 	"log"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/helper"
 	"github.com/mdubb86/devm/internal/identity"
 )
@@ -152,13 +153,13 @@ func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, proj
 	log.Printf("serviceapi: proxy: HTTP listening on %s (project %s)", httpLn.Addr(), projectID)
 	go func() {
 		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
-			log.Printf("serviceapi: proxy HTTP serve for %s exited: %v", projectID, err)
+			daemonlog.Errorf("serviceapi: proxy HTTP serve for %s exited: %v", projectID, err)
 		}
 	}()
 	log.Printf("serviceapi: proxy: HTTPS listening on %s (project %s)", httpsLn.Addr(), projectID)
 	go func() {
 		if err := httpsSrv.ServeTLS(httpsLn, "", ""); err != nil && err != http.ErrServerClosed {
-			log.Printf("serviceapi: proxy HTTPS serve for %s exited: %v", projectID, err)
+			daemonlog.Errorf("serviceapi: proxy HTTPS serve for %s exited: %v", projectID, err)
 		}
 	}()
 
@@ -365,7 +366,7 @@ func (p *ProxyServer) StartLANListener(ctx context.Context, lanPort int) error {
 	p.lanSrv = srv
 	go func() {
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Printf("serviceapi: LAN listener serve exited: %v", err)
+			daemonlog.Errorf("serviceapi: LAN listener serve exited: %v", err)
 		}
 	}()
 	log.Printf("serviceapi: LAN listener bound on 0.0.0.0:%d", lanPort)

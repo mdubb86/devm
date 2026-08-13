@@ -3,7 +3,6 @@ package serviceapi
 import (
 	"bufio"
 	"context"
-	"log"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -11,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 )
 
@@ -44,14 +44,14 @@ func ReapOrphanSoftnets(ctx context.Context, cfg identity.Config) {
 		binary := filepath.Join(cfg.RuntimeDir(), "softnet-bin", "softnet")
 		out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,command=").Output()
 		if err != nil {
-			log.Printf("serviceapi: reap orphan softnets: ps: %v", err)
+			daemonlog.Errorf("serviceapi: reap orphan softnets: ps: %v", err)
 			return
 		}
 		pids := parseOrphanSoftnets(string(out), binary)
 		if len(pids) == 0 {
 			return
 		}
-		log.Printf("serviceapi: reaping %d orphan softnet process(es) (parent already exited): %v", len(pids), pids)
+		daemonlog.Errorf("serviceapi: reaping %d orphan softnet process(es) (parent already exited): %v", len(pids), pids)
 		for _, pid := range pids {
 			_ = syscall.Kill(pid, syscall.SIGTERM)
 		}
