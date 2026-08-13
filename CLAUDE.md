@@ -44,6 +44,21 @@ user wants to replace their prod install (e.g. shipping v0.11.2 after
 a real release), ask them explicitly and quote back the risks in this
 section. The default answer is always "use the e2e slot."
 
+### Workflow split — sudo vs. no-sudo
+
+- **User drives every step that needs sudo.** That's `just e2e-bootstrap`,
+  `just e2e-install <NAME>`, `sudo -v`-refresher activity, and any daemon
+  reinstall. Ask the user to run these; explain briefly why and hand them
+  the exact commands.
+- **Claude drives every step that doesn't need sudo, after bootstrap is
+  in place.** That's `just e2e <NAME>`, follow-up probes (`tart list`,
+  `ps`, log tails), and any code / test iteration.
+- **After a daemon-side code change, the e2e binary MUST be re-bootstrapped
+  or the test is running the old binary.** Symptom: a bug you just fixed
+  still reproduces. Ask the user to `just e2e-bootstrap` again — don't
+  chase "why is my fix not working" without checking the install
+  timestamp (`ls -l /usr/local/bin/devm-e2e`).
+
 ## Never operate directly on a shared checkout
 
 `/Users/michael/workspace/devm` is a working directory shared across
