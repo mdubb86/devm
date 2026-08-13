@@ -16,8 +16,8 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `env` | map[string]EnvValue | live | Project-wide environment variables forwarded to all services. |
 | `services` | map[string]Service | varies | Named service definitions; bucket depends on which sub-field changes (see Services section). |
 | `packages` | []string | recreate | Apt packages installed at VM creation time. |
-| `install` | []string | recreate | Shell commands run once at VM creation as root. |
-| `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as root, with open network — before egress enforcement is applied. |
+| `install` | []string | recreate | Shell commands run once at VM creation as the guest `devm` user. NOPASSWD sudo is available for privileged steps. |
+| `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as the guest `devm` user, with open network — before egress enforcement is applied. NOPASSWD sudo is available for privileged steps. |
 | `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
 | `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
 | `volumes` | map[string]string | restart | Per-project named persistent stores. Key = volume name; value = absolute guest path where the volume is mounted. Data lives on the Mac side under `~/Library/Application Support/devm/volumes/<project>/<name>/` and survives `devm teardown`. See the `volumes` section below. |
@@ -120,7 +120,7 @@ Rules:
 
 `[]string` — bucket: **recreate**.
 
-Shell commands run once at VM creation time, in order, as root. Each command runs under `bash -o pipefail -c`. Bootstrap runs first, so `apt-get update` has already been called — user entries can `apt-get install -y <pkg>` directly.
+Shell commands run once at VM creation time, in order, as the guest `devm` user. Each command runs under `bash -o pipefail -c`. Bootstrap runs first, so `apt-get update` has already been called — user entries can `sudo apt-get install -y <pkg>` directly (the `devm` user has NOPASSWD sudo baked into the base image).
 
 `install` runs **once, on first boot only** — it is gated by a marker (`/var/lib/devm/provisioned`) and is **not** re-run on a later cold start (`devm stop` then `devm shell` reuses the same disk, so installed tools and built artifacts are still there). It runs with **open** network, before egress enforcement is applied. Use `install` for one-time setup. For a command that must run on **every** boot, use `startup:` (every boot, still open network — see below), or a service (`exec:` / `systemd:`) for a long-running process (every boot, under the enforced egress allowlist).
 
@@ -134,7 +134,7 @@ Note: `--` in a command's argv is consumed by the internal wrapper; quote it or 
 
 `[]string` — bucket: **restart** (VM stop + cold start; no teardown, no data loss).
 
-Shell commands run on **every** boot where the open-egress window runs, in order, as root, with **open** network — before egress enforcement is applied. Runs under one shared shell (exports/`cd` persist between lines), 600s timeout for the whole block (override with `DEVM_INSTALL_STEP_TIMEOUT_S`). Use it for per-boot setup that needs unrestricted network (fetch/refresh something, register the VM, warm a cache).
+Shell commands run on **every** boot where the open-egress window runs, in order, as the guest `devm` user, with **open** network — before egress enforcement is applied. NOPASSWD sudo is available for privileged steps. Runs under one shared shell (exports/`cd` persist between lines), 600s timeout for the whole block (override with `DEVM_INSTALL_STEP_TIMEOUT_S`). Use it for per-boot setup that needs unrestricted network (fetch/refresh something, register the VM, warm a cache).
 
 The open-egress window itself only runs when there's work for it: first boot, or `startup:` is non-empty, or any service declares `templates:`. A project with no `startup:` and no `templates:` skips the window entirely on a later cold start and goes straight to the enforced allowlist.
 
