@@ -292,6 +292,22 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// feedback loop caught).
 	server.SetProxyReady(true)
 
+	// Iron-proxy watchdog actor. Periodically walks running projects
+	// and respawns any iron-proxy that has silently died (SIGKILL, hard
+	// crash — anything the setsid shim's session-detach doesn't recover
+	// from). Skips projects that inject secrets — those need CLI
+	// reconcile because secret values never persist to disk. Without
+	// this actor a project whose iron-proxy dies stays broken until the
+	// user notices and reconciles by hand.
+	{
+		watchdogCtx, cancel := context.WithCancel(ctx)
+		g.Add(func() error {
+			return runIronProxyWatchdog(watchdogCtx, cfg, sup, proxy, locks, denials)
+		}, func(error) {
+			cancel()
+		})
+	}
+
 	// Context-cancel actor: when ctx is cancelled (parent signal),
 	// the group returns. Also tears down every project's per-project
 	// HTTP/HTTPS proxy listeners so a graceful daemon exit doesn't leak
