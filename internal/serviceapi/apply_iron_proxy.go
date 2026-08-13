@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -275,10 +275,10 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		// nothing to expose.
 		if snap != nil {
 			if err := pushExposeMap(req.Name, computeExposeMap(snap.Cfg, projectIP)); err != nil {
-				debuglog.Logf("serviceapi", "apply-iron-proxy: push expose map for %s: %v", req.Name, err)
+				log.Printf("serviceapi: apply-iron-proxy: push expose map for %s: %v", req.Name, err)
 			}
 			if err := pushTestHosts(req.Name, computeDirectTestHosts(snap.Cfg)); err != nil {
-				debuglog.Logf("serviceapi", "apply-iron-proxy: push test hosts for %s: %v", req.Name, err)
+				log.Printf("serviceapi: apply-iron-proxy: push test hosts for %s: %v", req.Name, err)
 			}
 		}
 

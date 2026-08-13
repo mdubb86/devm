@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/identity"
@@ -138,7 +137,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	if err != nil {
 		return -1, fmt.Errorf("query vm status: %w", err)
 	}
-	debuglog.Logf("shell", "vm status: present=%v running=%v", vmStatus.Present, vmStatus.Running)
+	log.Printf("shell: vm status: present=%v running=%v", vmStatus.Present, vmStatus.Running)
 
 	if vmStatus.Running {
 		// The VM process is up, but that alone doesn't tell us whether it's
@@ -211,7 +210,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 
 	// Cold start: the VM was stopped, or we just tore down a dirty one above.
 	reporter.Step("starting vm", false)
-	debuglog.Logf("shell", "cold-start: sending StartVM to daemon")
+	log.Printf("shell: cold-start: sending StartVM to daemon")
 
 	// Collect allow-list from network config, expanded with Docker Hub
 	// hosts when docker: true.
@@ -273,7 +272,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	if err := waitVMReady(ctx, d.Tart, vmName, 60*time.Second); err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "vm did not become ready")
 	}
-	debuglog.Logf("shell", "cold-start: vm exec-ready")
+	log.Printf("shell: cold-start: vm exec-ready")
 
 	return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, startResp.ProjectIP, reporter)
 }
@@ -348,7 +347,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		WorkspaceVMPath:     repoRoot,
 		StepTimeoutSeconds:  installStepTimeoutSeconds(),
 	}
-	debuglog.Logf("shell", "provisioning %s", vmName)
+	log.Printf("shell: provisioning %s", vmName)
 	reporter.Step("provisioning", false)
 
 	// softnet boots LOCKED. Flip it OPEN before the open-egress exec runs,
@@ -371,7 +370,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		// belongs in devm.yaml (test_51: install failure = state=absent).
 		return d.teardownOnFail(ctx, cfg, vmName, err, "provision")
 	}
-	debuglog.Logf("shell", "open-egress provisioning done: %s", vmName)
+	log.Printf("shell: open-egress provisioning done: %s", vmName)
 
 	// Lock softnet down to the project's real allowlist BEFORE services or
 	// devm.target come up — the Critical fix: services must never start
@@ -389,12 +388,12 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		// phase failures (the daemon's own enforcement broken) still tear
 		// down.
 		if provision.IsPostInstallFailure(err) {
-			debuglog.Logf("shell", "post-install failure — keeping VM: %v", err)
+			log.Printf("shell: post-install failure — keeping VM: %v", err)
 			return -1, fmt.Errorf("provision: %w", err)
 		}
 		return d.teardownOnFail(ctx, cfg, vmName, err, "provision")
 	}
-	debuglog.Logf("shell", "provisioning done: %s", vmName)
+	log.Printf("shell: provisioning done: %s", vmName)
 
 	// Write initial snapshot so that subsequent `devm reconcile` calls have
 	// a baseline to diff against. Without this, ReadSnapshot returns "" which
@@ -407,7 +406,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	if err := WriteSnapshot(d.Tart, vmName, snapshotHeader+string(provSnap)); err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "write provision snapshot")
 	}
-	debuglog.Logf("shell", "snapshot written: %s", vmName)
+	log.Printf("shell: snapshot written: %s", vmName)
 
 	// Seed the daemon-side state snapshot too, now that provisioning is
 	// fully green (RunOpen, egress enforcement, and RunEnforced all
@@ -483,12 +482,12 @@ func (d ShellDeps) teardownVM(ctx context.Context, cfg schema.Config, vmName str
 		// caller to see it — otherwise this class of failure (VM stopped
 		// but not deleted) is invisible from the outside.
 		fmt.Fprintf(os.Stderr, "teardown: StopVM: %v\n", stopErr)
-		debuglog.Logf("shell", "teardown: StopVM: %v", stopErr)
+		log.Printf("shell: teardown: StopVM: %v", stopErr)
 	}
 	if derr := d.Tart.Delete(teardownCtx, vmName); derr != nil &&
 		!strings.Contains(derr.Error(), "does not exist") {
 		fmt.Fprintf(os.Stderr, "teardown: tart delete %s failed: %v\n", vmName, derr)
-		debuglog.Logf("shell", "teardown: delete %s failed: %v", vmName, derr)
+		log.Printf("shell: teardown: delete %s failed: %v", vmName, derr)
 		return fmt.Errorf("tart delete %s: %w", vmName, derr)
 	}
 	return nil
@@ -500,7 +499,7 @@ func (d ShellDeps) teardownVM(ctx context.Context, cfg schema.Config, vmName str
 // avoid leaving a zombie — `devm shell` promises loud-failure: exit
 // non-zero AND leave no half-created VM behind (pinned by test_51).
 func (d ShellDeps) teardownOnFail(ctx context.Context, cfg schema.Config, vmName string, err error, msg string) (int, error) {
-	debuglog.Logf("shell", "failed: %s: %v", msg, err)
+	log.Printf("shell: failed: %s: %v", msg, err)
 	fmt.Fprintf(os.Stderr, "teardown-on-fail: %s: %v\n", msg, err)
 	if terr := d.teardownVM(ctx, cfg, vmName); terr != nil {
 		fmt.Fprintf(os.Stderr, "teardown-on-fail: %v\n", terr)
@@ -536,7 +535,7 @@ func (d ShellDeps) attachShell(ctx context.Context, vmName, repoRoot, cmdName st
 	execArgs = append(execArgs, terminalEnvForward()...)
 	execArgs = append(execArgs, wrapper, cmdName)
 	execArgs = append(execArgs, cmdArgs...)
-	debuglog.Logf("shell", "attaching interactive shell: tart exec %s %v", vmName, execArgs)
+	log.Printf("shell: attaching interactive shell: tart exec %s %v", vmName, execArgs)
 	cmd, err := d.UserSpawner.Start(d.Tart.Path, execArgs...)
 	if err != nil {
 		return -1, fmt.Errorf("spawn interactive shell: %w", err)

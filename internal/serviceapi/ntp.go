@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"sync/atomic"
 	"time"
-
-	"github.com/mdubb86/devm/internal/debuglog"
 )
 
 // ntpUnixEpochOffset converts between UNIX (1970-01-01) and NTP (1900-01-01)
@@ -61,7 +60,7 @@ func (s *NTPServer) Port() int {
 // dropped — SNTP has no error channel, and logging every stray packet
 // on a well-known port would just spam.
 func (s *NTPServer) Serve(ctx context.Context) error {
-	debuglog.Logf("ntp", "listening on udp %s", s.conn.LocalAddr())
+	log.Printf("ntp: listening on udp %s", s.conn.LocalAddr())
 	go func() {
 		<-ctx.Done()
 		_ = s.conn.Close()
@@ -81,7 +80,7 @@ func (s *NTPServer) Serve(ctx context.Context) error {
 		recvTime := time.Now()
 		reply := buildSNTPReply(buf[:sntpPacketLen], recvTime, time.Now())
 		if _, err := s.conn.WriteToUDP(reply, addr); err != nil {
-			debuglog.Logf("ntp", "write reply to %s: %v", addr, err)
+			log.Printf("ntp: write reply to %s: %v", addr, err)
 		}
 	}
 }

@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"sync/atomic"
 	"time"
-
-	"github.com/mdubb86/devm/internal/debuglog"
 )
 
 // Server is the HTTP API the devm service exposes over a Unix
@@ -125,7 +124,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		_ = ln.Close()
 		return fmt.Errorf("chmod %s: %w", s.socketPath, err)
 	}
-	debuglog.Logf("serviceapi", "listening on %s", s.socketPath)
+	log.Printf("serviceapi: listening on %s", s.socketPath)
 
 	server := &http.Server{Handler: s.mux}
 

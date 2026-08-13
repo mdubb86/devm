@@ -10,8 +10,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
-
-	"github.com/mdubb86/devm/internal/debuglog"
 )
 
 // guestOriginBackend resolves a Host header from guest-originated `.test`
@@ -129,7 +127,7 @@ func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, 
 	}()
 
 	p.recordGuestOriginListeners(projectID, httpLn, httpsLn, httpSrv, httpsSrv, httpPort, httpsPort)
-	debuglog.Logf("serviceapi", "guest-origin listening on %s/%s (project %s)",
+	log.Printf("serviceapi: guest-origin listening on %s/%s (project %s)",
 		httpLn.Addr(), httpsLn.Addr(), projectID)
 	return httpPort, httpsPort, nil
 }

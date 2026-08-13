@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -293,12 +293,12 @@ func armRelockTimer(locks *ProjectLocks, tr TartLister, name string, d time.Dura
 			// for). Worst case is a stale lock on an already-stopped VM,
 			// which the next `devm stop`/`devm unlock` clears — recoverable,
 			// unlike a silently-unlocked running VM.
-			debuglog.Logf("configlock", "auto-relock %s: tart list failed, re-locking fail-closed: %v", name, err)
+			log.Printf("configlock: auto-relock %s: tart list failed, re-locking fail-closed: %v", name, err)
 		} else if !vmRunning(vms, name) {
 			return // VM confirmed stopped — don't strand a lock on it
 		}
 		if err := lockConfigFiles(e.repoRoot); err != nil {
-			debuglog.Logf("configlock", "auto-relock %s: %v", name, err)
+			log.Printf("configlock: auto-relock %s: %v", name, err)
 		}
 	})
 	configLockState.setTimer(name, t)
@@ -324,7 +324,7 @@ func shutdownSoftnet(projectID string) {
 		return
 	}
 	if err := newSoftnetClient(sock).shutdown(); err != nil {
-		debuglog.Logf("serviceapi", "vm/stop: softnet shutdown for %s: %v", projectID, err)
+		log.Printf("serviceapi: vm/stop: softnet shutdown for %s: %v", projectID, err)
 	}
 }
 
@@ -409,7 +409,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		if req.MemoryMB > 0 || req.CpuCount > 0 {
 			memBytes, cpus, err := hostCapacity()
 			if err != nil {
-				debuglog.Logf("serviceapi", "vm/start: host-capacity check skipped: %v", err)
+				log.Printf("serviceapi: vm/start: host-capacity check skipped: %v", err)
 			} else {
 				hostMemMB := memBytes / (1024 * 1024)
 				if req.MemoryMB > 0 && uint64(req.MemoryMB) > hostMemMB {
@@ -518,7 +518,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// entirely.
 		if req.Cfg.ConfigLockEnabled() {
 			if err := lockConfigFiles(req.WorkspaceHostPath); err != nil {
-				debuglog.Logf("configlock", "lock config for %s: %v (continuing)", req.Name, err)
+				log.Printf("configlock: lock config for %s: %v (continuing)", req.Name, err)
 			} else {
 				configLockState.put(req.Name, req.WorkspaceHostPath)
 			}
@@ -576,10 +576,10 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// boundary, ingress is convenience, and a failed push is
 		// re-attempted at the next reconcile.
 		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, projectIP)); err != nil {
-			debuglog.Logf("serviceapi", "vm/start: push expose map for %s: %v", req.Name, err)
+			log.Printf("serviceapi: vm/start: push expose map for %s: %v", req.Name, err)
 		}
 		if err := pushTestHosts(req.Name, computeDirectTestHosts(req.Cfg)); err != nil {
-			debuglog.Logf("serviceapi", "vm/start: push test hosts for %s: %v", req.Name, err)
+			log.Printf("serviceapi: vm/start: push test hosts for %s: %v", req.Name, err)
 		}
 
 		// Wait for the Tart Guest Agent to come up before injecting
@@ -705,7 +705,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// installed) is re-attempted on the next /vm/start.
 		if proxy != nil {
 			if err := proxy.StartProjectListeners(ctx, req.Name, projectIP); err != nil {
-				debuglog.Logf("serviceapi", "vm/start: start project listeners for %s: %v", req.Name, err)
+				log.Printf("serviceapi: vm/start: start project listeners for %s: %v", req.Name, err)
 			}
 
 			guestHTTPPort, guestHTTPSPort, err := proxy.StartGuestOriginListeners(ctx, req.Name, projectIP)
@@ -890,7 +890,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 		if repoRoot != "" {
 			if err := unlockConfigFiles(repoRoot); err != nil {
-				debuglog.Logf("configlock", "unlock config for %s: %v", req.Name, err)
+				log.Printf("configlock: unlock config for %s: %v", req.Name, err)
 			}
 		}
 		configLockState.del(req.Name)
@@ -927,7 +927,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// means /vm/start never ran (or a prior /vm/stop already reaped
 		// this key), which is fine.
 		if err := sup.Stop(r.Context(), key); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
-			debuglog.Logf("serviceapi", "vm/stop: supervisor stop for %s: %v", req.Name, err)
+			log.Printf("serviceapi: vm/stop: supervisor stop for %s: %v", req.Name, err)
 		}
 		// Ask softnet to exit now that the guest is confirmed stopped and
 		// its tart-run process confirmed terminated above. softnet is a
@@ -975,7 +975,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		relockSeconds := 0
 		if ok {
 			if err := unlockConfigFiles(entry.repoRoot); err != nil {
-				debuglog.Logf("configlock", "unlock config for %s: %v (continuing)", req.Name, err)
+				log.Printf("configlock: unlock config for %s: %v (continuing)", req.Name, err)
 			}
 			d := time.Duration(req.RelockSeconds) * time.Second
 			if d <= 0 {
@@ -1012,7 +1012,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		entry, ok := configLockState.get(req.Name)
 		if ok {
 			if err := lockConfigFiles(entry.repoRoot); err != nil {
-				debuglog.Logf("configlock", "lock config for %s: %v (continuing)", req.Name, err)
+				log.Printf("configlock: lock config for %s: %v (continuing)", req.Name, err)
 			}
 			configLockState.stopTimer(req.Name)
 		}

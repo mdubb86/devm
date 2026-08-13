@@ -2,12 +2,12 @@ package serviceapi
 
 import (
 	"context"
+	"log"
 	"net"
 	"strings"
 
 	"github.com/miekg/dns"
 
-	"github.com/mdubb86/devm/internal/debuglog"
 	"github.com/mdubb86/devm/internal/identity"
 )
 
@@ -55,7 +55,7 @@ func (s *DNSServer) Serve(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.server.ListenAndServe() }()
 
-	debuglog.Logf("serviceapi", "dns server listening on %s", s.server.Addr)
+	log.Printf("serviceapi: dns server listening on %s", s.server.Addr)
 
 	select {
 	case <-ctx.Done():
