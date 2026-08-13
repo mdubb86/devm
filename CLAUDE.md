@@ -80,6 +80,13 @@ checkout only at the end.
   block; no explaining devm's own schema in a recipe.
 - **Optional schema fields are nullable pointers.** Never `""`/`0` as an
   "unset" sentinel. `*string`, `*int`, `*bool`.
+- **`debuglog.Logf` is for HIGH-VOLUME paths only** — per-request,
+  per-connection, per-DNS-query, anything that would drown out useful
+  signal if always on. Every lifecycle-event log line (VM start/stop,
+  iron-proxy respawn, softnet reap, project rebind, config lock/unlock,
+  listener startup) belongs on unconditional `log.Printf` with a
+  `"category: "` prefix. When in doubt, use `log.Printf` — a silent
+  daemon is the failure mode we keep re-discovering the hard way.
 
 ## Where the internal specs / plans / gap matrices live
 
