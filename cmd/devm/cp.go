@@ -314,7 +314,12 @@ func pipeUpload(ctx context.Context, tr *tart.Tart, vm, hostPath, remoteCmd stri
 		defer f.Close()
 		src = f
 	}
-	cmd := exec.CommandContext(ctx, tr.Path, "exec", vm, "sh", "-c", remoteCmd)
+	// `-i` is required — `tart exec` drops stdin unless -i is passed, so a
+	// pipeUpload without it silently produces an empty file on the guest
+	// (proven by test_149's first run: sudo tee succeeded but wrote 0
+	// bytes). Harmless for pipeDownload too (nothing to feed via stdin),
+	// so we use the same argv shape for both.
+	cmd := exec.CommandContext(ctx, tr.Path, "exec", "-i", vm, "sh", "-c", remoteCmd)
 	cmd.Stdin = src
 	cmd.Stdout = os.Stderr // tart exec sometimes prints its own noise; keep it off the pipe
 	var stderr strings.Builder
@@ -339,7 +344,8 @@ func pipeDownload(ctx context.Context, tr *tart.Tart, vm, remoteCmd, hostPath st
 		defer f.Close()
 		dst = f
 	}
-	cmd := exec.CommandContext(ctx, tr.Path, "exec", vm, "sh", "-c", remoteCmd)
+	// `-i` matches pipeUpload — harmless here (nothing to feed via stdin).
+	cmd := exec.CommandContext(ctx, tr.Path, "exec", "-i", vm, "sh", "-c", remoteCmd)
 	cmd.Stdout = dst
 	var stderr strings.Builder
 	cmd.Stderr = &teeWriter{w: os.Stderr, buf: &stderr}
