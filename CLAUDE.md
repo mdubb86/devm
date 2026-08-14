@@ -69,9 +69,13 @@ checkout only at the end.
 
 ## Standing preferences (devm-specific)
 
-- **No auto-releases.** `just release` is user-driven, never Claude-driven.
-  Even when a fix looks release-worthy, stop at "branch merged; awaiting
-  release sign-off."
+- **Releases require explicit version agreement.** Claude can run
+  `just release` — but only after proposing a specific version number
+  (e.g. "proposing v0.12.1") and the user explicitly agreeing or
+  supplying their own. Never auto-tag from "this looks release-worthy";
+  never assume the next bump. Once the version is agreed, run
+  `NONINTERACTIVE=1 just release vX.Y.Z` from the shared checkout on a
+  clean `main`.
 - **No archaeology comments.** Code documents what IS, not what was. No
   "migrated from X", "used to be Y", "removed Z because ..." in the tree.
 - **No migration/compat notes in devm docs.** Single-user tool; every doc
