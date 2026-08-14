@@ -78,6 +78,22 @@ The docker-shim rewrites `docker build …` to `docker buildx build --builder de
 
 - **`docker run` fails with a cert error.** The runc-shim's bind-mount didn't land. Check `docker inspect <container>` — should show `/etc/ssl/certs/ca-certificates.crt` mounted from the host bundle. If missing, `devm reconcile` to reprovision the runtime config.
 - **Iron-proxy denies the pull with 403.** The registry host isn't in `network.allow` and isn't one of the auto-allowed Docker Hub hosts. Add it under `network.allow`.
+- **Every runtime `apt-get update` fails** with
+  `Err https://download.docker.com/... 403 Forbidden` +
+  `E: The repository ... is no longer signed.` — Engine install leaves
+  `/etc/apt/sources.list.d/docker.list` enabled, and its host is only reachable
+  during the open provision window (the auto-allowlist covers the Docker Hub
+  *image* hosts, not the apt repo). One failing repo makes `apt-get update`
+  exit non-zero, so anything that apt-installs at runtime breaks — e.g.
+  `playwright install --with-deps`. Preferred fix: install apt packages via
+  `packages:` (provision-time, open egress) instead of at runtime. If you
+  genuinely need runtime apt, allowlist the repo host:
+
+  ```yaml
+  network:
+    allow:
+      - download.docker.com   # Engine's apt repo; only for runtime apt-get
+  ```
 
 ## Debugging build-time trust
 
