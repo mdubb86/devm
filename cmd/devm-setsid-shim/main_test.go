@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -186,6 +187,98 @@ func TestShim_IgnoresSIGTERM(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// TestShim_ChildSurvivesParentStdoutClose pins the invariant that
+// dropped in production and killed iron-proxy for everstone: when the
+// process on the OTHER side of the shim's inherited stdout pipe goes
+// away, iron-proxy's next write hits EPIPE. Go's runtime handler for
+// SIGPIPE on fd 1/2 terminates the process. That's how a daemon
+// restart (SIGTERM, SIGKILL, launchctl bootout — any exit) reaches
+// through the setsid boundary and kills iron-proxy despite the shim.
+//
+// This test simulates the daemon's pexec pipe: shim's stdout/stderr is
+// a fresh pipe the test owns. The child writes to stdout continuously
+// (like iron-proxy's request-audit log). The test closes the pipe's
+// read-end — the equivalent of the daemon dying. The child MUST stay
+// alive: the shim's job is to absorb the broken-pipe write and keep
+// the child unaware.
+//
+// Fails today because the shim currently passes its inherited stdout
+// through verbatim; the child inherits the pipe's write-end and dies
+// on the next write. Passes after the shim interposes a fresh pipe
+// and a tee-absorb goroutine.
+func TestShim_ChildSurvivesParentStdoutClose(t *testing.T) {
+	shim := buildShim(t)
+
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Close(); _ = w.Close() })
+
+	// Child writes "tick\n" continuously via `yes tick`. That's what
+	// makes the SIGPIPE cascade observable: as soon as the read-end
+	// closes, the very next write triggers it.
+	cmd := exec.Command(shim, "yes", "tick")
+	cmd.Stdout = w
+	cmd.Stderr = w
+	require.NoError(t, cmd.Start())
+	// Close our copy of the write-end. Child + shim still hold theirs.
+	_ = w.Close()
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+
+	// Locate the `yes` child of the shim.
+	var childPID int
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		childPID = findNamedChildOf(t, cmd.Process.Pid, "yes")
+		if childPID != 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	require.NotZero(t, childPID, "expected `yes` child of shim %d", cmd.Process.Pid)
+
+	// Drain a little output to confirm the pipe is flowing end-to-end
+	// before we close it — otherwise a slow start could race the close.
+	if err := r.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	buf := make([]byte, 4096)
+	n, err := r.Read(buf)
+	require.NoError(t, err, "reading initial output from child")
+	require.NotZero(t, n, "expected child output before closing pipe")
+
+	// Close the pipe's read-end — this is the moment the daemon "dies".
+	// Any subsequent write from the child to stdout will EPIPE.
+	require.NoError(t, r.Close())
+
+	// Poll: the child must stay alive. Pre-fix, `yes` sees SIGPIPE on
+	// its next write and terminates within milliseconds.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(childPID, 0); err != nil {
+			t.Fatalf("child (pid %d) died after parent-pipe close: %v — "+
+				"shim did not absorb the broken-pipe write. iron-proxy "+
+				"dies the same way on real daemon shutdown.", childPID, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// findNamedChildOf returns the PID of a process whose command name is
+// `name` and whose parent is `parentPID`. Returns 0 if none.
+func findNamedChildOf(t *testing.T, parentPID int, name string) int {
+	t.Helper()
+	out, err := exec.Command("pgrep", "-P", strconv.Itoa(parentPID), name).CombinedOutput()
+	if err != nil {
+		return 0
+	}
+	lines := strings.Fields(strings.TrimSpace(string(out)))
+	if len(lines) == 0 {
+		return 0
+	}
+	pid, err := strconv.Atoi(lines[0])
+	require.NoError(t, err)
+	return pid
 }
 
 // findSleepChildOf returns the PID of the sleep process that's a direct
