@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -82,7 +83,11 @@ func (c *softnetClient) setPolicy(pol string, ep *Endpoint) error {
 	if ep != nil {
 		msg["forward_targets"] = ep
 	}
-	return c.send(msg)
+	if err := c.send(msg); err != nil {
+		return err
+	}
+	log.Printf("softnet-push: setPolicy sock=%s policy=%s forward_targets=%v", c.sock, pol, ep != nil)
+	return nil
 }
 
 // setExposeMap tells softnet which host->guest ingress port mappings to
@@ -92,16 +97,24 @@ func (c *softnetClient) setExposeMap(ports []softnet.ExposePort) error {
 		"op":     "setExposeMap",
 		"expose": ports,
 	}
-	return c.send(msg)
+	if err := c.send(msg); err != nil {
+		return err
+	}
+	log.Printf("softnet-push: setExposeMap sock=%s ports=%d", c.sock, len(ports))
+	return nil
 }
 
 // setTestHosts pushes the set of direct-service hostnames softnet's .test
 // DNS answers with loopback. Replace-not-merge on the softnet side.
 func (c *softnetClient) setTestHosts(hosts []string) error {
-	return c.send(map[string]any{
+	if err := c.send(map[string]any{
 		"op":                "setTestHosts",
 		"direct_test_hosts": hosts,
-	})
+	}); err != nil {
+		return err
+	}
+	log.Printf("softnet-push: setTestHosts sock=%s hosts=%d", c.sock, len(hosts))
+	return nil
 }
 
 // shutdown asks softnet to exit now. softnet is a child process `tart run

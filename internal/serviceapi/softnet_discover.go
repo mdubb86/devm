@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"context"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 )
 
@@ -66,11 +67,17 @@ func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
 		needsEnforcedPush := info.ProjectIP == ""
 		go func(id, sock string, info projectInfo) {
 			if needsEnforcedPush {
-				_ = newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
+				if err := newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort)); err != nil {
+					daemonlog.Errorf("serviceapi: discoverSoftnet: setPolicy ENFORCED for %s: %v", id, err)
+				}
 			}
 			if snap, err := ReadStateSnapshot(cfg, id); err == nil && snap != nil {
-				_ = pushExposeMap(id, computeExposeMap(snap.Cfg, info.ProjectIP))
-				_ = pushTestHosts(id, computeDirectTestHosts(snap.Cfg))
+				if err := pushExposeMap(id, computeExposeMap(snap.Cfg, info.ProjectIP)); err != nil {
+					daemonlog.Errorf("serviceapi: discoverSoftnet: pushExposeMap for %s: %v", id, err)
+				}
+				if err := pushTestHosts(id, computeDirectTestHosts(snap.Cfg)); err != nil {
+					daemonlog.Errorf("serviceapi: discoverSoftnet: pushTestHosts for %s: %v", id, err)
+				}
 			}
 		}(id, sock, info)
 	}

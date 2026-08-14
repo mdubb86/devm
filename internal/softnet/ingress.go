@@ -46,6 +46,7 @@ func (ing *ingress) apply(ports []ExposePort) {
 	for hp, el := range ing.listeners {
 		if w, ok := want[hp]; !ok || uint16(w.GuestPort) != el.guestPort {
 			_ = el.ln.Close()
+			logf("ingress close host:%d (was -> guest:%d)", hp, el.guestPort)
 			delete(ing.listeners, hp)
 		}
 	}
@@ -78,6 +79,7 @@ func (ing *ingress) apply(ports []ExposePort) {
 		}
 		el := &exposeListener{ln: ln, guestPort: uint16(p.GuestPort)}
 		ing.listeners[hp] = el
+		logf("ingress open %s:%d -> guest:%d", bind, hp, p.GuestPort)
 		go ing.accept(el)
 	}
 }
@@ -125,6 +127,7 @@ func (ing *ingress) close() {
 	defer ing.mu.Unlock()
 	for hp, el := range ing.listeners {
 		_ = el.ln.Close()
+		logf("ingress close host:%d (shutdown)", hp)
 		delete(ing.listeners, hp)
 	}
 }

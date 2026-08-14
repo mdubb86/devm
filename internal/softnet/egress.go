@@ -22,6 +22,21 @@ import (
 const (
 	keepAliveIdle     = 60 * time.Second
 	keepAliveInterval = 15 * time.Second
+
+	// egressLogWindow bounds how often an identical rejection or
+	// dial failure re-logs. Chosen so a hot-loop guest under a
+	// LOCKED policy doesn't drown the log while a persistent
+	// misconfiguration still keeps a heartbeat once per minute.
+	egressLogWindow = 60 * time.Second
+)
+
+// egressRejectLog and egressDialFailLog dedupe two silent-failure
+// classes on the outbound path — policy rejects and dial failures.
+// Both live at package scope so they persist across every forwarder
+// invocation in a softnet process.
+var (
+	egressRejectLog   = newDedupLogger(egressLogWindow)
+	egressDialFailLog = newDedupLogger(egressLogWindow)
 )
 
 // egress holds the current egress policy and decides, per outbound TCP flow,
@@ -155,13 +170,23 @@ func (e *egress) udpTarget(dstIP string, dport uint16) (string, bool) {
 func attachEgress(n *network, e *egress) {
 	fwd := tcp.NewForwarder(n.stack, 0, 100, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
-		host, ok := e.target(id.LocalAddress.String(), id.LocalPort)
+		dstIP := id.LocalAddress.String()
+		host, ok := e.target(dstIP, id.LocalPort)
 		if !ok {
+			pol, _ := e.snapshot()
+			egressRejectLog.Logf(
+				fmt.Sprintf("%s:%d|%s", dstIP, id.LocalPort, pol),
+				"egress reject %s:%d (policy=%s)", dstIP, id.LocalPort, pol,
+			)
 			r.Complete(true) // RST
 			return
 		}
 		outbound, err := net.DialTimeout("tcp", host, 10*time.Second)
 		if err != nil {
+			egressDialFailLog.Logf(
+				host,
+				"egress dial %s -> %s failed: %v", dstIP, host, err,
+			)
 			r.Complete(true)
 			return
 		}

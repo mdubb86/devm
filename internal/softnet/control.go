@@ -23,19 +23,24 @@ func applyControl(e *egress, ing *ingress, m ControlMsg, shutdown func()) error 
 			return err
 		}
 		e.setPolicy(p, m.ForwardTargets)
+		logf("control setPolicy policy=%s forward_targets=%v", p, m.ForwardTargets != nil)
 		return nil
 	case "setExposeMap":
 		ing.apply(m.Expose)
+		logf("control setExposeMap ports=%d", len(m.Expose))
 		return nil
 	case "setTestHosts":
 		e.setDirectTestHosts(m.DirectTestHosts)
+		logf("control setTestHosts hosts=%d", len(m.DirectTestHosts))
 		return nil
 	case "shutdown":
+		logf("control shutdown")
 		if shutdown != nil {
 			shutdown()
 		}
 		return nil
 	default:
+		logf("control unknown op=%q ignored", m.Op)
 		return nil // unknown ops are ignored, not fatal
 	}
 }
