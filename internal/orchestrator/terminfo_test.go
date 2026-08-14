@@ -70,3 +70,44 @@ func TestCaptureHostTerminfo_KnownTermReturnsBase64Source(t *testing.T) {
 	assert.True(t, strings.Contains(src, "xterm-256color"),
 		"decoded blob must mention the terminal name: %q", src)
 }
+
+// TestRedactedExecArgs_ReplacesTerminfoBlob pins that the shell-attach
+// log line stays legible — the raw base64 payload from
+// captureHostTerminfo can exceed 4 KB and would otherwise drown the
+// terminal output on every `devm shell` / `devm exec`.
+func TestRedactedExecArgs_ReplacesTerminfoBlob(t *testing.T) {
+	args := []string{
+		"exec", "-i", "-t", "everstone",
+		"env", "TERM=xterm-256color", "COLORTERM=truecolor",
+		"DEVM_TERMINFO_BLOB=" + strings.Repeat("A", 4096),
+		"/opt/devm/scripts/with-devm-env", "sh", "-c", "ls",
+	}
+	got := redactedExecArgs(args)
+	if len(got) != len(args) {
+		t.Fatalf("length changed: got %d, want %d", len(got), len(args))
+	}
+	for i, a := range args {
+		if strings.HasPrefix(a, "DEVM_TERMINFO_BLOB=") {
+			if got[i] != "DEVM_TERMINFO_BLOB=<4096 bytes>" {
+				t.Fatalf("index %d: got %q, want DEVM_TERMINFO_BLOB=<4096 bytes>", i, got[i])
+			}
+			continue
+		}
+		if got[i] != a {
+			t.Fatalf("index %d: got %q, want %q (verbatim)", i, got[i], a)
+		}
+	}
+}
+
+func TestRedactedExecArgs_NoTerminfoBlob(t *testing.T) {
+	args := []string{"exec", "everstone", "sh", "-c", "true"}
+	got := redactedExecArgs(args)
+	if len(got) != len(args) {
+		t.Fatalf("length changed")
+	}
+	for i := range args {
+		if got[i] != args[i] {
+			t.Fatalf("index %d: got %q, want %q", i, got[i], args[i])
+		}
+	}
+}

@@ -535,7 +535,7 @@ func (d ShellDeps) attachShell(ctx context.Context, vmName, repoRoot, cmdName st
 	execArgs = append(execArgs, terminalEnvForward()...)
 	execArgs = append(execArgs, wrapper, cmdName)
 	execArgs = append(execArgs, cmdArgs...)
-	log.Printf("shell: attaching interactive shell: tart exec %s %v", vmName, execArgs)
+	log.Printf("shell: attaching interactive shell: tart exec %s %v", vmName, redactedExecArgs(execArgs))
 	cmd, err := d.UserSpawner.Start(d.Tart.Path, execArgs...)
 	if err != nil {
 		return -1, fmt.Errorf("spawn interactive shell: %w", err)

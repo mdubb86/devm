@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -45,6 +46,24 @@ func terminalEnvForward() []string {
 		return nil
 	}
 	return args
+}
+
+// redactedExecArgs returns a copy of args with the DEVM_TERMINFO_BLOB
+// value replaced by a length placeholder — the raw base64 payload can
+// easily exceed 4 KB and drowns the shell-attach log line otherwise.
+// Every other argv element is preserved verbatim so the log stays
+// grep-friendly for debugging.
+func redactedExecArgs(args []string) []string {
+	const prefix = "DEVM_TERMINFO_BLOB="
+	out := make([]string, len(args))
+	for i, a := range args {
+		if strings.HasPrefix(a, prefix) {
+			out[i] = prefix + "<" + strconv.Itoa(len(a)-len(prefix)) + " bytes>"
+			continue
+		}
+		out[i] = a
+	}
+	return out
 }
 
 // captureHostTerminfo runs `infocmp -x "$TERM"` on the host and returns
