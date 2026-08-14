@@ -109,7 +109,15 @@ func (ing *ingress) forward(hc net.Conn, guestPort uint16) {
 		_ = hc.Close()
 		return
 	}
-	splice(hc, gc) // reuse egress.go's splice
+	hostAddr := hc.RemoteAddr().String()
+	h2g, g2h, hErr, gErr := splice(hc, gc)
+	// Ingress is low-volume: log every splice end. Byte counts and
+	// per-direction errors are the only signal that a splice
+	// established but failed to forward data. Clean-close errors
+	// (io.EOF, net.ErrClosed) are filtered so a normal disconnect
+	// doesn't drown out the 0-byte signal.
+	logf("ingress %s -> guest:%d ended h2g=%d g2h=%d h2g_err=%v g2h_err=%v",
+		hostAddr, guestPort, h2g, g2h, realErr(hErr), realErr(gErr))
 }
 
 func (ing *ingress) close() {
