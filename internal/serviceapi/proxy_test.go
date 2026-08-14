@@ -2,10 +2,12 @@ package serviceapi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -548,4 +550,142 @@ func freeTCPPort(t *testing.T) int {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 	return port
+}
+
+// captureStdlibLog redirects the stdlib default logger (which the
+// daemon proxy uses via log.Printf) into a buffer for the duration
+// of a test. Returns the buffer.
+func captureStdlibLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
+
+// TestProxy_ServeHTTP_LogsEveryOutcome pins per-branch logging in
+// ServeHTTP. Silent RSTs and 502-no-route mysteries have wasted enough
+// diagnostic time already — every code path must leave a breadcrumb.
+func TestProxy_ServeHTTP_LogsEveryOutcome(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+
+	t.Run("no-local-addr", func(t *testing.T) {
+		routes := NewRoutes()
+		proxy := NewProxyServer(identity.Prod, routes, ca)
+		buf := captureStdlibLog(t)
+
+		req := httptest.NewRequest(http.MethodGet, "http://a.test/foo", nil)
+		req.Host = "a.test"
+		proxy.ServeHTTP(httptest.NewRecorder(), req)
+
+		got := buf.String()
+		assert.Contains(t, got, "no-local-addr")
+		assert.Contains(t, got, "host=a.test")
+		assert.Contains(t, got, "path=/foo")
+	})
+
+	t.Run("no-project", func(t *testing.T) {
+		routes := NewRoutes()
+		proxy := NewProxyServer(identity.Prod, routes, ca)
+		buf := captureStdlibLog(t)
+
+		req := httptest.NewRequest(http.MethodGet, "http://a.test/", nil)
+		req.Host = "a.test"
+		req = withLocalAddr(req, "127.42.0.98")
+		proxy.ServeHTTP(httptest.NewRecorder(), req)
+
+		got := buf.String()
+		assert.Contains(t, got, "no-project")
+		assert.Contains(t, got, "ip=127.42.0.98")
+		assert.Contains(t, got, "host=a.test")
+	})
+
+	t.Run("no-route", func(t *testing.T) {
+		routes := NewRoutes()
+		registerProject(t, "px", "127.42.0.97")
+		proxy := NewProxyServer(identity.Prod, routes, ca)
+		buf := captureStdlibLog(t)
+
+		req := httptest.NewRequest(http.MethodGet, "http://unknown.test/x", nil)
+		req.Host = "unknown.test"
+		req = withLocalAddr(req, "127.42.0.97")
+		proxy.ServeHTTP(httptest.NewRecorder(), req)
+
+		got := buf.String()
+		assert.Contains(t, got, "no-route")
+		assert.Contains(t, got, "project=px")
+		assert.Contains(t, got, "host=unknown.test")
+		assert.Contains(t, got, "path=/x")
+	})
+
+	t.Run("dispatched", func(t *testing.T) {
+		backPort, cleanup := startBackend(t, "ok")
+		defer cleanup()
+		routes := NewRoutes()
+		require.NoError(t, routes.Apply("py", []Route{
+			{Hostname: "a.test", BackendPort: backPort, Mode: ModeLocal, Project: "py"},
+		}))
+		registerProject(t, "py", "127.42.0.96")
+		proxy := NewProxyServer(identity.Prod, routes, ca)
+		buf := captureStdlibLog(t)
+
+		req := httptest.NewRequest(http.MethodGet, "http://a.test/hello", nil)
+		req.Host = "a.test"
+		req = withLocalAddr(req, "127.42.0.96")
+		proxy.ServeHTTP(httptest.NewRecorder(), req)
+
+		got := buf.String()
+		assert.Contains(t, got, "py")
+		assert.Contains(t, got, "a.test/hello")
+		assert.Contains(t, got, fmt.Sprintf(":%d", backPort))
+	})
+
+	t.Run("backend-down", func(t *testing.T) {
+		routes := NewRoutes()
+		require.NoError(t, routes.Apply("pz", []Route{
+			{Hostname: "down.test", BackendPort: 59991, Mode: ModeVM, Project: "pz"},
+		}))
+		registerProject(t, "pz", "127.42.0.95")
+		proxy := NewProxyServer(identity.Prod, routes, ca)
+		buf := captureStdlibLog(t)
+
+		req := httptest.NewRequest(http.MethodGet, "http://down.test/", nil)
+		req.Host = "down.test"
+		req = withLocalAddr(req, "127.42.0.95")
+		proxy.ServeHTTP(httptest.NewRecorder(), req)
+
+		got := buf.String()
+		assert.Contains(t, got, "backend-down")
+		assert.Contains(t, got, "host=down.test")
+		assert.Contains(t, got, ":59991")
+	})
+}
+
+// TestNewProxyErrorLog_WritesToConfiguredSink pins that the ErrorLog
+// wired onto http.Server routes its output to proxyErrorLogOut (which
+// production sets to os.Stderr), tagged with the scope string. This
+// is the seam that catches panic-serving traces and TLS handshake
+// errors — without it those messages go through the stdlib default
+// logger to stdout, buried in the info stream.
+func TestNewProxyErrorLog_WritesToConfiguredSink(t *testing.T) {
+	prev := proxyErrorLogOut
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	proxyErrorLogOut = w
+	t.Cleanup(func() {
+		proxyErrorLogOut = prev
+		_ = r.Close()
+		_ = w.Close()
+	})
+
+	lg := newProxyErrorLog("http everstone")
+	lg.Println("simulated panic-serving trace")
+	_ = w.Close()
+	got, _ := io.ReadAll(r)
+
+	assert.Contains(t, string(got), "serviceapi: proxy(http everstone):")
+	assert.Contains(t, string(got), "simulated panic-serving trace")
 }

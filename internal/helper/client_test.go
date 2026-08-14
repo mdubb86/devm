@@ -3,6 +3,7 @@ package helper
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -132,15 +133,23 @@ func TestBindTCPViaSock_ReturnsWorkingListener(t *testing.T) {
 		if err != nil {
 			return
 		}
+		defer c.Close()
 		_, _ = c.Write([]byte("ok"))
-		c.Close()
+		// CloseWrite (not Close) so the server-side Read below is
+		// guaranteed to see "ok" before the FIN. Plain Close raced
+		// occasionally on macOS: the peer's Read returned 0/EOF
+		// before the 2 bytes were delivered.
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.CloseWrite()
+		}
 	}()
 	c, err := ln.Accept()
 	require.NoError(t, err)
 	defer c.Close()
-	buf := make([]byte, 8)
-	n, _ := c.Read(buf)
-	assert.Equal(t, "ok", string(buf[:n]))
+	buf := make([]byte, 2)
+	_, err = io.ReadFull(c, buf)
+	require.NoError(t, err, "reading 'ok' from accepted conn")
+	assert.Equal(t, "ok", string(buf))
 }
 
 // TestBindTCPViaSock_NewlineDelimitedHelper_ReturnsWorkingListener proves
@@ -161,15 +170,23 @@ func TestBindTCPViaSock_NewlineDelimitedHelper_ReturnsWorkingListener(t *testing
 		if err != nil {
 			return
 		}
+		defer c.Close()
 		_, _ = c.Write([]byte("ok"))
-		c.Close()
+		// CloseWrite (not Close) so the server-side Read below is
+		// guaranteed to see "ok" before the FIN. Plain Close raced
+		// occasionally on macOS: the peer's Read returned 0/EOF
+		// before the 2 bytes were delivered.
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.CloseWrite()
+		}
 	}()
 	c, err := ln.Accept()
 	require.NoError(t, err)
 	defer c.Close()
-	buf := make([]byte, 8)
-	n, _ := c.Read(buf)
-	assert.Equal(t, "ok", string(buf[:n]))
+	buf := make([]byte, 2)
+	_, err = io.ReadFull(c, buf)
+	require.NoError(t, err, "reading 'ok' from accepted conn")
+	assert.Equal(t, "ok", string(buf))
 }
 
 func TestBindTCPViaSock_HelperErrorSurfaces(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -18,6 +19,21 @@ import (
 	"github.com/mdubb86/devm/internal/helper"
 	"github.com/mdubb86/devm/internal/identity"
 )
+
+// proxyErrorLogOut is where newProxyErrorLog writes; tests redirect
+// it to capture output. Defaults to os.Stderr so http.Server-produced
+// errors (panic-serving, TLS handshake failures) land in the daemon's
+// err.log alongside daemonlog.Errorf output.
+var proxyErrorLogOut = os.Stderr
+
+// newProxyErrorLog builds a *log.Logger wired into the daemon's
+// stderr sink, prefixed with the given scope so a stack of
+// per-project HTTP servers stays legible in the log ("serviceapi:
+// proxy(http everstone): …", "serviceapi: proxy(https everstone):
+// …", "serviceapi: proxy(lan): …").
+func newProxyErrorLog(scope string) *log.Logger {
+	return log.New(proxyErrorLogOut, fmt.Sprintf("serviceapi: proxy(%s): ", scope), log.LstdFlags)
+}
 
 // LANDispatchPort is the fixed port for the shared LAN dispatcher —
 // binds on 0.0.0.0 so a LAN device (or a reverse proxy like NPM on a
@@ -134,7 +150,17 @@ func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, proj
 		return fmt.Errorf("bind :443 on %s: %w", projectIP, err)
 	}
 
-	httpSrv := &http.Server{Handler: p, ConnContext: p.stampLocalAddr}
+	httpSrv := &http.Server{
+		Handler:     p,
+		ConnContext: p.stampLocalAddr,
+		// Route http.Server's own errors — panic-serving traces, TLS
+		// handshake failures, unexpected handler behavior — to stderr
+		// so they land in the err.log alongside daemonlog.Errorf. The
+		// default logger goes through stdlib log, which the daemon
+		// routes to stdout; a panic in one of these handlers would
+		// otherwise vanish into the info stream.
+		ErrorLog: newProxyErrorLog("http " + projectID),
+	}
 	httpsSrv := &http.Server{
 		Handler:     p,
 		ConnContext: p.stampLocalAddr,
@@ -142,6 +168,7 @@ func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, proj
 			GetCertificate: p.ca.GetCertificate,
 			NextProtos:     []string{"h2", "http/1.1"},
 		},
+		ErrorLog: newProxyErrorLog("https " + projectID),
 	}
 
 	// Serve-loop errors go to unconditional stderr, not debuglog: a
@@ -309,23 +336,32 @@ func localAddrFromCtx(ctx context.Context) (net.IP, bool) {
 // project). A Host that doesn't belong to the dest-IP's project is a
 // 502, never a fall-through to another project — this is the
 // isolation guarantee.
+//
+// Every branch logs its outcome. The daemon proxy is low-volume (only
+// Mac-side .test hostname access), so unconditional per-request logs
+// are the right tradeoff: silent RSTs and 502-no-route mysteries have
+// wasted enough diagnostic time already.
 func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	host := stripPort(r.Host)
 	ip, ok := localAddrFromCtx(r.Context())
 	if !ok {
+		log.Printf("serviceapi: proxy: 502 no-local-addr host=%s method=%s path=%s", host, r.Method, r.URL.Path)
 		write502NoRoute(w, r.Host)
 		return
 	}
 	project := projectByIP(ip.String())
 	if project == "" {
+		log.Printf("serviceapi: proxy: 502 no-project ip=%s host=%s method=%s path=%s", ip, host, r.Method, r.URL.Path)
 		write502NoProject(w, ip.String())
 		return
 	}
-	host := stripPort(r.Host)
 	route, ok := p.routes.Lookup(host, project)
 	if !ok {
+		log.Printf("serviceapi: proxy: 502 no-route project=%s host=%s method=%s path=%s", project, host, r.Method, r.URL.Path)
 		write502NoRoute(w, host)
 		return
 	}
+	log.Printf("serviceapi: proxy: %s %s %s%s -> %s:%d", project, r.Method, host, r.URL.Path, backendHostOr(route), route.BackendPort)
 	p.dispatch(w, r, route)
 }
 
@@ -335,16 +371,27 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // scope) can reuse it instead of duplicating the reverse-proxy setup.
 func (p *ProxyServer) dispatch(w http.ResponseWriter, r *http.Request, route Route) {
 	host := stripPort(r.Host)
-	backendHost := route.BackendHost
-	if backendHost == "" {
-		backendHost = "localhost"
-	}
+	backendHost := backendHostOr(route)
 	target, _ := url.Parse(fmt.Sprintf("http://%s:%d", backendHost, route.BackendPort))
 	rev := httputil.NewSingleHostReverseProxy(target)
 	rev.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		// Backend dial/copy failed. Log with the error string so a
+		// silent "site can't be reached" leaves a breadcrumb naming
+		// the backend it couldn't reach.
+		log.Printf("serviceapi: proxy: 502 backend-down host=%s backend=%s:%d: %v", host, backendHost, route.BackendPort, err)
 		write502BackendDown(w, host, backendHost, route.BackendPort, err)
 	}
 	rev.ServeHTTP(w, r)
+}
+
+// backendHostOr returns the route's backend host, defaulting to
+// "localhost" when unset. Shared between the log-line and the URL
+// build so both stay in sync.
+func backendHostOr(route Route) string {
+	if route.BackendHost == "" {
+		return "localhost"
+	}
+	return route.BackendHost
 }
 
 // StartLANListener binds 0.0.0.0:lanPort and starts serving the shared
@@ -361,7 +408,10 @@ func (p *ProxyServer) StartLANListener(ctx context.Context, lanPort int) error {
 	if err != nil {
 		return fmt.Errorf("bind LAN listener :%d: %w", lanPort, err)
 	}
-	srv := &http.Server{Handler: http.HandlerFunc(p.serveLAN)}
+	srv := &http.Server{
+		Handler:  http.HandlerFunc(p.serveLAN),
+		ErrorLog: newProxyErrorLog("lan"),
+	}
 	p.lanListener = ln
 	p.lanSrv = srv
 	go func() {
@@ -394,9 +444,11 @@ func (p *ProxyServer) serveLAN(w http.ResponseWriter, r *http.Request) {
 	host := stripPort(r.Host)
 	route, ok := p.routes.LANLookup(host)
 	if !ok {
+		log.Printf("serviceapi: proxy(lan): 502 no-route host=%s method=%s path=%s", host, r.Method, r.URL.Path)
 		write502NoRoute(w, host)
 		return
 	}
+	log.Printf("serviceapi: proxy(lan): %s %s%s -> %s:%d", r.Method, host, r.URL.Path, backendHostOr(route), route.BackendPort)
 	p.dispatch(w, r, route)
 }
 
