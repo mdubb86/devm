@@ -183,6 +183,12 @@ func TestBindTCPViaSock_HelperErrorSurfaces(t *testing.T) {
 			return
 		}
 		defer conn.Close()
+		// Read the client's request before writing the reply. The real
+		// helper reads first; a mock that writes+closes immediately can
+		// close the socket before the client's write lands, and the
+		// client then surfaces "broken pipe" on write rather than the
+		// intended error string in the reply.
+		_, _ = bufio.NewReader(conn).ReadBytes('\n')
 		_, _ = conn.Write([]byte(`{"ok":false,"error":"ip not in devm pool"}`))
 	}()
 	defer ln.Close()
