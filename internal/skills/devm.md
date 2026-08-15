@@ -32,6 +32,14 @@ devm install                                # requires sudo
 devm shell                                  # cold-starts the VM, drops you in
 ```
 
+## Shared CLAUDE.md — host/guest split
+
+A project's `CLAUDE.md` is shared through the virtiofs workspace mount, so guest-side agents (Claude sessions running inside the Tart VM) see the same host-perspective rules by default. Add this bullet to the project's `CLAUDE.md` when configuring devm, so a guest-side agent knows to consult the guest-specific reference first:
+
+- **In devm guest (`$IS_SANDBOX=1`), read `/opt/devm/GUEST.md` first — commands here that name `devm`/`tart`/`just`/`brew`/`launchctl` are Mac-only.**
+
+`/opt/devm/GUEST.md` is installed on every guest by devm's bundle installer (no user action needed). It covers the guest's view of the network, filesystem quirks (including the Node `fs.cpSync` gotcha on virtiofs volumes), lifecycle actions, and where to look when something breaks.
+
 ## Where to look next
 
 - `devm skills get schema` — every `devm.yaml` field, its type, and which change bucket it falls in.

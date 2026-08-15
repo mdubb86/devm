@@ -11,6 +11,9 @@ const (
 	GuestWrapper      = GuestRoot + "/scripts/with-devm-env"
 	GuestDispatcher   = GuestRoot + "/scripts/install-templates.sh"
 	GuestTemplatesDir = GuestRoot + "/templates"
+	// GuestDoc is the guest-perspective reference doc installed on every
+	// guest. Loaded by guest-side agents (see internal/skills/devm.md).
+	GuestDoc = GuestRoot + "/GUEST.md"
 
 	// GuestInstallScript is the shell command the daemon runs inside
 	// the guest with the tar bytes on stdin. Extracts the bundle to

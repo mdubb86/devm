@@ -57,6 +57,14 @@ func Build(in BuildInput) ([]byte, error) {
 	if err := writeEntry(tw, "profile.d/devm.sh", 0o644, []byte(scripts.EtcProfileDevm)); err != nil {
 		return nil, err
 	}
+	// GUEST.md lands at /opt/devm/GUEST.md (bundle extracts into
+	// GuestRoot). Guest-side agents load it for the guest's view of the
+	// world — network model, filesystem quirks, lifecycle, and where to
+	// look when something breaks. See internal/skills/devm.md for the
+	// CLAUDE.md pointer that steers guest agents to it.
+	if err := writeEntry(tw, "GUEST.md", 0o644, []byte(scripts.GuestDoc)); err != nil {
+		return nil, err
+	}
 
 	templates, err := render.RenderTemplates(in.Cfg, in.RepoRoot)
 	if err != nil {

@@ -13,3 +13,6 @@ var Install string
 
 //go:embed etc-profile-devm.sh
 var EtcProfileDevm string
+
+//go:embed GUEST.md
+var GuestDoc string
