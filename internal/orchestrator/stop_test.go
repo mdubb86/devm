@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
@@ -243,4 +245,170 @@ func TestRunStopPromptText(t *testing.T) {
 
 func TestDestructivenessIdentity(t *testing.T) {
 	assert.NotEqual(t, StopPreserve, StopDestroy)
+}
+
+// fakeTartBinDeleteAbsent's `delete` prints tart's stable
+// "does not exist" stderr and exits 1. RunStop treats this as
+// "already absent" and continues; the cleanup pass must still fire
+// so v0.10.0-format leftovers get reaped.
+func fakeTartBinDeleteAbsent(t *testing.T, dir string) *tart.Tart {
+	t.Helper()
+	bin := filepath.Join(dir, "tart-fake-absent")
+	script := `#!/bin/sh
+if [ "$1" = "delete" ]; then
+  echo 'the specified VM "'"$2"'" does not exist' >&2
+  exit 1
+fi
+exec true
+`
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+	return tr
+}
+
+// seedPerProjectArtifacts creates the three orchestration files that
+// reapPerProjectArtifacts is expected to remove. Returns the paths so
+// tests can assert on each one individually.
+func seedPerProjectArtifacts(t *testing.T, cfg identity.Config, name string) (tartDir, ironCfg, softSock string) {
+	t.Helper()
+	paths := perProjectArtifactPaths(cfg, name)
+	require.Len(t, paths, 3, "expected iron-proxy config, softnet sock, tart vm dir")
+	ironCfg = paths[0]
+	softSock = paths[1]
+	tartDir = paths[2]
+
+	// Iron-proxy config: a plain file that would linger after teardown.
+	require.NoError(t, os.MkdirAll(filepath.Dir(ironCfg), 0o700))
+	require.NoError(t, os.WriteFile(ironCfg, []byte("dns:\n  enabled: true\n"), 0o600))
+
+	// Softnet control sock: a plain file at the deterministic sock path.
+	require.NoError(t, os.MkdirAll(filepath.Dir(softSock), 0o700))
+	require.NoError(t, os.WriteFile(softSock, []byte(""), 0o600))
+
+	// Tart VM dir: mimics the v0.10.0-format residue tart can't parse.
+	require.NoError(t, os.MkdirAll(tartDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tartDir, "config.json"), []byte(`{"schema":"v0.10"}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tartDir, "disk.img"), []byte("fake disk"), 0o644))
+	return
+}
+
+// TestRunStopDestroy_ReapsStraysOnDeletePath pins that a happy-path
+// teardown (tart delete succeeds) still runs the cleanup pass. If
+// tart cleaned its own dir up we shouldn't disturb anything else, but
+// iron-proxy config and softnet sock always outlive tart and must
+// go regardless.
+func TestRunStopDestroy_ReapsStraysOnDeletePath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoRoot := t.TempDir()
+	ironCfg, softSock, tartDir := "", "", ""
+	tartDir, ironCfg, softSock = seedPerProjectArtifacts(t, identity.Prod, "proj-reap")
+
+	tr := fakeTartBin(t, repoRoot)
+	out := &bytes.Buffer{}
+	deps := StopDeps{
+		Ident:            identity.Prod,
+		Tart:             tr,
+		ServiceAPIClient: &fakeStopClient{},
+		In:               strings.NewReader("y\n"),
+		Out:              out,
+	}
+	rc, err := RunStop(context.Background(), deps, "proj-reap", StopDestroy, false)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	for _, p := range []string{ironCfg, softSock, tartDir} {
+		_, err := os.Stat(p)
+		assert.True(t, os.IsNotExist(err), "expected %s to be gone: %v", p, err)
+	}
+}
+
+// TestRunStopDestroy_ReapsStraysOnAbsentPath is the jirav regression:
+// tart delete says "does not exist" while ~/.tart/vms/<name>/ still
+// holds the disk (v0.10.0-format config that newer tart won't parse).
+// Teardown must reap the residue on both the "Deleted" and "already
+// absent" branches.
+func TestRunStopDestroy_ReapsStraysOnAbsentPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoRoot := t.TempDir()
+	tartDir, ironCfg, softSock := seedPerProjectArtifacts(t, identity.Prod, "proj-orphan")
+
+	tr := fakeTartBinDeleteAbsent(t, repoRoot)
+	out := &bytes.Buffer{}
+	deps := StopDeps{
+		Ident:            identity.Prod,
+		Tart:             tr,
+		ServiceAPIClient: &fakeStopClient{},
+		In:               strings.NewReader("y\n"),
+		Out:              out,
+	}
+	rc, err := RunStop(context.Background(), deps, "proj-orphan", StopDestroy, false)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	assert.Contains(t, out.String(), "already absent",
+		"tart delete's 'does not exist' must be reported as already-absent, not fail teardown")
+
+	for _, p := range []string{ironCfg, softSock, tartDir} {
+		_, err := os.Stat(p)
+		assert.True(t, os.IsNotExist(err),
+			"jirav-class residue at %s must be reaped even when tart said 'already absent': %v", p, err)
+	}
+}
+
+// TestRunStopDestroy_ReapsWhenArtifactsAbsent pins that a missing
+// artifact is not an error — no-op for the common case where tart
+// already cleaned itself up cleanly and no iron-proxy ever ran.
+func TestRunStopDestroy_ReapsWhenArtifactsAbsent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoRoot := t.TempDir()
+	// Deliberately DON'T seed artifacts.
+
+	tr := fakeTartBin(t, repoRoot)
+	out := &bytes.Buffer{}
+	deps := StopDeps{
+		Ident:            identity.Prod,
+		Tart:             tr,
+		ServiceAPIClient: &fakeStopClient{},
+		In:               strings.NewReader("y\n"),
+		Out:              out,
+	}
+	rc, err := RunStop(context.Background(), deps, "proj-clean", StopDestroy, false)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	assert.NotContains(t, out.String(), "warning:",
+		"missing artifacts must not produce warning noise")
+}
+
+// TestRunStopDestroy_PreservesUserData pins the boundary: teardown
+// cleanup MUST NOT touch volumes, secrets, or workspace files.
+// Volume preservation across teardown is a documented feature.
+func TestRunStopDestroy_PreservesUserData(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoRoot := t.TempDir()
+
+	// User-data paths that must survive teardown.
+	volDir := filepath.Join(identity.Prod.RuntimeDir(), "volumes", "proj-preserve", "claude")
+	secretDir := filepath.Join(identity.Prod.SecretsDir(), "proj-preserve")
+	require.NoError(t, os.MkdirAll(volDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(volDir, "keep-me.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.MkdirAll(secretDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(secretDir, "api_key"), []byte("s3cret"), 0o600))
+
+	tr := fakeTartBin(t, repoRoot)
+	out := &bytes.Buffer{}
+	deps := StopDeps{
+		Ident:            identity.Prod,
+		Tart:             tr,
+		ServiceAPIClient: &fakeStopClient{},
+		In:               strings.NewReader("y\n"),
+		Out:              out,
+	}
+	rc, err := RunStop(context.Background(), deps, "proj-preserve", StopDestroy, false)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	_, err = os.Stat(filepath.Join(volDir, "keep-me.json"))
+	assert.NoError(t, err, "volume data must survive teardown (documented feature)")
+	_, err = os.Stat(filepath.Join(secretDir, "api_key"))
+	assert.NoError(t, err, "secrets must survive teardown (documented feature)")
 }

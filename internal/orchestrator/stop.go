@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mdubb86/devm/internal/identity"
@@ -127,11 +128,62 @@ func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness,
 		if err := sshkeys.Remove(d.Ident, name); err != nil {
 			log.Printf("sshkeys.Remove(%s): %v", name, err)
 		}
+
+		// Reap orchestration strays that outlive tart's own delete.
+		// Runs on both the "Deleted" and "already absent" branches:
+		// belt-and-suspenders when tart cleaned up cleanly, actual fix
+		// when tart's registry and disk diverged (a v0.10.0-created
+		// VM whose config newer tart can't parse — `tart delete`
+		// reports "does not exist" while ~/.tart/vms/<name>/ still
+		// holds the disk).
+		reapPerProjectArtifacts(d.Out, d.Ident, name)
 	} else {
 		fmt.Fprintf(d.Out, "Stopped VM %s. Disk preserved.\n", name)
 	}
 
 	return 0, nil
+}
+
+// reapPerProjectArtifacts removes the three orchestration files
+// devm owns per-project that outlive tart's own delete: the tart VM
+// disk dir (in case tart's registry disagreed with its filesystem),
+// the iron-proxy config, and the softnet control socket. Each is
+// best-effort — a missing file is not an error; a permission-denied
+// (or anything else) is logged as a warning line on stdout but does
+// not fail the teardown, which has already accomplished the user's
+// main intent of getting the VM out of the way.
+//
+// Never touches user data: volumes, secrets, workspace files, and
+// log files stay in place. Volume preservation across teardown is a
+// documented feature; `devm purge` reaps abandoned volume dirs on a
+// separate cadence.
+func reapPerProjectArtifacts(out io.Writer, cfg identity.Config, name string) {
+	for _, art := range perProjectArtifactPaths(cfg, name) {
+		removeArtifact(out, art)
+	}
+}
+
+// perProjectArtifactPaths lists the on-disk paths reapPerProjectArtifacts
+// tries to remove. Kept factored so tests can pin the exact set without
+// re-implementing the path derivation.
+func perProjectArtifactPaths(cfg identity.Config, name string) []string {
+	paths := []string{
+		filepath.Join(cfg.RuntimeDir(), "iron-proxy", name+".yaml"),
+		serviceapi.SoftnetControlSock(cfg, name),
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".tart", "vms", name))
+	}
+	return paths
+}
+
+// removeArtifact removes one path. RemoveAll handles both files and
+// directories, and returns nil for a missing path — the common no-op
+// case when tart cleaned up itself.
+func removeArtifact(out io.Writer, path string) {
+	if err := os.RemoveAll(path); err != nil {
+		fmt.Fprintf(out, "warning: remove %s: %v\n", path, err)
+	}
 }
 
 // promptStopConfirm prints the action description and asks for [y/N].
