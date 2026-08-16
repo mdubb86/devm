@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -103,6 +104,24 @@ func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 	transformCfg := transform["config"].(map[string]any)
 	domains := transformCfg["domains"].([]any)
 	assert.Equal(t, []any{"github.com", "*.npmjs.org"}, domains)
+}
+
+func TestLoadIronProxyConfig_RoundTrip(t *testing.T) {
+	in := IronProxyConfig{
+		HTTPListen:  "127.42.0.2:40080",
+		HTTPSListen: "127.42.0.2:40443",
+		DNSListen:   "127.42.0.2:40053",
+		DNSProxyIP:  "192.168.127.1",
+		CACertPath:  "/tmp/ca/root.crt",
+		CAKeyPath:   "/tmp/ca/root.key",
+		AllowList:   []string{"deb.debian.org", "api.anthropic.com"},
+		Secrets:     []IronSecret{{Name: "tok", Value: "s3cret", Hosts: []string{"api.example.com"}}},
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, writeIronProxyConfig(path, in))
+	got, err := LoadIronProxyConfig(path)
+	require.NoError(t, err)
+	require.Equal(t, in, got)
 }
 
 func TestBuildIronProxyConfig_EmptyAllowList_OmitsTransforms(t *testing.T) {

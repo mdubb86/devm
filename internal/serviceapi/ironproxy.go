@@ -28,7 +28,11 @@ var ironProxySpawn = func(ctx context.Context, sup *supervisor.Supervisor, key s
 }
 
 // IronSecret is one host-scoped secret to substitute. Value is the real
-// secret (goes into iron-proxy's process env, never the on-disk YAML).
+// secret; it reaches iron-proxy through its process env, never through
+// the iron-proxy-facing dns:/proxy:/transforms: section of the on-disk
+// YAML (see IronProxyConfig.rawMap). writeIronProxyConfig does persist
+// Value elsewhere in that same file, under the devm_full_config key, so
+// LoadIronProxyConfig can rehydrate it — see that function for why.
 // Hosts are the upstreams the secret may be injected for; empty Hosts
 // means the secret is omitted entirely (never injected).
 type IronSecret struct {
@@ -66,6 +70,13 @@ func ironProxyListenAddr(port int) string {
 // YAML returns the YAML blob iron-proxy reads from -config <path>.
 // The schema matches e2e/helpers/iron_proxy.py's IronProxyConfig.to_yaml_dict().
 func (c IronProxyConfig) YAML() ([]byte, error) {
+	return yaml.Marshal(c.rawMap())
+}
+
+// rawMap builds the map[string]any that YAML() marshals. Split out so
+// writeIronProxyConfig can layer additional devm-internal keys onto the
+// same document without duplicating the iron-proxy-facing shape.
+func (c IronProxyConfig) rawMap() map[string]any {
 	raw := map[string]any{
 		"dns": map[string]any{
 			"enabled":  true,
@@ -153,7 +164,7 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 	if len(transforms) > 0 {
 		raw["transforms"] = transforms
 	}
-	return yaml.Marshal(raw)
+	return raw
 }
 
 // SpawnIronProxy starts iron-proxy via the supervisor with a freshly
@@ -185,12 +196,11 @@ func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Su
 	if err != nil {
 		return fmt.Errorf("locate setsid shim: %w", err)
 	}
-	blob, err := proxyCfg.YAML()
+	configPath, err := IronProxyConfigPath(cfg, projectID)
 	if err != nil {
-		return fmt.Errorf("encode config: %w", err)
+		return fmt.Errorf("config path: %w", err)
 	}
-	configPath, err := writeIronProxyConfig(cfg, projectID, blob)
-	if err != nil {
+	if err := writeIronProxyConfig(configPath, proxyCfg); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 
@@ -247,7 +257,8 @@ func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Su
 
 // EnvVars returns KEY=VALUE strings for iron-proxy's process env, one per
 // host-bound secret. Unbound secrets are skipped — their value never
-// reaches the proxy. Values never touch the on-disk config.
+// reaches the proxy. Values never appear in the iron-proxy-facing
+// dns:/proxy:/transforms: section of the on-disk config (see IronSecret).
 func (c IronProxyConfig) EnvVars() []string {
 	out := make([]string, 0, len(c.Secrets))
 	for _, s := range c.Secrets {
@@ -284,20 +295,56 @@ func IronProxyConfigPath(cfg identity.Config, projectID string) (string, error) 
 	return filepath.Join(runDir, "iron-proxy", fmt.Sprintf("%s.yaml", projectID)), nil
 }
 
-// writeIronProxyConfig persists the YAML blob to a stable per-project path
-// so the supervisor can re-spawn iron-proxy after a crash without re-running
-// the daemon's config-build path. Returns the absolute path. File is written
-// mode 0600 to limit exposure of the config contents.
-func writeIronProxyConfig(cfg identity.Config, projectID string, blob []byte) (string, error) {
-	path, err := IronProxyConfigPath(cfg, projectID)
+// writeIronProxyConfig persists cfg to path so the supervisor can
+// re-spawn iron-proxy after a crash without re-running the daemon's
+// config-build path. File is written mode 0600 to limit exposure of the
+// config contents.
+//
+// The document is the same iron-proxy-facing shape cfg.YAML() produces
+// (dns:/proxy:/tls:/transforms:), plus one additional top-level
+// "devm_full_config" key holding cfg verbatim — including Secrets[].Value,
+// which the iron-proxy-facing shape deliberately omits (see IronSecret).
+// iron-proxy itself ignores the extra key; LoadIronProxyConfig reads it
+// back to reconstruct cfg losslessly.
+func writeIronProxyConfig(path string, cfg IronProxyConfig) error {
+	raw := cfg.rawMap()
+	raw["devm_full_config"] = cfg
+	blob, err := yaml.Marshal(raw)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("encode iron-proxy config: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return "", fmt.Errorf("create iron-proxy config dir: %w", err)
+		return fmt.Errorf("create iron-proxy config dir: %w", err)
 	}
 	if err := os.WriteFile(path, blob, 0600); err != nil {
-		return "", fmt.Errorf("write iron-proxy config: %w", err)
+		return fmt.Errorf("write iron-proxy config: %w", err)
 	}
-	return path, nil
+	return nil
+}
+
+// LoadIronProxyConfig reads back the full config a project's iron-proxy
+// was spawned with — the inverse of writeIronProxyConfig. Full-fidelity
+// by construction: writeIronProxyConfig embeds cfg verbatim under the
+// devm_full_config key, so unmarshalling that key loses nothing,
+// including Secrets[].Value. Distinct from loadIronProxyInfoFromConfig
+// (ironproxy_discover.go), which reads only the ports out of the
+// iron-proxy-facing dns:/proxy: sections.
+//
+// The transient packages-apply window (apply_packages.go) depends on
+// this full fidelity: it respawns iron-proxy from this struct with a
+// widened AllowList, then restores the original — including the
+// original's secret env vars, which only survive the round trip because
+// Value is here.
+func LoadIronProxyConfig(path string) (IronProxyConfig, error) {
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		return IronProxyConfig{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var wrapper struct {
+		Devm IronProxyConfig `yaml:"devm_full_config"`
+	}
+	if err := yaml.Unmarshal(blob, &wrapper); err != nil {
+		return IronProxyConfig{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return wrapper.Devm, nil
 }
