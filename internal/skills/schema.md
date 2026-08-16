@@ -15,7 +15,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `network` | object | live | Iron-proxy outbound allowlist. |
 | `env` | map[string]EnvValue | live | Project-wide environment variables forwarded to all services. |
 | `services` | map[string]Service | varies | Named service definitions; bucket depends on which sub-field changes (see Services section). |
-| `packages` | []string | recreate | Apt packages installed at VM creation time. |
+| `packages` | []string | live | Apt packages. A running VM converges via a transient egress window; a stopped VM converges on the next boot's open window. |
 | `install` | []string | recreate | Shell commands run once at VM creation as the guest `devm` user. NOPASSWD sudo is available for privileged steps. |
 | `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as the guest `devm` user, with open network — before egress enforcement is applied. NOPASSWD sudo is available for privileged steps. |
 | `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
@@ -186,9 +186,9 @@ Mounts are baked at `tart run` time; changing them requires a full VM teardown a
 
 ## `packages`
 
-`[]string` — bucket: **recreate**.
+`[]string` — bucket: **live**.
 
-Apt package names installed via `apt-get install -y` during VM creation. Changing this list requires a full VM teardown and cold start.
+Apt package names installed via `apt-get install -y`. Adding or removing entries converges without a teardown: on a running VM, the daemon briefly respawns iron-proxy with the apt mirrors added to the allowlist (`deb.debian.org`, `security.debian.org`, plus `download.docker.com` when `docker: true`), runs the apt diff, then restores the original allowlist. On a stopped VM, the same diff converges during the next boot's open egress window. Reordering the list is a no-op — only membership changes trigger a converge.
 
 ```yaml
 packages:
@@ -283,11 +283,11 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 ## Bucket glossary
 
-**live** — Devm applies the change to the running VM without stopping it or ending active sessions. Currently wired for env, path, template, and mask changes. Network (`allow`) changes are classified live but the apply path isn't currently wired; they take effect on the next cold start.
+**live** — Devm applies the change to the running VM without stopping it or ending active sessions. Currently wired for env, path, template, mask, and package changes. Network (`allow`) changes are classified live but the apply path isn't currently wired; they take effect on the next cold start.
 
 **restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Sits here: `startup:` (edit takes effect on the applying restart) and `volumes:` (adds/removes require re-issuing `tart run` with new `--dir` args, since AVF doesn't hot-plug virtiofs shares).
 
-**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `packages`, `mounts`, `base_image`, and `project` identity fields.
+**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `mounts`, `base_image`, and `project` identity fields.
 
 ---
 

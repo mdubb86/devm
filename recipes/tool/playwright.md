@@ -35,7 +35,7 @@ network:
 Both hosts are required: `playwright install` tries the primary CDN, then the
 mirror — allow one and the other still 403s (`devm denials` shows them).
 `network.allow` is a live bucket (`devm reconcile`, no restart); `packages:`
-is recreate-bucket.
+is live too — devm apt-installs in a transient egress window.
 
 ## Project side: pin `@playwright/test`, install browser-only
 

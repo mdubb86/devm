@@ -52,8 +52,8 @@ Provisioning is the daemon's job, not the guest's own boot sequence. It walks th
 | Stage | When | What it does |
 |---|---|---|
 | _(preamble)_ | every run | Set up devm's in-guest state and the CA trust. |
-| `open` | first boot, or `startup:` non-empty, or any service declares `templates:` | Egress opens fully for this window so `apt-get`, `curl … \| bash`, and friends work. |
-| `packages` | first boot only, if `packages:` set | `apt-get update` + `apt-get install -y <packages>`. |
+| `open` | first boot, `startup:` non-empty, any service declares `templates:`, or a pending `packages:` diff | Egress opens fully for this window so `apt-get`, `curl … \| bash`, and friends work. |
+| `packages` | first boot (full list), or any later boot with a pending `packages:` diff | `apt-get update` + `apt-get install -y <packages>` on first boot; a targeted apt add/remove converge on a later boot. |
 | `install` | first boot only, if `install:` set | Run each `install:` command in order, open network. |
 | `docker` | first boot only, if `docker: true` | Install the Docker engine + runc shim; gate docker with everything else so it only starts after enforcement. |
 | `templates` | every boot, if any service declares `templates:` | Render every declared template file into its output path. |
@@ -64,7 +64,7 @@ Provisioning is the daemon's job, not the guest's own boot sequence. It walks th
 
 Any failing command aborts the whole provisioning run before `devm.target` starts, so a failure never grants access. A failure at the `templates` or `services` stage leaves the VM running for in-place debugging (the user's service/template definition is what's broken); any earlier-stage failure (`open` through `enforce`) tears the VM down — `devm shell` promises loud failure, never a half-created VM left behind.
 
-`packages`/`install`/`docker` are gated by the `/var/lib/devm/provisioned` marker and only run once, on first boot; they're skipped on a later cold start (`devm stop` + `devm shell` reuses the same disk, so installed tools and built artifacts are still there). `startup:` and `templates` run on every boot that opens the window. Restart-time workload otherwise comes back via systemd — enabled units auto-start when `devm.target` activates, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
+`install`/`docker` are gated by the `/var/lib/devm/provisioned` marker and only run once, on first boot; they're skipped on a later cold start (`devm stop` + `devm shell` reuses the same disk, so installed tools and built artifacts are still there). `packages` runs its full list on first boot like the others, but also converges a pending `packages:` diff on a later cold start (a running VM instead converges the same diff live, via `devm reconcile`'s transient egress window — see `packages` in the schema reference). `startup:` and `templates` run on every boot that opens the window. Restart-time workload otherwise comes back via systemd — enabled units auto-start when `devm.target` activates, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
 
 ---
 
@@ -85,6 +85,8 @@ Sandbox stopped; config changes will apply on next `devm shell`.
   - `template` add / change / remove — re-runs the installer dispatcher script inside the VM via `tart exec`.
   
   All other BucketLive kinds (ports, path, service unit fields) have no apply path in `ApplyLive` and take effect at the next cold start, even though reconcile reports them as applied.
+
+- **Package add / remove** is also BucketLive, but converges through a separate path, not `ApplyLive`: the daemon briefly respawns iron-proxy with the apt mirrors (`deb.debian.org`, `security.debian.org`, plus `download.docker.com` when `docker: true`) added to the allowlist, runs the apt diff inside the VM, then restores the original allowlist — no teardown, no restart.
 
 - **BucketRestartVM changes** (e.g. `startup:` edits) are surfaced as pending under a distinct "restart" section, separate from recreate. On approval `devm reconcile` stops the VM (preserving its disk — no teardown); the user then runs `devm shell` to cold-start and pick up the change. This is deterministic — the applying restart runs the freshly-composed provisioning script, so the change takes effect on that restart, not on some later boot.
 
@@ -157,6 +159,12 @@ Currently wired in `ApplyLive` (changes take effect immediately):
 | Template add / change / remove | Runs installer dispatcher script in the VM via `tart exec` |
 | Mask add / remove | Top-level `masks:` list differs. Path must be relative to the workspace (absolute paths, `~`, `$VAR`, and `../` traversal are rejected at `devm validate`). Guest-side `mount --bind` (add) or `umount` (remove) via `tart exec`; idempotent via mountpoint guard; umount EBUSY surfaces the spec's structured error. |
 
+Also live, but converged outside `ApplyLive` (the reconcile handler applies it first, via a dedicated packages applier, before calling `ApplyLive`):
+
+| Kind | Mechanism |
+|---|---|
+| `packages` add / remove | Top-level `packages:` list differs (set semantics — reordering is a no-op). Daemon briefly respawns iron-proxy with the apt mirrors (`deb.debian.org`, `security.debian.org`, plus `download.docker.com` when `docker: true`) added to the allowlist, runs the apt diff inside the VM, then restores the original allowlist. A stopped VM converges the same diff on its next boot's open window instead. |
+
 Classified BucketLive but no apply path in `ApplyLive` (take effect at next cold start):
 
 | Kind | Note |
@@ -173,7 +181,6 @@ The VM must be fully deleted and recreated. `devm reconcile` surfaces these as p
 | Kind | Trigger |
 |---|---|
 | `install` change | `install:` command list differs |
-| `packages` change | `packages:` list differs |
 | Mount add / remove | `mounts:` list differs |
 | Image change | `base_image:` field differs. Note: `BaseImage` is an empty struct with no fields; structural equality is always true, so `KindImageChange` cannot fire from a `devm.yaml` edit. |
 | Identity change | `project:` identity fields differ |

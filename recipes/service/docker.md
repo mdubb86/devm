@@ -86,8 +86,10 @@ The docker-shim rewrites `docker build …` to `docker buildx build --builder de
   *image* hosts, not the apt repo). One failing repo makes `apt-get update`
   exit non-zero, so anything that apt-installs at runtime breaks — e.g.
   `playwright install --with-deps`. Preferred fix: install apt packages via
-  `packages:` (provision-time, open egress) instead of at runtime. If you
-  genuinely need runtime apt, allowlist the repo host:
+  `packages:` (provision-time, open egress) instead of at runtime.
+  `packages:` edits themselves don't hit this — devm's own apply runs in a
+  transient window that includes `download.docker.com` when `docker: true`.
+  If you genuinely need runtime apt, allowlist the repo host:
 
   ```yaml
   network:
