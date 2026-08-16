@@ -38,6 +38,8 @@ type realPackagesApplier struct {
 	healthWait func(addr string) bool
 }
 
+var _ PackagesApplier = (*realPackagesApplier)(nil)
+
 // aptEgressHosts returns the egress hosts a transient apt-converge
 // window must allow beyond the project's steady-state allowlist:
 // Debian's package mirrors, plus Docker's apt repo host when the
@@ -53,18 +55,34 @@ func aptEgressHosts(dockerEnabled bool) []string {
 
 // ApplyPackages converges the guest's apt package set: it widens the
 // project's iron-proxy egress allowlist just long enough to reach the
-// apt mirrors, execs the converge script, then unconditionally
-// restores the original allowlist before returning.
+// apt mirrors, execs the converge script, then restores the original
+// allowlist before returning.
 //
 // snapCfg is the last-applied snapshot config — the state the running
 // iron-proxy currently reflects — used both to rebuild the exact
 // pre-change spawn config (ports, secrets, allowlist) and to decide
 // whether Docker's apt repo host belongs in the transient window.
 //
-// The restore runs even when apt fails, so a failed install never
-// leaves the egress window open — the caller sees an error either way,
-// but the VM converges back to its steady-state policy regardless of
-// which step failed.
+// Restore contract: once the widen respawn has actually invoked
+// spawnIronProxyFn (config written, process started — regardless of
+// whether that respawn call itself then failed on health-wait), a
+// restore to the original allowlist is ALWAYS attempted before
+// ApplyPackages returns — either the ordinary unconditional restore
+// after a successful widen+exec, or a best-effort restore (failure
+// logged, not returned) when the widen respawn itself failed after
+// spawning. The only case with no restore attempt at all is a widen
+// respawn that failed BEFORE spawnIronProxyFn was ever invoked (e.g.
+// stopping the still-running old process failed) — nothing changed, so
+// there is nothing to undo. A failure of the unconditional (post-exec)
+// restore IS surfaced as this call's error even when apt itself
+// succeeded; a failure of the best-effort (post-widen-failure) restore
+// is not — the widen error is what's returned in that case.
+//
+// Caller contract: ApplyPackages does not acquire the project lock
+// itself. The caller (the /vm/reconcile handler, via
+// locks.Lock(projectID)) must hold it for the entire call — concurrent
+// apply-iron-proxy or watchdog activity during the transient window
+// would race this call's stop/spawn pairs against its own.
 func (a *realPackagesApplier) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, adds, removes []string) error {
 	script := render.AptConvergeScript(adds, removes)
 	if script == "" {
@@ -76,22 +94,56 @@ func (a *realPackagesApplier) ApplyPackages(ctx context.Context, projectID strin
 		return fmt.Errorf("apply packages: rebuild iron-proxy config: %w", err)
 	}
 
-	extra := aptEgressHosts(snapCfg.Docker)
+	// Widen by the apt hosts not already covered by the steady-state
+	// allowlist — mirrors docker.EffectiveAllowlist's own
+	// already-present dedup so a project that (for whatever reason)
+	// already allows deb.debian.org doesn't get a duplicated entry.
+	extraHosts := aptEgressHosts(snapCfg.Docker)
+	existing := make(map[string]struct{}, len(orig.AllowList))
+	for _, h := range orig.AllowList {
+		existing[h] = struct{}{}
+	}
+	added := make([]string, 0, len(extraHosts))
+	for _, h := range extraHosts {
+		if _, ok := existing[h]; ok {
+			continue
+		}
+		added = append(added, h)
+	}
 	widened := orig
-	widened.AllowList = append(append([]string{}, orig.AllowList...), extra...)
+	widened.AllowList = append(append([]string{}, orig.AllowList...), added...)
 
-	if err := a.respawn(ctx, projectID, widened); err != nil {
+	spawned, err := a.respawn(ctx, projectID, widened)
+	if err != nil {
+		if spawned {
+			// spawnIronProxyFn already succeeded before this respawn
+			// call failed (a health-wait timeout) — the widened config
+			// may already be live on disk and running, and the
+			// supervisor's own crash-restart would otherwise keep
+			// respawning it widened. Try once, best-effort, to restore
+			// the original egress; a failure here is logged but does
+			// NOT change the error surfaced to the caller — the widen
+			// failure is still the actionable one. Runs detached from
+			// ctx (bounded by the health-wait budget) so a cancelled
+			// request can't cut this restore attempt short too.
+			if _, rerr := a.respawn(context.WithoutCancel(ctx), projectID, orig); rerr != nil {
+				daemonlog.Errorf("packages: best-effort restore after widen failure for %s: %v", projectID, rerr)
+			}
+		}
 		return fmt.Errorf("apply packages: widen egress: %w", err)
 	}
-	log.Printf("packages: transient apt-egress window open for %s (+%v)", projectID, extra)
+	log.Printf("packages: transient apt-egress window open for %s (+%v)", projectID, added)
 
 	exitCode, stderr := a.exec()(ctx, projectID, script)
 
-	// Restore UNCONDITIONALLY, before judging apt's result. A restore
-	// failure fails the whole apply even when apt succeeded — the
-	// window must not silently stay open (next apply-iron-proxy or
-	// daemon restart converges it regardless).
-	if rerr := a.respawn(ctx, projectID, orig); rerr != nil {
+	// Restore UNCONDITIONALLY, before judging apt's result. Detached
+	// from ctx (bounded by the health-wait budget) so a cancelled
+	// request can't degrade the restore's own stop/spawn pair. A
+	// restore failure here fails the whole apply even when apt
+	// succeeded — the window must not silently stay open (a later
+	// apply-iron-proxy or daemon restart converges it regardless, but
+	// not immediately).
+	if _, rerr := a.respawn(context.WithoutCancel(ctx), projectID, orig); rerr != nil {
 		daemonlog.Errorf("packages: restore egress for %s: %v", projectID, rerr)
 		return fmt.Errorf("apply packages: restore egress: %w", rerr)
 	}
@@ -108,20 +160,28 @@ func (a *realPackagesApplier) ApplyPackages(ctx context.Context, projectID strin
 // from proxyCfg, then waits for it to bind before returning. Mirrors
 // apply_iron_proxy.go's stop -> spawnIronProxyFn -> health-wait
 // sequence and ironproxy_watchdog.go's respawnIronProxyFromState.
-func (a *realPackagesApplier) respawn(ctx context.Context, projectID string, proxyCfg IronProxyConfig) error {
+//
+// spawned reports whether spawnIronProxyFn was actually invoked and
+// itself returned no error — true even when the subsequent health-wait
+// times out, since by then the given config is already written to disk
+// and the process already started. Callers use this to decide whether a
+// failed respawn needs a compensating restore attempt: spawned=false
+// means nothing changed and there's nothing to undo (e.g. the stop of
+// the prior process failed before any spawn was attempted).
+func (a *realPackagesApplier) respawn(ctx context.Context, projectID string, proxyCfg IronProxyConfig) (spawned bool, err error) {
 	key := supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}
 	if st := a.sup.Status(key); st.Present && st.Running {
 		if err := a.sup.Stop(ctx, key); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
-			return fmt.Errorf("stop iron-proxy: %w", err)
+			return false, fmt.Errorf("stop iron-proxy: %w", err)
 		}
 	}
 	if err := spawnIronProxyFn(ctx, a.cfg, a.sup, projectID, proxyCfg, a.denials); err != nil {
-		return fmt.Errorf("spawn iron-proxy: %w", err)
+		return false, fmt.Errorf("spawn iron-proxy: %w", err)
 	}
 	if !a.wait()(proxyCfg.HTTPSListen) {
-		return fmt.Errorf("iron-proxy spawned but did not bind %s within 2s", proxyCfg.HTTPSListen)
+		return true, fmt.Errorf("iron-proxy spawned but did not bind %s within 2s", proxyCfg.HTTPSListen)
 	}
-	return nil
+	return true, nil
 }
 
 // exec returns execScript, defaulting to the tart-backed implementation.

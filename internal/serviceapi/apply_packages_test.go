@@ -13,44 +13,68 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// errStubSpawnFailed is the sentinel error stubSpawnFailingOnCall
-// returns from the failing call.
+// errStubSpawnFailed is the sentinel error the spawn stub returns from
+// its designated failing call.
 var errStubSpawnFailed = errors.New("stub spawn failure")
 
-// spawnedPackagesCfg records one call to the stubbed spawnIronProxyFn.
-type spawnedPackagesCfg struct {
-	allowList []string
+// packagesEvent is one recorded step of a realPackagesApplier call,
+// captured in call order across both spawnIronProxyFn and execScript so
+// ordering can be asserted directly (widen spawn -> exec -> restore
+// spawn) instead of inferred from two independently-ordered slices.
+//
+// kind is "spawn:widened" for the first spawn call ApplyPackages ever
+// makes, "spawn:orig" for every subsequent one (ApplyPackages only ever
+// respawns the widened config once, up front — every later respawn,
+// whether the post-exec restore or a best-effort restore after a widen
+// failure, is always back to orig), or "exec" for the guest script run.
+type packagesEvent struct {
+	kind      string
+	allowList []string // populated for "spawn:*" events
+	script    string   // populated for "exec" events
 }
 
-// stubSpawnRecorder installs a spawnIronProxyFn stub that records the
-// AllowList of every config it's asked to spawn, and always succeeds.
-// Returns the recorded calls slice (grows in place) and a restore func.
-func stubSpawnRecorder(t *testing.T) *[]spawnedPackagesCfg {
+// newPackagesEventRecorder installs a spawnIronProxyFn stub and returns
+// an execScript stub, both appending to one shared, call-ordered event
+// log. spawnFailOn, if > 0, is the 1-indexed spawn call that returns
+// errStubSpawnFailed instead of succeeding (the call is still recorded
+// — spawnIronProxyFn was invoked either way). execResult supplies the
+// (exitCode, stderr) the exec stub returns.
+func newPackagesEventRecorder(t *testing.T, projectID string, spawnFailOn int, execResult func() (int, string)) (*[]packagesEvent, func(ctx context.Context, vmName, script string) (int, string)) {
 	t.Helper()
-	calls := []spawnedPackagesCfg{}
-	orig := spawnIronProxyFn
-	t.Cleanup(func() { spawnIronProxyFn = orig })
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *Denials) error {
-		calls = append(calls, spawnedPackagesCfg{allowList: append([]string{}, proxyCfg.AllowList...)})
-		return nil
-	}
-	return &calls
-}
+	events := []packagesEvent{}
+	origSpawn := spawnIronProxyFn
+	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 
-// stubSpawnFailingOnCall installs a spawnIronProxyFn stub that fails on
-// the given 1-indexed call number and succeeds otherwise.
-func stubSpawnFailingOnCall(t *testing.T, failOn int) {
-	t.Helper()
-	orig := spawnIronProxyFn
-	t.Cleanup(func() { spawnIronProxyFn = orig })
 	n := 0
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, _ IronProxyConfig, _ *Denials) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *Denials) error {
 		n++
-		if n == failOn {
+		kind := "spawn:orig"
+		if n == 1 {
+			kind = "spawn:widened"
+		}
+		events = append(events, packagesEvent{kind: kind, allowList: append([]string{}, proxyCfg.AllowList...)})
+		if n == spawnFailOn {
 			return errStubSpawnFailed
 		}
 		return nil
 	}
+
+	execScript := func(_ context.Context, vmName, script string) (int, string) {
+		assert.Equal(t, projectID, vmName)
+		events = append(events, packagesEvent{kind: "exec", script: script})
+		return execResult()
+	}
+	return &events, execScript
+}
+
+// eventKinds extracts the kind of each event, for a compact ordering
+// assertion.
+func eventKinds(events []packagesEvent) []string {
+	kinds := make([]string, len(events))
+	for i, e := range events {
+		kinds[i] = e.kind
+	}
+	return kinds
 }
 
 // seedPackagesFixture writes a real iron-proxy ports config on disk
@@ -90,67 +114,105 @@ func TestApplyPackages_WidensThenRestores(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	const projectID = "pkg-widen"
 
-	var execedScript string
-	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"},
-		func(_ context.Context, vmName, script string) (int, string) {
-			assert.Equal(t, projectID, vmName)
-			execedScript = script
-			return 0, ""
-		})
-	calls := stubSpawnRecorder(t)
+	events, execScript := newPackagesEventRecorder(t, projectID, 0, func() (int, string) { return 0, "" })
+	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"}, execScript)
 
 	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"sl"}, nil)
 	require.NoError(t, err)
 
-	require.Len(t, *calls, 2, "expected widen spawn + restore spawn")
-	assert.Equal(t, []string{"api.anthropic.com", "deb.debian.org", "security.debian.org"}, (*calls)[0].allowList)
-	assert.Equal(t, []string{"api.anthropic.com"}, (*calls)[1].allowList)
-	assert.Contains(t, execedScript, "install -y 'sl'")
+	require.Len(t, *events, 3, "expected widen spawn, exec, restore spawn in order")
+	assert.Equal(t, []string{"spawn:widened", "exec", "spawn:orig"}, eventKinds(*events))
+	assert.Equal(t, []string{"api.anthropic.com", "deb.debian.org", "security.debian.org"}, (*events)[0].allowList)
+	assert.Contains(t, (*events)[1].script, "install -y 'sl'")
+	assert.Equal(t, []string{"api.anthropic.com"}, (*events)[2].allowList)
 }
 
 func TestApplyPackages_AptFailureStillRestores(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	const projectID = "pkg-apt-fail"
 
-	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"},
-		func(_ context.Context, _ string, _ string) (int, string) {
-			return 100, "E: Unable to locate package nope"
-		})
-	calls := stubSpawnRecorder(t)
+	events, execScript := newPackagesEventRecorder(t, projectID, 0, func() (int, string) {
+		return 100, "E: Unable to locate package nope"
+	})
+	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"}, execScript)
 
 	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"nope"}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "E: Unable to locate package nope")
 
-	require.Len(t, *calls, 2, "restore spawn must still happen despite apt failure")
-	assert.Equal(t, []string{"api.anthropic.com"}, (*calls)[1].allowList)
+	assert.Equal(t, []string{"spawn:widened", "exec", "spawn:orig"}, eventKinds(*events), "restore spawn must still happen despite apt failure")
+	assert.Equal(t, []string{"api.anthropic.com"}, (*events)[2].allowList)
 }
 
 func TestApplyPackages_DockerAddsAptRepoHost(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	const projectID = "pkg-docker"
 
-	a, snapCfg := seedPackagesFixture(t, projectID, []string{"example.com"},
-		func(_ context.Context, _ string, _ string) (int, string) { return 0, "" })
+	events, execScript := newPackagesEventRecorder(t, projectID, 0, func() (int, string) { return 0, "" })
+	a, snapCfg := seedPackagesFixture(t, projectID, []string{"example.com"}, execScript)
 	snapCfg.Docker = true
-	calls := stubSpawnRecorder(t)
 
 	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"sl"}, nil)
 	require.NoError(t, err)
 
-	require.Len(t, *calls, 2)
-	assert.Contains(t, (*calls)[0].allowList, "download.docker.com")
+	assert.Equal(t, []string{"spawn:widened", "exec", "spawn:orig"}, eventKinds(*events))
+	assert.Contains(t, (*events)[0].allowList, "download.docker.com")
 }
 
 func TestApplyPackages_RestoreFailureSurfaces(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	const projectID = "pkg-restore-fail"
 
-	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"},
-		func(_ context.Context, _ string, _ string) (int, string) { return 0, "" })
-	stubSpawnFailingOnCall(t, 2)
+	// spawn call #2 is the post-exec restore — fail it so a successful
+	// apt run still surfaces an error because the restore itself failed.
+	events, execScript := newPackagesEventRecorder(t, projectID, 2, func() (int, string) { return 0, "" })
+	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"}, execScript)
 
 	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"sl"}, nil)
 	require.Error(t, err)
 	assert.Contains(t, strings.ToLower(err.Error()), "restore")
+
+	assert.Equal(t, []string{"spawn:widened", "exec", "spawn:orig"}, eventKinds(*events), "restore spawn must still be attempted even though it fails")
+}
+
+// TestApplyPackages_WidenHealthTimeout_BestEffortRestores covers the
+// case where the widen respawn's spawnIronProxyFn call succeeds (the
+// widened config is live) but the subsequent health-wait times out —
+// ApplyPackages must still attempt a best-effort restore before
+// returning the widen error, since the widened allowlist is already on
+// disk and running. No exec call must happen (apt never runs), and a
+// failure of THIS restore attempt is only logged, not returned.
+func TestApplyPackages_WidenHealthTimeout_BestEffortRestores(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const projectID = "pkg-widen-timeout"
+
+	events, execScript := newPackagesEventRecorder(t, projectID, 0, func() (int, string) { return 0, "" })
+	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"}, execScript)
+
+	healthCalls := 0
+	a.healthWait = func(string) bool {
+		healthCalls++
+		return healthCalls != 1 // first (widen) health-wait fails; restore's succeeds
+	}
+
+	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"sl"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "widen egress")
+
+	// Widen spawn happened, then a best-effort restore spawn — but no
+	// exec, since ApplyPackages returns before ever running the script.
+	assert.Equal(t, []string{"spawn:widened", "spawn:orig"}, eventKinds(*events))
+	assert.Equal(t, []string{"api.anthropic.com"}, (*events)[1].allowList, "best-effort restore must target the original allowlist")
+}
+
+func TestApplyPackages_EmptyNoop(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const projectID = "pkg-noop"
+
+	events, execScript := newPackagesEventRecorder(t, projectID, 0, func() (int, string) { return 0, "" })
+	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"}, execScript)
+
+	err := a.ApplyPackages(context.Background(), projectID, snapCfg, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, *events, "no adds/removes must not spawn iron-proxy or exec anything")
 }
