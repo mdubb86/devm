@@ -56,11 +56,20 @@ type ProvisionScriptInput struct {
 	// DEVM_INSTALL_STEP_TIMEOUT_S (see provision.Provisioner), so it is only
 	// ever zero in tests that don't care about the override.
 	StepTimeoutSeconds int
+
+	// PackageAdds / PackageRemoves converge apt drift on a NON-first
+	// boot: `packages:` was edited while the VM was stopped, so the
+	// diff vs the last-applied snapshot runs here, in the boot's open
+	// window, instead of the runtime transient-egress path. First boot
+	// ignores them — it installs the full Packages list.
+	PackageAdds    []string
+	PackageRemoves []string
 }
 
 // hasOpenWork reports whether the open egress window is needed this boot.
 func (in ProvisionScriptInput) hasOpenWork() bool {
-	return in.FirstBoot || len(in.Startup) > 0 || in.InstallTemplates
+	return in.FirstBoot || len(in.Startup) > 0 || in.InstallTemplates ||
+		len(in.PackageAdds)+len(in.PackageRemoves) > 0
 }
 
 // defaultStepTimeoutSeconds is the fallback for ProvisionScriptInput.
@@ -152,6 +161,10 @@ func RenderProvisionOpenScript(in ProvisionScriptInput) []byte {
 				p("sudo mkdir -p /etc/systemd/system/devm.target.wants")
 				p("sudo ln -sf /lib/systemd/system/docker.service /etc/systemd/system/devm.target.wants/docker.service")
 			}
+		}
+		if !in.FirstBoot && len(in.PackageAdds)+len(in.PackageRemoves) > 0 {
+			p("echo ::devm:stage:packages::")
+			p("%s", AptConvergeScript(in.PackageAdds, in.PackageRemoves))
 		}
 		if in.InstallTemplates {
 			p("echo ::devm:stage:templates::")

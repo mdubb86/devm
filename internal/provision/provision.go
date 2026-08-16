@@ -65,6 +65,13 @@ type Provisioner struct {
 	// "unset" and RenderProvisionOpenScript falls back to its own default.
 	StepTimeoutSeconds int
 
+	// PackageAdds / PackageRemoves are the apt package drift to converge
+	// on a non-first boot (render.ProvisionScriptInput.PackageAdds/
+	// PackageRemoves) — pass-through from the caller, which computes them
+	// against the last-applied state snapshot.
+	PackageAdds    []string
+	PackageRemoves []string
+
 	// firstBoot is true when /var/lib/devm/provisioned is absent — i.e.
 	// this VM has not completed provisioning. Set at the top of Run.
 	firstBoot bool
@@ -189,6 +196,8 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		Services:           p.serviceUnits(),
 		Masks:              p.maskMounts(),
 		StepTimeoutSeconds: p.StepTimeoutSeconds,
+		PackageAdds:        p.PackageAdds,
+		PackageRemoves:     p.PackageRemoves,
 	}
 }
 

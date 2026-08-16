@@ -489,11 +489,13 @@ func computeStartupChanges(old, new schema.Config) []Change {
 	return []Change{{Kind: KindStartupChange}}
 }
 
-// computePackagesChange diffs the `packages:` list as a set — apt
-// packages are unordered, so reordering the list is a no-op. Emits one
-// KindPackageAdd/KindPackageRemove per package present in exactly one
-// of old/new, adds sorted before removes.
-func computePackagesChange(old, new schema.Config) []Change {
+// PackageDrift diffs the `packages:` list between old and new config as a
+// set — apt packages are unordered, so reordering the list is a no-op.
+// Returns the package names present only in new (adds) and only in old
+// (removes), both sorted for determinism. Shared by computePackagesChange
+// (reconcile's live-VM diff) and the cold-start provisioner, which converges
+// the same drift in a stopped VM's next boot open window instead.
+func PackageDrift(old, new schema.Config) (adds, removes []string) {
 	oldSet := make(map[string]struct{}, len(old.Packages))
 	for _, p := range old.Packages {
 		oldSet[p] = struct{}{}
@@ -502,7 +504,6 @@ func computePackagesChange(old, new schema.Config) []Change {
 	for _, p := range new.Packages {
 		newSet[p] = struct{}{}
 	}
-	var adds, removes []string
 	for p := range newSet {
 		if _, ok := oldSet[p]; !ok {
 			adds = append(adds, p)
@@ -515,6 +516,15 @@ func computePackagesChange(old, new schema.Config) []Change {
 	}
 	sort.Strings(adds)
 	sort.Strings(removes)
+	return adds, removes
+}
+
+// computePackagesChange diffs the `packages:` list as a set — apt
+// packages are unordered, so reordering the list is a no-op. Emits one
+// KindPackageAdd/KindPackageRemove per package present in exactly one
+// of old/new, adds sorted before removes.
+func computePackagesChange(old, new schema.Config) []Change {
+	adds, removes := PackageDrift(old, new)
 	var out []Change
 	for _, p := range adds {
 		out = append(out, Change{Kind: KindPackageAdd, Key: p, New: p})

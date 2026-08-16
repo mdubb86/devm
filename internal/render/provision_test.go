@@ -144,6 +144,45 @@ func TestRenderProvisionOpen_InstallScriptRef_Expands(t *testing.T) {
 	assert.Contains(t, s, "::devm:progress:install:3:3::")
 }
 
+func TestProvisionOpen_PackageConvergeOnNonFirstBoot(t *testing.T) {
+	in := ProvisionScriptInput{
+		FirstBoot:      false,
+		PackageAdds:    []string{"sl"},
+		PackageRemoves: []string{"chromium"},
+	}
+	s := string(RenderProvisionOpenScript(in))
+	// Converge renders inside the open window:
+	require.Contains(t, s, "::devm:stage:packages::")
+	require.Contains(t, s, "install -y 'sl'")
+	require.Contains(t, s, "remove -y 'chromium'")
+}
+
+func TestProvisionOpen_ConvergeAloneOpensWindow(t *testing.T) {
+	// FirstBoot=false, no startup, no templates, only PackageAdds:
+	// hasOpenWork must be true (the converge needs the open window).
+	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
+		FirstBoot:   false,
+		PackageAdds: []string{"sl"},
+	}))
+	assert.Contains(t, s, "::devm:stage:open::")
+	assert.Contains(t, s, "::devm:stage:packages::")
+	assert.Contains(t, s, "install -y 'sl'")
+}
+
+func TestProvisionOpen_FirstBootIgnoresConvergeFields(t *testing.T) {
+	// FirstBoot=true renders the full Packages list exactly as today;
+	// PackageAdds/Removes are not rendered (first boot has no drift).
+	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
+		FirstBoot:      true,
+		Packages:       []string{"jq"},
+		PackageAdds:    []string{"sl"},
+		PackageRemoves: []string{"chromium"},
+	}))
+	assert.Contains(t, s, "sudo apt-get install -y 'jq'")
+	assert.NotContains(t, s, "install -y 'sl'")
+	assert.NotContains(t, s, "remove -y 'chromium'")
+}
+
 func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 	in := ProvisionScriptInput{
 		FirstBoot: true,

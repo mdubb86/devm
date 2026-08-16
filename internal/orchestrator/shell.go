@@ -15,6 +15,7 @@ import (
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/provision"
+	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -289,6 +290,16 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		return d.teardownOnFail(ctx, cfg, vmName, err, "fetch enforcement config")
 	}
 
+	// Package drift for an EXISTING VM (non-first boot): diff the
+	// last-applied snapshot's packages against the current config so the
+	// boot script converges apt in its open window. Snapshot missing
+	// (fresh VM) → first boot installs the full list anyway, and the
+	// renderer ignores these fields on FirstBoot regardless.
+	var pkgAdds, pkgRemoves []string
+	if snap, err := serviceapi.ReadStateSnapshot(d.Ident, cfg.Project.Name); err == nil && snap != nil {
+		pkgAdds, pkgRemoves = reconcile.PackageDrift(snap.Cfg, cfg)
+	}
+
 	prov := &provision.Provisioner{
 		Tart:                d.Tart,
 		VMName:              vmName,
@@ -299,6 +310,8 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		SSHHostPub:          hostPub,
 		WorkspaceVMPath:     repoRoot,
 		StepTimeoutSeconds:  installStepTimeoutSeconds(),
+		PackageAdds:         pkgAdds,
+		PackageRemoves:      pkgRemoves,
 	}
 	log.Printf("shell: provisioning %s", vmName)
 	reporter.Step("provisioning", false)
