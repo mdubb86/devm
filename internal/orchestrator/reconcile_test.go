@@ -211,6 +211,34 @@ func TestRunReconcile_TeardownRequired_ClassifiesFlavorAndSessions(t *testing.T)
 	defer cleanup()
 
 	oldCfg := reconcileMinimalCfg()
+	oldCfg.Install = []string{"true"}
+	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := reconcileMinimalCfg()
+	newCfg.Install = []string{"true", "false"}
+
+	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	assert.Equal(t, "needs_approval", res.NextAction)
+	require.Len(t, res.RecreateRequired, 1)
+	assert.Equal(t, reconcile.KindInstallChange, res.RecreateRequired[0].Kind)
+	assert.Equal(t, reconcile.FlavorTeardownVM, res.Flavor)
+	assert.Empty(t, res.Applied)
+	// probeSessions is best-effort against a fake tart that always
+	// exits non-zero — nil, not an error.
+	assert.Nil(t, res.Sessions)
+}
+
+// TestRunReconcile_PackagesChange_ClassifiesLive proves the `packages:`
+// live-bucket flip: a package add/remove now surfaces in Applied (not
+// RecreateRequired) and the flavor stays live-only, since apt is
+// idempotent and can converge on a running VM without a teardown.
+func TestRunReconcile_PackagesChange_ClassifiesLive(t *testing.T) {
+	cleanup := startReconcileDaemon(t)
+	defer cleanup()
+
+	oldCfg := reconcileMinimalCfg()
 	oldCfg.Packages = []string{"jq"}
 	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: oldCfg}))
 
@@ -220,14 +248,12 @@ func TestRunReconcile_TeardownRequired_ClassifiesFlavorAndSessions(t *testing.T)
 	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
-	assert.Equal(t, "needs_approval", res.NextAction)
-	require.Len(t, res.RecreateRequired, 1)
-	assert.Equal(t, reconcile.KindPackagesChange, res.RecreateRequired[0].Kind)
-	assert.Equal(t, reconcile.FlavorTeardownVM, res.Flavor)
-	assert.Empty(t, res.Applied)
-	// probeSessions is best-effort against a fake tart that always
-	// exits non-zero — nil, not an error.
-	assert.Nil(t, res.Sessions)
+	assert.Equal(t, "applied", res.NextAction)
+	require.Len(t, res.Applied, 1)
+	assert.Equal(t, reconcile.KindPackageAdd, res.Applied[0].Kind)
+	assert.Equal(t, "yq", res.Applied[0].Key)
+	assert.Equal(t, reconcile.FlavorLiveOnly, res.Flavor)
+	assert.Empty(t, res.RecreateRequired)
 }
 
 func TestRunReconcile_DaemonUnreachable_ReturnsError(t *testing.T) {

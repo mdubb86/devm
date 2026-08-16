@@ -39,9 +39,8 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
 
-	// Teardown+shell: install, packages, mounts, image, identity
+	// Teardown+shell: install, mounts, image, identity
 	assert.Equal(t, BucketTeardownVM, KindInstallChange.Bucket())
-	assert.Equal(t, BucketTeardownVM, KindPackagesChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindImageChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindIdentityChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindMountAddRemove.Bucket())
@@ -59,6 +58,27 @@ func TestChangeKindBuckets(t *testing.T) {
 	// Live: path (same fan-out as env via /etc/environment)
 	assert.Equal(t, BucketLive, KindPathChange.Bucket())
 
+}
+
+func TestComputePackagesChange_SetDiff(t *testing.T) {
+	old := schema.Config{Packages: []string{"jq", "chromium"}}
+	new := schema.Config{Packages: []string{"jq", "sl"}}
+	got := computePackagesChange(old, new)
+	require.Equal(t, []Change{
+		{Kind: KindPackageAdd, Key: "sl", New: "sl"},
+		{Kind: KindPackageRemove, Key: "chromium", Old: "chromium"},
+	}, got)
+}
+
+func TestComputePackagesChange_ReorderIsNoop(t *testing.T) {
+	old := schema.Config{Packages: []string{"a", "b"}}
+	new := schema.Config{Packages: []string{"b", "a"}}
+	require.Empty(t, computePackagesChange(old, new))
+}
+
+func TestPackageKindsAreLive(t *testing.T) {
+	require.Equal(t, BucketLive, KindPackageAdd.Bucket())
+	require.Equal(t, BucketLive, KindPackageRemove.Bucket())
 }
 
 func TestDiff_StartupChange_IsBucketRestartVM(t *testing.T) {
@@ -343,19 +363,19 @@ func TestComputeDirectChanges(t *testing.T) {
 	require.Len(t, computeDirectChanges(next, gone), 1)
 }
 
-func TestDiff_PackagesChange_IsBucketTeardownVM(t *testing.T) {
+func TestDiff_PackagesChange_IsBucketLive(t *testing.T) {
 	old := schema.Config{Packages: []string{"jq"}}
 	new := schema.Config{Packages: []string{"jq", "ripgrep"}}
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {
-		if c.Kind == KindPackagesChange {
+		if c.Kind == KindPackageAdd {
 			found = true
-			assert.Equal(t, BucketTeardownVM, c.Bucket())
+			assert.Equal(t, BucketLive, c.Bucket())
 		}
 	}
-	assert.True(t, found, "expected KindPackagesChange")
+	assert.True(t, found, "expected KindPackageAdd")
 }
 
 func TestDiff_MaskChange_IsBucketLive(t *testing.T) {
@@ -510,7 +530,6 @@ func TestRecreateFlavorPickMax(t *testing.T) {
 	// Any teardown wins
 	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
 		{Kind: KindPortAdd},
-		{Kind: KindPackagesChange},
 		{Kind: KindInstallChange},
 	}))
 	// Single teardown change alone also picks teardown.

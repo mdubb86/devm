@@ -56,7 +56,13 @@ const (
 	KindEnvRemove
 	KindEnvChange
 	KindInstallChange
-	KindPackagesChange
+	// KindPackageAdd / KindPackageRemove fire once per apt package
+	// present in exactly one of old/new `packages:` (set semantics —
+	// reordering the list is a no-op). Key = package name. BucketLive:
+	// a running VM converges via apt in a transient egress window; a
+	// stopped VM converges in the next boot's open window.
+	KindPackageAdd
+	KindPackageRemove
 	// KindMaskChange fires when the top-level `masks:` list differs
 	// between old and new config. Emitted once per changed path; Key
 	// = mask path (workspace-relative), Old = path in old config (or
@@ -125,8 +131,10 @@ var changeBucket = map[ChangeKind]Bucket{
 	// install: commands happen on first boot; can't re-run cleanly on a
 	// half-installed VM.
 	KindInstallChange: BucketTeardownVM,
-	// apt packages similarly — recreate is cleaner than diffing.
-	KindPackagesChange: BucketTeardownVM,
+	// apt is idempotent and declarative — unlike install: scripts,
+	// package changes converge on a live VM.
+	KindPackageAdd:    BucketLive,
+	KindPackageRemove: BucketLive,
 	// virtio-fs mounts are set at tart run time; requires full recreate.
 	KindMountAddRemove: BucketTeardownVM,
 	// mount --bind masks are applied inside the running guest — no VM
@@ -481,11 +489,40 @@ func computeStartupChanges(old, new schema.Config) []Change {
 	return []Change{{Kind: KindStartupChange}}
 }
 
+// computePackagesChange diffs the `packages:` list as a set — apt
+// packages are unordered, so reordering the list is a no-op. Emits one
+// KindPackageAdd/KindPackageRemove per package present in exactly one
+// of old/new, adds sorted before removes.
 func computePackagesChange(old, new schema.Config) []Change {
-	if stringSliceEqual(old.Packages, new.Packages) {
-		return nil
+	oldSet := make(map[string]struct{}, len(old.Packages))
+	for _, p := range old.Packages {
+		oldSet[p] = struct{}{}
 	}
-	return []Change{{Kind: KindPackagesChange}}
+	newSet := make(map[string]struct{}, len(new.Packages))
+	for _, p := range new.Packages {
+		newSet[p] = struct{}{}
+	}
+	var adds, removes []string
+	for p := range newSet {
+		if _, ok := oldSet[p]; !ok {
+			adds = append(adds, p)
+		}
+	}
+	for p := range oldSet {
+		if _, ok := newSet[p]; !ok {
+			removes = append(removes, p)
+		}
+	}
+	sort.Strings(adds)
+	sort.Strings(removes)
+	var out []Change
+	for _, p := range adds {
+		out = append(out, Change{Kind: KindPackageAdd, Key: p, New: p})
+	}
+	for _, p := range removes {
+		out = append(out, Change{Kind: KindPackageRemove, Key: p, Old: p})
+	}
+	return out
 }
 
 func computeMountAddRemove(old, new schema.Config) []Change {

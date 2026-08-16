@@ -50,14 +50,14 @@ func TestFormatReconcileText_RecreatePending(t *testing.T) {
 	out := FormatReconcileText(ReconcileResult{
 		Applied: []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
 		RecreateRequired: []reconcile.Change{
-			{Kind: reconcile.KindPackagesChange},
+			{Kind: reconcile.KindInstallChange},
 		},
 		Flavor:   reconcile.FlavorTeardownVM,
 		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 	})
 	assert.Contains(t, out, "Applied 1 live change")
 	assert.Contains(t, out, "1 change(s) require recreate")
-	assert.Contains(t, out, "~ packages")
+	assert.Contains(t, out, "~ install commands")
 	assert.Contains(t, out, "Teardown + recreate sandbox?")
 	assert.Contains(t, out, "Will hang up 1 active session")
 	assert.NotContains(t, out, "require restart")
@@ -85,21 +85,21 @@ func TestFormatReconcileText_RestartAndRecreatePending_BothSectionsRender(t *tes
 	out := FormatReconcileText(ReconcileResult{
 		RecreateRequired: []reconcile.Change{
 			{Kind: reconcile.KindStartupChange},
-			{Kind: reconcile.KindPackagesChange},
+			{Kind: reconcile.KindInstallChange},
 		},
 		Flavor: reconcile.FlavorTeardownVM,
 	})
 	assert.Contains(t, out, "1 change(s) require restart")
 	assert.Contains(t, out, "~ startup commands")
 	assert.Contains(t, out, "1 change(s) require recreate")
-	assert.Contains(t, out, "~ packages")
+	assert.Contains(t, out, "~ install commands")
 }
 
 func TestFormatReconcileText_RestartAndRecreatePending_HangupPrintedOnce(t *testing.T) {
 	out := FormatReconcileText(ReconcileResult{
 		RecreateRequired: []reconcile.Change{
 			{Kind: reconcile.KindStartupChange},
-			{Kind: reconcile.KindPackagesChange},
+			{Kind: reconcile.KindInstallChange},
 		},
 		Flavor:   reconcile.FlavorTeardownVM,
 		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
@@ -222,7 +222,7 @@ func TestFormatReconcileJSON(t *testing.T) {
 	js := FormatReconcileJSON(ReconcileResult{
 		Rendered: true, SandboxState: "running",
 		Applied:          []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
-		RecreateRequired: []reconcile.Change{{Kind: reconcile.KindPackagesChange}},
+		RecreateRequired: []reconcile.Change{{Kind: reconcile.KindInstallChange}},
 		Flavor:           reconcile.FlavorTeardownVM,
 		Sessions:         []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 		NextAction:       "needs_approval",
@@ -234,7 +234,7 @@ func TestFormatReconcileJSON(t *testing.T) {
 	rec := parsed["recreate_required"].(map[string]any)
 	changes := rec["changes"].([]any)
 	require.Len(t, changes, 1)
-	assert.Equal(t, "packages_change", changes[0].(map[string]any)["kind"])
+	assert.Equal(t, "install_change", changes[0].(map[string]any)["kind"])
 	assert.NotContains(t, parsed, "restart_required")
 }
 
@@ -243,7 +243,7 @@ func TestFormatReconcileJSON_RestartRequired_SeparateFromRecreate(t *testing.T) 
 		Rendered: true, SandboxState: "running",
 		RecreateRequired: []reconcile.Change{
 			{Kind: reconcile.KindStartupChange},
-			{Kind: reconcile.KindPackagesChange},
+			{Kind: reconcile.KindInstallChange},
 		},
 		Flavor:     reconcile.FlavorTeardownVM,
 		NextAction: "needs_approval",
@@ -259,7 +259,7 @@ func TestFormatReconcileJSON_RestartRequired_SeparateFromRecreate(t *testing.T) 
 	recreate := parsed["recreate_required"].(map[string]any)
 	recreateChanges := recreate["changes"].([]any)
 	require.Len(t, recreateChanges, 1)
-	assert.Equal(t, "packages_change", recreateChanges[0].(map[string]any)["kind"])
+	assert.Equal(t, "install_change", recreateChanges[0].(map[string]any)["kind"])
 }
 
 func TestFormatStatusText_ProxyUnreachable(t *testing.T) {
@@ -592,6 +592,16 @@ func TestFormatChange_Startup(t *testing.T) {
 	change := reconcile.Change{Kind: reconcile.KindStartupChange}
 	assert.Equal(t, "~ startup commands", formatChange(change))
 	assert.Equal(t, "startup_change", changeKindJSON(reconcile.KindStartupChange))
+}
+
+func TestFormatChange_Package(t *testing.T) {
+	added := reconcile.Change{Kind: reconcile.KindPackageAdd, Key: "ripgrep", New: "ripgrep"}
+	assert.Equal(t, "+ package ripgrep", formatChange(added))
+	assert.Equal(t, "package_add", changeKindJSON(reconcile.KindPackageAdd))
+
+	removed := reconcile.Change{Kind: reconcile.KindPackageRemove, Key: "jq", Old: "jq"}
+	assert.Equal(t, "- package jq", formatChange(removed))
+	assert.Equal(t, "package_remove", changeKindJSON(reconcile.KindPackageRemove))
 }
 
 func TestFormatStatusText_UnboundRebindShowsRecovery(t *testing.T) {

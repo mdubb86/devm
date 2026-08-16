@@ -156,12 +156,12 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	oldCfg := schema.Config{
-		Project:  schema.Project{Name: "p"},
-		Packages: []string{"jq"},
+		Project: schema.Project{Name: "p"},
+		Install: []string{"true"},
 	}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 	newCfg := oldCfg
-	newCfg.Packages = []string{"jq", "yq"} // bucket=recreate
+	newCfg.Install = []string{"true", "false"} // bucket=recreate
 
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
 	body, _ := json.Marshal(req)
@@ -178,11 +178,11 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	assert.NotEmpty(t, resp.TeardownRequired)
 
-	// Snapshot NOT overwritten with new_cfg (packages change is pending).
+	// Snapshot NOT overwritten with new_cfg (install change is pending).
 	got, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, []string{"jq"}, got.Cfg.Packages, "packages change must not be persisted until user acts")
+	assert.Equal(t, []string{"true"}, got.Cfg.Install, "install change must not be persisted until user acts")
 }
 
 func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
@@ -230,10 +230,10 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 
 func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *testing.T) {
 	// One reconcile carries BOTH a per-service live change (service
-	// exec) AND a top-level teardown-required change (packages).
+	// exec) AND a top-level teardown-required change (install).
 	// Applying the live exec must not silently absorb the pending
-	// packages change into the snapshot. Next reconcile must still
-	// surface the packages change as teardown_required.
+	// install change into the snapshot. Next reconcile must still
+	// surface the install change as teardown_required.
 	t.Setenv("HOME", t.TempDir())
 	createTestCA(t)
 	oldCfg := schema.Config{
@@ -243,7 +243,7 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 				Exec: []string{"/bin/true"},
 			},
 		},
-		Packages: []string{"jq"},
+		Install: []string{"true"},
 	}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 
@@ -251,7 +251,7 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 	newSvc := oldCfg.Services["web"]
 	newSvc.Exec = []string{"/bin/echo", "hi"} // live change
 	newCfg.Services = map[string]schema.Service{"web": newSvc}
-	newCfg.Packages = []string{"jq", "ripgrep"} // teardown-required addition
+	newCfg.Install = []string{"true", "false"} // teardown-required addition
 
 	registerFakeSoftnet(t, "p")
 
@@ -271,9 +271,9 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 	require.NotNil(t, got)
 	// Live change (exec) landed in snapshot.
 	assert.Equal(t, []string{"/bin/echo", "hi"}, got.Cfg.Services["web"].Exec)
-	// Pending packages change did NOT land — old packages preserved so
-	// next reconcile still surfaces the packages add as teardown_required.
-	assert.Equal(t, []string{"jq"}, got.Cfg.Packages)
+	// Pending install change did NOT land — old install preserved so
+	// next reconcile still surfaces the install add as teardown_required.
+	assert.Equal(t, []string{"true"}, got.Cfg.Install)
 }
 
 func TestMergeLiveApplied_Direct(t *testing.T) {
@@ -301,6 +301,26 @@ func TestMergeLiveApplied_Direct(t *testing.T) {
 	require.NotNil(t, merged.Services)
 	assert.True(t, merged.Services["web"].Direct,
 		"direct flip must land in the merged snapshot, or a subsequent withdraw diffs stale-false vs false and never rebuilds svc_ingress")
+}
+
+func TestMergeLiveApplied_Packages(t *testing.T) {
+	// Package add/remove is now BucketLive; mergeLiveApplied must
+	// wholesale-replace Packages from new_cfg so the applied set lands
+	// in the snapshot (all package changes are applied together in one
+	// reconcile, so per-key merging isn't needed).
+	old := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Packages: []string{"jq"},
+	}
+	newCfg := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Packages: []string{"jq", "yq"},
+	}
+	applied := []reconcile.Change{{Kind: reconcile.KindPackageAdd, Key: "yq", New: "yq"}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	assert.Equal(t, []string{"jq", "yq"}, merged.Packages)
 }
 
 func TestMergeLiveApplied_Direct_ServiceRemoved(t *testing.T) {

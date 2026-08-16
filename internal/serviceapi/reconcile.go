@@ -382,6 +382,8 @@ func mergeLiveApplied(old, new schema.Config, applied []reconcile.Change) schema
 				svc.BindIP = newSvc.BindIP
 				merged.Services[c.Service] = svc
 			}
+		case reconcile.KindPackageAdd, reconcile.KindPackageRemove:
+			merged.Packages = new.Packages
 		}
 	}
 	return merged
