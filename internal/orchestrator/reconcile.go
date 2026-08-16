@@ -44,7 +44,7 @@ func RunReconcile(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoR
 	// Resolve secrets CLI-side for the hash map AND for the possible
 	// downstream ApplyIronProxy call. resolveSecretBindings walks env
 	// values for !secret refs; if none, bindings is nil.
-	bindings, err := resolveSecretBindings(cfg, secret.NewFileBackend(ident.SecretsDir()))
+	bindings, err := serviceapi.ResolveSecretBindings(cfg, secret.NewFileBackend(ident.SecretsDir()))
 	if err != nil {
 		return -1, ReconcileResult{}, fmt.Errorf("resolve secrets: %w", err)
 	}

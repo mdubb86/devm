@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
@@ -27,11 +26,9 @@ const ironProxyWatchdogInterval = 30 * time.Second
 // respawn failures are logged and swallowed so one flaky project doesn't
 // starve the others.
 //
-// Only projects that don't inject secrets are auto-respawned. Secret
-// values never persist to disk — they arrive on the CLI reconcile path
-// — so the daemon can't rebuild a secret-injecting iron-proxy config on
-// its own. Those projects get a log line pointing at `devm reconcile`
-// and are otherwise left for the user to heal.
+// Secret-injecting projects are respawned like any other: secrets live
+// in the on-disk file store (secret.NewFileBackend), which the daemon
+// reads directly via rebuildIronProxyConfig — no CLI round-trip needed.
 func runIronProxyWatchdog(
 	ctx context.Context,
 	cfg identity.Config,
@@ -53,10 +50,9 @@ func runIronProxyWatchdog(
 }
 
 // healIronProxies is one watchdog pass — iterate ironProxyState's
-// known-running projects, and for any where iron-proxy is MISSING and
-// no secret injection is required, respawn from persisted state.
-// Extracted from runIronProxyWatchdog so tests can drive one tick
-// without a goroutine + ticker.
+// known-running projects and respawn from persisted state any whose
+// iron-proxy is MISSING. Extracted from runIronProxyWatchdog so tests
+// can drive one tick without a goroutine + ticker.
 //
 // ironProxyState.keys() only contains running projects (vm.go's
 // /vm/stop calls ironProxyState.del after Stop), so a stopped VM
@@ -74,10 +70,6 @@ func healIronProxies(
 		if health.Status != ProxyMissing {
 			continue
 		}
-		if health.NeedsSecrets {
-			log.Printf("serviceapi: iron-proxy watchdog: %s missing but injects secrets; skipping (run 'devm reconcile' to heal)", projectID)
-			continue
-		}
 		if err := respawnIronProxyFromState(ctx, cfg, sup, locks, denials, projectID); err != nil {
 			daemonlog.Errorf("serviceapi: iron-proxy watchdog: respawn %s: %v", projectID, err)
 			continue
@@ -87,10 +79,10 @@ func healIronProxies(
 }
 
 // respawnIronProxyFromState rebuilds an IronProxyConfig from the
-// project's persisted state (on-disk YAML for ports, state snapshot for
-// the network allowlist, runtime dir for CA paths) and spawns a fresh
-// iron-proxy. Empty Secrets by design — callers gate on cfgHasSecretRefs
-// before invoking this.
+// project's persisted state via rebuildIronProxyConfig and spawns a
+// fresh iron-proxy — secret-injecting projects included, since
+// rebuildIronProxyConfig resolves secret values straight from the
+// on-disk file store.
 //
 // Acquires the project's reconcile lock so a watchdog respawn can't
 // race a concurrent /vm/start or /vm/reconcile (both take the same
@@ -113,17 +105,6 @@ func respawnIronProxyFromState(
 		return nil
 	}
 
-	cfgPath, err := IronProxyConfigPath(cfg, projectID)
-	if err != nil {
-		return fmt.Errorf("resolve config path: %w", err)
-	}
-	diskInfo, err := loadIronProxyInfoFromConfig(cfgPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("no prior iron-proxy config on disk (project may be stopping)")
-		}
-		return fmt.Errorf("load prior config: %w", err)
-	}
 	snap, err := ReadStateSnapshot(cfg, projectID)
 	if err != nil {
 		return fmt.Errorf("read snapshot: %w", err)
@@ -131,19 +112,13 @@ func respawnIronProxyFromState(
 	if snap == nil {
 		return errors.New("no state snapshot")
 	}
-	caDir, err := EnsureRuntimeDir(cfg)
-	if err != nil {
-		return fmt.Errorf("runtime dir: %w", err)
-	}
 
-	proxyCfg := IronProxyConfig{
-		HTTPListen:  ironProxyListenAddr(diskInfo.HTTPPort),
-		HTTPSListen: ironProxyListenAddr(diskInfo.HTTPSPort),
-		DNSListen:   ironProxyListenAddr(diskInfo.DNSPort),
-		DNSProxyIP:  interceptedEgressIP,
-		CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
-		CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
-		AllowList:   snap.Cfg.Network.Domains(),
+	proxyCfg, err := rebuildIronProxyConfig(cfg, projectID, snap.Cfg)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("no prior iron-proxy config on disk (project may be stopping)")
+		}
+		return fmt.Errorf("rebuild config: %w", err)
 	}
 	return spawnIronProxyFn(ctx, cfg, sup, projectID, proxyCfg, denials)
 }

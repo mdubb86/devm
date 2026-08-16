@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,50 +25,6 @@ import (
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
-
-// resolveSecretBindings gathers every `!secret <name>` ref from cfg
-// (top-level env + per-service env, deduped), looks each up in the
-// on-disk secret store under "<project>/<name>", and attaches the
-// injection-host scope declared in network.allow. Returns the
-// bindings the daemon hands to iron-proxy. A secret with no
-// network.allow host scope is still resolved and sent with empty
-// Hosts (iron-proxy omits it — never injects).
-func resolveSecretBindings(cfg schema.Config, backend secret.Backend) ([]serviceapi.SecretBinding, error) {
-	seen := map[string]bool{}
-	var names []string
-	collect := func(env map[string]schema.EnvValue) {
-		for _, v := range env {
-			if v.Secret != nil && !seen[v.Secret.Name] {
-				seen[v.Secret.Name] = true
-				names = append(names, v.Secret.Name)
-			}
-		}
-	}
-	collect(cfg.Env)
-	for _, svc := range cfg.Services {
-		collect(svc.Env)
-	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		return nil, nil
-	}
-
-	hosts := cfg.Network.SecretHosts()
-	var bindings []serviceapi.SecretBinding
-	var missing []string
-	for _, n := range names {
-		v, err := backend.Get(cfg.Project.Name + "/" + n)
-		if err != nil {
-			missing = append(missing, n)
-			continue
-		}
-		bindings = append(bindings, serviceapi.SecretBinding{Name: n, Value: v, Hosts: hosts[n]})
-	}
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("missing secrets: %v (set with `devm secret set <name>`)", missing)
-	}
-	return bindings, nil
-}
 
 // ShellDeps wires the orchestrator's collaborators. Production callers
 // build one via DefaultShellDeps; tests substitute fakes.
@@ -179,7 +134,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 			// Adopt in place — provision it without StartVM/waitVMReady,
 			// since it's already up and exec-ready.
 			reporter.Step("adopting running vm", false)
-			bindings, err := resolveSecretBindings(cfg, secret.NewFileBackend(d.Ident.SecretsDir()))
+			bindings, err := serviceapi.ResolveSecretBindings(cfg, secret.NewFileBackend(d.Ident.SecretsDir()))
 			if err != nil {
 				return -1, fmt.Errorf("resolve secrets: %w", err)
 			}
@@ -214,7 +169,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// hosts when docker: true.
 	allowList := docker.EffectiveAllowlist(cfg)
 
-	bindings, err := resolveSecretBindings(cfg, secret.NewFileBackend(d.Ident.SecretsDir()))
+	bindings, err := serviceapi.ResolveSecretBindings(cfg, secret.NewFileBackend(d.Ident.SecretsDir()))
 	if err != nil {
 		return -1, fmt.Errorf("resolve secrets: %w", err)
 	}

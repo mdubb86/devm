@@ -8,6 +8,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,25 +74,36 @@ func TestHealIronProxies_RespawnsMissing(t *testing.T) {
 	assert.Contains(t, lastCfg.HTTPSListen, "127.0.0.1:", "listen addr preserves loopback")
 }
 
-// TestHealIronProxies_SkipsSecretsProjects verifies projects that inject
-// secrets are logged + skipped, not silently respawned with empty
-// secrets (which would produce a broken proxy that lets guest-side
-// tokens leak in cleartext through the transform pipeline).
-func TestHealIronProxies_SkipsSecretsProjects(t *testing.T) {
+// TestHealIronProxies_RespawnsSecretsProjects verifies projects that
+// inject secrets are respawned like any other missing iron-proxy — the
+// daemon resolves secret values directly from the file-backed secret
+// store (secret.NewFileBackend), so it no longer needs the CLI to
+// supply them.
+func TestHealIronProxies_RespawnsSecretsProjects(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sup := supervisor.New(t.TempDir())
 	locks := NewProjectLocks()
 
 	const projectID = "watchdog-needs-secrets"
-	// Schema with a secret-injecting env value — cfgHasSecretRefs
-	// returns true, so computeProxyHealth marks NeedsSecrets.
+	// Schema with a secret-injecting env value, host-scoped via
+	// network.allow so the respawned config's Secrets carries Hosts too.
 	seededCfg := schema.Config{
 		Project: schema.Project{Name: projectID},
 		Env: map[string]schema.EnvValue{
 			"API_KEY": {Secret: &schema.SecretRef{Name: "api_key"}},
 		},
+		Network: schema.Network{
+			Allow: []schema.AllowEntry{
+				{Host: "api.example.com", Secrets: []string{"api_key"}},
+			},
+		},
 	}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg, ProjectIP: "127.42.0.6"}))
+
+	// Seed the secret value in the file-backed store the daemon reads
+	// directly — no CLI round-trip.
+	be := secret.NewFileBackend(identity.Prod.SecretsDir())
+	require.NoError(t, be.Set(projectID+"/api_key", "resolved-value"))
 
 	httpPort, err := pickPort()
 	require.NoError(t, err)
@@ -109,23 +121,26 @@ func TestHealIronProxies_SkipsSecretsProjects(t *testing.T) {
 	})
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
-	// Assert the health signal that gates the watchdog decision, not
-	// just that it's Missing.
-	h := computeProxyHealth(identity.Prod, sup, nil, projectID)
-	require.Equal(t, ProxyMissing, h.Status)
-	require.True(t, h.NeedsSecrets, "cfgHasSecretRefs should detect the !secret env value")
+	require.Equal(t, ProxyMissing, computeProxyHealth(identity.Prod, sup, nil, projectID).Status)
 
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
-	spawnCalls := 0
-	spawnIronProxyFn = func(context.Context, identity.Config, *supervisor.Supervisor, string, IronProxyConfig, *Denials) error {
+	var spawnCalls int
+	var lastCfg IronProxyConfig
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, s *supervisor.Supervisor, id string, cfg IronProxyConfig, _ *Denials) error {
 		spawnCalls++
+		lastCfg = cfg
+		s.Adopt(supervisor.Key{ProjectID: id, Role: supervisor.RoleProxy}, 1)
 		return nil
 	}
 
 	healIronProxies(context.Background(), identity.Prod, sup, nil, locks, nil)
 
-	assert.Equal(t, 0, spawnCalls, "watchdog must not respawn a secrets-injecting project")
+	assert.Equal(t, 1, spawnCalls, "secrets-injecting project should be respawned, not skipped")
+	require.Len(t, lastCfg.Secrets, 1)
+	assert.Equal(t, "api_key", lastCfg.Secrets[0].Name)
+	assert.Equal(t, "resolved-value", lastCfg.Secrets[0].Value)
+	assert.Equal(t, []string{"api.example.com"}, lastCfg.Secrets[0].Hosts)
 }
 
 // TestHealIronProxies_SkipsHealthyProject verifies the watchdog no-ops
