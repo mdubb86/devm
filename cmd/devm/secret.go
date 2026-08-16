@@ -15,7 +15,7 @@ import (
 
 var secretCmd = &cobra.Command{
 	Use:   "secret",
-	Short: "Manage per-project secrets in the macOS login keychain",
+	Short: "Manage per-project secrets in the on-disk secret store",
 }
 
 var secretSetCmd = &cobra.Command{
@@ -28,7 +28,7 @@ var secretSetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return runSecretSet(secret.NewMacKeychain(), projectID, args[0], os.Stdin)
+		return runSecretSet(secret.NewFileBackend(cfg.SecretsDir()), projectID, args[0], os.Stdin)
 	},
 }
 
@@ -66,7 +66,7 @@ var secretGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return runSecretGet(secret.NewMacKeychain(), projectID, args[0], secretGetReveal, os.Stdout)
+		return runSecretGet(secret.NewFileBackend(cfg.SecretsDir()), projectID, args[0], secretGetReveal, os.Stdout)
 	},
 }
 
@@ -99,7 +99,7 @@ var secretListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return runSecretList(secret.NewMacKeychain(), projectID, os.Stdout)
+		return runSecretList(secret.NewFileBackend(cfg.SecretsDir()), projectID, os.Stdout)
 	},
 }
 
@@ -124,7 +124,7 @@ var secretDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return runSecretDelete(secret.NewMacKeychain(), projectID, args[0])
+		return runSecretDelete(secret.NewFileBackend(cfg.SecretsDir()), projectID, args[0])
 	},
 }
 

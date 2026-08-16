@@ -48,7 +48,7 @@ Other pre-VM errors from `devm shell`:
 | Error prefix | Cause | Fix |
 |---|---|---|
 | `render devm dir: ...` | `devm.yaml` failed to render (bad template variable or YAML parse error) | Fix the YAML and retry |
-| `resolve secrets: missing secrets in keychain: [<name>] ...` | A `!secret` reference has no matching entry in the macOS login keychain | Run `devm secret set <name>` for each listed name; see `devm skills get secrets` |
+| `resolve secrets: missing secrets: [<name>] ...` | A `!secret` reference has no matching file in the on-disk secret store | Run `devm secret set <name>` for each listed name; see `devm skills get secrets` |
 | `start vm: ...` | Daemon rejected the `StartVM` call | Check daemon log at `~/Library/Logs/com.devm.service.err.log` |
 | `vm did not become ready: timeout waiting for vm <name> to become exec-ready` | VM did not accept exec connections within 60 seconds | Run `tart list` to check VM state; daemon log may have more detail |
 

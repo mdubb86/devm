@@ -118,6 +118,16 @@ func (c Config) SocketPath() string {
 	return filepath.Join(c.RuntimeDir(), "devm.sock")
 }
 
+// SecretsDir is where the file-backed secret store lives — one
+// mode-0600 file per (project, key) pair under a mode-0700 root. Prod
+// and e2e get disjoint directories via the identity split; a
+// migration script converts existing macOS keychain items into this
+// layout once, and every subsequent read is a plain file read (no
+// per-secret keychain prompt on daemon start or upgrade).
+func (c Config) SecretsDir() string {
+	return filepath.Join(c.RuntimeDir(), "secrets")
+}
+
 // LogDir is where the daemon and its supervised child processes
 // (Tart VMs, iron-proxy) write log files, and where install/uninstall
 // redirect subprocess output. ~/Library/Logs/<Name>/. Kept separate

@@ -1,11 +1,13 @@
 ---
 name: secrets
-description: devm secret — store credentials in the macOS keychain and reference them from devm.yaml. Iron-proxy substitutes the real value at request time so workloads only ever see opaque tokens.
+description: devm secret — store credentials in the on-disk secret store and reference them from devm.yaml. Iron-proxy substitutes the real value at request time so workloads only ever see opaque tokens.
 ---
 
 # devm secrets reference
 
-Secrets live in the macOS login keychain, not in `devm.yaml`. In the config file you declare a reference; the CLI resolves it from the keychain at start time and hands an opaque proxy-token to iron-proxy. Workloads inside the VM only ever see the token string. Iron-proxy substitutes the real credential value when forwarding outbound requests.
+Secrets live in the on-disk store at `~/Library/Application Support/devm/secrets/<project>/<name>` (mode-0600 files under a mode-0700 root), not in `devm.yaml`. In the config file you declare a reference; the CLI reads the file at start time and hands an opaque proxy-token to iron-proxy. Workloads inside the VM only ever see the token string. Iron-proxy substitutes the real credential value when forwarding outbound requests.
+
+**Security posture**: files are 0600 under a 0700 root, so no other user account on the Mac can read them. On a FileVault-enabled Mac the store is encrypted at rest. macOS TCC also gates programmatic access under `~/Library/`. Rotation is `devm secret set <name>` overwrite + `devm reconcile` per project that uses it.
 
 ---
 
@@ -34,13 +36,13 @@ At `devm shell`, the CLI reads `anthropic_key` from the keychain and injects the
 
 ## Subcommands
 
-**`devm secret set <name>`** — Reads the value from stdin if input is piped; otherwise prompts interactively (no echo) at the terminal. Stores the value in the macOS login keychain under `<project-id>/<name>`. Rejects empty values.
+**`devm secret set <name>`** — Reads the value from stdin if input is piped; otherwise prompts interactively (no echo) at the terminal. Writes the value to `~/Library/Application Support/devm/secrets/<project-id>/<name>` (mode 0600). Rejects empty values.
 
 **`devm secret get <name>`** — Prints the stored value. The output is masked by default (`ab***yz`); pass `--reveal` to print the raw value.
 
 **`devm secret list`** — Lists all secret names stored for the current project (names only, no values).
 
-**`devm secret delete <name>`** — Removes the named secret from the keychain for the current project.
+**`devm secret delete <name>`** — Removes the named secret's file for the current project.
 
 All subcommands derive the project ID from `devm.yaml` in the working directory.
 
@@ -88,7 +90,7 @@ You may bind one secret across multiple hosts by listing it in multiple allow en
 devm shell
   │
   ├─ reads devm.yaml → finds !secret refs
-  ├─ calls macOS keychain for each ref
+  ├─ reads each ref's file from ~/Library/Application Support/devm/secrets/<project>/
   ├─ collects host bindings from network.allow[*].secrets
   │
   └─ hands the resolved secrets to the daemon at start time
@@ -115,10 +117,10 @@ Real credential values are never written to disk; they live only in iron-proxy's
 
 ## Failure mode: missing secret
 
-If a `!secret` reference in `devm.yaml` has no matching entry in the keychain, `devm shell` fails immediately with:
+If a `!secret` reference in `devm.yaml` has no matching file in the store, `devm shell` fails immediately with:
 
 ```
-missing secrets in keychain: [<name>] (set with `devm secret set <name>`)
+missing secrets: [<name>] (set with `devm secret set <name>`)
 ```
 
 The error names every missing key. Run `devm secret set <name>` for each one, then retry.

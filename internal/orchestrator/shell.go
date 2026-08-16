@@ -28,14 +28,12 @@ import (
 )
 
 // resolveSecretBindings gathers every `!secret <name>` ref from cfg
-// (top-level env + per-service env, deduped), looks each up in the macOS
-// login keychain under "<project>/<name>", and attaches the injection-host
-// scope declared in network.allow. Returns the bindings the daemon hands
-// to iron-proxy. A secret with no network.allow host scope is still
-// resolved and sent with empty Hosts (iron-proxy omits it — never injects).
-//
-// Runs CLI-side because the daemon (a LaunchDaemon) can't access the
-// user's login keychain.
+// (top-level env + per-service env, deduped), looks each up in the
+// on-disk secret store under "<project>/<name>", and attaches the
+// injection-host scope declared in network.allow. Returns the
+// bindings the daemon hands to iron-proxy. A secret with no
+// network.allow host scope is still resolved and sent with empty
+// Hosts (iron-proxy omits it — never injects).
 func resolveSecretBindings(cfg schema.Config, backend secret.Backend) ([]serviceapi.SecretBinding, error) {
 	seen := map[string]bool{}
 	var names []string
@@ -68,7 +66,7 @@ func resolveSecretBindings(cfg schema.Config, backend secret.Backend) ([]service
 		bindings = append(bindings, serviceapi.SecretBinding{Name: n, Value: v, Hosts: hosts[n]})
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("missing secrets in keychain: %v (set with `devm secret set <name>`)", missing)
+		return nil, fmt.Errorf("missing secrets: %v (set with `devm secret set <name>`)", missing)
 	}
 	return bindings, nil
 }
@@ -181,7 +179,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 			// Adopt in place — provision it without StartVM/waitVMReady,
 			// since it's already up and exec-ready.
 			reporter.Step("adopting running vm", false)
-			bindings, err := resolveSecretBindings(cfg, secret.NewMacKeychain())
+			bindings, err := resolveSecretBindings(cfg, secret.NewFileBackend(d.Ident.SecretsDir()))
 			if err != nil {
 				return -1, fmt.Errorf("resolve secrets: %w", err)
 			}
@@ -216,7 +214,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// hosts when docker: true.
 	allowList := docker.EffectiveAllowlist(cfg)
 
-	bindings, err := resolveSecretBindings(cfg, secret.NewMacKeychain())
+	bindings, err := resolveSecretBindings(cfg, secret.NewFileBackend(d.Ident.SecretsDir()))
 	if err != nil {
 		return -1, fmt.Errorf("resolve secrets: %w", err)
 	}

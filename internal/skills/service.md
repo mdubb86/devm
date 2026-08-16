@@ -101,8 +101,6 @@ tail -n 50 ~/Library/Logs/com.devm.service.err.log
 
 After a manual rebuild (e.g., `go build`) that places the binary at a new path, the existing plist still points at the old location. Re-running `devm install` rewrites the plist with the current binary path and restarts the daemon.
 
-### Keychain access
+### Secret resolution
 
-The daemon runs as your user but in a LaunchDaemon context. macOS does not grant LaunchDaemon processes access to the user's login keychain, even when the `UserName` key in the plist matches your account.
-
-This is why `devm secret` resolves keychain lookups in the CLI process (which has login keychain access) and passes the resolved values to the daemon at start time as proxy-tokens. See `devm skills get secrets` for details on how secrets are declared and handed off.
+Secrets live in the on-disk store at `~/Library/Application Support/devm/secrets/<project>/<name>`. The CLI process (running as your user) reads each `!secret` ref, resolves it against the store, and passes the resolved values to the daemon at start time as proxy-tokens. The daemon never reads secret material off disk itself — keeping secret handling in the user's process context. See `devm skills get secrets` for how secrets are declared and handed off.

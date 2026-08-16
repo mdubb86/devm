@@ -24,7 +24,8 @@ const DefaultDiskSizeGB = 32
 
 // SecretRef is the in-memory representation of a YAML `!secret <name>`
 // tagged value. Resolved to a literal at iron-proxy spawn time by
-// looking up <name> in the macOS login keychain.
+// reading <name> from the on-disk secret store
+// (identity.Config.SecretsDir()).
 type SecretRef struct {
 	Name string
 }

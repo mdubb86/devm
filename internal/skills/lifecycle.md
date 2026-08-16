@@ -37,7 +37,7 @@ If the VM is running but `devm.target` is **not** active, the daemon never finis
 
 If the VM is stopped or absent (or was just torn down as a dirty adopt-in-place above), `devm shell`:
 
-1. Resolves any `!secret` references from the macOS login keychain.
+1. Resolves any `!secret` references from the on-disk secret store.
 2. Sends a `StartVM` request to the daemon (which starts the VM and applies the network allow-list from `network.allow`).
 3. Polls `tart exec <vmName> true` until exit 0, or up to 60 seconds.
 4. Runs the provisioning tail described below (shared with adopt-in-place).
