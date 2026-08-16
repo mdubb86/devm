@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -94,7 +95,7 @@ func TestVMReconcile_NoSnapshotYet_TreatsAllAsFullDiff(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -135,7 +136,7 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks /* fake apply */, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks /* fake apply */, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -168,7 +169,7 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -215,7 +216,7 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -260,7 +261,7 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -387,7 +388,7 @@ func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -437,7 +438,7 @@ func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"), nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -480,7 +481,7 @@ func TestVMReconcile_NetworkAddSurfacesAsAppliedIronProxy(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"), nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -512,7 +513,7 @@ func TestVMReconcile_MissingIronProxy_EmitsKindIronProxyDown(t *testing.T) {
 	// A fresh supervisor with no adopted iron-proxy process reports the
 	// proxy as not Present/Running → computeProxyHealth returns MISSING.
 	sup := supervisor.New(t.TempDir())
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, sup, nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, sup, nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -539,7 +540,7 @@ func TestVMReconcile_StoppedVM_MissingIronProxy_DoesNotEmitKindIronProxyDown(t *
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	sup := supervisor.New(t.TempDir())
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: false, vmName: "p"}, sup, nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: false, vmName: "p"}, sup, nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -584,6 +585,9 @@ type fakeApply struct {
 	lastSSHAuthPub  []byte
 	lastSSHHostPriv []byte
 	lastSSHHostPub  []byte
+	// order, when non-nil, gets "apply_live" appended on call — used to
+	// pin call ordering against fakePackages's own "packages" append.
+	order *[]string
 }
 
 func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
@@ -591,7 +595,36 @@ func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, rep
 	f.lastSSHAuthPub = sshAuthPub
 	f.lastSSHHostPriv = sshHostPriv
 	f.lastSSHHostPub = sshHostPub
+	if f.order != nil {
+		*f.order = append(*f.order, "apply_live")
+	}
 	return nil
+}
+
+// fakePackages is a stand-in for the real PackagesApplier; it records
+// the args of its most recent call and returns err (nil by default).
+// order, when non-nil, gets "packages" appended on call — used to pin
+// call ordering against fakeApply's own "apply_live" append.
+type fakePackages struct {
+	called    bool
+	projectID string
+	snapCfg   schema.Config
+	adds      []string
+	removes   []string
+	err       error
+	order     *[]string
+}
+
+func (f *fakePackages) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, adds, removes []string) error {
+	f.called = true
+	f.projectID = projectID
+	f.snapCfg = snapCfg
+	f.adds = adds
+	f.removes = removes
+	if f.order != nil {
+		*f.order = append(*f.order, "packages")
+	}
+	return f.err
 }
 
 // fakeTartList is a stand-in for the daemon's *tart.Tart, reporting a
@@ -627,7 +660,7 @@ func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
 	fake := &fakeApply{}
 	// Use a fake tart that reports p-vm as NOT running.
 	fakeTart := &fakeTartList{running: false, vmName: "p"}
-	RegisterReconcileHandler(server, identity.Prod, locks, fake, fakeTart, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, fake, &fakePackages{}, fakeTart, supervisor.New(t.TempDir()), nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -675,7 +708,7 @@ func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -718,7 +751,7 @@ func TestVMReconcile_ForwardsSSHBytesToApplyLive(t *testing.T) {
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	fake := &fakeApply{}
-	RegisterReconcileHandler(server, identity.Prod, locks, fake, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, fake, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -731,4 +764,123 @@ func TestVMReconcile_ForwardsSSHBytesToApplyLive(t *testing.T) {
 		"SSH host privkey must forward to ApplyLive")
 	assert.Equal(t, req.SSHHostPub, fake.lastSSHHostPub,
 		"SSH host pubkey must forward to ApplyLive")
+}
+
+func TestReconcile_PackageChangesRouteToApplier(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	oldCfg := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Packages: []string{"jq"},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newCfg.Packages = []string{"jq", "sl"}
+
+	registerFakeSoftnet(t, "p")
+
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: "/tmp/repo"}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	pkgs := &fakePackages{}
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	require.True(t, pkgs.called, "PackagesApplier must be invoked for a package change")
+	assert.Equal(t, "p", pkgs.projectID)
+	assert.Equal(t, []string{"sl"}, pkgs.adds)
+	assert.Empty(t, pkgs.removes)
+	// snapCfg must be the OLD snapshot cfg, not req.Cfg — the applier
+	// rebuilds/restores the iron-proxy config the running proxy
+	// currently reflects.
+	assert.Equal(t, oldCfg.Packages, pkgs.snapCfg.Packages,
+		"applier must receive the OLD snapshot cfg, not the new request cfg")
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Contains(t, changeKinds(resp.Applied), reconcile.KindPackageAdd)
+	assert.Empty(t, resp.TeardownRequired)
+
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []string{"jq", "sl"}, got.Cfg.Packages)
+}
+
+func TestReconcile_PackagesApplierFailureAbortsAndKeepsSnapshot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	oldCfg := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Packages: []string{"jq"},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newCfg.Packages = []string{"jq", "sl"}
+
+	registerFakeSoftnet(t, "p")
+
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: "/tmp/repo"}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	pkgs := &fakePackages{err: fmt.Errorf("apt exit 1")}
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusInternalServerError, rec.Code, "body=%s", rec.Body.String())
+
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []string{"jq"}, got.Cfg.Packages,
+		"snapshot must be untouched on applier failure so the change re-surfaces next reconcile")
+}
+
+func TestReconcile_PackagesBeforeApplyLive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	oldCfg := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Packages: []string{"jq"},
+		Env:      map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newCfg.Packages = []string{"jq", "sl"}
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	registerFakeSoftnet(t, "p")
+
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: "/tmp/repo"}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	var order []string
+	apply := &fakeApply{order: &order}
+	pkgs := &fakePackages{order: &order}
+	RegisterReconcileHandler(server, identity.Prod, locks, apply, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	require.True(t, pkgs.called)
+	require.True(t, apply.called)
+	assert.Equal(t, []string{"packages", "apply_live"}, order,
+		"packages must converge before ApplyLive so a template installer applied in the same reconcile can rely on newly-installed binaries")
 }

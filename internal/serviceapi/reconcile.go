@@ -71,7 +71,7 @@ type TartLister interface {
 // RegisterReconcileHandler wires POST /vm/reconcile. sup is consulted
 // (only when the VM is running) to self-heal a missing/stale
 // iron-proxy: see the KindIronProxyDown emit below.
-func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer) {
+func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, packages PackagesApplier, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer) {
 	s.Register("/vm/reconcile", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -181,6 +181,32 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 			if err != nil {
 				http.Error(w, fmt.Sprintf("read CA root: %v", err), http.StatusInternalServerError)
 				return
+			}
+			// Packages converge first: a template installer applied in the
+			// same reconcile may invoke binaries the new packages provide.
+			// Package changes stay in `live` for the snapshot merge below;
+			// ApplyLive has no case for them and skips them.
+			//
+			// snapCfg is `base` (the OLD snapshot cfg), not req.Cfg: the
+			// applier rebuilds and restores the iron-proxy config the
+			// running proxy currently reflects — the last-applied state.
+			// Pending egress changes computed in this same reconcile are
+			// applied afterwards by the CLI's apply-iron-proxy dispatch
+			// (AppliedIronProxy), not here.
+			var pkgAdds, pkgRemoves []string
+			for _, c := range live {
+				switch c.Kind {
+				case reconcile.KindPackageAdd:
+					pkgAdds = append(pkgAdds, c.Key)
+				case reconcile.KindPackageRemove:
+					pkgRemoves = append(pkgRemoves, c.Key)
+				}
+			}
+			if len(pkgAdds)+len(pkgRemoves) > 0 {
+				if err := packages.ApplyPackages(r.Context(), req.Name, base, pkgAdds, pkgRemoves); err != nil {
+					http.Error(w, fmt.Sprintf("apply packages: %v", err), http.StatusInternalServerError)
+					return
+				}
 			}
 			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, req.Name, caPEM, req.SSHAuthorizedPubkey, req.SSHHostPriv, req.SSHHostPub); err != nil {
 				http.Error(w, fmt.Sprintf("apply live: %v", err), http.StatusInternalServerError)

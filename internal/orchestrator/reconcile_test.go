@@ -37,6 +37,15 @@ func (nopApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoo
 	return nil
 }
 
+// nopPackages is a stand-in for serviceapi.PackagesApplier — these
+// orchestrator-level tests never exercise a package change, so it only
+// needs to satisfy the interface.
+type nopPackages struct{}
+
+func (nopPackages) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, adds, removes []string) error {
+	return nil
+}
+
 // fakeTartList is a stand-in for the daemon's *tart.Tart, reporting a
 // fixed running state for one VM name without shelling out to `tart`.
 // These orchestrator-level tests exercise the "VM is running" path;
@@ -88,7 +97,7 @@ func startReconcileDaemon(t *testing.T) func() {
 
 	sup := healthyIronProxySupervisor(t, "x")
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: true, vmName: "x"}, sup, nil)
+	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, nopPackages{}, &fakeTartList{running: true, vmName: "x"}, sup, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -292,7 +301,7 @@ func startReconcileDaemonWithIronProxyCapture(t *testing.T, running bool) (clean
 	socket := identity.Prod.SocketPath()
 
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(t.TempDir()), nil)
+	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, nopPackages{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(t.TempDir()), nil)
 
 	req := &serviceapi.VMApplyIronProxyRequest{}
 	srv.Register("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {
