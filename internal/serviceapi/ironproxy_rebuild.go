@@ -14,9 +14,7 @@ import (
 // project's iron-proxy from daemon-readable state: listener ports from
 // the on-disk config, allowlist + secret refs from the state snapshot's
 // cfg, and secret VALUES from the on-disk secret store. The daemon can
-// do this entirely on its own — secret.NewFileBackend(cfg.SecretsDir())
-// is a plain file read, unlike the old macOS-keychain backend which
-// only the CLI, running as the logged-in user, could unlock.
+// do this entirely on its own.
 func rebuildIronProxyConfig(cfg identity.Config, projectID string, snapCfg schema.Config) (IronProxyConfig, error) {
 	cfgPath, err := IronProxyConfigPath(cfg, projectID)
 	if err != nil {

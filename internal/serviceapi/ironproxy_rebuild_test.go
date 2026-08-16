@@ -56,3 +56,38 @@ func TestRebuildIronProxyConfig(t *testing.T) {
 	assert.Equal(t, "resolved-value", got.Secrets[0].Value)
 	assert.Equal(t, []string{"api.github.com"}, got.Secrets[0].Hosts)
 }
+
+// TestRebuildIronProxyConfig_DockerExpandsAllowlist locks in that the
+// allowlist derivation is docker.EffectiveAllowlist(snapCfg) — not a
+// bare Network.Domains() read — so a rebuilt config for a docker:true
+// project still carries the Docker Hub hosts.
+func TestRebuildIronProxyConfig_DockerExpandsAllowlist(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const projectID = "rebuild-docker-test"
+
+	cfgPath, err := IronProxyConfigPath(identity.Prod, projectID)
+	require.NoError(t, err)
+	require.NoError(t, writeIronProxyConfig(cfgPath, IronProxyConfig{
+		HTTPListen:  "127.0.0.1:9180",
+		HTTPSListen: "127.0.0.1:9543",
+		DNSListen:   "127.0.0.1:9153",
+	}))
+
+	snapCfg := schema.Config{
+		Project: schema.Project{Name: projectID},
+		Docker:  true,
+		Network: schema.Network{
+			Allow: []schema.AllowEntry{{Host: "example.com"}},
+		},
+	}
+
+	got, err := rebuildIronProxyConfig(identity.Prod, projectID, snapCfg)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{
+		"example.com",
+		"registry-1.docker.io",
+		"auth.docker.io",
+		"production.cloudfront.docker.com",
+	}, got.AllowList)
+}

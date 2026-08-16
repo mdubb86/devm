@@ -61,8 +61,8 @@ func TestResolveSecretBindings(t *testing.T) {
 		assert.Empty(t, bindings[0].Hosts)
 	})
 
-	t.Run("missing_keychain_entry_returns_error", func(t *testing.T) {
-		// A !secret whose keychain entry is missing → error mentioning the name.
+	t.Run("missing_store_entry_returns_error", func(t *testing.T) {
+		// A !secret whose file-store entry is missing → error mentioning the name.
 		be := secret.NewFake()
 		// Deliberately do NOT seed "proj/missing".
 

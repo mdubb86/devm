@@ -70,15 +70,14 @@ func TestHealIronProxies_RespawnsMissing(t *testing.T) {
 
 	assert.Equal(t, 1, spawnCalls, "should respawn exactly once for the missing project")
 	assert.Equal(t, []string{"api.example.com"}, lastCfg.AllowList,
-		"allowlist should reconstruct from snap.Cfg.Network.Domains()")
+		"allowlist should reconstruct via docker.EffectiveAllowlist(snap.Cfg)")
 	assert.Contains(t, lastCfg.HTTPSListen, "127.0.0.1:", "listen addr preserves loopback")
 }
 
 // TestHealIronProxies_RespawnsSecretsProjects verifies projects that
-// inject secrets are respawned like any other missing iron-proxy — the
-// daemon resolves secret values directly from the file-backed secret
-// store (secret.NewFileBackend), so it no longer needs the CLI to
-// supply them.
+// inject secrets are respawned like any other missing iron-proxy —
+// secret values resolve from the on-disk file store
+// (secret.NewFileBackend).
 func TestHealIronProxies_RespawnsSecretsProjects(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sup := supervisor.New(t.TempDir())

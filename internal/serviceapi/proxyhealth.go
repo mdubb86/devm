@@ -17,11 +17,12 @@ const (
 	ProxyStale   ProxyStatus = "stale"
 )
 
-// ProxyHealth is the daemon's per-project verdict on the iron-proxy: is it
-// present and current, and (if not) does healing it require the CLI to
-// supply secret values the daemon can't read itself. Rebind reports the
-// most recent outcome of the daemon-startup rebind pass for this
-// project's :80/:443 listeners — nil when no rebind was attempted.
+// ProxyHealth is the daemon's per-project verdict on the iron-proxy: is
+// it present and current, and does the project's config bind any
+// host-scoped secrets (NeedsSecrets — informational; consumed by the
+// CLI status renderer, format.go). Rebind reports the most recent
+// outcome of the daemon-startup rebind pass for this project's
+// :80/:443 listeners — nil when no rebind was attempted.
 type ProxyHealth struct {
 	Status       ProxyStatus   `json:"status"`
 	NeedsSecrets bool          `json:"needs_secrets"`
@@ -42,9 +43,11 @@ type RebindReport struct {
 // lock. MISSING when no live proxy or no config file; STALE when the live
 // proxy was spawned from a version stamp that differs from the current
 // embedded binary; else OK. NeedsSecrets when there is drift AND the
-// project injects secrets (only the CLI can resolve those). proxy is
-// consulted for the most recent startup-rebind outcome; nil is
-// tolerated (some callers don't have a *ProxyServer in scope).
+// project injects secrets — purely informational (healing itself doesn't
+// depend on it; rebuildIronProxyConfig resolves secret values from the
+// on-disk store regardless). proxy is consulted for the most recent
+// startup-rebind outcome; nil is tolerated (some callers don't have a
+// *ProxyServer in scope).
 func computeProxyHealth(cfg identity.Config, sup *supervisor.Supervisor, proxy *ProxyServer, projectID string) ProxyHealth {
 	snap, _ := ReadStateSnapshot(cfg, projectID)
 	needsSecrets := false
@@ -78,8 +81,8 @@ func computeProxyHealth(cfg identity.Config, sup *supervisor.Supervisor, proxy *
 }
 
 // cfgHasSecretRefs reports whether any env value (global or per-service) is
-// a `!secret` reference — i.e. the proxy would inject secret values only
-// the CLI can resolve from the keychain.
+// a `!secret` reference — i.e. the project's iron-proxy injects
+// host-scoped secret values.
 func cfgHasSecretRefs(cfg schema.Config) bool {
 	for _, v := range cfg.Env {
 		if v.IsSecret() {
