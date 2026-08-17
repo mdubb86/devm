@@ -30,6 +30,16 @@ if [ -f /opt/devm/ca/devm.crt ] && ! cmp -s /opt/devm/ca/devm.crt /usr/local/sha
     certutil -A -n devm -t C,, \
         -i /usr/local/share/ca-certificates/devm.crt \
         -d sql:/etc/pki/nssdb
+    # certutil runs here as root (this whole script is `sudo /opt/devm/
+    # install.sh`) and creates the db files with root's umask — 0600
+    # root:root. NSS refuses to open unreadable files and returns the
+    # misleading SEC_ERROR_BAD_DATABASE ("bad" here means "unopenable").
+    # The store holds only public CA certs (no keys), so the system-
+    # wide convention on Fedora/Debian is world-readable: 0755 dir,
+    # 0644 files. Match that so Chromium/Firefox (running as devm)
+    # can read the trust store.
+    chmod 0755 /etc/pki/nssdb
+    chmod 0644 /etc/pki/nssdb/*
 fi
 
 # --- dnsmasq drop-in: devm-test.conf configures local resolver behavior. ---

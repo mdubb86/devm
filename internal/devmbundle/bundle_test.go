@@ -81,6 +81,13 @@ func TestBuild_InstallScriptSeedsNSSTrust(t *testing.T) {
 		"install.sh must seed the devm CA into the system NSS db (see /etc/pki/nssdb)")
 	assert.Contains(t, script, "sql:/etc/pki/nssdb",
 		"install.sh must target the system NSS trust db path")
+	// certutil runs as root and creates db files with root's umask
+	// (0600). NSS returns the misleading SEC_ERROR_BAD_DATABASE when a
+	// non-root reader (Chromium as devm) can't open them. Pin the
+	// world-readable chmod so a regression that drops it re-breaks
+	// browser trust silently on the next install.
+	assert.Contains(t, script, "chmod 0644 /etc/pki/nssdb/*",
+		"install.sh must chmod the NSS db files world-readable after certutil -A")
 }
 
 func TestBuild_EnvReflectsConfig(t *testing.T) {
