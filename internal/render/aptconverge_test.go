@@ -8,6 +8,7 @@ import (
 func TestAptConvergeScript_AddsAndRemoves(t *testing.T) {
 	s := AptConvergeScript([]string{"sl", "jq"}, []string{"chromium"})
 	for _, want := range []string{
+		"sudo dpkg --configure -a",
 		"apt-get -o DPkg::Lock::Timeout=60 update",
 		"apt-get -o DPkg::Lock::Timeout=60 install -y 'sl' 'jq'",
 		"apt-get -o DPkg::Lock::Timeout=60 remove -y 'chromium'",
@@ -16,6 +17,14 @@ func TestAptConvergeScript_AddsAndRemoves(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("script missing %q:\n%s", want, s)
 		}
+	}
+}
+
+func TestAptConvergeScript_DpkgConfigureIsFirstLine(t *testing.T) {
+	s := AptConvergeScript([]string{"sl"}, nil)
+	lines := strings.Split(s, "\n")
+	if len(lines) == 0 || lines[0] != "sudo dpkg --configure -a" {
+		t.Errorf("want first line to be dpkg self-repair, got script:\n%s", s)
 	}
 }
 
@@ -34,7 +43,11 @@ func TestAptConvergeScript_RemoveOnly_NoUpdateNoInstall(t *testing.T) {
 }
 
 func TestAptConvergeScript_Empty(t *testing.T) {
-	if s := AptConvergeScript(nil, nil); s != "" {
+	s := AptConvergeScript(nil, nil)
+	if s != "" {
 		t.Errorf("want empty, got %q", s)
+	}
+	if strings.Contains(s, "dpkg --configure") {
+		t.Errorf("empty script must not carry the dpkg self-repair line:\n%s", s)
 	}
 }

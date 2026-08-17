@@ -952,4 +952,3 @@ func writeFakeCA(t *testing.T, repoRoot string) {
 	require.NoError(t, os.MkdirAll(caPath, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(caPath, "root.crt"), []byte("FAKE-CA"), 0o644))
 }
-

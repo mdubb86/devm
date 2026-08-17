@@ -305,7 +305,7 @@ func TestMergeLiveApplied_Direct(t *testing.T) {
 }
 
 func TestMergeLiveApplied_Packages(t *testing.T) {
-	// Package add/remove is now BucketLive; mergeLiveApplied must
+	// Package add/remove is BucketLive; mergeLiveApplied must
 	// wholesale-replace Packages from new_cfg so the applied set lands
 	// in the snapshot (all package changes are applied together in one
 	// reconcile, so per-key merging isn't needed).

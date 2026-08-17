@@ -30,7 +30,7 @@ network:
       secrets: [anthropic_key]
 ```
 
-At `devm shell`, the CLI reads `anthropic_key` from the keychain and injects the token `__DEVM_SECRET_anthropic_key__` into the VM's environment under `ANTHROPIC_API_KEY`. Iron-proxy substitutes the real value only on requests destined for hosts listed in `network.allow[].secrets` — a secret not bound to any host is never injected. See **Host scoping** below for details.
+At `devm shell`, the CLI reads `anthropic_key` from the secret store and injects the token `__DEVM_SECRET_anthropic_key__` into the VM's environment under `ANTHROPIC_API_KEY`. Iron-proxy substitutes the real value only on requests destined for hosts listed in `network.allow[].secrets` — a secret not bound to any host is never injected. See **Host scoping** below for details.
 
 ---
 

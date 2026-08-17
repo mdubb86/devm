@@ -18,6 +18,10 @@ func AptConvergeScript(adds, removes []string) string {
 	}
 	const apt = "sudo apt-get -o DPkg::Lock::Timeout=60"
 	var b strings.Builder
+	// A prior converge killed mid-dpkg-run leaves the dpkg database
+	// locked in an inconsistent state; repair it first so this (or any
+	// future) converge doesn't wedge on "dpkg was interrupted".
+	b.WriteString("sudo dpkg --configure -a\n")
 	if len(adds) > 0 {
 		fmt.Fprintf(&b, "%s update\n", apt)
 		fmt.Fprintf(&b, "%s install -y %s\n", apt, joinQuoted(adds))

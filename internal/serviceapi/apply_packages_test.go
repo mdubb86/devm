@@ -212,13 +212,12 @@ func TestApplyPackages_WidenHealthTimeout_BestEffortRestores(t *testing.T) {
 }
 
 // TestApplyPackages_NoProjectAllowlist_RestoreCloses covers a project
-// with no network.allow at all — the shape that made the window look
-// closed while egress stayed wide open. The restore spawn's config must
-// still carry an allowlist transform (with no domains), because
-// iron-proxy applies no egress check whatsoever when the transform is
-// absent: an omitted transform is allow-all, not deny-all, so a restore
-// that merely drops the apt hosts from the config leaves deb.debian.org
-// reachable.
+// whose effective allowlist is empty (no network.allow at all). The
+// restore spawn's config must still carry an allowlist transform (empty
+// domains = deny-all), because iron-proxy applies no egress check
+// whatsoever when the transform is absent: an omitted transform is
+// allow-all, not deny-all, so a restore that merely drops the apt hosts
+// from the config would leave deb.debian.org reachable.
 func TestApplyPackages_NoProjectAllowlist_RestoreCloses(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	const projectID = "pkg-no-allowlist"

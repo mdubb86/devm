@@ -76,7 +76,7 @@ network:
 
 `map[string]EnvValue` — bucket: **live**.
 
-Project-wide environment variables injected into all services. Values are literal strings or `!secret` references resolved from the macOS keychain:
+Project-wide environment variables injected into all services. Values are literal strings or `!secret` references resolved from the on-disk secret store:
 
 ```yaml
 env:

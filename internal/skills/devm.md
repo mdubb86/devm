@@ -46,6 +46,6 @@ A project's `CLAUDE.md` is shared through the virtiofs workspace mount, so guest
 - `devm skills get lifecycle` — when to use `devm shell`, `reconcile`, `stop`, `teardown`, and `validate`.
 - `devm skills get service` — managing the background service (install, uninstall, restart, logs).
 - `devm skills get routing` — how port declarations, `devm route` commands, and `*.test` hostnames work on the Mac and inside the VM.
-- `devm skills get secrets` — storing credentials in the macOS keychain and referencing them with `!secret` in `devm.yaml`.
+- `devm skills get secrets` — storing credentials in the on-disk secret store and referencing them with `!secret` in `devm.yaml`.
 - `devm skills get errors` — reading supervision error blocks and where logs live.
 - `devm recipes get tool/service/docker` — docker is a built-in (`docker: true`), not a recipe you install, but the recipe covers the intricacies: the two egress paths (why `docker run` works with no config but `docker build` needs a Dockerfile RUN block), and the exact block to add for build-time HTTPS to survive iron-proxy's MITM.
