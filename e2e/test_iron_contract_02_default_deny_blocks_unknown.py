@@ -1,13 +1,20 @@
-"""Pin: empty allow-list (no allowlist transform) blocks all egress.
+"""Pin: an allowlist transform with no domains blocks all egress.
 
-Iron-proxy v0.45.0 defaults to deny-all when no allowlist transform is
-present. An HTTP request to an unknown host through the http_listen port
-must result in a 4xx/5xx response — never a successful proxied response.
+Iron-proxy v0.45.0 runs the egress check ONLY when an allowlist
+transform is present. Present with `domains: []` is the deny-all shape:
+an HTTP request to an unlisted host through http_listen returns 403.
+With the transform ABSENT there is no check at all and every host is
+proxied — which is why devm always emits the transform, empty domains
+included (internal/serviceapi/ironproxy.go).
 
-Implementation note: iron-proxy's MITM architecture means:
-  - TLS to https_listen always succeeds (it mints a leaf cert regardless
-    of the allowlist); the allowlist check fires at the HTTP request layer.
-  - HTTP requests through http_listen return 502 Bad Gateway for denied hosts.
+The probe host must be one that genuinely resolves and serves: an
+unreachable host would fail upstream and return 5xx no matter what the
+allowlist says, so a "blocked" assertion against it would pass even
+under allow-all.
+
+Implementation note: iron-proxy's MITM architecture means TLS to
+https_listen always succeeds (it mints a leaf cert regardless of the
+allowlist); the allowlist check fires at the HTTP request layer.
 """
 import http.client
 import subprocess
@@ -45,21 +52,22 @@ def test_default_deny_blocks_unknown(tmp_path):
         https_listen=f"127.0.0.1:{https_port}",
         ca_cert_path=str(ca_cert),
         ca_key_path=str(ca_key),
-        allow_domains=[],  # empty: no allowlist transform → deny all
+        allow_domains=[],  # allowlist transform with no domains → deny all
     )
 
     with spawn(cfg):
-        # HTTP request through http_listen: iron-proxy returns 502 for denied hosts.
-        conn = http.client.HTTPConnection("127.0.0.1", http_port, timeout=5)
+        # example.com resolves and serves 200 when allowed, so a
+        # non-200 here can only come from the allowlist.
+        conn = http.client.HTTPConnection("127.0.0.1", http_port, timeout=10)
         try:
             conn.request(
                 "GET",
-                "http://evil.example.com/",
-                headers={"Host": "evil.example.com"},
+                "http://example.com/",
+                headers={"Host": "example.com"},
             )
             resp = conn.getresponse()
-            assert resp.status in (400, 403, 502, 503), (
-                f"expected blocked response, got {resp.status}"
+            assert resp.status == 403, (
+                f"expected 403 for an unlisted host, got {resp.status}"
             )
         except (ConnectionError, OSError, http.client.RemoteDisconnected):
             # iron-proxy may drop the connection entirely — also counts as blocking.

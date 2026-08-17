@@ -11,6 +11,7 @@ import (
 	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // errStubSpawnFailed is the sentinel error the spawn stub returns from
@@ -29,8 +30,9 @@ var errStubSpawnFailed = errors.New("stub spawn failure")
 // failure, is always back to orig), or "exec" for the guest script run.
 type packagesEvent struct {
 	kind      string
-	allowList []string // populated for "spawn:*" events
-	script    string   // populated for "exec" events
+	allowList []string        // populated for "spawn:*" events
+	proxyCfg  IronProxyConfig // populated for "spawn:*" events
+	script    string          // populated for "exec" events
 }
 
 // newPackagesEventRecorder installs a spawnIronProxyFn stub and returns
@@ -52,7 +54,11 @@ func newPackagesEventRecorder(t *testing.T, projectID string, spawnFailOn int, e
 		if n == 1 {
 			kind = "spawn:widened"
 		}
-		events = append(events, packagesEvent{kind: kind, allowList: append([]string{}, proxyCfg.AllowList...)})
+		events = append(events, packagesEvent{
+			kind:      kind,
+			allowList: append([]string{}, proxyCfg.AllowList...),
+			proxyCfg:  proxyCfg,
+		})
 		if n == spawnFailOn {
 			return errStubSpawnFailed
 		}
@@ -203,6 +209,45 @@ func TestApplyPackages_WidenHealthTimeout_BestEffortRestores(t *testing.T) {
 	// exec, since ApplyPackages returns before ever running the script.
 	assert.Equal(t, []string{"spawn:widened", "spawn:orig"}, eventKinds(*events))
 	assert.Equal(t, []string{"api.anthropic.com"}, (*events)[1].allowList, "best-effort restore must target the original allowlist")
+}
+
+// TestApplyPackages_NoProjectAllowlist_RestoreCloses covers a project
+// with no network.allow at all — the shape that made the window look
+// closed while egress stayed wide open. The restore spawn's config must
+// still carry an allowlist transform (with no domains), because
+// iron-proxy applies no egress check whatsoever when the transform is
+// absent: an omitted transform is allow-all, not deny-all, so a restore
+// that merely drops the apt hosts from the config leaves deb.debian.org
+// reachable.
+func TestApplyPackages_NoProjectAllowlist_RestoreCloses(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const projectID = "pkg-no-allowlist"
+
+	events, execScript := newPackagesEventRecorder(t, projectID, 0, func() (int, string) { return 0, "" })
+	a, snapCfg := seedPackagesFixture(t, projectID, nil, execScript)
+
+	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"sl"}, nil)
+	require.NoError(t, err)
+
+	require.Equal(t, []string{"spawn:widened", "exec", "spawn:orig"}, eventKinds(*events))
+	assert.Equal(t, []string{"deb.debian.org", "security.debian.org"}, (*events)[0].allowList)
+	assert.Empty(t, (*events)[2].allowList)
+
+	// The window is only closed if the config the restore spawns with
+	// actually denies. Assert on the emitted YAML, not just the
+	// AllowList slice — that's the layer where the window stayed open.
+	blob, err := (*events)[2].proxyCfg.YAML()
+	require.NoError(t, err)
+	var restored map[string]any
+	require.NoError(t, yaml.Unmarshal(blob, &restored))
+
+	transforms, ok := restored["transforms"].([]any)
+	require.True(t, ok, "restore config must carry a transforms list; without one iron-proxy allows every host")
+	require.Len(t, transforms, 1)
+	transform := transforms[0].(map[string]any)
+	assert.Equal(t, "allowlist", transform["name"])
+	domains := transform["config"].(map[string]any)["domains"]
+	assert.Equal(t, []any{}, domains, "deny-all is an allowlist transform with no domains")
 }
 
 func TestApplyPackages_EmptyNoop(t *testing.T) {

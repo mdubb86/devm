@@ -94,15 +94,18 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 			"listen": "127.0.0.1:0",
 		},
 	}
-	var transforms []any
-	if len(c.AllowList) > 0 {
-		transforms = append(transforms, map[string]any{
-			"name": "allowlist",
-			"config": map[string]any{
-				"domains": c.AllowList,
-			},
-		})
-	}
+	// The allowlist transform is emitted unconditionally, including with
+	// no domains. iron-proxy v0.45.0 runs the egress check only when the
+	// transform is present: with it absent every host is proxied and
+	// allowed, so omitting it for a project with no network.allow would
+	// publish an unrestricted egress path instead of the deny-all one.
+	// `domains: []` is the deny-all shape.
+	transforms := []any{map[string]any{
+		"name": "allowlist",
+		"config": map[string]any{
+			"domains": append([]string{}, c.AllowList...),
+		},
+	}}
 	var boundSecrets []IronSecret
 	for _, s := range c.Secrets {
 		if len(s.Hosts) > 0 {
@@ -150,9 +153,7 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 			},
 		})
 	}
-	if len(transforms) > 0 {
-		raw["transforms"] = transforms
-	}
+	raw["transforms"] = transforms
 	return yaml.Marshal(raw)
 }
 

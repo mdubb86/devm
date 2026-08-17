@@ -98,13 +98,14 @@ class IronProxyConfig:
             cfg["dns"]["listen"] = self.dns_listen
             cfg["dns"]["proxy_ip"] = self.dns_proxy_ip
 
-        transforms: list = []
-
-        if self.allow_domains:
-            transforms.append({
-                "name": "allowlist",
-                "config": {"domains": self.allow_domains},
-            })
+        # The allowlist transform is always emitted, empty domains
+        # included — iron-proxy only runs the egress check when the
+        # transform is present, so an omitted one means allow-all.
+        # Mirrors internal/serviceapi/ironproxy.go's YAML().
+        transforms: list = [{
+            "name": "allowlist",
+            "config": {"domains": list(self.allow_domains)},
+        }]
 
         if self.secret_tokens:
             entries = []
@@ -126,8 +127,7 @@ class IronProxyConfig:
                 "config": {"secrets": entries},
             })
 
-        if transforms:
-            cfg["transforms"] = transforms
+        cfg["transforms"] = transforms
 
         return cfg
 

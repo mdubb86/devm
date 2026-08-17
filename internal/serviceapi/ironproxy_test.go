@@ -105,7 +105,11 @@ func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 	assert.Equal(t, []any{"github.com", "*.npmjs.org"}, domains)
 }
 
-func TestBuildIronProxyConfig_EmptyAllowList_OmitsTransforms(t *testing.T) {
+// An empty AllowList must still emit the allowlist transform, with no
+// domains. iron-proxy v0.45.0 runs no egress check at all when the
+// transform is absent — an omitted transform is allow-all. The
+// deny-all shape is the transform present with `domains: []`.
+func TestBuildIronProxyConfig_EmptyAllowList_EmitsDenyAllTransform(t *testing.T) {
 	cfg := IronProxyConfig{
 		HTTPListen:  "127.0.0.1:8080",
 		HTTPSListen: "127.0.0.1:8443",
@@ -118,8 +122,12 @@ func TestBuildIronProxyConfig_EmptyAllowList_OmitsTransforms(t *testing.T) {
 	var got map[string]any
 	require.NoError(t, yaml.Unmarshal(blob, &got))
 
-	_, hasTransforms := got["transforms"]
-	assert.False(t, hasTransforms, "transforms key should be absent when AllowList is empty")
+	transforms, ok := got["transforms"].([]any)
+	require.True(t, ok, "transforms key must be present even with an empty AllowList")
+	require.Len(t, transforms, 1)
+	transform := transforms[0].(map[string]any)
+	assert.Equal(t, "allowlist", transform["name"])
+	assert.Equal(t, []any{}, transform["config"].(map[string]any)["domains"])
 }
 
 func TestIronProxyListenAddr_UsesLoopback(t *testing.T) {
