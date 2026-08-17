@@ -173,51 +173,53 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	defer cancel()
 
 	// Auto-install routes in vm mode if the project doesn't have
-	// any yet. Best-effort: silent if the daemon is down. We
-	// don't overwrite an existing route set — the user may have
-	// explicitly chosen `devm route local`, and we respect that
-	// across stop/start cycles per the Ship 3 design.
+	// any yet. Best-effort: silent if the daemon is down. We don't
+	// overwrite an existing route set — the user may have explicitly
+	// chosen `devm route local`, and we respect that across stop/start
+	// cycles per the Ship 3 design.
 	//
-	// This goroutine is launched BEFORE orchestrator.RunShell brings the
-	// VM up below, so on a cold start buildRoutes(ModeVM) — which reads
-	// the VM's IP — fails until the VM exists. Retry on error (VM not up
-	// yet) until it succeeds or a generous cold-start-sized deadline
-	// passes, so routes still get registered during provisioning,
-	// before an interactive attach or a `-- cmd` exit. Retry ONLY on
-	// error; once buildRoutes returns nil error, stop — an empty result
-	// is legitimate (no hostnamed services) and not a reason to keep
-	// retrying.
+	// Races with orchestrator.RunShell below, which is what brings the
+	// VM up. Routes/apply on the daemon side needs the project's IP
+	// allocated (ironProxyState.get) — until /vm/start has completed
+	// that step, /routes/apply returns 400 "no projectIP allocated".
+	// So the loop retries on ApplyRoutes failure, not buildRoutes
+	// (which never errors — the VM-IP substitution happens server-side).
+	// Deadline is cold-start-sized; if the goroutine gives up, the
+	// user's fix is a manual `devm reconcile --yes`.
 	go func() {
-		var routes []serviceapi.Route
+		routes, err := buildRoutes(cfg, serviceapi.ModeVM)
+		if err != nil || len(routes) == 0 {
+			return
+		}
+		c := serviceapi.NewClient(ident)
 		deadline := time.Now().Add(5 * time.Minute)
 		for {
-			r, err := buildRoutes(cfg, serviceapi.ModeVM)
-			if err == nil {
-				routes = r
-				break
+			rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
+			if c.Available(rctx) {
+				// Preserve an existing user-chosen route mode (e.g.
+				// `devm route local`) across stop/start; only fill in
+				// when the daemon has nothing for this project.
+				existing, listErr := c.ListRoutes(rctx)
+				if listErr == nil {
+					if _, present := existing[cfg.Project.Name]; present {
+						rcancel()
+						return
+					}
+					if _, applyErr := c.ApplyRoutes(rctx, cfg.Project.Name, routes); applyErr == nil {
+						rcancel()
+						return
+					}
+					// applyErr is typically the "no projectIP allocated"
+					// 400 during the race window — keep polling until
+					// /vm/start has populated ironProxyState.
+				}
 			}
+			rcancel()
 			if time.Now().After(deadline) {
 				return
 			}
 			time.Sleep(2 * time.Second)
 		}
-		if len(routes) == 0 {
-			return
-		}
-		rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer rcancel()
-		c := serviceapi.NewClient(ident)
-		if !c.Available(rctx) {
-			return
-		}
-		existing, err := c.ListRoutes(rctx)
-		if err != nil {
-			return
-		}
-		if _, present := existing[cfg.Project.Name]; present {
-			return
-		}
-		_, _ = c.ApplyRoutes(rctx, cfg.Project.Name, routes)
 	}()
 
 	deps := orchestrator.DefaultShellDeps(ident, repoRoot)
