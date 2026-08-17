@@ -17,6 +17,19 @@ if [ -f /opt/devm/ca/devm.crt ] && ! cmp -s /opt/devm/ca/devm.crt /usr/local/sha
         echo "FAIL: devm CA installed to CApath but not merged into ca-certificates.crt bundle" >&2
         exit 1
     }
+
+    # --- NSS trust: seed /etc/pki/nssdb so browsers accept the CA too. ---
+    # NSS (Chromium, Firefox) has its own sqlite trust store and does
+    # not consume the OpenSSL bundle above or any of the ~12 env-var
+    # CA hooks devm sets for other toolchains. Same CA, second store.
+    # certutil ships in libnss3-tools, installed in the base image.
+    # Idempotent: -D-then-A tolerates CA rotation; the outer cmp -s
+    # already skips this whole block when the CA is unchanged.
+    mkdir -p /etc/pki/nssdb
+    certutil -D -n devm -d sql:/etc/pki/nssdb 2>/dev/null || true
+    certutil -A -n devm -t C,, \
+        -i /usr/local/share/ca-certificates/devm.crt \
+        -d sql:/etc/pki/nssdb
 fi
 
 # --- dnsmasq drop-in: devm-test.conf configures local resolver behavior. ---

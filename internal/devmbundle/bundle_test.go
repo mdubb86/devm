@@ -62,6 +62,27 @@ func TestBuild_GuestDocContent(t *testing.T) {
 	assert.Contains(t, doc, "iron-proxy", "GUEST.md must explain the egress model")
 }
 
+// TestBuild_InstallScriptSeedsNSSTrust pins that install.sh in the
+// bundle seeds the system NSS db with the devm CA. NSS (Chromium,
+// Firefox) doesn't consume the OpenSSL bundle or any of devm's
+// env-var trust hooks — its trust lives in sqlite. A regression that
+// dropped this seed would silently break every browser in the guest
+// against .test hostnames and every iron-proxy-MITM'd HTTPS site.
+func TestBuild_InstallScriptSeedsNSSTrust(t *testing.T) {
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+
+	entries := readTar(t, body)
+	e, ok := entries["install.sh"]
+	require.True(t, ok, "bundle missing install.sh")
+	script := string(e.body)
+	assert.Contains(t, script, "certutil -A -n devm -t C,,",
+		"install.sh must seed the devm CA into the system NSS db (see /etc/pki/nssdb)")
+	assert.Contains(t, script, "sql:/etc/pki/nssdb",
+		"install.sh must target the system NSS trust db path")
+}
+
 func TestBuild_EnvReflectsConfig(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
