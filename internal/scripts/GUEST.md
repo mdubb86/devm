@@ -85,8 +85,13 @@ Mac-side. Ask them to run one of these and share the output:
 
 ## Reserved env
 
-Guaranteed set on every shell here (install-time and runtime):
+`env:` in `devm.yaml` is set **everywhere** in the guest — every login
+shell, every non-login shell, every child process, every systemd
+service. If a variable is declared, it is set; nowhere to check,
+nothing to source manually.
+
+Always available:
 
 - `IS_SANDBOX=1` — mode detect
 - `WORKSPACE` — absolute path to the project dir (identical on host)
-- Plus everything from `env:` in `devm.yaml`.
+- Everything else from `env:` in `devm.yaml`.
