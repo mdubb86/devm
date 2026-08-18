@@ -31,7 +31,12 @@ work.
   ONLY way to get your code changes running as a daemon for testing.
   Idempotent-forward: re-run it after any daemon-side change.
 - **`just e2e <NAME>`** — runs a non-sudo e2e test against the
-  bootstrapped e2e daemon.
+  bootstrapped e2e daemon. Marker `devm` — the default devm-behavior
+  suite.
+- **`just e2e-recipe <NAME>`** — runs a recipe-marker e2e test (proves
+  a `recipes/**/*.md` recipe's promises end-to-end; installs the tool,
+  spins up its real workload). Same bootstrap requirement; no sudo.
+  Slow (minutes to tens of minutes per test).
 - **`just e2e-install <NAME>`** — runs a sudo-marker e2e test (tests
   that themselves exercise `devm install`/`uninstall`/`service
   restart` on the e2e slot). Prompts once for sudo; refreshes in the
@@ -51,8 +56,9 @@ section. The default answer is always "use the e2e slot."
   reinstall. Ask the user to run these; explain briefly why and hand them
   the exact commands.
 - **Claude drives every step that doesn't need sudo, after bootstrap is
-  in place.** That's `just e2e <NAME>`, follow-up probes (`tart list`,
-  `ps`, log tails), and any code / test iteration.
+  in place.** That's `just e2e <NAME>`, `just e2e-recipe <NAME>`,
+  follow-up probes (`tart list`, `ps`, log tails), and any code / test
+  iteration.
 - **After a daemon-side code change, the e2e binary MUST be re-bootstrapped
   or the test is running the old binary.** Symptom: a bug you just fixed
   still reproduces. Ask the user to `just e2e-bootstrap` again — don't

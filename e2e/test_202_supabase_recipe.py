@@ -1,40 +1,44 @@
-"""202: Supabase recipe end-to-end (full stack + auth email flow).
+"""202: Supabase recipe end-to-end (full stack + browser auth flow).
 
 Proves recipes/service/supabase.md works on a real Tart VM by
-exercising the recipe's full promise:
+exercising every promise the recipe makes:
 
   A. Install works. `supabase --version` returns 0.
 
-  B. `supabase start` brings up the full stack (~10 containers).
-     Waits for all services healthy, then queries `supabase status`
-     for endpoint URLs and the anon key.
+  B. `supabase start` brings up the full stack (~10 containers), then
+     the anon key is read from `supabase status`.
 
-  C. Every routing pattern the recipe declares works from inside the
-     VM:
-       - HTTP-via-proxy: `curl https://api.<proj>.test/rest/v1/`,
-         `curl https://studio.<proj>.test`, `curl https://mail.<proj>.test`
-         all reach their upstream containers.
-       - Raw-TCP-direct: `psql db.<proj>.test:54322` returns `SELECT 1`.
-     This proves both routing planes (proxy + direct) actually work.
+  C. Per-service HOSTNAME routing (recipe's core promise) actually
+     reaches each container. Mac-side curl to each declared hostname
+     resolves through the daemon proxy and back to the right
+     container:
+       - https://api.<proj>.e2e.test/          → Kong (via TLS chain)
+       - http://studio.<proj>.e2e.test/        → Studio HTML
+       - http://mail.<proj>.e2e.test/          → Mailpit UI
+       - psql db.<proj>.e2e.test:54322         → direct-mode Postgres
+     Validates `services:` routing + `direct: true` + TLS chain.
 
-  D. Full auth email flow — the piece the recipe's email-templates
-     section exists for. Recipe overrides GoTrue's default templates
-     so emails carry a `{{ .SiteURL }}` link, not the broken
-     `127.0.0.1:54321` GoTrue defaults to. Steps:
-       1. POST /auth/v1/signup a test user.
-       2. Poll Mailpit for the confirmation email.
-       3. Extract the confirmation URL from the email body.
-       4. Assert the URL points at our hostname (NOT 127.0.0.1) —
-          this is the concrete proof the template fix works.
-       5. Extract token_hash + type from the URL.
-       6. Call POST /auth/v1/verify with them (simulates what an
-          `/auth/confirm` route in a real app would do).
-       7. GET /auth/v1/user and assert email_confirmed_at is set.
+  D. Full auth email flow via API. Signup, poll Mailpit, extract link,
+     assert URL is HOSTNAME (not 127.0.0.1) — smoking gun for the
+     recipe's custom-template fix. Then verify → user confirmed.
 
-LIVE RUN DEFERRED at branch-land time. Runtime is ~15-25 min the
-first time (base image + docker install + supabase CLI install +
-~10 container pulls). Subsequent runs against a warm image cache
-are faster. Run via `just e2e-recipe`.
+  E. Browser click-through via Playwright — Chromium in the VM
+     navigates the emailed HTTPS confirmation link, lands on the
+     app's /auth/confirm handler (a tiny http.server this test spins
+     up as a `services:` exec), and receives the token_hash. Proves
+     the full recipe-shape flow the way a real user would experience
+     it: NSS trust (v0.15.1 install.sh seed) + hostname routing +
+     custom-template landing convention.
+
+Playwright is used ONLY as a validation probe here — the recipe
+doesn't teach Playwright itself (that lives in
+recipes/tool/playwright.md); this test uses it to prove the
+supabase recipe's browser-facing promises hold end-to-end.
+
+Runtime is ~15-25 min the first time (base image + docker install +
+supabase CLI install + ~10 container pulls + pip install playwright
++ chromium browser download). Subsequent runs against a warm cache
+are faster. Run via `just e2e test_202_supabase_recipe`.
 """
 from __future__ import annotations
 
@@ -49,6 +53,9 @@ import pytest
 pytestmark = pytest.mark.recipe
 
 
+# --- Custom email templates: link points at the APP's /auth/confirm
+# --- (built from {{ .SiteURL }} + {{ .TokenHash }}), not GoTrue's
+# --- default {{ .ConfirmationURL }} which bakes in 127.0.0.1:54321.
 CONFIRMATION_TEMPLATE = """<!DOCTYPE html>
 <html><body>
   <h1>Confirm your email</h1>
@@ -62,7 +69,6 @@ CONFIRMATION_TEMPLATE = """<!DOCTYPE html>
 MAGIC_LINK_TEMPLATE = """<!DOCTYPE html>
 <html><body>
   <h1>Your magic link</h1>
-  <p>Sign in to your account:</p>
   <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email">
     Sign in
   </a>
@@ -87,6 +93,50 @@ EMAIL_CHANGE_TEMPLATE = """<!DOCTYPE html>
 </body></html>
 """
 
+# --- Minimal in-VM /auth/confirm handler. A real app would call
+# --- supabase.auth.verifyOtp; here we just prove the emailed link
+# --- reaches something on our hostname, so Playwright can observe
+# --- title + path.
+CONFIRM_HANDLER = '''
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        body = (
+            "<!DOCTYPE html><html><head><title>Auth Confirm</title></head>"
+            "<body><p>PATH:" + self.path + "</p></body></html>"
+        )
+        self.wfile.write(body.encode("utf-8"))
+    def log_message(self, *args, **kwargs):
+        pass
+
+HTTPServer(("0.0.0.0", 5173), Handler).serve_forever()
+'''
+
+# --- Playwright probe: launch chromium in the VM, navigate the
+# --- emailed link, print status + title + final URL so the outer
+# --- assertions can key off them. No ignoreHTTPSErrors — the whole
+# --- point is to prove the devm CA is trusted by NSS. If Chromium
+# --- rejects the cert, the test fails and we've learned something.
+PLAYWRIGHT_PROBE = '''
+import sys
+from playwright.sync_api import sync_playwright
+
+url = sys.argv[1]
+with sync_playwright() as p:
+    browser = p.chromium.launch()
+    page = browser.new_page()
+    response = page.goto(url, wait_until="load", timeout=30000)
+    print("STATUS", response.status)
+    print("TITLE", page.title())
+    print("URL", page.url)
+    print("BODY", page.content()[:500])
+    browser.close()
+'''
+
 
 def _shell(devm, workspace, script: str, timeout: float, check: bool = True) -> subprocess.CompletedProcess:
     """Run a bash command inside the VM. Wraps devm shell -- bash -c."""
@@ -106,17 +156,44 @@ def _shell(devm, workspace, script: str, timeout: float, check: bool = True) -> 
     return r
 
 
+def _mac_curl(url: str, extra: list[str] | None = None, timeout: float = 15) -> tuple[int, str]:
+    """Run curl on the Mac (not in the VM). Returns (http_code, body)."""
+    cmd = [
+        "curl", "-sS", "-o", "-", "-w", "\n__HTTP_CODE__:%{http_code}",
+        "--max-time", "10",
+    ]
+    if extra:
+        cmd += extra
+    cmd.append(url)
+    r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    out = r.stdout.decode(errors="replace")
+    m = re.search(r"\n__HTTP_CODE__:(\d+)\s*$", out)
+    if not m:
+        return -1, out
+    return int(m.group(1)), out[: m.start()]
+
+
 @pytest.mark.timeout(1800)
 def test_supabase_recipe(devm, workspace, sandbox_name):
     proj = workspace.vm_name
+    site_url = f"https://{proj}.e2e.test"
+    api_ext = f"https://api.{proj}.e2e.test/auth/v1"
 
-    # devm.yaml — the recipe's shape, verbatim.
+    # devm.yaml — the recipe's shape, verbatim, plus a tiny http.server
+    # for the /auth/confirm landing page and Playwright's runtime deps.
     workspace.devmyaml_path.write_text(textwrap.dedent(f"""\
         project:
           name: {proj}
         docker: true
+        env:
+          # Recipe §1: add devm var BEFORE referencing it from config.toml.
+          # An unset env(NAME) is a fatal parse error for the whole stack.
+          PUBLIC_SITE_URL: {site_url}
+          PUBLIC_SUPABASE_AUTH_EXTERNAL_URL: {api_ext}
         packages:
           - postgresql-client
+          - chromium                     # Playwright runtime libs (per playwright recipe)
+          - python3-venv                 # Playwright install into an isolated venv
         scripts:
           install-supabase:
             - TAG=$(curl -sIL -o /dev/null -w '%{{url_effective}}' https://github.com/supabase/cli/releases/latest | xargs basename)
@@ -126,18 +203,26 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         install:
           - ">install-supabase"
         services:
+          # App: a tiny http.server serving /auth/confirm on 5173. Bound
+          # to 0.0.0.0 — a loopback bind returns 502 through the proxy
+          # (recipe Notes).
+          app:
+            port: 5173
+            hostname: {proj}.e2e.test
+            exec: ["python3", "{workspace.path}/confirm_handler.py"]
+            restart: always
           supabase-api:
             port: 54321
-            hostname: api.{proj}.test
+            hostname: api.{proj}.e2e.test
           supabase-studio:
             port: 54323
-            hostname: studio.{proj}.test
+            hostname: studio.{proj}.e2e.test
           supabase-mail:
             port: 54324
-            hostname: mail.{proj}.test
+            hostname: mail.{proj}.e2e.test
           supabase-db:
             port: 54322
-            hostname: db.{proj}.test
+            hostname: db.{proj}.e2e.test
             direct: true
         network:
           allow:
@@ -145,10 +230,19 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
           - objects.githubusercontent.com
           - public.ecr.aws
           - "*.cloudfront.net"
+          # Playwright CDN + mirror (recipes/tool/playwright.md).
+          - cdn.playwright.dev
+          - playwright.download.prss.microsoft.com
+          # pip install playwright (PyPI + wheels).
+          - pypi.org
+          - files.pythonhosted.org
     """))
 
-    # Cold-start. Budget covers base image (if not current) + docker
-    # feature install + supabase CLI download.
+    # Handler script — served via the app service above.
+    (workspace.path / "confirm_handler.py").write_text(CONFIRM_HANDLER)
+    (workspace.path / "pw_probe.py").write_text(PLAYWRIGHT_PROBE)
+
+    # Cold-start.
     r = subprocess.run(
         [devm.path, "shell", "--", "true"],
         cwd=str(workspace.path), capture_output=True, timeout=600,
@@ -171,14 +265,7 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
     # Phase B — write config + templates, then start.
     # ------------------------------------------------------------------
     # Skipping `supabase init` — it's interactive and we're writing
-    # every file it would create anyway (config.toml + templates). The
-    # supabase CLI only requires supabase/config.toml to be present for
-    # `supabase start` to work; init just scaffolds it and adds
-    # .gitignore entries we don't need in a test.
-    #
-    # Write custom config.toml + templates. Site URL uses http (not
-    # https) because the recipe test runs isolated — proxy TLS setup
-    # for *.test hostnames isn't in scope here.
+    # every file it would create anyway.
     supabase_dir = workspace.path / "supabase"
     supabase_dir.mkdir(exist_ok=True)
     (supabase_dir / "templates").mkdir(exist_ok=True)
@@ -188,7 +275,6 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
     (supabase_dir / "templates" / "recovery.html").write_text(RECOVERY_TEMPLATE)
     (supabase_dir / "templates" / "email_change.html").write_text(EMAIL_CHANGE_TEMPLATE)
 
-    site_url = f"http://{proj}.test"
     (supabase_dir / "config.toml").write_text(textwrap.dedent(f"""\
         project_id = "{proj}"
 
@@ -216,8 +302,9 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
 
         [auth]
         enabled = true
-        site_url = "{site_url}"
-        additional_redirect_urls = ["{site_url}/auth/callback"]
+        site_url = "env(PUBLIC_SITE_URL)"
+        external_url = "env(PUBLIC_SUPABASE_AUTH_EXTERNAL_URL)"
+        additional_redirect_urls = ["env(PUBLIC_SITE_URL)"]
         jwt_expiry = 3600
         enable_signup = true
 
@@ -243,9 +330,7 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         content_path = "./supabase/templates/email_change.html"
     """))
 
-    # supabase start. First run pulls ~10 container images through
-    # iron-proxy — slow (10min+ possible), but subsequent runs against
-    # docker's local cache are minutes not tens-of-minutes.
+    # supabase start.
     r = _shell(
         devm, workspace,
         "cd $WORKSPACE && supabase start 2>&1",
@@ -258,14 +343,10 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         f"stderr:\n{r.stderr.decode(errors='replace')}"
     )
 
-    # Test-cadence sleep only. supabase/cli#4668 (fixed upstream in
-    # 2026-01) enables GoTrue's template reloader; it retries every
-    # ~10s until Kong's :8088 endpoint is serving. `supabase start`
-    # returns "healthy" before that first successful reload, so a test
-    # that hits /signup instantly races the reloader and gets the
-    # default template. Interactive users don't notice — they take
-    # seconds to click, plenty for the retry. Sleeping ~15s here is
-    # enough margin.
+    # supabase/cli#4668 (fixed 2026-01): GoTrue's template reloader
+    # retries every ~10s until Kong's :8088 endpoint is serving.
+    # `supabase start` returns "healthy" before the first successful
+    # reload — sleeping ~15s here is enough margin.
     time.sleep(15)
 
     # Fetch anon key from supabase status.
@@ -276,67 +357,54 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
     anon_key = m.group(1)
 
     # ------------------------------------------------------------------
-    # Phase C — supabase containers are actually up and serving.
+    # Phase C — hostname routing (recipe's core promise).
     # ------------------------------------------------------------------
-    # Hit container ports directly (localhost:PORT) inside the VM.
-    # Isolated e2e has no *.test hostname routing (see e2e/README.md).
-    # The recipe's job is to make the STACK come up correctly; direct
-    # probes prove that without needing the routing layer.
-
-    # Kong (API gateway) on :54321. /rest/v1/ is PostgREST via Kong;
-    # requires the apikey header for anon-key auth. Just prove it
-    # responds (401 without a valid key is still a proof of "up").
-    r = _shell(
-        devm, workspace,
-        "curl -sS -o /dev/null -w '%{http_code}' http://localhost:54321/rest/v1/ --max-time 10",
-        timeout=30, check=False,
+    # Mac-side probes. Each hostname must route via the daemon proxy
+    # into the corresponding container. Kong on HTTPS also validates
+    # the TLS chain (proxy re-signs with devm-e2e CA; curl trusts it
+    # via the OpenSSL system bundle installed at devm install-time).
+    code, body = _mac_curl(f"https://api.{proj}.e2e.test/")
+    assert code in (200, 401, 404), (
+        f"https://api.{proj}.e2e.test/ (Kong) unreachable: code={code}, body={body[:300]!r}"
     )
-    code = r.stdout.decode().strip()
-    assert code.startswith(("2", "4")), f"Kong :54321 not serving: got code={code!r}"
-
-    # Studio on :54323. Serves HTML.
-    r = _shell(
-        devm, workspace,
-        "curl -sS -o /dev/null -w '%{http_code}' http://localhost:54323/ --max-time 10",
-        timeout=30, check=False,
+    code, body = _mac_curl(f"http://studio.{proj}.e2e.test/")
+    assert code in (200, 301, 302, 307), (
+        f"http://studio.{proj}.e2e.test/ (Studio) unreachable: code={code}, body={body[:300]!r}"
     )
-    code = r.stdout.decode().strip()
-    assert code.startswith(("2", "3")), f"Studio :54323 not serving: got code={code!r}"
-
-    # Mailpit on :54324. Serves web UI + API.
-    r = _shell(
-        devm, workspace,
-        "curl -sS -o /dev/null -w '%{http_code}' http://localhost:54324/ --max-time 10",
-        timeout=30, check=False,
+    code, body = _mac_curl(f"http://mail.{proj}.e2e.test/")
+    assert code == 200, (
+        f"http://mail.{proj}.e2e.test/ (Mailpit) unreachable: code={code}, body={body[:300]!r}"
     )
-    code = r.stdout.decode().strip()
-    assert code.startswith(("2", "3")), f"Mailpit :54324 not serving: got code={code!r}"
-
-    # Postgres on :54322 via localhost. psql was installed during
-    # provisioning (see install: block above).
-    r = _shell(
-        devm, workspace,
-        "PGPASSWORD=postgres psql -h localhost -p 54322 -U postgres -d postgres -tAc 'SELECT 1'",
-        timeout=30,
-    )
-    assert r.stdout.decode().strip() == "1", (
-        f"psql SELECT 1 didn't return 1; got: {r.stdout!r}"
+    # Direct-mode Postgres: TCP passthrough, not HTTP. Reachable from
+    # the Mac at db.<proj>.e2e.test:54322. Probed via TCP + a minimal
+    # Postgres SSLRequest handshake (avoids requiring psql on the Mac
+    # PATH); a Postgres server responds with a single 'S' or 'N' byte.
+    import socket
+    import struct
+    try:
+        with socket.create_connection((f"db.{proj}.e2e.test", 54322), timeout=5) as s:
+            # SSLRequest: length=8, code=80877103 (0x04D2162F).
+            s.sendall(struct.pack("!II", 8, 80877103))
+            resp = s.recv(1)
+    except OSError as e:
+        raise AssertionError(
+            f"direct: true routing broken: TCP connect to db.{proj}.e2e.test:54322 "
+            f"from Mac failed: {e}"
+        )
+    assert resp in (b"S", b"N"), (
+        f"direct: true reached something, but not Postgres: got byte {resp!r} "
+        f"(expected 'S' or 'N' in reply to SSLRequest)"
     )
 
     # ------------------------------------------------------------------
-    # Phase D — full signup + email + verify chain.
+    # Phase D — signup, poll Mailpit, extract link, assert hostname.
     # ------------------------------------------------------------------
     test_email = "e2etest@example.com"
     test_password = "correct-horse-battery-staple"
-    # Direct-to-Kong for API calls (localhost:54321). Isolated e2e has
-    # no *.test hostname routing (see e2e/README.md — no launchd → no
-    # daemon proxy listener), so hostname URLs would hang. What THIS
-    # test proves is the recipe's config: custom templates → correct
-    # site_url in email bodies — see the smoking-gun assertion below.
-    api_base = "http://localhost:54321"
-    mailpit_base = "http://localhost:54324"
+    # Hit Kong via the routed hostname now that Phase C proved it works.
+    api_base = f"https://api.{proj}.e2e.test"
+    mailpit_base = f"http://mail.{proj}.e2e.test"
 
-    # Signup.
     signup_body = json.dumps({"email": test_email, "password": test_password})
     r = _shell(
         devm, workspace,
@@ -348,10 +416,6 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         timeout=30,
     )
     signup_resp = r.stdout.decode()
-    # GoTrue returns {"id": "...", ...} on success (user object at top
-    # level when confirm-required is off) or {"user": {...}, ...} when
-    # confirm-required is on. Errors look like {"error_code": "...",
-    # "msg": "..."} — reject those.
     try:
         signup_json = json.loads(signup_resp)
     except json.JSONDecodeError as e:
@@ -363,15 +427,10 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         f"signup didn't return a user id: {signup_json}"
     )
 
-    # Poll Mailpit for the confirmation email. Supabase CLI's mail
-    # container is Mailpit (the container name is `supabase_inbucket_*`
-    # for historical reasons, but the image is Mailpit).
-    #   GET /api/v1/messages           → {"messages":[{"ID":...}], ...}
-    #   GET /api/v1/message/{ID}       → {"HTML":..., "Text":..., "To":[{...}]}
+    # Poll Mailpit for the confirmation email.
     messages_api = f"{mailpit_base}/api/v1/messages"
-
     confirmation_body = None
-    for _ in range(30):  # up to 30s of polling
+    for _ in range(30):
         r = _shell(
             devm, workspace,
             f"curl -sS '{messages_api}'",
@@ -383,7 +442,6 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
                 messages = envelope.get("messages", [])
             except json.JSONDecodeError:
                 messages = []
-            # Find the message addressed to our test_email.
             target = None
             for m in messages:
                 for to in m.get("To", []):
@@ -400,17 +458,11 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
                     timeout=15,
                 )
                 full = json.loads(r2.stdout.decode())
-                # Prefer HTML body (that's where our template lives);
-                # fall back to Text.
                 confirmation_body = full.get("HTML") or full.get("Text") or ""
                 break
         time.sleep(1)
 
     if not confirmation_body:
-        # Diagnostic dump — supabase CLI has swapped mail containers
-        # before (Mailpit → Mailpit); if it happens again the API paths
-        # here will 404 and the container list + SMTP env below shows
-        # what changed.
         debug_script = "\n".join([
             "set +e",
             "echo '=== all containers ==='",
@@ -431,11 +483,9 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
             f"debug stderr:\n{r_debug.stderr.decode(errors='replace')[:2000]}"
         )
 
-    # This is the smoking-gun assertion for the recipe's email-templates
-    # fix: the URL must contain OUR hostname, NOT the default
-    # 127.0.0.1:54321 that GoTrue bakes in without custom templates.
-    assert f"{proj}.test" in confirmation_body, (
-        f"email doesn't contain the hostname {proj}.test — templates "
+    # Smoking-gun: URL must be OUR hostname, not GoTrue's default.
+    assert f"{proj}.e2e.test" in confirmation_body, (
+        f"email doesn't contain the hostname {proj}.e2e.test — templates "
         f"not registered or not overriding GoTrue defaults. Body:\n{confirmation_body[:2000]}"
     )
     assert "127.0.0.1:54321" not in confirmation_body, (
@@ -443,14 +493,24 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
         f"effect. Body:\n{confirmation_body[:2000]}"
     )
 
-    # Extract token_hash from the URL.
-    match = re.search(r"token_hash=([A-Za-z0-9_\-]+)&type=(\w+)", confirmation_body)
-    assert match, f"couldn't find token_hash in email body:\n{confirmation_body[:2000]}"
-    token_hash, verify_type = match.group(1), match.group(2)
+    # Extract the confirmation URL. HTML-unescape first because raw
+    # HTML uses &amp; between query params (per feedback §6).
+    import html
+    email_unescaped = html.unescape(confirmation_body)
+    link_match = re.search(
+        rf"(https://{re.escape(proj)}\.e2e\.test/auth/confirm\?token_hash=[A-Za-z0-9_\-]+&type=\w+)",
+        email_unescaped,
+    )
+    assert link_match, (
+        f"couldn't find confirmation URL in email body:\n{email_unescaped[:2000]}"
+    )
+    confirm_url = link_match.group(1)
+    tok_match = re.search(r"token_hash=([A-Za-z0-9_\-]+)&type=(\w+)", confirm_url)
+    token_hash, verify_type = tok_match.group(1), tok_match.group(2)
     assert verify_type == "email", f"expected type=email, got type={verify_type}"
 
-    # Simulate what an app's /auth/confirm route would do:
-    # POST /auth/v1/verify with the token_hash.
+    # API-level verify (mirrors what an /auth/confirm handler does
+    # server-side). Confirms the token GoTrue baked in is usable.
     verify_body = json.dumps({"type": "email", "token_hash": token_hash})
     r = _shell(
         devm, workspace,
@@ -464,8 +524,6 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
     assert "access_token" in verify_resp, (
         f"verify didn't return an access_token; response:\n{verify_resp}"
     )
-
-    # Confirm user is confirmed.
     verify_json = json.loads(verify_resp)
     access_token = verify_json["access_token"]
     r = _shell(
@@ -479,4 +537,108 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
     assert user_resp.get("email") == test_email, f"unexpected user: {user_resp}"
     assert user_resp.get("email_confirmed_at"), (
         f"user email not confirmed after verify: {user_resp}"
+    )
+
+    # ------------------------------------------------------------------
+    # Phase E — browser click-through via Playwright.
+    # ------------------------------------------------------------------
+    # Sign up a second user so the confirmation URL is fresh (the one
+    # from Phase D is single-use and already consumed by the verify
+    # call above). Then have Chromium in the VM navigate the emailed
+    # link and land on our /auth/confirm handler over HTTPS.
+    pw_email = "e2epw@example.com"
+    signup_body = json.dumps({"email": pw_email, "password": test_password})
+    r = _shell(
+        devm, workspace,
+        f"curl -sS -X POST '{api_base}/auth/v1/signup' "
+        f"-H 'Content-Type: application/json' "
+        f"-H 'apikey: {anon_key}' "
+        f"-H 'Authorization: Bearer {anon_key}' "
+        f"-d '{signup_body}'",
+        timeout=30,
+    )
+    assert r.returncode == 0 and "error_code" not in r.stdout.decode(), (
+        f"second signup failed: {r.stdout.decode()!r}"
+    )
+
+    # Poll for the second user's email.
+    pw_confirm_url = None
+    for _ in range(30):
+        r = _shell(
+            devm, workspace,
+            f"curl -sS '{messages_api}'",
+            timeout=15, check=False,
+        )
+        if r.returncode == 0:
+            try:
+                envelope = json.loads(r.stdout.decode())
+                messages = envelope.get("messages", [])
+            except json.JSONDecodeError:
+                messages = []
+            target = None
+            for m in messages:
+                for to in m.get("To", []):
+                    if to.get("Address") == pw_email:
+                        target = m
+                        break
+                if target:
+                    break
+            if target:
+                r2 = _shell(
+                    devm, workspace,
+                    f"curl -sS '{mailpit_base}/api/v1/message/{target['ID']}'",
+                    timeout=15,
+                )
+                full = json.loads(r2.stdout.decode())
+                body2 = html.unescape(full.get("HTML") or full.get("Text") or "")
+                m2 = re.search(
+                    rf"(https://{re.escape(proj)}\.e2e\.test/auth/confirm\?token_hash=[A-Za-z0-9_\-]+&type=\w+)",
+                    body2,
+                )
+                if m2:
+                    pw_confirm_url = m2.group(1)
+                    break
+        time.sleep(1)
+    assert pw_confirm_url, "no Playwright-target confirmation URL arrived"
+
+    # Install Playwright in an isolated venv (PEP 668 blocks system
+    # pip on Debian 13). Then download the pinned Chromium build via
+    # the two allowlisted CDN hosts.
+    _shell(
+        devm, workspace,
+        "python3 -m venv $HOME/pw-venv && "
+        "$HOME/pw-venv/bin/pip install --quiet playwright && "
+        "$HOME/pw-venv/bin/playwright install chromium",
+        timeout=600,
+    )
+
+    # Run the probe. No --ignoreHTTPSErrors: this proves the devm CA
+    # is trusted by NSS (v0.15.1 seeded $HOME/.pki/nssdb via install.sh).
+    r = _shell(
+        devm, workspace,
+        f"$HOME/pw-venv/bin/python {workspace.path}/pw_probe.py '{pw_confirm_url}'",
+        timeout=60,
+    )
+    probe_out = r.stdout.decode()
+
+    status_m = re.search(r"^STATUS (\d+)$", probe_out, re.MULTILINE)
+    title_m = re.search(r"^TITLE (.+)$", probe_out, re.MULTILINE)
+    url_m = re.search(r"^URL (.+)$", probe_out, re.MULTILINE)
+    body_m = re.search(r"^BODY (.+)$", probe_out, re.MULTILINE)
+    assert status_m and title_m and url_m and body_m, (
+        f"playwright probe didn't emit expected fields:\n{probe_out}"
+    )
+    assert status_m.group(1) == "200", (
+        f"playwright hit non-200 on confirmation URL: STATUS={status_m.group(1)}\n{probe_out}"
+    )
+    assert title_m.group(1).strip() == "Auth Confirm", (
+        f"landing page wasn't our handler: TITLE={title_m.group(1)!r}\n{probe_out}"
+    )
+    assert re.search(r"token_hash=([A-Za-z0-9_\-]+)", url_m.group(1)), (
+        f"final URL missing token_hash: URL={url_m.group(1)!r}\n{probe_out}"
+    )
+    # The handler echoes the request PATH into the body — proves it
+    # actually ran, not just any 200 from something in the chain.
+    assert "PATH:/auth/confirm" in body_m.group(1), (
+        f"handler didn't process the request path: BODY={body_m.group(1)!r}\n{probe_out}"
     )

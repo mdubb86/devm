@@ -182,6 +182,27 @@ e2e *NAMES:
     fi
     exit $rc
 
+# Run recipe-marker e2e tests (exercises devm's recipes end-to-end:
+# installs the tool, brings up a real workload, asserts the recipe's
+# promises hold). Same bootstrap requirement as `just e2e`; no sudo.
+# Slow — each recipe test installs the target tool + hydrates its
+# runtime, so runtimes are minutes to tens of minutes.
+e2e-recipe *NAMES:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    scripts/assert-e2e-installed.sh || {
+        echo "e2e state not bootstrapped. Run: just e2e-bootstrap"
+        exit 1
+    }
+    args=(-m recipe)
+    [ -n "{{NAMES}}" ] && args+=(-k "$(echo '{{NAMES}}' | sed 's/ / or /g')")
+    e2e/scripts/run.sh "${args[@]}"
+    rc=$?
+    if [ $rc -eq 5 ] && [ -n "{{NAMES}}" ]; then
+        echo "no tests matched: {{NAMES}}" >&2; exit 1
+    fi
+    exit $rc
+
 # Run install-marker tests. Each test exercises `devm-e2e install`/
 # `devm-e2e uninstall` themselves; those invocations need sudo. Prime
 # the timestamp up-front, then spawn a background refresher that keeps

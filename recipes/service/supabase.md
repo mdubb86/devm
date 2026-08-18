@@ -112,19 +112,37 @@ install:
 If `supabase` is in `devDependencies`, ask before removing it — the
 project may deliberately pin a version. If it's absent, nothing to do.
 
+## Steer agents at the CLI, not `docker exec`
+
+Add to the project's `CLAUDE.md`:
+
+```
+- Use the `supabase` CLI for all DB work — `supabase db query`,
+  `supabase db reset`, `supabase migration new`, `supabase gen types`.
+  Reach for `docker exec supabase_db_* psql` only for CLI-unavailable
+  ad-hoc probes.
+```
+
+Agents in the VM default to `docker exec … psql` because it always
+works; the CLI is the officially supported interface, keeps generated
+types in sync, and its subcommands handle migrations, seeds, and
+resets cleanly.
+
 ## Supabase-specific config fixes
 
 These are Supabase quirks devm can't know about.
 
 ### 1. Pin auth URLs + register custom email templates
 
-In `supabase/config.toml` — pins `site_url` AND registers custom
-templates so GoTrue stops using its broken defaults:
+In `supabase/config.toml` — pin `site_url` + `external_url` via
+`env()` so devm controls them, and register custom templates so
+GoTrue stops using its broken defaults:
 
 ```toml
 [auth]
-site_url = "http://<proj>.test"
-additional_redirect_urls = ["http://<proj>.test/auth/callback"]
+site_url = "env(PUBLIC_SITE_URL)"
+external_url = "env(PUBLIC_SUPABASE_AUTH_EXTERNAL_URL)"
+additional_redirect_urls = ["env(PUBLIC_SITE_URL)"]   # bare origin covers sub-paths
 
 [auth.email]
 enable_confirmations = true
@@ -146,6 +164,34 @@ content_path = "./supabase/templates/recovery.html"
 subject = "Confirm your email change"
 content_path = "./supabase/templates/email_change.html"
 ```
+
+Matching `devm.yaml` `env:` block:
+
+```yaml
+env:
+  PUBLIC_SITE_URL: https://<proj>.test
+  PUBLIC_SUPABASE_AUTH_EXTERNAL_URL: https://api.<proj>.test/auth/v1
+```
+
+Everything is `https` — an `http://` API base in an `https://` app
+page would be blocked by the browser as mixed content.
+
+Gotchas — all silent failures:
+
+- **Add the devm var first, then reference it.** An unset `env(NAME)`
+  is a fatal parse error for the whole stack (Postgres included).
+- **`env()` is whole-value only** — `env(NAME)/**` reaches GoTrue as
+  the literal string. Any suffixed URL needs its own variable.
+- **`redirect_to` mismatches silently fall back to `site_url`** and
+  still return 200 — assert the emitted link, not the status code.
+- **`[auth]` changes need `supabase stop && supabase start`** — `db:reset`
+  won't re-read them.
+- **`[api] external_url` is a no-op** — CLI reconstructs it from
+  `hostname + api.port`. Use `[auth] external_url` for the auth email
+  host.
+- **`SUPABASE_SERVICES_HOSTNAME` isn't usable with devm's routing** —
+  it emits one global hostname with real ports appended, incompatible
+  with per-service routes on 80/443.
 
 ### 2. Ship the four custom templates
 
@@ -209,6 +255,8 @@ EOF
 ```
 
 Take keys from `supabase status`, but **override the URLs** to hostnames.
+`--override-name` on `supabase status -o env` renames the KEY, not the
+value — don't try to pass a URL to it.
 
 ### 5. Framework dev-origin allowlist
 
@@ -237,6 +285,10 @@ $ psql postgresql://postgres:postgres@db.<proj>.test:54322/postgres -c 'SELECT 1
 - **`docker: true` is load-bearing.** `supabase start` orchestrates ~10
   Docker containers. See `recipes/service/docker.md` for what devm's
   built-in docker feature actually provides.
+- **App servers behind a route must bind `0.0.0.0`.** A loopback-bound
+  listener returns 502 through the proxy — reads like a crashed
+  service. Applies to `vite dev --host`, `wrangler dev --ip 0.0.0.0`,
+  and anything else you route to.
 - **Realtime rides `api.<proj>.test`.** WebSocket upgrades flow through
   the daemon HTTP proxy. No separate hostname.
 - **Analytics (Logflare, port 54327) is deliberately not exposed.** It's
@@ -245,6 +297,11 @@ $ psql postgresql://postgres:postgres@db.<proj>.test:54322/postgres -c 'SELECT 1
 - **First `supabase start` is slow** (~5-10 min pulling ~10 container
   images through iron-proxy). Subsequent starts reuse the local docker
   image cache.
+- **After `devm teardown`, run the full rehydration in one shot** —
+  `supabase start && supabase db reset` (+ `playwright install chromium`
+  if the project uses Playwright, since `~/.cache/ms-playwright` is
+  VM-local). Ordering bugs (a test that reads `.env` before the step
+  generating it) hide behind warm state and only surface on a cold VM.
 - **DNS TTL for `direct:` services is near-zero** — the VM's DHCP address
   changes on restart, and clients that cache beyond TTL may need a
   reconnect. Relevant if you leave `psql` sessions open across VM
