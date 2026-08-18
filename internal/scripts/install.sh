@@ -18,28 +18,32 @@ if [ -f /opt/devm/ca/devm.crt ] && ! cmp -s /opt/devm/ca/devm.crt /usr/local/sha
         exit 1
     }
 
-    # --- NSS trust: seed /etc/pki/nssdb so browsers accept the CA too. ---
-    # NSS (Chromium, Firefox) has its own sqlite trust store and does
-    # not consume the OpenSSL bundle above or any of the ~12 env-var
-    # CA hooks devm sets for other toolchains. Same CA, second store.
+    # --- NSS trust: seed the devm user's per-user NSS db so browsers
+    # accept the CA too. Chromium (both Debian's chromium package and
+    # Playwright's Chrome-for-Testing) reads $HOME/.pki/nssdb and does
+    # NOT fall through to /etc/pki/nssdb when the per-user db exists
+    # but lacks the cert — verified by A/B on the same binary. So the
+    # per-user db is the one that matters; system NSS is unused by
+    # anything in a devm guest today.
+    #
+    # $HOME dies on teardown, so this re-seeds on every fresh cold-
+    # start alongside the CA install above. Between stop/start the
+    # ext4 $HOME persists, and the outer cmp -s guard skips re-seeding
+    # when the CA hasn't changed.
+    #
+    # `su - devm -c` runs certutil in the devm user's context so
+    # $HOME resolves to /home/devm and file ownership lands right.
     # certutil ships in libnss3-tools, installed in the base image.
-    # Idempotent: -D-then-A tolerates CA rotation; the outer cmp -s
-    # already skips this whole block when the CA is unchanged.
-    mkdir -p /etc/pki/nssdb
-    certutil -D -n devm -d sql:/etc/pki/nssdb 2>/dev/null || true
-    certutil -A -n devm -t C,, \
-        -i /usr/local/share/ca-certificates/devm.crt \
-        -d sql:/etc/pki/nssdb
-    # certutil runs here as root (this whole script is `sudo /opt/devm/
-    # install.sh`) and creates the db files with root's umask — 0600
-    # root:root. NSS refuses to open unreadable files and returns the
-    # misleading SEC_ERROR_BAD_DATABASE ("bad" here means "unopenable").
-    # The store holds only public CA certs (no keys), so the system-
-    # wide convention on Fedora/Debian is world-readable: 0755 dir,
-    # 0644 files. Match that so Chromium/Firefox (running as devm)
-    # can read the trust store.
-    chmod 0755 /etc/pki/nssdb
-    chmod 0644 /etc/pki/nssdb/*
+    # -D-then-A tolerates CA rotation.
+    su - devm -c '
+        set -e
+        mkdir -p "$HOME/.pki/nssdb"
+        chmod 700 "$HOME/.pki" "$HOME/.pki/nssdb"
+        certutil -D -n devm -d sql:"$HOME/.pki/nssdb" 2>/dev/null || true
+        certutil -A -n devm -t "C,," \
+            -i /usr/local/share/ca-certificates/devm.crt \
+            -d sql:"$HOME/.pki/nssdb"
+    '
 fi
 
 # --- dnsmasq drop-in: devm-test.conf configures local resolver behavior. ---

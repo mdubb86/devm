@@ -63,9 +63,10 @@ func TestBuild_GuestDocContent(t *testing.T) {
 }
 
 // TestBuild_InstallScriptSeedsNSSTrust pins that install.sh in the
-// bundle seeds the system NSS db with the devm CA. NSS (Chromium,
-// Firefox) doesn't consume the OpenSSL bundle or any of devm's
-// env-var trust hooks — its trust lives in sqlite. A regression that
+// bundle seeds the devm user's per-user NSS db with the devm CA.
+// Chromium (Debian's package AND Playwright's Chrome-for-Testing)
+// reads $HOME/.pki/nssdb and does NOT fall through to /etc/pki/nssdb
+// when the per-user db exists but lacks the cert. A regression that
 // dropped this seed would silently break every browser in the guest
 // against .test hostnames and every iron-proxy-MITM'd HTTPS site.
 func TestBuild_InstallScriptSeedsNSSTrust(t *testing.T) {
@@ -77,17 +78,21 @@ func TestBuild_InstallScriptSeedsNSSTrust(t *testing.T) {
 	e, ok := entries["install.sh"]
 	require.True(t, ok, "bundle missing install.sh")
 	script := string(e.body)
-	assert.Contains(t, script, "certutil -A -n devm -t C,,",
-		"install.sh must seed the devm CA into the system NSS db (see /etc/pki/nssdb)")
-	assert.Contains(t, script, "sql:/etc/pki/nssdb",
-		"install.sh must target the system NSS trust db path")
-	// certutil runs as root and creates db files with root's umask
-	// (0600). NSS returns the misleading SEC_ERROR_BAD_DATABASE when a
-	// non-root reader (Chromium as devm) can't open them. Pin the
-	// world-readable chmod so a regression that drops it re-breaks
-	// browser trust silently on the next install.
-	assert.Contains(t, script, "chmod 0644 /etc/pki/nssdb/*",
-		"install.sh must chmod the NSS db files world-readable after certutil -A")
+	// The seed must run as the devm user so $HOME resolves to
+	// /home/devm and files land with correct ownership. install.sh
+	// itself runs as root via `sudo /opt/devm/install.sh`.
+	assert.Contains(t, script, "su - devm -c",
+		"install.sh must run the NSS seed in the devm user's context")
+	assert.Contains(t, script, `certutil -A -n devm -t "C,,"`,
+		"install.sh must seed the devm CA into the per-user NSS db")
+	assert.Contains(t, script, `sql:"$HOME/.pki/nssdb"`,
+		"install.sh must target the per-user NSS trust db path ($HOME/.pki/nssdb)")
+	// The per-user db must NOT be world-readable — 0700/0600. Prod
+	// docs suggest tight perms for user-scoped NSS stores; the store
+	// holds only a public CA cert today but the mode should match
+	// $HOME convention.
+	assert.Contains(t, script, `chmod 700 "$HOME/.pki" "$HOME/.pki/nssdb"`,
+		"install.sh must chmod the NSS dir 0700")
 }
 
 func TestBuild_EnvReflectsConfig(t *testing.T) {
