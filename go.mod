@@ -8,7 +8,6 @@ require (
 	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/insomniacslk/dhcp v0.0.0-20240710054256-ddd8a41251c9
 	github.com/kardianos/service v1.2.4
-	github.com/keybase/go-keychain v0.0.1
 	github.com/mattn/go-isatty v0.0.22
 	github.com/miekg/dns v1.1.72
 	github.com/oklog/run v1.2.0

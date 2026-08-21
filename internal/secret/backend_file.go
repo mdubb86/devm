@@ -142,7 +142,7 @@ func validateAccountSegment(seg string) error {
 	if seg == "." || seg == ".." {
 		return fmt.Errorf("secret: account segment %q would escape the secrets dir", seg)
 	}
-	if strings.ContainsAny(seg, `/\` + "\x00") {
+	if strings.ContainsAny(seg, `/\`+"\x00") {
 		return fmt.Errorf("secret: account segment %q contains invalid characters", seg)
 	}
 	if strings.HasPrefix(seg, ".tmp-") {
