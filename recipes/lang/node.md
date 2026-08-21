@@ -48,6 +48,8 @@ network:
     - github.com                      # fnm binary release
     - objects.githubusercontent.com   # release-artifact storage
     - nodejs.org                      # fnm's default Node distribution mirror
+    - registry.npmjs.org              # npm/pnpm/yarn package downloads
+    - api.npmjs.org                   # npm metadata (search / audit / stats); pnpm hits it
 ```
 
 ## Notes

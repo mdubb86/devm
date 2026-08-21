@@ -67,6 +67,7 @@ network:
     - console.anthropic.com     # OAuth token refresh (claude.ai accounts)
     - platform.claude.com       # OAuth token exchange + revoke
     - downloads.claude.ai       # native installer + plugin downloads
+    - mcp-proxy.anthropic.com   # WebFetch / WebSearch (routed via Anthropic)
     - raw.githubusercontent.com # plugin marketplace + /release-notes
 ```
 
