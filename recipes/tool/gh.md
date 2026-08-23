@@ -23,9 +23,12 @@ On github.com → Settings → Developer settings → Personal access tokens
 
 - **Repository access:** Only select repositories → the single repo
   this sandbox works on.
-- **Permissions:** grant only what the workload needs. Read-only:
-  `contents: read`. PR-opening workflow: also `pull_requests: write`.
-  Skip everything else.
+- **Permissions:** grant only what the workload needs.
+    - Read-only (audit / status): `contents: read`.
+    - Typical dev workflow: `contents: r/w`, `pull_requests: r/w`,
+      `issues: r/w`, `discussions: r/w`.
+    - CI/release automation: add `actions: r/w`, `deployments: r/w`
+      as needed.
 - **Expiration:** whatever fits — 30-90d is reasonable.
 
 The fine-grained PAT physically cannot see other repos and cannot
@@ -39,18 +42,22 @@ it here instead of using a classic PAT.
 Prompts for the value; stores it under `<project>/GH_TOKEN` in the
 macOS login keychain. Never touches disk on the guest.
 
+To rotate later, re-run `devm secret set GH_TOKEN` and
+`devm reconcile` — iron-proxy picks up the new value; no VM restart.
+
 ## devm.yaml
 
 ```yaml
-packages:
-  - wget
-
 install:
   - "sudo mkdir -p -m 755 /etc/apt/keyrings"
-  - "wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null"
+  - "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null"
   - "sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg"
   - "echo 'deb [arch=arm64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null"
-  - "sudo apt-get update && sudo apt-get install -y gh"
+  # Targeted update — only refreshes cli.github.com, safe to re-run
+  # under enforced egress (the base Debian mirrors aren't allowlisted
+  # at runtime).
+  - "sudo apt-get update -o Dir::Etc::sourcelist=sources.list.d/github-cli.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0"
+  - "sudo apt-get install -y gh"
 
 env:
   GH_TOKEN: !secret GH_TOKEN
@@ -73,9 +80,8 @@ Notes on the shape:
   `Authorization: Bearer __DEVM_SECRET_GH_TOKEN__` on the wire and
   swaps in the real value from the keychain. The workload's env holds
   only the opaque placeholder.
-- Community-distributed `gh` (some Debian bases pre-package it) is
-  known-broken for `2.45.x`/`2.46.x` per GitHub's own docs — the apt
-  repo path isn't just preferred, it's required.
+- Use GitHub's official apt repo (this recipe). Community `gh`
+  packages in base images have lagged version + capability parity.
 
 ## Verifying
 
@@ -84,11 +90,8 @@ devm shell
 $ gh --version                                # gh version X.Y.Z (deb source)
 $ gh api /user                                # your PAT's identity
 $ gh api /repos/OWNER/REPO/pulls              # the repo you scoped to
+$ gh api /repos/OWNER/OTHER-REPO              # 404 → fine-grained scope working
 ```
-
-If you scoped the token to one repo and
-`gh api /repos/OWNER/OTHER-REPO` returns 404 — that's fine-grained
-scope working as intended.
 
 ## Troubleshooting
 
