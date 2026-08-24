@@ -148,7 +148,7 @@ Currently wired in `ApplyLive` (changes take effect immediately):
 
 | Kind | Mechanism |
 |---|---|
-| Per-service env add / remove / change | Daemon pipes an updated bundle into the guest, rewriting `/etc/environment` |
+| Per-service env add / remove / change, top-level env add / remove / change, `path` change | Daemon pipes an updated bundle into the guest, rewriting `/etc/environment` (all three share the bundle-rebuild path) |
 | Template add / change / remove | Runs installer dispatcher script in the VM via `tart exec` |
 | Mask add / remove | Top-level `masks:` list differs. Path must be relative to the workspace (absolute paths, `~`, `$VAR`, and `../` traversal are rejected at `devm validate`). Guest-side `mount --bind` (add) or `umount` (remove) via `tart exec`; idempotent via mountpoint guard; umount EBUSY surfaces the spec's structured error. |
 
@@ -162,8 +162,7 @@ Classified BucketLive but no apply path in `ApplyLive` (take effect at next cold
 
 | Kind | Note |
 |---|---|
-| Port add / remove / change | No apply code in `ApplyLive` |
-| `path` change | No apply code in `ApplyLive` |
+| Port add / remove / change | Softnet ingress reconciles port publishing off the merged snapshot elsewhere — no in-guest action needed for the port itself |
 | Service `exec`, `restart`, `after`, `workdir`, `user`, `systemd` override, `hostname` | No apply code in `ApplyLive` |
 
 ### BucketTeardownVM
