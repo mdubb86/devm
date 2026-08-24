@@ -527,6 +527,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			macPath  string
 			wasEmpty bool
 			repo     *schema.RepoConfig
+			mountTag string // virtiofs tag (may differ from name for the primary)
 		}
 		var volumes []volumeState
 		// Primary workspace, synthesized as a volume when the project
@@ -550,12 +551,20 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				}
 				primaryRepo.URL = &url
 			}
+			// The mount tag is a short constant, not primaryName: tags
+			// go through macOS Virtualization Framework's virtio-fs tag
+			// field, capped around 36 bytes, while primaryName is the
+			// Mac cwd basename and can run much longer (pytest tmpdirs,
+			// deeply-versioned project names, ...). Storage dir naming
+			// (primaryName, spec-required) and mount tag naming
+			// (arbitrary) are independent concerns.
+			const primaryTag = "workspace"
 			opts.DirMounts = append(opts.DirMounts, tart.DirMount{
 				HostPath: macPath,
-				Tag:      "vol_" + primaryName,
+				Tag:      "vol_" + primaryTag,
 			})
 			volumes = append(volumes, volumeState{
-				name: primaryName, target: req.MacCwd, macPath: macPath, wasEmpty: wasEmpty, repo: &primaryRepo,
+				name: primaryName, target: req.MacCwd, macPath: macPath, wasEmpty: wasEmpty, repo: &primaryRepo, mountTag: primaryTag,
 			})
 		}
 		// Sort volume names for deterministic mount order across boots
@@ -577,7 +586,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				Tag:      "vol_" + name,
 			})
 			volumes = append(volumes, volumeState{
-				name: name, target: target, macPath: macPath, wasEmpty: wasEmpty, repo: req.Cfg.Volumes[name].Repo,
+				name: name, target: target, macPath: macPath, wasEmpty: wasEmpty, repo: req.Cfg.Volumes[name].Repo, mountTag: name,
 			})
 		}
 		// Make devm.yaml (+ devm.me.yaml) host-immutable before the guest
@@ -782,7 +791,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// the Mac-side path into the conflict message so the user sees
 		// where their data lives.
 		for _, v := range volumes {
-			script := buildVolumeMountScript(v.name, v.target, v.wasEmpty)
+			script := buildVolumeMountScript(v.mountTag, v.target, v.wasEmpty)
 			script = strings.ReplaceAll(script, "$MAC_VOLUME_DIR", v.macPath)
 			scripts = append(scripts, script)
 		}
