@@ -260,3 +260,49 @@ func TestRenderProvisionEnforcedScript_ServiceHealthPoll_OneShotAware(t *testing
 	// a failed unit aborts the whole script (loud, no access).
 	assert.Contains(t, s, "echo 'service migrate failed' >&2; exit 1")
 }
+
+func TestRenderProvisionEnforcedScript_WritesGitCredentials(t *testing.T) {
+	in := ProvisionScriptInput{
+		GitCredentials: "https://x-access-token:__DEVM_SECRET_gh_token__@github.com/me/x.git\n",
+		GitConfig:      "[credential]\n    helper = store\n    useHttpPath = true\n",
+	}
+	got := string(RenderProvisionEnforcedScript(in))
+
+	// Both files provisioned atomically via install(1).
+	assert.Contains(t, got,
+		"install -o devm -g devm -m 0600 /dev/stdin /home/devm/.git-credentials",
+		"credentials file must be written via install(1) with the correct mode+owner")
+	assert.Contains(t, got,
+		"install -o devm -g devm -m 0644 /dev/stdin /home/devm/.gitconfig",
+		"gitconfig must be written via install(1) with the correct mode+owner")
+	// Bodies embedded via heredoc (immune to shell quoting).
+	assert.Contains(t, got,
+		"https://x-access-token:__DEVM_SECRET_gh_token__@github.com/me/x.git",
+		"credentials file body must appear in the emitted script")
+	assert.Contains(t, got,
+		"[credential]",
+		"gitconfig body must appear in the emitted script")
+}
+
+func TestRenderProvisionEnforcedScript_NoGitFilesWhenBothEmpty(t *testing.T) {
+	// When there are zero repo declarations, don't write empty files —
+	// keeps the provisioning surface clean for projects that never git.
+	in := ProvisionScriptInput{GitCredentials: "", GitConfig: ""}
+	got := string(RenderProvisionEnforcedScript(in))
+	assert.NotContains(t, got, "/home/devm/.git-credentials")
+	assert.NotContains(t, got, "/home/devm/.gitconfig")
+}
+
+func TestRenderProvisionEnforcedScript_WritesGitconfigEvenWithEmptyCredentials(t *testing.T) {
+	// Edge case: caller wants gitconfig but no credential lines (e.g. a
+	// devm.yaml with `repo:` declarations that resolve to zero bindings
+	// for some reason). Still write gitconfig — future git ops from the
+	// user's own credential setup keep working through iron-proxy.
+	in := ProvisionScriptInput{
+		GitCredentials: "",
+		GitConfig:      "[credential]\n    helper = store\n    useHttpPath = true\n",
+	}
+	got := string(RenderProvisionEnforcedScript(in))
+	assert.Contains(t, got, "install -o devm -g devm -m 0644 /dev/stdin /home/devm/.gitconfig")
+	assert.NotContains(t, got, "install -o devm -g devm -m 0600 /dev/stdin /home/devm/.git-credentials")
+}

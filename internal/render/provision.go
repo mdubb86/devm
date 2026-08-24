@@ -64,6 +64,18 @@ type ProvisionScriptInput struct {
 	// ignores them — it installs the full Packages list.
 	PackageAdds    []string
 	PackageRemoves []string
+
+	// GitCredentials is the pre-rendered body of /home/devm/.git-credentials,
+	// one URL-form line per declared repo with the iron-proxy secret
+	// placeholder as userinfo. Empty ⇒ no credentials file emitted.
+	// See internal/render/gitcredentials.go's RenderGitCredentials.
+	GitCredentials string
+	// GitConfig is the pre-rendered body of /home/devm/.gitconfig — fixed
+	// content that enables credential.helper=store + useHttpPath=true.
+	// Emitted independently of GitCredentials so a caller that clears
+	// credentials but keeps the config for the user's own credential
+	// helper still gets the store helper wired up.
+	GitConfig string
 }
 
 // hasOpenWork reports whether the open egress window is needed this boot.
@@ -265,6 +277,23 @@ func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
 	// dockerd come up (services already healthy), enforced. Access is granted
 	// ONLY after services are confirmed up.
 	p("sudo systemctl start devm.target")
+
+	// Guest git credentials: emit .git-credentials (secrets placeholders,
+	// substituted by iron-proxy on the wire) and .gitconfig (store helper
+	// + path-scoped matching). Heredoc-fed to install(1) so owner/mode
+	// are set atomically and shell quoting is a non-issue.
+	if in.GitCredentials != "" {
+		p("install -o devm -g devm -m 0600 /dev/stdin /home/devm/.git-credentials <<'DEVM_GIT_CREDS_EOF'")
+		// Body — literal, exactly as rendered.
+		p("%s", strings.TrimRight(in.GitCredentials, "\n"))
+		p("DEVM_GIT_CREDS_EOF")
+	}
+	if in.GitConfig != "" {
+		p("install -o devm -g devm -m 0644 /dev/stdin /home/devm/.gitconfig <<'DEVM_GITCONFIG_EOF'")
+		p("%s", strings.TrimRight(in.GitConfig, "\n"))
+		p("DEVM_GITCONFIG_EOF")
+	}
+
 	// (7) cleanup marker on success — clears the marker RenderProvisionOpenScript
 	// wrote, closing out the two-exec provisioning run.
 	p("sudo rm -f %s", inProgressMarker)
