@@ -563,8 +563,9 @@ func computeVolumeChanges(old, new schema.Config) []Change {
 	return out
 }
 
-// stringPtrEqual compares two string pointers, treating nil and
-// non-nil as different even if both are nil.
+// stringPtrEqual compares two string pointers: both nil is equal, one
+// nil and one non-nil is not equal, and both non-nil compares the
+// dereferenced values.
 func stringPtrEqual(a, b *string) bool {
 	if (a == nil) != (b == nil) {
 		return false

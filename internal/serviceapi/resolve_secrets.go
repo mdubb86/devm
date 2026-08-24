@@ -181,7 +181,12 @@ func repoSecretHosts(cfg schema.Config, macCwd string) (map[string][]string, []s
 // url.Parse rejects (the colon before any slash reads as an invalid
 // scheme) via a manual fallback split.
 func repoURLHost(rawURL string) (string, error) {
-	if u, err := url.Parse(rawURL); err == nil && u.Hostname() != "" {
+	if u, err := url.Parse(rawURL); err == nil {
+		if u.Host == "" {
+			// file:// (and similar host-less schemes) parse cleanly with
+			// no Host — no host implied, not the scp-like fallback below.
+			return "", nil
+		}
 		return u.Hostname(), nil
 	}
 	rest := rawURL
@@ -194,12 +199,12 @@ func repoURLHost(rawURL string) (string, error) {
 	return "", fmt.Errorf("cannot determine host from repo url %q", rawURL)
 }
 
-// appendUniqueHosts returns base with any of extra's entries not
+// AppendUniqueHosts returns base with any of extra's entries not
 // already present appended, in extra's order. Unlike
 // mergeSortedUnique, it does not sort — callers merging repo hosts
 // into an egress allowlist need the user-declared/Docker-Hub order
 // EffectiveAllowlist already establishes preserved, not alphabetized.
-func appendUniqueHosts(base, extra []string) []string {
+func AppendUniqueHosts(base, extra []string) []string {
 	seen := make(map[string]bool, len(base)+len(extra))
 	out := make([]string, 0, len(base)+len(extra))
 	for _, h := range base {

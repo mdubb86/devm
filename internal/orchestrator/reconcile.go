@@ -85,7 +85,7 @@ func RunReconcile(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoR
 		}
 		ipReq := serviceapi.VMApplyIronProxyRequest{
 			Name:      cfg.Project.Name,
-			Allowlist: appendUniqueHosts(docker.EffectiveAllowlist(cfg), repoHosts),
+			Allowlist: serviceapi.AppendUniqueHosts(docker.EffectiveAllowlist(cfg), repoHosts),
 			Secrets:   bindings,
 		}
 		ipResp, err := client.ApplyIronProxy(context.Background(), ipReq)

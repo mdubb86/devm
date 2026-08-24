@@ -260,6 +260,12 @@ func TestRepoHosts(t *testing.T) {
 		assert.Equal(t, []string{"github.com", "gitlab.example.com"}, hosts)
 	})
 
+	t.Run("file_url_host_empty_not_literal_file", func(t *testing.T) {
+		host, err := repoURLHost("file:///tmp/foo")
+		require.NoError(t, err)
+		assert.Equal(t, "", host)
+	})
+
 	t.Run("no_repo_declarations_returns_empty", func(t *testing.T) {
 		cfg := schema.Config{Project: schema.Project{Name: "proj"}}
 		hosts, err := RepoHosts(cfg, "")

@@ -151,7 +151,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 			// inside provisionAndAttach) has a live iron-proxy to read.
 			applyResp, err := d.ServiceAPIClient.ApplyIronProxy(ctx, serviceapi.VMApplyIronProxyRequest{
 				Name:      cfg.Project.Name,
-				Allowlist: appendUniqueHosts(docker.EffectiveAllowlist(cfg), repoHosts),
+				Allowlist: serviceapi.AppendUniqueHosts(docker.EffectiveAllowlist(cfg), repoHosts),
 				Secrets:   bindings,
 			})
 			if err != nil {
@@ -184,7 +184,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// declarations so a bare `repo.secret:`/`repo.url:` doesn't also
 	// require a matching network.allow entry for the clone to reach its
 	// host (gap #1 of the repo-workspace hydration fixes).
-	allowList := appendUniqueHosts(docker.EffectiveAllowlist(cfg), repoHosts)
+	allowList := serviceapi.AppendUniqueHosts(docker.EffectiveAllowlist(cfg), repoHosts)
 
 	// Resolve each mounts[] entry against repoRoot (~ expansion, relative→
 	// absolute, :ro suffix passthrough). schema.ValidateWithRoot already
@@ -559,29 +559,4 @@ func waitVMReady(ctx context.Context, tr *tart.Tart, vmName string, timeout time
 // consistent with Ship 3's CA location.
 func caStorageDir(cfg identity.Config) string {
 	return filepath.Join(cfg.RuntimeDir(), "ca")
-}
-
-// appendUniqueHosts returns base with any of extra's entries not
-// already present appended, in extra's order — used to fold
-// repo-derived hosts (serviceapi.RepoHosts) into the network.allow-
-// derived allowlist (docker.EffectiveAllowlist) so a bare top-level
-// `repo.secret:`/`repo.url:` doesn't also require a matching
-// network.allow entry for the clone to reach its host. Does not sort:
-// EffectiveAllowlist's user-declared/Docker-Hub order is preserved.
-func appendUniqueHosts(base, extra []string) []string {
-	seen := make(map[string]bool, len(base)+len(extra))
-	out := make([]string, 0, len(base)+len(extra))
-	for _, h := range base {
-		if !seen[h] {
-			seen[h] = true
-			out = append(out, h)
-		}
-	}
-	for _, h := range extra {
-		if !seen[h] {
-			seen[h] = true
-			out = append(out, h)
-		}
-	}
-	return out
 }

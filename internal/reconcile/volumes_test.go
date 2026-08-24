@@ -81,6 +81,7 @@ func TestComputeVolumeChanges_RepoURLChanged(t *testing.T) {
 	changes := computeVolumeChanges(old, new)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindVolumeChange, changes[0].Kind)
+	assert.Equal(t, "pg", changes[0].Key)
 }
 
 func TestKindVolumeChange_BucketRestartVM(t *testing.T) {

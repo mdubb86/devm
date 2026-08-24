@@ -51,6 +51,36 @@ vendor-lib:
 	assert.Equal(t, "release", *v.Repo.Branch)
 }
 
+func TestVolume_MarshalUnmarshalRoundTrip_WithRepo(t *testing.T) {
+	url := "https://github.com/me/foo.git"
+	branch := "main"
+	orig := map[string]Volume{
+		"primary": {
+			Path: "/home/devm/workspace/foo",
+			Repo: &RepoConfig{
+				URL:    &url,
+				Secret: "gh_token",
+				Branch: &branch,
+			},
+		},
+		"scratch": {Path: "/var/lib/pg"},
+	}
+	buf, err := yaml.Marshal(orig)
+	require.NoError(t, err)
+
+	var round map[string]Volume
+	require.NoError(t, yaml.Unmarshal(buf, &round))
+	assert.Equal(t, orig["scratch"].Path, round["scratch"].Path)
+	assert.Nil(t, round["scratch"].Repo)
+	assert.Equal(t, orig["primary"].Path, round["primary"].Path)
+	require.NotNil(t, round["primary"].Repo)
+	require.NotNil(t, round["primary"].Repo.URL)
+	assert.Equal(t, url, *round["primary"].Repo.URL)
+	assert.Equal(t, "gh_token", round["primary"].Repo.Secret)
+	require.NotNil(t, round["primary"].Repo.Branch)
+	assert.Equal(t, branch, *round["primary"].Repo.Branch)
+}
+
 func TestVolume_UnknownKey_Rejected(t *testing.T) {
 	src := `
 foo:

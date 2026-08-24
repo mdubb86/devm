@@ -49,7 +49,7 @@ func rebuildIronProxyConfig(cfg identity.Config, projectID string, snapCfg schem
 		DNSProxyIP:  interceptedEgressIP,
 		CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
 		CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
-		AllowList:   appendUniqueHosts(docker.EffectiveAllowlist(snapCfg), repoHosts),
+		AllowList:   AppendUniqueHosts(docker.EffectiveAllowlist(snapCfg), repoHosts),
 		Secrets:     secrets,
 	}, nil
 }

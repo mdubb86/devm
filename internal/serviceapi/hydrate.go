@@ -42,6 +42,10 @@ func HydrateRepoVolume(ctx context.Context, storagePath string, repo schema.Repo
 
 	cmd := exec.CommandContext(ctx, "git", args...)
 	env := os.Environ()
+	// Gated on ironProxyURL alone (not && secret != ""): schema.Validate()
+	// guarantees a validated RepoConfig always resolves a non-empty secret
+	// (own or inherited), so ironProxyURL != "" with an empty secret can't
+	// occur on a real cold-start.
 	if ironProxyURL != "" {
 		env = append(env, "HTTP_PROXY="+ironProxyURL, "HTTPS_PROXY="+ironProxyURL)
 	}
