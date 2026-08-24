@@ -12,7 +12,7 @@ since: recipes-vNEXT
 Run [uv](https://docs.astral.sh/uv/) — `uv run`, `uvx`, `uv python`, and the
 tools they drive (`datamodel-code-generator`, `ruff`, etc.) — inside a devm VM.
 uv itself installs fine; the friction is one environment fact that isn't a code
-bug, plus keeping the virtualenv in the volume rather than the git-tracked tree.
+bug.
 
 **uv's managed-CPython download needs a non-obvious host.** `uv python install`
 / `uvx --python <v>` fetch python-build-standalone from GitHub **release
