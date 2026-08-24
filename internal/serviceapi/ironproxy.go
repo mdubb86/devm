@@ -63,6 +63,18 @@ func ironProxyListenAddr(port int) string {
 	return fmt.Sprintf("%s:%d", softnet.HostLoopIP, port)
 }
 
+// ironProxyURLFor returns the http:// URL that HTTP_PROXY/HTTPS_PROXY-aware
+// tooling (git, during host-side repo hydration) dials to route through
+// this project's iron-proxy instance. Empty when iron-proxy state hasn't
+// been seeded for projectID yet (e.g. called before SpawnIronProxy).
+func ironProxyURLFor(projectID string) string {
+	info, ok := ironProxyState.get(projectID)
+	if !ok || info.HTTPPort == 0 {
+		return ""
+	}
+	return "http://" + ironProxyListenAddr(info.HTTPPort)
+}
+
 // YAML returns the YAML blob iron-proxy reads from -config <path>.
 // The schema matches e2e/helpers/iron_proxy.py's IronProxyConfig.to_yaml_dict().
 func (c IronProxyConfig) YAML() ([]byte, error) {

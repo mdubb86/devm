@@ -17,6 +17,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -471,14 +472,46 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// volumeState captures the observed Mac-side empty state per
 		// volume before the guest boots; buildVolumeMountScript reads
 		// it later to pick the four-case action (mount / adopt /
-		// error).
+		// error). repo, when non-nil, is hydrated (git clone) into
+		// macPath once iron-proxy is up and only if wasEmpty — see the
+		// hydration pass after SpawnIronProxy below.
 		type volumeState struct {
 			name     string
 			target   string
 			macPath  string
 			wasEmpty bool
+			repo     *schema.RepoConfig
 		}
 		var volumes []volumeState
+		// Primary workspace, synthesized as a volume when the project
+		// declares a top-level `repo:`. Named after the Mac cwd folder
+		// basename and mounted at Mac cwd's absolute path — the
+		// $WORKSPACE convention, now backed by persistent Mac-side
+		// storage instead of a live bind of the Mac checkout.
+		if req.Cfg.Repo != nil {
+			primaryName := repohelpers.PrimaryVolumeName(req.MacCwd)
+			macPath, wasEmpty, err := ensureVolumeMacDir(cfg, req.Name, primaryName)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("ensure primary volume dir: %v", err), http.StatusInternalServerError)
+				return
+			}
+			primaryRepo := *req.Cfg.Repo
+			if primaryRepo.URL == nil {
+				url, err := repohelpers.DeriveRepoURL(req.MacCwd)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("derive primary repo url: %v", err), http.StatusInternalServerError)
+					return
+				}
+				primaryRepo.URL = &url
+			}
+			opts.DirMounts = append(opts.DirMounts, tart.DirMount{
+				HostPath: macPath,
+				Tag:      "vol_" + primaryName,
+			})
+			volumes = append(volumes, volumeState{
+				name: primaryName, target: req.MacCwd, macPath: macPath, wasEmpty: wasEmpty, repo: &primaryRepo,
+			})
+		}
 		// Sort volume names for deterministic mount order across boots
 		// (no functional effect, but makes logs comparable).
 		volNames := make([]string, 0, len(req.Cfg.Volumes))
@@ -498,7 +531,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				Tag:      "vol_" + name,
 			})
 			volumes = append(volumes, volumeState{
-				name: name, target: target, macPath: macPath, wasEmpty: wasEmpty,
+				name: name, target: target, macPath: macPath, wasEmpty: wasEmpty, repo: req.Cfg.Volumes[name].Repo,
 			})
 		}
 		// Make devm.yaml (+ devm.me.yaml) host-immutable before the guest
@@ -642,6 +675,30 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info.HTTPSPort = httpsPort
 		info.DNSPort = dnsPort
 		ironProxyState.put(req.Name, info)
+
+		// Hydrate any volume (including the synthesized primary) whose
+		// Mac-side storage was observed empty and declares a repo. Must
+		// run after iron-proxy is up — the __DEVM_SECRET_<name>__
+		// placeholder is substituted on the wire by iron-proxy — and
+		// before the mount scripts below, which key off the wasEmpty
+		// captured earlier (buildVolumeMountScript treats a newly
+		// hydrated, now non-empty Mac dir as a clean bind, exactly as
+		// intended). Fails loud: any clone failure aborts /vm/start
+		// entirely rather than leave a half-hydrated volume.
+		inheritedSecret := ""
+		if req.Cfg.Repo != nil {
+			inheritedSecret = req.Cfg.Repo.Secret
+		}
+		ironURL := ironProxyURLFor(req.Name)
+		for _, v := range volumes {
+			if !v.wasEmpty || v.repo == nil {
+				continue
+			}
+			if err := HydrateRepoVolume(ctx, v.macPath, *v.repo, inheritedSecret, ironURL); err != nil {
+				http.Error(w, fmt.Sprintf("hydrate volume %q: %v", v.name, err), http.StatusInternalServerError)
+				return
+			}
+		}
 
 		// Apply VM-side config via tart exec — extra mounts, volumes, env
 		// only. timesyncd's NTP config is baked into the base image
