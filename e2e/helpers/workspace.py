@@ -93,6 +93,23 @@ class Workspace:
             cfg[k] = v
         self.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
+    def proxy_log_path(self) -> Path:
+        """Mac-side path to this project's iron-proxy audit log under the
+        devm-e2e identity's LogDir (~/Library/Logs/devm-e2e/). Filename is
+        `<project-name>-proxy.log` — supervisor.Key{ProjectID, RoleProxy}
+        keys the log file on project.name, which is this workspace's
+        vm_name (see internal/identity.Config.LogDir,
+        internal/supervisor.New's log naming)."""
+        return Path.home() / "Library" / "Logs" / "devm-e2e" / f"{self.vm_name}-proxy.log"
+
+    def read_proxy_log(self) -> list[str]:
+        """Return the iron-proxy audit log's lines for this project, or
+        an empty list if iron-proxy hasn't written one yet."""
+        path = self.proxy_log_path()
+        if not path.exists():
+            return []
+        return path.read_text(errors="replace").splitlines(keepends=True)
+
     def add_systemd_service(self, name: str, exec: list[str], restart: str = "always", **extra) -> None:
         """Add (or replace) a systemd service block under services.<name>.
 
