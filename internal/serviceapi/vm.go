@@ -700,6 +700,21 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			}
 		}
 
+		// Give the Mac cwd a short, ergonomic path into the primary
+		// volume's persistent storage now that it's materialized:
+		// <macCwd>/.vm symlink, kept out of git via .git/info/exclude.
+		// Best-effort — a failure here doesn't block the VM from
+		// starting; the user can fix the .vm dir manually.
+		if req.Cfg.Repo != nil {
+			primaryPath := volumeMacDir(cfg, req.Name, repohelpers.PrimaryVolumeName(req.MacCwd))
+			if err := EnsureVMSymlink(req.MacCwd, primaryPath); err != nil {
+				daemonlog.Errorf("vmsymlink: %v", err)
+			}
+			if err := EnsureGitExclude(req.MacCwd); err != nil {
+				daemonlog.Errorf("git-exclude: %v", err)
+			}
+		}
+
 		// Apply VM-side config via tart exec — extra mounts, volumes, env
 		// only. timesyncd's NTP config is baked into the base image
 		// (image/provision-base.sh), not applied here — the user's
