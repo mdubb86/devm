@@ -56,6 +56,18 @@ devm version      # current version + build info
 devm upgrade      # self-update (no-op for brew installs)
 ```
 
+**Your project needs a `repo:` block in `devm.yaml`** — devm hydrates the
+sandbox's workspace via `git clone` at first cold-start. Simplest form:
+
+```yaml
+repo:
+  secret: gh_token        # names a secret in devm's store; iron-proxy substitutes it in the git-clone Authorization header
+```
+
+When `url:` is omitted, devm derives it from `git remote get-url origin`
+in the project directory. See `devm skills get schema` for the full
+shape (multi-repo, per-volume overrides).
+
 ## devm.yaml affordances
 
 A few things devm does so your `devm.yaml` doesn't have to:

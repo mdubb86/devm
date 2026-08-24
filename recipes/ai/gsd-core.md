@@ -69,12 +69,17 @@ GSD's surface while keeping hand-written `.claude/commands/*.md` and
 - **Runs in the open-network provisioning window** (install: bucket),
   so no runtime egress opens beyond the two npm hosts.
 - **GSD's persistent state lives in `.planning/`** (workspace-tracked,
-  bind-mounted, committed). The install is ephemeral; ROADMAPs, PLANs,
-  and phase artifacts survive teardown independently.
-- **User-scope install** (`--profile default`) would land in `~/.claude/`
-  and could ride the volume from `tool/ai/claude`. But that puts Mac
-  and VM back on the same `.claude/` — same node-path collision.
-  Local + mask + gitignore is the right shape for a shared repo.
+  committed). Because it's git-tracked, it survives `devm teardown` on
+  its own: the workspace volume is deleted and rehydrated from git on
+  the next cold start, and `.planning/` comes back with it. The GSD
+  install itself is ephemeral and gets re-run.
+- **User-scope install** (`--profile default`) lands in `~/.claude/`,
+  riding the volume from `tool/ai/claude` — that's a legitimate choice.
+  The local + gitignore shape here is preferred when the project wants
+  to ship its GSD conventions (hand-written `.claude/commands/*.md`,
+  `.claude/skills/**`) to teammates via git, since those stay
+  project-scoped and repo-tracked rather than living in one user's
+  home directory.
 
 ## Verifying
 

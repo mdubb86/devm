@@ -12,7 +12,7 @@ since: recipes-vNEXT
 Run [uv](https://docs.astral.sh/uv/) — `uv run`, `uvx`, `uv python`, and the
 tools they drive (`datamodel-code-generator`, `ruff`, etc.) — inside a devm VM.
 uv itself installs fine; the friction is one environment fact that isn't a code
-bug, plus keeping the virtualenv off the bind-mount.
+bug, plus keeping the virtualenv in the volume rather than the git-tracked tree.
 
 **uv's managed-CPython download needs a non-obvious host.** `uv python install`
 / `uvx --python <v>` fetch python-build-standalone from GitHub **release
@@ -114,11 +114,6 @@ env:
 - **Version pin is a project concern.** The `3.12` default in `preseed-python`
   is just a fallback; real projects carry it in `.python-version`. (In BuzzTrack
   it's 3.12 because `datamodel-code-generator==0.69.0` rejects Debian 13's 3.13.)
-- **Per-worktree masks are a known devm friction, not uv-specific.** Masks are
-  repo-root-relative and recreate-bucket, so a project with Orca worktrees needs
-  a `.venv` mask entry per worktree + a rebuild to add them — the same gap that
-  bites `node_modules`, `target/`, etc. A live `devm mask add` + a worktree hook
-  would fix it generally; out of scope for this recipe.
 - **Not in scope: telemetry noise.** The `DO_NOT_TRACK=1` / `SUPABASE_TELEMETRY=0`
   suggestion (to silence the posthog 403 stacktrace) is tool-agnostic and belongs
   in a devm-global default or the supabase recipe, not here.

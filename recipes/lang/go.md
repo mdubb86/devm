@@ -2,7 +2,7 @@
 name: tool/lang/go
 category: lang
 display_name: Go
-description: Current stable Go toolchain via direct download + gopls for LSP. Single GOBIN target so install-time and runtime `go install` share one directory. Honors Go defaults — no module/build cache redirection across the host bind-mount.
+description: Current stable Go toolchain via direct download + gopls for LSP. Single GOBIN target so install-time and runtime `go install` share one directory. Honors Go defaults — GOMODCACHE/GOCACHE live in guest-only storage with no override needed.
 keywords: go golang gopls module go-install godev cross-compile
 since: recipes-v1.0.0
 ---
@@ -16,8 +16,8 @@ stale; if you want to pin, swap in an explicit `goX.Y.Z` string. Plus
 gopls for LSP-driven editor and agent intelligence. `GOBIN` is set
 once in `env:` so both the install-time gopls install AND any ad-hoc
 `go install X` at runtime land in the same directory. No overrides
-for `GOMODCACHE`/`GOCACHE` — Go's defaults are honored so the VM
-doesn't share linux/arm64 build artifacts with a darwin host.
+for `GOMODCACHE`/`GOCACHE` — Go's defaults already put them in
+guest-only storage, so there's no cross-platform pollution to avoid.
 
 ## devm.yaml additions
 
@@ -68,12 +68,11 @@ network:
   install ...` in the install: line, but devm has one user (`devm`),
   so there's no multi-user story to solve.
 
-- **No env overrides for `GOMODCACHE` / `GOCACHE`.** The workspace
-  bind is shared with the host — putting linux/arm64 binaries and
-  build artifacts on a darwin/arm64 Mac filesystem is wasteful and
-  conceptually wrong (Mac would never run them). Module re-downloads
-  on teardown are cheap; build cache rebuilds from cached source are
-  fast.
+- **No env overrides for `GOMODCACHE` / `GOCACHE`.** Both live under
+  `$HOME` in guest-only storage by default — no risk of linux/arm64
+  build artifacts landing on the Mac side, no override needed. Module
+  re-downloads on teardown are cheap; build cache rebuilds from cached
+  source are fast.
 
 - **Tools you want always-available go in the `install:` block** so
   they get reinstalled at every cold-start (`install:` is the

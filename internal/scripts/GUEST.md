@@ -10,8 +10,9 @@ something breaks.
 ## What this is
 
 - Debian arm64, provisioned by devm on the Mac.
-- Your project's workspace is at `$WORKSPACE` — identical absolute path on
-  host and guest via a virtiofs share.
+- Your project's workspace is at `$WORKSPACE` — the same absolute path
+  string as the project directory on the Mac, but a separate devm-managed
+  volume, not a live share. See Filesystem below.
 - `devm`, `tart`, `just`, `brew`, `launchctl` do NOT exist here. They are
   Mac binaries. Ask the Mac user to run them.
 
@@ -30,15 +31,36 @@ something breaks.
 
 ## Filesystem
 
-- `$WORKSPACE` is a virtiofs share. Reads and writes are visible on both
-  host and guest immediately.
-- Volumes (declared as `volumes:` in devm.yaml) are also virtiofs shares —
-  same rules, plus they survive `devm teardown` (which wipes the VM disk).
-- **Node's `fs.cpSync({recursive: true})` misbehaves on virtiofs**: it
-  produces 0-byte, mode-`0200` destination files regardless of source
-  mode. Use `cp -pR` from the shell, or `fs.copyFileSync` + explicit
-  `fs.chmodSync` in Node. Every other perm-preserving tool (`cp -p`,
-  `install -m`, `chmod`, `tar -xp`, `rsync -a`) works correctly.
+- `$WORKSPACE` is a devm-managed volume, mounted at the same absolute
+  path string as the project directory on the Mac. It is **its own git
+  clone** of the project repo — hydrated at first cold-start via
+  `git clone` through iron-proxy secret substitution (`repo:` in
+  `devm.yaml`) — **not** a live mirror of the Mac checkout. Writes you
+  make here do not appear on the Mac side automatically, and vice versa.
+- **To share work with the Mac side**: commit and push from here, then
+  ask the Mac user to `git pull` in their own clone. Both sides are
+  independent clones of the same repo; git is the sync mechanism.
+- **To open a specific guest-side file on the Mac** (e.g. a screenshot
+  or generated artifact you just wrote), ask the Mac user to run
+  `devm resolve <path>` — it translates a `$WORKSPACE`-anchored
+  absolute or relative path to the file's Mac-side location in the
+  volume's storage and prints it. Add `--open` to have it invoke
+  `open(1)` directly instead of printing.
+- On the Mac, `<project>/.vm/` is a symlink into the primary volume's
+  Mac-side storage — useful for the Mac user browsing the guest's view
+  of the tree without leaving their shell.
+- Other volumes (declared as `volumes:` in devm.yaml) work the same
+  way: a devm-managed Mac-side storage directory bind-mounted into the
+  guest, surviving `devm teardown` (which wipes everything else on the
+  VM disk).
+- **Node's `fs.cpSync({recursive: true})` misbehaves on volume paths**
+  (`$WORKSPACE` and any `volumes:` entry): it produces 0-byte,
+  mode-`0200` destination files regardless of source mode — the
+  underlying virtiofs transport rejects the metadata syscalls Node's
+  fast path relies on. Use `cp -pR` from the shell, or
+  `fs.copyFileSync` + explicit `fs.chmodSync` in Node. Every other
+  perm-preserving tool (`cp -p`, `install -m`, `chmod`, `tar -xp`,
+  `rsync -a`) works correctly.
 - Masks (declared as `masks:` in devm.yaml) live on guest-native ext4 at
   `/var/devm/masks/<project>/<path>` — no virtiofs quirks, but wiped by
   `devm teardown`.
@@ -93,5 +115,6 @@ nothing to source manually.
 Always available:
 
 - `IS_SANDBOX=1` — mode detect
-- `WORKSPACE` — absolute path to the project dir (identical on host)
+- `WORKSPACE` — absolute path to the project dir (same path string as
+  the Mac project dir; a separate clone, see Filesystem)
 - Everything else from `env:` in `devm.yaml`.

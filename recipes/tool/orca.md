@@ -62,9 +62,11 @@ devm-managed block is picked up transparently.
 
 ## Opening a project on the VM
 
-The workspace is bind-mounted (virtiofs) at the **mirrored host
-path**, not under `/home/devm`. In Orca's "add remote project →
-Browse remote filesystem" picker, navigate to:
+The workspace lives at the **same path string as the project directory
+on the Mac**, not under `/home/devm` — but it's a devm-managed volume
+(its own git clone, hydrated via `repo:`), not a live mirror of the
+Mac checkout. In Orca's "add remote project → Browse remote
+filesystem" picker, navigate to:
 
     /Users/<you>/workspace/<project>
 
