@@ -615,7 +615,7 @@ type fakePackages struct {
 	order     *[]string
 }
 
-func (f *fakePackages) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, adds, removes []string) error {
+func (f *fakePackages) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, macCwd string, adds, removes []string) error {
 	f.called = true
 	f.projectID = projectID
 	f.snapCfg = snapCfg

@@ -44,7 +44,7 @@ func TestRebuildIronProxyConfig(t *testing.T) {
 	be := secret.NewFileBackend(identity.Prod.SecretsDir())
 	require.NoError(t, be.Set(projectID+"/gh", "resolved-value"))
 
-	got, err := rebuildIronProxyConfig(identity.Prod, projectID, snapCfg)
+	got, err := rebuildIronProxyConfig(identity.Prod, projectID, snapCfg, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, "127.0.0.1:9080", got.HTTPListen)
@@ -81,7 +81,7 @@ func TestRebuildIronProxyConfig_DockerExpandsAllowlist(t *testing.T) {
 		},
 	}
 
-	got, err := rebuildIronProxyConfig(identity.Prod, projectID, snapCfg)
+	got, err := rebuildIronProxyConfig(identity.Prod, projectID, snapCfg, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{

@@ -113,7 +113,7 @@ func respawnIronProxyFromState(
 		return errors.New("no state snapshot")
 	}
 
-	proxyCfg, err := rebuildIronProxyConfig(cfg, projectID, snap.Cfg)
+	proxyCfg, err := rebuildIronProxyConfig(cfg, projectID, snap.Cfg, snap.WorkspaceHostPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("no prior iron-proxy config on disk (project may be stopping)")

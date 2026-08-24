@@ -203,7 +203,7 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 				}
 			}
 			if len(pkgAdds)+len(pkgRemoves) > 0 {
-				if err := packages.ApplyPackages(r.Context(), req.Name, base, pkgAdds, pkgRemoves); err != nil {
+				if err := packages.ApplyPackages(r.Context(), req.Name, base, req.WorkspaceHostPath, pkgAdds, pkgRemoves); err != nil {
 					http.Error(w, fmt.Sprintf("apply packages: %v", err), http.StatusInternalServerError)
 					return
 				}

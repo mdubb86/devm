@@ -123,7 +123,7 @@ func TestApplyPackages_WidensThenRestores(t *testing.T) {
 	events, execScript := newPackagesEventRecorder(t, projectID, 0, func() (int, string) { return 0, "" })
 	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"}, execScript)
 
-	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"sl"}, nil)
+	err := a.ApplyPackages(context.Background(), projectID, snapCfg, "", []string{"sl"}, nil)
 	require.NoError(t, err)
 
 	require.Len(t, *events, 3, "expected widen spawn, exec, restore spawn in order")
@@ -142,7 +142,7 @@ func TestApplyPackages_AptFailureStillRestores(t *testing.T) {
 	})
 	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"}, execScript)
 
-	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"nope"}, nil)
+	err := a.ApplyPackages(context.Background(), projectID, snapCfg, "", []string{"nope"}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "E: Unable to locate package nope")
 
@@ -158,7 +158,7 @@ func TestApplyPackages_DockerAddsAptRepoHost(t *testing.T) {
 	a, snapCfg := seedPackagesFixture(t, projectID, []string{"example.com"}, execScript)
 	snapCfg.Docker = true
 
-	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"sl"}, nil)
+	err := a.ApplyPackages(context.Background(), projectID, snapCfg, "", []string{"sl"}, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"spawn:widened", "exec", "spawn:orig"}, eventKinds(*events))
@@ -174,7 +174,7 @@ func TestApplyPackages_RestoreFailureSurfaces(t *testing.T) {
 	events, execScript := newPackagesEventRecorder(t, projectID, 2, func() (int, string) { return 0, "" })
 	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"}, execScript)
 
-	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"sl"}, nil)
+	err := a.ApplyPackages(context.Background(), projectID, snapCfg, "", []string{"sl"}, nil)
 	require.Error(t, err)
 	assert.Contains(t, strings.ToLower(err.Error()), "restore")
 
@@ -201,7 +201,7 @@ func TestApplyPackages_WidenHealthTimeout_BestEffortRestores(t *testing.T) {
 		return healthCalls != 1 // first (widen) health-wait fails; restore's succeeds
 	}
 
-	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"sl"}, nil)
+	err := a.ApplyPackages(context.Background(), projectID, snapCfg, "", []string{"sl"}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "widen egress")
 
@@ -225,7 +225,7 @@ func TestApplyPackages_NoProjectAllowlist_RestoreCloses(t *testing.T) {
 	events, execScript := newPackagesEventRecorder(t, projectID, 0, func() (int, string) { return 0, "" })
 	a, snapCfg := seedPackagesFixture(t, projectID, nil, execScript)
 
-	err := a.ApplyPackages(context.Background(), projectID, snapCfg, []string{"sl"}, nil)
+	err := a.ApplyPackages(context.Background(), projectID, snapCfg, "", []string{"sl"}, nil)
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"spawn:widened", "exec", "spawn:orig"}, eventKinds(*events))
@@ -256,7 +256,7 @@ func TestApplyPackages_EmptyNoop(t *testing.T) {
 	events, execScript := newPackagesEventRecorder(t, projectID, 0, func() (int, string) { return 0, "" })
 	a, snapCfg := seedPackagesFixture(t, projectID, []string{"api.anthropic.com"}, execScript)
 
-	err := a.ApplyPackages(context.Background(), projectID, snapCfg, nil, nil)
+	err := a.ApplyPackages(context.Background(), projectID, snapCfg, "", nil, nil)
 	require.NoError(t, err)
 	assert.Empty(t, *events, "no adds/removes must not spawn iron-proxy or exec anything")
 }

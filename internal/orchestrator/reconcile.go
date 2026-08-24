@@ -44,7 +44,7 @@ func RunReconcile(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoR
 	// Resolve secrets CLI-side for the hash map AND for the possible
 	// downstream ApplyIronProxy call. resolveSecretBindings walks env
 	// values for !secret refs; if none, bindings is nil.
-	bindings, err := serviceapi.ResolveSecretBindings(cfg, secret.NewFileBackend(ident.SecretsDir()))
+	bindings, err := serviceapi.ResolveSecretBindings(cfg, secret.NewFileBackend(ident.SecretsDir()), repoRoot)
 	if err != nil {
 		return -1, ReconcileResult{}, fmt.Errorf("resolve secrets: %w", err)
 	}
@@ -79,9 +79,13 @@ func RunReconcile(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoR
 	var ironProxyRevived bool
 	var stoppedByIronProxy bool
 	if len(resp.AppliedIronProxy) > 0 {
+		repoHosts, err := serviceapi.RepoHosts(cfg, repoRoot)
+		if err != nil {
+			return -1, ReconcileResult{}, fmt.Errorf("resolve repo hosts: %w", err)
+		}
 		ipReq := serviceapi.VMApplyIronProxyRequest{
 			Name:      cfg.Project.Name,
-			Allowlist: docker.EffectiveAllowlist(cfg),
+			Allowlist: appendUniqueHosts(docker.EffectiveAllowlist(cfg), repoHosts),
 			Secrets:   bindings,
 		}
 		ipResp, err := client.ApplyIronProxy(context.Background(), ipReq)

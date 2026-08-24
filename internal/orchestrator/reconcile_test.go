@@ -42,7 +42,7 @@ func (nopApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoo
 // needs to satisfy the interface.
 type nopPackages struct{}
 
-func (nopPackages) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, adds, removes []string) error {
+func (nopPackages) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, macCwd string, adds, removes []string) error {
 	return nil
 }
 

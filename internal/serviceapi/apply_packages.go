@@ -18,7 +18,7 @@ import (
 // PackagesApplier is the daemon-internal contract for converging apt
 // packages on a running VM. Tests fake it in the reconcile handler.
 type PackagesApplier interface {
-	ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, adds, removes []string) error
+	ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, macCwd string, adds, removes []string) error
 }
 
 // realPackagesApplier is the production impl, wired by runner.go.
@@ -83,13 +83,13 @@ func aptEgressHosts(dockerEnabled bool) []string {
 // locks.Lock(projectID)) must hold it for the entire call — concurrent
 // apply-iron-proxy or watchdog activity during the transient window
 // would race this call's stop/spawn pairs against its own.
-func (a *realPackagesApplier) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, adds, removes []string) error {
+func (a *realPackagesApplier) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, macCwd string, adds, removes []string) error {
 	script := render.AptConvergeScript(adds, removes)
 	if script == "" {
 		return nil
 	}
 
-	orig, err := rebuildIronProxyConfig(a.cfg, projectID, snapCfg)
+	orig, err := rebuildIronProxyConfig(a.cfg, projectID, snapCfg, macCwd)
 	if err != nil {
 		return fmt.Errorf("apply packages: rebuild iron-proxy config: %w", err)
 	}
