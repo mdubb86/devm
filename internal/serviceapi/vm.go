@@ -254,6 +254,52 @@ func gracefulStopVM(ctx context.Context, tr vmStopper, name string) {
 	}
 }
 
+// teardownFailedVMStart tears down everything /vm/start already created for
+// name once a post-boot failure (currently: repo hydration) makes the
+// in-flight cold start unrecoverable. Mirrors /vm/stop's cleanup sequence so
+// a retried /vm/start begins from a clean slate rather than fighting a
+// zombie tart-run process, a dangling iron-proxy, or a still-locked
+// devm.yaml — the same fail-loud "VM does not come up" contract
+// waitVMReady's failure path already gets via the CLI's teardownOnFail.
+// Best-effort throughout: it runs while a request is already failing, so a
+// secondary error here must never mask the original — every step just logs
+// and continues.
+func teardownFailedVMStart(ctx context.Context, sup *supervisor.Supervisor, tr *tart.Tart, cfg identity.Config, denials *Denials, name string) {
+	proxyKey := supervisor.Key{ProjectID: name, Role: supervisor.RoleProxy}
+	if err := sup.Stop(ctx, proxyKey); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
+		daemonlog.Errorf("serviceapi: vm/start: teardown-on-fail: stop iron-proxy for %s: %v", name, err)
+	}
+	ironProxyState.del(name)
+
+	// Same ordering as /vm/stop: disable auto-respawn before the in-guest
+	// poweroff, or the supervisor reads the clean exit as a crash and
+	// respawns tart run out from under this teardown.
+	vmKey := supervisor.Key{ProjectID: name, Role: supervisor.RoleVM}
+	sup.DisableRestart(vmKey)
+	gracefulStopVM(ctx, tr, name)
+	if err := sup.Stop(ctx, vmKey); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
+		daemonlog.Errorf("serviceapi: vm/start: teardown-on-fail: stop vm process for %s: %v", name, err)
+	}
+	shutdownSoftnet(name)
+	softnetState.del(name)
+
+	if err := tr.Delete(ctx, name); err != nil && !strings.Contains(err.Error(), "does not exist") {
+		daemonlog.Errorf("serviceapi: vm/start: teardown-on-fail: tart delete %s: %v", name, err)
+	}
+
+	ReleaseProjectIP(cfg, name)
+	exposeClaims.release(name)
+	if denials != nil {
+		denials.Reset(name)
+	}
+	if e, ok := configLockState.get(name); ok {
+		if err := unlockConfigFiles(e.repoRoot); err != nil {
+			daemonlog.Errorf("serviceapi: vm/start: teardown-on-fail: unlock config for %s: %v", name, err)
+		}
+		configLockState.del(name)
+	}
+}
+
 // vmRunning reports whether the named VM appears running in a `tart list`.
 func vmRunning(vms []tart.VM, name string) bool {
 	for _, v := range vms {
@@ -695,6 +741,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				continue
 			}
 			if err := HydrateRepoVolume(ctx, v.macPath, *v.repo, inheritedSecret, ironURL); err != nil {
+				teardownFailedVMStart(ctx, sup, tr, cfg, denials, req.Name)
 				http.Error(w, fmt.Sprintf("hydrate volume %q: %v", v.name, err), http.StatusInternalServerError)
 				return
 			}
