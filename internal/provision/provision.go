@@ -190,6 +190,14 @@ func (p *Provisioner) execScript(ctx context.Context, script []byte, stdin io.Re
 
 // scriptInput assembles the ProvisionScriptInput from the project config.
 func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
+	// RenderGitCredentials emits its fixed gitconfig body unconditionally,
+	// even for zero bindings — guard here so no repo: block anywhere in
+	// p.Cfg means both fields stay empty and RenderProvisionEnforcedScript
+	// skips the .git-credentials/.gitconfig install steps entirely.
+	var creds, gitconfig string
+	if bindings := p.repoBindings(); len(bindings) > 0 {
+		creds, gitconfig = render.RenderGitCredentials(bindings)
+	}
 	return render.ProvisionScriptInput{
 		FirstBoot:          p.firstBoot,
 		Packages:           p.Cfg.Packages,
@@ -203,7 +211,47 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		StepTimeoutSeconds: p.StepTimeoutSeconds,
 		PackageAdds:        p.PackageAdds,
 		PackageRemoves:     p.PackageRemoves,
+		GitCredentials:     creds,
+		GitConfig:          gitconfig,
 	}
+}
+
+// repoBindings flattens p.Cfg's repo declarations (top-level + per-volume)
+// into the order-stable slice RenderGitCredentials consumes. Primary
+// first (when declared), then per-volume repos in sorted volume-name
+// order. Volumes without a repo: block or without a resolved URL are
+// skipped. A per-volume repo with an empty Secret inherits from the
+// top-level secret (mirrors schema.Validate's inheritance rule).
+func (p *Provisioner) repoBindings() []render.RepoBinding {
+	var bindings []render.RepoBinding
+	var topSecret string
+	if p.Cfg.Repo != nil {
+		topSecret = p.Cfg.Repo.Secret
+		if p.Cfg.Repo.URL != nil && *p.Cfg.Repo.URL != "" {
+			bindings = append(bindings, render.RepoBinding{
+				URL: *p.Cfg.Repo.URL, Secret: p.Cfg.Repo.Secret,
+			})
+		}
+	}
+	names := make([]string, 0, len(p.Cfg.Volumes))
+	for name := range p.Cfg.Volumes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		vol := p.Cfg.Volumes[name]
+		if vol.Repo == nil || vol.Repo.URL == nil || *vol.Repo.URL == "" {
+			continue
+		}
+		secret := vol.Repo.Secret
+		if secret == "" {
+			secret = topSecret
+		}
+		bindings = append(bindings, render.RepoBinding{
+			URL: *vol.Repo.URL, Secret: secret,
+		})
+	}
+	return bindings
 }
 
 // buildBundle builds the devm-owned artifact bundle tar (env file,
