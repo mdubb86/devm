@@ -100,13 +100,15 @@ func TestVMStart_LocksConfig_DefaultEnabled(t *testing.T) {
 	defer cancel()
 
 	_, err := c.StartVM(ctx, VMStartRequest{
-		Name:              name,
-		WorkspaceHostPath: repoRoot,
-		Cfg:               schema.Config{Project: schema.Project{Name: name}},
+		Name:        name,
+		MacCwd:      repoRoot,
+		ExtraMounts: []string{filepath.Join(repoRoot, "extra")},
+		Cfg:         schema.Config{Project: schema.Project{Name: name}},
 	})
-	// The fake tart's inject step deliberately fails so the handler
-	// returns fast and deterministically; this is not the assertion
-	// under test, just proof the failure is unrelated to config-lock.
+	// ExtraMounts guarantees at least one VM-config inject step runs; the
+	// fake tart's inject step deliberately fails so the handler returns
+	// fast and deterministically — this is not the assertion under test,
+	// just proof the failure is unrelated to config-lock.
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "vm inject step")
 
@@ -137,8 +139,9 @@ func TestVMStart_ConfigLockDisabled_NoLock(t *testing.T) {
 	defer cancel()
 
 	_, err := c.StartVM(ctx, VMStartRequest{
-		Name:              name,
-		WorkspaceHostPath: repoRoot,
+		Name:        name,
+		MacCwd:      repoRoot,
+		ExtraMounts: []string{filepath.Join(repoRoot, "extra")},
 		Cfg: schema.Config{
 			Project:    schema.Project{Name: name},
 			ConfigLock: &disabled,
@@ -174,9 +177,10 @@ func TestVMStart_LockFailureIsBestEffort(t *testing.T) {
 	defer cancel()
 
 	_, err := c.StartVM(ctx, VMStartRequest{
-		Name:              name,
-		WorkspaceHostPath: repoRoot,
-		Cfg:               schema.Config{Project: schema.Project{Name: name}},
+		Name:        name,
+		MacCwd:      repoRoot,
+		ExtraMounts: []string{filepath.Join(repoRoot, "extra")},
+		Cfg:         schema.Config{Project: schema.Project{Name: name}},
 	})
 	// Must still fail at the (unrelated) inject step, proving the lock
 	// failure was swallowed rather than short-circuiting the handler

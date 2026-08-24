@@ -58,8 +58,8 @@ type StateSnapshot struct {
 	// WorkspaceHostPath is the project repoRoot, stamped here so a daemon
 	// restart or `devm stop` can recover which files to (un)lock — the
 	// running iron-proxy config has no notion of it. It only arrives on
-	// the /vm/start request (as StartVM's WorkspaceHostPath argument) and
-	// on /vm/reconcile (as VMReconcileRequest.WorkspaceHostPath); without
+	// the /vm/start request (as StartVM's MacCwd argument) and on
+	// /vm/reconcile (as VMReconcileRequest.WorkspaceHostPath); without
 	// this copy, those later paths have no repoRoot to work from. The
 	// orchestrator's cold-start and live-reconcile snapshot writes both
 	// stamp the current value.

@@ -49,28 +49,6 @@ grep -q '^%s ' /etc/fstab || echo '%s %s virtiofs %s 0 0' | sudo tee -a /etc/fst
 		tag, tag, hostPath, fstabOpts)
 }
 
-// buildWorkspaceMountScript mounts the workspace virtiofs share at the same
-// absolute path inside the VM as it lives on the host (Ship 4 mirrored-path
-// decision). Cirruslabs base image doesn't auto-mount virtiofs shares; without
-// this the guest can't see the workspace.
-//
-// The mount tag is "workspace" — set at `tart run --dir=workspace:...:tag=workspace`
-// (see internal/sandbox/tart/tart.go:formatDirArg + serviceapi/vm.go).
-// /etc/fstab persists the mount across guest reboots; this script also runs on
-// every VM start regardless of whether the mount already came up via fstab, so
-// every step here must be idempotent (mount check + fstab grep-guard).
-func buildWorkspaceMountScript(workspaceMirrorPath string) string {
-	// No chown: Apple Virtualization's virtiofs surfaces the share with the
-	// default exec user's ownership already — files authored on the host as
-	// uid 501 show up in the guest as uid 1000 (devm). A `chown devm:devm`
-	// is a no-op. Pinned by e2e/test_tart_contract_09_*.
-	return fmt.Sprintf(`set -e
-sudo mkdir -p %s
-mountpoint -q %s || sudo mount -t virtiofs workspace %s
-grep -q '^workspace' /etc/fstab || echo 'workspace %s virtiofs rw,_netdev 0 0' | sudo tee -a /etc/fstab
-`, workspaceMirrorPath, workspaceMirrorPath, workspaceMirrorPath, workspaceMirrorPath)
-}
-
 // buildVolumeMountScript returns the guest-side shell that establishes
 // one declared volume: mount the vol_<name> virtiofs share at
 // /mnt/vol_<name>/, then decide the four-case action based on
@@ -126,11 +104,11 @@ if [ -n "$(ls -A %s 2>/dev/null)" ]; then
     # Dropping all metadata preservation is actually correct here:
     # virtiofs surfaces every file with fixed guest-visible ownership
     # (the exec user) and default mode regardless of what is stored
-    # on the Mac side — see the comment in buildWorkspaceMountScript.
-    # Guest metadata cannot be preserved through virtiofs even if we
-    # tried. Postgres-style workloads that require specific mode/uid
-    # on data files do not work through virtiofs mounts at all today
-    # — a separate limitation, out of scope for this feature.
+    # on the Mac side. Guest metadata cannot be preserved through
+    # virtiofs even if we tried. Postgres-style workloads that require
+    # specific mode/uid on data files do not work through virtiofs
+    # mounts at all today — a separate limitation, out of scope for
+    # this feature.
     if ! cp -RP %s/. %s/; then
         find %s -mindepth 1 -delete
         echo "volume adopt failed for %s (target=%s); Mac dir rolled back to empty" >&2

@@ -207,15 +207,15 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		cpuCount = *cfg.Cpu
 	}
 	startResp, err := d.ServiceAPIClient.StartVM(ctx, serviceapi.VMStartRequest{
-		Name:              cfg.Project.Name,
-		WorkspaceHostPath: repoRoot,
-		AllowList:         allowList,
-		Secrets:           bindings,
-		ExtraMounts:       extraMounts,
-		DiskSizeGB:        diskGB,
-		MemoryMB:          memoryMB,
-		CpuCount:          cpuCount,
-		Cfg:               cfg,
+		Name:        cfg.Project.Name,
+		MacCwd:      repoRoot,
+		AllowList:   allowList,
+		Secrets:     bindings,
+		ExtraMounts: extraMounts,
+		DiskSizeGB:  diskGB,
+		MemoryMB:    memoryMB,
+		CpuCount:    cpuCount,
+		Cfg:         cfg,
 	})
 	if err != nil {
 		return -1, fmt.Errorf("start vm: %w", err)

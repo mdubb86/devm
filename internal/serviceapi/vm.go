@@ -43,10 +43,13 @@ const interceptedEgressIP = "192.0.2.1"
 
 // VMStartRequest is the body shape for POST /vm/start.
 type VMStartRequest struct {
-	Name              string          `json:"name"`
-	WorkspaceHostPath string          `json:"workspace_host_path"`
-	AllowList         []string        `json:"allow_list,omitempty"`
-	Secrets           []SecretBinding `json:"secrets,omitempty"`
+	Name string `json:"name"`
+	// MacCwd is the project's Mac-side working directory absolute path.
+	// Used to make devm.yaml (+ devm.me.yaml) host-immutable for the
+	// duration of the VM's run (see ConfigLockEnabled below).
+	MacCwd    string          `json:"mac_cwd"`
+	AllowList []string        `json:"allow_list,omitempty"`
+	Secrets   []SecretBinding `json:"secrets,omitempty"`
 	// ExtraMounts are additional host paths to share into the VM at the
 	// same absolute path (mirrored). Each entry is the CLI-resolved form
 	// `ABS_HOST_PATH[:ro]` (see schema.ResolveMount).
@@ -435,24 +438,11 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			}
 		}
 
-		// Run options: softnet NIC, no graphics, workspace mount. softnet is
-		// the daemon's sole egress path for every VM it launches.
+		// Run options: softnet NIC, no graphics. softnet is the daemon's
+		// sole egress path for every VM it launches.
 		opts := tart.RunOpts{
 			NoGraphics: true,
 			NetSoftnet: true,
-		}
-		if req.WorkspaceHostPath != "" {
-			// Deliberate: no Name. A named share (`--dir=workspace:PATH`)
-			// puts host content at MIRROR_PATH/workspace inside the guest
-			// and the guest cannot write to MIRROR_PATH itself. Dropping
-			// Name yields `--dir=PATH:tag=workspace`, mounting host content
-			// directly at the mirror path.
-			opts.DirMounts = []tart.DirMount{
-				{
-					HostPath: req.WorkspaceHostPath,
-					Tag:      "workspace",
-				},
-			}
 		}
 		// Extra user-declared mounts. Each entry is `HOST_PATH[:ro]`
 		// (already resolved CLI-side); tag is `extra_N` so the guest-side
@@ -517,10 +507,10 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// the VM from starting; config_lock:false opts a project out
 		// entirely.
 		if req.Cfg.ConfigLockEnabled() {
-			if err := lockConfigFiles(req.WorkspaceHostPath); err != nil {
+			if err := lockConfigFiles(req.MacCwd); err != nil {
 				daemonlog.Errorf("configlock: lock config for %s: %v (continuing)", req.Name, err)
 			} else {
-				configLockState.put(req.Name, req.WorkspaceHostPath)
+				configLockState.put(req.Name, req.MacCwd)
 			}
 		}
 
@@ -653,15 +643,12 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info.DNSPort = dnsPort
 		ironProxyState.put(req.Name, info)
 
-		// Apply VM-side config via tart exec — workspace mount, extra
-		// mounts, env only. timesyncd's NTP config is baked into the base
-		// image (image/provision-base.sh), not applied here — the user's
+		// Apply VM-side config via tart exec — extra mounts, volumes, env
+		// only. timesyncd's NTP config is baked into the base image
+		// (image/provision-base.sh), not applied here — the user's
 		// install:, apt-get, and template-install steps still run with
 		// open egress; iron-proxy is meant to gate the workload/services,
 		// not the developer's provisioning phase.
-		//
-		// Workspace mount runs first so subsequent scripts can read files
-		// from the workspace (e.g. devm-owned metadata under .devm/).
 		scripts := []string{}
 		// Extra mounts must land BEFORE the env script so scripts that
 		// read files from an extra mount can find them. Order among
@@ -671,10 +658,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				buildExtraMountScript(fmt.Sprintf("extra_%d", i), m.hostPath, m.readOnly),
 			}, scripts...)
 		}
-		if req.WorkspaceHostPath != "" {
-			scripts = append([]string{buildWorkspaceMountScript(req.WorkspaceHostPath)}, scripts...)
-		}
-		// Volume mount scripts. Run after workspace (so /mnt is stable)
+		// Volume mount scripts. Run after extra mounts (so /mnt is stable)
 		// and before any user-side provisioning. Each script substitutes
 		// the Mac-side path into the conflict message so the user sees
 		// where their data lives.

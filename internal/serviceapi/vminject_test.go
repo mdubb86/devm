@@ -19,17 +19,6 @@ func TestBuildGrowRootScript(t *testing.T) {
 	assert.True(t, strings.Contains(s, "growpart /dev/vda 1 || true"))
 }
 
-func TestBuildWorkspaceMountScript_MountsVirtioFSAtMirrorPath(t *testing.T) {
-	path := "/Users/michael/workspace/myproject"
-	script := buildWorkspaceMountScript(path)
-	assert.Contains(t, script, "mount -t virtiofs workspace "+path)
-	assert.Contains(t, script, "mkdir -p "+path)
-	assert.Contains(t, script, "workspace "+path+" virtiofs")
-	// Explicit: no chown — virtiofs on Apple Virtualization.framework rejects
-	// guest-side ownership changes with "Operation not permitted".
-	assert.NotContains(t, script, "chown")
-}
-
 func TestParseExtraMounts_RWAndRO(t *testing.T) {
 	got := parseExtraMounts([]string{
 		"/Users/x/data",
