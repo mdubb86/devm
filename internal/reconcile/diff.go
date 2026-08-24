@@ -534,9 +534,10 @@ func computeMountAddRemove(old, new schema.Config) []Change {
 }
 
 // computeVolumeChanges emits one KindVolumeChange per name whose
-// declared guest path differs between old and new. Removes surface as
-// Old set, New empty; adds as Old empty, New set; retargets as both
-// populated. Sorted by name for deterministic output.
+// Volume differs between old and new (Path, Repo pointer nil↔non-nil,
+// or RepoConfig field values). Removes surface as Old set, New empty;
+// adds as Old empty, New set; retargets as both populated. Sorted by
+// name for deterministic output.
 func computeVolumeChanges(old, new schema.Config) []Change {
 	names := map[string]struct{}{}
 	for n := range old.Volumes {
@@ -553,13 +554,49 @@ func computeVolumeChanges(old, new schema.Config) []Change {
 
 	var out []Change
 	for _, n := range sorted {
-		oldPath, newPath := old.Volumes[n].Path, new.Volumes[n].Path
-		if oldPath == newPath {
+		oldVol, newVol := old.Volumes[n], new.Volumes[n]
+		if volumeEqual(oldVol, newVol) {
 			continue
 		}
-		out = append(out, Change{Kind: KindVolumeChange, Key: n, Old: oldPath, New: newPath})
+		out = append(out, Change{Kind: KindVolumeChange, Key: n, Old: oldVol.Path, New: newVol.Path})
 	}
 	return out
+}
+
+// stringPtrEqual compares two string pointers, treating nil and
+// non-nil as different even if both are nil.
+func stringPtrEqual(a, b *string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	return *a == *b
+}
+
+// repoConfigEqual compares two RepoConfig values, accounting for
+// pointer fields (URL, Branch) that may be nil.
+func repoConfigEqual(a, b schema.RepoConfig) bool {
+	return stringPtrEqual(a.URL, b.URL) &&
+		a.Secret == b.Secret &&
+		stringPtrEqual(a.Branch, b.Branch)
+}
+
+// volumeEqual compares two Volume values, including the optional
+// Repo sub-block. A change to any field (Path, Repo pointer, or
+// RepoConfig field) is considered a difference.
+func volumeEqual(a, b schema.Volume) bool {
+	if a.Path != b.Path {
+		return false
+	}
+	if (a.Repo == nil) != (b.Repo == nil) {
+		return false
+	}
+	if a.Repo == nil {
+		return true
+	}
+	return repoConfigEqual(*a.Repo, *b.Repo)
 }
 
 // computeMaskChanges emits one KindMaskChange per path that

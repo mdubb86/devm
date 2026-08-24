@@ -63,6 +63,26 @@ func TestComputeVolumeChanges_MultipleSortedDeterministic(t *testing.T) {
 	assert.Equal(t, "c", changes[2].Key)
 }
 
+func TestComputeVolumeChanges_RepoAdded(t *testing.T) {
+	url := "https://github.com/x/y.git"
+	old := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data"}}}
+	new := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &url, Secret: "s"}}}}
+	changes := computeVolumeChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindVolumeChange, changes[0].Kind)
+	assert.Equal(t, "pg", changes[0].Key)
+}
+
+func TestComputeVolumeChanges_RepoURLChanged(t *testing.T) {
+	oldURL := "https://github.com/x/y.git"
+	newURL := "https://github.com/x/z.git"
+	old := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &oldURL, Secret: "s"}}}}
+	new := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &newURL, Secret: "s"}}}}
+	changes := computeVolumeChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindVolumeChange, changes[0].Kind)
+}
+
 func TestKindVolumeChange_BucketRestartVM(t *testing.T) {
 	assert.Equal(t, BucketRestartVM, KindVolumeChange.Bucket())
 }
