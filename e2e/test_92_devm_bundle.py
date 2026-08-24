@@ -1,13 +1,13 @@
 """92: devm bundle — /opt/devm layout, no .devm/ in workspace.
 
 Consolidated smoke test for the bundle refactor:
-  - After `devm start`, /opt/devm/ has .env, scripts/, templates/,
-    install.sh with expected modes.
+  - After `devm start`, /opt/devm/ has scripts/ (with-devm-env,
+    install-templates.sh) and install.sh with expected modes.
   - /usr/local/bin/with-devm-env is a symlink into /opt/devm/scripts/.
   - The workspace has a `.vm` symlink into the primary volume's Mac-side
     storage (not a `.devm/` directory materialized in-place).
-  - `devm exec` works (proves the wrapper is on PATH via the symlink
-    and sources /opt/devm/.env).
+  - `devm exec` works and cfg-declared env vars are visible via the
+    wrapper (which sources /etc/environment).
 """
 from __future__ import annotations
 
@@ -37,11 +37,10 @@ def test_devm_bundle_layout(workspace, devm):
     # ---- /opt/devm/ layout ----
     ls = subprocess.run(
         [devm.path, "exec", "sh", "-c",
-         "ls -la /opt/devm/ /opt/devm/scripts/ /opt/devm/templates/ 2>&1"],
+         "ls -la /opt/devm/ /opt/devm/scripts/ 2>&1"],
         cwd=str(workspace.path), capture_output=True, timeout=30,
     )
     out = ls.stdout.decode()
-    assert "/opt/devm/.env" in ls.stdout.decode() or ".env" in out, out
     assert "with-devm-env" in out, out
     assert "install-templates.sh" in out, out
     assert "install.sh" in out, out
@@ -73,6 +72,6 @@ def test_devm_bundle_layout(workspace, devm):
     )
     assert echo.returncode == 0
     assert echo.stdout.decode().strip() == "hello", (
-        f"env var BUNDLE_TEST not exported via /opt/devm/.env; "
+        f"env var BUNDLE_TEST not exported via /etc/environment; "
         f"got: {echo.stdout.decode()!r}"
     )
