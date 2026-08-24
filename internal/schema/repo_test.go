@@ -1,12 +1,50 @@
 package schema
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
+
+// TestVolume_UnmarshalJSON_LegacyStringShape locks the state-snapshot
+// backward-compat path: JSON snapshots written by pre-v0.16.0 daemons
+// used `map[string]string` for volumes (bare guest path as the value).
+// The current polymorphic Volume must still decode that shape or the
+// daemon silently drops every project's snapshot post-upgrade.
+func TestVolume_UnmarshalJSON_LegacyStringShape(t *testing.T) {
+	src := `{"claude":"/home/devm/.claude","pg-data":"/var/lib/postgresql/data"}`
+	var got map[string]Volume
+	require.NoError(t, json.Unmarshal([]byte(src), &got))
+	assert.Equal(t, "/home/devm/.claude", got["claude"].Path)
+	assert.Nil(t, got["claude"].Repo)
+	assert.Equal(t, "/var/lib/postgresql/data", got["pg-data"].Path)
+}
+
+// TestVolume_UnmarshalJSON_MappingShape locks that the current-shape
+// (post-v0.16.0) JSON emitted by the daemon round-trips correctly:
+// the same JSON that json.Marshal produces must decode back into the
+// same Volume.
+func TestVolume_UnmarshalJSON_MappingShape(t *testing.T) {
+	url := "https://github.com/me/foo.git"
+	orig := map[string]Volume{
+		"primary": {Path: "/home/devm/workspace/foo", Repo: &RepoConfig{URL: &url, Secret: "gh_token"}},
+		"scratch": {Path: "/var/lib/pg"},
+	}
+	buf, err := json.Marshal(orig)
+	require.NoError(t, err)
+	var round map[string]Volume
+	require.NoError(t, json.Unmarshal(buf, &round))
+	assert.Equal(t, "/home/devm/workspace/foo", round["primary"].Path)
+	require.NotNil(t, round["primary"].Repo)
+	require.NotNil(t, round["primary"].Repo.URL)
+	assert.Equal(t, url, *round["primary"].Repo.URL)
+	assert.Equal(t, "gh_token", round["primary"].Repo.Secret)
+	assert.Equal(t, "/var/lib/pg", round["scratch"].Path)
+	assert.Nil(t, round["scratch"].Repo)
+}
 
 func TestVolume_ScalarShape(t *testing.T) {
 	src := `pg-data: /var/lib/postgresql/data`
