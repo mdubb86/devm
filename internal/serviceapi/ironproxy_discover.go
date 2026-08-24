@@ -270,7 +270,7 @@ func parseIronProxyProjectID(command string) (string, bool) {
 }
 
 // loadIronProxyInfoFromConfig reads the YAML iron-proxy was launched
-// with and pulls back HTTPPort + HTTPSPort + DNSPort.
+// with and pulls back HTTPPort + HTTPSPort + TunnelPort + DNSPort.
 func loadIronProxyInfoFromConfig(path string) (projectInfo, error) {
 	blob, err := os.ReadFile(path)
 	if err != nil {
@@ -281,8 +281,9 @@ func loadIronProxyInfoFromConfig(path string) (projectInfo, error) {
 			Listen string `yaml:"listen"`
 		} `yaml:"dns"`
 		Proxy struct {
-			HTTPListen  string `yaml:"http_listen"`
-			HTTPSListen string `yaml:"https_listen"`
+			HTTPListen   string `yaml:"http_listen"`
+			HTTPSListen  string `yaml:"https_listen"`
+			TunnelListen string `yaml:"tunnel_listen"`
 		} `yaml:"proxy"`
 	}
 	if err := yaml.Unmarshal(blob, &raw); err != nil {
@@ -296,14 +297,19 @@ func loadIronProxyInfoFromConfig(path string) (projectInfo, error) {
 	if err != nil {
 		return projectInfo{}, fmt.Errorf("proxy.https_listen: %w", err)
 	}
+	_, tunnelPort, err := splitHostPortInt(raw.Proxy.TunnelListen)
+	if err != nil {
+		return projectInfo{}, fmt.Errorf("proxy.tunnel_listen: %w", err)
+	}
 	_, dnsPort, err := splitHostPortInt(raw.DNS.Listen)
 	if err != nil {
 		return projectInfo{}, fmt.Errorf("dns.listen: %w", err)
 	}
 	return projectInfo{
-		HTTPPort:  httpPort,
-		HTTPSPort: httpsPort,
-		DNSPort:   dnsPort,
+		HTTPPort:   httpPort,
+		HTTPSPort:  httpsPort,
+		TunnelPort: tunnelPort,
+		DNSPort:    dnsPort,
 	}, nil
 }
 

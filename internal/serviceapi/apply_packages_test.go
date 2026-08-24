@@ -93,9 +93,10 @@ func seedPackagesFixture(t *testing.T, projectID string, allowList []string, exe
 	cfgPath, err := IronProxyConfigPath(identity.Prod, projectID)
 	require.NoError(t, err)
 	require.NoError(t, writeIronProxyConfig(cfgPath, IronProxyConfig{
-		HTTPListen:  "127.0.0.1:9080",
-		HTTPSListen: "127.0.0.1:9443",
-		DNSListen:   "127.0.0.1:9053",
+		HTTPListen:   "127.0.0.1:9080",
+		HTTPSListen:  "127.0.0.1:9443",
+		TunnelListen: "127.0.0.1:9081",
+		DNSListen:    "127.0.0.1:9053",
 	}))
 
 	allow := make([]schema.AllowEntry, 0, len(allowList))

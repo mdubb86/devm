@@ -23,9 +23,10 @@ func TestRebuildIronProxyConfig(t *testing.T) {
 	cfgPath, err := IronProxyConfigPath(identity.Prod, projectID)
 	require.NoError(t, err)
 	require.NoError(t, writeIronProxyConfig(cfgPath, IronProxyConfig{
-		HTTPListen:  "127.0.0.1:9080",
-		HTTPSListen: "127.0.0.1:9443",
-		DNSListen:   "127.0.0.1:9053",
+		HTTPListen:   "127.0.0.1:9080",
+		HTTPSListen:  "127.0.0.1:9443",
+		TunnelListen: "127.0.0.1:9081",
+		DNSListen:    "127.0.0.1:9053",
 	}))
 
 	// Snapshot-shaped schema.Config: one allow entry carrying a
@@ -68,9 +69,10 @@ func TestRebuildIronProxyConfig_DockerExpandsAllowlist(t *testing.T) {
 	cfgPath, err := IronProxyConfigPath(identity.Prod, projectID)
 	require.NoError(t, err)
 	require.NoError(t, writeIronProxyConfig(cfgPath, IronProxyConfig{
-		HTTPListen:  "127.0.0.1:9180",
-		HTTPSListen: "127.0.0.1:9543",
-		DNSListen:   "127.0.0.1:9153",
+		HTTPListen:   "127.0.0.1:9180",
+		HTTPSListen:  "127.0.0.1:9543",
+		TunnelListen: "127.0.0.1:9181",
+		DNSListen:    "127.0.0.1:9153",
 	}))
 
 	snapCfg := schema.Config{

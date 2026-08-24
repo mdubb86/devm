@@ -58,6 +58,13 @@ class IronProxyConfig:
     https_listen: str
     ca_cert_path: str
     ca_key_path: str
+    # CONNECT/SOCKS5 tunnel port. Iron-proxy's HTTP proxy CONNECT method
+    # is served by a SEPARATE accept loop on this port (internal/proxy/
+    # tunnel.go), NOT the http_listen handler. HTTP_PROXY-consuming
+    # clients that send `CONNECT host:443` must point at this port; the
+    # http_listen port returns 400 for CONNECT. Empty ⇒ tunnel handler
+    # not started (matches iron-proxy default).
+    tunnel_listen: str = ""
     # DNS is disabled by default in tests to avoid requiring port 53 or root.
     # When dns_enabled=True, dns_listen and dns_proxy_ip must be set.
     dns_enabled: bool = False
@@ -83,6 +90,7 @@ class IronProxyConfig:
                 # 127.0.0.1 through the proxy in later tests. Override the
                 # default deny that blocks 127.0.0.0/8.
                 "upstream_deny_cidrs": [],
+                **({"tunnel_listen": self.tunnel_listen} if self.tunnel_listen else {}),
             },
             "tls": {
                 "ca_cert": self.ca_cert_path,

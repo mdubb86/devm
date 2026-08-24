@@ -137,14 +137,15 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		// Build fresh config on the SAME MAC_HOST + ports pulled from
 		// the on-disk config above.
 		newCfg := IronProxyConfig{
-			HTTPListen:  ironProxyListenAddr(diskInfo.HTTPPort),
-			HTTPSListen: ironProxyListenAddr(diskInfo.HTTPSPort),
-			DNSListen:   ironProxyListenAddr(diskInfo.DNSPort),
-			DNSProxyIP:  interceptedEgressIP,
-			CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
-			CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
-			AllowList:   req.Allowlist,
-			Secrets:     secrets,
+			HTTPListen:   ironProxyListenAddr(diskInfo.HTTPPort),
+			HTTPSListen:  ironProxyListenAddr(diskInfo.HTTPSPort),
+			TunnelListen: ironProxyListenAddr(diskInfo.TunnelPort),
+			DNSListen:    ironProxyListenAddr(diskInfo.DNSPort),
+			DNSProxyIP:   interceptedEgressIP,
+			CACertPath:   filepath.Join(caDir, "ca", "root.crt"),
+			CAKeyPath:    filepath.Join(caDir, "ca", "root.key"),
+			AllowList:    req.Allowlist,
+			Secrets:      secrets,
 		}
 
 		// Is iron-proxy alive for this project right now? Determines
@@ -203,6 +204,7 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		info, _ := ironProxyState.get(req.Name)
 		info.HTTPPort = diskInfo.HTTPPort
 		info.HTTPSPort = diskInfo.HTTPSPort
+		info.TunnelPort = diskInfo.TunnelPort
 		info.DNSPort = diskInfo.DNSPort
 		ironProxyState.put(req.Name, info)
 

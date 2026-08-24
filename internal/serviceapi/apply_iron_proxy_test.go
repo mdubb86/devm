@@ -45,6 +45,8 @@ func fakeTartIPFails() *tart.Tart {
 
 // writePreExistingIronProxyConfig drops a minimal YAML at the
 // per-project path so /vm/apply-iron-proxy can pull ports out of it.
+// The tunnel_listen port is offset by 1 from http_listen — arbitrary,
+// just a distinct value the readback can pin.
 func writePreExistingIronProxyConfig(t *testing.T, projectID, macHost string, httpPort, httpsPort, dnsPort int) {
 	t.Helper()
 	path, err := IronProxyConfigPath(identity.Prod, projectID)
@@ -55,7 +57,8 @@ func writePreExistingIronProxyConfig(t *testing.T, projectID, macHost string, ht
 			"  listen: " + macHost + ":" + strconv.Itoa(dnsPort) + "\n" +
 			"proxy:\n" +
 			"  http_listen: " + macHost + ":" + strconv.Itoa(httpPort) + "\n" +
-			"  https_listen: " + macHost + ":" + strconv.Itoa(httpsPort) + "\n",
+			"  https_listen: " + macHost + ":" + strconv.Itoa(httpsPort) + "\n" +
+			"  tunnel_listen: " + macHost + ":" + strconv.Itoa(httpPort+1) + "\n",
 	)
 	require.NoError(t, os.WriteFile(path, body, 0o600))
 }

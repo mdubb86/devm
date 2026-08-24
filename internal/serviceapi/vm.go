@@ -677,7 +677,8 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			ironSecrets = append(ironSecrets, IronSecret{Name: b.Name, Value: b.Value, Hosts: b.Hosts})
 		}
 
-		// Allocate three ephemeral ports on the Mac (HTTP + HTTPS + DNS).
+		// Allocate four ephemeral ports on the Mac
+		// (HTTP + HTTPS + TUNNEL + DNS).
 		httpPort, err := pickPort()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("pick http port: %v", err), http.StatusInternalServerError)
@@ -686,6 +687,11 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		httpsPort, err := pickPort()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("pick https port: %v", err), http.StatusInternalServerError)
+			return
+		}
+		tunnelPort, err := pickPort()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("pick tunnel port: %v", err), http.StatusInternalServerError)
 			return
 		}
 		dnsPort, err := pickPort()
@@ -701,9 +707,10 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			return
 		}
 		proxyCfg := IronProxyConfig{
-			HTTPListen:  ironProxyListenAddr(httpPort),
-			HTTPSListen: ironProxyListenAddr(httpsPort),
-			DNSListen:   ironProxyListenAddr(dnsPort),
+			HTTPListen:   ironProxyListenAddr(httpPort),
+			HTTPSListen:  ironProxyListenAddr(httpsPort),
+			TunnelListen: ironProxyListenAddr(tunnelPort),
+			DNSListen:    ironProxyListenAddr(dnsPort),
 			// DNS answers with interceptedEgressIP (RFC 5737 documentation
 			// range, never a real destination); softnet forwards outbound
 			// TCP:80/443 to iron-proxy purely by destination port under
@@ -728,6 +735,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info, _ := ironProxyState.get(req.Name)
 		info.HTTPPort = httpPort
 		info.HTTPSPort = httpsPort
+		info.TunnelPort = tunnelPort
 		info.DNSPort = dnsPort
 		ironProxyState.put(req.Name, info)
 
@@ -1278,9 +1286,10 @@ func endpointFrom(info projectInfo, ntpPort int) *Endpoint {
 // diff hygiene). Fields survive daemon restart via StateSnapshot mirror
 // so AdoptIronProxies can rebuild after a crash.
 type projectInfo struct {
-	HTTPPort  int
-	HTTPSPort int
-	DNSPort   int
+	HTTPPort   int
+	HTTPSPort  int
+	TunnelPort int
+	DNSPort    int
 
 	// GuestHTTPPort / GuestHTTPSPort are the daemon's guest-origin listener
 	// pair for this project — where softnet forwards `.test` traffic.

@@ -89,6 +89,10 @@ func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 	assert.Equal(t, "192.168.64.1:8080", proxy["http_listen"])
 	assert.Equal(t, "192.168.64.1:8443", proxy["https_listen"])
 	assert.Equal(t, []any{}, proxy["upstream_deny_cidrs"])
+	// tunnel_listen is omitted unless set — protecting adopts of
+	// pre-tunnel_listen configs from a spurious field in the compare.
+	_, hasTunnel := proxy["tunnel_listen"]
+	assert.False(t, hasTunnel, "tunnel_listen must be absent when TunnelListen is empty")
 
 	// tls section
 	tls := got["tls"].(map[string]any)
@@ -109,6 +113,57 @@ func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 // domains. iron-proxy v0.45.0 runs no egress check at all when the
 // transform is absent — an omitted transform is allow-all. The
 // deny-all shape is the transform present with `domains: []`.
+// tunnel_listen is iron-proxy's CONNECT/SOCKS5 tunnel port. HTTP_PROXY-
+// consuming clients (git during host-side hydration) MUST reach the tunnel
+// port — the http_listen handler returns 400 for CONNECT. If this test
+// fails, hydration's git subprocess will 400 on every CONNECT attempt.
+// Pinned separately from the earlier YAML shape test to signal intent:
+// this field's presence is load-bearing for hydration, not incidental.
+func TestBuildIronProxyConfig_EmitsTunnelListenWhenSet(t *testing.T) {
+	cfg := IronProxyConfig{
+		HTTPListen:   "127.0.0.1:8080",
+		HTTPSListen:  "127.0.0.1:8443",
+		TunnelListen: "127.0.0.1:8081",
+		DNSListen:    "127.0.0.1:8053",
+		DNSProxyIP:   "127.0.0.1",
+		CACertPath:   "/tmp/ca.crt",
+		CAKeyPath:    "/tmp/ca.key",
+	}
+	blob, err := cfg.YAML()
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(blob, &got))
+	proxy := got["proxy"].(map[string]any)
+	assert.Equal(t, "127.0.0.1:8081", proxy["tunnel_listen"],
+		"tunnel_listen must be present in the emitted YAML so iron-proxy starts its CONNECT accept loop")
+}
+
+// ironProxyURLFor is the URL git hydration hands to HTTP_PROXY / HTTPS_PROXY.
+// It MUST point at the tunnel port — the http_listen handler returns 400 for
+// CONNECT. A regression to http_listen here means every git-clone hydration
+// attempts a CONNECT the http handler rejects.
+func TestIronProxyURLFor_ReturnsTunnelPortNotHTTPPort(t *testing.T) {
+	ironProxyState = newIronProxyStore()
+	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
+
+	ironProxyState.put("p", projectInfo{HTTPPort: 8080, TunnelPort: 8081})
+	got := ironProxyURLFor("p")
+	assert.Contains(t, got, ":8081",
+		"ironProxyURLFor must return the tunnel port URL; got %q", got)
+	assert.NotContains(t, got, ":8080",
+		"ironProxyURLFor must NOT return the http_listen port — CONNECT there returns 400; got %q", got)
+}
+
+// ironProxyURLFor returns empty for a project the state store doesn't know
+// about (called before SpawnIronProxy). Hydration checks the returned URL
+// and skips proxy setup when empty, so the caller must never see ":0".
+func TestIronProxyURLFor_EmptyForUnknownProject(t *testing.T) {
+	ironProxyState = newIronProxyStore()
+	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
+
+	assert.Equal(t, "", ironProxyURLFor("never-spawned"))
+}
+
 func TestBuildIronProxyConfig_EmptyAllowList_EmitsDenyAllTransform(t *testing.T) {
 	cfg := IronProxyConfig{
 		HTTPListen:  "127.0.0.1:8080",

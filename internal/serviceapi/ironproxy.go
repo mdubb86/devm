@@ -41,7 +41,17 @@ type IronSecret struct {
 type IronProxyConfig struct {
 	HTTPListen  string
 	HTTPSListen string
-	DNSListen   string
+	// TunnelListen is iron-proxy's CONNECT/SOCKS5 tunnel port. It runs
+	// on its own accept loop (iron-proxy internal/proxy/tunnel.go) and
+	// is the only listener that handles the `CONNECT host:port` method
+	// — the http_listen handler returns 400 for CONNECT. Any Mac-side
+	// client that uses HTTP_PROXY / HTTPS_PROXY (`git clone` during
+	// host-side repo hydration is the load-bearing case) MUST dial this
+	// port, not http_listen. Empty ⇒ iron-proxy never starts the tunnel
+	// handler at all, which strands HTTP_PROXY-consuming callers with
+	// CONNECT-returns-400.
+	TunnelListen string
+	DNSListen    string
 	// DNSProxyIP is the IP iron-proxy answers with for every host in the
 	// allow list. softnet forwards outbound TCP:80/443 to iron-proxy's
 	// HTTP/HTTPS listeners by destination port under ENFORCED policy, so
@@ -65,14 +75,17 @@ func ironProxyListenAddr(port int) string {
 
 // ironProxyURLFor returns the http:// URL that HTTP_PROXY/HTTPS_PROXY-aware
 // tooling (git, during host-side repo hydration) dials to route through
-// this project's iron-proxy instance. Empty when iron-proxy state hasn't
-// been seeded for projectID yet (e.g. called before SpawnIronProxy).
+// this project's iron-proxy instance. Returns iron-proxy's tunnel_listen
+// port, not http_listen: HTTP_PROXY clients send `CONNECT host:port`
+// which the http_listen handler rejects with 400 — tunnel_listen owns
+// the CONNECT accept loop. Empty when iron-proxy state hasn't been
+// seeded for projectID yet (e.g. called before SpawnIronProxy).
 func ironProxyURLFor(projectID string) string {
 	info, ok := ironProxyState.get(projectID)
-	if !ok || info.HTTPPort == 0 {
+	if !ok || info.TunnelPort == 0 {
 		return ""
 	}
-	return "http://" + ironProxyListenAddr(info.HTTPPort)
+	return "http://" + ironProxyListenAddr(info.TunnelPort)
 }
 
 // YAML returns the YAML blob iron-proxy reads from -config <path>.
@@ -84,13 +97,19 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 			"listen":   c.DNSListen,
 			"proxy_ip": c.DNSProxyIP,
 		},
-		"proxy": map[string]any{
-			"http_listen":  c.HTTPListen,
-			"https_listen": c.HTTPSListen,
-			// Allow loopback upstream so in-VM services can be reached.
-			// Overrides iron-proxy's default deny for 127.0.0.0/8.
-			"upstream_deny_cidrs": []string{},
-		},
+		"proxy": func() map[string]any {
+			m := map[string]any{
+				"http_listen":  c.HTTPListen,
+				"https_listen": c.HTTPSListen,
+				// Allow loopback upstream so in-VM services can be reached.
+				// Overrides iron-proxy's default deny for 127.0.0.0/8.
+				"upstream_deny_cidrs": []string{},
+			}
+			if c.TunnelListen != "" {
+				m["tunnel_listen"] = c.TunnelListen
+			}
+			return m
+		}(),
 		"tls": map[string]any{
 			"ca_cert": c.CACertPath,
 			"ca_key":  c.CAKeyPath,

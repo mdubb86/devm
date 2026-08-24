@@ -99,12 +99,13 @@ func TestLoadIronProxyInfoFromConfig(t *testing.T) {
 	// starts returning zero values and the daemon rebuilds the softnet
 	// enforced-policy endpoint with the wrong ports after a restart.
 	cfg := IronProxyConfig{
-		HTTPListen:  "192.168.64.1:59481",
-		HTTPSListen: "192.168.64.1:59482",
-		DNSListen:   "192.168.64.1:59483",
-		DNSProxyIP:  "192.0.2.1",
-		CACertPath:  "/tmp/ca.crt",
-		CAKeyPath:   "/tmp/ca.key",
+		HTTPListen:   "192.168.64.1:59481",
+		HTTPSListen:  "192.168.64.1:59482",
+		TunnelListen: "192.168.64.1:59484",
+		DNSListen:    "192.168.64.1:59483",
+		DNSProxyIP:   "192.0.2.1",
+		CACertPath:   "/tmp/ca.crt",
+		CAKeyPath:    "/tmp/ca.key",
 	}
 	blob, err := cfg.YAML()
 	require.NoError(t, err)
@@ -116,9 +117,10 @@ func TestLoadIronProxyInfoFromConfig(t *testing.T) {
 	info, err := loadIronProxyInfoFromConfig(path)
 	require.NoError(t, err)
 	assert.Equal(t, projectInfo{
-		HTTPPort:  59481,
-		HTTPSPort: 59482,
-		DNSPort:   59483,
+		HTTPPort:   59481,
+		HTTPSPort:  59482,
+		TunnelPort: 59484,
+		DNSPort:    59483,
 	}, info)
 }
 

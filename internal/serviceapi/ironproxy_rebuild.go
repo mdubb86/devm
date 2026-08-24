@@ -43,13 +43,14 @@ func rebuildIronProxyConfig(cfg identity.Config, projectID string, snapCfg schem
 		return IronProxyConfig{}, fmt.Errorf("resolve repo hosts: %w", err)
 	}
 	return IronProxyConfig{
-		HTTPListen:  ironProxyListenAddr(diskInfo.HTTPPort),
-		HTTPSListen: ironProxyListenAddr(diskInfo.HTTPSPort),
-		DNSListen:   ironProxyListenAddr(diskInfo.DNSPort),
-		DNSProxyIP:  interceptedEgressIP,
-		CACertPath:  filepath.Join(caDir, "ca", "root.crt"),
-		CAKeyPath:   filepath.Join(caDir, "ca", "root.key"),
-		AllowList:   AppendUniqueHosts(docker.EffectiveAllowlist(snapCfg), repoHosts),
-		Secrets:     secrets,
+		HTTPListen:   ironProxyListenAddr(diskInfo.HTTPPort),
+		HTTPSListen:  ironProxyListenAddr(diskInfo.HTTPSPort),
+		TunnelListen: ironProxyListenAddr(diskInfo.TunnelPort),
+		DNSListen:    ironProxyListenAddr(diskInfo.DNSPort),
+		DNSProxyIP:   interceptedEgressIP,
+		CACertPath:   filepath.Join(caDir, "ca", "root.crt"),
+		CAKeyPath:    filepath.Join(caDir, "ca", "root.key"),
+		AllowList:    AppendUniqueHosts(docker.EffectiveAllowlist(snapCfg), repoHosts),
+		Secrets:      secrets,
 	}, nil
 }
