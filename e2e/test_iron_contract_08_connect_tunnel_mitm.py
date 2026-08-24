@@ -104,10 +104,13 @@ def test_connect_via_tunnel_listen_reaches_allowlisted_upstream(tmp_path):
 @pytest.mark.contract
 @pytest.mark.skipif(not _HTTPBIN_REACHABLE, reason="needs internet to httpbin.org")
 def test_connect_via_tunnel_listen_substitutes_secret_in_header(tmp_path):
-    """CONNECT+MITM+secrets end-to-end: __DEVM_SECRET_*__ in the
-    Authorization header is substituted with the real value before
-    reaching the upstream. This is the exact contract hydration needs.
+    """CONNECT+MITM+secrets end-to-end in the Basic-auth wire shape hydrate
+    emits: __DEVM_SECRET_*__ embedded in `Basic base64("x-access-token:...")`
+    is auto-decoded by iron-proxy's replaceInHeader, substituted, and
+    re-encoded before reaching upstream. Pins the exact contract git
+    hydration relies on for private-repo clones.
     """
+    import base64 as _b64
     ca_cert, ca_key = _generate_ca(tmp_path)
 
     http_port, https_port, tunnel_port = free_ports(3)
@@ -121,6 +124,15 @@ def test_connect_via_tunnel_listen_substitutes_secret_in_header(tmp_path):
         secret_tokens={"__DEVM_SECRET_HYDRATE__": "DEVM_SECRET_HYDRATE"},
     )
 
+    # Client-side blob: base64("x-access-token:__DEVM_SECRET_HYDRATE__")
+    client_blob = _b64.b64encode(
+        b"x-access-token:__DEVM_SECRET_HYDRATE__"
+    ).decode("ascii")
+    # Expected upstream blob: base64("x-access-token:real-hydrate-secret")
+    expected_blob = _b64.b64encode(
+        b"x-access-token:real-hydrate-secret"
+    ).decode("ascii")
+
     with spawn(cfg, env={"DEVM_SECRET_HYDRATE": "real-hydrate-secret"}):
         result = subprocess.run(
             [
@@ -130,7 +142,7 @@ def test_connect_via_tunnel_listen_substitutes_secret_in_header(tmp_path):
                 "--max-time", "15",
                 "--proxy", f"http://127.0.0.1:{tunnel_port}",
                 "--cacert", str(ca_cert),
-                "-H", "Authorization: bearer __DEVM_SECRET_HYDRATE__",
+                "-H", f"Authorization: Basic {client_blob}",
                 "https://httpbin.org/headers",
             ],
             capture_output=True,
@@ -140,12 +152,16 @@ def test_connect_via_tunnel_listen_substitutes_secret_in_header(tmp_path):
             f"curl through tunnel_listen CONNECT failed (rc={result.returncode}): "
             f"stderr={result.stderr!r}"
         )
-        assert "real-hydrate-secret" in result.stdout, (
-            "iron-proxy did not substitute the secret token before forwarding; "
-            f"upstream would have received the raw placeholder. stdout={result.stdout!r}"
+        # httpbin /headers echoes back what it received. The Authorization
+        # value must be the re-encoded Basic blob with the substituted
+        # secret — proves iron-proxy's Basic-aware decode+substitute+
+        # re-encode path fired.
+        assert f"Basic {expected_blob}" in result.stdout, (
+            "iron-proxy did not produce the expected Basic-auth blob at upstream; "
+            f"stdout={result.stdout!r}"
         )
         assert "__DEVM_SECRET_HYDRATE__" not in result.stdout, (
-            "raw placeholder leaked to upstream (substitution ran but did not replace); "
+            "raw placeholder leaked to upstream — Basic decode+replace path did not fire; "
             f"stdout={result.stdout!r}"
         )
 

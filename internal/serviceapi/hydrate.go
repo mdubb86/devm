@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,9 +35,8 @@ func HydrateRepoVolume(ctx context.Context, storagePath string, repo schema.Repo
 		args = append(args, "-b", *repo.Branch)
 	}
 	if ironProxyURL != "" && secret != "" {
-		placeholder := schema.TokenFor(secret)
-		args = append(args,
-			"-c", fmt.Sprintf("http.extraheader=Authorization: bearer %s", placeholder))
+		args = append(args, "-c",
+			"http.extraheader="+hydrateExtraHeader(secret))
 	}
 	args = append(args, *repo.URL, storagePath)
 
@@ -55,4 +55,21 @@ func HydrateRepoVolume(ctx context.Context, storagePath string, repo schema.Repo
 		return fmt.Errorf("git clone %s: %s: %w", *repo.URL, strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// hydrateExtraHeader returns the Authorization header string hydrate
+// injects via `git -c http.extraheader=<...>`. Split out so unit tests
+// can pin the exact wire shape without executing git.
+//
+// Shape: `Authorization: Basic base64("x-access-token:<placeholder>")`.
+// Iron-proxy's secrets transform decodes the Basic payload, replaces
+// the placeholder with the resolved secret value, and re-encodes.
+// GitHub / GitLab / Azure DevOps all accept this shape uniformly for
+// git-over-HTTPS operations; bearer works only for narrower
+// provider+token combinations.
+func hydrateExtraHeader(secretName string) string {
+	placeholder := schema.TokenFor(secretName)
+	blob := base64.StdEncoding.EncodeToString(
+		[]byte("x-access-token:" + placeholder))
+	return "Authorization: Basic " + blob
 }
