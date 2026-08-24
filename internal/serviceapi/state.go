@@ -73,8 +73,13 @@ type StateSnapshot struct {
 }
 
 // ReadStateSnapshot loads the persisted snapshot for a project. Returns
-// (nil, nil) when the file is absent or malformed — reconcile treats
-// both as "assume everything changed" and computes a full diff.
+// (nil, nil) only when the file is absent — a fresh project. A file
+// that exists but fails to parse is returned as an error: silently
+// treating a malformed snapshot as missing loses every adopted
+// iron-proxy PID, project IP, and workspace path on every reconcile
+// for the lifetime of the daemon. Fail loud so the operator sees it,
+// with the path in the message so the fix (deleting the stale file)
+// is obvious.
 func ReadStateSnapshot(cfg identity.Config, projectID string) (*StateSnapshot, error) {
 	if err := validProjectID(projectID); err != nil {
 		return nil, err
@@ -89,9 +94,9 @@ func ReadStateSnapshot(cfg identity.Config, projectID string) (*StateSnapshot, e
 	}
 	var snap StateSnapshot
 	if err := json.Unmarshal(body, &snap); err != nil {
-		// Malformed → treated as missing. Log so operators can notice.
-		fmt.Fprintf(os.Stderr, "state: malformed snapshot at %s: %v (treating as missing)\n", path, err)
-		return nil, nil
+		return nil, fmt.Errorf(
+			"parse state %s: %w (delete this file to recover; the daemon "+
+				"will rebuild state on the next reconcile)", path, err)
 	}
 	return &snap, nil
 }

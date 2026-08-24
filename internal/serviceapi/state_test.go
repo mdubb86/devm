@@ -31,16 +31,21 @@ func TestReadStateSnapshot_Missing_ReturnsNilNil(t *testing.T) {
 	assert.Nil(t, got)
 }
 
-func TestReadStateSnapshot_Malformed_ReturnsNilNil(t *testing.T) {
-	// Malformed snapshot is treated as missing so reconcile falls
-	// back to a full diff. Callers that log this get to notice; the
-	// hot path stays reliable.
+func TestReadStateSnapshot_Malformed_ReturnsError(t *testing.T) {
+	// A snapshot file that exists but fails to parse must fail loud —
+	// the alternative (treating it as missing) silently loses every
+	// adopted iron-proxy PID, project IP, and workspace path on every
+	// reconcile for the lifetime of the daemon. The error carries the
+	// file path so the operator can act on it directly.
 	t.Setenv("HOME", t.TempDir())
 	require.NoError(t, os.MkdirAll(StateDir(identity.Prod), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(StateDir(identity.Prod), "junk.json"), []byte("{oh no"), 0o600))
+	junkPath := filepath.Join(StateDir(identity.Prod), "junk.json")
+	require.NoError(t, os.WriteFile(junkPath, []byte("{oh no"), 0o600))
 	got, err := ReadStateSnapshot(identity.Prod, "junk")
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), junkPath,
+		"error must name the malformed file so the operator can find and delete it")
 }
 
 func TestRemoveStateCfg_Idempotent(t *testing.T) {
