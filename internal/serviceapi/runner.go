@@ -238,6 +238,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	RegisterApplyIronProxyHandler(server, cfg, locks, sup, tr, denials, proxy)
 	RegisterHandshakeHandler(server, cfg, build, sup, proxy)
 	RegisterStatusAllHandler(server, cfg, sup, tr, proxy)
+	RegisterWorkspacesHandler(server, cfg)
 
 	var g run.Group
 

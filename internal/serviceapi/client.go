@@ -134,6 +134,29 @@ func (c *Client) StatusAll(ctx context.Context) ([]ProjectStatus, error) {
 	return out, nil
 }
 
+// Workspaces returns the daemon's workspace registry — one entry per
+// project with a primary repo, pairing its guest clone path with the
+// Mac-side volume storage path. Backs `devm resolve`.
+func (c *Client) Workspaces(ctx context.Context) ([]WorkspaceEntry, error) {
+	resp, err := c.do(ctx, "GET", "/workspaces")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("workspaces request failed: status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var out []WorkspaceEntry
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("parse workspaces response: %w", err)
+	}
+	return out, nil
+}
+
 // Available returns true if the service is reachable. Used by CLI
 // commands to decide whether to surface a warning, route through
 // the service, etc. Errors are swallowed — "not available" is a
