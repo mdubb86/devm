@@ -112,6 +112,12 @@ func repoSecretHosts(cfg schema.Config, macCwd string) (map[string][]string, []s
 		if err != nil {
 			return err
 		}
+		if host == "" {
+			// URL schemes with no authority component (file://, git://
+			// with local path) never route through iron-proxy — nothing
+			// to inject or allowlist for them.
+			return nil
+		}
 		if bySecret[secretName] == nil {
 			bySecret[secretName] = map[string]bool{}
 		}
