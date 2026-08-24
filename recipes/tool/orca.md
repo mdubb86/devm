@@ -70,8 +70,7 @@ Browse remote filesystem" picker, navigate to:
 
 `~/workspace` and any legacy `/w/<project>` path do not exist on the
 guest. Orca runs `git worktree add` on the remote under this path.
-Note `node_modules` is a separate VM-local volume (devm `masks:`),
-so it won't match your Mac's checkout — expected.
+`node_modules/` lives in the volume; no Mac-side confusion.
 
 ## Troubleshooting
 

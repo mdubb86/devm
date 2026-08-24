@@ -2,29 +2,21 @@
 name: tool/ai/gsd-core
 category: ai
 display_name: GSD Core (Get Shit Done)
-description: Project-scoped Claude workflow install (roadmaps / phases / plans / executions) under .claude/. Masked so the VM keeps its own copy — settings.local.json bakes in an absolute node path, so Mac and VM must not share.
+description: Project-scoped Claude workflow install (roadmaps / phases / plans / executions) under .claude/; gitignored generated surface.
 keywords: gsd get-shit-done opengsd claude workflow roadmap plan phase execution planning
 since: recipes-v1.0.0
 ---
 
 # GSD Core
 
-[Get Shit Done](https://www.npmjs.com/package/@opengsd/gsd-core)
-installs into `.claude/` (slash commands, subagents, hooks, runtime
-code, and a `settings.local.json` that wires the hooks in). The one
-gotcha for devm: `settings.local.json` hardcodes the absolute path to
-the Node interpreter that ran the install — so a `.claude/` shared
-between Mac and VM breaks on whichever side installed second.
-
-Fix: mask `.claude/` (VM gets its own private copy over the
-bind-mounted workspace) and auto-install into it on cold start.
+[Get Shit Done](https://www.npmjs.com/package/@opengsd/gsd-core) is a
+project-scoped workflow install that drops slash commands, subagents,
+hooks, and `settings.local.json` directly into `.claude/`. All of
+GSD's generated output should be gitignored.
 
 ## devm.yaml additions
 
 ```yaml
-masks:
-  - .claude                       # VM's own .claude/, shadowed over the workspace mount
-
 scripts:
   install-gsd-core:
     # Absolute npx path — install: shell has no login PATH init yet.
@@ -70,9 +62,10 @@ GSD's surface while keeping hand-written `.claude/commands/*.md` and
   invokes `claude plugin install ...`), GSD Core is a project-scoped
   file-install: it drops slash commands, subagents, hooks, and
   `settings.local.json` directly under the project's `.claude/`.
-- **Rehydration.** `devm teardown` wipes the `.claude` mask AND the
-  `install:` marker, so the next `devm start` re-runs `install-gsd-core`
-  and GSD is fresh. Nothing to remember.
+- **Rehydration.** `devm teardown` deletes the workspace volume; next
+  `devm start` re-hydrates from git (which does not include the GSD
+  install), then re-runs `install-gsd-core` in the fresh clone. Nothing
+  to remember.
 - **Runs in the open-network provisioning window** (install: bucket),
   so no runtime egress opens beyond the two npm hosts.
 - **GSD's persistent state lives in `.planning/`** (workspace-tracked,

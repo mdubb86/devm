@@ -72,24 +72,12 @@ network:
     - release-assets.githubusercontent.com   # uv managed CPython (python-build-standalone)
 ```
 
-## The `.venv` — mask it (same class as node_modules)
+## The `.venv`
 
-A project `.venv/` is **per-system compiled tooling**, not portable config:
-`site-packages/` carries native extensions (`.so`) built for the guest
-(linux-aarch64), and `.venv/bin/python` is a symlink to a VM-only interpreter
-path. On the darwin↔linux bind-mount it's broken the moment it's created — the
-same problem `node_modules` has. Keep it VM-local with a mask (masks are a
-service field; attach to any service you declare):
+A project `.venv/` is **per-system compiled tooling**, not portable config.
+It lives in the volume, out of the way of your Mac's own clone if you have one.
 
-```yaml
-services:
-  <any-service>:
-    masks:
-      - path: .venv        # your project's venv path; one entry per worktree
-        size: 2g
-```
-
-- uv's **cache** (`~/.cache/uv`) is already VM-local — **no mask needed**.
+- uv's **cache** (`~/.cache/uv`) is already VM-local.
 - `UV_PROJECT_ENVIRONMENT=<VM-local path>` is an alternative (a live env change,
   no recreate) that pushes the venv fully outside the tree — use it only if your
   tooling drives everything through `uv run` rather than a hardcoded `./.venv`.
