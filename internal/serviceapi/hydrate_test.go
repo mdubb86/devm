@@ -36,7 +36,7 @@ func TestHydrateRepoVolume_FreshClone(t *testing.T) {
 	repo := schema.RepoConfig{URL: &url}
 
 	// file:// clones bypass HTTP proxy — pass empty ironProxyURL.
-	err := HydrateRepoVolume(context.Background(), storage, repo, "", "")
+	err := HydrateRepoVolume(context.Background(), storage, repo, "", "", "")
 	require.NoError(t, err)
 
 	_, err = os.Stat(filepath.Join(storage, "README.md"))
@@ -46,7 +46,7 @@ func TestHydrateRepoVolume_FreshClone(t *testing.T) {
 func TestHydrateRepoVolume_BadURL(t *testing.T) {
 	bad := "file:///nonexistent-repo-that-does-not-exist.git"
 	repo := schema.RepoConfig{URL: &bad}
-	err := HydrateRepoVolume(context.Background(), t.TempDir(), repo, "", "")
+	err := HydrateRepoVolume(context.Background(), t.TempDir(), repo, "", "", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "git clone")
 }
@@ -68,7 +68,7 @@ func TestHydrateRepoVolume_PlaceholderMatchesIronProxyTokenFor(t *testing.T) {
 	secret := "gh_token" // lowercase, per the migration playbook's naming convention
 	repo := schema.RepoConfig{URL: &url, Secret: secret}
 
-	err := HydrateRepoVolume(context.Background(), t.TempDir(), repo, "", "http://127.0.0.1:1")
+	err := HydrateRepoVolume(context.Background(), t.TempDir(), repo, "", "http://127.0.0.1:1", "")
 	require.NoError(t, err)
 
 	out, err := os.ReadFile(argsFile)
@@ -108,7 +108,7 @@ func TestHydrateRepoVolume_EmitsBasicAuthExtraHeader(t *testing.T) {
 	// success — we care that the returned error message names the
 	// Basic-blob extraheader we assembled.
 	err := HydrateRepoVolume(context.Background(), "/nowhere/should/not/be/reached-dst",
-		schema.RepoConfig{URL: &url, Secret: "gh_token"}, "", "http://127.0.0.1:65535")
+		schema.RepoConfig{URL: &url, Secret: "gh_token"}, "", "http://127.0.0.1:65535", "")
 	require.Error(t, err, "expected git to fail against a bogus URL")
 
 	// The extraheader we emit lands in git's diagnostic output for -c
@@ -128,13 +128,40 @@ func TestHydrateRepoVolume_EmitsBasicAuthExtraHeader(t *testing.T) {
 		"hydrate must emit Basic auth extraheader with x-access-token:<placeholder>")
 }
 
+// TestHydrateRepoVolume_SetsGitSSLCAInfoForIronProxy guards against a
+// regression back to a bare HTTP_PROXY/HTTPS_PROXY env with no CA trust
+// for iron-proxy's MITM cert: this host-side git process never goes
+// through update-ca-certificates (that's a guest-only step via
+// caenv.Vars), so without GIT_SSL_CAINFO naming the cert explicitly, git
+// rejects the MITM tunnel and every proxied clone fails closed.
+func TestHydrateRepoVolume_SetsGitSSLCAInfoForIronProxy(t *testing.T) {
+	fakeBinDir := t.TempDir()
+	envFile := filepath.Join(fakeBinDir, "env.txt")
+	script := "#!/bin/sh\nenv > " + envFile + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(fakeBinDir, "git"), []byte(script), 0o755))
+
+	t.Setenv("PATH", fakeBinDir+":"+os.Getenv("PATH"))
+
+	url := "https://example.com/org/repo.git"
+	repo := schema.RepoConfig{URL: &url, Secret: "gh_token"}
+
+	err := HydrateRepoVolume(context.Background(), t.TempDir(), repo, "",
+		"http://127.0.0.1:1", "/fake/ca/root.crt")
+	require.NoError(t, err)
+
+	out, err := os.ReadFile(envFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "GIT_SSL_CAINFO=/fake/ca/root.crt",
+		"HydrateRepoVolume must point git at iron-proxy's CA cert when proxying")
+}
+
 func TestHydrateRepoVolume_BranchOverride(t *testing.T) {
 	url := makeBareRepo(t)
 	storage := t.TempDir()
 	main := "master" // git init default may be master or main; use whichever succeeds
 	branch := main
 	repo := schema.RepoConfig{URL: &url, Branch: &branch}
-	err := HydrateRepoVolume(context.Background(), storage, repo, "", "")
+	err := HydrateRepoVolume(context.Background(), storage, repo, "", "", "")
 	// If master/main mismatch, git errors — fine, we're pinning the
 	// signature accepts and passes -b. Assert no crash / bogus success.
 	if err != nil {

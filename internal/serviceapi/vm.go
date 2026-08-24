@@ -757,7 +757,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			if !v.wasEmpty || v.repo == nil {
 				continue
 			}
-			if err := HydrateRepoVolume(ctx, v.macPath, *v.repo, inheritedSecret, ironURL); err != nil {
+			if err := HydrateRepoVolume(ctx, v.macPath, *v.repo, inheritedSecret, ironURL, proxyCfg.CACertPath); err != nil {
 				teardownFailedVMStart(ctx, sup, tr, cfg, denials, req.Name)
 				http.Error(w, fmt.Sprintf("hydrate volume %q: %v", v.name, err), http.StatusInternalServerError)
 				return

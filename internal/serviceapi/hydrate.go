@@ -19,10 +19,17 @@ import (
 // header — the caller is responsible for whatever auth the URL scheme
 // needs.
 //
+// caCertPath points at iron-proxy's MITM root cert (IronProxyConfig.CACertPath
+// on the host filesystem). This git clone runs on the host, not the guest —
+// the guest's trust of that same CA comes from update-ca-certificates into
+// its system store (caenv.Vars), which this host process never goes through.
+// Without GIT_SSL_CAINFO naming it explicitly, git rejects iron-proxy's MITM
+// certificate for the CONNECT tunnel and the clone fails closed.
+//
 // Fails loud: any nonzero git exit wraps stderr into the returned error.
 // storagePath must be empty; the caller ensures this via
 // ensureVolumeMacDir's wasEmpty return.
-func HydrateRepoVolume(ctx context.Context, storagePath string, repo schema.RepoConfig, inheritedSecret, ironProxyURL string) error {
+func HydrateRepoVolume(ctx context.Context, storagePath string, repo schema.RepoConfig, inheritedSecret, ironProxyURL, caCertPath string) error {
 	if repo.URL == nil || *repo.URL == "" {
 		return fmt.Errorf("repo.url is required for hydration")
 	}
@@ -48,6 +55,9 @@ func HydrateRepoVolume(ctx context.Context, storagePath string, repo schema.Repo
 	// occur on a real cold-start.
 	if ironProxyURL != "" {
 		env = append(env, "HTTP_PROXY="+ironProxyURL, "HTTPS_PROXY="+ironProxyURL)
+		if caCertPath != "" {
+			env = append(env, "GIT_SSL_CAINFO="+caCertPath)
+		}
 	}
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
