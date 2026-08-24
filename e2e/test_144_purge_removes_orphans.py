@@ -22,10 +22,7 @@ def test_purge_removes_orphaned_volumes(devm, workspace, sandbox_name):
         volumes={"scratch": "/var/lib/scratch"},
     )
     home = os.path.expanduser("~")
-    mac_vol_dir = os.path.join(
-        home, "Library", "Application Support", "devm-e2e",
-        "volumes", workspace.slug,
-    )
+    mac_vol_dir = workspace.volume_path("scratch").parent
     try:
         # Cold-start, seed the volume with content.
         r = subprocess.run(

@@ -49,7 +49,10 @@ EXPECTED_KIT = "kit-value-60"
 def test_env_and_workspace_propagation(workspace, devm, sandbox_name):
     # Sentinel file for mount-content visibility (56): written host-side
     # before cold-start, must be readable inside the VM at $WORKSPACE.
-    sentinel = workspace.path / "MOUNT_SENTINEL_56"
+    # workspace.path is just the Mac cwd holding devm.yaml; guest-visible
+    # content lives in the primary volume's Mac-side storage instead.
+    workspace.volume_path().mkdir(parents=True, exist_ok=True)
+    sentinel = workspace.volume_path() / "MOUNT_SENTINEL_56"
     sentinel.write_text("present\n")
 
     ws = str(workspace.path)

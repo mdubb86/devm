@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/schema"
@@ -78,14 +79,21 @@ func TestResolveDirection(t *testing.T) {
 
 func TestMountPassthrough(t *testing.T) {
 	// Standard project layout: workspace at /Users/me/workspace/foo,
-	// plus a user mount at /Users/me/data.
+	// plus a user mount at /Users/me/data. `repo:` configured, so the
+	// primary workspace is volume-backed (not a direct Mac-cwd bind) —
+	// paths under repoRoot translate to the primary volume's Mac-side
+	// storage.
 	repoRoot := "/Users/me/workspace/foo"
-	cfg := schema.Config{
+	repoURL := "file:///tmp/repo.git"
+	projectName := "myproj"
+	pcfg := schema.Config{
+		Repo: &schema.RepoConfig{URL: &repoURL, Secret: "e2e_default"},
 		Mounts: []string{
 			"/Users/me/data",
 			"/Users/me/read-only:ro",
 		},
 	}
+	storageRoot := filepath.Join(cfg.RuntimeDir(), "volumes", projectName, "foo")
 
 	cases := []struct {
 		name      string
@@ -93,8 +101,8 @@ func TestMountPassthrough(t *testing.T) {
 		wantHost  string
 		wantOK    bool
 	}{
-		{"under workspace root", "/Users/me/workspace/foo/src/main.go", "/Users/me/workspace/foo/src/main.go", true},
-		{"exactly workspace root", "/Users/me/workspace/foo", "/Users/me/workspace/foo", true},
+		{"under workspace root", "/Users/me/workspace/foo/src/main.go", filepath.Join(storageRoot, "src/main.go"), true},
+		{"exactly workspace root", "/Users/me/workspace/foo", storageRoot, true},
 		{"under user mount", "/Users/me/data/big.csv", "/Users/me/data/big.csv", true},
 		{"under ro user mount", "/Users/me/read-only/setup.sql", "/Users/me/read-only/setup.sql", true},
 		{"outside everything (/etc)", "/etc/hosts", "", false},
@@ -104,7 +112,7 @@ func TestMountPassthrough(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotHost, gotOK := mountPassthrough(tc.guestPath, repoRoot, cfg)
+			gotHost, gotOK := mountPassthrough(tc.guestPath, repoRoot, pcfg, projectName)
 			assert.Equal(t, tc.wantOK, gotOK)
 			if tc.wantOK {
 				assert.Equal(t, tc.wantHost, gotHost)
@@ -113,10 +121,23 @@ func TestMountPassthrough(t *testing.T) {
 	}
 }
 
+func TestMountPassthrough_NoRepo_WorkspaceRootNotMirrored(t *testing.T) {
+	// Without `repo:`, the daemon never mounts a primary workspace volume
+	// at all — a guest path under the Mac cwd is NOT mirrored anywhere,
+	// so it must fall through to pipe transport rather than resolving to
+	// a (nonexistent) storage dir.
+	gotHost, gotOK := mountPassthrough(
+		"/Users/me/workspace/foo/src/main.go", "/Users/me/workspace/foo",
+		schema.Config{}, "myproj",
+	)
+	assert.False(t, gotOK)
+	assert.Empty(t, gotHost)
+}
+
 func TestMountPassthrough_NoRepoRoot_NoConfig(t *testing.T) {
 	// When project was named explicitly (no CWD walk), we don't have a
 	// repoRoot or cfg. Every path must fall through to pipe transport.
-	gotHost, gotOK := mountPassthrough("/Users/me/workspace/foo/src/main.go", "", schema.Config{})
+	gotHost, gotOK := mountPassthrough("/Users/me/workspace/foo/src/main.go", "", schema.Config{}, "")
 	assert.False(t, gotOK)
 	assert.Empty(t, gotHost)
 }

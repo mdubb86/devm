@@ -184,6 +184,9 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
     workspace.devmyaml_path.write_text(textwrap.dedent(f"""\
         project:
           name: {proj}
+        repo:
+          url: {workspace.bare_repo_url()}
+          secret: e2e_default
         docker: true
         env:
           # Recipe §1: add devm var BEFORE referencing it from config.toml.
@@ -238,9 +241,13 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
           - files.pythonhosted.org
     """))
 
-    # Handler script — served via the app service above.
-    (workspace.path / "confirm_handler.py").write_text(CONFIRM_HANDLER)
-    (workspace.path / "pw_probe.py").write_text(PLAYWRIGHT_PROBE)
+    # Handler script — served via the app service above. Written into the
+    # primary volume's Mac-side storage (workspace.path is just the Mac
+    # cwd holding devm.yaml, not shared with the guest) so the guest sees
+    # it at $WORKSPACE via the live virtiofs share.
+    workspace.volume_path().mkdir(parents=True, exist_ok=True)
+    (workspace.volume_path() / "confirm_handler.py").write_text(CONFIRM_HANDLER)
+    (workspace.volume_path() / "pw_probe.py").write_text(PLAYWRIGHT_PROBE)
 
     # Cold-start.
     r = subprocess.run(
@@ -265,8 +272,9 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
     # Phase B — write config + templates, then start.
     # ------------------------------------------------------------------
     # Skipping `supabase init` — it's interactive and we're writing
-    # every file it would create anyway.
-    supabase_dir = workspace.path / "supabase"
+    # every file it would create anyway. Written into the primary
+    # volume's Mac-side storage — see confirm_handler.py note above.
+    supabase_dir = workspace.volume_path() / "supabase"
     supabase_dir.mkdir(exist_ok=True)
     (supabase_dir / "templates").mkdir(exist_ok=True)
 

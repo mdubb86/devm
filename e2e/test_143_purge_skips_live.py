@@ -44,14 +44,9 @@ def test_purge_skips_live_projects(devm, workspace, sandbox_name):
         )
 
         # Volume dir still there + sentinel intact.
-        home = os.path.expanduser("~")
-        mac_dir = os.path.join(
-            home, "Library", "Application Support", "devm-e2e",
-            "volumes", workspace.slug, "scratch",
-        )
-        assert os.path.exists(mac_dir), f"purge wiped a live project's volume dir!"
-        with open(os.path.join(mac_dir, "sentinel")) as f:
-            assert f.read().strip() == "alive"
+        mac_dir = workspace.volume_path("scratch")
+        assert mac_dir.exists(), f"purge wiped a live project's volume dir!"
+        assert (mac_dir / "sentinel").read_text().strip() == "alive"
     finally:
         subprocess.run(
             [devm.path, "teardown", "--yes"],

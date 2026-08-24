@@ -3,7 +3,9 @@
 Small end-to-end test: declare two volumes, cold-start (populates
 one with content, leaves one empty), run `devm volume ls` and check
 the output includes both names, paths, and non-zero size on the
-populated one.
+populated one. Also asserts the auto-managed PRIMARY workspace volume
+(synthesized from the fixture's default `repo:` block) is listed
+alongside the declared ones.
 """
 from __future__ import annotations
 
@@ -58,6 +60,21 @@ def test_volume_ls(devm, workspace, sandbox_name):
         # Regex is lenient about padding.
         assert re.search(r"data.+\d+\s?B", out), f"data size not shown as bytes:\n{out}"
         assert re.search(r"cache.+0\s?B", out), f"cache should be 0B:\n{out}"
+
+        # The auto-managed primary workspace volume is also listed,
+        # named after the workspace dir's basename and pointing at the
+        # Mac cwd (guest path) / the primary volume's Mac-side storage.
+        primary_name = workspace.path.name
+        assert primary_name in out, (
+            f"primary workspace volume {primary_name!r} missing from `devm "
+            f"volume ls` output:\n{out}"
+        )
+        assert str(workspace.path) in out, (
+            f"primary workspace guest path missing from output:\n{out}"
+        )
+        assert str(workspace.volume_path()) in out, (
+            f"primary workspace Mac-side storage path missing from output:\n{out}"
+        )
     finally:
         subprocess.run(
             [devm.path, "teardown", "--yes"],

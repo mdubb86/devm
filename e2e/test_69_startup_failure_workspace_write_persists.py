@@ -40,17 +40,20 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(180)
 def test_startup_failure_workspace_write_persists_on_host(workspace, devm, sandbox_name):
-    # The workspace is virtio-fs mounted in the VM at the same absolute path
-    # as on the host. Use the concrete path so the service's exec doesn't
-    # depend on $WORKSPACE_DIR being set in the systemd unit's environment.
-    marker_path = workspace.path / "startup-wrote.txt"
+    # $WORKSPACE is virtio-fs mounted in the VM at the Mac cwd's absolute
+    # path (the mount target), backed on the host by the primary volume's
+    # Mac-side storage — two distinct paths. The write, run inside the
+    # guest, must target the guest-visible mount path; the host-side
+    # read must target the volume's Mac-side storage.
+    guest_marker_path = workspace.path / "startup-wrote.txt"
+    marker_path = workspace.volume_path() / "startup-wrote.txt"
 
     # Pre-write a helper script via install: to avoid shell metacharacters
     # in ExecStart= (exec: joins argv with spaces without quoting).
     # The script writes to the workspace path (accessible in VM via virtio-fs)
     # and exits 1 so systemd marks failsvc as "failed".
     install_script = (
-        f"printf '#!/bin/sh\\necho STARTUP_FAILED > \"{marker_path}\"\\nexit 1\\n'"
+        f"printf '#!/bin/sh\\necho STARTUP_FAILED > \"{guest_marker_path}\"\\nexit 1\\n'"
         " > /tmp/run-failsvc.sh && chmod +x /tmp/run-failsvc.sh"
     )
 

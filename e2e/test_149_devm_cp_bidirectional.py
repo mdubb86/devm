@@ -43,9 +43,13 @@ def test_devm_cp_upload_mount_and_pipe_and_download(devm, workspace, sandbox_nam
 
         # ============================================================
         # A. Upload via MOUNT transport — target path is inside the
-        #    workspace, which is mirrored at the same absolute path in
-        #    the guest via virtio-fs. devm cp writes directly to the
-        #    Mac path; the guest sees it immediately.
+        #    workspace. devm cp resolves the guest path to the primary
+        #    volume's Mac-side storage internally (mountPassthrough in
+        #    cmd/devm/cp.go) and writes there directly; the guest sees
+        #    it immediately via the live virtiofs share. The Mac-side
+        #    write location is an implementation detail this test
+        #    doesn't need to know — it only asserts guest-visible
+        #    content via `devm exec`.
         # ============================================================
         mount_src = tmp_path / "hello.txt"
         mount_src.write_text("hello via mount\n")

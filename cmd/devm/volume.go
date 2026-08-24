@@ -10,6 +10,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/schema"
 
 	"github.com/spf13/cobra"
@@ -36,29 +37,35 @@ var volumeLsCmd = &cobra.Command{
 		// cfg is the package-level identity.Config set by
 		// identity.Load() in main.go — resolves to identity.Prod for
 		// the shipped devm binary and identity.E2E for devm-e2e.
-		return runVolumeLs(cfg, userCfg, os.Stdout)
+		return runVolumeLs(cfg, userCfg, cwd, os.Stdout)
 	},
 }
 
 // runVolumeLs is factored out for testability. ident tells us which
 // daemon's runtime dir to look under (devm vs devm-e2e); tests hand
-// in a synthetic identity with a temp-dir-resolving RuntimeDir. Writes
-// to `out`.
-func runVolumeLs(ident identity.Config, userCfg schema.Config, out io.Writer) error {
+// in a synthetic identity with a temp-dir-resolving RuntimeDir. cwd is
+// the project root (Mac cwd), needed to derive the auto-managed
+// primary workspace volume's name and guest path when `repo:` is
+// configured. Writes to `out`.
+func runVolumeLs(ident identity.Config, userCfg schema.Config, cwd string, out io.Writer) error {
 	volumesRoot := filepath.Join(ident.RuntimeDir(), "volumes", userCfg.Project.Name)
+
+	type row struct{ name, guestPath, macPath string }
+	var rows []row
+	if userCfg.Repo != nil {
+		primary := repohelpers.PrimaryVolumeName(cwd)
+		rows = append(rows, row{primary, cwd, filepath.Join(volumesRoot, primary)})
+	}
+	for name, v := range userCfg.Volumes {
+		rows = append(rows, row{name, v.Path, filepath.Join(volumesRoot, name)})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
 
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tGUEST PATH\tMAC PATH\tSIZE")
-	names := make([]string, 0, len(userCfg.Volumes))
-	for n := range userCfg.Volumes {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		guestPath := userCfg.Volumes[name].Path
-		macPath := filepath.Join(volumesRoot, name)
-		size := dirSize(macPath)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", name, guestPath, macPath, humanBytes(size))
+	for _, r := range rows {
+		size := dirSize(r.macPath)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.name, r.guestPath, r.macPath, humanBytes(size))
 	}
 	return tw.Flush()
 }

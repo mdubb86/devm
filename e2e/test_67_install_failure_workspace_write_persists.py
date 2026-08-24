@@ -78,8 +78,10 @@ def test_install_failure_workspace_write_persists_and_is_removable(workspace, de
     )
 
     # The viability pin: the workspace write from install: must persist
-    # on the host even though the VM was torn down.
-    host_path = workspace.path / "install-wrote.txt"
+    # on the host even though the VM was torn down. The write lands in
+    # the primary volume's Mac-side storage — workspace.path is just the
+    # Mac cwd holding devm.yaml, not shared with the guest.
+    host_path = workspace.volume_path() / "install-wrote.txt"
     assert host_path.exists(), (
         f"VM-side write to $WORKSPACE did NOT persist on host after "
         f"install failure + VM teardown. The virtio-fs write-and-survive "

@@ -152,6 +152,19 @@ def workspace(request, devm_path, sandbox_name) -> Iterator[Workspace]:
         # match what the daemon keys on.
         ws = Workspace(path, slug=sandbox_name, vm_name=sandbox_name, port_offset=port_offset)
         ws.write_devmyaml()  # minimal config; tests can call write_devmyaml again with extras
+        # write_devmyaml() auto-injects a `repo:` block referencing the
+        # "e2e_default" secret. Seed it now, before any cold-start can
+        # attempt hydration -- any non-empty value works, iron-proxy
+        # substitutes it happily even against a file:// URL that ignores
+        # auth entirely.
+        subprocess.run(
+            [devm_path, "secret", "set", "e2e_default"],
+            cwd=str(path),
+            input=b"e2e-default-secret-value\n",
+            capture_output=True,
+            timeout=15,
+            check=True,
+        )
         yield ws
     finally:
         # Guaranteed teardown: stops the VM AND its iron-proxy child
@@ -170,6 +183,10 @@ def workspace(request, devm_path, sandbox_name) -> Iterator[Workspace]:
         except Exception:
             pass
         shutil.rmtree(path, ignore_errors=True)
+        # Sibling dirs bare_repo_url() may have created (work checkout +
+        # bare clone) aren't under `path`, so they need their own sweep.
+        shutil.rmtree(f"{path}-repo-work", ignore_errors=True)
+        shutil.rmtree(f"{path}-repo.git", ignore_errors=True)
         registry.remove("workspace", str(path))
 
 

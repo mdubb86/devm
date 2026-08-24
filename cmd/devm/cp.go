@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/spf13/cobra"
@@ -100,20 +101,28 @@ func resolveDirection(src, dst cpArg) (direction, error) {
 
 // mountPassthrough returns the host-side path that mirrors the given
 // guest path, if the guest path lives under a mount that shares the
-// filesystem view (workspace or user mounts[] entries — both mirror
-// the host path at the same absolute path inside the guest). Returns
-// ("", false) when no mirror is known; caller falls back to pipe.
+// filesystem view. Two cases:
 //
-// Volumes deliberately not checked here — the daemon's volume storage
-// path (~/Library/Application Support/devm/volumes/<project>/<name>)
-// is an implementation detail I don't want to couple the CLI to for
-// v1. Volume paths go via pipe; add a daemon-served lookup later if
-// speed matters.
-func mountPassthrough(guestPath, repoRoot string, cfg schema.Config) (string, bool) {
-	if inside(guestPath, repoRoot) {
-		return guestPath, true
+//   - The primary workspace (repoRoot, when `repo:` is configured) is
+//     virtiofs-shared from the primary volume's Mac-side storage
+//     (<RuntimeDir>/volumes/<project>/<primaryVolumeName>/). A guest
+//     path under repoRoot translates to the same relative path under
+//     that storage dir.
+//   - User mounts[] entries — these still mirror the host path at the
+//     same absolute path inside the guest.
+//
+// Named volumes (other than the primary) aren't checked here — go via
+// pipe. Returns ("", false) when no mirror is known; caller falls back
+// to pipe.
+func mountPassthrough(guestPath, repoRoot string, pcfg schema.Config, projectName string) (string, bool) {
+	if pcfg.Repo != nil && inside(guestPath, repoRoot) {
+		if rel, err := filepath.Rel(repoRoot, guestPath); err == nil {
+			primary := repohelpers.PrimaryVolumeName(repoRoot)
+			storageRoot := filepath.Join(cfg.RuntimeDir(), "volumes", projectName, primary)
+			return filepath.Clean(filepath.Join(storageRoot, rel)), true
+		}
 	}
-	for _, entry := range cfg.Mounts {
+	for _, entry := range pcfg.Mounts {
 		host, _ := strings.CutSuffix(entry, ":ro")
 		host = expandHome(host)
 		if !filepath.IsAbs(host) {
@@ -243,7 +252,7 @@ func runCp(ctx context.Context, projectName, repoRoot string, cfg schema.Config,
 
 // upload copies hostPath into the guest at guestPath.
 func upload(ctx context.Context, tr *tart.Tart, projectName, repoRoot string, cfg schema.Config, hostPath, guestPath string) error {
-	if hostMirror, ok := mountPassthrough(guestPath, repoRoot, cfg); ok {
+	if hostMirror, ok := mountPassthrough(guestPath, repoRoot, cfg, projectName); ok {
 		// Zero-network path: write into the shared filesystem the guest
 		// already sees at guestPath === hostMirror.
 		if err := copyFileHostSide(hostPath, hostMirror); err != nil {
@@ -276,7 +285,7 @@ func upload(ctx context.Context, tr *tart.Tart, projectName, repoRoot string, cf
 
 // download copies guestPath out to hostPath.
 func download(ctx context.Context, tr *tart.Tart, projectName, repoRoot string, cfg schema.Config, guestPath, hostPath string) error {
-	if hostMirror, ok := mountPassthrough(guestPath, repoRoot, cfg); ok {
+	if hostMirror, ok := mountPassthrough(guestPath, repoRoot, cfg, projectName); ok {
 		if err := copyFileHostSide(hostMirror, hostPath); err != nil {
 			return fmt.Errorf("mount-passthrough copy: %w", err)
 		}

@@ -4,7 +4,8 @@ Consolidated smoke test for the bundle refactor:
   - After `devm start`, /opt/devm/ has .env, scripts/, templates/,
     install.sh with expected modes.
   - /usr/local/bin/with-devm-env is a symlink into /opt/devm/scripts/.
-  - The workspace has no .devm/ directory.
+  - The workspace has a `.vm` symlink into the primary volume's Mac-side
+    storage (not a `.devm/` directory materialized in-place).
   - `devm exec` works (proves the wrapper is on PATH via the symlink
     and sources /opt/devm/.env).
 """
@@ -53,7 +54,13 @@ def test_devm_bundle_layout(workspace, devm):
     assert readlink.returncode == 0
     assert readlink.stdout.decode().strip() == "/opt/devm/scripts/with-devm-env"
 
-    # ---- Workspace has no .devm/ ----
+    # ---- Workspace has a .vm symlink into the primary volume, not .devm/ ----
+    vm_link = workspace.path / ".vm"
+    assert vm_link.is_symlink(), ".vm symlink must be present in the workspace"
+    assert vm_link.readlink() == workspace.volume_path(), (
+        f".vm symlink target mismatch: got {vm_link.readlink()}, "
+        f"expected {workspace.volume_path()}"
+    )
     assert not (workspace.path / ".devm").exists(), (
         f".devm/ should not be created in the workspace; found: "
         f"{list((workspace.path / '.devm').iterdir()) if (workspace.path / '.devm').exists() else 'N/A'}"

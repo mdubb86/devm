@@ -57,9 +57,14 @@ def test_docker_build_transparent(workspace, devm):
         f"stderr={inspect.stderr.decode()!r}"
     )
 
-    # Plain Dockerfile — zero devm-specific content.
-    build_ctx = workspace.path / "transparent-build"
-    build_ctx.mkdir()
+    # Plain Dockerfile — zero devm-specific content. `devm exec` auto-cds
+    # into $WORKSPACE inside the guest, which is backed by the primary
+    # volume's Mac-side storage (workspace.path is just the Mac cwd
+    # holding devm.yaml, not shared with the guest), so the build
+    # context must be created there to be visible to the relative
+    # "transparent-build" path passed to `docker build` below.
+    build_ctx = workspace.volume_path() / "transparent-build"
+    build_ctx.mkdir(parents=True)
     (build_ctx / "Dockerfile").write_text(
         "FROM debian:trixie-slim\n"
         "RUN apt-get update -qq && apt-get install -y -qq curl\n"
