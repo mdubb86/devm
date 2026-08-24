@@ -7,7 +7,7 @@ description: Configure and edit devm.yaml — a Mac+Tart-VM dev workspace tool w
 
 ## What devm is
 
-devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-project Tart VM as your development environment. Your project directory is mounted into the VM at its same absolute path as on the Mac. All outbound network traffic from the VM is gated through an iron-proxy daemon running on the Mac, so the VM cannot reach the internet except through an explicit allowlist. Configuration lives in `devm.yaml` at the project root.
+devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-project Tart VM as your development environment. The workspace inside the VM is a devm-managed volume, hydrated via `git clone` from the repo declared by `repo:` in `devm.yaml` — not a live bind mount of your Mac checkout. Its guest path mirrors the Mac cwd's absolute path string, but the two are separate git clones; use `devm resolve` to translate a guest-side path to its Mac-side storage location. All outbound network traffic from the VM is gated through an iron-proxy daemon running on the Mac, so the VM cannot reach the internet except through an explicit allowlist. Configuration lives in `devm.yaml` at the project root.
 
 ## Three-process model
 
@@ -32,9 +32,9 @@ devm install                                # requires sudo
 devm shell                                  # cold-starts the VM, drops you in
 ```
 
-## Shared CLAUDE.md — host/guest split
+## CLAUDE.md — host/guest split
 
-A project's `CLAUDE.md` is shared through the virtiofs workspace mount, so guest-side agents (Claude sessions running inside the Tart VM) see the same host-perspective rules by default. Add this bullet to the project's `CLAUDE.md` when configuring devm, so a guest-side agent knows to consult the guest-specific reference first:
+A project's `CLAUDE.md` is git-tracked, so both the Mac and the VM see the same content — each is its own clone of the same repo. Add this bullet to the project's `CLAUDE.md` when configuring devm, so a guest-side agent knows to consult the guest-specific reference first:
 
 - **In devm guest (`$IS_SANDBOX=1`), read `/opt/devm/GUEST.md` first — commands here that name `devm`/`tart`/`just`/`brew`/`launchctl` are Mac-only.**
 
@@ -48,4 +48,6 @@ A project's `CLAUDE.md` is shared through the virtiofs workspace mount, so guest
 - `devm skills get routing` — how port declarations, `devm route` commands, and `*.test` hostnames work on the Mac and inside the VM.
 - `devm skills get secrets` — storing credentials in the on-disk secret store and referencing them with `!secret` in `devm.yaml`.
 - `devm skills get errors` — reading supervision error blocks and where logs live.
+- `devm resolve <path> [--open]` — translate a guest-side (`$WORKSPACE`-anchored) path to its Mac-side volume storage location, or open it directly.
+- `.vm/` — a symlink at the Mac project root pointing at the primary volume's Mac-side storage; browse the live guest checkout without leaving the Mac.
 - `devm recipes get tool/service/docker` — docker is a built-in (`docker: true`), not a recipe you install, but the recipe covers the intricacies: the two egress paths (why `docker run` works with no config but `docker build` needs a Dockerfile RUN block), and the exact block to add for build-time HTTPS to survive iron-proxy's MITM.

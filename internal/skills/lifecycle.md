@@ -15,6 +15,7 @@ description: devm VM lifecycle commands — shell, reconcile, stop, teardown, st
 | `devm teardown` | Destroy the VM and delete its disk image. Required after teardown-bucket changes. |
 | `devm status` | Show VM state, active sessions, pending config diff, routing, DNS, CA trust, and proxy health. |
 | `devm validate` | Lint `devm.yaml` (and `devm.me.yaml` if present) without touching the VM. |
+| `devm resolve <path> [--open]` | Translate a guest-side path to its Mac-side volume storage location; `--open` opens it directly instead of printing it. |
 
 ---
 
@@ -90,12 +91,6 @@ Sandbox stopped; config changes will apply on next `devm shell`.
 
 - **BucketTeardownVM changes** are surfaced as pending under the "recreate" section. `devm reconcile` prompts the user; on approval it stops or tears down the VM automatically. The user then runs `devm shell` to rebuild.
 
-**Two known gaps:**
-
-1. **Network (`allow`) changes** — classified BucketLive in `changeBucket` but has no apply code in `ApplyLive`. The allow-list is passed to the daemon at `StartVM` time, so changes take effect at the next cold start, not on a running VM.
-
-2. **Top-level `env:` changes** — `computeEnvChanges` iterates only per-service env (via `envOf`). A change made only at the top-level `env:` key produces no diff and takes effect at the next cold start. The devm bundle builder (`internal/devmbundle/bundle.go`, `Build` function) merges top-level env into each service's env before rendering systemd units, so top-level entries like `env: { GITHUB_TOKEN: !secret ... }` reach the per-service systemd units' `Environment=` lines.
-
 **Flags:** `--dry-run` (print diff, do not apply), `--yes` / `-y` (skip recreate confirmation), `--json`.
 
 ---
@@ -147,7 +142,7 @@ Every change kind is assigned to exactly one bucket in the `changeBucket` map (`
 
 ### BucketLive
 
-`devm reconcile` handles these without stopping or destroying the VM.
+`devm reconcile` handles these without stopping or destroying the VM. `network.allow` and secret value changes also fall here: the daemon regenerates iron-proxy's config and respawns it in place — no VM restart, no prompt.
 
 Currently wired in `ApplyLive` (changes take effect immediately):
 
@@ -168,7 +163,6 @@ Classified BucketLive but no apply path in `ApplyLive` (take effect at next cold
 | Kind | Note |
 |---|---|
 | Port add / remove / change | No apply code in `ApplyLive` |
-| Network `allow` add / remove | No apply code in `ApplyLive` — the allow-list is applied at `StartVM` time, so changes land on the next cold start |
 | `path` change | No apply code in `ApplyLive` |
 | Service `exec`, `restart`, `after`, `workdir`, `user`, `systemd` override, `hostname` | No apply code in `ApplyLive` |
 

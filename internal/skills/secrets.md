@@ -84,6 +84,12 @@ You may bind one secret across multiple hosts by listing it in multiple allow en
 
 ---
 
+## Repo secrets
+
+`repo.secret` (top-level) and `volumes.<name>.repo.secret` are auto-scoped to the repo URL's host — no `network.allow` entry required for git-clone auth. Devm derives the host from `repo.url` (or from the Mac cwd's `git remote get-url origin` when `url` is omitted), adds it to iron-proxy's substitution rule for that project, and folds it into the effective allowlist so clone traffic isn't rejected.
+
+---
+
 ## The flow
 
 ```

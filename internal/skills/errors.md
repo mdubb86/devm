@@ -54,6 +54,17 @@ Other pre-VM errors from `devm shell`:
 
 ---
 
+## Repo hydration failures
+
+Repo hydration (`git clone` into a volume's Mac-side storage, for top-level `repo:` and any `volumes.*.repo`) runs daemon-side, Mac-side, after iron-proxy spawns but before the guest boots — it's neither a daemon-startup nor a provisioner-stage failure.
+
+- **Missing secret.** `repo.secret` (or a `volumes.*.repo.secret`) names a secret not in the store — cold-start aborts before the VM is created; the error names the missing secret. Fix: `devm secret set <name>`.
+- **Clone auth failure (401).** Usually a missing iron-proxy substitution rule or an expired token. Cold-start aborts and the VM is torn down; the error names the repo URL. Fix: confirm `repo.secret` holds a token with clone access to that repo.
+- **Wrong URL / network failure.** Same abort-and-teardown shape; the error surfaces git's raw stderr. Fix: check the URL, or `devm denials` if it looks like a network block.
+- **Non-empty volume conflict.** Can't happen by design — devm only hydrates a volume whose Mac-side storage is observed empty. To force re-hydration (e.g. stale content), delete the volume's Mac-side dir manually and re-run `devm shell`.
+
+---
+
 ## Provisioner failures
 
 After the VM starts, provisioning walks a series of stages. Each stage emits a marker (`::devm:stage:<name>::`) that drives the `devm shell` spinner. Egress is OPEN through the `open`→`startup` stages and switches to ENFORCED before `enforce`/`services`, so user services always come up under the enforced allowlist.

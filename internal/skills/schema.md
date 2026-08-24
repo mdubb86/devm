@@ -53,7 +53,7 @@ Controls outbound access enforced by iron-proxy (bucket: **live**).
 |---|---|---|
 | `allow` | []AllowEntry | Hostnames the VM is permitted to reach, matched by SNI for TLS connections or HTTP Host header for plain HTTP. Each entry is a bare host scalar or a `{host, secrets}` mapping. |
 
-Changes to `allow` take effect on the next `devm shell` cold start. The change-detection and live-apply path for network is not currently wired, so `devm reconcile` will not report or apply them.
+On a running VM, `devm reconcile` applies `allow` changes automatically by regenerating iron-proxy's config and respawning it — no VM restart, no prompt. On a stopped VM, changes take effect at the next `devm shell` cold start.
 
 Each allow entry accepts two forms:
 
@@ -285,7 +285,7 @@ A `volumes.*.repo` entry (secondary repo) always requires its own `url`; its `se
 
 ## `masks`
 
-Workspace-relative paths whose contents are shadowed by a private per-project guest ext4 directory. Purpose: platform-content isolation — `node_modules`, `companion/.venv`, `.cargo`, `dist`, and similar paths whose files differ between macOS and Linux. Without a mask, `npm install` on the Mac fills the directory with Mac-only binaries; the Linux guest's `npm install` corrupts it back to Linux-only. Masks give the guest its own private view.
+Workspace-relative paths whose contents are shadowed by a private per-project guest ext4 directory. Purpose: VM-local scratch that shouldn't live in the git-backed workspace volume — build caches you don't want surviving a rebuild, per-worktree isolated scratch dirs, or any ephemeral state you'd rather not have persisted through `devm teardown` or included in the volume's Mac-side storage.
 
 ```yaml
 masks:
@@ -309,9 +309,16 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 ---
 
+## See also
+
+- `devm skills get devm` — `.vm/` symlink and `devm resolve` for navigating between a guest-side path and its Mac-side volume storage.
+- `devm skills get lifecycle` — how `devm reconcile` applies each bucket.
+
+---
+
 ## Bucket glossary
 
-**live** — Devm applies the change to the running VM without stopping it or ending active sessions. Currently wired for env, path, template, mask, and package changes. Network (`allow`) changes are classified live but the apply path isn't currently wired; they take effect on the next cold start.
+**live** — Devm applies the change without stopping the VM or ending active sessions. Env, path, template, mask, and package changes are applied directly inside the guest. Network (`allow`) and secret changes are applied by regenerating iron-proxy's config and respawning it — no VM restart, no prompt.
 
 **restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Sits here: `startup:` (edit takes effect on the applying restart) and `volumes:` (adds/removes require re-issuing `tart run` with new `--dir` args, since AVF doesn't hot-plug virtiofs shares).
 
