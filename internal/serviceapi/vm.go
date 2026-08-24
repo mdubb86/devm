@@ -497,7 +497,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 		sort.Strings(volNames)
 		for _, name := range volNames {
-			target := req.Cfg.Volumes[name]
+			target := req.Cfg.Volumes[name].Path
 			macPath, wasEmpty, err := ensureVolumeMacDir(cfg, req.Name, name)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("ensure volume dir %s: %v", name, err), http.StatusInternalServerError)

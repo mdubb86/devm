@@ -55,7 +55,7 @@ func runVolumeLs(ident identity.Config, userCfg schema.Config, out io.Writer) er
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		guestPath := userCfg.Volumes[name]
+		guestPath := userCfg.Volumes[name].Path
 		macPath := filepath.Join(volumesRoot, name)
 		size := dirSize(macPath)
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", name, guestPath, macPath, humanBytes(size))

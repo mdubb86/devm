@@ -8,14 +8,14 @@ import (
 )
 
 func TestComputeVolumeChanges_NoChange(t *testing.T) {
-	old := schema.Config{Volumes: map[string]string{"pg": "/data"}}
-	new := schema.Config{Volumes: map[string]string{"pg": "/data"}}
+	old := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data"}}}
+	new := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data"}}}
 	assert.Empty(t, computeVolumeChanges(old, new))
 }
 
 func TestComputeVolumeChanges_Add(t *testing.T) {
 	old := schema.Config{}
-	new := schema.Config{Volumes: map[string]string{"pg": "/data"}}
+	new := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data"}}}
 	changes := computeVolumeChanges(old, new)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindVolumeChange, changes[0].Kind)
@@ -25,7 +25,7 @@ func TestComputeVolumeChanges_Add(t *testing.T) {
 }
 
 func TestComputeVolumeChanges_Remove(t *testing.T) {
-	old := schema.Config{Volumes: map[string]string{"pg": "/data"}}
+	old := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data"}}}
 	new := schema.Config{}
 	changes := computeVolumeChanges(old, new)
 	assert.Len(t, changes, 1)
@@ -36,8 +36,8 @@ func TestComputeVolumeChanges_Remove(t *testing.T) {
 }
 
 func TestComputeVolumeChanges_Retarget(t *testing.T) {
-	old := schema.Config{Volumes: map[string]string{"pg": "/data"}}
-	new := schema.Config{Volumes: map[string]string{"pg": "/var/lib/postgresql/data"}}
+	old := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data"}}}
+	new := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/var/lib/postgresql/data"}}}
 	changes := computeVolumeChanges(old, new)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindVolumeChange, changes[0].Kind)
@@ -49,11 +49,11 @@ func TestComputeVolumeChanges_Retarget(t *testing.T) {
 func TestComputeVolumeChanges_MultipleSortedDeterministic(t *testing.T) {
 	// Go's map iteration is random; the detector must sort so output
 	// order is stable.
-	old := schema.Config{Volumes: map[string]string{"a": "/a1"}}
-	new := schema.Config{Volumes: map[string]string{
-		"c": "/c1",
-		"b": "/b1",
-		"a": "/a2",
+	old := schema.Config{Volumes: map[string]schema.Volume{"a": {Path: "/a1"}}}
+	new := schema.Config{Volumes: map[string]schema.Volume{
+		"c": {Path: "/c1"},
+		"b": {Path: "/b1"},
+		"a": {Path: "/a2"},
 	}}
 	changes := computeVolumeChanges(old, new)
 	assert.Len(t, changes, 3)

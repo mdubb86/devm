@@ -115,7 +115,7 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 		if !volumeNameRE.MatchString(name) {
 			return fmt.Errorf(`volumes: name %q must match [a-z0-9][a-z0-9._-]*`, name)
 		}
-		path := c.Volumes[name]
+		path := c.Volumes[name].Path
 		if path == "" {
 			return fmt.Errorf("volumes.%s: guest path must not be empty", name)
 		}
@@ -131,7 +131,7 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 	// the same guest target would collide at mount time.
 	byPath := map[string]string{}
 	for _, name := range names {
-		path := c.Volumes[name]
+		path := c.Volumes[name].Path
 		if prior, ok := byPath[path]; ok {
 			// Report the pair in name-sorted order — deterministic
 			// message regardless of which name Go's iterator saw first.
@@ -140,7 +140,22 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 		byPath[path] = name
 	}
 
-	// Third: no overlap with any top-level mask target. Masks live
+	// Third: repo-config validation on volume entries. Independent of
+	// workspaceRoot, so it runs under plain Validate() too.
+	for _, name := range names {
+		vol := c.Volumes[name]
+		if vol.Repo == nil {
+			continue
+		}
+		if vol.Repo.URL == nil || *vol.Repo.URL == "" {
+			return fmt.Errorf("volumes.%s.repo: url is required for secondary repos", name)
+		}
+		if vol.Repo.Secret == "" && (c.Repo == nil || c.Repo.Secret == "") {
+			return fmt.Errorf("volumes.%s.repo: secret is required (no top-level repo.secret to inherit)", name)
+		}
+	}
+
+	// Fourth: no overlap with any top-level mask target. Masks live
 	// under the workspace root; volume target is absolute. Checked
 	// before the workspace-root overlap below (mask targets are always
 	// workspace subpaths) so a volume colliding with a mask reports the
@@ -153,14 +168,14 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 	for _, maskPath := range c.Masks {
 		maskAbs := filepath.Join(workspaceRoot, maskPath)
 		for _, name := range names {
-			if c.Volumes[name] == maskAbs {
+			if c.Volumes[name].Path == maskAbs {
 				return fmt.Errorf(`volumes.%s: guest path %q overlaps mask %q`,
-					name, c.Volumes[name], maskPath)
+					name, c.Volumes[name].Path, maskPath)
 			}
 		}
 	}
 
-	// Fourth: no overlap with the workspace mount root. The workspace
+	// Fifth: no overlap with the workspace mount root. The workspace
 	// is virtiofs-mounted at the same absolute path in the guest as
 	// on the Mac (mirrored per vm.go). A volume mounted at the
 	// workspace root or any subpath would collide with the workspace
@@ -168,11 +183,23 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 	cleanedRoot := filepath.Clean(workspaceRoot)
 	rootPrefix := cleanedRoot + string(filepath.Separator)
 	for _, name := range names {
-		vp := filepath.Clean(c.Volumes[name])
+		vp := filepath.Clean(c.Volumes[name].Path)
 		if vp == cleanedRoot || strings.HasPrefix(vp, rootPrefix) {
 			return fmt.Errorf(`volumes.%s: guest path %q overlaps the workspace mount root %q`,
-				name, c.Volumes[name], cleanedRoot)
+				name, c.Volumes[name].Path, cleanedRoot)
 		}
+	}
+	return nil
+}
+
+// validateRepo checks the top-level Repo field. Presence requires
+// Secret — the URL may be nil (derives from Mac cwd's git remote).
+func (c Config) validateRepo() error {
+	if c.Repo == nil {
+		return nil
+	}
+	if c.Repo.Secret == "" {
+		return fmt.Errorf("repo.secret is required (names a secret-store entry for iron-proxy substitution at clone time)")
 	}
 	return nil
 }
@@ -500,7 +527,7 @@ func CheckUnknownKeys(data []byte) error {
 	knownTop := []string{
 		"project", "base_image", "docker", "network", "env",
 		"services", "install", "startup", "scripts", "mounts", "path", "packages", "disk", "memory", "cpu",
-		"config_lock", "volumes", "masks",
+		"config_lock", "volumes", "masks", "repo",
 	}
 	knownProject := []string{
 		"name", "proxy",
@@ -649,12 +676,18 @@ type Config struct {
 	Services map[string]Service  `yaml:"services,omitempty"`
 
 	// Volumes are per-project named persistent stores. Each key is a
-	// volume name; each value is the absolute guest path where the
-	// volume is mounted. Data lives on the Mac side under
+	// volume name; each value is the guest mount path, optionally with
+	// a repo to hydrate it from. Data lives on the Mac side under
 	// ~/Library/Application Support/<daemon>/volumes/<project>/<name>/
 	// and survives `devm teardown`. See docs/superpowers/specs/
 	// 2026-08-01-persistent-volumes-design.md.
-	Volumes map[string]string `yaml:"volumes,omitempty"`
+	Volumes map[string]Volume `yaml:"volumes,omitempty"`
+
+	// Repo declares the primary workspace repo. Nil means the project
+	// has no primary — utility VMs that only run tools. Presence
+	// requires Secret; URL is optional (derives from Mac cwd's
+	// `git remote get-url origin` when nil).
+	Repo *RepoConfig `yaml:"repo,omitempty"`
 
 	// Masks are workspace-relative paths whose contents are overlaid
 	// by a private per-project guest ext4 directory, so Mac and Linux
@@ -995,6 +1028,9 @@ func (c Config) Validate() error {
 		}
 	}
 	if err := c.validateVolumes(""); err != nil {
+		return err
+	}
+	if err := c.validateRepo(); err != nil {
 		return err
 	}
 	if err := c.validateMasks(); err != nil {

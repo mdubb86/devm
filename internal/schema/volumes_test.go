@@ -16,9 +16,9 @@ func unmarshalYAML(data []byte, out interface{}) error {
 func TestVolumes_ValidShape(t *testing.T) {
 	c := Config{
 		Project: Project{Name: "p"},
-		Volumes: map[string]string{
-			"postgres-data": "/var/lib/postgresql/data",
-			"claude-cache":  "/home/devm/.cache/claude",
+		Volumes: map[string]Volume{
+			"postgres-data": {Path: "/var/lib/postgresql/data"},
+			"claude-cache":  {Path: "/home/devm/.cache/claude"},
 		},
 	}
 	require.NoError(t, c.Validate())
@@ -27,7 +27,7 @@ func TestVolumes_ValidShape(t *testing.T) {
 func TestVolumes_RejectsEmptyName(t *testing.T) {
 	c := Config{
 		Project: Project{Name: "p"},
-		Volumes: map[string]string{"": "/data"},
+		Volumes: map[string]Volume{"": {Path: "/data"}},
 	}
 	err := c.Validate()
 	require.Error(t, err)
@@ -37,7 +37,7 @@ func TestVolumes_RejectsEmptyName(t *testing.T) {
 func TestVolumes_RejectsEmptyPath(t *testing.T) {
 	c := Config{
 		Project: Project{Name: "p"},
-		Volumes: map[string]string{"data": ""},
+		Volumes: map[string]Volume{"data": {Path: ""}},
 	}
 	err := c.Validate()
 	require.Error(t, err)
@@ -47,7 +47,7 @@ func TestVolumes_RejectsEmptyPath(t *testing.T) {
 func TestVolumes_RejectsRelativePath(t *testing.T) {
 	c := Config{
 		Project: Project{Name: "p"},
-		Volumes: map[string]string{"data": "var/lib/data"},
+		Volumes: map[string]Volume{"data": {Path: "var/lib/data"}},
 	}
 	err := c.Validate()
 	require.Error(t, err)
@@ -57,7 +57,7 @@ func TestVolumes_RejectsRelativePath(t *testing.T) {
 func TestVolumes_RejectsPathTraversal(t *testing.T) {
 	c := Config{
 		Project: Project{Name: "p"},
-		Volumes: map[string]string{"data": "/var/../etc"},
+		Volumes: map[string]Volume{"data": {Path: "/var/../etc"}},
 	}
 	err := c.Validate()
 	require.Error(t, err)
@@ -67,9 +67,9 @@ func TestVolumes_RejectsPathTraversal(t *testing.T) {
 func TestVolumes_RejectsDuplicateTargetPaths(t *testing.T) {
 	c := Config{
 		Project: Project{Name: "p"},
-		Volumes: map[string]string{
-			"a": "/data",
-			"b": "/data",
+		Volumes: map[string]Volume{
+			"a": {Path: "/data"},
+			"b": {Path: "/data"},
 		},
 	}
 	err := c.Validate()
@@ -87,7 +87,7 @@ func TestVolumes_RejectsInvalidName(t *testing.T) {
 	// filesystem path segment both must be safe.
 	c := Config{
 		Project: Project{Name: "p"},
-		Volumes: map[string]string{"Bad Name!": "/data"},
+		Volumes: map[string]Volume{"Bad Name!": {Path: "/data"}},
 	}
 	err := c.Validate()
 	require.Error(t, err)
@@ -100,8 +100,8 @@ func TestVolumes_RejectsOverlapWithWorkspace(t *testing.T) {
 	// at that path (or any subpath) would collide.
 	c := Config{
 		Project: Project{Name: "p"},
-		Volumes: map[string]string{
-			"clash": "/Users/michael/workspace/p/data",
+		Volumes: map[string]Volume{
+			"clash": {Path: "/Users/michael/workspace/p/data"},
 		},
 	}
 	err := c.ValidateWithRoot("/Users/michael/workspace/p")
@@ -118,8 +118,8 @@ func TestVolumes_RejectsOverlapWithMask(t *testing.T) {
 	c := Config{
 		Project: Project{Name: "p"},
 		Masks:   []string{"node_modules"},
-		Volumes: map[string]string{
-			"cache": "/Users/michael/workspace/p/node_modules",
+		Volumes: map[string]Volume{
+			"cache": {Path: "/Users/michael/workspace/p/node_modules"},
 		},
 	}
 	err := c.ValidateWithRoot("/Users/michael/workspace/p")
@@ -128,10 +128,10 @@ func TestVolumes_RejectsOverlapWithMask(t *testing.T) {
 }
 
 func TestVolumes_YAMLRoundTrip(t *testing.T) {
-	// Value type must be a plain string, not a nested map — the spec
-	// commits to `name: /path` shape, not `name: {target: /path}`.
+	// Bare scalar shape decodes to Volume.Path with Repo left nil.
 	yamlIn := "project:\n  name: p\nvolumes:\n  pg: /var/lib/pg\n"
 	var c Config
 	require.NoError(t, unmarshalYAML([]byte(yamlIn), &c))
-	assert.Equal(t, "/var/lib/pg", c.Volumes["pg"])
+	assert.Equal(t, "/var/lib/pg", c.Volumes["pg"].Path)
+	assert.Nil(t, c.Volumes["pg"].Repo)
 }

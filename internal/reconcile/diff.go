@@ -547,9 +547,22 @@ func computeMountAddRemove(old, new schema.Config) []Change {
 // Old set, New empty; adds as Old empty, New set; retargets as both
 // populated. Sorted by name for deterministic output.
 func computeVolumeChanges(old, new schema.Config) []Change {
+	names := map[string]struct{}{}
+	for n := range old.Volumes {
+		names[n] = struct{}{}
+	}
+	for n := range new.Volumes {
+		names[n] = struct{}{}
+	}
+	sorted := make([]string, 0, len(names))
+	for n := range names {
+		sorted = append(sorted, n)
+	}
+	sort.Strings(sorted)
+
 	var out []Change
-	for _, n := range unionStringKeys(old.Volumes, new.Volumes) {
-		oldPath, newPath := old.Volumes[n], new.Volumes[n]
+	for _, n := range sorted {
+		oldPath, newPath := old.Volumes[n].Path, new.Volumes[n].Path
 		if oldPath == newPath {
 			continue
 		}

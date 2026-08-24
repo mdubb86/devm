@@ -41,9 +41,9 @@ func TestRunVolumeLs_ListsDeclaredVolumes(t *testing.T) {
 
 	userCfg := schema.Config{
 		Project: schema.Project{Name: "p"},
-		Volumes: map[string]string{
-			"pg-data":      "/var/lib/postgresql/data",
-			"claude-cache": "/home/devm/.cache/claude",
+		Volumes: map[string]schema.Volume{
+			"pg-data":      {Path: "/var/lib/postgresql/data"},
+			"claude-cache": {Path: "/home/devm/.cache/claude"},
 		},
 	}
 	var buf bytes.Buffer
@@ -66,10 +66,10 @@ func TestRunVolumeLs_SortedByName(t *testing.T) {
 	ident := identity.Config{Name: "devm-test"}
 	userCfg := schema.Config{
 		Project: schema.Project{Name: "p"},
-		Volumes: map[string]string{
-			"zebra":  "/z",
-			"alpha":  "/a",
-			"middle": "/m",
+		Volumes: map[string]schema.Volume{
+			"zebra":  {Path: "/z"},
+			"alpha":  {Path: "/a"},
+			"middle": {Path: "/m"},
 		},
 	}
 	var buf bytes.Buffer

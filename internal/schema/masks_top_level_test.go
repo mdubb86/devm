@@ -81,8 +81,8 @@ func TestMasks_RejectsOverlapWithVolume(t *testing.T) {
 	c := Config{
 		Project: Project{Name: "p"},
 		Masks:   []string{"data"},
-		Volumes: map[string]string{
-			"clash": "/Users/michael/workspace/p/data",
+		Volumes: map[string]Volume{
+			"clash": {Path: "/Users/michael/workspace/p/data"},
 		},
 	}
 	err := c.ValidateWithRoot("/Users/michael/workspace/p")

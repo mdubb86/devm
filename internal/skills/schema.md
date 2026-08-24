@@ -20,7 +20,8 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as the guest `devm` user, with open network — before egress enforcement is applied. NOPASSWD sudo is available for privileged steps. |
 | `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
 | `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
-| `volumes` | map[string]string | restart | Per-project named persistent stores. Key = volume name; value = absolute guest path where the volume is mounted. Data lives on the Mac side under `~/Library/Application Support/devm/volumes/<project>/<name>/` and survives `devm teardown`. See the `volumes` section below. |
+| `volumes` | map[string]Volume | restart | Per-project named persistent stores. Key = volume name; value is either a bare guest path string or a `{path, repo}` mapping. Data lives on the Mac side under `~/Library/Application Support/devm/volumes/<project>/<name>/` and survives `devm teardown`. See the `volumes` section below. |
+| `repo` | object | recreate | Declares the primary workspace repo devm hydrates via `git clone` on cold-start. Optional — omit for utility VMs with no primary repo. See the `repo` section below. |
 | `masks` | []string | live | Workspace-relative paths overlaid by a private per-project guest ext4 directory. Isolates platform-differing content (Mac's `node_modules` vs Linux's) so both platforms have their own copies. See the `masks` section below. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
@@ -240,10 +241,16 @@ Per-project named persistent stores. State that outlives `devm teardown` — Pos
 volumes:
   postgres-data: /var/lib/postgresql/data
   claude-cache: /home/devm/.cache/claude
+  design-tokens:
+    path: /home/devm/design-tokens
+    repo:
+      url: https://github.com/me/design-tokens.git
 ```
 
 - **Name** (the map key): must match `[a-z0-9][a-z0-9._-]*`. Scoped to the project — different projects can reuse the same name without collision.
-- **Guest path** (the value): absolute; no `..` traversal; can't overlap the workspace mount root or any top-level mask target.
+- **Value**: either a bare guest path string, or a mapping with `path` and an optional `repo`.
+  - **`path`**: absolute; no `..` traversal; can't overlap the workspace mount root or any top-level mask target.
+  - **`repo`**: when present, devm `git clone`s into the volume's Mac-side storage on the first cold-start where the storage is empty. See the `repo` section below for `url`/`secret`/`branch`; a volume-level `repo.secret` is optional and inherits the top-level `repo.secret` when omitted — one of the two must be set.
 
 Storage lives Mac-side at `~/Library/Application Support/devm/volumes/<project>/<name>/`. Delivery is virtiofs — one `tart run --dir` per declared volume — so `devm teardown` (which wipes the VM disk) leaves volume data alone. A subsequent cold-start reattaches the same Mac dir at the declared guest path.
 
@@ -252,6 +259,27 @@ Add / remove / retarget a volume ⇒ **restart** bucket: Tart's `--dir` args are
 On first attach with existing content at the guest target (e.g. Postgres has already run `initdb`), the daemon **adopts**: copies the target content into the empty volume dir via the same virtiofs share, then bind-mounts the volume at the target. If both the Mac side and the guest target already have content, the daemon errors and asks the user to clear one side.
 
 Discovery: `devm volume ls` lists the current project's volumes with name, guest path, Mac path, and size. Deletion is manual (`rm -rf` at the Mac path), or `devm purge` for orphan cleanup of projects that no longer exist.
+
+---
+
+## `repo`
+
+Declares the primary workspace repo devm hydrates via `git clone` at cold-start. Optional — omit for a utility VM that runs only tools, with no primary project checkout.
+
+```yaml
+repo:
+  url: https://github.com/me/my-project.git
+  secret: gh_token
+  branch: main
+```
+
+| Field | Type | Required | Purpose |
+|---|---|---|---|
+| `url` | string | no | Git clone URL. Omit to derive it from `git remote get-url origin` in the Mac-side project directory. |
+| `secret` | string | yes (when `repo` is present) | Names a devm secret-store entry; iron-proxy substitutes it into the clone's `Authorization` header. |
+| `branch` | string | no | Overrides the remote's default branch. |
+
+A `volumes.*.repo` entry (secondary repo) always requires its own `url`; its `secret` is optional and falls back to the top-level `repo.secret` when omitted — at least one of the two must resolve.
 
 ---
 
