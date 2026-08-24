@@ -60,7 +60,7 @@ def _mk_project(devm_path: str, label: str) -> tuple[Workspace, Devm]:
     path = Path(tempfile.mkdtemp(prefix=f"devm-e2e-{name}-")).resolve()
     registry.append("workspace", str(path))
     ws = Workspace(path, slug=name, vm_name=name)
-    ws.write_devmyaml()
+    ws.write_devmyaml(no_repo=True)
     d = Devm(devm_path, cwd=str(path))
     return ws, d
 

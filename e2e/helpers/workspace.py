@@ -61,12 +61,18 @@ class Workspace:
             name = self.path.name
         return Path.home() / "Library/Application Support/devm-e2e/volumes" / self.vm_name / name
 
-    def write_devmyaml(self, **sections: Any) -> None:
+    def write_devmyaml(self, *, no_repo: bool = False, **sections: Any) -> None:
         """Write a fresh devm.yaml. Extra sections (install, services, env,
         network) are merged into the project skeleton. A `repo:` section
-        is auto-injected (pointing at a hermetic local bare repo) unless
-        the caller passes one explicitly."""
-        if "repo" not in sections:
+        is auto-injected (pointing at a hermetic local bare repo, which
+        shells out to git) unless the caller opts out: pass an explicit
+        `repo=...` section to use verbatim, pass `repo=False` or
+        `no_repo=True` to omit the `repo:` block entirely without ever
+        calling `bare_repo_url()`."""
+        if sections.get("repo") is False:
+            no_repo = True
+            del sections["repo"]
+        if not no_repo and "repo" not in sections:
             sections["repo"] = {
                 "url": self.bare_repo_url(),
                 "secret": "e2e_default",

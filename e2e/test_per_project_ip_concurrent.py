@@ -104,6 +104,7 @@ def _mk_project(devm_path: str, label: str) -> tuple[Workspace, Devm]:
     ws = Workspace(path, slug=name, vm_name=name)
     hostname = f"echo.{name}.e2e.test"
     ws.write_devmyaml(
+        no_repo=True,
         docker=True,
         services={
             "echo": {"port": DIRECT_PORT, "hostname": hostname, "direct": True},
