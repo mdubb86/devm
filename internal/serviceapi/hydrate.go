@@ -34,7 +34,7 @@ func HydrateRepoVolume(ctx context.Context, storagePath string, repo schema.Repo
 		args = append(args, "-b", *repo.Branch)
 	}
 	if ironProxyURL != "" && secret != "" {
-		placeholder := fmt.Sprintf("__DEVM_SECRET_%s__", strings.ToUpper(secret))
+		placeholder := schema.TokenFor(secret)
 		args = append(args,
 			"-c", fmt.Sprintf("http.extraheader=Authorization: bearer %s", placeholder))
 	}

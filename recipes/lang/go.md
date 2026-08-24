@@ -68,13 +68,12 @@ network:
   install ...` in the install: line, but devm has one user (`devm`),
   so there's no multi-user story to solve.
 
-- **No env overrides for `GOMODCACHE` / `GOCACHE`.** Earlier iterations
-  redirected these to `$WORKSPACE/.devm/...` for teardown survival,
-  but the workspace bind is shared with the host — putting
-  linux/arm64 binaries and build artifacts on a darwin/arm64 Mac
-  filesystem is wasteful and conceptually wrong (Mac would never run
-  them). Module re-downloads on teardown are cheap; build cache
-  rebuilds from cached source are fast.
+- **No env overrides for `GOMODCACHE` / `GOCACHE`.** The workspace
+  bind is shared with the host — putting linux/arm64 binaries and
+  build artifacts on a darwin/arm64 Mac filesystem is wasteful and
+  conceptually wrong (Mac would never run them). Module re-downloads
+  on teardown are cheap; build cache rebuilds from cached source are
+  fast.
 
 - **Tools you want always-available go in the `install:` block** so
   they get reinstalled at every cold-start (`install:` is the

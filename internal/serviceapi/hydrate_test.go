@@ -49,6 +49,34 @@ func TestHydrateRepoVolume_BadURL(t *testing.T) {
 	assert.Contains(t, err.Error(), "git clone")
 }
 
+// TestHydrateRepoVolume_PlaceholderMatchesIronProxyTokenFor guards against
+// a placeholder-case mismatch between HydrateRepoVolume and iron-proxy's
+// substitution rule (secretToken in ironproxy.go, which must match
+// schema.TokenFor). A fake `git` on PATH records its args instead of
+// cloning; the ironProxyURL+secret branch never touches the network.
+func TestHydrateRepoVolume_PlaceholderMatchesIronProxyTokenFor(t *testing.T) {
+	fakeBinDir := t.TempDir()
+	argsFile := filepath.Join(fakeBinDir, "args.txt")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(fakeBinDir, "git"), []byte(script), 0o755))
+
+	t.Setenv("PATH", fakeBinDir+":"+os.Getenv("PATH"))
+
+	url := "https://example.com/org/repo.git"
+	secret := "gh_token" // lowercase, per the migration playbook's naming convention
+	repo := schema.RepoConfig{URL: &url, Secret: secret}
+
+	err := HydrateRepoVolume(context.Background(), t.TempDir(), repo, "", "http://127.0.0.1:1")
+	require.NoError(t, err)
+
+	out, err := os.ReadFile(argsFile)
+	require.NoError(t, err)
+
+	want := schema.TokenFor(secret)
+	require.Equal(t, "__DEVM_SECRET_gh_token__", want, "sanity check on schema.TokenFor's shape")
+	assert.Contains(t, string(out), want, "placeholder must match schema.TokenFor's raw case exactly")
+}
+
 func TestHydrateRepoVolume_BranchOverride(t *testing.T) {
 	url := makeBareRepo(t)
 	storage := t.TempDir()

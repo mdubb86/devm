@@ -50,7 +50,7 @@ installer drops to `.agents/skills/…` and Claude Code won't see it.
 ```bash
 cd ~/your-project
 devm validate     # check devm.yaml
-devm reconcile    # regenerate .devm/ kit assets
+devm reconcile    # apply devm.yaml changes
 devm shell        # drop into the sandbox
 devm version      # current version + build info
 devm upgrade      # self-update (no-op for brew installs)
@@ -66,11 +66,7 @@ A few things devm does so your `devm.yaml` doesn't have to:
 * **Failures surface with captured output.** Each `install:` and `startup:` step
   is wrapped: stdout+stderr is captured, exit codes are tracked, and `devm shell`
   prints a structured error showing which step failed and what it printed.
-  Logs persist at `/tmp/.devm-install/install-<N>/current` and
-  `/tmp/.devm-startup/startup-<N>/current` inside the sandbox.
 * **The `ncurses-term` package is installed** (modern terminfo for TUIs).
-  Devm also embeds and drops a static `s6-log` binary at `.devm/scripts/s6-log`
-  for `wrap-bg.sh` to use without any apt step.
 
 ## Docker builds and iron-proxy
 
