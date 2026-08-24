@@ -345,8 +345,8 @@ spawn, 10+s observation — and produces a durable mapping on
   - Tight-poll verify cadence (250ms) is fine.
 
 What's left in devm's flow that the probe DOESN'T have:
-file-lock (`flock` on `.devm/lock`), `render.WriteDevmDir` (which
-overwrites the kit before anchor spawn), and the `runDone`
+file-lock (`flock` on the project lock file), the kit-render step
+(which overwrites the kit before anchor spawn), and the `runDone`
 goroutine that calls `runCmd.Wait()` on the anchor. None of these
 should plausibly affect sbx daemon state — but **something** in
 devm's larger orchestrator is the active ingredient.
@@ -357,7 +357,7 @@ Worked the disposable `strip-devm-publish` branch. Ruled out as
 *the* cause (each tested in isolation, bug still reproduces):
 
   - `lock.Acquire` / lock release (stripped)
-  - `render.WriteDevmDir` (stripped, test pre-renders)
+  - the kit-render step (stripped, test pre-renders)
   - `runDone` goroutine + `runCmd.Wait()` (stripped, replaced
     with a never-firing channel)
   - `ReconcilePortsWithRunner` complexity (replaced with single
@@ -370,7 +370,7 @@ Worked the disposable `strip-devm-publish` branch. Ruled out as
     but driven via cobra+`signal.NotifyContext`; passes 5/5)
   - Kit content / project ID / agent name / cwd of the anchor
     (verified by building a probe variant that uses devm's
-    rendered `.devm/spec.yaml`, devm's `cfg.Project.Name` as
+    rendered kit spec, devm's `cfg.Project.Name` as
     agent name, and cwd=workspace; passes 10/10)
 
 **Pure-sbx (Python `subprocess.Popen` with inherited PTY for

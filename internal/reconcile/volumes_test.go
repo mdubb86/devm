@@ -84,6 +84,26 @@ func TestComputeVolumeChanges_RepoURLChanged(t *testing.T) {
 	assert.Equal(t, "pg", changes[0].Key)
 }
 
+func TestComputeVolumeChanges_RepoURLChanged_ShowsRepoSummary(t *testing.T) {
+	oldURL := "https://github.com/x/y.git"
+	newURL := "https://github.com/x/z.git"
+	branch := "main"
+	old := schema.Config{Volumes: map[string]schema.Volume{
+		"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &oldURL, Branch: &branch, Secret: "s"}},
+	}}
+	new := schema.Config{Volumes: map[string]schema.Volume{
+		"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &newURL, Branch: &branch, Secret: "s"}},
+	}}
+	changes := computeVolumeChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindVolumeChange, changes[0].Kind)
+	assert.Equal(t, "pg", changes[0].Key)
+	assert.Contains(t, changes[0].Old, "/data")
+	assert.Contains(t, changes[0].Old, oldURL)
+	assert.Contains(t, changes[0].New, "/data")
+	assert.Contains(t, changes[0].New, newURL)
+}
+
 func TestKindVolumeChange_BucketRestartVM(t *testing.T) {
 	assert.Equal(t, BucketRestartVM, KindVolumeChange.Bucket())
 }

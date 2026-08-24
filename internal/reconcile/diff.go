@@ -558,9 +558,33 @@ func computeVolumeChanges(old, new schema.Config) []Change {
 		if volumeEqual(oldVol, newVol) {
 			continue
 		}
-		out = append(out, Change{Kind: KindVolumeChange, Key: n, Old: oldVol.Path, New: newVol.Path})
+		out = append(out, Change{
+			Kind: KindVolumeChange, Key: n,
+			Old: formatVolumeChangeValue(oldVol),
+			New: formatVolumeChangeValue(newVol),
+		})
 	}
 	return out
+}
+
+// formatVolumeChangeValue renders a Volume for the reconcile prompt's
+// Old/New display. Plain path when Repo is unset, so a path-only
+// retarget still reads as "<old> → <new>". When Repo is set, appends
+// a repo summary so a repo-only edit (same path) doesn't render as a
+// no-op "<path> → <path>".
+func formatVolumeChangeValue(v schema.Volume) string {
+	if v.Repo == nil {
+		return v.Path
+	}
+	url := ""
+	if v.Repo.URL != nil {
+		url = *v.Repo.URL
+	}
+	branch := ""
+	if v.Repo.Branch != nil {
+		branch = *v.Repo.Branch
+	}
+	return fmt.Sprintf("%s [repo=%s@%s, secret=%s]", v.Path, url, branch, v.Repo.Secret)
 }
 
 // stringPtrEqual compares two string pointers: both nil is equal, one
