@@ -40,18 +40,22 @@ type ServiceData struct {
 }
 
 // RenderTemplates renders every services.*.templates entry into a map
-// of absolute installer-script paths under <repoRoot>/.devm/templates/
-// to their shell-script contents. Caller writes them to disk.
+// of absolute installer-script paths under
+// <daemonRuntimeDir>/templates/<projectID>/ to their shell-script
+// contents. The map keys are an internal namespace for deterministic,
+// collision-free keying — nothing writes them to that path today, only
+// their content and basename are consumed. Template sources are read
+// from repoRoot, the project's Mac-side directory.
 //
 // Empty result on no templates. Errors on: missing source file, source
 // outside repoRoot, undefined template variable, parse errors.
-func RenderTemplates(cfg schema.Config, repoRoot string) (map[string]string, error) {
+func RenderTemplates(cfg schema.Config, repoRoot, daemonRuntimeDir, projectID string) (map[string]string, error) {
 	out := map[string]string{}
 	if len(cfg.Services) == 0 {
 		return out, nil
 	}
 	data := buildTemplateData(cfg)
-	dir := filepath.Join(repoRoot, ".devm", "templates")
+	dir := filepath.Join(daemonRuntimeDir, "templates", projectID)
 
 	// Deterministic order: services alphabetically, templates in
 	// declaration order. The NN index ensures stable glob iteration.
@@ -83,9 +87,9 @@ func RenderTemplates(cfg schema.Config, repoRoot string) (map[string]string, err
 // full path. This is the keying reconcile.ComputeTemplateChanges expects
 // for its last-applied baseline (serviceapi.StateSnapshot.TemplateContents),
 // since that baseline is persisted independently of any particular
-// repoRoot's .devm/templates/ directory.
-func RenderTemplatesByBasename(cfg schema.Config, repoRoot string) (map[string]string, error) {
-	rendered, err := RenderTemplates(cfg, repoRoot)
+// project's rendering location.
+func RenderTemplatesByBasename(cfg schema.Config, repoRoot, daemonRuntimeDir, projectID string) (map[string]string, error) {
+	rendered, err := RenderTemplates(cfg, repoRoot, daemonRuntimeDir, projectID)
 	if err != nil {
 		return nil, err
 	}

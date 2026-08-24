@@ -14,7 +14,7 @@ func TestRenderTemplates_Empty(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "x"},
 	}
-	got, err := RenderTemplates(cfg, t.TempDir())
+	got, err := RenderTemplates(cfg, t.TempDir(), t.TempDir(), "x")
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
@@ -36,7 +36,7 @@ func TestRenderTemplates_SymlinkEscape_Rejected(t *testing.T) {
 			}},
 		},
 	}
-	_, err := RenderTemplates(cfg, root)
+	_, err := RenderTemplates(cfg, root, t.TempDir(), "x")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outside project root")
 }
@@ -53,12 +53,13 @@ func TestRenderTemplates_Simple(t *testing.T) {
 			"api": {Port: 8080, Templates: []schema.Template{{Source: "hello.tmpl", Output: "/etc/hello"}}},
 		},
 	}
-	got, err := RenderTemplates(cfg, dir)
+	runtimeDir := t.TempDir()
+	got, err := RenderTemplates(cfg, dir, runtimeDir, "myapp")
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 
-	// Single installer at .devm/templates/00-api-hello.sh.
-	expectPath := filepath.Join(dir, ".devm", "templates", "00-api-hello.sh")
+	// Single installer at <runtimeDir>/templates/myapp/00-api-hello.sh.
+	expectPath := filepath.Join(runtimeDir, "templates", "myapp", "00-api-hello.sh")
 	script, ok := got[expectPath]
 	require.True(t, ok, "expected installer at %s; got keys: %v", expectPath, mapKeys(got))
 
@@ -82,9 +83,10 @@ func TestRenderTemplates_SudoDefault_NoSudoInScript(t *testing.T) {
 			"a": {Port: 80, Templates: []schema.Template{{Source: "u.tmpl", Output: "/home/admin/x"}}},
 		},
 	}
-	got, err := RenderTemplates(cfg, dir)
+	runtimeDir := t.TempDir()
+	got, err := RenderTemplates(cfg, dir, runtimeDir, "p")
 	require.NoError(t, err)
-	script := got[filepath.Join(dir, ".devm", "templates", "00-a-x.sh")]
+	script := got[filepath.Join(runtimeDir, "templates", "p", "00-a-x.sh")]
 	require.NotEmpty(t, script)
 	assert.NotContains(t, script, "sudo install", "sudo:false must not shell out to sudo install")
 	assert.NotContains(t, script, "sudo mv", "sudo:false must not sudo the mv either")
@@ -104,9 +106,10 @@ func TestRenderTemplates_Sudo_EmitsRootOwnedInstall(t *testing.T) {
 			}}},
 		},
 	}
-	got, err := RenderTemplates(cfg, dir)
+	runtimeDir := t.TempDir()
+	got, err := RenderTemplates(cfg, dir, runtimeDir, "p")
 	require.NoError(t, err)
-	script := got[filepath.Join(dir, ".devm", "templates", "00-a-n.conf.sh")]
+	script := got[filepath.Join(runtimeDir, "templates", "p", "00-a-n.conf.sh")]
 	require.NotEmpty(t, script)
 	assert.Contains(t, script, "TMP=\"$(mktemp)\"", "sudo path must stage TMP in /tmp")
 	assert.Contains(t, script, `sudo install -m 0644 -o root -g root "$TMP" "$DEST"`)
@@ -126,7 +129,7 @@ func TestRenderTemplates_MissingVar_Error(t *testing.T) {
 			"a": {Port: 1, Templates: []schema.Template{{Source: "bad.tmpl", Output: "/x"}}},
 		},
 	}
-	_, err := RenderTemplates(cfg, dir)
+	_, err := RenderTemplates(cfg, dir, t.TempDir(), "x")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nope")
 }
@@ -148,7 +151,7 @@ func TestRenderTemplates_PathTraversal_Rejected(t *testing.T) {
 			}},
 		},
 	}
-	_, err := RenderTemplates(cfg, root)
+	_, err := RenderTemplates(cfg, root, t.TempDir(), "x")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outside project root")
 }
@@ -165,15 +168,16 @@ func TestRenderTemplates_Deterministic(t *testing.T) {
 			"alpha": {Port: 8000, Templates: []schema.Template{{Source: "a.tmpl", Output: "/a"}}},
 		},
 	}
-	r1, err := RenderTemplates(cfg, dir)
+	runtimeDir := t.TempDir()
+	r1, err := RenderTemplates(cfg, dir, runtimeDir, "p")
 	require.NoError(t, err)
-	r2, err := RenderTemplates(cfg, dir)
+	r2, err := RenderTemplates(cfg, dir, runtimeDir, "p")
 	require.NoError(t, err)
 	assert.Equal(t, r1, r2)
 
 	// alpha sorts before zeta -> indices 00 (alpha) and 01 (zeta).
-	_, hasAlpha := r1[filepath.Join(dir, ".devm/templates/00-alpha-a.sh")]
-	_, hasZeta := r1[filepath.Join(dir, ".devm/templates/01-zeta-b.sh")]
+	_, hasAlpha := r1[filepath.Join(runtimeDir, "templates", "p", "00-alpha-a.sh")]
+	_, hasZeta := r1[filepath.Join(runtimeDir, "templates", "p", "01-zeta-b.sh")]
 	assert.True(t, hasAlpha, "expected 00-alpha-a.sh; keys: %v", mapKeys(r1))
 	assert.True(t, hasZeta, "expected 01-zeta-b.sh; keys: %v", mapKeys(r1))
 }

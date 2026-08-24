@@ -59,6 +59,11 @@ type Provisioner struct {
 	// on the Mac (e.g., /Users/michael/projects/myproj).
 	WorkspaceVMPath string
 
+	// DaemonRuntimeDir is the daemon's runtime directory (identity.
+	// Config.RuntimeDir()), threaded into devmbundle.Build's BuildInput
+	// as the root of RenderTemplates' scratch namespace.
+	DaemonRuntimeDir string
+
 	// StepTimeoutSeconds bounds every install:/startup: command in the
 	// composed script (render.ProvisionScriptInput.StepTimeoutSeconds). The
 	// daemon fills this from DEVM_INSTALL_STEP_TIMEOUT_S; zero means
@@ -209,6 +214,7 @@ func (p *Provisioner) buildBundle() ([]byte, error) {
 	in := devmbundle.BuildInput{
 		Cfg:                 p.Cfg,
 		RepoRoot:            p.WorkspaceVMPath,
+		DaemonRuntimeDir:    p.DaemonRuntimeDir,
 		CARootPEM:           p.CARootPEM,
 		SSHAuthorizedPubkey: p.SSHAuthorizedPubkey,
 		SSHHostPriv:         p.SSHHostPriv,

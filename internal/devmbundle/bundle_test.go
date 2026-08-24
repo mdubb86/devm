@@ -124,10 +124,11 @@ func TestBuild_Deterministic(t *testing.T) {
 }
 
 func TestBuild_TemplatePathsAreFlatBaseNames(t *testing.T) {
-	// RenderTemplates returns a map keyed by absolute host paths
-	// (<repoRoot>/.devm/templates/NN-svc-base.sh); Build must reduce
-	// them to a flat basename so the guest's install-templates.sh
-	// dispatcher (which iterates templates/*.sh non-recursively) can
+	// RenderTemplates returns a map keyed by absolute paths under the
+	// daemon runtime dir (<daemonRuntimeDir>/templates/<project>/
+	// NN-svc-base.sh); Build must reduce them to a flat basename so the
+	// guest's install-templates.sh dispatcher (which iterates
+	// templates/*.sh non-recursively) can
 	// find them. Regression: an earlier revision embedded the full
 	// host path into the tar entry name and silently broke the whole
 	// templates flow.

@@ -3,10 +3,9 @@ package serviceapi
 import "sync"
 
 // ProjectLocks provides per-project mutual exclusion for the daemon's
-// state-mutating endpoints. Replaces the CLI-side .devm/lock flock:
-// serialization moves inside the daemon so every state mutation
-// (start, stop, teardown, reconcile, apply-egress) queues against
-// concurrent invocations for the same project.
+// state-mutating endpoints: every state mutation (start, stop,
+// teardown, reconcile, apply-egress) queues against concurrent
+// invocations for the same project.
 //
 // Daemon restart drops the map — same semantics as flock dying with
 // its CLI process today.

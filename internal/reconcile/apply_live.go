@@ -36,7 +36,7 @@ import (
 //
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
-func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
+func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot, daemonRuntimeDir string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
 	var templateChanges []Change
 	var maskChanges []Change
 	var bundleRebuildNeeded bool
@@ -71,6 +71,7 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		in := devmbundle.BuildInput{
 			Cfg:                 cfg,
 			RepoRoot:            repoRoot,
+			DaemonRuntimeDir:    daemonRuntimeDir,
 			CARootPEM:           caPEM,
 			SSHAuthorizedPubkey: sshAuthPub,
 			SSHHostPriv:         sshHostPriv,

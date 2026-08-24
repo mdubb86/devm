@@ -178,7 +178,7 @@ func TestComputeEnvChanges(t *testing.T) {
 	new := cfgWithServices(map[string]schema.Service{
 		"api": {Env: map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "debug"}, "NEW": {Literal: "yes"}}},
 	})
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	var kinds []ChangeKind
 	for _, c := range changes {
@@ -192,7 +192,7 @@ func TestComputeEnvChanges(t *testing.T) {
 func TestComputeGlobalEnvChanges(t *testing.T) {
 	old := schema.Config{Env: map[string]schema.EnvValue{"FOO": {Literal: "old"}, "STALE": {Literal: "1"}}}
 	new := schema.Config{Env: map[string]schema.EnvValue{"FOO": {Literal: "new"}, "ADDED": {Literal: "yes"}}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	var kinds []ChangeKind
 	for _, c := range changes {
@@ -210,7 +210,7 @@ func TestDiff_ServiceExecChange_IsBucketLive(t *testing.T) {
 	new := cfgWithServices(map[string]schema.Service{
 		"api": {Exec: []string{"new"}},
 	})
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {
@@ -230,7 +230,7 @@ func TestDiff_ServiceRestartChange_IsBucketLive(t *testing.T) {
 	new := cfgWithServices(map[string]schema.Service{
 		"api": {Exec: []string{"run"}, Restart: "always"},
 	})
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {
@@ -249,7 +249,7 @@ func TestDiff_ServiceAfterChange_IsBucketLive(t *testing.T) {
 	new := cfgWithServices(map[string]schema.Service{
 		"api": {Exec: []string{"run"}, After: []string{"network.target", "db.service"}},
 	})
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {
@@ -268,7 +268,7 @@ func TestDiff_ServiceWorkdirChange_IsBucketLive(t *testing.T) {
 	new := cfgWithServices(map[string]schema.Service{
 		"api": {Exec: []string{"run"}, WorkDir: "/new"},
 	})
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {
@@ -287,7 +287,7 @@ func TestDiff_ServiceUserChange_IsBucketLive(t *testing.T) {
 	new := cfgWithServices(map[string]schema.Service{
 		"api": {Exec: []string{"run"}, User: "bob"},
 	})
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {
@@ -306,7 +306,7 @@ func TestDiff_ServiceSystemdOverrideChange_IsBucketLive(t *testing.T) {
 	new := cfgWithServices(map[string]schema.Service{
 		"api": {Systemd: "new-unit-content"},
 	})
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {
@@ -325,7 +325,7 @@ func TestDiff_ServiceHostnameChange_IsBucketLive(t *testing.T) {
 	new := cfgWithServices(map[string]schema.Service{
 		"api": {Port: 8080, Hostname: "api2.test"},
 	})
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {
@@ -366,7 +366,7 @@ func TestComputeDirectChanges(t *testing.T) {
 func TestDiff_PackagesChange_IsBucketLive(t *testing.T) {
 	old := schema.Config{Packages: []string{"jq"}}
 	new := schema.Config{Packages: []string{"jq", "ripgrep"}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {
@@ -385,7 +385,7 @@ func TestDiff_MaskChange_IsBucketLive(t *testing.T) {
 func TestDiff_MountAddRemove_IsBucketTeardownVM(t *testing.T) {
 	old := schema.Config{Mounts: []string{"/etc/hosts:ro"}}
 	new := schema.Config{Mounts: []string{"/etc/hosts:ro", "/tmp:ro"}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {
@@ -400,7 +400,7 @@ func TestDiff_MountAddRemove_IsBucketTeardownVM(t *testing.T) {
 func TestComputeInstallChanges(t *testing.T) {
 	old := schema.Config{Install: []string{"apt-get install -y jq"}}
 	new := schema.Config{Install: []string{"apt-get install -y jq curl"}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindInstallChange, changes[0].Kind)
@@ -409,7 +409,7 @@ func TestComputeInstallChanges(t *testing.T) {
 func TestComputeStartupChanges(t *testing.T) {
 	old := schema.Config{Startup: []string{"echo one"}}
 	new := schema.Config{Startup: []string{"echo one", "echo two"}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindStartupChange, changes[0].Kind)
@@ -417,7 +417,7 @@ func TestComputeStartupChanges(t *testing.T) {
 
 	// Identical startup: lists → no change.
 	same := schema.Config{Startup: []string{"echo one", "echo two"}}
-	changes, err = ComputeAllChanges(same, same, t.TempDir(), nil, nil, nil)
+	changes, err = ComputeAllChanges(same, same, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	for _, c := range changes {
 		assert.NotEqual(t, KindStartupChange, c.Kind, "identical startup: must not produce a change")
@@ -469,7 +469,7 @@ func TestComputeImageChange(t *testing.T) {
 	// is emitted for identical (empty) BaseImage structs.
 	old := schema.Config{Project: schema.Project{Name: "p"}}
 	new := schema.Config{Project: schema.Project{Name: "p"}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	for _, c := range changes {
 		assert.NotEqual(t, KindImageChange, c.Kind, "no image change for identical config")
@@ -479,7 +479,7 @@ func TestComputeImageChange(t *testing.T) {
 func TestComputeIdentityChange(t *testing.T) {
 	old := schema.Config{Project: schema.Project{Name: "p1"}}
 	new := schema.Config{Project: schema.Project{Name: "p2"}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindIdentityChange, changes[0].Kind)
@@ -517,7 +517,7 @@ func TestComputeAllChanges_NoOp(t *testing.T) {
 		Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}},
 		Install: []string{"true"},
 	}
-	changes, err := ComputeAllChanges(cfg, cfg, t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(cfg, cfg, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	assert.Empty(t, changes)
 }
@@ -565,7 +565,7 @@ func TestComputeTemplateChanges_NewTemplate(t *testing.T) {
 		},
 	}
 	// No last-applied baseline at all → surfaces as new.
-	got, err := ComputeTemplateChanges(cfg, dir, nil)
+	got, err := ComputeTemplateChanges(cfg, dir, t.TempDir(), nil)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, KindTemplateChange, got[0].Kind)
@@ -585,10 +585,10 @@ func TestComputeTemplateChanges_NoChanges(t *testing.T) {
 		},
 	}
 	// Baseline == what cfg renders right now → no diff.
-	baseline, err := render.RenderTemplatesByBasename(cfg, dir)
+	baseline, err := render.RenderTemplatesByBasename(cfg, dir, t.TempDir(), cfg.Project.Name)
 	require.NoError(t, err)
 
-	got, err := ComputeTemplateChanges(cfg, dir, baseline)
+	got, err := ComputeTemplateChanges(cfg, dir, t.TempDir(), baseline)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
@@ -615,11 +615,11 @@ func TestComputeTemplateChanges_ContentChanged_SurfacesAsChangeNotAdd(t *testing
 	// post-apply reconcile), THEN mutate the source file — simulating a
 	// devm.yaml/template edit between snapshot capture and the next
 	// reconcile.
-	baseline, err := render.RenderTemplatesByBasename(cfg, dir)
+	baseline, err := render.RenderTemplatesByBasename(cfg, dir, t.TempDir(), cfg.Project.Name)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(src, []byte("v2 {{.Project.Name}}\n"), 0o644))
 
-	got, err := ComputeTemplateChanges(cfg, dir, baseline)
+	got, err := ComputeTemplateChanges(cfg, dir, t.TempDir(), baseline)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, KindTemplateChange, got[0].Kind)
@@ -641,7 +641,7 @@ func TestComputeTemplateChanges_Removed(t *testing.T) {
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
 	}
-	baseline, err := render.RenderTemplatesByBasename(cfg1, dir)
+	baseline, err := render.RenderTemplatesByBasename(cfg1, dir, t.TempDir(), cfg1.Project.Name)
 	require.NoError(t, err)
 
 	// New config drops the template.
@@ -649,7 +649,7 @@ func TestComputeTemplateChanges_Removed(t *testing.T) {
 		Project:  cfg1.Project,
 		Services: map[string]schema.Service{"a": {Port: 1}},
 	}
-	got, err := ComputeTemplateChanges(cfg2, dir, baseline)
+	got, err := ComputeTemplateChanges(cfg2, dir, t.TempDir(), baseline)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, KindTemplateChange, got[0].Kind)
@@ -668,7 +668,7 @@ func TestComputeAllChanges_IncludesTemplates(t *testing.T) {
 			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
 		},
 	}
-	changes, err := ComputeAllChanges(schema.Config{}, cfg, dir, nil, nil, nil)
+	changes, err := ComputeAllChanges(schema.Config{}, cfg, dir, t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {
@@ -773,7 +773,7 @@ func TestComputeAllChanges_IncludesNetworkAndSecretChanges(t *testing.T) {
 	}
 	oldHashes := map[string]string{"TOK": "h_old"}
 	newHashes := map[string]string{"TOK": "h_new"}
-	changes, err := ComputeAllChanges(old, new, "", nil, oldHashes, newHashes)
+	changes, err := ComputeAllChanges(old, new, "", t.TempDir(), nil, oldHashes, newHashes)
 	require.NoError(t, err)
 	// Exactly one network add + one secret change (both other diffs empty).
 	require.Len(t, changes, 2)

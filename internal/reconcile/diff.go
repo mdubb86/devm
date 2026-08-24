@@ -276,32 +276,23 @@ func ComputePortChanges(old, new schema.Config) []Change {
 
 // ComputeAllChanges returns the full set of diffs between old and new
 // configs. Order: ports, network, env (per service), service unit fields
-// (per service), install, packages, mounts, masks (per service), image,
-// identity, templates, path. Within each section, service names are sorted
-// alphabetically for determinism.
-//
-// `repoRoot` is required by the templates diff to render the desired
-// installer scripts. `lastAppliedTemplates` is the last-applied baseline
-// (basename -> rendered content, from the daemon's persisted
-// StateSnapshot); pass nil when there is none (e.g. cold-start with no
-// prior snapshot), which surfaces every declared template as an add.
-// ComputeAllChanges returns the full set of diffs between old and new
-// configs. Order: ports, network, env (per service), service unit fields
 // (per service), install, startup, packages, mounts, masks (per service),
 // image, identity, templates, path, secrets. Within each section, service
 // names are sorted alphabetically for determinism.
 //
-// `repoRoot` is required by the templates diff to render the desired
-// installer scripts. `lastAppliedTemplates` is the last-applied baseline
-// (basename -> rendered content, from the daemon's persisted
-// StateSnapshot); pass nil when there is none (e.g. cold-start with no
-// prior snapshot), which surfaces every declared template as an add.
+// `repoRoot` and `daemonRuntimeDir` are required by the templates diff
+// to render the desired installer scripts (source reads and the
+// rendering namespace, respectively). `lastAppliedTemplates` is the
+// last-applied baseline (basename -> rendered content, from the
+// daemon's persisted StateSnapshot); pass nil when there is none (e.g.
+// cold-start with no prior snapshot), which surfaces every declared
+// template as an add.
 // `oldSecretHashes` is the last-applied SecretHashes map from the same
 // snapshot; `newSecretHashes` is the freshly-hashed set the CLI just
 // resolved. Both nil means "no secret drift to consider".
 func ComputeAllChanges(
 	old, new schema.Config,
-	repoRoot string,
+	repoRoot, daemonRuntimeDir string,
 	lastAppliedTemplates map[string]string,
 	oldSecretHashes, newSecretHashes map[string]string,
 ) ([]Change, error) {
@@ -325,7 +316,7 @@ func ComputeAllChanges(
 	out = append(out, computeDiskChange(old, new)...)
 	out = append(out, computeResourceChange(old, new)...)
 	out = append(out, computePathChange(old, new)...)
-	tmplChanges, err := ComputeTemplateChanges(new, repoRoot, lastAppliedTemplates)
+	tmplChanges, err := ComputeTemplateChanges(new, repoRoot, daemonRuntimeDir, lastAppliedTemplates)
 	if err != nil {
 		return nil, err
 	}
@@ -864,8 +855,8 @@ func computeSecretChanges(newHashes, oldHashes map[string]string) []Change {
 // Emits a Change per template that would differ from its last-applied
 // content (including newly-added templates) and a Change per
 // last-applied template that is no longer in the new config (removal).
-func ComputeTemplateChanges(new schema.Config, repoRoot string, lastApplied map[string]string) ([]Change, error) {
-	desired, err := render.RenderTemplates(new, repoRoot)
+func ComputeTemplateChanges(new schema.Config, repoRoot, daemonRuntimeDir string, lastApplied map[string]string) ([]Change, error) {
+	desired, err := render.RenderTemplates(new, repoRoot, daemonRuntimeDir, new.Project.Name)
 	if err != nil {
 		return nil, fmt.Errorf("compute templates: %w", err)
 	}

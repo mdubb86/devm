@@ -590,7 +590,7 @@ type fakeApply struct {
 	order *[]string
 }
 
-func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
+func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
 	f.called = true
 	f.lastSSHAuthPub = sshAuthPub
 	f.lastSSHHostPriv = sshHostPriv

@@ -52,14 +52,14 @@ type VMReconcileResponse struct {
 // inside the guest. Real impl calls reconcile.ApplyLive; tests use a
 // fake to skip shelling out.
 type ApplyLiver interface {
-	ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error
+	ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error
 }
 
 // realApplyLiver adapts reconcile.ApplyLive to the interface.
 type realApplyLiver struct{ tr *tart.Tart }
 
-func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
-	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, caPEM, sshAuthPub, sshHostPriv, sshHostPub)
+func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
+	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub)
 }
 
 // TartLister is the subset of *tart.Tart the reconcile handler uses to
@@ -122,7 +122,7 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 		}
 
 		changes, err := reconcile.ComputeAllChanges(
-			base, req.Cfg, req.WorkspaceHostPath, lastAppliedTemplates,
+			base, req.Cfg, req.WorkspaceHostPath, cfg.RuntimeDir(), lastAppliedTemplates,
 			oldSecretHashes, req.SecretHashes,
 		)
 		if err != nil {
@@ -208,7 +208,7 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 					return
 				}
 			}
-			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, req.Name, caPEM, req.SSHAuthorizedPubkey, req.SSHHostPriv, req.SSHHostPub); err != nil {
+			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, cfg.RuntimeDir(), req.Name, caPEM, req.SSHAuthorizedPubkey, req.SSHHostPriv, req.SSHHostPub); err != nil {
 				http.Error(w, fmt.Sprintf("apply live: %v", err), http.StatusInternalServerError)
 				return
 			}
@@ -219,7 +219,7 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 			// Recompute the template-contents baseline from the merged
 			// cfg so it stays in lockstep with whatever templates that
 			// cfg now declares (including any just applied live).
-			mergedTemplates, err := render.RenderTemplatesByBasename(merged, req.WorkspaceHostPath)
+			mergedTemplates, err := render.RenderTemplatesByBasename(merged, req.WorkspaceHostPath, cfg.RuntimeDir(), req.Name)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("render templates: %v", err), http.StatusInternalServerError)
 				return

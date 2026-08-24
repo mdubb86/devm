@@ -133,7 +133,3 @@ If an API call fails with unexpected credentials or a 401, check whether iron-pr
 | Iron-proxy | `~/Library/Logs/devm/<project-id>-proxy.log` | Per-project; logs every proxied request. `<project-id>` = `project.name` in `devm.yaml` |
 | In-VM systemd | `tart exec <vm> journalctl -u <unit>` | Use `-xe` for recent system errors; use `-u <unit>` for a specific service |
 | Install / uninstall | `~/Library/Logs/devm/install.log` | Subprocess output from `devm install` and `devm uninstall`; last 30 lines are printed automatically on failure |
-
-The `.devm/` directory in your project root is maintained by the CLI and is not committed to version control. It contains:
-
-- `.devm/templates/` — installer scripts generated from `devm.yaml` template declarations

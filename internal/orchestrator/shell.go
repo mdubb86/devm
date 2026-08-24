@@ -309,6 +309,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		SSHHostPriv:         hostPriv,
 		SSHHostPub:          hostPub,
 		WorkspaceVMPath:     repoRoot,
+		DaemonRuntimeDir:    d.Ident.RuntimeDir(),
 		StepTimeoutSeconds:  installStepTimeoutSeconds(),
 		PackageAdds:         pkgAdds,
 		PackageRemoves:      pkgRemoves,
@@ -384,7 +385,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	// a missing snapshot only degrades to "full diff on next
 	// reconcile" (safe), and failing here would kill a start that
 	// otherwise succeeded.
-	templateContents, err := render.RenderTemplatesByBasename(cfg, repoRoot)
+	templateContents, err := render.RenderTemplatesByBasename(cfg, repoRoot, d.Ident.RuntimeDir(), cfg.Project.Name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "state: render templates for seed snapshot %s failed: %v\n", cfg.Project.Name, err)
 	}

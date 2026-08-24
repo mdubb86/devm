@@ -23,6 +23,12 @@ type BuildInput struct {
 	Cfg      schema.Config
 	RepoRoot string
 
+	// DaemonRuntimeDir is the daemon's runtime directory (identity.Config.
+	// RuntimeDir()), threaded through to render.RenderTemplates as the
+	// root of its scratch namespace for the in-memory template-installer
+	// map.
+	DaemonRuntimeDir string
+
 	CARootPEM []byte
 
 	SSHAuthorizedPubkey []byte
@@ -66,7 +72,7 @@ func Build(in BuildInput) ([]byte, error) {
 		return nil, err
 	}
 
-	templates, err := render.RenderTemplates(in.Cfg, in.RepoRoot)
+	templates, err := render.RenderTemplates(in.Cfg, in.RepoRoot, in.DaemonRuntimeDir, in.Cfg.Project.Name)
 	if err != nil {
 		return nil, fmt.Errorf("render templates: %w", err)
 	}

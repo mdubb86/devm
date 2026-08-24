@@ -10,7 +10,7 @@ description: devm VM lifecycle commands — shell, reconcile, stop, teardown, st
 | Command | What it does |
 |---|---|
 | `devm shell` | Bring the VM up (cold-start if needed) and attach an interactive shell. Attaches immediately if already running. |
-| `devm reconcile` | Re-render `.devm/`, diff against the in-VM snapshot, apply live-bucket changes, and surface any pending teardown-bucket changes. |
+| `devm reconcile` | Diff the current config against the in-VM snapshot, apply live-bucket changes, and surface any pending teardown-bucket changes. |
 | `devm stop` | Stop the VM (preserves disk). Use to free resources without losing installed state. |
 | `devm teardown` | Destroy the VM and delete its disk image. Required after teardown-bucket changes. |
 | `devm status` | Show VM state, active sessions, pending config diff, routing, DNS, CA trust, and proxy health. |
@@ -70,9 +70,7 @@ Any failing command aborts the whole provisioning run before `devm.target` start
 
 ## `devm reconcile`
 
-Always re-renders `.devm/` static files first (spec.yaml, scripts — but not template installer scripts, which are the diff baseline). Then:
-
-**VM stopped:** writes template installers too and exits cleanly, printing:
+**VM stopped:** exits cleanly without applying anything, printing:
 
 ```
 Sandbox stopped; config changes will apply on next `devm shell`.
@@ -110,7 +108,7 @@ Prompts for confirmation (skip with `--yes` / `-y`), then sends `StopVM` to the 
 
 ## `devm teardown`
 
-Prompts for confirmation (skip with `--yes` / `-y`). Before stopping, removes this project's routes from the daemon (best-effort; silent if the daemon is down). Then sends `StopVM` to the daemon and calls `tart delete` to wipe the VM disk image. All installed state is lost. `.devm/` is not touched; the next `devm shell` performs a full cold start from scratch.
+Prompts for confirmation (skip with `--yes` / `-y`). Before stopping, removes this project's routes from the daemon (best-effort; silent if the daemon is down). Then sends `StopVM` to the daemon and calls `tart delete` to wipe the VM disk image. All installed state is lost; the next `devm shell` performs a full cold start from scratch.
 
 Required after any **teardown-bucket** change (see Bucket semantics below).
 

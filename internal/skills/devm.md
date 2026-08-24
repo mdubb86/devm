@@ -11,7 +11,7 @@ devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-proje
 
 ## Three-process model
 
-- **`devm` CLI** — the command you type in your terminal. Reads `devm.yaml`, renders `.devm/` from the current config, then talks to the daemon over a Unix socket to start or query the VM. Once the VM is up, it attaches your terminal to a shell inside the guest.
+- **`devm` CLI** — the command you type in your terminal. Reads `devm.yaml`, then talks to the daemon over a Unix socket to start or query the VM. Once the VM is up, it attaches your terminal to a shell inside the guest.
 - **the devm daemon** — owns the VM lifecycle (start, stop), runs its own built-in ProxyServer for `*.test` ingress on the Mac, and spawns per-project iron-proxy for egress enforcement. Managed with `devm service`.
 - **The Tart VM** — runs your code on a Debian Linux base image. It has no direct path to the internet: every outbound flow is intercepted on the Mac. Under the enforced egress policy, only allowlisted HTTPS hosts and NTP reach the outside; everything else is dropped.
 
