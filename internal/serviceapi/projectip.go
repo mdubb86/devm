@@ -2,8 +2,11 @@ package serviceapi
 
 import (
 	"fmt"
+	"net"
 	"sync"
+	"time"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 )
 
@@ -20,6 +23,33 @@ const projectIPPoolFmt = "127.42.0.%d"
 // the three separate lock acquisitions (get, keys+get loop, put) on
 // the underlying projectInfoStore.
 var allocMu sync.Mutex
+
+// probeIPInUse reports whether a listener is already accepting on
+// ip:22. Every project's softnet binds :22 on its ProjectIP, so an
+// accepting listener on an address the daemon considers free means a
+// process outside daemon state holds it — typically an orphaned VM
+// whose state snapshot was lost (daemon state and running VMs have
+// independent lifetimes: VMs survive daemon uninstall/reinstall and
+// state-dir loss). Handing out such an address cross-wires DNS and
+// ingress: the name resolves to the new project while :22 keeps
+// answering with the orphan's sshd, and the bind conflict is only
+// visible as a swallowed EADDRINUSE inside the new softnet.
+// Var so unit tests can stub machine state.
+var probeIPInUse = func(ip string) bool {
+	return listenerActive(net.JoinHostPort(ip, "22"))
+}
+
+// listenerActive reports whether a TCP connect to addr succeeds.
+// Loopback connects resolve instantly (accept or ECONNREFUSED); the
+// timeout only guards pathological states.
+func listenerActive(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 250*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
 
 // AllocateProjectIP returns projectID's existing ProjectIP if it has
 // one; otherwise picks the lowest-free address from cfg's alias pool,
@@ -42,6 +72,13 @@ func AllocateProjectIP(cfg identity.Config, projectID string) (string, error) {
 	for n := cfg.PoolStart; n <= cfg.PoolEnd; n++ {
 		ip := fmt.Sprintf(projectIPPoolFmt, n)
 		if inUse[ip] {
+			continue
+		}
+		// The project's own softnet binds nothing until the expose map
+		// is pushed (after allocation), so any :22 listener here is
+		// foreign — skip the address rather than cross-wire it.
+		if probeIPInUse(ip) {
+			daemonlog.Errorf("serviceapi: pool IP %s:22 is held by a listener outside daemon state (orphaned VM?) — skipping it for %s", ip, projectID)
 			continue
 		}
 		// Store on projectInfo (and merge into any pre-existing entry).

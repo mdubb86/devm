@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"fmt"
+	"net"
 	"sync"
 	"testing"
 
@@ -110,11 +111,60 @@ func TestAllocateProjectIP_ConcurrentDistinct(t *testing.T) {
 	}
 }
 
+// TestAllocateProjectIP_SkipsSquattedIP pins the orphaned-VM defense:
+// an IP whose :22 answers a connect probe is held by a process outside
+// daemon state (e.g. a VM whose state snapshot was lost) and must be
+// skipped, or DNS for the new project would point at the orphan's sshd.
+func TestAllocateProjectIP_SkipsSquattedIP(t *testing.T) {
+	resetIronProxyState(t)
+	probeIPInUse = func(ip string) bool { return ip == "127.42.0.1" || ip == "127.42.0.2" }
+	ip, err := AllocateProjectIP(identity.Prod, "a")
+	require.NoError(t, err)
+	assert.Equal(t, "127.42.0.3", ip, "squatted .1/.2 must be skipped")
+}
+
+func TestAllocateProjectIP_AllSquattedExhaustsPool(t *testing.T) {
+	resetIronProxyState(t)
+	probeIPInUse = func(string) bool { return true }
+	_, err := AllocateProjectIP(identity.Prod, "a")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pool exhausted")
+}
+
+// TestAllocateProjectIP_ExistingAssignmentNotProbed pins that the
+// idempotent path returns the recorded IP without probing: once the
+// project's own softnet is up, its own :22 listener answers the probe,
+// and re-allocation must not mistake the project for a squatter.
+func TestAllocateProjectIP_ExistingAssignmentNotProbed(t *testing.T) {
+	resetIronProxyState(t)
+	first, err := AllocateProjectIP(identity.Prod, "a")
+	require.NoError(t, err)
+	probeIPInUse = func(string) bool { return true }
+	second, err := AllocateProjectIP(identity.Prod, "a")
+	require.NoError(t, err)
+	assert.Equal(t, first, second)
+}
+
+func TestListenerActive(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	assert.True(t, listenerActive(addr), "live listener must probe as active")
+	require.NoError(t, ln.Close())
+	assert.False(t, listenerActive(addr), "closed listener must probe as free")
+}
+
 // resetIronProxyState clears the package-level ironProxyState between
-// tests so allocator tests don't leak state into each other.
+// tests so allocator tests don't leak state into each other. It also
+// stubs probeIPInUse to "free" — the real probe reads live machine
+// state (whatever holds 127.42.0.N:22 on the dev box), which would
+// make allocator tests non-hermetic.
 func resetIronProxyState(t *testing.T) {
 	t.Helper()
 	ironProxyState = newIronProxyStore()
+	old := probeIPInUse
+	probeIPInUse = func(string) bool { return false }
+	t.Cleanup(func() { probeIPInUse = old })
 }
 
 // itoaSA is a local zero-alloc int→string for the exhaustion test.
