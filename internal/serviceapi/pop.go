@@ -156,7 +156,6 @@ var popListeners sync.Map // projectName -> net.Listener
 // POST /pop to handlePop for the given project. The workspace registry
 // is fetched fresh per-request so hot-changed state is picked up.
 func servePopListener(ln net.Listener, cfg identity.Config, projectName string) {
-	popListeners.Store(projectName, ln)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/pop", func(w http.ResponseWriter, r *http.Request) {
 		reg, err := listWorkspaces(cfg)

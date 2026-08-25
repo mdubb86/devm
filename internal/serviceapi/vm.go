@@ -740,6 +740,11 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, fmt.Sprintf("bind pop listener: %v", err), http.StatusInternalServerError)
 			return
 		}
+		// Register before spawning the serve goroutine — a fast /vm/stop
+		// racing the goroutine's own startup could otherwise call
+		// closePopListener before the listener is recorded, leaking the
+		// fd. Mirrors ProxyServer.recordProjectListeners in proxy.go.
+		popListeners.Store(req.Name, popLn)
 		go servePopListener(popLn, cfg, req.Name)
 
 		// Stash port info for VM env injection and the deferred
