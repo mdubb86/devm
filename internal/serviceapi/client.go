@@ -136,7 +136,7 @@ func (c *Client) StatusAll(ctx context.Context) ([]ProjectStatus, error) {
 
 // Workspaces returns the daemon's workspace registry — one entry per
 // project with a primary repo, pairing its guest clone path with the
-// Mac-side volume storage path. Backs `devm resolve`.
+// Mac-side volume storage path.
 func (c *Client) Workspaces(ctx context.Context) ([]WorkspaceEntry, error) {
 	resp, err := c.do(ctx, "GET", "/workspaces")
 	if err != nil {

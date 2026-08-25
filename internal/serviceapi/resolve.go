@@ -14,9 +14,9 @@ import (
 // WorkspaceEntry is one row of GET /workspaces — a project's primary
 // workspace repo, pairing the path as it appears inside the guest
 // clone (GuestPath) with the Mac-side volume storage path
-// (StoragePath). Backs `devm resolve`, which translates a
-// VM-emitted path (e.g. from a screenshot or test-output path a
-// guest process printed) back to where it actually lives on the Mac.
+// (StoragePath). Used to translate a VM-emitted path (e.g. from a
+// screenshot or test-output path a guest process printed) back to
+// where it actually lives on the Mac.
 type WorkspaceEntry struct {
 	Project     string `json:"project"`
 	GuestPath   string `json:"guest_path"`
