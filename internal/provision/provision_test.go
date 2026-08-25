@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -442,4 +443,57 @@ func TestProvisioner_ScriptInput_PassesScripts(t *testing.T) {
 	in := p.scriptInput()
 	assert.Equal(t, []string{"echo one", "echo two"}, in.Scripts["install-supabase"])
 	assert.Equal(t, []string{">install-supabase"}, in.Install)
+}
+
+// makeRepoWithIdentity creates a fixture git repo at a temp dir with a
+// local (repo-scoped) user.name/user.email, so the read is deterministic
+// regardless of the test machine's own global git config.
+func makeRepoWithIdentity(t *testing.T, name, email string) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, exec.Command("git", "-C", dir, "init", "-q").Run())
+	require.NoError(t, exec.Command("git", "-C", dir, "config", "user.name", name).Run())
+	require.NoError(t, exec.Command("git", "-C", dir, "config", "user.email", email).Run())
+	return dir
+}
+
+func TestGitIdentity_ReadsRepoLocalConfig(t *testing.T) {
+	dir := makeRepoWithIdentity(t, "Fixture User", "fixture@example.com")
+	p := &Provisioner{MacCwd: dir}
+	id := p.gitIdentity()
+	assert.Equal(t, "Fixture User", id.UserName)
+	assert.Equal(t, "fixture@example.com", id.UserEmail)
+}
+
+func TestGitIdentity_EmptyMacCwdSkipsRead(t *testing.T) {
+	p := &Provisioner{}
+	id := p.gitIdentity()
+	assert.Equal(t, "", id.UserName)
+	assert.Equal(t, "", id.UserEmail)
+}
+
+func TestGitIdentity_NoIdentityAnywhereYieldsEmpty(t *testing.T) {
+	// Not a git repo, and isolated from the test machine's own global/system
+	// git config, so this reflects a genuinely identity-less environment
+	// rather than leaking whatever the dev machine happens to have set.
+	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	p := &Provisioner{MacCwd: dir}
+	id := p.gitIdentity()
+	assert.Equal(t, "", id.UserName)
+	assert.Equal(t, "", id.UserEmail)
+}
+
+func TestScriptInput_GitConfigCarriesIdentityWhenReposDeclared(t *testing.T) {
+	dir := makeRepoWithIdentity(t, "Fixture User", "fixture@example.com")
+	url := "https://github.com/mdubb86/sewtrue.git"
+	p := &Provisioner{
+		MacCwd: dir,
+		Cfg: schema.Config{
+			Repo: &schema.RepoConfig{URL: &url, Secret: "gh_token"},
+		},
+	}
+	in := p.scriptInput()
+	assert.Contains(t, in.GitConfig, "[user]\n    name = Fixture User\n    email = fixture@example.com\n")
 }

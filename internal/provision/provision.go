@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -58,6 +59,12 @@ type Provisioner struct {
 	// is mounted. Mirrored paths (Ship 4 decision): the same path as
 	// on the Mac (e.g., /Users/michael/projects/myproj).
 	WorkspaceVMPath string
+
+	// MacCwd is the project's Mac-side working directory — used to read
+	// the effective git user.name/user.email (git's own precedence:
+	// repo-local > global > system) to mirror into the guest .gitconfig.
+	// Empty ⇒ no identity read is attempted (see gitIdentity).
+	MacCwd string
 
 	// DaemonRuntimeDir is the daemon's runtime directory (identity.
 	// Config.RuntimeDir()), threaded into devmbundle.Build's BuildInput
@@ -196,7 +203,7 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 	// skips the .git-credentials/.gitconfig install steps entirely.
 	var creds, gitconfig string
 	if bindings := p.repoBindings(); len(bindings) > 0 {
-		creds, gitconfig = render.RenderGitCredentials(bindings)
+		creds, gitconfig = render.RenderGitCredentials(bindings, p.gitIdentity())
 	}
 	return render.ProvisionScriptInput{
 		FirstBoot:          p.firstBoot,
@@ -213,6 +220,26 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		PackageRemoves:     p.PackageRemoves,
 		GitCredentials:     creds,
 		GitConfig:          gitconfig,
+	}
+}
+
+// gitIdentity reads the Mac-side effective git user.name/user.email for
+// MacCwd via git's own config precedence (repo-local .git/config >
+// ~/.gitconfig > /etc/gitconfig) — whatever git would use for a commit
+// in that directory. p.MacCwd empty (unset in tests, or no project cwd
+// known) skips the read entirely rather than falling back to this
+// process's own cwd. Either lookup failing (not a repo, no identity
+// configured anywhere) yields an empty string for that field — that's a
+// normal, silent "unset", not an error.
+func (p *Provisioner) gitIdentity() render.GitIdentity {
+	if p.MacCwd == "" {
+		return render.GitIdentity{}
+	}
+	name, _ := exec.Command("git", "-C", p.MacCwd, "config", "user.name").Output()
+	email, _ := exec.Command("git", "-C", p.MacCwd, "config", "user.email").Output()
+	return render.GitIdentity{
+		UserName:  strings.TrimSpace(string(name)),
+		UserEmail: strings.TrimSpace(string(email)),
 	}
 }
 

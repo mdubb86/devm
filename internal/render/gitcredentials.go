@@ -21,14 +21,26 @@ type RepoBinding struct {
 	Secret string
 }
 
+// GitIdentity is the Mac-side effective git user identity (git's own
+// precedence: repo-local > global > system) to mirror into the guest
+// .gitconfig's [user] block. Either field empty ⇒ the [user] block is
+// omitted entirely and guest git prompts for identity on commit, same
+// as before this was wired up.
+type GitIdentity struct {
+	UserName  string
+	UserEmail string
+}
+
 // RenderGitCredentials returns the bodies for /home/devm/.git-credentials
-// and /home/devm/.gitconfig derived from bindings. Pure: no I/O.
-// Empty bindings → empty credentials file, fixed gitconfig body.
+// and /home/devm/.gitconfig derived from bindings and identity. Pure: no
+// I/O. Empty bindings → empty credentials file; gitconfig always carries
+// the credential-helper block, plus a [user] block when identity is
+// fully known.
 //
 // Line ordering follows bindings order — the caller is responsible for
 // producing a deterministic order (primary first, then secondaries in
 // map-key sort order) so the file diffs cleanly across re-emits.
-func RenderGitCredentials(bindings []RepoBinding) (credentials, gitconfig string) {
+func RenderGitCredentials(bindings []RepoBinding, identity GitIdentity) (credentials, gitconfig string) {
 	var b strings.Builder
 	for _, r := range bindings {
 		// Insert x-access-token:<placeholder>@ between the scheme and
@@ -48,13 +60,20 @@ func RenderGitCredentials(bindings []RepoBinding) (credentials, gitconfig string
 		b.WriteString(rest)
 		b.WriteByte('\n')
 	}
-	return b.String(), fixedGitconfigBody()
+	return b.String(), gitconfigBody(identity)
 }
 
-// fixedGitconfigBody is the entire body of the devm-managed
-// /home/devm/.gitconfig. useHttpPath=true routes same-host
-// different-secret repos by full URL including path. Emitted
-// unconditionally so multi-repo growth needs no gitconfig regeneration.
-func fixedGitconfigBody() string {
-	return "[credential]\n    helper = store\n    useHttpPath = true\n"
+// gitconfigBody is the entire body of the devm-managed
+// /home/devm/.gitconfig. The [credential] block (useHttpPath=true
+// routes same-host different-secret repos by full URL including path)
+// is emitted unconditionally so multi-repo growth needs no gitconfig
+// regeneration. The [user] block is appended only when both UserName
+// and UserEmail are known — a partial identity is treated as unknown,
+// since a lone name or email is not a usable git identity.
+func gitconfigBody(identity GitIdentity) string {
+	body := "[credential]\n    helper = store\n    useHttpPath = true\n"
+	if identity.UserName != "" && identity.UserEmail != "" {
+		body += "[user]\n    name = " + identity.UserName + "\n    email = " + identity.UserEmail + "\n"
+	}
+	return body
 }

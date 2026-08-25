@@ -320,6 +320,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		SSHHostPriv:         hostPriv,
 		SSHHostPub:          hostPub,
 		WorkspaceVMPath:     repoRoot,
+		MacCwd:              repoRoot,
 		DaemonRuntimeDir:    d.Ident.RuntimeDir(),
 		StepTimeoutSeconds:  installStepTimeoutSeconds(),
 		PackageAdds:         pkgAdds,
