@@ -648,18 +648,6 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			return
 		}
 
-		// Push the initial ingress expose map. Independent of egress
-		// state; listeners bind on the host and forward lazily once
-		// guest services come up. Non-fatal: egress is the security
-		// boundary, ingress is convenience, and a failed push is
-		// re-attempted at the next reconcile.
-		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, projectIP)); err != nil {
-			daemonlog.Errorf("serviceapi: vm/start: push expose map for %s: %v", req.Name, err)
-		}
-		if err := pushTestHosts(req.Name, computeDirectTestHosts(req.Cfg)); err != nil {
-			daemonlog.Errorf("serviceapi: vm/start: push test hosts for %s: %v", req.Name, err)
-		}
-
 		// Wait for the Tart Guest Agent to come up before injecting
 		// scripts via `tart exec`. Fresh VMs take a few seconds for
 		// the agent to register; without this wait, the env script
@@ -668,6 +656,25 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		if err := waitVMExecReady(ctx, req.Name, 60*time.Second); err != nil {
 			http.Error(w, fmt.Sprintf("wait for vm exec-ready: %v", err), http.StatusInternalServerError)
 			return
+		}
+
+		// Push the initial ingress expose map. Independent of egress
+		// state; listeners bind on the host and forward lazily once
+		// guest services come up. Deliberately after waitVMExecReady:
+		// softnet creates its control socket when `tart run` forks it
+		// during network setup, but that can land a beat after this
+		// handler reaches the push — softnetClient.dial's ~1s retry
+		// window has lost that race in the field, leaving the project
+		// with no :22 ingress (SSH dead) behind a successful start.
+		// Exec-ready implies the guest agent is up, which softnet's
+		// socket creation precedes by the whole guest boot. Non-fatal:
+		// egress is the security boundary, ingress is convenience, and
+		// a failed push is re-attempted at the next reconcile.
+		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, projectIP)); err != nil {
+			daemonlog.Errorf("serviceapi: vm/start: push expose map for %s: %v", req.Name, err)
+		}
+		if err := pushTestHosts(req.Name, computeDirectTestHosts(req.Cfg)); err != nil {
+			daemonlog.Errorf("serviceapi: vm/start: push test hosts for %s: %v", req.Name, err)
 		}
 
 		// Secrets are resolved CLI-side (login-keychain access); the CLI
