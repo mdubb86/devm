@@ -145,6 +145,14 @@ func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
 // injection seam with a stub that just opens the expected listener.
 func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Stub the :22 probe: CI runners bind sshd on 0.0.0.0:22, which
+	// makes every 127.42.0.X:22 probe report "held" and exhausts the
+	// pool before allocation can pick an address. Real machines don't
+	// hit this because sshd there listens on specific IPs, not the
+	// softnet loopback range.
+	oldProbe := probeIPInUse
+	probeIPInUse = func(string) bool { return false }
+	t.Cleanup(func() { probeIPInUse = oldProbe })
 	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
 
@@ -307,6 +315,11 @@ func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 // cold-start.
 func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Stub the :22 probe — see TestApplyIronProxy_RunningRestartSucceeds
+	// for why (CI runners bind sshd on 0.0.0.0:22).
+	oldProbe := probeIPInUse
+	probeIPInUse = func(string) bool { return false }
+	t.Cleanup(func() { probeIPInUse = oldProbe })
 	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
 
@@ -440,6 +453,11 @@ func TestApplyIronProxy_PreservesGuestOriginPorts(t *testing.T) {
 // itself and record the ports in the registry.
 func TestApplyIronProxy_AdoptInPlace_StartsGuestOriginListeners(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Stub the :22 probe — see TestApplyIronProxy_RunningRestartSucceeds
+	// for why (CI runners bind sshd on 0.0.0.0:22).
+	oldProbe := probeIPInUse
+	probeIPInUse = func(string) bool { return false }
+	t.Cleanup(func() { probeIPInUse = oldProbe })
 	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
 
