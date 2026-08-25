@@ -72,6 +72,13 @@ type ForwardTargets struct {
 
 	GuestHTTP  string `json:"guest_http,omitempty"`
 	GuestHTTPS string `json:"guest_https,omitempty"`
+
+	// Pop is the Mac-side host:port where softnet forwards guest TCP
+	// traffic destined for 192.168.127.1:81. Serves the daemon's per-
+	// project pop HTTP listener (internal/serviceapi/pop.go). Omitted
+	// from setPolicy payloads when unset (older daemons or projects
+	// without pop wired up).
+	Pop string `json:"pop,omitempty"`
 }
 
 // ExposePort is one host->guest ingress mapping.

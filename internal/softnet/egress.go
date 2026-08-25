@@ -124,6 +124,17 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 		return "", false
 	}
 
+	// The daemon's per-project pop listener is reached at the gateway IP's
+	// dedicated port, forwarded regardless of policy switch below so it
+	// works during provisioning as well as under ENFORCED — mirrors the
+	// .test hairpin's early decision above.
+	if dstIP == GatewayIP && dport == 81 {
+		if ft == nil {
+			return "", false
+		}
+		return ft.Pop, ft.Pop != ""
+	}
+
 	switch pol {
 	case PolicyOpen:
 		return fmt.Sprintf("%s:%d", dstIP, dport), true

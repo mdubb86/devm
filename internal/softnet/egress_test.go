@@ -94,6 +94,45 @@ func TestEgressTargetInterceptedTest(t *testing.T) {
 	}
 }
 
+// TestEgress_ForwardsPopPortToPopEndpoint pins that a guest TCP flow to
+// the gateway's pop port (192.168.127.1:81) routes to ForwardTargets.Pop
+// when set. Serves the daemon's per-project pop HTTP listener; see
+// internal/serviceapi/pop.go for the handler.
+func TestEgress_ForwardsPopPortToPopEndpoint(t *testing.T) {
+	ft := &ForwardTargets{
+		HTTP: "127.0.0.1:8080", HTTPS: "127.0.0.1:8443",
+		DNS: "127.0.0.1:8053", NTP: "127.0.0.1:8123",
+		Pop: "127.0.0.1:65431",
+	}
+	e := newEgress(nil)
+	e.setPolicy(PolicyEnforced, ft)
+
+	got, ok := e.target(GatewayIP, 81)
+	if !ok {
+		t.Fatal("TCP:81 to gateway must forward under ENFORCED with Pop set")
+	}
+	if got != "127.0.0.1:65431" {
+		t.Fatalf("target(gateway, 81) = %q, want 127.0.0.1:65431", got)
+	}
+}
+
+// TestEgress_DoesNotForwardPopPortWhenPopUnset pins that the gateway's
+// pop port is denied, not silently forwarded elsewhere, when Pop hasn't
+// been configured.
+func TestEgress_DoesNotForwardPopPortWhenPopUnset(t *testing.T) {
+	ft := &ForwardTargets{
+		HTTP: "127.0.0.1:8080", HTTPS: "127.0.0.1:8443",
+		DNS: "127.0.0.1:8053", NTP: "127.0.0.1:8123",
+		// Pop deliberately omitted
+	}
+	e := newEgress(nil)
+	e.setPolicy(PolicyEnforced, ft)
+
+	if _, ok := e.target(GatewayIP, 81); ok {
+		t.Fatal("TCP:81 must NOT forward when Pop is unset")
+	}
+}
+
 // TestSpliceReturnsByteCounts pins that splice reports how many bytes
 // flowed each direction — the counts callers log to detect splices
 // that established but never carried data.
