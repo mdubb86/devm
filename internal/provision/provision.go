@@ -22,6 +22,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
+	"github.com/mdubb86/devm/internal/guestbin"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -296,6 +297,7 @@ func (p *Provisioner) buildBundle() ([]byte, error) {
 		SSHAuthorizedPubkey: p.SSHAuthorizedPubkey,
 		SSHHostPriv:         p.SSHHostPriv,
 		SSHHostPub:          p.SSHHostPub,
+		Pop:                 guestbin.Pop(),
 	}
 	if p.Cfg.Docker {
 		in.DockerRuncShim = docker.Shim()

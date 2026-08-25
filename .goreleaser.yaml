@@ -27,6 +27,10 @@ before:
     # identity.Profile ldflag — the shim is identity-agnostic, the same
     # binary works for prod + e2e.
     - sh -c 'mkdir -p internal/setsidshim/embed && raw="$(mktemp -t devm-setsid-shim-raw.XXXXXX)" && GOOS=darwin GOARCH=arm64 go build -o "$raw" ./cmd/devm-setsid-shim && gzip -c "$raw" > internal/setsidshim/embed/devm-setsid-shim.gz && rm "$raw"'
+    # Compile the guest-side pop binary for linux_arm64. Mirrors the
+    # just _build-pop-embed recipe. Uncompressed embed, same pattern as
+    # the docker shims above.
+    - sh -c 'mkdir -p internal/guestbin/embed && GOOS=linux GOARCH=arm64 go build -o internal/guestbin/embed/pop ./cmd/pop'
 
 builds:
   # Tart requires Apple Silicon; amd64 macOS isn't a supported target.

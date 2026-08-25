@@ -365,6 +365,28 @@ func TestBuild_TarOmitsDockerShims_WhenDockerFalse(t *testing.T) {
 	assert.NotContains(t, names, "bin/docker")
 }
 
+func TestBuild_IncludesPopWhenPresent(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:      schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot: "/tmp/repo",
+		Pop:      []byte("pop-elf-bytes"),
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.Contains(t, names, "bin/pop")
+	assert.Equal(t, []byte("pop-elf-bytes"), readTarEntry(t, blob, "bin/pop"))
+}
+
+func TestBuild_OmitsPopWhenAbsent(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:      schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot: "/tmp/repo",
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.NotContains(t, names, "bin/pop")
+}
+
 func TestBuild_TarContainsStartupScript_WhenStartupSet(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},

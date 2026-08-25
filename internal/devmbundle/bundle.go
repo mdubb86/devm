@@ -37,6 +37,8 @@ type BuildInput struct {
 
 	DockerRuncShim []byte
 	DockerCLIShim  []byte
+
+	Pop []byte
 }
 
 // Build returns a tar archive containing the devm-owned artifacts the
@@ -164,6 +166,12 @@ func Build(in BuildInput) ([]byte, error) {
 			return nil, err
 		}
 		if err := writeEntry(tw, "bin/docker", 0o755, in.DockerCLIShim); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(in.Pop) > 0 {
+		if err := writeEntry(tw, "bin/pop", 0o755, in.Pop); err != nil {
 			return nil, err
 		}
 	}
