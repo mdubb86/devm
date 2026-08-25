@@ -18,7 +18,7 @@ import (
 // screenshot or test-output path a guest process printed) back to
 // where it actually lives on the Mac.
 type WorkspaceEntry struct {
-	Project     string `json:"project"`
+	ProjectName string `json:"project"`
 	GuestPath   string `json:"guest_path"`
 	StoragePath string `json:"storage_path"`
 }
@@ -68,7 +68,7 @@ func listWorkspaces(cfg identity.Config) ([]WorkspaceEntry, error) {
 		}
 		primary := repohelpers.PrimaryVolumeName(snap.WorkspaceHostPath)
 		out = append(out, WorkspaceEntry{
-			Project:     projectID,
+			ProjectName: projectID,
 			GuestPath:   snap.WorkspaceHostPath,
 			StoragePath: volumeMacDir(cfg, projectID, primary),
 		})

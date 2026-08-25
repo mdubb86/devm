@@ -727,6 +727,21 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			return
 		}
 
+		// Allocate a port and bind the per-project pop HTTP listener. The
+		// forward from guest 192.168.127.1:81 → this address is wired via
+		// ForwardTargets.Pop in endpointFrom below.
+		popPort, err := pickPort()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("pick pop port: %v", err), http.StatusInternalServerError)
+			return
+		}
+		popLn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", popPort))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("bind pop listener: %v", err), http.StatusInternalServerError)
+			return
+		}
+		go servePopListener(popLn, cfg, req.Name)
+
 		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read. Merge onto the existing
 		// entry rather than overwrite — AllocateProjectIP above already
@@ -737,6 +752,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info.HTTPSPort = httpsPort
 		info.TunnelPort = tunnelPort
 		info.DNSPort = dnsPort
+		info.PopPort = popPort
 		ironProxyState.put(req.Name, info)
 
 		// Hydrate any volume (including the synthesized primary) whose
@@ -986,6 +1002,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		if proxy != nil {
 			proxy.StopProjectListeners(req.Name)
 		}
+		closePopListener(req.Name)
 		ReleaseProjectIP(cfg, req.Name)
 		ironProxyState.del(req.Name)
 		// A stopped project frees its claimed host ports for other
@@ -1278,6 +1295,9 @@ func endpointFrom(info projectInfo, ntpPort int) *Endpoint {
 	if info.GuestHTTPSPort != 0 {
 		e.GuestHTTPS = ironProxyListenAddr(info.GuestHTTPSPort)
 	}
+	if info.PopPort != 0 {
+		e.Pop = ironProxyListenAddr(info.PopPort)
+	}
 	return e
 }
 
@@ -1297,6 +1317,11 @@ type projectInfo struct {
 	// rebinds a fresh pair and re-pushes it (see rebindProjectListeners).
 	GuestHTTPPort  int
 	GuestHTTPSPort int
+
+	// PopPort is the daemon's per-project pop HTTP listener — where
+	// softnet forwards guest TCP 192.168.127.1:81. In-memory only, set
+	// at /vm/start and cleared at /vm/stop via closePopListener.
+	PopPort int
 
 	// ProjectIP is the project's allocated 127.42/16 loopback IP. All
 	// ingress listeners (softnet direct ports, softnet SSH, daemon HTTP

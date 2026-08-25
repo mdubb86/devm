@@ -41,7 +41,7 @@ func TestResolveEndpoint_ListsPrimaryWorkspaces(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	assert.Len(t, got, 2)
 	for _, w := range got {
-		assert.NotEmpty(t, w.Project)
+		assert.NotEmpty(t, w.ProjectName)
 		assert.NotEmpty(t, w.GuestPath)
 		assert.NotEmpty(t, w.StoragePath)
 	}
@@ -63,7 +63,7 @@ func TestResolveEndpoint_SkipsProjectsWithoutPrimaryRepo(t *testing.T) {
 	var got []WorkspaceEntry
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Len(t, got, 1)
-	assert.Equal(t, "sewtrue", got[0].Project)
+	assert.Equal(t, "sewtrue", got[0].ProjectName)
 }
 
 func TestResolveEndpoint_NoSnapshots_EmptyList(t *testing.T) {
