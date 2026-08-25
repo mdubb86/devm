@@ -26,6 +26,7 @@ import array
 import json
 import socket
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -57,15 +58,32 @@ def _project_ip(slug: str) -> str:
     return ip
 
 
-def _assert_ssh_whoami(vm_name: str) -> None:
-    r = subprocess.run(
-        ["ssh", "-F", str(E2E_RUNTIME_DIR / "ssh_config"), f"devm-{vm_name}", "whoami"],
-        capture_output=True, text=True, timeout=30,
+def _assert_ssh_whoami(vm_name: str, deadline_s: float = 90.0) -> None:
+    """SSH `whoami` with retries. ConnectTimeout bounds each attempt so
+    a listener that accepts TCP but never sends an SSH banner (e.g. a
+    stale-DNS-cached connection to the squatted IP — mDNSResponder can
+    briefly serve the previous lifecycle's answer despite devm's TTL-0
+    records) fails the attempt in seconds instead of hanging."""
+    end = time.monotonic() + deadline_s
+    last = None
+    while time.monotonic() < end:
+        r = subprocess.run(
+            ["ssh", "-F", str(E2E_RUNTIME_DIR / "ssh_config"),
+             "-o", "ConnectTimeout=5", f"devm-{vm_name}", "whoami"],
+            capture_output=True, text=True, timeout=20,
+        )
+        if r.returncode == 0:
+            assert r.stdout.strip() == "devm", (
+                f"expected devm user, got {r.stdout.strip()!r}"
+            )
+            return
+        last = r
+        time.sleep(2)
+    assert False, (
+        f"ssh whoami failed for {deadline_s}s:\n"
+        f"stdout={last.stdout!r}\nstderr={last.stderr!r}" if last else
+        f"ssh whoami never attempted within {deadline_s}s"
     )
-    assert r.returncode == 0, (
-        f"ssh whoami failed:\nstdout={r.stdout!r}\nstderr={r.stderr!r}"
-    )
-    assert r.stdout.strip() == "devm", f"expected devm user, got {r.stdout.strip()!r}"
 
 
 def _squat(ip: str, port: int) -> socket.socket:
@@ -118,6 +136,10 @@ def test_ssh_after_teardown_start_skips_squatted_ip(devm, workspace):
             f"allocator handed out squatted IP {first_ip} — the project's "
             f"name now resolves to a foreign :22 listener"
         )
+
+        # The project's IP just changed; drop any cached answer for the
+        # old one so the ssh below resolves fresh.
+        subprocess.run(["dscacheutil", "-flushcache"], capture_output=True, timeout=10)
 
         # Strict host-key checking against the project's pinned
         # known_hosts: success proves the right VM answers on :22.
