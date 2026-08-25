@@ -16,10 +16,8 @@ Covers:
 The test avoids actually launching macOS apps; it inspects daemon
 logs and captured stderr for the invocation record.
 """
-import json
 import os
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -37,16 +35,16 @@ def test_guest_pop_reaches_daemon_and_resolves(devm, workspace):
     try:
         # Seed a file in the volume storage the guest can see.
         vol = workspace.volume_path()  # primary volume storage
-        (vol / "sketch.png").write_bytes(b"fake png bytes")
+        (vol / "sketch.txt").write_bytes(b"fake png bytes")
 
-        # Guest runs `pop sketch.png`. It should not error.
+        # Guest runs `pop sketch.txt`. It should not error.
         pop_result = subprocess.run(
-            [devm.path, "exec", "--", "pop", "sketch.png"],
+            [devm.path, "exec", "--", "pop", "sketch.txt"],
             cwd=str(workspace.path), capture_output=True, timeout=30,
         )
         # If the guest binary exists and the daemon is reachable, this
         # returns 0 (open exit status is propagated; a missing default
-        # app for .png would be unusual but not a failure of our path).
+        # app for .txt would be unusual but not a failure of our path).
         assert pop_result.returncode == 0, (
             f"guest pop failed:\nstdout={pop_result.stdout.decode()}\nstderr={pop_result.stderr.decode()}"
         )
@@ -56,7 +54,7 @@ def test_guest_pop_reaches_daemon_and_resolves(devm, workspace):
         # (~/Library/Logs/com.devm.e2e.service.out.log).
         log_path = Path.home() / "Library" / "Logs" / "com.devm.e2e.service.out.log"
         log_content = log_path.read_text(errors="replace")
-        expected_pretty = f"{workspace.path}/.vm/sketch.png"
+        expected_pretty = f"{workspace.path}/.vm/sketch.txt"
         assert expected_pretty in log_content, (
             f"daemon log missing pop invocation for {expected_pretty}\n"
             f"last 20 lines:\n{''.join(log_content.splitlines(keepends=True)[-20:])}"
@@ -74,7 +72,7 @@ def test_devm_pop_mac_refuses_when_resolves_into_vm(devm, workspace):
         # Create a file inside volume storage; it's reachable via .vm/
         # symlink from workspace.path.
         vol = workspace.volume_path()
-        (vol / "vm-only.png").write_bytes(b"x")
+        (vol / "vm-only.txt").write_bytes(b"x")
 
         # cwd inside .vm/ + relative arg to a file inside volume storage
         # → resolveMacMode's EvalSymlinks lands the candidate inside
@@ -84,7 +82,7 @@ def test_devm_pop_mac_refuses_when_resolves_into_vm(devm, workspace):
         assert vm_cwd.exists() and vm_cwd.is_symlink(), ".vm symlink missing"
 
         r = subprocess.run(
-            [devm.path, "pop", "mac", "vm-only.png"],
+            [devm.path, "pop", "mac", "vm-only.txt"],
             cwd=str(vm_cwd), capture_output=True, timeout=30,
         )
         assert r.returncode != 0
@@ -134,14 +132,14 @@ def test_devm_pop_vm_from_subdir_opens_pretty_path(devm, workspace):
     assert r.returncode == 0
     try:
         vol = workspace.volume_path()
-        (vol / "top.png").write_bytes(b"x")
+        (vol / "top.txt").write_bytes(b"x")
 
         # Run pop vm from a Mac subdir (not .vm/, just any Mac-side
         # subdir with devm.yaml walkable up).
         sub = Path(str(workspace.path)) / "arbitrary-subdir"
         sub.mkdir(exist_ok=True)
         r = subprocess.run(
-            [devm.path, "pop", "vm", "top.png"],
+            [devm.path, "pop", "vm", "top.txt"],
             cwd=str(sub), capture_output=True, timeout=30,
         )
         # Should succeed; open receives the pretty .vm/-form path.
