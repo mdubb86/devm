@@ -197,13 +197,15 @@ func (p *Provisioner) execScript(ctx context.Context, script []byte, stdin io.Re
 
 // scriptInput assembles the ProvisionScriptInput from the project config.
 func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
-	// RenderGitCredentials emits its fixed gitconfig body unconditionally,
-	// even for zero bindings — guard here so no repo: block anywhere in
-	// p.Cfg means both fields stay empty and RenderProvisionEnforcedScript
-	// skips the .git-credentials/.gitconfig install steps entirely.
+	// Emit the gitconfig when either repo bindings exist OR the git
+	// identity resolves — otherwise a bare workspace with an
+	// identity-only config gets no /home/devm/.gitconfig at all.
+	// .git-credentials still only ships when there are bindings.
 	var creds, gitconfig string
-	if bindings := p.repoBindings(); len(bindings) > 0 {
-		creds, gitconfig = render.RenderGitCredentials(bindings, p.gitIdentity())
+	bindings := p.repoBindings()
+	identity := p.gitIdentity()
+	if len(bindings) > 0 || identity.UserName != "" || identity.UserEmail != "" {
+		creds, gitconfig = render.RenderGitCredentials(bindings, identity)
 	}
 	return render.ProvisionScriptInput{
 		FirstBoot:          p.firstBoot,

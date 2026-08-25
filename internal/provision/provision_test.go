@@ -485,6 +485,25 @@ func TestGitIdentity_NoIdentityAnywhereYieldsEmpty(t *testing.T) {
 	assert.Equal(t, "", id.UserEmail)
 }
 
+func TestScriptInput_IdentityOnlyEmitsGitconfigNotCredentials(t *testing.T) {
+	dir := makeRepoWithIdentity(t, "Fixture User", "fixture@example.com")
+	p := &Provisioner{
+		MacCwd: dir,
+		Cfg:    schema.Config{},
+	}
+	in := p.scriptInput()
+	assert.NotEmpty(t, in.GitConfig, "identity alone must still emit a gitconfig")
+	assert.Contains(t, in.GitConfig, "[user]\n    name = Fixture User\n    email = fixture@example.com\n")
+	assert.Equal(t, "", in.GitCredentials, "no repo bindings ⇒ no .git-credentials lines")
+}
+
+func TestScriptInput_NoReposNoIdentity_BothFieldsEmpty(t *testing.T) {
+	p := &Provisioner{Cfg: schema.Config{}}
+	in := p.scriptInput()
+	assert.Equal(t, "", in.GitCredentials, "no repos, no identity ⇒ no credentials")
+	assert.Equal(t, "", in.GitConfig, "no repos, no identity ⇒ no gitconfig")
+}
+
 func TestScriptInput_GitConfigCarriesIdentityWhenReposDeclared(t *testing.T) {
 	dir := makeRepoWithIdentity(t, "Fixture User", "fixture@example.com")
 	url := "https://github.com/mdubb86/sewtrue.git"
