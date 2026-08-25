@@ -140,7 +140,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// HTTP API server (Ship 1) with the /routes/* admin endpoints
 	// registered on top.
 	server := NewServer(cfg.SocketPath(), build)
-	RegisterRoutesHandlers(server, routes, proxy)
+	RegisterRoutesHandlers(server, cfg, routes, proxy)
 
 	// VM lifecycle endpoints (Ship 4). Supervisor and tart wrapper are
 	// daemon-scoped singletons; the supervisor manages the per-project VM

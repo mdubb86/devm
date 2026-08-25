@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 func TestRoutes_Apply_AddsEntries(t *testing.T) {
@@ -146,7 +147,7 @@ func TestApplyRoutes_SubstitutesProjectIP_ForVMNonDirect(t *testing.T) {
 	routes := NewRoutes()
 	srv := &Server{mux: http.NewServeMux()}
 	proxy := NewProxyServer(identity.Prod, routes, nil)
-	RegisterRoutesHandlers(srv, routes, proxy)
+	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
 
 	// Client sends a vm-mode non-direct route with NO BackendHost.
 	req := ApplyRequest{
@@ -181,7 +182,7 @@ func TestApplyRoutes_ErrorsWhenProjectIPUnallocated(t *testing.T) {
 	routes := NewRoutes()
 	srv := &Server{mux: http.NewServeMux()}
 	proxy := NewProxyServer(identity.Prod, routes, nil)
-	RegisterRoutesHandlers(srv, routes, proxy)
+	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
 
 	req := ApplyRequest{
 		Name: "proj-b",
@@ -212,7 +213,7 @@ func TestApplyRoutes_LocalModePassthrough(t *testing.T) {
 	routes := NewRoutes()
 	srv := &Server{mux: http.NewServeMux()}
 	proxy := NewProxyServer(identity.Prod, routes, nil)
-	RegisterRoutesHandlers(srv, routes, proxy)
+	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
 
 	req := ApplyRequest{
 		Name: "proj-c",
@@ -238,7 +239,7 @@ func TestApplyRoutes_DirectVMPassthrough(t *testing.T) {
 	routes := NewRoutes()
 	srv := &Server{mux: http.NewServeMux()}
 	proxy := NewProxyServer(identity.Prod, routes, nil)
-	RegisterRoutesHandlers(srv, routes, proxy)
+	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
 
 	req := ApplyRequest{
 		Name: "proj-d",
@@ -306,4 +307,122 @@ func TestRoutes_Remove_ClearsLANMap(t *testing.T) {
 	assert.Equal(t, 0, r.CountLANRoutes())
 	_, ok := r.LANLookup("x.alpha.test")
 	assert.False(t, ok)
+}
+
+// TestApplyRoutes_MirrorsResolvedToSnapshot pins the write side of the
+// daemon-restart recovery contract: /routes/apply must persist the
+// resolved route set (with BackendHost substitution applied) into the
+// project's state snapshot, so a subsequent daemon restart can
+// recoverProjectState → routes.Apply(snap.Routes) verbatim.
+func TestApplyRoutes_MirrorsResolvedToSnapshot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ironProxyState = newIronProxyStore()
+	ironProxyState.put("mirror-proj", projectInfo{ProjectIP: "127.42.0.7"})
+	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
+
+	// A snapshot must exist for the mirror to land — /vm/start writes
+	// it in production; the test seeds an empty one to stand in.
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "mirror-proj", StateSnapshot{
+		Cfg:       schema.Config{Project: schema.Project{Name: "mirror-proj"}},
+		ProjectIP: "127.42.0.7",
+	}))
+
+	routes := NewRoutes()
+	srv := &Server{mux: http.NewServeMux()}
+	proxy := NewProxyServer(identity.Prod, routes, nil)
+	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
+
+	req := ApplyRequest{
+		Name: "mirror-proj",
+		Routes: []Route{
+			{Hostname: "api.mirror-proj.test", BackendPort: 8080, Mode: ModeVM, Project: "mirror-proj"},
+			{Hostname: "db.mirror-proj.test", BackendPort: 5432, Mode: ModeVM, Direct: true, Project: "mirror-proj"},
+		},
+	}
+	body, _ := json.Marshal(req)
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, httptest.NewRequest("POST", "/routes/apply", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rr.Code, "want 200, got %d: %s", rr.Code, rr.Body.String())
+
+	snap, err := ReadStateSnapshot(identity.Prod, "mirror-proj")
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	require.Len(t, snap.Routes, 2, "both routes must be mirrored into the snapshot")
+
+	byHost := map[string]Route{}
+	for _, rt := range snap.Routes {
+		byHost[rt.Hostname] = rt
+	}
+	assert.Equal(t, "127.42.0.7", byHost["api.mirror-proj.test"].BackendHost,
+		"snapshot must carry the substituted BackendHost — recovery replays this verbatim")
+	assert.Equal(t, ModeVM, byHost["api.mirror-proj.test"].Mode)
+	assert.True(t, byHost["db.mirror-proj.test"].Direct, "Direct flag must survive the mirror")
+	assert.Empty(t, byHost["db.mirror-proj.test"].BackendHost, "direct routes carry no BackendHost — snapshot must match")
+}
+
+// TestApplyRoutes_MirrorSurvivesMissingSnapshot pins the best-effort
+// contract: /routes/apply against a project whose /vm/start has not
+// written a snapshot yet still succeeds (200) rather than failing the
+// whole request. The next /vm/start writes a snapshot, and the following
+// /routes/apply back-fills the mirror.
+func TestApplyRoutes_MirrorSurvivesMissingSnapshot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ironProxyState = newIronProxyStore()
+	ironProxyState.put("no-snap-proj", projectInfo{ProjectIP: "127.42.0.8"})
+	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
+
+	routes := NewRoutes()
+	srv := &Server{mux: http.NewServeMux()}
+	proxy := NewProxyServer(identity.Prod, routes, nil)
+	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
+
+	req := ApplyRequest{
+		Name:   "no-snap-proj",
+		Routes: []Route{{Hostname: "api.no-snap-proj.test", BackendPort: 8080, Mode: ModeVM, Project: "no-snap-proj"}},
+	}
+	body, _ := json.Marshal(req)
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, httptest.NewRequest("POST", "/routes/apply", bytes.NewReader(body)))
+	assert.Equal(t, http.StatusOK, rr.Code, "a failed snapshot mirror must not fail the apply")
+
+	// The route landed in the live table even though there was
+	// nowhere to mirror it.
+	_, ok := routes.Lookup("api.no-snap-proj.test", "no-snap-proj")
+	assert.True(t, ok)
+}
+
+// TestRemoveRoutes_ClearsSnapshotRoutes pins that /routes/remove wipes
+// snap.Routes so the next daemon restart replays nothing for the
+// project (matching the removed live-table state).
+func TestRemoveRoutes_ClearsSnapshotRoutes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ironProxyState = newIronProxyStore()
+	ironProxyState.put("clear-proj", projectInfo{ProjectIP: "127.42.0.9"})
+	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
+
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "clear-proj", StateSnapshot{
+		Cfg:       schema.Config{Project: schema.Project{Name: "clear-proj"}},
+		ProjectIP: "127.42.0.9",
+		Routes: []Route{
+			{Hostname: "api.clear-proj.test", BackendHost: "127.42.0.9", BackendPort: 8080, Mode: ModeVM, Project: "clear-proj"},
+		},
+	}))
+
+	routes := NewRoutes()
+	require.NoError(t, routes.Apply("clear-proj", []Route{
+		{Hostname: "api.clear-proj.test", BackendHost: "127.42.0.9", BackendPort: 8080, Mode: ModeVM, Project: "clear-proj"},
+	}))
+	srv := &Server{mux: http.NewServeMux()}
+	proxy := NewProxyServer(identity.Prod, routes, nil)
+	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
+
+	body, _ := json.Marshal(RemoveRequest{Name: "clear-proj"})
+	rr := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rr, httptest.NewRequest("POST", "/routes/remove", bytes.NewReader(body)))
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	snap, err := ReadStateSnapshot(identity.Prod, "clear-proj")
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	assert.Empty(t, snap.Routes, "remove must wipe snap.Routes so daemon restart replays nothing")
 }

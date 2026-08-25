@@ -110,23 +110,15 @@ func AdoptIronProxies(ctx context.Context, cfg identity.Config, sup *supervisor.
 // in-memory state that live outside ironProxyState's config-file
 // rehydration: the allocated project IP (read back from the
 // last-applied state snapshot, since it isn't part of iron-proxy's own
-// config shape) and the project's direct routes. It's split out of
-// AdoptIronProxies's loop so it can be unit tested without shelling out
-// to `ps` (DiscoverIronProxies).
+// config shape) and the project's full route set (replayed verbatim
+// from snap.Routes, mirrored there on every /routes/apply). It's
+// split out of AdoptIronProxies's loop so it can be unit tested
+// without shelling out to `ps` (DiscoverIronProxies).
 //
-// Best-effort: a missing/malformed snapshot (or a project with no
-// direct services) simply leaves nothing to recover.
-//
-// Direct and ExposeHost routes are rebuilt here. Direct is DNS-only
-// (no backend to dial), and ExposeHost's shared LAN dispatcher needs
-// its opt-in route restored so a recovered project's LAN reachability
-// doesn't silently go dark until the next `devm reconcile` or `devm
-// shell` — see reconcileLAN. All other proxied (non-direct,
-// non-ExposeHost) routes depend on the VM's IP as BackendHost and are
-// normally re-pushed by the CLI (`devm shell` auto-apply, `devm
-// reconcile`); rebuilding those here is out of scope for this recovery
-// path — see buildRoutes in cmd/devm/route.go for how the CLI
-// constructs the full set.
+// Best-effort: a missing/malformed snapshot (or one written before
+// snap.Routes existed) simply leaves nothing to recover — the user's
+// next `devm shell` / `devm route local|vm` re-populates both the
+// live table and the snapshot.
 func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart, routes *Routes, projectID string) {
 	snap, err := ReadStateSnapshot(cfg, projectID)
 	if err != nil || snap == nil {
@@ -159,50 +151,8 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 		}
 	}
 
-	var directRoutes []Route
-	for _, svc := range snap.Cfg.Services {
-		if !svc.Direct || svc.Hostname == "" {
-			continue
-		}
-		directRoutes = append(directRoutes, Route{
-			Hostname:    svc.Hostname,
-			BackendPort: svc.Port,
-			Direct:      true,
-			Project:     projectID,
-		})
-	}
-
-	var exposeHostRoutes []Route
-	for _, svc := range snap.Cfg.Services {
-		if !svc.ExposeHost || svc.Hostname == "" {
-			continue
-		}
-		rt := Route{
-			Hostname:    svc.Hostname,
-			BackendPort: svc.Port,
-			ExposeHost:  true,
-			Project:     projectID,
-		}
-		// Mirror the /routes/apply handler's v0.9.3 substitution: a
-		// vm-mode (default), non-direct route dials BackendHost:BackendPort
-		// at dispatch time. Left empty, dispatch falls back to
-		// "localhost" — a Mac-side 502 (or silent misroute) instead of
-		// reaching the VM. recoverProjectState calls routes.Apply
-		// directly, bypassing that handler, so the substitution has to
-		// happen here too.
-		if info.ProjectIP != "" {
-			rt.BackendHost = info.ProjectIP
-		}
-		exposeHostRoutes = append(exposeHostRoutes, rt)
-	}
-
-	// Routes.Apply replaces the project's entire route set in one call —
-	// two separate Apply calls here would make the second silently wipe
-	// out the first's routes, so direct + ExposeHost are merged before
-	// the single Apply below.
-	recovered := append(directRoutes, exposeHostRoutes...)
-	if len(recovered) > 0 {
-		if err := routes.Apply(projectID, recovered); err != nil {
+	if len(snap.Routes) > 0 {
+		if err := routes.Apply(projectID, snap.Routes); err != nil {
 			daemonlog.Errorf("routes: recover routes for %s: %v (continuing)", projectID, err)
 		}
 	}

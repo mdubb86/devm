@@ -118,7 +118,7 @@ func startRoutesDaemon(t *testing.T) func() {
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "dev"})
 	routes := serviceapi.NewRoutes()
 	proxy := serviceapi.NewProxyServer(identity.Prod, routes, nil)
-	serviceapi.RegisterRoutesHandlers(srv, routes, proxy)
+	serviceapi.RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

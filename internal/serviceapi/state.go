@@ -70,6 +70,16 @@ type StateSnapshot struct {
 	// while the project is stopped; set at /vm/start, cleared at /vm/stop.
 	// AdoptIronProxies reads this back into projectInfo on daemon startup.
 	ProjectIP string `json:"project_ip,omitempty"`
+
+	// Routes is the last resolved route set the daemon accepted via
+	// /routes/apply for this project — the whole shape (Mode, Direct,
+	// ExposeHost, and the substituted BackendHost) baked in and ready
+	// to replay. Mirrored on every successful /routes/apply and cleared
+	// on /routes/remove; recoverProjectState re-pushes it into the live
+	// Routes table on daemon restart, so `devm route local|vm` survives
+	// the restart without a manual re-issue and running in-guest
+	// sessions don't lose `.test` hairpin.
+	Routes []Route `json:"routes,omitempty"`
 }
 
 // ReadStateSnapshot loads the persisted snapshot for a project. Returns
