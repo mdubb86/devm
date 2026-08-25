@@ -14,6 +14,10 @@ Sets a repo-local git identity in the workspace dir itself (not relying
 on the e2e machine's own global config, which is out of this test's
 control) so the assertion is deterministic regardless of what identity
 happens to be configured on the machine running the suite.
+
+`packages: [git]` + apt-mirror allowlist matches test_182's pattern —
+git isn't in the base guest image; the test needs it installed to run
+`git config` and `git commit` in the guest.
 """
 from __future__ import annotations
 import subprocess
@@ -38,6 +42,10 @@ def test_guest_git_identity_mirrored(devm, workspace):
     )
     subprocess.run(
         ["git", "-C", str(workspace.path), "config", "user.email", _TEST_EMAIL], check=True,
+    )
+    workspace.write_devmyaml(
+        packages=["git"],
+        network={"allow": ["deb.debian.org", "security.debian.org"]},
     )
 
     try:
