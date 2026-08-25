@@ -41,11 +41,11 @@ something breaks.
   ask the Mac user to `git pull` in their own clone. Both sides are
   independent clones of the same repo; git is the sync mechanism.
 - **To open a specific guest-side file on the Mac** (e.g. a screenshot
-  or generated artifact you just wrote), ask the Mac user to run
-  `devm resolve <path>` — it translates a `$WORKSPACE`-anchored
-  absolute or relative path to the file's Mac-side location in the
-  volume's storage and prints it. Add `--open` to have it invoke
-  `open(1)` directly instead of printing.
+  or generated artifact you just wrote), run `pop <path>` from here —
+  it resolves a `$WORKSPACE`-anchored absolute or relative path,
+  translates it to the file's Mac-side location in the volume's
+  storage, and opens it there with its default app. No need to ask
+  the Mac user.
 - On the Mac, `<project>/.vm/` is a symlink into the primary volume's
   Mac-side storage — useful for the Mac user browsing the guest's view
   of the tree without leaving their shell.

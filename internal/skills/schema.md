@@ -311,7 +311,7 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 ## See also
 
-- `devm skills get devm` — `.vm/` symlink and `devm resolve` for navigating between a guest-side path and its Mac-side volume storage.
+- `devm skills get devm` — `.vm/` symlink and `devm pop mac`/`devm pop vm` for navigating between a guest-side path and its Mac-side volume storage.
 - `devm skills get lifecycle` — how `devm reconcile` applies each bucket.
 
 ---
