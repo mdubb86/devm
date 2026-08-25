@@ -11,6 +11,7 @@ import (
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/orchestrator"
+	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
@@ -109,9 +110,13 @@ TTY/PTY handling is auto-detected from the caller's stdin:
 			return fmt.Errorf("exec requires a COMMAND — see `devm exec --help`")
 		}
 		ident := cfg // capture package identity cfg before it's shadowed below
-		repoRoot, err := os.Getwd()
+		cwd, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)
+		}
+		repoRoot, err := repohelpers.FindDevmYAML(cwd)
+		if err != nil {
+			return err
 		}
 		cfg, err := config.Load(repoRoot)
 		if err != nil {
@@ -157,9 +162,13 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	// Past arg parsing — errors from here on are runtime, not usage.
 	cmd.SilenceUsage = true
 	ident := cfg // capture package identity cfg before it's shadowed below
-	repoRoot, err := os.Getwd()
+	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
+	}
+	repoRoot, err := repohelpers.FindDevmYAML(cwd)
+	if err != nil {
+		return err
 	}
 	cfg, err := config.Load(repoRoot)
 	if err != nil {

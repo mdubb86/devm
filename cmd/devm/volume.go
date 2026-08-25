@@ -30,14 +30,18 @@ var volumeLsCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		userCfg, err := config.Load(cwd)
+		repoRoot, err := repohelpers.FindDevmYAML(cwd)
+		if err != nil {
+			return err
+		}
+		userCfg, err := config.Load(repoRoot)
 		if err != nil {
 			return fmt.Errorf("locate devm.yaml: %w (run `devm volume ls` from a project root)", err)
 		}
 		// cfg is the package-level identity.Config set by
 		// identity.Load() in main.go — resolves to identity.Prod for
 		// the shipped devm binary and identity.E2E for devm-e2e.
-		return runVolumeLs(cfg, userCfg, cwd, os.Stdout)
+		return runVolumeLs(cfg, userCfg, repoRoot, os.Stdout)
 	},
 }
 

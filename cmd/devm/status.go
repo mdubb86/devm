@@ -1,12 +1,12 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/orchestrator"
+	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
@@ -63,32 +63,36 @@ exit code.`,
 		}
 
 		ident := cfg // capture package identity cfg before it's shadowed below
-		repoRoot, err := os.Getwd()
+		cwd, err := os.Getwd()
 		if err != nil {
 			return err
 		}
 
 		var res orchestrator.StatusResult
-		switch cfg, cfgErr := config.Load(repoRoot); {
-		case cfgErr == nil:
+		switch repoRoot, findErr := repohelpers.FindDevmYAML(cwd); {
+		case findErr == nil:
 			// Project mode: full status including sandbox VM, routing,
 			// DNS, CA, proxy — plus daemon status via ProbeDaemon.
+			cfg, err := config.Load(repoRoot)
+			if err != nil {
+				// devm.yaml exists but is unreadable or invalid — that's
+				// an error the user needs to see, not a "no project"
+				// situation.
+				return err
+			}
 			tr := tart.New()
 			res, err = orchestrator.RunStatus(ident, cfg, tr, repoRoot, Fingerprint)
 			if err != nil {
 				return err
 			}
-		case errors.Is(cfgErr, config.ErrNoConfig):
-			// No devm.yaml — daemon-only mode. Report just the daemon
-			// probe so `devm status` outside a project still works.
+		default:
+			// No devm.yaml anywhere up the tree — daemon-only mode.
+			// Report just the daemon probe so `devm status` outside a
+			// project still works.
 			res = orchestrator.StatusResult{
 				HasProject: false,
 				Daemon:     orchestrator.ProbeDaemon(cmd.Context(), ident, Fingerprint),
 			}
-		default:
-			// devm.yaml exists but is unreadable or invalid — that's an
-			// error the user needs to see, not a "no project" situation.
-			return cfgErr
 		}
 
 		if statusJSON {

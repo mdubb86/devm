@@ -12,6 +12,7 @@ import (
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/orchestrator"
 	"github.com/mdubb86/devm/internal/reconcile"
+	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -32,7 +33,11 @@ var reconcileCmd = &cobra.Command{
 			return err
 		}
 		ident := cfg // capture package identity cfg before it's shadowed below
-		repoRoot, err := os.Getwd()
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		repoRoot, err := repohelpers.FindDevmYAML(cwd)
 		if err != nil {
 			return err
 		}

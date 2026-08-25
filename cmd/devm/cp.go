@@ -219,7 +219,7 @@ NOPASSWD sudo).`,
 // zero value — mount detection still returns "not mounted" for every
 // path, forcing pipe transport, which is the right conservative
 // default when we don't know the project's mount table). When empty,
-// load the project rooted at CWD.
+// walk up from CWD to find the project root and load it.
 func resolveProject(explicit string) (name, repoRoot string, cfg schema.Config, err error) {
 	if explicit != "" {
 		// Explicit project name — no local devm.yaml required.
@@ -229,11 +229,15 @@ func resolveProject(explicit string) (name, repoRoot string, cfg schema.Config, 
 	if err != nil {
 		return "", "", schema.Config{}, fmt.Errorf("get cwd: %w", err)
 	}
-	loaded, err := config.Load(cwd)
+	repoRoot, err = repohelpers.FindDevmYAML(cwd)
 	if err != nil {
 		return "", "", schema.Config{}, fmt.Errorf("locate devm.yaml: %w (run `devm cp` from a project root or use `project:/path` syntax)", err)
 	}
-	return loaded.Project.Name, cwd, loaded, nil
+	loaded, err := config.Load(repoRoot)
+	if err != nil {
+		return "", "", schema.Config{}, fmt.Errorf("locate devm.yaml: %w (run `devm cp` from a project root or use `project:/path` syntax)", err)
+	}
+	return loaded.Project.Name, repoRoot, loaded, nil
 }
 
 // runCp is the transport-dispatcher after arg parsing + project

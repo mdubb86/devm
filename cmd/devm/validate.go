@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +19,11 @@ var validateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(wd)
+		repoRoot, err := repohelpers.FindDevmYAML(wd)
+		if err != nil {
+			return err
+		}
+		cfg, err := config.Load(repoRoot)
 		if err != nil {
 			return err
 		}
