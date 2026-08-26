@@ -376,13 +376,21 @@ func vmRunning(vms []tart.VM, name string) bool {
 // belt-and-suspenders against the timer having fired the instant
 // before a racing cancellation.
 func armRelockTimer(locks *ProjectLocks, tr TartLister, name string, d time.Duration) {
-	t := time.AfterFunc(d, func() {
+	// Forward-declare t so the closure captures the variable in scope;
+	// its value is assigned by time.AfterFunc's return below. The
+	// callback then compares e.relock == t under the lock — pointer-
+	// identity check that guarantees a stale callback (one whose Stop
+	// lost the race with its own fire, replaced mid-AfterFunc by a
+	// newer setTimer) exits before touching state. Standard Go idiom
+	// for "am I the current AfterFunc callback?".
+	var t *time.Timer
+	t = time.AfterFunc(d, func() {
 		unlock := locks.Lock(name)
 		defer unlock()
 
 		e, ok := configLockState.get(name)
-		if !ok {
-			return // stopped/torn down since unlock — nothing to relock
+		if !ok || e.relock != t {
+			return // stopped/torn down since unlock, or superseded by a newer timer
 		}
 		vms, err := tr.List(context.Background())
 		if err != nil {
@@ -420,12 +428,20 @@ func armRelockTimer(locks *ProjectLocks, tr TartLister, name string, d time.Dura
 // belt-and-suspenders against the timer having fired the instant
 // before a racing cancellation.
 func armPassthroughRestoreTimer(locks *ProjectLocks, tr TartLister, ntpPort int, name string, d time.Duration) {
-	t := time.AfterFunc(d, func() {
+	// Forward-declare t so the closure captures the variable in scope;
+	// value assigned by time.AfterFunc's return below. Callback checks
+	// e.restore == t under the lock — pointer-identity check that
+	// guarantees a stale callback (one whose Stop lost the race with
+	// its own fire, replaced mid-AfterFunc by a newer setTimer) exits
+	// before touching softnet. Matches armRelockTimer's guard.
+	var t *time.Timer
+	t = time.AfterFunc(d, func() {
 		unlock := locks.Lock(name)
 		defer unlock()
 
-		if _, ok := egressPassthroughState.get(name); !ok {
-			return // restricted/stopped/torn down since open — nothing to restore
+		e, ok := egressPassthroughState.get(name)
+		if !ok || e.restore != t {
+			return // restricted/stopped/torn down since open, or superseded by a newer timer
 		}
 		vms, err := tr.List(context.Background())
 		if err != nil {
