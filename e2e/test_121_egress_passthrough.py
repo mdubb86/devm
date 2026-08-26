@@ -193,6 +193,11 @@ def test_passthrough_survives_reconcile(workspace, devm, sandbox_name):
     # Trigger a reconcile with a trivial env change so it has work to do
     # (a no-op reconcile bails early before touching softnet anyway, but
     # this guarantees the full apply path runs).
+    # Cold-start uchg-locked devm.yaml; unlock before rewriting it.
+    subprocess.run(
+        [devm.path, "unlock"],
+        cwd=str(workspace.path), capture_output=True, timeout=30,
+    )
     workspace.write_devmyaml(
         network={"allow": ["example.com"]},
         packages=["curl"],
