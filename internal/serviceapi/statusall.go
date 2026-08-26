@@ -20,6 +20,10 @@ type ProjectStatus struct {
 	Name      string      `json:"name"`
 	VMRunning bool        `json:"vm_running"`
 	Proxy     ProxyHealth `json:"proxy"`
+	// Orphaned marks a running VM that carries devm sidecar artifacts
+	// but no state snapshot — devm-created, daemon lost track of it
+	// (see detectOrphanVMs). Such rows have no meaningful Proxy value.
+	Orphaned bool `json:"orphaned,omitempty"`
 }
 
 // RegisterStatusAllHandler wires GET /status/all. sup is queried for
@@ -77,6 +81,18 @@ func listProjectStatuses(ctx context.Context, cfg identity.Config, sup *supervis
 			VMRunning: running[projectID],
 			Proxy:     computeProxyHealth(cfg, sup, proxy, projectID),
 		})
+	}
+
+	// Orphaned devm VMs — running, sidecar-evidenced, no snapshot —
+	// get their own rows so `devm status --all` surfaces them instead
+	// of silently omitting a VM that's burning RAM and squatting pool
+	// IP binds.
+	orphans, err := detectOrphanVMs(ctx, cfg, tr)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range orphans {
+		out = append(out, ProjectStatus{Name: name, VMRunning: true, Orphaned: true})
 	}
 	return out, nil
 }

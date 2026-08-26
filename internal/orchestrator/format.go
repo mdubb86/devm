@@ -305,12 +305,22 @@ func FormatStatusAllText(rows []serviceapi.ProjectStatus) string {
 		utf8.RuneCountInString("IRON-PROXY"),
 		utf8.RuneCountInString("RECONCILE"),
 	}
+	orphaned := false
 	for i, r := range rows {
 		vmState := "stopped"
 		if r.VMRunning {
 			vmState = "running"
 		}
 		proxyCol, reconcileCol, colored := "—", "—", ""
+		if r.Orphaned {
+			// A running devm VM the daemon has no state for: no proxy
+			// verdict is computable, and reconcile can't reach it.
+			orphaned = true
+			lines[i] = line{project: r.Name, vm: "ORPHANED", proxy: "—", reconcile: "—"}
+			widths[0] = max(widths[0], utf8.RuneCountInString(r.Name))
+			widths[1] = max(widths[1], utf8.RuneCountInString("ORPHANED"))
+			continue
+		}
 		if r.VMRunning {
 			switch r.Proxy.Status {
 			case serviceapi.ProxyOK:
@@ -365,6 +375,11 @@ func FormatStatusAllText(rows []serviceapi.ProjectStatus) string {
 		note := fmt.Sprintf("Note: project %s has proxy listeners UNBOUND — %s — Recovery: cd to project %s's directory, then `devm stop && devm start`",
 			r.Name, r.Proxy.Rebind.LastError, r.Name)
 		fmt.Fprintln(&b, red(note))
+	}
+
+	if orphaned {
+		fmt.Fprintln(&b)
+		fmt.Fprintln(&b, red("Note: ORPHANED = running VM with devm artifacts but no daemon state; its softnet may be squatting pool IP binds. Recovery: `devm stop` (or `devm teardown`) from that project's directory."))
 	}
 	return b.String()
 }

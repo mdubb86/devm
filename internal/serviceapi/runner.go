@@ -203,6 +203,12 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// above just populated.
 	discoverSoftnet(ctx, cfg, ntp.Port())
 
+	// Surface devm VMs the daemon has lost track of (running, devm
+	// sidecar artifacts on disk, no state snapshot) — their softnets
+	// squat pool IP binds invisibly. Goroutine: tart list can take
+	// seconds and must not stall daemon startup.
+	go reportOrphanVMs(ctx, cfg, tr)
+
 	// When there are recovered projects to rebind, wait briefly for the
 	// helper socket — otherwise skip the gate so first-boot (no projects)
 	// doesn't pay the readiness latency. Both daemon and helper get

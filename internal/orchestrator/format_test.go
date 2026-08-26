@@ -465,6 +465,20 @@ func TestFormatStatusAllText_TableShape(t *testing.T) {
 	assert.Regexp(t, `ship5\s+stopped\s+—\s+—`, out)
 }
 
+// An orphaned row (running devm VM without daemon state) renders as
+// ORPHANED with a recovery footer, and never claims a proxy verdict.
+func TestFormatStatusAllText_OrphanedRow(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{Name: "tracked", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+		{Name: "lost", VMRunning: true, Orphaned: true},
+	}
+	UseColor = false
+	out := FormatStatusAllText(rows)
+	assert.Regexp(t, `lost\s+ORPHANED\s+—\s+—`, out)
+	assert.Contains(t, out, "no daemon state")
+	assert.Contains(t, out, "`devm stop`")
+}
+
 func TestFormatStatusAllText_StaleShowsReconcileRequired(t *testing.T) {
 	rows := []serviceapi.ProjectStatus{
 		{Name: "p", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyStale}},
