@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/identity"
@@ -55,12 +56,53 @@ func registerFakeSoftnet(t *testing.T, projectID string) {
 			}
 			go func(c net.Conn) {
 				defer c.Close()
-				_, _ = bufio.NewReader(c).ReadString('\n')
+				line, err := bufio.NewReader(c).ReadString('\n')
+				if err != nil {
+					return
+				}
+				// setExposeMap is acked; other ops are fire-and-forget.
+				if strings.Contains(line, `"op":"setExposeMap"`) {
+					_, _ = c.Write([]byte(`{"ok":true,"results":[]}` + "\n"))
+				}
 			}(c)
 		}
 	}()
 	softnetState.put(projectID, sock)
 	t.Cleanup(func() { softnetState.del(projectID) })
+}
+
+// registerFakeSoftnetAtDeterministicPath is registerFakeSoftnet for
+// tests that drive the real /vm/start handler: the handler overwrites
+// softnetState with SoftnetControlSock's deterministic path before
+// spawning, so the fake must listen exactly there for the (now fatal)
+// expose push to be acked. The path hashes the test's HOME-derived
+// runtime dir, so it can't collide with a live daemon's sockets.
+func registerFakeSoftnetAtDeterministicPath(t *testing.T, projectID string) {
+	t.Helper()
+	sock := SoftnetControlSock(identity.Prod, projectID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(sock), 0o700))
+	_ = os.Remove(sock)
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close(); os.Remove(sock) })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				line, err := bufio.NewReader(c).ReadString('\n')
+				if err != nil {
+					return
+				}
+				if strings.Contains(line, `"op":"setExposeMap"`) {
+					_, _ = c.Write([]byte(`{"ok":true,"results":[]}` + "\n"))
+				}
+			}(c)
+		}
+	}()
 }
 
 // createTestCA creates a dummy CA file in the test's HOME/.../ca/ directory.

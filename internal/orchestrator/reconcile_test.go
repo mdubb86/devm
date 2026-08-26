@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,7 +144,14 @@ func registerFakeSoftnetForOrchestratorTest(t *testing.T, projectID string) {
 			}
 			go func(c net.Conn) {
 				defer c.Close()
-				_, _ = bufio.NewReader(c).ReadString('\n')
+				line, err := bufio.NewReader(c).ReadString('\n')
+				if err != nil {
+					return
+				}
+				// setExposeMap is acked; other ops are fire-and-forget.
+				if strings.Contains(line, `"op":"setExposeMap"`) {
+					_, _ = c.Write([]byte(`{"ok":true,"results":[]}` + "\n"))
+				}
 			}(c)
 		}
 	}()

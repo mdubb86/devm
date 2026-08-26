@@ -1,10 +1,12 @@
 package serviceapi
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,16 +97,48 @@ func (c *softnetClient) setPolicy(pol string, ep *Endpoint) error {
 }
 
 // setExposeMap tells softnet which host->guest ingress port mappings to
-// forward. Used by Plan 4's `devm expose`.
+// forward, then reads softnet's per-port ack from the same connection.
+// A missing ack (dead or wedged softnet — every current softnet replies)
+// and any reported bind failure both surface as errors: a silently
+// unbound :22 is a dead SSH endpoint behind a "successful" start, the
+// exact failure shape of the orphaned-VM incident.
 func (c *softnetClient) setExposeMap(ports []softnet.ExposePort) error {
-	msg := map[string]any{
-		"op":     "setExposeMap",
-		"expose": ports,
-	}
-	if err := c.send(msg); err != nil {
+	conn, err := c.dial()
+	if err != nil {
 		return err
 	}
-	log.Printf("softnet-push: setExposeMap sock=%s ports=%d", c.sock, len(ports))
+	defer conn.Close()
+
+	b, err := json.Marshal(map[string]any{
+		"op":     "setExposeMap",
+		"expose": ports,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal control message: %w", err)
+	}
+	if _, err := conn.Write(append(b, '\n')); err != nil {
+		return fmt.Errorf("write softnet control message: %w", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return fmt.Errorf("softnet sent no setExposeMap ack (sock=%s) — softnet is dead or predates the ack protocol; `devm stop` then start the VM to replace it: %w", c.sock, err)
+	}
+	var ack softnet.ExposeAck
+	if err := json.Unmarshal(line, &ack); err != nil {
+		return fmt.Errorf("decode setExposeMap ack: %w", err)
+	}
+	if !ack.OK {
+		var failed []string
+		for _, r := range ack.Results {
+			if !r.OK {
+				failed = append(failed, fmt.Sprintf("%s:%d -> guest:%d: %s", r.BindIP, r.HostPort, r.GuestPort, r.Error))
+			}
+		}
+		return fmt.Errorf("softnet failed to bind ingress ports: %s", strings.Join(failed, "; "))
+	}
+	log.Printf("softnet-push: setExposeMap sock=%s ports=%d acked", c.sock, len(ports))
 	return nil
 }
 

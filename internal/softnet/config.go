@@ -88,9 +88,27 @@ type ExposePort struct {
 	HostPort  int    `json:"host_port"`
 }
 
+// ExposeResult is the per-port outcome of one setExposeMap apply.
+type ExposeResult struct {
+	BindIP    string `json:"bind_ip"`
+	HostPort  int    `json:"host_port"`
+	GuestPort int    `json:"guest_port"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
+}
+
+// ExposeAck is the one-line JSON reply softnet writes back on the
+// control connection for a setExposeMap message. OK is the AND of all
+// results, so the daemon can fail loud without walking them.
+type ExposeAck struct {
+	OK      bool           `json:"ok"`
+	Results []ExposeResult `json:"results"`
+}
+
 // ControlMsg is one line of the daemon->softnet control protocol (JSON per
 // line over the unix socket). Op is "setPolicy", "setExposeMap", or
-// "setTestHosts".
+// "setTestHosts". setExposeMap is the one op with a reply: an ExposeAck
+// line on the same connection.
 type ControlMsg struct {
 	Op              string          `json:"op"`
 	Policy          string          `json:"policy,omitempty"`

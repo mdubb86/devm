@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/mdubb86/devm/internal/softnet"
 )
@@ -92,6 +95,8 @@ func TestSetExposeMapWire(t *testing.T) {
 		r := bufio.NewReader(c)
 		line, _ := r.ReadString('\n')
 		got <- line
+		// Ack the push — setExposeMap reads one reply line.
+		_, _ = c.Write([]byte(`{"ok":true,"results":[{"bind_ip":"127.0.0.1","host_port":2222,"guest_port":22,"ok":true}]}` + "\n"))
 	}()
 
 	ports := []softnet.ExposePort{{GuestPort: 22, BindIP: "127.0.0.1", HostPort: 2222}}
@@ -102,6 +107,65 @@ func TestSetExposeMapWire(t *testing.T) {
 	line := <-got
 	if !strings.Contains(line, `"op":"setExposeMap"`) || !strings.Contains(line, `"guest_port":22`) || !strings.Contains(line, `"host_port":2222`) {
 		t.Fatalf("bad wire: %s", line)
+	}
+}
+
+// A softnet that never acks (dead, wedged, or predating the ack
+// protocol) must surface as a push error, not a silent success.
+func TestSetExposeMap_NoAckErrors(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "sn-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		r := bufio.NewReader(c)
+		_, _ = r.ReadString('\n')
+		c.Close() // read the push, reply with nothing
+	}()
+
+	err = newSoftnetClient(sock).setExposeMap([]softnet.ExposePort{{GuestPort: 22, BindIP: "127.0.0.1", HostPort: 2222}})
+	if err == nil || !strings.Contains(err.Error(), "ack") {
+		t.Fatalf("expected no-ack error, got %v", err)
+	}
+}
+
+// A failed bind reported in the ack must surface as an error naming
+// the endpoint that failed.
+func TestSetExposeMap_BindFailureSurfacesError(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "sn-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		_, _ = r.ReadString('\n')
+		_, _ = c.Write([]byte(`{"ok":false,"results":[{"bind_ip":"127.42.0.2","host_port":22,"guest_port":22,"ok":false,"error":"address already in use"}]}` + "\n"))
+	}()
+
+	err = newSoftnetClient(sock).setExposeMap([]softnet.ExposePort{{GuestPort: 22, BindIP: "127.42.0.2", HostPort: 22}})
+	if err == nil || !strings.Contains(err.Error(), "127.42.0.2:22") || !strings.Contains(err.Error(), "address already in use") {
+		t.Fatalf("expected bind-failure error naming the endpoint, got %v", err)
 	}
 }
 

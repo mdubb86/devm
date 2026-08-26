@@ -676,11 +676,17 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// window has lost that race in the field, leaving the project
 		// with no :22 ingress (SSH dead) behind a successful start.
 		// Exec-ready implies the guest agent is up, which softnet's
-		// socket creation precedes by the whole guest boot. Non-fatal:
-		// egress is the security boundary, ingress is convenience, and
-		// a failed push is re-attempted at the next reconcile.
+		// socket creation precedes by the whole guest boot. Fatal:
+		// softnet acks the push with per-port bind results, and a
+		// failed bind means the project's ingress — :22 included — is
+		// partially dead behind what would otherwise report as a
+		// successful start. Better a loud failed start naming the
+		// port than a VM whose SSH endpoint silently belongs to
+		// someone else.
 		if err := pushExposeMap(req.Name, computeExposeMap(req.Cfg, projectIP)); err != nil {
 			daemonlog.Errorf("serviceapi: vm/start: push expose map for %s: %v", req.Name, err)
+			http.Error(w, fmt.Sprintf("push expose map: %v", err), http.StatusInternalServerError)
+			return
 		}
 		if err := pushTestHosts(req.Name, computeDirectTestHosts(req.Cfg)); err != nil {
 			daemonlog.Errorf("serviceapi: vm/start: push test hosts for %s: %v", req.Name, err)

@@ -96,6 +96,71 @@ func TestIngressReconcileSameHostPortChangedGuestPort(t *testing.T) {
 	}
 }
 
+// TestIngressApplyReturnsResults pins the per-port outcome contract:
+// a fresh bind and a kept listener report ok, a conflicting bind
+// reports the error instead of being swallowed.
+func TestIngressApplyReturnsResults(t *testing.T) {
+	ing := newIngress(identity.Prod, nil)
+	defer ing.close()
+	pOK, pBusy := freeTCPPort(t), freeTCPPort(t)
+
+	squatter, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", itoa(pBusy)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer squatter.Close()
+
+	results := ing.apply([]ExposePort{
+		{GuestPort: 5432, BindIP: "127.0.0.1", HostPort: pOK},
+		{GuestPort: 22, BindIP: "127.0.0.1", HostPort: pBusy},
+	})
+	if len(results) != 2 {
+		t.Fatalf("want 2 results, got %d: %+v", len(results), results)
+	}
+	byPort := map[int]ExposeResult{}
+	for _, r := range results {
+		byPort[r.HostPort] = r
+	}
+	if r := byPort[pOK]; !r.OK || r.Error != "" {
+		t.Fatalf("free port should bind ok, got %+v", r)
+	}
+	if r := byPort[pBusy]; r.OK || r.Error == "" {
+		t.Fatalf("busy port should report its bind error, got %+v", r)
+	}
+
+	// Second apply: the kept listener reports ok again.
+	results = ing.apply([]ExposePort{{GuestPort: 5432, BindIP: "127.0.0.1", HostPort: pOK}})
+	if len(results) != 1 || !results[0].OK {
+		t.Fatalf("kept listener should report ok, got %+v", results)
+	}
+}
+
+// TestIngressReconcileChangedBindIP pins that a BindIP change on an
+// unchanged host/guest port pair closes the old listener — keeping it
+// would leave the port answering on an address the project no longer
+// owns (the cross-wiring shape from the orphaned-VM incident).
+func TestIngressReconcileChangedBindIP(t *testing.T) {
+	ing := newIngress(identity.Prod, nil)
+	defer ing.close()
+	p := freeTCPPort(t)
+
+	ing.apply([]ExposePort{{GuestPort: 5432, BindIP: "127.0.0.1", HostPort: p}})
+	if !hostReachable(p) {
+		t.Fatalf("after apply, host port %d should be listening", p)
+	}
+
+	// Same host/guest port, different BindIP. 127.42.99.9 is not an
+	// lo0 alias, so the new bind fails — but the OLD listener must be
+	// gone regardless, and the failure must be reported.
+	results := ing.apply([]ExposePort{{GuestPort: 5432, BindIP: "127.42.99.9", HostPort: p}})
+	if hostReachable(p) {
+		t.Fatalf("old 127.0.0.1:%d listener must close on BindIP change", p)
+	}
+	if len(results) != 1 || results[0].OK {
+		t.Fatalf("unbindable new BindIP should report failure, got %+v", results)
+	}
+}
+
 // mockHelper starts a UDS listener that mimics the root
 // devm-helper closely enough for apply()'s low-port branch:
 // it reads (and discards) one request, binds a real ephemeral TCP
