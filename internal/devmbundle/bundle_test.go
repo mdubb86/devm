@@ -459,6 +459,13 @@ func TestBuild_IncludesEtcProfileDevm(t *testing.T) {
 	// mechanism directly since it's what makes downstream consumers work.
 	assert.Contains(t, string(entry.body), ". /etc/environment")
 	assert.Contains(t, string(entry.body), "set -a")
+	// Regression: interactive SSH (bash -l) must land in the workspace
+	// directory, not $HOME. Without the cd, running `supabase start` (or
+	// any tool that treats cwd as the project root) initializes a fresh
+	// project under /home/devm instead of picking up the checkout.
+	// with-devm-env handles the same chdir for devm exec / devm shell.
+	assert.Contains(t, string(entry.body), `cd "$WORKSPACE"`,
+		"profile.d/devm.sh must chdir to $WORKSPACE so SSH login shells land in the project root")
 }
 
 // TestBuild_IncludesEtcEnvironment proves the bundle carries the
