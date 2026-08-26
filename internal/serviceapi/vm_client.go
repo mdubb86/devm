@@ -199,9 +199,6 @@ func (c *Client) EgressStatus(ctx context.Context, name string) (*EgressStatus, 
 		return nil, err
 	}
 	defer r.Body.Close()
-	if r.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
 	if r.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(r.Body)
 		return nil, fmt.Errorf("vm/egress-status: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
