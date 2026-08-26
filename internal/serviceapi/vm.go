@@ -1340,6 +1340,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// unchanged" — so setPolicy(OPEN, nil) is the whole open path,
 		// no ForwardTargets capture needed.
 		if err := newSoftnetClient(sock).setPolicy("OPEN", nil); err != nil {
+			daemonlog.Errorf("egress: passthrough setPolicy(OPEN) for %s: %v", req.Name, err)
 			http.Error(w, fmt.Sprintf("flip softnet open: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -1400,6 +1401,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// reconcile-driven allowlist update that landed during the
 		// window takes effect on this close.
 		if err := sendSoftnetEnforced(sock, info, ntpPort); err != nil {
+			daemonlog.Errorf("egress: restrict setPolicy(ENFORCED) for %s: %v", req.Name, err)
 			http.Error(w, fmt.Sprintf("flip softnet enforced: %v", err), http.StatusInternalServerError)
 			return
 		}

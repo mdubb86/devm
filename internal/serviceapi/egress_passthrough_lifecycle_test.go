@@ -360,6 +360,63 @@ func TestPassthroughEgress_TimerFiresRestore(t *testing.T) {
 	assert.False(t, ok, "timer-driven restore must clear state (same code path as restrict)")
 }
 
+// TestPassthroughEgress_RestoreReadsFreshForwardTargets pins the spec's
+// "restore reads ForwardTargets fresh" contract. armPassthroughRestoreTimer's
+// callback calls sendSoftnetEnforced, which reads ironProxyState.get(name)
+// at fire time and rebuilds the Endpoint from the CURRENT projectInfo — so
+// any reconcile-driven port change that lands during the window takes effect
+// on close. A regression that captured the info at open time and closed over
+// it in the callback would silently ship stale ports to softnet on restore.
+func TestPassthroughEgress_RestoreReadsFreshForwardTargets(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	script := "#!/bin/sh\ncase \"$1\" in\n  list) echo '[{\"Name\":\"passthrough-fresh-ft\",\"State\":\"running\"}]' ;;\nesac\nexit 0\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	const name = "passthrough-fresh-ft"
+	// Initial ports — what open would see if the callback closed over them.
+	ironProxyState.put(name, projectInfo{HTTPPort: 1, HTTPSPort: 2, DNSPort: 3})
+	t.Cleanup(func() {
+		ironProxyState.del(name)
+		egressPassthroughState.del(name)
+	})
+	_, lastMsg, cleanupSock := newFakeSoftnet(t, name)
+	defer cleanupSock()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Open the window with the initial ports in place.
+	_, _, err := c.PassthroughEgress(ctx, name, 1)
+	require.NoError(t, err)
+
+	// Mid-window: simulate a reconcile-driven allowlist change that
+	// re-derived ports. If the restore path captured the initial info
+	// at open, this mutation is invisible to it. If it re-reads fresh
+	// (the contract), the setPolicy(ENFORCED) message that fires next
+	// carries the NEW ports.
+	ironProxyState.put(name, projectInfo{HTTPPort: 51100, HTTPSPort: 51101, DNSPort: 51102})
+
+	// Wait for the timer to fire and softnet to receive the restore.
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	for time.Now().Before(deadline) && !strings.Contains(lastMsg(), `"policy":"ENFORCED"`) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	msg := lastMsg()
+	require.Contains(t, msg, `"policy":"ENFORCED"`, "timer must fire restore")
+	assert.Contains(t, msg, `"http":"127.0.0.1:51100"`, "restore must carry the CURRENT HTTPPort (51100), not the open-time value (1)")
+	assert.Contains(t, msg, `"https":"127.0.0.1:51101"`, "restore must carry the CURRENT HTTPSPort")
+	assert.Contains(t, msg, `"dns":"127.0.0.1:51102"`, "restore must carry the CURRENT DNSPort")
+}
+
 func TestVMStop_ClearsPassthroughState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	logDir := t.TempDir()
