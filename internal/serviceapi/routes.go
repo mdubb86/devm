@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/mdubb86/devm/internal/daemonlog"
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // RouteMode is what the proxy dials to reach the backend.
@@ -250,8 +253,12 @@ type RouteStatus struct {
 // given server's mux. Called once from runner.go after the Routes
 // instance is created. proxy is threaded through so a successful
 // Apply/Remove can reconcile the LAN listener's lifecycle against the
-// resulting ExposeHost route count.
-func RegisterRoutesHandlers(s *Server, routes *Routes, proxy *ProxyServer) {
+// resulting ExposeHost route count. cfg is threaded so successful
+// Apply/Remove can mirror the resolved route set into the project's
+// state snapshot — recoverProjectState replays it on daemon restart,
+// so `devm route local|vm` survives without a manual re-issue and
+// running in-guest sessions don't lose `.test` hairpin.
+func RegisterRoutesHandlers(s *Server, cfg identity.Config, routes *Routes, proxy *ProxyServer) {
 	s.Register("/routes/apply", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -292,6 +299,7 @@ func RegisterRoutesHandlers(s *Server, routes *Routes, proxy *ProxyServer) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		mirrorRoutesToSnapshot(cfg, req.Name, resolved)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(ApplyResponse{Routes: resolved})
 	})
@@ -315,6 +323,7 @@ func RegisterRoutesHandlers(s *Server, routes *Routes, proxy *ProxyServer) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		mirrorRoutesToSnapshot(cfg, req.Name, nil)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -326,4 +335,29 @@ func RegisterRoutesHandlers(s *Server, routes *Routes, proxy *ProxyServer) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(routes.AllByProject())
 	})
+}
+
+// mirrorRoutesToSnapshot writes the last resolved route set for
+// projectID into its state snapshot, so recoverProjectState can replay
+// it on daemon restart. Pass nil to clear (called from /routes/remove).
+//
+// Best-effort — missing snapshot means the project hasn't gone through
+// /vm/start yet (nothing to mirror into) and is silently skipped, same
+// pattern as ReleaseProjectIP. Read/write errors are logged and dropped
+// so a failed mirror never masks a successful Apply/Remove — the
+// user-visible /routes/apply response stays 200 either way, and the
+// on-disk snapshot self-heals on the next successful apply.
+func mirrorRoutesToSnapshot(cfg identity.Config, projectID string, resolved []Route) {
+	snap, err := ReadStateSnapshot(cfg, projectID)
+	if err != nil {
+		daemonlog.Errorf("routes: read snapshot for %s: %v (continuing)", projectID, err)
+		return
+	}
+	if snap == nil {
+		return
+	}
+	snap.Routes = resolved
+	if err := WriteStateSnapshot(cfg, projectID, *snap); err != nil {
+		daemonlog.Errorf("routes: mirror routes to snapshot for %s: %v (continuing)", projectID, err)
+	}
 }

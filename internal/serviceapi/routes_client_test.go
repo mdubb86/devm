@@ -26,7 +26,7 @@ func newTestServerWithRoutes(t *testing.T) (*Server, *Routes, func()) {
 	srv := NewServer(socket, Build{Version: "test-version"})
 	routes := NewRoutes()
 	proxy := NewProxyServer(identity.Prod, routes, nil)
-	RegisterRoutesHandlers(srv, routes, proxy)
+	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

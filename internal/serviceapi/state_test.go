@@ -115,6 +115,23 @@ func TestStateSnapshotProxyVersionRoundTrips(t *testing.T) {
 	require.Equal(t, "abc123", got.ProxyVersion)
 }
 
+func TestStateSnapshotRoutesRoundTrips(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	want := StateSnapshot{
+		Cfg: schema.Config{Project: schema.Project{Name: "p"}},
+		Routes: []Route{
+			{Hostname: "app.p.test", BackendHost: "127.42.0.9", BackendPort: 5173, Mode: ModeVM, Project: "p"},
+			{Hostname: "db.p.test", BackendPort: 5432, Mode: ModeVM, Direct: true, Project: "p"},
+			{Hostname: "api.p.test", BackendPort: 8080, Mode: ModeLocal, Project: "p"},
+		},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", want))
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, want.Routes, got.Routes)
+}
+
 func TestStateSnapshotWorkspaceHostPathRoundTrips(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	want := StateSnapshot{Cfg: schema.Config{Project: schema.Project{Name: "p"}}, WorkspaceHostPath: "/Users/dev/myproj"}

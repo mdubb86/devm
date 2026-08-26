@@ -129,14 +129,14 @@ func TestLoadIronProxyInfoFromConfig_MissingFile(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestRecoverProjectState_RebuildsDirectRoutes covers the daemon-restart
-// adoption path (AdoptIronProxies calls this per recovered project,
-// after already seeding ironProxyState from the project's on-disk
-// iron-proxy config): given a state snapshot on disk describing a
-// direct service, recoverProjectState should rebuild the project's
-// direct routes (so DNS keeps answering for it) — all without a daemon
-// restart actually having happened.
-func TestRecoverProjectState_RebuildsDirectRoutes(t *testing.T) {
+// TestRecoverProjectState_ReplaysSnapshotRoutes covers the
+// daemon-restart adoption path (AdoptIronProxies calls this per
+// recovered project, after already seeding ironProxyState from the
+// project's on-disk iron-proxy config): given a state snapshot whose
+// Routes carries the last-applied set — direct, ExposeHost, and
+// default proxied routes with substituted BackendHost — recoverProjectState
+// replays them verbatim so a daemon restart is invisible to callers.
+func TestRecoverProjectState_ReplaysSnapshotRoutes(t *testing.T) {
 	const projectID = "recover-proj"
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
@@ -146,25 +146,15 @@ func TestRecoverProjectState_RebuildsDirectRoutes(t *testing.T) {
 	// recoverProjectState.
 	ironProxyState.put(projectID, projectInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})
 
-	snap := StateSnapshot{
-		Cfg: schema.Config{
-			Project: schema.Project{Name: projectID},
-			Services: map[string]schema.Service{
-				"db": {
-					Hostname: "db.test",
-					Port:     5432,
-					Direct:   true,
-				},
-				"web": {
-					// Proxied (non-direct) service; must NOT show up as a
-					// direct route.
-					Hostname: "web.test",
-					Port:     3000,
-				},
-			},
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
+		Cfg:       schema.Config{Project: schema.Project{Name: projectID}},
+		ProjectIP: "127.42.0.9",
+		Routes: []Route{
+			{Hostname: "db.recover-proj.test", BackendPort: 5432, Mode: ModeVM, Direct: true, Project: projectID},
+			{Hostname: "api.recover-proj.test", BackendHost: "127.42.0.9", BackendPort: 8080, Mode: ModeVM, ExposeHost: true, Project: projectID},
+			{Hostname: "web.recover-proj.test", BackendHost: "127.42.0.9", BackendPort: 3000, Mode: ModeVM, Project: projectID},
 		},
-	}
-	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, snap))
+	}))
 
 	routes := NewRoutes()
 	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
@@ -173,126 +163,46 @@ func TestRecoverProjectState_RebuildsDirectRoutes(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, 59481, info.HTTPPort, "pre-seeded ports must survive recoverProjectState")
 
-	route, ok := routes.DirectRoute("db.test")
-	require.True(t, ok)
-	assert.Equal(t, 5432, route.BackendPort)
-	assert.Equal(t, projectID, route.Project)
+	direct, ok := routes.DirectRoute("db.recover-proj.test")
+	require.True(t, ok, "direct route must be replayed")
+	assert.Equal(t, 5432, direct.BackendPort)
 
-	_, ok = routes.DirectRoute("web.test")
-	assert.False(t, ok, "non-direct service must not become a direct route")
-}
-
-// TestRecoverProjectState_RebuildsExposeHostRoutes covers the
-// daemon-restart recovery gap for the shared LAN dispatcher: given a
-// state snapshot describing an expose_host:true service, recoverProjectState
-// should rebuild that service's route with ExposeHost set (so the
-// startup reconcileLAN pass in runner.go sees CountLANRoutes() > 0 and
-// rebinds the listener), while a non-exposed service must not show up
-// in the LAN opt-in map.
-func TestRecoverProjectState_RebuildsExposeHostRoutes(t *testing.T) {
-	const projectID = "recover-lan-proj"
-	t.Setenv("HOME", t.TempDir())
-	t.Cleanup(func() { ironProxyState.del(projectID) })
-
-	ironProxyState.put(projectID, projectInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})
-
-	snap := StateSnapshot{
-		Cfg: schema.Config{
-			Project: schema.Project{Name: projectID},
-			Services: map[string]schema.Service{
-				"api": {
-					Hostname:   "api.recover-lan-proj.test",
-					Port:       8080,
-					ExposeHost: true,
-				},
-				"internal": {
-					// Not exposed; must NOT show up in the LAN opt-in map.
-					Hostname: "internal.recover-lan-proj.test",
-					Port:     9090,
-				},
-			},
-		},
-	}
-	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, snap))
-
-	routes := NewRoutes()
-	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
-
-	route, ok := routes.LANLookup("api.recover-lan-proj.test")
-	require.True(t, ok, "expose_host service must be recovered into the LAN opt-in map")
-	assert.Equal(t, 8080, route.BackendPort)
-	assert.Equal(t, projectID, route.Project)
-	assert.True(t, route.ExposeHost)
-
-	_, ok = routes.LANLookup("internal.recover-lan-proj.test")
-	assert.False(t, ok, "non-exposed service must not become a LAN route")
-
+	lan, ok := routes.LANLookup("api.recover-proj.test")
+	require.True(t, ok, "expose_host route must be replayed into the LAN opt-in map")
+	assert.Equal(t, "127.42.0.9", lan.BackendHost, "recovered BackendHost must round-trip through the snapshot verbatim")
+	assert.Equal(t, 8080, lan.BackendPort)
 	assert.Equal(t, 1, routes.CountLANRoutes())
+
+	web, ok := routes.Lookup("web.recover-proj.test", projectID)
+	require.True(t, ok, "default proxied route (the class the pre-mirror recovery deliberately skipped) must now be replayed")
+	assert.Equal(t, "127.42.0.9", web.BackendHost)
+	assert.Equal(t, 3000, web.BackendPort)
 }
 
-// TestRecoverProjectState_ExposeHostRouteHasBackendHostFromProjectIP pins
-// the v0.9.6 fix for a real correctness bug: recovered ExposeHost routes
-// left BackendHost="" would fall back to "localhost" at dispatch time,
-// producing a 502 (or a silent misroute to whatever happened to be
-// listening on Mac:<port>) once the daemon restarted. Recovery must
-// substitute BackendHost = info.ProjectIP, mirroring the /routes/apply
-// handler's v0.9.3 vm-mode substitution — recoverProjectState calls
-// routes.Apply directly, bypassing that handler.
-func TestRecoverProjectState_ExposeHostRouteHasBackendHostFromProjectIP(t *testing.T) {
-	const projectID = "recover-backendhost-proj"
+// TestRecoverProjectState_PreservesRouteModeAcrossRestart pins that a
+// project last put into `devm route local` mode still comes back as
+// ModeLocal after a daemon restart. The recovery path replays snap.Routes
+// verbatim, so whatever mode the CLI last posted survives — no silent
+// flip back to ModeVM.
+func TestRecoverProjectState_PreservesRouteModeAcrossRestart(t *testing.T) {
+	const projectID = "recover-mode-proj"
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
-	ironProxyState.put(projectID, projectInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})
-
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
-		Cfg: schema.Config{
-			Project: schema.Project{Name: projectID},
-			Services: map[string]schema.Service{
-				"api": {Hostname: "api.recover-backendhost-proj.test", Port: 8080, ExposeHost: true},
-			},
+		Cfg: schema.Config{Project: schema.Project{Name: projectID}},
+		Routes: []Route{
+			{Hostname: "api.recover-mode-proj.test", BackendPort: 8080, Mode: ModeLocal, Project: projectID},
 		},
-		ProjectIP: "127.42.0.9",
 	}))
 
 	routes := NewRoutes()
 	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
 
-	route, ok := routes.LANLookup("api.recover-backendhost-proj.test")
+	rt, ok := routes.Lookup("api.recover-mode-proj.test", projectID)
 	require.True(t, ok)
-	assert.Equal(t, "127.42.0.9", route.BackendHost, "recovered ExposeHost route must carry the ProjectIP substitution, not an empty BackendHost")
-	assert.Equal(t, 8080, route.BackendPort)
-}
-
-// TestRecoverProjectState_DirectAndExposeHostRoutesCoexist covers the
-// merge step in recoverProjectState: a project with both a direct
-// service and an expose_host service must recover both — a single
-// Apply call carrying the union — rather than the second Apply
-// silently wiping out the first's routes (Routes.Apply replaces a
-// project's entire route set per call).
-func TestRecoverProjectState_DirectAndExposeHostRoutesCoexist(t *testing.T) {
-	const projectID = "recover-mixed-proj"
-	t.Setenv("HOME", t.TempDir())
-	t.Cleanup(func() { ironProxyState.del(projectID) })
-
-	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
-		Cfg: schema.Config{
-			Project: schema.Project{Name: projectID},
-			Services: map[string]schema.Service{
-				"db":  {Hostname: "db.recover-mixed-proj.test", Port: 5432, Direct: true},
-				"api": {Hostname: "api.recover-mixed-proj.test", Port: 8080, ExposeHost: true},
-			},
-		},
-	}))
-
-	routes := NewRoutes()
-	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
-
-	_, ok := routes.DirectRoute("db.recover-mixed-proj.test")
-	assert.True(t, ok, "direct route must survive being merged with the ExposeHost recovery")
-
-	_, ok = routes.LANLookup("api.recover-mixed-proj.test")
-	assert.True(t, ok, "ExposeHost route must survive being merged with the direct recovery")
+	assert.Equal(t, ModeLocal, rt.Mode, "last-applied route mode must survive daemon restart")
+	assert.Empty(t, rt.BackendHost, "local-mode route dials Mac localhost — BackendHost stays empty")
 }
 
 // TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched covers a
@@ -322,19 +232,17 @@ func TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched(t *testing.T) 
 // the defensive case where ironProxyState holds no entry yet for the
 // project (e.g. called outside AdoptIronProxies's normal
 // config-rehydration-first order): given only a state snapshot,
-// recoverProjectState must still create an entry and rebuild direct
-// routes.
+// recoverProjectState must still create an entry and replay the
+// snapshot's routes.
 func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.T) {
 	const projectID = "vm-down-proj"
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
-		Cfg: schema.Config{
-			Project: schema.Project{Name: projectID},
-			Services: map[string]schema.Service{
-				"db": {Hostname: "db.test", Port: 5432, Direct: true},
-			},
+		Cfg: schema.Config{Project: schema.Project{Name: projectID}},
+		Routes: []Route{
+			{Hostname: "db.vm-down-proj.test", BackendPort: 5432, Mode: ModeVM, Direct: true, Project: projectID},
 		},
 	}))
 
@@ -344,7 +252,7 @@ func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.
 	_, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
 
-	route, ok := routes.DirectRoute("db.test")
+	route, ok := routes.DirectRoute("db.vm-down-proj.test")
 	require.True(t, ok)
 	assert.Equal(t, projectID, route.Project)
 }
