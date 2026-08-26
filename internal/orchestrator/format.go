@@ -715,6 +715,8 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "iron_proxy_down"
 	case reconcile.KindVolumeChange:
 		return "volume_change"
+	case reconcile.KindSSHEndpointHealed:
+		return "ssh_endpoint_healed"
 	}
 	return "unknown"
 }
@@ -722,6 +724,8 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 // formatChange returns a one-line, human-readable description of a Change.
 func formatChange(c reconcile.Change) string {
 	switch c.Kind {
+	case reconcile.KindSSHEndpointHealed:
+		return fmt.Sprintf("~ ssh endpoint healed: %s:22 was answered by a foreign host key, project moved to %s", c.Old, c.New)
 	case reconcile.KindPortAdd:
 		return fmt.Sprintf("+ port %s (%s)", c.New, c.Service)
 	case reconcile.KindPortRemove:

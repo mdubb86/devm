@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
@@ -71,7 +73,7 @@ type TartLister interface {
 // RegisterReconcileHandler wires POST /vm/reconcile. sup is consulted
 // (only when the VM is running) to self-heal a missing/stale
 // iron-proxy: see the KindIronProxyDown emit below.
-func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, packages PackagesApplier, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer) {
+func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, packages PackagesApplier, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer, ntpPort int) {
 	s.Register("/vm/reconcile", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -152,6 +154,41 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 		if running {
 			if computeProxyHealth(cfg, sup, proxy, req.Name).Status != ProxyOK {
 				ironProxy = append(ironProxy, reconcile.Change{Kind: reconcile.KindIronProxyDown})
+			}
+		}
+
+		// SSH-endpoint verify + heal: a running project's :22 must be
+		// answered by its own guest sshd. A foreign host key means the
+		// ProjectIP is cross-wired — a listener outside daemon state
+		// (typically an orphaned VM's softnet) owns the bind — so move
+		// the project to a fresh IP. Heal only on a definitive key
+		// MISMATCH: a failed or non-SSH handshake can be a booting
+		// guest or a wedged sshd, where reallocating would churn IPs
+		// for nothing — those log loudly and stay put. Runs before the
+		// live-apply section so its expose push targets the healed IP.
+		var sshHealed []reconcile.Change
+		if running && len(req.SSHHostPub) > 0 {
+			if info, ok := ironProxyState.get(req.Name); ok && info.ProjectIP != "" {
+				oldIP := info.ProjectIP
+				verr := verifySSHHostKey(sshVerifyAddr(oldIP), req.SSHHostPub, 4*time.Second)
+				switch {
+				case verr == nil:
+					// healthy
+				case strings.Contains(verr.Error(), "host key mismatch"):
+					daemonlog.Errorf("serviceapi: reconcile: %s is cross-wired (%v) — reallocating", req.Name, verr)
+					newIP, err := healCrossWiredIP(r.Context(), cfg, req.Name, req.Cfg, proxy, ntpPort)
+					if err != nil {
+						http.Error(w, fmt.Sprintf("ssh endpoint cross-wired (%v) and heal failed: %v", verr, err), http.StatusInternalServerError)
+						return
+					}
+					if verr2 := verifySSHHostKey(sshVerifyAddr(newIP), req.SSHHostPub, 4*time.Second); verr2 != nil {
+						http.Error(w, fmt.Sprintf("ssh endpoint still unhealthy after heal to %s: %v", newIP, verr2), http.StatusInternalServerError)
+						return
+					}
+					sshHealed = append(sshHealed, reconcile.Change{Kind: reconcile.KindSSHEndpointHealed, Old: oldIP, New: newIP})
+				default:
+					daemonlog.Errorf("serviceapi: reconcile: ssh endpoint check for %s inconclusive (not healing): %v", req.Name, verr)
+				}
 			}
 		}
 
@@ -280,7 +317,7 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 		}
 
 		resp := VMReconcileResponse{
-			Applied:          live,
+			Applied:          append(live, sshHealed...),
 			AppliedIronProxy: ironProxy,
 			TeardownRequired: teardown,
 			SandboxState:     state,
