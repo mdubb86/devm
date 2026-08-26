@@ -68,6 +68,8 @@ network:
     - platform.claude.com       # OAuth token exchange + revoke
     - downloads.claude.ai       # native installer + plugin downloads
     - mcp-proxy.anthropic.com   # WebFetch / WebSearch (routed via Anthropic)
+    - docs.claude.com           # WebFetch — official docs (user guides)
+    - code.claude.com           # WebFetch — official docs (Claude Code, SDK)
     - raw.githubusercontent.com # plugin marketplace + /release-notes
 ```
 
