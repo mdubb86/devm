@@ -80,8 +80,9 @@ services:
 
 network:
   allow:
-    - github.com                          # supabase CLI release download + /releases/latest redirect
-    - objects.githubusercontent.com       # github redirects release assets here
+    - github.com/supabase/cli/*           # supabase CLI release download + /releases/latest redirect
+    # release-asset storage — supabase/cli assets only
+    - release-assets.githubusercontent.com/github-production-release-asset/314160187/*
     - public.ecr.aws                      # supabase container image registry (manifests)
     - "*.cloudfront.net"                  # ECR Public blob storage (image layers)
     # ECR Public returns HTTP 307s to CloudFront for layer blobs, and

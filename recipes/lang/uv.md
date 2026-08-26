@@ -69,7 +69,8 @@ allowlist:
 ```yaml
 network:
   allow:
-    - release-assets.githubusercontent.com   # uv managed CPython (python-build-standalone)
+    # uv managed CPython — astral-sh/python-build-standalone release assets only
+    - release-assets.githubusercontent.com/github-production-release-asset/162334160/*
 ```
 
 ## The `.venv`

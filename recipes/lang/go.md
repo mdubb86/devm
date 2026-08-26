@@ -46,7 +46,7 @@ install:
 network:
   allow:
     - go.dev                # /VERSION lookup + release-notes
-    - dl.google.com         # go.dev/dl/ redirects here for the tarball
+    - dl.google.com/go/*    # go.dev/dl/ redirects here for the tarball
     - proxy.golang.org      # `go mod download` + `go install` module proxy
     - sum.golang.org        # checksum database verification
     - github.com            # direct VCS fallback for un-proxied modules

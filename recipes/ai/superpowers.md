@@ -45,11 +45,15 @@ services:
 
 network:
   allow:
-    - github.com                # plugin marketplace + plugin sources (git clone)
-    - codeload.github.com       # github archive/tarball downloads
-    - objects.githubusercontent.com  # github LFS + release-artifact storage
-    - raw.githubusercontent.com      # plugin marketplace index + release-notes
+    - github.com/obra/*              # marketplace + superpowers source (git clone)
+    - codeload.github.com/obra/*     # github archive/tarball downloads
+    - objects.githubusercontent.com  # github LFS (not owner-scoped in the URL)
+    - raw.githubusercontent.com/obra/*  # plugin marketplace index
 ```
+
+The github entries are scoped to the `obra` owner — installing plugins
+from other marketplaces/owners needs their own `github.com/<owner>/*`
+(+ codeload/raw) entries.
 
 `env` and `services` are the live bucket — after adding, `devm reconcile`
 applies them without restart, then `devm route vm`.
