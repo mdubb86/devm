@@ -99,6 +99,15 @@ type VMStopRequest struct {
 type VMConfigLockRequest struct {
 	Name          string `json:"name"`
 	RelockSeconds int    `json:"relock_seconds,omitempty"`
+	// RepoRoot is the caller's discovered project root. Used by
+	// /vm/unlock-config as an escape-hatch fallback when no
+	// configLockState entry exists (daemon didn't adopt the project,
+	// state was lost across a crash, /vm/stop bailed out before it
+	// could clear the flag) — so `devm unlock` can always fix a
+	// stray host-immutable flag rather than silently no-op'ing when
+	// the user needs it most. Ignored by /vm/lock-config since
+	// re-locking makes no sense without a live VM enforcing it.
+	RepoRoot string `json:"repo_root,omitempty"`
 }
 
 // VMConfigLockResponse is the response for POST /vm/unlock-config and
@@ -999,6 +1008,30 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		unlock := locks.Lock(req.Name)
 		defer unlock()
 
+		// Unlock devm.yaml (+ devm.me.yaml) via a defer at the top so
+		// no intermediate failure below — iron-proxy sup.Stop erroring,
+		// a panic, an early http.Error — can strand the file
+		// host-immutable. The registry is the normal source; the state
+		// snapshot's WorkspaceHostPath is the fallback for a project
+		// adopted across a daemon restart that hasn't gone through
+		// /vm/start (and thus recoverProjectState) again yet. No-op
+		// when locking was disabled (config_lock:false) or never
+		// happened, since no repoRoot resolves in that case.
+		defer func() {
+			repoRoot := ""
+			if e, ok := configLockState.get(req.Name); ok {
+				repoRoot = e.repoRoot
+			} else if snap, _ := ReadStateSnapshot(cfg, req.Name); snap != nil {
+				repoRoot = snap.WorkspaceHostPath
+			}
+			if repoRoot != "" {
+				if err := unlockConfigFiles(repoRoot); err != nil {
+					daemonlog.Errorf("configlock: unlock config for %s: %v (file left host-immutable; recover with `devm unlock`)", req.Name, err)
+				}
+			}
+			configLockState.del(req.Name)
+		}()
+
 		// Stop iron-proxy for this project first. Best-effort — if
 		// it's not running, supervisor.Stop returns ErrNotFound which
 		// we treat as success.
@@ -1023,26 +1056,6 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		if denials != nil {
 			denials.Reset(req.Name)
 		}
-
-		// Unlock devm.yaml (+ devm.me.yaml) unconditionally-if-known: a
-		// no-op when locking was disabled (config_lock:false) or never
-		// happened, since no repoRoot resolves in that case. The registry
-		// is the normal source; the state snapshot's WorkspaceHostPath is
-		// the fallback for a project adopted across a daemon restart that
-		// hasn't gone through /vm/start (and thus recoverProjectState)
-		// again yet.
-		repoRoot := ""
-		if e, ok := configLockState.get(req.Name); ok {
-			repoRoot = e.repoRoot
-		} else if snap, _ := ReadStateSnapshot(cfg, req.Name); snap != nil {
-			repoRoot = snap.WorkspaceHostPath
-		}
-		if repoRoot != "" {
-			if err := unlockConfigFiles(repoRoot); err != nil {
-				daemonlog.Errorf("configlock: unlock config for %s: %v", req.Name, err)
-			}
-		}
-		configLockState.del(req.Name)
 
 		// Disable the supervisor's auto-respawn for the VM's tart-run
 		// process BEFORE asking the guest to power off. gracefulStopVM's
@@ -1132,6 +1145,18 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			}
 			armRelockTimer(locks, tr, req.Name, d)
 			relockSeconds = int(d / time.Second)
+		} else if req.RepoRoot != "" {
+			// Escape hatch: no daemon state, but the caller supplied a
+			// repoRoot — clear any stray uchg flag anyway. WasLocked
+			// reflects the actual on-disk state at entry, not the
+			// daemon's view (which is what makes this the escape hatch).
+			// No relock timer to arm — there's nothing to re-lock against.
+			paths := configPaths(req.RepoRoot)
+			wasLocked, _ := fileIsImmutable(paths[0])
+			if err := unlockConfigFiles(req.RepoRoot); err != nil {
+				daemonlog.Errorf("configlock: escape-hatch unlock for %s at %s: %v (continuing)", req.Name, req.RepoRoot, err)
+			}
+			ok = wasLocked
 		}
 
 		writeJSON(w, VMConfigLockResponse{WasLocked: ok, RelockSeconds: relockSeconds})

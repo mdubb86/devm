@@ -80,15 +80,19 @@ func (c *Client) StopVM(ctx context.Context, name string) error {
 }
 
 // UnlockConfig calls POST /vm/unlock-config, lifting the host-immutable
-// flag on devm.yaml (+ devm.me.yaml) for a running project — the `devm
-// unlock` escape hatch. relockSeconds bounds how long it stays
-// editable before the daemon re-locks it automatically; 0 means "use
-// the daemon's default". Returns whether the project actually had
-// anything locked (false when the VM isn't running or config_lock is
-// disabled — not an error in that case) and the relock window the
-// daemon actually armed (0 when wasLocked is false).
-func (c *Client) UnlockConfig(ctx context.Context, name string, relockSeconds int) (wasLocked bool, armedRelockSeconds int, err error) {
-	body, err := json.Marshal(VMConfigLockRequest{Name: name, RelockSeconds: relockSeconds})
+// flag on devm.yaml (+ devm.me.yaml) — the `devm unlock` escape hatch.
+// repoRoot lets the daemon clear a stray uchg flag even when it holds
+// no configLockState for the project (VM stopped, state lost across
+// a crash, /vm/stop bailed out before it could unlock) — always pass
+// the caller's discovered project root. relockSeconds bounds how long
+// the file stays editable when the daemon has state to arm the timer
+// against; 0 means "use the daemon's default"; ignored for the
+// escape-hatch path (no live VM to relock against). Returns whether
+// the file was actually uchg on entry (drives the CLI's user-facing
+// "was/wasn't locked" message) and the relock window the daemon armed
+// (0 when there was no state to relock).
+func (c *Client) UnlockConfig(ctx context.Context, name, repoRoot string, relockSeconds int) (wasLocked bool, armedRelockSeconds int, err error) {
+	body, err := json.Marshal(VMConfigLockRequest{Name: name, RepoRoot: repoRoot, RelockSeconds: relockSeconds})
 	if err != nil {
 		return false, 0, err
 	}

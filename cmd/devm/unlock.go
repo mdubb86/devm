@@ -53,7 +53,7 @@ if you run ` + "`devm reconcile`" + ` or ` + "`devm lock`" + `.`,
 			relockSeconds = int(forDur.Round(time.Second) / time.Second)
 		}
 
-		wasLocked, armedRelockSeconds, err := serviceapi.NewClient(ident).UnlockConfig(ctx, cfg.Project.Name, relockSeconds)
+		wasLocked, armedRelockSeconds, err := serviceapi.NewClient(ident).UnlockConfig(ctx, cfg.Project.Name, repoRoot, relockSeconds)
 		if err != nil {
 			return fmt.Errorf("unlock config: %w", err)
 		}

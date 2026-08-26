@@ -241,6 +241,77 @@ def test_config_lock_lifecycle(workspace, devm, sandbox_name):
 
 
 @pytest.mark.slow
+@pytest.mark.timeout(600)
+def test_config_lock_teardown_unlocks(workspace, devm, sandbox_name):
+    """Assertion: `devm teardown` unlocks devm.yaml, same as `devm stop`.
+
+    Regression pin: a live report described a teardown that left devm.yaml
+    uchg-locked, which then caused `devm unlock` to no-op (see the
+    escape-hatch assertion in test_config_lock_unlock_when_vm_stopped
+    below) and the workspace directory to become unremovable. Cold-start
+    locks the file; a clean teardown must release it.
+    """
+    devm_yaml = workspace.devmyaml_path
+    workspace.write_devmyaml(network={"allow": ["example.com"]})
+
+    _cold_start(devm, workspace, sandbox_name)
+    assert _wait_uchg(devm_yaml, True, timeout=30), (
+        "devm.yaml should be uchg-locked after cold-start"
+    )
+
+    r = devm.teardown(yes=True, timeout=90)
+    assert r.returncode == 0, f"devm teardown failed:\n{r.stderr.decode()}"
+
+    assert _wait_uchg(devm_yaml, False, timeout=20), (
+        "devm.yaml must be unlocked after `devm teardown` — the "
+        "invariant is 'locked iff VM running'"
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(600)
+def test_config_lock_unlock_when_vm_stopped(workspace, devm, sandbox_name):
+    """Assertion: `devm unlock` clears a stray uchg lock even when the
+    daemon no longer tracks the project's config state.
+
+    `devm unlock` is the escape hatch — its whole purpose is to make the
+    file editable when other paths left it in a bad state. Refusing to
+    unlock because "the VM isn't running" (as the daemon sees it) turns
+    the escape hatch into a footgun.
+
+    Setup mirrors the reported failure: cold-start locks the file, then
+    an out-of-band `chflags uchg` stands in for a daemon-state-was-lost
+    scenario (external `tart stop`, daemon crash, `/vm/stop` bailout
+    that skipped the unlock branch). After `devm teardown` clears
+    daemon state, we manually re-set uchg to reproduce the "locked file
+    without daemon state" pathology and assert `devm unlock` fixes it.
+    """
+    devm_yaml = workspace.devmyaml_path
+    workspace.write_devmyaml(network={"allow": ["example.com"]})
+
+    _cold_start(devm, workspace, sandbox_name)
+    r = devm.teardown(yes=True, timeout=90)
+    assert r.returncode == 0, f"devm teardown failed:\n{r.stderr.decode()}"
+
+    # Simulate the pathology: file is locked on disk, but the daemon
+    # has no configLockState / snapshot for the project (teardown wiped
+    # it). `devm unlock` sees "not tracked" and today no-ops — the bug.
+    subprocess.run(["chflags", "uchg", str(devm_yaml)], check=True, timeout=10)
+    assert _has_uchg(devm_yaml), "test setup: file should be uchg"
+
+    r = subprocess.run(
+        [devm.path, "unlock"], cwd=str(workspace.path),
+        capture_output=True, timeout=30,
+    )
+    assert r.returncode == 0, f"devm unlock failed:\n{r.stderr.decode()}"
+    assert _wait_uchg(devm_yaml, False, timeout=15), (
+        "`devm unlock` must clear a stray uchg flag even when the "
+        "daemon has no state for this project — that is the escape "
+        "hatch's whole job"
+    )
+
+
+@pytest.mark.slow
 @pytest.mark.timeout(300)
 def test_config_lock_opt_out(workspace, devm, sandbox_name):
     """Assertion 5: `config_lock: false` opts a project out — devm.yaml

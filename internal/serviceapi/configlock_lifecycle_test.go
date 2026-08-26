@@ -367,7 +367,7 @@ func TestVMUnlockConfig_ClearsImmutableFlag(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	wasLocked, relockSeconds, err := c.UnlockConfig(ctx, name, 0)
+	wasLocked, relockSeconds, err := c.UnlockConfig(ctx, name, "", 0)
 	require.NoError(t, err)
 	assert.True(t, wasLocked, "unlock-config must report the project was locked")
 	assert.Equal(t, defaultRelockSeconds, relockSeconds, "0 relock_seconds must arm the daemon default")
@@ -376,6 +376,46 @@ func TestVMUnlockConfig_ClearsImmutableFlag(t *testing.T) {
 	entry, ok := configLockState.get(name)
 	require.True(t, ok, "the registry entry must survive an unlock — repoRoot is still needed")
 	assert.Equal(t, repoRoot, entry.repoRoot)
+}
+
+// TestVMUnlockConfig_EscapeHatch_ClearsFlagWhenDaemonHasNoState covers
+// the reported failure: a stray uchg flag on disk with no matching
+// configLockState entry (daemon crash mid-stop, external `tart stop`
+// that bypassed /vm/stop, a /vm/stop that bailed before its unlock
+// path). `devm unlock` must clear the flag anyway when the CLI hands
+// the daemon a repoRoot — refusing to unlock in that case turns the
+// escape hatch into a footgun.
+func TestVMUnlockConfig_EscapeHatch_ClearsFlagWhenDaemonHasNoState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	repoRoot := t.TempDir()
+	cfgPath := filepath.Join(repoRoot, "devm.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("project:\n  name: p\n"), 0o644))
+	t.Cleanup(func() { _ = unlockConfigFiles(repoRoot) })
+
+	const name = "escape-hatch-project"
+	require.NoError(t, lockConfigFiles(repoRoot))
+	// Deliberately NO configLockState.put — this is the pathology: file
+	// locked on disk, daemon has no state to drive the normal unlock.
+	require.True(t, isImmutable(t, cfgPath), "test setup must start with the file locked")
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	wasLocked, _, err := c.UnlockConfig(ctx, name, repoRoot, 0)
+	require.NoError(t, err)
+	assert.True(t, wasLocked, "was_locked must reflect actual on-disk state, not daemon-tracked state")
+	assert.False(t, isImmutable(t, cfgPath), "escape-hatch unlock must clear the immutable flag even without daemon state")
 }
 
 // TestVMLockConfig_ReLocksFile verifies `devm lock`'s daemon endpoint
@@ -434,7 +474,7 @@ func TestVMUnlockConfig_UnknownProject_NoOpNoError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	wasLocked, relockSeconds, err := c.UnlockConfig(ctx, "no-such-project", 0)
+	wasLocked, relockSeconds, err := c.UnlockConfig(ctx, "no-such-project", "", 0)
 	require.NoError(t, err)
 	assert.False(t, wasLocked)
 	assert.Zero(t, relockSeconds, "no registry entry means nothing was armed")
@@ -593,7 +633,7 @@ esac
 	// armRelockTimer's already-proven timing behavior: confirm the
 	// handler reports the armed window, then separately arm a tiny
 	// timer through the same store entry to prove it re-locks.
-	wasLocked, relockSeconds, err := c.UnlockConfig(ctx, name, 3)
+	wasLocked, relockSeconds, err := c.UnlockConfig(ctx, name, "", 3)
 	require.NoError(t, err)
 	assert.True(t, wasLocked)
 	assert.Equal(t, 3, relockSeconds, "an explicit relock_seconds must be echoed back as armed")
