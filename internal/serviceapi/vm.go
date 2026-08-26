@@ -1110,6 +1110,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				}
 			}
 			configLockState.del(req.Name)
+			egressPassthroughState.del(req.Name)
 		}()
 
 		// Stop iron-proxy for this project first. Best-effort — if

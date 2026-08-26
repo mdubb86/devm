@@ -359,3 +359,52 @@ func TestPassthroughEgress_TimerFiresRestore(t *testing.T) {
 	_, ok := egressPassthroughState.get(name)
 	assert.False(t, ok, "timer-driven restore must clear state (same code path as restrict)")
 }
+
+func TestVMStop_ClearsPassthroughState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	script := "#!/bin/sh\ncase \"$1\" in\n  list) echo '[]' ;;\nesac\nexit 0\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	const name = "stop-clears-passthrough"
+	ironProxyState.put(name, projectInfo{HTTPPort: 1, HTTPSPort: 2, DNSPort: 3})
+	t.Cleanup(func() {
+		ironProxyState.del(name)
+		egressPassthroughState.del(name)
+	})
+	_, _, cleanupSock := newFakeSoftnet(t, name)
+	defer cleanupSock()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Open a long window so the timer would otherwise still be armed.
+	_, _, err := c.PassthroughEgress(ctx, name, 3600)
+	require.NoError(t, err)
+	require.NotNil(t, mustEntry(t, egressPassthroughState, name).restore, "test setup: timer armed")
+
+	// /vm/stop must clear the passthrough state (state + timer),
+	// even though iron-proxy for this test project isn't actually
+	// running — the top-of-handler defer runs regardless of stop errors.
+	require.NoError(t, c.StopVM(ctx, name))
+
+	_, ok := egressPassthroughState.get(name)
+	assert.False(t, ok, "/vm/stop must clear egressPassthroughState so no timer fires against a dead softnet")
+}
+
+// mustEntry returns egressPassthroughState's entry for name or fails
+// the test — small helper that keeps the assertion above compact.
+func mustEntry(t *testing.T, s *egressPassthroughStore, name string) egressPassthroughEntry {
+	t.Helper()
+	e, ok := s.get(name)
+	require.True(t, ok, "expected an egressPassthroughState entry for %s", name)
+	return e
+}
