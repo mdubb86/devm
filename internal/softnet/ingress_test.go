@@ -149,10 +149,15 @@ func TestIngressReconcileChangedBindIP(t *testing.T) {
 		t.Fatalf("after apply, host port %d should be listening", p)
 	}
 
-	// Same host/guest port, different BindIP. 127.42.99.9 is not an
-	// lo0 alias, so the new bind fails — but the OLD listener must be
+	// Same host/guest port, different BindIP. 192.0.2.1 is TEST-NET-1
+	// (RFC 5737) — not assigned to any interface on macOS or Linux,
+	// so the bind fails with EADDRNOTAVAIL. The OLD listener must be
 	// gone regardless, and the failure must be reported.
-	results := ing.apply([]ExposePort{{GuestPort: 5432, BindIP: "127.42.99.9", HostPort: p}})
+	// (127.42.99.9 would work on macOS, where non-127.0.0.1 loopback
+	// requires an lo0 alias, but Linux treats every 127.x/8 address as
+	// loopback and binds it happily — the assertion needs an IP that's
+	// unbindable on both platforms.)
+	results := ing.apply([]ExposePort{{GuestPort: 5432, BindIP: "192.0.2.1", HostPort: p}})
 	if hostReachable(p) {
 		t.Fatalf("old 127.0.0.1:%d listener must close on BindIP change", p)
 	}
