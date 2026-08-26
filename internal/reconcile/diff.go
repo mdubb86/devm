@@ -112,6 +112,12 @@ const (
 	// once per changed volume; Key=volume name, Old/New=guest path.
 	// Bucket: BucketRestartVM — tart takes --dir args at run time.
 	KindVolumeChange
+	// KindSSHEndpointHealed is a synthetic change: emitted by the
+	// reconcile handler after it detected the project's :22 answered
+	// with a foreign SSH host key (a cross-wired ProjectIP) and healed
+	// it by reallocating the IP and rebinding listeners. Old = the
+	// cross-wired IP, New = the replacement.
+	KindSSHEndpointHealed
 )
 
 // changeBucket is the single source of truth that maps each ChangeKind
@@ -182,6 +188,9 @@ var changeBucket = map[ChangeKind]Bucket{
 	// Volumes are tart --dir args at run time; Apple Virtualization
 	// Framework doesn't hot-plug virtiofs shares.
 	KindVolumeChange: BucketRestartVM,
+	// Synthetic heal signal: the daemon fixed it in-place during the
+	// reconcile — nothing left for the CLI to dispatch.
+	KindSSHEndpointHealed: BucketLive,
 }
 
 // Bucket returns the bucket this ChangeKind belongs to.

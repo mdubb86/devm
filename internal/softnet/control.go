@@ -15,33 +15,46 @@ import (
 // `tart run --net-softnet` forks internally, invisible to the daemon's
 // process supervisor, so this control message — not a process signal — is
 // the reliable way the daemon reaches it at teardown.
-func applyControl(e *egress, ing *ingress, m ControlMsg, shutdown func()) error {
+// applyControl returns a reply payload for ops that ack (setExposeMap
+// answers with an ExposeAck line; every other op replies nil — their
+// senders close the connection without reading).
+func applyControl(e *egress, ing *ingress, m ControlMsg, shutdown func()) ([]byte, error) {
 	switch m.Op {
 	case "setPolicy":
 		p, err := ParsePolicy(m.Policy)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		e.setPolicy(p, m.ForwardTargets)
 		logf("control setPolicy policy=%s forward_targets=%v", p, m.ForwardTargets != nil)
-		return nil
+		return nil, nil
 	case "setExposeMap":
-		ing.apply(m.Expose)
-		logf("control setExposeMap ports=%d", len(m.Expose))
-		return nil
+		results := ing.apply(m.Expose)
+		ack := ExposeAck{OK: true, Results: results}
+		for _, r := range results {
+			if !r.OK {
+				ack.OK = false
+			}
+		}
+		logf("control setExposeMap ports=%d ok=%v", len(m.Expose), ack.OK)
+		reply, err := json.Marshal(ack)
+		if err != nil {
+			return nil, err
+		}
+		return reply, nil
 	case "setTestHosts":
 		e.setDirectTestHosts(m.DirectTestHosts)
 		logf("control setTestHosts hosts=%d", len(m.DirectTestHosts))
-		return nil
+		return nil, nil
 	case "shutdown":
 		logf("control shutdown")
 		if shutdown != nil {
 			shutdown()
 		}
-		return nil
+		return nil, nil
 	default:
 		logf("control unknown op=%q ignored", m.Op)
-		return nil // unknown ops are ignored, not fatal
+		return nil, nil // unknown ops are ignored, not fatal
 	}
 }
 
@@ -71,8 +84,14 @@ func serveControl(sockPath string, e *egress, ing *ingress, shutdown func()) (io
 						logf("control unmarshal: %v", err)
 						continue
 					}
-					if err := applyControl(e, ing, m, shutdown); err != nil {
+					reply, err := applyControl(e, ing, m, shutdown)
+					if err != nil {
 						logf("control apply %s: %v", m.Op, err)
+					}
+					if reply != nil {
+						if _, err := c.Write(append(reply, '\n')); err != nil {
+							logf("control reply %s: %v", m.Op, err)
+						}
 					}
 				}
 			}(conn)

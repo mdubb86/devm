@@ -93,6 +93,7 @@ func TestVMStart_LocksConfig_DefaultEnabled(t *testing.T) {
 	t.Cleanup(func() { _ = unlockConfigFiles(repoRoot) })
 
 	const name = "start-lock-default"
+	registerFakeSoftnetAtDeterministicPath(t, name)
 	t.Cleanup(func() { configLockState.del(name) })
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -131,6 +132,7 @@ func TestVMStart_ConfigLockDisabled_NoLock(t *testing.T) {
 	t.Cleanup(func() { _ = unlockConfigFiles(repoRoot) })
 
 	const name = "start-lock-disabled"
+	registerFakeSoftnetAtDeterministicPath(t, name)
 	t.Cleanup(func() { configLockState.del(name) })
 
 	disabled := false
@@ -170,6 +172,7 @@ func TestVMStart_LockFailureIsBestEffort(t *testing.T) {
 	require.NoError(t, os.Symlink("devm.yaml", cfgPath))
 
 	const name = "start-lock-besteffort"
+	registerFakeSoftnetAtDeterministicPath(t, name)
 	t.Cleanup(func() { configLockState.del(name) })
 
 	c := NewClientWithSocket(srv.socketPath)

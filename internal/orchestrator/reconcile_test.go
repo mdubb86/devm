@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,7 +98,7 @@ func startReconcileDaemon(t *testing.T) func() {
 
 	sup := healthyIronProxySupervisor(t, "x")
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, nopPackages{}, &fakeTartList{running: true, vmName: "x"}, sup, nil)
+	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, nopPackages{}, &fakeTartList{running: true, vmName: "x"}, sup, nil, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -143,7 +144,14 @@ func registerFakeSoftnetForOrchestratorTest(t *testing.T, projectID string) {
 			}
 			go func(c net.Conn) {
 				defer c.Close()
-				_, _ = bufio.NewReader(c).ReadString('\n')
+				line, err := bufio.NewReader(c).ReadString('\n')
+				if err != nil {
+					return
+				}
+				// setExposeMap is acked; other ops are fire-and-forget.
+				if strings.Contains(line, `"op":"setExposeMap"`) {
+					_, _ = c.Write([]byte(`{"ok":true,"results":[]}` + "\n"))
+				}
 			}(c)
 		}
 	}()
@@ -301,7 +309,7 @@ func startReconcileDaemonWithIronProxyCapture(t *testing.T, running bool) (clean
 	socket := identity.Prod.SocketPath()
 
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, nopPackages{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(t.TempDir()), nil)
+	serviceapi.RegisterReconcileHandler(srv, identity.Prod, serviceapi.NewProjectLocks(), nopApply{}, nopPackages{}, &fakeTartList{running: running, vmName: "x"}, supervisor.New(t.TempDir()), nil, 0)
 
 	req := &serviceapi.VMApplyIronProxyRequest{}
 	srv.Register("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {

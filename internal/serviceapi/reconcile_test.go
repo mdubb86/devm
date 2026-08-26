@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/identity"
@@ -55,12 +56,53 @@ func registerFakeSoftnet(t *testing.T, projectID string) {
 			}
 			go func(c net.Conn) {
 				defer c.Close()
-				_, _ = bufio.NewReader(c).ReadString('\n')
+				line, err := bufio.NewReader(c).ReadString('\n')
+				if err != nil {
+					return
+				}
+				// setExposeMap is acked; other ops are fire-and-forget.
+				if strings.Contains(line, `"op":"setExposeMap"`) {
+					_, _ = c.Write([]byte(`{"ok":true,"results":[]}` + "\n"))
+				}
 			}(c)
 		}
 	}()
 	softnetState.put(projectID, sock)
 	t.Cleanup(func() { softnetState.del(projectID) })
+}
+
+// registerFakeSoftnetAtDeterministicPath is registerFakeSoftnet for
+// tests that drive the real /vm/start handler: the handler overwrites
+// softnetState with SoftnetControlSock's deterministic path before
+// spawning, so the fake must listen exactly there for the (now fatal)
+// expose push to be acked. The path hashes the test's HOME-derived
+// runtime dir, so it can't collide with a live daemon's sockets.
+func registerFakeSoftnetAtDeterministicPath(t *testing.T, projectID string) {
+	t.Helper()
+	sock := SoftnetControlSock(identity.Prod, projectID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(sock), 0o700))
+	_ = os.Remove(sock)
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close(); os.Remove(sock) })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				line, err := bufio.NewReader(c).ReadString('\n')
+				if err != nil {
+					return
+				}
+				if strings.Contains(line, `"op":"setExposeMap"`) {
+					_, _ = c.Write([]byte(`{"ok":true,"results":[]}` + "\n"))
+				}
+			}(c)
+		}
+	}()
 }
 
 // createTestCA creates a dummy CA file in the test's HOME/.../ca/ directory.
@@ -95,7 +137,7 @@ func TestVMReconcile_NoSnapshotYet_TreatsAllAsFullDiff(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -136,7 +178,7 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks /* fake apply */, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks /* fake apply */, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -169,7 +211,7 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -216,7 +258,7 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -261,7 +303,7 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -388,7 +430,7 @@ func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -438,7 +480,7 @@ func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -481,7 +523,7 @@ func TestVMReconcile_NetworkAddSurfacesAsAppliedIronProxy(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -513,7 +555,7 @@ func TestVMReconcile_MissingIronProxy_EmitsKindIronProxyDown(t *testing.T) {
 	// A fresh supervisor with no adopted iron-proxy process reports the
 	// proxy as not Present/Running → computeProxyHealth returns MISSING.
 	sup := supervisor.New(t.TempDir())
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, sup, nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, sup, nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -540,7 +582,7 @@ func TestVMReconcile_StoppedVM_MissingIronProxy_DoesNotEmitKindIronProxyDown(t *
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	sup := supervisor.New(t.TempDir())
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: false, vmName: "p"}, sup, nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: false, vmName: "p"}, sup, nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -660,7 +702,7 @@ func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
 	fake := &fakeApply{}
 	// Use a fake tart that reports p-vm as NOT running.
 	fakeTart := &fakeTartList{running: false, vmName: "p"}
-	RegisterReconcileHandler(server, identity.Prod, locks, fake, &fakePackages{}, fakeTart, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, fake, &fakePackages{}, fakeTart, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -708,7 +750,7 @@ func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -751,7 +793,7 @@ func TestVMReconcile_ForwardsSSHBytesToApplyLive(t *testing.T) {
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	fake := &fakeApply{}
-	RegisterReconcileHandler(server, identity.Prod, locks, fake, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, fake, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -787,7 +829,7 @@ func TestReconcile_PackageChangesRouteToApplier(t *testing.T) {
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	pkgs := &fakePackages{}
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -835,7 +877,7 @@ func TestReconcile_PackagesApplierFailureAbortsAndKeepsSnapshot(t *testing.T) {
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	pkgs := &fakePackages{err: fmt.Errorf("apt exit 1")}
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
@@ -873,7 +915,7 @@ func TestReconcile_PackagesBeforeApplyLive(t *testing.T) {
 	var order []string
 	apply := &fakeApply{order: &order}
 	pkgs := &fakePackages{order: &order}
-	RegisterReconcileHandler(server, identity.Prod, locks, apply, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil)
+	RegisterReconcileHandler(server, identity.Prod, locks, apply, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
