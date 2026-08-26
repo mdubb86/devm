@@ -592,9 +592,34 @@ type BaseImage struct{}
 // either a bare host string (reachable, no secret injection) or a mapping
 // {host, secrets} (reachable, and the named secrets may be substituted for
 // that host). The secret name joins to a `!secret` env value elsewhere.
+//
+// Host may carry a path pattern after the hostname —
+// "release-assets.githubusercontent.com/github-production-release-asset/834082440/*"
+// — which scopes reachability to matching request paths (iron-proxy
+// allowlist `rules`; a pattern ending "/*" matches the subtree, anything
+// else is an exact segment-wise glob). Without a path the whole host is
+// reachable. Secret injection scope is always the host part alone: the
+// path gates reachability, never widens or narrows where secrets go.
 type AllowEntry struct {
 	Host    string
 	Secrets []string
+}
+
+// HostPart returns the hostname portion of Host, without any path pattern.
+func (a AllowEntry) HostPart() string {
+	if i := strings.IndexByte(a.Host, '/'); i >= 0 {
+		return a.Host[:i]
+	}
+	return a.Host
+}
+
+// PathPattern returns the path pattern portion of Host ("/..." inclusive
+// of the leading slash), or "" for a whole-host entry.
+func (a AllowEntry) PathPattern() string {
+	if i := strings.IndexByte(a.Host, '/'); i >= 0 {
+		return a.Host[i:]
+	}
+	return ""
 }
 
 // UnmarshalYAML accepts a scalar host or a {host, secrets} mapping.
@@ -625,6 +650,38 @@ type Network struct {
 	Allow []AllowEntry `yaml:"allow,omitempty"`
 }
 
+// validate checks each allow entry's host/path shape. The path pattern
+// is matched by iron-proxy against req.URL.Path only, so query and
+// fragment characters in a pattern would silently never match — reject
+// them here instead of letting the entry ship dead.
+func (n Network) validate() error {
+	for i, e := range n.Allow {
+		if e.Host == "" {
+			return fmt.Errorf("network.allow[%d]: host is required", i)
+		}
+		if strings.Contains(e.Host, "://") {
+			return fmt.Errorf("network.allow[%d]: %q: scheme prefix not allowed — write the bare host", i, e.Host)
+		}
+		if e.HostPart() == "" {
+			return fmt.Errorf("network.allow[%d]: %q: host part is empty", i, e.Host)
+		}
+		p := e.PathPattern()
+		if p == "" {
+			continue
+		}
+		if p == "/" {
+			return fmt.Errorf("network.allow[%d]: %q: trailing slash with no path pattern — drop it for the whole host, or add a pattern like /dl/*", i, e.Host)
+		}
+		if strings.ContainsAny(p, "?") {
+			return fmt.Errorf("network.allow[%d]: %q: query strings never participate in path matching — drop everything from '?'", i, e.Host)
+		}
+		if strings.ContainsAny(p, "#") {
+			return fmt.Errorf("network.allow[%d]: %q: fragments never participate in path matching — drop everything from '#'", i, e.Host)
+		}
+	}
+	return nil
+}
+
 // Domains is the reachability list: every allow entry's host, in order.
 func (n Network) Domains() []string {
 	out := make([]string, 0, len(n.Allow))
@@ -643,7 +700,10 @@ func (n Network) SecretHosts() map[string][]string {
 			if sets[s] == nil {
 				sets[s] = map[string]bool{}
 			}
-			sets[s][e.Host] = true
+			// Host part only: iron-proxy secret rules are host-based,
+			// and a path-scoped entry must not leak its path pattern
+			// into the injection scope.
+			sets[s][e.HostPart()] = true
 		}
 	}
 	out := make(map[string][]string, len(sets))
@@ -917,6 +977,9 @@ func (c Config) ValidateWithRoot(projectRoot string) error {
 
 func (c Config) Validate() error {
 	if err := c.Project.Validate(); err != nil {
+		return err
+	}
+	if err := c.Network.validate(); err != nil {
 		return err
 	}
 	if c.Disk != nil {

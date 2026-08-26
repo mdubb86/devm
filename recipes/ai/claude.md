@@ -68,7 +68,7 @@ network:
     - platform.claude.com       # OAuth token exchange + revoke
     - downloads.claude.ai       # native installer + plugin downloads
     - mcp-proxy.anthropic.com   # WebFetch / WebSearch (routed via Anthropic)
-    - raw.githubusercontent.com # plugin marketplace + /release-notes
+    - raw.githubusercontent.com/anthropics/*  # plugin marketplace + /release-notes
 ```
 
 ## Notes
@@ -106,8 +106,9 @@ network:
   runs once per VM lifetime).
 - **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`** kills Sentry error
   reporting + telemetry. Cleaner than allowlisting `*.sentry.io`.
-- **`raw.githubusercontent.com`** is needed for plugin marketplace
-  install counts and `/release-notes`. Drop it if you don't use those.
+- **`raw.githubusercontent.com/anthropics/*`** covers the plugin
+  marketplace and `/release-notes`. Drop it if you don't use those;
+  marketplaces from other owners need their own `/<owner>/*` entry.
 - If you also need Node for other reasons, install Node via the Node
   recipe — Claude Code's native installer doesn't depend on it.
 

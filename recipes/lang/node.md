@@ -45,8 +45,9 @@ path:
 network:
   allow:
     - fnm.vercel.app                  # fnm install script host
-    - github.com                      # fnm binary release
-    - objects.githubusercontent.com   # release-artifact storage
+    - github.com/Schniz/fnm/*         # fnm binary release
+    # release-asset storage — Schniz/fnm assets only
+    - release-assets.githubusercontent.com/github-production-release-asset/166045424/*
     - nodejs.org                      # fnm's default Node distribution mirror
     - registry.npmjs.org              # npm/pnpm/yarn package downloads
     - api.npmjs.org                   # npm metadata (search / audit / stats); pnpm hits it

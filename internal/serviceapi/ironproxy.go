@@ -12,6 +12,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/setsidshim"
 	"github.com/mdubb86/devm/internal/softnet"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -131,11 +132,42 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 	// allowed, so omitting it for a project with no network.allow would
 	// publish an unrestricted egress path instead of the deny-all one.
 	// `domains: []` is the deny-all shape.
+	//
+	// AllowList entries may carry a path pattern after the hostname
+	// ("host/path/*", see schema.AllowEntry). Those emit as allowlist
+	// `rules` ({host, paths}) — iron-proxy's domains list is host-only,
+	// so a path-bearing string placed there would never match anything.
+	// Patterns for the same host coalesce into one rule, first-seen
+	// host order preserved. The rules key is omitted entirely when no
+	// entry carries a path, keeping the domains-only shape stable for
+	// configs written before path scoping existed.
+	domains := []string{}
+	var ruleHosts []string
+	rulePaths := map[string][]string{}
+	for _, entry := range c.AllowList {
+		e := schema.AllowEntry{Host: entry}
+		p := e.PathPattern()
+		if p == "" {
+			domains = append(domains, entry)
+			continue
+		}
+		h := e.HostPart()
+		if _, seen := rulePaths[h]; !seen {
+			ruleHosts = append(ruleHosts, h)
+		}
+		rulePaths[h] = append(rulePaths[h], p)
+	}
+	allowCfg := map[string]any{"domains": domains}
+	if len(ruleHosts) > 0 {
+		rules := make([]any, 0, len(ruleHosts))
+		for _, h := range ruleHosts {
+			rules = append(rules, map[string]any{"host": h, "paths": rulePaths[h]})
+		}
+		allowCfg["rules"] = rules
+	}
 	transforms := []any{map[string]any{
-		"name": "allowlist",
-		"config": map[string]any{
-			"domains": append([]string{}, c.AllowList...),
-		},
+		"name":   "allowlist",
+		"config": allowCfg,
 	}}
 	var boundSecrets []IronSecret
 	for _, s := range c.Secrets {

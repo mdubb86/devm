@@ -109,6 +109,73 @@ func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 	assert.Equal(t, []any{"github.com", "*.npmjs.org"}, domains)
 }
 
+// Path-bearing allowlist entries emit as allowlist `rules` (host +
+// paths), not as domains — iron-proxy's domains list is host-only, so
+// a "host/path*" string placed there would be dead (never match).
+// Bare hosts stay in domains; patterns for the same host coalesce
+// into one rule; rules for distinct hosts keep first-seen order.
+func TestIronProxyConfigYAML_PathEntriesEmitAsRules(t *testing.T) {
+	c := IronProxyConfig{
+		HTTPListen:  "127.0.0.1:8080",
+		HTTPSListen: "127.0.0.1:8443",
+		DNSListen:   "127.0.0.1:8053",
+		DNSProxyIP:  "192.0.2.1",
+		CACertPath:  "/tmp/root.crt",
+		CAKeyPath:   "/tmp/root.key",
+		AllowList: []string{
+			"github.com",
+			"release-assets.githubusercontent.com/gh-prod/834082440/*",
+			"api.github.com/repos/o/r/releases",
+			"release-assets.githubusercontent.com/gh-prod/916455101/*",
+		},
+	}
+	out, err := c.YAML()
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(out, &got))
+
+	transforms := got["transforms"].([]any)
+	require.Len(t, transforms, 1)
+	transform := transforms[0].(map[string]any)
+	assert.Equal(t, "allowlist", transform["name"])
+	cfg := transform["config"].(map[string]any)
+
+	assert.Equal(t, []any{"github.com"}, cfg["domains"].([]any),
+		"path-bearing entries must not leak into domains")
+
+	rules := cfg["rules"].([]any)
+	require.Len(t, rules, 2)
+	r0 := rules[0].(map[string]any)
+	assert.Equal(t, "release-assets.githubusercontent.com", r0["host"])
+	assert.Equal(t, []any{"/gh-prod/834082440/*", "/gh-prod/916455101/*"}, r0["paths"].([]any),
+		"same-host patterns coalesce into one rule")
+	r1 := rules[1].(map[string]any)
+	assert.Equal(t, "api.github.com", r1["host"])
+	assert.Equal(t, []any{"/repos/o/r/releases"}, r1["paths"].([]any))
+}
+
+// A path-free AllowList must not emit a rules key at all — the
+// domains-only shape is what adopt-in-place compares against for
+// pre-existing configs.
+func TestIronProxyConfigYAML_NoRulesKeyWithoutPathEntries(t *testing.T) {
+	c := IronProxyConfig{
+		HTTPListen:  "127.0.0.1:8080",
+		HTTPSListen: "127.0.0.1:8443",
+		DNSListen:   "127.0.0.1:8053",
+		DNSProxyIP:  "192.0.2.1",
+		CACertPath:  "/tmp/root.crt",
+		CAKeyPath:   "/tmp/root.key",
+		AllowList:   []string{"github.com"},
+	}
+	out, err := c.YAML()
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(out, &got))
+	cfg := got["transforms"].([]any)[0].(map[string]any)["config"].(map[string]any)
+	_, hasRules := cfg["rules"]
+	assert.False(t, hasRules, "rules key must be absent when no entry carries a path")
+}
+
 // An empty AllowList must still emit the allowlist transform, with no
 // domains. iron-proxy v0.45.0 runs no egress check at all when the
 // transform is absent — an omitted transform is allow-all. The
