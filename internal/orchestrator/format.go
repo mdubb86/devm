@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/mdubb86/devm/internal/reconcile"
@@ -25,6 +26,12 @@ type StatusResult struct {
 	PendingRecreate int
 	Drift           []DriftItem
 	Routing         serviceapi.RoutingStatus
+
+	// Egress is the project's current egress policy state (restricted
+	// vs. passthrough). Populated only when the VM is running; nil
+	// otherwise. Rendered under the Routing section — a highlighted
+	// row when passthrough is active, silent when restricted.
+	Egress *serviceapi.EgressStatus
 
 	// DNSHealthy is true when the system resolver can reach the daemon's
 	// DNS server for *.test names. DNSError describes the failure when
@@ -112,6 +119,7 @@ func FormatStatusText(r StatusResult) string {
 		fmt.Fprintf(&b, "Drift: %s — %s\n", d.Kind, d.Detail)
 	}
 	b.WriteString(formatRouting(r.Routing))
+	b.WriteString(formatEgress(r.Egress))
 	b.WriteString(formatDNSHealth(r))
 	b.WriteString(formatCAHealth(r))
 	b.WriteString(formatProxyHealth(r))
@@ -152,6 +160,26 @@ func formatDaemonStatus(d DaemonStatus) string {
 		fmt.Fprintf(&b, "  error: %s\n", d.Error)
 	}
 	return b.String()
+}
+
+// formatEgress renders the egress policy line under Routing. Silent
+// under the default "restricted" state (a per-project baseline is
+// implied). Highlighted (uppercase, with a countdown) under
+// "passthrough" to make the user aware the window is open. Silent
+// entirely when eg is nil (VM not running, or daemon didn't return
+// the field).
+func formatEgress(eg *serviceapi.EgressStatus) string {
+	if eg == nil {
+		return ""
+	}
+	if eg.Policy != "passthrough" || eg.PassthroughExpiresAt == nil {
+		return "  egress:  RESTRICTED\n"
+	}
+	remaining := time.Until(*eg.PassthroughExpiresAt).Round(time.Second)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return fmt.Sprintf("  egress:  PASSTHROUGH — auto-restores in %s\n", remaining)
 }
 
 func formatRouting(r serviceapi.RoutingStatus) string {
@@ -518,6 +546,7 @@ func FormatStatusJSON(r StatusResult) string {
 		PendingChanges pending                  `json:"pending_changes"`
 		Drift          []drift                  `json:"drift"`
 		Routing        serviceapi.RoutingStatus `json:"routing"`
+		Egress         *serviceapi.EgressStatus `json:"egress,omitempty"`
 		IronProxy      *ironProxy               `json:"iron_proxy,omitempty"`
 	}
 	type body struct {
@@ -564,6 +593,7 @@ func FormatStatusJSON(r StatusResult) string {
 			PendingChanges: pending{Live: r.PendingLive, Recreate: r.PendingRecreate},
 			Drift:          drifts,
 			Routing:        r.Routing,
+			Egress:         r.Egress,
 		}
 		if r.ProxyHealth != nil {
 			b.Project.IronProxy = &ironProxy{
