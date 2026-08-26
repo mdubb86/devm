@@ -1,7 +1,9 @@
 package serviceapi
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"net"
 	"strings"
@@ -57,6 +59,48 @@ func genSigner(t *testing.T) (ssh.Signer, []byte) {
 	sshPub, err := ssh.NewPublicKey(pub)
 	require.NoError(t, err)
 	return signer, ssh.MarshalAuthorizedKey(sshPub)
+}
+
+// A server holding multiple host keys (the real guest sshd has
+// ed25519 + ECDSA + RSA; devm manages only ed25519) must still verify:
+// the probe pins negotiation to the expected key's algorithm so the
+// server can't present a sibling key that compares as "foreign". This
+// is the false-cross-wire the e2e caught — an un-pinned handshake
+// negotiated a non-ed25519 key from a healthy guest and reconcile
+// "healed" an IP that was never cross-wired.
+func TestVerifySSHHostKey_MultiKeyServerMatchesManagedKey(t *testing.T) {
+	edSigner, edPub := genSigner(t)
+	ecdsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	ecdsaSigner, err := ssh.NewSignerFromKey(ecdsaKey)
+	require.NoError(t, err)
+
+	cfg := &ssh.ServerConfig{
+		PasswordCallback: func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
+			return nil, ssh.ErrNoAuth
+		},
+	}
+	// ECDSA added FIRST so an un-pinned client that follows server
+	// order would get the non-managed key.
+	cfg.AddHostKey(ecdsaSigner)
+	cfg.AddHostKey(edSigner)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _, _, _ = ssh.NewServerConn(c, cfg)
+			}(c)
+		}
+	}()
+
+	require.NoError(t, verifySSHHostKey(ln.Addr().String(), edPub, 3*time.Second))
 }
 
 func TestVerifySSHHostKey_Match(t *testing.T) {

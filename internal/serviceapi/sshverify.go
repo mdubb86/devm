@@ -47,7 +47,16 @@ func verifySSHHostKey(addr string, expectedPub []byte, timeout time.Duration) er
 			presented = key
 			return nil // record and continue; the comparison happens below
 		},
-		Timeout: timeout,
+		// Pin the negotiation to the expected key's algorithm. The
+		// guest sshd holds several host keys (ed25519, ECDSA, RSA) and
+		// devm manages only the ed25519 one — left to its default
+		// preference order, the handshake can negotiate a different
+		// algorithm and present a key that is genuinely the guest's
+		// yet compares as "foreign", turning a healthy endpoint into a
+		// false cross-wire. (OpenSSH avoids this the same way: a
+		// known_hosts entry steers the algorithm choice.)
+		HostKeyAlgorithms: []string{want.Type()},
+		Timeout:           timeout,
 	}
 	// No auth methods: the handshake completes key exchange (running
 	// the callback above), then fails authentication — which is fine,
