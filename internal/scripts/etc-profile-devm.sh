@@ -18,3 +18,13 @@ if [ -r /etc/environment ]; then
     . /etc/environment
     set +a
 fi
+
+# Auto-cd to the workspace directory so SSH interactive sessions (and
+# any bash -l invocation) land in the project root, matching what
+# with-devm-env already does for devm exec / devm shell. Without it,
+# `ssh sewtrue` drops the user in $HOME and tools that treat cwd as the
+# project root (supabase start, pnpm install, etc.) misfire. Silent
+# no-op if $WORKSPACE isn't set or the path doesn't exist.
+if [ -n "$WORKSPACE" ] && [ -d "$WORKSPACE" ]; then
+    cd "$WORKSPACE" || true
+fi
