@@ -62,10 +62,13 @@ Each allow entry accepts two forms:
 
 Bare `*` is the open-egress sentinel: it matches any destination host, permitting unrestricted outbound access through iron-proxy.
 
+A host may carry a path pattern: everything from the first `/` scopes reachability to matching request paths. A pattern ending `/*` matches the whole subtree; anything else must match exactly. Query strings never participate in matching — drop them. Secrets on a path-scoped entry still inject host-wide.
+
 ```yaml
 network:
   allow:
-    - api.example.com                        # bare scalar
+    - api.example.com                        # bare scalar — whole host
+    - cdn.example.com/dl/v2/*                # only this path subtree
     - host: api.other.com
       secrets: [my_api_key]                  # inject my_api_key only to this host
     - "*"                                    # open egress — any host

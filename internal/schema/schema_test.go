@@ -658,6 +658,82 @@ func TestNetwork_SecretHosts_UnionsHostsPerSecret(t *testing.T) {
 	assert.Len(t, got, 2)
 }
 
+func TestAllowEntry_HostPartAndPathPattern(t *testing.T) {
+	cases := []struct {
+		entry string
+		host  string
+		path  string
+	}{
+		{"github.com", "github.com", ""},
+		{"*.npmjs.org", "*.npmjs.org", ""},
+		{"*", "*", ""},
+		{"release-assets.githubusercontent.com/github-production-release-asset/834082440/*",
+			"release-assets.githubusercontent.com", "/github-production-release-asset/834082440/*"},
+		{"*.githubusercontent.com/foo/*", "*.githubusercontent.com", "/foo/*"},
+		{"api.github.com/repos/o/r/releases", "api.github.com", "/repos/o/r/releases"},
+	}
+	for _, c := range cases {
+		e := AllowEntry{Host: c.entry}
+		assert.Equal(t, c.host, e.HostPart(), "HostPart(%q)", c.entry)
+		assert.Equal(t, c.path, e.PathPattern(), "PathPattern(%q)", c.entry)
+	}
+}
+
+func TestNetworkAllow_Validate_PathEntries(t *testing.T) {
+	valid := []string{
+		"github.com",
+		"release-assets.githubusercontent.com/github-production-release-asset/834082440/*",
+		"api.github.com/repos/o/r/releases",
+		"*.example.com/dl/*",
+	}
+	for _, h := range valid {
+		n := Network{Allow: []AllowEntry{{Host: h}}}
+		assert.NoError(t, n.validate(), "expected %q to validate", h)
+	}
+	invalid := []struct {
+		host    string
+		errPart string
+	}{
+		{"https://github.com/foo", "scheme"},
+		{"github.com/", "path"},
+		{"github.com/dl?ref=x", "query"},
+		{"github.com/dl#frag", "fragment"},
+		{"/just/a/path", "host"},
+		{"", "host"},
+	}
+	for _, c := range invalid {
+		n := Network{Allow: []AllowEntry{{Host: c.host}}}
+		err := n.validate()
+		require.Error(t, err, "expected %q to be rejected", c.host)
+		assert.Contains(t, err.Error(), c.errPart, "error for %q", c.host)
+	}
+}
+
+// TestNetwork_Domains_KeepsFullEntry pins that Domains() preserves the
+// path-bearing form verbatim: the reconcile diff and the daemon wire
+// both carry the full entry so a path edit is a visible change.
+func TestNetwork_Domains_KeepsFullEntry(t *testing.T) {
+	n := Network{Allow: []AllowEntry{
+		{Host: "github.com"},
+		{Host: "release-assets.githubusercontent.com/gh-prod/834082440/*"},
+	}}
+	assert.Equal(t, []string{
+		"github.com",
+		"release-assets.githubusercontent.com/gh-prod/834082440/*",
+	}, n.Domains())
+}
+
+// TestNetwork_SecretHosts_UsesHostPart pins that secret injection scope
+// is the host part only: iron-proxy secret rules are host-based, and a
+// path-scoped allow entry must not leak its path into the secret rule.
+func TestNetwork_SecretHosts_UsesHostPart(t *testing.T) {
+	n := Network{Allow: []AllowEntry{
+		{Host: "api.github.com/repos/*", Secrets: []string{"gh"}},
+		{Host: "uploads.github.com", Secrets: []string{"gh"}},
+	}}
+	assert.Equal(t, []string{"api.github.com", "uploads.github.com"}, n.SecretHosts()["gh"])
+}
+
 func TestEnvValue_TokenFor(t *testing.T) {
 	assert.Equal(t, "__DEVM_SECRET_github_token__", TokenFor("github_token"))
 	assert.Equal(t, "__DEVM_SECRET_x__", TokenFor("x"))
