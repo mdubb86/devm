@@ -104,6 +104,12 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 		// hsErr != nil: daemon unreachable — res.ProxyHealth stays nil
 		// and the format layer omits the iron-proxy line rather than
 		// claiming a status we don't have.
+
+		egCtx, egCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if eg, err := c.EgressStatus(egCtx, cfg.Project.Name); err == nil {
+			res.Egress = eg
+		}
+		egCancel()
 	}
 
 	if state != "running" {

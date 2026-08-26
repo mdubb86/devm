@@ -152,6 +152,16 @@ type VMEgressRestrictResponse struct {
 	WasOpen bool `json:"was_open"`
 }
 
+// EgressStatus is the response for GET /vm/egress-status. Policy is
+// "restricted" (the default ENFORCED posture) or "passthrough" (an
+// active `devm passthrough` window). PassthroughExpiresAt is set
+// only when a window is active — the deadline at which the daemon
+// will auto-restore ENFORCED.
+type EgressStatus struct {
+	Policy               string     `json:"policy"`
+	PassthroughExpiresAt *time.Time `json:"passthrough_expires_at,omitempty"`
+}
+
 // VMEnforcementConfigResponse is the body shape for GET
 // /vm/enforcement-config. Egress allow-listing and DNS resolution are
 // enforced by softnet over the control socket (POST
@@ -1379,6 +1389,29 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 		egressPassthroughState.del(req.Name)
 		writeJSON(w, VMEgressRestrictResponse{WasOpen: true})
+	})
+
+	// /vm/egress-status returns whether a passthrough window is
+	// currently active for the project. Read-only: never mutates
+	// state. Suitable for `devm status` polling.
+	s.Register("/vm/egress-status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "name query param required", http.StatusBadRequest)
+			return
+		}
+		entry, ok := egressPassthroughState.get(name)
+		resp := EgressStatus{Policy: "restricted"}
+		if ok {
+			resp.Policy = "passthrough"
+			expiresAt := entry.expiresAt
+			resp.PassthroughExpiresAt = &expiresAt
+		}
+		writeJSON(w, resp)
 	})
 
 	s.Register("/vm/status", func(w http.ResponseWriter, r *http.Request) {

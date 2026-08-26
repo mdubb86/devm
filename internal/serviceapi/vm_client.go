@@ -185,6 +185,34 @@ func (c *Client) RestrictEgress(ctx context.Context, name string) (wasOpen bool,
 	return resp.WasOpen, nil
 }
 
+// EgressStatus queries the daemon's egress policy state for the
+// project. Returns "restricted" when no passthrough window is
+// active, "passthrough" with a non-nil expiry when one is. Returns
+// nil (not an error) on a 404 — the project has no tracked state.
+func (c *Client) EgressStatus(ctx context.Context, name string) (*EgressStatus, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://localhost/vm/egress-status?name="+name, nil)
+	if err != nil {
+		return nil, err
+	}
+	r, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Body.Close()
+	if r.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return nil, fmt.Errorf("vm/egress-status: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp EgressStatus
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // Reconcile calls POST /vm/reconcile with cfg + workspace_host_path.
 // The daemon diffs cfg against the project's last-applied snapshot,
 // applies every live-bucket change in place, and returns what still

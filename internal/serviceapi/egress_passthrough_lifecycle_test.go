@@ -408,3 +408,46 @@ func mustEntry(t *testing.T, s *egressPassthroughStore, name string) egressPasst
 	require.True(t, ok, "expected an egressPassthroughState entry for %s", name)
 	return e
 }
+
+func TestEgressStatus_ReportsPassthroughAndRestricted(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	const name = "egress-status-report"
+	ironProxyState.put(name, projectInfo{HTTPPort: 1, HTTPSPort: 2, DNSPort: 3})
+	t.Cleanup(func() {
+		ironProxyState.del(name)
+		egressPassthroughState.del(name)
+	})
+	_, _, cleanupSock := newFakeSoftnet(t, name)
+	defer cleanupSock()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Restricted baseline (no window active).
+	before, err := c.EgressStatus(ctx, name)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	assert.Equal(t, "restricted", before.Policy)
+	assert.Nil(t, before.PassthroughExpiresAt)
+
+	// Open a window; status reports passthrough with a future expiry.
+	_, _, err = c.PassthroughEgress(ctx, name, 60)
+	require.NoError(t, err)
+	during, err := c.EgressStatus(ctx, name)
+	require.NoError(t, err)
+	require.NotNil(t, during)
+	assert.Equal(t, "passthrough", during.Policy)
+	require.NotNil(t, during.PassthroughExpiresAt)
+	assert.WithinDuration(t, time.Now().Add(60*time.Second), *during.PassthroughExpiresAt, 5*time.Second)
+}
