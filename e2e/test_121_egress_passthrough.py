@@ -142,9 +142,12 @@ def test_passthrough_status_json_reports_state(workspace, devm, sandbox_name):
         assert r.returncode == 0, f"devm status failed:\n{r.stderr.decode()}"
         return json.loads(r.stdout)
 
+    # Egress nests under `project`, alongside `routing` — matches the
+    # rest of the per-project block in devm status --json.
     before = status()
-    assert before.get("egress", {}).get("policy") == "restricted", (
-        f"pre-passthrough status must report restricted; got {before.get('egress')!r}"
+    before_egress = before.get("project", {}).get("egress", {})
+    assert before_egress.get("policy") == "restricted", (
+        f"pre-passthrough status must report restricted; got {before_egress!r}"
     )
 
     r = subprocess.run(
@@ -154,7 +157,7 @@ def test_passthrough_status_json_reports_state(workspace, devm, sandbox_name):
     assert r.returncode == 0
 
     during = status()
-    egress = during.get("egress") or {}
+    egress = during.get("project", {}).get("egress") or {}
     assert egress.get("policy") == "passthrough", (
         f"during-passthrough status must report passthrough; got {egress!r}"
     )
