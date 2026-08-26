@@ -1,10 +1,19 @@
 package serviceapi
 
 import (
+	"context"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,4 +93,269 @@ func TestEgressPassthroughStore_DefaultDurationConst(t *testing.T) {
 	// 30-second window. Longer defaults raise the security exposure;
 	// shorter ones make the user re-invoke mid-supervision.
 	assert.Equal(t, 30, defaultPassthroughSeconds)
+}
+
+// newFakeSoftnet stands up a temporary unix socket that captures the
+// last setPolicy JSON message sent to it. Returned sockPath is
+// registered with SetSoftnetControlSockForTest so /vm/* handlers find
+// it. cleanup closes the listener and clears state.
+func newFakeSoftnet(t *testing.T, projectID string) (sockPath string, last func() string, cleanup func()) {
+	t.Helper()
+	// os.MkdirTemp("/tmp", ...) rather than t.TempDir(): t.TempDir()
+	// embeds the (long) test name in the path, which overflows unix
+	// sun_path's ~104-byte limit on macOS and fails the Listen below.
+	dir, err := os.MkdirTemp("/tmp", "softnet-fake-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sockPath = filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	var lastMsg string
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			buf, _ := io.ReadAll(conn)
+			mu.Lock()
+			lastMsg = string(buf)
+			mu.Unlock()
+			conn.Close()
+		}
+	}()
+	SetSoftnetControlSockForTest(projectID, sockPath)
+	last = func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return lastMsg
+	}
+	cleanup = func() {
+		_ = ln.Close()
+		softnetState.del(projectID)
+	}
+	return
+}
+
+func TestPassthroughEgress_FlipsSoftnetToOpen(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	const name = "passthrough-flip"
+	ironProxyState.put(name, projectInfo{HTTPPort: 1, HTTPSPort: 2, DNSPort: 3})
+	t.Cleanup(func() {
+		ironProxyState.del(name)
+		egressPassthroughState.del(name)
+	})
+	_, lastMsg, cleanupSock := newFakeSoftnet(t, name)
+	defer cleanupSock()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	wasOpen, expires, err := c.PassthroughEgress(ctx, name, 60)
+	require.NoError(t, err)
+	assert.False(t, wasOpen, "fresh open must report was_open=false")
+	assert.Equal(t, 60, expires)
+
+	// Give the socket a moment to receive the write.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && !strings.Contains(lastMsg(), `"policy":"OPEN"`) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	assert.Contains(t, lastMsg(), `"op":"setPolicy"`)
+	assert.Contains(t, lastMsg(), `"policy":"OPEN"`)
+
+	entry, ok := egressPassthroughState.get(name)
+	require.True(t, ok, "state entry must exist after open")
+	assert.WithinDuration(t, time.Now().Add(60*time.Second), entry.expiresAt, 2*time.Second)
+}
+
+func TestPassthroughEgress_ZeroDurationUsesDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	const name = "passthrough-default-dur"
+	ironProxyState.put(name, projectInfo{HTTPPort: 1, HTTPSPort: 2, DNSPort: 3})
+	t.Cleanup(func() {
+		ironProxyState.del(name)
+		egressPassthroughState.del(name)
+	})
+	_, _, cleanupSock := newFakeSoftnet(t, name)
+	defer cleanupSock()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	_, expires, err := c.PassthroughEgress(ctx, name, 0)
+	require.NoError(t, err)
+	assert.Equal(t, defaultPassthroughSeconds, expires, "duration <= 0 must fall back to defaultPassthroughSeconds")
+}
+
+func TestPassthroughEgress_ReplacesInFlightTimer(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	const name = "passthrough-replace-timer"
+	ironProxyState.put(name, projectInfo{HTTPPort: 1, HTTPSPort: 2, DNSPort: 3})
+	t.Cleanup(func() {
+		ironProxyState.del(name)
+		egressPassthroughState.del(name)
+	})
+	_, _, cleanupSock := newFakeSoftnet(t, name)
+	defer cleanupSock()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// First open — very long.
+	_, _, err := c.PassthroughEgress(ctx, name, 3600)
+	require.NoError(t, err)
+	first, _ := egressPassthroughState.get(name)
+
+	// Second open — very short.
+	_, _, err = c.PassthroughEgress(ctx, name, 1)
+	require.NoError(t, err)
+	second, _ := egressPassthroughState.get(name)
+
+	assert.True(t, second.expiresAt.Before(first.expiresAt), "second open must shorten expiresAt")
+}
+
+func TestRestrictEgress_ClearsStateAndFlipsEnforced(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	const name = "restrict-clears"
+	ironProxyState.put(name, projectInfo{HTTPPort: 1, HTTPSPort: 2, DNSPort: 3})
+	t.Cleanup(func() {
+		ironProxyState.del(name)
+		egressPassthroughState.del(name)
+	})
+	_, lastMsg, cleanupSock := newFakeSoftnet(t, name)
+	defer cleanupSock()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Open first.
+	_, _, err := c.PassthroughEgress(ctx, name, 3600)
+	require.NoError(t, err)
+
+	// Restrict.
+	wasOpen, err := c.RestrictEgress(ctx, name)
+	require.NoError(t, err)
+	assert.True(t, wasOpen)
+
+	// State cleared.
+	_, ok := egressPassthroughState.get(name)
+	assert.False(t, ok, "restrict must del the state entry")
+
+	// Last softnet message was ENFORCED.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && !strings.Contains(lastMsg(), `"policy":"ENFORCED"`) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	assert.Contains(t, lastMsg(), `"policy":"ENFORCED"`)
+}
+
+func TestRestrictEgress_UnknownProject_NoOpNoError(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	wasOpen, err := c.RestrictEgress(ctx, "no-such-project")
+	require.NoError(t, err)
+	assert.False(t, wasOpen, "restrict of an unknown project returns 200 was_open=false")
+}
+
+func TestPassthroughEgress_TimerFiresRestore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	bin := filepath.Join(t.TempDir(), "tart-fake")
+	// tart list must return the VM as running so armPassthroughRestoreTimer's
+	// re-check doesn't early-out. Return a running row matching the project name.
+	script := "#!/bin/sh\ncase \"$1\" in\n  list) echo '[{\"Name\":\"passthrough-timer\",\"State\":\"running\"}]' ;;\nesac\nexit 0\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	const name = "passthrough-timer"
+	ironProxyState.put(name, projectInfo{HTTPPort: 1, HTTPSPort: 2, DNSPort: 3})
+	t.Cleanup(func() {
+		ironProxyState.del(name)
+		egressPassthroughState.del(name)
+	})
+	_, lastMsg, cleanupSock := newFakeSoftnet(t, name)
+	defer cleanupSock()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Open for 1 second.
+	_, _, err := c.PassthroughEgress(ctx, name, 1)
+	require.NoError(t, err)
+
+	// Wait past deadline + a small margin for the timer + softnet write.
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	for time.Now().Before(deadline) && !strings.Contains(lastMsg(), `"policy":"ENFORCED"`) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	assert.Contains(t, lastMsg(), `"policy":"ENFORCED"`, "timer must fire restore to ENFORCED")
+
+	_, ok := egressPassthroughState.get(name)
+	assert.False(t, ok, "timer-driven restore must clear state (same code path as restrict)")
 }

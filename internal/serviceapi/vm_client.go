@@ -132,6 +132,59 @@ func (c *Client) LockConfig(ctx context.Context, name string) error {
 	return nil
 }
 
+// PassthroughEgress calls POST /vm/passthrough-egress, flipping the
+// project's softnet policy from ENFORCED to OPEN for a bounded
+// window. durationSeconds <= 0 asks the daemon to apply
+// defaultPassthroughSeconds (30). Returns whether the project had an
+// existing open window (drives "opened" vs "renewed" user message)
+// and the seconds the daemon actually armed.
+func (c *Client) PassthroughEgress(ctx context.Context, name string, durationSeconds int) (wasOpen bool, expiresSeconds int, err error) {
+	body, err := json.Marshal(VMEgressPassthroughRequest{Name: name, DurationSeconds: durationSeconds})
+	if err != nil {
+		return false, 0, err
+	}
+	r, err := c.post(ctx, "/vm/passthrough-egress", body)
+	if err != nil {
+		return false, 0, err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return false, 0, fmt.Errorf("vm/passthrough-egress: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp VMEgressPassthroughResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return false, 0, err
+	}
+	return resp.WasOpen, resp.ExpiresSeconds, nil
+}
+
+// RestrictEgress calls POST /vm/restrict-egress, restoring the
+// project's softnet policy to ENFORCED and cancelling any pending
+// passthrough restore timer. Returns whether there was a window
+// to restrict — false is not an error; the CLI reports it as a
+// no-op.
+func (c *Client) RestrictEgress(ctx context.Context, name string) (wasOpen bool, err error) {
+	body, err := json.Marshal(VMConfigLockRequest{Name: name})
+	if err != nil {
+		return false, err
+	}
+	r, err := c.post(ctx, "/vm/restrict-egress", body)
+	if err != nil {
+		return false, err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return false, fmt.Errorf("vm/restrict-egress: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp VMEgressRestrictResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return false, err
+	}
+	return resp.WasOpen, nil
+}
+
 // Reconcile calls POST /vm/reconcile with cfg + workspace_host_path.
 // The daemon diffs cfg against the project's last-applied snapshot,
 // applies every live-bucket change in place, and returns what still

@@ -122,6 +122,36 @@ type VMConfigLockResponse struct {
 	RelockSeconds int  `json:"relock_seconds,omitempty"`
 }
 
+// VMEgressPassthroughRequest is the body shape for POST
+// /vm/passthrough-egress. DurationSeconds <= 0 lets the daemon apply
+// defaultPassthroughSeconds — the CLI passes 0 when the user did not
+// specify --for.
+type VMEgressPassthroughRequest struct {
+	Name            string `json:"name"`
+	DurationSeconds int    `json:"duration_seconds,omitempty"`
+}
+
+// VMEgressPassthroughResponse is the response for POST
+// /vm/passthrough-egress. WasOpen reports whether the project had an
+// active passthrough window at the moment of the request — the CLI
+// uses it to distinguish "opened fresh" from "renewed existing".
+// ExpiresSeconds is the duration the daemon actually armed (the
+// caller's value, or defaultPassthroughSeconds if the caller passed
+// <= 0), suitable for a "auto-restores in Xs" user message.
+type VMEgressPassthroughResponse struct {
+	WasOpen        bool `json:"was_open"`
+	ExpiresSeconds int  `json:"expires_seconds"`
+}
+
+// VMEgressRestrictResponse is the response for POST
+// /vm/restrict-egress. WasOpen reports whether there was a window
+// to restrict — false means it was already ENFORCED (or the project
+// wasn't tracked), which the CLI surfaces as a "nothing to do"
+// message rather than an error.
+type VMEgressRestrictResponse struct {
+	WasOpen bool `json:"was_open"`
+}
+
 // VMEnforcementConfigResponse is the body shape for GET
 // /vm/enforcement-config. Egress allow-listing and DNS resolution are
 // enforced by softnet over the control socket (POST
@@ -361,6 +391,56 @@ func armRelockTimer(locks *ProjectLocks, tr TartLister, name string, d time.Dura
 		}
 	})
 	configLockState.setTimer(name, t)
+}
+
+// armPassthroughRestoreTimer schedules egress to be restored to
+// ENFORCED after d, the bound `devm passthrough --for <dur>` (or the
+// default) puts on a supervised window. Installing it via
+// egressPassthroughState.setTimer stops+replaces whatever restore
+// timer was already pending for name, so repeated passthroughs (or a
+// restrict in between) never leave two timers racing.
+//
+// The callback runs on its own goroutine (time.AfterFunc, not
+// inline), so taking locks.Lock(name) here is not nested under any
+// handler's lock. It re-checks egressPassthroughState and the VM's
+// running state right before signalling softnet — by the time it
+// fires, the project may have been stopped, torn down, or restricted
+// early by `devm restrict`, all of which call del/stopTimer and so
+// would have already cancelled this timer; the re-check is therefore
+// belt-and-suspenders against the timer having fired the instant
+// before a racing cancellation.
+func armPassthroughRestoreTimer(locks *ProjectLocks, tr TartLister, ntpPort int, name string, d time.Duration) {
+	t := time.AfterFunc(d, func() {
+		unlock := locks.Lock(name)
+		defer unlock()
+
+		if _, ok := egressPassthroughState.get(name); !ok {
+			return // restricted/stopped/torn down since open — nothing to restore
+		}
+		vms, err := tr.List(context.Background())
+		if err != nil {
+			// Fail closed: a transient `tart list` error means we can't
+			// confirm the VM is stopped, so restore rather than leave
+			// a running VM permissively open past the intended window.
+			daemonlog.Errorf("egress: auto-restore %s: tart list failed, restoring fail-closed: %v", name, err)
+		} else if !vmRunning(vms, name) {
+			egressPassthroughState.del(name)
+			return // VM confirmed stopped — no softnet to signal
+		}
+		sock := softnetState.get(name)
+		info, hasInfo := ironProxyState.get(name)
+		if sock == "" || !hasInfo {
+			// Stop path won the race — state's already cleared, softnet's
+			// gone. Nothing to do.
+			egressPassthroughState.del(name)
+			return
+		}
+		if err := sendSoftnetEnforced(sock, info, ntpPort); err != nil {
+			daemonlog.Errorf("egress: auto-restore %s: %v (window state cleared; softnet may remain OPEN until next reconcile)", name, err)
+		}
+		egressPassthroughState.del(name)
+	})
+	egressPassthroughState.setTimer(name, t)
 }
 
 // shutdownSoftnet asks projectID's softnet child to exit, over its control
@@ -1192,6 +1272,112 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 
 		writeJSON(w, VMConfigLockResponse{WasLocked: ok})
+	})
+
+	// /vm/passthrough-egress opens a time-bounded egress passthrough
+	// window: flips softnet from ENFORCED to OPEN for the duration,
+	// arms a timer to restore ENFORCED on expiry. Repeat opens
+	// replace the existing timer (matches configLockState.setTimer's
+	// replace-not-add behavior). Reconcile does NOT close the window;
+	// only the timer, `devm restrict`, or /vm/stop do.
+	s.Register("/vm/passthrough-egress", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMEgressPassthroughRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		sock := softnetState.get(req.Name)
+		if sock == "" {
+			http.Error(w, "softnet control socket missing — was /vm/start called for this project?",
+				http.StatusPreconditionFailed)
+			return
+		}
+
+		_, wasOpen := egressPassthroughState.get(req.Name)
+
+		// PolicyOpen doesn't consult ForwardTargets for dispatch
+		// (softnet's target() returns direct-to-destination for that
+		// branch), and setPolicy treats a nil ft as "leave existing
+		// unchanged" — so setPolicy(OPEN, nil) is the whole open path,
+		// no ForwardTargets capture needed.
+		if err := newSoftnetClient(sock).setPolicy("OPEN", nil); err != nil {
+			http.Error(w, fmt.Sprintf("flip softnet open: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		dur := time.Duration(req.DurationSeconds) * time.Second
+		if dur <= 0 {
+			dur = defaultPassthroughSeconds * time.Second
+		}
+		egressPassthroughState.put(req.Name, time.Now().Add(dur))
+		armPassthroughRestoreTimer(locks, tr, ntpPort, req.Name, dur)
+
+		writeJSON(w, VMEgressPassthroughResponse{
+			WasOpen:        wasOpen,
+			ExpiresSeconds: int(dur / time.Second),
+		})
+	})
+
+	// /vm/restrict-egress closes an active passthrough window: flips
+	// softnet back to ENFORCED, cancels the restore timer, deletes
+	// state. No-op (was_open=false) if no window is active — matches
+	// `devm restrict` idempotency contract from the spec.
+	s.Register("/vm/restrict-egress", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMConfigLockRequest // reuses {Name} shape; RelockSeconds unused
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		_, wasOpen := egressPassthroughState.get(req.Name)
+		if !wasOpen {
+			writeJSON(w, VMEgressRestrictResponse{WasOpen: false})
+			return
+		}
+
+		sock := softnetState.get(req.Name)
+		info, hasInfo := ironProxyState.get(req.Name)
+		if sock == "" || !hasInfo {
+			// Stop path won a race: no softnet to signal. Clear state
+			// and report was_open=true so the caller sees the
+			// operation was meaningful (the window WAS open when the
+			// caller asked to close it).
+			egressPassthroughState.del(req.Name)
+			writeJSON(w, VMEgressRestrictResponse{WasOpen: true})
+			return
+		}
+		// Read ForwardTargets fresh via sendSoftnetEnforced — any
+		// reconcile-driven allowlist update that landed during the
+		// window takes effect on this close.
+		if err := sendSoftnetEnforced(sock, info, ntpPort); err != nil {
+			http.Error(w, fmt.Sprintf("flip softnet enforced: %v", err), http.StatusInternalServerError)
+			return
+		}
+		egressPassthroughState.del(req.Name)
+		writeJSON(w, VMEgressRestrictResponse{WasOpen: true})
 	})
 
 	s.Register("/vm/status", func(w http.ResponseWriter, r *http.Request) {
