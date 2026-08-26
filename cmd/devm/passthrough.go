@@ -54,7 +54,10 @@ stays exfiltrated after it closes.`,
 			return err
 		}
 		durationSeconds := 0
-		if forDur > 0 {
+		if cmd.Flags().Changed("for") {
+			if forDur < time.Second {
+				return fmt.Errorf("--for must be at least 1s (got %s); omit the flag entirely for the 30s default", forDur)
+			}
 			durationSeconds = int(forDur.Round(time.Second) / time.Second)
 		}
 
