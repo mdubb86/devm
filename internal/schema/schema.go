@@ -177,18 +177,6 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 	return nil
 }
 
-// validateRepo checks the top-level Repo field. Presence requires
-// Secret — the URL may be nil (derives from Mac cwd's git remote).
-func (c Config) validateRepo() error {
-	if c.Repo == nil {
-		return nil
-	}
-	if c.Repo.Secret == "" {
-		return fmt.Errorf("repo.secret is required (names a secret-store entry for iron-proxy substitution at clone time)")
-	}
-	return nil
-}
-
 // validateMasks checks the top-level Masks list: shape, and
 // duplicate/traversal rejection. Overlap with declared volumes is
 // validateVolumes' responsibility (single source of truth).
@@ -508,12 +496,18 @@ func (p Project) Validate() error {
 // Checks top-level keys + project-block + network-block keys. Per-service
 // shape has more legitimate variation (kit-passthrough fields could grow)
 // so it's not validated here.
+//
+// Must be kept in sync with Config's yaml tags by hand — Config has no
+// custom UnmarshalYAML (adding one would swallow strictDecode's
+// KnownFields(true) for every nested block; see
+// internal/config/load.go).
+var topLevelKnownFields = []string{
+	"project", "base_image", "docker", "network", "env",
+	"services", "install", "startup", "scripts", "mounts", "path", "packages", "disk", "memory", "cpu",
+	"config_lock", "volumes", "masks", "repos",
+}
+
 func CheckUnknownKeys(data []byte) error {
-	knownTop := []string{
-		"project", "base_image", "docker", "network", "env",
-		"services", "install", "startup", "scripts", "mounts", "path", "packages", "disk", "memory", "cpu",
-		"config_lock", "volumes", "masks", "repo",
-	}
 	knownProject := []string{
 		"name", "proxy",
 	}
@@ -524,7 +518,7 @@ func CheckUnknownKeys(data []byte) error {
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil // typed unmarshal will surface the parse error
 	}
-	if err := rejectUnknown(raw, knownTop, "top-level"); err != nil {
+	if err := rejectUnknown(raw, topLevelKnownFields, "top-level"); err != nil {
 		return err
 	}
 	if proj, ok := raw["project"].(map[string]any); ok {
@@ -728,11 +722,11 @@ type Config struct {
 	// 2026-08-01-persistent-volumes-design.md.
 	Volumes map[string]Volume `yaml:"volumes,omitempty"`
 
-	// Repo declares the primary workspace repo. Nil means the project
-	// has no primary — utility VMs that only run tools. Presence
-	// requires Secret; URL is optional (derives from Mac cwd's
-	// `git remote get-url origin` when nil).
-	Repo *RepoConfig `yaml:"repo,omitempty"`
+	// Repos declares the project's git repos to hydrate at cold-start,
+	// keyed by name. A nil/empty map means the project has no repo —
+	// utility VMs that only run tools. Exactly one entry may set
+	// Primary to mark the primary workspace repo.
+	Repos map[string]RepoConfig `yaml:"repos,omitempty"`
 
 	// Masks are workspace-relative paths whose contents are overlaid
 	// by a private per-project guest ext4 directory, so Mac and Linux
@@ -1076,9 +1070,6 @@ func (c Config) Validate() error {
 		}
 	}
 	if err := c.validateVolumes(""); err != nil {
-		return err
-	}
-	if err := c.validateRepo(); err != nil {
 		return err
 	}
 	if err := c.validateMasks(); err != nil {

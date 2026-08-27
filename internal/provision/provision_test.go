@@ -336,19 +336,6 @@ func TestRunOpen_TemplatesTriggerDispatcher(t *testing.T) {
 	assert.Contains(t, scriptOf(t, f), "install-templates.sh")
 }
 
-func TestScriptInput_PopulatesGitCredentialsFromTopLevelRepo(t *testing.T) {
-	url := "https://github.com/mdubb86/sewtrue.git"
-	p := &Provisioner{
-		Cfg: schema.Config{
-			Repo: &schema.RepoConfig{URL: &url, Secret: "gh_token"},
-		},
-	}
-	in := p.scriptInput()
-	assert.Contains(t, in.GitCredentials,
-		"https://x-access-token:__DEVM_SECRET_gh_token__@github.com/mdubb86/sewtrue.git")
-	assert.Contains(t, in.GitConfig, "useHttpPath = true")
-}
-
 func TestScriptInput_NoReposEmptyCredentials(t *testing.T) {
 	p := &Provisioner{Cfg: schema.Config{}}
 	in := p.scriptInput()
@@ -429,17 +416,4 @@ func TestScriptInput_NoReposNoIdentity_BothFieldsEmpty(t *testing.T) {
 	in := p.scriptInput()
 	assert.Equal(t, "", in.GitCredentials, "no repos, no identity ⇒ no credentials")
 	assert.Equal(t, "", in.GitConfig, "no repos, no identity ⇒ no gitconfig")
-}
-
-func TestScriptInput_GitConfigCarriesIdentityWhenReposDeclared(t *testing.T) {
-	dir := makeRepoWithIdentity(t, "Fixture User", "fixture@example.com")
-	url := "https://github.com/mdubb86/sewtrue.git"
-	p := &Provisioner{
-		MacCwd: dir,
-		Cfg: schema.Config{
-			Repo: &schema.RepoConfig{URL: &url, Secret: "gh_token"},
-		},
-	}
-	in := p.scriptInput()
-	assert.Contains(t, in.GitConfig, "[user]\n    name = Fixture User\n    email = fixture@example.com\n")
 }

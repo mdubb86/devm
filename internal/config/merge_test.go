@@ -163,4 +163,18 @@ func TestMerge_DiskOverrideAbsentPreserves(t *testing.T) {
 	assert.Equal(t, "64G", *out.Disk, "Disk: want preserved 64G")
 }
 
+func TestMerge_PreservesReposWhenOverrideAbsent(t *testing.T) {
+	base := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Repos: map[string]schema.RepoConfig{
+			"main": {Secret: "github"},
+		},
+	}
+	override := schema.ConfigOverride{} // Repos is project-wide, not overridable
+	out, err := Merge(base, override)
+	require.NoError(t, err)
+	require.Contains(t, out.Repos, "main")
+	assert.Equal(t, "github", out.Repos["main"].Secret)
+}
+
 func strPtr(s string) *string { return &s }

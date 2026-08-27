@@ -232,3 +232,35 @@ project:
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "name")
 }
+
+func TestLoad_ReposMap(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  name: test
+repos:
+  main:
+    secret: github
+    primary: true
+`)
+
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	require.Contains(t, cfg.Repos, "main")
+	assert.Equal(t, "github", cfg.Repos["main"].Secret)
+}
+
+func TestLoad_RejectsLegacyTopLevelRepo(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  name: test
+repo:
+  secret: github
+`)
+
+	_, err := Load(dir)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field")
+	assert.Contains(t, err.Error(), "repo")
+}

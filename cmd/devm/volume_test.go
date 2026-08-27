@@ -13,28 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunVolumeLs_IncludesAutoManagedPrimary(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	ident := identity.Config{Name: "devm-test"}
-	repoURL := "file:///tmp/repo.git"
-	userCfg := schema.Config{
-		Project: schema.Project{Name: "p"},
-		Repo:    &schema.RepoConfig{URL: &repoURL, Secret: "e2e_default"},
-		Volumes: map[string]schema.Volume{
-			"cache": {Path: "/var/lib/cache"},
-		},
-	}
-	cwd := "/Users/me/projects/myproj"
-	var buf bytes.Buffer
-	require.NoError(t, runVolumeLs(ident, userCfg, cwd, &buf))
-	out := buf.String()
-	assert.Contains(t, out, "myproj")
-	assert.Contains(t, out, cwd)
-	assert.Contains(t, out, filepath.Join(ident.RuntimeDir(), "volumes", "p", "myproj"))
-	assert.Contains(t, out, "cache")
-}
-
 func TestRunVolumeLs_EmptyVolumes_PrintsHeaderOnly(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

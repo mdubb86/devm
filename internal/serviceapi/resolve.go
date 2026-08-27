@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/repohelpers"
 )
 
 // WorkspaceEntry is one row of GET /workspaces — a project's primary
@@ -25,10 +24,12 @@ type WorkspaceEntry struct {
 
 // RegisterWorkspacesHandler wires GET /workspaces. Enumerates every
 // persisted StateSnapshot in StateDir() — same source `devm status
-// --all` reads — and reports one entry per project whose Cfg.Repo is
-// set (a primary workspace repo). Projects without a primary repo
-// (Repo == nil) have no guest clone to resolve paths against, so
-// they're skipped.
+// --all` reads — and reports one entry per project with a primary
+// workspace repo in Cfg.Repos. Projects without one have no guest
+// clone to resolve paths against, so they're skipped.
+//
+// TODO(Task 17): listWorkspaces is currently a no-op (see below) —
+// the primary-repo lookup needs to walk Cfg.Repos.
 func RegisterWorkspacesHandler(s *Server, cfg identity.Config) {
 	s.Register("/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		out, err := listWorkspaces(cfg)
@@ -63,15 +64,10 @@ func listWorkspaces(cfg identity.Config) ([]WorkspaceEntry, error) {
 		if err != nil || snap == nil {
 			continue
 		}
-		if snap.Cfg.Repo == nil || snap.WorkspaceHostPath == "" {
-			continue
-		}
-		primary := repohelpers.PrimaryVolumeName(snap.WorkspaceHostPath)
-		out = append(out, WorkspaceEntry{
-			ProjectName: projectID,
-			GuestPath:   snap.WorkspaceHostPath,
-			StoragePath: volumeMacDir(cfg, projectID, primary),
-		})
+		// TODO(Task 17): rewrite for the Repos map — resolve the
+		// primary entry from snap.Cfg.Repos instead of the removed
+		// singular Cfg.Repo, then re-add the WorkspaceEntry below.
+		// No-op (skip every project) until then.
 	}
 	return out, nil
 }

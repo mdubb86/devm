@@ -17,7 +17,6 @@ import (
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -645,43 +644,13 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			mountTag string // virtiofs tag (may differ from name for the primary)
 		}
 		var volumes []volumeState
-		// Primary workspace, synthesized as a volume when the project
-		// declares a top-level `repo:`. Named after the Mac cwd folder
-		// basename and mounted at Mac cwd's absolute path — the
-		// $WORKSPACE convention, now backed by persistent Mac-side
-		// storage instead of a live bind of the Mac checkout.
-		if req.Cfg.Repo != nil {
-			primaryName := repohelpers.PrimaryVolumeName(req.MacCwd)
-			macPath, wasEmpty, err := ensureVolumeMacDir(cfg, req.Name, primaryName)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("ensure primary volume dir: %v", err), http.StatusInternalServerError)
-				return
-			}
-			primaryRepo := *req.Cfg.Repo
-			if primaryRepo.URL == nil {
-				url, err := repohelpers.DeriveRepoURL(req.MacCwd)
-				if err != nil {
-					http.Error(w, fmt.Sprintf("derive primary repo url: %v", err), http.StatusInternalServerError)
-					return
-				}
-				primaryRepo.URL = &url
-			}
-			// The mount tag is a short constant, not primaryName: tags
-			// go through macOS Virtualization Framework's virtio-fs tag
-			// field, capped around 36 bytes, while primaryName is the
-			// Mac cwd basename and can run much longer (pytest tmpdirs,
-			// deeply-versioned project names, ...). Storage dir naming
-			// (primaryName, spec-required) and mount tag naming
-			// (arbitrary) are independent concerns.
-			const primaryTag = "workspace"
-			opts.DirMounts = append(opts.DirMounts, tart.DirMount{
-				HostPath: macPath,
-				Tag:      "vol_" + primaryTag,
-			})
-			volumes = append(volumes, volumeState{
-				name: primaryName, target: req.MacCwd, macPath: macPath, wasEmpty: wasEmpty, repo: &primaryRepo, mountTag: primaryTag,
-			})
-		}
+		// TODO(Task 17): rewrite for the Repos map. This used to
+		// synthesize a primary-workspace volume from the removed
+		// singular Config.Repo; the replacement walks req.Cfg.Repos for
+		// the entry with Primary == true (deriving its URL from
+		// req.MacCwd when nil) and performs the same
+		// ensureVolumeMacDir + DirMounts + volumeState append. No-op
+		// until then.
 		// Sort volume names for deterministic mount order across boots
 		// (no functional effect, but makes logs comparable).
 		volNames := make([]string, 0, len(req.Cfg.Volumes))
@@ -898,10 +867,11 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// hydrated, now non-empty Mac dir as a clean bind, exactly as
 		// intended). Fails loud: any clone failure aborts /vm/start
 		// entirely rather than leave a half-hydrated volume.
+		// TODO(Task 17): rewrite for the Repos map — inherit the secret
+		// from req.Cfg.Repos' primary entry. No-op until then: volumes
+		// derived from req.Cfg.Volumes never carry a .repo, so this value
+		// is currently unused by the loop below.
 		inheritedSecret := ""
-		if req.Cfg.Repo != nil {
-			inheritedSecret = req.Cfg.Repo.Secret
-		}
 		ironURL := ironProxyURLFor(req.Name)
 		for _, v := range volumes {
 			if !v.wasEmpty || v.repo == nil {
@@ -919,15 +889,9 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// <macCwd>/.vm symlink, kept out of git via .git/info/exclude.
 		// Best-effort — a failure here doesn't block the VM from
 		// starting; the user can fix the .vm dir manually.
-		if req.Cfg.Repo != nil {
-			primaryPath := volumeMacDir(cfg, req.Name, repohelpers.PrimaryVolumeName(req.MacCwd))
-			if err := EnsureVMSymlink(req.MacCwd, primaryPath); err != nil {
-				daemonlog.Errorf("vmsymlink: %v", err)
-			}
-			if err := EnsureGitExclude(req.MacCwd); err != nil {
-				daemonlog.Errorf("git-exclude: %v", err)
-			}
-		}
+		// TODO(Task 17): rewrite for the Repos map — re-enable the .vm
+		// symlink + git-exclude bookkeeping keyed off req.Cfg.Repos'
+		// primary entry. No-op until then.
 
 		// Apply VM-side config via tart exec — extra mounts, volumes, env
 		// only. timesyncd's NTP config is baked into the base image

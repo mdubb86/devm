@@ -246,15 +246,14 @@ func (p *Provisioner) gitIdentity() render.GitIdentity {
 	}
 }
 
-// repoBindings flattens p.Cfg's top-level repo declaration (when present
-// and resolved to a URL) into the slice RenderGitCredentials consumes.
+// repoBindings flattens p.Cfg's repo declarations (each resolved to a
+// URL) into the slice RenderGitCredentials consumes.
+//
+// TODO(Task 17): rewrite for the Repos map — walk p.Cfg.Repos and emit
+// one render.RepoBinding per entry with a resolved URL, instead of the
+// removed singular p.Cfg.Repo. No-op until then.
 func (p *Provisioner) repoBindings() []render.RepoBinding {
 	var bindings []render.RepoBinding
-	if p.Cfg.Repo != nil && p.Cfg.Repo.URL != nil && *p.Cfg.Repo.URL != "" {
-		bindings = append(bindings, render.RepoBinding{
-			URL: *p.Cfg.Repo.URL, Secret: p.Cfg.Repo.Secret,
-		})
-	}
 	return bindings
 }
 

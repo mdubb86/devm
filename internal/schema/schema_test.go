@@ -1062,6 +1062,44 @@ install:
 	assert.Equal(t, []string{">install-supabase"}, cfg.Install)
 }
 
+func TestConfig_ReposMap_UnmarshalYAML(t *testing.T) {
+	y := `project:
+  name: shelfmates
+repos:
+  main:
+    secret: github
+    primary: true
+  data:
+    url: git@github.com:me/data.git
+    secret: github
+`
+	var c Config
+	require.NoError(t, yaml.Unmarshal([]byte(y), &c))
+	require.Contains(t, c.Repos, "main")
+	require.Contains(t, c.Repos, "data")
+	assert.Equal(t, "github", c.Repos["main"].Secret)
+	assert.NotNil(t, c.Repos["main"].Primary)
+}
+
+func TestConfig_RejectsTopLevelRepo(t *testing.T) {
+	y := `project:
+  name: x
+repo:
+  url: git@github.com:me/foo.git
+  secret: github
+`
+	// The singular top-level repo: key is gone; CheckUnknownKeys (the
+	// mechanism config.Load uses to reject removed/typo'd keys) must
+	// name it. Plain yaml.Unmarshal is permissive by default — Config
+	// deliberately does NOT implement its own UnmarshalYAML, since
+	// doing so would swallow the KnownFields(true) strict-decode used
+	// by config.Load for nested blocks (see strictDecode in
+	// internal/config/load.go).
+	err := CheckUnknownKeys([]byte(y))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field \"repo\"")
+}
+
 func TestScripts_UnknownTopLevelKey_Rejected(t *testing.T) {
 	in := []byte(`
 project:

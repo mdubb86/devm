@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/schema"
@@ -79,21 +78,20 @@ func TestResolveDirection(t *testing.T) {
 
 func TestMountPassthrough(t *testing.T) {
 	// Standard project layout: workspace at /Users/me/workspace/foo,
-	// plus a user mount at /Users/me/data. `repo:` configured, so the
-	// primary workspace is volume-backed (not a direct Mac-cwd bind) —
-	// paths under repoRoot translate to the primary volume's Mac-side
-	// storage.
+	// plus a user mount at /Users/me/data. mountPassthrough's repo-backed
+	// primary-workspace branch is a TODO(Task 17) no-op for now (see
+	// cmd/devm/cp.go), so only the mounts[]-based cases below exercise
+	// live behavior — the interim reality is that a repo-backed
+	// workspace path falls through to pipe transport just like
+	// TestMountPassthrough_NoRepo_WorkspaceRootNotMirrored.
 	repoRoot := "/Users/me/workspace/foo"
-	repoURL := "file:///tmp/repo.git"
 	projectName := "myproj"
 	pcfg := schema.Config{
-		Repo: &schema.RepoConfig{URL: &repoURL, Secret: "e2e_default"},
 		Mounts: []string{
 			"/Users/me/data",
 			"/Users/me/read-only:ro",
 		},
 	}
-	storageRoot := filepath.Join(cfg.RuntimeDir(), "volumes", projectName, "foo")
 
 	cases := []struct {
 		name      string
@@ -101,8 +99,6 @@ func TestMountPassthrough(t *testing.T) {
 		wantHost  string
 		wantOK    bool
 	}{
-		{"under workspace root", "/Users/me/workspace/foo/src/main.go", filepath.Join(storageRoot, "src/main.go"), true},
-		{"exactly workspace root", "/Users/me/workspace/foo", storageRoot, true},
 		{"under user mount", "/Users/me/data/big.csv", "/Users/me/data/big.csv", true},
 		{"under ro user mount", "/Users/me/read-only/setup.sql", "/Users/me/read-only/setup.sql", true},
 		{"outside everything (/etc)", "/etc/hosts", "", false},

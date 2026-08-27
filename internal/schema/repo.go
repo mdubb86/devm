@@ -8,7 +8,7 @@ import (
 )
 
 // RepoConfig declares a git repo to hydrate a volume from at cold-start.
-// Used at top level (Config.Repo, the primary workspace).
+// Used at top level (Config.Repos, keyed by repo name).
 type RepoConfig struct {
 	// URL is the git clone URL. Nil at top level means "derive from
 	// `git remote get-url origin` in Mac cwd." Nil for a secondary is

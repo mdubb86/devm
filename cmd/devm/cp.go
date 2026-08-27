@@ -115,13 +115,9 @@ func resolveDirection(src, dst cpArg) (direction, error) {
 // pipe. Returns ("", false) when no mirror is known; caller falls back
 // to pipe.
 func mountPassthrough(guestPath, repoRoot string, pcfg schema.Config, projectName string) (string, bool) {
-	if pcfg.Repo != nil && inside(guestPath, repoRoot) {
-		if rel, err := filepath.Rel(repoRoot, guestPath); err == nil {
-			primary := repohelpers.PrimaryVolumeName(repoRoot)
-			storageRoot := filepath.Join(cfg.RuntimeDir(), "volumes", projectName, primary)
-			return filepath.Clean(filepath.Join(storageRoot, rel)), true
-		}
-	}
+	// TODO(Task 17): rewrite for the Repos map — check pcfg.Repos'
+	// primary entry instead of the removed singular pcfg.Repo. No-op
+	// until then.
 	for _, entry := range pcfg.Mounts {
 		host, _ := strings.CutSuffix(entry, ":ro")
 		host = expandHome(host)

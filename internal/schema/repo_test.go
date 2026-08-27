@@ -20,20 +20,6 @@ foo:
 	assert.Contains(t, err.Error(), "unknown field")
 }
 
-func TestConfig_Repo_MissingSecret(t *testing.T) {
-	src := `
-project:
-  name: p
-repo:
-  url: https://github.com/x/y.git
-`
-	var cfg Config
-	require.NoError(t, yaml.Unmarshal([]byte(src), &cfg))
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "repo.secret is required")
-}
-
 func TestRepoConfig_KnownFields_NewShape(t *testing.T) {
 	assert.ElementsMatch(t,
 		[]string{"url", "secret", "label", "volume", "primary", "ignore"},

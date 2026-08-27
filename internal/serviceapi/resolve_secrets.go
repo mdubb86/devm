@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/secret"
 )
@@ -129,21 +128,11 @@ func repoSecretHosts(cfg schema.Config, macCwd string) (map[string][]string, []s
 		return nil
 	}
 
-	if cfg.Repo != nil {
-		rawURL := ""
-		if cfg.Repo.URL != nil {
-			rawURL = *cfg.Repo.URL
-		} else {
-			derived, err := repohelpers.DeriveRepoURL(macCwd)
-			if err != nil {
-				return nil, nil, fmt.Errorf("repo: %w", err)
-			}
-			rawURL = derived
-		}
-		if err := add(cfg.Repo.Secret, rawURL); err != nil {
-			return nil, nil, fmt.Errorf("repo.secret: %w", err)
-		}
-	}
+	// TODO(Task 17): rewrite for the Repos map — walk cfg.Repos
+	// (deriving URL from macCwd via repohelpers.DeriveRepoURL when a
+	// given entry's URL is nil), calling add(secret, url) for each,
+	// instead of the removed singular cfg.Repo. No-op until then.
+	_ = add
 
 	out := make(map[string][]string, len(bySecret))
 	for s, hostSet := range bySecret {
