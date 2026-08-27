@@ -83,17 +83,13 @@ func (c *CLI) run(args ...string) (string, error) {
 // beta, loading configFile for the session's ignore/mode defaults,
 // and returns the session identifier mutagen assigns.
 //
-// Deviation from the original brief: mutagen v0.18.1's `sync create`
-// has no --ssh-flag (or any other per-invocation SSH flag — verified
-// against the real --help output, which lists no ssh-related flags
-// at all). mutagen shells out to the system ssh client for remote
-// endpoints, so identity file / host-key-checking behavior is
-// controlled entirely by ~/.ssh/config for the target host, which the
-// caller must have prepared before calling SyncCreate. sshFlags is
-// still accepted and passed through verbatim as extra argv tokens
-// ahead of alpha/beta, so a caller can forward any *real* mutagen
-// flag (e.g. --watch-mode-beta=force-poll) without this wrapper
-// needing to know about it.
+// mutagen shells out to the system ssh client for remote endpoints,
+// taking identity file / host-key-checking behavior from ~/.ssh/config
+// for the target host — the caller must have that prepared before
+// calling SyncCreate. sshFlags is passed through verbatim as extra
+// argv tokens ahead of alpha/beta, so a caller can forward any real
+// mutagen flag (e.g. --watch-mode-beta=force-poll) without this
+// wrapper needing to know about it individually.
 func (c *CLI) SyncCreate(name, alpha, beta, configFile string, sshFlags []string) (string, error) {
 	args := []string{"sync", "create", "--name", name, "--configuration-file", configFile}
 	args = append(args, sshFlags...)
@@ -178,14 +174,9 @@ func (c *CLI) SyncTerminate(id string) error {
 // DaemonStart starts the mutagen daemon (a no-op if already running)
 // and returns its PID.
 //
-// Deviation from the original brief: mutagen v0.18.1 has no `daemon
-// list` subcommand at all (confirmed: `mutagen daemon --help` lists
-// only start/stop/register/unregister), so there is no CLI-native way
-// to surface the daemon's PID. DaemonStart instead resolves it via
-// `lsof -t` against the daemon.lock file mutagen holds open under
-// DataDir/daemon/daemon.lock — the same file mutagen itself uses for
-// single-instance locking, so whichever PID holds it open unlocked is
-// the running daemon for this DataDir.
+// The mutagen daemon holds a flock on DataDir/daemon/daemon.lock for
+// single-instance enforcement; DaemonStart resolves the daemon's PID
+// as whichever process holds that lock open, via `lsof -t`.
 func (c *CLI) DaemonStart() (int, error) {
 	if c.DataDir == "" {
 		return 0, fmt.Errorf("mutagen: DaemonStart requires DataDir to locate the daemon lock file")
