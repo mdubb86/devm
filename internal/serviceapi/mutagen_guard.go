@@ -57,12 +57,12 @@ top=$(find . -mindepth 1 -printf '%P\n' 2>/dev/null | sort | head -100 | shasum 
 echo "count=$count size=$size hash=$top"
 `
 
-// posixShellQuote wraps s in POSIX single-quotes, escaping any embedded
+// PosixShellQuote wraps s in POSIX single-quotes, escaping any embedded
 // single-quote by closing the open quote, emitting a backslash-escaped
 // single-quote, and reopening the quote. No shell metacharacter is
 // active inside single-quotes, so the result is safe to place anywhere
 // a POSIX shell word is expected, regardless of s's contents.
-func posixShellQuote(s string) string {
+func PosixShellQuote(s string) string {
 	// Embedded single-quote escape: close, escaped quote, reopen.
 	const embeddedQuote = `'\''`
 	return "'" + strings.ReplaceAll(s, "'", embeddedQuote) + "'"
@@ -75,7 +75,7 @@ func posixShellQuote(s string) string {
 // and ` active inside a shell double-quoted context) is what makes
 // this injection-safe.
 func buildGuestScanScript(guestPath string) string {
-	return fmt.Sprintf("set -- %s\n%s", posixShellQuote(guestPath), guestScanScriptBody)
+	return fmt.Sprintf("set -- %s\n%s", PosixShellQuote(guestPath), guestScanScriptBody)
 }
 
 // ScanMac walks rootPath on the Mac side and computes its ScanSide: the

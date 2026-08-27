@@ -856,32 +856,6 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info.PopPort = popPort
 		ironProxyState.put(req.Name, info)
 
-		// Hydrate any volume (including the synthesized primary) whose
-		// Mac-side storage was observed empty and declares a repo. Must
-		// run after iron-proxy is up — the __DEVM_SECRET_<name>__
-		// placeholder is substituted on the wire by iron-proxy — and
-		// before the mount scripts below, which key off the wasEmpty
-		// captured earlier (buildVolumeMountScript treats a newly
-		// hydrated, now non-empty Mac dir as a clean bind, exactly as
-		// intended). Fails loud: any clone failure aborts /vm/start
-		// entirely rather than leave a half-hydrated volume.
-		// TODO(Task 17): rewrite for the Repos map — inherit the secret
-		// from req.Cfg.Repos' primary entry. No-op until then: volumes
-		// derived from req.Cfg.Volumes never carry a .repo, so this value
-		// is currently unused by the loop below.
-		inheritedSecret := ""
-		ironURL := ironProxyURLFor(req.Name)
-		for _, v := range volumes {
-			if !v.wasEmpty || v.repo == nil {
-				continue
-			}
-			if err := HydrateRepoVolume(ctx, v.macPath, *v.repo, inheritedSecret, ironURL, proxyCfg.CACertPath); err != nil {
-				teardownFailedVMStart(ctx, sup, tr, cfg, denials, req.Name)
-				http.Error(w, fmt.Sprintf("hydrate volume %q: %v", v.name, err), http.StatusInternalServerError)
-				return
-			}
-		}
-
 		// Give the Mac cwd a short, ergonomic path into the primary
 		// volume's persistent storage now that it's materialized:
 		// <macCwd>/.vm symlink, kept out of git via .git/info/exclude.
