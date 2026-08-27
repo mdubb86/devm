@@ -22,11 +22,21 @@ type RepoConfig struct {
 	// (inherits from top-level).
 	Secret string `yaml:"secret,omitempty"`
 
-	// Branch overrides remote HEAD when non-nil.
-	Branch *string `yaml:"branch,omitempty"`
+	// Label names the mutagen sync session for this repo.
+	Label *string `yaml:"label,omitempty"`
+
+	// Volume, when true, backs this repo with a devm-managed volume
+	// instead of a plain bind mount.
+	Volume *bool `yaml:"volume,omitempty"`
+
+	// Primary marks this repo as the project's primary workspace.
+	Primary *bool `yaml:"primary,omitempty"`
+
+	// Ignore lists mutagen sync ignore patterns.
+	Ignore []string `yaml:"ignore,omitempty"`
 }
 
-var repoKnownFields = []string{"url", "secret", "branch"}
+var repoKnownFields = []string{"url", "secret", "label", "volume", "primary", "ignore"}
 
 // Volume is a per-project persistent store, optionally hydrated from git.
 type Volume struct {
@@ -95,9 +105,12 @@ func (r *RepoConfig) UnmarshalYAML(node *yaml.Node) error {
 		}
 	}
 	type raw struct {
-		URL    *string `yaml:"url,omitempty"`
-		Secret string  `yaml:"secret,omitempty"`
-		Branch *string `yaml:"branch,omitempty"`
+		URL     *string  `yaml:"url,omitempty"`
+		Secret  string   `yaml:"secret,omitempty"`
+		Label   *string  `yaml:"label,omitempty"`
+		Volume  *bool    `yaml:"volume,omitempty"`
+		Primary *bool    `yaml:"primary,omitempty"`
+		Ignore  []string `yaml:"ignore,omitempty"`
 	}
 	var raw2 raw
 	if err := node.Decode(&raw2); err != nil {
@@ -105,6 +118,9 @@ func (r *RepoConfig) UnmarshalYAML(node *yaml.Node) error {
 	}
 	r.URL = raw2.URL
 	r.Secret = raw2.Secret
-	r.Branch = raw2.Branch
+	r.Label = raw2.Label
+	r.Volume = raw2.Volume
+	r.Primary = raw2.Primary
+	r.Ignore = raw2.Ignore
 	return nil
 }

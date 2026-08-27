@@ -40,27 +40,24 @@ vendor-lib:
   repo:
     url: https://github.com/vendor/lib.git
     secret: vendor_token
-    branch: release
 `
 	var got map[string]Volume
 	require.NoError(t, yaml.Unmarshal([]byte(src), &got))
 	v := got["vendor-lib"]
 	require.NotNil(t, v.Repo)
 	assert.Equal(t, "vendor_token", v.Repo.Secret)
-	require.NotNil(t, v.Repo.Branch)
-	assert.Equal(t, "release", *v.Repo.Branch)
 }
 
 func TestVolume_MarshalUnmarshalRoundTrip_WithRepo(t *testing.T) {
 	url := "https://github.com/me/foo.git"
-	branch := "main"
+	label := "foo"
 	orig := map[string]Volume{
 		"primary": {
 			Path: "/home/devm/workspace/foo",
 			Repo: &RepoConfig{
 				URL:    &url,
 				Secret: "gh_token",
-				Branch: &branch,
+				Label:  &label,
 			},
 		},
 		"scratch": {Path: "/var/lib/pg"},
@@ -77,8 +74,8 @@ func TestVolume_MarshalUnmarshalRoundTrip_WithRepo(t *testing.T) {
 	require.NotNil(t, round["primary"].Repo.URL)
 	assert.Equal(t, url, *round["primary"].Repo.URL)
 	assert.Equal(t, "gh_token", round["primary"].Repo.Secret)
-	require.NotNil(t, round["primary"].Repo.Branch)
-	assert.Equal(t, branch, *round["primary"].Repo.Branch)
+	require.NotNil(t, round["primary"].Repo.Label)
+	assert.Equal(t, label, *round["primary"].Repo.Label)
 }
 
 func TestVolume_UnknownKey_Rejected(t *testing.T) {
@@ -140,4 +137,49 @@ volumes:
 	err := cfg.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no top-level repo.secret to inherit")
+}
+
+func TestRepoConfig_KnownFields_NewShape(t *testing.T) {
+	assert.ElementsMatch(t,
+		[]string{"url", "secret", "label", "volume", "primary", "ignore"},
+		repoKnownFields,
+	)
+}
+
+func TestRepoConfig_UnmarshalYAML_FullShape(t *testing.T) {
+	y := `url: git@github.com:me/foo.git
+secret: github
+label: myproject
+volume: true
+primary: true
+ignore:
+  - node_modules
+  - .venv
+`
+	var r RepoConfig
+	require.NoError(t, yaml.Unmarshal([]byte(y), &r))
+	require.NotNil(t, r.URL)
+	assert.Equal(t, "git@github.com:me/foo.git", *r.URL)
+	assert.Equal(t, "github", r.Secret)
+	require.NotNil(t, r.Label)
+	assert.Equal(t, "myproject", *r.Label)
+	require.NotNil(t, r.Volume)
+	assert.True(t, *r.Volume)
+	require.NotNil(t, r.Primary)
+	assert.True(t, *r.Primary)
+	assert.Equal(t, []string{"node_modules", ".venv"}, r.Ignore)
+}
+
+func TestRepoConfig_UnmarshalYAML_RejectsBranch(t *testing.T) {
+	var r RepoConfig
+	err := yaml.Unmarshal([]byte("branch: main\nsecret: github\n"), &r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field \"branch\"")
+}
+
+func TestRepoConfig_UnmarshalYAML_RejectsUnknown(t *testing.T) {
+	var r RepoConfig
+	err := yaml.Unmarshal([]byte("wat: yes\nsecret: github\n"), &r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field \"wat\"")
 }

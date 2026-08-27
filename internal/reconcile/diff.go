@@ -589,11 +589,7 @@ func formatVolumeChangeValue(v schema.Volume) string {
 	if v.Repo.URL != nil {
 		url = *v.Repo.URL
 	}
-	branch := ""
-	if v.Repo.Branch != nil {
-		branch = *v.Repo.Branch
-	}
-	return fmt.Sprintf("%s [repo=%s@%s, secret=%s]", v.Path, url, branch, v.Repo.Secret)
+	return fmt.Sprintf("%s [repo=%s, secret=%s]", v.Path, url, v.Repo.Secret)
 }
 
 // stringPtrEqual compares two string pointers: both nil is equal, one
@@ -610,11 +606,10 @@ func stringPtrEqual(a, b *string) bool {
 }
 
 // repoConfigEqual compares two RepoConfig values, accounting for
-// pointer fields (URL, Branch) that may be nil.
+// pointer fields (URL) that may be nil.
 func repoConfigEqual(a, b schema.RepoConfig) bool {
 	return stringPtrEqual(a.URL, b.URL) &&
-		a.Secret == b.Secret &&
-		stringPtrEqual(a.Branch, b.Branch)
+		a.Secret == b.Secret
 }
 
 // volumeEqual compares two Volume values, including the optional

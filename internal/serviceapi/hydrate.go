@@ -38,9 +38,6 @@ func HydrateRepoVolume(ctx context.Context, storagePath string, repo schema.Repo
 		secret = inheritedSecret
 	}
 	args := []string{"clone", "--quiet"}
-	if repo.Branch != nil && *repo.Branch != "" {
-		args = append(args, "-b", *repo.Branch)
-	}
 	if ironProxyURL != "" && secret != "" {
 		args = append(args, "-c",
 			"http.extraheader="+hydrateExtraHeader(secret))

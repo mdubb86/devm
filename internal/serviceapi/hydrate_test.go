@@ -154,17 +154,3 @@ func TestHydrateRepoVolume_SetsGitSSLCAInfoForIronProxy(t *testing.T) {
 	assert.Contains(t, string(out), "GIT_SSL_CAINFO=/fake/ca/root.crt",
 		"HydrateRepoVolume must point git at iron-proxy's CA cert when proxying")
 }
-
-func TestHydrateRepoVolume_BranchOverride(t *testing.T) {
-	url := makeBareRepo(t)
-	storage := t.TempDir()
-	main := "master" // git init default may be master or main; use whichever succeeds
-	branch := main
-	repo := schema.RepoConfig{URL: &url, Branch: &branch}
-	err := HydrateRepoVolume(context.Background(), storage, repo, "", "", "")
-	// If master/main mismatch, git errors — fine, we're pinning the
-	// signature accepts and passes -b. Assert no crash / bogus success.
-	if err != nil {
-		assert.Contains(t, err.Error(), branch)
-	}
-}

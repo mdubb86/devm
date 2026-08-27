@@ -87,12 +87,11 @@ func TestComputeVolumeChanges_RepoURLChanged(t *testing.T) {
 func TestComputeVolumeChanges_RepoURLChanged_ShowsRepoSummary(t *testing.T) {
 	oldURL := "https://github.com/x/y.git"
 	newURL := "https://github.com/x/z.git"
-	branch := "main"
 	old := schema.Config{Volumes: map[string]schema.Volume{
-		"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &oldURL, Branch: &branch, Secret: "s"}},
+		"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &oldURL, Secret: "s"}},
 	}}
 	new := schema.Config{Volumes: map[string]schema.Volume{
-		"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &newURL, Branch: &branch, Secret: "s"}},
+		"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &newURL, Secret: "s"}},
 	}}
 	changes := computeVolumeChanges(old, new)
 	assert.Len(t, changes, 1)
