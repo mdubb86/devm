@@ -52,10 +52,6 @@ def test_camoufox_recipe(devm, workspace, sandbox_name):
           - dbus-x11
           - python3-pip
           - python3-venv
-          # p11-kit-modules ships in devm >=0.18.1 base images; list it
-          # here so the test tolerates a stale base image where the
-          # bootstrapped e2e daemon predates the base rebuild.
-          - p11-kit-modules
         network:
           allow:
             - github.com/daijro/camoufox/releases/download/*
