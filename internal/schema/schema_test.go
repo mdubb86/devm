@@ -1258,6 +1258,34 @@ func TestValidateRepos_PrimaryDetermination(t *testing.T) {
 	})
 }
 
+// ---------- validateRepos: secondaries require url ----------
+
+func TestValidateRepos_SecondaryRequiresURL(t *testing.T) {
+	t.Run("secondary with nil url errors naming it", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":      {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"secondary": {},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "repos.secondary")
+		assert.Contains(t, err.Error(), "url is required")
+	})
+
+	t.Run("two secondaries, only the nil-url one is named", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":  {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"good":  {URL: strPtr("git@github.com:me/good.git")},
+			"badly": {},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "repos.badly")
+		assert.Contains(t, err.Error(), "url is required")
+		assert.NotContains(t, err.Error(), "repos.good")
+	})
+}
+
 // ---------- validateLabels: cross-schema flat-namespace collision ----------
 
 func TestValidateLabels_Collision(t *testing.T) {

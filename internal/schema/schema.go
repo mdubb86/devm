@@ -1010,6 +1010,17 @@ func (c *Config) validateRepos() error {
 	if primary.Volume != nil && !*primary.Volume {
 		return fmt.Errorf("repos.%s: primary cannot have volume: false", primaryName)
 	}
+
+	// Secondary repos must declare URL explicitly (they don't derive from
+	// `git remote get-url origin`; only the primary does).
+	for _, name := range names {
+		if name == primaryName {
+			continue
+		}
+		if c.Repos[name].URL == nil {
+			return fmt.Errorf("repos.%s: url is required for secondary repos (only the primary derives URL from `git remote get-url origin`)", name)
+		}
+	}
 	return nil
 }
 
