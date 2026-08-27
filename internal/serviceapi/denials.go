@@ -20,19 +20,33 @@ import (
 // worse than no counts.
 type Denials struct {
 	mu        sync.Mutex
-	byProject map[string]map[string]*denialCounter
+	byProject map[string]map[denialKey]*denialCounter
+}
+
+// denialKey rolls up by (host, path). Path-scoped allow rules
+// (v0.18.0+) mean a reject at github.com/anthropics/... and one at
+// github.com/other/... are two different allowlist decisions; the
+// user needs each URL separately to know what to add.
+type denialKey struct {
+	host string
+	path string
 }
 
 type denialCounter struct {
 	count     int
+	method    string // last-seen HTTP method for this (host, path)
 	firstSeen time.Time
 	lastSeen  time.Time
 }
 
-// Denial is one host's roll-up, safe to serialise as JSON. Times are
-// UTC-normalised for stable output across clients.
+// Denial is one (host, path) roll-up, safe to serialise as JSON. Times
+// are UTC-normalised for stable output across clients. Method is the
+// most-recent-seen HTTP method for this URL — informational, not part
+// of the rollup key.
 type Denial struct {
 	Host      string    `json:"host"`
+	Path      string    `json:"path"`
+	Method    string    `json:"method"`
 	Count     int       `json:"count"`
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
@@ -40,13 +54,14 @@ type Denial struct {
 
 // NewDenials returns an empty tracker.
 func NewDenials() *Denials {
-	return &Denials{byProject: map[string]map[string]*denialCounter{}}
+	return &Denials{byProject: map[string]map[denialKey]*denialCounter{}}
 }
 
-// Record bumps the count for host under projectID, updating lastSeen.
-// First observation sets firstSeen. Called from the supervisor tap on
-// every parsed reject audit line.
-func (d *Denials) Record(projectID, host string, when time.Time) {
+// Record bumps the count for (host, path) under projectID, updating
+// lastSeen and refreshing the recorded method. First observation sets
+// firstSeen. Called from the supervisor tap on every parsed reject
+// audit line.
+func (d *Denials) Record(projectID, host, path, method string, when time.Time) {
 	if projectID == "" || host == "" {
 		return
 	}
@@ -54,15 +69,17 @@ func (d *Denials) Record(projectID, host string, when time.Time) {
 	defer d.mu.Unlock()
 	proj, ok := d.byProject[projectID]
 	if !ok {
-		proj = map[string]*denialCounter{}
+		proj = map[denialKey]*denialCounter{}
 		d.byProject[projectID] = proj
 	}
-	c, ok := proj[host]
+	k := denialKey{host: host, path: path}
+	c, ok := proj[k]
 	if !ok {
-		proj[host] = &denialCounter{count: 1, firstSeen: when, lastSeen: when}
+		proj[k] = &denialCounter{count: 1, method: method, firstSeen: when, lastSeen: when}
 		return
 	}
 	c.count++
+	c.method = method
 	c.lastSeen = when
 }
 
@@ -82,9 +99,11 @@ func (d *Denials) Snapshot(projectID string) []Denial {
 	defer d.mu.Unlock()
 	proj := d.byProject[projectID]
 	out := make([]Denial, 0, len(proj))
-	for h, c := range proj {
+	for k, c := range proj {
 		out = append(out, Denial{
-			Host:      h,
+			Host:      k.host,
+			Path:      k.path,
+			Method:    c.method,
 			Count:     c.count,
 			FirstSeen: c.firstSeen,
 			LastSeen:  c.lastSeen,
@@ -94,7 +113,10 @@ func (d *Denials) Snapshot(projectID string) []Denial {
 		if out[i].Count != out[j].Count {
 			return out[i].Count > out[j].Count
 		}
-		return out[i].Host < out[j].Host
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		return out[i].Path < out[j].Path
 	})
 	return out
 }
@@ -149,6 +171,8 @@ func (t *denialsTap) consume(line []byte) {
 		Time  time.Time `json:"time"`
 		Audit struct {
 			Host   string `json:"host"`
+			Path   string `json:"path"`
+			Method string `json:"method"`
 			Action string `json:"action"`
 		} `json:"audit"`
 	}
@@ -162,5 +186,5 @@ func (t *denialsTap) consume(line []byte) {
 	if when.IsZero() {
 		when = time.Now()
 	}
-	t.dst.Record(t.projectID, rec.Audit.Host, when.UTC())
+	t.dst.Record(t.projectID, rec.Audit.Host, rec.Audit.Path, rec.Audit.Method, when.UTC())
 }

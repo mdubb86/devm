@@ -9,10 +9,10 @@ import (
 func TestDenials_RecordAndSnapshot(t *testing.T) {
 	d := NewDenials()
 	t0 := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
-	d.Record("p1", "google.com", t0)
-	d.Record("p1", "google.com", t0.Add(1*time.Second))
-	d.Record("p1", "example.com", t0.Add(2*time.Second))
-	d.Record("p2", "github.com", t0.Add(3*time.Second))
+	d.Record("p1", "google.com", "/", "GET", t0)
+	d.Record("p1", "google.com", "/", "GET", t0.Add(1*time.Second))
+	d.Record("p1", "example.com", "/", "GET", t0.Add(2*time.Second))
+	d.Record("p2", "github.com", "/", "GET", t0.Add(3*time.Second))
 
 	got := d.Snapshot("p1")
 	if len(got) != 2 {
@@ -39,11 +39,42 @@ func TestDenials_RecordAndSnapshot(t *testing.T) {
 	}
 }
 
+// TestDenials_RecordsPathSeparately pins that a reject at
+// github.com/anthropics/... and a reject at github.com/other/... roll
+// up as two distinct entries — same host, different actionable path
+// to allowlist. Path-scoped rules (v0.18.0+) make each URL its own
+// unit of denial.
+func TestDenials_RecordsPathSeparately(t *testing.T) {
+	d := NewDenials()
+	t0 := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	d.Record("p1", "github.com", "/anthropics/foo", "GET", t0)
+	d.Record("p1", "github.com", "/anthropics/foo", "GET", t0.Add(1*time.Second))
+	d.Record("p1", "github.com", "/other/bar", "POST", t0.Add(2*time.Second))
+
+	got := d.Snapshot("p1")
+	if len(got) != 2 {
+		t.Fatalf("want 2 (host, path) entries, got %d: %+v", len(got), got)
+	}
+	// Sorted count desc — the /anthropics/foo entry has count 2.
+	if got[0].Host != "github.com" || got[0].Path != "/anthropics/foo" || got[0].Count != 2 {
+		t.Errorf("want github.com/anthropics/foo count=2 first, got %+v", got[0])
+	}
+	if got[0].Method != "GET" {
+		t.Errorf("method: want GET, got %q", got[0].Method)
+	}
+	if got[1].Host != "github.com" || got[1].Path != "/other/bar" || got[1].Count != 1 {
+		t.Errorf("want github.com/other/bar count=1 second, got %+v", got[1])
+	}
+	if got[1].Method != "POST" {
+		t.Errorf("method: want POST, got %q", got[1].Method)
+	}
+}
+
 func TestDenials_Reset(t *testing.T) {
 	d := NewDenials()
 	now := time.Now().UTC()
-	d.Record("p1", "google.com", now)
-	d.Record("p2", "example.com", now)
+	d.Record("p1", "google.com", "/", "GET", now)
+	d.Record("p2", "example.com", "/", "GET", now)
 	d.Reset("p1")
 	if snap := d.Snapshot("p1"); len(snap) != 0 {
 		t.Errorf("p1 should be empty after reset, got %+v", snap)
@@ -65,6 +96,12 @@ func TestDenials_TapWriter_ParsesRejectLines(t *testing.T) {
 	snap := d.Snapshot("proj")
 	if len(snap) != 1 || snap[0].Host != "google.com" || snap[0].Count != 1 {
 		t.Fatalf("want google.com=1, got %+v", snap)
+	}
+	if snap[0].Path != "/" {
+		t.Errorf("path: want %q, got %q", "/", snap[0].Path)
+	}
+	if snap[0].Method != "GET" {
+		t.Errorf("method: want %q, got %q", "GET", snap[0].Method)
 	}
 }
 
