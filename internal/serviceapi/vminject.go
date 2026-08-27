@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -144,6 +145,13 @@ sudo mkdir -p %s
 mountpoint -q %s || sudo mount -t virtiofs %s %s
 grep -q '^%s ' /etc/fstab || echo '%s %s virtiofs rw,_netdev 0 0' | sudo tee -a /etc/fstab
 
+# Create any missing parents of the mount target owned by devm:devm
+# (install -d mkdir -p's the chain AND chowns each). The mount target
+# itself gets masked by the bind below, so its ownership doesn't
+# matter — but a subsequent devm-user write UNDER a newly-created
+# parent (e.g. ~/.cache/foo when the volume is ~/.cache/foo/data) needs
+# devm:devm on that parent, not root:root.
+sudo install -d -o devm -g devm %s
 sudo mkdir -p %s
 # Idempotency: if the target is already a bind mount from a previous
 # boot, do nothing. The virtiofs share above is idempotent too, so
@@ -156,6 +164,7 @@ sudo mount --bind %s %s
 `,
 		sharePath, sharePath, tag, sharePath,
 		tag, tag, sharePath,
+		filepath.Dir(guestTargetPath),
 		guestTargetPath,
 		guestTargetPath,
 		adoptOrErrorBlock,
