@@ -414,3 +414,8 @@ func TestWaitProcessGone_ProcessOutlivesTimeout(t *testing.T) {
 	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond, "should wait the full timeout, took %v", elapsed)
 	assert.Less(t, elapsed, 500*time.Millisecond, "should return promptly after timeout, took %v", elapsed)
 }
+
+func TestRoleMutagen_DistinctValue(t *testing.T) {
+	assert.Equal(t, Role("mutagen"), RoleMutagen)
+	assert.NotEqual(t, RoleProxy, RoleMutagen)
+}

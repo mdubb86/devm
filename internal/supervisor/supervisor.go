@@ -41,8 +41,9 @@ var ErrNotFound = errors.New("supervisor: key not found")
 type Role string
 
 const (
-	RoleVM    Role = "vm"
-	RoleProxy Role = "proxy" // Ship 5 iron-proxy
+	RoleVM      Role = "vm"
+	RoleProxy   Role = "proxy" // Ship 5 iron-proxy
+	RoleMutagen Role = "mutagen"
 )
 
 // Key is the registry key: one process per (project_id, role).
