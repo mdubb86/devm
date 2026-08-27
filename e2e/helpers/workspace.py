@@ -63,19 +63,33 @@ class Workspace:
 
     def write_devmyaml(self, *, no_repo: bool = False, **sections: Any) -> None:
         """Write a fresh devm.yaml. Extra sections (install, services, env,
-        network) are merged into the project skeleton. A `repo:` section
-        is auto-injected (pointing at a hermetic local bare repo, which
-        shells out to git) unless the caller opts out: pass an explicit
-        `repo=...` section to use verbatim, pass `repo=False` or
-        `no_repo=True` to omit the `repo:` block entirely without ever
-        calling `bare_repo_url()`."""
+        network) are merged into the project skeleton. A `repos:` map with
+        a single "main" entry is auto-injected (pointing at a hermetic
+        local bare repo, which shells out to git) unless the caller opts
+        out: pass an explicit `repos={...}` section to use verbatim, pass
+        `repo=False` or `no_repo=True` to omit the `repos:` block entirely
+        without ever calling `bare_repo_url()`.
+
+        The singular `repo=...` kwarg (the pre-Phase-B shape) is no
+        longer accepted -- Config.Repos is a map now, and the daemon's
+        KnownFields(true) decode rejects a stray `repo:` key outright.
+        Callers must pass `repos={"main": {...}}` (or another id)
+        instead."""
+        if "repo" in sections and sections["repo"] is not False:
+            raise ValueError(
+                "write_devmyaml(repo=...) is no longer supported: devm.yaml "
+                "now uses a `repos:` map. Pass repos={'main': {...}} instead "
+                "(or repo=False / no_repo=True to omit repos entirely)."
+            )
         if sections.get("repo") is False:
             no_repo = True
             del sections["repo"]
-        if not no_repo and "repo" not in sections:
-            sections["repo"] = {
-                "url": self.bare_repo_url(),
-                "secret": "e2e_default",
+        if not no_repo and "repos" not in sections:
+            sections["repos"] = {
+                "main": {
+                    "url": self.bare_repo_url(),
+                    "secret": "e2e_default",
+                },
             }
         cfg: dict[str, Any] = {
             "project": {

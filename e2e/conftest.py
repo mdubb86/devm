@@ -152,11 +152,11 @@ def workspace(request, devm_path, sandbox_name) -> Iterator[Workspace]:
         # match what the daemon keys on.
         ws = Workspace(path, slug=sandbox_name, vm_name=sandbox_name, port_offset=port_offset)
         ws.write_devmyaml()  # minimal config; tests can call write_devmyaml again with extras
-        # write_devmyaml() auto-injects a `repo:` block referencing the
-        # "e2e_default" secret. Seed it now, before any cold-start can
-        # attempt hydration -- any non-empty value works, iron-proxy
-        # substitutes it happily even against a file:// URL that ignores
-        # auth entirely.
+        # write_devmyaml() auto-injects a `repos:` map (id "main")
+        # referencing the "e2e_default" secret. Seed it now, before any
+        # cold-start can attempt hydration -- any non-empty value works,
+        # iron-proxy substitutes it happily even against a file:// URL
+        # that ignores auth entirely.
         subprocess.run(
             [devm_path, "secret", "set", "e2e_default"],
             cwd=str(path),
