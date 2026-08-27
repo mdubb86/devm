@@ -63,44 +63,42 @@ func TestComputeVolumeChanges_MultipleSortedDeterministic(t *testing.T) {
 	assert.Equal(t, "c", changes[2].Key)
 }
 
-func TestComputeVolumeChanges_RepoAdded(t *testing.T) {
-	url := "https://github.com/x/y.git"
+func TestComputeVolumeChanges_LabelAdded(t *testing.T) {
+	label := "claude"
 	old := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data"}}}
-	new := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &url, Secret: "s"}}}}
+	new := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data", Label: &label}}}
 	changes := computeVolumeChanges(old, new)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindVolumeChange, changes[0].Kind)
 	assert.Equal(t, "pg", changes[0].Key)
 }
 
-func TestComputeVolumeChanges_RepoURLChanged(t *testing.T) {
-	oldURL := "https://github.com/x/y.git"
-	newURL := "https://github.com/x/z.git"
-	old := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &oldURL, Secret: "s"}}}}
-	new := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &newURL, Secret: "s"}}}}
+func TestComputeVolumeChanges_IgnoreChanged(t *testing.T) {
+	old := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data", Ignore: []string{"a/"}}}}
+	new := schema.Config{Volumes: map[string]schema.Volume{"pg": {Path: "/data", Ignore: []string{"b/"}}}}
 	changes := computeVolumeChanges(old, new)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindVolumeChange, changes[0].Kind)
 	assert.Equal(t, "pg", changes[0].Key)
 }
 
-func TestComputeVolumeChanges_RepoURLChanged_ShowsRepoSummary(t *testing.T) {
-	oldURL := "https://github.com/x/y.git"
-	newURL := "https://github.com/x/z.git"
+func TestComputeVolumeChanges_LabelChanged_ShowsSummary(t *testing.T) {
+	oldLabel := "old-label"
+	newLabel := "new-label"
 	old := schema.Config{Volumes: map[string]schema.Volume{
-		"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &oldURL, Secret: "s"}},
+		"pg": {Path: "/data", Label: &oldLabel},
 	}}
 	new := schema.Config{Volumes: map[string]schema.Volume{
-		"pg": {Path: "/data", Repo: &schema.RepoConfig{URL: &newURL, Secret: "s"}},
+		"pg": {Path: "/data", Label: &newLabel},
 	}}
 	changes := computeVolumeChanges(old, new)
 	assert.Len(t, changes, 1)
 	assert.Equal(t, KindVolumeChange, changes[0].Kind)
 	assert.Equal(t, "pg", changes[0].Key)
 	assert.Contains(t, changes[0].Old, "/data")
-	assert.Contains(t, changes[0].Old, oldURL)
+	assert.Contains(t, changes[0].Old, oldLabel)
 	assert.Contains(t, changes[0].New, "/data")
-	assert.Contains(t, changes[0].New, newURL)
+	assert.Contains(t, changes[0].New, newLabel)
 }
 
 func TestKindVolumeChange_BucketRestartVM(t *testing.T) {

@@ -246,39 +246,13 @@ func (p *Provisioner) gitIdentity() render.GitIdentity {
 	}
 }
 
-// repoBindings flattens p.Cfg's repo declarations (top-level + per-volume)
-// into the order-stable slice RenderGitCredentials consumes. Primary
-// first (when declared), then per-volume repos in sorted volume-name
-// order. Volumes without a repo: block or without a resolved URL are
-// skipped. A per-volume repo with an empty Secret inherits from the
-// top-level secret (mirrors schema.Validate's inheritance rule).
+// repoBindings flattens p.Cfg's top-level repo declaration (when present
+// and resolved to a URL) into the slice RenderGitCredentials consumes.
 func (p *Provisioner) repoBindings() []render.RepoBinding {
 	var bindings []render.RepoBinding
-	var topSecret string
-	if p.Cfg.Repo != nil {
-		topSecret = p.Cfg.Repo.Secret
-		if p.Cfg.Repo.URL != nil && *p.Cfg.Repo.URL != "" {
-			bindings = append(bindings, render.RepoBinding{
-				URL: *p.Cfg.Repo.URL, Secret: p.Cfg.Repo.Secret,
-			})
-		}
-	}
-	names := make([]string, 0, len(p.Cfg.Volumes))
-	for name := range p.Cfg.Volumes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		vol := p.Cfg.Volumes[name]
-		if vol.Repo == nil || vol.Repo.URL == nil || *vol.Repo.URL == "" {
-			continue
-		}
-		secret := vol.Repo.Secret
-		if secret == "" {
-			secret = topSecret
-		}
+	if p.Cfg.Repo != nil && p.Cfg.Repo.URL != nil && *p.Cfg.Repo.URL != "" {
 		bindings = append(bindings, render.RepoBinding{
-			URL: *vol.Repo.URL, Secret: secret,
+			URL: *p.Cfg.Repo.URL, Secret: p.Cfg.Repo.Secret,
 		})
 	}
 	return bindings

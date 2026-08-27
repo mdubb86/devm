@@ -8,8 +8,7 @@ import (
 )
 
 // RepoConfig declares a git repo to hydrate a volume from at cold-start.
-// Used at top level (Config.Repo, the primary workspace) and inside a
-// Volume (secondary repos under `volumes:`).
+// Used at top level (Config.Repo, the primary workspace).
 type RepoConfig struct {
 	// URL is the git clone URL. Nil at top level means "derive from
 	// `git remote get-url origin` in Mac cwd." Nil for a secondary is
@@ -38,20 +37,21 @@ type RepoConfig struct {
 
 var repoKnownFields = []string{"url", "secret", "label", "volume", "primary", "ignore"}
 
-// Volume is a per-project persistent store, optionally hydrated from git.
+// Volume is a per-project persistent store.
 type Volume struct {
 	// Path is the absolute guest mount point. Required.
 	Path string
-	// Repo, when non-nil, causes devm to `git clone` into the volume's
-	// Mac-side storage on the first cold-start where the storage is empty.
-	Repo *RepoConfig
+	// Label names the mutagen sync session for this volume.
+	Label *string
+	// Ignore lists mutagen sync ignore patterns.
+	Ignore []string
 }
 
-var volumeKnownFields = []string{"path", "repo"}
+var volumeKnownFields = []string{"path", "label", "ignore"}
 
 // UnmarshalYAML decodes either the scalar shape (bare guest path) or the
-// mapping shape (`{path: ..., repo: ...}`). Rejects unknown keys in the
-// mapping shape.
+// mapping shape (`{path: ..., label: ..., ignore: ...}`). Rejects unknown
+// keys in the mapping shape.
 func (v *Volume) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind == yaml.ScalarNode {
 		v.Path = node.Value
@@ -74,15 +74,17 @@ func (v *Volume) UnmarshalYAML(node *yaml.Node) error {
 		}
 	}
 	type raw struct {
-		Path string      `yaml:"path"`
-		Repo *RepoConfig `yaml:"repo,omitempty"`
+		Path   string   `yaml:"path"`
+		Label  *string  `yaml:"label,omitempty"`
+		Ignore []string `yaml:"ignore,omitempty"`
 	}
 	var r raw
 	if err := node.Decode(&r); err != nil {
 		return err
 	}
 	v.Path = r.Path
-	v.Repo = r.Repo
+	v.Label = r.Label
+	v.Ignore = r.Ignore
 	return nil
 }
 

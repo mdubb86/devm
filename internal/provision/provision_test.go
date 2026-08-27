@@ -349,84 +349,11 @@ func TestScriptInput_PopulatesGitCredentialsFromTopLevelRepo(t *testing.T) {
 	assert.Contains(t, in.GitConfig, "useHttpPath = true")
 }
 
-func TestScriptInput_PopulatesGitCredentialsFromPerVolumeRepo(t *testing.T) {
-	topURL := "https://github.com/mdubb86/sewtrue.git"
-	sdkURL := "https://github.com/mdubb86/some-sdk.git"
-	p := &Provisioner{
-		Cfg: schema.Config{
-			Repo: &schema.RepoConfig{URL: &topURL, Secret: "gh_workspace"},
-			Volumes: map[string]schema.Volume{
-				"sdk": {
-					Path: "/home/devm/sdk",
-					Repo: &schema.RepoConfig{URL: &sdkURL, Secret: "gh_sdk_ro"},
-				},
-			},
-		},
-	}
-	in := p.scriptInput()
-	assert.Contains(t, in.GitCredentials,
-		"https://x-access-token:__DEVM_SECRET_gh_workspace__@github.com/mdubb86/sewtrue.git")
-	assert.Contains(t, in.GitCredentials,
-		"https://x-access-token:__DEVM_SECRET_gh_sdk_ro__@github.com/mdubb86/some-sdk.git")
-}
-
-func TestScriptInput_PerVolumeInheritsTopLevelSecret(t *testing.T) {
-	topURL := "https://github.com/mdubb86/sewtrue.git"
-	sdkURL := "https://github.com/mdubb86/some-sdk.git"
-	p := &Provisioner{
-		Cfg: schema.Config{
-			Repo: &schema.RepoConfig{URL: &topURL, Secret: "gh_shared"},
-			Volumes: map[string]schema.Volume{
-				// Per-volume with URL but empty Secret ⇒ inherits gh_shared.
-				"sdk": {
-					Path: "/home/devm/sdk",
-					Repo: &schema.RepoConfig{URL: &sdkURL, Secret: ""},
-				},
-			},
-		},
-	}
-	in := p.scriptInput()
-	// Both lines reference the inherited secret name.
-	assert.Contains(t, in.GitCredentials,
-		"https://x-access-token:__DEVM_SECRET_gh_shared__@github.com/mdubb86/sewtrue.git")
-	assert.Contains(t, in.GitCredentials,
-		"https://x-access-token:__DEVM_SECRET_gh_shared__@github.com/mdubb86/some-sdk.git")
-}
-
 func TestScriptInput_NoReposEmptyCredentials(t *testing.T) {
 	p := &Provisioner{Cfg: schema.Config{}}
 	in := p.scriptInput()
 	assert.Equal(t, "", in.GitCredentials, "no repos ⇒ no credentials lines")
 	assert.Equal(t, "", in.GitConfig, "no repos ⇒ no gitconfig")
-}
-
-func TestScriptInput_DeterministicVolumeOrder(t *testing.T) {
-	// Map iteration is unordered; the caller must sort volume names so
-	// re-emits produce byte-identical files.
-	urlA := "https://github.com/me/a.git"
-	urlB := "https://github.com/me/b.git"
-	urlC := "https://github.com/me/c.git"
-	p := &Provisioner{
-		Cfg: schema.Config{
-			Volumes: map[string]schema.Volume{
-				"c-vol": {Path: "/home/devm/c", Repo: &schema.RepoConfig{URL: &urlC, Secret: "s_c"}},
-				"a-vol": {Path: "/home/devm/a", Repo: &schema.RepoConfig{URL: &urlA, Secret: "s_a"}},
-				"b-vol": {Path: "/home/devm/b", Repo: &schema.RepoConfig{URL: &urlB, Secret: "s_b"}},
-			},
-		},
-	}
-	// Run scriptInput twice; assert identical output.
-	in1 := p.scriptInput()
-	in2 := p.scriptInput()
-	assert.Equal(t, in1.GitCredentials, in2.GitCredentials,
-		"same Cfg must yield byte-identical credentials output across calls")
-	// Assert sorted volume order in the emitted lines.
-	// Expected order: primary (none here) then a-vol, b-vol, c-vol.
-	aIdx := strings.Index(in1.GitCredentials, "/me/a.git")
-	bIdx := strings.Index(in1.GitCredentials, "/me/b.git")
-	cIdx := strings.Index(in1.GitCredentials, "/me/c.git")
-	assert.True(t, aIdx < bIdx && bIdx < cIdx,
-		"volume-repo lines must be in sorted volume-name order (a-vol < b-vol < c-vol)")
 }
 
 func TestProvisioner_ScriptInput_PassesScripts(t *testing.T) {

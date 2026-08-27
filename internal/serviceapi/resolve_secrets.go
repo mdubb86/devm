@@ -85,10 +85,10 @@ func ResolveSecretBindings(cfg schema.Config, backend secret.Backend, macCwd str
 }
 
 // RepoHosts returns the sorted, de-duplicated hosts implied by cfg's
-// repo declarations (top-level `repo:` + every `volumes.<name>.repo:`)
-// — the egress-allowlist entries those clones need beyond whatever
-// network.allow already declares. macCwd resolves the top-level
-// repo's URL when nil, exactly as ResolveSecretBindings does.
+// top-level `repo:` declaration — the egress-allowlist entries that
+// clone needs beyond whatever network.allow already declares. macCwd
+// resolves the repo's URL when nil, exactly as ResolveSecretBindings
+// does.
 func RepoHosts(cfg schema.Config, macCwd string) ([]string, error) {
 	_, hosts, err := repoSecretHosts(cfg, macCwd)
 	return hosts, err
@@ -142,29 +142,6 @@ func repoSecretHosts(cfg schema.Config, macCwd string) (map[string][]string, []s
 		}
 		if err := add(cfg.Repo.Secret, rawURL); err != nil {
 			return nil, nil, fmt.Errorf("repo.secret: %w", err)
-		}
-	}
-
-	volNames := make([]string, 0, len(cfg.Volumes))
-	for n := range cfg.Volumes {
-		volNames = append(volNames, n)
-	}
-	sort.Strings(volNames)
-	for _, name := range volNames {
-		vol := cfg.Volumes[name]
-		if vol.Repo == nil {
-			continue
-		}
-		secretName := vol.Repo.Secret
-		if secretName == "" && cfg.Repo != nil {
-			secretName = cfg.Repo.Secret
-		}
-		rawURL := ""
-		if vol.Repo.URL != nil {
-			rawURL = *vol.Repo.URL
-		}
-		if err := add(secretName, rawURL); err != nil {
-			return nil, nil, fmt.Errorf("volumes.%s.repo.secret: %w", name, err)
 		}
 	}
 

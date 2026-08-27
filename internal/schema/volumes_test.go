@@ -128,10 +128,47 @@ func TestVolumes_RejectsOverlapWithMask(t *testing.T) {
 }
 
 func TestVolumes_YAMLRoundTrip(t *testing.T) {
-	// Bare scalar shape decodes to Volume.Path with Repo left nil.
+	// Bare scalar shape decodes to Volume.Path with Label/Ignore left nil.
 	yamlIn := "project:\n  name: p\nvolumes:\n  pg: /var/lib/pg\n"
 	var c Config
 	require.NoError(t, unmarshalYAML([]byte(yamlIn), &c))
 	assert.Equal(t, "/var/lib/pg", c.Volumes["pg"].Path)
-	assert.Nil(t, c.Volumes["pg"].Repo)
+	assert.Nil(t, c.Volumes["pg"].Label)
+	assert.Nil(t, c.Volumes["pg"].Ignore)
+}
+
+func TestVolume_KnownFields_NewShape(t *testing.T) {
+	assert.ElementsMatch(t,
+		[]string{"path", "label", "ignore"},
+		volumeKnownFields,
+	)
+}
+
+func TestVolume_UnmarshalYAML_Scalar(t *testing.T) {
+	var v Volume
+	require.NoError(t, yaml.Unmarshal([]byte(`/home/devm/.claude`), &v))
+	assert.Equal(t, "/home/devm/.claude", v.Path)
+	assert.Nil(t, v.Label)
+	assert.Nil(t, v.Ignore)
+}
+
+func TestVolume_UnmarshalYAML_FullShape(t *testing.T) {
+	y := `path: /home/devm/.claude
+label: claude
+ignore:
+  - Cache/
+`
+	var v Volume
+	require.NoError(t, yaml.Unmarshal([]byte(y), &v))
+	assert.Equal(t, "/home/devm/.claude", v.Path)
+	require.NotNil(t, v.Label)
+	assert.Equal(t, "claude", *v.Label)
+	assert.Equal(t, []string{"Cache/"}, v.Ignore)
+}
+
+func TestVolume_UnmarshalYAML_RejectsRepoField(t *testing.T) {
+	var v Volume
+	err := yaml.Unmarshal([]byte("path: /x\nrepo: {url: g}\n"), &v)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field \"repo\"")
 }

@@ -701,7 +701,8 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				Tag:      "vol_" + name,
 			})
 			volumes = append(volumes, volumeState{
-				name: name, target: target, macPath: macPath, wasEmpty: wasEmpty, repo: req.Cfg.Volumes[name].Repo, mountTag: name,
+				// TODO(task 6): secondary-volume hydration moves to top-level `repos:`.
+				name: name, target: target, macPath: macPath, wasEmpty: wasEmpty, repo: nil, mountTag: name,
 			})
 		}
 		// Make devm.yaml (+ devm.me.yaml) host-immutable before the guest

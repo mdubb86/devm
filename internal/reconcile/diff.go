@@ -577,19 +577,19 @@ func computeVolumeChanges(old, new schema.Config) []Change {
 }
 
 // formatVolumeChangeValue renders a Volume for the reconcile prompt's
-// Old/New display. Plain path when Repo is unset, so a path-only
-// retarget still reads as "<old> → <new>". When Repo is set, appends
-// a repo summary so a repo-only edit (same path) doesn't render as a
-// no-op "<path> → <path>".
+// Old/New display. Plain path when Label/Ignore are unset, so a
+// path-only retarget still reads as "<old> → <new>". Otherwise appends
+// a label/ignore summary so a metadata-only edit (same path) doesn't
+// render as a no-op "<path> → <path>".
 func formatVolumeChangeValue(v schema.Volume) string {
-	if v.Repo == nil {
+	if v.Label == nil && len(v.Ignore) == 0 {
 		return v.Path
 	}
-	url := ""
-	if v.Repo.URL != nil {
-		url = *v.Repo.URL
+	label := ""
+	if v.Label != nil {
+		label = *v.Label
 	}
-	return fmt.Sprintf("%s [repo=%s, secret=%s]", v.Path, url, v.Repo.Secret)
+	return fmt.Sprintf("%s [label=%s, ignore=%s]", v.Path, label, strings.Join(v.Ignore, ","))
 }
 
 // stringPtrEqual compares two string pointers: both nil is equal, one
@@ -605,27 +605,16 @@ func stringPtrEqual(a, b *string) bool {
 	return *a == *b
 }
 
-// repoConfigEqual compares two RepoConfig values, accounting for
-// pointer fields (URL) that may be nil.
-func repoConfigEqual(a, b schema.RepoConfig) bool {
-	return stringPtrEqual(a.URL, b.URL) &&
-		a.Secret == b.Secret
-}
-
-// volumeEqual compares two Volume values, including the optional
-// Repo sub-block. A change to any field (Path, Repo pointer, or
-// RepoConfig field) is considered a difference.
+// volumeEqual compares two Volume values, including Label and Ignore.
+// A change to any field is considered a difference.
 func volumeEqual(a, b schema.Volume) bool {
 	if a.Path != b.Path {
 		return false
 	}
-	if (a.Repo == nil) != (b.Repo == nil) {
+	if !stringPtrEqual(a.Label, b.Label) {
 		return false
 	}
-	if a.Repo == nil {
-		return true
-	}
-	return repoConfigEqual(*a.Repo, *b.Repo)
+	return stringSliceEqual(a.Ignore, b.Ignore)
 }
 
 // computeMaskChanges emits one KindMaskChange per path that

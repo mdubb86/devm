@@ -140,22 +140,7 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 		byPath[path] = name
 	}
 
-	// Third: repo-config validation on volume entries. Independent of
-	// workspaceRoot, so it runs under plain Validate() too.
-	for _, name := range names {
-		vol := c.Volumes[name]
-		if vol.Repo == nil {
-			continue
-		}
-		if vol.Repo.URL == nil || *vol.Repo.URL == "" {
-			return fmt.Errorf("volumes.%s.repo: url is required for secondary repos", name)
-		}
-		if vol.Repo.Secret == "" && (c.Repo == nil || c.Repo.Secret == "") {
-			return fmt.Errorf("volumes.%s.repo: secret is required (no top-level repo.secret to inherit)", name)
-		}
-	}
-
-	// Fourth: no overlap with any top-level mask target. Masks live
+	// Third: no overlap with any top-level mask target. Masks live
 	// under the workspace root; volume target is absolute. Checked
 	// before the workspace-root overlap below (mask targets are always
 	// workspace subpaths) so a volume colliding with a mask reports the
@@ -175,7 +160,7 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 		}
 	}
 
-	// Fifth: no overlap with the workspace mount root. The workspace
+	// Fourth: no overlap with the workspace mount root. The workspace
 	// is virtiofs-mounted at the same absolute path in the guest as
 	// on the Mac (mirrored per vm.go). A volume mounted at the
 	// workspace root or any subpath would collide with the workspace
