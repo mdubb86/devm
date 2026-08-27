@@ -4,8 +4,6 @@ import (
 	"context"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -76,7 +74,7 @@ func stubMutagenSpawnSeams(t *testing.T) (ensureCalled *bool, startCalled *bool)
 	return ensureCalled, startCalled
 }
 
-func TestSpawnMutagen_CreatesDataAndHomeDirsAndSpawns(t *testing.T) {
+func TestSpawnMutagen_CreatesDataDirAndSpawns(t *testing.T) {
 	cfg := testMutagenCfg(t)
 	sup := supervisor.New(t.TempDir())
 
@@ -109,16 +107,12 @@ func TestSpawnMutagen_CreatesDataAndHomeDirsAndSpawns(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 
-	info, err = os.Stat(mutagenHomeDir(cfg))
-	require.NoError(t, err)
-	assert.True(t, info.IsDir())
-
 	st := sup.Status(supervisor.Key{Role: supervisor.RoleMutagen})
 	assert.True(t, st.Present)
 	assert.Equal(t, os.Getpid(), st.PID)
 }
 
-func TestSpawnMutagen_SetsEnvIncludingMutagenDataDirectoryAndHome(t *testing.T) {
+func TestSpawnMutagen_SetsMutagenDataDirectoryEnv(t *testing.T) {
 	cfg := testMutagenCfg(t)
 	sup := supervisor.New(t.TempDir())
 
@@ -140,7 +134,6 @@ func TestSpawnMutagen_SetsEnvIncludingMutagenDataDirectoryAndHome(t *testing.T) 
 
 	require.NotNil(t, startCalledWith)
 	assert.Equal(t, mutagenDataDir(cfg), startCalledWith.DataDir)
-	assert.Contains(t, startCalledWith.ExtraEnv, "HOME="+mutagenHomeDir(cfg))
 }
 
 func TestAdoptMutagenDaemon_ExistingAliveShaMatches_Adopts(t *testing.T) {
@@ -229,69 +222,4 @@ func TestStopMutagen_CallsSupervisorStop(t *testing.T) {
 
 	st := sup.Status(supervisor.Key{Role: supervisor.RoleMutagen})
 	assert.False(t, st.Present)
-}
-
-func TestWriteMutagenSSHConfig_WritesConfigDIncludeAndHostBlock(t *testing.T) {
-	cfg := testMutagenCfg(t)
-
-	err := WriteMutagenSSHConfig(cfg, "myproj", "devm-myproj", "192.168.64.10", "/path/to/id_ed25519", "/path/to/known_hosts")
-	require.NoError(t, err)
-
-	path := filepath.Join(mutagenHomeDir(cfg), ".ssh", "config.d", "myproj.conf")
-	body, err := os.ReadFile(path)
-	require.NoError(t, err)
-
-	want := `Host devm-myproj
-  HostName 192.168.64.10
-  User devm
-  IdentityFile /path/to/id_ed25519
-  UserKnownHostsFile /path/to/known_hosts
-  StrictHostKeyChecking yes
-  IdentitiesOnly yes
-`
-	assert.Equal(t, want, string(body))
-
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
-}
-
-func TestWriteMutagenSSHConfig_MainConfigContainsIncludeDirective(t *testing.T) {
-	cfg := testMutagenCfg(t)
-
-	err := WriteMutagenSSHConfig(cfg, "myproj", "devm-myproj", "192.168.64.10", "/path/to/id_ed25519", "/path/to/known_hosts")
-	require.NoError(t, err)
-
-	mainPath := filepath.Join(mutagenHomeDir(cfg), ".ssh", "config")
-	body, err := os.ReadFile(mainPath)
-	require.NoError(t, err)
-	assert.Contains(t, string(body), "Include config.d/*.conf")
-
-	info, err := os.Stat(mainPath)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
-
-	// Idempotent: writing a second project must not duplicate the
-	// Include directive.
-	require.NoError(t, WriteMutagenSSHConfig(cfg, "otherproj", "devm-otherproj", "192.168.64.11", "/k", "/kh"))
-	body2, err := os.ReadFile(mainPath)
-	require.NoError(t, err)
-	assert.Equal(t, 1, strings.Count(string(body2), "Include config.d/*.conf"))
-}
-
-func TestRemoveMutagenSSHConfig_DeletesPerProjectFile(t *testing.T) {
-	cfg := testMutagenCfg(t)
-	require.NoError(t, WriteMutagenSSHConfig(cfg, "myproj", "devm-myproj", "192.168.64.10", "/k", "/kh"))
-
-	path := filepath.Join(mutagenHomeDir(cfg), ".ssh", "config.d", "myproj.conf")
-	_, err := os.Stat(path)
-	require.NoError(t, err)
-
-	require.NoError(t, RemoveMutagenSSHConfig(cfg, "myproj"))
-
-	_, err = os.Stat(path)
-	assert.True(t, os.IsNotExist(err))
-
-	// Removing a project with no config file is a no-op, not an error.
-	require.NoError(t, RemoveMutagenSSHConfig(cfg, "myproj"))
 }
