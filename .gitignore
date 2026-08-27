@@ -46,3 +46,7 @@ internal/setsidshim/embed/devm-setsid-shim.gz
 # pop binary embedded (uncompressed) into devm at build time.
 # Populated by `just _build-pop-embed`.
 internal/guestbin/embed/pop
+
+# mutagen binary embedded (gzipped) into devm at build time.
+# Populated by `just fetch-mutagen`.
+internal/mutagen/embed/*.gz

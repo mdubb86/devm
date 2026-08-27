@@ -297,3 +297,19 @@ fetch-iron-proxy:
     @gunzip -kc internal/ironproxy/embed/iron-proxy.gz > bin/iron-proxy
     @chmod +x bin/iron-proxy
     @echo "iron-proxy binary extracted to bin/iron-proxy"
+
+# Fetch mutagen binary for embed. Pinned to v0.18.1.
+fetch-mutagen:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VER=v0.18.1
+    ARCH=arm64
+    URL="https://github.com/mutagen-io/mutagen/releases/download/${VER}/mutagen_darwin_${ARCH}_${VER}.tar.gz"
+    DEST=internal/mutagen/embed
+    mkdir -p "$DEST"
+    tmp=$(mktemp -d)
+    trap "rm -rf $tmp" EXIT
+    curl -fsSL "$URL" -o "$tmp/mutagen.tar.gz"
+    tar -xzf "$tmp/mutagen.tar.gz" -C "$tmp" mutagen
+    gzip -c "$tmp/mutagen" > "$DEST/mutagen.gz"
+    echo "wrote $DEST/mutagen.gz ($(wc -c < $DEST/mutagen.gz) bytes)"
