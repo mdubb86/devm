@@ -926,6 +926,156 @@ func ParseMemorySize(s string) (int, error) {
 	return n * 1024, nil
 }
 
+// reservedProjectIDs are devm-internal storage directory names under
+// the daemon's Application Support root. A project.name colliding
+// with one of these would shadow devm's own storage layout.
+var reservedProjectIDs = map[string]bool{
+	"bin": true, "state": true, "iron-proxy": true,
+	"mutagen": true, "volumes": true,
+}
+
+// validateProjectIDReserved rejects a project.name that collides with
+// a devm-internal storage directory name.
+func (c *Config) validateProjectIDReserved() error {
+	name := c.Project.Name
+	if reservedProjectIDs[name] {
+		return fmt.Errorf("project.name %q collides with a devm-internal storage dir — pick another name", name)
+	}
+	return nil
+}
+
+// BareCloneName derives a repo's default label from its clone URL:
+// strips a trailing ".git", then keeps the path segment after the
+// last "/" or ":" — "git@github.com:me/foo.git" → "foo".
+func BareCloneName(url string) string {
+	trimmed := strings.TrimSuffix(url, ".git")
+	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
+		trimmed = trimmed[i+1:]
+	}
+	if i := strings.LastIndex(trimmed, ":"); i >= 0 {
+		trimmed = trimmed[i+1:]
+	}
+	return trimmed
+}
+
+// cwdLabelPlaceholder is the label derived for a URL-nil primary repo
+// when macCwd is unknown. Production callers always resolve through
+// ValidateWithRoot, which supplies the real Mac cwd; this placeholder
+// only surfaces when Validate() is called directly (unit tests).
+const cwdLabelPlaceholder = "__cwd__"
+
+// validateRepos enforces primary determination across Config.Repos:
+// either exactly one entry is marked `primary: true`, or exactly one
+// entry omits `url:` (implying primary — its URL derives from
+// `git remote get-url origin` in the Mac cwd). The resolved primary
+// must not have `volume: false`.
+func (c *Config) validateRepos() error {
+	if len(c.Repos) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(c.Repos))
+	for name := range c.Repos {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var explicitPrimary []string
+	var urlNilKeys []string
+	for _, name := range names {
+		r := c.Repos[name]
+		if r.Primary != nil && *r.Primary {
+			explicitPrimary = append(explicitPrimary, name)
+		}
+		if r.URL == nil {
+			urlNilKeys = append(urlNilKeys, name)
+		}
+	}
+	if len(explicitPrimary) > 1 {
+		return fmt.Errorf("repos: multiple entries with primary: true (%v) — only one allowed", explicitPrimary)
+	}
+
+	var primaryName string
+	switch {
+	case len(explicitPrimary) == 1:
+		primaryName = explicitPrimary[0]
+	case len(urlNilKeys) == 1:
+		primaryName = urlNilKeys[0]
+	case len(urlNilKeys) == 0:
+		return fmt.Errorf("repos: no primary — either mark one entry `primary: true` or omit `url:` on one entry (URL derives from `git remote get-url origin`)")
+	default:
+		return fmt.Errorf("repos: multiple entries without a `url:` (%v) — mark exactly one `primary: true`", urlNilKeys)
+	}
+
+	primary := c.Repos[primaryName]
+	if primary.Volume != nil && !*primary.Volume {
+		return fmt.Errorf("repos.%s: primary cannot have volume: false", primaryName)
+	}
+	return nil
+}
+
+// labelOwner names one entity (a repos: or volumes: entry) that
+// derived or declared a given mutagen sync label.
+type labelOwner struct {
+	kind, name, label string
+}
+
+// validateLabels checks the flat label namespace shared by repos: and
+// volumes: for collisions. An entry's label is its explicit `label:`
+// when set, else derived: repos with url: → bare-clone name; the
+// url-nil primary repo → basename of macCwd (or cwdLabelPlaceholder
+// when macCwd is unknown); volumes → leaf-dir of path:.
+func (c *Config) validateLabels(macCwd string) error {
+	var owners []labelOwner
+
+	repoNames := make([]string, 0, len(c.Repos))
+	for name := range c.Repos {
+		repoNames = append(repoNames, name)
+	}
+	sort.Strings(repoNames)
+	for _, name := range repoNames {
+		r := c.Repos[name]
+		var label string
+		switch {
+		case r.Label != nil:
+			label = *r.Label
+		case r.URL != nil:
+			label = BareCloneName(*r.URL)
+		case macCwd != "":
+			label = filepath.Base(macCwd)
+		default:
+			label = cwdLabelPlaceholder
+		}
+		owners = append(owners, labelOwner{"repos", name, label})
+	}
+
+	volNames := make([]string, 0, len(c.Volumes))
+	for name := range c.Volumes {
+		volNames = append(volNames, name)
+	}
+	sort.Strings(volNames)
+	for _, name := range volNames {
+		v := c.Volumes[name]
+		var label string
+		if v.Label != nil {
+			label = *v.Label
+		} else {
+			label = filepath.Base(v.Path)
+		}
+		owners = append(owners, labelOwner{"volumes", name, label})
+	}
+
+	seen := map[string]labelOwner{}
+	for _, o := range owners {
+		if prior, ok := seen[o.label]; ok {
+			return fmt.Errorf(
+				"label %q: %s.%s and %s.%s both resolve to it — set an explicit `label:` on one",
+				o.label, prior.kind, prior.name, o.kind, o.name)
+		}
+		seen[o.label] = o
+	}
+	return nil
+}
+
 // ValidateWithRoot is like Validate but additionally checks the
 // `mounts:` entries resolve cleanly and the resolved host paths
 // exist. Callers that have the project root (devm's config loader)
@@ -949,6 +1099,9 @@ func (c Config) ValidateWithRoot(projectRoot string) error {
 		return err
 	}
 	if err := c.validateMasks(); err != nil {
+		return err
+	}
+	if err := c.validateLabels(projectRoot); err != nil {
 		return err
 	}
 	return nil
@@ -1076,6 +1229,15 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validateSecretBindings(); err != nil {
+		return err
+	}
+	if err := c.validateRepos(); err != nil {
+		return err
+	}
+	if err := c.validateProjectIDReserved(); err != nil {
+		return err
+	}
+	if err := c.validateLabels(""); err != nil {
 		return err
 	}
 	return nil

@@ -1196,3 +1196,153 @@ func TestValidate_Secrets_NoSecretsAnywhere_OK(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool    { return &b }
+
+// ---------- validateRepos: primary determination ----------
+
+func TestValidateRepos_PrimaryDetermination(t *testing.T) {
+	t.Run("explicit primary true valid", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		assert.NoError(t, c.validateRepos())
+	})
+
+	t.Run("two explicit primaries error", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"second": {URL: strPtr("git@github.com:me/second.git"), Primary: boolPtr(true)},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "multiple entries with primary: true")
+	})
+
+	t.Run("exactly one url-omitted implies primary", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		assert.NoError(t, c.validateRepos())
+	})
+
+	t.Run("zero url-omitted no explicit primary errors", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {URL: strPtr("git@github.com:me/main.git")},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no primary")
+	})
+
+	t.Run("two url-omitted no explicit primary errors", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {},
+			"second": {},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "multiple entries without a `url:`")
+	})
+
+	t.Run("primary marked volume false errors", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {Primary: boolPtr(true), Volume: boolPtr(false)},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "primary cannot have volume: false")
+	})
+}
+
+// ---------- validateLabels: cross-schema flat-namespace collision ----------
+
+func TestValidateLabels_Collision(t *testing.T) {
+	t.Run("two repos derive same label errors naming both and the label", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":  {URL: strPtr("git@github.com:me/foo.git")},
+			"other": {URL: strPtr("git@github.com:them/foo.git")},
+		}}
+		err := c.validateLabels("")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `label "foo"`)
+		assert.Contains(t, err.Error(), "repos.main")
+		assert.Contains(t, err.Error(), "repos.other")
+	})
+
+	t.Run("explicit label resolves the collision", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":  {URL: strPtr("git@github.com:me/foo.git")},
+			"other": {URL: strPtr("git@github.com:them/foo.git"), Label: strPtr("other-foo")},
+		}}
+		assert.NoError(t, c.validateLabels(""))
+	})
+
+	t.Run("repo label collides with volume label", func(t *testing.T) {
+		c := Config{
+			Repos: map[string]RepoConfig{
+				"main": {URL: strPtr("git@github.com:me/claude.git")},
+			},
+			Volumes: map[string]Volume{
+				"claude": {Path: "/home/devm/claude"},
+			},
+		}
+		err := c.validateLabels("")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `label "claude"`)
+		assert.Contains(t, err.Error(), "repos.main")
+		assert.Contains(t, err.Error(), "volumes.claude")
+	})
+
+	t.Run("cwd placeholder fallback used only when macCwd empty", func(t *testing.T) {
+		c := Config{
+			Repos: map[string]RepoConfig{
+				"main": {}, // URL-nil primary; label derives from macCwd
+			},
+			Volumes: map[string]Volume{
+				"placeholder": {Path: "/x", Label: strPtr("__cwd__")},
+			},
+		}
+		// No macCwd supplied: main's label falls back to the "__cwd__"
+		// placeholder, which collides with the volume's explicit label.
+		err := c.validateLabels("")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `label "__cwd__"`)
+
+		// A real macCwd derives "myproj" instead — no collision.
+		assert.NoError(t, c.validateLabels("/Users/me/myproj"))
+	})
+}
+
+// ---------- validateProjectIDReserved ----------
+
+func TestValidateProjectID_ReservedNames(t *testing.T) {
+	reserved := []string{"bin", "state", "iron-proxy", "mutagen", "volumes"}
+	for _, name := range reserved {
+		t.Run(name, func(t *testing.T) {
+			c := Config{Project: Project{Name: name}}
+			err := c.validateProjectIDReserved()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), name)
+		})
+	}
+
+	unrelated := []string{"shelfmates", "buzztrack", "my-app"}
+	for _, name := range unrelated {
+		t.Run(name, func(t *testing.T) {
+			c := Config{Project: Project{Name: name}}
+			assert.NoError(t, c.validateProjectIDReserved())
+		})
+	}
+}
+
+// ---------- BareCloneName ----------
+
+func TestBareCloneName(t *testing.T) {
+	assert.Equal(t, "foo", BareCloneName("git@github.com:me/foo.git"))
+	assert.Equal(t, "foo", BareCloneName("https://github.com/me/foo.git"))
+	assert.Equal(t, "foo", BareCloneName("https://github.com/me/foo"))
+}
