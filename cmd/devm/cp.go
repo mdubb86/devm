@@ -115,9 +115,10 @@ func resolveDirection(src, dst cpArg) (direction, error) {
 // pipe. Returns ("", false) when no mirror is known; caller falls back
 // to pipe.
 func mountPassthrough(guestPath, repoRoot string, pcfg schema.Config, projectName string) (string, bool) {
-	// TODO(Task 17): rewrite for the Repos map — check pcfg.Repos'
-	// primary entry instead of the removed singular pcfg.Repo. No-op
-	// until then.
+	// TODO(Task 17): check pcfg.Repos for the entry with Primary ==
+	// true and, when guestPath falls under repoRoot, translate it into
+	// that entry's primary-volume storage path as below. No-op until
+	// then.
 	for _, entry := range pcfg.Mounts {
 		host, _ := strings.CutSuffix(entry, ":ro")
 		host = expandHome(host)

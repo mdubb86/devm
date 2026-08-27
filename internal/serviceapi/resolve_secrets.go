@@ -128,10 +128,9 @@ func repoSecretHosts(cfg schema.Config, macCwd string) (map[string][]string, []s
 		return nil
 	}
 
-	// TODO(Task 17): rewrite for the Repos map — walk cfg.Repos
-	// (deriving URL from macCwd via repohelpers.DeriveRepoURL when a
-	// given entry's URL is nil), calling add(secret, url) for each,
-	// instead of the removed singular cfg.Repo. No-op until then.
+	// TODO(Task 17): walk cfg.Repos, deriving URL from macCwd via
+	// repohelpers.DeriveRepoURL when a given entry's URL is nil, and
+	// call add(secret, url) for each. No-op until then.
 	_ = add
 
 	out := make(map[string][]string, len(bySecret))

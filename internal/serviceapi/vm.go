@@ -644,13 +644,11 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			mountTag string // virtiofs tag (may differ from name for the primary)
 		}
 		var volumes []volumeState
-		// TODO(Task 17): rewrite for the Repos map. This used to
-		// synthesize a primary-workspace volume from the removed
-		// singular Config.Repo; the replacement walks req.Cfg.Repos for
-		// the entry with Primary == true (deriving its URL from
-		// req.MacCwd when nil) and performs the same
-		// ensureVolumeMacDir + DirMounts + volumeState append. No-op
-		// until then.
+		// TODO(Task 17): walk req.Cfg.Repos for the entry with Primary
+		// == true, deriving its URL from req.MacCwd when nil, and
+		// synthesize its volumeState (ensureVolumeMacDir + DirMounts +
+		// append, as the per-name loop below does for req.Cfg.Volumes).
+		// No-op until then.
 		// Sort volume names for deterministic mount order across boots
 		// (no functional effect, but makes logs comparable).
 		volNames := make([]string, 0, len(req.Cfg.Volumes))

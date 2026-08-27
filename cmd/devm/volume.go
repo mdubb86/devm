@@ -56,9 +56,10 @@ func runVolumeLs(ident identity.Config, userCfg schema.Config, cwd string, out i
 
 	type row struct{ name, guestPath, macPath string }
 	var rows []row
-	// TODO(Task 17): rewrite for the Repos map — synthesize the
-	// primary-workspace row from userCfg.Repos' primary entry instead
-	// of the removed singular userCfg.Repo. No-op until then.
+	// TODO(Task 17): synthesize the primary-workspace row from
+	// userCfg.Repos' entry with Primary == true (name, cwd, and its
+	// volumesRoot path), the same way the loop below handles
+	// userCfg.Volumes. No-op until then.
 	for name, v := range userCfg.Volumes {
 		rows = append(rows, row{name, v.Path, filepath.Join(volumesRoot, name)})
 	}
