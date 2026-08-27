@@ -20,8 +20,8 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as the guest `devm` user, with open network — before egress enforcement is applied. NOPASSWD sudo is available for privileged steps. |
 | `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
 | `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
-| `volumes` | map[string]Volume | restart | Per-project named persistent stores. Key = volume name; value is either a bare guest path string or a `{path, repo}` mapping. Data lives on the Mac side under `~/Library/Application Support/devm/volumes/<project>/<name>/` and survives `devm teardown`. See the `volumes` section below. |
-| `repo` | object | recreate | Declares the primary workspace repo devm hydrates via `git clone` on cold-start. Optional — omit for utility VMs with no primary repo. See the `repo` section below. |
+| `volumes` | map[string]Volume | restart | Per-project named persistent stores. Key = volume name; value is either a bare guest path string or a `{path, label, ignore}` mapping. Data lives on the Mac side under `~/Library/Application Support/devm/volumes/<project>/<name>/` and survives `devm teardown`. See the `volumes` section below. |
+| `repos` | map[string]RepoConfig | restart | Declares the project's git repos to hydrate via `git clone` at cold-start, keyed by an arbitrary schema id. Exactly one entry is the primary workspace repo. Optional — omit for utility VMs with no repo. See the `repos` section below. |
 | `masks` | []string | live | Workspace-relative paths overlaid by a private per-project guest ext4 directory. Isolates platform-differing content (Mac's `node_modules` vs Linux's) so both platforms have their own copies. See the `masks` section below. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
@@ -246,14 +246,16 @@ volumes:
   claude-cache: /home/devm/.cache/claude
   design-tokens:
     path: /home/devm/design-tokens
-    repo:
-      url: https://github.com/me/design-tokens.git
+    label: tokens
+    ignore:
+      - "*.log"
 ```
 
 - **Name** (the map key): must match `[a-z0-9][a-z0-9._-]*`. Scoped to the project — different projects can reuse the same name without collision.
-- **Value**: either a bare guest path string, or a mapping with `path` and an optional `repo`.
-  - **`path`**: absolute; no `..` traversal; can't overlap the workspace mount root or any top-level mask target.
-  - **`repo`**: when present, devm `git clone`s into the volume's Mac-side storage on the first cold-start where the storage is empty. See the `repo` section below for `url`/`secret`/`branch`; a volume-level `repo.secret` is optional and inherits the top-level `repo.secret` when omitted — one of the two must be set.
+- **Value**: either a bare guest path string, or a mapping with `path`, `label`, and `ignore`.
+  - **`path`**: required; absolute; no `..` traversal; can't overlap the workspace mount root or any top-level mask target.
+  - **`label`**: optional. Names the mutagen sync session for this volume. Defaults to the leaf directory name of `path` (e.g. `/home/devm/.cache/claude` → `claude`). Must be unique across every `repos` and `volumes` entry in the config — see label collision under the `repos` section below.
+  - **`ignore`**: optional list of mutagen sync ignore patterns.
 
 Storage lives Mac-side at `~/Library/Application Support/devm/volumes/<project>/<name>/`. Delivery is virtiofs — one `tart run --dir` per declared volume — so `devm teardown` (which wipes the VM disk) leaves volume data alone. A subsequent cold-start reattaches the same Mac dir at the declared guest path.
 
@@ -265,24 +267,43 @@ Discovery: `devm volume ls` lists the current project's volumes with name, guest
 
 ---
 
-## `repo`
+## `repos`
 
-Declares the primary workspace repo devm hydrates via `git clone` at cold-start. Optional — omit for a utility VM that runs only tools, with no primary project checkout.
+`map[string]RepoConfig` — bucket: **restart** (add/remove/retarget currently requires a VM stop + cold start; becomes **live** for add/remove once mutagen session hot-add lands).
+
+Declares the project's git repos, keyed by an arbitrary schema id (the map key). Devm `git clone`s each one via `tart exec` at cold-start. Optional — omit entirely for a utility VM that runs only tools, with no repo checkout.
 
 ```yaml
-repo:
-  url: https://github.com/me/my-project.git
-  secret: gh_token
-  branch: main
+repos:
+  main:
+    secret: gh_token
+    primary: true
+  data:
+    url: https://github.com/me/data.git
+    secret: gh_token
+    label: data
+    ignore:
+      - "*.log"
 ```
 
 | Field | Type | Required | Purpose |
 |---|---|---|---|
-| `url` | string | no | Git clone URL. Omit to derive it from `git remote get-url origin` in the Mac-side project directory. |
-| `secret` | string | yes (when `repo` is present) | Names a devm secret-store entry; iron-proxy substitutes it into the clone's `Authorization` header. |
-| `branch` | string | no | Overrides the remote's default branch. |
+| `url` | string | only for non-primary entries | Git clone URL. Omit only on the primary entry — its URL derives from `git remote get-url origin` in the Mac-side project directory. |
+| `secret` | string | yes | Names a devm secret-store entry; iron-proxy substitutes it into the clone's `Authorization` header. |
+| `label` | string | no | Names the mutagen sync session for this repo. Defaults to the bare clone name (`git@github.com:me/foo.git` → `foo`) when `url` is set, or to the Mac-side project directory's basename for the URL-omitted primary. |
+| `volume` | bool | no | When true, backs this repo with a devm-managed volume instead of a plain bind mount. Defaults `true` for the primary, `false` for secondaries. The primary cannot set `volume: false`. |
+| `primary` | bool | no | Marks this entry as the project's primary workspace repo. |
+| `ignore` | []string | no | Mutagen sync ignore patterns. |
 
-A `volumes.*.repo` entry (secondary repo) always requires its own `url`; its `secret` is optional and falls back to the top-level `repo.secret` when omitted — at least one of the two must resolve.
+**Primary determination** — exactly one of these must hold across `repos`:
+- one entry sets `primary: true` explicitly, or
+- exactly one entry omits `url:` (that omission implies it's primary, deriving its URL from `git remote get-url origin`).
+
+Zero or multiple explicit `primary: true` entries, or zero or multiple `url`-omitted entries, is a validation error at load time. Non-primary entries must always declare `url:` explicitly.
+
+**Validation**:
+- **Label collisions**: every `repos` and `volumes` entry resolves to a label (explicit `label:`, or its derived default). Two entries — repo-repo, repo-volume, or volume-volume — resolving to the same label is rejected; set an explicit `label:` on one to disambiguate.
+- **Reserved project names**: `project.name` may not collide with a devm-internal storage directory name (`bin`, `state`, `iron-proxy`, `mutagen`, `volumes`) — repo and volume storage lives under the project's own directory, and a name collision would shadow devm's internals.
 
 ---
 
