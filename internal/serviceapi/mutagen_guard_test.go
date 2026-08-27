@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -131,4 +132,26 @@ func TestScanGuest_MissingTarget_ReturnsEmpty(t *testing.T) {
 	assert.EqualValues(t, 0, side.Count)
 	assert.EqualValues(t, 0, side.Size)
 	assert.Empty(t, side.TopHash)
+}
+
+// TestBuildGuestScanScript_QuotesInjectionAttempt verifies a guestPath
+// containing a shell command substitution is neutralized by
+// buildGuestScanScript's POSIX single-quoting rather than executed:
+// running the generated script through sh must not create the marker
+// file the payload targets, and the payload must survive intact inside
+// single-quotes in the generated script text.
+func TestBuildGuestScanScript_QuotesInjectionAttempt(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "should_not_exist")
+	guestPath := "/data/$(touch " + marker + ")"
+
+	script := buildGuestScanScript(guestPath)
+	assert.Contains(t, script, "$(touch "+marker+")",
+		"payload must appear literally (unexecuted) in the generated script")
+
+	out, err := exec.Command("sh", "-c", script).CombinedOutput()
+	require.NoError(t, err, "script output: %s", out)
+
+	_, statErr := os.Stat(marker)
+	assert.True(t, os.IsNotExist(statErr), "command substitution in guestPath must not execute")
 }

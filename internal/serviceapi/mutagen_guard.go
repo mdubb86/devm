@@ -57,17 +57,33 @@ top=$(find . -mindepth 1 -printf '%P\n' 2>/dev/null | sort | head -100 | shasum 
 echo "count=$count size=$size hash=$top"
 `
 
-// buildGuestScanScript embeds guestPath as a Go-quoted (and therefore
-// shell-safe for ordinary paths) literal in a "set --" preamble, then
-// appends guestScanScriptBody, which reads that value back out of $1.
+// posixShellQuote wraps s in POSIX single-quotes, escaping any embedded
+// single-quote by closing the open quote, emitting a backslash-escaped
+// single-quote, and reopening the quote. No shell metacharacter is
+// active inside single-quotes, so the result is safe to place anywhere
+// a POSIX shell word is expected, regardless of s's contents.
+func posixShellQuote(s string) string {
+	// Embedded single-quote escape: close, escaped quote, reopen.
+	const embeddedQuote = `'\''`
+	return "'" + strings.ReplaceAll(s, "'", embeddedQuote) + "'"
+}
+
+// buildGuestScanScript embeds guestPath as a POSIX single-quoted
+// literal in a "set --" preamble, then appends guestScanScriptBody,
+// which reads that value back out of $1. Single-quoting (rather than
+// Go's %q, which only escapes Go-string metacharacters and leaves $
+// and ` active inside a shell double-quoted context) is what makes
+// this injection-safe.
 func buildGuestScanScript(guestPath string) string {
-	return fmt.Sprintf("set -- %q\n%s", guestPath, guestScanScriptBody)
+	return fmt.Sprintf("set -- %s\n%s", posixShellQuote(guestPath), guestScanScriptBody)
 }
 
 // ScanMac walks rootPath on the Mac side and computes its ScanSide: the
 // total count of entries below rootPath, their total size in bytes, and
 // a sha256 hash over the sorted top guardTopSampleLimit relative paths.
-// An empty or missing directory returns the zero ScanSide.
+// An empty or missing directory returns the zero ScanSide. Symlinks are
+// counted as-is; the walker does not follow them (avoids symlink
+// loops).
 func ScanMac(rootPath string) (ScanSide, error) {
 	var count, size int64
 	var relPaths []string
