@@ -46,10 +46,43 @@ def test_camoufox_recipe(devm, workspace, sandbox_name):
         project:
           name: {workspace.vm_name}
         packages:
+          # Camoufox-specific — see recipe.
           - xvfb
+          - dbus-x11
           - libdbus-glib-1-2
           - libxt6t64
-          - dbus-x11
+          # Playwright's `ubuntu24_04_x64 → firefox` list, verbatim from
+          # nativeDeps.ts. Test is standalone (no chromium companion)
+          # to exercise the recipe on its own — the harder shape.
+          - libasound2t64
+          - libatk1.0-0t64
+          # libavcodec* omitted — Firefox dlopens it lazily for HTML5
+          # video; not needed to launch or load text pages.
+          - libcairo-gobject2
+          - libcairo2
+          - libdbus-1-3
+          - libfontconfig1
+          - libfreetype6
+          - libgdk-pixbuf-2.0-0
+          - libglib2.0-0t64
+          - libgtk-3-0t64
+          - libpango-1.0-0
+          - libpangocairo-1.0-0
+          - libx11-6
+          - libx11-xcb1
+          - libxcb-shm0
+          - libxcb1
+          - libxcomposite1
+          - libxcursor1
+          - libxdamage1
+          - libxext6
+          - libxfixes3
+          - libxi6
+          - libxrandr2
+          - libxrender1
+          # Firefox NSS trust bridge (loaded by /etc/firefox/policies/policies.json).
+          - p11-kit-modules
+          # For pip-installing camoufox itself.
           - python3-pip
           - python3-venv
         network:
@@ -70,8 +103,16 @@ def test_camoufox_recipe(devm, workspace, sandbox_name):
           # runtime allowlist. ~1.2 GB download; slow tail of cold-start.
           - /home/devm/.venvs/camoufox/bin/python -m camoufox fetch
         startup:
-          - mkdir -p /home/devm/.cache/camoufox/distribution
-          - ln -sfn /etc/firefox/policies/policies.json /home/devm/.cache/camoufox/distribution/policies.json
+          # Camoufox's Firefox binary is at
+          # ~/.cache/camoufox/browsers/official/<version>/camoufox-bin;
+          # its install-dir policies.json lives beside it. Glob the
+          # version segment — pkgman.fetch (install: above) has already
+          # unpacked it before startup: runs.
+          - >
+            for d in /home/devm/.cache/camoufox/browsers/official/*/; do
+              mkdir -p "$d/distribution"
+              ln -sfn /etc/firefox/policies/policies.json "$d/distribution/policies.json"
+            done
     """))
 
     # Cold-start. Budget covers apt install + venv + pip camoufox +
@@ -96,9 +137,10 @@ def test_camoufox_recipe(devm, workspace, sandbox_name):
     )
     assert r.returncode == 0, f"runtime-libs check failed:\n{r.stderr.decode()}"
     installed = r.stdout.decode()
-    assert "libdbus-glib-1-2" in installed and "libxt6t64" in installed, (
-        f"expected both firefox runtime libs installed; got:\n{installed}"
-    )
+    for pkg in ("libdbus-glib-1-2", "libxt6t64"):
+        assert pkg in installed, (
+            f"expected {pkg} installed; got:\n{installed}"
+        )
 
     # B. Volume mounted at the extraction path.
     r = subprocess.run(
@@ -112,9 +154,11 @@ def test_camoufox_recipe(devm, workspace, sandbox_name):
     )
 
     # C. Trust-bridge symlink resolves to the devm-managed policies.json.
+    # The path is /home/devm/.cache/camoufox/browsers/official/<version>/distribution/policies.json;
+    # glob the version segment.
     r = subprocess.run(
-        [devm.path, "shell", "--", "readlink",
-         "/home/devm/.cache/camoufox/distribution/policies.json"],
+        [devm.path, "shell", "--", "bash", "-c",
+         "readlink /home/devm/.cache/camoufox/browsers/official/*/distribution/policies.json"],
         cwd=str(workspace.path), capture_output=True, timeout=15,
     )
     assert r.returncode == 0, f"readlink failed:\n{r.stderr.decode()}"

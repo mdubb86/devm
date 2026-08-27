@@ -27,13 +27,27 @@ in a devm VM that shells to `camoufox.launch_persistent_context`
 
 ```yaml
 packages:
-  # Camoufox runtime prerequisites — Firefox needs different libs than
-  # chromium, and `camoufox/virtdisplay.py` shells out to `which("Xvfb")`.
-  - xvfb                # camoufox VirtualDisplay
-  - libdbus-glib-1-2    # camoufox's bundled Firefox links it
-  - libxt6t64           # Firefox needs libXt (trixie t64-transition
-                        # rename of libxt6 — apt-cache only has libxt6t64)
+  # Camoufox-specific — not covered by Playwright's Firefox deps list
+  # (see note below), not pulled by chromium's Depends chain.
+  - xvfb                # camoufox/virtdisplay.py shells out to `Xvfb`
   - dbus-x11            # dbus-launch — Firefox misbehaves with no session bus
+  - libdbus-glib-1-2    # camoufox's bundled Firefox links it
+  - libxt6t64           # libXt (trixie t64 name of libxt6)
+  - p11-kit-modules     # loaded by /etc/firefox/policies/policies.json's
+                        # SecurityDevices entry to bridge system CA trust
+                        # into NSS — without it, iron-proxy MITM'd HTTPS
+                        # inside Firefox fails with SEC_ERROR_UNKNOWN_ISSUER
+
+  # Plus every entry from Playwright's Firefox deps list — they maintain
+  # the authoritative Firefox runtime lib set:
+  #   https://github.com/microsoft/playwright/blob/main/packages/playwright-core/src/server/registry/nativeDeps.ts
+  # Use the `ubuntu24_04_x64 → firefox` block (devm's base image is
+  # Debian trixie, same t64 package names as Ubuntu 24.04). Two
+  # adjustments for trixie: skip `libavcodec60` (Firefox dlopens it
+  # lazily — add `libavcodec61` only if the workload plays HTML5
+  # video), and if this project also installs `chromium` or ships
+  # Playwright itself, most of the list is already present —
+  # `dpkg -l <name>` before adding a duplicate.
 
 network:
   allow:
@@ -51,31 +65,36 @@ volumes:
   camoufox: /home/devm/.cache/camoufox
 
 startup:
-  # Bridge devm's CA into camoufox's Firefox trust. devm 0.18.1+ drops
+  # Bridge devm's CA into camoufox's Firefox trust. devm drops
   # /etc/firefox/policies/policies.json with a SecurityDevices entry
   # pointing at p11-kit-trust.so; stock Firefox reads that path
-  # directly. Camoufox reads its INSTALL_DIR/distribution/policies.json
-  # instead — a symlink there routes it to the canonical file.
-  # `mkdir -p` covers the first cold-start where distribution/ doesn't
-  # yet exist; `ln -sfn` is idempotent so this is safe on every boot.
-  - mkdir -p /home/devm/.cache/camoufox/distribution
-  - ln -sfn /etc/firefox/policies/policies.json /home/devm/.cache/camoufox/distribution/policies.json
+  # directly. Camoufox's binary lives at
+  # ~/.cache/camoufox/browsers/official/<version>/camoufox-bin and
+  # reads its install-dir distribution/policies.json — a symlink there
+  # routes it to the canonical file. The glob covers the version
+  # segment; pkgman.fetch (below or manual) must have run first, so
+  # this belongs in startup: rather than install:.
+  - >
+    for d in /home/devm/.cache/camoufox/browsers/official/*/; do
+      mkdir -p "$d/distribution"
+      ln -sfn /etc/firefox/policies/policies.json "$d/distribution/policies.json"
+    done
 ```
 
 ## Notes
 
-- **`libxt6` doesn't exist on Debian trixie.** The t64 time_t transition
-  renamed it to `libxt6t64` (same class of renames as `libasound2t64`,
-  `libcups2t64`, `libncurses6t64`, etc.). A recipe that lists `libxt6`
-  will silently fail on trixie — apt reports the package as `un`
-  (unknown / not installed) even though a reconcile prints
-  `+ package libxt6`. If the recipe supports pre-trixie bases too, list
-  both and let apt pick.
-- **The chromium package isn't a substitute for these Firefox libs.**
-  If a project already installs `chromium` (e.g. for Playwright), that
-  covers `libnss3` / `libgbm1` / `libasound2t64` / etc., but NOT
-  `libdbus-glib-1-2` / `libxt6t64`. Camoufox's Firefox links to those
-  and will crash on launch without them.
+- **`libxt6` doesn't exist on Debian trixie.** The t64 time_t
+  transition renamed it to `libxt6t64` (same class of renames as
+  `libasound2t64`, `libcups2t64`, `libncurses6t64`, etc.). A recipe
+  that lists `libxt6` will silently fail on trixie — apt reports the
+  package as `un` (unknown / not installed) even though a reconcile
+  prints `+ package libxt6`. Use the t64 name.
+- **Recipe assumes `chromium` is also installed.** The Firefox bundle
+  camoufox ships links `libgtk-3-0t64`, `libasound2t64`, `libx11-xcb1`,
+  `libpci3`, and half a dozen others — chromium's Depends chain pulls
+  every one of them. If a project uses camoufox without chromium (rare
+  — most anti-detect scraping projects run both), list those explicitly
+  in `packages:` alongside the four above.
 - **The two egress entries are load-bearing separately.** The
   `github.com/daijro/camoufox/releases/download/*` entry only reaches
   GitHub's release-page redirect; the actual `.tar.zst` download 302s
@@ -122,8 +141,9 @@ startup:
 devm shell
 $ command -v Xvfb dbus-launch                       # both present
 $ dpkg -l libdbus-glib-1-2 libxt6t64 | grep '^ii'  # both installed
-$ ls ~/.cache/camoufox/camoufox-bin                # binary present after first fetch
-$ readlink ~/.cache/camoufox/distribution/policies.json
+$ ls ~/.cache/camoufox/browsers/official/*/camoufox-bin
+                                                    # binary present after first fetch
+$ readlink ~/.cache/camoufox/browsers/official/*/distribution/policies.json
                                                     # → /etc/firefox/policies/policies.json
 $ mount | grep camoufox                            # vol_camoufox bind-mounted
 $ python -c "from camoufox.sync_api import Camoufox; \
