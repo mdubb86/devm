@@ -61,13 +61,26 @@ sandbox is failing to reach an upstream.`,
 			return nil
 		}
 		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "COUNT\tHOST\tLAST SEEN")
+		fmt.Fprintln(tw, "COUNT\tURL\tMETHOD\tLAST SEEN")
 		now := time.Now().UTC()
 		for _, d := range snap {
-			fmt.Fprintf(tw, "%d\t%s\t%s ago\n", d.Count, d.Host, humaniseDuration(now.Sub(d.LastSeen)))
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%s ago\n",
+				d.Count, urlFor(d.Host, d.Path), d.Method, humaniseDuration(now.Sub(d.LastSeen)))
 		}
 		return tw.Flush()
 	},
+}
+
+// urlFor combines host and path into the readable form users would
+// paste into `network.allow`. An empty path or a bare "/" collapses to
+// just the host — that's a whole-host reject with no path signal to
+// carry. Everything else prints as "host<path>" (path already begins
+// with "/", so no separator needed).
+func urlFor(host, path string) string {
+	if path == "" || path == "/" {
+		return host
+	}
+	return host + path
 }
 
 // humaniseDuration renders a compact "3m", "12s", "1h" for the LAST SEEN
