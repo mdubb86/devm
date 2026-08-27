@@ -95,6 +95,32 @@ func TestBuild_InstallScriptSeedsNSSTrust(t *testing.T) {
 		"install.sh must chmod the NSS dir 0700")
 }
 
+// TestBuild_InstallScriptDropsFirefoxPoliciesJSON pins that install.sh
+// writes /etc/firefox/policies/policies.json with a SecurityDevices
+// entry pointing at p11-kit-trust.so — the bridge that lets Firefox
+// (and Firefox-derived browsers like Camoufox, once symlinked) trust
+// the system CA store transparently, without per-profile certutil
+// dances. Without this drop-in, Firefox uses its own bundled NSS with
+// only Mozilla's root set, and iron-proxy-MITM'd HTTPS shows
+// SEC_ERROR_UNKNOWN_ISSUER.
+func TestBuild_InstallScriptDropsFirefoxPoliciesJSON(t *testing.T) {
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+
+	entries := readTar(t, body)
+	e, ok := entries["install.sh"]
+	require.True(t, ok, "bundle missing install.sh")
+	script := string(e.body)
+
+	assert.Contains(t, script, "/etc/firefox/policies/policies.json",
+		"install.sh must write the Firefox enterprise-policy file at the canonical Linux path")
+	assert.Contains(t, script, "SecurityDevices",
+		"install.sh must set the SecurityDevices policy so Firefox loads a PKCS#11 module")
+	assert.Contains(t, script, "p11-kit-trust.so",
+		"install.sh must point SecurityDevices at p11-kit-trust.so — the NSS module that bridges the system CA store into Firefox")
+}
+
 func TestBuild_EnvReflectsConfig(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},

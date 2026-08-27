@@ -46,6 +46,23 @@ if [ -f /opt/devm/ca/devm.crt ] && ! cmp -s /opt/devm/ca/devm.crt /usr/local/sha
     '
 fi
 
+# --- Firefox trust: enterprise-policy drop-in that loads p11-kit-trust
+# as a PKCS#11 SecurityDevice. NSS then reads the system CA store
+# (which the /etc/ssl/certs merge above just seeded with devm's CA)
+# transparently, so Firefox — and Firefox-derived browsers whose
+# install-dir distribution/policies.json symlinks here — accept
+# iron-proxy's re-signed certs without per-profile certutil work.
+# Firefox on Linux has no `ImportEnterpriseRoots` (Windows/macOS only)
+# and reads NEITHER /etc/ssl/certs NOR $HOME/.pki/nssdb on its own.
+#
+# Path is arch-specific: p11-kit-modules installs the module under
+# /usr/lib/$multiarch/pkcs11/. devm's base image is aarch64-only
+# (macOS/M-series host constraint); revisit when we support x86_64.
+install -o root -g root -d -m 0755 /etc/firefox/policies
+install -o root -g root -m 0644 /dev/stdin /etc/firefox/policies/policies.json <<'JSON'
+{"policies":{"SecurityDevices":{"P11-kit Trust":"/usr/lib/aarch64-linux-gnu/pkcs11/p11-kit-trust.so"}}}
+JSON
+
 # --- dnsmasq drop-in: devm-test.conf configures local resolver behavior. ---
 if [ -f /opt/devm/dnsmasq/devm-test.conf ] && ! cmp -s /opt/devm/dnsmasq/devm-test.conf /etc/dnsmasq.d/devm-test.conf; then
     install -o root -g root -m 0644 \
