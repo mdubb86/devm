@@ -15,7 +15,10 @@ import subprocess
 
 import pytest
 
-pytestmark = pytest.mark.devm
+pytestmark = [
+    pytest.mark.devm,
+    pytest.mark.skip(reason="Task 28: pending mutagen-volumes fixture migration"),
+]
 
 
 def _git_init_with_origin(path, origin_url: str) -> None:
