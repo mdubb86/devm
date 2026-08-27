@@ -94,3 +94,20 @@ func TestBuildVolumeMountScript_Idempotent(t *testing.T) {
 	// Idempotency guard: mountpoint check on the target path.
 	assert.Contains(t, script, "mountpoint -q /data")
 }
+
+// TestBuildVolumeMountScript_ParentChainOwnedByDevm pins that any
+// missing parent directory of the mount target is created owned by
+// devm:devm, not root:root. The mount target itself is masked by the
+// bind, so its ownership doesn't matter — but if a project declares
+// a volume at ~/.cache/<name> on a VM where /home/devm/.cache doesn't
+// yet exist, plain `sudo mkdir -p` would create .cache as root:root,
+// EACCES'ing any subsequent devm-user write under .cache (npm, pip,
+// browser profiles, etc.).
+func TestBuildVolumeMountScript_ParentChainOwnedByDevm(t *testing.T) {
+	script := buildVolumeMountScript("camoufox", "/home/devm/.cache/camoufox", true)
+	// The parent chain is created with `install -d -o devm -g devm`
+	// which mkdir -p's the missing intermediates AND chowns them.
+	assert.Contains(t, script,
+		`install -d -o devm -g devm /home/devm/.cache`,
+		"missing parents of the mount target must be created owned by devm:devm")
+}
