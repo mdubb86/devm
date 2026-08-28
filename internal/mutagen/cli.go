@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // ExecFn runs bin with args and env, returning captured stdout/stderr,
@@ -204,6 +205,12 @@ func (c *CLI) SyncTerminate(id string) error {
 // The mutagen daemon holds a flock on DataDir/daemon/daemon.lock for
 // single-instance enforcement; DaemonStart resolves the daemon's PID
 // as whichever process holds that lock open, via `lsof -t`.
+//
+// `mutagen daemon start` returns before the freshly-forked daemon
+// child has grabbed its flock — lsof running immediately returns exit
+// 1 (no holder). Poll for up to 5s so a fresh spawn is observable by
+// the time DaemonStart returns. Pinned by
+// e2e/test_mutagen_contract_01_daemon_lifecycle.
 func (c *CLI) DaemonStart() (int, error) {
 	if c.DataDir == "" {
 		return 0, fmt.Errorf("mutagen: DaemonStart requires DataDir to locate the daemon lock file")
@@ -211,7 +218,19 @@ func (c *CLI) DaemonStart() (int, error) {
 	if _, err := c.run("daemon", "start"); err != nil {
 		return 0, err
 	}
-	return c.daemonPID()
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for {
+		pid, err := c.daemonPID()
+		if err == nil {
+			return pid, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return 0, lastErr
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // DaemonStop stops the mutagen daemon if running.

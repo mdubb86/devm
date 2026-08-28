@@ -47,6 +47,13 @@ def _wait_daemon_up(devm_path: str, timeout: float = 30.0) -> None:
 
 @pytest.mark.timeout(180)
 def test_mutagen_survives_devm_sigkill(devm, devm_path, workspace):
+    # When install-marker tests run back-to-back (test_204 runs first),
+    # test_204's `devm teardown --yes` triggers cleanup work that can
+    # briefly make the daemon socket unavailable between tests. Wait
+    # for the socket to reappear before this test's first `devm start`
+    # so we're not racing the previous test's teardown.
+    _wait_daemon_up(devm_path)
+
     r = subprocess.run(
         [devm.path, "start"], cwd=str(workspace.path),
         capture_output=True, timeout=180,
