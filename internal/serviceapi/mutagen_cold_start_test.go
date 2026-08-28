@@ -38,8 +38,11 @@ func TestCloneRepoInGuest_HappyPath(t *testing.T) {
 
 	script := *captured
 	assert.Contains(t, script, "sudo -u devm bash -c")
-	assert.Contains(t, script, "export HTTP_PROXY=http://127.0.0.1:5555")
-	assert.Contains(t, script, "export HTTPS_PROXY=http://127.0.0.1:5555")
+	// Guest egress is transparently routed through iron-proxy by softnet;
+	// no HTTP_PROXY/HTTPS_PROXY needed. Iron-proxy MITMs :443 and secret-
+	// substitutes the extraheader placeholder on the wire.
+	assert.NotContains(t, script, "HTTP_PROXY")
+	assert.NotContains(t, script, "HTTPS_PROXY")
 	assert.Contains(t, script, "export GIT_SSL_CAINFO=/etc/ssl/certs/devm-iron-proxy-ca.crt")
 	assert.Contains(t, script, "git clone")
 	assert.Contains(t, script, "https://github.com/example/repo.git")
@@ -102,9 +105,9 @@ func TestCloneRepoInGuest_QuotesURLAndPath(t *testing.T) {
 	// real must not run the embedded command substitution or the
 	// semicolon-appended command.
 	argv := runGuestScriptForReal(t, script)
-	require.Len(t, argv, 8, "clone argv: clone --quiet -c <http.proxy> -c <header> <url> <target>")
-	assert.Equal(t, maliciousURL, argv[6], "git must receive the URL literally, unexpanded")
-	assert.Equal(t, maliciousTarget, argv[7], "git must receive the target path literally, unexpanded")
+	require.Len(t, argv, 6, "clone argv: clone --quiet -c <header> <url> <target>")
+	assert.Equal(t, maliciousURL, argv[4], "git must receive the URL literally, unexpanded")
+	assert.Equal(t, maliciousTarget, argv[5], "git must receive the target path literally, unexpanded")
 
 	_, statErr := os.Stat(pwnMarker)
 	assert.True(t, os.IsNotExist(statErr), "injected command must never execute; marker file must not exist")

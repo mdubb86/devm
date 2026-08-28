@@ -36,20 +36,17 @@ func CloneRepoInGuest(exec GuestExec, req CloneRequest) error {
 	authB64 := base64.StdEncoding.EncodeToString([]byte(authRaw))
 	extraHeader := "Authorization: Basic " + authB64
 
-	// `-c http.proxy=` forces git to route through iron-proxy even when
-	// the URL host resolves to loopback (git's default HTTP_PROXY handling
-	// bypasses loopback). Redundant for typical remote URLs where the env
-	// var already applies; required for URLs like http://127.0.0.1:PORT/.
+	// Guest egress is transparently routed through iron-proxy by softnet
+	// (:80 → ft.HTTP, :443 → ft.HTTPS under PolicyEnforced), so git just
+	// clones normally — no HTTP_PROXY/HTTPS_PROXY. Iron-proxy sees the
+	// http.extraheader with the placeholder token and substitutes the
+	// resolved secret on the wire. GIT_SSL_CAINFO points at iron-proxy's
+	// MITM root cert so git trusts the intercepted TLS handshake.
 	script := fmt.Sprintf(`sudo -u devm bash -c %s`, PosixShellQuote(fmt.Sprintf(`set -e
-export HTTP_PROXY=%s
-export HTTPS_PROXY=%s
 export GIT_SSL_CAINFO=%s
-git clone --quiet -c %s -c %s %s %s
+git clone --quiet -c %s %s %s
 `,
-		req.IronProxyURL,
-		req.IronProxyURL,
 		req.GuestCACertPath,
-		PosixShellQuote("http.proxy="+req.IronProxyURL),
 		PosixShellQuote("http.extraheader="+extraHeader),
 		PosixShellQuote(req.URL),
 		PosixShellQuote(req.GuestTargetPath),
