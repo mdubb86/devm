@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -217,7 +216,6 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		Startup:            p.Cfg.Startup,
 		Scripts:            p.Cfg.Scripts,
 		Services:           p.serviceUnits(),
-		Masks:              p.maskMounts(),
 		StepTimeoutSeconds: p.StepTimeoutSeconds,
 		PackageAdds:        p.PackageAdds,
 		PackageRemoves:     p.PackageRemoves,
@@ -307,27 +305,6 @@ func (p *Provisioner) hasTemplates() bool {
 		}
 	}
 	return false
-}
-
-// maskMounts resolves every declared mask into a MaskMount the
-// script can bind-mount over the workspace path. Sorted by mask
-// path for a deterministic script. Storage lives at
-// /var/devm/masks/<project>/<path>/ — no per-service dimension
-// (masks became top-level in v0.9.18, decoupled from services).
-func (p *Provisioner) maskMounts() []render.MaskMount {
-	if len(p.Cfg.Masks) == 0 {
-		return nil
-	}
-	paths := append([]string(nil), p.Cfg.Masks...)
-	sort.Strings(paths)
-	mounts := make([]render.MaskMount, 0, len(paths))
-	for _, path := range paths {
-		mounts = append(mounts, render.MaskMount{
-			HostPath:    filepath.Join("/var/devm/masks", p.Cfg.Project.Name, path),
-			MountTarget: filepath.Join(p.WorkspaceVMPath, path),
-		})
-	}
-	return mounts
 }
 
 // provisionedMarker is the guest path whose presence indicates this VM has

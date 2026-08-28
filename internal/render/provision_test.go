@@ -17,9 +17,6 @@ func TestRenderProvisionOpenScript_Structure(t *testing.T) {
 		InstallTemplates: true,
 		Startup:          []string{"echo boot"},
 		Services:         []string{"web"},
-		Masks: []MaskMount{
-			{HostPath: "/var/devm/masks/p/data", MountTarget: "/Users/x/p/data"},
-		},
 	}
 	s := string(RenderProvisionOpenScript(in))
 
@@ -38,8 +35,6 @@ func TestRenderProvisionOpenScript_Structure(t *testing.T) {
 	assert.NotContains(t, s, "systemctl start devm.target")
 	assert.NotContains(t, s, "systemctl start web.service")
 	assert.NotContains(t, s, "touch /var/lib/devm/provisioned")
-	// no mask/enforcement content leaks into the open half
-	assert.NotContains(t, s, "mount --bind")
 	// templates dispatcher runs through the wrapper, in the open window
 	assert.Contains(t, s, "/opt/devm/scripts/with-devm-env bash /opt/devm/scripts/install-templates.sh")
 	// install commands run through the with-devm-env wrapper (correct path)
@@ -187,9 +182,6 @@ func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 	in := ProvisionScriptInput{
 		FirstBoot: true,
 		Services:  []string{"web"},
-		Masks: []MaskMount{
-			{HostPath: "/var/devm/masks/p/data", MountTarget: "/Users/x/p/data"},
-		},
 	}
 	s := string(RenderProvisionEnforcedScript(in))
 
@@ -210,11 +202,6 @@ func TestRenderProvisionEnforcedScript_Structure(t *testing.T) {
 		strings.Index(s, "systemctl start devm.target"))
 	assert.Less(t, strings.Index(s, "::devm:stage:enforce::"),
 		strings.Index(s, "::devm:stage:services::"))
-	// mask overlay: chown BEFORE the bind mount, mounted at the workspace path
-	chownIdx := strings.Index(s, "chown devm:devm '/var/devm/masks/p/data'")
-	mountIdx := strings.Index(s, "mount --bind '/var/devm/masks/p/data' '/Users/x/p/data'")
-	assert.Greater(t, chownIdx, 0)
-	assert.Greater(t, mountIdx, chownIdx)
 	// first-boot completion marker written before the target
 	assert.Less(t, strings.Index(s, "touch /var/lib/devm/provisioned"),
 		strings.Index(s, "systemctl start devm.target"))
