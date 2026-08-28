@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -760,6 +761,8 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "iron_proxy_down"
 	case reconcile.KindVolumeChange:
 		return "volume_change"
+	case reconcile.KindRepoChange:
+		return "repo_change"
 	case reconcile.KindSSHEndpointHealed:
 		return "ssh_endpoint_healed"
 	}
@@ -848,16 +851,64 @@ func formatChange(c reconcile.Change) string {
 			return fmt.Sprintf("~ template: %s → %s", c.Service, c.Detail)
 		}
 	case reconcile.KindVolumeChange:
-		switch {
-		case c.Old == "" && c.New != "":
+		switch c.Op {
+		case reconcile.OpAdd:
 			return fmt.Sprintf("+ volume %s at %s", c.Key, c.New)
-		case c.Old != "" && c.New == "":
-			return fmt.Sprintf("- volume %s (was at %s)", c.Key, c.Old)
+		case reconcile.OpRemove:
+			return fmt.Sprintf("- volume %s", c.Key)
 		default:
-			return fmt.Sprintf("~ volume %s target: %s → %s", c.Key, c.Old, c.New)
+			return fmt.Sprintf("~ volume %s.%s: %s → %s", c.Key, c.Field,
+				formatChangeValue(c.OldValue), formatChangeValue(c.NewValue))
+		}
+	case reconcile.KindRepoChange:
+		switch c.Op {
+		case reconcile.OpAdd:
+			return fmt.Sprintf("+ repo %s", c.Key)
+		case reconcile.OpRemove:
+			return fmt.Sprintf("- repo %s", c.Key)
+		default:
+			return fmt.Sprintf("~ repo %s.%s: %s → %s", c.Key, c.Field,
+				formatChangeValue(c.OldValue), formatChangeValue(c.NewValue))
 		}
 	}
 	return "(unknown change)"
+}
+
+// maxChangeValueDisplayLen caps how much of a long field value
+// (typically a repo URL) formatChange prints inline before eliding it.
+const maxChangeValueDisplayLen = 60
+
+// formatChangeValue renders a KindRepoChange/KindVolumeChange field's
+// typed Old/NewValue for display: nil pointers as "(unset)", empty
+// strings/slices as `""`, and anything past maxChangeValueDisplayLen
+// truncated with a trailing ellipsis so a long URL doesn't blow out
+// the reconcile summary line.
+func formatChangeValue(v any) string {
+	var s string
+	switch t := v.(type) {
+	case nil:
+		return "(unset)"
+	case *string:
+		if t == nil {
+			return "(unset)"
+		}
+		s = *t
+	case *bool:
+		if t == nil {
+			return "(unset)"
+		}
+		s = strconv.FormatBool(*t)
+	case string:
+		s = t
+	case []string:
+		s = strings.Join(t, ",")
+	default:
+		s = fmt.Sprintf("%v", t)
+	}
+	if len(s) > maxChangeValueDisplayLen {
+		return fmt.Sprintf("%q…", s[:maxChangeValueDisplayLen])
+	}
+	return fmt.Sprintf("%q", s)
 }
 
 // formatIronProxyChange renders a KindNetwork* or KindSecret* change

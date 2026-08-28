@@ -43,6 +43,35 @@ func (b Bucket) String() string {
 	return "unknown"
 }
 
+// Op categorizes a per-field diff entry (KindRepoChange, KindVolumeChange)
+// as an add of a whole map entry, a remove of a whole map entry, or a
+// mutation of one field on an entry present in both old and new.
+type Op int
+
+const (
+	OpAdd Op = iota
+	OpRemove
+	OpMutate
+)
+
+func (o Op) String() string {
+	switch o {
+	case OpAdd:
+		return "add"
+	case OpRemove:
+		return "remove"
+	case OpMutate:
+		return "mutate"
+	}
+	return "unknown"
+}
+
+// RepoOp and VolumeOp name Op at the call sites that produce
+// KindRepoChange / KindVolumeChange entries; both share Op's
+// OpAdd/OpRemove/OpMutate values.
+type RepoOp = Op
+type VolumeOp = Op
+
 // ChangeKind enumerates every kind of difference the diff machinery detects.
 type ChangeKind int
 
@@ -108,10 +137,23 @@ const (
 	// iron-proxy.
 	KindIronProxyDown
 	// KindVolumeChange fires when the top-level `volumes:` map differs
-	// between old and new config (add, remove, or retarget). Emitted
-	// once per changed volume; Key=volume name, Old/New=guest path.
-	// Bucket: BucketRestartVM — tart takes --dir args at run time.
+	// between old and new config. One Change per changed volume per
+	// field: Op=OpAdd/OpRemove for whole-entry add/remove (Key=volume
+	// name, Old/New=guest path), Op=OpMutate per changed field on a
+	// volume present in both (Field="path"/"label"/"ignore").
+	// Bucket: BucketLive — volumes hydrate via mutagen sync against an
+	// already-provisioned guest directory, no VM cycle needed.
 	KindVolumeChange
+	// KindRepoChange fires when Config.Repos differs between old and
+	// new config. One Change per changed repo entry per field:
+	// Op=OpAdd/OpRemove for whole-entry add/remove (Key=repo name),
+	// Op=OpMutate per changed field on a repo present in both
+	// (Field="URL"/"Secret"/"Label"/"Volume"/"Primary"/"Ignore").
+	// Bucket: BucketRestartVM for URL/Secret (iron-proxy clones the
+	// repo at VM boot using these values); BucketLive for every other
+	// field (label/ignore/volume/primary only affect the mutagen
+	// session, not the clone). See Change.Bucket().
+	KindRepoChange
 	// KindSSHEndpointHealed is a synthetic change: emitted by the
 	// reconcile handler after it detected the project's :22 answered
 	// with a foreign SSH host key (a cross-wired ProjectIP) and healed
@@ -185,9 +227,11 @@ var changeBucket = map[ChangeKind]Bucket{
 	// Synthetic heal signal — same bucket as the rest of the
 	// egress-restart family since it's applied the same way.
 	KindIronProxyDown: BucketEgressRestart,
-	// Volumes are tart --dir args at run time; Apple Virtualization
-	// Framework doesn't hot-plug virtiofs shares.
-	KindVolumeChange: BucketRestartVM,
+	// Volumes hydrate via mutagen sync against an already-provisioned
+	// guest directory — no VM cycle needed. Repo URL/Secret overrides
+	// this default; see Change.Bucket().
+	KindVolumeChange: BucketLive,
+	KindRepoChange:   BucketLive,
 	// Synthetic heal signal: the daemon fixed it in-place during the
 	// reconcile — nothing left for the CLI to dispatch.
 	KindSSHEndpointHealed: BucketLive,
@@ -204,9 +248,31 @@ type Change struct {
 	Old     string // formatted previous value; empty for adds
 	New     string // formatted new value; empty for removes
 	Detail  string // freeform extra info for the formatter
+
+	// Op, Field, OldValue, and NewValue are populated on KindRepoChange
+	// and KindVolumeChange entries: Op categorizes the entry as an
+	// add/remove of a whole map key or a mutation of one field on a key
+	// present in both old and new; Field names that field (e.g. "URL",
+	// "path"); OldValue/NewValue carry the typed field value (not the
+	// formatted Old/New strings) for consumers that need the raw data
+	// (e.g. apply-live's mutagen/repo-clone handling).
+	Op                 Op
+	Field              string
+	OldValue, NewValue any
 }
 
-func (c Change) Bucket() Bucket { return c.Kind.Bucket() }
+// Bucket returns the bucket this Change belongs to. Most kinds route
+// solely on Kind (see changeBucket); KindRepoChange is the one
+// exception — a URL or Secret mutation requires an iron-proxy /
+// VM-boot re-clone (BucketRestartVM) while every other repo field only
+// affects the live mutagen session (BucketLive, changeBucket's
+// default for KindRepoChange).
+func (c Change) Bucket() Bucket {
+	if c.Kind == KindRepoChange && (c.Field == "URL" || c.Field == "Secret") {
+		return BucketRestartVM
+	}
+	return c.Kind.Bucket()
+}
 
 // FlavorKind names the recreate flavor required to apply a set of changes.
 type FlavorKind int
@@ -285,9 +351,10 @@ func ComputePortChanges(old, new schema.Config) []Change {
 
 // ComputeAllChanges returns the full set of diffs between old and new
 // configs. Order: ports, network, env (per service), service unit fields
-// (per service), install, startup, packages, mounts, masks (per service),
-// image, identity, templates, path, secrets. Within each section, service
-// names are sorted alphabetically for determinism.
+// (per service), install, startup, packages, mounts, volumes, repos,
+// masks (per service), image, identity, templates, path, secrets.
+// Within each section, service/volume/repo names are sorted
+// alphabetically for determinism.
 //
 // `repoRoot` and `daemonRuntimeDir` are required by the templates diff
 // to render the desired installer scripts (source reads and the
@@ -318,6 +385,7 @@ func ComputeAllChanges(
 	out = append(out, computePackagesChange(old, new)...)
 	out = append(out, computeMountAddRemove(old, new)...)
 	out = append(out, computeVolumeChanges(old, new)...)
+	out = append(out, computeRepoChanges(old, new)...)
 	out = append(out, computeMaskChanges(old, new)...)
 	out = append(out, computeImageChange(old, new)...)
 	out = append(out, computeIdentityChange(old, new)...)
@@ -542,54 +610,146 @@ func computeMountAddRemove(old, new schema.Config) []Change {
 	return []Change{{Kind: KindMountAddRemove}}
 }
 
-// computeVolumeChanges emits one KindVolumeChange per name whose
-// Volume differs between old and new (Path, Repo pointer nil↔non-nil,
-// or RepoConfig field values). Removes surface as Old set, New empty;
-// adds as Old empty, New set; retargets as both populated. Sorted by
+// computeVolumeChanges emits one KindVolumeChange per changed
+// Config.Volumes entry. A key present in exactly one of old/new emits
+// a single OpAdd/OpRemove Change; a key present in both emits one
+// OpMutate Change per changed field (path, label, ignore). Sorted by
 // name for deterministic output.
 func computeVolumeChanges(old, new schema.Config) []Change {
-	names := map[string]struct{}{}
-	for n := range old.Volumes {
-		names[n] = struct{}{}
-	}
-	for n := range new.Volumes {
-		names[n] = struct{}{}
-	}
-	sorted := make([]string, 0, len(names))
-	for n := range names {
-		sorted = append(sorted, n)
-	}
-	sort.Strings(sorted)
-
 	var out []Change
-	for _, n := range sorted {
-		oldVol, newVol := old.Volumes[n], new.Volumes[n]
-		if volumeEqual(oldVol, newVol) {
-			continue
+	for _, n := range unionVolumeNames(old.Volumes, new.Volumes) {
+		oldVol, oldOk := old.Volumes[n]
+		newVol, newOk := new.Volumes[n]
+		switch {
+		case !oldOk && newOk:
+			out = append(out, Change{Kind: KindVolumeChange, Op: OpAdd, Key: n,
+				New: newVol.Path, NewValue: newVol})
+		case oldOk && !newOk:
+			out = append(out, Change{Kind: KindVolumeChange, Op: OpRemove, Key: n,
+				Old: oldVol.Path, OldValue: oldVol})
+		default:
+			out = append(out, volumeFieldChanges(n, oldVol, newVol)...)
 		}
-		out = append(out, Change{
-			Kind: KindVolumeChange, Key: n,
-			Old: formatVolumeChangeValue(oldVol),
-			New: formatVolumeChangeValue(newVol),
-		})
 	}
 	return out
 }
 
-// formatVolumeChangeValue renders a Volume for the reconcile prompt's
-// Old/New display. Plain path when Label/Ignore are unset, so a
-// path-only retarget still reads as "<old> → <new>". Otherwise appends
-// a label/ignore summary so a metadata-only edit (same path) doesn't
-// render as a no-op "<path> → <path>".
-func formatVolumeChangeValue(v schema.Volume) string {
-	if v.Label == nil && len(v.Ignore) == 0 {
-		return v.Path
+// volumeFieldChanges diffs a single volume present in both old and new,
+// emitting one OpMutate Change per field that differs.
+func volumeFieldChanges(name string, o, n schema.Volume) []Change {
+	var out []Change
+	if o.Path != n.Path {
+		out = append(out, Change{Kind: KindVolumeChange, Op: OpMutate, Key: name, Field: "path",
+			Old: o.Path, New: n.Path, OldValue: o.Path, NewValue: n.Path})
 	}
-	label := ""
-	if v.Label != nil {
-		label = *v.Label
+	if !stringPtrEqual(o.Label, n.Label) {
+		out = append(out, Change{Kind: KindVolumeChange, Op: OpMutate, Key: name, Field: "label",
+			Old: formatStringPtr(o.Label), New: formatStringPtr(n.Label),
+			OldValue: o.Label, NewValue: n.Label})
 	}
-	return fmt.Sprintf("%s [label=%s, ignore=%s]", v.Path, label, strings.Join(v.Ignore, ","))
+	if !stringSliceEqual(o.Ignore, n.Ignore) {
+		out = append(out, Change{Kind: KindVolumeChange, Op: OpMutate, Key: name, Field: "ignore",
+			Old: strings.Join(o.Ignore, ","), New: strings.Join(n.Ignore, ","),
+			OldValue: o.Ignore, NewValue: n.Ignore})
+	}
+	return out
+}
+
+// computeRepoChanges emits one KindRepoChange per changed
+// Config.Repos entry. A key present in exactly one of old/new emits a
+// single OpAdd/OpRemove Change; a key present in both emits one
+// OpMutate Change per changed field (URL, Secret, Label, Volume,
+// Primary, Ignore). Sorted by name for deterministic output.
+func computeRepoChanges(old, new schema.Config) []Change {
+	var out []Change
+	for _, n := range unionRepoNames(old.Repos, new.Repos) {
+		oldRepo, oldOk := old.Repos[n]
+		newRepo, newOk := new.Repos[n]
+		switch {
+		case !oldOk && newOk:
+			out = append(out, Change{Kind: KindRepoChange, Op: OpAdd, Key: n})
+		case oldOk && !newOk:
+			out = append(out, Change{Kind: KindRepoChange, Op: OpRemove, Key: n})
+		default:
+			out = append(out, repoFieldChanges(n, oldRepo, newRepo)...)
+		}
+	}
+	return out
+}
+
+// repoFieldChanges diffs a single repo present in both old and new,
+// emitting one OpMutate Change per field that differs. Field names
+// match the RepoConfig Go field names (not the yaml tags) so
+// Change.Bucket()'s URL/Secret check and any downstream apply-live
+// switch can compare against them directly.
+func repoFieldChanges(name string, o, n schema.RepoConfig) []Change {
+	var out []Change
+	if !stringPtrEqual(o.URL, n.URL) {
+		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "URL",
+			Old: formatStringPtr(o.URL), New: formatStringPtr(n.URL),
+			OldValue: o.URL, NewValue: n.URL})
+	}
+	if o.Secret != n.Secret {
+		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "Secret",
+			Old: o.Secret, New: n.Secret, OldValue: o.Secret, NewValue: n.Secret})
+	}
+	if !stringPtrEqual(o.Label, n.Label) {
+		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "Label",
+			Old: formatStringPtr(o.Label), New: formatStringPtr(n.Label),
+			OldValue: o.Label, NewValue: n.Label})
+	}
+	if !boolPtrEqual(o.Volume, n.Volume) {
+		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "Volume",
+			Old: formatBoolPtr(o.Volume), New: formatBoolPtr(n.Volume),
+			OldValue: o.Volume, NewValue: n.Volume})
+	}
+	if !boolPtrEqual(o.Primary, n.Primary) {
+		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "Primary",
+			Old: formatBoolPtr(o.Primary), New: formatBoolPtr(n.Primary),
+			OldValue: o.Primary, NewValue: n.Primary})
+	}
+	if !stringSliceEqual(o.Ignore, n.Ignore) {
+		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "Ignore",
+			Old: strings.Join(o.Ignore, ","), New: strings.Join(n.Ignore, ","),
+			OldValue: o.Ignore, NewValue: n.Ignore})
+	}
+	return out
+}
+
+// unionVolumeNames returns the sorted union of keys across both
+// Volumes maps, for deterministic diff-walk ordering.
+func unionVolumeNames(a, b map[string]schema.Volume) []string {
+	set := make(map[string]struct{}, len(a)+len(b))
+	for k := range a {
+		set[k] = struct{}{}
+	}
+	for k := range b {
+		set[k] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// unionRepoNames returns the sorted union of keys across both Repos
+// maps, for deterministic diff-walk ordering.
+func unionRepoNames(a, b map[string]schema.RepoConfig) []string {
+	set := make(map[string]struct{}, len(a)+len(b))
+	for k := range a {
+		set[k] = struct{}{}
+	}
+	for k := range b {
+		set[k] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // stringPtrEqual compares two string pointers: both nil is equal, one
@@ -605,16 +765,35 @@ func stringPtrEqual(a, b *string) bool {
 	return *a == *b
 }
 
-// volumeEqual compares two Volume values, including Label and Ignore.
-// A change to any field is considered a difference.
-func volumeEqual(a, b schema.Volume) bool {
-	if a.Path != b.Path {
+// boolPtrEqual compares two bool pointers: both nil is equal, one nil
+// and one non-nil is not equal, and both non-nil compares the
+// dereferenced values.
+func boolPtrEqual(a, b *bool) bool {
+	if (a == nil) != (b == nil) {
 		return false
 	}
-	if !stringPtrEqual(a.Label, b.Label) {
-		return false
+	if a == nil {
+		return true
 	}
-	return stringSliceEqual(a.Ignore, b.Ignore)
+	return *a == *b
+}
+
+// formatStringPtr renders a *string for a Change's Old/New display:
+// empty string when nil, the dereferenced value otherwise.
+func formatStringPtr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// formatBoolPtr renders a *bool for a Change's Old/New display: empty
+// string when nil, "true"/"false" otherwise.
+func formatBoolPtr(p *bool) string {
+	if p == nil {
+		return ""
+	}
+	return strconv.FormatBool(*p)
 }
 
 // computeMaskChanges emits one KindMaskChange per path that
