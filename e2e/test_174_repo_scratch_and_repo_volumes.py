@@ -1,10 +1,9 @@
 """174: a plain scratch `volumes:` entry coexists with a repo-hydrated
 `repos:` secondary (`volume: true`).
 
-Under the mutagen-volumes model, a repo secondary that wants its own
-Mac mirror lives in the `repos:` map with `volume: true` -- the old
-`volumes.<name>.repo:` embedded shape is gone (schema.Volume has no
-Repo field). This pins that both coexist correctly in one project: the
+A repo secondary that wants its own Mac mirror lives in the `repos:`
+map with `volume: true` (schema.Volume has no Repo field). This pins
+that both coexist correctly in one project: the
 scratch volume stays empty in the guest on cold-start and persists a
 guest-written sentinel across a teardown + restart cycle (via its Mac
 mirror, not VM disk persistence), while the repo secondary is cloned

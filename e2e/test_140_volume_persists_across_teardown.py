@@ -1,9 +1,9 @@
 """140: a volume's contents survive `devm teardown` + cold-start.
 
-Under the mutagen-volumes model a `volumes:` entry (and the primary
-repo) is no longer a live bind mount -- it's a Mac-side mirror dir
-kept in sync with a guest path via mutagen. Persistence now means:
-content written in the guest, once flushed to the Mac mirror at
+A `volumes:` entry (and the primary repo) is a Mac-side mirror dir
+kept in sync with a guest path via mutagen, not a live bind mount.
+Persistence means: content written in the guest, once flushed to the
+Mac mirror at
 `~/Library/Application Support/devm-e2e/<project>/<label>/`, survives
 the VM disk being destroyed at teardown, and a fresh guest re-syncs it
 back in on the next cold-start.

@@ -11,9 +11,9 @@ Pins:
    populated with the same content -- proof the mutagen session is
    actually wired up, not just that the guest-side clone ran.
 
-Unlike the pre-mutagen shape, there's no `.vm` symlink and no live
-bind mount at the Mac cwd: the guest path and the Mac cwd are
-independent, connected only by mutagen's two-way sync.
+There's no `.vm` symlink and no live bind mount at the Mac cwd: the
+guest path and the Mac cwd are independent, connected only by
+mutagen's two-way sync.
 """
 from __future__ import annotations
 import subprocess

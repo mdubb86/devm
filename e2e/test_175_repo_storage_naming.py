@@ -8,7 +8,7 @@ mirrorMacDir (internal/serviceapi/volumes.go) is
 `<RuntimeDir>/<projectID>/<label>/`. A `volumes:` entry's default
 label is the leaf dir of its guest `path:` (resolveVolumeLabel);
 `devm volume ls` itself is not yet updated for this model (still
-prints the pre-mutagen `volumes/<project>/<name>` shape -- see its
+prints the `volumes/<project>/<name>` shape -- see its
 TODO(Task 17) comment), so this test inspects mirror paths directly
 rather than through that command.
 

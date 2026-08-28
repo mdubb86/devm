@@ -2,8 +2,8 @@
 `git remote get-url origin` in the Mac cwd, and its mutagen sync label
 defaults to the Mac cwd's basename.
 
-Mirrors the pre-mutagen test_171 (now skipped pending Task 28's fuller
-rework), migrated onto the `repos:` map: `repos.main` declares only
+Exercises the same shape as test_171 (skipped pending Task 28's fuller
+rework), using the `repos:` map: `repos.main` declares only
 `secret:`, no `url:`. resolveRepoLabel
 (internal/serviceapi/mutagen_sessions.go) falls back to
 `filepath.Base(macCwd)` for exactly this shape -- the URL-nil primary.

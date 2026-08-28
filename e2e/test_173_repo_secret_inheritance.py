@@ -1,7 +1,5 @@
 """173: each `repos:` entry declares its own `secret:` independently --
-there is no top-level `repo.secret:` for a secondary to fall back to
-anymore (that concept only existed under the pre-mutagen singular
-`repo:` field, which is gone).
+there is no top-level `repo.secret:` for a secondary to fall back to.
 
 Two entries name two DIFFERENT secrets ("s1", "s2") with no shared
 value between them, proving there's no hidden inheritance/fallback
@@ -13,9 +11,9 @@ secondary alike, with no top-level equivalent left in Config for
 anything to inherit from.
 
 Local file:// clones ignore the substituted Authorization header
-entirely, so (as in the pre-mutagen version of this test) the
-observable pin is: both entries validate and hydrate successfully
-under independently-named secrets, not the literal on-wire header.
+entirely, so the observable pin is: both entries validate and hydrate
+successfully under independently-named secrets, not the literal
+on-wire header.
 """
 from __future__ import annotations
 import subprocess
