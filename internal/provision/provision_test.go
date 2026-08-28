@@ -320,6 +320,21 @@ func TestScriptInput_NoReposEmptyCredentials(t *testing.T) {
 	assert.Equal(t, "", in.GitConfig, "no repos ⇒ no gitconfig")
 }
 
+func TestScriptInput_PopulatesGitCredentialsFromReposMap(t *testing.T) {
+	url := "https://github.com/mdubb86/sewtrue.git"
+	p := &Provisioner{
+		Cfg: schema.Config{
+			Repos: map[string]schema.RepoConfig{
+				"workspace": {URL: &url, Secret: "gh_token"},
+			},
+		},
+	}
+	in := p.scriptInput()
+	assert.Contains(t, in.GitCredentials,
+		"https://x-access-token:__DEVM_SECRET_gh_token__@github.com/mdubb86/sewtrue.git")
+	assert.Contains(t, in.GitConfig, "useHttpPath = true")
+}
+
 func TestProvisioner_ScriptInput_PassesScripts(t *testing.T) {
 	p := &Provisioner{
 		Cfg: schema.Config{
@@ -393,4 +408,19 @@ func TestScriptInput_NoReposNoIdentity_BothFieldsEmpty(t *testing.T) {
 	in := p.scriptInput()
 	assert.Equal(t, "", in.GitCredentials, "no repos, no identity ⇒ no credentials")
 	assert.Equal(t, "", in.GitConfig, "no repos, no identity ⇒ no gitconfig")
+}
+
+func TestScriptInput_GitConfigCarriesIdentityWhenReposDeclared(t *testing.T) {
+	dir := makeRepoWithIdentity(t, "Fixture User", "fixture@example.com")
+	url := "https://github.com/mdubb86/sewtrue.git"
+	p := &Provisioner{
+		MacCwd: dir,
+		Cfg: schema.Config{
+			Repos: map[string]schema.RepoConfig{
+				"workspace": {URL: &url, Secret: "gh_token"},
+			},
+		},
+	}
+	in := p.scriptInput()
+	assert.Contains(t, in.GitConfig, "[user]\n    name = Fixture User\n    email = fixture@example.com\n")
 }

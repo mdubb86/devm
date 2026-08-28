@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"sort"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/guestbin"
 	"github.com/mdubb86/devm/internal/render"
+	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -244,14 +246,39 @@ func (p *Provisioner) gitIdentity() render.GitIdentity {
 	}
 }
 
-// repoBindings flattens p.Cfg's repo declarations (each resolved to a
-// URL) into the slice RenderGitCredentials consumes.
-//
-// TODO(Task 17): walk p.Cfg.Repos and emit one render.RepoBinding per
-// entry with a resolved URL (deriving from p.MacCwd when an entry's
-// URL is nil). No-op until then.
+// repoBindings flattens p.Cfg.Repos (sorted by key for deterministic
+// output) into the slice RenderGitCredentials consumes. An entry's URL
+// is used verbatim when set; a nil URL (the primary, per schema
+// validation) derives from `git remote get-url origin` in p.MacCwd. An
+// entry with no secret needs no injected credential and is skipped, as
+// is an entry whose URL fails to derive (logged, not fatal — the rest
+// of provisioning should still proceed).
 func (p *Provisioner) repoBindings() []render.RepoBinding {
+	names := make([]string, 0, len(p.Cfg.Repos))
+	for name := range p.Cfg.Repos {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	var bindings []render.RepoBinding
+	for _, name := range names {
+		r := p.Cfg.Repos[name]
+		if r.Secret == "" {
+			continue
+		}
+		url := ""
+		if r.URL != nil {
+			url = *r.URL
+		} else {
+			derived, err := repohelpers.DeriveRepoURL(p.MacCwd)
+			if err != nil {
+				log.Printf("provision: repos.%s: derive URL from %s: %v", name, p.MacCwd, err)
+				continue
+			}
+			url = derived
+		}
+		bindings = append(bindings, render.RepoBinding{URL: url, Secret: r.Secret})
+	}
 	return bindings
 }
 
