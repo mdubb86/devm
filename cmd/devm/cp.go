@@ -14,6 +14,7 @@ import (
 	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
 )
 
@@ -100,22 +101,46 @@ func resolveDirection(src, dst cpArg) (direction, error) {
 }
 
 // mountPassthrough returns the host-side path that mirrors the given
-// guest path, if the guest path lives under a mount that shares the
-// filesystem view. The primary workspace (repoRoot, when `repo:` is
-// configured) is virtiofs-shared from the primary volume's Mac-side
-// storage (<RuntimeDir>/volumes/<project>/<primaryVolumeName>/). A
-// guest path under repoRoot translates to the same relative path
-// under that storage dir.
+// guest path, if the guest path lives under one of the project's
+// mirrored repos/volumes. It walks pcfg's label→mirror table (the
+// same repo/volume enumeration SetupPhase uses to set up mutagen sync
+// sessions) and matches the deepest entry whose GuestPath contains
+// guestPath — a nested volume inside a repo's tree wins over the repo
+// itself. The match translates to <RuntimeDir>/<projectName>/<label>/
+// plus the path relative to the entry's GuestPath; no `.vm` insertion.
 //
-// Named volumes (other than the primary) aren't checked here — go via
-// pipe. Returns ("", false) when no mirror is known; caller falls back
-// to pipe.
+// Returns ("", false) when no mirror is known (no `repos:`/`volumes:`
+// configured, repoRoot/projectName unavailable, or guestPath falls
+// outside every entry) — caller falls back to pipe transport.
 func mountPassthrough(guestPath, repoRoot string, pcfg schema.Config, projectName string) (string, bool) {
-	// TODO(Task 17): check pcfg.Repos for the entry with Primary ==
-	// true and, when guestPath falls under repoRoot, translate it into
-	// that entry's primary-volume storage path as below. No-op until
-	// then.
-	return "", false
+	if repoRoot == "" || projectName == "" {
+		return "", false
+	}
+	entities, err := serviceapi.BuildEntities(&pcfg, repoRoot)
+	if err != nil || len(entities) == 0 {
+		return "", false
+	}
+
+	var best *serviceapi.SessionEntity
+	for i := range entities {
+		e := &entities[i]
+		if !inside(guestPath, e.GuestPath) {
+			continue
+		}
+		if best == nil || len(e.GuestPath) > len(best.GuestPath) {
+			best = e
+		}
+	}
+	if best == nil {
+		return "", false
+	}
+
+	rel, err := filepath.Rel(best.GuestPath, guestPath)
+	if err != nil {
+		return "", false
+	}
+	storagePath := filepath.Join(cfg.RuntimeDir(), projectName, best.Label)
+	return filepath.Join(storagePath, rel), true
 }
 
 // inside reports whether target lives under root (or is root itself).

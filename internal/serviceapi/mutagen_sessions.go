@@ -96,6 +96,22 @@ func resolveVolumeLabel(v schema.Volume) string {
 	return filepath.Base(v.Path)
 }
 
+// PrimaryGuestPath returns the guest-side path of cfg's primary
+// mirrored repo (e.g. "/home/devm/<label>"), or "" if cfg declares no
+// repos at all. macCwd resolves the URL-nil/label-nil primary's label
+// exactly like BuildEntities does. Exported for cmd/devm/pop.go's
+// project-root-relative resolution, which needs the primary's guest
+// path without needing BuildEntities' full entity list (and the
+// git/clone-URL derivation that comes with it for other repos).
+func PrimaryGuestPath(cfg *schema.Config, macCwd string) string {
+	name := findPrimaryRepoName(cfg)
+	if name == "" {
+		return ""
+	}
+	label := resolveRepoLabel(cfg.Repos[name], macCwd)
+	return filepath.Join(guestHomeDir, label)
+}
+
 // BuildEntities enumerates every mirrored entity in cfg: the primary
 // repo (included unless explicitly `volume: false`, which schema
 // validation already rejects), every secondary repo that opts in with

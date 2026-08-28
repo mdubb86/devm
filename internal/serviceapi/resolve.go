@@ -5,31 +5,32 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
-// WorkspaceEntry is one row of GET /workspaces — a project's primary
-// workspace repo, pairing the path as it appears inside the guest
-// clone (GuestPath) with the Mac-side volume storage path
-// (StoragePath). Used to translate a VM-emitted path (e.g. from a
-// screenshot or test-output path a guest process printed) back to
+// WorkspaceEntry is one row of GET /workspaces — a mirrored repo or
+// volume, pairing its guest-view path (GuestPath) with its Mac-side
+// mirror storage path (StoragePath) and the label its mutagen sync
+// session runs under. Used to translate a VM-emitted path (e.g. from
+// a screenshot or test-output path a guest process printed) back to
 // where it actually lives on the Mac.
 type WorkspaceEntry struct {
 	ProjectName string `json:"project"`
+	Label       string `json:"label"`
 	GuestPath   string `json:"guest_path"`
 	StoragePath string `json:"storage_path"`
 }
 
 // RegisterWorkspacesHandler wires GET /workspaces. Enumerates every
 // persisted StateSnapshot in StateDir() — same source `devm status
-// --all` reads — and reports one entry per project with a primary
-// workspace repo in Cfg.Repos. Projects without one have no guest
-// clone to resolve paths against, so they're skipped.
-//
-// TODO(Task 17): listWorkspaces is currently a no-op (see below) —
-// the primary-repo lookup needs to walk Cfg.Repos.
+// --all` reads — and reports one entry per mirrored repo or volume:
+// the primary repo (mirrored by default), every secondary repo that
+// opts in with `volume: true`, and every volumes.<name> entry.
 func RegisterWorkspacesHandler(s *Server, cfg identity.Config) {
 	s.Register("/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		out, err := listWorkspaces(cfg)
@@ -42,7 +43,9 @@ func RegisterWorkspacesHandler(s *Server, cfg identity.Config) {
 	})
 }
 
-// listWorkspaces mirrors listProjectStatuses' StateDir enumeration.
+// listWorkspaces mirrors listProjectStatuses' StateDir enumeration,
+// then expands each project's persisted Cfg into one WorkspaceEntry
+// per mirrored repo/volume.
 func listWorkspaces(cfg identity.Config) ([]WorkspaceEntry, error) {
 	entries, err := os.ReadDir(StateDir(cfg))
 	if err != nil {
@@ -64,10 +67,70 @@ func listWorkspaces(cfg identity.Config) ([]WorkspaceEntry, error) {
 		if err != nil || snap == nil {
 			continue
 		}
-		// TODO(Task 24): resolve the entry in snap.Cfg.Repos with
-		// Primary == true and append a WorkspaceEntry for it (guest path
-		// + StoragePath via mirrorMacDir). No-op (skip every project)
-		// until then.
+		out = append(out, projectWorkspaceEntries(cfg, projectID, &snap.Cfg)...)
 	}
 	return out, nil
+}
+
+// projectWorkspaceEntries builds one WorkspaceEntry per mirrored repo
+// or volume declared in pcfg, for the given projectID. Label
+// resolution mirrors BuildEntities' resolveRepoLabel/
+// resolveVolumeLabel rules, with one deliberate divergence: a
+// URL-nil, label-nil primary repo would normally fall back to the
+// basename of the Mac checkout dir (macCwd) — that value isn't
+// persisted on StateSnapshot, so this falls back to projectID
+// instead, which is the same string under the default
+// `project.name` == checkout-dirname convention.
+func projectWorkspaceEntries(cfg identity.Config, projectID string, pcfg *schema.Config) []WorkspaceEntry {
+	var out []WorkspaceEntry
+
+	primaryName := findPrimaryRepoName(pcfg)
+
+	repoNames := make([]string, 0, len(pcfg.Repos))
+	for n := range pcfg.Repos {
+		repoNames = append(repoNames, n)
+	}
+	sort.Strings(repoNames)
+
+	for _, name := range repoNames {
+		r := pcfg.Repos[name]
+		isPrimary := name == primaryName
+
+		var included bool
+		if isPrimary {
+			included = r.Volume == nil || *r.Volume
+		} else {
+			included = r.Volume != nil && *r.Volume
+		}
+		if !included {
+			continue
+		}
+
+		label := resolveRepoLabel(r, projectID)
+		out = append(out, WorkspaceEntry{
+			ProjectName: projectID,
+			Label:       label,
+			GuestPath:   filepath.Join(guestHomeDir, label),
+			StoragePath: mirrorMacDir(cfg, projectID, label),
+		})
+	}
+
+	volNames := make([]string, 0, len(pcfg.Volumes))
+	for n := range pcfg.Volumes {
+		volNames = append(volNames, n)
+	}
+	sort.Strings(volNames)
+
+	for _, name := range volNames {
+		v := pcfg.Volumes[name]
+		label := resolveVolumeLabel(v)
+		out = append(out, WorkspaceEntry{
+			ProjectName: projectID,
+			Label:       label,
+			GuestPath:   v.Path,
+			StoragePath: mirrorMacDir(cfg, projectID, label),
+		})
+	}
+
+	return out
 }

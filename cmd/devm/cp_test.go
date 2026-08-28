@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/schema"
@@ -93,6 +94,59 @@ func TestMountPassthrough_NoRepoRoot_NoConfig(t *testing.T) {
 	// When project was named explicitly (no CWD walk), we don't have a
 	// repoRoot or cfg. Every path must fall through to pipe transport.
 	gotHost, gotOK := mountPassthrough("/Users/me/workspace/foo/src/main.go", "", schema.Config{}, "")
+	assert.False(t, gotOK)
+	assert.Empty(t, gotHost)
+}
+
+func TestMountPassthrough_ResolvesPrimaryRepoViaLabelTable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate cfg.RuntimeDir() from the real HOME
+	repoRoot := t.TempDir()
+	url := "https://example.com/main.git"
+	primary := true
+	pcfg := schema.Config{
+		Repos: map[string]schema.RepoConfig{
+			"main": {URL: &url, Primary: &primary},
+		},
+	}
+
+	gotHost, gotOK := mountPassthrough("/home/devm/main/src/main.go", repoRoot, pcfg, "myproj")
+	require.True(t, gotOK)
+	assert.Equal(t, filepath.Join(cfg.RuntimeDir(), "myproj", "main", "src", "main.go"), gotHost)
+}
+
+func TestMountPassthrough_PicksDeepestContainingEntry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate cfg.RuntimeDir() from the real HOME
+	repoRoot := t.TempDir()
+	url := "https://example.com/main.git"
+	primary := true
+	pcfg := schema.Config{
+		Repos: map[string]schema.RepoConfig{
+			"main": {URL: &url, Primary: &primary},
+		},
+		Volumes: map[string]schema.Volume{
+			"data": {Path: "/home/devm/main/data"},
+		},
+	}
+
+	// "/home/devm/main/data/x.db" is contained by both the repo entry
+	// ("/home/devm/main") and the nested volume entry
+	// ("/home/devm/main/data") — the deeper (volume) entry must win.
+	gotHost, gotOK := mountPassthrough("/home/devm/main/data/x.db", repoRoot, pcfg, "myproj")
+	require.True(t, gotOK)
+	assert.Equal(t, filepath.Join(cfg.RuntimeDir(), "myproj", "data", "x.db"), gotHost)
+}
+
+func TestMountPassthrough_PathOutsideAnyEntry(t *testing.T) {
+	repoRoot := t.TempDir()
+	url := "https://example.com/main.git"
+	primary := true
+	pcfg := schema.Config{
+		Repos: map[string]schema.RepoConfig{
+			"main": {URL: &url, Primary: &primary},
+		},
+	}
+
+	gotHost, gotOK := mountPassthrough("/etc/passwd", repoRoot, pcfg, "myproj")
 	assert.False(t, gotOK)
 	assert.Empty(t, gotHost)
 }
