@@ -160,7 +160,7 @@ func TestApplyMutagenSessionChange_VolumeAdd_CreatesSession(t *testing.T) {
 	require.Len(t, cli.createArgs, 1)
 	args := cli.createArgs[0]
 	assert.Contains(t, args, "devm-myproj-data")
-	assert.Contains(t, args, "devm@myproj.test:/var/lib/postgresql/data")
+	assert.Contains(t, args, "devm@devm-myproj:/var/lib/postgresql/data")
 	assert.True(t, rec.containsCall("mkdir -p '/var/lib/postgresql/data'"), "must ensure the guest dir exists")
 }
 
@@ -286,7 +286,7 @@ func TestApplyMutagenSessionChange_RepoVolumeToggle_FalseToTrue(t *testing.T) {
 
 	require.Len(t, cli.createArgs, 1)
 	assert.Contains(t, cli.createArgs[0], "devm-myproj-extra")
-	assert.Contains(t, cli.createArgs[0], "devm@myproj.test:/home/devm/extra")
+	assert.Contains(t, cli.createArgs[0], "devm@devm-myproj:/home/devm/extra")
 }
 
 func TestApplyMutagenSessionChange_PrimaryToggle_NoOp(t *testing.T) {
@@ -331,7 +331,7 @@ func TestApplyMutagenSessionChange_VolumePathMutate_MovesGuestDir(t *testing.T) 
 
 	require.Len(t, cli.createArgs, 1)
 	assert.Contains(t, cli.createArgs[0], "devm-myproj-data")
-	assert.Contains(t, cli.createArgs[0], "devm@myproj.test:/new-data")
+	assert.Contains(t, cli.createArgs[0], "devm@devm-myproj:/new-data")
 }
 
 func TestApplyMutagenSessionChange_RepoLabelRename_MovesGuestCloneDirAndRecreates(t *testing.T) {
@@ -370,7 +370,7 @@ func TestApplyMutagenSessionChange_RepoLabelRename_MovesGuestCloneDirAndRecreate
 
 	require.Len(t, cli.createArgs, 1)
 	assert.Contains(t, cli.createArgs[0], "devm-myproj-newname")
-	assert.Contains(t, cli.createArgs[0], "devm@myproj.test:/home/devm/newname")
+	assert.Contains(t, cli.createArgs[0], "devm@devm-myproj:/home/devm/newname")
 }
 
 func TestApplyMutagenSessionChange_RepoIgnoreChange_RegeneratesConfigAndRecreates(t *testing.T) {
@@ -396,7 +396,7 @@ func TestApplyMutagenSessionChange_RepoIgnoreChange_RegeneratesConfigAndRecreate
 	assert.False(t, rec.containsCall("git clone"), "ignore-only change must not re-clone an already-populated repo")
 	require.Len(t, cli.createArgs, 1, "must recreate the session to pick up the new ignore list")
 	assert.Contains(t, cli.createArgs[0], "devm-myproj-myrepo")
-	assert.Contains(t, cli.createArgs[0], "devm@myproj.test:/home/devm/myrepo")
+	assert.Contains(t, cli.createArgs[0], "devm@devm-myproj:/home/devm/myrepo")
 }
 
 func TestApplyMutagenSessionChange_RepoOpRemove_TerminatesAndClearsMirror(t *testing.T) {

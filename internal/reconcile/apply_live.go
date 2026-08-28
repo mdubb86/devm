@@ -221,10 +221,16 @@ func mutagenSessionName(projectID, label string) string {
 }
 
 // guestSSHTarget returns the mutagen beta-endpoint host for projectID
-// — mirrors the "<vmName>.<TLD>" target serviceapi.setupMutagenSessions
-// computes for SetupPhase.
+// — the ALIAS ("devm-<vmName>") from devm's managed ssh_config, not the
+// bare "<vmName>.<TLD>" hostname. mutagen shells out to system ssh
+// which resolves per-project HostKeyAlias / UserKnownHostsFile /
+// IdentityFile from the alias's Host block; passing the FQDN matches
+// no Host stanza, ssh falls back to default known_hosts, and mutagen
+// sync create fails with "Host key verification failed". Mirrors
+// serviceapi.setupMutagenSessions.
 func guestSSHTarget(cfg identity.Config, projectID string) string {
-	return projectID + "." + cfg.TLD
+	_ = cfg.TLD
+	return "devm-" + projectID
 }
 
 // guestGitCACertPath returns the guest-side CA bundle path git trusts
