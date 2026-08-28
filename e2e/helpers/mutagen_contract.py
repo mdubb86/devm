@@ -128,8 +128,18 @@ def daemon() -> Iterator[Path]:
     daemon stop fails (e.g. the daemon already died), swallow — the
     DataDir is torn down anyway.
     """
+    import time
     with short_data_dir() as data_dir:
         run(["daemon", "start"], data_dir=data_dir)
+        # `daemon start` returns before the forked daemon child has bound
+        # its socket; poll for daemon.lock so subsequent CLI calls don't
+        # race the daemon's startup. See test_mutagen_contract_01 for the
+        # underlying contract.
+        lock = data_dir / "daemon" / "daemon.lock"
+        for _ in range(50):  # up to 5s
+            if lock.exists():
+                break
+            time.sleep(0.1)
         try:
             yield data_dir
         finally:
