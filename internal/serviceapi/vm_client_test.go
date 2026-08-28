@@ -22,8 +22,20 @@ import (
 // newTestServerWithVM returns a Server with VM handlers registered
 // on a temp socket. sup and tr are the live collaborators for the
 // handler (callers may substitute a real or stub supervisor/tart).
+//
+// mutagenStopPhaseFn is faked to a no-op for the fixture's lifetime:
+// its production default shells out to the real mutagen binary and
+// (on first use) starts a real mutagen daemon, which is both slow and
+// unrelated to what these handler-lifecycle tests exercise. Tests
+// that specifically want to assert /vm/stop's mutagen wiring (e.g.
+// TestVMStop_CallsMutagenStopPhaseBeforeGracefulStop) set up their own
+// server directly instead of going through this fixture.
 func newTestServerWithVM(t *testing.T, sup *supervisor.Supervisor, tr *tart.Tart) (*Server, func()) {
 	t.Helper()
+	origMutagenStopPhaseFn := mutagenStopPhaseFn
+	mutagenStopPhaseFn = func(identity.Config, string) error { return nil }
+	t.Cleanup(func() { mutagenStopPhaseFn = origMutagenStopPhaseFn })
+
 	dir, err := os.MkdirTemp("/tmp", "sapi-vm-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(dir) })

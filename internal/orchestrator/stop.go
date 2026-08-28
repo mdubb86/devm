@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
@@ -96,6 +97,16 @@ func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness,
 	}
 
 	if mode == StopDestroy {
+		// Terminate this project's mutagen sessions before the VM disk
+		// is deleted. Termination is a mutagen-daemon-local operation
+		// (no guest sshd needed), but runs before Delete for ordering
+		// consistency with the flush+pause /vm/stop just issued.
+		// Best-effort: a failure leaves the sessions dangling in the
+		// mutagen daemon's state, cleaned up on its next restart.
+		if err := mutagenTeardownFn(d, name); err != nil {
+			log.Printf("mutagen teardown phase for %s: %v (continuing)", name, err)
+		}
+
 		if err := d.Tart.Delete(ctx, name); err != nil {
 			// "VM does not exist" is the desired end state; treat
 			// as success. tart's stderr for absent VMs is stable:
@@ -142,6 +153,24 @@ func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness,
 	}
 
 	return 0, nil
+}
+
+// mutagenTeardownFn is the test-injection seam for the mutagen
+// session-termination step RunStop runs (on StopDestroy) before the
+// VM disk delete. Production always terminates the project's real
+// mutagen sessions; tests substitute a fake to verify sequencing
+// without a live mutagen daemon.
+var mutagenTeardownFn = func(d StopDeps, name string) error {
+	mutagenBin, err := mutagen.Ensure(d.Ident.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("mutagen: extract binary: %w", err)
+	}
+	mutagenCLI := &mutagen.CLI{
+		Binary:  mutagenBin,
+		DataDir: filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
+		Exec:    mutagen.OSExec,
+	}
+	return serviceapi.TeardownPhase(mutagenCLI, name)
 }
 
 // reapPerProjectArtifacts removes the three orchestration files

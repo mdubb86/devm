@@ -933,6 +933,17 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			egressPassthroughState.del(req.Name)
 		}()
 
+		// Flush + pause this project's mutagen sessions before anything
+		// below touches the guest's network or power state — mutagen's
+		// SSH transport needs sshd up and reachable, both of which
+		// gracefulStopVM's in-guest poweroff (further down) ends.
+		// Best-effort: mutagen's own journal handles a crash mid-flush,
+		// so a failure here just means sessions resume unflushed on the
+		// next start instead of failing the stop.
+		if err := mutagenStopPhaseFn(cfg, req.Name); err != nil {
+			daemonlog.Errorf("mutagen stop phase for %s: %v (continuing)", req.Name, err)
+		}
+
 		// Stop iron-proxy for this project first. Best-effort — if
 		// it's not running, supervisor.Stop returns ErrNotFound which
 		// we treat as success.

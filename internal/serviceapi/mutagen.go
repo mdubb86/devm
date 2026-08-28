@@ -80,6 +80,20 @@ func mutagenDataDir(cfg identity.Config) string {
 	return filepath.Join(cfg.RuntimeDir(), "mutagen", "data")
 }
 
+// mutagenStopPhaseFn is the test-injection seam for the flush+pause
+// step /vm/stop runs (before gracefulStopVM) against the project's
+// mutagen sessions. Production always extracts the real embedded
+// binary and calls StopPhase; tests substitute a fake to verify
+// sequencing without a live mutagen daemon.
+var mutagenStopPhaseFn = func(cfg identity.Config, projectID string) error {
+	mutagenBin, err := mutagenEnsureFn(cfg.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("mutagen: extract binary: %w", err)
+	}
+	mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(cfg), Exec: mutagen.OSExec}
+	return StopPhase(mutagenCLI, projectID)
+}
+
 // SpawnMutagen extracts the embedded mutagen binary, starts its daemon
 // with a data directory scoped under cfg.RuntimeDir(), and adopts the
 // resulting PID under supervisor.RoleMutagen.

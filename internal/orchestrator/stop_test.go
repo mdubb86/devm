@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -245,6 +246,89 @@ func TestRunStopPromptText(t *testing.T) {
 
 func TestDestructivenessIdentity(t *testing.T) {
 	assert.NotEqual(t, StopPreserve, StopDestroy)
+}
+
+// ---------- mutagenTeardownFn wiring tests (Task 18) ----------
+
+// TestRunStopDestroy_CallsMutagenTeardownBeforeDelete verifies Task 18:
+// `devm teardown` terminates the project's mutagen sessions before the
+// VM disk is deleted — ordering-consistent with the flush+pause
+// /vm/stop issues before the VM itself shuts down.
+func TestRunStopDestroy_CallsMutagenTeardownBeforeDelete(t *testing.T) {
+	orig := mutagenTeardownFn
+	defer func() { mutagenTeardownFn = orig }()
+
+	repoRoot := t.TempDir()
+	logPath := filepath.Join(repoRoot, "order.log")
+	tr := fakeTartBinWithLog(t, repoRoot, logPath)
+
+	var teardownArgs []string
+	mutagenTeardownFn = func(d StopDeps, name string) error {
+		fh, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		require.NoError(t, err)
+		defer fh.Close()
+		_, err = fmt.Fprintln(fh, "MUTAGEN-TEARDOWN "+name)
+		require.NoError(t, err)
+		teardownArgs = append(teardownArgs, name)
+		return nil
+	}
+
+	admin := &fakeStopClient{}
+	out := &bytes.Buffer{}
+	deps := StopDeps{
+		Ident:            identity.Prod,
+		Tart:             tr,
+		ServiceAPIClient: admin,
+		Out:              out,
+	}
+	rc, err := RunStop(context.Background(), deps, "proj-mutagen", StopDestroy, true)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	assert.Equal(t, []string{"proj-mutagen"}, teardownArgs, "TeardownPhase must be called for the right projectID")
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+	teardownIdx, deleteIdx := -1, -1
+	for i, line := range lines {
+		switch {
+		case strings.Contains(line, "MUTAGEN-TEARDOWN"):
+			teardownIdx = i
+		case strings.Contains(line, "delete"):
+			deleteIdx = i
+		}
+	}
+	require.GreaterOrEqual(t, teardownIdx, 0, "mutagen teardown marker must be present")
+	require.GreaterOrEqual(t, deleteIdx, 0, "tart delete call must be present")
+	assert.Less(t, teardownIdx, deleteIdx, "mutagen sessions must be terminated BEFORE the VM disk is deleted")
+}
+
+// TestRunStopPreserve_DoesNotCallMutagenTeardown verifies `devm stop`
+// (StopPreserve) never terminates mutagen sessions — only teardown
+// permanently ends sync; a plain stop only flushes+pauses (via /vm/stop
+// daemon-side, exercised by TestStopPhase_* in internal/serviceapi).
+func TestRunStopPreserve_DoesNotCallMutagenTeardown(t *testing.T) {
+	orig := mutagenTeardownFn
+	defer func() { mutagenTeardownFn = orig }()
+
+	called := false
+	mutagenTeardownFn = func(d StopDeps, name string) error {
+		called = true
+		return nil
+	}
+
+	admin := &fakeStopClient{}
+	out := &bytes.Buffer{}
+	deps := StopDeps{
+		Ident:            identity.Prod,
+		Tart:             tartPathNotNeeded(t),
+		ServiceAPIClient: admin,
+		Out:              out,
+	}
+	rc, err := RunStop(context.Background(), deps, "proj-mutagen", StopPreserve, true)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	assert.False(t, called, "StopPreserve must not terminate mutagen sessions")
 }
 
 // fakeTartBinDeleteAbsent's `delete` prints tart's stable
