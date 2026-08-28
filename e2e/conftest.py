@@ -182,6 +182,11 @@ def workspace(request, devm_path, sandbox_name) -> Iterator[Workspace]:
             )
         except Exception:
             pass
+        # Shut down the mac-side bare-repo http.server if one was started.
+        try:
+            ws.teardown()
+        except Exception:
+            pass
         shutil.rmtree(path, ignore_errors=True)
         # Sibling dirs bare_repo_url() may have created (work checkout +
         # bare clone) aren't under `path`, so they need their own sweep.

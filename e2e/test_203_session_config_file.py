@@ -35,6 +35,7 @@ def test_session_config_file(devm, workspace):
             "main": {
                 "url": workspace.bare_repo_url(),
                 "secret": "e2e_default",
+                "primary": True,
                 "ignore": ["scratch/"],
             },
         },
