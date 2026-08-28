@@ -101,15 +101,11 @@ func resolveDirection(src, dst cpArg) (direction, error) {
 
 // mountPassthrough returns the host-side path that mirrors the given
 // guest path, if the guest path lives under a mount that shares the
-// filesystem view. Two cases:
-//
-//   - The primary workspace (repoRoot, when `repo:` is configured) is
-//     virtiofs-shared from the primary volume's Mac-side storage
-//     (<RuntimeDir>/volumes/<project>/<primaryVolumeName>/). A guest
-//     path under repoRoot translates to the same relative path under
-//     that storage dir.
-//   - User mounts[] entries — these still mirror the host path at the
-//     same absolute path inside the guest.
+// filesystem view. The primary workspace (repoRoot, when `repo:` is
+// configured) is virtiofs-shared from the primary volume's Mac-side
+// storage (<RuntimeDir>/volumes/<project>/<primaryVolumeName>/). A
+// guest path under repoRoot translates to the same relative path
+// under that storage dir.
 //
 // Named volumes (other than the primary) aren't checked here — go via
 // pipe. Returns ("", false) when no mirror is known; caller falls back
@@ -119,18 +115,6 @@ func mountPassthrough(guestPath, repoRoot string, pcfg schema.Config, projectNam
 	// true and, when guestPath falls under repoRoot, translate it into
 	// that entry's primary-volume storage path as below. No-op until
 	// then.
-	for _, entry := range pcfg.Mounts {
-		host, _ := strings.CutSuffix(entry, ":ro")
-		host = expandHome(host)
-		if !filepath.IsAbs(host) {
-			host = filepath.Join(repoRoot, host)
-		}
-		host = filepath.Clean(host)
-		// Same-path mirror: mounts[] pins host path === guest path.
-		if inside(guestPath, host) {
-			return guestPath, true
-		}
-	}
 	return "", false
 }
 
@@ -144,18 +128,6 @@ func inside(target, root string) bool {
 		return true
 	}
 	return strings.HasPrefix(target, root+string(filepath.Separator))
-}
-
-func expandHome(p string) string {
-	if p == "~" || strings.HasPrefix(p, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			if p == "~" {
-				return home
-			}
-			return filepath.Join(home, p[2:])
-		}
-	}
-	return p
 }
 
 var cpCmd = &cobra.Command{
@@ -172,12 +144,11 @@ inferred from which arg wears the colon:
 working directory; "project:/path" is always explicit. "-" is stdin
 (as src) or stdout (as dst) for streaming from/to pipes.
 
-Transport is auto-selected: if the guest path lives under a shared
-mount (workspace or a mounts[] entry), the copy is a plain host-side
-cp into the shared filesystem with no network involved. Otherwise
-it's streamed through the daemon exec channel; writes to root-owned
-paths (/etc, /var, /root) retry via sudo (the guest devm user has
-NOPASSWD sudo).`,
+Transport is auto-selected: if the guest path lives under the shared
+workspace mount, the copy is a plain host-side cp into the shared
+filesystem with no network involved. Otherwise it's streamed through
+the daemon exec channel; writes to root-owned paths (/etc, /var,
+/root) retry via sudo (the guest devm user has NOPASSWD sudo).`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true

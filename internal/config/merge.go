@@ -90,9 +90,6 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 	if override.Startup != nil {
 		out.Startup = *override.Startup
 	}
-	if override.Mounts != nil {
-		out.Mounts = *override.Mounts
-	}
 	if override.Path != nil {
 		out.Path = *override.Path
 	}

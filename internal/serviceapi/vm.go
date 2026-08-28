@@ -47,11 +47,6 @@ type VMStartRequest struct {
 	MacCwd    string          `json:"mac_cwd"`
 	AllowList []string        `json:"allow_list,omitempty"`
 	Secrets   []SecretBinding `json:"secrets,omitempty"`
-	// ExtraMounts is accepted for wire compatibility with the CLI's
-	// `mounts:` resolution (schema.ResolveMount) but is no longer
-	// consumed: mounts: was a virtiofs-only mechanism and has no
-	// mutagen-sync equivalent yet.
-	ExtraMounts []string `json:"extra_mounts,omitempty"`
 	// DiskSizeGB, when > 0, grows this VM's virtual disk to the given
 	// gigabytes at clone time (a per-project `disk:` override). Zero
 	// means the base image default.

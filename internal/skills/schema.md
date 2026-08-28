@@ -19,7 +19,6 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `install` | []string | recreate | Shell commands run once at VM creation as the guest `devm` user. NOPASSWD sudo is available for privileged steps. |
 | `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as the guest `devm` user, with open network — before egress enforcement is applied. NOPASSWD sudo is available for privileged steps. |
 | `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
-| `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
 | `volumes` | map[string]Volume | restart | Per-project named persistent stores. Key = volume name; value is either a bare guest path string or a `{path, label, ignore}` mapping. Data lives on the Mac side under `~/Library/Application Support/devm/volumes/<project>/<name>/` and survives `devm teardown`. See the `volumes` section below. |
 | `repos` | map[string]RepoConfig | restart | Declares the project's git repos to hydrate via `git clone` at cold-start, keyed by an arbitrary schema id. Exactly one entry is the primary workspace repo. Optional — omit for utility VMs with no repo. See the `repos` section below. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
@@ -169,23 +168,6 @@ V1 scope: refs are only resolved from `install:` and `startup:`. Scripts take no
 
 ---
 
-## `mounts`
-
-`[]string` — bucket: **recreate**.
-
-Host paths shared into the VM via virtio-fs at matching absolute paths. Each entry is `HOST_PATH[:ro]`.
-
-`HOST_PATH` may be:
-- Absolute: `/Users/alice/src`
-- Relative to the project root: `../shared`
-- Home-relative: `~/data`
-
-The optional `:ro` suffix makes the share read-only inside the VM.
-
-Mounts are baked at `tart run` time; changing them requires a full VM teardown and cold start.
-
----
-
 ## `packages`
 
 `[]string` — bucket: **live**.
@@ -326,7 +308,7 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 **restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Sits here: `startup:` (edit takes effect on the applying restart) and `volumes:` (adds/removes require re-issuing `tart run` with new `--dir` args, since AVF doesn't hot-plug virtiofs shares).
 
-**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `mounts`, `base_image`, and `project` identity fields.
+**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `base_image`, and `project` identity fields.
 
 ---
 

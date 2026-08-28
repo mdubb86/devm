@@ -99,7 +99,6 @@ const (
 	KindMemoryChange
 	KindCpuChange
 	KindTemplateChange
-	KindMountAddRemove
 	KindPathChange
 	KindServiceExecChange
 	KindServiceRestartChange
@@ -174,10 +173,8 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindInstallChange: BucketTeardownVM,
 	// apt is idempotent and declarative — unlike install: scripts,
 	// package changes converge on a live VM.
-	KindPackageAdd:    BucketLive,
-	KindPackageRemove: BucketLive,
-	// virtio-fs mounts are set at tart run time; requires full recreate.
-	KindMountAddRemove: BucketTeardownVM,
+	KindPackageAdd:     BucketLive,
+	KindPackageRemove:  BucketLive,
 	KindImageChange:    BucketTeardownVM,
 	KindIdentityChange: BucketTeardownVM,
 	KindDockerToggle:   BucketTeardownVM,
@@ -354,7 +351,7 @@ func ComputePortChanges(old, new schema.Config) []Change {
 
 // ComputeAllChanges returns the full set of diffs between old and new
 // configs. Order: ports, network, env (per service), service unit fields
-// (per service), install, startup, packages, mounts, volumes, repos,
+// (per service), install, startup, packages, volumes, repos,
 // image, identity, templates, path, secrets.
 // Within each section, service/volume/repo names are sorted
 // alphabetically for determinism.
@@ -386,7 +383,6 @@ func ComputeAllChanges(
 	out = append(out, computeInstallChanges(old, new)...)
 	out = append(out, computeStartupChanges(old, new)...)
 	out = append(out, computePackagesChange(old, new)...)
-	out = append(out, computeMountAddRemove(old, new)...)
 	out = append(out, computeVolumeChanges(old, new)...)
 	out = append(out, computeRepoChanges(old, new)...)
 	out = append(out, computeImageChange(old, new)...)
@@ -549,7 +545,7 @@ func computeInstallChanges(old, new schema.Config) []Change {
 
 // computeStartupChanges emits KindStartupChange when the ordered
 // `startup:` command list differs between old and new config. Compared
-// as an ordered slice (like Install/Packages/Mounts) rather than by
+// as an ordered slice (like Install/Packages) rather than by
 // membership — reordering the boot commands is itself a meaningful
 // change.
 func computeStartupChanges(old, new schema.Config) []Change {
@@ -603,13 +599,6 @@ func computePackagesChange(old, new schema.Config) []Change {
 		out = append(out, Change{Kind: KindPackageRemove, Key: p, Old: p})
 	}
 	return out
-}
-
-func computeMountAddRemove(old, new schema.Config) []Change {
-	if stringSliceEqual(old.Mounts, new.Mounts) {
-		return nil
-	}
-	return []Change{{Kind: KindMountAddRemove}}
 }
 
 // computeVolumeChanges emits one KindVolumeChange per changed

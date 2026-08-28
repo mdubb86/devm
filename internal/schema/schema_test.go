@@ -149,54 +149,6 @@ func TestConfigValidatesStartupSteps(t *testing.T) {
 	assert.Contains(t, err.Error(), "startup[0]")
 }
 
-func TestResolveMount(t *testing.T) {
-	root := "/proj"
-	cases := []struct {
-		name, entry, want string
-	}{
-		{"absolute", "/etc/hosts", "/etc/hosts"},
-		{"absolute_ro", "/etc/hosts:ro", "/etc/hosts:ro"},
-		{"relative", "configs/extra", "/proj/configs/extra"},
-		{"relative_ro", "configs/extra:ro", "/proj/configs/extra:ro"},
-		{"dotdot", "../sibling", "/sibling"},
-		{"clean_doubleslash", "/etc//hosts", "/etc/hosts"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := ResolveMount(tc.entry, root)
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
-func TestResolveMountTildeExpansion(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-
-	got, err := ResolveMount("~/.ssh", "/proj")
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(home, ".ssh"), got)
-
-	gotRO, err := ResolveMount("~/.ssh:ro", "/proj")
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(home, ".ssh")+":ro", gotRO)
-
-	gotBare, err := ResolveMount("~", "/proj")
-	require.NoError(t, err)
-	assert.Equal(t, home, gotBare)
-}
-
-func TestResolveMountErrors(t *testing.T) {
-	_, err := ResolveMount("", "/proj")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "empty")
-
-	_, err = ResolveMount(":ro", "/proj")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "host path is empty")
-}
-
 // TestServicePortPolymorphicUnmarshal exercises the single-field `port:`
 // polymorphic decode that accepts either an int (just sandbox port) or
 // a "IP:PORT" string (interface + sandbox port).
@@ -346,42 +298,6 @@ func TestServiceResolveBind(t *testing.T) {
 	assert.Equal(t, "192.168.1.10", Service{Port: 5432, BindIP: "192.168.1.10"}.ResolveBind())
 }
 
-func TestConfigValidateRejectsEmptyMountEntry(t *testing.T) {
-	cfg := Config{
-		Project: Project{Name: "x"},
-		Mounts:  []string{"/etc/hosts", ""},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "mounts[1]")
-}
-
-func TestConfigValidateWithRootChecksExistence(t *testing.T) {
-	tmp := t.TempDir()
-	existing := filepath.Join(tmp, "real")
-	require.NoError(t, os.MkdirAll(existing, 0o755))
-
-	// Existing path passes.
-	cfg := Config{
-		Project: Project{Name: "x"},
-		Mounts:  []string{existing + ":ro"},
-	}
-	require.NoError(t, cfg.ValidateWithRoot(tmp))
-
-	// Missing path fails.
-	cfg.Mounts = []string{filepath.Join(tmp, "does-not-exist")}
-	err := cfg.ValidateWithRoot(tmp)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "mounts[0]")
-
-	// Relative path resolves against projectRoot.
-	relCfg := Config{
-		Project: Project{Name: "x"},
-		Mounts:  []string{"real:ro"},
-	}
-	require.NoError(t, relCfg.ValidateWithRoot(tmp))
-}
-
 func TestCheckUnknownKeys_NetworkChild_Rejected(t *testing.T) {
 	// network.allowed_domains was renamed to network.allow; with no
 	// legacy-migration layer it surfaces as a plain unknown-field error.
@@ -471,8 +387,6 @@ services:
     port: 8080
 install:
   - true
-mounts:
-  - ~/.aws:ro
 path:
   - $WORKSPACE/bin
 packages:

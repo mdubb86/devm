@@ -83,7 +83,6 @@ func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
 	tr, _ := fakeTartForApplyLive(t, dir)
 	err := ApplyLive(tr, "x", []Change{
 		{Kind: KindInstallChange},
-		{Kind: KindMountAddRemove},
 	}, schema.Config{}, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "")
 	assert.NoError(t, err)
 }

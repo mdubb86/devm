@@ -731,8 +731,6 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "cpu_change"
 	case reconcile.KindTemplateChange:
 		return "template_change"
-	case reconcile.KindMountAddRemove:
-		return "mount_add_remove"
 	case reconcile.KindServiceExecChange:
 		return "service_exec_change"
 	case reconcile.KindServiceRestartChange:
@@ -796,8 +794,6 @@ func formatChange(c reconcile.Change) string {
 		return fmt.Sprintf("+ package %s", c.Key)
 	case reconcile.KindPackageRemove:
 		return fmt.Sprintf("- package %s", c.Key)
-	case reconcile.KindMountAddRemove:
-		return "~ mounts"
 	case reconcile.KindServiceExecChange:
 		return fmt.Sprintf("~ service exec: %s", c.Service)
 	case reconcile.KindServiceRestartChange:

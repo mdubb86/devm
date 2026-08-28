@@ -76,47 +76,6 @@ func TestResolveDirection(t *testing.T) {
 	}
 }
 
-func TestMountPassthrough(t *testing.T) {
-	// Standard project layout: workspace at /Users/me/workspace/foo,
-	// plus a user mount at /Users/me/data. mountPassthrough's repo-backed
-	// primary-workspace branch is a TODO(Task 17) no-op for now (see
-	// cmd/devm/cp.go), so only the mounts[]-based cases below exercise
-	// live behavior — the interim reality is that a repo-backed
-	// workspace path falls through to pipe transport just like
-	// TestMountPassthrough_NoRepo_WorkspaceRootNotMirrored.
-	repoRoot := "/Users/me/workspace/foo"
-	projectName := "myproj"
-	pcfg := schema.Config{
-		Mounts: []string{
-			"/Users/me/data",
-			"/Users/me/read-only:ro",
-		},
-	}
-
-	cases := []struct {
-		name      string
-		guestPath string
-		wantHost  string
-		wantOK    bool
-	}{
-		{"under user mount", "/Users/me/data/big.csv", "/Users/me/data/big.csv", true},
-		{"under ro user mount", "/Users/me/read-only/setup.sql", "/Users/me/read-only/setup.sql", true},
-		{"outside everything (/etc)", "/etc/hosts", "", false},
-		{"outside everything (/var)", "/var/log/foo.log", "", false},
-		{"prefix collision (not really under)", "/Users/me/workspace/foobar/x", "", false},
-		{"prefix collision on mount", "/Users/me/dataother/x", "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			gotHost, gotOK := mountPassthrough(tc.guestPath, repoRoot, pcfg, projectName)
-			assert.Equal(t, tc.wantOK, gotOK)
-			if tc.wantOK {
-				assert.Equal(t, tc.wantHost, gotHost)
-			}
-		})
-	}
-}
-
 func TestMountPassthrough_NoRepo_WorkspaceRootNotMirrored(t *testing.T) {
 	// Without `repo:`, the daemon never mounts a primary workspace volume
 	// at all — a guest path under the Mac cwd is NOT mirrored anywhere,

@@ -39,11 +39,10 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
 
-	// Teardown+shell: install, mounts, image, identity
+	// Teardown+shell: install, image, identity
 	assert.Equal(t, BucketTeardownVM, KindInstallChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindImageChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindIdentityChange.Bucket())
-	assert.Equal(t, BucketTeardownVM, KindMountAddRemove.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindDockerToggle.Bucket())
 
 	// Live: service unit fields and hostname
@@ -107,21 +106,6 @@ func TestComputePathChange(t *testing.T) {
 	reordered := cfgWith(map[string]schema.Service{})
 	reordered.Path = []string{"/r/node_modules/.bin", "/r/.cargo/bin"}
 	assert.Len(t, computePathChange(new, reordered), 1, "reorder must produce a change")
-}
-
-func TestComputeMountAddRemove(t *testing.T) {
-	old := cfgWith(map[string]schema.Service{})
-	old.Mounts = []string{"/etc/hosts:ro"}
-	new := cfgWith(map[string]schema.Service{})
-	new.Mounts = []string{"/etc/hosts:ro", "/tmp:ro"}
-
-	changes := computeMountAddRemove(old, new)
-	require.Len(t, changes, 1)
-	assert.Equal(t, KindMountAddRemove, changes[0].Kind)
-	assert.Equal(t, BucketTeardownVM, changes[0].Bucket())
-
-	// Same list → no change.
-	assert.Empty(t, computeMountAddRemove(old, old))
 }
 
 func TestComputePortChanges_Add(t *testing.T) {
@@ -376,21 +360,6 @@ func TestDiff_PackagesChange_IsBucketLive(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "expected KindPackageAdd")
-}
-
-func TestDiff_MountAddRemove_IsBucketTeardownVM(t *testing.T) {
-	old := schema.Config{Mounts: []string{"/etc/hosts:ro"}}
-	new := schema.Config{Mounts: []string{"/etc/hosts:ro", "/tmp:ro"}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
-	require.NoError(t, err)
-	found := false
-	for _, c := range changes {
-		if c.Kind == KindMountAddRemove {
-			found = true
-			assert.Equal(t, BucketTeardownVM, c.Bucket())
-		}
-	}
-	assert.True(t, found, "expected KindMountAddRemove")
 }
 
 func TestComputeInstallChanges(t *testing.T) {

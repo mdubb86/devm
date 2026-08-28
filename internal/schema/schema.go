@@ -3,7 +3,6 @@ package schema
 import (
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -461,7 +460,7 @@ func (p Project) Validate() error {
 // internal/config/load.go).
 var topLevelKnownFields = []string{
 	"project", "base_image", "docker", "network", "env",
-	"services", "install", "startup", "scripts", "mounts", "path", "packages", "disk", "memory", "cpu",
+	"services", "install", "startup", "scripts", "path", "packages", "disk", "memory", "cpu",
 	"volumes", "repos",
 }
 
@@ -721,19 +720,6 @@ type Config struct {
 	// no script-to-script calls.
 	Scripts map[string][]string `yaml:"scripts,omitempty"`
 
-	// Mounts are additional host paths shared into the VM at the same
-	// path inside the VM ("mirrored path" mode — same host and guest
-	// path). Each entry is a string of the form `HOST_PATH[:ro]`.
-	// HOST_PATH may be absolute, relative to the project root, or
-	// start with `~` for home-directory expansion. The optional `:ro`
-	// suffix is passed through to tart's `--dir` flag and makes the
-	// virtio-fs share read-only.
-	//
-	// Changing this field is in the TEARDOWN bucket: tart run's
-	// --dir mounts are baked at VM-start time and the VM must be
-	// stopped and re-started to apply.
-	Mounts []string `yaml:"mounts,omitempty"`
-
 	// Path is a list of directories prepended to PATH inside the
 	// sandbox. Reaches all four executable entrypoints (install,
 	// startup foreground, startup background, interactive shell) via
@@ -771,51 +757,6 @@ type Config struct {
 	// nil = use image default. Applied via `tart set --cpu` at VM
 	// start; a change reconciles as BucketRestartVM.
 	Cpu *int `yaml:"cpu,omitempty"`
-}
-
-// ResolveMount expands and absolute-resolves a single mounts[] entry
-// against the given project root. Returns the canonical form
-// `ABS_HOST_PATH[:ro]` ready to pass to tart's `--dir` flag.
-//
-// Rules:
-//   - Optional `:ro` suffix is preserved (becomes `:ro` on the
-//     `--dir` argument, which tart honors as a read-only share).
-//   - A leading `~/` is expanded to the host user's home directory.
-//   - Relative paths are joined to projectRoot.
-//   - `filepath.Clean` is applied so `..` segments are resolved.
-//
-// Returns an error if entry is empty or if `~` expansion fails.
-// Does NOT check whether the resolved host path exists — that's a
-// separate concern (Validate does the existence check).
-func ResolveMount(entry, projectRoot string) (string, error) {
-	if entry == "" {
-		return "", fmt.Errorf("mount entry must not be empty")
-	}
-	path, ro := strings.CutSuffix(entry, ":ro")
-	if path == "" {
-		return "", fmt.Errorf("mount entry %q: host path is empty", entry)
-	}
-	switch {
-	case path == "~":
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("mount entry %q: expand ~: %w", entry, err)
-		}
-		path = home
-	case strings.HasPrefix(path, "~/"):
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("mount entry %q: expand ~/: %w", entry, err)
-		}
-		path = filepath.Join(home, path[2:])
-	case !filepath.IsAbs(path):
-		path = filepath.Join(projectRoot, path)
-	}
-	path = filepath.Clean(path)
-	if ro {
-		path += ":ro"
-	}
-	return path, nil
 }
 
 // ParseDiskSize parses a `disk:` value like "64G" or "64GB" into an
@@ -1025,24 +966,14 @@ func (c *Config) validateLabels(macCwd string) error {
 	return nil
 }
 
-// ValidateWithRoot is like Validate but additionally checks the
-// `mounts:` entries resolve cleanly and the resolved host paths
-// exist. Callers that have the project root (devm's config loader)
-// should prefer ValidateWithRoot; the parameter-free Validate skips
-// path-existence checks.
+// ValidateWithRoot is like Validate but additionally checks
+// project-root-relative config (volumes, labels) against the
+// filesystem. Callers that have the project root (devm's config
+// loader) should prefer ValidateWithRoot; the parameter-free Validate
+// skips those checks.
 func (c Config) ValidateWithRoot(projectRoot string) error {
 	if err := c.Validate(); err != nil {
 		return err
-	}
-	for i, entry := range c.Mounts {
-		resolved, err := ResolveMount(entry, projectRoot)
-		if err != nil {
-			return fmt.Errorf("mounts[%d]: %w", i, err)
-		}
-		hostPath, _ := strings.CutSuffix(resolved, ":ro")
-		if _, err := os.Stat(hostPath); err != nil {
-			return fmt.Errorf("mounts[%d]: host path %q: %w", i, hostPath, err)
-		}
 	}
 	if err := c.validateVolumes(projectRoot); err != nil {
 		return err
@@ -1133,11 +1064,6 @@ func (c Config) Validate() error {
 					return fmt.Errorf("startup[%d]: reference to undefined script %q", i, refName)
 				}
 			}
-		}
-	}
-	for i, entry := range c.Mounts {
-		if entry == "" {
-			return fmt.Errorf("mounts[%d] must not be empty", i)
 		}
 	}
 	names := make([]string, 0, len(c.Services))

@@ -189,19 +189,6 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// host (gap #1 of the repo-workspace hydration fixes).
 	allowList := serviceapi.AppendUniqueHosts(docker.EffectiveAllowlist(cfg), repoHosts)
 
-	// Resolve each mounts[] entry against repoRoot (~ expansion, relative→
-	// absolute, :ro suffix passthrough). schema.ValidateWithRoot already
-	// rejected malformed entries at config-load time; ResolveMount here
-	// just canonicalises for the daemon.
-	extraMounts := make([]string, 0, len(cfg.Mounts))
-	for i, entry := range cfg.Mounts {
-		resolved, err := schema.ResolveMount(entry, repoRoot)
-		if err != nil {
-			return -1, fmt.Errorf("mounts[%d]: %w", i, err)
-		}
-		extraMounts = append(extraMounts, resolved)
-	}
-
 	var diskGB int
 	if cfg.Disk != nil {
 		diskGB, err = schema.ParseDiskSize(*cfg.Disk)
@@ -221,15 +208,14 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 		cpuCount = *cfg.Cpu
 	}
 	startResp, err := d.ServiceAPIClient.StartVM(ctx, serviceapi.VMStartRequest{
-		Name:        cfg.Project.Name,
-		MacCwd:      repoRoot,
-		AllowList:   allowList,
-		Secrets:     bindings,
-		ExtraMounts: extraMounts,
-		DiskSizeGB:  diskGB,
-		MemoryMB:    memoryMB,
-		CpuCount:    cpuCount,
-		Cfg:         cfg,
+		Name:       cfg.Project.Name,
+		MacCwd:     repoRoot,
+		AllowList:  allowList,
+		Secrets:    bindings,
+		DiskSizeGB: diskGB,
+		MemoryMB:   memoryMB,
+		CpuCount:   cpuCount,
+		Cfg:        cfg,
 	})
 	if err != nil {
 		return -1, fmt.Errorf("start vm: %w", err)

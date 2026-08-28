@@ -172,7 +172,6 @@ The VM must be fully deleted and recreated. `devm reconcile` surfaces these as p
 | Kind | Trigger |
 |---|---|
 | `install` change | `install:` command list differs |
-| Mount add / remove | `mounts:` list differs |
 | Image change | `base_image:` field differs. Note: `BaseImage` is an empty struct with no fields; structural equality is always true, so `KindImageChange` cannot fire from a `devm.yaml` edit. |
 | Identity change | `project:` identity fields differ |
 
