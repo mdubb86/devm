@@ -1,17 +1,13 @@
 """210: cold-start hydration clones IN THE GUEST, through iron-proxy.
 
-Task 20's mutagen-volumes model moves repo hydration off the host
-entirely: `CloneRepoInGuest` (internal/serviceapi/mutagen_cold_start.go)
-runs `git clone` as the guest's devm user, with HTTP(S)_PROXY pointed
-at iron-proxy's tunnel-capable listener. This supersedes the older
-host-side HydrateRepoVolume flow pinned by test_183 -- that test's
-git process runs on the Mac; this one's runs inside the tart VM.
+The mutagen-volumes model hydrates repos entirely inside the guest:
+`CloneRepoInGuest` (internal/serviceapi/mutagen_cold_start.go) runs
+`git clone` as the guest's devm user, with HTTP(S)_PROXY pointed at
+iron-proxy's tunnel-capable listener.
 
 A plain HTTP (not HTTPS) dumb-protocol git server is enough here: no
 CONNECT tunnel or MITM cert plumbing needed, since the guest's
-HTTP_PROXY (not HTTPS_PROXY) leg is a bare forward-proxy GET. This
-also keeps the test independent of test_183's HTTPS/leaf-cert
-machinery.
+HTTP_PROXY (not HTTPS_PROXY) leg is a bare forward-proxy GET.
 
 Pins:
   - `.git` exists in the guest at `/home/devm/<label>/` (label derives
