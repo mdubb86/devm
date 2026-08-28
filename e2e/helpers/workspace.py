@@ -5,14 +5,19 @@ devm.yaml. The Workspace knows how to write a minimal config and
 how to patch named sections without breaking YAML.
 """
 from __future__ import annotations
-import http.server
-import socket
 import subprocess
-import threading
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+# github.com/octocat/Hello-World is github's canonical demo repo: public,
+# tiny (a single README-ish file), and stable. Tests that need to observe
+# a real remote clone through iron-proxy point here. Iron-proxy substitutes
+# the placeholder secret on the wire; github ignores the auth for public
+# reads, so no real PAT is needed.
+E2E_FIXTURE_REPO_URL = "https://github.com/octocat/Hello-World.git"
 
 
 class Workspace:
@@ -21,66 +26,23 @@ class Workspace:
         self.slug = slug
         self.vm_name = vm_name
         self.port_offset = port_offset
-        self._bare_repo_cache: str | None = None
-        self._bare_repo_server: http.server.ThreadingHTTPServer | None = None
-        self._bare_repo_thread: threading.Thread | None = None
-        self._bare_repo_name: str | None = None
 
     @property
     def devmyaml_path(self) -> Path:
         return self.path / "devm.yaml"
 
     def bare_repo_url(self) -> str:
-        """Create (once) a local bare git repo for this test and serve it
-        via a mac-side python http.server so the guest can clone it
-        under mutagen. Returns `http://127.0.0.1:<port>/<repo>.git`.
-
-        Iron-proxy forwards guest → mac's 127.0.0.1:port. Callers must
-        include `127.0.0.1` in `network.allow` (the default fixture does).
+        """Return the URL of the shared public remote every test's default
+        `repos.main` points at. Guest clones it through iron-proxy's
+        transparent :443 intercept.
         """
-        if self._bare_repo_cache is not None:
-            return self._bare_repo_cache
-        work = self.path.parent / f"{self.path.name}-repo-work"
-        work.mkdir()
-        subprocess.run(["git", "-C", str(work), "init", "-q"], check=True)
-        (work / "README.md").write_text("bare\n")
-        subprocess.run(["git", "-C", str(work), "add", "."], check=True)
-        subprocess.run(
-            ["git", "-C", str(work), "-c", "user.email=e2e@e2e", "-c", "user.name=e2e",
-             "commit", "-q", "-m", "init"],
-            check=True,
-        )
-        bare = self.path.parent / f"{self.path.name}-repo.git"
-        subprocess.run(["git", "clone", "--bare", "-q", str(work), str(bare)], check=True)
-        # Enable dumb-http protocol on the bare repo. `git update-server-info`
-        # writes info/refs and objects/info/packs so plain HTTP GET can serve
-        # everything git needs (no git-http-backend CGI required).
-        subprocess.run(["git", "-C", str(bare), "update-server-info"], check=True)
-
-        # Start a mac-side python http.server serving the bare repo's parent
-        # dir. Guest reaches it via iron-proxy → mac's 127.0.0.1:port.
-        served_root = bare.parent  # so URL is /<bare-name>/HEAD, /<bare-name>/info/refs, ...
-        handler = _quiet_http_handler(served_root)
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        port = server.server_address[1]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self._bare_repo_server = server
-        self._bare_repo_thread = thread
-        self._bare_repo_name = bare.name
-        self._bare_repo_cache = f"http://127.0.0.1:{port}/{bare.name}"
-        return self._bare_repo_cache
+        return E2E_FIXTURE_REPO_URL
 
     def teardown(self) -> None:
-        """Called by the workspace fixture at end. Shuts down the mac-side
-        git-serving http.server if one was started."""
-        if self._bare_repo_server is not None:
-            self._bare_repo_server.shutdown()
-            self._bare_repo_server.server_close()
-            self._bare_repo_server = None
-        if self._bare_repo_thread is not None:
-            self._bare_repo_thread.join(timeout=5)
-            self._bare_repo_thread = None
+        """Present for symmetry with fixtures that manage per-workspace
+        resources; no-op today.
+        """
+        return None
 
     def volume_path(self, name: str | None = None) -> Path:
         """Return the Mac-side volume storage path for a project volume.
@@ -135,12 +97,12 @@ class Workspace:
         # it before SetupPhase runs. Remove once the base image bakes git in.
         if not no_repo and "packages" not in sections:
             cfg["packages"] = ["git"]
-        # bare_repo_url() serves the bare repo over http on mac's 127.0.0.1;
-        # iron-proxy forwards guest → mac's loopback. Guest needs 127.0.0.1
-        # in its egress allowlist to reach it. Callers passing their own
-        # `network` block are responsible for including it.
+        # bare_repo_url() points at github.com's canonical demo repo; guest
+        # clones through iron-proxy's transparent :443 intercept. Callers
+        # passing their own `network` block are responsible for including
+        # `github.com` if they want the default `repos.main` to clone.
         if not no_repo and "network" not in sections:
-            cfg["network"] = {"allow": ["127.0.0.1"]}
+            cfg["network"] = {"allow": ["github.com"]}
         for k, v in sections.items():
             cfg[k] = v
         self.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
@@ -181,21 +143,3 @@ class Workspace:
         services = cfg.setdefault("services", {})
         services[name] = {"exec": exec, "restart": restart, **extra}
         self.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
-
-
-def _quiet_http_handler(directory: Path):
-    """Return a SimpleHTTPRequestHandler subclass rooted at `directory`
-    with logging suppressed (test suite noise). Serves static bytes;
-    git dumb-http protocol only needs HEAD/GET, which
-    SimpleHTTPRequestHandler provides out of the box.
-    """
-    root = str(directory)
-
-    class Handler(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=root, **kwargs)
-
-        def log_message(self, format, *args):
-            pass  # silence
-
-    return Handler
