@@ -367,21 +367,11 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	}
 	log.Printf("shell: provisioning done: %s", vmName)
 
-	// Bring every declared repo/volume's mutagen sync session up to date:
-	// cold-start clone (if needed), guard check, then create or resume the
-	// session. This must run after RunEnforced (unmasks sshd, installs the
-	// project ssh keys) and after OpenEgress (permits guest -> iron-proxy) —
-	// mutagen's ssh transport and a cold-start guest git clone both need
-	// both preconditions in place.
-	if err := mutagenSetupFn(d, ctx, cfg, vmName, repoRoot, tunnelPort); err != nil {
-		return d.teardownOnFail(ctx, cfg, vmName, err, "mutagen setup")
-	}
-	log.Printf("shell: mutagen sessions ready: %s", vmName)
-
-	// Write initial snapshot so that subsequent `devm reconcile` calls have
-	// a baseline to diff against. Without this, ReadSnapshot returns "" which
-	// reconcile treats as zero-diff (identity with the new config), masking
-	// any changes made between cold-start and the first reconcile.
+	// Write initial guest snapshot so subsequent `devm reconcile` calls
+	// have a baseline to diff against. Without this, ReadSnapshot returns
+	// "" which reconcile treats as zero-diff (identity with the new
+	// config), masking any changes made between cold-start and the first
+	// reconcile.
 	provSnap, err := yaml.Marshal(cfg)
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "marshal provision snapshot")
@@ -393,14 +383,13 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 
 	// Seed the daemon-side state snapshot too, now that provisioning is
 	// fully green (RunOpen, egress enforcement, and RunEnforced all
-	// succeeded). Without this, the first
-	// `devm reconcile` after `devm start` finds no baseline, diffs
-	// against schema.Config{}, and every teardown-bucket kind
-	// spuriously surfaces as pending — prompting the user to tear down
-	// the VM they just started. Best-effort: log but don't fail here —
-	// a missing snapshot only degrades to "full diff on next
-	// reconcile" (safe), and failing here would kill a start that
-	// otherwise succeeded.
+	// succeeded). Best-effort: log but don't fail — a missing snapshot
+	// only degrades to "full diff on next reconcile" (safe), and failing
+	// here would kill a start that otherwise succeeded.
+	//
+	// Ordered BEFORE mutagen setup: EmitSSHConfig below walks state
+	// snapshots to build the ssh_config Host set, and mutagen's ssh
+	// transport needs the Host block for this project already in place.
 	templateContents, err := render.RenderTemplatesByBasename(cfg, repoRoot, d.Ident.RuntimeDir(), cfg.Project.Name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "state: render templates for seed snapshot %s failed: %v\n", cfg.Project.Name, err)
@@ -417,9 +406,27 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)
 	}
 
+	// Emit the ssh_config Host block BEFORE mutagen setup. Mutagen's
+	// sync transport shells out to the system ssh client, which reads
+	// ~/.ssh/config → Include of devm's managed ssh_config. Without the
+	// Host devm-<name> block, ssh has no per-project HostKeyAlias /
+	// UserKnownHostsFile / IdentityFile pointer, falls back to the
+	// user's default known_hosts (which doesn't know this guest), and
+	// `mutagen sync create` fails with "Host key verification failed".
 	if err := EmitSSHConfig(ctx, d.Ident, d.Tart); err != nil {
 		log.Printf("ssh_config emit failed after provisioning: %v", err)
 	}
+
+	// Bring every declared repo/volume's mutagen sync session up to date:
+	// cold-start clone (if needed), guard check, then create or resume the
+	// session. This must run after RunEnforced (unmasks sshd, installs the
+	// project ssh keys) and after OpenEgress (permits guest -> iron-proxy) —
+	// mutagen's ssh transport and a cold-start guest git clone both need
+	// both preconditions in place.
+	if err := mutagenSetupFn(d, ctx, cfg, vmName, repoRoot, tunnelPort); err != nil {
+		return d.teardownOnFail(ctx, cfg, vmName, err, "mutagen setup")
+	}
+	log.Printf("shell: mutagen sessions ready: %s", vmName)
 
 	reporter.Step("ready", false)
 	reporter.Stop()
