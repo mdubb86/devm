@@ -190,6 +190,22 @@ e2e *NAMES:
     fi
     exit $rc
 
+# Run contract-marker e2e tests: pin upstream tool invariants (tart,
+# iron-proxy, mutagen) devm depends on. No devm daemon needed; contract
+# tests run the upstream binary directly against their own tmp state.
+# Hard-fails if NAMES match nothing.
+e2e-contract *NAMES:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    args=(-m contract)
+    [ -n "{{NAMES}}" ] && args+=(-k "$(echo '{{NAMES}}' | sed 's/ / or /g')")
+    e2e/scripts/run.sh "${args[@]}"
+    rc=$?
+    if [ $rc -eq 5 ] && [ -n "{{NAMES}}" ]; then
+        echo "no tests matched: {{NAMES}}" >&2; exit 1
+    fi
+    exit $rc
+
 # Run recipe-marker e2e tests (exercises devm's recipes end-to-end:
 # installs the tool, brings up a real workload, asserts the recipe's
 # promises hold). Same bootstrap requirement as `just e2e`; no sudo.
@@ -318,3 +334,12 @@ fetch-mutagen:
     cp "$tmp/mutagen-agents.tar.gz" "$DEST/mutagen-agents.tar.gz"
     echo "wrote $DEST/mutagen.gz ($(wc -c < $DEST/mutagen.gz) bytes)"
     echo "wrote $DEST/mutagen-agents.tar.gz ($(wc -c < $DEST/mutagen-agents.tar.gz) bytes)"
+    # Also stage runnable copies under bin/ for contract tests, mirroring
+    # bin/iron-proxy. Not used by production (production reads the embed
+    # blob via internal/mutagen.Ensure); contract tests need an executable
+    # they can run without a devm-e2e bootstrap.
+    mkdir -p bin
+    cp "$tmp/mutagen" bin/mutagen
+    chmod +x bin/mutagen
+    cp "$tmp/mutagen-agents.tar.gz" bin/mutagen-agents.tar.gz
+    echo "wrote bin/mutagen + bin/mutagen-agents.tar.gz for contract tests"

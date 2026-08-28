@@ -147,6 +147,14 @@ func (c *CLI) SyncList(namePrefix string) ([]SyncSession, error) {
 	return sessions, nil
 }
 
+// SyncListRaw returns the full JSON output from `mutagen sync list` for
+// diagnostic use — the SyncSession struct only pulls the three fields
+// devm needs at the moment, and knowing what other fields mutagen
+// actually exposes is useful when debugging pause/resume semantics.
+func (c *CLI) SyncListRaw() (string, error) {
+	return c.run("sync", "list", "--template", "{{json .}}")
+}
+
 // SyncFlush forces an immediate synchronization cycle for id.
 func (c *CLI) SyncFlush(id string) error {
 	_, err := c.run("sync", "flush", id)
