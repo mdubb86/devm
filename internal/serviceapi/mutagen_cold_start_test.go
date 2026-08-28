@@ -45,11 +45,39 @@ func TestCloneRepoInGuest_HappyPath(t *testing.T) {
 	assert.NotContains(t, script, "HTTPS_PROXY")
 	assert.Contains(t, script, "export GIT_SSL_CAINFO=/etc/ssl/certs/devm-iron-proxy-ca.crt")
 	assert.Contains(t, script, "git clone")
+	assert.Contains(t, script, "http.extraheader=")
 	assert.Contains(t, script, "https://github.com/example/repo.git")
 	assert.Contains(t, script, "/home/devm/work/repo")
 
 	wantBlob := base64.StdEncoding.EncodeToString([]byte("x-access-token:__DEVM_SECRET_gh_token__"))
 	assert.Contains(t, script, "Authorization: Basic "+wantBlob)
+}
+
+// TestCloneRepoInGuest_NoSecret_OmitsExtraheader pins the public-repo
+// path: when SecretName is empty, the generated script must not carry
+// an http.extraheader. Sending a well-formed Basic auth with a bogus
+// token makes hosts like github.com reject the clone even for public
+// reads, so the extraheader has to be omitted entirely.
+func TestCloneRepoInGuest_NoSecret_OmitsExtraheader(t *testing.T) {
+	execFn, captured := fakeGuestExec("", "", 0, nil)
+
+	req := CloneRequest{
+		URL:             "https://github.com/octocat/Hello-World.git",
+		SecretName:      "",
+		GuestTargetPath: "/home/devm/work/repo",
+		IronProxyURL:    "http://127.0.0.1:5555",
+		GuestCACertPath: "/etc/ssl/certs/devm-iron-proxy-ca.crt",
+	}
+
+	err := CloneRepoInGuest(execFn, req)
+	require.NoError(t, err)
+
+	script := *captured
+	assert.NotContains(t, script, "http.extraheader")
+	assert.NotContains(t, script, "Authorization")
+	assert.Contains(t, script, "git clone")
+	assert.Contains(t, script, "https://github.com/octocat/Hello-World.git")
+	assert.Contains(t, script, "/home/devm/work/repo")
 }
 
 // runGuestScriptForReal executes the script CloneRepoInGuest built through

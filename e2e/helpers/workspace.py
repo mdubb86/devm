@@ -80,10 +80,13 @@ class Workspace:
             no_repo = True
             del sections["repo"]
         if not no_repo and "repos" not in sections:
+            # bare_repo_url() is github's public octocat/Hello-World repo,
+            # cloneable without auth. Omitting `secret:` tells the daemon
+            # not to inject an http.extraheader — github rejects a bogus
+            # Basic auth token even for public reads.
             sections["repos"] = {
                 "main": {
                     "url": self.bare_repo_url(),
-                    "secret": "e2e_default",
                     "primary": True,
                 },
             }

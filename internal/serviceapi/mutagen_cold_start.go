@@ -32,22 +32,31 @@ type CloneRequest struct {
 // Fails loud: a transport error or nonzero exit returns an error that
 // names the git-clone step and carries stderr.
 func CloneRepoInGuest(exec GuestExec, req CloneRequest) error {
-	authRaw := "x-access-token:" + tokenPlaceholderFor(req.SecretName)
-	authB64 := base64.StdEncoding.EncodeToString([]byte(authRaw))
-	extraHeader := "Authorization: Basic " + authB64
-
 	// Guest egress is transparently routed through iron-proxy by softnet
 	// (:80 → ft.HTTP, :443 → ft.HTTPS under PolicyEnforced), so git just
-	// clones normally — no HTTP_PROXY/HTTPS_PROXY. Iron-proxy sees the
-	// http.extraheader with the placeholder token and substitutes the
-	// resolved secret on the wire. GIT_SSL_CAINFO points at iron-proxy's
-	// MITM root cert so git trusts the intercepted TLS handshake.
+	// clones normally — no HTTP_PROXY/HTTPS_PROXY. When a secret is
+	// configured, iron-proxy sees the http.extraheader with the placeholder
+	// token and substitutes the resolved secret on the wire. GIT_SSL_CAINFO
+	// points at iron-proxy's MITM root cert so git trusts the intercepted
+	// TLS handshake.
+	//
+	// When SecretName is empty (public repo, no auth needed), the
+	// extraheader is omitted entirely — sending a well-formed Basic auth
+	// header with a bogus token makes hosts like github.com reject the
+	// clone even for public reads.
+	var configOpts string
+	if req.SecretName != "" {
+		authRaw := "x-access-token:" + tokenPlaceholderFor(req.SecretName)
+		authB64 := base64.StdEncoding.EncodeToString([]byte(authRaw))
+		extraHeader := "Authorization: Basic " + authB64
+		configOpts = "-c " + PosixShellQuote("http.extraheader="+extraHeader) + " "
+	}
 	script := fmt.Sprintf(`sudo -u devm bash -c %s`, PosixShellQuote(fmt.Sprintf(`set -e
 export GIT_SSL_CAINFO=%s
-git clone --quiet -c %s %s %s
+git clone --quiet %s%s %s
 `,
 		req.GuestCACertPath,
-		PosixShellQuote("http.extraheader="+extraHeader),
+		configOpts,
 		PosixShellQuote(req.URL),
 		PosixShellQuote(req.GuestTargetPath),
 	)))

@@ -152,29 +152,21 @@ def workspace(request, devm_path, sandbox_name) -> Iterator[Workspace]:
         # match what the daemon keys on.
         ws = Workspace(path, slug=sandbox_name, vm_name=sandbox_name, port_offset=port_offset)
         ws.write_devmyaml()  # minimal config; tests can call write_devmyaml again with extras
-        # write_devmyaml() auto-injects a `repos:` map (id "main")
-        # referencing the "e2e_default" secret. Seed it now, before any
-        # cold-start can attempt hydration.
-        #
-        # The default URL points at github.com/octocat/Hello-World; iron-proxy
-        # substitutes __DEVM_SECRET_e2e_default__ into the git-clone
-        # Authorization header on the wire. Even for public repos, github
-        # rejects a well-formed Basic auth header whose token doesn't parse
-        # as a PAT ("Invalid username or token"), so tests that actually
-        # need the clone to succeed require a real read-scoped PAT via
-        # DEVM_E2E_GH_TOKEN. Without it, the transport is still exercised;
-        # only the clone leg 401s.
-        secret_value = os.environ.get(
-            "DEVM_E2E_GH_TOKEN", "e2e-default-secret-value"
-        )
-        subprocess.run(
-            [devm_path, "secret", "set", "e2e_default"],
-            cwd=str(path),
-            input=(secret_value + "\n").encode(),
-            capture_output=True,
-            timeout=15,
-            check=True,
-        )
+        # If the test's devm.yaml references any `secret:` values, seed the
+        # devm secret store before yielding so cold-start doesn't fail on
+        # a missing secret. `e2e_default` is the well-known name tests use
+        # when they need auth to reach the fixture remote; if a real github
+        # PAT is available via DEVM_E2E_GH_TOKEN, seed that.
+        gh_token = os.environ.get("DEVM_E2E_GH_TOKEN", "")
+        if gh_token:
+            subprocess.run(
+                [devm_path, "secret", "set", "e2e_default"],
+                cwd=str(path),
+                input=(gh_token + "\n").encode(),
+                capture_output=True,
+                timeout=15,
+                check=True,
+            )
         yield ws
     finally:
         # Guaranteed teardown: stops the VM AND its iron-proxy child
