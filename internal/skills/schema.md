@@ -22,7 +22,6 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
 | `volumes` | map[string]Volume | restart | Per-project named persistent stores. Key = volume name; value is either a bare guest path string or a `{path, label, ignore}` mapping. Data lives on the Mac side under `~/Library/Application Support/devm/volumes/<project>/<name>/` and survives `devm teardown`. See the `volumes` section below. |
 | `repos` | map[string]RepoConfig | restart | Declares the project's git repos to hydrate via `git clone` at cold-start, keyed by an arbitrary schema id. Exactly one entry is the primary workspace repo. Optional — omit for utility VMs with no repo. See the `repos` section below. |
-| `masks` | []string | live | Workspace-relative paths overlaid by a private per-project guest ext4 directory. Isolates platform-differing content (Mac's `node_modules` vs Linux's) so both platforms have their own copies. See the `masks` section below. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
 | `memory` | string | restart | Override the VM's RAM, e.g. `"8G"`, `"16G"`. Unset uses the base image default. Requires a G/GB suffix; the magnitude must be a positive integer. Removing this field from devm.yaml does not revert the running VM's tart config; the previously-set value persists across reconcile-restarts. Use `devm teardown` to fully reset to the base image default. Not overridable in `devm.me.yaml`. |
@@ -303,24 +302,6 @@ Zero or multiple explicit `primary: true` entries, or zero or multiple `url`-omi
 **Validation**:
 - **Label collisions**: every `repos` and `volumes` entry resolves to a label (explicit `label:`, or its derived default). Two entries — repo-repo, repo-volume, or volume-volume — resolving to the same label is rejected; set an explicit `label:` on one to disambiguate.
 - **Reserved project names**: `project.name` may not collide with a devm-internal storage directory name (`bin`, `state`, `iron-proxy`, `mutagen`, `volumes`) — repo and volume storage lives under the project's own directory, and a name collision would shadow devm's internals.
-
----
-
-## `masks`
-
-Workspace-relative paths whose contents are shadowed by a private per-project guest ext4 directory. Purpose: VM-local scratch that shouldn't live in the git-backed workspace volume — build caches you don't want surviving a rebuild, per-worktree isolated scratch dirs, or any ephemeral state you'd rather not have persisted through `devm teardown` or included in the volume's Mac-side storage.
-
-```yaml
-masks:
-  - node_modules
-  - companion/.venv
-```
-
-- **Path shape**: workspace-relative only (leading `/`, `~`, `$`, or `..` traversal rejected at load).
-- **Storage**: guest-side ext4 at `/var/devm/masks/<project>/<path>/`. Owned by `devm`.
-- **Persistence**: mask contents die with the VM on `devm teardown`. Not for persistent data — that's what `volumes` is for.
-
-Add / remove / retarget a mask ⇒ **live** bucket: guest-side `mount --bind` (add) or `umount` (remove), no VM restart. Live-add silently shadows any pre-existing workspace content (that's the point of the feature). Live-remove errors if a running service holds a file open under the mount; stop the service and re-run.
 
 ---
 

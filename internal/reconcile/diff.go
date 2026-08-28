@@ -92,13 +92,6 @@ const (
 	// stopped VM converges in the next boot's open window.
 	KindPackageAdd
 	KindPackageRemove
-	// KindMaskChange fires when the top-level `masks:` list differs
-	// between old and new config. Emitted once per changed path; Key
-	// = mask path (workspace-relative), Old = path in old config (or
-	// empty if new-only), New = path in new (or empty if removed).
-	// Bucket: BucketLive — mask add/remove is a guest-side mount --bind
-	// or umount, no VM restart needed.
-	KindMaskChange
 	KindImageChange
 	KindIdentityChange
 	KindDockerToggle
@@ -185,9 +178,6 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindPackageRemove: BucketLive,
 	// virtio-fs mounts are set at tart run time; requires full recreate.
 	KindMountAddRemove: BucketTeardownVM,
-	// mount --bind masks are applied inside the running guest — no VM
-	// restart needed.
-	KindMaskChange:     BucketLive,
 	KindImageChange:    BucketTeardownVM,
 	KindIdentityChange: BucketTeardownVM,
 	KindDockerToggle:   BucketTeardownVM,
@@ -244,7 +234,7 @@ func (k ChangeKind) Bucket() Bucket { return changeBucket[k] }
 type Change struct {
 	Kind    ChangeKind
 	Service string // service name when applicable; empty otherwise
-	Key     string // sub-key: env var name, sandbox port, domain, mask path
+	Key     string // sub-key: env var name, sandbox port, domain
 	Old     string // formatted previous value; empty for adds
 	New     string // formatted new value; empty for removes
 	Detail  string // freeform extra info for the formatter
@@ -365,7 +355,7 @@ func ComputePortChanges(old, new schema.Config) []Change {
 // ComputeAllChanges returns the full set of diffs between old and new
 // configs. Order: ports, network, env (per service), service unit fields
 // (per service), install, startup, packages, mounts, volumes, repos,
-// masks (per service), image, identity, templates, path, secrets.
+// image, identity, templates, path, secrets.
 // Within each section, service/volume/repo names are sorted
 // alphabetically for determinism.
 //
@@ -399,7 +389,6 @@ func ComputeAllChanges(
 	out = append(out, computeMountAddRemove(old, new)...)
 	out = append(out, computeVolumeChanges(old, new)...)
 	out = append(out, computeRepoChanges(old, new)...)
-	out = append(out, computeMaskChanges(old, new)...)
 	out = append(out, computeImageChange(old, new)...)
 	out = append(out, computeIdentityChange(old, new)...)
 	out = append(out, computeDockerChange(old, new)...)
@@ -816,54 +805,6 @@ func formatBoolPtr(p *bool) string {
 		return ""
 	}
 	return strconv.FormatBool(*p)
-}
-
-// computeMaskChanges emits one KindMaskChange per path that
-// differs between old and new. Removes have Old set, New empty;
-// adds have Old empty, New set. Sorted by path for deterministic
-// output.
-func computeMaskChanges(old, new schema.Config) []Change {
-	oldSet := map[string]struct{}{}
-	newSet := map[string]struct{}{}
-	for _, p := range old.Masks {
-		oldSet[p] = struct{}{}
-	}
-	for _, p := range new.Masks {
-		newSet[p] = struct{}{}
-	}
-	all := map[string]struct{}{}
-	for p := range oldSet {
-		all[p] = struct{}{}
-	}
-	for p := range newSet {
-		all[p] = struct{}{}
-	}
-	if len(all) == 0 {
-		return nil
-	}
-	sorted := make([]string, 0, len(all))
-	for p := range all {
-		sorted = append(sorted, p)
-	}
-	sort.Strings(sorted)
-
-	var out []Change
-	for _, p := range sorted {
-		_, oldHas := oldSet[p]
-		_, newHas := newSet[p]
-		if oldHas == newHas {
-			continue // both set or both unset → no change
-		}
-		change := Change{Kind: KindMaskChange, Key: p}
-		if oldHas {
-			change.Old = p
-		}
-		if newHas {
-			change.New = p
-		}
-		out = append(out, change)
-	}
-	return out
 }
 
 func computeImageChange(old, new schema.Config) []Change {

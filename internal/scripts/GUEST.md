@@ -61,9 +61,6 @@ something breaks.
   `fs.copyFileSync` + explicit `fs.chmodSync` in Node. Every other
   perm-preserving tool (`cp -p`, `install -m`, `chmod`, `tar -xp`,
   `rsync -a`) works correctly.
-- Masks (declared as `masks:` in devm.yaml) live on guest-native ext4 at
-  `/var/devm/masks/<project>/<path>` — no virtiofs quirks, but wiped by
-  `devm teardown`.
 - `/opt/devm/` is managed by devm's bundle installer. Don't edit files
   there directly — every provision rewrites it.
 

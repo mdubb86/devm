@@ -109,24 +109,6 @@ func TestVolumes_RejectsOverlapWithWorkspace(t *testing.T) {
 	assert.Contains(t, err.Error(), `volumes.clash: guest path "/Users/michael/workspace/p/data" overlaps the workspace mount root "/Users/michael/workspace/p"`)
 }
 
-func TestVolumes_RejectsOverlapWithMask(t *testing.T) {
-	// A mask target lives under the workspace root; volume target is
-	// absolute. This test proves the validator flags a volume whose
-	// guest path is *identical* to a top-level mask's *absolute-form*
-	// path (repoRoot + "/" + mask path). Since ValidateWithRoot is the
-	// entry point that knows the workspace root, this test uses it.
-	c := Config{
-		Project: Project{Name: "p"},
-		Masks:   []string{"node_modules"},
-		Volumes: map[string]Volume{
-			"cache": {Path: "/Users/michael/workspace/p/node_modules"},
-		},
-	}
-	err := c.ValidateWithRoot("/Users/michael/workspace/p")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `volumes.cache: guest path "/Users/michael/workspace/p/node_modules" overlaps mask "node_modules"`)
-}
-
 func TestVolumes_YAMLRoundTrip(t *testing.T) {
 	// Bare scalar shape decodes to Volume.Path with Label/Ignore left nil.
 	yamlIn := "project:\n  name: p\nvolumes:\n  pg: /var/lib/pg\n"

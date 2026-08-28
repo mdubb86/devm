@@ -140,31 +140,16 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 		byPath[path] = name
 	}
 
-	// Third: no overlap with any top-level mask target. Masks live
-	// under the workspace root; volume target is absolute. Checked
-	// before the workspace-root overlap below (mask targets are always
-	// workspace subpaths) so a volume colliding with a mask reports the
-	// more specific mask conflict rather than the generic workspace one.
-	// Only enforceable when workspaceRoot is known (ValidateWithRoot);
-	// plain Validate() with empty workspaceRoot skips this check.
-	if workspaceRoot == "" {
-		return nil
-	}
-	for _, maskPath := range c.Masks {
-		maskAbs := filepath.Join(workspaceRoot, maskPath)
-		for _, name := range names {
-			if c.Volumes[name].Path == maskAbs {
-				return fmt.Errorf(`volumes.%s: guest path %q overlaps mask %q`,
-					name, c.Volumes[name].Path, maskPath)
-			}
-		}
-	}
-
-	// Fourth: no overlap with the workspace mount root. The workspace
+	// Third: no overlap with the workspace mount root. The workspace
 	// is virtiofs-mounted at the same absolute path in the guest as
 	// on the Mac (mirrored per vm.go). A volume mounted at the
 	// workspace root or any subpath would collide with the workspace
-	// bind.
+	// bind. Only enforceable when workspaceRoot is known
+	// (ValidateWithRoot); plain Validate() with empty workspaceRoot
+	// skips this check.
+	if workspaceRoot == "" {
+		return nil
+	}
 	cleanedRoot := filepath.Clean(workspaceRoot)
 	rootPrefix := cleanedRoot + string(filepath.Separator)
 	for _, name := range names {
@@ -173,33 +158,6 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 			return fmt.Errorf(`volumes.%s: guest path %q overlaps the workspace mount root %q`,
 				name, c.Volumes[name].Path, cleanedRoot)
 		}
-	}
-	return nil
-}
-
-// validateMasks checks the top-level Masks list: shape, and
-// duplicate/traversal rejection. Overlap with declared volumes is
-// validateVolumes' responsibility (single source of truth).
-func (c Config) validateMasks() error {
-	if len(c.Masks) == 0 {
-		return nil
-	}
-	seen := map[string]int{} // path → first index where seen
-	for i, path := range c.Masks {
-		if path == "" {
-			return fmt.Errorf("masks[%d]: path must not be empty", i)
-		}
-		if filepath.IsAbs(path) || strings.HasPrefix(path, "~") || strings.HasPrefix(path, "$") {
-			return fmt.Errorf(`masks[%d]: path %q must be relative to the workspace (no leading /, ~, or $)`, i, path)
-		}
-		cleaned := filepath.Clean(path)
-		if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-			return fmt.Errorf(`masks[%d]: path %q: path traversal outside the workspace is not allowed`, i, path)
-		}
-		if prior, dup := seen[path]; dup {
-			return fmt.Errorf(`masks[%d]: path %q is already declared (first at masks[%d])`, i, path, prior)
-		}
-		seen[path] = i
 	}
 	return nil
 }
@@ -504,7 +462,7 @@ func (p Project) Validate() error {
 var topLevelKnownFields = []string{
 	"project", "base_image", "docker", "network", "env",
 	"services", "install", "startup", "scripts", "mounts", "path", "packages", "disk", "memory", "cpu",
-	"volumes", "masks", "repos",
+	"volumes", "repos",
 }
 
 func CheckUnknownKeys(data []byte) error {
@@ -727,15 +685,6 @@ type Config struct {
 	// utility VMs that only run tools. Exactly one entry may set
 	// Primary to mark the primary workspace repo.
 	Repos map[string]RepoConfig `yaml:"repos,omitempty"`
-
-	// Masks are workspace-relative paths whose contents are overlaid
-	// by a private per-project guest ext4 directory, so Mac and Linux
-	// versions of platform-specific content (node_modules with native
-	// binaries, .venv wheels, .cargo build artefacts) don't step on
-	// each other. Storage lives on the VM disk at
-	// /var/devm/masks/<project>/<path>/ and dies with the VM on
-	// teardown — masks aren't for persistence (see volumes:).
-	Masks []string `yaml:"masks,omitempty"`
 
 	// Packages is a list of apt package names installed automatically
 	// via `apt-get install -y` during Tart VM provisioning.
@@ -1098,9 +1047,6 @@ func (c Config) ValidateWithRoot(projectRoot string) error {
 	if err := c.validateVolumes(projectRoot); err != nil {
 		return err
 	}
-	if err := c.validateMasks(); err != nil {
-		return err
-	}
 	if err := c.validateLabels(projectRoot); err != nil {
 		return err
 	}
@@ -1223,9 +1169,6 @@ func (c Config) Validate() error {
 		}
 	}
 	if err := c.validateVolumes(""); err != nil {
-		return err
-	}
-	if err := c.validateMasks(); err != nil {
 		return err
 	}
 	if err := c.validateSecretBindings(); err != nil {

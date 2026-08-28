@@ -367,8 +367,8 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 
 	if err := prov.RunEnforced(ctx, os.Stderr, pp.Line); err != nil {
 		fmt.Fprint(os.Stderr, pp.FailureOutput())
-		// Service-phase failures (unit install, daemon-reload, enable+start,
-		// apply masks) leave the VM in a debuggable state — user's fix is
+		// Service-phase failures (unit install, daemon-reload, enable+start)
+		// leave the VM in a debuggable state — user's fix is
 		// in devm.yaml, not in the VM. Surface the error but keep the VM
 		// alive so `tart exec <vm> systemctl status` etc. works. Enforce-
 		// phase failures (the daemon's own enforcement broken) still tear
