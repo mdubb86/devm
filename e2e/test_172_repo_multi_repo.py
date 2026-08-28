@@ -1,15 +1,23 @@
-"""172: primary + secondary repo volumes both hydrate on cold-start.
+"""172: primary + secondary repos (`repos:` map) both hydrate on
+cold-start, each into its own guest path and Mac mirror.
 
-Declares a secondary volume under `volumes:` with its own `repo:`
-block, backed by a SECOND bare repo distinct from the primary's (so a
+Declares a secondary entry in the `repos:` map with `volume: true`,
+backed by a SECOND bare repo distinct from the primary's (so a
 passing test can't be explained by devm accidentally aliasing one
-clone destination onto the other). Both mounts must appear via
-`devm shell -- ls`.
+clone destination onto the other). Both `devm shell -- cat` reads must
+see their own distinct content.
+
+The primary needs an explicit `primary: true` here (rather than
+relying on the URL-nil heuristic) because, with two `repos:` entries
+present, validateRepos requires exactly one primary marker when no
+entry omits `url:`.
 """
 from __future__ import annotations
 import subprocess
 
 import pytest
+
+from helpers.mutagen_e2e import mirror_path, session_prefix, sync_flush, sync_list
 
 pytestmark = pytest.mark.devm
 
@@ -34,42 +42,42 @@ def _make_bare_repo(tmp_path_factory, marker: str) -> str:
 @pytest.mark.timeout(300)
 def test_multi_repo_both_mount(devm, workspace, tmp_path_factory):
     secondary_url = _make_bare_repo(tmp_path_factory, "secondary")
+    primary_label = f"{workspace.path.name}-repo"  # BareCloneName of bare_repo_url()
+    secondary_label = "repo"  # BareCloneName of ".../repo.git"
 
     workspace.write_devmyaml(
-        volumes={
-            "secondary": {
-                "path": "/mnt/secondary",
-                "repo": {"url": secondary_url, "secret": "e2e_default"},
-            },
+        repos={
+            "main": {"url": workspace.bare_repo_url(), "secret": "e2e_default", "primary": True},
+            "secondary": {"url": secondary_url, "secret": "e2e_default", "volume": True},
         },
     )
 
     try:
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
-            cwd=str(workspace.path), capture_output=True, timeout=300,
+            [devm.path, "start"], cwd=str(workspace.path),
+            capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
 
-        # Primary mount ($WORKSPACE) has the fixture's default clone.
         r = subprocess.run(
-            [devm.path, "shell", "--", "sh", "-c", 'ls "$WORKSPACE"'],
+            [devm.path, "shell", "--", "cat", f"/home/devm/{primary_label}/README.md"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, r.stderr.decode()
-        assert "README.md" in r.stdout.decode()
+        assert r.stdout.decode().strip() == "bare"
 
-        # Secondary mount has its own distinct clone.
         r = subprocess.run(
-            [devm.path, "shell", "--", "ls", "/mnt/secondary"],
+            [devm.path, "shell", "--", "cat", f"/home/devm/{secondary_label}/secondary.txt"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, r.stderr.decode()
-        assert "secondary.txt" in r.stdout.decode()
+        assert r.stdout.decode().strip() == "secondary"
 
-        # Mac-side storage for both.
-        assert (workspace.volume_path() / "README.md").exists()
-        assert (workspace.volume_path("secondary") / "secondary.txt").exists()
+        for s in sync_list(session_prefix(workspace.vm_name)):
+            sync_flush(s["identifier"])
+
+        assert (mirror_path(workspace.vm_name, primary_label) / "README.md").exists()
+        assert (mirror_path(workspace.vm_name, secondary_label) / "secondary.txt").exists()
     finally:
         subprocess.run(
             [devm.path, "teardown", "--yes"],

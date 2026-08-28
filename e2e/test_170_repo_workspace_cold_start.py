@@ -1,30 +1,34 @@
 """170: primary-only repo workspace hydrates on cold-start.
 
 Pins:
-1. Cold-start with `project.repo:` clones into the primary volume's
-   Mac-side storage (the fixture's default `repo:` block points at a
+1. Cold-start with `repos.main:` clones into the guest at
+   `/home/devm/<label>/` (label defaults to the bare-clone name derived
+   from the URL -- the fixture's default `repos:` block points at a
    hermetic local `file://` bare repo).
-2. `.vm/` symlink appears in Mac cwd, pointing at that storage.
-3. `.git/info/exclude` contains `/.vm`.
-4. Guest sees the cloned content at $WORKSPACE.
+2. The guest sees the cloned content there.
+3. After a `mutagen sync flush`, the Mac-side mirror at
+   `~/Library/Application Support/devm-e2e/<project>/<label>/` is
+   populated with the same content -- proof the mutagen session is
+   actually wired up, not just that the guest-side clone ran.
 
-The workspace dir must be a real git repo for .git/info/exclude to
-apply (EnsureGitExclude no-ops when .git doesn't exist), so this test
-`git init`s it before cold-start.
+Unlike the pre-mutagen shape, there's no `.vm` symlink and no live
+bind mount at the Mac cwd: the guest path and the Mac cwd are
+independent, connected only by mutagen's two-way sync.
 """
 from __future__ import annotations
 import subprocess
 
 import pytest
 
+from helpers.mutagen_e2e import mirror_path, session_prefix, sync_flush, sync_list
+
 pytestmark = pytest.mark.devm
 
 
 @pytest.mark.timeout(300)
 def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
-    subprocess.run(["git", "init", "-q", str(workspace.path)], check=True)
-
-    workspace.write_devmyaml()  # fixture's default repo: block is enough
+    workspace.write_devmyaml()  # fixture's default repos.main is enough
+    label = f"{workspace.path.name}-repo"  # BareCloneName of bare_repo_url()
 
     try:
         r = subprocess.run(
@@ -33,28 +37,24 @@ def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
         )
         assert r.returncode == 0, r.stderr.decode()
 
-        # Volume storage populated with clone contents.
-        assert (workspace.volume_path() / "README.md").exists(), (
-            f"primary volume storage {workspace.volume_path()} missing "
-            f"cloned README.md"
-        )
-
-        # .vm symlink present, target correct.
-        vm_link = workspace.path / ".vm"
-        assert vm_link.is_symlink(), f"{vm_link} is not a symlink"
-        assert vm_link.readlink() == workspace.volume_path()
-
-        # .git/info/exclude has /.vm.
-        exclude = (workspace.path / ".git" / "info" / "exclude").read_text()
-        assert "/.vm" in exclude
-
-        # Guest sees the cloned content at $WORKSPACE.
+        # Guest sees the cloned content at /home/devm/<label>.
         r = subprocess.run(
-            [devm.path, "shell", "--", "sh", "-c", 'cat "$WORKSPACE/README.md"'],
+            [devm.path, "shell", "--", "cat", f"/home/devm/{label}/README.md"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, r.stderr.decode()
         assert r.stdout.decode().strip() == "bare"
+
+        # Mac mirror populated after a flush.
+        sessions = sync_list(session_prefix(workspace.vm_name))
+        assert len(sessions) == 1, f"expected exactly one session, got {sessions}"
+        r = sync_flush(sessions[0]["identifier"])
+        assert r.returncode == 0, f"mutagen sync flush failed:\n{r.stderr}"
+
+        mirror = mirror_path(workspace.vm_name, label)
+        assert (mirror / "README.md").exists(), (
+            f"primary Mac mirror {mirror} missing cloned README.md"
+        )
     finally:
         subprocess.run(
             [devm.path, "teardown", "--yes"],
