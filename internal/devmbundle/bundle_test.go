@@ -44,10 +44,10 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 
 // TestBuild_GuestDocContent pins that the guest-perspective doc is
 // bundled and includes the load-bearing content (mode-detect env var,
-// pointer to the Node fs.cpSync gotcha). Guest-side agents lean on
-// this file to distinguish host-only instructions from guest-safe
-// ones — the CLAUDE.md pointer in internal/skills/devm.md points at
-// it explicitly.
+// the mutagen sync model). Guest-side agents lean on this file to
+// distinguish host-only instructions from guest-safe ones — the
+// CLAUDE.md pointer in internal/skills/devm.md points at it
+// explicitly.
 func TestBuild_GuestDocContent(t *testing.T) {
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
 	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
@@ -58,7 +58,7 @@ func TestBuild_GuestDocContent(t *testing.T) {
 	require.True(t, ok, "bundle missing GUEST.md")
 	doc := string(e.body)
 	assert.Contains(t, doc, "IS_SANDBOX", "GUEST.md must document the mode-detect env")
-	assert.Contains(t, doc, "fs.cpSync", "GUEST.md must warn about the Node virtiofs gotcha")
+	assert.Contains(t, doc, "mutagen", "GUEST.md must explain the mutagen sync model")
 	assert.Contains(t, doc, "iron-proxy", "GUEST.md must explain the egress model")
 }
 

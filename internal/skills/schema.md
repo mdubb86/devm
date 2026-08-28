@@ -19,8 +19,8 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `install` | []string | recreate | Shell commands run once at VM creation as the guest `devm` user. NOPASSWD sudo is available for privileged steps. |
 | `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as the guest `devm` user, with open network — before egress enforcement is applied. NOPASSWD sudo is available for privileged steps. |
 | `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
-| `volumes` | map[string]Volume | restart | Per-project named persistent stores. Key = volume name; value is either a bare guest path string or a `{path, label, ignore}` mapping. Data lives on the Mac side under `~/Library/Application Support/devm/volumes/<project>/<name>/` and survives `devm teardown`. See the `volumes` section below. |
-| `repos` | map[string]RepoConfig | restart | Declares the project's git repos to hydrate via `git clone` at cold-start, keyed by an arbitrary schema id. Exactly one entry is the primary workspace repo. Optional — omit for utility VMs with no repo. See the `repos` section below. |
+| `volumes` | map[string]Volume | live | Per-project named persistent stores. Key = volume name; value is either a bare guest path string or a `{path, label, ignore}` mapping. Data lives on the Mac side under `~/Library/Application Support/devm/<projectID>/<label>/` and survives `devm teardown`. See the `volumes` section below. |
+| `repos` | map[string]RepoConfig | varies | Declares the project's git repos to hydrate via `git clone` at cold-start, keyed by an arbitrary schema id. Exactly one entry is the primary workspace repo. `url`/`secret` are **restart-VM** (iron-proxy clones at boot using these); every other field is **live** (mutagen-session-only). Optional — omit for utility VMs with no repo. See the `repos` section below. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
 | `memory` | string | restart | Override the VM's RAM, e.g. `"8G"`, `"16G"`. Unset uses the base image default. Requires a G/GB suffix; the magnitude must be a positive integer. Removing this field from devm.yaml does not revert the running VM's tart config; the previously-set value persists across reconcile-restarts. Use `devm teardown` to fully reset to the base image default. Not overridable in `devm.me.yaml`. |
@@ -233,15 +233,15 @@ volumes:
 
 - **Name** (the map key): must match `[a-z0-9][a-z0-9._-]*`. Scoped to the project — different projects can reuse the same name without collision.
 - **Value**: either a bare guest path string, or a mapping with `path`, `label`, and `ignore`.
-  - **`path`**: required; absolute; no `..` traversal; can't overlap the workspace mount root or any top-level mask target.
+  - **`path`**: required; absolute; no `..` traversal; can't overlap the workspace mount root.
   - **`label`**: optional. Names the mutagen sync session for this volume. Defaults to the leaf directory name of `path` (e.g. `/home/devm/.cache/claude` → `claude`). Must be unique across every `repos` and `volumes` entry in the config — see label collision under the `repos` section below.
   - **`ignore`**: optional list of mutagen sync ignore patterns.
 
-Storage lives Mac-side at `~/Library/Application Support/devm/volumes/<project>/<name>/`. Delivery is virtiofs — one `tart run --dir` per declared volume — so `devm teardown` (which wipes the VM disk) leaves volume data alone. A subsequent cold-start reattaches the same Mac dir at the declared guest path.
+Storage lives Mac-side at `~/Library/Application Support/devm/<projectID>/<label>/`. Delivery is a mutagen two-way sync session between that Mac dir and the guest path, so `devm teardown` (which wipes the VM disk) leaves volume data alone. A subsequent cold-start resumes syncing the same Mac dir against the declared guest path.
 
-Add / remove / retarget a volume ⇒ **restart** bucket: Tart's `--dir` args are set at run time, so the VM stops + cold-starts (no teardown, no data loss, ~5s). `devm reconcile` prompts for restart approval unless `--yes`.
+Add / remove / retarget a volume ⇒ **live** bucket: mutagen sessions start/stop without a VM cycle.
 
-On first attach with existing content at the guest target (e.g. Postgres has already run `initdb`), the daemon **adopts**: copies the target content into the empty volume dir via the same virtiofs share, then bind-mounts the volume at the target. If both the Mac side and the guest target already have content, the daemon errors and asks the user to clear one side.
+On first sync with existing content on one or both sides, devm's in-sync guard compares entry count, total size, and a hash of each side's sorted top-100 paths before handing anything to mutagen. Two empty sides, or two sides that already agree, proceed straight to sync. Sides that disagree are rejected rather than guessed at — clear the stale side and retry.
 
 Discovery: `devm volume ls` lists the current project's volumes with name, guest path, Mac path, and size. Deletion is manual (`rm -rf` at the Mac path), or `devm purge` for orphan cleanup of projects that no longer exist.
 
@@ -297,16 +297,16 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 ## See also
 
-- `devm skills get devm` — `.vm/` symlink and `devm pop mac`/`devm pop vm` for navigating between a guest-side path and its Mac-side volume storage.
+- `devm skills get devm` — `devm pop mac`/`devm pop vm` for navigating between a guest-side path and its Mac-side volume storage.
 - `devm skills get lifecycle` — how `devm reconcile` applies each bucket.
 
 ---
 
 ## Bucket glossary
 
-**live** — Devm applies the change without stopping the VM or ending active sessions. Env, path, template, mask, and package changes are applied directly inside the guest. Network (`allow`) and secret changes are applied by regenerating iron-proxy's config and respawning it — no VM restart, no prompt.
+**live** — Devm applies the change without stopping the VM or ending active sessions. Env, path, template, and package changes are applied directly inside the guest. `volumes:` and most of `repos:` (every field except `url`/`secret`) start, stop, or retarget a mutagen sync session without a VM cycle. Network (`allow`) and secret changes are applied by regenerating iron-proxy's config and respawning it — no VM restart, no prompt.
 
-**restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Sits here: `startup:` (edit takes effect on the applying restart) and `volumes:` (adds/removes require re-issuing `tart run` with new `--dir` args, since AVF doesn't hot-plug virtiofs shares).
+**restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Sits here: `startup:` (edit takes effect on the applying restart) and `repos.<name>.url`/`repos.<name>.secret` (iron-proxy clones the repo at VM boot using these values).
 
 **recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `base_image`, and `project` identity fields.
 

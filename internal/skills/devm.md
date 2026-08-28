@@ -7,7 +7,7 @@ description: Configure and edit devm.yaml — a Mac+Tart-VM dev workspace tool w
 
 ## What devm is
 
-devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-project Tart VM as your development environment. The workspace inside the VM is a devm-managed volume, hydrated via `git clone` from the repo declared by `repo:` in `devm.yaml` — not a live bind mount of your Mac checkout. Its guest path mirrors the Mac cwd's absolute path string, but the two are separate git clones; use `devm pop mac`/`devm pop vm` to open a file on the Mac side of that split. All outbound network traffic from the VM is gated through an iron-proxy daemon running on the Mac, so the VM cannot reach the internet except through an explicit allowlist. Configuration lives in `devm.yaml` at the project root.
+devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-project Tart VM as your development environment. The workspace inside the VM is hydrated via `git clone` from the repo(s) declared by `repos:` in `devm.yaml` — not a live bind mount of your Mac checkout. Its guest path mirrors the Mac cwd's absolute path string, kept in sync with the Mac side by a mutagen sync session; use `devm pop mac`/`devm pop vm` to open a file on the Mac side of that split. All outbound network traffic from the VM is gated through an iron-proxy daemon running on the Mac, so the VM cannot reach the internet except through an explicit allowlist. Configuration lives in `devm.yaml` at the project root.
 
 ## Three-process model
 
@@ -38,7 +38,7 @@ A project's `CLAUDE.md` is git-tracked, so both the Mac and the VM see the same 
 
 - **In devm guest (`$IS_SANDBOX=1`), read `/opt/devm/GUEST.md` first — commands here that name `devm`/`tart`/`just`/`brew`/`launchctl` are Mac-only.**
 
-`/opt/devm/GUEST.md` is installed on every guest by devm's bundle installer (no user action needed). It covers the guest's view of the network, filesystem quirks (including the Node `fs.cpSync` gotcha on virtiofs volumes), lifecycle actions, and where to look when something breaks.
+`/opt/devm/GUEST.md` is installed on every guest by devm's bundle installer (no user action needed). It covers the guest's view of the network, filesystem quirks, lifecycle actions, and where to look when something breaks.
 
 ## Where to look next
 
@@ -50,5 +50,4 @@ A project's `CLAUDE.md` is git-tracked, so both the Mac and the VM see the same 
 - `devm skills get errors` — reading supervision error blocks and where logs live.
 - `devm pop mac <path>` — open a Mac-native file with its default app; refuses paths that resolve into a devm-managed volume.
 - `devm pop vm <path>` — open a file from the project's guest workspace (a `$WORKSPACE`-anchored path) with its default app on the Mac.
-- `.vm/` — a symlink at the Mac project root pointing at the primary volume's Mac-side storage; browse the live guest checkout without leaving the Mac.
 - `devm recipes get tool/service/docker` — docker is a built-in (`docker: true`), not a recipe you install, but the recipe covers the intricacies: the two egress paths (why `docker run` works with no config but `docker build` needs a Dockerfile RUN block), and the exact block to add for build-time HTTPS to survive iron-proxy's MITM.

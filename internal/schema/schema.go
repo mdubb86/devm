@@ -672,9 +672,9 @@ type Config struct {
 	Services map[string]Service  `yaml:"services,omitempty"`
 
 	// Volumes are per-project named persistent stores. Each key is a
-	// volume name; each value is the guest mount path, optionally with
-	// a repo to hydrate it from. Data lives on the Mac side under
-	// ~/Library/Application Support/<daemon>/volumes/<project>/<name>/
+	// volume name; each value is the guest mount path. Data lives on
+	// the Mac side under
+	// ~/Library/Application Support/<daemon>/<projectID>/<label>/
 	// and survives `devm teardown`. See docs/superpowers/specs/
 	// 2026-08-01-persistent-volumes-design.md.
 	Volumes map[string]Volume `yaml:"volumes,omitempty"`
