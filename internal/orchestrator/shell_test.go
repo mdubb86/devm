@@ -452,7 +452,7 @@ func TestRunShellColdPath_MutagenSetupRunsAfterRunEnforced(t *testing.T) {
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	var mutagenSetupCalled int
-	mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot, projectIP string, tunnelPort int) error {
+	mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
 		mutagenSetupCalled++
 		fh, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		require.NoError(t, err)

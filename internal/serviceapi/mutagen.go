@@ -80,6 +80,39 @@ func mutagenDataDir(cfg identity.Config) string {
 	return filepath.Join(cfg.RuntimeDir(), "mutagen", "data")
 }
 
+// mutagenHomeDir is HOME for the mutagen daemon and every ssh child it
+// spawns. The daemon runs as root under launchd, so its default HOME is
+// /var/root — where devm's managed ssh_config Include line does NOT live.
+// Redirecting HOME to a devm-owned dir with .ssh/config -> Include of the
+// managed ssh_config makes mutagen's ssh subprocess see the per-project
+// Host block regardless of the launching user.
+func mutagenHomeDir(cfg identity.Config) string {
+	return filepath.Join(cfg.RuntimeDir(), "mutagen", "home")
+}
+
+// ensureMutagenHome creates $mutagenHomeDir/.ssh/config with a single
+// `Include "<managed ssh_config>"` line so ssh under HOME=$mutagenHomeDir
+// resolves devm's per-project Host blocks. Idempotent — the file's
+// content is fixed by cfg.
+func ensureMutagenHome(cfg identity.Config) error {
+	home := mutagenHomeDir(cfg)
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		return fmt.Errorf("mutagen home %s: %w", sshDir, err)
+	}
+	configPath := filepath.Join(sshDir, "config")
+	want := "# devm-managed. Points mutagen daemon's ssh at devm's Host blocks.\n" +
+		"Include \"" + filepath.Join(cfg.RuntimeDir(), "ssh_config") + "\"\n"
+	existing, err := os.ReadFile(configPath)
+	if err == nil && string(existing) == want {
+		return nil
+	}
+	if err := os.WriteFile(configPath, []byte(want), 0o600); err != nil {
+		return fmt.Errorf("mutagen home %s: %w", configPath, err)
+	}
+	return nil
+}
+
 // mutagenStopPhaseFn is the test-injection seam for the flush+pause
 // step /vm/stop runs (before gracefulStopVM) against the project's
 // mutagen sessions. Production always extracts the real embedded
@@ -107,6 +140,9 @@ func SpawnMutagen(ctx context.Context, cfg identity.Config, sup *supervisor.Supe
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return fmt.Errorf("mutagen: data dir %s: %w", dataDir, err)
 	}
+	if err := ensureMutagenHome(cfg); err != nil {
+		return fmt.Errorf("mutagen: home dir: %w", err)
+	}
 
 	bin, err := mutagenEnsureFn(cfg.RuntimeDir())
 	if err != nil {
@@ -114,8 +150,9 @@ func SpawnMutagen(ctx context.Context, cfg identity.Config, sup *supervisor.Supe
 	}
 
 	cli := &mutagen.CLI{
-		Binary:  bin,
-		DataDir: dataDir,
+		Binary:   bin,
+		DataDir:  dataDir,
+		ExtraEnv: []string{"HOME=" + mutagenHomeDir(cfg)},
 	}
 
 	pid, err := mutagenDaemonStartFn(cli)
@@ -147,17 +184,18 @@ func AdoptMutagenDaemon(ctx context.Context, cfg identity.Config, sup *superviso
 
 	key := supervisor.Key{Role: supervisor.RoleMutagen}
 
-	if sha, err := mutagenBinarySha(cfg); err == nil && sha == mutagen.EmbeddedSha256() {
-		sup.Adopt(key, pid)
-		log.Printf("mutagen: adopted existing daemon pid=%d data=%s", pid, dataDir)
-		return nil
-	}
-
+	// Always stop-and-respawn any adopted daemon: mutagen sessions persist
+	// in DataDir across daemon restarts (mutagen resumes them on next
+	// start), and this guarantees the daemon inherits the current build's
+	// full env — including HOME (points at devm's managed ssh_config so
+	// ssh under root sees per-project Host blocks) and MUTAGEN_DATA_DIRECTORY.
+	// A stale env from a previous devm build would silently break ssh in
+	// ways that only surface at the first sync create.
 	sup.Adopt(key, pid)
 	if err := sup.Stop(ctx, key); err != nil {
-		return fmt.Errorf("mutagen: stop stale daemon pid %d: %w", pid, err)
+		return fmt.Errorf("mutagen: stop existing daemon pid %d: %w", pid, err)
 	}
-	log.Printf("mutagen: stopped stale daemon pid=%d (binary changed), respawning", pid)
+	log.Printf("mutagen: stopped existing daemon pid=%d, respawning with current env", pid)
 	return SpawnMutagen(ctx, cfg, sup)
 }
 

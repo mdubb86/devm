@@ -136,7 +136,14 @@ func TestSpawnMutagen_SetsMutagenDataDirectoryEnv(t *testing.T) {
 	assert.Equal(t, mutagenDataDir(cfg), startCalledWith.DataDir)
 }
 
-func TestAdoptMutagenDaemon_ExistingAliveShaMatches_Adopts(t *testing.T) {
+// AdoptMutagenDaemon always stops and respawns any existing mutagen
+// daemon on devm daemon start, regardless of binary sha. Mutagen
+// sessions live in DataDir and are resumed automatically on the fresh
+// daemon; this guarantees the daemon inherits the current build's env
+// (notably HOME → devm's managed ssh_config include, so ssh under root
+// sees per-project Host blocks). Adopt-in-place was silently pinning a
+// stale env from a previous devm build.
+func TestAdoptMutagenDaemon_ExistingAlive_StopsAndRespawns(t *testing.T) {
 	cfg := testMutagenCfg(t)
 	sup := supervisor.New(t.TempDir())
 	pid := spawnFakeAliveProcess(t)
@@ -154,12 +161,8 @@ func TestAdoptMutagenDaemon_ExistingAliveShaMatches_Adopts(t *testing.T) {
 
 	err := AdoptMutagenDaemon(context.Background(), cfg, sup)
 	require.NoError(t, err)
-	assert.False(t, *ensureCalled, "sha match must adopt in place, not respawn")
-	assert.False(t, *startCalled, "sha match must adopt in place, not respawn")
-
-	st := sup.Status(supervisor.Key{Role: supervisor.RoleMutagen})
-	assert.True(t, st.Present)
-	assert.Equal(t, pid, st.PID)
+	assert.True(t, *ensureCalled, "existing daemon must be replaced")
+	assert.True(t, *startCalled, "existing daemon must be replaced")
 }
 
 func TestAdoptMutagenDaemon_ExistingAliveShaMismatches_StopsAndRespawns(t *testing.T) {

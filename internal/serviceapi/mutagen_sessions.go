@@ -239,7 +239,6 @@ func SetupPhase(
 	entities []SessionEntity,
 	exec GuestExec,
 	guestSSHTarget, ironProxyURL, guestCACertPath string,
-	sshFlags []string,
 ) error {
 	for i := range entities {
 		e := &entities[i]
@@ -329,7 +328,7 @@ func SetupPhase(
 		}
 
 		beta := "devm@" + guestSSHTarget + ":" + e.GuestPath
-		if _, err := cli.SyncCreate(name, macMirror, beta, configPath, sshFlags); err != nil {
+		if _, err := cli.SyncCreate(name, macMirror, beta, configPath, nil); err != nil {
 			return fmt.Errorf("mutagen setup %s: create session: %w", e.Label, err)
 		}
 	}
