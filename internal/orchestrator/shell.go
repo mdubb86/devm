@@ -411,6 +411,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		SecretHashes:     SecretHashesFromBindings(bindings),
 		ProxyVersion:     ironproxy.EmbeddedSha256(), // stamp the version that just provisioned
 		ProjectIP:        projectIP,
+		MacCwd:           repoRoot,
 	}
 	if err := serviceapi.WriteStateSnapshot(d.Ident, cfg.Project.Name, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)

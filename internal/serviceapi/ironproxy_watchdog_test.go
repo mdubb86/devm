@@ -142,6 +142,74 @@ func TestHealIronProxies_RespawnsSecretsProjects(t *testing.T) {
 	assert.Equal(t, []string{"api.example.com"}, lastCfg.Secrets[0].Hosts)
 }
 
+// TestHealIronProxies_RespawnUsesSnapshotMacCwd verifies a respawn
+// resolves a URL-nil primary repo's host/secret scope from the
+// project's persisted MacCwd — not from an empty string, which would
+// make ResolveSecretBindings/RepoHosts silently drop the injection.
+func TestHealIronProxies_RespawnUsesSnapshotMacCwd(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sup := supervisor.New(t.TempDir())
+	locks := NewProjectLocks()
+
+	const projectID = "watchdog-mac-cwd"
+	repoDir := makeRepoWithOrigin(t, "https://github.com/me/foo.git")
+
+	seededCfg := schema.Config{
+		Project: schema.Project{Name: projectID},
+		Repos: map[string]schema.RepoConfig{
+			// URL nil ⇒ primary; derives from `git remote get-url origin`
+			// in MacCwd, exactly like cold-start.
+			"workspace": {Secret: "gh_token"},
+		},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
+		Cfg:       seededCfg,
+		ProjectIP: "127.42.0.8",
+		MacCwd:    repoDir,
+	}))
+
+	be := secret.NewFileBackend(identity.Prod.SecretsDir())
+	require.NoError(t, be.Set(projectID+"/gh_token", "resolved-token"))
+
+	httpPort, err := pickPort()
+	require.NoError(t, err)
+	httpsPort, err := pickPort()
+	require.NoError(t, err)
+	dnsPort, err := pickPort()
+	require.NoError(t, err)
+	writePreExistingIronProxyConfig(t, projectID, "127.0.0.1", httpPort, httpsPort, dnsPort)
+
+	ironProxyState.put(projectID, projectInfo{
+		ProjectIP: "127.42.0.8",
+		HTTPPort:  httpPort,
+		HTTPSPort: httpsPort,
+		DNSPort:   dnsPort,
+	})
+	t.Cleanup(func() { ironProxyState.del(projectID) })
+
+	require.Equal(t, ProxyMissing, computeProxyHealth(identity.Prod, sup, nil, projectID).Status)
+
+	origSpawn := spawnIronProxyFn
+	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
+	var spawnCalls int
+	var lastCfg IronProxyConfig
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, s *supervisor.Supervisor, id string, cfg IronProxyConfig, _ *Denials) error {
+		spawnCalls++
+		lastCfg = cfg
+		s.Adopt(supervisor.Key{ProjectID: id, Role: supervisor.RoleProxy}, 1)
+		return nil
+	}
+
+	healIronProxies(context.Background(), identity.Prod, sup, nil, locks, nil)
+
+	assert.Equal(t, 1, spawnCalls)
+	require.Len(t, lastCfg.Secrets, 1, "MacCwd must resolve the URL-nil primary's host so its secret is injected")
+	assert.Equal(t, "gh_token", lastCfg.Secrets[0].Name)
+	assert.Equal(t, "resolved-token", lastCfg.Secrets[0].Value)
+	assert.Equal(t, []string{"github.com"}, lastCfg.Secrets[0].Hosts)
+	assert.Contains(t, lastCfg.AllowList, "github.com")
+}
+
 // TestHealIronProxies_SkipsHealthyProject verifies the watchdog no-ops
 // when iron-proxy is up. Prevents spurious stop+respawn churn.
 func TestHealIronProxies_SkipsHealthyProject(t *testing.T) {

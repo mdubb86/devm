@@ -70,6 +70,13 @@ type StateSnapshot struct {
 	// the restart without a manual re-issue and running in-guest
 	// sessions don't lose `.test` hairpin.
 	Routes []Route `json:"routes,omitempty"`
+
+	// MacCwd is the project's Mac-side working directory, mirrored here
+	// from the CLI's cold-start seed and every /vm/reconcile so a later
+	// iron-proxy respawn (the watchdog, or any other daemon-only path
+	// with no request-scoped repoRoot) can still derive a URL-nil
+	// primary repo's clone URL via `git remote get-url origin`.
+	MacCwd string `json:"mac_cwd,omitempty"`
 }
 
 // ReadStateSnapshot loads the persisted snapshot for a project. Returns
