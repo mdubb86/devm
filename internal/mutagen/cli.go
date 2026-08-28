@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // ExecFn runs bin with args and env, returning captured stdout/stderr,
@@ -44,9 +45,19 @@ type SyncSession struct {
 }
 
 // OSExec is the default ExecFn: a real os/exec invocation.
+//
+// Setsid=true is REQUIRED on the mutagen CLI process — `mutagen daemon
+// start` fork/execs the daemon and detaches it into a new process
+// group, and if the CLI itself isn't already a session leader, the
+// detachment silently fails: daemon start returns 0 but writes nothing
+// to the DataDir. Every OTHER subcommand (sync list/pause/resume/etc.)
+// is a short-lived RPC to the running daemon and is unaffected, but
+// it's cheaper to set it uniformly than to remember which subcommand
+// needs it. Pinned by e2e/test_mutagen_contract_01_daemon_lifecycle.
 func OSExec(bin string, args []string, env []string) (stdout, stderr string, exitCode int, err error) {
 	cmd := exec.Command(bin, args...)
 	cmd.Env = env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	var outBuf, errBuf strings.Builder
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
