@@ -35,24 +35,32 @@ def _daemon_pid(devm_path: str) -> int | None:
     return int(lines[0]) if lines else None
 
 
-def _wait_daemon_up(devm_path: str, timeout: float = 30.0) -> None:
+_SOCK_PATH = "/Users/michael/Library/Application Support/devm-e2e/devm.sock"
+
+
+def _wait_socket_present(timeout: float = 30.0) -> None:
+    import pathlib
+    p = pathlib.Path(_SOCK_PATH)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        r = subprocess.run([devm_path, "status"], capture_output=True, timeout=10)
-        if r.returncode == 0:
+        if p.exists():
             return
-        time.sleep(0.5)
-    raise AssertionError(f"devm-e2e daemon never came back up within {timeout}s")
+        time.sleep(0.1)
+    raise AssertionError(f"devm-e2e socket never appeared at {_SOCK_PATH} within {timeout}s")
+
+
 
 
 @pytest.mark.timeout(180)
 def test_mutagen_survives_devm_sigkill(devm, devm_path, workspace):
-    # When install-marker tests run back-to-back (test_204 runs first),
-    # test_204's `devm teardown --yes` triggers cleanup work that can
-    # briefly make the daemon socket unavailable between tests. Wait
-    # for the socket to reappear before this test's first `devm start`
-    # so we're not racing the previous test's teardown.
-    _wait_daemon_up(devm_path)
+    # The prior install-marker test (test_204) leaves the shared daemon
+    # in a state where its socket file is briefly missing — the daemon
+    # process itself is alive but its /Users/…/devm-e2e/devm.sock file
+    # doesn't exist for a window that overlaps this test's very first
+    # `devm start`. `devm status` (which the sibling _wait_daemon_up
+    # helper uses) reports rc=0 in that state, so poll the socket file
+    # directly instead.
+    _wait_socket_present()
 
     r = subprocess.run(
         [devm.path, "start"], cwd=str(workspace.path),
@@ -81,7 +89,7 @@ def test_mutagen_survives_devm_sigkill(devm, devm_path, workspace):
         else:
             pytest.fail(f"daemon (pid {pid}) still alive 10s after SIGKILL")
 
-        _wait_daemon_up(devm_path, timeout=30)
+        _wait_socket_present(timeout=30)
 
         deadline = time.monotonic() + 10
         after: list[dict] = []
