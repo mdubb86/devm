@@ -27,10 +27,20 @@ type CLI struct {
 }
 
 // SyncSession is one row from `mutagen sync list`.
+//
+// Paused and Status are ORTHOGONAL. Paused reflects the user's
+// deliberate pause state (mutagen sync pause -> true; sync resume ->
+// false); Status is the transport/activity state (Watching,
+// Disconnected, Scanning, etc.). A paused session's Status is never
+// the string "paused" — it's whatever transport state the session was
+// in when it got paused. Any code branching on "is this session
+// paused?" MUST key off Paused, not Status.
+// Pinned in e2e/test_mutagen_contract_04 + 05.
 type SyncSession struct {
 	ID     string
 	Name   string
 	Status string
+	Paused bool
 }
 
 // OSExec is the default ExecFn: a real os/exec invocation.
@@ -124,6 +134,7 @@ type syncSessionJSON struct {
 	Identifier string `json:"identifier"`
 	Name       string `json:"name"`
 	Status     string `json:"status"`
+	Paused     bool   `json:"paused"`
 }
 
 // SyncList returns sessions from `mutagen sync list`, filtered to
@@ -142,17 +153,14 @@ func (c *CLI) SyncList(namePrefix string) ([]SyncSession, error) {
 		if namePrefix != "" && !strings.HasPrefix(r.Name, namePrefix) {
 			continue
 		}
-		sessions = append(sessions, SyncSession{ID: r.Identifier, Name: r.Name, Status: r.Status})
+		sessions = append(sessions, SyncSession{
+			ID:     r.Identifier,
+			Name:   r.Name,
+			Status: r.Status,
+			Paused: r.Paused,
+		})
 	}
 	return sessions, nil
-}
-
-// SyncListRaw returns the full JSON output from `mutagen sync list` for
-// diagnostic use — the SyncSession struct only pulls the three fields
-// devm needs at the moment, and knowing what other fields mutagen
-// actually exposes is useful when debugging pause/resume semantics.
-func (c *CLI) SyncListRaw() (string, error) {
-	return c.run("sync", "list", "--template", "{{json .}}")
 }
 
 // SyncFlush forces an immediate synchronization cycle for id.

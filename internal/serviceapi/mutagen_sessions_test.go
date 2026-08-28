@@ -207,13 +207,15 @@ func (s *scriptedCLI) build() *mutagen.CLI {
 						Identifier string `json:"identifier"`
 						Name       string `json:"name"`
 						Status     string `json:"status"`
+						Paused     bool   `json:"paused"`
 					}, len(s.listSessions))
 					for i, sess := range s.listSessions {
 						rows[i] = struct {
 							Identifier string `json:"identifier"`
 							Name       string `json:"name"`
 							Status     string `json:"status"`
-						}{sess.ID, sess.Name, sess.Status}
+							Paused     bool   `json:"paused"`
+						}{sess.ID, sess.Name, sess.Status, sess.Paused}
 					}
 					b, _ := json.Marshal(rows)
 					return string(b), "", 0, nil
@@ -291,8 +293,12 @@ func TestSetupPhase_ColdStartClonesThenCreates(t *testing.T) {
 func TestSetupPhase_WarmStartResumesPausedSession(t *testing.T) {
 	cfg := testSessionsIdentity(t)
 	sc := &scriptedCLI{
+		// Paused=true is what mutagen actually reports for a
+		// user-paused session; the Status field stays a transport
+		// state and is NEVER the literal "paused". Pinned in
+		// e2e/test_mutagen_contract_04 + 05.
 		listSessions: []mutagen.SyncSession{
-			{ID: "sess-1", Name: "devm-myproj-app", Status: "paused"},
+			{ID: "sess-1", Name: "devm-myproj-app", Status: "Disconnected", Paused: true},
 		},
 	}
 	cli := sc.build()

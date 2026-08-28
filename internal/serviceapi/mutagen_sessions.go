@@ -313,7 +313,12 @@ func SetupPhase(
 		}
 
 		if existing != nil {
-			if existing.Status == "paused" {
+			// Key off Paused, not Status. `mutagen sync pause` sets the
+			// top-level `paused` bool to true; the `status` field is
+			// orthogonal transport state (Watching, Disconnected, etc.)
+			// and NEVER the string "paused". Pinned in
+			// e2e/test_mutagen_contract_04 + 05.
+			if existing.Paused {
 				if err := cli.SyncResume(existing.ID); err != nil {
 					return fmt.Errorf("mutagen setup %s: resume session: %w", e.Label, err)
 				}
@@ -345,8 +350,14 @@ func StopPhase(cli *mutagen.CLI, projectID string) error {
 		return fmt.Errorf("mutagen stop %s: list sessions: %w", projectID, err)
 	}
 	for _, s := range sessions {
-		if err := cli.SyncFlush(s.ID); err != nil {
-			daemonlog.Errorf("mutagen stop %s: flush session %s: %v", projectID, s.Name, err)
+		// Skip flush on an already-paused session — `mutagen sync flush`
+		// errors "session is paused" and spams the daemon error log with
+		// no upside (flush on a paused session couldn't do anything
+		// anyway). Pinned in e2e/test_mutagen_contract_10.
+		if !s.Paused {
+			if err := cli.SyncFlush(s.ID); err != nil {
+				daemonlog.Errorf("mutagen stop %s: flush session %s: %v", projectID, s.Name, err)
+			}
 		}
 		if err := cli.SyncPause(s.ID); err != nil {
 			daemonlog.Errorf("mutagen stop %s: pause session %s: %v", projectID, s.Name, err)
