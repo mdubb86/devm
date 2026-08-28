@@ -34,7 +34,7 @@ def test_user_ignore_composes_and_negates(devm, workspace):
         repos={
             "main": {
                 "url": workspace.bare_repo_url(),
-                "secret": "e2e_default",
+                "primary": True,
                 "ignore": ["scratch/", "!scratch/keep/"],
             },
         },
