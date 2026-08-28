@@ -1227,7 +1227,7 @@ func TestValidateLabels_Collision(t *testing.T) {
 // ---------- validateProjectIDReserved ----------
 
 func TestValidateProjectID_ReservedNames(t *testing.T) {
-	reserved := []string{"bin", "state", "iron-proxy", "mutagen", "volumes"}
+	reserved := []string{"bin", "state", "iron-proxy", "mutagen", "ssh", "secrets", "ca", "softnet-bin", "volumes"}
 	for _, name := range reserved {
 		t.Run(name, func(t *testing.T) {
 			c := Config{Project: Project{Name: name}}

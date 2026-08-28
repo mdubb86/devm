@@ -807,10 +807,12 @@ func ParseMemorySize(s string) (int, error) {
 
 // reservedProjectIDs are devm-internal storage directory names under
 // the daemon's Application Support root. A project.name colliding
-// with one of these would shadow devm's own storage layout.
+// with one of these would shadow devm's own storage layout. Must
+// agree with cmd/devm's purgeSkipDirs — same set of reserved names.
 var reservedProjectIDs = map[string]bool{
 	"bin": true, "state": true, "iron-proxy": true,
-	"mutagen": true, "volumes": true,
+	"mutagen": true, "ssh": true, "secrets": true,
+	"ca": true, "softnet-bin": true, "volumes": true,
 }
 
 // validateProjectIDReserved rejects a project.name that collides with
