@@ -44,8 +44,12 @@ def test_session_paused_on_stop_resumed_on_start(devm, workspace):
         assert sessions[0]["identifier"] == session_id, (
             f"session identifier changed across stop: {session_id} -> {sessions[0]['identifier']}"
         )
-        assert sessions[0]["status"] == "paused", (
-            f"expected status 'paused' after devm stop, got {sessions[0]['status']!r}"
+        # Mutagen exposes user-pause state in `paused` (bool), not
+        # `status` (transport/activity state — Watching, Disconnected,
+        # etc.). Pinned in e2e/test_mutagen_contract_04 + 05.
+        assert sessions[0]["paused"] is True, (
+            f"expected paused=true after devm stop, got "
+            f"paused={sessions[0].get('paused')!r} status={sessions[0]['status']!r}"
         )
 
         r = subprocess.run(
@@ -60,9 +64,9 @@ def test_session_paused_on_stop_resumed_on_start(devm, workspace):
             f"session identifier changed across resume: {session_id} -> {sessions[0]['identifier']} "
             f"-- expected a resume of the SAME session, not a fresh create"
         )
-        assert sessions[0]["status"] != "paused", (
-            f"expected a non-paused status after devm start resumed it, got "
-            f"{sessions[0]['status']!r}"
+        assert sessions[0]["paused"] is False, (
+            f"expected paused=false after devm start resumed it, got "
+            f"paused={sessions[0].get('paused')!r} status={sessions[0]['status']!r}"
         )
     finally:
         subprocess.run(

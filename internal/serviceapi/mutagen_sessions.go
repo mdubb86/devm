@@ -262,6 +262,40 @@ func SetupPhase(
 			return fmt.Errorf("mutagen setup %s: ensure guest dir: exit %d: %s", e.Label, exitCode, stderr)
 		}
 
+		// Warm-attach branch: an existing session for this label already
+		// exists in mutagen's state, so this label is not a first-time
+		// setup — no cold-start clone, no guard check. Resume if paused
+		// (see contract 04 + 05 for the .Paused vs .Status semantics)
+		// and continue. Skipping the guard here matters: between
+		// `devm stop` (pause) and `devm start` (resume), transient
+		// content on either side can nudge the entry counts out of
+		// alignment for the flush that hasn't caught up yet — the guard
+		// is only there to protect a FRESH session-create from silently
+		// destroying content, which is not the situation on resume.
+		name := SessionName(projectID, e.Label)
+		sessions, err := cli.SyncList(name)
+		if err != nil {
+			return fmt.Errorf("mutagen setup %s: list sessions: %w", e.Label, err)
+		}
+		var existing *mutagen.SyncSession
+		for j := range sessions {
+			if sessions[j].Name == name {
+				existing = &sessions[j]
+				break
+			}
+		}
+		if existing != nil {
+			if existing.Paused {
+				if err := cli.SyncResume(existing.ID); err != nil {
+					return fmt.Errorf("mutagen setup %s: resume session: %w", e.Label, err)
+				}
+			}
+			continue
+		}
+
+		// Cold-start branch: no session exists yet for this label. Clone
+		// if both sides are empty, then run the guard before we let
+		// mutagen touch the pair.
 		if e.Repo != nil {
 			macSide, err := ScanMac(macMirror)
 			if err != nil {
@@ -297,33 +331,6 @@ func SetupPhase(
 		if !verdict.OK {
 			daemonlog.Errorf("mutagen: guard rejected %s: %s", e.Label, verdict.Reason)
 			return fmt.Errorf("in-sync guard failed for %s: %s", e.Label, verdict.Reason)
-		}
-
-		name := SessionName(projectID, e.Label)
-		sessions, err := cli.SyncList(name)
-		if err != nil {
-			return fmt.Errorf("mutagen setup %s: list sessions: %w", e.Label, err)
-		}
-		var existing *mutagen.SyncSession
-		for j := range sessions {
-			if sessions[j].Name == name {
-				existing = &sessions[j]
-				break
-			}
-		}
-
-		if existing != nil {
-			// Key off Paused, not Status. `mutagen sync pause` sets the
-			// top-level `paused` bool to true; the `status` field is
-			// orthogonal transport state (Watching, Disconnected, etc.)
-			// and NEVER the string "paused". Pinned in
-			// e2e/test_mutagen_contract_04 + 05.
-			if existing.Paused {
-				if err := cli.SyncResume(existing.ID); err != nil {
-					return fmt.Errorf("mutagen setup %s: resume session: %w", e.Label, err)
-				}
-			}
-			continue
 		}
 
 		sessionCfg := mutagen.ComposeConfig(e.UserIgnore)
