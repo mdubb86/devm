@@ -34,7 +34,7 @@ func reconcileMinimalCfg() schema.Config {
 // don't require verifying guest-side effects.
 type nopApply struct{}
 
-func (nopApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
+func (nopApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, identCfg identity.Config, ironProxyURL string) error {
 	return nil
 }
 

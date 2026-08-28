@@ -632,7 +632,7 @@ type fakeApply struct {
 	order *[]string
 }
 
-func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
+func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, identCfg identity.Config, ironProxyURL string) error {
 	f.called = true
 	f.lastSSHAuthPub = sshAuthPub
 	f.lastSSHHostPriv = sshHostPriv

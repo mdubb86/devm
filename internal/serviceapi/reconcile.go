@@ -14,6 +14,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -53,15 +54,26 @@ type VMReconcileResponse struct {
 // ApplyLiver is the daemon-internal contract for applying live changes
 // inside the guest. Real impl calls reconcile.ApplyLive; tests use a
 // fake to skip shelling out.
+//
+// identCfg and ironProxyURL feed reconcile.ApplyLive's mutagen-session
+// branch (KindRepoChange/KindVolumeChange): identCfg scopes mirror
+// paths and the mutagen data dir to this daemon's identity;
+// ironProxyURL is this project's current iron-proxy CONNECT URL, used
+// only when the change implies a cold-start clone.
 type ApplyLiver interface {
-	ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error
+	ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, identCfg identity.Config, ironProxyURL string) error
 }
 
 // realApplyLiver adapts reconcile.ApplyLive to the interface.
 type realApplyLiver struct{ tr *tart.Tart }
 
-func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
-	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub)
+func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, identCfg identity.Config, ironProxyURL string) error {
+	mutagenBin, err := mutagen.Ensure(identCfg.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("apply live: mutagen: extract binary: %w", err)
+	}
+	mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(identCfg), Exec: mutagen.OSExec}
+	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub, mutagenCLI, identCfg, ironProxyURL)
 }
 
 // TartLister is the subset of *tart.Tart the reconcile handler uses to
@@ -245,7 +257,7 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 					return
 				}
 			}
-			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, cfg.RuntimeDir(), req.Name, caPEM, req.SSHAuthorizedPubkey, req.SSHHostPriv, req.SSHHostPub); err != nil {
+			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, cfg.RuntimeDir(), req.Name, caPEM, req.SSHAuthorizedPubkey, req.SSHHostPriv, req.SSHHostPub, cfg, ironProxyURLFor(req.Name)); err != nil {
 				http.Error(w, fmt.Sprintf("apply live: %v", err), http.StatusInternalServerError)
 				return
 			}

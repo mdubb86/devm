@@ -259,6 +259,19 @@ type Change struct {
 	Op                 Op
 	Field              string
 	OldValue, NewValue any
+
+	// RepoBefore/RepoAfter and VolumeBefore/VolumeAfter carry the whole
+	// repos.<name>/volumes.<name> entry (not just the one field named by
+	// Field) on OpMutate KindRepoChange/KindVolumeChange entries.
+	// apply-live's session management needs the full entry — Path,
+	// Label, Ignore, URL, Secret — to resolve a session's name and
+	// mirror path regardless of which single field triggered the diff
+	// (e.g. an Ignore-only mutation still needs Label/Path to name the
+	// session it recreates). nil for every other ChangeKind and for
+	// OpAdd/OpRemove, which already carry the whole entry via
+	// OldValue/NewValue.
+	RepoBefore, RepoAfter     *schema.RepoConfig
+	VolumeBefore, VolumeAfter *schema.Volume
 }
 
 // Bucket returns the bucket this Change belongs to. Most kinds route
@@ -640,17 +653,20 @@ func volumeFieldChanges(name string, o, n schema.Volume) []Change {
 	var out []Change
 	if o.Path != n.Path {
 		out = append(out, Change{Kind: KindVolumeChange, Op: OpMutate, Key: name, Field: "path",
-			Old: o.Path, New: n.Path, OldValue: o.Path, NewValue: n.Path})
+			Old: o.Path, New: n.Path, OldValue: o.Path, NewValue: n.Path,
+			VolumeBefore: &o, VolumeAfter: &n})
 	}
 	if !stringPtrEqual(o.Label, n.Label) {
 		out = append(out, Change{Kind: KindVolumeChange, Op: OpMutate, Key: name, Field: "label",
 			Old: formatStringPtr(o.Label), New: formatStringPtr(n.Label),
-			OldValue: o.Label, NewValue: n.Label})
+			OldValue: o.Label, NewValue: n.Label,
+			VolumeBefore: &o, VolumeAfter: &n})
 	}
 	if !stringSliceEqual(o.Ignore, n.Ignore) {
 		out = append(out, Change{Kind: KindVolumeChange, Op: OpMutate, Key: name, Field: "ignore",
 			Old: strings.Join(o.Ignore, ","), New: strings.Join(n.Ignore, ","),
-			OldValue: o.Ignore, NewValue: n.Ignore})
+			OldValue: o.Ignore, NewValue: n.Ignore,
+			VolumeBefore: &o, VolumeAfter: &n})
 	}
 	return out
 }
@@ -667,9 +683,9 @@ func computeRepoChanges(old, new schema.Config) []Change {
 		newRepo, newOk := new.Repos[n]
 		switch {
 		case !oldOk && newOk:
-			out = append(out, Change{Kind: KindRepoChange, Op: OpAdd, Key: n})
+			out = append(out, Change{Kind: KindRepoChange, Op: OpAdd, Key: n, NewValue: newRepo})
 		case oldOk && !newOk:
-			out = append(out, Change{Kind: KindRepoChange, Op: OpRemove, Key: n})
+			out = append(out, Change{Kind: KindRepoChange, Op: OpRemove, Key: n, OldValue: oldRepo})
 		default:
 			out = append(out, repoFieldChanges(n, oldRepo, newRepo)...)
 		}
@@ -687,31 +703,37 @@ func repoFieldChanges(name string, o, n schema.RepoConfig) []Change {
 	if !stringPtrEqual(o.URL, n.URL) {
 		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "URL",
 			Old: formatStringPtr(o.URL), New: formatStringPtr(n.URL),
-			OldValue: o.URL, NewValue: n.URL})
+			OldValue: o.URL, NewValue: n.URL,
+			RepoBefore: &o, RepoAfter: &n})
 	}
 	if o.Secret != n.Secret {
 		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "Secret",
-			Old: o.Secret, New: n.Secret, OldValue: o.Secret, NewValue: n.Secret})
+			Old: o.Secret, New: n.Secret, OldValue: o.Secret, NewValue: n.Secret,
+			RepoBefore: &o, RepoAfter: &n})
 	}
 	if !stringPtrEqual(o.Label, n.Label) {
 		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "Label",
 			Old: formatStringPtr(o.Label), New: formatStringPtr(n.Label),
-			OldValue: o.Label, NewValue: n.Label})
+			OldValue: o.Label, NewValue: n.Label,
+			RepoBefore: &o, RepoAfter: &n})
 	}
 	if !boolPtrEqual(o.Volume, n.Volume) {
 		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "Volume",
 			Old: formatBoolPtr(o.Volume), New: formatBoolPtr(n.Volume),
-			OldValue: o.Volume, NewValue: n.Volume})
+			OldValue: o.Volume, NewValue: n.Volume,
+			RepoBefore: &o, RepoAfter: &n})
 	}
 	if !boolPtrEqual(o.Primary, n.Primary) {
 		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "Primary",
 			Old: formatBoolPtr(o.Primary), New: formatBoolPtr(n.Primary),
-			OldValue: o.Primary, NewValue: n.Primary})
+			OldValue: o.Primary, NewValue: n.Primary,
+			RepoBefore: &o, RepoAfter: &n})
 	}
 	if !stringSliceEqual(o.Ignore, n.Ignore) {
 		out = append(out, Change{Kind: KindRepoChange, Op: OpMutate, Key: name, Field: "Ignore",
 			Old: strings.Join(o.Ignore, ","), New: strings.Join(n.Ignore, ","),
-			OldValue: o.Ignore, NewValue: n.Ignore})
+			OldValue: o.Ignore, NewValue: n.Ignore,
+			RepoBefore: &o, RepoAfter: &n})
 	}
 	return out
 }
