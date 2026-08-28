@@ -166,6 +166,15 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		return fmt.Errorf("start ntp responder: %w", err)
 	}
 
+	// Adopt (or spawn) the mutagen daemon. Unlike iron-proxy, mutagen is
+	// a single daemon-wide process, not per-project — it's adopted here,
+	// ahead of the per-project iron-proxy adopt pass, since no project
+	// state depends on it. Best-effort: a failure (e.g. lsof missing)
+	// shouldn't block daemon startup; the watchdog actor below retries.
+	if err := AdoptMutagenDaemon(ctx, cfg, sup); err != nil {
+		fmt.Fprintf(os.Stderr, "mutagen adopt: %v\n", err)
+	}
+
 	// Adopt iron-proxy processes left running by a prior daemon
 	// instance. They survive daemon death by design (setsid on
 	// spawn); re-attaching here means /vm/stop and /vm/status
@@ -310,6 +319,20 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		watchdogCtx, cancel := context.WithCancel(ctx)
 		g.Add(func() error {
 			return runIronProxyWatchdog(watchdogCtx, cfg, sup, proxy, locks, denials)
+		}, func(error) {
+			cancel()
+		})
+	}
+
+	// Mutagen watchdog actor. Periodically checks whether the
+	// daemon-wide mutagen daemon has silently died and respawns it.
+	// Without this actor, a killed mutagen daemon leaves every
+	// project's volume sync stalled until the user notices and
+	// restarts devm.
+	{
+		watchdogCtx, cancel := context.WithCancel(ctx)
+		g.Add(func() error {
+			return runMutagenWatchdog(watchdogCtx, cfg, sup)
 		}, func(error) {
 			cancel()
 		})
