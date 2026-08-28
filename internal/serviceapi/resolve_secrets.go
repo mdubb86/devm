@@ -6,25 +6,25 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/secret"
 )
 
 // ResolveSecretBindings gathers every `!secret <name>` ref from cfg
-// (top-level env + per-service env, deduped) plus every repo secret
-// (`repo.secret` at top level and `volumes.<name>.repo.secret`,
-// inherited or own), looks each up in the on-disk secret store under
+// (top-level env + per-service env, deduped) plus every repos entry's
+// secret, looks each up in the on-disk secret store under
 // "<project>/<name>", and attaches the injection-host scope: for env
 // secrets, the hosts declared in network.allow; for repo secrets, the
-// host of the repo's own clone URL — so a bare top-level `repo.secret:`
+// host of the repo's own clone URL — so a bare `repos.<name>.secret:`
 // is sufficient, with no matching network.allow entry required.
 // Returns the bindings a caller hands to iron-proxy. A secret with no
 // host scope at all is still resolved and sent with empty Hosts
 // (iron-proxy omits it — never injects).
 //
-// macCwd resolves the top-level repo's clone URL when repo.url is nil
-// (`git remote get-url origin` in macCwd). Volumes always declare url
-// explicitly (schema-enforced), so macCwd is never consulted for them.
+// macCwd resolves a repos entry's clone URL when its url is nil (only
+// the primary entry may omit url; schema validation enforces this) via
+// `git remote get-url origin` in macCwd.
 //
 // Lives in serviceapi (not orchestrator) so the daemon can call it
 // directly against the on-disk file-store backend — the daemon
@@ -84,20 +84,20 @@ func ResolveSecretBindings(cfg schema.Config, backend secret.Backend, macCwd str
 }
 
 // RepoHosts returns the sorted, de-duplicated hosts implied by cfg's
-// top-level `repo:` declaration — the egress-allowlist entries that
-// clone needs beyond whatever network.allow already declares. macCwd
-// resolves the repo's URL when nil, exactly as ResolveSecretBindings
+// `repos:` declarations — the egress-allowlist entries that clone
+// needs beyond whatever network.allow already declares. macCwd
+// resolves a nil-url entry's URL, exactly as ResolveSecretBindings
 // does.
 func RepoHosts(cfg schema.Config, macCwd string) ([]string, error) {
 	_, hosts, err := repoSecretHosts(cfg, macCwd)
 	return hosts, err
 }
 
-// repoSecretHosts walks cfg's repo declarations and returns both the
-// secret-name -> hosts map (for ResolveSecretBindings' injection scope)
-// and the flat, sorted, de-duplicated host list (for RepoHosts' egress
-// scope). Every repo declaration schema-validates to a non-empty
-// effective secret, so the two views cover the same set of hosts.
+// repoSecretHosts walks cfg.Repos in sorted-key order and returns both
+// the secret-name -> hosts map (for ResolveSecretBindings' injection
+// scope) and the flat, sorted, de-duplicated host list (for
+// RepoHosts' egress scope). A repos entry with no secret (a public
+// repo needing no injected credential) contributes to neither view.
 func repoSecretHosts(cfg schema.Config, macCwd string) (map[string][]string, []string, error) {
 	bySecret := map[string]map[string]bool{}
 	seenHost := map[string]bool{}
@@ -128,10 +128,31 @@ func repoSecretHosts(cfg schema.Config, macCwd string) (map[string][]string, []s
 		return nil
 	}
 
-	// TODO(Task 17): walk cfg.Repos, deriving URL from macCwd via
-	// repohelpers.DeriveRepoURL when a given entry's URL is nil, and
-	// call add(secret, url) for each. No-op until then.
-	_ = add
+	names := make([]string, 0, len(cfg.Repos))
+	for name := range cfg.Repos {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		r := cfg.Repos[name]
+		if r.Secret == "" {
+			continue
+		}
+		rawURL := ""
+		if r.URL != nil {
+			rawURL = *r.URL
+		} else {
+			derived, err := repohelpers.DeriveRepoURL(macCwd)
+			if err != nil {
+				return nil, nil, err
+			}
+			rawURL = derived
+		}
+		if err := add(r.Secret, rawURL); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	out := make(map[string][]string, len(bySecret))
 	for s, hostSet := range bySecret {
