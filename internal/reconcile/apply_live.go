@@ -472,23 +472,39 @@ func tokenPlaceholderFor(secretName string) string {
 	return "__DEVM_SECRET_" + secretName + "__"
 }
 
-// cloneRepoInGuest runs `git clone` inside the guest as the devm user,
-// routed through iron-proxy — mirrors serviceapi.CloneRepoInGuest.
+// cloneRepoInGuest runs `git clone` inside the guest as the devm user.
+// Mirrors serviceapi.CloneRepoInGuest exactly — same shape, same
+// constraints — but lives here because internal/reconcile can't import
+// internal/serviceapi without a cycle. Keep the two in lockstep.
+//
+// Guest egress is transparently routed through iron-proxy by softnet
+// (:80 → ft.HTTP, :443 → ft.HTTPS under PolicyEnforced) so git just
+// clones normally; NO HTTP_PROXY. When a secret is configured,
+// iron-proxy sees the http.extraheader with the placeholder token and
+// substitutes the resolved secret on the wire. GIT_SSL_CAINFO points
+// at iron-proxy's MITM root cert so git trusts the intercepted TLS.
+//
+// When secretName is empty (public repo), the extraheader is omitted
+// entirely — sending a well-formed Basic auth header with a bogus
+// token makes hosts like github.com reject the clone even for public
+// reads. ironProxyURL is retained for API compatibility with the
+// SessionEntity plumbing but is not used on the guest side.
 func cloneRepoInGuest(exec GuestExec, url, secretName, guestTargetPath, ironProxyURL, guestCACertPath string) error {
-	authRaw := "x-access-token:" + tokenPlaceholderFor(secretName)
-	authB64 := base64.StdEncoding.EncodeToString([]byte(authRaw))
-	extraHeader := "Authorization: Basic " + authB64
+	_ = ironProxyURL
 
+	var configOpts string
+	if secretName != "" {
+		authRaw := "x-access-token:" + tokenPlaceholderFor(secretName)
+		authB64 := base64.StdEncoding.EncodeToString([]byte(authRaw))
+		extraHeader := "Authorization: Basic " + authB64
+		configOpts = "-c " + shellSingleQuoted("http.extraheader="+extraHeader) + " "
+	}
 	script := fmt.Sprintf(`sudo -u devm bash -c %s`, shellSingleQuoted(fmt.Sprintf(`set -e
-export HTTP_PROXY=%s
-export HTTPS_PROXY=%s
 export GIT_SSL_CAINFO=%s
-git clone --quiet -c %s %s %s
+git clone --quiet %s%s %s
 `,
-		ironProxyURL,
-		ironProxyURL,
 		guestCACertPath,
-		shellSingleQuoted("http.extraheader="+extraHeader),
+		configOpts,
 		shellSingleQuoted(url),
 		shellSingleQuoted(guestTargetPath),
 	)))

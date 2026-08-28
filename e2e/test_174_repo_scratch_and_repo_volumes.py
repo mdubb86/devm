@@ -3,11 +3,11 @@
 
 A repo secondary that wants its own Mac mirror lives in the `repos:`
 map with `volume: true` (schema.Volume has no Repo field). This pins
-that both coexist correctly in one project: the
-scratch volume stays empty in the guest on cold-start and persists a
-guest-written sentinel across a teardown + restart cycle (via its Mac
-mirror, not VM disk persistence), while the repo secondary is cloned
-in the guest and its own mirror holds the clone content.
+that both coexist correctly in one project: the scratch volume stays
+empty in the guest on cold-start and persists a guest-written sentinel
+across a teardown + restart cycle (via its Mac mirror, not VM disk
+persistence), while the repo secondary is cloned in the guest and its
+own mirror holds the clone content.
 """
 from __future__ import annotations
 import subprocess
@@ -18,6 +18,10 @@ from helpers.mutagen_e2e import mirror_path, session_prefix, sync_flush, sync_li
 
 pytestmark = pytest.mark.devm
 
+# Public github secondary — distinct from the fixture's Hello-World
+# so we can pin distinctive top-level files.
+SECONDARY_URL = "https://github.com/octocat/Spoon-Knife.git"
+
 
 def _flush_all(vm_name: str) -> None:
     for s in sync_list(session_prefix(vm_name)):
@@ -25,25 +29,19 @@ def _flush_all(vm_name: str) -> None:
 
 
 @pytest.mark.timeout(400)
-def test_scratch_and_repo_volumes_coexist(devm, workspace, tmp_path_factory):
-    work = tmp_path_factory.mktemp("repohydrated-work")
-    subprocess.run(["git", "-C", str(work), "init", "-q"], check=True)
-    (work / "repohydrated.txt").write_text("repohydrated\n")
-    subprocess.run(["git", "-C", str(work), "add", "."], check=True)
-    subprocess.run(
-        ["git", "-C", str(work), "-c", "user.email=e2e@e2e", "-c", "user.name=e2e",
-         "commit", "-q", "-m", "init"],
-        check=True,
-    )
-    bare = tmp_path_factory.mktemp("repohydrated-bare") / "repohydrated.git"
-    subprocess.run(["git", "clone", "--bare", "-q", str(work), str(bare)], check=True)
-    repohydrated_url = f"file://{bare}"
-    repohydrated_label = "repohydrated"  # BareCloneName of ".../repohydrated.git"
+def test_scratch_and_repo_volumes_coexist(devm, workspace):
+    secondary_label = "Spoon-Knife"
 
     workspace.write_devmyaml(
         repos={
-            "main": {"url": workspace.bare_repo_url(), "secret": "e2e_default", "primary": True},
-            "repohydrated": {"url": repohydrated_url, "secret": "e2e_default", "volume": True},
+            "main": {
+                "url": workspace.bare_repo_url(),
+                "primary": True,
+            },
+            "secondary": {
+                "url": SECONDARY_URL,
+                "volume": True,
+            },
         },
         volumes={"scratch": "/var/lib/scratch"},
     )
@@ -65,15 +63,17 @@ def test_scratch_and_repo_volumes_coexist(devm, workspace, tmp_path_factory):
             f"scratch volume should be empty, got: {r.stdout.decode()!r}"
         )
 
-        # Repo secondary: hydrated with clone content in the guest.
+        # Repo secondary: hydrated in the guest.
         r = subprocess.run(
-            [devm.path, "shell", "--", "cat", f"/home/devm/{repohydrated_label}/repohydrated.txt"],
+            [devm.path, "shell", "--", "ls", f"/home/devm/{secondary_label}"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, r.stderr.decode()
-        assert r.stdout.decode().strip() == "repohydrated"
+        assert "index.html" in r.stdout.decode(), (
+            f"secondary Spoon-Knife tree missing index.html; got:\n{r.stdout.decode()}"
+        )
 
-        # Write a sentinel into scratch, flush both sessions to their
+        # Write a sentinel into scratch, flush all sessions to their
         # Mac mirrors, then teardown + restart.
         r = subprocess.run(
             [devm.path, "shell", "--", "sudo", "sh", "-c",
@@ -84,7 +84,7 @@ def test_scratch_and_repo_volumes_coexist(devm, workspace, tmp_path_factory):
 
         _flush_all(workspace.vm_name)
         assert (mirror_path(workspace.vm_name, "scratch") / "sentinel").exists()
-        assert (mirror_path(workspace.vm_name, repohydrated_label) / "repohydrated.txt").exists()
+        assert (mirror_path(workspace.vm_name, secondary_label) / "index.html").exists()
 
         subprocess.run(
             [devm.path, "teardown", "--yes"],
@@ -107,14 +107,14 @@ def test_scratch_and_repo_volumes_coexist(devm, workspace, tmp_path_factory):
         assert r.returncode == 0, r.stderr.decode()
         assert r.stdout.decode().strip() == "sentinel"
 
-        # Repo secondary's clone survived too (re-synced from its
-        # Mac mirror, never re-cloned or wiped).
+        # Repo secondary's clone survived too (re-synced from its Mac
+        # mirror, never re-cloned or wiped).
         r = subprocess.run(
-            [devm.path, "shell", "--", "cat", f"/home/devm/{repohydrated_label}/repohydrated.txt"],
+            [devm.path, "shell", "--", "ls", f"/home/devm/{secondary_label}"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, r.stderr.decode()
-        assert r.stdout.decode().strip() == "repohydrated"
+        assert "index.html" in r.stdout.decode()
     finally:
         subprocess.run(
             [devm.path, "teardown", "--yes"],

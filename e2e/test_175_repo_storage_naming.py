@@ -41,18 +41,21 @@ def test_storage_naming_primary_and_secondary(devm, workspace):
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
 
+        # Hello-World ships a `README` (no extension).
         r = subprocess.run(
-            [devm.path, "shell", "--", "cat", f"/home/devm/{primary_label}/README.md"],
+            [devm.path, "shell", "--", "ls", f"/home/devm/{primary_label}"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, r.stderr.decode()
-        assert r.stdout.decode().strip() == "bare"
+        assert "README" in r.stdout.decode(), (
+            f"primary tree missing README; got:\n{r.stdout.decode()}"
+        )
 
         # Primary: mirror keyed by its resolved label (BareCloneName),
         # not the Mac cwd basename or the `repos:` map key ("main").
         primary_mirror = mirror_path(workspace.vm_name, primary_label)
-        assert (primary_mirror / "README.md").exists(), (
-            f"primary Mac mirror missing README.md at {primary_mirror}"
+        assert (primary_mirror / "README").exists(), (
+            f"primary Mac mirror missing README at {primary_mirror}"
         )
 
         # Named volume: mirror keyed by the leaf dir of its guest path
@@ -98,7 +101,10 @@ def test_volume_label_collision_rejected_then_resolved(devm, workspace):
         [devm.path, "reconcile"], cwd=str(workspace.path),
         capture_output=True, timeout=30,
     )
-    assert r.returncode == 0, (
+    # rc=0: no changes; rc=2: pending changes need confirmation — both
+    # are validation-passed (validation-failed would be rc=1).
+    assert r.returncode in (0, 2), (
         "reconcile should accept the config once the label collision is "
-        f"resolved: stdout={r.stdout.decode()!r} stderr={r.stderr.decode()!r}"
+        f"resolved: rc={r.returncode} stdout={r.stdout.decode()!r} "
+        f"stderr={r.stderr.decode()!r}"
     )
