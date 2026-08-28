@@ -464,7 +464,13 @@ func (d ShellDeps) setupMutagenSessions(ctx context.Context, cfg schema.Config, 
 		return fmt.Errorf("mutagen: build entities: %w", err)
 	}
 
-	guestSSHTarget := fmt.Sprintf("%s.%s", vmName, d.Ident.TLD)
+	// mutagen's ssh transport must resolve HostKeyAlias, UserKnownHostsFile,
+	// and IdentityFile from the per-project Host block in the managed
+	// ssh_config. That block is aliased `Host devm-<vmName>` — using the
+	// bare hostname <vmName>.<TLD> would not match any Host alias and ssh
+	// would fall back to the default known_hosts (which doesn't know the
+	// guest's host key), producing "Host key verification failed".
+	guestSSHTarget := "devm-" + vmName
 	ironProxyURL := fmt.Sprintf("http://%s:%d", softnet.NATAliasIP, tunnelPort)
 
 	if err := serviceapi.SetupPhase(ctx, mutagenCLI, d.Ident, vmName, entities, d.guestExec(ctx, vmName),
