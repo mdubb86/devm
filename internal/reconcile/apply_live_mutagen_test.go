@@ -309,6 +309,123 @@ func TestApplyMutagenSessionChange_PrimaryToggle_NoOp(t *testing.T) {
 	assert.Empty(t, rec.scripts, "a primary toggle must not touch the guest at all")
 }
 
+func TestApplyMutagenSessionChange_VolumePathMutate_MovesGuestDir(t *testing.T) {
+	withFakeMirrorDir(t, t.TempDir())
+	cli := &fakeMutagenCLI{listSessions: []mutagen.SyncSession{
+		{ID: "s1", Name: "devm-myproj-data", Status: "watching"},
+	}}
+	rec := &recordingExec{}
+
+	before := schema.Volume{Path: "/old-data", Label: strPtr("data")}
+	after := schema.Volume{Path: "/new-data", Label: strPtr("data")}
+	change := Change{
+		Kind: KindVolumeChange, Op: OpMutate, Key: "data", Field: "path",
+		VolumeBefore: &before, VolumeAfter: &after,
+	}
+	err := applyMutagenSessionChange(context.Background(), rec.exec(), cli.build(), testApplyIdentity(t), "myproj", "", change)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"s1"}, cli.flushCalls, "old session must be flushed before the guest dir moves")
+	assert.Equal(t, []string{"s1"}, cli.terminateCalls, "old session must be terminated before the guest dir moves")
+	assert.True(t, rec.containsCall("mv '/old-data' '/new-data'"), "must mv the guest dir to its new path")
+
+	require.Len(t, cli.createArgs, 1)
+	assert.Contains(t, cli.createArgs[0], "devm-myproj-data")
+	assert.Contains(t, cli.createArgs[0], "devm@myproj.test:/new-data")
+}
+
+func TestApplyMutagenSessionChange_RepoLabelRename_MovesGuestCloneDirAndRecreates(t *testing.T) {
+	root := t.TempDir()
+	withFakeMirrorDir(t, root)
+	cli := &fakeMutagenCLI{listSessions: []mutagen.SyncSession{
+		{ID: "s1", Name: "devm-myproj-oldname", Status: "watching"},
+	}}
+	rec := &recordingExec{}
+
+	// Pre-seed the old mirror dir with a marker file so the rename's
+	// os.Rename has real content to carry over.
+	oldMirror := filepath.Join(root, "myproj", "oldname")
+	require.NoError(t, os.MkdirAll(oldMirror, 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(oldMirror, "marker.txt"), []byte("hi"), 0o644))
+
+	before := schema.RepoConfig{URL: strPtr("git@example.com:a/repo.git"), Secret: "gh", Volume: boolPtr(true), Label: strPtr("oldname")}
+	after := schema.RepoConfig{URL: strPtr("git@example.com:a/repo.git"), Secret: "gh", Volume: boolPtr(true), Label: strPtr("newname")}
+	change := Change{
+		Kind: KindRepoChange, Op: OpMutate, Key: "extra", Field: "Label",
+		RepoBefore: &before, RepoAfter: &after,
+	}
+	err := applyMutagenSessionChange(context.Background(), rec.exec(), cli.build(), testApplyIdentity(t), "myproj", "", change)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"s1"}, cli.flushCalls)
+	assert.Equal(t, []string{"s1"}, cli.terminateCalls)
+	assert.True(t, rec.containsCall("mv '/home/devm/oldname' '/home/devm/newname'"),
+		"must mv the guest clone dir — unlike a volume, a repo's guest path is label-derived")
+
+	newMirror := filepath.Join(root, "myproj", "newname")
+	_, statErr := os.Stat(filepath.Join(newMirror, "marker.txt"))
+	require.NoError(t, statErr, "marker file must have moved with the mac mirror dir")
+	_, oldStatErr := os.Stat(oldMirror)
+	assert.True(t, os.IsNotExist(oldStatErr), "old mac mirror dir must no longer exist")
+
+	require.Len(t, cli.createArgs, 1)
+	assert.Contains(t, cli.createArgs[0], "devm-myproj-newname")
+	assert.Contains(t, cli.createArgs[0], "devm@myproj.test:/home/devm/newname")
+}
+
+func TestApplyMutagenSessionChange_RepoIgnoreChange_RegeneratesConfigAndRecreates(t *testing.T) {
+	withFakeMirrorDir(t, t.TempDir())
+	cli := &fakeMutagenCLI{listSessions: []mutagen.SyncSession{
+		{ID: "s1", Name: "devm-myproj-myrepo", Status: "watching"},
+	}}
+	// A non-empty, non-zero guest scan simulates an already-cloned repo
+	// so an ignore-only change doesn't spuriously re-clone.
+	rec := &recordingExec{guestCount: 5, guestSize: 500, guestHash: "abc"}
+
+	before := schema.RepoConfig{URL: strPtr("git@example.com:a/myrepo.git"), Secret: "gh", Volume: boolPtr(true), Ignore: []string{"*.log"}}
+	after := schema.RepoConfig{URL: strPtr("git@example.com:a/myrepo.git"), Secret: "gh", Volume: boolPtr(true), Ignore: []string{"*.log", "*.tmp"}}
+	change := Change{
+		Kind: KindRepoChange, Op: OpMutate, Key: "extra", Field: "Ignore",
+		RepoBefore: &before, RepoAfter: &after,
+	}
+	err := applyMutagenSessionChange(context.Background(), rec.exec(), cli.build(), testApplyIdentity(t), "myproj", "http://127.0.0.1:5555", change)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"s1"}, cli.flushCalls)
+	assert.Equal(t, []string{"s1"}, cli.terminateCalls)
+	assert.False(t, rec.containsCall("git clone"), "ignore-only change must not re-clone an already-populated repo")
+	require.Len(t, cli.createArgs, 1, "must recreate the session to pick up the new ignore list")
+	assert.Contains(t, cli.createArgs[0], "devm-myproj-myrepo")
+	assert.Contains(t, cli.createArgs[0], "devm@myproj.test:/home/devm/myrepo")
+}
+
+func TestApplyMutagenSessionChange_RepoOpRemove_TerminatesAndClearsMirror(t *testing.T) {
+	root := t.TempDir()
+	withFakeMirrorDir(t, root)
+	cli := &fakeMutagenCLI{listSessions: []mutagen.SyncSession{
+		{ID: "s1", Name: "devm-myproj-extra", Status: "watching"},
+	}}
+	rec := &recordingExec{}
+
+	// Empty mirror dir (no un-synced content) — must be cleaned up.
+	mirror := filepath.Join(root, "myproj", "extra")
+	require.NoError(t, os.MkdirAll(mirror, 0700))
+
+	change := Change{
+		Kind: KindRepoChange, Op: OpRemove, Key: "extra",
+		OldValue: schema.RepoConfig{URL: strPtr("git@example.com:a/extra.git"), Secret: "gh", Volume: boolPtr(true)},
+	}
+	err := applyMutagenSessionChange(context.Background(), rec.exec(), cli.build(), testApplyIdentity(t), "myproj", "", change)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"s1"}, cli.flushCalls)
+	assert.Equal(t, []string{"s1"}, cli.terminateCalls)
+	require.Empty(t, cli.createArgs, "remove must never create a session")
+
+	_, statErr := os.Stat(mirror)
+	assert.True(t, os.IsNotExist(statErr), "empty mac mirror dir must be cleaned up on remove")
+}
+
 func TestApplyMutagenSessionChange_RepoOpAdd_VolumeFalse_JustClones(t *testing.T) {
 	withFakeMirrorDir(t, t.TempDir())
 	cli := &fakeMutagenCLI{}

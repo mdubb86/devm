@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/caenv"
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/identity"
@@ -560,6 +561,34 @@ func terminateSessionIfExists(cli *mutagen.CLI, projectID, label string) error {
 	return nil
 }
 
+// removeMirrorIfEmpty removes label's Mac mirror dir when a
+// removed repo/volume's mirror holds nothing — pure housekeeping, not
+// required for correctness (a stale empty dir is harmless). A
+// non-empty mirror is left alone: it may hold content the mutagen
+// session never finished syncing back to the guest before the entry
+// was removed, and this isn't the place to silently discard it — the
+// daemon's project-purge path is what unconditionally clears mirrors.
+func removeMirrorIfEmpty(cfg identity.Config, projectID, label string) error {
+	mirror, err := resolveMirrorPath(cfg, projectID, label)
+	if err != nil {
+		return fmt.Errorf("resolve mac mirror for %s: %w", label, err)
+	}
+	entries, err := os.ReadDir(mirror)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read mac mirror %s: %w", mirror, err)
+	}
+	if len(entries) != 0 {
+		return nil
+	}
+	if err := os.Remove(mirror); err != nil {
+		return fmt.Errorf("rm mac mirror %s: %w", mirror, err)
+	}
+	return nil
+}
+
 // setupSingleSession brings spec's mutagen sync session up to date —
 // the apply-live analogue of serviceapi.SetupPhase for exactly one
 // entity: ensures both sides' mirror dirs exist, cold-start clones a
@@ -603,6 +632,7 @@ func setupSingleSession(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, p
 	}
 
 	if ok, reason := guardOK(macSide, guestSide); !ok {
+		daemonlog.Errorf("mutagen: guard rejected %s: %s", spec.Label, reason)
 		return fmt.Errorf("in-sync guard failed for %s: %s", spec.Label, reason)
 	}
 
@@ -683,7 +713,11 @@ func applyVolumeChange(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, pr
 		if !ok {
 			return fmt.Errorf("apply_live: volume remove %q: missing old value", change.Key)
 		}
-		return terminateSessionIfExists(cli, projectID, resolveVolumeLabel(vol))
+		label := resolveVolumeLabel(vol)
+		if err := terminateSessionIfExists(cli, projectID, label); err != nil {
+			return err
+		}
+		return removeMirrorIfEmpty(cfg, projectID, label)
 
 	case OpMutate:
 		before, after := change.VolumeBefore, change.VolumeAfter
@@ -777,7 +811,11 @@ func applyRepoChange(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, proj
 		if !repoVolumeEnabled(repo) {
 			return nil
 		}
-		return terminateSessionIfExists(cli, projectID, resolveRepoLabelForApply(repo))
+		label := resolveRepoLabelForApply(repo)
+		if err := terminateSessionIfExists(cli, projectID, label); err != nil {
+			return err
+		}
+		return removeMirrorIfEmpty(cfg, projectID, label)
 
 	case OpMutate:
 		before, after := change.RepoBefore, change.RepoAfter
