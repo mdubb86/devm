@@ -31,12 +31,10 @@ pytestmark = pytest.mark.devm
 _REPOS_COLLIDING = {
     "a": {
         "url": "https://example.test/team/proj.git",
-        "secret": "e2e_test",
         "primary": True,
     },
     "b": {
         "url": "https://example.test/otherteam/proj.git",
-        "secret": "e2e_test",
     },
 }
 
@@ -68,7 +66,11 @@ def test_repos_label_collision_rejected_then_resolved(devm, workspace):
         [devm.path, "reconcile"], cwd=str(workspace.path),
         capture_output=True, timeout=30,
     )
-    assert r.returncode == 0, (
+    # rc=0: no changes; rc=2: reconcile detected pending changes and
+    # is prompting for confirmation — validation passed either way
+    # (validation-failed is rc=1 with a schema error on stderr).
+    assert r.returncode in (0, 2), (
         "reconcile should accept the config once the label collision is "
-        f"resolved: stdout={r.stdout.decode()!r} stderr={r.stderr.decode()!r}"
+        f"resolved: rc={r.returncode} stdout={r.stdout.decode()!r} "
+        f"stderr={r.stderr.decode()!r}"
     )

@@ -54,7 +54,11 @@ def test_projectid_reserved_name_rejected_then_resolved(devm, workspace):
         [devm.path, "reconcile"], cwd=str(workspace.path),
         capture_output=True, timeout=30,
     )
-    assert r.returncode == 0, (
+    # rc=0: no changes; rc=2: pending changes need confirmation — both
+    # are validation-passed (validation-failed is rc=1 with a schema
+    # error on stderr).
+    assert r.returncode in (0, 2), (
         "reconcile should accept a project.name that isn't reserved: "
-        f"stdout={r.stdout.decode()!r} stderr={r.stderr.decode()!r}"
+        f"rc={r.returncode} stdout={r.stdout.decode()!r} "
+        f"stderr={r.stderr.decode()!r}"
     )

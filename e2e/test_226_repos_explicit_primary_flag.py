@@ -22,12 +22,10 @@ pytestmark = pytest.mark.devm
 _REPOS_BASE = {
     "a": {
         "url": "https://example.test/team/proj-a.git",
-        "secret": "e2e_test",
         "primary": True,
     },
     "b": {
         "url": "https://example.test/team/proj-b.git",
-        "secret": "e2e_test",
     },
 }
 
@@ -63,7 +61,11 @@ def test_repos_explicit_primary_flag(devm, workspace):
         [devm.path, "reconcile"], cwd=str(workspace.path),
         capture_output=True, timeout=30,
     )
-    assert r.returncode == 0, (
+    # rc=0: no changes; rc=2: reconcile detected pending changes and
+    # is prompting for confirmation — either is a validation-passed
+    # state (validation-failed is rc=1 with a schema error on stderr).
+    assert r.returncode in (0, 2), (
         f"reconcile should accept an explicit primary: true among "
-        f"URL'd entries: stdout={r.stdout.decode()!r} stderr={r.stderr.decode()!r}"
+        f"URL'd entries: rc={r.returncode} stdout={r.stdout.decode()!r} "
+        f"stderr={r.stderr.decode()!r}"
     )
