@@ -38,12 +38,15 @@ def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
         assert r.returncode == 0, r.stderr.decode()
 
         # Guest sees the cloned content at /home/devm/<label>.
+        # Hello-World ships a `README` (no extension).
         r = subprocess.run(
-            [devm.path, "shell", "--", "cat", f"/home/devm/{label}/README.md"],
+            [devm.path, "shell", "--", "ls", f"/home/devm/{label}"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, r.stderr.decode()
-        assert r.stdout.decode().strip() == "bare"
+        assert "README" in r.stdout.decode(), (
+            f"expected README in guest tree; got:\n{r.stdout.decode()}"
+        )
 
         # Mac mirror populated after a flush.
         sessions = sync_list(session_prefix(workspace.vm_name))
@@ -52,8 +55,8 @@ def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
         assert r.returncode == 0, f"mutagen sync flush failed:\n{r.stderr}"
 
         mirror = mirror_path(workspace.vm_name, label)
-        assert (mirror / "README.md").exists(), (
-            f"primary Mac mirror {mirror} missing cloned README.md"
+        assert (mirror / "README").exists(), (
+            f"primary Mac mirror {mirror} missing cloned README"
         )
     finally:
         subprocess.run(
