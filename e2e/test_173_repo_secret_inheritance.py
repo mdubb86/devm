@@ -42,7 +42,7 @@ def _make_bare_repo(tmp_path_factory, marker: str) -> str:
 def test_secrets_declared_independently_per_entry(devm, workspace, tmp_path_factory):
     secondary_url = _make_bare_repo(tmp_path_factory, "secondary")
     secondary_label = "repo"  # BareCloneName of ".../repo.git"
-    primary_label = f"{workspace.path.name}-repo"
+    primary_label = workspace.bare_repo_label()
 
     for name in ("s1", "s2"):
         subprocess.run(

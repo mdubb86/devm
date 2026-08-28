@@ -38,6 +38,16 @@ class Workspace:
         """
         return E2E_FIXTURE_REPO_URL
 
+    def bare_repo_label(self) -> str:
+        """Return schema.BareCloneName(bare_repo_url()) — the label devm
+        derives for the default `repos.main` entry. Kept as a helper so
+        tests don't hardcode the shape (previous fixture used a
+        `<slug>-repo.git` URL, giving label `<slug>-repo`; switching to
+        github.com/octocat/Hello-World.git changed the label to
+        `Hello-World`, and every test that had computed the label from
+        `path.name + "-repo"` silently broke). Read this instead."""
+        return "Hello-World"
+
     def teardown(self) -> None:
         """Present for symmetry with fixtures that manage per-workspace
         resources; no-op today.

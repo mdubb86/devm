@@ -39,7 +39,7 @@ def test_user_ignore_composes_and_negates(devm, workspace):
             },
         },
     )
-    label = f"{workspace.path.name}-repo"
+    label = workspace.bare_repo_label()
 
     try:
         r = subprocess.run(

@@ -42,7 +42,7 @@ def _make_bare_repo(tmp_path_factory, marker: str) -> str:
 @pytest.mark.timeout(300)
 def test_multi_repo_both_mount(devm, workspace, tmp_path_factory):
     secondary_url = _make_bare_repo(tmp_path_factory, "secondary")
-    primary_label = f"{workspace.path.name}-repo"  # BareCloneName of bare_repo_url()
+    primary_label = workspace.bare_repo_label()
     secondary_label = "repo"  # BareCloneName of ".../repo.git"
 
     workspace.write_devmyaml(

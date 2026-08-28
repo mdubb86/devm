@@ -19,7 +19,7 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(240)
 def test_default_ignores_apply(devm, workspace):
     workspace.write_devmyaml()  # default repos.main only
-    label = f"{workspace.path.name}-repo"
+    label = workspace.bare_repo_label()
 
     try:
         r = subprocess.run(

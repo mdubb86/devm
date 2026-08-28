@@ -29,7 +29,7 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(300)
 def test_storage_naming_primary_and_secondary(devm, workspace):
-    primary_label = f"{workspace.path.name}-repo"  # BareCloneName of bare_repo_url()
+    primary_label = workspace.bare_repo_label()
     workspace.write_devmyaml(
         volumes={"mydata": "/mnt/mydata"},
     )

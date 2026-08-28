@@ -28,7 +28,7 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(300)
 def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
     workspace.write_devmyaml()  # fixture's default repos.main is enough
-    label = f"{workspace.path.name}-repo"  # BareCloneName of bare_repo_url()
+    label = workspace.bare_repo_label()
 
     try:
         r = subprocess.run(

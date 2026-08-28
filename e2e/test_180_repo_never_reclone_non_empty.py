@@ -41,7 +41,7 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(300)
 def test_never_reclone_divergent_mirror(devm, workspace):
     workspace.write_devmyaml()  # default repos.main only
-    label = f"{workspace.path.name}-repo"
+    label = workspace.bare_repo_label()
 
     try:
         r = subprocess.run(

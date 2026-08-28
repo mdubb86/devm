@@ -19,7 +19,7 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(180)
 def test_session_created_on_start(devm, workspace):
     workspace.write_devmyaml()  # default repos.main only
-    label = f"{workspace.path.name}-repo"  # BareCloneName of bare_repo_url()
+    label = workspace.bare_repo_label()
 
     try:
         r = subprocess.run(

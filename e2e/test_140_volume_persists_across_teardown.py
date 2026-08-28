@@ -37,7 +37,7 @@ def _flush_all(vm_name: str) -> None:
 @pytest.mark.slow
 def test_volume_persists_across_teardown(devm, workspace, sandbox_name):
     workspace.write_devmyaml(volumes={"scratch": "/var/lib/scratch"})
-    primary_label = f"{workspace.path.name}-repo"  # BareCloneName of bare_repo_url()
+    primary_label = workspace.bare_repo_label()
 
     try:
         r = subprocess.run(
