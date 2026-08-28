@@ -12,24 +12,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func writeWorkspaceSnapshot(t *testing.T, projectID, macCwd string) {
+func writeWorkspaceSnapshot(t *testing.T, projectID string) {
 	t.Helper()
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
 		Cfg: schema.Config{
 			Project: schema.Project{Name: projectID},
 		},
-		WorkspaceHostPath: macCwd,
 	}))
 }
 
 // TestResolveEndpoint_NoOpUntilReposMap pins listWorkspaces' current
-// TODO(Task 17) interim behavior: /workspaces reports no entries at
+// TODO(Task 24) interim behavior: /workspaces reports no entries at
 // all, even for projects with persisted snapshots, until the
 // primary-repo lookup is rewritten against Cfg.Repos.
 func TestResolveEndpoint_NoOpUntilReposMap(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	writeWorkspaceSnapshot(t, "sewtrue", "/Users/me/projects/sewtrue")
+	writeWorkspaceSnapshot(t, "sewtrue")
 
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
 	RegisterWorkspacesHandler(srv, identity.Prod)

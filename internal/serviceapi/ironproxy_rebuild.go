@@ -14,9 +14,11 @@ import (
 // project's iron-proxy from daemon-readable state: listener ports from
 // the on-disk config, allowlist + secret refs from the state snapshot's
 // cfg, and secret VALUES from the on-disk secret store. The daemon can
-// do this entirely on its own. macCwd is the project's persisted
-// WorkspaceHostPath — needed to re-derive a top-level repo's URL when
-// repo.url is nil, exactly as the CLI's cold-start path does.
+// do this entirely on its own. macCwd is the project's Mac-side
+// working directory — needed to re-derive a top-level repo's URL when
+// repo.url is nil, exactly as the CLI's cold-start path does. Callers
+// that have no repoRoot to hand (see TODO(Task 24) at the watchdog
+// call site) pass "", degrading only the URL-nil-primary case.
 func rebuildIronProxyConfig(cfg identity.Config, projectID string, snapCfg schema.Config, macCwd string) (IronProxyConfig, error) {
 	cfgPath, err := IronProxyConfigPath(cfg, projectID)
 	if err != nil {

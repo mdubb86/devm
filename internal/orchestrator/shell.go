@@ -402,12 +402,11 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		fmt.Fprintf(os.Stderr, "state: render templates for seed snapshot %s failed: %v\n", cfg.Project.Name, err)
 	}
 	snap := serviceapi.StateSnapshot{
-		Cfg:               cfg,
-		TemplateContents:  templateContents,
-		SecretHashes:      SecretHashesFromBindings(bindings),
-		ProxyVersion:      ironproxy.EmbeddedSha256(), // stamp the version that just provisioned
-		ProjectIP:         projectIP,
-		WorkspaceHostPath: repoRoot,
+		Cfg:              cfg,
+		TemplateContents: templateContents,
+		SecretHashes:     SecretHashesFromBindings(bindings),
+		ProxyVersion:     ironproxy.EmbeddedSha256(), // stamp the version that just provisioned
+		ProjectIP:        projectIP,
 	}
 	if err := serviceapi.WriteStateSnapshot(d.Ident, cfg.Project.Name, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)

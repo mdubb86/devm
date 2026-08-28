@@ -113,7 +113,10 @@ func respawnIronProxyFromState(
 		return errors.New("no state snapshot")
 	}
 
-	proxyCfg, err := rebuildIronProxyConfig(cfg, projectID, snap.Cfg, snap.WorkspaceHostPath)
+	// TODO(Task 24): macCwd is no longer persisted on StateSnapshot
+	// (WorkspaceHostPath removed); a URL-nil primary repo's host/secret
+	// resolution degrades until this has a repoRoot source again.
+	proxyCfg, err := rebuildIronProxyConfig(cfg, projectID, snap.Cfg, "")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("no prior iron-proxy config on disk (project may be stopping)")

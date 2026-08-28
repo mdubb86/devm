@@ -284,7 +284,7 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 				http.Error(w, fmt.Sprintf("push test hosts: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := WriteStateSnapshot(cfg, req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, ProjectIP: projectIP, WorkspaceHostPath: req.WorkspaceHostPath}); err != nil {
+			if err := WriteStateSnapshot(cfg, req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, ProjectIP: projectIP}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}

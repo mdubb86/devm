@@ -10,15 +10,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mdubb86/devm/internal/caenv"
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/softnet"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -50,9 +52,10 @@ type VMStartRequest struct {
 	MacCwd    string          `json:"mac_cwd"`
 	AllowList []string        `json:"allow_list,omitempty"`
 	Secrets   []SecretBinding `json:"secrets,omitempty"`
-	// ExtraMounts are additional host paths to share into the VM at the
-	// same absolute path (mirrored). Each entry is the CLI-resolved form
-	// `ABS_HOST_PATH[:ro]` (see schema.ResolveMount).
+	// ExtraMounts is accepted for wire compatibility with the CLI's
+	// `mounts:` resolution (schema.ResolveMount) but is no longer
+	// consumed: mounts: was a virtiofs-only mechanism and has no
+	// mutagen-sync equivalent yet.
 	ExtraMounts []string `json:"extra_mounts,omitempty"`
 	// DiskSizeGB, when > 0, grows this VM's virtual disk to the given
 	// gigabytes at clone time (a per-project `disk:` override). Zero
@@ -600,89 +603,12 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 
 		// Run options: softnet NIC, no graphics. softnet is the daemon's
-		// sole egress path for every VM it launches.
+		// sole egress path for every VM it launches. Volumes, repos, and
+		// extra mounts are no longer virtiofs shares — mutagen sync
+		// sessions (SetupPhase, below) carry that traffic instead.
 		opts := tart.RunOpts{
 			NoGraphics: true,
 			NetSoftnet: true,
-		}
-		// Extra user-declared mounts. Each entry is `HOST_PATH[:ro]`
-		// (already resolved CLI-side); tag is `extra_N` so the guest-side
-		// mount script can address each share independently.
-		//
-		// We deliberately DON'T pass ReadOnly through to tart's --dir.
-		// Apple Virtualization's parser gets confused by
-		// `--dir=<path>:ro:tag=X` (interprets the path segment as the
-		// share name — slashes then reject as "file system sensitive
-		// characters"). Enforcing read-only via the guest mount script
-		// (`mount -o ro`) is equivalent for our use.
-		extraMountSpecs := parseExtraMounts(req.ExtraMounts)
-		for i, m := range extraMountSpecs {
-			opts.DirMounts = append(opts.DirMounts, tart.DirMount{
-				HostPath: m.hostPath,
-				Tag:      fmt.Sprintf("extra_%d", i),
-			})
-		}
-		// Persistent volumes — one --dir per declared volume. Each
-		// share is Mac-side (RuntimeDir/<project>/<name>/,
-		// created if missing) and lands in the guest at /mnt/vol_<name>/,
-		// which the volume mount script bind-mounts at the declared
-		// target path. Data survives `devm teardown` — the disk goes
-		// but the Mac dir doesn't.
-		//
-		// volumeState captures the observed Mac-side empty state per
-		// volume before the guest boots; buildVolumeMountScript reads
-		// it later to pick the four-case action (mount / adopt /
-		// error). repo, when non-nil, is hydrated (git clone) into
-		// macPath once iron-proxy is up and only if wasEmpty — see the
-		// hydration pass after SpawnIronProxy below.
-		type volumeState struct {
-			name     string
-			target   string
-			macPath  string
-			wasEmpty bool
-			repo     *schema.RepoConfig
-			mountTag string // virtiofs tag (may differ from name for the primary)
-		}
-		var volumes []volumeState
-		// TODO(Task 17): walk req.Cfg.Repos for the entry with Primary
-		// == true, deriving its URL from req.MacCwd when nil, and
-		// synthesize its volumeState (ensureMirrorDir + DirMounts +
-		// append, as the per-name loop below does for req.Cfg.Volumes).
-		// No-op until then.
-		// Sort volume names for deterministic mount order across boots
-		// (no functional effect, but makes logs comparable).
-		volNames := make([]string, 0, len(req.Cfg.Volumes))
-		for n := range req.Cfg.Volumes {
-			volNames = append(volNames, n)
-		}
-		sort.Strings(volNames)
-		for _, name := range volNames {
-			target := req.Cfg.Volumes[name].Path
-			macPath, wasEmpty, err := ensureMirrorDir(cfg, req.Name, name)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("ensure volume dir %s: %v", name, err), http.StatusInternalServerError)
-				return
-			}
-			opts.DirMounts = append(opts.DirMounts, tart.DirMount{
-				HostPath: macPath,
-				Tag:      "vol_" + name,
-			})
-			volumes = append(volumes, volumeState{
-				// TODO(task 6): secondary-volume hydration moves to top-level `repos:`.
-				name: name, target: target, macPath: macPath, wasEmpty: wasEmpty, repo: nil, mountTag: name,
-			})
-		}
-		// Make devm.yaml (+ devm.me.yaml) host-immutable before the guest
-		// ever boots, so a root guest never sees a writable window onto its
-		// own trust boundary. Best-effort: a chflags failure must not block
-		// the VM from starting; config_lock:false opts a project out
-		// entirely.
-		if req.Cfg.ConfigLockEnabled() {
-			if err := lockConfigFiles(req.MacCwd); err != nil {
-				daemonlog.Errorf("configlock: lock config for %s: %v (continuing)", req.Name, err)
-			} else {
-				configLockState.put(req.Name, req.MacCwd)
-			}
 		}
 
 		cmd, err := tr.Run(ctx, req.Name, opts)
@@ -856,43 +782,17 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info.PopPort = popPort
 		ironProxyState.put(req.Name, info)
 
-		// Give the Mac cwd a short, ergonomic path into the primary
-		// volume's persistent storage now that it's materialized:
-		// <macCwd>/.vm symlink, kept out of git via .git/info/exclude.
-		// Best-effort — a failure here doesn't block the VM from
-		// starting; the user can fix the .vm dir manually.
-		// TODO(Task 17): rewrite for the Repos map — re-enable the .vm
-		// symlink + git-exclude bookkeeping keyed off req.Cfg.Repos'
-		// primary entry. No-op until then.
-
-		// Apply VM-side config via tart exec — extra mounts, volumes, env
-		// only. timesyncd's NTP config is baked into the base image
-		// (image/provision-base.sh), not applied here — the user's
-		// install:, apt-get, and template-install steps still run with
-		// open egress; iron-proxy is meant to gate the workload/services,
-		// not the developer's provisioning phase.
-		scripts := []string{}
-		// Extra mounts must land BEFORE the env script so scripts that
-		// read files from an extra mount can find them. Order among
-		// extras doesn't matter — each is independent.
-		for i, m := range extraMountSpecs {
-			scripts = append([]string{
-				buildExtraMountScript(fmt.Sprintf("extra_%d", i), m.hostPath, m.readOnly),
-			}, scripts...)
-		}
-		// Volume mount scripts. Run after extra mounts (so /mnt is stable)
-		// and before any user-side provisioning. Each script substitutes
-		// the Mac-side path into the conflict message so the user sees
-		// where their data lives.
-		for _, v := range volumes {
-			script := buildVolumeMountScript(v.mountTag, v.target, v.wasEmpty)
-			script = strings.ReplaceAll(script, "$MAC_VOLUME_DIR", v.macPath)
-			scripts = append(scripts, script)
-		}
+		// Apply VM-side config via tart exec. timesyncd's NTP config is
+		// baked into the base image (image/provision-base.sh), not
+		// applied here — the user's install:, apt-get, and
+		// template-install steps still run with open egress; iron-proxy
+		// is meant to gate the workload/services, not the developer's
+		// provisioning phase.
+		var scripts []string
 		// On a freshly-cloned VM that got a disk override, grow the guest
 		// filesystem first so subsequent steps see the full disk.
 		if !exists && req.DiskSizeGB > 0 {
-			scripts = append([]string{buildGrowRootScript()}, scripts...)
+			scripts = append(scripts, buildGrowRootScript())
 		}
 		for i, script := range scripts {
 			cmd := exec.Command("tart", "exec", "-i", req.Name, "sudo", "bash", "-s")
@@ -922,6 +822,38 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			info.GuestHTTPPort = guestHTTPPort
 			info.GuestHTTPSPort = guestHTTPSPort
 			ironProxyState.put(req.Name, info)
+		}
+
+		// Bring every declared repo/volume's mutagen sync session up to
+		// date: cold-start clone (if needed), guard check, then create
+		// or resume the session. Replaces the virtiofs volume/repo
+		// mounts removed above.
+		mutagenBin, err := mutagen.Ensure(cfg.RuntimeDir())
+		if err != nil {
+			teardownFailedVMStart(ctx, sup, tr, cfg, denials, req.Name)
+			http.Error(w, "mutagen: extract binary: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(cfg)}
+		entities, err := BuildEntities(&req.Cfg, req.MacCwd)
+		if err != nil {
+			teardownFailedVMStart(ctx, sup, tr, cfg, denials, req.Name)
+			http.Error(w, "mutagen: build entities: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		guestSSHTarget := fmt.Sprintf("%s.%s", req.Name, cfg.TLD)
+		// NATAliasIP is the guest-visible address that softnet NATs to
+		// the host's loopback (see internal/softnet/egress.go) — the
+		// only guest-reachable path to iron-proxy's tunnel_listen
+		// (CONNECT-capable, unlike http_listen/https_listen) for the
+		// explicit HTTP_PROXY a guest-side git clone needs.
+		ironProxyURL := fmt.Sprintf("http://%s:%d", softnet.NATAliasIP, info.TunnelPort)
+		if err := SetupPhase(ctx, mutagenCLI, cfg, req.Name, entities, tartGuestExec(req.Name),
+			guestSSHTarget, ironProxyURL, guestGitCACertPath()); err != nil {
+			daemonlog.Errorf("mutagen: setup failed for %s: %v", req.Name, err)
+			teardownFailedVMStart(ctx, sup, tr, cfg, denials, req.Name)
+			http.Error(w, "mutagen setup: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		writeJSON(w, VMStartResponse{ProjectIP: projectIP})
@@ -1060,18 +992,13 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// Unlock devm.yaml (+ devm.me.yaml) via a defer at the top so
 		// no intermediate failure below — iron-proxy sup.Stop erroring,
 		// a panic, an early http.Error — can strand the file
-		// host-immutable. The registry is the normal source; the state
-		// snapshot's WorkspaceHostPath is the fallback for a project
-		// adopted across a daemon restart that hasn't gone through
-		// /vm/start (and thus recoverProjectState) again yet. No-op
-		// when locking was disabled (config_lock:false) or never
-		// happened, since no repoRoot resolves in that case.
+		// host-immutable. No-op when locking was disabled
+		// (config_lock:false) or never happened, since no repoRoot
+		// resolves in that case.
 		defer func() {
 			repoRoot := ""
 			if e, ok := configLockState.get(req.Name); ok {
 				repoRoot = e.repoRoot
-			} else if snap, _ := ReadStateSnapshot(cfg, req.Name); snap != nil {
-				repoRoot = snap.WorkspaceHostPath
 			}
 			if repoRoot != "" {
 				if err := unlockConfigFiles(repoRoot); err != nil {
@@ -1445,6 +1372,44 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(snap)
 	})
+}
+
+// tartGuestExec returns a GuestExec that runs script inside vmName via
+// `tart exec ... sudo bash -s`, matching the invocation the /vm/start
+// inject loop already uses (root, script on stdin). Scripts embed their
+// own `sudo -u devm` where they need to drop privileges, mirroring
+// ensureGuestDirScript / CloneRepoInGuest's own scripts.
+func tartGuestExec(vmName string) GuestExec {
+	return func(script string) (stdout, stderr string, exitCode int, err error) {
+		cmd := exec.Command("tart", "exec", "-i", vmName, "sudo", "bash", "-s")
+		cmd.Stdin = strings.NewReader(script)
+		var outBuf, errBuf strings.Builder
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &errBuf
+		runErr := cmd.Run()
+		if runErr != nil {
+			if exitErr, ok := runErr.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				err = runErr
+			}
+		}
+		return outBuf.String(), errBuf.String(), exitCode, err
+	}
+}
+
+// guestGitCACertPath returns the guest-side CA bundle path git trusts
+// for a proxied clone — the same value devm exports as GIT_SSL_CAINFO
+// via caenv.Vars (internal/caenv is the single source of truth for
+// this path; see its "SSL_CERT_FILE trap" warning against pointing at
+// the raw devm.crt instead of the merged system bundle).
+func guestGitCACertPath() string {
+	for _, v := range caenv.Vars {
+		if v.Key == "GIT_SSL_CAINFO" {
+			return v.Value
+		}
+	}
+	return ""
 }
 
 // pickPort returns a free ephemeral TCP port: bind to :0 on 0.0.0.0

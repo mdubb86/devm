@@ -64,10 +64,10 @@ func listWorkspaces(cfg identity.Config) ([]WorkspaceEntry, error) {
 		if err != nil || snap == nil {
 			continue
 		}
-		// TODO(Task 17): resolve the entry in snap.Cfg.Repos with
-		// Primary == true and, when snap.WorkspaceHostPath is set,
-		// append a WorkspaceEntry for it (guest path + StoragePath via
-		// mirrorMacDir). No-op (skip every project) until then.
+		// TODO(Task 24): resolve the entry in snap.Cfg.Repos with
+		// Primary == true and append a WorkspaceEntry for it (guest path
+		// + StoragePath via mirrorMacDir). No-op (skip every project)
+		// until then.
 	}
 	return out, nil
 }

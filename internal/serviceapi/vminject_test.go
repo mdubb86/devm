@@ -19,32 +19,6 @@ func TestBuildGrowRootScript(t *testing.T) {
 	assert.True(t, strings.Contains(s, "growpart /dev/vda 1 || true"))
 }
 
-func TestParseExtraMounts_RWAndRO(t *testing.T) {
-	got := parseExtraMounts([]string{
-		"/Users/x/data",
-		"/Users/x/ro-thing:ro",
-		"", // dropped
-	})
-	require.Len(t, got, 2)
-	assert.Equal(t, extraMount{hostPath: "/Users/x/data", readOnly: false}, got[0])
-	assert.Equal(t, extraMount{hostPath: "/Users/x/ro-thing", readOnly: true}, got[1])
-}
-
-func TestBuildExtraMountScript_RW(t *testing.T) {
-	script := buildExtraMountScript("extra_0", "/Users/x/data", false)
-	assert.Contains(t, script, "mkdir -p /Users/x/data")
-	assert.Contains(t, script, "mount -t virtiofs extra_0 /Users/x/data")
-	assert.Contains(t, script, "extra_0 /Users/x/data virtiofs rw,_netdev 0 0")
-	// RW must not pass -o ro to mount.
-	assert.NotContains(t, script, "-o ro")
-}
-
-func TestBuildExtraMountScript_ReadOnly(t *testing.T) {
-	script := buildExtraMountScript("extra_1", "/Users/x/ro-thing", true)
-	assert.Contains(t, script, "mount -o ro -t virtiofs extra_1 /Users/x/ro-thing")
-	assert.Contains(t, script, "extra_1 /Users/x/ro-thing virtiofs ro,_netdev 0 0")
-}
-
 // TestVminject_NoDirectEtcEnvironmentWrite pins that vminject.go
 // contains no `tee /etc/environment` — /etc/environment travels
 // with the bundle now (see internal/devmbundle + install.sh). A
