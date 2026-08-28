@@ -136,6 +136,28 @@ func TestMountPassthrough_PicksDeepestContainingEntry(t *testing.T) {
 	assert.Equal(t, filepath.Join(cfg.RuntimeDir(), "myproj", "data", "x.db"), gotHost)
 }
 
+func TestMountPassthrough_NoMirrorSecondary_FallsBackToPipe(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate cfg.RuntimeDir() from the real HOME
+	repoRoot := t.TempDir()
+	mainURL := "https://example.com/main.git"
+	primary := true
+	dataURL := "https://example.com/data.git"
+	pcfg := schema.Config{
+		Repos: map[string]schema.RepoConfig{
+			"main": {URL: &mainURL, Primary: &primary},
+			"data": {URL: &dataURL}, // volume: unset -> NoMirror, no Mac mirror dir exists
+		},
+	}
+
+	// A NoMirror secondary has no Mac-side mirror storage — cp must not
+	// synthesize a passthrough path into a mirror dir that was never
+	// created, and must instead report no known mount so the caller
+	// falls back to pipe transport.
+	gotHost, gotOK := mountPassthrough("/home/devm/data/src/main.go", repoRoot, pcfg, "myproj")
+	assert.False(t, gotOK)
+	assert.Empty(t, gotHost)
+}
+
 func TestMountPassthrough_PathOutsideAnyEntry(t *testing.T) {
 	repoRoot := t.TempDir()
 	url := "https://example.com/main.git"

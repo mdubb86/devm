@@ -66,7 +66,7 @@ func TestBuildEntities_PrimaryPlusSecondaryVolumeTrue(t *testing.T) {
 	assert.True(t, labels["data"])
 }
 
-func TestBuildEntities_PrimaryPlusSecondaryVolumeFalse_Excluded(t *testing.T) {
+func TestBuildEntities_VolumeFalseSecondary_IncludedAsNoMirror(t *testing.T) {
 	cfg := &schema.Config{
 		Repos: map[string]schema.RepoConfig{
 			"app":  {URL: strPtr("git@github.com:me/app.git"), Primary: boolPtr(true)},
@@ -75,8 +75,45 @@ func TestBuildEntities_PrimaryPlusSecondaryVolumeFalse_Excluded(t *testing.T) {
 	}
 	entities, err := BuildEntities(cfg, "/Users/me/whatever")
 	require.NoError(t, err)
-	require.Len(t, entities, 1)
-	assert.Equal(t, "app", entities[0].Label)
+	require.Len(t, entities, 2)
+
+	var app, data *SessionEntity
+	for i := range entities {
+		switch entities[i].Label {
+		case "app":
+			app = &entities[i]
+		case "data":
+			data = &entities[i]
+		}
+	}
+	require.NotNil(t, app)
+	require.NotNil(t, data)
+	assert.False(t, app.NoMirror, "primary is always mirrored")
+	assert.True(t, data.NoMirror, "volume:false secondary is cold-start-clone only, no mirror session")
+	require.NotNil(t, data.Repo)
+	assert.Equal(t, "git@github.com:me/data.git", data.Repo.URL)
+	assert.Equal(t, "/home/devm/data", data.GuestPath)
+}
+
+func TestBuildEntities_VolumeNilSecondary_IncludedAsNoMirror(t *testing.T) {
+	cfg := &schema.Config{
+		Repos: map[string]schema.RepoConfig{
+			"app":  {URL: strPtr("git@github.com:me/app.git"), Primary: boolPtr(true)},
+			"data": {URL: strPtr("git@github.com:me/data.git")},
+		},
+	}
+	entities, err := BuildEntities(cfg, "/Users/me/whatever")
+	require.NoError(t, err)
+	require.Len(t, entities, 2)
+
+	var data *SessionEntity
+	for i := range entities {
+		if entities[i].Label == "data" {
+			data = &entities[i]
+		}
+	}
+	require.NotNil(t, data)
+	assert.True(t, data.NoMirror, "volume-unset secondary defaults to cold-start-clone only")
 }
 
 func TestBuildEntities_VolumesIncluded(t *testing.T) {
@@ -346,6 +383,81 @@ func TestSetupPhase_DivergentGuardRejects(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "app")
 	assert.Empty(t, sc.createArgs, "guard rejection must not create a session")
+}
+
+func TestSetupPhase_NoMirrorEntity_ClonesButNoSession(t *testing.T) {
+	cfg := testSessionsIdentity(t)
+	sc := &scriptedCLI{} // empty sync list — sync/create must NEVER be called
+	cli := sc.build()
+
+	var cloneScripts []string
+	exec := func(script string) (string, string, int, error) {
+		if strings.Contains(script, "git clone") {
+			cloneScripts = append(cloneScripts, script)
+		}
+		if strings.Contains(script, "find .") {
+			return "count=0 size=0 hash=-\n", "", 0, nil
+		}
+		return "", "", 0, nil
+	}
+
+	entities := []SessionEntity{
+		{
+			Label:     "data",
+			GuestPath: "/home/devm/data",
+			NoMirror:  true,
+			Repo:      &SessionRepoInfo{URL: "git@github.com:me/data.git", Secret: "gh"},
+		},
+	}
+
+	err := SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
+		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+	require.NoError(t, err)
+
+	require.Len(t, cloneScripts, 1, "cold-start clone must run for a NoMirror entity")
+	assert.Contains(t, cloneScripts[0], "git@github.com:me/data.git")
+	assert.Empty(t, sc.createArgs, "mutagen sync create must never be called for a NoMirror entity")
+	assert.Empty(t, sc.resumeCalls, "mutagen sync resume must never be called for a NoMirror entity")
+
+	// No Mac mirror dir should have been created for a NoMirror entity.
+	macMirror, _, err := ensureMirrorDir(cfg, "myproj", "data")
+	require.NoError(t, err)
+	entriesInMirror, err := os.ReadDir(macMirror)
+	require.NoError(t, err)
+	assert.Empty(t, entriesInMirror, "NoMirror entity must not populate a mac mirror dir")
+}
+
+func TestSetupPhase_NoMirrorEntity_AlreadyClonedSkipsClone(t *testing.T) {
+	cfg := testSessionsIdentity(t)
+	sc := &scriptedCLI{}
+	cli := sc.build()
+
+	var cloneScripts []string
+	exec := func(script string) (string, string, int, error) {
+		if strings.Contains(script, "git clone") {
+			cloneScripts = append(cloneScripts, script)
+		}
+		if strings.Contains(script, "find .") {
+			return "count=3 size=300 hash=abc\n", "", 0, nil
+		}
+		return "", "", 0, nil
+	}
+
+	entities := []SessionEntity{
+		{
+			Label:     "data",
+			GuestPath: "/home/devm/data",
+			NoMirror:  true,
+			Repo:      &SessionRepoInfo{URL: "git@github.com:me/data.git", Secret: "gh"},
+		},
+	}
+
+	err := SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
+		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+	require.NoError(t, err)
+
+	assert.Empty(t, cloneScripts, "an already-populated guest dir must not be re-cloned")
+	assert.Empty(t, sc.createArgs)
 }
 
 // ---------- StopPhase / TeardownPhase ----------

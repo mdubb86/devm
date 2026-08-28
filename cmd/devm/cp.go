@@ -124,6 +124,11 @@ func mountPassthrough(guestPath, repoRoot string, pcfg schema.Config, projectNam
 	var best *serviceapi.SessionEntity
 	for i := range entities {
 		e := &entities[i]
+		if e.NoMirror {
+			// No Mac-side mirror dir exists for a cold-start-clone-only
+			// secondary repo — it has nothing for cp to pass through to.
+			continue
+		}
 		if !inside(guestPath, e.GuestPath) {
 			continue
 		}

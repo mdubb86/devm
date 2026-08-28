@@ -32,6 +32,12 @@ type SessionEntity struct {
 	MacMirrorPath string
 	UserIgnore    []string
 	Repo          *SessionRepoInfo
+
+	// NoMirror marks a secondary repo declared without `volume: true`:
+	// it gets a cold-start clone into the guest but no Mac mirror dir
+	// and no mutagen sync session. Always false for the primary repo
+	// and for volumes.<name> entries.
+	NoMirror bool
 }
 
 // guestHomeDir is the guest-side parent for every repo clone.
@@ -112,12 +118,13 @@ func PrimaryGuestPath(cfg *schema.Config, macCwd string) string {
 	return filepath.Join(guestHomeDir, label)
 }
 
-// BuildEntities enumerates every mirrored entity in cfg: the primary
-// repo (included unless explicitly `volume: false`, which schema
-// validation already rejects), every secondary repo that opts in with
-// `volume: true`, and every volumes.<name> entry (always mirrored).
-// macCwd resolves both the URL-nil primary's label and, when needed,
-// its clone URL via `git remote get-url origin`.
+// BuildEntities enumerates every repo/volume entity in cfg: the
+// primary repo, every secondary repo, and every volumes.<name> entry.
+// A secondary repo without `volume: true` comes back with NoMirror
+// set — it still gets cold-start cloned into the guest, but SetupPhase
+// skips the Mac mirror dir and mutagen sync session for it. macCwd
+// resolves both the URL-nil primary's label and, when needed, its
+// clone URL via `git remote get-url origin`.
 func BuildEntities(cfg *schema.Config, macCwd string) ([]SessionEntity, error) {
 	primaryName := findPrimaryRepoName(cfg)
 
@@ -132,16 +139,7 @@ func BuildEntities(cfg *schema.Config, macCwd string) ([]SessionEntity, error) {
 	for _, name := range repoNames {
 		r := cfg.Repos[name]
 		isPrimary := name == primaryName
-
-		var included bool
-		if isPrimary {
-			included = r.Volume == nil || *r.Volume
-		} else {
-			included = r.Volume != nil && *r.Volume
-		}
-		if !included {
-			continue
-		}
+		noMirror := !isPrimary && !(r.Volume != nil && *r.Volume)
 
 		label := resolveRepoLabel(r, macCwd)
 
@@ -161,6 +159,7 @@ func BuildEntities(cfg *schema.Config, macCwd string) ([]SessionEntity, error) {
 			GuestPath:  filepath.Join(guestHomeDir, label),
 			UserIgnore: r.Ignore,
 			Repo:       &SessionRepoInfo{URL: url, Secret: r.Secret},
+			NoMirror:   noMirror,
 		})
 	}
 
@@ -195,6 +194,37 @@ func ensureGuestDirScript(guestPath string) string {
 	)
 }
 
+// coldStartCloneOnly handles a NoMirror entity: ensure the guest dir
+// exists, then clone into it if it's empty. No Mac mirror dir, no
+// guard check, no mutagen session — the guest clone is the entity's
+// only state.
+func coldStartCloneOnly(exec GuestExec, e *SessionEntity, ironProxyURL, guestCACertPath string) error {
+	if _, stderr, exitCode, err := exec(ensureGuestDirScript(e.GuestPath)); err != nil {
+		return fmt.Errorf("mutagen setup %s: ensure guest dir: %w", e.Label, err)
+	} else if exitCode != 0 {
+		return fmt.Errorf("mutagen setup %s: ensure guest dir: exit %d: %s", e.Label, exitCode, stderr)
+	}
+
+	guestSide, err := ScanGuest(exec, e.GuestPath)
+	if err != nil {
+		return fmt.Errorf("mutagen setup %s: %w", e.Label, err)
+	}
+	if guestSide.Count != 0 {
+		return nil
+	}
+
+	if err := CloneRepoInGuest(exec, CloneRequest{
+		URL:             e.Repo.URL,
+		SecretName:      e.Repo.Secret,
+		GuestTargetPath: e.GuestPath,
+		IronProxyURL:    ironProxyURL,
+		GuestCACertPath: guestCACertPath,
+	}); err != nil {
+		return fmt.Errorf("mutagen setup %s: %w", e.Label, err)
+	}
+	return nil
+}
+
 // SetupPhase brings every entity's mutagen sync session up to date:
 // ensures both sides' mirror dirs exist, cold-start clones a repo
 // entity into an all-empty guest, verifies the in-sync guard before
@@ -212,6 +242,13 @@ func SetupPhase(
 ) error {
 	for i := range entities {
 		e := &entities[i]
+
+		if e.NoMirror {
+			if err := coldStartCloneOnly(exec, e, ironProxyURL, guestCACertPath); err != nil {
+				return err
+			}
+			continue
+		}
 
 		macMirror, _, err := ensureMirrorDir(cfg, projectID, e.Label)
 		if err != nil {
