@@ -298,7 +298,10 @@ fetch-iron-proxy:
     @chmod +x bin/iron-proxy
     @echo "iron-proxy binary extracted to bin/iron-proxy"
 
-# Fetch mutagen binary for embed. Pinned to v0.18.1.
+# Fetch mutagen binary + agents bundle for embed. Pinned to v0.18.1.
+# The agents tarball ships every guest-platform agent binary mutagen
+# knows how to install; the CLI looks for it alongside the mutagen
+# binary and fails 'unable to locate agent bundle' without it.
 fetch-mutagen:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -310,6 +313,8 @@ fetch-mutagen:
     tmp=$(mktemp -d)
     trap "rm -rf $tmp" EXIT
     curl -fsSL "$URL" -o "$tmp/mutagen.tar.gz"
-    tar -xzf "$tmp/mutagen.tar.gz" -C "$tmp" mutagen
+    tar -xzf "$tmp/mutagen.tar.gz" -C "$tmp" mutagen mutagen-agents.tar.gz
     gzip -c "$tmp/mutagen" > "$DEST/mutagen.gz"
+    cp "$tmp/mutagen-agents.tar.gz" "$DEST/mutagen-agents.tar.gz"
     echo "wrote $DEST/mutagen.gz ($(wc -c < $DEST/mutagen.gz) bytes)"
+    echo "wrote $DEST/mutagen-agents.tar.gz ($(wc -c < $DEST/mutagen-agents.tar.gz) bytes)"

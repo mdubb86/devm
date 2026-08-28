@@ -13,6 +13,9 @@ import (
 //go:embed embed/mutagen.gz
 var mutagenGz []byte
 
+//go:embed embed/mutagen-agents.tar.gz
+var mutagenAgentsTarGz []byte
+
 var embedSha256Hex string
 
 func init() {
