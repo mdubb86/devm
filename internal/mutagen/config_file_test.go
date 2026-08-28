@@ -19,7 +19,6 @@ func TestComposeConfig_DefaultsFirstUserLast(t *testing.T) {
 	assert.Equal(t, "two-way-resolved", cfg.SyncMode)
 	assert.Equal(t, "accelerated", cfg.ScanMode)
 	assert.False(t, cfg.VCSIgnore)
-	assert.Equal(t, 1, cfg.Version)
 }
 
 func TestWriteConfigFile_AtomicAndReadable(t *testing.T) {

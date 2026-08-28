@@ -29,12 +29,15 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(180)
 def test_session_config_file(devm, workspace):
-    label = f"{workspace.path.name}-repo"  # BareCloneName of bare_repo_url()'s <name>-repo.git
+    # bare_repo_url() is github.com/octocat/Hello-World.git; BareCloneName
+    # strips scheme, path, and .git → "Hello-World". Hello-World is public,
+    # so no `secret:` — the daemon must not add an http.extraheader for
+    # unauthenticated repos.
+    label = "Hello-World"
     workspace.write_devmyaml(
         repos={
             "main": {
                 "url": workspace.bare_repo_url(),
-                "secret": "e2e_default",
                 "primary": True,
                 "ignore": ["scratch/"],
             },
