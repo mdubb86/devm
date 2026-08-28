@@ -28,7 +28,8 @@ def test_cold_start_url_nil_derives(devm, workspace):
 
     # No `url:` -> devm must derive it from `origin`, and the label
     # falls back to the basename of the Mac cwd (workspace.path).
-    workspace.write_devmyaml(repos={"main": {"secret": "e2e_default"}})
+    # Hello-World is public; no secret needed.
+    workspace.write_devmyaml(repos={"main": {}})
 
     label = workspace.path.name
     guest_dir = f"/home/devm/{label}"
@@ -49,12 +50,15 @@ def test_cold_start_url_nil_derives(devm, workspace):
             f"basename ({label!r}) for a URL-nil primary:\n{r.stderr.decode()}"
         )
 
+        # Hello-World ships a `README` (no extension).
         r = subprocess.run(
-            [devm.path, "shell", "--", "cat", f"{guest_dir}/README.md"],
+            [devm.path, "shell", "--", "ls", guest_dir],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, r.stderr.decode()
-        assert r.stdout.decode().strip() == "bare"
+        assert "README" in r.stdout.decode(), (
+            f"expected README in cloned tree; got:\n{r.stdout.decode()}"
+        )
     finally:
         subprocess.run(
             [devm.path, "teardown", "--yes"],

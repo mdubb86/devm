@@ -1,6 +1,5 @@
 """225: a `repos:` map with a URL-omitted primary and a URL-set
-secondary (`volume: true`) hydrates both, each with its own Mac
-mirror.
+secondary (`volume: true`) hydrates both, each with its own Mac mirror.
 
 findPrimaryRepoName (internal/serviceapi/mutagen_sessions.go) resolves
 the sole URL-nil entry as primary when no entry is explicitly marked
@@ -17,42 +16,40 @@ from helpers.mutagen_e2e import mirror_path, session_prefix, sync_flush, sync_li
 
 pytestmark = pytest.mark.devm
 
-
-def _make_bare_repo(tmp_path_factory, marker: str) -> str:
-    work = tmp_path_factory.mktemp(f"{marker}-work")
-    subprocess.run(["git", "-C", str(work), "init", "-q"], check=True)
-    (work / f"{marker}.txt").write_text(f"{marker}\n")
-    subprocess.run(["git", "-C", str(work), "add", "."], check=True)
-    subprocess.run(
-        ["git", "-C", str(work), "-c", "user.email=e2e@e2e", "-c", "user.name=e2e",
-         "commit", "-q", "-m", "init"],
-        check=True,
-    )
-    bare = tmp_path_factory.mktemp(f"{marker}-bare") / "repo.git"
-    subprocess.run(["git", "clone", "--bare", "-q", str(work), str(bare)], check=True)
-    return f"file://{bare}"
+# Second public github repo used as the secondary. Small, stable, and
+# has a distinctive filename (`index.html`) we can pin the mirror
+# against. Any other tiny public repo would do.
+SECONDARY_URL = "https://github.com/octocat/Spoon-Knife.git"
 
 
 @pytest.mark.timeout(300)
-def test_repos_map_and_primary(devm, workspace, tmp_path_factory):
+def test_repos_map_and_primary(devm, workspace):
+    # Primary: workspace becomes a git repo whose `origin` points at
+    # the fixture's public URL. `repos.main` omits `url:` so devm must
+    # derive it from `git remote get-url origin`, and the label falls
+    # back to the basename of the Mac cwd (the workspace dir).
     subprocess.run(["git", "init", "-q", str(workspace.path)], check=True)
     subprocess.run(
         ["git", "-C", str(workspace.path), "remote", "add", "origin", workspace.bare_repo_url()],
         check=True,
     )
-    secondary_url = _make_bare_repo(tmp_path_factory, "secondary")
 
     primary_label = workspace.path.name
-    secondary_label = "secondary"  # BareCloneName("file://.../repo.git") -> "repo"; use explicit label instead
+    secondary_label = "spoon-knife"
 
     workspace.write_devmyaml(
         repos={
-            "main": {"secret": "e2e_default"},
+            "main": {},  # url derived from `origin`
             "secondary": {
-                "url": secondary_url, "secret": "e2e_default",
-                "volume": True, "label": secondary_label,
+                "url": SECONDARY_URL,
+                "volume": True,       # opt into mirroring
+                "label": secondary_label,
             },
         },
+        # Extend network.allow beyond the default (github.com only) —
+        # SECONDARY_URL also points at github.com, so the fixture
+        # default covers it, but be explicit.
+        network={"allow": ["github.com"]},
     )
 
     try:
@@ -62,20 +59,23 @@ def test_repos_map_and_primary(devm, workspace, tmp_path_factory):
         )
         assert r.returncode == 0, f"devm start failed:\n{r.stderr.decode()}"
 
+        # Both repos land in the guest at /home/devm/<label>.
         r = subprocess.run(
-            [devm.path, "shell", "--", "cat", f"/home/devm/{primary_label}/README.md"],
+            [devm.path, "shell", "--", "test", "-d", f"/home/devm/{primary_label}/.git"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
-        assert r.returncode == 0, r.stderr.decode()
-        assert r.stdout.decode().strip() == "bare"
-
+        assert r.returncode == 0, (
+            f"primary label {primary_label!r} missing in guest:\n{r.stderr.decode()}"
+        )
         r = subprocess.run(
-            [devm.path, "shell", "--", "cat", f"/home/devm/{secondary_label}/secondary.txt"],
+            [devm.path, "shell", "--", "test", "-d", f"/home/devm/{secondary_label}/.git"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
-        assert r.returncode == 0, r.stderr.decode()
-        assert r.stdout.decode().strip() == "secondary"
+        assert r.returncode == 0, (
+            f"secondary label {secondary_label!r} missing in guest:\n{r.stderr.decode()}"
+        )
 
+        # Both labels produce their own mutagen session.
         sessions = sync_list(session_prefix(workspace.vm_name))
         by_name = {s["name"]: s for s in sessions}
         assert any(n.endswith(f"-{primary_label}") for n in by_name), (
@@ -85,16 +85,19 @@ def test_repos_map_and_primary(devm, workspace, tmp_path_factory):
             f"expected a session for secondary label {secondary_label!r}, got {list(by_name)}"
         )
 
+        # Force a flush and pin distinctive files on each Mac-side mirror.
         for s in sessions:
             sync_flush(s["identifier"])
 
-        assert (mirror_path(workspace.vm_name, primary_label) / "README.md").exists(), (
-            f"primary Mac mirror missing README.md at "
-            f"{mirror_path(workspace.vm_name, primary_label)}"
+        # Hello-World's `README` (no extension).
+        primary_mirror = mirror_path(workspace.vm_name, primary_label)
+        assert (primary_mirror / "README").exists(), (
+            f"primary Mac mirror missing README at {primary_mirror}"
         )
-        assert (mirror_path(workspace.vm_name, secondary_label) / "secondary.txt").exists(), (
-            f"secondary Mac mirror missing secondary.txt at "
-            f"{mirror_path(workspace.vm_name, secondary_label)}"
+        # Spoon-Knife ships an `index.html`.
+        secondary_mirror = mirror_path(workspace.vm_name, secondary_label)
+        assert (secondary_mirror / "index.html").exists(), (
+            f"secondary Mac mirror missing index.html at {secondary_mirror}"
         )
     finally:
         subprocess.run(
