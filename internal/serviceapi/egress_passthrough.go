@@ -7,10 +7,8 @@ import (
 
 // defaultPassthroughSeconds is how long `devm passthrough` opens
 // egress for when the caller doesn't specify `--for`. Deliberately
-// shorter than devm unlock's 5-minute default: egress is a wider
-// surface than a single file's immutability, and every second of
-// passthrough is a second where any host on any port is reachable
-// without MITM or audit log.
+// short: every second of passthrough is a second where any host on
+// any port is reachable without MITM or audit log.
 const defaultPassthroughSeconds = 30
 
 // egressPassthroughEntry tracks one project's active passthrough
@@ -26,8 +24,8 @@ type egressPassthroughEntry struct {
 }
 
 // egressPassthroughStore tracks each project's egress-passthrough
-// window state, mirroring configLockStore's mutex-guarded map plus
-// timer pattern.
+// window state: a mutex-guarded map plus a per-project relock-style
+// timer.
 type egressPassthroughStore struct {
 	mu sync.Mutex
 	m  map[string]egressPassthroughEntry
@@ -87,7 +85,7 @@ func (s *egressPassthroughStore) del(projectID string) {
 	delete(s.m, projectID)
 }
 
-// egressPassthroughState is the daemon-wide singleton mirroring
-// configLockState's package-level shape. RegisterVMHandlers reads and
-// mutates it; unit tests reset it via t.Cleanup(func() { … del(name) }).
+// egressPassthroughState is the daemon-wide singleton. RegisterVMHandlers
+// reads and mutates it; unit tests reset it via
+// t.Cleanup(func() { … del(name) }).
 var egressPassthroughState = newEgressPassthroughStore()

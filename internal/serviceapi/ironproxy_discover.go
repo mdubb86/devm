@@ -136,11 +136,6 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 	}
 	ironProxyState.put(projectID, info)
 
-	// TODO(Task 22): config-lock re-arming on daemon-restart recovery
-	// needs a repoRoot source now that StateSnapshot.WorkspaceHostPath
-	// is gone; config-lock itself is slated for full deletion in
-	// Task 22. No-op until then.
-
 	if len(snap.Routes) > 0 {
 		if err := routes.Apply(projectID, snap.Routes); err != nil {
 			daemonlog.Errorf("routes: recover routes for %s: %v (continuing)", projectID, err)

@@ -303,31 +303,6 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 
 		}
 
-		// Config lock: after ANY reconcile on a running VM, re-establish
-		// the "running VM ⟹ devm.yaml locked" invariant that /vm/start and
-		// adopt set up — so an `unlock → edit → reconcile` cycle always ends
-		// locked, whether or not the edit produced live changes. If the
-		// project has flipped config_lock off, ensure it's unlocked instead.
-		// Best-effort: a chflags failure must not fail a reconcile that
-		// already succeeded; stopTimer cancels any pending relock timer from
-		// the unlock this reconcile closes out. Only reached when running
-		// (the !running path returned above).
-		if req.WorkspaceHostPath != "" {
-			if req.Cfg.ConfigLockEnabled() {
-				if err := lockConfigFiles(req.WorkspaceHostPath); err != nil {
-					daemonlog.Errorf("configlock: re-lock config for %s: %v (continuing)", req.Name, err)
-				} else {
-					configLockState.put(req.Name, req.WorkspaceHostPath)
-				}
-				configLockState.stopTimer(req.Name)
-			} else {
-				if err := unlockConfigFiles(req.WorkspaceHostPath); err != nil {
-					daemonlog.Errorf("configlock: unlock config for %s (config_lock off): %v (continuing)", req.Name, err)
-				}
-				configLockState.del(req.Name)
-			}
-		}
-
 		resp := VMReconcileResponse{
 			Applied:          append(live, sshHealed...),
 			AppliedIronProxy: ironProxy,

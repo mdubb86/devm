@@ -44,8 +44,6 @@ const interceptedEgressIP = "192.0.2.1"
 type VMStartRequest struct {
 	Name string `json:"name"`
 	// MacCwd is the project's Mac-side working directory absolute path.
-	// Used to make devm.yaml (+ devm.me.yaml) host-immutable for the
-	// duration of the VM's run (see ConfigLockEnabled below).
 	MacCwd    string          `json:"mac_cwd"`
 	AllowList []string        `json:"allow_list,omitempty"`
 	Secrets   []SecretBinding `json:"secrets,omitempty"`
@@ -93,37 +91,6 @@ type VMStartResponse struct {
 // supervised tart process.
 type VMStopRequest struct {
 	Name string `json:"name"`
-}
-
-// VMConfigLockRequest is the body shape for POST /vm/unlock-config and
-// POST /vm/lock-config. RelockSeconds is only meaningful to
-// /vm/unlock-config: how long to leave devm.yaml editable before the
-// daemon re-locks it automatically. Zero means "use
-// defaultRelockSeconds".
-type VMConfigLockRequest struct {
-	Name          string `json:"name"`
-	RelockSeconds int    `json:"relock_seconds,omitempty"`
-	// RepoRoot is the caller's discovered project root. Used by
-	// /vm/unlock-config as an escape-hatch fallback when no
-	// configLockState entry exists (daemon didn't adopt the project,
-	// state was lost across a crash, /vm/stop bailed out before it
-	// could clear the flag) — so `devm unlock` can always fix a
-	// stray host-immutable flag rather than silently no-op'ing when
-	// the user needs it most. Ignored by /vm/lock-config since
-	// re-locking makes no sense without a live VM enforcing it.
-	RepoRoot string `json:"repo_root,omitempty"`
-}
-
-// VMConfigLockResponse is the response for POST /vm/unlock-config and
-// POST /vm/lock-config. WasLocked reports whether the project had a
-// configLockState entry — i.e. whether there was anything to
-// unlock/lock. false (with no error) means the VM isn't running or
-// config_lock is disabled for the project. RelockSeconds is only set
-// by /vm/unlock-config when WasLocked: the duration the just-armed
-// auto-relock timer will wait before re-locking devm.yaml.
-type VMConfigLockResponse struct {
-	WasLocked     bool `json:"was_locked"`
-	RelockSeconds int  `json:"relock_seconds,omitempty"`
 }
 
 // VMEgressPassthroughRequest is the body shape for POST
@@ -317,58 +284,6 @@ func vmRunning(vms []tart.VM, name string) bool {
 	return false
 }
 
-// armRelockTimer schedules devm.yaml to be re-locked after d, the
-// bound `devm unlock --for <dur>` (or the default) puts on an
-// unattended unlock window. Installing it via configLockState.setTimer
-// stops+replaces whatever relock timer was already pending for name,
-// so repeated unlocks (or a lock/reconcile in between) never leave two
-// timers racing.
-//
-// The callback runs on its own goroutine (time.AfterFunc, not inline),
-// so taking locks.Lock(name) here is not nested under any handler's
-// lock. It re-checks configLockState and the VM's running state right
-// before locking — by the time it fires, the project may have been
-// stopped, torn down, or already re-locked by a `devm lock` or
-// `devm reconcile` in the interim, both of which call stopTimer and so
-// would have already cancelled this timer; the re-check is therefore
-// belt-and-suspenders against the timer having fired the instant
-// before a racing cancellation.
-func armRelockTimer(locks *ProjectLocks, tr TartLister, name string, d time.Duration) {
-	// Forward-declare t so the closure captures the variable in scope;
-	// its value is assigned by time.AfterFunc's return below. The
-	// callback then compares e.relock == t under the lock — pointer-
-	// identity check that guarantees a stale callback (one whose Stop
-	// lost the race with its own fire, replaced mid-AfterFunc by a
-	// newer setTimer) exits before touching state. Standard Go idiom
-	// for "am I the current AfterFunc callback?".
-	var t *time.Timer
-	t = time.AfterFunc(d, func() {
-		unlock := locks.Lock(name)
-		defer unlock()
-
-		e, ok := configLockState.get(name)
-		if !ok || e.relock != t {
-			return // stopped/torn down since unlock, or superseded by a newer timer
-		}
-		vms, err := tr.List(context.Background())
-		if err != nil {
-			// Fail closed: a transient `tart list` error means we can't
-			// confirm the VM is stopped, so re-lock rather than leave a
-			// running VM's config writable (the invariant this lock exists
-			// for). Worst case is a stale lock on an already-stopped VM,
-			// which the next `devm stop`/`devm unlock` clears — recoverable,
-			// unlike a silently-unlocked running VM.
-			daemonlog.Errorf("configlock: auto-relock %s: tart list failed, re-locking fail-closed: %v", name, err)
-		} else if !vmRunning(vms, name) {
-			return // VM confirmed stopped — don't strand a lock on it
-		}
-		if err := lockConfigFiles(e.repoRoot); err != nil {
-			daemonlog.Errorf("configlock: auto-relock %s: %v", name, err)
-		}
-	})
-	configLockState.setTimer(name, t)
-}
-
 // armPassthroughRestoreTimer schedules egress to be restored to
 // ENFORCED after d, the bound `devm passthrough --for <dur>` (or the
 // default) puts on a supervised window. Installing it via
@@ -391,7 +306,7 @@ func armPassthroughRestoreTimer(locks *ProjectLocks, tr TartLister, ntpPort int,
 	// e.restore == t under the lock — pointer-identity check that
 	// guarantees a stale callback (one whose Stop lost the race with
 	// its own fire, replaced mid-AfterFunc by a newer setTimer) exits
-	// before touching softnet. Matches armRelockTimer's guard.
+	// before touching softnet.
 	var t *time.Timer
 	t = time.AfterFunc(d, func() {
 		unlock := locks.Lock(name)
@@ -913,25 +828,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		unlock := locks.Lock(req.Name)
 		defer unlock()
 
-		// Unlock devm.yaml (+ devm.me.yaml) via a defer at the top so
-		// no intermediate failure below — iron-proxy sup.Stop erroring,
-		// a panic, an early http.Error — can strand the file
-		// host-immutable. No-op when locking was disabled
-		// (config_lock:false) or never happened, since no repoRoot
-		// resolves in that case.
-		defer func() {
-			repoRoot := ""
-			if e, ok := configLockState.get(req.Name); ok {
-				repoRoot = e.repoRoot
-			}
-			if repoRoot != "" {
-				if err := unlockConfigFiles(repoRoot); err != nil {
-					daemonlog.Errorf("configlock: unlock config for %s: %v (file left host-immutable; recover with `devm unlock`)", req.Name, err)
-				}
-			}
-			configLockState.del(req.Name)
-			egressPassthroughState.del(req.Name)
-		}()
+		defer egressPassthroughState.del(req.Name)
 
 		// Flush + pause this project's mutagen sessions before anything
 		// below touches the guest's network or power state — mutagen's
@@ -1018,99 +915,10 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// /vm/unlock-config is the `devm unlock` escape hatch: it lifts the
-	// host-immutable flag on devm.yaml (+ devm.me.yaml) for a running
-	// project so the user can edit config without the daemon fighting
-	// them, and arms a relock timer bounding how long it stays editable
-	// unattended (`--for <dur>`, default defaultRelockSeconds). `devm
-	// lock` or `devm reconcile` ends the window early and cancels this
-	// timer (stopTimer). A project with no configLockState entry (VM
-	// not running, or config_lock:false) is a no-op, not an error —
-	// WasLocked reports which case this was.
-	s.Register("/vm/unlock-config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		var req VMConfigLockRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
-			return
-		}
-		if req.Name == "" {
-			http.Error(w, "name required", http.StatusBadRequest)
-			return
-		}
-
-		unlock := locks.Lock(req.Name)
-		defer unlock()
-
-		entry, ok := configLockState.get(req.Name)
-		relockSeconds := 0
-		if ok {
-			if err := unlockConfigFiles(entry.repoRoot); err != nil {
-				daemonlog.Errorf("configlock: unlock config for %s: %v (continuing)", req.Name, err)
-			}
-			d := time.Duration(req.RelockSeconds) * time.Second
-			if d <= 0 {
-				d = defaultRelockSeconds * time.Second
-			}
-			armRelockTimer(locks, tr, req.Name, d)
-			relockSeconds = int(d / time.Second)
-		} else if req.RepoRoot != "" {
-			// Escape hatch: no daemon state, but the caller supplied a
-			// repoRoot — clear any stray uchg flag anyway. WasLocked
-			// reflects the actual on-disk state at entry, not the
-			// daemon's view (which is what makes this the escape hatch).
-			// No relock timer to arm — there's nothing to re-lock against.
-			paths := configPaths(req.RepoRoot)
-			wasLocked, _ := fileIsImmutable(paths[0])
-			if err := unlockConfigFiles(req.RepoRoot); err != nil {
-				daemonlog.Errorf("configlock: escape-hatch unlock for %s at %s: %v (continuing)", req.Name, req.RepoRoot, err)
-			}
-			ok = wasLocked
-		}
-
-		writeJSON(w, VMConfigLockResponse{WasLocked: ok, RelockSeconds: relockSeconds})
-	})
-
-	// /vm/lock-config is the `devm lock` command: re-locks devm.yaml on
-	// demand, ending a temporary unlock early instead of waiting for the
-	// relock timer.
-	s.Register("/vm/lock-config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		var req VMConfigLockRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
-			return
-		}
-		if req.Name == "" {
-			http.Error(w, "name required", http.StatusBadRequest)
-			return
-		}
-
-		unlock := locks.Lock(req.Name)
-		defer unlock()
-
-		entry, ok := configLockState.get(req.Name)
-		if ok {
-			if err := lockConfigFiles(entry.repoRoot); err != nil {
-				daemonlog.Errorf("configlock: lock config for %s: %v (continuing)", req.Name, err)
-			}
-			configLockState.stopTimer(req.Name)
-		}
-
-		writeJSON(w, VMConfigLockResponse{WasLocked: ok})
-	})
-
 	// /vm/passthrough-egress opens a time-bounded egress passthrough
 	// window: flips softnet from ENFORCED to OPEN for the duration,
 	// arms a timer to restore ENFORCED on expiry. Repeat opens
-	// replace the existing timer (matches configLockState.setTimer's
-	// replace-not-add behavior). Reconcile does NOT close the window;
+	// replace the existing timer. Reconcile does NOT close the window;
 	// only the timer, `devm restrict`, or /vm/stop do.
 	s.Register("/vm/passthrough-egress", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -1172,7 +980,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		var req VMConfigLockRequest // reuses {Name} shape; RelockSeconds unused
+		var req VMApplyEgressEnforcementRequest // reuses {Name} shape
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
