@@ -423,6 +423,82 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 			"the Critical fix: services must never start under open egress")
 }
 
+// TestRunShellColdPath_MutagenSetupRunsAfterRunEnforced verifies Task
+// 17.5: the mutagen sync-session setup step runs strictly after
+// RunEnforced's exec (which unmasks sshd + installs the project's ssh
+// keys) — running it any earlier would try to ssh into a guest with no
+// keys and no live sshd.
+//
+// mutagenSetupFn is faked to append a marker into the same ordered log
+// file fakeTartBinWithLog and fakeVMAdmin both write into, instead of
+// running the real mutagen binary + entity scan — this is a sequencing
+// test, not an integration test of SetupPhase itself (covered by
+// internal/serviceapi's own SetupPhase tests).
+func TestRunShellColdPath_MutagenSetupRunsAfterRunEnforced(t *testing.T) {
+	orig := mutagenSetupFn
+	defer func() { mutagenSetupFn = orig }()
+
+	repoRoot := t.TempDir()
+	logPath := filepath.Join(repoRoot, "order.log")
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+		logPath:    logPath,
+	}
+
+	tartBin := fakeTartBinWithLog(t, repoRoot, logPath)
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	var mutagenSetupCalled int
+	mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
+		mutagenSetupCalled++
+		fh, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		require.NoError(t, err)
+		defer fh.Close()
+		_, err = fmt.Fprintln(fh, "MUTAGEN-SETUP")
+		require.NoError(t, err)
+		return nil
+	}
+
+	deps := ShellDeps{
+		Ident:            identity.Prod,
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	writeFakeCA(t, repoRoot)
+
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+	assert.Equal(t, 1, mutagenSetupCalled, "mutagen setup must run exactly once")
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+
+	runEnforcedIdx, mutagenIdx := -1, -1
+	bashCSeen := 0
+	for i, line := range lines {
+		switch {
+		case strings.Contains(line, "bash -c"):
+			bashCSeen++
+			if bashCSeen == 2 {
+				runEnforcedIdx = i
+			}
+		case line == "MUTAGEN-SETUP":
+			mutagenIdx = i
+		}
+	}
+	require.GreaterOrEqual(t, runEnforcedIdx, 0, "RunEnforced's bash -c exec must be present")
+	require.GreaterOrEqual(t, mutagenIdx, 0, "mutagen setup marker must be present")
+	assert.Less(t, runEnforcedIdx, mutagenIdx,
+		"mutagen setup must run AFTER RunEnforced — sshd is masked and no project ssh keys "+
+			"exist in the guest until RunEnforced completes")
+}
+
 // TestRunShellColdPath_PostInstallFail_KeepsVM verifies that a
 // service-phase failure (the enforced script's `services` stage) leaves
 // the VM running so the user can debug — install failures still tear down.

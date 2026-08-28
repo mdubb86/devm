@@ -51,6 +51,12 @@ type VMApplyIronProxyResponse struct {
 	// cold-start path. Empty in the VM-never-started (VMRunning=false)
 	// case, since no IP is allocated there.
 	ProjectIP string `json:"project_ip,omitempty"`
+	// TunnelPort is iron-proxy's CONNECT-capable tunnel_listen port —
+	// mirrors VMStartResponse.TunnelPort for adopt-in-place, so the
+	// orchestrator's post-RunEnforced mutagen SetupPhase call can build
+	// the guest-visible HTTP_PROXY URL on either path. Zero in the
+	// VM-never-started (VMRunning=false) case.
+	TunnelPort int `json:"tunnel_port,omitempty"`
 }
 
 // spawnIronProxyFn is the test-injection seam for SpawnIronProxy.
@@ -285,10 +291,11 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		}
 
 		writeJSON(w, VMApplyIronProxyResponse{
-			Applied:   true,
-			Revived:   !wasRunning,
-			VMRunning: true,
-			ProjectIP: projectIP,
+			Applied:    true,
+			Revived:    !wasRunning,
+			VMRunning:  true,
+			ProjectIP:  projectIP,
+			TunnelPort: diskInfo.TunnelPort,
 		})
 	})
 }

@@ -14,13 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mdubb86/devm/internal/caenv"
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
-	"github.com/mdubb86/devm/internal/softnet"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -84,6 +81,11 @@ type VMStartResponse struct {
 	// the snapshot, and recoverProjectState would find nothing to
 	// restore.
 	ProjectIP string `json:"project_ip"`
+	// TunnelPort is iron-proxy's CONNECT-capable tunnel_listen port —
+	// the orchestrator needs it (with softnet.NATAliasIP) to build the
+	// guest-visible HTTP_PROXY URL for its post-RunEnforced mutagen
+	// SetupPhase call, which the daemon has no visibility into.
+	TunnelPort int `json:"tunnel_port,omitempty"`
 }
 
 // VMStopRequest is the body shape for POST /vm/stop. The daemon calls
@@ -824,39 +826,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			ironProxyState.put(req.Name, info)
 		}
 
-		// Bring every declared repo/volume's mutagen sync session up to
-		// date: cold-start clone (if needed), guard check, then create
-		// or resume the session. Replaces the virtiofs volume/repo
-		// mounts removed above.
-		mutagenBin, err := mutagen.Ensure(cfg.RuntimeDir())
-		if err != nil {
-			teardownFailedVMStart(ctx, sup, tr, cfg, denials, req.Name)
-			http.Error(w, "mutagen: extract binary: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(cfg)}
-		entities, err := BuildEntities(&req.Cfg, req.MacCwd)
-		if err != nil {
-			teardownFailedVMStart(ctx, sup, tr, cfg, denials, req.Name)
-			http.Error(w, "mutagen: build entities: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		guestSSHTarget := fmt.Sprintf("%s.%s", req.Name, cfg.TLD)
-		// NATAliasIP is the guest-visible address that softnet NATs to
-		// the host's loopback (see internal/softnet/egress.go) — the
-		// only guest-reachable path to iron-proxy's tunnel_listen
-		// (CONNECT-capable, unlike http_listen/https_listen) for the
-		// explicit HTTP_PROXY a guest-side git clone needs.
-		ironProxyURL := fmt.Sprintf("http://%s:%d", softnet.NATAliasIP, info.TunnelPort)
-		if err := SetupPhase(ctx, mutagenCLI, cfg, req.Name, entities, tartGuestExec(req.Name),
-			guestSSHTarget, ironProxyURL, guestGitCACertPath()); err != nil {
-			daemonlog.Errorf("mutagen: setup failed for %s: %v", req.Name, err)
-			teardownFailedVMStart(ctx, sup, tr, cfg, denials, req.Name)
-			http.Error(w, "mutagen setup: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		writeJSON(w, VMStartResponse{ProjectIP: projectIP})
+		writeJSON(w, VMStartResponse{ProjectIP: projectIP, TunnelPort: info.TunnelPort})
 	})
 
 	// /vm/enforcement-config is a precondition check that this project's
@@ -1372,44 +1342,6 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(snap)
 	})
-}
-
-// tartGuestExec returns a GuestExec that runs script inside vmName via
-// `tart exec ... sudo bash -s`, matching the invocation the /vm/start
-// inject loop already uses (root, script on stdin). Scripts embed their
-// own `sudo -u devm` where they need to drop privileges, mirroring
-// ensureGuestDirScript / CloneRepoInGuest's own scripts.
-func tartGuestExec(vmName string) GuestExec {
-	return func(script string) (stdout, stderr string, exitCode int, err error) {
-		cmd := exec.Command("tart", "exec", "-i", vmName, "sudo", "bash", "-s")
-		cmd.Stdin = strings.NewReader(script)
-		var outBuf, errBuf strings.Builder
-		cmd.Stdout = &outBuf
-		cmd.Stderr = &errBuf
-		runErr := cmd.Run()
-		if runErr != nil {
-			if exitErr, ok := runErr.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			} else {
-				err = runErr
-			}
-		}
-		return outBuf.String(), errBuf.String(), exitCode, err
-	}
-}
-
-// guestGitCACertPath returns the guest-side CA bundle path git trusts
-// for a proxied clone — the same value devm exports as GIT_SSL_CAINFO
-// via caenv.Vars (internal/caenv is the single source of truth for
-// this path; see its "SSL_CERT_FILE trap" warning against pointing at
-// the raw devm.crt instead of the merged system bundle).
-func guestGitCACertPath() string {
-	for _, v := range caenv.Vars {
-		if v.Key == "GIT_SSL_CAINFO" {
-			return v.Value
-		}
-	}
-	return ""
 }
 
 // pickPort returns a free ephemeral TCP port: bind to :0 on 0.0.0.0

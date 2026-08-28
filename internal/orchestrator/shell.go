@@ -10,10 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mdubb86/devm/internal/caenv"
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
+	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/provision"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/render"
@@ -22,6 +24,7 @@ import (
 	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
+	"github.com/mdubb86/devm/internal/softnet"
 	"github.com/mdubb86/devm/internal/status"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -162,7 +165,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 					"adopt-in-place: no iron-proxy record found for %q — this vm was never started by devm",
 					cfg.Project.Name)
 			}
-			return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, applyResp.ProjectIP, reporter)
+			return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, applyResp.ProjectIP, applyResp.TunnelPort, reporter)
 		}
 	}
 
@@ -239,7 +242,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	}
 	log.Printf("shell: cold-start: vm exec-ready")
 
-	return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, startResp.ProjectIP, reporter)
+	return d.provisionAndAttach(ctx, cfg, vmName, repoRoot, cmdName, cmdArgs, bindings, startResp.ProjectIP, startResp.TunnelPort, reporter)
 }
 
 // warmAttach attaches to a VM that's already provisioned (devm.target
@@ -278,7 +281,11 @@ func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName str
 // on adopt-in-place — seeded into the cold-start StateSnapshot below so
 // a daemon crash before the next reconcile doesn't strand
 // recoverProjectState with nothing to restore.
-func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vmName, repoRoot, cmdName string, cmdArgs []string, bindings []serviceapi.SecretBinding, projectIP string, reporter status.Reporter) (int, error) {
+//
+// tunnelPort is iron-proxy's CONNECT-capable tunnel_listen port, from
+// the same two responses — the mutagen setup step below needs it to
+// build the guest-visible HTTP_PROXY URL.
+func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vmName, repoRoot, cmdName string, cmdArgs []string, bindings []serviceapi.SecretBinding, projectIP string, tunnelPort int, reporter status.Reporter) (int, error) {
 	caPEM, err := os.ReadFile(filepath.Join(caStorageDir(d.Ident), "root.crt"))
 	if err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "read CA root")
@@ -374,6 +381,17 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	}
 	log.Printf("shell: provisioning done: %s", vmName)
 
+	// Bring every declared repo/volume's mutagen sync session up to date:
+	// cold-start clone (if needed), guard check, then create or resume the
+	// session. This must run after RunEnforced (unmasks sshd, installs the
+	// project ssh keys) and after OpenEgress (permits guest -> iron-proxy) —
+	// mutagen's ssh transport and a cold-start guest git clone both need
+	// both preconditions in place.
+	if err := mutagenSetupFn(d, ctx, cfg, vmName, repoRoot, tunnelPort); err != nil {
+		return d.teardownOnFail(ctx, cfg, vmName, err, "mutagen setup")
+	}
+	log.Printf("shell: mutagen sessions ready: %s", vmName)
+
 	// Write initial snapshot so that subsequent `devm reconcile` calls have
 	// a baseline to diff against. Without this, ReadSnapshot returns "" which
 	// reconcile treats as zero-diff (identity with the new config), masking
@@ -421,6 +439,72 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	reporter.Clear()
 
 	return d.attachShell(ctx, vmName, repoRoot, cmdName, cmdArgs)
+}
+
+// mutagenSetupFn is the test-injection seam for the mutagen sync-session
+// setup step provisionAndAttach runs after RunEnforced. Production always
+// calls (ShellDeps).setupMutagenSessions; tests substitute a fake to
+// verify sequencing without needing a live VM or the real mutagen binary.
+var mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
+	return d.setupMutagenSessions(ctx, cfg, vmName, repoRoot, tunnelPort)
+}
+
+// setupMutagenSessions builds the mutagen CLI + entity list and calls
+// serviceapi.SetupPhase for vmName. tunnelPort is iron-proxy's
+// CONNECT-capable tunnel_listen port (from VMStartResponse or
+// VMApplyIronProxyResponse) — combined with softnet.NATAliasIP, the
+// guest-visible address softnet NATs to the host's loopback, it forms the
+// HTTP_PROXY URL a guest-side git clone needs.
+func (d ShellDeps) setupMutagenSessions(ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
+	mutagenBin, err := mutagen.Ensure(d.Ident.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("mutagen: extract binary: %w", err)
+	}
+	mutagenCLI := &mutagen.CLI{
+		Binary:  mutagenBin,
+		DataDir: filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
+	}
+
+	entities, err := serviceapi.BuildEntities(&cfg, repoRoot)
+	if err != nil {
+		return fmt.Errorf("mutagen: build entities: %w", err)
+	}
+
+	guestSSHTarget := fmt.Sprintf("%s.%s", vmName, d.Ident.TLD)
+	ironProxyURL := fmt.Sprintf("http://%s:%d", softnet.NATAliasIP, tunnelPort)
+
+	if err := serviceapi.SetupPhase(ctx, mutagenCLI, d.Ident, vmName, entities, d.guestExec(ctx, vmName),
+		guestSSHTarget, ironProxyURL, guestGitCACertPath()); err != nil {
+		return fmt.Errorf("mutagen setup: %w", err)
+	}
+	return nil
+}
+
+// guestExec returns a serviceapi.GuestExec that runs a script inside
+// vmName via `tart exec -i <name> sudo bash -s`, script on stdin. Scripts
+// embed their own `sudo -u devm` where they need to drop privileges.
+// Routed through d.Tart (rather than a raw exec.Command) so tests can
+// substitute the same fake tart binary they already use for RunOpen/
+// RunEnforced.
+func (d ShellDeps) guestExec(ctx context.Context, vmName string) serviceapi.GuestExec {
+	return func(script string) (stdout, stderr string, exitCode int, err error) {
+		res := d.Tart.ExecStdin(ctx, vmName, strings.NewReader(script), []string{"sudo", "bash", "-s"})
+		return res.Stdout, res.Stderr, res.ExitCode, nil
+	}
+}
+
+// guestGitCACertPath returns the guest-side CA bundle path git trusts for
+// a proxied clone — the same value devm exports as GIT_SSL_CAINFO via
+// caenv.Vars (internal/caenv is the single source of truth for this path;
+// see its "SSL_CERT_FILE trap" warning against pointing at the raw
+// devm.crt instead of the merged system bundle).
+func guestGitCACertPath() string {
+	for _, v := range caenv.Vars {
+		if v.Key == "GIT_SSL_CAINFO" {
+			return v.Value
+		}
+	}
+	return ""
 }
 
 // defaultInstallStepTimeoutSeconds is installStepTimeoutSeconds' fallback
