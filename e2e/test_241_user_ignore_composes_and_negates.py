@@ -2,15 +2,18 @@
 DefaultIgnores, and a `!pattern` negation un-ignores a subpath.
 
 ComposeConfig (internal/mutagen/config_file.go) appends the entry's
-own `ignore:` list AFTER DefaultIgnores, so `!scratch/keep/` -- listed
-after a blanket `scratch/` exclusion -- un-ignores exactly that one
-subdirectory (mutagen's ignore semantics, like gitignore's, require
-negating a directory itself to re-include anything under it; negating
-a deeper path alone wouldn't work here).
+own `ignore:` list AFTER DefaultIgnores, so a later `!scratch/keep/`
+un-ignores that one subdirectory.
+
+CRITICAL: mutagen honors the gitignore rule that an excluded parent
+directory is not walked, so a bare `scratch/` exclusion makes any
+`!scratch/keep/` un-ignore ineffective. To re-include a specific
+subdirectory, exclude the PARENT'S CHILDREN with `scratch/*` (leaves
+the parent walkable) and then negate the specific child. Pinned in
+e2e/test_mutagen_contract_11.
 
 Three sub-checks in one flush:
-  a. `scratch/other.txt` (under the user-ignored `scratch/`) does not
-     sync.
+  a. `scratch/other.txt` (matched by `scratch/*`) does not sync.
   b. `scratch/keep/foo.txt` (under the negated `!scratch/keep/`) DOES
      sync.
   c. `apps/web/.next/cache/cachefile.txt` (nested, matched by the
@@ -35,7 +38,7 @@ def test_user_ignore_composes_and_negates(devm, workspace):
             "main": {
                 "url": workspace.bare_repo_url(),
                 "primary": True,
-                "ignore": ["scratch/", "!scratch/keep/"],
+                "ignore": ["scratch/*", "!scratch/keep/"],
             },
         },
     )
@@ -78,12 +81,13 @@ def test_user_ignore_composes_and_negates(devm, workspace):
 
         assert not (mirror / "scratch" / "other.txt").exists(), (
             f"scratch/other.txt should be excluded by the user ignore "
-            f"'scratch/' but appeared at {mirror}"
+            f"'scratch/*' but appeared at {mirror}"
         )
 
         assert (mirror / "scratch" / "keep" / "foo.txt").exists(), (
-            f"scratch/keep/foo.txt should have synced -- '!scratch/keep/' "
-            f"negates the blanket 'scratch/' exclusion for this subdir"
+            f"scratch/keep/foo.txt should have synced — 'scratch/*' leaves "
+            f"the parent dir walkable so '!scratch/keep/' can re-include "
+            f"this subdir (contract 11 pins the walkable-parent rule)"
         )
         assert (mirror / "scratch" / "keep" / "foo.txt").read_text().strip() == "b"
 
