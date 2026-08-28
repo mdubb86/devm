@@ -278,7 +278,7 @@ func TestSetupPhase_ColdStartClonesThenCreates(t *testing.T) {
 	exec := scriptedGuestExec(true) // mac mirror is freshly created (empty), guest empty too
 
 	err := SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt", nil)
 	require.NoError(t, err)
 
 	require.Len(t, sc.createArgs, 1)
@@ -308,7 +308,7 @@ func TestSetupPhase_WarmStartResumesPausedSession(t *testing.T) {
 	exec := scriptedGuestExec(false) // both sides populated + aligned (same scan values)
 
 	err := SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt", nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"sess-1"}, sc.resumeCalls)
@@ -345,7 +345,7 @@ func TestSetupPhase_AlignedContentCreatesSession(t *testing.T) {
 	}
 
 	err = SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt", nil)
 	require.NoError(t, err)
 
 	require.Len(t, sc.createArgs, 1)
@@ -379,7 +379,7 @@ func TestSetupPhase_DivergentGuardRejects(t *testing.T) {
 	}
 
 	err = SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "app")
 	assert.Empty(t, sc.createArgs, "guard rejection must not create a session")
@@ -411,7 +411,7 @@ func TestSetupPhase_NoMirrorEntity_ClonesButNoSession(t *testing.T) {
 	}
 
 	err := SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt", nil)
 	require.NoError(t, err)
 
 	require.Len(t, cloneScripts, 1, "cold-start clone must run for a NoMirror entity")
@@ -453,7 +453,7 @@ func TestSetupPhase_NoMirrorEntity_AlreadyClonedSkipsClone(t *testing.T) {
 	}
 
 	err := SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt", nil)
 	require.NoError(t, err)
 
 	assert.Empty(t, cloneScripts, "an already-populated guest dir must not be re-cloned")

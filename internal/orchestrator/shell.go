@@ -423,7 +423,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	// project ssh keys) and after OpenEgress (permits guest -> iron-proxy) —
 	// mutagen's ssh transport and a cold-start guest git clone both need
 	// both preconditions in place.
-	if err := mutagenSetupFn(d, ctx, cfg, vmName, repoRoot, tunnelPort); err != nil {
+	if err := mutagenSetupFn(d, ctx, cfg, vmName, repoRoot, projectIP, tunnelPort); err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "mutagen setup")
 	}
 	log.Printf("shell: mutagen sessions ready: %s", vmName)
@@ -439,8 +439,8 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 // setup step provisionAndAttach runs after RunEnforced. Production always
 // calls (ShellDeps).setupMutagenSessions; tests substitute a fake to
 // verify sequencing without needing a live VM or the real mutagen binary.
-var mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
-	return d.setupMutagenSessions(ctx, cfg, vmName, repoRoot, tunnelPort)
+var mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot, projectIP string, tunnelPort int) error {
+	return d.setupMutagenSessions(ctx, cfg, vmName, repoRoot, projectIP, tunnelPort)
 }
 
 // setupMutagenSessions builds the mutagen CLI + entity list and calls
@@ -449,7 +449,7 @@ var mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, v
 // VMApplyIronProxyResponse) — combined with softnet.NATAliasIP, the
 // guest-visible address softnet NATs to the host's loopback, it forms the
 // HTTP_PROXY URL a guest-side git clone needs.
-func (d ShellDeps) setupMutagenSessions(ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
+func (d ShellDeps) setupMutagenSessions(ctx context.Context, cfg schema.Config, vmName, repoRoot, projectIP string, tunnelPort int) error {
 	mutagenBin, err := mutagen.Ensure(d.Ident.RuntimeDir())
 	if err != nil {
 		return fmt.Errorf("mutagen: extract binary: %w", err)
@@ -464,17 +464,32 @@ func (d ShellDeps) setupMutagenSessions(ctx context.Context, cfg schema.Config, 
 		return fmt.Errorf("mutagen: build entities: %w", err)
 	}
 
-	// mutagen's ssh transport must resolve HostKeyAlias, UserKnownHostsFile,
-	// and IdentityFile from the per-project Host block in the managed
-	// ssh_config. That block is aliased `Host devm-<vmName>` — using the
-	// bare hostname <vmName>.<TLD> would not match any Host alias and ssh
-	// would fall back to the default known_hosts (which doesn't know the
-	// guest's host key), producing "Host key verification failed".
-	guestSSHTarget := "devm-" + vmName
+	// mutagen shells out to the system ssh client. The devm daemon runs as
+	// root (LaunchDaemon), so its ssh subprocess reads /var/root/.ssh/config
+	// — NOT the user's ~/.ssh/config that carries the Include of devm's
+	// managed ssh_config. Passing target `devm-<vmName>` (the alias) or
+	// `<vmName>.<TLD>` (the FQDN) both fail: alias never matches (no
+	// ssh_config to consult), FQDN resolves to nothing (private DNS lives
+	// on softnet, root has no /etc/resolver knowledge either).
+	//
+	// Bypass ssh_config lookup entirely: hand mutagen the per-project
+	// identity file, host-key-alias, known_hosts path, and strictness knobs
+	// as -i / -o flags (mutagen forwards them to ssh verbatim). Target the
+	// guest by its ProjectIP (softnet's :22 bind) so no DNS resolution is
+	// needed either.
+	kdir := sshkeys.ProjectDir(d.Ident, vmName)
+	guestSSHTarget := projectIP
+	sshFlags := []string{
+		"-i", filepath.Join(kdir, "id_ed25519"),
+		"-o", "HostKeyAlias=devm-" + vmName,
+		"-o", "UserKnownHostsFile=" + filepath.Join(kdir, "known_hosts"),
+		"-o", "StrictHostKeyChecking=yes",
+		"-o", "IdentitiesOnly=yes",
+	}
 	ironProxyURL := fmt.Sprintf("http://%s:%d", softnet.NATAliasIP, tunnelPort)
 
 	if err := serviceapi.SetupPhase(ctx, mutagenCLI, d.Ident, vmName, entities, d.guestExec(ctx, vmName),
-		guestSSHTarget, ironProxyURL, guestGitCACertPath()); err != nil {
+		guestSSHTarget, ironProxyURL, guestGitCACertPath(), sshFlags); err != nil {
 		return fmt.Errorf("mutagen setup: %w", err)
 	}
 	return nil
