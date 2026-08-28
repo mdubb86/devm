@@ -623,7 +623,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			})
 		}
 		// Persistent volumes — one --dir per declared volume. Each
-		// share is Mac-side (RuntimeDir/volumes/<project>/<name>/,
+		// share is Mac-side (RuntimeDir/<project>/<name>/,
 		// created if missing) and lands in the guest at /mnt/vol_<name>/,
 		// which the volume mount script bind-mounts at the declared
 		// target path. Data survives `devm teardown` — the disk goes
@@ -646,7 +646,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		var volumes []volumeState
 		// TODO(Task 17): walk req.Cfg.Repos for the entry with Primary
 		// == true, deriving its URL from req.MacCwd when nil, and
-		// synthesize its volumeState (ensureVolumeMacDir + DirMounts +
+		// synthesize its volumeState (ensureMirrorDir + DirMounts +
 		// append, as the per-name loop below does for req.Cfg.Volumes).
 		// No-op until then.
 		// Sort volume names for deterministic mount order across boots
@@ -658,7 +658,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		sort.Strings(volNames)
 		for _, name := range volNames {
 			target := req.Cfg.Volumes[name].Path
-			macPath, wasEmpty, err := ensureVolumeMacDir(cfg, req.Name, name)
+			macPath, wasEmpty, err := ensureMirrorDir(cfg, req.Name, name)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("ensure volume dir %s: %v", name, err), http.StatusInternalServerError)
 				return

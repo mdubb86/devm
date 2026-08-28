@@ -10,52 +10,61 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProjectVolumesDir_ComputesPath(t *testing.T) {
-	// Use a temp HOME so we don't touch the real ~/Library.
+func TestProjectMirrorRoot_Path(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	cfg := identity.Config{Name: "devm-test"}
-	got := projectVolumesDir(cfg, "myproj")
+	got := projectMirrorRoot(cfg, "myproj")
 	assert.Equal(t,
-		filepath.Join(tmp, "Library", "Application Support", "devm-test", "volumes", "myproj"),
+		filepath.Join(tmp, "Library", "Application Support", "devm-test", "myproj"),
 		got)
 }
 
-func TestEnsureVolumeMacDir_CreatesFreshDir_ReportsEmpty(t *testing.T) {
+func TestMirrorMacDir_Path(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	cfg := identity.Config{Name: "devm-test"}
-	path, wasEmpty, err := ensureVolumeMacDir(cfg, "myproj", "pg-data")
+	got := mirrorMacDir(cfg, "myproj", "pg-data")
+	assert.Equal(t,
+		filepath.Join(tmp, "Library", "Application Support", "devm-test", "myproj", "pg-data"),
+		got)
+}
+
+func TestEnsureMirrorDir_CreatesDirAndReportsEmpty(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	cfg := identity.Config{Name: "devm-test"}
+	path, wasEmpty, err := ensureMirrorDir(cfg, "myproj", "pg-data")
 	require.NoError(t, err)
 	assert.True(t, wasEmpty, "freshly-created dir must be reported empty")
 
-	// Path exists with mode 0700.
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 	assert.Equal(t, os.FileMode(0700), info.Mode().Perm())
 }
 
-func TestEnsureVolumeMacDir_ReportsNonEmpty(t *testing.T) {
+func TestEnsureMirrorDir_ExistingDirWithFiles_ReportsNonEmpty(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	cfg := identity.Config{Name: "devm-test"}
-	path, _, err := ensureVolumeMacDir(cfg, "myproj", "pg-data")
+	path, _, err := ensureMirrorDir(cfg, "myproj", "pg-data")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(path, "PG_VERSION"), []byte("14"), 0644))
 
-	_, wasEmpty, err := ensureVolumeMacDir(cfg, "myproj", "pg-data")
+	_, wasEmpty, err := ensureMirrorDir(cfg, "myproj", "pg-data")
 	require.NoError(t, err)
 	assert.False(t, wasEmpty, "dir containing files must be reported non-empty")
 }
 
-func TestEnsureVolumeMacDir_IdempotentOnRepeat(t *testing.T) {
+func TestEnsureMirrorDir_ExistingEmptyDir_ReportsEmpty(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	cfg := identity.Config{Name: "devm-test"}
-	p1, _, err := ensureVolumeMacDir(cfg, "myproj", "pg-data")
+	p1, _, err := ensureMirrorDir(cfg, "myproj", "pg-data")
 	require.NoError(t, err)
-	p2, _, err := ensureVolumeMacDir(cfg, "myproj", "pg-data")
+	p2, wasEmpty, err := ensureMirrorDir(cfg, "myproj", "pg-data")
 	require.NoError(t, err)
 	assert.Equal(t, p1, p2)
+	assert.True(t, wasEmpty, "pre-existing empty dir must still be reported empty")
 }

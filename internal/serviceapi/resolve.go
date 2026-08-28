@@ -67,7 +67,7 @@ func listWorkspaces(cfg identity.Config) ([]WorkspaceEntry, error) {
 		// TODO(Task 17): resolve the entry in snap.Cfg.Repos with
 		// Primary == true and, when snap.WorkspaceHostPath is set,
 		// append a WorkspaceEntry for it (guest path + StoragePath via
-		// volumeMacDir). No-op (skip every project) until then.
+		// mirrorMacDir). No-op (skip every project) until then.
 	}
 	return out, nil
 }
