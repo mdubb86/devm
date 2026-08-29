@@ -62,6 +62,10 @@ func TestRenderCommandsManifest_Shape(t *testing.T) {
 }
 
 func TestRenderCommandsManifest_EmptyWhenNoCommands(t *testing.T) {
+	// A declared repo with no commands must still appear in the
+	// manifest (with commands: {}) — omitting it made cmd/run's
+	// lookup report "no devm repo in current directory" for a cwd that
+	// IS in a devm repo, just one with no commands defined.
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
 		Repos: map[string]schema.RepoConfig{
@@ -70,7 +74,7 @@ func TestRenderCommandsManifest_EmptyWhenNoCommands(t *testing.T) {
 	}
 	body, err := RenderCommandsManifest(cfg, "/host")
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"repos":{}}`, string(body))
+	assert.JSONEq(t, `{"repos":{"main":{"guestPath":"/home/devm/work","commands":{}}}}`, string(body))
 }
 
 func TestRenderCommandsManifest_Deterministic(t *testing.T) {

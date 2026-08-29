@@ -131,6 +131,36 @@ func TestRun_ErrorOutsideRepo(t *testing.T) {
 	assert.Contains(t, string(out), "no devm repo in current directory")
 }
 
+// TestRun_EmptyCommandsRepo_ErrorsNoCommand is a regression test:
+// render.RenderCommandsManifest used to omit a repo with zero declared
+// commands from the manifest entirely, so a cwd inside such a repo hit
+// the "no devm repo in current directory" branch — misleading, since
+// the cwd IS in a devm repo. With the repo present in the manifest
+// (commands: {}), the same lookup must instead report "no command"
+// against the correct repo name.
+func TestRun_EmptyCommandsRepo_ErrorsNoCommand(t *testing.T) {
+	bin := buildRun(t)
+	base := t.TempDir()
+	mainDir := filepath.Join(base, "main-repo")
+	require.NoError(t, os.MkdirAll(mainDir, 0o755))
+	manifest := writeManifest(t, base, strings.NewReplacer("MAIN", mainDir).Replace(`{
+	  "repos": {
+	    "main": {
+	      "guestPath": "MAIN",
+	      "commands": {}
+	    }
+	  }
+	}`))
+
+	cmd := exec.Command(bin, "install")
+	cmd.Dir = mainDir
+	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err)
+	assert.Contains(t, string(out), `no command "install" in repo "main"`)
+	assert.NotContains(t, string(out), "no devm repo in current directory")
+}
+
 func TestRun_ErrorUnknownCommand(t *testing.T) {
 	bin := buildRun(t)
 	manifest, mainDir, _ := prepareTree(t)

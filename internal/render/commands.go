@@ -29,13 +29,14 @@ type manifestCommand struct {
 // /opt/devm/commands.json. All `>NAME` script refs are resolved at
 // render time so the guest binary never touches the scripts library.
 // Always emits a valid JSON body — an empty repos map when cfg has no
-// commands — so callers ship the file unconditionally.
+// repos — so callers ship the file unconditionally. Every declared
+// repo appears in the manifest even with zero commands (commands: {}):
+// the guest's `run` dispatcher uses a repo's presence in this map to
+// distinguish "cwd is outside any devm repo" from "cwd is in a repo
+// that just has no such command."
 func RenderCommandsManifest(cfg schema.Config, macCwd string) ([]byte, error) {
 	out := commandsManifest{Repos: map[string]manifestRepo{}}
 	for repoName, r := range cfg.Repos {
-		if len(r.Commands) == 0 {
-			continue
-		}
 		repo := manifestRepo{
 			GuestPath: filepath.Join(schema.GuestHomeDir, r.ResolveLabel(macCwd)),
 			Commands:  make(map[string]manifestCommand, len(r.Commands)),

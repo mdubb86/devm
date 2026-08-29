@@ -924,6 +924,9 @@ func (c Config) StartupCommands(macCwd string) []StartupCommand {
 			}
 			body := cmd.Exec
 			if name, ok := ParseScriptRef(cmd.Exec); ok {
+				// invariant: Config.Validate rejects >NAME refs whose target
+				// script is undefined, so c.Scripts[name] is guaranteed
+				// non-nil here.
 				body = strings.Join(c.Scripts[name], " && ")
 			}
 			out = append(out, StartupCommand{

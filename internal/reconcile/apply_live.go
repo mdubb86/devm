@@ -43,15 +43,20 @@ import (
 // is written into every bundle rebuild alongside env/templates. Path
 // changes ride the same rebuild as env changes because
 // render.RenderEtcEnvironment folds cfg.Path into /etc/environment's PATH= line
-// (there's no separate path-only artifact to pipe). KindStartupChange is
-// NOT live-applied — it's BucketRestartVM, not BucketLive, so the caller
-// routes it through the recreate path (VM stop + cold start; see
-// internal/provision's setupBootEnforcement / runStartupCommands, which
-// pick up the freshly-rendered /opt/devm/startup.sh on that next boot).
-// For each changed template, this function logs a "consuming services
-// may need restart" line to stderr.
+// (there's no separate path-only artifact to pipe). A KindRepoChange
+// mutation ALSO rides this rebuild — a label rename or primary toggle
+// changes the guestPath commands.json records and/or the $WORKSPACE
+// /etc/environment folds in, so without it a rename leaves the guest's
+// `run <name>` dispatcher and $WORKSPACE pointed at the old path.
+// KindStartupChange is NOT live-applied — it's BucketRestartVM, not
+// BucketLive, so the caller routes it through the recreate path (VM
+// stop + cold start; see internal/provision's setupBootEnforcement /
+// runStartupCommands, which pick up the freshly-rendered
+// /opt/devm/startup.sh on that next boot). For each changed template,
+// this function logs a "consuming services may need restart" line to
+// stderr.
 //
-// KindRepoChange/KindVolumeChange entries route through
+// KindRepoChange/KindVolumeChange entries ALSO route through
 // applyMutagenSessionChange, which needs a live mutagen daemon
 // (mutagenCLI), the daemon's identity (identCfg, for runtime-dir-scoped
 // mirror paths and TLD), and the project's current iron-proxy CONNECT
@@ -80,7 +85,15 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		case KindServiceDirectChange:
 			// Ingress for direct services is pushed to softnet's
 			// declarative expose map by the daemon, not applied in-guest.
-		case KindRepoChange, KindVolumeChange:
+		case KindRepoChange:
+			// A repo mutation (label rename, primary toggle, ...) changes
+			// the guestPath commands.json records and/or $WORKSPACE in
+			// /etc/environment, so it needs the same bundle rebuild as an
+			// env/path/commands change, ON TOP OF its mutagen session
+			// update below.
+			bundleRebuildNeeded = true
+			mutagenChanges = append(mutagenChanges, c)
+		case KindVolumeChange:
 			mutagenChanges = append(mutagenChanges, c)
 		}
 	}
