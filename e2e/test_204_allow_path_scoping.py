@@ -51,7 +51,11 @@ def _guest_curl_status(devm, workspace, url: str) -> subprocess.CompletedProcess
 @pytest.mark.slow
 @pytest.mark.timeout(420)
 def test_allow_path_scoping(devm, workspace):
+    # no_repo=True so the fixture doesn't auto-inject the default
+    # Hello-World repo — that would need github.com in the allow list,
+    # unrelated to what this test pins.
     workspace.write_devmyaml(
+        no_repo=True,
         install=["true"],
         network={"allow": ["api.github.com/octocat"]},
     )

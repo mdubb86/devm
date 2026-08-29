@@ -14,6 +14,7 @@ import (
 	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
 )
 
@@ -100,41 +101,51 @@ func resolveDirection(src, dst cpArg) (direction, error) {
 }
 
 // mountPassthrough returns the host-side path that mirrors the given
-// guest path, if the guest path lives under a mount that shares the
-// filesystem view. Two cases:
+// guest path, if the guest path lives under one of the project's
+// mirrored repos/volumes. It walks pcfg's label→mirror table (the
+// same repo/volume enumeration SetupPhase uses to set up mutagen sync
+// sessions) and matches the deepest entry whose GuestPath contains
+// guestPath — a nested volume inside a repo's tree wins over the repo
+// itself. The match translates to <RuntimeDir>/<projectName>/<label>/
+// plus the path relative to the entry's GuestPath; no `.vm` insertion.
 //
-//   - The primary workspace (repoRoot, when `repo:` is configured) is
-//     virtiofs-shared from the primary volume's Mac-side storage
-//     (<RuntimeDir>/volumes/<project>/<primaryVolumeName>/). A guest
-//     path under repoRoot translates to the same relative path under
-//     that storage dir.
-//   - User mounts[] entries — these still mirror the host path at the
-//     same absolute path inside the guest.
-//
-// Named volumes (other than the primary) aren't checked here — go via
-// pipe. Returns ("", false) when no mirror is known; caller falls back
-// to pipe.
+// Returns ("", false) when no mirror is known (no `repos:`/`volumes:`
+// configured, repoRoot/projectName unavailable, or guestPath falls
+// outside every entry) — caller falls back to pipe transport.
 func mountPassthrough(guestPath, repoRoot string, pcfg schema.Config, projectName string) (string, bool) {
-	if pcfg.Repo != nil && inside(guestPath, repoRoot) {
-		if rel, err := filepath.Rel(repoRoot, guestPath); err == nil {
-			primary := repohelpers.PrimaryVolumeName(repoRoot)
-			storageRoot := filepath.Join(cfg.RuntimeDir(), "volumes", projectName, primary)
-			return filepath.Clean(filepath.Join(storageRoot, rel)), true
+	if repoRoot == "" || projectName == "" {
+		return "", false
+	}
+	entities, err := serviceapi.BuildEntities(&pcfg, repoRoot)
+	if err != nil || len(entities) == 0 {
+		return "", false
+	}
+
+	var best *serviceapi.SessionEntity
+	for i := range entities {
+		e := &entities[i]
+		if e.NoMirror {
+			// No Mac-side mirror dir exists for a cold-start-clone-only
+			// secondary repo — it has nothing for cp to pass through to.
+			continue
+		}
+		if !inside(guestPath, e.GuestPath) {
+			continue
+		}
+		if best == nil || len(e.GuestPath) > len(best.GuestPath) {
+			best = e
 		}
 	}
-	for _, entry := range pcfg.Mounts {
-		host, _ := strings.CutSuffix(entry, ":ro")
-		host = expandHome(host)
-		if !filepath.IsAbs(host) {
-			host = filepath.Join(repoRoot, host)
-		}
-		host = filepath.Clean(host)
-		// Same-path mirror: mounts[] pins host path === guest path.
-		if inside(guestPath, host) {
-			return guestPath, true
-		}
+	if best == nil {
+		return "", false
 	}
-	return "", false
+
+	rel, err := filepath.Rel(best.GuestPath, guestPath)
+	if err != nil {
+		return "", false
+	}
+	storagePath := filepath.Join(cfg.RuntimeDir(), projectName, best.Label)
+	return filepath.Join(storagePath, rel), true
 }
 
 // inside reports whether target lives under root (or is root itself).
@@ -147,18 +158,6 @@ func inside(target, root string) bool {
 		return true
 	}
 	return strings.HasPrefix(target, root+string(filepath.Separator))
-}
-
-func expandHome(p string) string {
-	if p == "~" || strings.HasPrefix(p, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			if p == "~" {
-				return home
-			}
-			return filepath.Join(home, p[2:])
-		}
-	}
-	return p
 }
 
 var cpCmd = &cobra.Command{
@@ -175,12 +174,11 @@ inferred from which arg wears the colon:
 working directory; "project:/path" is always explicit. "-" is stdin
 (as src) or stdout (as dst) for streaming from/to pipes.
 
-Transport is auto-selected: if the guest path lives under a shared
-mount (workspace or a mounts[] entry), the copy is a plain host-side
-cp into the shared filesystem with no network involved. Otherwise
-it's streamed through the daemon exec channel; writes to root-owned
-paths (/etc, /var, /root) retry via sudo (the guest devm user has
-NOPASSWD sudo).`,
+Transport is auto-selected: if the guest path lives under the shared
+workspace mount, the copy is a plain host-side cp into the shared
+filesystem with no network involved. Otherwise it's streamed through
+the daemon exec channel; writes to root-owned paths (/etc, /var,
+/root) retry via sudo (the guest devm user has NOPASSWD sudo).`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true

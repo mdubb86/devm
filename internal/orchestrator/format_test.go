@@ -676,3 +676,62 @@ func TestFormatChange_KindCpuChange(t *testing.T) {
 	}
 	assert.Equal(t, "~ cpu: 6 → (default)", formatChange(ch))
 }
+
+func TestFormatChange_KindRepoChange_Add(t *testing.T) {
+	ch := reconcile.Change{Kind: reconcile.KindRepoChange, Op: reconcile.OpAdd, Key: "main"}
+	assert.Equal(t, "+ repo main", formatChange(ch))
+}
+
+func TestFormatChange_KindRepoChange_Remove(t *testing.T) {
+	ch := reconcile.Change{Kind: reconcile.KindRepoChange, Op: reconcile.OpRemove, Key: "main"}
+	assert.Equal(t, "- repo main", formatChange(ch))
+}
+
+func TestFormatChange_KindRepoChange_URLMutate(t *testing.T) {
+	oldURL, newURL := "git@example.com:a/b.git", "git@example.com:a/c.git"
+	ch := reconcile.Change{
+		Kind: reconcile.KindRepoChange, Op: reconcile.OpMutate, Key: "main", Field: "URL",
+		OldValue: &oldURL, NewValue: &newURL,
+	}
+	assert.Equal(t, `~ repo main.URL: "git@example.com:a/b.git" → "git@example.com:a/c.git"`, formatChange(ch))
+}
+
+func TestFormatChange_KindRepoChange_URLMutate_TruncatesLongValue(t *testing.T) {
+	oldURL := strings.Repeat("x", 100)
+	newURL := "git@example.com:a/c.git"
+	ch := reconcile.Change{
+		Kind: reconcile.KindRepoChange, Op: reconcile.OpMutate, Key: "main", Field: "URL",
+		OldValue: &oldURL, NewValue: &newURL,
+	}
+	got := formatChange(ch)
+	assert.Contains(t, got, "…")
+	assert.NotContains(t, got, strings.Repeat("x", 100))
+}
+
+func TestFormatChange_KindRepoChange_LabelMutate(t *testing.T) {
+	newLabel := "main"
+	ch := reconcile.Change{
+		Kind: reconcile.KindRepoChange, Op: reconcile.OpMutate, Key: "main", Field: "Label",
+		OldValue: (*string)(nil), NewValue: &newLabel,
+	}
+	assert.Equal(t, `~ repo main.Label: (unset) → "main"`, formatChange(ch))
+}
+
+func TestFormatChange_KindVolumeChange_Add(t *testing.T) {
+	ch := reconcile.Change{Kind: reconcile.KindVolumeChange, Op: reconcile.OpAdd, Key: "claude", New: "/home/devm/.claude"}
+	assert.Equal(t, "+ volume claude at /home/devm/.claude", formatChange(ch))
+}
+
+func TestFormatChange_KindVolumeChange_Remove(t *testing.T) {
+	ch := reconcile.Change{Kind: reconcile.KindVolumeChange, Op: reconcile.OpRemove, Key: "old-name"}
+	assert.Equal(t, "- volume old-name", formatChange(ch))
+}
+
+func TestFormatChange_KindVolumeChange_LabelMutate(t *testing.T) {
+	oldLabel, newLabel := "old-label", "new-label"
+	ch := reconcile.Change{
+		Kind: reconcile.KindVolumeChange, Op: reconcile.OpMutate, Key: "claude", Field: "label",
+		OldValue: &oldLabel, NewValue: &newLabel,
+	}
+	assert.Equal(t, `~ volume claude.label: "old-label" → "new-label"`, formatChange(ch))
+}

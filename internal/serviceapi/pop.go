@@ -5,8 +5,8 @@
 //	       "open_args": ["-a", "Preview"]}
 //
 // The handler resolves the arg (cwd-first, then project root),
-// translates the guest path to Mac storage, then hands the pretty
-// .vm/-form Mac path to `open`.
+// translates the guest path to Mac storage, then hands that Mac
+// mirror path directly to `open`.
 //
 // Softnet forwards guest TCP 192.168.127.1:81 to this listener — see
 // internal/softnet/egress.go's Pop branch and internal/serviceapi/
@@ -97,7 +97,6 @@ func handlePop(w http.ResponseWriter, r *http.Request, projectName string, regis
 	}
 
 	var storagePath string
-	var guestFound string
 	for _, guestCand := range candidates {
 		macStorage, err := repohelpers.TranslateGuestPath(guestCand, toPathEntries(registry))
 		if err != nil {
@@ -105,7 +104,6 @@ func handlePop(w http.ResponseWriter, r *http.Request, projectName string, regis
 		}
 		if _, statErr := os.Stat(macStorage); statErr == nil {
 			storagePath = macStorage
-			guestFound = guestCand
 			break
 		}
 	}
@@ -115,26 +113,15 @@ func handlePop(w http.ResponseWriter, r *http.Request, projectName string, regis
 		return
 	}
 
-	// Convert the found storage path back to the pretty .vm/-symlink
-	// form so `open` shows apps a readable path like
-	// "sewtrue/.vm/src/foo.png" instead of the raw
-	// "~/Library/Application Support/devm/volumes/..." form.
-	rel, err := filepath.Rel(entry.GuestPath, guestFound)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("pop: internal path error: %v", err), http.StatusInternalServerError)
-		return
-	}
-	pretty := filepath.Join(entry.GuestPath, ".vm", rel)
-
-	openArgs := append([]string{pretty}, req.OpenArgs...)
+	openArgs := append([]string{storagePath}, req.OpenArgs...)
 	if err := popExecOpen(r.Context(), openArgs...); err != nil {
-		daemonlog.Errorf("serviceapi: pop: open %s: %v", pretty, err)
+		daemonlog.Errorf("serviceapi: pop: open %s: %v", storagePath, err)
 		http.Error(w, fmt.Sprintf("pop: open failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("serviceapi: pop: opened %s (project %s)", pretty, projectName)
-	fmt.Fprintln(w, pretty)
+	log.Printf("serviceapi: pop: opened %s (project %s)", storagePath, projectName)
+	fmt.Fprintln(w, storagePath)
 }
 
 // toPathEntries narrows a []WorkspaceEntry down to the minimal shape

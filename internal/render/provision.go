@@ -20,16 +20,6 @@ const (
 	inProgressMarker = "/run/devm/provisioning"
 )
 
-// MaskMount is one resolved top-level mask overlay: a host dir
-// bind-mounted over a workspace path. The daemon resolves the paths
-// (it holds the workspace path and project name); the script only
-// emits the mkdir/chown/mount. Owner is always devm — no
-// per-service run-user concept at this scope.
-type MaskMount struct {
-	HostPath    string // /var/devm/masks/<project>/<path>
-	MountTarget string // <workspace>/<path>
-}
-
 // ProvisionScriptInput is everything the composed guest provisioning script
 // needs baked in. The daemon builds this from schema.Config, then
 // RenderProvisionOpenScript/RenderProvisionEnforcedScript turn it into the
@@ -48,7 +38,6 @@ type ProvisionScriptInput struct {
 	// in schema.Config.Validate — the renderer trusts what it receives.
 	Scripts  map[string][]string
 	Services []string // service unit names to enable+start (health-polled)
-	Masks    []MaskMount
 
 	// StepTimeoutSeconds bounds every install:/startup: command (the
 	// `timeout %d` wrapping both stages). Zero means "unset" and falls back
@@ -220,24 +209,14 @@ func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
 	// (3) enforce: stage boundary marking the classifier's teardown/
 	// debuggable-VM split (stagesAfterInstall in provision.Provisioner) —
 	// a failure at or before this point is the daemon's own enforcement
-	// being broken, not the user's service. timesyncd's NTP config used
-	// to be applied here at runtime; it's now baked into the base image
-	// (image/provision-base.sh), so this stage has no work of its own
-	// left, only masks below.
+	// being broken, not the user's service.
 	p("echo ::devm:stage:enforce::")
 
-	// (4) services phase: masks (bind-mount overlays the services write into),
-	// then start + health-poll services BEFORE granting access. A failure from
-	// here on leaves a provisioned VM whose user-declared service is what's
-	// broken, so the classifier keeps the VM for in-place debugging.
+	// (4) services phase: start + health-poll services BEFORE granting
+	// access. A failure from here on leaves a provisioned VM whose
+	// user-declared service is what's broken, so the classifier keeps
+	// the VM for in-place debugging.
 	p("echo ::devm:stage:services::")
-	for _, m := range in.Masks {
-		p("sudo mkdir -p %s", shellSingleQuoted(m.HostPath))
-		// Owner is always devm — masks are project-wide, no service-user concept.
-		p("sudo chown devm:devm %s", shellSingleQuoted(m.HostPath))
-		p("sudo mkdir -p %s", shellSingleQuoted(m.MountTarget))
-		p("sudo mount --bind %s %s", shellSingleQuoted(m.HostPath), shellSingleQuoted(m.MountTarget))
-	}
 	// Services are WantedBy=devm.target (disabled at boot), but we start them
 	// EXPLICITLY here and poll — so a broken service aborts (exit 1) BEFORE
 	// ssh/the target come up. Preserves "broken service is loud, no access".

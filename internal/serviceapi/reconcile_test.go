@@ -388,26 +388,6 @@ func TestMergeLiveApplied_Direct_ServiceRemoved(t *testing.T) {
 	assert.False(t, present, "service removed in new_cfg must be dropped from the merged snapshot")
 }
 
-func TestMergeLiveApplied_MaskAdd(t *testing.T) {
-	base := schema.Config{}
-	new := schema.Config{Masks: []string{"node_modules"}}
-	merged := mergeLiveApplied(base, new, []reconcile.Change{
-		{Kind: reconcile.KindMaskChange, Key: "node_modules", New: "node_modules"},
-	})
-	assert.Equal(t, []string{"node_modules"}, merged.Masks,
-		"snapshot must reflect the mask add; otherwise the next reconcile sees stale base and no umount fires on removal")
-}
-
-func TestMergeLiveApplied_MaskRemove(t *testing.T) {
-	base := schema.Config{Masks: []string{"node_modules"}}
-	new := schema.Config{}
-	merged := mergeLiveApplied(base, new, []reconcile.Change{
-		{Kind: reconcile.KindMaskChange, Key: "node_modules", Old: "node_modules"},
-	})
-	assert.Empty(t, merged.Masks,
-		"snapshot must reflect the mask removal; otherwise re-adds are silently ignored")
-}
-
 func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
 	// CLI resolves + hashes secret refs (login-keychain access happens
 	// in the user context) and sends the map on every /vm/reconcile
@@ -632,7 +612,7 @@ type fakeApply struct {
 	order *[]string
 }
 
-func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
+func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, identCfg identity.Config, ironProxyURL string) error {
 	f.called = true
 	f.lastSSHAuthPub = sshAuthPub
 	f.lastSSHHostPriv = sshHostPriv

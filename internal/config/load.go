@@ -76,8 +76,8 @@ func Load(dir string) (schema.Config, error) {
 	if err != nil {
 		return schema.Config{}, fmt.Errorf("merge: %w", err)
 	}
-	// Validate against the project root so mounts[] entries can be
-	// resolved and existence-checked against the host filesystem.
+	// Validate against the project root so path-relative config
+	// (volumes, labels) can be checked against the host filesystem.
 	if err := merged.ValidateWithRoot(dir); err != nil {
 		return schema.Config{}, fmt.Errorf("merged config: %w", err)
 	}

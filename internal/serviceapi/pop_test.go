@@ -7,9 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,7 +33,7 @@ func withPopExecSeam(t *testing.T, fn func(recs *[]popExecRecord)) {
 	fn(&recs)
 }
 
-func TestPopHandler_ResolvesCwdRelative_OpensPrettyPath(t *testing.T) {
+func TestPopHandler_ReturnsMirrorPathDirectly(t *testing.T) {
 	storage := t.TempDir()
 	guestRoot := "/Users/x/proj"
 	// Seed a file in storage matching where the guest cwd/arg would land.
@@ -57,8 +55,10 @@ func TestPopHandler_ResolvesCwdRelative_OpensPrettyPath(t *testing.T) {
 		assert.Equal(t, 200, w.Code, "body: %s", w.Body.String())
 		require.Len(t, *recs, 1)
 		require.Len(t, (*recs)[0].args, 1)
-		assert.Equal(t, guestRoot+"/.vm/src/foo.png", (*recs)[0].args[0],
-			"open must receive the pretty .vm/-form path")
+		got := (*recs)[0].args[0]
+		assert.Equal(t, filepath.Join(storage, "src", "foo.png"), got,
+			"open must receive the Mac mirror path directly")
+		assert.NotContains(t, got, ".vm/", "no .vm/-suffixed indirection")
 	})
 }
 
@@ -81,7 +81,7 @@ func TestPopHandler_FallsBackToProjectRoot(t *testing.T) {
 
 		assert.Equal(t, 200, w.Code, "body: %s", w.Body.String())
 		require.Len(t, *recs, 1)
-		assert.Equal(t, guestRoot+"/.vm/top.png", (*recs)[0].args[0])
+		assert.Equal(t, filepath.Join(storage, "top.png"), (*recs)[0].args[0])
 	})
 }
 
@@ -137,7 +137,7 @@ func TestPopHandler_ForwardsOpenArgs(t *testing.T) {
 
 		assert.Equal(t, 200, w.Code, "body: %s", w.Body.String())
 		require.Len(t, *recs, 1)
-		assert.Equal(t, []string{guestRoot + "/.vm/img.png", "-a", "Preview"}, (*recs)[0].args)
+		assert.Equal(t, []string{filepath.Join(storage, "img.png"), "-a", "Preview"}, (*recs)[0].args)
 	})
 }
 
@@ -158,12 +158,6 @@ func TestPopHandler_AbsoluteGuestArg(t *testing.T) {
 
 		assert.Equal(t, 200, w.Code)
 		require.Len(t, *recs, 1)
-		assert.Equal(t, guestRoot+"/.vm/abs.png", (*recs)[0].args[0])
+		assert.Equal(t, filepath.Join(storage, "abs.png"), (*recs)[0].args[0])
 	})
 }
-
-// popExecOpen is only referenced inside pop.go for the real impl and
-// re-used here in tests via the seam. Suppress unused-import lint
-// signal.
-var _ = exec.Command
-var _ = strings.Contains

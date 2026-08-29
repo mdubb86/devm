@@ -3,7 +3,6 @@ package schema
 import (
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -140,46 +139,16 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 		byPath[path] = name
 	}
 
-	// Third: repo-config validation on volume entries. Independent of
-	// workspaceRoot, so it runs under plain Validate() too.
-	for _, name := range names {
-		vol := c.Volumes[name]
-		if vol.Repo == nil {
-			continue
-		}
-		if vol.Repo.URL == nil || *vol.Repo.URL == "" {
-			return fmt.Errorf("volumes.%s.repo: url is required for secondary repos", name)
-		}
-		if vol.Repo.Secret == "" && (c.Repo == nil || c.Repo.Secret == "") {
-			return fmt.Errorf("volumes.%s.repo: secret is required (no top-level repo.secret to inherit)", name)
-		}
-	}
-
-	// Fourth: no overlap with any top-level mask target. Masks live
-	// under the workspace root; volume target is absolute. Checked
-	// before the workspace-root overlap below (mask targets are always
-	// workspace subpaths) so a volume colliding with a mask reports the
-	// more specific mask conflict rather than the generic workspace one.
-	// Only enforceable when workspaceRoot is known (ValidateWithRoot);
-	// plain Validate() with empty workspaceRoot skips this check.
-	if workspaceRoot == "" {
-		return nil
-	}
-	for _, maskPath := range c.Masks {
-		maskAbs := filepath.Join(workspaceRoot, maskPath)
-		for _, name := range names {
-			if c.Volumes[name].Path == maskAbs {
-				return fmt.Errorf(`volumes.%s: guest path %q overlaps mask %q`,
-					name, c.Volumes[name].Path, maskPath)
-			}
-		}
-	}
-
-	// Fifth: no overlap with the workspace mount root. The workspace
+	// Third: no overlap with the workspace mount root. The workspace
 	// is virtiofs-mounted at the same absolute path in the guest as
 	// on the Mac (mirrored per vm.go). A volume mounted at the
 	// workspace root or any subpath would collide with the workspace
-	// bind.
+	// bind. Only enforceable when workspaceRoot is known
+	// (ValidateWithRoot); plain Validate() with empty workspaceRoot
+	// skips this check.
+	if workspaceRoot == "" {
+		return nil
+	}
 	cleanedRoot := filepath.Clean(workspaceRoot)
 	rootPrefix := cleanedRoot + string(filepath.Separator)
 	for _, name := range names {
@@ -188,45 +157,6 @@ func (c Config) validateVolumes(workspaceRoot string) error {
 			return fmt.Errorf(`volumes.%s: guest path %q overlaps the workspace mount root %q`,
 				name, c.Volumes[name].Path, cleanedRoot)
 		}
-	}
-	return nil
-}
-
-// validateRepo checks the top-level Repo field. Presence requires
-// Secret — the URL may be nil (derives from Mac cwd's git remote).
-func (c Config) validateRepo() error {
-	if c.Repo == nil {
-		return nil
-	}
-	if c.Repo.Secret == "" {
-		return fmt.Errorf("repo.secret is required (names a secret-store entry for iron-proxy substitution at clone time)")
-	}
-	return nil
-}
-
-// validateMasks checks the top-level Masks list: shape, and
-// duplicate/traversal rejection. Overlap with declared volumes is
-// validateVolumes' responsibility (single source of truth).
-func (c Config) validateMasks() error {
-	if len(c.Masks) == 0 {
-		return nil
-	}
-	seen := map[string]int{} // path → first index where seen
-	for i, path := range c.Masks {
-		if path == "" {
-			return fmt.Errorf("masks[%d]: path must not be empty", i)
-		}
-		if filepath.IsAbs(path) || strings.HasPrefix(path, "~") || strings.HasPrefix(path, "$") {
-			return fmt.Errorf(`masks[%d]: path %q must be relative to the workspace (no leading /, ~, or $)`, i, path)
-		}
-		cleaned := filepath.Clean(path)
-		if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-			return fmt.Errorf(`masks[%d]: path %q: path traversal outside the workspace is not allowed`, i, path)
-		}
-		if prior, dup := seen[path]; dup {
-			return fmt.Errorf(`masks[%d]: path %q is already declared (first at masks[%d])`, i, path, prior)
-		}
-		seen[path] = i
 	}
 	return nil
 }
@@ -523,12 +453,18 @@ func (p Project) Validate() error {
 // Checks top-level keys + project-block + network-block keys. Per-service
 // shape has more legitimate variation (kit-passthrough fields could grow)
 // so it's not validated here.
+//
+// Must be kept in sync with Config's yaml tags by hand — Config has no
+// custom UnmarshalYAML (adding one would swallow strictDecode's
+// KnownFields(true) for every nested block; see
+// internal/config/load.go).
+var topLevelKnownFields = []string{
+	"project", "base_image", "docker", "network", "env",
+	"services", "install", "startup", "scripts", "path", "packages", "disk", "memory", "cpu",
+	"volumes", "repos",
+}
+
 func CheckUnknownKeys(data []byte) error {
-	knownTop := []string{
-		"project", "base_image", "docker", "network", "env",
-		"services", "install", "startup", "scripts", "mounts", "path", "packages", "disk", "memory", "cpu",
-		"config_lock", "volumes", "masks", "repo",
-	}
 	knownProject := []string{
 		"name", "proxy",
 	}
@@ -539,7 +475,7 @@ func CheckUnknownKeys(data []byte) error {
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil // typed unmarshal will surface the parse error
 	}
-	if err := rejectUnknown(raw, knownTop, "top-level"); err != nil {
+	if err := rejectUnknown(raw, topLevelKnownFields, "top-level"); err != nil {
 		return err
 	}
 	if proj, ok := raw["project"].(map[string]any); ok {
@@ -736,27 +672,18 @@ type Config struct {
 	Services map[string]Service  `yaml:"services,omitempty"`
 
 	// Volumes are per-project named persistent stores. Each key is a
-	// volume name; each value is the guest mount path, optionally with
-	// a repo to hydrate it from. Data lives on the Mac side under
-	// ~/Library/Application Support/<daemon>/volumes/<project>/<name>/
+	// volume name; each value is the guest mount path. Data lives on
+	// the Mac side under
+	// ~/Library/Application Support/<daemon>/<projectID>/<label>/
 	// and survives `devm teardown`. See docs/superpowers/specs/
 	// 2026-08-01-persistent-volumes-design.md.
 	Volumes map[string]Volume `yaml:"volumes,omitempty"`
 
-	// Repo declares the primary workspace repo. Nil means the project
-	// has no primary — utility VMs that only run tools. Presence
-	// requires Secret; URL is optional (derives from Mac cwd's
-	// `git remote get-url origin` when nil).
-	Repo *RepoConfig `yaml:"repo,omitempty"`
-
-	// Masks are workspace-relative paths whose contents are overlaid
-	// by a private per-project guest ext4 directory, so Mac and Linux
-	// versions of platform-specific content (node_modules with native
-	// binaries, .venv wheels, .cargo build artefacts) don't step on
-	// each other. Storage lives on the VM disk at
-	// /var/devm/masks/<project>/<path>/ and dies with the VM on
-	// teardown — masks aren't for persistence (see volumes:).
-	Masks []string `yaml:"masks,omitempty"`
+	// Repos declares the project's git repos to hydrate at cold-start,
+	// keyed by name. A nil/empty map means the project has no repo —
+	// utility VMs that only run tools. Exactly one entry may set
+	// Primary to mark the primary workspace repo.
+	Repos map[string]RepoConfig `yaml:"repos,omitempty"`
 
 	// Packages is a list of apt package names installed automatically
 	// via `apt-get install -y` during Tart VM provisioning.
@@ -792,19 +719,6 @@ type Config struct {
 	// V1 scope: refs only from install: and startup:. No parameters,
 	// no script-to-script calls.
 	Scripts map[string][]string `yaml:"scripts,omitempty"`
-
-	// Mounts are additional host paths shared into the VM at the same
-	// path inside the VM ("mirrored path" mode — same host and guest
-	// path). Each entry is a string of the form `HOST_PATH[:ro]`.
-	// HOST_PATH may be absolute, relative to the project root, or
-	// start with `~` for home-directory expansion. The optional `:ro`
-	// suffix is passed through to tart's `--dir` flag and makes the
-	// virtio-fs share read-only.
-	//
-	// Changing this field is in the TEARDOWN bucket: tart run's
-	// --dir mounts are baked at VM-start time and the VM must be
-	// stopped and re-started to apply.
-	Mounts []string `yaml:"mounts,omitempty"`
 
 	// Path is a list of directories prepended to PATH inside the
 	// sandbox. Reaches all four executable entrypoints (install,
@@ -843,62 +757,6 @@ type Config struct {
 	// nil = use image default. Applied via `tart set --cpu` at VM
 	// start; a change reconciles as BucketRestartVM.
 	Cpu *int `yaml:"cpu,omitempty"`
-
-	// ConfigLock opts out of host-immutable devm.yaml when explicitly
-	// set to false. Pointer so absent (nil) is distinguishable from an
-	// explicit `config_lock: false` — see ConfigLockEnabled for the
-	// centralized default.
-	ConfigLock *bool `yaml:"config_lock,omitempty"`
-}
-
-// ConfigLockEnabled reports whether devm.yaml should be made host-immutable
-// (chflags uchg) while the VM runs. Default true; only an explicit
-// `config_lock: false` disables it.
-func (c Config) ConfigLockEnabled() bool { return c.ConfigLock == nil || *c.ConfigLock }
-
-// ResolveMount expands and absolute-resolves a single mounts[] entry
-// against the given project root. Returns the canonical form
-// `ABS_HOST_PATH[:ro]` ready to pass to tart's `--dir` flag.
-//
-// Rules:
-//   - Optional `:ro` suffix is preserved (becomes `:ro` on the
-//     `--dir` argument, which tart honors as a read-only share).
-//   - A leading `~/` is expanded to the host user's home directory.
-//   - Relative paths are joined to projectRoot.
-//   - `filepath.Clean` is applied so `..` segments are resolved.
-//
-// Returns an error if entry is empty or if `~` expansion fails.
-// Does NOT check whether the resolved host path exists — that's a
-// separate concern (Validate does the existence check).
-func ResolveMount(entry, projectRoot string) (string, error) {
-	if entry == "" {
-		return "", fmt.Errorf("mount entry must not be empty")
-	}
-	path, ro := strings.CutSuffix(entry, ":ro")
-	if path == "" {
-		return "", fmt.Errorf("mount entry %q: host path is empty", entry)
-	}
-	switch {
-	case path == "~":
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("mount entry %q: expand ~: %w", entry, err)
-		}
-		path = home
-	case strings.HasPrefix(path, "~/"):
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("mount entry %q: expand ~/: %w", entry, err)
-		}
-		path = filepath.Join(home, path[2:])
-	case !filepath.IsAbs(path):
-		path = filepath.Join(projectRoot, path)
-	}
-	path = filepath.Clean(path)
-	if ro {
-		path += ":ro"
-	}
-	return path, nil
 }
 
 // ParseDiskSize parses a `disk:` value like "64G" or "64GB" into an
@@ -947,29 +805,182 @@ func ParseMemorySize(s string) (int, error) {
 	return n * 1024, nil
 }
 
-// ValidateWithRoot is like Validate but additionally checks the
-// `mounts:` entries resolve cleanly and the resolved host paths
-// exist. Callers that have the project root (devm's config loader)
-// should prefer ValidateWithRoot; the parameter-free Validate skips
-// path-existence checks.
+// reservedProjectIDs are devm-internal storage directory names under
+// the daemon's Application Support root. A project.name colliding
+// with one of these would shadow devm's own storage layout. Must
+// agree with cmd/devm's purgeSkipDirs — same set of reserved names.
+var reservedProjectIDs = map[string]bool{
+	"bin": true, "state": true, "iron-proxy": true,
+	"mutagen": true, "ssh": true, "secrets": true,
+	"ca": true, "softnet-bin": true, "volumes": true,
+}
+
+// validateProjectIDReserved rejects a project.name that collides with
+// a devm-internal storage directory name.
+func (c *Config) validateProjectIDReserved() error {
+	name := c.Project.Name
+	if reservedProjectIDs[name] {
+		return fmt.Errorf("project.name %q collides with a devm-internal storage dir — pick another name", name)
+	}
+	return nil
+}
+
+// BareCloneName derives a repo's default label from its clone URL:
+// strips a trailing ".git", then keeps the path segment after the
+// last "/" or ":" — "git@github.com:me/foo.git" → "foo".
+func BareCloneName(url string) string {
+	trimmed := strings.TrimSuffix(url, ".git")
+	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
+		trimmed = trimmed[i+1:]
+	}
+	if i := strings.LastIndex(trimmed, ":"); i >= 0 {
+		trimmed = trimmed[i+1:]
+	}
+	return trimmed
+}
+
+// cwdLabelPlaceholder is the label derived for a URL-nil primary repo
+// when macCwd is unknown. Production callers always resolve through
+// ValidateWithRoot, which supplies the real Mac cwd; this placeholder
+// only surfaces when Validate() is called directly (unit tests).
+const cwdLabelPlaceholder = "__cwd__"
+
+// validateRepos enforces primary determination across Config.Repos:
+// either exactly one entry is marked `primary: true`, or exactly one
+// entry omits `url:` (implying primary — its URL derives from
+// `git remote get-url origin` in the Mac cwd). The resolved primary
+// must not have `volume: false`.
+func (c *Config) validateRepos() error {
+	if len(c.Repos) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(c.Repos))
+	for name := range c.Repos {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var explicitPrimary []string
+	var urlNilKeys []string
+	for _, name := range names {
+		r := c.Repos[name]
+		if r.Primary != nil && *r.Primary {
+			explicitPrimary = append(explicitPrimary, name)
+		}
+		if r.URL == nil {
+			urlNilKeys = append(urlNilKeys, name)
+		}
+	}
+	if len(explicitPrimary) > 1 {
+		return fmt.Errorf("repos: multiple entries with primary: true (%v) — only one allowed", explicitPrimary)
+	}
+
+	var primaryName string
+	switch {
+	case len(explicitPrimary) == 1:
+		primaryName = explicitPrimary[0]
+	case len(urlNilKeys) == 1:
+		primaryName = urlNilKeys[0]
+	case len(urlNilKeys) == 0:
+		return fmt.Errorf("repos: no primary — either mark one entry `primary: true` or omit `url:` on one entry (URL derives from `git remote get-url origin`)")
+	default:
+		return fmt.Errorf("repos: multiple entries without a `url:` (%v) — mark exactly one `primary: true`", urlNilKeys)
+	}
+
+	primary := c.Repos[primaryName]
+	if primary.Volume != nil && !*primary.Volume {
+		return fmt.Errorf("repos.%s: primary cannot have volume: false", primaryName)
+	}
+
+	// Secondary repos must declare URL explicitly (they don't derive from
+	// `git remote get-url origin`; only the primary does).
+	for _, name := range names {
+		if name == primaryName {
+			continue
+		}
+		if c.Repos[name].URL == nil {
+			return fmt.Errorf("repos.%s: url is required for secondary repos (only the primary derives URL from `git remote get-url origin`)", name)
+		}
+	}
+	return nil
+}
+
+// labelOwner names one entity (a repos: or volumes: entry) that
+// derived or declared a given mutagen sync label.
+type labelOwner struct {
+	kind, name, label string
+}
+
+// validateLabels checks the flat label namespace shared by repos: and
+// volumes: for collisions. An entry's label is its explicit `label:`
+// when set, else derived: repos with url: → bare-clone name; the
+// url-nil primary repo → basename of macCwd (or cwdLabelPlaceholder
+// when macCwd is unknown); volumes → leaf-dir of path:.
+func (c *Config) validateLabels(macCwd string) error {
+	var owners []labelOwner
+
+	repoNames := make([]string, 0, len(c.Repos))
+	for name := range c.Repos {
+		repoNames = append(repoNames, name)
+	}
+	sort.Strings(repoNames)
+	for _, name := range repoNames {
+		r := c.Repos[name]
+		var label string
+		switch {
+		case r.Label != nil:
+			label = *r.Label
+		case r.URL != nil:
+			label = BareCloneName(*r.URL)
+		case macCwd != "":
+			label = filepath.Base(macCwd)
+		default:
+			label = cwdLabelPlaceholder
+		}
+		owners = append(owners, labelOwner{"repos", name, label})
+	}
+
+	volNames := make([]string, 0, len(c.Volumes))
+	for name := range c.Volumes {
+		volNames = append(volNames, name)
+	}
+	sort.Strings(volNames)
+	for _, name := range volNames {
+		v := c.Volumes[name]
+		var label string
+		if v.Label != nil {
+			label = *v.Label
+		} else {
+			label = filepath.Base(v.Path)
+		}
+		owners = append(owners, labelOwner{"volumes", name, label})
+	}
+
+	seen := map[string]labelOwner{}
+	for _, o := range owners {
+		if prior, ok := seen[o.label]; ok {
+			return fmt.Errorf(
+				"label %q: %s.%s and %s.%s both resolve to it — set an explicit `label:` on one",
+				o.label, prior.kind, prior.name, o.kind, o.name)
+		}
+		seen[o.label] = o
+	}
+	return nil
+}
+
+// ValidateWithRoot is like Validate but additionally checks
+// project-root-relative config (volumes, labels) against the
+// filesystem. Callers that have the project root (devm's config
+// loader) should prefer ValidateWithRoot; the parameter-free Validate
+// skips those checks.
 func (c Config) ValidateWithRoot(projectRoot string) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	for i, entry := range c.Mounts {
-		resolved, err := ResolveMount(entry, projectRoot)
-		if err != nil {
-			return fmt.Errorf("mounts[%d]: %w", i, err)
-		}
-		hostPath, _ := strings.CutSuffix(resolved, ":ro")
-		if _, err := os.Stat(hostPath); err != nil {
-			return fmt.Errorf("mounts[%d]: host path %q: %w", i, hostPath, err)
-		}
-	}
 	if err := c.validateVolumes(projectRoot); err != nil {
 		return err
 	}
-	if err := c.validateMasks(); err != nil {
+	if err := c.validateLabels(projectRoot); err != nil {
 		return err
 	}
 	return nil
@@ -1057,11 +1068,6 @@ func (c Config) Validate() error {
 			}
 		}
 	}
-	for i, entry := range c.Mounts {
-		if entry == "" {
-			return fmt.Errorf("mounts[%d] must not be empty", i)
-		}
-	}
 	names := make([]string, 0, len(c.Services))
 	for name := range c.Services {
 		names = append(names, name)
@@ -1093,13 +1099,16 @@ func (c Config) Validate() error {
 	if err := c.validateVolumes(""); err != nil {
 		return err
 	}
-	if err := c.validateRepo(); err != nil {
-		return err
-	}
-	if err := c.validateMasks(); err != nil {
-		return err
-	}
 	if err := c.validateSecretBindings(); err != nil {
+		return err
+	}
+	if err := c.validateRepos(); err != nil {
+		return err
+	}
+	if err := c.validateProjectIDReserved(); err != nil {
+		return err
+	}
+	if err := c.validateLabels(""); err != nil {
 		return err
 	}
 	return nil

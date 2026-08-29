@@ -14,6 +14,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -53,15 +54,26 @@ type VMReconcileResponse struct {
 // ApplyLiver is the daemon-internal contract for applying live changes
 // inside the guest. Real impl calls reconcile.ApplyLive; tests use a
 // fake to skip shelling out.
+//
+// identCfg and ironProxyURL feed reconcile.ApplyLive's mutagen-session
+// branch (KindRepoChange/KindVolumeChange): identCfg scopes mirror
+// paths and the mutagen data dir to this daemon's identity;
+// ironProxyURL is this project's current iron-proxy CONNECT URL, used
+// only when the change implies a cold-start clone.
 type ApplyLiver interface {
-	ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error
+	ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, identCfg identity.Config, ironProxyURL string) error
 }
 
 // realApplyLiver adapts reconcile.ApplyLive to the interface.
 type realApplyLiver struct{ tr *tart.Tart }
 
-func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte) error {
-	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub)
+func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, identCfg identity.Config, ironProxyURL string) error {
+	mutagenBin, err := mutagen.Ensure(identCfg.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("apply live: mutagen: extract binary: %w", err)
+	}
+	mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(identCfg), Exec: mutagen.OSExec}
+	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub, mutagenCLI, identCfg, ironProxyURL)
 }
 
 // TartLister is the subset of *tart.Tart the reconcile handler uses to
@@ -245,7 +257,7 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 					return
 				}
 			}
-			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, cfg.RuntimeDir(), req.Name, caPEM, req.SSHAuthorizedPubkey, req.SSHHostPriv, req.SSHHostPub); err != nil {
+			if err := apply.ApplyLive(live, req.Cfg, req.WorkspaceHostPath, cfg.RuntimeDir(), req.Name, caPEM, req.SSHAuthorizedPubkey, req.SSHHostPriv, req.SSHHostPub, cfg, ironProxyURLFor(req.Name)); err != nil {
 				http.Error(w, fmt.Sprintf("apply live: %v", err), http.StatusInternalServerError)
 				return
 			}
@@ -284,36 +296,11 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 				http.Error(w, fmt.Sprintf("push test hosts: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := WriteStateSnapshot(cfg, req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, ProjectIP: projectIP, WorkspaceHostPath: req.WorkspaceHostPath}); err != nil {
+			if err := WriteStateSnapshot(cfg, req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, ProjectIP: projectIP, MacCwd: req.WorkspaceHostPath}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}
 
-		}
-
-		// Config lock: after ANY reconcile on a running VM, re-establish
-		// the "running VM ⟹ devm.yaml locked" invariant that /vm/start and
-		// adopt set up — so an `unlock → edit → reconcile` cycle always ends
-		// locked, whether or not the edit produced live changes. If the
-		// project has flipped config_lock off, ensure it's unlocked instead.
-		// Best-effort: a chflags failure must not fail a reconcile that
-		// already succeeded; stopTimer cancels any pending relock timer from
-		// the unlock this reconcile closes out. Only reached when running
-		// (the !running path returned above).
-		if req.WorkspaceHostPath != "" {
-			if req.Cfg.ConfigLockEnabled() {
-				if err := lockConfigFiles(req.WorkspaceHostPath); err != nil {
-					daemonlog.Errorf("configlock: re-lock config for %s: %v (continuing)", req.Name, err)
-				} else {
-					configLockState.put(req.Name, req.WorkspaceHostPath)
-				}
-				configLockState.stopTimer(req.Name)
-			} else {
-				if err := unlockConfigFiles(req.WorkspaceHostPath); err != nil {
-					daemonlog.Errorf("configlock: unlock config for %s (config_lock off): %v (continuing)", req.Name, err)
-				}
-				configLockState.del(req.Name)
-			}
 		}
 
 		resp := VMReconcileResponse{
@@ -372,8 +359,6 @@ func mergeLiveApplied(old, new schema.Config, applied []reconcile.Change) schema
 			}
 		case reconcile.KindPathChange:
 			merged.Path = new.Path
-		case reconcile.KindMaskChange:
-			merged.Masks = new.Masks
 		case reconcile.KindNetworkAdd, reconcile.KindNetworkRemove:
 			merged.Network = new.Network
 		case reconcile.KindTemplateChange:

@@ -56,12 +56,12 @@ Other pre-VM errors from `devm shell`:
 
 ## Repo hydration failures
 
-Repo hydration (`git clone` into a volume's Mac-side storage, for top-level `repo:` and any `volumes.*.repo`) runs daemon-side, Mac-side, after iron-proxy spawns but before the guest boots — it's neither a daemon-startup nor a provisioner-stage failure.
+Repo hydration (`git clone` inside the guest, for `repos:` entries) runs as part of mutagen session setup, after the guest finishes provisioning (RunEnforced) and before the shell attaches — it's neither a daemon-startup nor a provisioner-stage failure, but a cold-start failure here still tears down the VM like any other.
 
-- **Missing secret.** `repo.secret` (or a `volumes.*.repo.secret`) names a secret not in the store — cold-start aborts before the VM is created; the error names the missing secret. Fix: `devm secret set <name>`.
-- **Clone auth failure (401).** Usually a missing iron-proxy substitution rule or an expired token. Cold-start aborts and the VM is torn down; the error names the repo URL. Fix: confirm `repo.secret` holds a token with clone access to that repo.
+- **Missing secret.** `repos.<name>.secret` names a secret not in the store — cold-start aborts before the clone runs; the error names the missing secret. Fix: `devm secret set <name>`.
+- **Clone auth failure (401).** Usually a missing iron-proxy substitution rule or an expired token. Cold-start aborts and the VM is torn down; the error names the repo URL. Fix: confirm `repos.<name>.secret` holds a token with clone access to that repo.
 - **Wrong URL / network failure.** Same abort-and-teardown shape; the error surfaces git's raw stderr. Fix: check the URL, or `devm denials` if it looks like a network block.
-- **Non-empty volume conflict.** Can't happen by design — devm only hydrates a volume whose Mac-side storage is observed empty. To force re-hydration (e.g. stale content), delete the volume's Mac-side dir manually and re-run `devm shell`.
+- **In-sync guard rejection.** The clone only fires when both the Mac mirror and the guest target are empty. If either side already has content, the guard compares entry count, total size, and a hash of each side's sorted top-100 paths; any mismatch is rejected rather than guessing which side is authoritative, with `in-sync guard failed for <label>: <reason>`. Fix: align the two sides by hand (clear the stale one, or accept the divergence) and re-run `devm shell`.
 
 ---
 
@@ -88,7 +88,7 @@ provision: provision stage "<name>": provisioning script exited <N>
 | `templates` | Renders every `services[*].templates` entry into its declared output path. Runs on ANY boot that has templates declared. | Template output path unwritable (e.g. `/etc/foo` without `sudo: true` on the template) or template source render error | Add `sudo: true` to the template if the output is under a root-owned dir; otherwise fix the template source |
 | `startup` | Runs every `startup:` command in one shared bash process (exports/`cd` persist between lines), wrapped in a single aggregate `timeout` — default 600s, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | A command exits non-zero, or the combined script exceeds its timeout | Read the captured output above the error; fix the failing command, or raise `DEVM_INSTALL_STEP_TIMEOUT_S` |
 | `enforce` | Stage marker only — no in-guest work. Marks the point after which egress is enforced. | Should not fail | n/a |
-| `services` | Applies workspace mask overlays, then enables + starts each declared service unit and health-polls it before `devm.target` (and therefore access) is granted. | Service failed to start (port in use, missing binary, bad config), or a mask's mount target doesn't exist | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>`; check top-level `masks:` paths in `devm.yaml` |
+| `services` | Enables + starts each declared service unit and health-polls it before `devm.target` (and therefore access) is granted. | Service failed to start (port in use, missing binary, bad config) | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>` |
 
 A failure at `open` through `enforce` leaves the VM in a bad cold-start state — `devm shell` tears it down (the next `devm shell` starts clean). A failure at `templates` or `services` leaves a basically-good VM whose user-declared service/template is what's broken, so `devm shell` surfaces the error but keeps the VM running for in-place debugging via `tart exec`.
 

@@ -14,8 +14,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +24,7 @@ import (
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/guestbin"
 	"github.com/mdubb86/devm/internal/render"
+	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -217,7 +218,6 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		Startup:            p.Cfg.Startup,
 		Scripts:            p.Cfg.Scripts,
 		Services:           p.serviceUnits(),
-		Masks:              p.maskMounts(),
 		StepTimeoutSeconds: p.StepTimeoutSeconds,
 		PackageAdds:        p.PackageAdds,
 		PackageRemoves:     p.PackageRemoves,
@@ -246,40 +246,38 @@ func (p *Provisioner) gitIdentity() render.GitIdentity {
 	}
 }
 
-// repoBindings flattens p.Cfg's repo declarations (top-level + per-volume)
-// into the order-stable slice RenderGitCredentials consumes. Primary
-// first (when declared), then per-volume repos in sorted volume-name
-// order. Volumes without a repo: block or without a resolved URL are
-// skipped. A per-volume repo with an empty Secret inherits from the
-// top-level secret (mirrors schema.Validate's inheritance rule).
+// repoBindings flattens p.Cfg.Repos (sorted by key for deterministic
+// output) into the slice RenderGitCredentials consumes. An entry's URL
+// is used verbatim when set; a nil URL (the primary, per schema
+// validation) derives from `git remote get-url origin` in p.MacCwd. An
+// entry with no secret needs no injected credential and is skipped, as
+// is an entry whose URL fails to derive (logged, not fatal — the rest
+// of provisioning should still proceed).
 func (p *Provisioner) repoBindings() []render.RepoBinding {
-	var bindings []render.RepoBinding
-	var topSecret string
-	if p.Cfg.Repo != nil {
-		topSecret = p.Cfg.Repo.Secret
-		if p.Cfg.Repo.URL != nil && *p.Cfg.Repo.URL != "" {
-			bindings = append(bindings, render.RepoBinding{
-				URL: *p.Cfg.Repo.URL, Secret: p.Cfg.Repo.Secret,
-			})
-		}
-	}
-	names := make([]string, 0, len(p.Cfg.Volumes))
-	for name := range p.Cfg.Volumes {
+	names := make([]string, 0, len(p.Cfg.Repos))
+	for name := range p.Cfg.Repos {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+
+	var bindings []render.RepoBinding
 	for _, name := range names {
-		vol := p.Cfg.Volumes[name]
-		if vol.Repo == nil || vol.Repo.URL == nil || *vol.Repo.URL == "" {
+		r := p.Cfg.Repos[name]
+		if r.Secret == "" {
 			continue
 		}
-		secret := vol.Repo.Secret
-		if secret == "" {
-			secret = topSecret
+		url := ""
+		if r.URL != nil {
+			url = *r.URL
+		} else {
+			derived, err := repohelpers.DeriveRepoURL(p.MacCwd)
+			if err != nil {
+				log.Printf("provision: repos.%s: derive URL from %s: %v", name, p.MacCwd, err)
+				continue
+			}
+			url = derived
 		}
-		bindings = append(bindings, render.RepoBinding{
-			URL: *vol.Repo.URL, Secret: secret,
-		})
+		bindings = append(bindings, render.RepoBinding{URL: url, Secret: r.Secret})
 	}
 	return bindings
 }
@@ -334,27 +332,6 @@ func (p *Provisioner) hasTemplates() bool {
 		}
 	}
 	return false
-}
-
-// maskMounts resolves every declared mask into a MaskMount the
-// script can bind-mount over the workspace path. Sorted by mask
-// path for a deterministic script. Storage lives at
-// /var/devm/masks/<project>/<path>/ — no per-service dimension
-// (masks became top-level in v0.9.18, decoupled from services).
-func (p *Provisioner) maskMounts() []render.MaskMount {
-	if len(p.Cfg.Masks) == 0 {
-		return nil
-	}
-	paths := append([]string(nil), p.Cfg.Masks...)
-	sort.Strings(paths)
-	mounts := make([]render.MaskMount, 0, len(paths))
-	for _, path := range paths {
-		mounts = append(mounts, render.MaskMount{
-			HostPath:    filepath.Join("/var/devm/masks", p.Cfg.Project.Name, path),
-			MountTarget: filepath.Join(p.WorkspaceVMPath, path),
-		})
-	}
-	return mounts
 }
 
 // provisionedMarker is the guest path whose presence indicates this VM has

@@ -43,16 +43,32 @@ tart list 2>/dev/null | awk 'NR>1 {print $2}' | grep -qx devm-e2e-base || \
     fail "missing tart image devm-e2e-base"
 
 # 8. Daemon UDS reachable
+#
+# launchd may take up to a couple of seconds after `devm install` returns
+# before it starts com.devm.e2e.service and the daemon binds its socket.
+# Poll for the socket for up to 10s so the bootstrap step doesn't fail
+# just because we checked one moment too early.
 SOCK="$HOME/Library/Application Support/devm-e2e/devm.sock"
-[ -S "$SOCK" ] || fail "daemon socket missing: $SOCK"
+for _ in $(seq 1 20); do
+    [ -S "$SOCK" ] && break
+    sleep 0.5
+done
+[ -S "$SOCK" ] || fail "daemon socket missing after 10s: $SOCK"
 
-# 9. Fingerprint match — daemon fingerprint == /usr/local/bin/devm-e2e's
+# 9. Fingerprint match — daemon fingerprint == /usr/local/bin/devm-e2e's.
+# Same startup race: the daemon may accept a `status --json` call and
+# report itself running once the socket appears, but poll a few seconds
+# in case fingerprint publication trails socket bind.
 DEVM_BIN=/usr/local/bin/devm-e2e
 [ -x "$DEVM_BIN" ] || fail "missing $DEVM_BIN"
 command -v jq >/dev/null 2>&1 || fail "jq not installed (required for fingerprint check; brew install jq)"
-"$DEVM_BIN" status --json 2>/dev/null | \
-    jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' \
-    >/dev/null 2>&1 || fail "daemon not reachable or fingerprint mismatch"
+for _ in $(seq 1 20); do
+    "$DEVM_BIN" status --json 2>/dev/null | \
+        jq -e '.daemon.running == true and .daemon.fingerprint_matches_cli == true' \
+        >/dev/null 2>&1 && ok=1 && break
+    sleep 0.5
+done
+[ "${ok:-0}" = 1 ] || fail "daemon not reachable or fingerprint mismatch after 10s"
 
 # 10. ~/.ssh/config Include line
 INCLUDE_LINE="Include \"$HOME/Library/Application Support/devm-e2e/ssh_config\""

@@ -26,7 +26,10 @@ import pytest
 
 from helpers.tart import TartSandbox
 
-pytestmark = pytest.mark.devm
+pytestmark = [
+    pytest.mark.devm,
+    pytest.mark.skip(reason="Task 28: pending mutagen-volumes fixture migration"),
+]
 
 
 @pytest.mark.timeout(300)

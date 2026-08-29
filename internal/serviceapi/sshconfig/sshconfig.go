@@ -169,13 +169,23 @@ func userSSHConfigPath() (string, error) {
 	return filepath.Join(home, ".ssh", "config"), nil
 }
 
-// EnsureInclude appends `Include "<Path(cfg)>"` to ~/.ssh/config if not
-// already present, so the user's ssh config picks up devm's generated
-// Host blocks. Creates ~/.ssh (0700) and ~/.ssh/config (0600) if either
-// is missing. Idempotent: a second call after a successful first call
-// is a no-op. Any other content in ~/.ssh/config is preserved verbatim;
-// matching is by trimmed whole-line equality, not substring, so it
-// can't false-match a similar-looking Include line.
+// EnsureInclude prepends `Include "<Path(cfg)>"` at the TOP of
+// ~/.ssh/config if not already present, so the user's ssh config picks
+// up devm's generated Host blocks. Creates ~/.ssh (0700) and
+// ~/.ssh/config (0600) if either is missing. Idempotent: a second call
+// after a successful first call is a no-op. Any other content is
+// preserved verbatim; matching is by trimmed whole-line equality, not
+// substring, so it can't false-match a similar-looking Include line.
+//
+// Prepend (not append) because ssh_config scoping is by-line: an Include
+// directive inserted inside an open `Host <pattern>` block is treated as
+// scoped to that block, and any Host directives inside the included file
+// then compound with the outer pattern instead of matching on their own.
+// Appending to a file that ends in an open Host block (common — user
+// files rarely end in `Host *`) silently breaks resolution of devm's
+// per-project Host blocks. Prepending guarantees the Include lives
+// outside any Host scope regardless of what the rest of the file looks
+// like.
 func EnsureInclude(cfg identity.Config) error {
 	path, err := userSSHConfigPath()
 	if err != nil {
@@ -190,10 +200,40 @@ func EnsureInclude(cfg identity.Config) error {
 		}
 		data = nil
 	} else {
+		// If the Include line already exists, verify it's not scoped
+		// inside a preceding `Host …` or `Match …` block — if a Host or
+		// Match directive appears before the Include line, ssh treats
+		// the Include as part of that block's scope and Host directives
+		// inside the included file compound with the outer pattern
+		// instead of standing on their own.
+		scoped := false
+		found := false
 		for _, l := range strings.Split(string(data), "\n") {
-			if strings.TrimSpace(l) == line {
-				return nil // already present
+			trimmed := strings.TrimSpace(l)
+			if trimmed == line {
+				found = true
+				break
 			}
+			lower := strings.ToLower(trimmed)
+			if strings.HasPrefix(lower, "host ") || strings.HasPrefix(lower, "match ") {
+				scoped = true
+			}
+		}
+		if found && !scoped {
+			return nil // already present at top-level scope
+		}
+		if found && scoped {
+			// Strip the misplaced Include; the prepend below reinstates
+			// it at file top-level scope.
+			lines := strings.Split(string(data), "\n")
+			out := lines[:0]
+			for _, l := range lines {
+				if strings.TrimSpace(l) == line {
+					continue
+				}
+				out = append(out, l)
+			}
+			data = []byte(strings.Join(out, "\n"))
 		}
 	}
 
@@ -202,12 +242,9 @@ func EnsureInclude(cfg identity.Config) error {
 	}
 
 	var buf bytes.Buffer
-	buf.Write(data)
-	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
-		buf.WriteByte('\n')
-	}
 	buf.WriteString(line)
 	buf.WriteByte('\n')
+	buf.Write(data)
 
 	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)

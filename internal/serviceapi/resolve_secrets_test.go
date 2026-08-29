@@ -14,11 +14,9 @@ func secretRef(name string) schema.EnvValue {
 	return schema.EnvValue{Secret: &schema.SecretRef{Name: name}}
 }
 
-func strPtr(s string) *string { return &s }
-
 // makeRepoWithOrigin mirrors repohelpers_test.go's fixture — a real git
 // repo with an `origin` remote — so DeriveRepoURL has something to find
-// when a top-level repo.url is nil.
+// when a repos entry's url is nil.
 func makeRepoWithOrigin(t *testing.T, origin string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -123,18 +121,20 @@ func TestResolveSecretBindings(t *testing.T) {
 		assert.Nil(t, bindings)
 	})
 
-	t.Run("top_level_repo_secret_with_explicit_url", func(t *testing.T) {
-		// cfg.Repo.Secret + cfg.Repo.URL explicit → a binding scoped to
+	t.Run("repo_secret_with_explicit_url", func(t *testing.T) {
+		// cfg.Repos["main"].Secret + explicit URL → a binding scoped to
 		// the URL's host is emitted, with no network.allow entry at all
-		// (gap #1: a bare top-level repo.secret: must be sufficient).
+		// (a bare repos.<name>.secret: must be sufficient).
 		be := secret.NewFake()
 		require.NoError(t, be.Set("proj/gh_token", "tok-value"))
 
 		cfg := schema.Config{
 			Project: schema.Project{Name: "proj"},
-			Repo: &schema.RepoConfig{
-				URL:    strPtr("https://github.com/acme/widget.git"),
-				Secret: "gh_token",
+			Repos: map[string]schema.RepoConfig{
+				"main": {
+					URL:    strPtr("https://github.com/acme/widget.git"),
+					Secret: "gh_token",
+				},
 			},
 		}
 
@@ -146,72 +146,18 @@ func TestResolveSecretBindings(t *testing.T) {
 		assert.Equal(t, []string{"github.com"}, bindings[0].Hosts)
 	})
 
-	t.Run("volume_repo_with_own_secret", func(t *testing.T) {
-		// A volume declaring its own repo.secret → a binding scoped to
-		// that volume's repo URL host, independent of any top-level repo.
-		be := secret.NewFake()
-		require.NoError(t, be.Set("proj/docs_token", "docs-value"))
-
-		cfg := schema.Config{
-			Project: schema.Project{Name: "proj"},
-			Volumes: map[string]schema.Volume{
-				"docs": {
-					Path: "/mnt/docs",
-					Repo: &schema.RepoConfig{
-						URL:    strPtr("https://gitlab.example.com/acme/docs.git"),
-						Secret: "docs_token",
-					},
-				},
-			},
-		}
-
-		bindings, err := ResolveSecretBindings(cfg, be, "")
-		require.NoError(t, err)
-		require.Len(t, bindings, 1)
-		assert.Equal(t, "docs_token", bindings[0].Name)
-		assert.Equal(t, []string{"gitlab.example.com"}, bindings[0].Hosts)
-	})
-
-	t.Run("volume_repo_inherits_top_level_secret", func(t *testing.T) {
-		// A volume with no own repo.secret inherits the top-level
-		// repo.secret name, but still scopes Hosts to ITS OWN repo URL
-		// (not the top-level repo's host).
-		be := secret.NewFake()
-		require.NoError(t, be.Set("proj/shared_token", "shared-value"))
-
-		cfg := schema.Config{
-			Project: schema.Project{Name: "proj"},
-			Repo: &schema.RepoConfig{
-				URL:    strPtr("https://github.com/acme/widget.git"),
-				Secret: "shared_token",
-			},
-			Volumes: map[string]schema.Volume{
-				"docs": {
-					Path: "/mnt/docs",
-					Repo: &schema.RepoConfig{
-						URL: strPtr("https://gitlab.example.com/acme/docs.git"),
-						// Secret left empty: inherits "shared_token".
-					},
-				},
-			},
-		}
-
-		bindings, err := ResolveSecretBindings(cfg, be, "")
-		require.NoError(t, err)
-		require.Len(t, bindings, 1)
-		require.Equal(t, "shared_token", bindings[0].Name)
-		assert.Equal(t, []string{"github.com", "gitlab.example.com"}, bindings[0].Hosts)
-	})
-
-	t.Run("top_level_repo_nil_url_derives_from_mac_cwd", func(t *testing.T) {
-		// cfg.Repo.URL == nil → falls through to DeriveRepoURL(macCwd).
+	t.Run("repo_nil_url_derives_from_mac_cwd", func(t *testing.T) {
+		// A repos entry with url == nil (the primary) falls through to
+		// DeriveRepoURL(macCwd).
 		be := secret.NewFake()
 		require.NoError(t, be.Set("proj/gh_token", "tok-value"))
 		dir := makeRepoWithOrigin(t, "https://github.com/acme/derived.git")
 
 		cfg := schema.Config{
 			Project: schema.Project{Name: "proj"},
-			Repo:    &schema.RepoConfig{Secret: "gh_token"},
+			Repos: map[string]schema.RepoConfig{
+				"main": {Secret: "gh_token"},
+			},
 		}
 
 		bindings, err := ResolveSecretBindings(cfg, be, dir)
@@ -220,7 +166,7 @@ func TestResolveSecretBindings(t *testing.T) {
 		assert.Equal(t, []string{"github.com"}, bindings[0].Hosts)
 	})
 
-	t.Run("top_level_repo_nil_url_derive_failure_surfaces", func(t *testing.T) {
+	t.Run("repo_nil_url_derive_failure_surfaces", func(t *testing.T) {
 		// A macCwd that isn't a git repo (or has no origin) surfaces
 		// DeriveRepoURL's error rather than silently dropping the
 		// binding.
@@ -229,37 +175,34 @@ func TestResolveSecretBindings(t *testing.T) {
 
 		cfg := schema.Config{
 			Project: schema.Project{Name: "proj"},
-			Repo:    &schema.RepoConfig{Secret: "gh_token"},
+			Repos: map[string]schema.RepoConfig{
+				"main": {Secret: "gh_token"},
+			},
 		}
 
 		_, err := ResolveSecretBindings(cfg, be, t.TempDir())
 		require.Error(t, err)
 	})
+
+	t.Run("repo_with_no_secret_contributes_nothing", func(t *testing.T) {
+		// A repos entry with no secret (public repo) is a no-op for
+		// injection scope — no error, no binding.
+		be := secret.NewFake()
+
+		cfg := schema.Config{
+			Project: schema.Project{Name: "proj"},
+			Repos: map[string]schema.RepoConfig{
+				"main": {URL: strPtr("https://example.com/pub/repo.git")},
+			},
+		}
+
+		bindings, err := ResolveSecretBindings(cfg, be, "")
+		require.NoError(t, err)
+		assert.Nil(t, bindings)
+	})
 }
 
 func TestRepoHosts(t *testing.T) {
-	t.Run("top_level_and_volume_hosts_merged_sorted", func(t *testing.T) {
-		cfg := schema.Config{
-			Project: schema.Project{Name: "proj"},
-			Repo: &schema.RepoConfig{
-				URL:    strPtr("https://github.com/acme/widget.git"),
-				Secret: "gh_token",
-			},
-			Volumes: map[string]schema.Volume{
-				"docs": {
-					Path: "/mnt/docs",
-					Repo: &schema.RepoConfig{
-						URL:    strPtr("https://gitlab.example.com/acme/docs.git"),
-						Secret: "docs_token",
-					},
-				},
-			},
-		}
-		hosts, err := RepoHosts(cfg, "")
-		require.NoError(t, err)
-		assert.Equal(t, []string{"github.com", "gitlab.example.com"}, hosts)
-	})
-
 	t.Run("file_url_host_empty_not_literal_file", func(t *testing.T) {
 		host, err := repoURLHost("file:///tmp/foo")
 		require.NoError(t, err)
@@ -273,16 +216,52 @@ func TestRepoHosts(t *testing.T) {
 		assert.Empty(t, hosts)
 	})
 
-	t.Run("scp_like_ssh_url_host_parsed", func(t *testing.T) {
+	t.Run("repo_host_resolved", func(t *testing.T) {
 		cfg := schema.Config{
 			Project: schema.Project{Name: "proj"},
-			Repo: &schema.RepoConfig{
-				URL:    strPtr("git@github.com:acme/widget.git"),
-				Secret: "gh_token",
+			Repos: map[string]schema.RepoConfig{
+				"main": {
+					URL:    strPtr("https://github.com/acme/widget.git"),
+					Secret: "gh_token",
+				},
 			},
 		}
 		hosts, err := RepoHosts(cfg, "")
 		require.NoError(t, err)
 		assert.Equal(t, []string{"github.com"}, hosts)
+	})
+
+	t.Run("scp_like_ssh_url_host_parsed", func(t *testing.T) {
+		cfg := schema.Config{
+			Project: schema.Project{Name: "proj"},
+			Repos: map[string]schema.RepoConfig{
+				"main": {
+					URL:    strPtr("git@github.com:acme/widget.git"),
+					Secret: "gh_token",
+				},
+			},
+		}
+		hosts, err := RepoHosts(cfg, "")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"github.com"}, hosts)
+	})
+
+	t.Run("multiple_repos_hosts_merged_sorted", func(t *testing.T) {
+		cfg := schema.Config{
+			Project: schema.Project{Name: "proj"},
+			Repos: map[string]schema.RepoConfig{
+				"main": {
+					URL:    strPtr("https://z.example.com/acme/main.git"),
+					Secret: "gh_token",
+				},
+				"secondary": {
+					URL:    strPtr("https://a.example.com/acme/second.git"),
+					Secret: "other_token",
+				},
+			},
+		}
+		hosts, err := RepoHosts(cfg, "")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"a.example.com", "z.example.com"}, hosts)
 	})
 }

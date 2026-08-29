@@ -10,14 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -46,15 +44,9 @@ const interceptedEgressIP = "192.0.2.1"
 type VMStartRequest struct {
 	Name string `json:"name"`
 	// MacCwd is the project's Mac-side working directory absolute path.
-	// Used to make devm.yaml (+ devm.me.yaml) host-immutable for the
-	// duration of the VM's run (see ConfigLockEnabled below).
 	MacCwd    string          `json:"mac_cwd"`
 	AllowList []string        `json:"allow_list,omitempty"`
 	Secrets   []SecretBinding `json:"secrets,omitempty"`
-	// ExtraMounts are additional host paths to share into the VM at the
-	// same absolute path (mirrored). Each entry is the CLI-resolved form
-	// `ABS_HOST_PATH[:ro]` (see schema.ResolveMount).
-	ExtraMounts []string `json:"extra_mounts,omitempty"`
 	// DiskSizeGB, when > 0, grows this VM's virtual disk to the given
 	// gigabytes at clone time (a per-project `disk:` override). Zero
 	// means the base image default.
@@ -82,6 +74,11 @@ type VMStartResponse struct {
 	// the snapshot, and recoverProjectState would find nothing to
 	// restore.
 	ProjectIP string `json:"project_ip"`
+	// TunnelPort is iron-proxy's CONNECT-capable tunnel_listen port —
+	// the orchestrator needs it (with softnet.NATAliasIP) to build the
+	// guest-visible HTTP_PROXY URL for its post-RunEnforced mutagen
+	// SetupPhase call, which the daemon has no visibility into.
+	TunnelPort int `json:"tunnel_port,omitempty"`
 }
 
 // VMStopRequest is the body shape for POST /vm/stop. The daemon calls
@@ -89,37 +86,6 @@ type VMStartResponse struct {
 // supervised tart process.
 type VMStopRequest struct {
 	Name string `json:"name"`
-}
-
-// VMConfigLockRequest is the body shape for POST /vm/unlock-config and
-// POST /vm/lock-config. RelockSeconds is only meaningful to
-// /vm/unlock-config: how long to leave devm.yaml editable before the
-// daemon re-locks it automatically. Zero means "use
-// defaultRelockSeconds".
-type VMConfigLockRequest struct {
-	Name          string `json:"name"`
-	RelockSeconds int    `json:"relock_seconds,omitempty"`
-	// RepoRoot is the caller's discovered project root. Used by
-	// /vm/unlock-config as an escape-hatch fallback when no
-	// configLockState entry exists (daemon didn't adopt the project,
-	// state was lost across a crash, /vm/stop bailed out before it
-	// could clear the flag) — so `devm unlock` can always fix a
-	// stray host-immutable flag rather than silently no-op'ing when
-	// the user needs it most. Ignored by /vm/lock-config since
-	// re-locking makes no sense without a live VM enforcing it.
-	RepoRoot string `json:"repo_root,omitempty"`
-}
-
-// VMConfigLockResponse is the response for POST /vm/unlock-config and
-// POST /vm/lock-config. WasLocked reports whether the project had a
-// configLockState entry — i.e. whether there was anything to
-// unlock/lock. false (with no error) means the VM isn't running or
-// config_lock is disabled for the project. RelockSeconds is only set
-// by /vm/unlock-config when WasLocked: the duration the just-armed
-// auto-relock timer will wait before re-locking devm.yaml.
-type VMConfigLockResponse struct {
-	WasLocked     bool `json:"was_locked"`
-	RelockSeconds int  `json:"relock_seconds,omitempty"`
 }
 
 // VMEgressPassthroughRequest is the body shape for POST
@@ -303,52 +269,6 @@ func gracefulStopVM(ctx context.Context, tr vmStopper, name string) {
 	}
 }
 
-// teardownFailedVMStart tears down everything /vm/start already created for
-// name once a post-boot failure (currently: repo hydration) makes the
-// in-flight cold start unrecoverable. Mirrors /vm/stop's cleanup sequence so
-// a retried /vm/start begins from a clean slate rather than fighting a
-// zombie tart-run process, a dangling iron-proxy, or a still-locked
-// devm.yaml — the same fail-loud "VM does not come up" contract
-// waitVMReady's failure path already gets via the CLI's teardownOnFail.
-// Best-effort throughout: it runs while a request is already failing, so a
-// secondary error here must never mask the original — every step just logs
-// and continues.
-func teardownFailedVMStart(ctx context.Context, sup *supervisor.Supervisor, tr *tart.Tart, cfg identity.Config, denials *Denials, name string) {
-	proxyKey := supervisor.Key{ProjectID: name, Role: supervisor.RoleProxy}
-	if err := sup.Stop(ctx, proxyKey); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
-		daemonlog.Errorf("serviceapi: vm/start: teardown-on-fail: stop iron-proxy for %s: %v", name, err)
-	}
-	ironProxyState.del(name)
-
-	// Same ordering as /vm/stop: disable auto-respawn before the in-guest
-	// poweroff, or the supervisor reads the clean exit as a crash and
-	// respawns tart run out from under this teardown.
-	vmKey := supervisor.Key{ProjectID: name, Role: supervisor.RoleVM}
-	sup.DisableRestart(vmKey)
-	gracefulStopVM(ctx, tr, name)
-	if err := sup.Stop(ctx, vmKey); err != nil && !errors.Is(err, supervisor.ErrNotFound) {
-		daemonlog.Errorf("serviceapi: vm/start: teardown-on-fail: stop vm process for %s: %v", name, err)
-	}
-	shutdownSoftnet(name)
-	softnetState.del(name)
-
-	if err := tr.Delete(ctx, name); err != nil && !strings.Contains(err.Error(), "does not exist") {
-		daemonlog.Errorf("serviceapi: vm/start: teardown-on-fail: tart delete %s: %v", name, err)
-	}
-
-	ReleaseProjectIP(cfg, name)
-	exposeClaims.release(name)
-	if denials != nil {
-		denials.Reset(name)
-	}
-	if e, ok := configLockState.get(name); ok {
-		if err := unlockConfigFiles(e.repoRoot); err != nil {
-			daemonlog.Errorf("serviceapi: vm/start: teardown-on-fail: unlock config for %s: %v", name, err)
-		}
-		configLockState.del(name)
-	}
-}
-
 // vmRunning reports whether the named VM appears running in a `tart list`.
 func vmRunning(vms []tart.VM, name string) bool {
 	for _, v := range vms {
@@ -357,58 +277,6 @@ func vmRunning(vms []tart.VM, name string) bool {
 		}
 	}
 	return false
-}
-
-// armRelockTimer schedules devm.yaml to be re-locked after d, the
-// bound `devm unlock --for <dur>` (or the default) puts on an
-// unattended unlock window. Installing it via configLockState.setTimer
-// stops+replaces whatever relock timer was already pending for name,
-// so repeated unlocks (or a lock/reconcile in between) never leave two
-// timers racing.
-//
-// The callback runs on its own goroutine (time.AfterFunc, not inline),
-// so taking locks.Lock(name) here is not nested under any handler's
-// lock. It re-checks configLockState and the VM's running state right
-// before locking — by the time it fires, the project may have been
-// stopped, torn down, or already re-locked by a `devm lock` or
-// `devm reconcile` in the interim, both of which call stopTimer and so
-// would have already cancelled this timer; the re-check is therefore
-// belt-and-suspenders against the timer having fired the instant
-// before a racing cancellation.
-func armRelockTimer(locks *ProjectLocks, tr TartLister, name string, d time.Duration) {
-	// Forward-declare t so the closure captures the variable in scope;
-	// its value is assigned by time.AfterFunc's return below. The
-	// callback then compares e.relock == t under the lock — pointer-
-	// identity check that guarantees a stale callback (one whose Stop
-	// lost the race with its own fire, replaced mid-AfterFunc by a
-	// newer setTimer) exits before touching state. Standard Go idiom
-	// for "am I the current AfterFunc callback?".
-	var t *time.Timer
-	t = time.AfterFunc(d, func() {
-		unlock := locks.Lock(name)
-		defer unlock()
-
-		e, ok := configLockState.get(name)
-		if !ok || e.relock != t {
-			return // stopped/torn down since unlock, or superseded by a newer timer
-		}
-		vms, err := tr.List(context.Background())
-		if err != nil {
-			// Fail closed: a transient `tart list` error means we can't
-			// confirm the VM is stopped, so re-lock rather than leave a
-			// running VM's config writable (the invariant this lock exists
-			// for). Worst case is a stale lock on an already-stopped VM,
-			// which the next `devm stop`/`devm unlock` clears — recoverable,
-			// unlike a silently-unlocked running VM.
-			daemonlog.Errorf("configlock: auto-relock %s: tart list failed, re-locking fail-closed: %v", name, err)
-		} else if !vmRunning(vms, name) {
-			return // VM confirmed stopped — don't strand a lock on it
-		}
-		if err := lockConfigFiles(e.repoRoot); err != nil {
-			daemonlog.Errorf("configlock: auto-relock %s: %v", name, err)
-		}
-	})
-	configLockState.setTimer(name, t)
 }
 
 // armPassthroughRestoreTimer schedules egress to be restored to
@@ -433,7 +301,7 @@ func armPassthroughRestoreTimer(locks *ProjectLocks, tr TartLister, ntpPort int,
 	// e.restore == t under the lock — pointer-identity check that
 	// guarantees a stale callback (one whose Stop lost the race with
 	// its own fire, replaced mid-AfterFunc by a newer setTimer) exits
-	// before touching softnet. Matches armRelockTimer's guard.
+	// before touching softnet.
 	var t *time.Timer
 	t = time.AfterFunc(d, func() {
 		unlock := locks.Lock(name)
@@ -601,120 +469,12 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 
 		// Run options: softnet NIC, no graphics. softnet is the daemon's
-		// sole egress path for every VM it launches.
+		// sole egress path for every VM it launches. Volumes, repos, and
+		// extra mounts are no longer virtiofs shares — mutagen sync
+		// sessions (SetupPhase, below) carry that traffic instead.
 		opts := tart.RunOpts{
 			NoGraphics: true,
 			NetSoftnet: true,
-		}
-		// Extra user-declared mounts. Each entry is `HOST_PATH[:ro]`
-		// (already resolved CLI-side); tag is `extra_N` so the guest-side
-		// mount script can address each share independently.
-		//
-		// We deliberately DON'T pass ReadOnly through to tart's --dir.
-		// Apple Virtualization's parser gets confused by
-		// `--dir=<path>:ro:tag=X` (interprets the path segment as the
-		// share name — slashes then reject as "file system sensitive
-		// characters"). Enforcing read-only via the guest mount script
-		// (`mount -o ro`) is equivalent for our use.
-		extraMountSpecs := parseExtraMounts(req.ExtraMounts)
-		for i, m := range extraMountSpecs {
-			opts.DirMounts = append(opts.DirMounts, tart.DirMount{
-				HostPath: m.hostPath,
-				Tag:      fmt.Sprintf("extra_%d", i),
-			})
-		}
-		// Persistent volumes — one --dir per declared volume. Each
-		// share is Mac-side (RuntimeDir/volumes/<project>/<name>/,
-		// created if missing) and lands in the guest at /mnt/vol_<name>/,
-		// which the volume mount script bind-mounts at the declared
-		// target path. Data survives `devm teardown` — the disk goes
-		// but the Mac dir doesn't.
-		//
-		// volumeState captures the observed Mac-side empty state per
-		// volume before the guest boots; buildVolumeMountScript reads
-		// it later to pick the four-case action (mount / adopt /
-		// error). repo, when non-nil, is hydrated (git clone) into
-		// macPath once iron-proxy is up and only if wasEmpty — see the
-		// hydration pass after SpawnIronProxy below.
-		type volumeState struct {
-			name     string
-			target   string
-			macPath  string
-			wasEmpty bool
-			repo     *schema.RepoConfig
-			mountTag string // virtiofs tag (may differ from name for the primary)
-		}
-		var volumes []volumeState
-		// Primary workspace, synthesized as a volume when the project
-		// declares a top-level `repo:`. Named after the Mac cwd folder
-		// basename and mounted at Mac cwd's absolute path — the
-		// $WORKSPACE convention, now backed by persistent Mac-side
-		// storage instead of a live bind of the Mac checkout.
-		if req.Cfg.Repo != nil {
-			primaryName := repohelpers.PrimaryVolumeName(req.MacCwd)
-			macPath, wasEmpty, err := ensureVolumeMacDir(cfg, req.Name, primaryName)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("ensure primary volume dir: %v", err), http.StatusInternalServerError)
-				return
-			}
-			primaryRepo := *req.Cfg.Repo
-			if primaryRepo.URL == nil {
-				url, err := repohelpers.DeriveRepoURL(req.MacCwd)
-				if err != nil {
-					http.Error(w, fmt.Sprintf("derive primary repo url: %v", err), http.StatusInternalServerError)
-					return
-				}
-				primaryRepo.URL = &url
-			}
-			// The mount tag is a short constant, not primaryName: tags
-			// go through macOS Virtualization Framework's virtio-fs tag
-			// field, capped around 36 bytes, while primaryName is the
-			// Mac cwd basename and can run much longer (pytest tmpdirs,
-			// deeply-versioned project names, ...). Storage dir naming
-			// (primaryName, spec-required) and mount tag naming
-			// (arbitrary) are independent concerns.
-			const primaryTag = "workspace"
-			opts.DirMounts = append(opts.DirMounts, tart.DirMount{
-				HostPath: macPath,
-				Tag:      "vol_" + primaryTag,
-			})
-			volumes = append(volumes, volumeState{
-				name: primaryName, target: req.MacCwd, macPath: macPath, wasEmpty: wasEmpty, repo: &primaryRepo, mountTag: primaryTag,
-			})
-		}
-		// Sort volume names for deterministic mount order across boots
-		// (no functional effect, but makes logs comparable).
-		volNames := make([]string, 0, len(req.Cfg.Volumes))
-		for n := range req.Cfg.Volumes {
-			volNames = append(volNames, n)
-		}
-		sort.Strings(volNames)
-		for _, name := range volNames {
-			target := req.Cfg.Volumes[name].Path
-			macPath, wasEmpty, err := ensureVolumeMacDir(cfg, req.Name, name)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("ensure volume dir %s: %v", name, err), http.StatusInternalServerError)
-				return
-			}
-			opts.DirMounts = append(opts.DirMounts, tart.DirMount{
-				HostPath: macPath,
-				Tag:      "vol_" + name,
-			})
-			volumes = append(volumes, volumeState{
-				name: name, target: target, macPath: macPath, wasEmpty: wasEmpty, repo: req.Cfg.Volumes[name].Repo, mountTag: name,
-			})
-		}
-		// Make devm.yaml (+ devm.me.yaml) host-immutable before the guest
-		// ever boots, so a root guest never sees a writable window onto its
-		// own trust boundary. Best-effort: a chflags failure must not block
-		// the VM from starting; config_lock:false opts a project out
-		// entirely.
-		if req.Cfg.ConfigLockEnabled() {
-			if err := lockConfigFiles(req.MacCwd); err != nil {
-				daemonlog.Errorf("configlock: lock config for %s: %v (continuing)", req.Name, err)
-			} else {
-				configLockState.put(req.Name, req.MacCwd)
-			}
 		}
 
 		cmd, err := tr.Run(ctx, req.Name, opts)
@@ -888,74 +648,17 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info.PopPort = popPort
 		ironProxyState.put(req.Name, info)
 
-		// Hydrate any volume (including the synthesized primary) whose
-		// Mac-side storage was observed empty and declares a repo. Must
-		// run after iron-proxy is up — the __DEVM_SECRET_<name>__
-		// placeholder is substituted on the wire by iron-proxy — and
-		// before the mount scripts below, which key off the wasEmpty
-		// captured earlier (buildVolumeMountScript treats a newly
-		// hydrated, now non-empty Mac dir as a clean bind, exactly as
-		// intended). Fails loud: any clone failure aborts /vm/start
-		// entirely rather than leave a half-hydrated volume.
-		inheritedSecret := ""
-		if req.Cfg.Repo != nil {
-			inheritedSecret = req.Cfg.Repo.Secret
-		}
-		ironURL := ironProxyURLFor(req.Name)
-		for _, v := range volumes {
-			if !v.wasEmpty || v.repo == nil {
-				continue
-			}
-			if err := HydrateRepoVolume(ctx, v.macPath, *v.repo, inheritedSecret, ironURL, proxyCfg.CACertPath); err != nil {
-				teardownFailedVMStart(ctx, sup, tr, cfg, denials, req.Name)
-				http.Error(w, fmt.Sprintf("hydrate volume %q: %v", v.name, err), http.StatusInternalServerError)
-				return
-			}
-		}
-
-		// Give the Mac cwd a short, ergonomic path into the primary
-		// volume's persistent storage now that it's materialized:
-		// <macCwd>/.vm symlink, kept out of git via .git/info/exclude.
-		// Best-effort — a failure here doesn't block the VM from
-		// starting; the user can fix the .vm dir manually.
-		if req.Cfg.Repo != nil {
-			primaryPath := volumeMacDir(cfg, req.Name, repohelpers.PrimaryVolumeName(req.MacCwd))
-			if err := EnsureVMSymlink(req.MacCwd, primaryPath); err != nil {
-				daemonlog.Errorf("vmsymlink: %v", err)
-			}
-			if err := EnsureGitExclude(req.MacCwd); err != nil {
-				daemonlog.Errorf("git-exclude: %v", err)
-			}
-		}
-
-		// Apply VM-side config via tart exec — extra mounts, volumes, env
-		// only. timesyncd's NTP config is baked into the base image
-		// (image/provision-base.sh), not applied here — the user's
-		// install:, apt-get, and template-install steps still run with
-		// open egress; iron-proxy is meant to gate the workload/services,
-		// not the developer's provisioning phase.
-		scripts := []string{}
-		// Extra mounts must land BEFORE the env script so scripts that
-		// read files from an extra mount can find them. Order among
-		// extras doesn't matter — each is independent.
-		for i, m := range extraMountSpecs {
-			scripts = append([]string{
-				buildExtraMountScript(fmt.Sprintf("extra_%d", i), m.hostPath, m.readOnly),
-			}, scripts...)
-		}
-		// Volume mount scripts. Run after extra mounts (so /mnt is stable)
-		// and before any user-side provisioning. Each script substitutes
-		// the Mac-side path into the conflict message so the user sees
-		// where their data lives.
-		for _, v := range volumes {
-			script := buildVolumeMountScript(v.mountTag, v.target, v.wasEmpty)
-			script = strings.ReplaceAll(script, "$MAC_VOLUME_DIR", v.macPath)
-			scripts = append(scripts, script)
-		}
+		// Apply VM-side config via tart exec. timesyncd's NTP config is
+		// baked into the base image (image/provision-base.sh), not
+		// applied here — the user's install:, apt-get, and
+		// template-install steps still run with open egress; iron-proxy
+		// is meant to gate the workload/services, not the developer's
+		// provisioning phase.
+		var scripts []string
 		// On a freshly-cloned VM that got a disk override, grow the guest
 		// filesystem first so subsequent steps see the full disk.
 		if !exists && req.DiskSizeGB > 0 {
-			scripts = append([]string{buildGrowRootScript()}, scripts...)
+			scripts = append(scripts, buildGrowRootScript())
 		}
 		for i, script := range scripts {
 			cmd := exec.Command("tart", "exec", "-i", req.Name, "sudo", "bash", "-s")
@@ -987,7 +690,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			ironProxyState.put(req.Name, info)
 		}
 
-		writeJSON(w, VMStartResponse{ProjectIP: projectIP})
+		writeJSON(w, VMStartResponse{ProjectIP: projectIP, TunnelPort: info.TunnelPort})
 	})
 
 	// /vm/enforcement-config is a precondition check that this project's
@@ -1120,30 +823,18 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		unlock := locks.Lock(req.Name)
 		defer unlock()
 
-		// Unlock devm.yaml (+ devm.me.yaml) via a defer at the top so
-		// no intermediate failure below — iron-proxy sup.Stop erroring,
-		// a panic, an early http.Error — can strand the file
-		// host-immutable. The registry is the normal source; the state
-		// snapshot's WorkspaceHostPath is the fallback for a project
-		// adopted across a daemon restart that hasn't gone through
-		// /vm/start (and thus recoverProjectState) again yet. No-op
-		// when locking was disabled (config_lock:false) or never
-		// happened, since no repoRoot resolves in that case.
-		defer func() {
-			repoRoot := ""
-			if e, ok := configLockState.get(req.Name); ok {
-				repoRoot = e.repoRoot
-			} else if snap, _ := ReadStateSnapshot(cfg, req.Name); snap != nil {
-				repoRoot = snap.WorkspaceHostPath
-			}
-			if repoRoot != "" {
-				if err := unlockConfigFiles(repoRoot); err != nil {
-					daemonlog.Errorf("configlock: unlock config for %s: %v (file left host-immutable; recover with `devm unlock`)", req.Name, err)
-				}
-			}
-			configLockState.del(req.Name)
-			egressPassthroughState.del(req.Name)
-		}()
+		defer egressPassthroughState.del(req.Name)
+
+		// Flush + pause this project's mutagen sessions before anything
+		// below touches the guest's network or power state — mutagen's
+		// SSH transport needs sshd up and reachable, both of which
+		// gracefulStopVM's in-guest poweroff (further down) ends.
+		// Best-effort: mutagen's own journal handles a crash mid-flush,
+		// so a failure here just means sessions resume unflushed on the
+		// next start instead of failing the stop.
+		if err := mutagenStopPhaseFn(cfg, req.Name); err != nil {
+			daemonlog.Errorf("mutagen stop phase for %s: %v (continuing)", req.Name, err)
+		}
 
 		// Stop iron-proxy for this project first. Best-effort — if
 		// it's not running, supervisor.Stop returns ErrNotFound which
@@ -1219,99 +910,10 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// /vm/unlock-config is the `devm unlock` escape hatch: it lifts the
-	// host-immutable flag on devm.yaml (+ devm.me.yaml) for a running
-	// project so the user can edit config without the daemon fighting
-	// them, and arms a relock timer bounding how long it stays editable
-	// unattended (`--for <dur>`, default defaultRelockSeconds). `devm
-	// lock` or `devm reconcile` ends the window early and cancels this
-	// timer (stopTimer). A project with no configLockState entry (VM
-	// not running, or config_lock:false) is a no-op, not an error —
-	// WasLocked reports which case this was.
-	s.Register("/vm/unlock-config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		var req VMConfigLockRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
-			return
-		}
-		if req.Name == "" {
-			http.Error(w, "name required", http.StatusBadRequest)
-			return
-		}
-
-		unlock := locks.Lock(req.Name)
-		defer unlock()
-
-		entry, ok := configLockState.get(req.Name)
-		relockSeconds := 0
-		if ok {
-			if err := unlockConfigFiles(entry.repoRoot); err != nil {
-				daemonlog.Errorf("configlock: unlock config for %s: %v (continuing)", req.Name, err)
-			}
-			d := time.Duration(req.RelockSeconds) * time.Second
-			if d <= 0 {
-				d = defaultRelockSeconds * time.Second
-			}
-			armRelockTimer(locks, tr, req.Name, d)
-			relockSeconds = int(d / time.Second)
-		} else if req.RepoRoot != "" {
-			// Escape hatch: no daemon state, but the caller supplied a
-			// repoRoot — clear any stray uchg flag anyway. WasLocked
-			// reflects the actual on-disk state at entry, not the
-			// daemon's view (which is what makes this the escape hatch).
-			// No relock timer to arm — there's nothing to re-lock against.
-			paths := configPaths(req.RepoRoot)
-			wasLocked, _ := fileIsImmutable(paths[0])
-			if err := unlockConfigFiles(req.RepoRoot); err != nil {
-				daemonlog.Errorf("configlock: escape-hatch unlock for %s at %s: %v (continuing)", req.Name, req.RepoRoot, err)
-			}
-			ok = wasLocked
-		}
-
-		writeJSON(w, VMConfigLockResponse{WasLocked: ok, RelockSeconds: relockSeconds})
-	})
-
-	// /vm/lock-config is the `devm lock` command: re-locks devm.yaml on
-	// demand, ending a temporary unlock early instead of waiting for the
-	// relock timer.
-	s.Register("/vm/lock-config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		var req VMConfigLockRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
-			return
-		}
-		if req.Name == "" {
-			http.Error(w, "name required", http.StatusBadRequest)
-			return
-		}
-
-		unlock := locks.Lock(req.Name)
-		defer unlock()
-
-		entry, ok := configLockState.get(req.Name)
-		if ok {
-			if err := lockConfigFiles(entry.repoRoot); err != nil {
-				daemonlog.Errorf("configlock: lock config for %s: %v (continuing)", req.Name, err)
-			}
-			configLockState.stopTimer(req.Name)
-		}
-
-		writeJSON(w, VMConfigLockResponse{WasLocked: ok})
-	})
-
 	// /vm/passthrough-egress opens a time-bounded egress passthrough
 	// window: flips softnet from ENFORCED to OPEN for the duration,
 	// arms a timer to restore ENFORCED on expiry. Repeat opens
-	// replace the existing timer (matches configLockState.setTimer's
-	// replace-not-add behavior). Reconcile does NOT close the window;
+	// replace the existing timer. Reconcile does NOT close the window;
 	// only the timer, `devm restrict`, or /vm/stop do.
 	s.Register("/vm/passthrough-egress", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -1373,7 +975,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		var req VMConfigLockRequest // reuses {Name} shape; RelockSeconds unused
+		var req VMApplyEgressEnforcementRequest // reuses {Name} shape
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return

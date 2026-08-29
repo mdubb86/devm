@@ -8,8 +8,7 @@ import (
 )
 
 // RepoConfig declares a git repo to hydrate a volume from at cold-start.
-// Used at top level (Config.Repo, the primary workspace) and inside a
-// Volume (secondary repos under `volumes:`).
+// Used at top level (Config.Repos, keyed by repo name).
 type RepoConfig struct {
 	// URL is the git clone URL. Nil at top level means "derive from
 	// `git remote get-url origin` in Mac cwd." Nil for a secondary is
@@ -22,26 +21,37 @@ type RepoConfig struct {
 	// (inherits from top-level).
 	Secret string `yaml:"secret,omitempty"`
 
-	// Branch overrides remote HEAD when non-nil.
-	Branch *string `yaml:"branch,omitempty"`
+	// Label names the mutagen sync session for this repo.
+	Label *string `yaml:"label,omitempty"`
+
+	// Volume, when true, backs this repo with a devm-managed volume
+	// instead of a plain bind mount.
+	Volume *bool `yaml:"volume,omitempty"`
+
+	// Primary marks this repo as the project's primary workspace.
+	Primary *bool `yaml:"primary,omitempty"`
+
+	// Ignore lists mutagen sync ignore patterns.
+	Ignore []string `yaml:"ignore,omitempty"`
 }
 
-var repoKnownFields = []string{"url", "secret", "branch"}
+var repoKnownFields = []string{"url", "secret", "label", "volume", "primary", "ignore"}
 
-// Volume is a per-project persistent store, optionally hydrated from git.
+// Volume is a per-project persistent store.
 type Volume struct {
 	// Path is the absolute guest mount point. Required.
 	Path string
-	// Repo, when non-nil, causes devm to `git clone` into the volume's
-	// Mac-side storage on the first cold-start where the storage is empty.
-	Repo *RepoConfig
+	// Label names the mutagen sync session for this volume.
+	Label *string
+	// Ignore lists mutagen sync ignore patterns.
+	Ignore []string
 }
 
-var volumeKnownFields = []string{"path", "repo"}
+var volumeKnownFields = []string{"path", "label", "ignore"}
 
 // UnmarshalYAML decodes either the scalar shape (bare guest path) or the
-// mapping shape (`{path: ..., repo: ...}`). Rejects unknown keys in the
-// mapping shape.
+// mapping shape (`{path: ..., label: ..., ignore: ...}`). Rejects unknown
+// keys in the mapping shape.
 func (v *Volume) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind == yaml.ScalarNode {
 		v.Path = node.Value
@@ -64,15 +74,17 @@ func (v *Volume) UnmarshalYAML(node *yaml.Node) error {
 		}
 	}
 	type raw struct {
-		Path string      `yaml:"path"`
-		Repo *RepoConfig `yaml:"repo,omitempty"`
+		Path   string   `yaml:"path"`
+		Label  *string  `yaml:"label,omitempty"`
+		Ignore []string `yaml:"ignore,omitempty"`
 	}
 	var r raw
 	if err := node.Decode(&r); err != nil {
 		return err
 	}
 	v.Path = r.Path
-	v.Repo = r.Repo
+	v.Label = r.Label
+	v.Ignore = r.Ignore
 	return nil
 }
 
@@ -95,9 +107,12 @@ func (r *RepoConfig) UnmarshalYAML(node *yaml.Node) error {
 		}
 	}
 	type raw struct {
-		URL    *string `yaml:"url,omitempty"`
-		Secret string  `yaml:"secret,omitempty"`
-		Branch *string `yaml:"branch,omitempty"`
+		URL     *string  `yaml:"url,omitempty"`
+		Secret  string   `yaml:"secret,omitempty"`
+		Label   *string  `yaml:"label,omitempty"`
+		Volume  *bool    `yaml:"volume,omitempty"`
+		Primary *bool    `yaml:"primary,omitempty"`
+		Ignore  []string `yaml:"ignore,omitempty"`
 	}
 	var raw2 raw
 	if err := node.Decode(&raw2); err != nil {
@@ -105,6 +120,9 @@ func (r *RepoConfig) UnmarshalYAML(node *yaml.Node) error {
 	}
 	r.URL = raw2.URL
 	r.Secret = raw2.Secret
-	r.Branch = raw2.Branch
+	r.Label = raw2.Label
+	r.Volume = raw2.Volume
+	r.Primary = raw2.Primary
+	r.Ignore = raw2.Ignore
 	return nil
 }

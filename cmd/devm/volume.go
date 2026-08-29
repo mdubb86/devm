@@ -23,7 +23,7 @@ var volumeCmd = &cobra.Command{
 
 var volumeLsCmd = &cobra.Command{
 	Use:   "ls",
-	Short: "List this project's volumes (name, guest path, Mac path, size)",
+	Short: "List this project's repos and volumes (name, label, kind, guest path, Mac path, size)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		cwd, err := os.Getwd()
@@ -45,31 +45,156 @@ var volumeLsCmd = &cobra.Command{
 	},
 }
 
+// guestHomeDir is the guest-side parent for every repo clone — mirrors
+// serviceapi.guestHomeDir (unexported there; the CLI needs its own
+// copy since it resolves labels itself rather than shelling out to
+// git via serviceapi.BuildEntities, see resolveRepoLabel).
+const guestHomeDir = "/home/devm"
+
+// findPrimaryRepoName returns the name of repos' primary entry: the
+// one explicitly marked Primary, or else the sole entry with a nil
+// URL. Mirrors schema's validateRepos primary-determination and
+// serviceapi.findPrimaryRepoName; callers are expected to hand it an
+// already-validated Config. Returns "" if no entry qualifies.
+func findPrimaryRepoName(repos map[string]schema.RepoConfig) string {
+	var urlNilName string
+	urlNilCount := 0
+	for name, r := range repos {
+		if r.Primary != nil && *r.Primary {
+			return name
+		}
+		if r.URL == nil {
+			urlNilName = name
+			urlNilCount++
+		}
+	}
+	if urlNilCount == 1 {
+		return urlNilName
+	}
+	return ""
+}
+
+// resolveRepoLabel resolves one repos.<name> entry's mutagen sync
+// label: an explicit `label:` always wins; else a repo with a URL
+// uses schema.BareCloneName; else (the URL-nil primary) the basename
+// of macCwd. Mirrors serviceapi.resolveRepoLabel.
+func resolveRepoLabel(r schema.RepoConfig, macCwd string) string {
+	if r.Label != nil {
+		return *r.Label
+	}
+	if r.URL != nil {
+		return schema.BareCloneName(*r.URL)
+	}
+	return filepath.Base(macCwd)
+}
+
+// resolveVolumeLabel resolves one volumes.<name> entry's mutagen sync
+// label: an explicit `label:` always wins; else the leaf dir of Path.
+// Mirrors serviceapi.resolveVolumeLabel.
+func resolveVolumeLabel(v schema.Volume) string {
+	if v.Label != nil {
+		return *v.Label
+	}
+	return filepath.Base(v.Path)
+}
+
+// volumeLsRow is one printed line: a repos or volumes entry. macPath
+// is "" for a repo that isn't mirrored (a secondary without
+// `volume: true`) — no mutagen session, no Mac-side storage to size.
+type volumeLsRow struct {
+	name, label, kind, guestPath, macPath string
+}
+
 // runVolumeLs is factored out for testability. ident tells us which
 // daemon's runtime dir to look under (devm vs devm-e2e); tests hand
 // in a synthetic identity with a temp-dir-resolving RuntimeDir. cwd is
-// the project root (Mac cwd), needed to derive the auto-managed
-// primary workspace volume's name and guest path when `repo:` is
-// configured. Writes to `out`.
+// the project root (Mac cwd), needed to resolve the label of a
+// URL-nil primary repo. Writes to `out`.
 func runVolumeLs(ident identity.Config, userCfg schema.Config, cwd string, out io.Writer) error {
-	volumesRoot := filepath.Join(ident.RuntimeDir(), "volumes", userCfg.Project.Name)
+	projectID := userCfg.Project.Name
+	mirrorPath := func(label string) string {
+		return filepath.Join(ident.RuntimeDir(), projectID, label)
+	}
 
-	type row struct{ name, guestPath, macPath string }
-	var rows []row
-	if userCfg.Repo != nil {
-		primary := repohelpers.PrimaryVolumeName(cwd)
-		rows = append(rows, row{primary, cwd, filepath.Join(volumesRoot, primary)})
+	// seen guards the flat label namespace repos: and volumes: share —
+	// two entries resolving to the same label would collide on the
+	// same Mac mirror dir. Config.Validate already rejects this at
+	// load time; this is a defensive re-check for callers (tests, or a
+	// future caller) that hand runVolumeLs an unvalidated Config.
+	seen := map[string]string{} // label -> "kind.name"
+	claim := func(kind, name, label string) error {
+		owner := kind + "." + name
+		if prior, ok := seen[label]; ok {
+			return fmt.Errorf("label %q: %s and %s both resolve to it — set an explicit `label:` on one", label, prior, owner)
+		}
+		seen[label] = owner
+		return nil
 	}
-	for name, v := range userCfg.Volumes {
-		rows = append(rows, row{name, v.Path, filepath.Join(volumesRoot, name)})
+
+	var rows []volumeLsRow
+
+	primaryName := findPrimaryRepoName(userCfg.Repos)
+	repoNames := make([]string, 0, len(userCfg.Repos))
+	for name := range userCfg.Repos {
+		repoNames = append(repoNames, name)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
+	sort.Strings(repoNames)
+	for _, name := range repoNames {
+		r := userCfg.Repos[name]
+		isPrimary := name == primaryName
+		var mirrored bool
+		if isPrimary {
+			mirrored = r.Volume == nil || *r.Volume
+		} else {
+			mirrored = r.Volume != nil && *r.Volume
+		}
+
+		label := resolveRepoLabel(r, cwd)
+		if err := claim("repos", name, label); err != nil {
+			return err
+		}
+
+		macPath := ""
+		if mirrored {
+			macPath = mirrorPath(label)
+		}
+		rows = append(rows, volumeLsRow{
+			name:      name,
+			label:     label,
+			kind:      "repo",
+			guestPath: filepath.Join(guestHomeDir, label),
+			macPath:   macPath,
+		})
+	}
+
+	volNames := make([]string, 0, len(userCfg.Volumes))
+	for name := range userCfg.Volumes {
+		volNames = append(volNames, name)
+	}
+	sort.Strings(volNames)
+	for _, name := range volNames {
+		v := userCfg.Volumes[name]
+		label := resolveVolumeLabel(v)
+		if err := claim("volumes", name, label); err != nil {
+			return err
+		}
+		rows = append(rows, volumeLsRow{
+			name:      name,
+			label:     label,
+			kind:      "volume",
+			guestPath: v.Path,
+			macPath:   mirrorPath(label),
+		})
+	}
 
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tGUEST PATH\tMAC PATH\tSIZE")
+	fmt.Fprintln(tw, "NAME\tLABEL\tKIND\tGUEST PATH\tMAC PATH\tSIZE")
 	for _, r := range rows {
-		size := dirSize(r.macPath)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.name, r.guestPath, r.macPath, humanBytes(size))
+		size := "-"
+		if r.macPath != "" {
+			size = humanBytes(dirSize(r.macPath))
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.name, r.label, r.kind, r.guestPath, r.macPath, size)
 	}
 	return tw.Flush()
 }

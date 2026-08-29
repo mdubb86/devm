@@ -1,11 +1,11 @@
-"""178: adding a secondary repo volume via `devm reconcile --yes`.
+"""178: adding a secondary repo (`repos:` with volume: true) via
+`devm reconcile --yes`.
 
-A `volumes:` map change is a KindVolumeChange diff, bucketed
-BucketRestartVM: it can't be applied live (tart takes --dir args only
-at VM launch), so reconcile stops the VM and cold-starts it again with
-the new volume declared. Config-lock holds devm.yaml host-immutable
-while the VM runs, so the edit needs `devm unlock` first (same
-sequencing as test_09/test_120's config-lock contract).
+Adding a `repos:` entry with volume: true is a change that requires the
+VM to be restarted (the mutagen session and its Mac mirror have to be
+allocated fresh). reconcile detects the diff, tears down + cold-starts
+with the new entity declared, and the secondary clone lands in its
+guest path on the fresh boot.
 """
 from __future__ import annotations
 import subprocess
@@ -14,13 +14,15 @@ import pytest
 
 pytestmark = pytest.mark.devm
 
+SECONDARY_URL = "https://github.com/octocat/Spoon-Knife.git"
+
 
 @pytest.mark.timeout(400)
 def test_reconcile_adds_secondary_volume(devm, workspace):
-    url = workspace.bare_repo_url()
-    workspace.write_devmyaml()
+    workspace.write_devmyaml()   # fixture default: primary Hello-World
 
     try:
+        # Initial cold-start: primary only.
         r = subprocess.run(
             [devm.path, "shell", "--", "true"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
@@ -29,17 +31,21 @@ def test_reconcile_adds_secondary_volume(devm, workspace):
 
         # Secondary not present yet.
         r = subprocess.run(
-            [devm.path, "shell", "--", "test", "-d", "/mnt/secondary"],
+            [devm.path, "shell", "--", "test", "-d", "/home/devm/Spoon-Knife"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
-        assert r.returncode != 0, "/mnt/secondary should not exist before reconcile"
+        assert r.returncode != 0, "/home/devm/Spoon-Knife should not exist before reconcile"
 
-        devm.unlock()
+        # Add a secondary repo with volume: true; reconcile picks it up.
         workspace.patch_devmyaml(
-            volumes={
+            repos={
+                "main": {
+                    "url": workspace.bare_repo_url(),
+                    "primary": True,
+                },
                 "secondary": {
-                    "path": "/mnt/secondary",
-                    "repo": {"url": url, "secret": "e2e_default"},
+                    "url": SECONDARY_URL,
+                    "volume": True,
                 },
             },
         )
@@ -48,12 +54,13 @@ def test_reconcile_adds_secondary_volume(devm, workspace):
         assert result.returncode == 0, result.stderr.decode()
 
         r = subprocess.run(
-            [devm.path, "shell", "--", "ls", "/mnt/secondary"],
+            [devm.path, "shell", "--", "ls", "/home/devm/Spoon-Knife"],
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, r.stderr.decode()
-        assert "README.md" in r.stdout.decode(), "secondary volume not hydrated after reconcile"
-        assert (workspace.volume_path("secondary") / "README.md").exists()
+        assert "index.html" in r.stdout.decode(), (
+            f"secondary Spoon-Knife not hydrated after reconcile; got:\n{r.stdout.decode()}"
+        )
     finally:
         subprocess.run(
             [devm.path, "teardown", "--yes"],

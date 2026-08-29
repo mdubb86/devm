@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -22,10 +23,10 @@ var (
 var purgeCmd = &cobra.Command{
 	Use:   "purge",
 	Short: "Delete state accumulated from projects that no longer exist",
-	Long: `Scans ~/Library/Application Support/devm/volumes/ for per-project
-subdirs. For each, checks whether a tart VM or state file still
-exists for the project. If neither: the project is gone and its
-volume data is orphaned — a candidate for deletion.
+	Long: `Scans ~/Library/Application Support/devm/ for per-project
+mirror dirs (<projectID>/). For each, checks whether a tart VM or
+state file still exists for the project. If neither: the project is
+gone and its mirrored data is orphaned — a candidate for deletion.
 
 Live projects are always skipped. Only fully-abandoned state gets
 purged. Data-losing action, so the default is interactive
@@ -61,18 +62,34 @@ func (r realVMLister) List() ([]string, error) {
 	return names, nil
 }
 
+// purgeSkipDirs are devm-internal directory names directly under
+// RuntimeDir() that are not project mirror dirs. Must agree with
+// internal/schema.reservedProjectIDs — that validator is what stops a
+// project.name from colliding with one of these in the first place,
+// so the two lists describe the same set of reserved names.
+var purgeSkipDirs = map[string]bool{
+	"bin":         true, // devm-installed binaries (iron-proxy, mutagen, setsidshim, ...)
+	"state":       true, // per-project state JSON
+	"iron-proxy":  true, // per-project iron-proxy configs
+	"mutagen":     true, // global mutagen daemon state + per-project session configs
+	"ssh":         true, // per-project SSH key material for guest reach
+	"secrets":     true, // file-backed secret store
+	"ca":          true, // devm's root CA material
+	"softnet-bin": true, // softnet binary + per-project sockets
+	"volumes":     true, // legacy layout artifact
+}
+
 // runPurge is factored for testability. runtimeDir is
 // ~/Library/Application Support/devm/ in production; tests pass a
 // temp dir. lister returns the current tart VM names.
 func runPurge(runtimeDir string, lister vmLister, dryRun, yes bool, out io.Writer) error {
-	volumesRoot := filepath.Join(runtimeDir, "volumes")
-	entries, err := os.ReadDir(volumesRoot)
+	entries, err := os.ReadDir(runtimeDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			fmt.Fprintln(out, "nothing to purge")
 			return nil
 		}
-		return fmt.Errorf("read volumes dir: %w", err)
+		return fmt.Errorf("read runtime dir: %w", err)
 	}
 	if len(entries) == 0 {
 		fmt.Fprintln(out, "nothing to purge")
@@ -91,9 +108,14 @@ func runPurge(runtimeDir string, lister vmLister, dryRun, yes bool, out io.Write
 	// Sort for deterministic output.
 	var projects []string
 	for _, e := range entries {
-		if e.IsDir() {
-			projects = append(projects, e.Name())
+		if !e.IsDir() {
+			continue
 		}
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || purgeSkipDirs[name] {
+			continue
+		}
+		projects = append(projects, name)
 	}
 	sort.Strings(projects)
 
@@ -117,7 +139,7 @@ func runPurge(runtimeDir string, lister vmLister, dryRun, yes bool, out io.Write
 
 	// Report candidates with sizes.
 	for _, p := range candidates {
-		dir := filepath.Join(volumesRoot, p)
+		dir := filepath.Join(runtimeDir, p)
 		size := dirSize(dir) // shared with volume.go
 		verb := "would delete"
 		if !dryRun {
@@ -139,7 +161,7 @@ func runPurge(runtimeDir string, lister vmLister, dryRun, yes bool, out io.Write
 		}
 	}
 	for _, p := range candidates {
-		dir := filepath.Join(volumesRoot, p)
+		dir := filepath.Join(runtimeDir, p)
 		if err := os.RemoveAll(dir); err != nil {
 			fmt.Fprintf(out, "failed to delete '%s': %v\n", p, err)
 			continue

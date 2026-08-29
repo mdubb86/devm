@@ -115,6 +115,19 @@ func TestStateSnapshotProxyVersionRoundTrips(t *testing.T) {
 	require.Equal(t, "abc123", got.ProxyVersion)
 }
 
+func TestStateSnapshotMacCwdRoundTrips(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	want := StateSnapshot{
+		Cfg:    schema.Config{Project: schema.Project{Name: "p"}},
+		MacCwd: "/Users/dev/projects/p",
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", want))
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "/Users/dev/projects/p", got.MacCwd)
+}
+
 func TestStateSnapshotRoutesRoundTrips(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	want := StateSnapshot{
@@ -130,16 +143,6 @@ func TestStateSnapshotRoutesRoundTrips(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, want.Routes, got.Routes)
-}
-
-func TestStateSnapshotWorkspaceHostPathRoundTrips(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	want := StateSnapshot{Cfg: schema.Config{Project: schema.Project{Name: "p"}}, WorkspaceHostPath: "/Users/dev/myproj"}
-	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", want))
-	got, err := ReadStateSnapshot(identity.Prod, "p")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.Equal(t, "/Users/dev/myproj", got.WorkspaceHostPath)
 }
 
 func names(entries []os.DirEntry) []string {

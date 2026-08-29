@@ -77,50 +77,6 @@ func TestResolveDirection(t *testing.T) {
 	}
 }
 
-func TestMountPassthrough(t *testing.T) {
-	// Standard project layout: workspace at /Users/me/workspace/foo,
-	// plus a user mount at /Users/me/data. `repo:` configured, so the
-	// primary workspace is volume-backed (not a direct Mac-cwd bind) —
-	// paths under repoRoot translate to the primary volume's Mac-side
-	// storage.
-	repoRoot := "/Users/me/workspace/foo"
-	repoURL := "file:///tmp/repo.git"
-	projectName := "myproj"
-	pcfg := schema.Config{
-		Repo: &schema.RepoConfig{URL: &repoURL, Secret: "e2e_default"},
-		Mounts: []string{
-			"/Users/me/data",
-			"/Users/me/read-only:ro",
-		},
-	}
-	storageRoot := filepath.Join(cfg.RuntimeDir(), "volumes", projectName, "foo")
-
-	cases := []struct {
-		name      string
-		guestPath string
-		wantHost  string
-		wantOK    bool
-	}{
-		{"under workspace root", "/Users/me/workspace/foo/src/main.go", filepath.Join(storageRoot, "src/main.go"), true},
-		{"exactly workspace root", "/Users/me/workspace/foo", storageRoot, true},
-		{"under user mount", "/Users/me/data/big.csv", "/Users/me/data/big.csv", true},
-		{"under ro user mount", "/Users/me/read-only/setup.sql", "/Users/me/read-only/setup.sql", true},
-		{"outside everything (/etc)", "/etc/hosts", "", false},
-		{"outside everything (/var)", "/var/log/foo.log", "", false},
-		{"prefix collision (not really under)", "/Users/me/workspace/foobar/x", "", false},
-		{"prefix collision on mount", "/Users/me/dataother/x", "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			gotHost, gotOK := mountPassthrough(tc.guestPath, repoRoot, pcfg, projectName)
-			assert.Equal(t, tc.wantOK, gotOK)
-			if tc.wantOK {
-				assert.Equal(t, tc.wantHost, gotHost)
-			}
-		})
-	}
-}
-
 func TestMountPassthrough_NoRepo_WorkspaceRootNotMirrored(t *testing.T) {
 	// Without `repo:`, the daemon never mounts a primary workspace volume
 	// at all — a guest path under the Mac cwd is NOT mirrored anywhere,
@@ -138,6 +94,81 @@ func TestMountPassthrough_NoRepoRoot_NoConfig(t *testing.T) {
 	// When project was named explicitly (no CWD walk), we don't have a
 	// repoRoot or cfg. Every path must fall through to pipe transport.
 	gotHost, gotOK := mountPassthrough("/Users/me/workspace/foo/src/main.go", "", schema.Config{}, "")
+	assert.False(t, gotOK)
+	assert.Empty(t, gotHost)
+}
+
+func TestMountPassthrough_ResolvesPrimaryRepoViaLabelTable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate cfg.RuntimeDir() from the real HOME
+	repoRoot := t.TempDir()
+	url := "https://example.com/main.git"
+	primary := true
+	pcfg := schema.Config{
+		Repos: map[string]schema.RepoConfig{
+			"main": {URL: &url, Primary: &primary},
+		},
+	}
+
+	gotHost, gotOK := mountPassthrough("/home/devm/main/src/main.go", repoRoot, pcfg, "myproj")
+	require.True(t, gotOK)
+	assert.Equal(t, filepath.Join(cfg.RuntimeDir(), "myproj", "main", "src", "main.go"), gotHost)
+}
+
+func TestMountPassthrough_PicksDeepestContainingEntry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate cfg.RuntimeDir() from the real HOME
+	repoRoot := t.TempDir()
+	url := "https://example.com/main.git"
+	primary := true
+	pcfg := schema.Config{
+		Repos: map[string]schema.RepoConfig{
+			"main": {URL: &url, Primary: &primary},
+		},
+		Volumes: map[string]schema.Volume{
+			"data": {Path: "/home/devm/main/data"},
+		},
+	}
+
+	// "/home/devm/main/data/x.db" is contained by both the repo entry
+	// ("/home/devm/main") and the nested volume entry
+	// ("/home/devm/main/data") — the deeper (volume) entry must win.
+	gotHost, gotOK := mountPassthrough("/home/devm/main/data/x.db", repoRoot, pcfg, "myproj")
+	require.True(t, gotOK)
+	assert.Equal(t, filepath.Join(cfg.RuntimeDir(), "myproj", "data", "x.db"), gotHost)
+}
+
+func TestMountPassthrough_NoMirrorSecondary_FallsBackToPipe(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate cfg.RuntimeDir() from the real HOME
+	repoRoot := t.TempDir()
+	mainURL := "https://example.com/main.git"
+	primary := true
+	dataURL := "https://example.com/data.git"
+	pcfg := schema.Config{
+		Repos: map[string]schema.RepoConfig{
+			"main": {URL: &mainURL, Primary: &primary},
+			"data": {URL: &dataURL}, // volume: unset -> NoMirror, no Mac mirror dir exists
+		},
+	}
+
+	// A NoMirror secondary has no Mac-side mirror storage — cp must not
+	// synthesize a passthrough path into a mirror dir that was never
+	// created, and must instead report no known mount so the caller
+	// falls back to pipe transport.
+	gotHost, gotOK := mountPassthrough("/home/devm/data/src/main.go", repoRoot, pcfg, "myproj")
+	assert.False(t, gotOK)
+	assert.Empty(t, gotHost)
+}
+
+func TestMountPassthrough_PathOutsideAnyEntry(t *testing.T) {
+	repoRoot := t.TempDir()
+	url := "https://example.com/main.git"
+	primary := true
+	pcfg := schema.Config{
+		Repos: map[string]schema.RepoConfig{
+			"main": {URL: &url, Primary: &primary},
+		},
+	}
+
+	gotHost, gotOK := mountPassthrough("/etc/passwd", repoRoot, pcfg, "myproj")
 	assert.False(t, gotOK)
 	assert.Empty(t, gotHost)
 }

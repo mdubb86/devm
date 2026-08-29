@@ -70,16 +70,16 @@ class Devm:
         return self._run(args, timeout=timeout)
 
     def unlock(self, *, duration: str | None = None, timeout: float = 30.0) -> subprocess.CompletedProcess:
-        """Lift config-lock's host-immutable devm.yaml while the VM runs, so
-        a test can edit it. `devm reconcile` (or the auto-relock timer, or
-        `devm lock`) re-establishes the lock -- see test_120_config_lock.py."""
-        args = ["unlock"]
-        if duration:
-            args += ["--for", duration]
-        return self._run(args, timeout=timeout)
+        """No-op: config-lock is not part of the mutagen-volumes shape.
+        The subcommand no longer exists on the CLI; kept as a helper
+        method so tests written for the older shape don't have to be
+        edited just to skip a call. Returns a fake success result.
+        """
+        return subprocess.CompletedProcess(args=["unlock"], returncode=0, stdout=b"", stderr=b"")
 
     def lock(self, *, timeout: float = 30.0) -> subprocess.CompletedProcess:
-        return self._run(["lock"], timeout=timeout)
+        """No-op: see unlock()."""
+        return subprocess.CompletedProcess(args=["lock"], returncode=0, stdout=b"", stderr=b"")
 
     def status(
         self,

@@ -149,54 +149,6 @@ func TestConfigValidatesStartupSteps(t *testing.T) {
 	assert.Contains(t, err.Error(), "startup[0]")
 }
 
-func TestResolveMount(t *testing.T) {
-	root := "/proj"
-	cases := []struct {
-		name, entry, want string
-	}{
-		{"absolute", "/etc/hosts", "/etc/hosts"},
-		{"absolute_ro", "/etc/hosts:ro", "/etc/hosts:ro"},
-		{"relative", "configs/extra", "/proj/configs/extra"},
-		{"relative_ro", "configs/extra:ro", "/proj/configs/extra:ro"},
-		{"dotdot", "../sibling", "/sibling"},
-		{"clean_doubleslash", "/etc//hosts", "/etc/hosts"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := ResolveMount(tc.entry, root)
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
-func TestResolveMountTildeExpansion(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-
-	got, err := ResolveMount("~/.ssh", "/proj")
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(home, ".ssh"), got)
-
-	gotRO, err := ResolveMount("~/.ssh:ro", "/proj")
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(home, ".ssh")+":ro", gotRO)
-
-	gotBare, err := ResolveMount("~", "/proj")
-	require.NoError(t, err)
-	assert.Equal(t, home, gotBare)
-}
-
-func TestResolveMountErrors(t *testing.T) {
-	_, err := ResolveMount("", "/proj")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "empty")
-
-	_, err = ResolveMount(":ro", "/proj")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "host path is empty")
-}
-
 // TestServicePortPolymorphicUnmarshal exercises the single-field `port:`
 // polymorphic decode that accepts either an int (just sandbox port) or
 // a "IP:PORT" string (interface + sandbox port).
@@ -346,42 +298,6 @@ func TestServiceResolveBind(t *testing.T) {
 	assert.Equal(t, "192.168.1.10", Service{Port: 5432, BindIP: "192.168.1.10"}.ResolveBind())
 }
 
-func TestConfigValidateRejectsEmptyMountEntry(t *testing.T) {
-	cfg := Config{
-		Project: Project{Name: "x"},
-		Mounts:  []string{"/etc/hosts", ""},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "mounts[1]")
-}
-
-func TestConfigValidateWithRootChecksExistence(t *testing.T) {
-	tmp := t.TempDir()
-	existing := filepath.Join(tmp, "real")
-	require.NoError(t, os.MkdirAll(existing, 0o755))
-
-	// Existing path passes.
-	cfg := Config{
-		Project: Project{Name: "x"},
-		Mounts:  []string{existing + ":ro"},
-	}
-	require.NoError(t, cfg.ValidateWithRoot(tmp))
-
-	// Missing path fails.
-	cfg.Mounts = []string{filepath.Join(tmp, "does-not-exist")}
-	err := cfg.ValidateWithRoot(tmp)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "mounts[0]")
-
-	// Relative path resolves against projectRoot.
-	relCfg := Config{
-		Project: Project{Name: "x"},
-		Mounts:  []string{"real:ro"},
-	}
-	require.NoError(t, relCfg.ValidateWithRoot(tmp))
-}
-
 func TestCheckUnknownKeys_NetworkChild_Rejected(t *testing.T) {
 	// network.allowed_domains was renamed to network.allow; with no
 	// legacy-migration layer it surfaces as a plain unknown-field error.
@@ -471,8 +387,6 @@ services:
     port: 8080
 install:
   - true
-mounts:
-  - ~/.aws:ro
 path:
   - $WORKSPACE/bin
 packages:
@@ -909,41 +823,6 @@ func TestCheckUnknownKeysAllowsDisk(t *testing.T) {
 	require.NoError(t, CheckUnknownKeys([]byte("disk: 64G\nproject:\n  name: x\n")))
 }
 
-func TestConfigLockEnabled_DefaultsTrue(t *testing.T) {
-	if !(Config{}).ConfigLockEnabled() {
-		t.Fatal("absent config_lock must default to enabled (true)")
-	}
-	f := false
-	if (Config{ConfigLock: &f}).ConfigLockEnabled() {
-		t.Fatal("config_lock: false must disable")
-	}
-	tr := true
-	if !(Config{ConfigLock: &tr}).ConfigLockEnabled() {
-		t.Fatal("config_lock: true must enable")
-	}
-}
-
-func TestConfigLock_ParsesFromYAML(t *testing.T) {
-	src := `
-project:
-  name: p
-config_lock: false
-`
-	var cfg Config
-	require.NoError(t, yaml.Unmarshal([]byte(src), &cfg))
-	assert.False(t, cfg.ConfigLockEnabled())
-
-	src = `
-project:
-  name: p
-`
-	var cfgNoKey Config
-	require.NoError(t, yaml.Unmarshal([]byte(src), &cfgNoKey))
-	assert.True(t, cfgNoKey.ConfigLockEnabled())
-
-	require.NoError(t, CheckUnknownKeys([]byte("config_lock: false\nproject:\n  name: x\n")))
-}
-
 // ---------- scripts: field tests ----------
 
 func TestValidate_Scripts_Valid(t *testing.T) {
@@ -1062,6 +941,44 @@ install:
 	assert.Equal(t, []string{">install-supabase"}, cfg.Install)
 }
 
+func TestConfig_ReposMap_UnmarshalYAML(t *testing.T) {
+	y := `project:
+  name: shelfmates
+repos:
+  main:
+    secret: github
+    primary: true
+  data:
+    url: git@github.com:me/data.git
+    secret: github
+`
+	var c Config
+	require.NoError(t, yaml.Unmarshal([]byte(y), &c))
+	require.Contains(t, c.Repos, "main")
+	require.Contains(t, c.Repos, "data")
+	assert.Equal(t, "github", c.Repos["main"].Secret)
+	assert.NotNil(t, c.Repos["main"].Primary)
+}
+
+func TestConfig_RejectsTopLevelRepo(t *testing.T) {
+	y := `project:
+  name: x
+repo:
+  url: git@github.com:me/foo.git
+  secret: github
+`
+	// The singular top-level repo: key is gone; CheckUnknownKeys (the
+	// mechanism config.Load uses to reject removed/typo'd keys) must
+	// name it. Plain yaml.Unmarshal is permissive by default — Config
+	// deliberately does NOT implement its own UnmarshalYAML, since
+	// doing so would swallow the KnownFields(true) strict-decode used
+	// by config.Load for nested blocks (see strictDecode in
+	// internal/config/load.go).
+	err := CheckUnknownKeys([]byte(y))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field \"repo\"")
+}
+
 func TestScripts_UnknownTopLevelKey_Rejected(t *testing.T) {
 	in := []byte(`
 project:
@@ -1158,3 +1075,181 @@ func TestValidate_Secrets_NoSecretsAnywhere_OK(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool    { return &b }
+
+// ---------- validateRepos: primary determination ----------
+
+func TestValidateRepos_PrimaryDetermination(t *testing.T) {
+	t.Run("explicit primary true valid", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		assert.NoError(t, c.validateRepos())
+	})
+
+	t.Run("two explicit primaries error", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"second": {URL: strPtr("git@github.com:me/second.git"), Primary: boolPtr(true)},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "multiple entries with primary: true")
+	})
+
+	t.Run("exactly one url-omitted implies primary", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		assert.NoError(t, c.validateRepos())
+	})
+
+	t.Run("zero url-omitted no explicit primary errors", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {URL: strPtr("git@github.com:me/main.git")},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no primary")
+	})
+
+	t.Run("two url-omitted no explicit primary errors", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {},
+			"second": {},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "multiple entries without a `url:`")
+	})
+
+	t.Run("primary marked volume false errors", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {Primary: boolPtr(true), Volume: boolPtr(false)},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "primary cannot have volume: false")
+	})
+}
+
+// ---------- validateRepos: secondaries require url ----------
+
+func TestValidateRepos_SecondaryRequiresURL(t *testing.T) {
+	t.Run("secondary with nil url errors naming it", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":      {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"secondary": {},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "repos.secondary")
+		assert.Contains(t, err.Error(), "url is required")
+	})
+
+	t.Run("two secondaries, only the nil-url one is named", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":  {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"good":  {URL: strPtr("git@github.com:me/good.git")},
+			"badly": {},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "repos.badly")
+		assert.Contains(t, err.Error(), "url is required")
+		assert.NotContains(t, err.Error(), "repos.good")
+	})
+}
+
+// ---------- validateLabels: cross-schema flat-namespace collision ----------
+
+func TestValidateLabels_Collision(t *testing.T) {
+	t.Run("two repos derive same label errors naming both and the label", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":  {URL: strPtr("git@github.com:me/foo.git")},
+			"other": {URL: strPtr("git@github.com:them/foo.git")},
+		}}
+		err := c.validateLabels("")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `label "foo"`)
+		assert.Contains(t, err.Error(), "repos.main")
+		assert.Contains(t, err.Error(), "repos.other")
+	})
+
+	t.Run("explicit label resolves the collision", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":  {URL: strPtr("git@github.com:me/foo.git")},
+			"other": {URL: strPtr("git@github.com:them/foo.git"), Label: strPtr("other-foo")},
+		}}
+		assert.NoError(t, c.validateLabels(""))
+	})
+
+	t.Run("repo label collides with volume label", func(t *testing.T) {
+		c := Config{
+			Repos: map[string]RepoConfig{
+				"main": {URL: strPtr("git@github.com:me/claude.git")},
+			},
+			Volumes: map[string]Volume{
+				"claude": {Path: "/home/devm/claude"},
+			},
+		}
+		err := c.validateLabels("")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `label "claude"`)
+		assert.Contains(t, err.Error(), "repos.main")
+		assert.Contains(t, err.Error(), "volumes.claude")
+	})
+
+	t.Run("cwd placeholder fallback used only when macCwd empty", func(t *testing.T) {
+		c := Config{
+			Repos: map[string]RepoConfig{
+				"main": {}, // URL-nil primary; label derives from macCwd
+			},
+			Volumes: map[string]Volume{
+				"placeholder": {Path: "/x", Label: strPtr("__cwd__")},
+			},
+		}
+		// No macCwd supplied: main's label falls back to the "__cwd__"
+		// placeholder, which collides with the volume's explicit label.
+		err := c.validateLabels("")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `label "__cwd__"`)
+
+		// A real macCwd derives "myproj" instead — no collision.
+		assert.NoError(t, c.validateLabels("/Users/me/myproj"))
+	})
+}
+
+// ---------- validateProjectIDReserved ----------
+
+func TestValidateProjectID_ReservedNames(t *testing.T) {
+	reserved := []string{"bin", "state", "iron-proxy", "mutagen", "ssh", "secrets", "ca", "softnet-bin", "volumes"}
+	for _, name := range reserved {
+		t.Run(name, func(t *testing.T) {
+			c := Config{Project: Project{Name: name}}
+			err := c.validateProjectIDReserved()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), name)
+		})
+	}
+
+	unrelated := []string{"shelfmates", "buzztrack", "my-app"}
+	for _, name := range unrelated {
+		t.Run(name, func(t *testing.T) {
+			c := Config{Project: Project{Name: name}}
+			assert.NoError(t, c.validateProjectIDReserved())
+		})
+	}
+}
+
+// ---------- BareCloneName ----------
+
+func TestBareCloneName(t *testing.T) {
+	assert.Equal(t, "foo", BareCloneName("git@github.com:me/foo.git"))
+	assert.Equal(t, "foo", BareCloneName("https://github.com/me/foo.git"))
+	assert.Equal(t, "foo", BareCloneName("https://github.com/me/foo"))
+}

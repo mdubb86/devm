@@ -79,59 +79,6 @@ func (c *Client) StopVM(ctx context.Context, name string) error {
 	return nil
 }
 
-// UnlockConfig calls POST /vm/unlock-config, lifting the host-immutable
-// flag on devm.yaml (+ devm.me.yaml) — the `devm unlock` escape hatch.
-// repoRoot lets the daemon clear a stray uchg flag even when it holds
-// no configLockState for the project (VM stopped, state lost across
-// a crash, /vm/stop bailed out before it could unlock) — always pass
-// the caller's discovered project root. relockSeconds bounds how long
-// the file stays editable when the daemon has state to arm the timer
-// against; 0 means "use the daemon's default"; ignored for the
-// escape-hatch path (no live VM to relock against). Returns whether
-// the file was actually uchg on entry (drives the CLI's user-facing
-// "was/wasn't locked" message) and the relock window the daemon armed
-// (0 when there was no state to relock).
-func (c *Client) UnlockConfig(ctx context.Context, name, repoRoot string, relockSeconds int) (wasLocked bool, armedRelockSeconds int, err error) {
-	body, err := json.Marshal(VMConfigLockRequest{Name: name, RepoRoot: repoRoot, RelockSeconds: relockSeconds})
-	if err != nil {
-		return false, 0, err
-	}
-	r, err := c.post(ctx, "/vm/unlock-config", body)
-	if err != nil {
-		return false, 0, err
-	}
-	defer r.Body.Close()
-	if r.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(r.Body)
-		return false, 0, fmt.Errorf("vm/unlock-config: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
-	}
-	var resp VMConfigLockResponse
-	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
-		return false, 0, err
-	}
-	return resp.WasLocked, resp.RelockSeconds, nil
-}
-
-// LockConfig calls POST /vm/lock-config, re-locking devm.yaml right
-// away — the `devm lock` command, for ending a temporary unlock before
-// its relock timer would have fired.
-func (c *Client) LockConfig(ctx context.Context, name string) error {
-	body, err := json.Marshal(VMConfigLockRequest{Name: name})
-	if err != nil {
-		return err
-	}
-	r, err := c.post(ctx, "/vm/lock-config", body)
-	if err != nil {
-		return err
-	}
-	defer r.Body.Close()
-	if r.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(r.Body)
-		return fmt.Errorf("vm/lock-config: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
-	}
-	return nil
-}
-
 // PassthroughEgress calls POST /vm/passthrough-egress, flipping the
 // project's softnet policy from ENFORCED to OPEN for a bounded
 // window. durationSeconds <= 0 asks the daemon to apply
@@ -165,7 +112,7 @@ func (c *Client) PassthroughEgress(ctx context.Context, name string, durationSec
 // to restrict — false is not an error; the CLI reports it as a
 // no-op.
 func (c *Client) RestrictEgress(ctx context.Context, name string) (wasOpen bool, err error) {
-	body, err := json.Marshal(VMConfigLockRequest{Name: name})
+	body, err := json.Marshal(VMApplyEgressEnforcementRequest{Name: name})
 	if err != nil {
 		return false, err
 	}

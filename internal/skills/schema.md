@@ -19,15 +19,12 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `install` | []string | recreate | Shell commands run once at VM creation as the guest `devm` user. NOPASSWD sudo is available for privileged steps. |
 | `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as the guest `devm` user, with open network — before egress enforcement is applied. NOPASSWD sudo is available for privileged steps. |
 | `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
-| `mounts` | []string | recreate | Host paths shared into the VM at matching absolute paths. |
-| `volumes` | map[string]Volume | restart | Per-project named persistent stores. Key = volume name; value is either a bare guest path string or a `{path, repo}` mapping. Data lives on the Mac side under `~/Library/Application Support/devm/volumes/<project>/<name>/` and survives `devm teardown`. See the `volumes` section below. |
-| `repo` | object | recreate | Declares the primary workspace repo devm hydrates via `git clone` on cold-start. Optional — omit for utility VMs with no primary repo. See the `repo` section below. |
-| `masks` | []string | live | Workspace-relative paths overlaid by a private per-project guest ext4 directory. Isolates platform-differing content (Mac's `node_modules` vs Linux's) so both platforms have their own copies. See the `masks` section below. |
+| `volumes` | map[string]Volume | live | Per-project named persistent stores. Key = volume name; value is either a bare guest path string or a `{path, label, ignore}` mapping. Data lives on the Mac side under `~/Library/Application Support/devm/<projectID>/<label>/` and survives `devm teardown`. See the `volumes` section below. |
+| `repos` | map[string]RepoConfig | varies | Declares the project's git repos to hydrate via `git clone` at cold-start, keyed by an arbitrary schema id. Exactly one entry is the primary workspace repo. `url`/`secret` are **restart-VM** (iron-proxy clones at boot using these); every other field is **live** (mutagen-session-only). Optional — omit for utility VMs with no repo. See the `repos` section below. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
 | `memory` | string | restart | Override the VM's RAM, e.g. `"8G"`, `"16G"`. Unset uses the base image default. Requires a G/GB suffix; the magnitude must be a positive integer. Removing this field from devm.yaml does not revert the running VM's tart config; the previously-set value persists across reconcile-restarts. Use `devm teardown` to fully reset to the base image default. Not overridable in `devm.me.yaml`. |
 | `cpu` | int | restart | Override the VM's virtual CPU count. Unset uses the base image default. Must be a positive integer. Removing this field from devm.yaml does not revert the running VM's tart config; the previously-set value persists across reconcile-restarts. Use `devm teardown` to fully reset to the base image default. Not overridable in `devm.me.yaml`. |
-| `config_lock` | bool | n/a | Defaults `true`. While the VM runs the daemon makes `devm.yaml` (+ `devm.me.yaml`) host-immutable (`chflags uchg`) so a root guest can't tamper with the egress allowlist; it unlocks on `devm stop`. Set `false` to disable. Edit while running via `devm unlock` (auto re-locks after `--for`, default 5m) then `devm reconcile`/`devm lock`. Not overridable in `devm.me.yaml`. |
 
 ---
 
@@ -171,23 +168,6 @@ V1 scope: refs are only resolved from `install:` and `startup:`. Scripts take no
 
 ---
 
-## `mounts`
-
-`[]string` — bucket: **recreate**.
-
-Host paths shared into the VM via virtio-fs at matching absolute paths. Each entry is `HOST_PATH[:ro]`.
-
-`HOST_PATH` may be:
-- Absolute: `/Users/alice/src`
-- Relative to the project root: `../shared`
-- Home-relative: `~/data`
-
-The optional `:ro` suffix makes the share read-only inside the VM.
-
-Mounts are baked at `tart run` time; changing them requires a full VM teardown and cold start.
-
----
-
 ## `packages`
 
 `[]string` — bucket: **live**.
@@ -246,61 +226,64 @@ volumes:
   claude-cache: /home/devm/.cache/claude
   design-tokens:
     path: /home/devm/design-tokens
-    repo:
-      url: https://github.com/me/design-tokens.git
+    label: tokens
+    ignore:
+      - "*.log"
 ```
 
 - **Name** (the map key): must match `[a-z0-9][a-z0-9._-]*`. Scoped to the project — different projects can reuse the same name without collision.
-- **Value**: either a bare guest path string, or a mapping with `path` and an optional `repo`.
-  - **`path`**: absolute; no `..` traversal; can't overlap the workspace mount root or any top-level mask target.
-  - **`repo`**: when present, devm `git clone`s into the volume's Mac-side storage on the first cold-start where the storage is empty. See the `repo` section below for `url`/`secret`/`branch`; a volume-level `repo.secret` is optional and inherits the top-level `repo.secret` when omitted — one of the two must be set.
+- **Value**: either a bare guest path string, or a mapping with `path`, `label`, and `ignore`.
+  - **`path`**: required; absolute; no `..` traversal; can't overlap the workspace mount root.
+  - **`label`**: optional. Names the mutagen sync session for this volume. Defaults to the leaf directory name of `path` (e.g. `/home/devm/.cache/claude` → `claude`). Must be unique across every `repos` and `volumes` entry in the config — see label collision under the `repos` section below.
+  - **`ignore`**: optional list of mutagen sync ignore patterns.
 
-Storage lives Mac-side at `~/Library/Application Support/devm/volumes/<project>/<name>/`. Delivery is virtiofs — one `tart run --dir` per declared volume — so `devm teardown` (which wipes the VM disk) leaves volume data alone. A subsequent cold-start reattaches the same Mac dir at the declared guest path.
+Storage lives Mac-side at `~/Library/Application Support/devm/<projectID>/<label>/`. Delivery is a mutagen two-way sync session between that Mac dir and the guest path, so `devm teardown` (which wipes the VM disk) leaves volume data alone. A subsequent cold-start resumes syncing the same Mac dir against the declared guest path.
 
-Add / remove / retarget a volume ⇒ **restart** bucket: Tart's `--dir` args are set at run time, so the VM stops + cold-starts (no teardown, no data loss, ~5s). `devm reconcile` prompts for restart approval unless `--yes`.
+Add / remove / retarget a volume ⇒ **live** bucket: mutagen sessions start/stop without a VM cycle.
 
-On first attach with existing content at the guest target (e.g. Postgres has already run `initdb`), the daemon **adopts**: copies the target content into the empty volume dir via the same virtiofs share, then bind-mounts the volume at the target. If both the Mac side and the guest target already have content, the daemon errors and asks the user to clear one side.
+On first sync with existing content on one or both sides, devm's in-sync guard compares entry count, total size, and a hash of each side's sorted top-100 paths before handing anything to mutagen. Two empty sides, or two sides that already agree, proceed straight to sync. Sides that disagree are rejected rather than guessed at — clear the stale side and retry.
 
 Discovery: `devm volume ls` lists the current project's volumes with name, guest path, Mac path, and size. Deletion is manual (`rm -rf` at the Mac path), or `devm purge` for orphan cleanup of projects that no longer exist.
 
 ---
 
-## `repo`
+## `repos`
 
-Declares the primary workspace repo devm hydrates via `git clone` at cold-start. Optional — omit for a utility VM that runs only tools, with no primary project checkout.
+`map[string]RepoConfig` — bucket: **restart** (add/remove/retarget currently requires a VM stop + cold start; becomes **live** for add/remove once mutagen session hot-add lands).
+
+Declares the project's git repos, keyed by an arbitrary schema id (the map key). Devm `git clone`s each one via `tart exec` at cold-start. Optional — omit entirely for a utility VM that runs only tools, with no repo checkout.
 
 ```yaml
-repo:
-  url: https://github.com/me/my-project.git
-  secret: gh_token
-  branch: main
+repos:
+  main:
+    secret: gh_token
+    primary: true
+  data:
+    url: https://github.com/me/data.git
+    secret: gh_token
+    label: data
+    ignore:
+      - "*.log"
 ```
 
 | Field | Type | Required | Purpose |
 |---|---|---|---|
-| `url` | string | no | Git clone URL. Omit to derive it from `git remote get-url origin` in the Mac-side project directory. |
-| `secret` | string | yes (when `repo` is present) | Names a devm secret-store entry; iron-proxy substitutes it into the clone's `Authorization` header. |
-| `branch` | string | no | Overrides the remote's default branch. |
+| `url` | string | only for non-primary entries | Git clone URL. Omit only on the primary entry — its URL derives from `git remote get-url origin` in the Mac-side project directory. |
+| `secret` | string | yes | Names a devm secret-store entry; iron-proxy substitutes it into the clone's `Authorization` header. |
+| `label` | string | no | Names the mutagen sync session for this repo. Defaults to the bare clone name (`git@github.com:me/foo.git` → `foo`) when `url` is set, or to the Mac-side project directory's basename for the URL-omitted primary. |
+| `volume` | bool | no | When true, backs this repo with a devm-managed volume instead of a plain bind mount. Defaults `true` for the primary, `false` for secondaries. The primary cannot set `volume: false`. |
+| `primary` | bool | no | Marks this entry as the project's primary workspace repo. |
+| `ignore` | []string | no | Mutagen sync ignore patterns. |
 
-A `volumes.*.repo` entry (secondary repo) always requires its own `url`; its `secret` is optional and falls back to the top-level `repo.secret` when omitted — at least one of the two must resolve.
+**Primary determination** — exactly one of these must hold across `repos`:
+- one entry sets `primary: true` explicitly, or
+- exactly one entry omits `url:` (that omission implies it's primary, deriving its URL from `git remote get-url origin`).
 
----
+Zero or multiple explicit `primary: true` entries, or zero or multiple `url`-omitted entries, is a validation error at load time. Non-primary entries must always declare `url:` explicitly.
 
-## `masks`
-
-Workspace-relative paths whose contents are shadowed by a private per-project guest ext4 directory. Purpose: VM-local scratch that shouldn't live in the git-backed workspace volume — build caches you don't want surviving a rebuild, per-worktree isolated scratch dirs, or any ephemeral state you'd rather not have persisted through `devm teardown` or included in the volume's Mac-side storage.
-
-```yaml
-masks:
-  - node_modules
-  - companion/.venv
-```
-
-- **Path shape**: workspace-relative only (leading `/`, `~`, `$`, or `..` traversal rejected at load).
-- **Storage**: guest-side ext4 at `/var/devm/masks/<project>/<path>/`. Owned by `devm`.
-- **Persistence**: mask contents die with the VM on `devm teardown`. Not for persistent data — that's what `volumes` is for.
-
-Add / remove / retarget a mask ⇒ **live** bucket: guest-side `mount --bind` (add) or `umount` (remove), no VM restart. Live-add silently shadows any pre-existing workspace content (that's the point of the feature). Live-remove errors if a running service holds a file open under the mount; stop the service and re-run.
+**Validation**:
+- **Label collisions**: every `repos` and `volumes` entry resolves to a label (explicit `label:`, or its derived default). Two entries — repo-repo, repo-volume, or volume-volume — resolving to the same label is rejected; set an explicit `label:` on one to disambiguate.
+- **Reserved project names**: `project.name` may not collide with a devm-internal storage directory name (`bin`, `state`, `iron-proxy`, `mutagen`, `volumes`) — repo and volume storage lives under the project's own directory, and a name collision would shadow devm's internals.
 
 ---
 
@@ -314,18 +297,18 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 ## See also
 
-- `devm skills get devm` — `.vm/` symlink and `devm pop mac`/`devm pop vm` for navigating between a guest-side path and its Mac-side volume storage.
+- `devm skills get devm` — `devm pop mac`/`devm pop vm` for navigating between a guest-side path and its Mac-side volume storage.
 - `devm skills get lifecycle` — how `devm reconcile` applies each bucket.
 
 ---
 
 ## Bucket glossary
 
-**live** — Devm applies the change without stopping the VM or ending active sessions. Env, path, template, mask, and package changes are applied directly inside the guest. Network (`allow`) and secret changes are applied by regenerating iron-proxy's config and respawning it — no VM restart, no prompt.
+**live** — Devm applies the change without stopping the VM or ending active sessions. Env, path, template, and package changes are applied directly inside the guest. `volumes:` and most of `repos:` (every field except `url`/`secret`) start, stop, or retarget a mutagen sync session without a VM cycle. Network (`allow`) and secret changes are applied by regenerating iron-proxy's config and respawning it — no VM restart, no prompt.
 
-**restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Sits here: `startup:` (edit takes effect on the applying restart) and `volumes:` (adds/removes require re-issuing `tart run` with new `--dir` args, since AVF doesn't hot-plug virtiofs shares).
+**restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Sits here: `startup:` (edit takes effect on the applying restart) and `repos.<name>.url`/`repos.<name>.secret` (iron-proxy clones the repo at VM boot using these values).
 
-**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `mounts`, `base_image`, and `project` identity fields.
+**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `base_image`, and `project` identity fields.
 
 ---
 

@@ -136,21 +136,6 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 	}
 	ironProxyState.put(projectID, info)
 
-	// Re-lock devm.yaml for a recovered running project: the daemon
-	// restart that brought us here wiped configLockState, so without
-	// this the config-lock registry stays empty (a subsequent /vm/stop
-	// has no repoRoot to unlock) and, worse, the file may have been left
-	// writable by whatever tore down the old daemon process. lockConfigFiles
-	// is idempotent, so re-applying it to an already-locked file is a
-	// no-op. Best-effort, gated the same way /vm/start gates it.
-	if snap.Cfg.ConfigLockEnabled() && snap.WorkspaceHostPath != "" {
-		if err := lockConfigFiles(snap.WorkspaceHostPath); err != nil {
-			daemonlog.Errorf("configlock: relock config for %s: %v (continuing)", projectID, err)
-		} else {
-			configLockState.put(projectID, snap.WorkspaceHostPath)
-		}
-	}
-
 	if len(snap.Routes) > 0 {
 		if err := routes.Apply(projectID, snap.Routes); err != nil {
 			daemonlog.Errorf("routes: recover routes for %s: %v (continuing)", projectID, err)

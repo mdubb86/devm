@@ -55,16 +55,6 @@ type StateSnapshot struct {
 	// build) and should be respawned on the current binary.
 	ProxyVersion string `json:"proxy_version,omitempty"`
 
-	// WorkspaceHostPath is the project repoRoot, stamped here so a daemon
-	// restart or `devm stop` can recover which files to (un)lock — the
-	// running iron-proxy config has no notion of it. It only arrives on
-	// the /vm/start request (as StartVM's MacCwd argument) and on
-	// /vm/reconcile (as VMReconcileRequest.WorkspaceHostPath); without
-	// this copy, those later paths have no repoRoot to work from. The
-	// orchestrator's cold-start and live-reconcile snapshot writes both
-	// stamp the current value.
-	WorkspaceHostPath string `json:"workspace_host_path,omitempty"`
-
 	// ProjectIP is the project's allocated 127.42/16 loopback IP, mirrored
 	// here from projectInfo so a daemon restart can recover it. Empty
 	// while the project is stopped; set at /vm/start, cleared at /vm/stop.
@@ -80,6 +70,13 @@ type StateSnapshot struct {
 	// the restart without a manual re-issue and running in-guest
 	// sessions don't lose `.test` hairpin.
 	Routes []Route `json:"routes,omitempty"`
+
+	// MacCwd is the project's Mac-side working directory, mirrored here
+	// from the CLI's cold-start seed and every /vm/reconcile so a later
+	// iron-proxy respawn (the watchdog, or any other daemon-only path
+	// with no request-scoped repoRoot) can still derive a URL-nil
+	// primary repo's clone URL via `git remote get-url origin`.
+	MacCwd string `json:"mac_cwd,omitempty"`
 }
 
 // ReadStateSnapshot loads the persisted snapshot for a project. Returns

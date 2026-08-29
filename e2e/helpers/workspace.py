@@ -12,42 +12,47 @@ from typing import Any
 import yaml
 
 
+# github.com/octocat/Hello-World is github's canonical demo repo: public,
+# tiny (a single README-ish file), and stable. Tests that need to observe
+# a real remote clone through iron-proxy point here. Iron-proxy substitutes
+# the placeholder secret on the wire; github ignores the auth for public
+# reads, so no real PAT is needed.
+E2E_FIXTURE_REPO_URL = "https://github.com/octocat/Hello-World.git"
+
+
 class Workspace:
     def __init__(self, path: Path, slug: str, vm_name: str, port_offset: int = 51000):
         self.path = Path(path)
         self.slug = slug
         self.vm_name = vm_name
         self.port_offset = port_offset
-        self._bare_repo_cache: str | None = None
 
     @property
     def devmyaml_path(self) -> Path:
         return self.path / "devm.yaml"
 
     def bare_repo_url(self) -> str:
-        """Create (once) a local bare git repo for this test and return its
-        file:// URL. Hermetic and fast — no network, no real remote.
+        """Return the URL of the shared public remote every test's default
+        `repos.main` points at. Guest clones it through iron-proxy's
+        transparent :443 intercept.
+        """
+        return E2E_FIXTURE_REPO_URL
 
-        `work`/`bare` are siblings of self.path, named off its unique
-        leaf (not off self.path.parent, which is the shared OS temp
-        root every workspace's path lives under -- suffixing that
-        directly would collide across every test in the suite)."""
-        if self._bare_repo_cache is not None:
-            return self._bare_repo_cache
-        work = self.path.parent / f"{self.path.name}-repo-work"
-        work.mkdir()
-        subprocess.run(["git", "-C", str(work), "init", "-q"], check=True)
-        (work / "README.md").write_text("bare\n")
-        subprocess.run(["git", "-C", str(work), "add", "."], check=True)
-        subprocess.run(
-            ["git", "-C", str(work), "-c", "user.email=e2e@e2e", "-c", "user.name=e2e",
-             "commit", "-q", "-m", "init"],
-            check=True,
-        )
-        bare = self.path.parent / f"{self.path.name}-repo.git"
-        subprocess.run(["git", "clone", "--bare", "-q", str(work), str(bare)], check=True)
-        self._bare_repo_cache = f"file://{bare}"
-        return self._bare_repo_cache
+    def bare_repo_label(self) -> str:
+        """Return schema.BareCloneName(bare_repo_url()) — the label devm
+        derives for the default `repos.main` entry. Kept as a helper so
+        tests don't hardcode the shape (previous fixture used a
+        `<slug>-repo.git` URL, giving label `<slug>-repo`; switching to
+        github.com/octocat/Hello-World.git changed the label to
+        `Hello-World`, and every test that had computed the label from
+        `path.name + "-repo"` silently broke). Read this instead."""
+        return "Hello-World"
+
+    def teardown(self) -> None:
+        """Present for symmetry with fixtures that manage per-workspace
+        resources; no-op today.
+        """
+        return None
 
     def volume_path(self, name: str | None = None) -> Path:
         """Return the Mac-side volume storage path for a project volume.
@@ -63,25 +68,54 @@ class Workspace:
 
     def write_devmyaml(self, *, no_repo: bool = False, **sections: Any) -> None:
         """Write a fresh devm.yaml. Extra sections (install, services, env,
-        network) are merged into the project skeleton. A `repo:` section
-        is auto-injected (pointing at a hermetic local bare repo, which
-        shells out to git) unless the caller opts out: pass an explicit
-        `repo=...` section to use verbatim, pass `repo=False` or
-        `no_repo=True` to omit the `repo:` block entirely without ever
-        calling `bare_repo_url()`."""
+        network) are merged into the project skeleton. A `repos:` map with
+        a single "main" entry is auto-injected (pointing at a hermetic
+        local bare repo, which shells out to git) unless the caller opts
+        out: pass an explicit `repos={...}` section to use verbatim, pass
+        `repo=False` or `no_repo=True` to omit the `repos:` block entirely
+        without ever calling `bare_repo_url()`.
+
+        The singular `repo=...` kwarg (the pre-Phase-B shape) is no
+        longer accepted -- Config.Repos is a map now, and the daemon's
+        KnownFields(true) decode rejects a stray `repo:` key outright.
+        Callers must pass `repos={"main": {...}}` (or another id)
+        instead."""
+        if "repo" in sections and sections["repo"] is not False:
+            raise ValueError(
+                "write_devmyaml(repo=...) is no longer supported: devm.yaml "
+                "now uses a `repos:` map. Pass repos={'main': {...}} instead "
+                "(or repo=False / no_repo=True to omit repos entirely)."
+            )
         if sections.get("repo") is False:
             no_repo = True
             del sections["repo"]
-        if not no_repo and "repo" not in sections:
-            sections["repo"] = {
-                "url": self.bare_repo_url(),
-                "secret": "e2e_default",
+        if not no_repo and "repos" not in sections:
+            # bare_repo_url() is github's public octocat/Hello-World repo,
+            # cloneable without auth. Omitting `secret:` tells the daemon
+            # not to inject an http.extraheader — github rejects a bogus
+            # Basic auth token even for public reads.
+            sections["repos"] = {
+                "main": {
+                    "url": self.bare_repo_url(),
+                    "primary": True,
+                },
             }
         cfg: dict[str, Any] = {
             "project": {
                 "name": self.vm_name,
             },
         }
+        # git is a hard requirement in-guest for mutagen cold-start clone.
+        # Base image doesn't ship it yet; declare here so RunOpen apt-installs
+        # it before SetupPhase runs. Remove once the base image bakes git in.
+        if not no_repo and "packages" not in sections:
+            cfg["packages"] = ["git"]
+        # bare_repo_url() points at github.com's canonical demo repo; guest
+        # clones through iron-proxy's transparent :443 intercept. Callers
+        # passing their own `network` block are responsible for including
+        # `github.com` if they want the default `repos.main` to clone.
+        if not no_repo and "network" not in sections:
+            cfg["network"] = {"allow": ["github.com"]}
         for k, v in sections.items():
             cfg[k] = v
         self.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))

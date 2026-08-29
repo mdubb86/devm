@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -296,28 +295,6 @@ func TestRunEnforced_RoutingOnlyServiceOmittedButProcessServicesStarted(t *testi
 	assert.NotContains(t, script, "routing-only.service")
 }
 
-func TestRunEnforced_MaskChownedToDevmBeforeMount(t *testing.T) {
-	f := &fakeStreamTart{}
-	p := baseProvisioner(f, schema.Config{
-		Project: schema.Project{Name: "p"},
-		Services: map[string]schema.Service{
-			"svc": {Exec: []string{"/bin/true"}},
-		},
-		Masks: []string{"data"},
-	})
-	p.WorkspaceVMPath = "/Users/x/proj"
-	require.NoError(t, p.RunEnforced(context.Background(), io.Discard, nil))
-
-	script := scriptOf(t, f)
-	chown := "chown devm:devm '/var/devm/masks/p/data'"
-	assert.Contains(t, script, chown)
-	// chown must precede the bind mount, or the mount covers the target.
-	chownIdx := strings.Index(script, chown)
-	mountIdx := strings.Index(script, "mount --bind '/var/devm/masks/p/data'")
-	require.Greater(t, chownIdx, 0)
-	assert.Greater(t, mountIdx, chownIdx)
-}
-
 func TestRunOpen_TemplatesTriggerDispatcher(t *testing.T) {
 	// devmbundle.Build renders declared templates from a real source file
 	// under the repo root, so give it one.
@@ -336,63 +313,6 @@ func TestRunOpen_TemplatesTriggerDispatcher(t *testing.T) {
 	assert.Contains(t, scriptOf(t, f), "install-templates.sh")
 }
 
-func TestScriptInput_PopulatesGitCredentialsFromTopLevelRepo(t *testing.T) {
-	url := "https://github.com/mdubb86/sewtrue.git"
-	p := &Provisioner{
-		Cfg: schema.Config{
-			Repo: &schema.RepoConfig{URL: &url, Secret: "gh_token"},
-		},
-	}
-	in := p.scriptInput()
-	assert.Contains(t, in.GitCredentials,
-		"https://x-access-token:__DEVM_SECRET_gh_token__@github.com/mdubb86/sewtrue.git")
-	assert.Contains(t, in.GitConfig, "useHttpPath = true")
-}
-
-func TestScriptInput_PopulatesGitCredentialsFromPerVolumeRepo(t *testing.T) {
-	topURL := "https://github.com/mdubb86/sewtrue.git"
-	sdkURL := "https://github.com/mdubb86/some-sdk.git"
-	p := &Provisioner{
-		Cfg: schema.Config{
-			Repo: &schema.RepoConfig{URL: &topURL, Secret: "gh_workspace"},
-			Volumes: map[string]schema.Volume{
-				"sdk": {
-					Path: "/home/devm/sdk",
-					Repo: &schema.RepoConfig{URL: &sdkURL, Secret: "gh_sdk_ro"},
-				},
-			},
-		},
-	}
-	in := p.scriptInput()
-	assert.Contains(t, in.GitCredentials,
-		"https://x-access-token:__DEVM_SECRET_gh_workspace__@github.com/mdubb86/sewtrue.git")
-	assert.Contains(t, in.GitCredentials,
-		"https://x-access-token:__DEVM_SECRET_gh_sdk_ro__@github.com/mdubb86/some-sdk.git")
-}
-
-func TestScriptInput_PerVolumeInheritsTopLevelSecret(t *testing.T) {
-	topURL := "https://github.com/mdubb86/sewtrue.git"
-	sdkURL := "https://github.com/mdubb86/some-sdk.git"
-	p := &Provisioner{
-		Cfg: schema.Config{
-			Repo: &schema.RepoConfig{URL: &topURL, Secret: "gh_shared"},
-			Volumes: map[string]schema.Volume{
-				// Per-volume with URL but empty Secret ⇒ inherits gh_shared.
-				"sdk": {
-					Path: "/home/devm/sdk",
-					Repo: &schema.RepoConfig{URL: &sdkURL, Secret: ""},
-				},
-			},
-		},
-	}
-	in := p.scriptInput()
-	// Both lines reference the inherited secret name.
-	assert.Contains(t, in.GitCredentials,
-		"https://x-access-token:__DEVM_SECRET_gh_shared__@github.com/mdubb86/sewtrue.git")
-	assert.Contains(t, in.GitCredentials,
-		"https://x-access-token:__DEVM_SECRET_gh_shared__@github.com/mdubb86/some-sdk.git")
-}
-
 func TestScriptInput_NoReposEmptyCredentials(t *testing.T) {
 	p := &Provisioner{Cfg: schema.Config{}}
 	in := p.scriptInput()
@@ -400,33 +320,19 @@ func TestScriptInput_NoReposEmptyCredentials(t *testing.T) {
 	assert.Equal(t, "", in.GitConfig, "no repos ⇒ no gitconfig")
 }
 
-func TestScriptInput_DeterministicVolumeOrder(t *testing.T) {
-	// Map iteration is unordered; the caller must sort volume names so
-	// re-emits produce byte-identical files.
-	urlA := "https://github.com/me/a.git"
-	urlB := "https://github.com/me/b.git"
-	urlC := "https://github.com/me/c.git"
+func TestScriptInput_PopulatesGitCredentialsFromReposMap(t *testing.T) {
+	url := "https://github.com/mdubb86/sewtrue.git"
 	p := &Provisioner{
 		Cfg: schema.Config{
-			Volumes: map[string]schema.Volume{
-				"c-vol": {Path: "/home/devm/c", Repo: &schema.RepoConfig{URL: &urlC, Secret: "s_c"}},
-				"a-vol": {Path: "/home/devm/a", Repo: &schema.RepoConfig{URL: &urlA, Secret: "s_a"}},
-				"b-vol": {Path: "/home/devm/b", Repo: &schema.RepoConfig{URL: &urlB, Secret: "s_b"}},
+			Repos: map[string]schema.RepoConfig{
+				"workspace": {URL: &url, Secret: "gh_token"},
 			},
 		},
 	}
-	// Run scriptInput twice; assert identical output.
-	in1 := p.scriptInput()
-	in2 := p.scriptInput()
-	assert.Equal(t, in1.GitCredentials, in2.GitCredentials,
-		"same Cfg must yield byte-identical credentials output across calls")
-	// Assert sorted volume order in the emitted lines.
-	// Expected order: primary (none here) then a-vol, b-vol, c-vol.
-	aIdx := strings.Index(in1.GitCredentials, "/me/a.git")
-	bIdx := strings.Index(in1.GitCredentials, "/me/b.git")
-	cIdx := strings.Index(in1.GitCredentials, "/me/c.git")
-	assert.True(t, aIdx < bIdx && bIdx < cIdx,
-		"volume-repo lines must be in sorted volume-name order (a-vol < b-vol < c-vol)")
+	in := p.scriptInput()
+	assert.Contains(t, in.GitCredentials,
+		"https://x-access-token:__DEVM_SECRET_gh_token__@github.com/mdubb86/sewtrue.git")
+	assert.Contains(t, in.GitConfig, "useHttpPath = true")
 }
 
 func TestProvisioner_ScriptInput_PassesScripts(t *testing.T) {
@@ -510,7 +416,9 @@ func TestScriptInput_GitConfigCarriesIdentityWhenReposDeclared(t *testing.T) {
 	p := &Provisioner{
 		MacCwd: dir,
 		Cfg: schema.Config{
-			Repo: &schema.RepoConfig{URL: &url, Secret: "gh_token"},
+			Repos: map[string]schema.RepoConfig{
+				"workspace": {URL: &url, Secret: "gh_token"},
+			},
 		},
 	}
 	in := p.scriptInput()

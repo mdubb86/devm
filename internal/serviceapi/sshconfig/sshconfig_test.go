@@ -162,7 +162,12 @@ func TestEnsureInclude_CreatesFileAndDir(t *testing.T) {
 	assert.Equal(t, `Include "`+Path(identity.Prod)+"\"\n", string(got))
 }
 
-func TestEnsureInclude_AppendsToExistingFile(t *testing.T) {
+// EnsureInclude prepends its Include line at the TOP of ~/.ssh/config,
+// not the bottom — ssh treats `Include` inside an open `Host` scope as
+// scoped to that block, so an append-to-end lands the Include inside
+// whatever Host block the file ended in. Prepending guarantees top-
+// level scope regardless of existing file shape.
+func TestEnsureInclude_PrependsBeforeExistingFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	sshDir := filepath.Join(home, ".ssh")
@@ -175,8 +180,33 @@ func TestEnsureInclude_AppendsToExistingFile(t *testing.T) {
 
 	got, err := os.ReadFile(cfgPath)
 	require.NoError(t, err)
-	want := existing + `Include "` + Path(identity.Prod) + "\"\n"
+	want := `Include "` + Path(identity.Prod) + "\"\n" + existing
 	assert.Equal(t, want, string(got))
+}
+
+// TestEnsureInclude_RepositionsMisplacedInclude reproduces the field
+// bug: a previous devm build appended the Include line at end-of-file
+// where it landed inside an open `Host` scope. A re-run of EnsureInclude
+// must detect the misplacement and move the Include to top-level scope
+// instead of accepting it in place.
+func TestEnsureInclude_RepositionsMisplacedInclude(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sshDir := filepath.Join(home, ".ssh")
+	require.NoError(t, os.MkdirAll(sshDir, 0o700))
+	cfgPath := filepath.Join(sshDir, "config")
+	includeLn := `Include "` + Path(identity.Prod) + `"`
+	existing := "Host example\n    HostName example.com\n" + includeLn + "\n"
+	require.NoError(t, os.WriteFile(cfgPath, []byte(existing), 0o600))
+
+	require.NoError(t, EnsureInclude(identity.Prod))
+
+	got, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	want := includeLn + "\n" + "Host example\n    HostName example.com\n"
+	assert.Equal(t, want, string(got))
+	assert.Equal(t, 1, strings.Count(string(got), includeLn),
+		"Include line must exist exactly once after reposition")
 }
 
 func TestEnsureInclude_HandlesMissingTrailingNewline(t *testing.T) {
@@ -192,7 +222,7 @@ func TestEnsureInclude_HandlesMissingTrailingNewline(t *testing.T) {
 
 	got, err := os.ReadFile(cfgPath)
 	require.NoError(t, err)
-	want := existing + "\n" + `Include "` + Path(identity.Prod) + "\"\n"
+	want := `Include "` + Path(identity.Prod) + "\"\n" + existing
 	assert.Equal(t, want, string(got))
 }
 

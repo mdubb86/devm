@@ -44,6 +44,17 @@ func TestTranslateGuestPath_OutsideAnyWorkspace(t *testing.T) {
 	assert.Contains(t, err.Error(), "not inside any known devm workspace")
 }
 
+func TestTranslateGuestPath_NewLayout(t *testing.T) {
+	// Task 16's mirror layout: guest paths live under /home/devm/<label>
+	// and translate to <runtimeDir>/<projectID>/<label>/ on the Mac side.
+	registry := []WorkspacePathEntry{
+		{GuestPath: "/home/devm/repo", StoragePath: "/base/proj/repo"},
+	}
+	got, err := TranslateGuestPath("/home/devm/repo/foo/bar", registry)
+	require.NoError(t, err)
+	assert.Equal(t, "/base/proj/repo/foo/bar", got)
+}
+
 func TestTranslateGuestPath_PrefixCollisionAvoidance(t *testing.T) {
 	// A guest path that starts with a workspace's GuestPath as a string
 	// but is not actually inside it (e.g., "/Users/x/projX" vs "/Users/x/proj")
