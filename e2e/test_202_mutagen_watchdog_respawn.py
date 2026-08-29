@@ -89,13 +89,10 @@ def test_mutagen_watchdog_respawn(devm_path, devm_installed):
     )
     assert new_pid != old_pid, "respawned pid is identical to the killed pid"
 
-    daemon_pid = _daemon_pid(devm_path)
-    assert daemon_pid is not None, "devm-e2e daemon PID not found via pgrep"
-    ppid = _ppid_of(new_pid)
-    assert ppid == daemon_pid, (
-        f"respawned mutagen daemon (pid={new_pid}) parent is {ppid}, expected "
-        f"the devm-e2e daemon pid={daemon_pid} — should be a direct child"
-    )
+    # mutagen's `daemon start` uses setsid to detach the daemon into
+    # its own session — the resulting process is reparented to init
+    # (ppid=1), NOT a direct child of the devm daemon. What actually
+    # matters (session set survives respawn) is asserted below.
 
     sha_after = Path(_SIDECAR_PATH).read_text().strip()
     assert sha_after == sha_before, (
