@@ -137,7 +137,7 @@ _build-pop-embed:
 # (which runs `go test ./...` as a pre-tag guard). `_build-helper-embed`
 # uses the prod identity here; `build-e2e` overrides with an "e2e"
 # helper build afterwards for local e2e installs.
-embeds: fetch-iron-proxy (_build-helper-embed "prod") _build-setsid-shim-embed _build-docker-shims-embed _build-pop-embed
+embeds: fetch-iron-proxy fetch-mutagen (_build-helper-embed "prod") _build-setsid-shim-embed _build-docker-shims-embed _build-pop-embed
 
 # Build the devm + devm-helper binaries into ./bin with prod identity,
 # and codesign with the local self-signed identity if available. The
