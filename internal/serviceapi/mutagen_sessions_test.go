@@ -194,6 +194,11 @@ type scriptedCLI struct {
 	flushCalls    []string
 	pauseCalls    []string
 	terminateCall []string
+
+	// flushErrs, keyed by session ID, makes the "flush" dispatch return
+	// a nonzero exit + this message instead of succeeding — used to
+	// exercise FlushAll's fail-fast path.
+	flushErrs map[string]string
 }
 
 func (s *scriptedCLI) build() *mutagen.CLI {
@@ -227,6 +232,9 @@ func (s *scriptedCLI) build() *mutagen.CLI {
 					return "", "", 0, nil
 				case "flush":
 					s.flushCalls = append(s.flushCalls, args[2])
+					if msg, ok := s.flushErrs[args[2]]; ok {
+						return "", msg, 1, nil
+					}
 					return "", "", 0, nil
 				case "pause":
 					s.pauseCalls = append(s.pauseCalls, args[2])
@@ -483,6 +491,44 @@ func TestStopPhase_FlushAndPauseAll(t *testing.T) {
 
 	assert.ElementsMatch(t, []string{"s1", "s2", "s3"}, sc.flushCalls)
 	assert.ElementsMatch(t, []string{"s1", "s2", "s3"}, sc.pauseCalls)
+}
+
+// ---------- FlushAll ----------
+
+func TestFlushAll_FlushesActiveOnlyAndFailsFast(t *testing.T) {
+	sc := &scriptedCLI{
+		listSessions: []mutagen.SyncSession{
+			{ID: "s1", Name: "devm-myproj-app", Status: "watching", Paused: false},
+			{ID: "s2", Name: "devm-myproj-data", Status: "watching", Paused: true},
+			{ID: "s3", Name: "devm-myproj-pg", Status: "watching", Paused: false},
+			{ID: "s4", Name: "devm-myproj-extra", Status: "watching", Paused: false},
+		},
+		flushErrs: map[string]string{"s3": "boom"},
+	}
+	cli := sc.build()
+
+	err := FlushAll(cli, "myproj")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "boom")
+
+	assert.Equal(t, []string{"s1", "s3"}, sc.flushCalls,
+		"paused s2 must be skipped, and the loop must stop at the first error (s4 never reached)")
+}
+
+func TestFlushAll_FlushesAllNonPausedOnSuccess(t *testing.T) {
+	sc := &scriptedCLI{
+		listSessions: []mutagen.SyncSession{
+			{ID: "s1", Name: "devm-myproj-app", Status: "watching", Paused: false},
+			{ID: "s2", Name: "devm-myproj-data", Status: "watching", Paused: true},
+			{ID: "s3", Name: "devm-myproj-pg", Status: "watching", Paused: false},
+		},
+	}
+	cli := sc.build()
+
+	err := FlushAll(cli, "myproj")
+	require.NoError(t, err)
+
+	assert.ElementsMatch(t, []string{"s1", "s3"}, sc.flushCalls)
 }
 
 func TestTeardownPhase_TerminateAll(t *testing.T) {
