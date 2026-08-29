@@ -761,6 +761,8 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "repo_change"
 	case reconcile.KindSSHEndpointHealed:
 		return "ssh_endpoint_healed"
+	case reconcile.KindCommandsChange:
+		return "commands_change"
 	}
 	return "unknown"
 }
@@ -853,6 +855,16 @@ func formatChange(c reconcile.Change) string {
 			return fmt.Sprintf("- repo %s", c.Key)
 		default:
 			return fmt.Sprintf("~ repo %s.%s: %s → %s", c.Key, c.Field,
+				formatChangeValue(c.OldValue), formatChangeValue(c.NewValue))
+		}
+	case reconcile.KindCommandsChange:
+		switch c.Op {
+		case reconcile.OpAdd:
+			return fmt.Sprintf("+ command %s/%s", c.Repo, c.Key)
+		case reconcile.OpRemove:
+			return fmt.Sprintf("- command %s/%s", c.Repo, c.Key)
+		default:
+			return fmt.Sprintf("~ command %s/%s.%s: %s → %s", c.Repo, c.Key, c.Field,
 				formatChangeValue(c.OldValue), formatChangeValue(c.NewValue))
 		}
 	}

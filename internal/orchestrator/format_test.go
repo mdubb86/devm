@@ -735,3 +735,27 @@ func TestFormatChange_KindVolumeChange_LabelMutate(t *testing.T) {
 	}
 	assert.Equal(t, `~ volume claude.label: "old-label" → "new-label"`, formatChange(ch))
 }
+
+func TestFormatChange_KindCommandsChange(t *testing.T) {
+	added := reconcile.Change{Kind: reconcile.KindCommandsChange, Op: reconcile.OpAdd, Repo: "main", Key: "install"}
+	assert.Equal(t, "+ command main/install", formatChange(added))
+
+	removed := reconcile.Change{Kind: reconcile.KindCommandsChange, Op: reconcile.OpRemove, Repo: "main", Key: "install"}
+	assert.Equal(t, "- command main/install", formatChange(removed))
+
+	oldExec, newExec := "pnpm install", "pnpm install --frozen-lockfile"
+	execMutate := reconcile.Change{
+		Kind: reconcile.KindCommandsChange, Op: reconcile.OpMutate, Repo: "main", Key: "install", Field: "Exec",
+		OldValue: oldExec, NewValue: newExec,
+	}
+	assert.Equal(t, `~ command main/install.Exec: "pnpm install" → "pnpm install --frozen-lockfile"`, formatChange(execMutate))
+
+	newStartup := true
+	startupMutate := reconcile.Change{
+		Kind: reconcile.KindCommandsChange, Op: reconcile.OpMutate, Repo: "main", Key: "install", Field: "Startup",
+		OldValue: (*bool)(nil), NewValue: &newStartup,
+	}
+	assert.Equal(t, `~ command main/install.Startup: (unset) → "true"`, formatChange(startupMutate))
+
+	assert.Equal(t, "commands_change", changeKindJSON(reconcile.KindCommandsChange))
+}

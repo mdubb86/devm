@@ -133,6 +133,7 @@ _build-pop-embed:
 # Build the guest-side run binary (linux-arm64) into the guestbin embed dir.
 _build-run-embed:
     @echo "→ building guest-side run binary"
+    @mkdir -p internal/guestbin/embed
     GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o internal/guestbin/embed/run ./cmd/run
     @echo "run embedded at internal/guestbin/embed/run"
 
