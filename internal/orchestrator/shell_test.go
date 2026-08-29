@@ -499,6 +499,97 @@ func TestRunShellColdPath_MutagenSetupRunsAfterRunEnforced(t *testing.T) {
 			"exist in the guest until RunEnforced completes")
 }
 
+// TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch pins:
+//   - runStartupCommandsFn is called AFTER mutagenSetupFn
+//   - a non-zero exit from a startup command is a teardown-class failure
+//     (asserted separately in TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM)
+func TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch(t *testing.T) {
+	origMutagen := mutagenSetupFn
+	origRun := runStartupCommandsFn
+	t.Cleanup(func() {
+		mutagenSetupFn = origMutagen
+		runStartupCommandsFn = origRun
+	})
+
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+	}
+	tartBin := fakeTartBin(t, repoRoot)
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		Ident:            identity.Prod,
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	writeFakeCA(t, repoRoot)
+
+	var mu sync.Mutex
+	var order []string
+	mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
+		mu.Lock()
+		order = append(order, "mutagen")
+		mu.Unlock()
+		return nil
+	}
+	runStartupCommandsFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
+		mu.Lock()
+		order = append(order, "run")
+		mu.Unlock()
+		return nil
+	}
+
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"mutagen", "run"}, order,
+		"runStartupCommandsFn must run AFTER mutagenSetupFn")
+}
+
+// TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM verifies that a
+// failing startup command (runStartupCommandsFn returns an error) is a
+// teardown-class failure — the user opted into startup: true, so a
+// non-zero exit must fail loud and leave no zombie VM, unlike a
+// post-install service failure which is kept for debugging.
+func TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM(t *testing.T) {
+	origRun := runStartupCommandsFn
+	t.Cleanup(func() { runStartupCommandsFn = origRun })
+
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+	}
+	tartBin := fakeTartBin(t, repoRoot)
+	spawner := &stubSpawner{}
+	deps := ShellDeps{
+		Ident:            identity.Prod,
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	writeFakeCA(t, repoRoot)
+
+	runStartupCommandsFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
+		return fmt.Errorf("run repo1/cmd2: exit 42: boom")
+	}
+
+	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run startup commands")
+
+	admin.mu.Lock()
+	assert.Equal(t, 1, admin.stopCalled, "StopVM must be called on startup-command failure")
+	admin.mu.Unlock()
+}
+
 // TestRunShellColdPath_PostInstallFail_KeepsVM verifies that a
 // service-phase failure (the enforced script's `services` stage) leaves
 // the VM running so the user can debug — install failures still tear down.

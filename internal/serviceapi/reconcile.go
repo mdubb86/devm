@@ -324,7 +324,9 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 //
 // Granularity: env is by-key (top-level or per-service); path is
 // wholesale; network by-list-membership; per-service subfield changes
-// touch ONLY that subfield on the service.
+// touch ONLY that subfield on the service; repos and commands (both
+// live inside Config.Repos) and volumes are wholesale on their
+// respective top-level map.
 func mergeLiveApplied(old, new schema.Config, applied []reconcile.Change) schema.Config {
 	merged := old
 	// Copy service map before mutating so we don't alias old_cfg's map.
@@ -361,6 +363,11 @@ func mergeLiveApplied(old, new schema.Config, applied []reconcile.Change) schema
 			merged.Path = new.Path
 		case reconcile.KindNetworkAdd, reconcile.KindNetworkRemove:
 			merged.Network = new.Network
+		case reconcile.KindRepoChange, reconcile.KindCommandsChange:
+			// Both live inside Config.Repos; wholesale replace covers both.
+			merged.Repos = new.Repos
+		case reconcile.KindVolumeChange:
+			merged.Volumes = new.Volumes
 		case reconcile.KindTemplateChange:
 			svc := merged.Services[c.Service]
 			if newSvc, ok := new.Services[c.Service]; ok {

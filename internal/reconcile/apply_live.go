@@ -19,8 +19,10 @@ import (
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
+	"github.com/mdubb86/devm/internal/guestbin"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/mutagen"
+	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -32,21 +34,29 @@ import (
 // Template changes are coalesced — any number of KindTemplateChange
 // entries trigger a SINGLE invocation of the in-sandbox dispatcher,
 // which re-runs every installer (cheap; identical content is an
-// idempotent atomic rewrite). Any env, path, or template change
-// re-builds the devmbundle from cfg + repoRoot and pipes it into the
-// guest at /opt/devm/ before the dispatcher runs, so the sandbox always
-// executes the latest rendered content — nothing is written to the host
-// workspace. Path changes ride the same rebuild as env changes because
+// idempotent atomic rewrite). Any env, path, commands, or template
+// change re-builds the devmbundle from cfg + repoRoot and pipes it into
+// the guest at /opt/devm/ before the dispatcher runs, so the sandbox
+// always executes the latest rendered content — nothing is written to
+// the host workspace. A commands change rides this same rebuild because
+// the commands manifest that backs the guest's `run <name>` dispatcher
+// is written into every bundle rebuild alongside env/templates. Path
+// changes ride the same rebuild as env changes because
 // render.RenderEtcEnvironment folds cfg.Path into /etc/environment's PATH= line
-// (there's no separate path-only artifact to pipe). KindStartupChange is
-// NOT live-applied — it's BucketRestartVM, not BucketLive, so the caller
-// routes it through the recreate path (VM stop + cold start; see
-// internal/provision's setupBootEnforcement / runStartupCommands, which
-// pick up the freshly-rendered /opt/devm/startup.sh on that next boot).
-// For each changed template, this function logs a "consuming services
-// may need restart" line to stderr.
+// (there's no separate path-only artifact to pipe). A KindRepoChange
+// mutation ALSO rides this rebuild — a label rename or primary toggle
+// changes the guestPath commands.json records and/or the $WORKSPACE
+// /etc/environment folds in, so without it a rename leaves the guest's
+// `run <name>` dispatcher and $WORKSPACE pointed at the old path.
+// KindStartupChange is NOT live-applied — it's BucketRestartVM, not
+// BucketLive, so the caller routes it through the recreate path (VM
+// stop + cold start; see internal/provision's setupBootEnforcement /
+// runStartupCommands, which pick up the freshly-rendered
+// /opt/devm/startup.sh on that next boot). For each changed template,
+// this function logs a "consuming services may need restart" line to
+// stderr.
 //
-// KindRepoChange/KindVolumeChange entries route through
+// KindRepoChange/KindVolumeChange entries ALSO route through
 // applyMutagenSessionChange, which needs a live mutagen daemon
 // (mutagenCLI), the daemon's identity (identCfg, for runtime-dir-scoped
 // mirror paths and TLD), and the project's current iron-proxy CONNECT
@@ -70,12 +80,20 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			// snapshot elsewhere — not applied here.
 		case KindTemplateChange:
 			templateChanges = append(templateChanges, c)
-		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange:
+		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange, KindCommandsChange:
 			bundleRebuildNeeded = true
 		case KindServiceDirectChange:
 			// Ingress for direct services is pushed to softnet's
 			// declarative expose map by the daemon, not applied in-guest.
-		case KindRepoChange, KindVolumeChange:
+		case KindRepoChange:
+			// A repo mutation (label rename, primary toggle, ...) changes
+			// the guestPath commands.json records and/or $WORKSPACE in
+			// /etc/environment, so it needs the same bundle rebuild as an
+			// env/path/commands change, ON TOP OF its mutagen session
+			// update below.
+			bundleRebuildNeeded = true
+			mutagenChanges = append(mutagenChanges, c)
+		case KindVolumeChange:
 			mutagenChanges = append(mutagenChanges, c)
 		}
 	}
@@ -87,6 +105,10 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		// /etc/environment on every subsequent exec, and (for template changes) the
 		// dispatcher below reads the freshly-piped installers. Running
 		// shells keep their old env until they re-exec — hence BucketLive.
+		commandsManifest, err := render.RenderCommandsManifest(cfg, repoRoot)
+		if err != nil {
+			return fmt.Errorf("render commands manifest: %w", err)
+		}
 		in := devmbundle.BuildInput{
 			Cfg:                 cfg,
 			RepoRoot:            repoRoot,
@@ -95,6 +117,8 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			SSHAuthorizedPubkey: sshAuthPub,
 			SSHHostPriv:         sshHostPriv,
 			SSHHostPub:          sshHostPub,
+			CommandsManifest:    commandsManifest,
+			Run:                 guestbin.Run(),
 		}
 		if cfg.Docker {
 			in.DockerRuncShim = docker.Shim()

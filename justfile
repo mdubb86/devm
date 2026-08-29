@@ -130,6 +130,13 @@ _build-pop-embed:
     GOOS=linux GOARCH=arm64 go build -o internal/guestbin/embed/pop ./cmd/pop
     @echo "pop embedded at internal/guestbin/embed/pop"
 
+# Build the guest-side run binary (linux-arm64) into the guestbin embed dir.
+_build-run-embed:
+    @echo "→ building guest-side run binary"
+    @mkdir -p internal/guestbin/embed
+    GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o internal/guestbin/embed/run ./cmd/run
+    @echo "run embedded at internal/guestbin/embed/run"
+
 # Prep every `//go:embed` blob the daemon needs, so subsequent `go
 # test` / `go vet` / `go build` can compile. This is the "just embed
 # prep, no main binary compile" recipe — used by CI (which only needs
@@ -137,7 +144,7 @@ _build-pop-embed:
 # (which runs `go test ./...` as a pre-tag guard). `_build-helper-embed`
 # uses the prod identity here; `build-e2e` overrides with an "e2e"
 # helper build afterwards for local e2e installs.
-embeds: fetch-iron-proxy fetch-mutagen (_build-helper-embed "prod") _build-setsid-shim-embed _build-docker-shims-embed _build-pop-embed
+embeds: fetch-iron-proxy fetch-mutagen (_build-helper-embed "prod") _build-setsid-shim-embed _build-docker-shims-embed _build-pop-embed _build-run-embed
 
 # Build the devm + devm-helper binaries into ./bin with prod identity,
 # and codesign with the local self-signed identity if available. The
@@ -147,12 +154,12 @@ embeds: fetch-iron-proxy fetch-mutagen (_build-helper-embed "prod") _build-setsi
 #
 # fetch-iron-proxy runs first: the ironproxy package's //go:embed
 # needs internal/ironproxy/embed/iron-proxy.gz to exist at compile time.
-build: fetch-iron-proxy (_build-helper-embed "prod") (_build-setsid-shim-embed) (_build-pop-embed) (_build "prod")
+build: fetch-iron-proxy (_build-helper-embed "prod") (_build-setsid-shim-embed) (_build-pop-embed) (_build-run-embed) (_build "prod")
 
 # Build the devm-e2e + devm-e2e-helper binaries into ./bin with e2e
 # identity, so they run alongside — not clobber — a live prod install
 # (separate runtime dir, socket, LaunchDaemon label; see internal/identity).
-build-e2e: fetch-iron-proxy (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build-pop-embed) (_build "e2e")
+build-e2e: fetch-iron-proxy (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build-pop-embed) (_build-run-embed) (_build "e2e")
 
 # Run Go unit tests.
 test:
@@ -255,7 +262,7 @@ e2e-install *NAMES: (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_bui
 # ends in installed-and-running. First run prompts for TouchID (plist,
 # resolver file, keychain, lo0 aliases, group, base image build).
 # Doubles as the canonical single-scenario install test.
-e2e-bootstrap: (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build "e2e")
+e2e-bootstrap: (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build-run-embed) (_build "e2e")
     @sudo -v
     @sudo install -m 755 bin/devm-e2e /usr/local/bin/devm-e2e
     /usr/local/bin/devm-e2e install

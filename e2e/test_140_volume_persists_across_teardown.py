@@ -16,6 +16,10 @@ against the (correctly) non-empty Mac mirror.
 Also covers the auto-managed PRIMARY repo mirror (the fixture's
 default `repos.main` entry) -- same persistence contract applies to
 its guest clone dir as to any named `volumes:` entry.
+
+The second cold-start also carries a `commands.<name>.startup: true`
+command that reads back `primary-sentinel` -- proof the startup phase
+runs after the workspace is hydrated from the Mac mirror, not before.
 """
 from __future__ import annotations
 
@@ -96,7 +100,26 @@ def test_volume_persists_across_teardown(devm, workspace, sandbox_name):
 
         # Second cold-start: a fresh, empty guest re-syncs from the
         # (correctly non-empty) Mac mirror -- the guard must accept
-        # this (guest.Count == 0 side of the fast path).
+        # this (guest.Count == 0 side of the fast path). Add a startup
+        # command now (not on the first cold-start, where
+        # primary-sentinel doesn't exist yet) that reads it back.
+        workspace.write_devmyaml(
+            volumes={"scratch": "/var/lib/scratch"},
+            repos={
+                "main": {
+                    "url": workspace.bare_repo_url(),
+                    "primary": True,
+                    "commands": {
+                        "check-restored": {
+                            "exec": "test -f $WORKSPACE/primary-sentinel",
+                            "startup": True,
+                        },
+                    },
+                },
+            },
+        )
+        # `check-restored` startup command tests `$WORKSPACE/primary-sentinel`
+        # after hydration -- a fire before sync completes would fail cold-start.
         r = subprocess.run(
             [devm.path, "start"], cwd=str(workspace.path),
             capture_output=True, timeout=300,

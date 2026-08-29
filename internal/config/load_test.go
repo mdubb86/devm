@@ -309,3 +309,50 @@ repo:
 	assert.Contains(t, err.Error(), "unknown field")
 	assert.Contains(t, err.Error(), "repo")
 }
+
+func TestLoad_RejectsUnknownCommandField(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  name: test
+repos:
+  main:
+    secret: gh
+    commands:
+      install:
+        exec: pnpm install
+        run_on_setup: true
+`)
+	_, err := Load(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run_on_setup")
+}
+
+func TestLoad_RepoCommandsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  name: test
+scripts:
+  fmt-check:
+    - echo fmt
+repos:
+  main:
+    secret: gh
+    commands:
+      install:
+        exec: pnpm install
+        startup: true
+      lint:
+        exec: ">fmt-check"
+`)
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	require.Contains(t, cfg.Repos, "main")
+	require.Contains(t, cfg.Repos["main"].Commands, "install")
+	assert.Equal(t, "pnpm install", cfg.Repos["main"].Commands["install"].Exec)
+	require.NotNil(t, cfg.Repos["main"].Commands["install"].Startup)
+	assert.True(t, *cfg.Repos["main"].Commands["install"].Startup)
+	assert.Equal(t, ">fmt-check", cfg.Repos["main"].Commands["lint"].Exec)
+	assert.Nil(t, cfg.Repos["main"].Commands["lint"].Startup, "unspecified startup stays nil")
+}

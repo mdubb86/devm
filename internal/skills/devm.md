@@ -40,6 +40,10 @@ A project's `CLAUDE.md` is git-tracked, so both the Mac and the VM see the same 
 
 `/opt/devm/GUEST.md` is installed on every guest by devm's bundle installer (no user action needed). It covers the guest's view of the network, filesystem quirks, lifecycle actions, and where to look when something breaks.
 
+## `run <name>` — repo task dispatcher
+
+Inside the guest, `run <name>` looks up `<name>` in the containing repo's `commands:` block (walks up from `$PWD` to find its repo) and runs it from the repo root. Two repos can define the same name; cwd picks the right one. Commands with `startup: true` also fire automatically at cold-start after the workspace is hydrated.
+
 ## Where to look next
 
 - `devm skills get schema` — every `devm.yaml` field, its type, and which change bucket it falls in.

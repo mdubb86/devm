@@ -254,6 +254,38 @@ func TestApplyLive_TemplateChange_PipesBundleThenInvokesDispatcher(t *testing.T)
 	assert.True(t, os.IsNotExist(statErr), "ApplyLive must NOT write .devm/ to the workspace; got: %v", statErr)
 }
 
+// TestApplyLive_RepoLabelChange_RebuildsBundleAndUpdatesMutagen is a
+// regression test: a live repo label rename (KindRepoChange, Field
+// "Label") must rebuild the bundle — so commands.json's guestPath and
+// /etc/environment's $WORKSPACE reflect the rename — IN ADDITION TO
+// updating the mutagen session. Before this fix, KindRepoChange only
+// routed to the mutagen branch, leaving the bundle (and thus `run
+// <name>` from the new label's directory) stale.
+func TestApplyLive_RepoLabelChange_RebuildsBundleAndUpdatesMutagen(t *testing.T) {
+	dir := t.TempDir()
+	tr, log := fakeTartForApplyLive(t, dir)
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+
+	changes := []Change{
+		{
+			Kind: KindRepoChange, Op: OpMutate, Field: "Label",
+			RepoBefore: &schema.RepoConfig{Label: strPtr("old")},
+			RepoAfter:  &schema.RepoConfig{Label: strPtr("new")},
+		},
+	}
+	require.NoError(t, ApplyLive(tr, "x-sbx", changes, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, ""))
+
+	// Bundle rebuilt: the repo change alone (no accompanying env/path
+	// change) must set bundleRebuildNeeded, or the guest's commands.json
+	// guestPath and /etc/environment $WORKSPACE go stale after a rename.
+	assert.Equal(t, 1, countCalls(t, log, "install.sh"), "expected exactly one bundle rebuild pipe")
+	// Mutagen path also fired: renameRepoLabel's moveGuestDir ran as a
+	// second, distinct ExecStdin call.
+	assert.Equal(t, 2, countCalls(t, log, "exec -i"), "expected bundle pipe + mutagen guest-dir move")
+	assert.True(t, logContains(t, log, "/home/devm/old") && logContains(t, log, "/home/devm/new"),
+		"mutagen path must move the guest dir from the old label to the new one")
+}
+
 // TestApplyLive_ServiceDirectChangeAlone_DoesNotExec pins the softnet
 // cutover: a KindServiceDirectChange no longer applies anything in-guest
 // (no svc_ingress nft chain, no ExecStdin call at all) — ingress for

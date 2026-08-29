@@ -39,6 +39,16 @@ type BuildInput struct {
 	DockerCLIShim  []byte
 
 	Pop []byte
+
+	// CommandsManifest is the pre-rendered body of /opt/devm/commands.json
+	// (see internal/render/commands.go's RenderCommandsManifest). Empty ⇒
+	// no file emitted.
+	CommandsManifest []byte
+
+	// Run is the compiled linux/arm64 run binary (see cmd/run). Written
+	// to bin/run in the tar; install.sh's existing bin/* loop symlinks it
+	// to /usr/local/bin/run. Empty ⇒ no file emitted.
+	Run []byte
 }
 
 // Build returns a tar archive containing the devm-owned artifacts the
@@ -172,6 +182,17 @@ func Build(in BuildInput) ([]byte, error) {
 
 	if len(in.Pop) > 0 {
 		if err := writeEntry(tw, "bin/pop", 0o755, in.Pop); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(in.CommandsManifest) > 0 {
+		if err := writeEntry(tw, "commands.json", 0o644, in.CommandsManifest); err != nil {
+			return nil, err
+		}
+	}
+	if len(in.Run) > 0 {
+		if err := writeEntry(tw, "bin/run", 0o755, in.Run); err != nil {
 			return nil, err
 		}
 	}

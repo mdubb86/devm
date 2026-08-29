@@ -33,9 +33,13 @@ type RepoConfig struct {
 
 	// Ignore lists mutagen sync ignore patterns.
 	Ignore []string `yaml:"ignore,omitempty"`
+
+	// Commands lists named commands runnable against this repo, keyed
+	// by command name.
+	Commands map[string]RepoCommand `yaml:"commands,omitempty"`
 }
 
-var repoKnownFields = []string{"url", "secret", "label", "volume", "primary", "ignore"}
+var repoKnownFields = []string{"url", "secret", "label", "volume", "primary", "ignore", "commands"}
 
 // Volume is a per-project persistent store.
 type Volume struct {
@@ -107,12 +111,13 @@ func (r *RepoConfig) UnmarshalYAML(node *yaml.Node) error {
 		}
 	}
 	type raw struct {
-		URL     *string  `yaml:"url,omitempty"`
-		Secret  string   `yaml:"secret,omitempty"`
-		Label   *string  `yaml:"label,omitempty"`
-		Volume  *bool    `yaml:"volume,omitempty"`
-		Primary *bool    `yaml:"primary,omitempty"`
-		Ignore  []string `yaml:"ignore,omitempty"`
+		URL      *string                `yaml:"url,omitempty"`
+		Secret   string                 `yaml:"secret,omitempty"`
+		Label    *string                `yaml:"label,omitempty"`
+		Volume   *bool                  `yaml:"volume,omitempty"`
+		Primary  *bool                  `yaml:"primary,omitempty"`
+		Ignore   []string               `yaml:"ignore,omitempty"`
+		Commands map[string]RepoCommand `yaml:"commands,omitempty"`
 	}
 	var raw2 raw
 	if err := node.Decode(&raw2); err != nil {
@@ -124,5 +129,6 @@ func (r *RepoConfig) UnmarshalYAML(node *yaml.Node) error {
 	r.Volume = raw2.Volume
 	r.Primary = raw2.Primary
 	r.Ignore = raw2.Ignore
+	r.Commands = raw2.Commands
 	return nil
 }

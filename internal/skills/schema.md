@@ -274,6 +274,34 @@ repos:
 | `volume` | bool | no | When true, backs this repo with a devm-managed volume instead of a plain bind mount. Defaults `true` for the primary, `false` for secondaries. The primary cannot set `volume: false`. |
 | `primary` | bool | no | Marks this entry as the project's primary workspace repo. |
 | `ignore` | []string | no | Mutagen sync ignore patterns. |
+| `commands` | map[string]RepoCommand | no | Named commands for this repo, keyed by command name (`^[a-z][a-z0-9_-]*$`). Each entry has `exec` (required — a literal shell command, or a `>NAME` reference into top-level `scripts:`) and `startup` (bool, defaults false). |
+
+##### `commands:` (optional)
+
+Map of named commands scoped to this repo. Each entry:
+
+| Field | Type | Required | Purpose |
+|---|---|---|---|
+| `exec` | string | yes | Shell command body. `>NAME` references a `scripts:` entry (joined with ` && `, same as `install:`/`startup:` refs). |
+| `startup` | bool | no (default false) | When true, this command fires automatically on every VM boot AFTER the workspace is hydrated (post-`mutagen sync flush`), from this repo's guest cwd. **Runs under ENFORCED egress** — any host it reaches must be in `network.allow:`. |
+
+Names must match `/^[a-z][a-z0-9_-]*$/`. Uniqueness is per-repo; two repos can both name a command `test` — the guest-side `run <name>` dispatcher picks the right one from `$PWD`.
+
+Example:
+
+```yaml
+repos:
+  main:
+    secret: gh_token
+    commands:
+      install:
+        exec: pnpm install
+        startup: true
+      test:
+        exec: pnpm test
+      lint:
+        exec: ">fmt-check"
+```
 
 **Primary determination** — exactly one of these must hold across `repos`:
 - one entry sets `primary: true` explicitly, or

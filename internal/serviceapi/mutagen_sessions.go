@@ -373,6 +373,31 @@ func StopPhase(cli *mutagen.CLI, projectID string) error {
 	return nil
 }
 
+// FlushAll blocks until every non-paused mutagen sync session belonging to
+// projectID has completed its current sync cycle. Called by the orchestrator's
+// RunStartupCommands phase to guarantee the workspace is hydrated (both
+// directions) before a startup command reads from it.
+//
+// Fail-fast: returns the first non-nil SyncFlush error. A startup command
+// racing an unflushed entity would read a partial workspace anyway.
+// Paused sessions are skipped (mirrors StopPhase's rationale: `mutagen sync
+// flush` on a paused session errors "session is paused" with no upside).
+func FlushAll(cli *mutagen.CLI, projectID string) error {
+	sessions, err := cli.SyncList(SessionNamePrefix(projectID))
+	if err != nil {
+		return fmt.Errorf("mutagen flush %s: list sessions: %w", projectID, err)
+	}
+	for _, s := range sessions {
+		if s.Paused {
+			continue
+		}
+		if err := cli.SyncFlush(s.ID); err != nil {
+			return fmt.Errorf("mutagen flush %s: flush %s: %w", projectID, s.Name, err)
+		}
+	}
+	return nil
+}
+
 // TeardownPhase permanently terminates every mutagen session belonging
 // to projectID, best-effort.
 func TeardownPhase(cli *mutagen.CLI, projectID string) error {

@@ -22,7 +22,7 @@ foo:
 
 func TestRepoConfig_KnownFields_NewShape(t *testing.T) {
 	assert.ElementsMatch(t,
-		[]string{"url", "secret", "label", "volume", "primary", "ignore"},
+		[]string{"url", "secret", "label", "volume", "primary", "ignore", "commands"},
 		repoKnownFields,
 	)
 }

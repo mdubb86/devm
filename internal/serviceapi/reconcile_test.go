@@ -388,6 +388,93 @@ func TestMergeLiveApplied_Direct_ServiceRemoved(t *testing.T) {
 	assert.False(t, present, "service removed in new_cfg must be dropped from the merged snapshot")
 }
 
+func TestMergeLiveApplied_Repo(t *testing.T) {
+	// Regression: mergeLiveApplied had no case for KindRepoChange, so a
+	// live-applied repo mutation (label rename, primary toggle, ...)
+	// left the snapshot holding old_cfg's Repos. The same "+ repo"
+	// / "~ repo" diff line then re-surfaced on every subsequent
+	// reconcile even though ApplyLive had already applied it.
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Repos: map[string]schema.RepoConfig{
+			"main": {Label: strPtr("old-label")},
+		},
+	}
+	newCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Repos: map[string]schema.RepoConfig{
+			"main": {Label: strPtr("new-label")},
+		},
+	}
+	applied := []reconcile.Change{{
+		Kind: reconcile.KindRepoChange, Op: reconcile.OpMutate, Field: "Label",
+		RepoBefore: &schema.RepoConfig{Label: strPtr("old-label")},
+		RepoAfter:  &schema.RepoConfig{Label: strPtr("new-label")},
+	}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	require.Contains(t, merged.Repos, "main")
+	assert.Equal(t, "new-label", *merged.Repos["main"].Label)
+}
+
+func TestMergeLiveApplied_Volume(t *testing.T) {
+	// Same regression as TestMergeLiveApplied_Repo, for volumes.
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Volumes: map[string]schema.Volume{
+			"data": {Path: "/var/lib/data"},
+		},
+	}
+	newCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Volumes: map[string]schema.Volume{
+			"data": {Path: "/var/lib/data2"},
+		},
+	}
+	applied := []reconcile.Change{{
+		Kind: reconcile.KindVolumeChange, Op: reconcile.OpMutate, Field: "path",
+		VolumeBefore: &schema.Volume{Path: "/var/lib/data"},
+		VolumeAfter:  &schema.Volume{Path: "/var/lib/data2"},
+	}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	require.Contains(t, merged.Volumes, "data")
+	assert.Equal(t, "/var/lib/data2", merged.Volumes["data"].Path)
+}
+
+func TestMergeLiveApplied_Commands(t *testing.T) {
+	// Same regression as TestMergeLiveApplied_Repo: KindCommandsChange
+	// lives inside Config.Repos too, so it must also wholesale-replace
+	// Repos on merge.
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Repos: map[string]schema.RepoConfig{
+			"main": {Commands: map[string]schema.RepoCommand{
+				"install": {Exec: "old install"},
+			}},
+		},
+	}
+	newCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Repos: map[string]schema.RepoConfig{
+			"main": {Commands: map[string]schema.RepoCommand{
+				"install": {Exec: "new install"},
+			}},
+		},
+	}
+	applied := []reconcile.Change{{
+		Kind: reconcile.KindCommandsChange, Repo: "main", Key: "install",
+		Old: "old install", New: "new install",
+	}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	require.Contains(t, merged.Repos, "main")
+	assert.Equal(t, "new install", merged.Repos["main"].Commands["install"].Exec)
+}
+
 func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
 	// CLI resolves + hashes secret refs (login-keychain access happens
 	// in the user context) and sends the map on every /vm/reconcile

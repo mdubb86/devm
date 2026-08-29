@@ -428,6 +428,17 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	}
 	log.Printf("shell: mutagen sessions ready: %s", vmName)
 
+	// Flush every mutagen session, then run every repo's `startup: true`
+	// commands in its guest cwd. Runs under ENFORCED egress (already
+	// flipped above, before RunEnforced) — any host a startup command
+	// reaches must be in the project's network.allow: list. The user
+	// opted in via startup: true, so a non-zero exit here is a loud,
+	// teardown-class failure, not a swallowed warning.
+	if err := runStartupCommandsFn(d, ctx, cfg, vmName, repoRoot); err != nil {
+		return d.teardownOnFail(ctx, cfg, vmName, err, "run startup commands")
+	}
+	log.Printf("shell: startup commands done: %s", vmName)
+
 	reporter.Step("ready", false)
 	reporter.Stop()
 	reporter.Clear()
@@ -479,6 +490,83 @@ func (d ShellDeps) setupMutagenSessions(ctx context.Context, cfg schema.Config, 
 		return fmt.Errorf("mutagen setup: %w", err)
 	}
 	return nil
+}
+
+// runStartupCommandsFn is the test-injection seam for the RunStartupCommands
+// phase provisionAndAttach runs after mutagenSetupFn. Production always
+// calls (ShellDeps).runStartupCommands; tests substitute a fake to verify
+// sequencing without needing a live VM or the real mutagen binary.
+var runStartupCommandsFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
+	return d.runStartupCommands(ctx, cfg, vmName, repoRoot)
+}
+
+// runStartupCommands flushes every mutagen session first (so the workspace
+// is hydrated in both directions), then invokes `run <name>` in each
+// repo's guest cwd for every command with `startup: true`. Runs under
+// enforced egress (this phase is AFTER ApplyEgressEnforcement) — any host a
+// startup command reaches must be in the project's network.allow: list.
+//
+// A non-zero exit fails cold-start (loud, teardown-class) — the user opted
+// in via startup: true; silent failure defeats the point.
+func (d ShellDeps) runStartupCommands(ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
+	startupCmds := cfg.StartupCommands(repoRoot)
+	if len(startupCmds) == 0 {
+		return nil
+	}
+
+	mutagenBin, err := mutagen.Ensure(d.Ident.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("mutagen: extract binary: %w", err)
+	}
+	cli := &mutagen.CLI{
+		Binary:  mutagenBin,
+		DataDir: filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
+	}
+
+	return runStartupCommandsWithCLI(cli, d.guestExec(ctx, vmName), vmName, startupCmds)
+}
+
+// runStartupCommandsWithCLI is the RunStartupCommands phase's core logic,
+// factored out of (ShellDeps).runStartupCommands so unit tests can inject a
+// fake mutagen CLI (via mutagen.CLI.Exec) and a fake guestExec, without a
+// live VM or the real mutagen binary.
+func runStartupCommandsWithCLI(cli *mutagen.CLI, exec serviceapi.GuestExec, vmName string, startupCmds []schema.StartupCommand) error {
+	if err := serviceapi.FlushAll(cli, vmName); err != nil {
+		return fmt.Errorf("flush mutagen before startup commands: %w", err)
+	}
+
+	log.Printf("shell: running startup commands: %s (%d)", vmName, len(startupCmds))
+	// Progress marker consumed by newProvisionProgress in provisionAndAttach.
+	fmt.Fprintln(os.Stderr, "::devm:stage:commands::")
+
+	for _, cmd := range startupCmds {
+		fmt.Fprintf(os.Stderr, "::devm:progress:commands:%s:%s::\n", cmd.Repo, cmd.Name)
+		// Runs as the devm user (guestExec's script already runs as root via
+		// `sudo bash -s`; sudo -u devm here drops to the devm user so PATH /
+		// HOME resolve the same way an interactive `run` invocation would
+		// see them).
+		script := fmt.Sprintf(
+			"sudo -u devm -H bash -c 'cd %s && %s /usr/local/bin/run %s'",
+			shellSingleQuoted(cmd.GuestCwd), devmbundle.GuestWrapper, shellSingleQuoted(cmd.Name),
+		)
+		stdout, stderr, exitCode, err := exec(script)
+		if err != nil {
+			return fmt.Errorf("run %s/%s: exec: %w", cmd.Repo, cmd.Name, err)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("run %s/%s: exit %d: %s\n%s",
+				cmd.Repo, cmd.Name, exitCode, stderr, stdout)
+		}
+	}
+	return nil
+}
+
+// shellSingleQuoted wraps s in single quotes for use as a bash literal.
+// Duplicated from render.shellSingleQuoted (unexported there) rather than
+// exporting it — the orchestrator has no other reason to depend on render's
+// internals.
+func shellSingleQuoted(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // guestExec returns a serviceapi.GuestExec that runs a script inside

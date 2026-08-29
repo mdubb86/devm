@@ -527,6 +527,74 @@ func TestBuild_EtcEnvironmentErrorPropagates(t *testing.T) {
 	assert.Contains(t, err.Error(), "BAD")
 }
 
+func minimalCfg(t *testing.T) schema.Config {
+	t.Helper()
+	return schema.Config{Project: schema.Project{Name: "p"}}
+}
+
+func listTarEntries(t *testing.T, body []byte) map[string]struct {
+	body string
+	mode int64
+} {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(body))
+	out := map[string]struct {
+		body string
+		mode int64
+	}{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		var b bytes.Buffer
+		_, err = io.Copy(&b, tr)
+		require.NoError(t, err)
+		out[hdr.Name] = struct {
+			body string
+			mode int64
+		}{body: b.String(), mode: hdr.Mode}
+	}
+	return out
+}
+
+func TestBuild_IncludesCommandsManifestAndRunBinary(t *testing.T) {
+	in := BuildInput{
+		Cfg:              minimalCfg(t),
+		RepoRoot:         t.TempDir(),
+		DaemonRuntimeDir: t.TempDir(),
+		CommandsManifest: []byte(`{"repos":{}}`),
+		Run:              []byte{0x7f, 'E', 'L', 'F'}, // sentinel; real bytes come from guestbin.Run()
+	}
+	body, err := Build(in)
+	require.NoError(t, err)
+
+	entries := listTarEntries(t, body)
+	require.Contains(t, entries, "commands.json")
+	assert.Equal(t, `{"repos":{}}`, entries["commands.json"].body,
+		"commands.json body must be shipped verbatim")
+	assert.Equal(t, int64(0o644), entries["commands.json"].mode)
+
+	require.Contains(t, entries, "bin/run")
+	assert.Equal(t, "\x7fELF", entries["bin/run"].body)
+	assert.Equal(t, int64(0o755), entries["bin/run"].mode)
+}
+
+func TestBuild_OmitsRunAndManifestWhenEmpty(t *testing.T) {
+	in := BuildInput{
+		Cfg:              minimalCfg(t),
+		RepoRoot:         t.TempDir(),
+		DaemonRuntimeDir: t.TempDir(),
+	}
+	body, err := Build(in)
+	require.NoError(t, err)
+	entries := listTarEntries(t, body)
+	assert.NotContains(t, entries, "commands.json",
+		"nothing to ship when caller passes no manifest")
+	assert.NotContains(t, entries, "bin/run")
+}
+
 func TestBuild_TarContainsSSHMaterial(t *testing.T) {
 	blob, err := Build(BuildInput{
 		Cfg:                 schema.Config{Project: schema.Project{Name: "p"}},

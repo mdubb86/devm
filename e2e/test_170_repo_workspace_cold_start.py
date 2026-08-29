@@ -10,6 +10,9 @@ Pins:
    `~/Library/Application Support/devm-e2e/<project>/<label>/` is
    populated with the same content -- proof the mutagen session is
    actually wired up, not just that the guest-side clone ran.
+4. A `commands.<name>.startup: true` command fires post-hydration and
+   its output is visible both in the guest and, after a flush, in the
+   Mac mirror.
 
 There's no `.vm` symlink and no live bind mount at the Mac cwd: the
 guest path and the Mac cwd are independent, connected only by
@@ -27,8 +30,21 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(300)
 def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
-    workspace.write_devmyaml()  # fixture's default repos.main is enough
     label = workspace.bare_repo_label()
+    workspace.write_devmyaml(
+        repos={
+            "main": {
+                "url": workspace.bare_repo_url(),
+                "primary": True,
+                "commands": {
+                    "install": {
+                        "exec": "echo hi > $WORKSPACE/startup-sentinel",
+                        "startup": True,
+                    },
+                },
+            },
+        },
+    )
 
     try:
         r = subprocess.run(
@@ -48,6 +64,14 @@ def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
             f"expected README in guest tree; got:\n{r.stdout.decode()}"
         )
 
+        # Startup command fired post-hydration.
+        r = subprocess.run(
+            [devm.path, "shell", "--", "cat", f"/home/devm/{label}/startup-sentinel"],
+            cwd=str(workspace.path), capture_output=True, timeout=60,
+        )
+        assert r.returncode == 0, r.stderr.decode()
+        assert "hi" in r.stdout.decode()
+
         # Mac mirror populated after a flush.
         sessions = sync_list(session_prefix(workspace.vm_name))
         assert len(sessions) == 1, f"expected exactly one session, got {sessions}"
@@ -58,6 +82,10 @@ def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
         assert (mirror / "README").exists(), (
             f"primary Mac mirror {mirror} missing cloned README"
         )
+
+        # Mac mirror sees the sentinel too (proves the command ran under the
+        # sync-completed workspace, not on an unsynced empty dir).
+        assert (mirror / "startup-sentinel").exists()
     finally:
         subprocess.run(
             [devm.path, "teardown", "--yes"],
