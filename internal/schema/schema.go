@@ -1161,6 +1161,18 @@ func (c Config) Validate() error {
 	if err := c.validateRepos(); err != nil {
 		return err
 	}
+	{
+		names := make([]string, 0, len(c.Repos))
+		for name := range c.Repos {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if err := c.Repos[name].validateCommands(c.Scripts); err != nil {
+				return fmt.Errorf("repo %q: %w", name, err)
+			}
+		}
+	}
 	if err := c.validateProjectIDReserved(); err != nil {
 		return err
 	}

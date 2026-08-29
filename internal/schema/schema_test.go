@@ -1253,3 +1253,36 @@ func TestBareCloneName(t *testing.T) {
 	assert.Equal(t, "foo", BareCloneName("https://github.com/me/foo.git"))
 	assert.Equal(t, "foo", BareCloneName("https://github.com/me/foo"))
 }
+
+// ---------- Config.Validate + repos.<name>.commands ----------
+
+func TestConfigValidate_RepoCommands(t *testing.T) {
+	valid := Config{
+		Project: Project{Name: "p"},
+		Repos: map[string]RepoConfig{
+			"main": {
+				Secret: "github",
+				Commands: map[string]RepoCommand{
+					"install": {Exec: "pnpm install", Startup: p(true)},
+					"test":    {Exec: "pnpm test"},
+				},
+			},
+		},
+	}
+	assert.NoError(t, valid.Validate())
+
+	invalid := Config{
+		Project: Project{Name: "p"},
+		Repos: map[string]RepoConfig{
+			"main": {
+				Secret: "github",
+				Commands: map[string]RepoCommand{
+					"Install": {Exec: "pnpm install"},
+				},
+			},
+		},
+	}
+	err := invalid.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command name")
+}
