@@ -17,15 +17,13 @@ GSD's generated output should be gitignored.
 ## devm.yaml additions
 
 ```yaml
-scripts:
-  install-gsd-core:
-    # Absolute npx path — install: shell has no login PATH init yet.
-    # -y auto-confirms npx's fetch.
-    - cd "$WORKSPACE" && /home/devm/.fnm/aliases/default/bin/npx -y @opengsd/gsd-core@latest --claude --local
-
-install:
-  # Must sequence AFTER the fnm/Node install (see recipes/lang/node.md).
-  - ">install-gsd-core"
+repos:
+  main:
+    secret: gh_token
+    commands:
+      install-gsd-core:
+        exec: npx @opengsd/gsd-core --claude --local
+        startup: true
 
 network:
   allow:
@@ -64,10 +62,11 @@ GSD's surface while keeping hand-written `.claude/commands/*.md` and
   `settings.local.json` directly under the project's `.claude/`.
 - **Rehydration.** `devm teardown` deletes the workspace volume; next
   `devm start` re-hydrates from git (which does not include the GSD
-  install), then re-runs `install-gsd-core` in the fresh clone. Nothing
-  to remember.
-- **Runs in the open-network provisioning window** (install: bucket),
-  so no runtime egress opens beyond the two npm hosts.
+  install), then `install-gsd-core` fires again on boot in the fresh
+  clone. Nothing to remember.
+- **Runs under enforced egress** (`commands.*.startup: true` fires
+  post-hydration, after the allowlist is applied) — hence both npm
+  hosts above must be in `network.allow:`.
 - **GSD's persistent state lives in `.planning/`** (workspace-tracked,
   committed). Because it's git-tracked, it survives `devm teardown` on
   its own: the workspace volume is deleted and rehydrated from git on
