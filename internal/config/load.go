@@ -85,7 +85,18 @@ func Load(dir string) (schema.Config, error) {
 	// reject reserved keys and unknown $VAR references, inject WORKSPACE
 	// + IS_SANDBOX. All downstream consumers (templates, EnvArgs,
 	// PersistentEnv, kit-env render) read the resolved cfg.Env.
-	if err := schema.ResolveEnv(&merged, dir); err != nil {
+	//
+	// $WORKSPACE expands to the primary repo's GUEST path (e.g.
+	// /home/devm/<label>) — NOT the Mac cwd. Under mutagen-volumes the
+	// guest no longer mirrors the Mac's absolute path; every place
+	// $WORKSPACE surfaces is a guest-side context (install:, startup:,
+	// scripts, service envs) so it must resolve to a path the guest can
+	// chdir into. Repo-less projects fall back to /home/devm.
+	workspace := merged.PrimaryGuestPath(dir)
+	if workspace == "" {
+		workspace = schema.GuestHomeDir
+	}
+	if err := schema.ResolveEnv(&merged, workspace); err != nil {
 		return schema.Config{}, fmt.Errorf("resolve env: %w", err)
 	}
 	return merged, nil

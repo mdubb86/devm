@@ -825,6 +825,62 @@ func (c *Config) validateProjectIDReserved() error {
 	return nil
 }
 
+// GuestHomeDir is the guest-side parent for every repo clone. Every
+// repo entity's guest path is `<GuestHomeDir>/<label>` and every
+// $WORKSPACE substitution in cfg.Env resolves to the primary repo's
+// guest path here (not the Mac cwd — under mutagen-volumes the guest
+// no longer mirrors the Mac's absolute path).
+const GuestHomeDir = "/home/devm"
+
+// PrimaryRepoName returns the name of cfg.Repos' primary entry: the
+// one explicitly marked Primary, or else the sole entry with a nil
+// URL. Returns "" if no entry qualifies (no repos declared, or an
+// ambiguous configuration that validateRepos would reject).
+func (c *Config) PrimaryRepoName() string {
+	var urlNilName string
+	urlNilCount := 0
+	for name, r := range c.Repos {
+		if r.Primary != nil && *r.Primary {
+			return name
+		}
+		if r.URL == nil {
+			urlNilName = name
+			urlNilCount++
+		}
+	}
+	if urlNilCount == 1 {
+		return urlNilName
+	}
+	return ""
+}
+
+// ResolveLabel returns the mutagen sync label for one repos.<name>
+// entry: an explicit `label:` always wins; else a repo with a URL
+// uses BareCloneName; else (the URL-nil primary) the basename of
+// macCwd.
+func (r RepoConfig) ResolveLabel(macCwd string) string {
+	if r.Label != nil {
+		return *r.Label
+	}
+	if r.URL != nil {
+		return BareCloneName(*r.URL)
+	}
+	return filepath.Base(macCwd)
+}
+
+// PrimaryGuestPath returns cfg's primary repo's guest-side path
+// (`/home/devm/<label>`), or "" if no repo is declared. This is the
+// path that $WORKSPACE expands to in cfg.Env — under mutagen-volumes
+// the guest workspace lives at a label-derived path, not the Mac
+// project directory's absolute path.
+func (c *Config) PrimaryGuestPath(macCwd string) string {
+	name := c.PrimaryRepoName()
+	if name == "" {
+		return ""
+	}
+	return filepath.Join(GuestHomeDir, c.Repos[name].ResolveLabel(macCwd))
+}
+
 // BareCloneName derives a repo's default label from its clone URL:
 // strips a trailing ".git", then keeps the path segment after the
 // last "/" or ":" — "git@github.com:me/foo.git" → "foo".

@@ -32,23 +32,68 @@ services:
 	assert.Equal(t, 3000, cfg.Services["webapp"].Port)
 }
 
-func TestLoadResolvesEnvAndInjectsWorkspaceAndIsSandbox(t *testing.T) {
+// Reproduces a real bug hit during a shelfmates cold-start:
+//
+//   scripts:
+//     install-gsd-core:
+//       - cd "$WORKSPACE" && npx ...
+//
+//   provisioning fails with:
+//     bash: line 1: cd: /Users/michael/workspace/shelfmates:
+//                       No such file or directory
+//
+// The `cd "$WORKSPACE"` line runs INSIDE THE GUEST. The guest resolves
+// $WORKSPACE from its shell env, which is populated from /etc/environment
+// (see internal/render/etc_environment.go), which is emitted from
+// cfg.Env["WORKSPACE"]. Load must set that env value to a path the guest
+// can chdir into — under mutagen-volumes the guest workspace lives at
+// `/home/devm/<primary-label>`, NOT the Mac cwd (there's no virtiofs
+// mirror any more; the Mac's absolute path doesn't exist in the guest).
+//
+// Test uses an explicit `label:` on the primary so the expected guest
+// path is known ahead of time (the URL-omitted-primary default label is
+// filepath.Base(macCwd), a tempdir name that would be awkward to spell
+// here).
+func TestLoad_WorkspaceEnvIsPrimaryRepoGuestPath(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
   name: test
+repos:
+  main:
+    label: work
+    secret: gh_token
 env:
   CLAUDE_CONFIG_DIR: $WORKSPACE/.claude
 `)
 
 	cfg, err := Load(dir)
-	assert.NoError(t, err)
-	assert.Equal(t, filepath.Join(dir, ".claude"), cfg.Env["CLAUDE_CONFIG_DIR"].Literal,
-		"$WORKSPACE must be expanded by Load via ResolveEnv")
-	assert.Equal(t, dir, cfg.Env["WORKSPACE"].Literal,
-		"WORKSPACE must be injected by Load via ResolveEnv")
+	require.NoError(t, err)
+	assert.Equal(t, "/home/devm/work", cfg.Env["WORKSPACE"].Literal,
+		"WORKSPACE must resolve to the primary repo's GUEST path — /home/devm/<label> — not the Mac cwd")
+	assert.Equal(t, "/home/devm/work/.claude", cfg.Env["CLAUDE_CONFIG_DIR"].Literal,
+		"$WORKSPACE-composed values inherit the same guest-path substitution")
 	assert.Equal(t, "1", cfg.Env["IS_SANDBOX"].Literal,
 		"IS_SANDBOX must be injected by Load via ResolveEnv")
+}
+
+// Utility VMs with no `repos:` still need a valid WORKSPACE — scripts
+// may reference $WORKSPACE without any repo declared. Fall back to
+// /home/devm so `cd "$WORKSPACE"` lands somewhere sane.
+func TestLoad_WorkspaceEnvFallsBackToHomeWhenNoRepos(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  name: test
+env:
+  CACHE_DIR: $WORKSPACE/.cache
+`)
+
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "/home/devm", cfg.Env["WORKSPACE"].Literal,
+		"WORKSPACE must fall back to /home/devm when no repos are declared")
+	assert.Equal(t, "/home/devm/.cache", cfg.Env["CACHE_DIR"].Literal)
 }
 
 func TestLoadReportsReservedEnvKeyError(t *testing.T) {

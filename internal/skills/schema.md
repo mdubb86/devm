@@ -88,7 +88,7 @@ env:
 Reserved keys (devm-injected; cannot be overridden): `WORKSPACE`, `IS_SANDBOX`.
 
 Substitution rules in values:
-- `$WORKSPACE` (or `${WORKSPACE}`) expands to the project root at load time.
+- `$WORKSPACE` (or `${WORKSPACE}`) expands to the primary repo's GUEST path (`/home/devm/<primary-label>`), or `/home/devm` when no repos are declared. Substitution happens at load time on the Mac; the expanded value lands in `/etc/environment` inside the guest, so `$WORKSPACE` in scripts resolves the same way at guest-shell run time.
 - `$$` → literal `$`.
 - Any other `$VAR` reference is an error.
 
@@ -112,7 +112,7 @@ Final `$PATH` shape inside the VM:
 
 Rules:
 - Entries must be absolute (start with `/` or `$WORKSPACE`).
-- `$WORKSPACE` expands to the project root at load time. `$$` → literal `$`.
+- `$WORKSPACE` expands to the primary repo's guest path (`/home/devm/<primary-label>`, or `/home/devm` when no repos are declared). See the `env` section for the full substitution rules. `$$` → literal `$`.
 - Empty entries and `~` expansion are rejected.
 
 ---
