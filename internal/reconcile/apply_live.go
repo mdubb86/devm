@@ -34,11 +34,14 @@ import (
 // Template changes are coalesced — any number of KindTemplateChange
 // entries trigger a SINGLE invocation of the in-sandbox dispatcher,
 // which re-runs every installer (cheap; identical content is an
-// idempotent atomic rewrite). Any env, path, or template change
-// re-builds the devmbundle from cfg + repoRoot and pipes it into the
-// guest at /opt/devm/ before the dispatcher runs, so the sandbox always
-// executes the latest rendered content — nothing is written to the host
-// workspace. Path changes ride the same rebuild as env changes because
+// idempotent atomic rewrite). Any env, path, commands, or template
+// change re-builds the devmbundle from cfg + repoRoot and pipes it into
+// the guest at /opt/devm/ before the dispatcher runs, so the sandbox
+// always executes the latest rendered content — nothing is written to
+// the host workspace. A commands change rides this same rebuild because
+// the commands manifest that backs the guest's `run <name>` dispatcher
+// is written into every bundle rebuild alongside env/templates. Path
+// changes ride the same rebuild as env changes because
 // render.RenderEtcEnvironment folds cfg.Path into /etc/environment's PATH= line
 // (there's no separate path-only artifact to pipe). KindStartupChange is
 // NOT live-applied — it's BucketRestartVM, not BucketLive, so the caller
@@ -72,7 +75,7 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			// snapshot elsewhere — not applied here.
 		case KindTemplateChange:
 			templateChanges = append(templateChanges, c)
-		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange:
+		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange, KindCommandsChange:
 			bundleRebuildNeeded = true
 		case KindServiceDirectChange:
 			// Ingress for direct services is pushed to softnet's

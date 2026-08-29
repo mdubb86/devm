@@ -152,6 +152,16 @@ const (
 	// it by reallocating the IP and rebinding listeners. Old = the
 	// cross-wired IP, New = the replacement.
 	KindSSHEndpointHealed
+	// KindCommandsChange fires when a repo's `commands:` map differs
+	// between old and new config. One Change per changed command per
+	// field: Op=OpAdd/OpRemove for whole-entry add/remove (Repo=repo
+	// name, Key=command name), Op=OpMutate per changed field on a
+	// command present in both (Field="Exec"/"Startup"). Bucket:
+	// BucketLive — the manifest that carries `run <name>` dispatch
+	// data is rebuilt and piped into the guest on every live bundle
+	// rebuild (same path env/path changes already use), no VM cycle
+	// needed.
+	KindCommandsChange
 )
 
 // changeBucket is the single source of truth that maps each ChangeKind
@@ -222,6 +232,10 @@ var changeBucket = map[ChangeKind]Bucket{
 	// Synthetic heal signal: the daemon fixed it in-place during the
 	// reconcile — nothing left for the CLI to dispatch.
 	KindSSHEndpointHealed: BucketLive,
+	// Commands are declarative dispatch metadata (the run <name>
+	// manifest), not a boot-time script — a live bundle rebuild
+	// carries the change, no VM cycle needed.
+	KindCommandsChange: BucketLive,
 }
 
 // Bucket returns the bucket this ChangeKind belongs to.
@@ -259,6 +273,10 @@ type Change struct {
 	// OldValue/NewValue.
 	RepoBefore, RepoAfter     *schema.RepoConfig
 	VolumeBefore, VolumeAfter *schema.Volume
+
+	// Repo names the owning repo on a KindCommandsChange entry (paired
+	// with Key, the command name); empty for every other ChangeKind.
+	Repo string
 }
 
 // Bucket returns the bucket this Change belongs to. Most kinds route
@@ -351,9 +369,9 @@ func ComputePortChanges(old, new schema.Config) []Change {
 
 // ComputeAllChanges returns the full set of diffs between old and new
 // configs. Order: ports, network, env (per service), service unit fields
-// (per service), install, startup, packages, volumes, repos,
+// (per service), install, startup, packages, volumes, repos, commands,
 // image, identity, templates, path, secrets.
-// Within each section, service/volume/repo names are sorted
+// Within each section, service/volume/repo/command names are sorted
 // alphabetically for determinism.
 //
 // `repoRoot` and `daemonRuntimeDir` are required by the templates diff
@@ -385,6 +403,7 @@ func ComputeAllChanges(
 	out = append(out, computePackagesChange(old, new)...)
 	out = append(out, computeVolumeChanges(old, new)...)
 	out = append(out, computeRepoChanges(old, new)...)
+	out = append(out, computeCommandsChanges(old, new)...)
 	out = append(out, computeImageChange(old, new)...)
 	out = append(out, computeIdentityChange(old, new)...)
 	out = append(out, computeDockerChange(old, new)...)
@@ -713,6 +732,70 @@ func repoFieldChanges(name string, o, n schema.RepoConfig) []Change {
 			OldValue: o.Ignore, NewValue: n.Ignore,
 			RepoBefore: &o, RepoAfter: &n})
 	}
+	return out
+}
+
+// computeCommandsChanges emits one KindCommandsChange per changed
+// command across every repo's `commands:` map. A command present in
+// exactly one of old/new emits a single OpAdd/OpRemove Change; a
+// command present in both emits one OpMutate Change per changed field
+// (Exec, Startup). Repos are walked in sorted order (unionRepoNames)
+// and each repo's commands in sorted order (unionCommandNames), so
+// output is fully deterministic regardless of map iteration order.
+func computeCommandsChanges(old, new schema.Config) []Change {
+	var out []Change
+	for _, repoName := range unionRepoNames(old.Repos, new.Repos) {
+		oldCmds := old.Repos[repoName].Commands
+		newCmds := new.Repos[repoName].Commands
+		for _, cmdName := range unionCommandNames(oldCmds, newCmds) {
+			oldCmd, oldOk := oldCmds[cmdName]
+			newCmd, newOk := newCmds[cmdName]
+			switch {
+			case !oldOk && newOk:
+				out = append(out, Change{Kind: KindCommandsChange, Op: OpAdd, Repo: repoName, Key: cmdName,
+					New: newCmd.Exec, NewValue: newCmd})
+			case oldOk && !newOk:
+				out = append(out, Change{Kind: KindCommandsChange, Op: OpRemove, Repo: repoName, Key: cmdName,
+					Old: oldCmd.Exec, OldValue: oldCmd})
+			default:
+				out = append(out, commandFieldChanges(repoName, cmdName, oldCmd, newCmd)...)
+			}
+		}
+	}
+	return out
+}
+
+// commandFieldChanges diffs a single command present in both old and
+// new, emitting one OpMutate Change per field that differs.
+func commandFieldChanges(repo, name string, o, n schema.RepoCommand) []Change {
+	var out []Change
+	if o.Exec != n.Exec {
+		out = append(out, Change{Kind: KindCommandsChange, Op: OpMutate, Repo: repo, Key: name, Field: "Exec",
+			Old: o.Exec, New: n.Exec, OldValue: o.Exec, NewValue: n.Exec})
+	}
+	if !boolPtrEqual(o.Startup, n.Startup) {
+		out = append(out, Change{Kind: KindCommandsChange, Op: OpMutate, Repo: repo, Key: name, Field: "Startup",
+			Old: formatBoolPtr(o.Startup), New: formatBoolPtr(n.Startup),
+			OldValue: o.Startup, NewValue: n.Startup})
+	}
+	return out
+}
+
+// unionCommandNames returns the sorted union of keys across both
+// per-repo Commands maps, for deterministic diff-walk ordering.
+func unionCommandNames(a, b map[string]schema.RepoCommand) []string {
+	set := make(map[string]struct{}, len(a)+len(b))
+	for k := range a {
+		set[k] = struct{}{}
+	}
+	for k := range b {
+		set[k] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 
