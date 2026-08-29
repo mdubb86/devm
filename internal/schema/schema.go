@@ -881,6 +881,62 @@ func (c *Config) PrimaryGuestPath(macCwd string) string {
 	return filepath.Join(GuestHomeDir, c.Repos[name].ResolveLabel(macCwd))
 }
 
+// StartupCommand names one command that must fire during the orchestrator's
+// RunStartupCommands phase (after mutagenSetupFn hydrates the workspace).
+// Exec has any leading ">NAME" script reference already expanded and joined
+// with " && " — the caller invokes it as a bash string in GuestCwd.
+type StartupCommand struct {
+	Repo     string
+	Name     string
+	GuestCwd string
+	Exec     string
+}
+
+// StartupCommands enumerates every command flagged `startup: true`, ordered
+// by repo name then command name. macCwd is the Mac-side project root —
+// used only to compute the URL-omitted-primary repo's default label.
+func (c Config) StartupCommands(macCwd string) []StartupCommand {
+	if len(c.Repos) == 0 {
+		return nil
+	}
+	repoNames := make([]string, 0, len(c.Repos))
+	for name := range c.Repos {
+		repoNames = append(repoNames, name)
+	}
+	sort.Strings(repoNames)
+
+	var out []StartupCommand
+	for _, repoName := range repoNames {
+		r := c.Repos[repoName]
+		if len(r.Commands) == 0 {
+			continue
+		}
+		cmdNames := make([]string, 0, len(r.Commands))
+		for cmd := range r.Commands {
+			cmdNames = append(cmdNames, cmd)
+		}
+		sort.Strings(cmdNames)
+		guestCwd := filepath.Join(GuestHomeDir, r.ResolveLabel(macCwd))
+		for _, cmdName := range cmdNames {
+			cmd := r.Commands[cmdName]
+			if !cmd.StartupBool() {
+				continue
+			}
+			body := cmd.Exec
+			if name, ok := ParseScriptRef(cmd.Exec); ok {
+				body = strings.Join(c.Scripts[name], " && ")
+			}
+			out = append(out, StartupCommand{
+				Repo:     repoName,
+				Name:     cmdName,
+				GuestCwd: guestCwd,
+				Exec:     body,
+			})
+		}
+	}
+	return out
+}
+
 // BareCloneName derives a repo's default label from its clone URL:
 // strips a trailing ".git", then keeps the path segment after the
 // last "/" or ":" — "git@github.com:me/foo.git" → "foo".
