@@ -13,6 +13,14 @@ before:
   hooks:
     - go mod tidy
     - sh -c 'IRON_PROXY_VERSION="${IRON_PROXY_VERSION:-v0.45.0}" && ver="$(echo "$IRON_PROXY_VERSION" | sed "s/^v//")" && mkdir -p internal/ironproxy/embed && curl -fsSL -o /tmp/iron-proxy.tar.gz "https://github.com/ironsh/iron-proxy/releases/download/${IRON_PROXY_VERSION}/iron-proxy_${ver}_darwin_arm64.tar.gz" && tar -xzf /tmp/iron-proxy.tar.gz -C /tmp iron-proxy && gzip -c /tmp/iron-proxy > internal/ironproxy/embed/iron-proxy.gz && rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy'
+    # Fetch the pinned mutagen binary + its agents tarball into the
+    # embed dir. Both //go:embed pragmas in internal/mutagen/embed.go
+    # need them on disk at compile time. MUTAGEN_VERSION mirrors the
+    # justfile fetch-mutagen recipe (v0.18.1). Ships mutagen (and its
+    # per-guest-platform agents) INSIDE the devm binary same as iron-
+    # proxy above — no risk of a self-update leaving a devm+mutagen
+    # version skew on the user's disk.
+    - sh -c 'MUTAGEN_VERSION="${MUTAGEN_VERSION:-v0.18.1}" && tmp="$(mktemp -d)" && mkdir -p internal/mutagen/embed && curl -fsSL -o "$tmp/mutagen.tar.gz" "https://github.com/mutagen-io/mutagen/releases/download/${MUTAGEN_VERSION}/mutagen_darwin_arm64_${MUTAGEN_VERSION}.tar.gz" && tar -xzf "$tmp/mutagen.tar.gz" -C "$tmp" mutagen mutagen-agents.tar.gz && gzip -c "$tmp/mutagen" > internal/mutagen/embed/mutagen.gz && cp "$tmp/mutagen-agents.tar.gz" internal/mutagen/embed/mutagen-agents.tar.gz && rm -rf "$tmp"'
     - sh -c 'mkdir -p internal/docker/embed && GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim'
     - sh -c 'mkdir -p internal/docker/embed && GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-docker-shim ./cmd/devm-docker-shim'
     # Compile devm-helper for darwin_arm64 and gzip into the embed dir.
