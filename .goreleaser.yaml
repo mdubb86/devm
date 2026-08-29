@@ -39,6 +39,9 @@ before:
     # just _build-pop-embed recipe. Uncompressed embed, same pattern as
     # the docker shims above.
     - sh -c 'mkdir -p internal/guestbin/embed && GOOS=linux GOARCH=arm64 go build -o internal/guestbin/embed/pop ./cmd/pop'
+    # Compile the guest-side run binary for linux_arm64. Mirrors the
+    # just _build-run-embed recipe. Uncompressed embed, static (no cgo).
+    - sh -c 'mkdir -p internal/guestbin/embed && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o internal/guestbin/embed/run ./cmd/run'
 
 builds:
   # Tart requires Apple Silicon; amd64 macOS isn't a supported target.
