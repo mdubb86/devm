@@ -145,22 +145,15 @@ $ ls ~/.cache/camoufox/browsers/official/*/camoufox-bin
                                                     # binary present after first fetch
 $ readlink ~/.cache/camoufox/browsers/official/*/distribution/policies.json
                                                     # → /etc/firefox/policies/policies.json
-$ mount | grep camoufox                            # vol_camoufox bind-mounted
 $ python -c "from camoufox.sync_api import Camoufox; \
     Camoufox(headless=True).__enter__().pages"     # smoke-launches Firefox
 ```
 
-The `mount` line should show something like:
-
-```
-vol_camoufox on /home/devm/.cache/camoufox type virtiofs (rw,relatime)
-```
-
-confirming the volume is layered over the extraction path.
-
 ## After `devm teardown`
 
 The camoufox volume backing lives Mac-side at
-`~/Library/Application Support/devm/volumes/<project>/camoufox/` and
-survives teardown. Next cold-start reattaches it; `pkgman.fetch()`
-sees the binary is already present and skips the download.
+`~/Library/Application Support/devm/<project>/camoufox/` and survives
+teardown. Next cold-start's mutagen session re-adopts it (populated
+mac side + empty guest side → mutagen syncs mac → guest, no re-fetch);
+`pkgman.fetch()` sees the binary is already present and skips the
+download.
