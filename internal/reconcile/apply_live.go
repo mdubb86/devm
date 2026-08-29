@@ -19,8 +19,10 @@ import (
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
+	"github.com/mdubb86/devm/internal/guestbin"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/mutagen"
+	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -87,6 +89,10 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		// /etc/environment on every subsequent exec, and (for template changes) the
 		// dispatcher below reads the freshly-piped installers. Running
 		// shells keep their old env until they re-exec — hence BucketLive.
+		commandsManifest, err := render.RenderCommandsManifest(cfg, repoRoot)
+		if err != nil {
+			return fmt.Errorf("render commands manifest: %w", err)
+		}
 		in := devmbundle.BuildInput{
 			Cfg:                 cfg,
 			RepoRoot:            repoRoot,
@@ -95,6 +101,8 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			SSHAuthorizedPubkey: sshAuthPub,
 			SSHHostPriv:         sshHostPriv,
 			SSHHostPub:          sshHostPub,
+			CommandsManifest:    commandsManifest,
+			Run:                 guestbin.Run(),
 		}
 		if cfg.Docker {
 			in.DockerRuncShim = docker.Shim()

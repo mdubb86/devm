@@ -287,6 +287,10 @@ func (p *Provisioner) repoBindings() []render.RepoBinding {
 // installers, systemd units, ssh material, CA, docker shims when declared,
 // install.sh). The guest's install.sh extracts it to /opt/devm.
 func (p *Provisioner) buildBundle() ([]byte, error) {
+	commandsManifest, err := render.RenderCommandsManifest(p.Cfg, p.MacCwd)
+	if err != nil {
+		return nil, fmt.Errorf("render commands manifest: %w", err)
+	}
 	in := devmbundle.BuildInput{
 		Cfg:                 p.Cfg,
 		RepoRoot:            p.WorkspaceVMPath,
@@ -296,6 +300,8 @@ func (p *Provisioner) buildBundle() ([]byte, error) {
 		SSHHostPriv:         p.SSHHostPriv,
 		SSHHostPub:          p.SSHHostPub,
 		Pop:                 guestbin.Pop(),
+		CommandsManifest:    commandsManifest,
+		Run:                 guestbin.Run(),
 	}
 	if p.Cfg.Docker {
 		in.DockerRuncShim = docker.Shim()
