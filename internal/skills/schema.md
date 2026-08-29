@@ -274,6 +274,7 @@ repos:
 | `volume` | bool | no | When true, backs this repo with a devm-managed volume instead of a plain bind mount. Defaults `true` for the primary, `false` for secondaries. The primary cannot set `volume: false`. |
 | `primary` | bool | no | Marks this entry as the project's primary workspace repo. |
 | `ignore` | []string | no | Mutagen sync ignore patterns. |
+| `commands` | map[string]RepoCommand | no | Named commands for this repo, keyed by command name (`^[a-z][a-z0-9_-]*$`). Each entry has `exec` (required — a literal shell command, or a `>NAME` reference into top-level `scripts:`) and `startup` (bool, defaults false). |
 
 **Primary determination** — exactly one of these must hold across `repos`:
 - one entry sets `primary: true` explicitly, or
