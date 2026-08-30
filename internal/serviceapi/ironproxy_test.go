@@ -3,7 +3,6 @@ package serviceapi
 import (
 	"context"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -20,15 +19,15 @@ import (
 )
 
 // TestIronPolicySocketPath_ShortHome pins the common case: a normal-length
-// HOME produces a debuggable projectID-named socket path. Uses the real
-// ambient HOME (short on any actual dev machine) rather than a fabricated
-// path — EnsureRuntimeDir must actually create the runtime dir, and a
-// fabricated top-level path like "/Users/x" isn't writable by a non-root
-// user on macOS.
+// HOME produces a debuggable projectID-named socket path. Uses "/tmp"
+// rather than t.TempDir() — t.TempDir() nests under macOS's deep TMPDIR
+// and would itself blow the sun_path cap, exercising the fallback branch
+// instead of the primary one this test targets. "/tmp" is short,
+// world-writable (no sudo), and independent of ambient machine state
+// (unlike the real $HOME, whose length isn't guaranteed and which would
+// make this test touch the live prod runtime dir).
 func TestIronPolicySocketPath_ShortHome(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-	t.Setenv("HOME", home)
+	t.Setenv("HOME", "/tmp")
 	p, err := IronPolicySocketPath(identity.Prod, "myproj")
 	require.NoError(t, err)
 	assert.True(t, strings.HasSuffix(p, "/iron-proxy/myproj.sock"), p)
