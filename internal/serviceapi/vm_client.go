@@ -302,10 +302,9 @@ func (c *Client) EndProvisioning(ctx context.Context, name string) error {
 	return nil
 }
 
-// Denials queries the daemon for iron-proxy allow-list rejects observed
-// this iron-proxy lifetime, per host. Sorted by count desc. Empty slice
-// (never nil) if the project hasn't triggered any denials yet, iron-proxy
-// isn't running, or the daemon wasn't built with tracking wired.
+// Denials queries the daemon for the project's currently-tracked
+// allow-list rejects, per (host, path). Sorted by count desc. Empty
+// slice (never nil) if the project has no denials recorded.
 func (c *Client) Denials(ctx context.Context, name string) ([]Denial, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		"http://localhost/denials?name="+name, nil)

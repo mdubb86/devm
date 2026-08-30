@@ -87,14 +87,16 @@ The docker-shim rewrites `docker build …` to `docker buildx build --builder de
   exit non-zero, so anything that apt-installs at runtime breaks — e.g.
   `playwright install --with-deps`. Preferred fix: install apt packages via
   `packages:` (provision-time, open egress) instead of at runtime.
-  `packages:` edits themselves don't hit this — devm's own apply runs in a
-  transient window that includes `download.docker.com` when `docker: true`.
+  `packages:` edits on a running VM converge under the project's current
+  `network.allow` too — for a `docker: true` project, add
+  `download.docker.com` there or the live converge 403s on this same repo.
   If you genuinely need runtime apt, allowlist the repo host:
 
   ```yaml
   network:
     allow:
-      - download.docker.com   # Engine's apt repo; only for runtime apt-get
+      - download.docker.com   # Engine's apt repo; needed for runtime apt-get
+                               # AND for live `packages:` converges
   ```
 
 ## Debugging build-time trust

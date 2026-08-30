@@ -66,7 +66,7 @@ Provisioning is the daemon's job, not the guest's own boot sequence. It walks th
 
 Any failing command aborts the whole provisioning run before `devm.target` starts, so a failure never grants access. A failure at the `templates` or `services` stage leaves the VM running for in-place debugging (the user's service/template definition is what's broken); any earlier-stage failure (`open` through `enforce`) tears the VM down — `devm shell` promises loud failure, never a half-created VM left behind.
 
-`install`/`docker` are gated by the `/var/lib/devm/provisioned` marker and only run once, on first boot; they're skipped on a later cold start (`devm stop` + `devm shell` reuses the same disk, so installed tools and built artifacts are still there). `packages` runs its full list on first boot like the others, but also converges a pending `packages:` diff on a later cold start (a running VM instead converges the same diff live, via `devm reconcile`'s transient egress window — see `packages` in the schema reference). `startup:` and `templates` run on every boot that opens the window. Restart-time workload otherwise comes back via systemd — enabled units auto-start when `devm.target` activates, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
+`install`/`docker` are gated by the `/var/lib/devm/provisioned` marker and only run once, on first boot; they're skipped on a later cold start (`devm stop` + `devm shell` reuses the same disk, so installed tools and built artifacts are still there). `packages` runs its full list on first boot like the others, but also converges a pending `packages:` diff on a later cold start (a running VM instead converges the same diff live, via `devm reconcile`, under the project's current `network.allow` — see `packages` in the schema reference). `startup:` and `templates` run on every boot that opens the window. Restart-time workload otherwise comes back via systemd — enabled units auto-start when `devm.target` activates, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
 
 ---
 
@@ -86,7 +86,7 @@ Sandbox stopped; config changes will apply on next `devm shell`.
   
   All other BucketLive kinds (ports, path, service unit fields) have no apply path in `ApplyLive` and take effect at the next cold start, even though reconcile reports them as applied.
 
-- **Package add / remove** is also BucketLive, but converges through a separate path, not `ApplyLive`: the daemon briefly respawns iron-proxy with the apt mirrors (`deb.debian.org`, `security.debian.org`, plus `download.docker.com` when `docker: true`) added to the allowlist, runs the apt diff inside the VM, then restores the original allowlist — no teardown, no restart.
+- **Package add / remove** is also BucketLive, but converges through a separate path, not `ApplyLive`: the daemon runs the apt diff inside the VM under the project's current `network.allow` — no allowlist widening, no restore, no teardown, no restart. `deb.debian.org` and `security.debian.org` (plus `download.docker.com` when `docker: true`) need to already be in `network.allow` for the diff to succeed.
 
 - **BucketRestartVM changes** (e.g. `startup:` edits) are surfaced as pending under a distinct "restart" section, separate from recreate. On approval `devm reconcile` stops the VM (preserving its disk — no teardown); the user then runs `devm shell` to cold-start and pick up the change. This is deterministic — the applying restart runs the freshly-composed provisioning script, so the change takes effect on that restart, not on some later boot.
 
@@ -156,7 +156,7 @@ Also live, but converged outside `ApplyLive` (the reconcile handler applies it f
 
 | Kind | Mechanism |
 |---|---|
-| `packages` add / remove | Top-level `packages:` list differs (set semantics — reordering is a no-op). Daemon briefly respawns iron-proxy with the apt mirrors (`deb.debian.org`, `security.debian.org`, plus `download.docker.com` when `docker: true`) added to the allowlist, runs the apt diff inside the VM, then restores the original allowlist. A stopped VM converges the same diff on its next boot's open window instead. |
+| `packages` add / remove | Top-level `packages:` list differs (set semantics — reordering is a no-op). Daemon runs the apt diff inside the VM under the project's current `network.allow` (`deb.debian.org`, `security.debian.org`, plus `download.docker.com` when `docker: true` need to be allowed already). A stopped VM converges the same diff on its next boot's open window instead. |
 
 Classified BucketLive but no apply path in `ApplyLive` (take effect at next cold start):
 
