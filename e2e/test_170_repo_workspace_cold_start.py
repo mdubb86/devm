@@ -45,6 +45,12 @@ def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
                 },
             },
         },
+        # This install: step reads a file that only exists once mutagen
+        # has hydrated $WORKSPACE with the cloned repo. If cold-start ran
+        # install: before hydration finished, this fails and `devm start`
+        # exits non-zero -- the return-code check below is the ordering
+        # proof.
+        install=["test -f $WORKSPACE/README"],  # README ships in the hello-world bare repo
     )
 
     try:

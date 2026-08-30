@@ -23,6 +23,8 @@ import subprocess
 
 import pytest
 
+from helpers.mutagen_e2e import mirror_path
+
 pytestmark = pytest.mark.devm
 
 
@@ -56,6 +58,16 @@ def test_cold_start_guest_clone(devm, workspace):
         assert r.returncode == 0, r.stderr.decode()
         assert "README" in r.stdout.decode(), (
             f"expected README in cloned tree; got:\n{r.stdout.decode()}"
+        )
+
+        # The Mac-side mirror is already populated by the time `devm start`
+        # returns -- WaitForInitialSync blocks start on the initial sync
+        # completing, so no manual `sync flush` is needed here.
+        mirror = mirror_path(workspace.vm_name, label)
+        assert (mirror / "README").exists(), (
+            f"Mac mirror {mirror} missing cloned README right after "
+            f"`devm start` returned -- WaitForInitialSync should have "
+            f"already brought it in sync"
         )
     finally:
         subprocess.run(

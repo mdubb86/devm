@@ -35,6 +35,14 @@ def test_session_created_on_start(devm, workspace):
         assert names == [expected_name], (
             f"expected exactly one session named {expected_name!r}, got {names!r}"
         )
+
+        assert len(sessions) >= 1
+        # In the new lifecycle, WaitForInitialSync fires before devm start
+        # returns. The session should be past initial-scan and into
+        # steady-state watching.
+        assert sessions[0]["status"] in ("Watching", "connected-beta", "connecting-beta"), (
+            f"expected Watching-class status, got {sessions[0]['status']}"
+        )
     finally:
         subprocess.run(
             [devm.path, "teardown", "--yes"],
