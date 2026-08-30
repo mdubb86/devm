@@ -331,6 +331,63 @@ func TestSetupVolumesPhase_WarmStartResumesPausedSession(t *testing.T) {
 	assert.Empty(t, sc.createArgs, "warm resume must not regenerate config or create a session")
 }
 
+// TestSetupPhases_WarmAttachRepoDoesNotCloneAgain locks in the safety
+// of the current SetupVolumesPhase/SetupReposPhase split for a
+// warm-attach repo entity: SetupVolumesPhase finds an existing mutagen
+// session via SyncList (so it skips the guard and never creates a
+// session), and SetupReposPhase then scans both sides — Mac mirror
+// content persisted across stop/start, guest content from the earlier
+// clone — finds both non-empty, and must not invoke the clone seam.
+func TestSetupPhases_WarmAttachRepoDoesNotCloneAgain(t *testing.T) {
+	cfg := testSessionsIdentity(t)
+	sc := &scriptedCLI{
+		listSessions: []mutagen.SyncSession{
+			{ID: "sess-1", Name: "devm-myproj-app", Status: "watching", Paused: false},
+		},
+	}
+	cli := sc.build()
+
+	entities := []SessionEntity{
+		{
+			Label:     "app",
+			GuestPath: "/home/devm/app",
+			Repo:      &SessionRepoInfo{URL: "git@github.com:me/app.git", Secret: "gh"},
+		},
+	}
+
+	// Mac mirror side: populated, representing state that persisted
+	// across a prior stop/start.
+	macDir, _, err := ensureMirrorDir(cfg, "myproj", "app")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(macDir, "foo.txt"), []byte("test"), 0o644))
+
+	// Guest side: also populated, representing the warm-attached
+	// state left by the original clone.
+	exec := func(script string) (string, string, int, error) {
+		if strings.Contains(script, "find .") {
+			return "count=3 size=300 hash=abc\n", "", 0, nil
+		}
+		return "", "", 0, nil
+	}
+
+	var cloneCalls []string
+	origClone := cloneRepoInGuestFn
+	cloneRepoInGuestFn = func(exec GuestExec, req CloneRequest) error {
+		cloneCalls = append(cloneCalls, req.GuestTargetPath)
+		return nil
+	}
+	t.Cleanup(func() { cloneRepoInGuestFn = origClone })
+
+	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	require.NoError(t, err)
+	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+	require.NoError(t, err)
+
+	assert.Empty(t, sc.createArgs, "warm-attached session must not be recreated")
+	assert.Empty(t, sc.resumeCalls, "an already-active (non-paused) session must not be resumed")
+	assert.Empty(t, cloneCalls, "warm-attach composition must short-circuit the clone seam when both sides are non-empty")
+}
+
 func TestSetupPhases_AlignedContentCreatesSession(t *testing.T) {
 	cfg := testSessionsIdentity(t)
 	sc := &scriptedCLI{} // no existing sessions
