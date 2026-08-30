@@ -96,3 +96,29 @@ exit 0
 	assert.Less(t, stopIdx, listIdx,
 		"mutagen sessions must be flushed+paused BEFORE the VM's guest is powered off")
 }
+
+// TestEndpointFrom_MapsAllFieldsToLoopback verifies endpointFrom — the
+// single builder behind every setPolicy push — wires each projectInfo port
+// to its own 127.0.0.1:<port> field on the returned Endpoint, with no
+// cross-field swaps (e.g. HTTPS getting the DNS port).
+func TestEndpointFrom_MapsAllFieldsToLoopback(t *testing.T) {
+	info := projectInfo{
+		HTTPPort:       5001,
+		HTTPSPort:      5002,
+		DNSPort:        5003,
+		GuestHTTPPort:  5005,
+		GuestHTTPSPort: 5006,
+		PopPort:        5007,
+	}
+	const ntpPort = 5004
+
+	ep := endpointFrom(info, ntpPort)
+
+	assert.Equal(t, "127.0.0.1:5001", ep.HTTP)
+	assert.Equal(t, "127.0.0.1:5002", ep.HTTPS)
+	assert.Equal(t, "127.0.0.1:5003", ep.DNS)
+	assert.Equal(t, "127.0.0.1:5004", ep.NTP)
+	assert.Equal(t, "127.0.0.1:5005", ep.GuestHTTP)
+	assert.Equal(t, "127.0.0.1:5006", ep.GuestHTTPS)
+	assert.Equal(t, "127.0.0.1:5007", ep.Pop)
+}

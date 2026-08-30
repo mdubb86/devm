@@ -19,15 +19,15 @@ const dnsZoneName = "devm.test."
 
 // upstreamFor picks the DNS upstream for the current policy. LOCKED drops;
 // FORWARDING dials addr (iron-proxy's DNS). ok=false => drop.
-func upstreamFor(pol Policy, ft *ForwardTargets) (addr string, useHost bool, ok bool) {
+func upstreamFor(pol Policy, ft *ForwardTargets) (addr string, ok bool) {
 	switch pol {
 	case PolicyForwarding:
 		if ft == nil || ft.DNS == "" {
-			return "", false, false
+			return "", false
 		}
-		return ft.DNS, false, true
+		return ft.DNS, true
 	default:
-		return "", false, false
+		return "", false
 	}
 }
 
@@ -38,18 +38,16 @@ func upstreamFor(pol Policy, ft *ForwardTargets) (addr string, useHost bool, ok 
 // with no server restart.
 type policyResolver struct{ e *egress }
 
-// resolver picks the *net.Resolver to use for one lookup: the host resolver
-// in OPEN, or one dialing iron-proxy's DNS address in ENFORCED. Returns an
-// error when the policy says to drop (LOCKED, or ENFORCED with no DNS
-// configured), which the dns package surfaces as a lookup failure (NXDOMAIN).
+// resolver picks the *net.Resolver to use for one lookup: LOCKED drops
+// (returns an error, which the dns package surfaces as a lookup failure —
+// NXDOMAIN); FORWARDING dials iron-proxy's DNS address. Returns an error
+// when the policy says to drop (LOCKED, or FORWARDING with no DNS
+// configured).
 func (r *policyResolver) resolver() (*net.Resolver, error) {
 	pol, ft := r.e.snapshot()
-	addr, useHost, ok := upstreamFor(pol, ft)
+	addr, ok := upstreamFor(pol, ft)
 	if !ok {
 		return nil, fmt.Errorf("softnet: dns upstream dropped by policy %s", pol)
-	}
-	if useHost {
-		return net.DefaultResolver, nil
 	}
 	return &net.Resolver{
 		PreferGo: true,

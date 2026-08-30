@@ -61,12 +61,12 @@ func TestPolicyResolverPerQuery(t *testing.T) {
 func TestUpstreamFor(t *testing.T) {
 	ft := &ForwardTargets{DNS: "127.0.0.1:8053"}
 
-	if _, _, ok := upstreamFor(PolicyLocked, ft); ok {
+	if _, ok := upstreamFor(PolicyLocked, ft); ok {
 		t.Fatal("LOCKED: no DNS upstream")
 	}
-	addr, useHost, ok := upstreamFor(PolicyForwarding, ft)
-	if !ok || useHost || addr != ft.DNS {
-		t.Fatalf("FORWARDING: want iron-proxy DNS %s, got %q useHost=%v ok=%v", ft.DNS, addr, useHost, ok)
+	addr, ok := upstreamFor(PolicyForwarding, ft)
+	if !ok || addr != ft.DNS {
+		t.Fatalf("FORWARDING: want iron-proxy DNS %s, got %q ok=%v", ft.DNS, addr, ok)
 	}
 }
 
