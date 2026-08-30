@@ -289,7 +289,7 @@ func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName str
 // recoverProjectState with nothing to restore.
 //
 // tunnelPort is iron-proxy's CONNECT-capable tunnel_listen port, from
-// the same two responses — the mutagen setup step below needs it to
+// the same two responses — the repo-clone stage below needs it to
 // build the guest-visible HTTP_PROXY URL.
 func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vmName, repoRoot, cmdName string, cmdArgs []string, bindings []serviceapi.SecretBinding, projectIP string, tunnelPort int, reporter status.Reporter) (int, error) {
 	caPEM, err := os.ReadFile(filepath.Join(caStorageDir(d.Ident), "root.crt"))

@@ -61,7 +61,7 @@ func TestDiscoverSoftnet_RebuildsStateForRehydratedProjects(t *testing.T) {
 
 	line := <-got
 	assert.Contains(t, line, `"op":"setPolicy"`)
-	assert.Contains(t, line, `"policy":"ENFORCED"`)
+	assert.Contains(t, line, `"policy":"FORWARDING"`)
 	assert.Contains(t, line, `"http":"127.0.0.1:8080"`)
 	assert.Contains(t, line, `"ntp":"127.0.0.1:51234"`)
 }

@@ -67,7 +67,7 @@ func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
 		needsEnforcedPush := info.ProjectIP == ""
 		go func(id, sock string, info projectInfo) {
 			if needsEnforcedPush {
-				if err := newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort)); err != nil {
+				if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(info, ntpPort)); err != nil {
 					daemonlog.Errorf("serviceapi: discoverSoftnet: setPolicy ENFORCED for %s: %v", id, err)
 				}
 			}

@@ -436,13 +436,13 @@ func TestClientEnforcementConfig_MissingProjectState(t *testing.T) {
 	assert.Contains(t, err.Error(), "enforcement-config")
 }
 
-// TestClientBeginProvisioning_SendsPolicyEnforced verifies POST
+// TestClientBeginProvisioning_SendsPolicyForwarding verifies POST
 // /vm/begin-provisioning flips the project's softnet control socket to
-// ENFORCED-behavior and carries the full forward_targets endpoint —
+// FORWARDING and carries the full forward_targets endpoint —
 // including the guest-origin ports — so `.test` resolves inside the
 // guest during the provisioning window, before /vm/end-provisioning
 // ever runs.
-func TestClientBeginProvisioning_SendsPolicyEnforced(t *testing.T) {
+func TestClientBeginProvisioning_SendsPolicyForwarding(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	tr := tart.New()
@@ -488,7 +488,7 @@ func TestClientBeginProvisioning_SendsPolicyEnforced(t *testing.T) {
 
 	line := <-got
 	assert.Contains(t, line, `"op":"setPolicy"`)
-	assert.Contains(t, line, `"policy":"ENFORCED"`)
+	assert.Contains(t, line, `"policy":"FORWARDING"`)
 
 	var msg struct {
 		ForwardTargets Endpoint `json:"forward_targets"`

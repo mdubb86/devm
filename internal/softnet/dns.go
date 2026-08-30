@@ -17,14 +17,11 @@ import (
 // resolving every <name>.test to NATAliasIP (the host loopback NAT alias).
 const dnsZoneName = "devm.test."
 
-// upstreamFor picks the DNS upstream for the current policy. useHost=true means
-// resolve via the Mac's own resolver (net.DefaultResolver) for direct
-// provisioning; otherwise dial addr (iron-proxy's DNS). ok=false => drop.
+// upstreamFor picks the DNS upstream for the current policy. LOCKED drops;
+// FORWARDING dials addr (iron-proxy's DNS). ok=false => drop.
 func upstreamFor(pol Policy, ft *ForwardTargets) (addr string, useHost bool, ok bool) {
 	switch pol {
-	case PolicyOpen:
-		return "", true, true
-	case PolicyEnforced:
+	case PolicyForwarding:
 		if ft == nil || ft.DNS == "" {
 			return "", false, false
 		}

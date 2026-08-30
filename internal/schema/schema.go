@@ -882,7 +882,8 @@ func (c *Config) PrimaryGuestPath(macCwd string) string {
 }
 
 // StartupCommand names one command that must fire during the orchestrator's
-// RunStartupCommands phase (after mutagenSetupFn hydrates the workspace).
+// RunStartupCommands phase (after the volume-sync/repo-clone stages hydrate
+// the workspace).
 // Exec has any leading ">NAME" script reference already expanded and joined
 // with " && " — the caller invokes it as a bash string in GuestCwd.
 type StartupCommand struct {

@@ -762,7 +762,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// Full ForwardTargets on every push — setPolicy keeps the previous
 		// endpoint on nil, so a partial push would silently clobber fields.
 		openInfo, _ := ironProxyState.get(req.Name)
-		if err := newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(openInfo, ntpPort)); err != nil {
+		if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(openInfo, ntpPort)); err != nil {
 			http.Error(w, fmt.Sprintf("flip softnet enforced: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -1209,22 +1209,12 @@ func guestGitCACertPath() string {
 	return ""
 }
 
-// sendSoftnetEnforced flips a project's softnet control socket to
-// ENFORCED, forwarding egress to iron-proxy's HTTP/HTTPS/DNS listeners and
-// the daemon's SNTP responder. All four addresses are loopback: softnet
-// dials iron-proxy and the NTP responder host-side, so the endpoint it
-// sends is always loopback.
-func sendSoftnetEnforced(sock string, info projectInfo, ntpPort int) error {
-	return newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
-}
-
 // endpointFrom builds the loopback softnet Endpoint for a project's
 // stashed projectInfo and the daemon's SNTP responder port. Every
-// setPolicy push — OPEN or ENFORCED, CLI-driven or daemon-restart
-// reconcile — goes through this builder so the wire shape is always
-// complete: setPolicy keeps the previous endpoint on a nil push, so a
-// caller building a partial Endpoint by hand would silently clobber
-// whichever fields it left zero.
+// setPolicy push — CLI-driven or daemon-restart reconcile — goes through
+// this builder so the wire shape is always complete: setPolicy keeps the
+// previous endpoint on a nil push, so a caller building a partial Endpoint
+// by hand would silently clobber whichever fields it left zero.
 //
 // GuestHTTP/GuestHTTPS are left "" when the corresponding port is 0
 // (the guest-origin listener pair hasn't bound yet) rather than

@@ -28,19 +28,16 @@ const (
 type Policy int
 
 const (
-	PolicyLocked   Policy = iota // drop all egress (boot lock)
-	PolicyOpen                   // forward anywhere, direct (provisioning)
-	PolicyEnforced               // forward :80/:443/:53/:123 to iron-proxy/NTP
+	PolicyLocked     Policy = iota // drop all egress (boot lock; pre-CA-install window)
+	PolicyForwarding               // route :80/:443 → iron-proxy, :53 → iron-proxy DNS, :123 → iron-proxy NTP; other ports dropped
 )
 
 func (p Policy) String() string {
 	switch p {
 	case PolicyLocked:
 		return "LOCKED"
-	case PolicyOpen:
-		return "OPEN"
-	case PolicyEnforced:
-		return "ENFORCED"
+	case PolicyForwarding:
+		return "FORWARDING"
 	default:
 		return fmt.Sprintf("Policy(%d)", int(p))
 	}
@@ -50,10 +47,8 @@ func ParsePolicy(s string) (Policy, error) {
 	switch s {
 	case "LOCKED":
 		return PolicyLocked, nil
-	case "OPEN":
-		return PolicyOpen, nil
-	case "ENFORCED":
-		return PolicyEnforced, nil
+	case "FORWARDING":
+		return PolicyForwarding, nil
 	default:
 		return 0, fmt.Errorf("unknown policy %q", s)
 	}

@@ -41,8 +41,8 @@ var (
 
 // egress holds the current egress policy and decides, per outbound TCP flow,
 // whether and where to forward it. setPolicy is called as the guest's state
-// changes (boot lock -> provisioning -> enforced); target is consulted per
-// flow by the TCP forwarder installed by attachEgress.
+// changes (boot lock -> forwarding); target is consulted per flow by the TCP
+// forwarder installed by attachEgress.
 type egress struct {
 	n   *network
 	mu  sync.RWMutex
@@ -96,7 +96,9 @@ func (e *egress) testAnswer(fqdn string) (net.IP, bool) {
 }
 
 // target maps an outbound TCP flow to a host dial address per current policy.
-// ok=false => RST the flow. Pure; unit-tested.
+// LOCKED drops everything; FORWARDING routes :80/:443 to iron-proxy (and the
+// two hairpins below, regardless of policy). ok=false => RST the flow. Pure;
+// unit-tested.
 func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 	pol, ft := e.snapshot()
 	if dstIP == NATAliasIP {
@@ -108,9 +110,9 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 
 	// `.test` loops back into this project's own services via the daemon's
 	// guest-origin listener. Decided ahead of the policy switch so it works
-	// during the provisioning window (OPEN) as well as under ENFORCED.
-	// Non-80/443 ports are denied: direct services resolve to 127.0.0.1 and
-	// never reach this address.
+	// under FORWARDING regardless of the port arms below. Non-80/443 ports
+	// are denied: direct services resolve to 127.0.0.1 and never reach this
+	// address.
 	if dstIP == InterceptedTestIP {
 		if ft == nil {
 			return "", false
@@ -125,9 +127,8 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 	}
 
 	// The daemon's per-project pop listener is reached at the gateway IP's
-	// dedicated port, forwarded regardless of policy switch below so it
-	// works during provisioning as well as under ENFORCED — mirrors the
-	// .test hairpin's early decision above.
+	// dedicated port, forwarded regardless of the policy switch below —
+	// mirrors the .test hairpin's early decision above.
 	if dstIP == GatewayIP && dport == 81 {
 		if ft == nil {
 			return "", false
@@ -136,9 +137,7 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 	}
 
 	switch pol {
-	case PolicyOpen:
-		return fmt.Sprintf("%s:%d", dstIP, dport), true
-	case PolicyEnforced:
+	case PolicyForwarding:
 		if ft == nil {
 			return "", false
 		}
@@ -155,7 +154,7 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 }
 
 // udpTarget maps an outbound UDP flow to a host dial address per current
-// policy. Mirrors target() but only NTP (:123) is forwarded when ENFORCED;
+// policy. Mirrors target() but only NTP (:123) is forwarded when FORWARDING;
 // DNS is served by a bound gateway:53 endpoint, not here. ok=false => drop.
 func (e *egress) udpTarget(dstIP string, dport uint16) (string, bool) {
 	pol, ft := e.snapshot()
@@ -163,9 +162,7 @@ func (e *egress) udpTarget(dstIP string, dport uint16) (string, bool) {
 		dstIP = HostLoopIP
 	}
 	switch pol {
-	case PolicyOpen:
-		return fmt.Sprintf("%s:%d", dstIP, dport), true
-	case PolicyEnforced:
+	case PolicyForwarding:
 		if dport == 123 && ft != nil && ft.NTP != "" {
 			return ft.NTP, true
 		}
