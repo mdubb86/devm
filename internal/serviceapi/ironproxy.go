@@ -252,7 +252,7 @@ func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Su
 	if err != nil {
 		return fmt.Errorf("policy socket path: %w", err)
 	}
-	policyAuthority.Set(projectID, proxyCfg.AllowList)
+	policyAuthority.SetAllowlist(projectID, proxyCfg.AllowList)
 	if err := policyAuthority.EnsureServing(projectID, sockPath); err != nil {
 		return fmt.Errorf("serve policy: %w", err)
 	}

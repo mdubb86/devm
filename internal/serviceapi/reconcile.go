@@ -93,7 +93,7 @@ type inProcessAllowlistSetter struct {
 }
 
 func (s *inProcessAllowlistSetter) SetAllowlist(ctx context.Context, name string, allowlist []string) error {
-	policyAuthority.Set(name, allowlist)
+	policyAuthority.SetAllowlist(name, allowlist)
 	return updateSnapshotAfterAllowlistSet(s.cfg, name, allowlist)
 }
 

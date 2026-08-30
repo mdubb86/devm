@@ -9,10 +9,12 @@ import (
 	"time"
 )
 
-// Denials is the per-project count of hostnames iron-proxy has rejected
-// due to allow-list mismatches. It exists so `devm denials` can answer
-// "what would I need to allow to make this work" without the user having
-// to grep proxy logs by hand.
+// Denials is the per-project count of hostnames the policy authority has
+// rejected due to allow-list mismatches. Recorded by PolicyAuthority at
+// the reject decision (see PolicyAuthority.SetAllowlist,
+// policyService.TransformRequest) so `devm denials` can answer "what
+// would I need to allow to make this work" without the user having to
+// grep proxy logs by hand.
 //
 // The map lives only in daemon memory — resets on daemon restart and on
 // iron-proxy respawn (see SpawnIronProxy). Transient by design: allow-lists
@@ -86,9 +88,34 @@ func (d *Denials) Record(projectID, host, path, method string, when time.Time) {
 // Reset drops all counts for projectID. Called on iron-proxy respawn so
 // counts reflect the currently running config, not a stale prior one.
 func (d *Denials) Reset(projectID string) {
+	d.clearProject(projectID)
+}
+
+// clearProject drops all counts for projectID.
+func (d *Denials) clearProject(projectID string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	delete(d.byProject, projectID)
+}
+
+// invalidateResolved deletes every (host, path) row under projectID for
+// which allowed reports true — i.e. rows a new allowlist would now let
+// through. It walks only its own rows; matching semantics are entirely
+// the caller's (PolicyAuthority.SetAllowlist passes a closure over
+// policymatch.Allowed) so this package never needs to know allowlist
+// syntax.
+func (d *Denials) invalidateResolved(projectID string, allowed func(host, path string) bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	proj, ok := d.byProject[projectID]
+	if !ok {
+		return
+	}
+	for k := range proj {
+		if allowed(k.host, k.path) {
+			delete(proj, k)
+		}
+	}
 }
 
 // Snapshot returns a copy of the current counts for projectID, sorted by
