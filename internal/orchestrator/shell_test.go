@@ -461,8 +461,9 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 // mutagenSetupFn, waitForInitialSyncFn, and runStartupCommandsFn are all
 // faked to append a marker into the same ordered log file fakeTartBinWithLog
 // and fakeVMAdmin both write into, instead of running the real mutagen
-// binary — this is a sequencing test, not an integration test of SetupPhase
-// or FlushAll themselves (covered by internal/serviceapi's own tests).
+// binary — this is a sequencing test, not an integration test of
+// SetupVolumesPhase, SetupReposPhase, or FlushAll themselves (covered by
+// internal/serviceapi's own tests).
 func TestProvisionAndAttach_MutagenBeforeRunUser(t *testing.T) {
 	origMutagen := mutagenSetupFn
 	origWait := waitForInitialSyncFn

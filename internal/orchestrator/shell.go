@@ -500,11 +500,12 @@ func (d ShellDeps) waitForInitialSync(ctx context.Context, cfg schema.Config, vm
 }
 
 // setupMutagenSessions builds the mutagen CLI + entity list and calls
-// serviceapi.SetupPhase for vmName. tunnelPort is iron-proxy's
-// CONNECT-capable tunnel_listen port (from VMStartResponse or
-// VMApplyIronProxyResponse) — combined with softnet.NATAliasIP, the
-// guest-visible address softnet NATs to the host's loopback, it forms the
-// HTTP_PROXY URL a guest-side git clone needs.
+// serviceapi.SetupVolumesPhase followed by serviceapi.SetupReposPhase
+// for vmName. tunnelPort is iron-proxy's CONNECT-capable tunnel_listen
+// port (from VMStartResponse or VMApplyIronProxyResponse) — combined
+// with softnet.NATAliasIP, the guest-visible address softnet NATs to
+// the host's loopback, it forms the HTTP_PROXY URL a guest-side git
+// clone needs.
 func (d ShellDeps) setupMutagenSessions(ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
 	mutagenBin, err := mutagen.Ensure(d.Ident.RuntimeDir())
 	if err != nil {
@@ -529,8 +530,11 @@ func (d ShellDeps) setupMutagenSessions(ctx context.Context, cfg schema.Config, 
 	guestSSHTarget := "devm-" + vmName
 	ironProxyURL := fmt.Sprintf("http://%s:%d", softnet.NATAliasIP, tunnelPort)
 
-	if err := serviceapi.SetupPhase(ctx, mutagenCLI, d.Ident, vmName, entities, d.guestExec(ctx, vmName),
-		guestSSHTarget, ironProxyURL, guestGitCACertPath()); err != nil {
+	guestExec := d.guestExec(ctx, vmName)
+	if err := serviceapi.SetupVolumesPhase(ctx, mutagenCLI, d.Ident, vmName, entities, guestExec, guestSSHTarget); err != nil {
+		return fmt.Errorf("mutagen setup: %w", err)
+	}
+	if err := serviceapi.SetupReposPhase(ctx, d.Ident, vmName, entities, guestExec, ironProxyURL, guestGitCACertPath()); err != nil {
 		return fmt.Errorf("mutagen setup: %w", err)
 	}
 	return nil

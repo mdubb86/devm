@@ -181,7 +181,7 @@ func TestBuildEntities_LabelOverrideRespected(t *testing.T) {
 	assert.Equal(t, "/home/devm/custom-label", entities[0].GuestPath)
 }
 
-// ---------- SetupPhase / StopPhase / TeardownPhase test scaffolding ----------
+// ---------- SetupVolumesPhase / SetupReposPhase / StopPhase / TeardownPhase test scaffolding ----------
 
 // scriptedCLI builds a *mutagen.CLI whose Exec dispatches on the mutagen
 // subcommand (args[0] args[1]) to canned behavior, recording every
@@ -272,7 +272,7 @@ func testSessionsIdentity(t *testing.T) identity.Config {
 	return identity.Config{Name: "devm-test-sessions"}
 }
 
-func TestSetupPhase_ColdStartClonesThenCreates(t *testing.T) {
+func TestSetupPhases_ColdStartClonesThenCreates(t *testing.T) {
 	cfg := testSessionsIdentity(t)
 	sc := &scriptedCLI{} // empty sync list
 	cli := sc.build()
@@ -287,8 +287,9 @@ func TestSetupPhase_ColdStartClonesThenCreates(t *testing.T) {
 
 	exec := scriptedGuestExec(true) // mac mirror is freshly created (empty), guest empty too
 
-	err := SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	require.NoError(t, err)
+	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
 
 	require.Len(t, sc.createArgs, 1)
@@ -298,7 +299,7 @@ func TestSetupPhase_ColdStartClonesThenCreates(t *testing.T) {
 	assert.Contains(t, args, "devm@myproj.test:/home/devm/app")
 }
 
-func TestSetupPhase_WarmStartResumesPausedSession(t *testing.T) {
+func TestSetupVolumesPhase_WarmStartResumesPausedSession(t *testing.T) {
 	cfg := testSessionsIdentity(t)
 	sc := &scriptedCLI{
 		// Paused=true is what mutagen actually reports for a
@@ -321,15 +322,16 @@ func TestSetupPhase_WarmStartResumesPausedSession(t *testing.T) {
 
 	exec := scriptedGuestExec(false) // both sides populated + aligned (same scan values)
 
-	err := SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	require.NoError(t, err)
+	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"sess-1"}, sc.resumeCalls)
 	assert.Empty(t, sc.createArgs, "warm resume must not regenerate config or create a session")
 }
 
-func TestSetupPhase_AlignedContentCreatesSession(t *testing.T) {
+func TestSetupPhases_AlignedContentCreatesSession(t *testing.T) {
 	cfg := testSessionsIdentity(t)
 	sc := &scriptedCLI{} // no existing sessions
 	cli := sc.build()
@@ -358,14 +360,15 @@ func TestSetupPhase_AlignedContentCreatesSession(t *testing.T) {
 		return "", "", 0, nil
 	}
 
-	err = SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	require.NoError(t, err)
+	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
 
 	require.Len(t, sc.createArgs, 1)
 }
 
-func TestSetupPhase_DivergentGuardRejects(t *testing.T) {
+func TestSetupVolumesPhase_DivergentGuardRejects(t *testing.T) {
 	cfg := testSessionsIdentity(t)
 	sc := &scriptedCLI{}
 	cli := sc.build()
@@ -392,14 +395,13 @@ func TestSetupPhase_DivergentGuardRejects(t *testing.T) {
 		return "", "", 0, nil
 	}
 
-	err = SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "app")
 	assert.Empty(t, sc.createArgs, "guard rejection must not create a session")
 }
 
-func TestSetupPhase_NoMirrorEntity_ClonesButNoSession(t *testing.T) {
+func TestSetupPhases_NoMirrorEntity_ClonesButNoSession(t *testing.T) {
 	cfg := testSessionsIdentity(t)
 	sc := &scriptedCLI{} // empty sync list — sync/create must NEVER be called
 	cli := sc.build()
@@ -424,8 +426,9 @@ func TestSetupPhase_NoMirrorEntity_ClonesButNoSession(t *testing.T) {
 		},
 	}
 
-	err := SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	require.NoError(t, err)
+	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
 
 	require.Len(t, cloneScripts, 1, "cold-start clone must run for a NoMirror entity")
@@ -441,7 +444,7 @@ func TestSetupPhase_NoMirrorEntity_ClonesButNoSession(t *testing.T) {
 	assert.Empty(t, entriesInMirror, "NoMirror entity must not populate a mac mirror dir")
 }
 
-func TestSetupPhase_NoMirrorEntity_AlreadyClonedSkipsClone(t *testing.T) {
+func TestSetupReposPhase_NoMirrorEntity_AlreadyClonedSkipsClone(t *testing.T) {
 	cfg := testSessionsIdentity(t)
 	sc := &scriptedCLI{}
 	cli := sc.build()
@@ -466,12 +469,71 @@ func TestSetupPhase_NoMirrorEntity_AlreadyClonedSkipsClone(t *testing.T) {
 		},
 	}
 
-	err := SetupPhase(context.Background(), cli, cfg, "myproj", entities, exec,
-		"myproj.test", "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	require.NoError(t, err)
+	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
 
 	assert.Empty(t, cloneScripts, "an already-populated guest dir must not be re-cloned")
 	assert.Empty(t, sc.createArgs)
+}
+
+// TestSetupReposPhase_ClonesOnlyEmptyRepos exercises SetupReposPhase in
+// isolation across three entity shapes: a pure volume (no clone path
+// at all), a repo with both sides empty (must clone), and a repo whose
+// guest side already has content (must not clone).
+func TestSetupReposPhase_ClonesOnlyEmptyRepos(t *testing.T) {
+	cfg := testSessionsIdentity(t)
+
+	var cloneCalls []string
+	origClone := cloneRepoInGuestFn
+	cloneRepoInGuestFn = func(exec GuestExec, req CloneRequest) error {
+		cloneCalls = append(cloneCalls, req.GuestTargetPath)
+		return nil
+	}
+	defer func() { cloneRepoInGuestFn = origClone }()
+
+	entities := []SessionEntity{
+		{Label: "vol1", GuestPath: "/vol1"}, // pure volume
+		{Label: "repoEmpty", GuestPath: "/home/devm/repoEmpty", Repo: &SessionRepoInfo{URL: "https://github.com/x/e.git", Secret: "gh_stub"}},
+		{Label: "repoPopulated", GuestPath: "/home/devm/repoPopulated", Repo: &SessionRepoInfo{URL: "https://github.com/x/p.git", Secret: "gh_stub"}},
+	}
+
+	// Guest-side scan fake: repoPopulated's guest path reports a
+	// non-empty scan; every other path (including the mac-mirror-only
+	// probes ScanMac never issues over exec) reports empty.
+	exec := func(script string) (string, string, int, error) {
+		if strings.Contains(script, "find .") {
+			if strings.Contains(script, "repoPopulated") {
+				return "count=5 size=500 hash=abc\n", "", 0, nil
+			}
+			return "count=0 size=0 hash=-\n", "", 0, nil
+		}
+		return "", "", 0, nil
+	}
+
+	err := SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://mac-loopback:tunnel", "/etc/ssl/certs/devm.crt")
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"/home/devm/repoEmpty"}, cloneCalls, "clone calls = repoEmpty only")
+}
+
+func TestSetupVolumesPhase_UniformSessionSetup(t *testing.T) {
+	cfg := testSessionsIdentity(t)
+	sc := &scriptedCLI{} // no existing sessions
+	cli := sc.build()
+
+	// All three entities get a session — no clone-branch coupling.
+	entities := []SessionEntity{
+		{Label: "vol1", GuestPath: "/vol1"},
+		{Label: "repoEmpty", GuestPath: "/home/devm/repoEmpty", Repo: &SessionRepoInfo{URL: "https://github.com/x/e.git", Secret: "gh_stub"}},
+		{Label: "repoPopulated", GuestPath: "/home/devm/repoPopulated", Repo: &SessionRepoInfo{URL: "https://github.com/x/p.git", Secret: "gh_stub"}},
+	}
+
+	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, scriptedGuestExec(true), "myproj.test")
+	require.NoError(t, err)
+
+	assert.Len(t, sc.createArgs, 3, "sessions created for all entities including repos")
 }
 
 // ---------- StopPhase / TeardownPhase ----------

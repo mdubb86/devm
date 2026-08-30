@@ -77,7 +77,8 @@ type VMStartResponse struct {
 	// TunnelPort is iron-proxy's CONNECT-capable tunnel_listen port —
 	// the orchestrator needs it (with softnet.NATAliasIP) to build the
 	// guest-visible HTTP_PROXY URL for its post-RunBundle, pre-RunUser
-	// mutagen SetupPhase call, which the daemon has no visibility into.
+	// mutagen SetupReposPhase call, which the daemon has no visibility
+	// into.
 	TunnelPort int `json:"tunnel_port,omitempty"`
 }
 
@@ -471,7 +472,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// Run options: softnet NIC, no graphics. softnet is the daemon's
 		// sole egress path for every VM it launches. Volumes, repos, and
 		// extra mounts are no longer virtiofs shares — mutagen sync
-		// sessions (SetupPhase, below) carry that traffic instead.
+		// sessions (SetupVolumesPhase, below) carry that traffic instead.
 		opts := tart.RunOpts{
 			NoGraphics: true,
 			NetSoftnet: true,

@@ -245,7 +245,7 @@ func mutagenSessionsDir(cfg identity.Config) string {
 // mutagenSessionName returns the mutagen sync session name for one
 // entity of projectID — mirrors serviceapi.SessionName. The two MUST
 // stay byte-for-byte identical: this is how apply-live finds a session
-// serviceapi.SetupPhase created at cold-start (and vice versa).
+// serviceapi.SetupVolumesPhase created at cold-start (and vice versa).
 func mutagenSessionName(projectID, label string) string {
 	return fmt.Sprintf("devm-%s-%s", projectID, label)
 }
@@ -641,12 +641,41 @@ func removeMirrorIfEmpty(cfg identity.Config, projectID, label string) error {
 	return nil
 }
 
+// cloneOneRepoIfEmpty is apply_live's analogue of
+// serviceapi.cloneOneRepoIfEmpty — same shape, same rules: a repo
+// entity is git-cloned iff both the Mac mirror and the guest side are
+// currently empty. A pure volume (spec.Repo == nil) is a no-op. Called
+// after setupSingleSession for every entity under the live-reconcile
+// path.
+func cloneOneRepoIfEmpty(exec GuestExec, cfg identity.Config, projectID string, spec sessionSpec) error {
+	if spec.Repo == nil {
+		return nil
+	}
+	macMirror, _, err := mirrorDirFn(cfg, projectID, spec.Label)
+	if err != nil {
+		return fmt.Errorf("mutagen setup %s: ensure mac mirror: %w", spec.Label, err)
+	}
+	macSide, err := scanMacSide(macMirror)
+	if err != nil {
+		return fmt.Errorf("mutagen setup %s: %w", spec.Label, err)
+	}
+	guestSide, err := scanGuestSide(exec, spec.GuestPath)
+	if err != nil {
+		return fmt.Errorf("mutagen setup %s: %w", spec.Label, err)
+	}
+	if macSide.Count > 0 || guestSide.Count > 0 {
+		return nil
+	}
+	return cloneRepoInGuest(exec, spec.Repo.URL, spec.Repo.Secret, spec.GuestPath, spec.Repo.IronProxyURL, spec.Repo.GuestCACertPath)
+}
+
 // setupSingleSession brings spec's mutagen sync session up to date —
-// the apply-live analogue of serviceapi.SetupPhase for exactly one
-// entity: ensures both sides' mirror dirs exist, cold-start clones a
-// repo entity into an all-empty guest, verifies the in-sync guard
-// before touching an existing target, then creates a fresh session or
-// resumes a paused one.
+// the apply-live analogue of serviceapi.SetupVolumesPhase for exactly
+// one entity: ensures both sides' mirror dirs exist, verifies the
+// in-sync guard before touching an existing target, then creates a
+// fresh session or resumes a paused one. Clone-if-empty for a repo
+// entity is handled separately by cloneOneRepoIfEmpty, called by every
+// caller right after this returns nil.
 func setupSingleSession(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, projectID string, spec sessionSpec) error {
 	macMirror, _, err := mirrorDirFn(cfg, projectID, spec.Label)
 	if err != nil {
@@ -655,23 +684,6 @@ func setupSingleSession(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, p
 
 	if err := ensureGuestDir(exec, spec.GuestPath); err != nil {
 		return fmt.Errorf("mutagen setup %s: %w", spec.Label, err)
-	}
-
-	if spec.Repo != nil {
-		macSide, err := scanMacSide(macMirror)
-		if err != nil {
-			return fmt.Errorf("mutagen setup %s: %w", spec.Label, err)
-		}
-		guestSide, err := scanGuestSide(exec, spec.GuestPath)
-		if err != nil {
-			return fmt.Errorf("mutagen setup %s: %w", spec.Label, err)
-		}
-		if macSide.Count == 0 && guestSide.Count == 0 {
-			if err := cloneRepoInGuest(exec, spec.Repo.URL, spec.Repo.Secret, spec.GuestPath,
-				spec.Repo.IronProxyURL, spec.Repo.GuestCACertPath); err != nil {
-				return fmt.Errorf("mutagen setup %s: %w", spec.Label, err)
-			}
-		}
 	}
 
 	macSide, err := scanMacSide(macMirror)
@@ -723,9 +735,13 @@ func recreateSessionWithIgnore(exec GuestExec, cli *mutagen.CLI, cfg identity.Co
 	if err := terminateSessionIfExists(cli, projectID, label); err != nil {
 		return err
 	}
-	return setupSingleSession(exec, cli, cfg, projectID, sessionSpec{
+	spec := sessionSpec{
 		Label: label, GuestPath: guestPath, Ignore: ignore, Repo: repo,
-	})
+	}
+	if err := setupSingleSession(exec, cli, cfg, projectID, spec); err != nil {
+		return err
+	}
+	return cloneOneRepoIfEmpty(exec, cfg, projectID, spec)
 }
 
 // ensureRepoClonedInGuest is the Volume:false repo flow: no mirror, no
@@ -756,9 +772,13 @@ func applyVolumeChange(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, pr
 		if !ok {
 			return fmt.Errorf("apply_live: volume add %q: missing new value", change.Key)
 		}
-		return setupSingleSession(exec, cli, cfg, projectID, sessionSpec{
+		spec := sessionSpec{
 			Label: resolveVolumeLabel(vol), GuestPath: vol.Path, Ignore: vol.Ignore,
-		})
+		}
+		if err := setupSingleSession(exec, cli, cfg, projectID, spec); err != nil {
+			return err
+		}
+		return cloneOneRepoIfEmpty(exec, cfg, projectID, spec)
 
 	case OpRemove:
 		vol, ok := change.OldValue.(schema.Volume)
@@ -802,9 +822,13 @@ func moveVolumeGuestPath(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, 
 		return fmt.Errorf("apply_live: volume path change %q: %w", oldLabel, err)
 	}
 	newLabel := resolveVolumeLabel(after)
-	return setupSingleSession(exec, cli, cfg, projectID, sessionSpec{
+	spec := sessionSpec{
 		Label: newLabel, GuestPath: after.Path, Ignore: after.Ignore,
-	})
+	}
+	if err := setupSingleSession(exec, cli, cfg, projectID, spec); err != nil {
+		return err
+	}
+	return cloneOneRepoIfEmpty(exec, cfg, projectID, spec)
 }
 
 // renameVolumeLabel handles Field="label": terminate the old session,
@@ -828,9 +852,13 @@ func renameVolumeLabel(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, pr
 	if err := os.Rename(oldMirror, newMirror); err != nil {
 		return fmt.Errorf("apply_live: mv mac mirror %s -> %s: %w", oldMirror, newMirror, err)
 	}
-	return setupSingleSession(exec, cli, cfg, projectID, sessionSpec{
+	spec := sessionSpec{
 		Label: newLabel, GuestPath: after.Path, Ignore: after.Ignore,
-	})
+	}
+	if err := setupSingleSession(exec, cli, cfg, projectID, spec); err != nil {
+		return err
+	}
+	return cloneOneRepoIfEmpty(exec, cfg, projectID, spec)
 }
 
 // ---------- repo change dispatch ----------
@@ -847,13 +875,17 @@ func applyRepoChange(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, proj
 		if !repoVolumeEnabled(repo) {
 			return ensureRepoClonedInGuest(exec, repo, guestPath, ironProxyURL, guestCACertPath)
 		}
-		return setupSingleSession(exec, cli, cfg, projectID, sessionSpec{
+		spec := sessionSpec{
 			Label: label, GuestPath: guestPath, Ignore: repo.Ignore,
 			Repo: &repoCloneSpec{
 				URL: derefOrEmpty(repo.URL), Secret: repo.Secret,
 				IronProxyURL: ironProxyURL, GuestCACertPath: guestCACertPath,
 			},
-		})
+		}
+		if err := setupSingleSession(exec, cli, cfg, projectID, spec); err != nil {
+			return err
+		}
+		return cloneOneRepoIfEmpty(exec, cfg, projectID, spec)
 
 	case OpRemove:
 		repo, ok := change.OldValue.(schema.RepoConfig)
@@ -936,13 +968,17 @@ func renameRepoLabel(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, proj
 		return fmt.Errorf("apply_live: mv mac mirror %s -> %s: %w", oldMirror, newMirror, err)
 	}
 
-	return setupSingleSession(exec, cli, cfg, projectID, sessionSpec{
+	spec := sessionSpec{
 		Label: newLabel, GuestPath: newGuestPath, Ignore: after.Ignore,
 		Repo: &repoCloneSpec{
 			URL: derefOrEmpty(after.URL), Secret: after.Secret,
 			IronProxyURL: ironProxyURL, GuestCACertPath: guestCACertPath,
 		},
-	})
+	}
+	if err := setupSingleSession(exec, cli, cfg, projectID, spec); err != nil {
+		return err
+	}
+	return cloneOneRepoIfEmpty(exec, cfg, projectID, spec)
 }
 
 // toggleRepoVolume handles Field="Volume": true->false tears the
@@ -973,13 +1009,17 @@ func toggleRepoVolume(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, pro
 	}
 
 	guestPath := filepath.Join(guestHomeDir, label)
-	return setupSingleSession(exec, cli, cfg, projectID, sessionSpec{
+	spec := sessionSpec{
 		Label: label, GuestPath: guestPath, Ignore: after.Ignore,
 		Repo: &repoCloneSpec{
 			URL: derefOrEmpty(after.URL), Secret: after.Secret,
 			IronProxyURL: ironProxyURL, GuestCACertPath: guestCACertPath,
 		},
-	})
+	}
+	if err := setupSingleSession(exec, cli, cfg, projectID, spec); err != nil {
+		return err
+	}
+	return cloneOneRepoIfEmpty(exec, cfg, projectID, spec)
 }
 
 // applyMutagenSessionChange dispatches one BucketLive
