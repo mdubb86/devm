@@ -16,6 +16,7 @@ identifiers present afterward.
 Mutates the shared e2e daemon's launchd registration -> `install`
 marker (single-process phase, `just e2e-install`).
 """
+# NOTE: mutagen setup runs pre-install:/startup: under the tart exec transport
 from __future__ import annotations
 import subprocess
 import time

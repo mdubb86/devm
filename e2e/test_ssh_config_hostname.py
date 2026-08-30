@@ -21,6 +21,9 @@ Adapted from the task-7 brief's sketch:
     `Devm`/`Workspace` instances) rather than the brief's zero-arg
     `Devm()`/`Workspace("proj_ssh")`, which don't match the actual
     constructors in helpers/devm.py and helpers/workspace.py.
+
+sshd is unchanged; this test pins interactive ssh access, which is
+orthogonal to the mutagen transport swap.
 """
 from __future__ import annotations
 

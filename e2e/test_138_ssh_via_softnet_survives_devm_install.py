@@ -32,6 +32,9 @@ user-side is that SSH keeps working across the install cycle.
 Note on Touch ID prompts: this test's `devm install` adds a prompt on
 top of the harness-primed sudo credential. Same tradeoff as test_133 —
 the whole point is to exercise the install path with a live project.
+
+sshd is unchanged; this test pins interactive ssh access, which is
+orthogonal to the mutagen transport swap.
 """
 from __future__ import annotations
 

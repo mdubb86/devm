@@ -11,6 +11,10 @@ What this pins:
 What it doesn't cover (tested elsewhere):
   - Successful cold-start -> test_50.
   - Stop/teardown paths -> test_52, test_53.
+
+install: failure = teardown, same as today. Mutagen-setup failure is a
+NEW failure class handled parallel to this — see
+test_mutagen_setup_failure_fails_loud (added in Task 11).
 """
 from __future__ import annotations
 

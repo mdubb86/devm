@@ -20,6 +20,9 @@ its guest clone dir as to any named `volumes:` entry.
 The second cold-start also carries a `commands.<name>.startup: true`
 command that reads back `primary-sentinel` -- proof the startup phase
 runs after the workspace is hydrated from the Mac mirror, not before.
+Under the new lifecycle, the primary-sentinel arrives via mutagen sync
+BEFORE the check-restored command runs -- proving hydration precedes
+startup.
 """
 from __future__ import annotations
 

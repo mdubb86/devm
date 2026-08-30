@@ -1,5 +1,8 @@
 """83: install: steps run BEFORE iron-proxy enforcement is applied.
 
+install: still runs pre-enforcement, but NOW also post-mutagen-sync —
+the workspace it operates on is hydrated.
+
 Iron-proxy is meant to gate the workload (agents / services), not the
 developer's provisioning phase. This test pins that invariant:
 

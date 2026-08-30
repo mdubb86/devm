@@ -15,6 +15,9 @@ running VMs and restore ssh_config?) is NOT covered here — it would
 need a real `devm service restart` (see test_73/test_100 for that
 pattern), not a second cold-start of the same already-destroyed
 project.
+
+sshd is unchanged; this test pins interactive ssh access, which is
+orthogonal to the mutagen transport swap.
 """
 from __future__ import annotations
 

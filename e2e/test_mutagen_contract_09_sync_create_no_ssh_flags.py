@@ -13,6 +13,10 @@ internal/serviceapi/mutagen.go points HOME at a devm-controlled dir so
 the mutagen daemon's ssh child reads that config). This pin locks the
 'we CANNOT put ssh knobs on the sync-create CLI' constraint so a future
 'clever' refactor can't quietly reintroduce them and break silently.
+Under the tart-mutagen-ssh transport, ssh knobs are irrelevant
+regardless — mutagen shells out to our shim which ignores every `-o*`
+flag and dispatches via `tart exec`. This test's assertion (no ssh
+flags on the CLI) stays valid.
 
 Test 09 is a direct regression pin for the '-i /key -o Strict...'
 experiment that shipped for a couple of iterations before we discovered

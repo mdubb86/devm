@@ -17,6 +17,7 @@ having pre-populated the Mac mirror and/or guest target directly
 "user already has content on both sides and wants to bring it under
 mutagen" path apply_live's OpAdd guard exists for.
 """
+# NOTE: mutagen setup runs pre-install:/startup: under the tart exec transport
 from __future__ import annotations
 import subprocess
 

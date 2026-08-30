@@ -4,7 +4,10 @@ warm-attach branch on an already-provisioned VM.
 
 Exercises the composed provisioning script's boot-integrity gate
 behavior on the ordinary (non-adopt, non-daemon-less) path -- contrast
-with test_90 (daemon-less boot floor) and test_91 (adopt-in-place):
+with test_90 (daemon-less boot floor) and test_91 (adopt-in-place).
+Mutagen setup runs in the same open-egress window as `startup:`, ahead
+of `enforce` -- the workspace is hydrated before either the boot-
+integrity gate or the assertions below ever look at it:
 
   1. `test_normal_cold_start_and_startup_determinism`:
      - A project with `startup:`, a service, and `network.allow:

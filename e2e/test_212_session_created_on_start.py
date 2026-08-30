@@ -6,6 +6,7 @@ shape. With no other `repos:`/`volumes:` entries, BuildEntities
 produces exactly one SessionEntity (the primary), so exactly one
 session should exist under the project's name prefix.
 """
+# NOTE: mutagen setup runs pre-install:/startup: under the tart exec transport
 from __future__ import annotations
 import subprocess
 
