@@ -57,7 +57,7 @@ func TestHealIronProxies_RespawnsMissing(t *testing.T) {
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var spawnCalls int
 	var lastCfg IronProxyConfig
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, s *supervisor.Supervisor, id string, cfg IronProxyConfig, _ *Denials) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, s *supervisor.Supervisor, id string, cfg IronProxyConfig) error {
 		spawnCalls++
 		lastCfg = cfg
 		// Mark supervisor as running so the recheck-under-lock inside
@@ -66,7 +66,7 @@ func TestHealIronProxies_RespawnsMissing(t *testing.T) {
 		return nil
 	}
 
-	healIronProxies(context.Background(), identity.Prod, sup, nil, locks, nil)
+	healIronProxies(context.Background(), identity.Prod, sup, nil, locks)
 
 	assert.Equal(t, 1, spawnCalls, "should respawn exactly once for the missing project")
 	assert.Equal(t, []string{"api.example.com"}, lastCfg.AllowList,
@@ -126,14 +126,14 @@ func TestHealIronProxies_RespawnsSecretsProjects(t *testing.T) {
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var spawnCalls int
 	var lastCfg IronProxyConfig
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, s *supervisor.Supervisor, id string, cfg IronProxyConfig, _ *Denials) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, s *supervisor.Supervisor, id string, cfg IronProxyConfig) error {
 		spawnCalls++
 		lastCfg = cfg
 		s.Adopt(supervisor.Key{ProjectID: id, Role: supervisor.RoleProxy}, 1)
 		return nil
 	}
 
-	healIronProxies(context.Background(), identity.Prod, sup, nil, locks, nil)
+	healIronProxies(context.Background(), identity.Prod, sup, nil, locks)
 
 	assert.Equal(t, 1, spawnCalls, "secrets-injecting project should be respawned, not skipped")
 	require.Len(t, lastCfg.Secrets, 1)
@@ -193,14 +193,14 @@ func TestHealIronProxies_RespawnUsesSnapshotMacCwd(t *testing.T) {
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var spawnCalls int
 	var lastCfg IronProxyConfig
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, s *supervisor.Supervisor, id string, cfg IronProxyConfig, _ *Denials) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, s *supervisor.Supervisor, id string, cfg IronProxyConfig) error {
 		spawnCalls++
 		lastCfg = cfg
 		s.Adopt(supervisor.Key{ProjectID: id, Role: supervisor.RoleProxy}, 1)
 		return nil
 	}
 
-	healIronProxies(context.Background(), identity.Prod, sup, nil, locks, nil)
+	healIronProxies(context.Background(), identity.Prod, sup, nil, locks)
 
 	assert.Equal(t, 1, spawnCalls)
 	require.Len(t, lastCfg.Secrets, 1, "MacCwd must resolve the URL-nil primary's host so its secret is injected")
@@ -259,12 +259,12 @@ func TestHealIronProxies_SkipsHealthyProject(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	spawnCalls := 0
-	spawnIronProxyFn = func(context.Context, identity.Config, *supervisor.Supervisor, string, IronProxyConfig, *Denials) error {
+	spawnIronProxyFn = func(context.Context, identity.Config, *supervisor.Supervisor, string, IronProxyConfig) error {
 		spawnCalls++
 		return nil
 	}
 
-	healIronProxies(context.Background(), identity.Prod, sup, nil, locks, nil)
+	healIronProxies(context.Background(), identity.Prod, sup, nil, locks)
 	assert.Equal(t, 0, spawnCalls, "healthy iron-proxy shouldn't be respawned")
 }
 

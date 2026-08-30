@@ -82,7 +82,7 @@ const (
 // health, or persisting the snapshot returns 500 and leaves the
 // snapshot untouched (except the two success/no-op paths, which
 // deliberately advance SecretHashes).
-func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *ProjectLocks, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials, proxy *ProxyServer) {
+func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *ProjectLocks, sup *supervisor.Supervisor, tr *tart.Tart, proxy *ProxyServer) {
 	s.Register("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -171,7 +171,7 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 			}
 		}
 
-		if err := spawnIronProxyFn(r.Context(), cfg, sup, req.Name, newCfg, denials); err != nil {
+		if err := spawnIronProxyFn(r.Context(), cfg, sup, req.Name, newCfg); err != nil {
 			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)
 			return
 		}

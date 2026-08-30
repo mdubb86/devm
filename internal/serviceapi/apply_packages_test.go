@@ -48,7 +48,7 @@ func newPackagesEventRecorder(t *testing.T, projectID string, spawnFailOn int, e
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 
 	n := 0
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *Denials) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig) error {
 		n++
 		kind := "spawn:orig"
 		if n == 1 {

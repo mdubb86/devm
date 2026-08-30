@@ -35,7 +35,6 @@ func runIronProxyWatchdog(
 	sup *supervisor.Supervisor,
 	proxy *ProxyServer,
 	locks *ProjectLocks,
-	denials *Denials,
 ) error {
 	tick := time.NewTicker(ironProxyWatchdogInterval)
 	defer tick.Stop()
@@ -44,7 +43,7 @@ func runIronProxyWatchdog(
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-tick.C:
-			healIronProxies(ctx, cfg, sup, proxy, locks, denials)
+			healIronProxies(ctx, cfg, sup, proxy, locks)
 		}
 	}
 }
@@ -63,14 +62,13 @@ func healIronProxies(
 	sup *supervisor.Supervisor,
 	proxy *ProxyServer,
 	locks *ProjectLocks,
-	denials *Denials,
 ) {
 	for _, projectID := range ironProxyState.keys() {
 		health := computeProxyHealth(cfg, sup, proxy, projectID)
 		if health.Status != ProxyMissing {
 			continue
 		}
-		if err := respawnIronProxyFromState(ctx, cfg, sup, locks, denials, projectID); err != nil {
+		if err := respawnIronProxyFromState(ctx, cfg, sup, locks, projectID); err != nil {
 			daemonlog.Errorf("serviceapi: iron-proxy watchdog: respawn %s: %v", projectID, err)
 			continue
 		}
@@ -92,7 +90,6 @@ func respawnIronProxyFromState(
 	cfg identity.Config,
 	sup *supervisor.Supervisor,
 	locks *ProjectLocks,
-	denials *Denials,
 	projectID string,
 ) error {
 	unlock := locks.Lock(projectID)
@@ -120,7 +117,7 @@ func respawnIronProxyFromState(
 		}
 		return fmt.Errorf("rebuild config: %w", err)
 	}
-	return spawnIronProxyFn(ctx, cfg, sup, projectID, proxyCfg, denials)
+	return spawnIronProxyFn(ctx, cfg, sup, projectID, proxyCfg)
 }
 
 // proxy_nilForRecheck lets the recheck under the lock use a nil

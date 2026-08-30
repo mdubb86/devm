@@ -379,8 +379,9 @@ func shutdownSoftnet(projectID string) {
 // RegisterVMHandlers wires /vm/start, /vm/stop, /vm/status, and
 // /denials onto the given server. sup manages the VM process
 // lifecycle; tr wraps the tart binary for clone, list, run, and IP
-// queries. denials is the daemon-scoped tracker fed by the iron-proxy
-// audit tap — may be nil in tests that don't exercise denial paths.
+// queries. /denials reads from the package-level policyAuthority,
+// which records reject decisions itself (see PolicyAuthority.SetAllowlist,
+// policyService.TransformRequest) — no separate tracker is threaded in.
 // ntpPort is the UDP port the daemon's SNTP responder is listening on;
 // under ENFORCED policy, softnet forwards the guest's outbound UDP:123
 // to this port so systemd-timesyncd resyncs from the host clock
@@ -393,7 +394,7 @@ func shutdownSoftnet(projectID string) {
 // tears them down. May be nil in tests that don't exercise the proxy
 // lifecycle — StartProjectListeners/StopProjectListeners are skipped
 // in that case.
-func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, denials *Denials, ntpPort int, locks *ProjectLocks, proxy *ProxyServer) {
+func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, ntpPort int, locks *ProjectLocks, proxy *ProxyServer) {
 	s.Register("/vm/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -625,7 +626,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			AllowList:  req.AllowList,
 			Secrets:    ironSecrets,
 		}
-		if err := SpawnIronProxy(r.Context(), cfg, sup, req.Name, proxyCfg, denials); err != nil {
+		if err := SpawnIronProxy(r.Context(), cfg, sup, req.Name, proxyCfg); err != nil {
 			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -1138,11 +1139,9 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	// /denials — read-only view of iron-proxy allow-list rejects for a
-	// project. Sorted by count desc. Empty array is a normal state (no
-	// rejects yet, or the process just respawned). Requires the tracker
-	// to be wired — if not, we still respond 200 with [] so the CLI has a
-	// uniform shape regardless of daemon build.
+	// /denials — read-only view of policy-authority allow-list rejects
+	// for a project. Sorted by count desc. Empty array is a normal state
+	// (no rejects yet, or the project's allow-list was just replaced).
 	s.Register("/denials", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
@@ -1153,10 +1152,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, "name query param required", http.StatusBadRequest)
 			return
 		}
-		var snap []Denial
-		if denials != nil {
-			snap = denials.Snapshot(name)
-		}
+		snap := policyAuthority.SnapshotDenials(name)
 		if snap == nil {
 			snap = []Denial{}
 		}

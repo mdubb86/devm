@@ -23,10 +23,9 @@ type PackagesApplier interface {
 
 // realPackagesApplier is the production impl, wired by runner.go.
 type realPackagesApplier struct {
-	cfg     identity.Config
-	tr      *tart.Tart
-	sup     *supervisor.Supervisor
-	denials *Denials
+	cfg identity.Config
+	tr  *tart.Tart
+	sup *supervisor.Supervisor
 
 	// execScript is the test-injection seam for running the apt
 	// converge script inside the guest. nil defaults to the
@@ -175,7 +174,7 @@ func (a *realPackagesApplier) respawn(ctx context.Context, projectID string, pro
 			return false, fmt.Errorf("stop iron-proxy: %w", err)
 		}
 	}
-	if err := spawnIronProxyFn(ctx, a.cfg, a.sup, projectID, proxyCfg, a.denials); err != nil {
+	if err := spawnIronProxyFn(ctx, a.cfg, a.sup, projectID, proxyCfg); err != nil {
 		return false, fmt.Errorf("spawn iron-proxy: %w", err)
 	}
 	if !a.wait()(proxyCfg.HTTPSListen) {

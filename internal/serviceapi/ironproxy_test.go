@@ -83,7 +83,7 @@ func TestSpawnIronProxy_WrapsWithSetsidShim(t *testing.T) {
 		CACertPath:  "/tmp/ca.crt",
 		CAKeyPath:   "/tmp/ca.key",
 	}
-	err := SpawnIronProxy(context.Background(), identity.Prod, sup, "p-shim-test", proxyCfg, nil)
+	err := SpawnIronProxy(context.Background(), identity.Prod, sup, "p-shim-test", proxyCfg)
 	require.NoError(t, err)
 	require.NotNil(t, gotCmd)
 
@@ -124,7 +124,7 @@ func TestSpawnIronProxy_ServesPolicySocketAndSetsTarget(t *testing.T) {
 		CAKeyPath:   "/tmp/ca.key",
 		AllowList:   []string{"example.com"},
 	}
-	require.NoError(t, SpawnIronProxy(context.Background(), identity.Prod, sup, projectID, proxyCfg, nil))
+	require.NoError(t, SpawnIronProxy(context.Background(), identity.Prod, sup, projectID, proxyCfg))
 
 	sockPath, err := IronPolicySocketPath(identity.Prod, projectID)
 	require.NoError(t, err)
