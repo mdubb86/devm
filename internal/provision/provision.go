@@ -23,6 +23,7 @@ import (
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/guestbin"
+	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -291,17 +292,23 @@ func (p *Provisioner) buildBundle() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("render commands manifest: %w", err)
 	}
+	mutagenAgent, err := mutagen.LinuxArm64Agent()
+	if err != nil {
+		return nil, fmt.Errorf("extract mutagen agent: %w", err)
+	}
 	in := devmbundle.BuildInput{
-		Cfg:                 p.Cfg,
-		RepoRoot:            p.WorkspaceVMPath,
-		DaemonRuntimeDir:    p.DaemonRuntimeDir,
-		CARootPEM:           p.CARootPEM,
-		SSHAuthorizedPubkey: p.SSHAuthorizedPubkey,
-		SSHHostPriv:         p.SSHHostPriv,
-		SSHHostPub:          p.SSHHostPub,
-		Pop:                 guestbin.Pop(),
-		CommandsManifest:    commandsManifest,
-		Run:                 guestbin.Run(),
+		Cfg:                    p.Cfg,
+		RepoRoot:               p.WorkspaceVMPath,
+		DaemonRuntimeDir:       p.DaemonRuntimeDir,
+		CARootPEM:              p.CARootPEM,
+		SSHAuthorizedPubkey:    p.SSHAuthorizedPubkey,
+		SSHHostPriv:            p.SSHHostPriv,
+		SSHHostPub:             p.SSHHostPub,
+		Pop:                    guestbin.Pop(),
+		CommandsManifest:       commandsManifest,
+		Run:                    guestbin.Run(),
+		MutagenAgentLinuxArm64: mutagenAgent,
+		MutagenVersion:         strings.TrimPrefix(mutagen.EmbeddedVersion(), "v"),
 	}
 	if p.Cfg.Docker {
 		in.DockerRuncShim = docker.Shim()
