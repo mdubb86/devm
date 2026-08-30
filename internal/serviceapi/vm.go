@@ -14,10 +14,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mdubb86/devm/internal/caenv"
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/softnet"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -145,6 +148,29 @@ type VMEnforcementConfigResponse struct{}
 // /vm/begin-provisioning and /vm/end-provisioning.
 type VMApplyEgressEnforcementRequest struct {
 	Name string `json:"name"`
+}
+
+// VMVolumeSyncRequest is the body shape for POST /vm/volume-sync.
+// Cfg carries the project's full config so the daemon can build the
+// mutagen entity list (BuildEntities) itself — it has no other
+// visibility into the project's volumes/repos configuration.
+type VMVolumeSyncRequest struct {
+	Name string `json:"name"`
+	// RepoRoot is the project's Mac-side working directory absolute
+	// path.
+	RepoRoot string        `json:"repo_root"`
+	Cfg      schema.Config `json:"cfg"`
+}
+
+// VMRepoCloneRequest is the body shape for POST /vm/repo-clone.
+type VMRepoCloneRequest struct {
+	Name     string        `json:"name"`
+	RepoRoot string        `json:"repo_root"`
+	Cfg      schema.Config `json:"cfg"`
+	// TunnelPort is iron-proxy's CONNECT-capable tunnel_listen port —
+	// combined with softnet.NATAliasIP it forms the guest-visible
+	// HTTP_PROXY URL a guest-side git clone needs.
+	TunnelPort int `json:"tunnel_port"`
 }
 
 // VMStatusResponse is the body shape for GET /vm/status.
@@ -697,12 +723,15 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		writeJSON(w, VMEnforcementConfigResponse{})
 	})
 
-	// /vm/begin-provisioning flips a project's softnet control socket to OPEN —
-	// unrestricted egress for the provisioning window (apt, install:,
-	// templates, startup:) before the enforced allowlist is in place.
-	// Called post-RunBundle and pre-RunUser to gate the user's own provisioning
-	// steps. softnet boots LOCKED, so cold-start provisioning would otherwise run
-	// with no egress at all.
+	// /vm/begin-provisioning flips a project's softnet control socket to
+	// ENFORCED-behavior (:80/:443 route to iron-proxy) and the egress
+	// policy authority to ModePassthrough — the provisioning window (apt,
+	// install:, templates, startup:) runs with iron-proxy already in the
+	// traffic path, gated only by the authority's passthrough mode rather
+	// than the real allowlist. Called post-RunBundle (the guest trust
+	// store already has the iron-proxy CA) and pre-RunUser. softnet boots
+	// LOCKED, so cold-start provisioning would otherwise run with no
+	// egress at all.
 	s.Register("/vm/begin-provisioning", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -728,25 +757,106 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			return
 		}
 
+		policyAuthority.SetMode(req.Name, ModePassthrough)
+
 		// Full ForwardTargets on every push — setPolicy keeps the previous
 		// endpoint on nil, so a partial push would silently clobber fields.
-		// Under OPEN only the guest-origin fields are consulted (`.test`
-		// works during the provisioning window); the egress fields ride
-		// along inert.
 		openInfo, _ := ironProxyState.get(req.Name)
-		if err := newSoftnetClient(sock).setPolicy("OPEN", endpointFrom(openInfo, ntpPort)); err != nil {
-			http.Error(w, fmt.Sprintf("flip softnet open: %v", err), http.StatusInternalServerError)
+		if err := newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(openInfo, ntpPort)); err != nil {
+			http.Error(w, fmt.Sprintf("flip softnet enforced: %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// /vm/end-provisioning flips a project's softnet control socket to ENFORCED,
-	// pointing egress at iron-proxy's loopback endpoint and the daemon's SNTP
-	// responder. Called pre-RunEnforced to gate egress enforcement post-provisioning.
-	// This is the sole egress gate under softnet — there is no guest-side
-	// nftables/dnsmasq step left to run here.
+	// /vm/volume-sync establishes a mutagen sync session for every entity
+	// (volumes and repos alike) — the uniform half of workspace hydration.
+	// Called after /vm/begin-provisioning and before /vm/repo-clone.
+	s.Register("/vm/volume-sync", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMVolumeSyncRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		entities, err := BuildEntities(&req.Cfg, req.RepoRoot)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("build entities: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		mutagenBin, err := mutagenEnsureFn(cfg.RuntimeDir())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("mutagen: extract binary: %v", err), http.StatusInternalServerError)
+			return
+		}
+		mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(cfg)}
+
+		guestSSHTarget := "devm-" + req.Name
+		if err := SetupVolumesPhase(r.Context(), mutagenCLI, cfg, req.Name, entities,
+			tartGuestExec(r.Context(), tr, req.Name), guestSSHTarget); err != nil {
+			http.Error(w, fmt.Sprintf("volume sync: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// /vm/repo-clone runs a cold-start git clone, through iron-proxy, for
+	// every repo entity where the relevant sides are empty. Called after
+	// /vm/volume-sync — the mutagen sessions it establishes pick up the
+	// freshly-cloned guest content on their own.
+	s.Register("/vm/repo-clone", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMRepoCloneRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		entities, err := BuildEntities(&req.Cfg, req.RepoRoot)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("build entities: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		ironProxyURL := fmt.Sprintf("http://%s:%d", softnet.NATAliasIP, req.TunnelPort)
+		if err := SetupReposPhase(r.Context(), cfg, req.Name, entities,
+			tartGuestExec(r.Context(), tr, req.Name), ironProxyURL, guestGitCACertPath()); err != nil {
+			http.Error(w, fmt.Sprintf("repo clone: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// /vm/end-provisioning flips the egress policy authority back to
+	// ModeRestricted — the real allowlist governs from here on. Called
+	// pre-RunEnforced. Softnet stays in ENFORCED-behavior (iron-proxy
+	// stays in the traffic path); the authority mode is the only gate
+	// this handler changes.
 	s.Register("/vm/end-provisioning", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -765,25 +875,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		unlock := locks.Lock(req.Name)
 		defer unlock()
 
-		info, ok := ironProxyState.get(req.Name)
-		if !ok {
-			http.Error(w, "iron-proxy state missing — was /vm/start called for this project?",
-				http.StatusPreconditionFailed)
-			return
-		}
-
-		sock := softnetState.get(req.Name)
-		if sock == "" {
-			http.Error(w, "softnet control socket missing — was /vm/start called for this project?",
-				http.StatusPreconditionFailed)
-			return
-		}
-
-		if err := sendSoftnetEnforced(sock, info, ntpPort); err != nil {
-			http.Error(w, fmt.Sprintf("flip softnet enforced: %v", err), http.StatusInternalServerError)
-			return
-		}
-
+		policyAuthority.SetMode(req.Name, ModeRestricted)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -1091,6 +1183,30 @@ func prependPathEnv(env []string, dir string) []string {
 		}
 	}
 	return append(env, "PATH="+dir)
+}
+
+// tartGuestExec returns a GuestExec that runs script inside name via
+// `tart exec -i <name> sudo bash -s`, script on stdin — the transport
+// SetupVolumesPhase/SetupReposPhase need for their guest-side scans,
+// clones, and mirror-dir checks.
+func tartGuestExec(ctx context.Context, tr *tart.Tart, name string) GuestExec {
+	return func(script string) (stdout, stderr string, exitCode int, err error) {
+		res := tr.ExecStdin(ctx, name, strings.NewReader(script), []string{"sudo", "bash", "-s"})
+		return res.Stdout, res.Stderr, res.ExitCode, nil
+	}
+}
+
+// guestGitCACertPath returns the guest-side CA bundle path git trusts
+// for a proxied clone — the merged system trust store devm exports as
+// GIT_SSL_CAINFO (see internal/caenv's "SSL_CERT_FILE trap" warning
+// against pointing at the raw devm.crt instead of the merged bundle).
+func guestGitCACertPath() string {
+	for _, v := range caenv.Vars {
+		if v.Key == "GIT_SSL_CAINFO" {
+			return v.Value
+		}
+	}
+	return ""
 }
 
 // sendSoftnetEnforced flips a project's softnet control socket to

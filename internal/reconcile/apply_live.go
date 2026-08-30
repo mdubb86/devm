@@ -199,7 +199,7 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 // already imports reconcile for Change/ApplyLive, so the reverse import
 // would cycle), so applyMutagenSessionChange gets its own copy of this
 // seam; ApplyLive wires it from *tart.Tart the same way
-// serviceapi.setupMutagenSessions wires the real one from tart exec.
+// serviceapi.tartGuestExec wires the real one from tart exec.
 type GuestExec func(script string) (stdout, stderr string, exitCode int, err error)
 
 // guestHomeDir is the guest-side parent for every repo clone — mirrors
@@ -256,15 +256,15 @@ func mutagenSessionName(projectID, label string) string {
 // which resolves per-project HostKeyAlias / UserKnownHostsFile /
 // IdentityFile from the alias's Host block; passing the FQDN matches
 // no Host stanza, ssh falls back to default known_hosts, and mutagen
-// sync create fails with "Host key verification failed". Mirrors
-// serviceapi.setupMutagenSessions.
+// sync create fails with "Host key verification failed". Mirrors the
+// guestSSHTarget construction in serviceapi's /vm/volume-sync handler.
 func guestSSHTarget(cfg identity.Config, projectID string) string {
 	_ = cfg.TLD
 	return "devm-" + projectID
 }
 
 // guestGitCACertPath returns the guest-side CA bundle path git trusts
-// for a proxied clone — mirrors orchestrator's guestGitCACertPath.
+// for a proxied clone — mirrors serviceapi.guestGitCACertPath.
 // caenv.Vars is the single source of truth for this value; this just
 // indexes into it.
 func guestGitCACertPath() string {

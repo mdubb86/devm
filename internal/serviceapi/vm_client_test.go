@@ -436,14 +436,13 @@ func TestClientEnforcementConfig_MissingProjectState(t *testing.T) {
 	assert.Contains(t, err.Error(), "enforcement-config")
 }
 
-// TestClientBeginProvisioning_SendsPolicyOpen verifies POST /vm/begin-provisioning flips
-// the project's softnet control socket to OPEN and carries the full
-// forward_targets endpoint — including the guest-origin ports — so `.test`
-// resolves inside the guest during the provisioning window, before
-// /vm/end-provisioning ever runs. Egress itself is unblocked under
-// OPEN regardless of forward_targets; only the guest-origin fields are
-// consulted while the policy is OPEN.
-func TestClientBeginProvisioning_SendsPolicyOpen(t *testing.T) {
+// TestClientBeginProvisioning_SendsPolicyEnforced verifies POST
+// /vm/begin-provisioning flips the project's softnet control socket to
+// ENFORCED-behavior and carries the full forward_targets endpoint —
+// including the guest-origin ports — so `.test` resolves inside the
+// guest during the provisioning window, before /vm/end-provisioning
+// ever runs.
+func TestClientBeginProvisioning_SendsPolicyEnforced(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	tr := tart.New()
@@ -489,16 +488,16 @@ func TestClientBeginProvisioning_SendsPolicyOpen(t *testing.T) {
 
 	line := <-got
 	assert.Contains(t, line, `"op":"setPolicy"`)
-	assert.Contains(t, line, `"policy":"OPEN"`)
+	assert.Contains(t, line, `"policy":"ENFORCED"`)
 
 	var msg struct {
 		ForwardTargets Endpoint `json:"forward_targets"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(line), &msg))
 	assert.Equal(t, ironProxyListenAddr(39001), msg.ForwardTargets.GuestHTTP,
-		"OPEN must carry the guest-origin HTTP port so `.test` resolves during provisioning")
+		"begin-provisioning must carry the guest-origin HTTP port so `.test` resolves during provisioning")
 	assert.Equal(t, ironProxyListenAddr(39002), msg.ForwardTargets.GuestHTTPS,
-		"OPEN must carry the guest-origin HTTPS port so `.test` resolves during provisioning")
+		"begin-provisioning must carry the guest-origin HTTPS port so `.test` resolves during provisioning")
 }
 
 // TestClientBeginProvisioning_MissingSoftnetState verifies /vm/begin-provisioning 412s
@@ -525,11 +524,12 @@ func TestClientBeginProvisioning_MissingSoftnetState(t *testing.T) {
 	assert.Contains(t, err.Error(), "softnet control socket missing")
 }
 
-// TestClientEndProvisioning_MissingSoftnetState verifies
-// /vm/end-provisioning 412s when softnetState has no entry for the
-// project, even though ironProxyState does — folds the T6-review finding
-// that softnetState.get was previously unchecked on this handler too.
-func TestClientEndProvisioning_MissingSoftnetState(t *testing.T) {
+// TestClientEndProvisioning_NoSoftnetStateRequired verifies
+// /vm/end-provisioning succeeds even when neither softnetState nor
+// ironProxyState has an entry for the project — the handler is
+// authority-mode-only: softnet stays in ENFORCED-behavior from
+// begin-provisioning onward and is never touched here.
+func TestClientEndProvisioning_NoSoftnetStateRequired(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	tr := tart.New()
@@ -538,20 +538,97 @@ func TestClientEndProvisioning_MissingSoftnetState(t *testing.T) {
 	srv, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
-	ironProxyState.put("proj-enforce-nosock", projectInfo{
-		HTTPPort: 8080, HTTPSPort: 8443, DNSPort: 8053,
-	})
-	t.Cleanup(func() { ironProxyState.del("proj-enforce-nosock") })
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	require.NoError(t, c.EndProvisioning(ctx, "proj-no-state-at-all"))
+}
+
+// TestClientVolumeSync_NoEntities_Succeeds verifies POST /vm/volume-sync
+// succeeds (204) for a project config with no repos or volumes —
+// SetupVolumesPhase's entity loop no-ops, so the handler never needs a
+// live mutagen daemon or guest to reach. mutagenEnsureFn is still faked
+// (the handler resolves the binary path unconditionally) so the test
+// never touches a real runtime dir.
+func TestClientVolumeSync_NoEntities_Succeeds(t *testing.T) {
+	origEnsure := mutagenEnsureFn
+	mutagenEnsureFn = func(string) (string, error) { return "/fake/bin/mutagen", nil }
+	t.Cleanup(func() { mutagenEnsureFn = origEnsure })
+
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	tr := tart.New()
+	tr.Path = "false"
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err := c.EndProvisioning(ctx, "proj-enforce-nosock")
+	require.NoError(t, c.VolumeSync(ctx, "proj-volume-sync", schema.Config{}, "/tmp/repo-root"))
+}
+
+// TestClientVolumeSync_MissingName_BadRequest verifies POST
+// /vm/volume-sync 400s without a name, same as the other /vm/*
+// handlers.
+func TestClientVolumeSync_MissingName_BadRequest(t *testing.T) {
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	tr := tart.New()
+	tr.Path = "false"
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := c.VolumeSync(ctx, "", schema.Config{}, "/tmp/repo-root")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "vm/end-provisioning")
-	assert.Contains(t, err.Error(), "412")
-	assert.Contains(t, err.Error(), "softnet control socket missing")
+	assert.Contains(t, err.Error(), "name required")
+}
+
+// TestClientRepoClone_NoEntities_Succeeds verifies POST /vm/repo-clone
+// succeeds (204) for a project config with no repos — SetupReposPhase's
+// entity loop no-ops, so the handler never needs to reach a live guest.
+func TestClientRepoClone_NoEntities_Succeeds(t *testing.T) {
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	tr := tart.New()
+	tr.Path = "false"
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	require.NoError(t, c.RepoClone(ctx, "proj-repo-clone", schema.Config{}, "/tmp/repo-root", 39001))
+}
+
+// TestClientRepoClone_MissingName_BadRequest verifies POST
+// /vm/repo-clone 400s without a name.
+func TestClientRepoClone_MissingName_BadRequest(t *testing.T) {
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	tr := tart.New()
+	tr.Path = "false"
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := c.RepoClone(ctx, "", schema.Config{}, "/tmp/repo-root", 39001)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "name required")
 }
 
 // TestClientApplyIronProxy_ReadsResponse verifies Client.ApplyIronProxy
