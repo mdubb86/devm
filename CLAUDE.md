@@ -1,14 +1,12 @@
+@./PRINCIPLES.md
+
 # devm — repo-specific rules
 
 Load-bearing conventions for anyone (human or Claude) working in this
-repo. If it's a *general* engineering preference, it lives in memory or
-user CLAUDE.md; this file is only for rules whose violation causes
-real, non-obvious damage in *this* repo.
-
-**Read [PRINCIPLES.md](PRINCIPLES.md) first — it is law here.** General
-engineering practice (review gaps close before merge, fail loudly, one
-write path, comments explain why, and the rest) lives there; this file
-only adds the devm-specific rules below.
+repo. If it's a *general* engineering preference, it lives in
+PRINCIPLES.md (imported above — it is law here) or user CLAUDE.md; this
+file is only for rules whose violation causes real, non-obvious damage
+in *this* repo.
 
 ## Never install a dev build into the live devm daemon
 
