@@ -485,7 +485,7 @@ func TestClientOpenEgress_SendsPolicyOpen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	require.NoError(t, c.OpenEgress(ctx, "proj-open"))
+	require.NoError(t, c.BeginProvisioning(ctx, "proj-open"))
 
 	line := <-got
 	assert.Contains(t, line, `"op":"setPolicy"`)
@@ -501,11 +501,11 @@ func TestClientOpenEgress_SendsPolicyOpen(t *testing.T) {
 		"OPEN must carry the guest-origin HTTPS port so `.test` resolves during provisioning")
 }
 
-// TestClientOpenEgress_MissingSoftnetState verifies /vm/open-egress 412s
+// TestClientBeginProvisioning_MissingSoftnetState verifies /vm/begin-provisioning 412s
 // when the softnet control socket was never registered for this project
 // (i.e. /vm/start was never called) — folds the T6-review finding that
 // softnetState.get was previously unchecked.
-func TestClientOpenEgress_MissingSoftnetState(t *testing.T) {
+func TestClientBeginProvisioning_MissingSoftnetState(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	tr := tart.New()
@@ -518,18 +518,18 @@ func TestClientOpenEgress_MissingSoftnetState(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err := c.OpenEgress(ctx, "nonexistent-project")
+	err := c.BeginProvisioning(ctx, "nonexistent-project")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "vm/open-egress")
+	assert.Contains(t, err.Error(), "vm/begin-provisioning")
 	assert.Contains(t, err.Error(), "412")
 	assert.Contains(t, err.Error(), "softnet control socket missing")
 }
 
-// TestClientApplyEgressEnforcement_MissingSoftnetState verifies
-// /vm/apply-egress-enforcement 412s when softnetState has no entry for the
+// TestClientEndProvisioning_MissingSoftnetState verifies
+// /vm/end-provisioning 412s when softnetState has no entry for the
 // project, even though ironProxyState does — folds the T6-review finding
 // that softnetState.get was previously unchecked on this handler too.
-func TestClientApplyEgressEnforcement_MissingSoftnetState(t *testing.T) {
+func TestClientEndProvisioning_MissingSoftnetState(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	tr := tart.New()
@@ -547,9 +547,9 @@ func TestClientApplyEgressEnforcement_MissingSoftnetState(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err := c.ApplyEgressEnforcement(ctx, "proj-enforce-nosock")
+	err := c.EndProvisioning(ctx, "proj-enforce-nosock")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "vm/apply-egress-enforcement")
+	assert.Contains(t, err.Error(), "vm/end-provisioning")
 	assert.Contains(t, err.Error(), "412")
 	assert.Contains(t, err.Error(), "softnet control socket missing")
 }

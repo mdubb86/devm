@@ -37,14 +37,14 @@ type fakeVMAdmin struct {
 	applyIronProxyRespSet bool // distinguishes an explicit all-false resp from "unset"
 	applyIronProxyErr     error
 
-	openEgressCalled             int
-	openEgressErr                error
-	applyEgressEnforcementCalled int
-	applyEgressEnforcementErr    error
-	// callOrder records the relative order OpenEgress/ApplyEgressEnforcement
+	beginProvisioningCalled int
+	beginProvisioningErr    error
+	endProvisioningCalled   int
+	endProvisioningErr      error
+	// callOrder records the relative order BeginProvisioning/EndProvisioning
 	// were invoked in, for asserting they bracket the RunBundle/RunUser/
-	// RunEnforced execs — entries append "open-egress" /
-	// "apply-egress-enforcement".
+	// RunEnforced execs — entries append "begin-provisioning" /
+	// "end-provisioning".
 	callOrder []string
 	// logPath, when set, also appends the same markers into a shared file
 	// that the fake tart binary writes its own invocations into, so a test
@@ -96,22 +96,22 @@ func (f *fakeVMAdmin) ApplyIronProxy(_ context.Context, req serviceapi.VMApplyIr
 	return serviceapi.VMApplyIronProxyResponse{Applied: true, VMRunning: true}, nil
 }
 
-func (f *fakeVMAdmin) OpenEgress(_ context.Context, _ string) error {
+func (f *fakeVMAdmin) BeginProvisioning(_ context.Context, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.openEgressCalled++
-	f.callOrder = append(f.callOrder, "open-egress")
-	f.appendLog("OPEN-EGRESS")
-	return f.openEgressErr
+	f.beginProvisioningCalled++
+	f.callOrder = append(f.callOrder, "begin-provisioning")
+	f.appendLog("BEGIN-PROVISIONING")
+	return f.beginProvisioningErr
 }
 
-func (f *fakeVMAdmin) ApplyEgressEnforcement(_ context.Context, _ string) error {
+func (f *fakeVMAdmin) EndProvisioning(_ context.Context, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.applyEgressEnforcementCalled++
-	f.callOrder = append(f.callOrder, "apply-egress-enforcement")
-	f.appendLog("APPLY-EGRESS-ENFORCEMENT")
-	return f.applyEgressEnforcementErr
+	f.endProvisioningCalled++
+	f.callOrder = append(f.callOrder, "end-provisioning")
+	f.appendLog("END-PROVISIONING")
+	return f.endProvisioningErr
 }
 
 // appendLog writes a marker line into f.logPath, if set, interleaving with
@@ -207,7 +207,7 @@ func fakeInstantMutagenSync(t *testing.T) {
 // already running AND devm.target is active (fully provisioned), the
 // daemon is NOT asked to start it again, no provisioning runs, the
 // user shell is spawned via tart exec, and — Fix 2, defense-in-depth —
-// ApplyEgressEnforcement is re-asserted before attach even though this VM
+// EndProvisioning is re-asserted before attach even though this VM
 // should already be enforced from its own cold start.
 func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
 	repoRoot := t.TempDir()
@@ -232,7 +232,7 @@ func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
 
 	admin.mu.Lock()
 	assert.Equal(t, 0, admin.startCalled, "StartVM must NOT be called on the warm path")
-	assert.Equal(t, 1, admin.applyEgressEnforcementCalled,
+	assert.Equal(t, 1, admin.endProvisioningCalled,
 		"warm attach must re-assert ENFORCED before attaching (belt-and-suspenders)")
 	admin.mu.Unlock()
 
@@ -365,13 +365,13 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 
 // TestRunShellColdPath_FlipsEgressAroundProvision verifies the Critical fix:
 // the daemon-side softnet OPEN→ENFORCED flip happens BETWEEN RunUser's and
-// RunEnforced's execs, not around a single one — OpenEgress, then
+// RunEnforced's execs, not around a single one — BeginProvisioning, then
 // RunBundle's exec, then RunUser's exec (apt/install:/templates/startup:),
-// then ApplyEgressEnforcement, then RunEnforced's exec (services +
+// then EndProvisioning, then RunEnforced's exec (services +
 // devm.target). Without this order services would come up under open
 // (unenforced) egress every boot.
 //
-// Both fakeVMAdmin (OpenEgress/ApplyEgressEnforcement) and the fake tart
+// Both fakeVMAdmin (BeginProvisioning/EndProvisioning) and the fake tart
 // binary (the three provisioning ExecStreams' `bash -c`) append markers to
 // the same log file, giving one ordered timeline across both fakes. The
 // fake logs each invocation's full argv verbatim, and a multi-line script
@@ -407,9 +407,9 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 	assert.Equal(t, 0, rc)
 
 	admin.mu.Lock()
-	assert.Equal(t, 1, admin.openEgressCalled, "OpenEgress must be called exactly once")
-	assert.Equal(t, 1, admin.applyEgressEnforcementCalled, "ApplyEgressEnforcement must be called exactly once")
-	assert.Equal(t, []string{"open-egress", "apply-egress-enforcement"}, admin.callOrder)
+	assert.Equal(t, 1, admin.beginProvisioningCalled, "BeginProvisioning must be called exactly once")
+	assert.Equal(t, 1, admin.endProvisioningCalled, "EndProvisioning must be called exactly once")
+	assert.Equal(t, []string{"begin-provisioning", "end-provisioning"}, admin.callOrder)
 	admin.mu.Unlock()
 
 	logBytes, err := os.ReadFile(logPath)
@@ -420,9 +420,9 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 	bashCSeen := 0
 	for i, line := range lines {
 		switch {
-		case line == "OPEN-EGRESS":
+		case line == "BEGIN-PROVISIONING":
 			openIdx = i
-		case line == "APPLY-EGRESS-ENFORCEMENT":
+		case line == "END-PROVISIONING":
 			enforceIdx = i
 		case strings.Contains(line, "bash -c"):
 			bashCSeen++
@@ -436,27 +436,27 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 			}
 		}
 	}
-	require.GreaterOrEqual(t, openIdx, 0, "OPEN-EGRESS marker must be present")
+	require.GreaterOrEqual(t, openIdx, 0, "BEGIN-PROVISIONING marker must be present")
 	require.GreaterOrEqual(t, runBundleIdx, 0, "RunBundle's bash -c exec must be present")
 	require.GreaterOrEqual(t, runUserIdx, 0, "RunUser's bash -c exec must be present")
-	require.GreaterOrEqual(t, enforceIdx, 0, "APPLY-EGRESS-ENFORCEMENT marker must be present")
+	require.GreaterOrEqual(t, enforceIdx, 0, "END-PROVISIONING marker must be present")
 	require.GreaterOrEqual(t, runEnforcedIdx, 0, "RunEnforced's bash -c exec must be present")
-	assert.Less(t, openIdx, runBundleIdx, "OpenEgress must run BEFORE RunBundle's exec")
+	assert.Less(t, openIdx, runBundleIdx, "BeginProvisioning must run BEFORE RunBundle's exec")
 	assert.Less(t, runBundleIdx, runUserIdx, "RunBundle's exec must run BEFORE RunUser's exec")
-	assert.Less(t, runUserIdx, enforceIdx, "ApplyEgressEnforcement must run AFTER RunUser's exec")
+	assert.Less(t, runUserIdx, enforceIdx, "EndProvisioning must run AFTER RunUser's exec")
 	assert.Less(t, enforceIdx, runEnforcedIdx,
-		"RunEnforced's exec (services + devm.target) must run AFTER ApplyEgressEnforcement — "+
+		"RunEnforced's exec (services + devm.target) must run AFTER EndProvisioning — "+
 			"the Critical fix: services must never start under open egress")
 }
 
 // TestProvisionAndAttach_MutagenBeforeRunUser pins the ordering: RunBundle
-// runs right after OpenEgress (extracts /opt/devm + installs the CA
+// runs right after BeginProvisioning (extracts /opt/devm + installs the CA
 // iron-proxy needs to MITM a guest git clone); the mutagen sync-session
 // setup step runs AFTER RunBundle but BEFORE RunUser (so install:/startup:
 // see a hydrated workspace). waitForInitialSyncFn sits between mutagen
 // setup and RunUser (the extracted FlushAll wait), and runStartupCommandsFn
 // fires right after RunUser, still under OPEN egress, before
-// ApplyEgressEnforcement.
+// EndProvisioning.
 //
 // mutagenSetupFn, waitForInitialSyncFn, and runStartupCommandsFn are all
 // faked to append a marker into the same ordered log file fakeTartBinWithLog
@@ -535,16 +535,16 @@ func TestProvisionAndAttach_MutagenBeforeRunUser(t *testing.T) {
 	bashCSeen := 0
 	for _, line := range lines {
 		switch {
-		case line == "OPEN-EGRESS":
-			order = append(order, "open-egress")
+		case line == "BEGIN-PROVISIONING":
+			order = append(order, "begin-provisioning")
 		case line == "MUTAGEN-SETUP":
 			order = append(order, "mutagen")
 		case line == "WAIT-SYNC":
 			order = append(order, "wait-sync")
 		case line == "RUN-STARTUP":
 			order = append(order, "run-startup")
-		case line == "APPLY-EGRESS-ENFORCEMENT":
-			order = append(order, "apply-enforcement")
+		case line == "END-PROVISIONING":
+			order = append(order, "end-provisioning")
 		case strings.Contains(line, "bash -c"):
 			bashCSeen++
 			switch bashCSeen {
@@ -558,7 +558,7 @@ func TestProvisionAndAttach_MutagenBeforeRunUser(t *testing.T) {
 		}
 	}
 	assert.Equal(t,
-		[]string{"open-egress", "run-bundle", "mutagen", "wait-sync", "run-user", "run-startup", "apply-enforcement", "run-enforced"},
+		[]string{"begin-provisioning", "run-bundle", "mutagen", "wait-sync", "run-user", "run-startup", "end-provisioning", "run-enforced"},
 		order,
 	)
 }

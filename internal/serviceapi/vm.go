@@ -697,12 +697,13 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		writeJSON(w, VMEnforcementConfigResponse{})
 	})
 
-	// /vm/open-egress flips a project's softnet control socket to OPEN —
+	// /vm/begin-provisioning flips a project's softnet control socket to OPEN —
 	// unrestricted egress for the provisioning window (apt, install:,
 	// templates, startup:) before the enforced allowlist is in place.
-	// softnet boots LOCKED, so cold-start provisioning would otherwise run
+	// Called post-RunBundle and pre-RunUser to gate the user's own provisioning
+	// steps. softnet boots LOCKED, so cold-start provisioning would otherwise run
 	// with no egress at all.
-	s.Register("/vm/open-egress", func(w http.ResponseWriter, r *http.Request) {
+	s.Register("/vm/begin-provisioning", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
@@ -741,12 +742,12 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// /vm/apply-egress-enforcement flips a project's softnet control
-	// socket to ENFORCED, pointing egress at iron-proxy's loopback
-	// endpoint and the daemon's SNTP responder. This is the sole egress
-	// gate under softnet — there is no guest-side nftables/dnsmasq step
-	// left to run here.
-	s.Register("/vm/apply-egress-enforcement", func(w http.ResponseWriter, r *http.Request) {
+	// /vm/end-provisioning flips a project's softnet control socket to ENFORCED,
+	// pointing egress at iron-proxy's loopback endpoint and the daemon's SNTP
+	// responder. Called pre-RunEnforced to gate egress enforcement post-provisioning.
+	// This is the sole egress gate under softnet — there is no guest-side
+	// nftables/dnsmasq step left to run here.
+	s.Register("/vm/end-provisioning", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
