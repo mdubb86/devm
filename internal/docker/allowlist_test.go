@@ -23,7 +23,7 @@ func TestEffectiveAllowlist_DockerFalse_ReturnsUserOnly(t *testing.T) {
 	}
 }
 
-func TestEffectiveAllowlist_DockerTrue_AddsDockerHub(t *testing.T) {
+func TestEffectiveAllowlist_DockerTrue_AddsImplicitHosts(t *testing.T) {
 	cfg := schema.Config{
 		Docker: true,
 		Network: schema.Network{
@@ -36,6 +36,7 @@ func TestEffectiveAllowlist_DockerTrue_AddsDockerHub(t *testing.T) {
 		"registry-1.docker.io",
 		"auth.docker.io",
 		"production.cloudfront.docker.com",
+		"download.docker.com",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("want %v, got %v", want, got)
@@ -47,7 +48,8 @@ func TestEffectiveAllowlist_DockerTrue_NoDuplicate(t *testing.T) {
 		Docker: true,
 		Network: schema.Network{
 			Allow: []schema.AllowEntry{
-				{Host: "registry-1.docker.io"}, // user already listed it
+				{Host: "registry-1.docker.io"},   // user already listed it
+				{Host: "download.docker.com"},    // user already listed the apt source too
 				{Host: "example.com"},
 			},
 		},
@@ -55,6 +57,7 @@ func TestEffectiveAllowlist_DockerTrue_NoDuplicate(t *testing.T) {
 	got := EffectiveAllowlist(cfg)
 	want := []string{
 		"registry-1.docker.io",
+		"download.docker.com",
 		"example.com",
 		"auth.docker.io",
 		"production.cloudfront.docker.com",
