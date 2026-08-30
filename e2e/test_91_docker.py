@@ -46,6 +46,12 @@ def test_docker_first_class_end_to_end(workspace, devm):
                 # Test target — httpbin is a stable HTTP-test service.
                 # -A "Mozilla/5.0" sidesteps its 503-on-default-curl-UA.
                 "httpbin.org",
+                # Debian mirrors — needed for the apt-get update assertion
+                # below. Under `docker: true` `download.docker.com` is
+                # auto-allowlisted (the pin of Assertion 1.5); Debian
+                # mirrors are not, so they're declared explicitly here.
+                "deb.debian.org",
+                "security.debian.org",
             ],
         },
     )
@@ -80,6 +86,23 @@ def test_docker_first_class_end_to_end(workspace, devm):
     assert info.returncode == 0, (
         f"docker info failed — socket permission likely broken:\n"
         f"stderr={info.stderr.decode()!r}"
+    )
+
+    # ---- Assertion 1.5: guest `apt-get update` succeeds. `docker: true`'s
+    # ---- install script (get.docker.com) writes /etc/apt/sources.list.d/
+    # ---- docker.list pointing at download.docker.com. That host must be
+    # ---- in the effective allowlist or every apt-get update after install
+    # ---- 403s on that one repo and apt fails ALL updates. Pins the
+    # ---- auto-allow of the docker apt-source host under docker: true.
+    apt_update = subprocess.run(
+        [devm.path, "shell", "--", "sudo", "apt-get", "update"],
+        cwd=str(workspace.path), capture_output=True, timeout=120,
+    )
+    assert apt_update.returncode == 0, (
+        f"apt-get update failed under docker: true — download.docker.com "
+        f"likely not allowlisted:\nrc={apt_update.returncode}\n"
+        f"stdout={apt_update.stdout.decode()!r}\n"
+        f"stderr={apt_update.stderr.decode()!r}"
     )
 
     # ---- Assertion 2: container HTTPS to an allow-listed host succeeds
