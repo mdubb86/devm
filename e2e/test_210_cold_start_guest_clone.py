@@ -3,9 +3,10 @@
 The mutagen-volumes model hydrates repos entirely inside the guest:
 `CloneRepoInGuest` (internal/serviceapi/mutagen_cold_start.go) runs
 `git clone <URL> /home/devm/<label>` as the guest's devm user during
-the OpenEgress window — softnet is OPEN (unrestricted egress) for the
-clone, not yet enforcing, so no HTTP_PROXY or MITM plumbing is needed
-on the guest side.
+the begin-provisioning window — softnet is FORWARDING (iron-proxy in
+the path) with authority in passthrough mode; the clone reaches origin
+through iron-proxy, with the secrets transform available for private
+repos though not needed for Hello-World.
 
 Pins:
   - `.git` exists in the guest at `/home/devm/<label>/` after

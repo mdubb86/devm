@@ -162,12 +162,12 @@ def test_softnet_production_egress_locked_then_enforced():
         locked = _curl_code(name, proxy_port)
         assert "RC=0" not in locked, f"LOCKED but egress succeeded: {locked!r}"
 
-        # --- ENFORCED: :443 forwards to iron-proxy HTTPS endpoint, :5432 denied ---
+        # --- FORWARDING: :443 forwards to iron-proxy HTTPS endpoint, :5432 denied ---
         ok = _control(
             sock_path,
             {
                 "op": "setPolicy",
-                "policy": "ENFORCED",
+                "policy": "FORWARDING",
                 "iron_proxy": {
                     "http": proxy_addr,
                     "https": proxy_addr,
@@ -176,7 +176,7 @@ def test_softnet_production_egress_locked_then_enforced():
                 },
             },
         )
-        assert ok, "failed to send ENFORCED setPolicy"
+        assert ok, "failed to send FORWARDING setPolicy"
 
         allowed = None
         for _ in range(8):
@@ -188,13 +188,13 @@ def test_softnet_production_egress_locked_then_enforced():
             if allowed == "200":
                 break
             time.sleep(1)
-        assert allowed == "200", f"ENFORCED :443 curl: {allowed!r}"
+        assert allowed == "200", f"FORWARDING :443 curl: {allowed!r}"
 
-        # --- ENFORCED :5432: dport routing in target() is deterministic, and
-        # :443 above already confirmed ENFORCED is live — a single attempt is
+        # --- FORWARDING :5432: dport routing in target() is deterministic, and
+        # :443 above already confirmed FORWARDING is live — a single attempt is
         # sound. A retry-until-fail loop would mask an RC=0 leak. ---
         blocked = _curl_code(name, 5432)
-        assert "RC=0" not in blocked, f"ENFORCED :5432 (non-80/443) reachable: {blocked!r}"
+        assert "RC=0" not in blocked, f"FORWARDING :5432 (non-80/443) reachable: {blocked!r}"
     finally:
         _cleanup(name, proc, softnet_bin)
         logf.close()

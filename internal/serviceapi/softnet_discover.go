@@ -64,11 +64,11 @@ func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
 		if !ok {
 			continue
 		}
-		needsEnforcedPush := info.ProjectIP == ""
+		needsForwardingPush := info.ProjectIP == ""
 		go func(id, sock string, info projectInfo) {
-			if needsEnforcedPush {
+			if needsForwardingPush {
 				if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(info, ntpPort)); err != nil {
-					daemonlog.Errorf("serviceapi: discoverSoftnet: setPolicy ENFORCED for %s: %v", id, err)
+					daemonlog.Errorf("serviceapi: discoverSoftnet: setPolicy FORWARDING for %s: %v", id, err)
 				}
 			}
 			if snap, err := ReadStateSnapshot(cfg, id); err == nil && snap != nil {

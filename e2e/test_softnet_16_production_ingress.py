@@ -132,12 +132,12 @@ def test_softnet_production_ingress_and_ntp():
         got_in = _pingpong("127.0.0.1", host_port, nonce_in)
         assert got_in == nonce_in, f"ingress ping-pong failed: sent {nonce_in!r} got {got_in!r}"
 
-        # --- NTP: flip to ENFORCED with the host UDP echo as the ntp endpoint ---
+        # --- NTP: flip to FORWARDING with the host UDP echo as the ntp endpoint ---
         ok = _control(
             sock_path,
             {
                 "op": "setPolicy",
-                "policy": "ENFORCED",
+                "policy": "FORWARDING",
                 "iron_proxy": {
                     "http": udp_addr,
                     "https": udp_addr,
@@ -146,7 +146,7 @@ def test_softnet_production_ingress_and_ntp():
                 },
             },
         )
-        assert ok, "failed to send ENFORCED setPolicy"
+        assert ok, "failed to send FORWARDING setPolicy"
 
         # --- guest UDP datagram to dport 123 (arbitrary dest IP) -> host echo ---
         nonce_udp = secrets.token_hex(8)

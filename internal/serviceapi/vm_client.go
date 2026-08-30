@@ -82,11 +82,11 @@ func (c *Client) StopVM(ctx context.Context, name string) error {
 }
 
 // PassthroughEgress calls POST /vm/passthrough-egress, flipping the
-// project's softnet policy from ENFORCED to OPEN for a bounded
-// window. durationSeconds <= 0 asks the daemon to apply
-// defaultPassthroughSeconds (30). Returns whether the project had an
-// existing open window (drives "opened" vs "renewed" user message)
-// and the seconds the daemon actually armed.
+// project's authority mode to passthrough for a bounded window (iron-proxy
+// remains in the traffic path, MITM'ing + audit-logging + secret-substituting).
+// durationSeconds <= 0 asks the daemon to apply defaultPassthroughSeconds (30).
+// Returns whether the project had an existing open window (drives "opened" vs
+// "renewed" user message) and the seconds the daemon actually armed.
 func (c *Client) PassthroughEgress(ctx context.Context, name string, durationSeconds int) (wasOpen bool, expiresSeconds int, err error) {
 	body, err := json.Marshal(VMEgressPassthroughRequest{Name: name, DurationSeconds: durationSeconds})
 	if err != nil {
