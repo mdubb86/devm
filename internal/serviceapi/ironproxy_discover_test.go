@@ -246,12 +246,14 @@ func TestAdoptOneIronProxy_UnreadableConfig_StillServesPolicy(t *testing.T) {
 	sup := supervisor.New(t.TempDir())
 	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424242, ProjectID: projectID})
 
-	// recoverProjectState unconditionally seeds an ironProxyState entry
-	// (e.g. to carry ProjectIP) even with nothing to rehydrate — but the
-	// ports themselves must stay zero-valued since the config was never
-	// read.
-	info, _ := ironProxyState.get(projectID)
-	assert.Zero(t, info.HTTPPort, "ports must not be recovered when the config file is unreadable")
+	// With no prior ironProxyState entry, an unreadable config, and no
+	// ProjectIP in the snapshot to restore, no entry must be created at
+	// all — a bare zero-port/zero-everything entry would make
+	// discoverSoftnet push a FORWARDING rule at HostLoopIP:0 and make
+	// healIronProxies' watchdog treat a perfectly healthy adopted proxy
+	// as ProxyMissing and try to kill+respawn it.
+	_, ok := ironProxyState.get(projectID)
+	assert.False(t, ok, "no ironProxyState entry must be created when the config is unreadable and the snapshot has no ProjectIP")
 
 	sockPath, err := IronPolicySocketPath(identity.Prod, projectID)
 	require.NoError(t, err)
@@ -264,6 +266,33 @@ func TestAdoptOneIronProxy_UnreadableConfig_StillServesPolicy(t *testing.T) {
 	resp, err = client.TransformRequest(ctx, policyReq("blocked.example", "GET", "/"))
 	require.NoError(t, err)
 	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.GetAction())
+}
+
+// TestAdoptOneIronProxy_UnreadableConfig_ProjectIPStillRestored covers
+// the other half of the ironProxyState contract for an unreadable
+// config: when the snapshot DOES carry a ProjectIP, an entry must still
+// be created (recoverProjectState's ordinary ProjectIP-restore path),
+// even though the config-load failure means no ports get rehydrated.
+func TestAdoptOneIronProxy_UnreadableConfig_ProjectIPStillRestored(t *testing.T) {
+	const projectID = "adopt-no-config-ip-proj"
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.PurgeProject(projectID)
+	})
+
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
+		Cfg:       schema.Config{Project: schema.Project{Name: projectID}},
+		ProjectIP: "127.42.0.11",
+	}))
+
+	sup := supervisor.New(t.TempDir())
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424243, ProjectID: projectID})
+
+	info, ok := ironProxyState.get(projectID)
+	require.True(t, ok, "an entry must be created to carry the restored ProjectIP")
+	assert.Equal(t, "127.42.0.11", info.ProjectIP)
+	assert.Zero(t, info.HTTPPort, "ports must not be recovered when the config file is unreadable")
 }
 
 // TestRecoverProjectState_PreservesRouteModeAcrossRestart pins that a
@@ -405,15 +434,20 @@ proxy:
 func TestRecoverProjectState_SetsRestrictedMode(t *testing.T) {
 	const projectID = "recover-restrict-proj"
 	t.Setenv("HOME", t.TempDir())
-	t.Cleanup(func() {
-		ironProxyState.del(projectID)
-		policyAuthority.PurgeProject(projectID)
-	})
+	t.Cleanup(func() { ironProxyState.del(projectID) })
 
 	// Seed the authority with passthrough mode BEFORE recovery, to prove
 	// recovery actively resets it (not just leaves it at the default).
+	// tempAuth is captured in a local so cleanup can purge it directly:
+	// t.Cleanup callbacks run AFTER this function's own defers, so by
+	// the time a cleanup fires the `defer` below has already restored
+	// the package-level policyAuthority back to orig — a cleanup that
+	// referenced the package-level var would purge orig (a no-op) and
+	// leak tempAuth's grpc listener and socket file.
 	orig := policyAuthority
-	policyAuthority = NewPolicyAuthority()
+	tempAuth := NewPolicyAuthority()
+	t.Cleanup(func() { tempAuth.PurgeProject(projectID) })
+	policyAuthority = tempAuth
 	policyAuthority.SetMode(projectID, ModePassthrough)
 	defer func() { policyAuthority = orig }()
 

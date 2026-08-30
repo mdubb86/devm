@@ -109,12 +109,32 @@ func AdoptIronProxies(ctx context.Context, cfg identity.Config, sup *supervisor.
 // else re-serves it after a daemon restart.
 func adoptOneIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, routes *Routes, p DiscoveredIronProxy) {
 	sup.Adopt(supervisor.Key{ProjectID: p.ProjectID, Role: supervisor.RoleProxy}, p.PID)
-	if info, err := ironProxyInfoForAdopted(cfg, p.ProjectID); err != nil {
+	_, hadEntry := ironProxyState.get(p.ProjectID)
+	info, err := ironProxyInfoForAdopted(cfg, p.ProjectID)
+	if err != nil {
 		daemonlog.Errorf("adopt: rehydrate ports for %s: %v (ports were not recovered; policy is still served)", p.ProjectID, err)
 	} else {
 		ironProxyState.put(p.ProjectID, info)
 	}
 	recoverProjectState(ctx, cfg, tr, routes, p.ProjectID)
+	if err != nil && !hadEntry {
+		// recoverProjectState unconditionally seeds an ironProxyState
+		// entry when a snapshot exists (so it has somewhere to merge a
+		// restored ProjectIP into) — with no prior entry and config-load
+		// having failed, that can leave a bare zero-value entry with no
+		// ProjectIP either. Downstream consumers treat any ironProxyState
+		// entry as "this project has a live iron-proxy": discoverSoftnet
+		// would push a FORWARDING rule at HostLoopIP:0, and
+		// healIronProxies' watchdog would see ProxyMissing and try to
+		// kill+respawn a proxy that's actually running fine. Strip the
+		// entry back out unless the snapshot contributed something
+		// (ProjectIP) worth keeping — restores the pre-adoption "no
+		// entry on unreadable config" property while still letting
+		// policy re-serve happen above.
+		if after, ok := ironProxyState.get(p.ProjectID); ok && after == (projectInfo{}) {
+			ironProxyState.del(p.ProjectID)
+		}
+	}
 }
 
 // ironProxyInfoForAdopted reads back the ports iron-proxy was launched
