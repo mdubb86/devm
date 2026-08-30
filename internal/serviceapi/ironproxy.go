@@ -354,8 +354,17 @@ func IronPolicySocketPath(cfg identity.Config, projectID string) (string, error)
 		sum := sha256.Sum256([]byte(projectID))
 		p = filepath.Join(dir, hex.EncodeToString(sum[:4])+".sock")
 	}
+	if len(p) <= 100 {
+		return p, nil
+	}
+	// Deep runtime dirs (long $HOME) blow macOS's 104-byte sun_path cap.
+	// Fall back to the per-user temp dir with a name derived from
+	// identity+project so the path stays deterministic across daemon
+	// restarts (adoption re-derives it) and distinct across identities.
+	sum := sha256.Sum256([]byte(cfg.Name + "/" + projectID))
+	p = filepath.Join(os.TempDir(), "devm-pol-"+hex.EncodeToString(sum[:6])+".sock")
 	if len(p) > 100 {
-		return "", fmt.Errorf("policy socket path too long even hashed (%d bytes): %s", len(p), p)
+		return "", fmt.Errorf("policy socket path too long even in temp dir (%d bytes): %s", len(p), p)
 	}
 	return p, nil
 }

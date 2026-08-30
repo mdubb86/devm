@@ -3,7 +3,10 @@ package serviceapi
 import (
 	"context"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +18,42 @@ import (
 	"github.com/mdubb86/devm/internal/setsidshim"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
+
+// TestIronPolicySocketPath_ShortHome pins the common case: a normal-length
+// HOME produces a debuggable projectID-named socket path. Uses the real
+// ambient HOME (short on any actual dev machine) rather than a fabricated
+// path — EnsureRuntimeDir must actually create the runtime dir, and a
+// fabricated top-level path like "/Users/x" isn't writable by a non-root
+// user on macOS.
+func TestIronPolicySocketPath_ShortHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	t.Setenv("HOME", home)
+	p, err := IronPolicySocketPath(identity.Prod, "myproj")
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(p, "/iron-proxy/myproj.sock"), p)
+	assert.LessOrEqual(t, len(p), 100)
+}
+
+// TestIronPolicySocketPath_DeepHomeFallsBackToTempDir pins that a deep
+// $HOME (which blows macOS's 104-byte sun_path cap even after hashing
+// under runDir) falls back to a short, deterministic path under
+// os.TempDir() instead of erroring.
+func TestIronPolicySocketPath_DeepHomeFallsBackToTempDir(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), strings.Repeat("d", 60)))
+	p, err := IronPolicySocketPath(identity.Prod, "myproj")
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(p), 100)
+	// Deterministic: adoption after a daemon restart must re-derive the
+	// same path SpawnIronProxy used.
+	p2, err := IronPolicySocketPath(identity.Prod, "myproj")
+	require.NoError(t, err)
+	assert.Equal(t, p, p2)
+	// Distinct per project and per identity.
+	q, err := IronPolicySocketPath(identity.Prod, "otherproj")
+	require.NoError(t, err)
+	assert.NotEqual(t, p, q)
+}
 
 // TestSpawnIronProxy_WrapsWithSetsidShim pins that iron-proxy is
 // started via the setsid shim (not directly). Without the shim,
