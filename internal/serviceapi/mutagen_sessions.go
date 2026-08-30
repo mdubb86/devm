@@ -406,6 +406,7 @@ func SetupVolumesPhase(
 		// to sync-create would propagate straight into the guest.
 		if e.Repo != nil && macSide.Count > 0 {
 			if err := verifyGitHEAD(e.MacMirrorPath); err != nil {
+				daemonlog.Errorf("mutagen: integrity check failed for %s: %v", e.Label, err)
 				return fmt.Errorf(
 					"repo %s: mac mirror at %s failed integrity check "+
 						"(git rev-parse --verify HEAD: %s) — the persistent checkout "+
