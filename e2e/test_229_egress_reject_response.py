@@ -53,9 +53,15 @@ def test_blocked_curl_sees_devm_reject(devm, workspace, sandbox_name):
     assert "x-devm-blocked: egress-policy" in hdrs.lower(), (
         f"reject must carry the devm marker header:\n{hdrs}"
     )
+    assert "content-type: application/json" in hdrs.lower(), (
+        f"reject body must be declared as JSON:\n{hdrs}"
+    )
+    assert body.strip(), f"empty reject body:\n{out}"
     payload = json.loads(body.strip())
     assert payload["blocked_by"] == "devm-egress-policy"
     assert payload["host"] == "example.org"
+    assert payload["method"] == "GET"
+    assert "/some/path" in payload["url"]
     assert payload["hint"]
 
     # Allowed host still round-trips.
