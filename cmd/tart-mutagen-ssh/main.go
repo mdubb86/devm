@@ -1,8 +1,11 @@
 // Package main implements tart-mutagen-ssh: a shim invoked by the mutagen
 // daemon in place of the system ssh binary (via MUTAGEN_SSH_PATH). It
-// translates mutagen's ssh-CLI argv into `tart exec <vm> sudo -u devm -H
-// <cmd...>` — running mutagen-agent inside the guest via Tart's
-// gRPC-over-vsock control channel instead of over sshd.
+// translates mutagen's ssh-CLI argv into `tart exec <vm> <cmd...>` —
+// running mutagen-agent inside the guest via Tart's gRPC-over-vsock
+// control channel instead of over sshd. `tart exec` already lands as the
+// devm user (devm's provisioner renames Tart's default admin user to
+// devm) with devm's HOME and cwd set natively, so no sudo or shell wrap
+// is needed.
 //
 // See docs/superpowers/specs/2026-08-29-mutagen-tart-transport.md for the
 // design.
@@ -31,14 +34,10 @@ func main() {
 		os.Exit(2)
 	}
 
-	// mutagen passes the remote command as ssh-CLI trailing args; sshd
-	// normally runs those via $SHELL -c "<joined>" with cwd = HOME so
-	// relative paths (e.g. .mutagen/agents/…/mutagen-agent) resolve and
-	// shell metacharacters (~, $HOME) expand. We replicate that here so
-	// mutagen's agent-invocation shape works unchanged over tart exec.
-	joined := strings.Join(cmd, " ")
-	script := `cd "$HOME" && exec ` + joined
-	tartArgs := []string{"exec", vm, "sudo", "-u", "devm", "-H", "bash", "-c", script}
+	// tart exec lands as the devm user with HOME and cwd already set, so
+	// mutagen's relative agent path (e.g. .mutagen/agents/…/mutagen-agent)
+	// resolves correctly without any shell wrap or sudo.
+	tartArgs := append([]string{"exec", vm}, cmd...)
 	c := exec.Command("tart", tartArgs...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout

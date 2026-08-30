@@ -82,7 +82,7 @@ func TestDispatchName_ClassifiesByArgv0(t *testing.T) {
 // End-to-end shim behavior test: build the binary, invoke it with a fake
 // `tart` in PATH, verify tart got the right argv. Uses a stub tart
 // script so no VM is required.
-func TestShim_InvokesTartExecWithSudoAndCmd(t *testing.T) {
+func TestShim_InvokesTartExecWithCmd(t *testing.T) {
 	dir := t.TempDir()
 
 	// Build the shim.
@@ -119,8 +119,9 @@ exit 0
 	require.NoError(t, err)
 	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
 	assert.Equal(t, []string{
-		"exec", "testvm", "sudo", "-u", "devm", "-H", "bash", "-c",
-		`cd "$HOME" && exec .mutagen/agents/0.18.1/mutagen-agent synchronizer --log-level=debug`,
+		"exec", "testvm",
+		".mutagen/agents/0.18.1/mutagen-agent",
+		"synchronizer", "--log-level=debug",
 	}, got)
 }
 
