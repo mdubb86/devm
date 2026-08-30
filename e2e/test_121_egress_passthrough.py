@@ -56,6 +56,11 @@ def _cold_start(devm, workspace, sandbox_name):
 def test_passthrough_open_and_restrict(workspace, devm, sandbox_name):
     """Baseline denies example.org; passthrough allows it; restrict denies again."""
     workspace.write_devmyaml(
+        # Opt out of the default repos.main (github.com/octocat/Hello-World):
+        # this test's allowlist is deliberately narrow to example.com, and
+        # hydration would clone that repo and get blocked by the same
+        # egress policy this test exercises.
+        no_repo=True,
         network={"allow": ["example.com"]},
         packages=["curl"],
     )
@@ -103,6 +108,7 @@ def test_passthrough_open_and_restrict(workspace, devm, sandbox_name):
 def test_passthrough_timer_restores(workspace, devm, sandbox_name):
     """After --for expires, egress is auto-restored to enforced."""
     workspace.write_devmyaml(
+        no_repo=True,
         network={"allow": ["example.com"]},
         packages=["curl"],
     )
@@ -129,6 +135,7 @@ def test_passthrough_timer_restores(workspace, devm, sandbox_name):
 def test_passthrough_status_json_reports_state(workspace, devm, sandbox_name):
     """`devm status --json` reports egress.policy + passthrough_expires_at."""
     workspace.write_devmyaml(
+        no_repo=True,
         network={"allow": ["example.com"]},
         packages=["curl"],
     )
@@ -182,6 +189,7 @@ def test_passthrough_survives_reconcile(workspace, devm, sandbox_name):
     policy state alone.
     """
     workspace.write_devmyaml(
+        no_repo=True,
         network={"allow": ["example.com"]},
         packages=["curl"],
     )
@@ -202,6 +210,7 @@ def test_passthrough_survives_reconcile(workspace, devm, sandbox_name):
         cwd=str(workspace.path), capture_output=True, timeout=30,
     )
     workspace.write_devmyaml(
+        no_repo=True,
         network={"allow": ["example.com"]},
         packages=["curl"],
         env={"PASSTHROUGH_RECONCILE_MARKER": "1"},
