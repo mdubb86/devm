@@ -132,7 +132,7 @@ type EgressStatus struct {
 // VMEnforcementConfigResponse is the body shape for GET
 // /vm/enforcement-config. Egress allow-listing and DNS resolution are
 // enforced by softnet over the control socket (POST
-// /vm/apply-egress-enforcement), not by guest-side nftables/dnsmasq.
+// /vm/end-provisioning), not by guest-side nftables/dnsmasq.
 // timesyncd's NTP config used to be applied here at runtime
 // (TimesyncdScript); it's now baked into the base image at
 // image/provision-base.sh, since it's static — no per-project or
@@ -142,7 +142,7 @@ type EgressStatus struct {
 type VMEnforcementConfigResponse struct{}
 
 // VMApplyEgressEnforcementRequest is the body shape for POST
-// /vm/apply-egress-enforcement.
+// /vm/begin-provisioning and /vm/end-provisioning.
 type VMApplyEgressEnforcementRequest struct {
 	Name string `json:"name"`
 }

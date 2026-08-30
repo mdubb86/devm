@@ -436,14 +436,14 @@ func TestClientEnforcementConfig_MissingProjectState(t *testing.T) {
 	assert.Contains(t, err.Error(), "enforcement-config")
 }
 
-// TestClientOpenEgress_SendsPolicyOpen verifies POST /vm/open-egress flips
+// TestClientBeginProvisioning_SendsPolicyOpen verifies POST /vm/begin-provisioning flips
 // the project's softnet control socket to OPEN and carries the full
 // forward_targets endpoint — including the guest-origin ports — so `.test`
 // resolves inside the guest during the provisioning window, before
-// /vm/apply-egress-enforcement ever runs. Egress itself is unblocked under
+// /vm/end-provisioning ever runs. Egress itself is unblocked under
 // OPEN regardless of forward_targets; only the guest-origin fields are
 // consulted while the policy is OPEN.
-func TestClientOpenEgress_SendsPolicyOpen(t *testing.T) {
+func TestClientBeginProvisioning_SendsPolicyOpen(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	tr := tart.New()

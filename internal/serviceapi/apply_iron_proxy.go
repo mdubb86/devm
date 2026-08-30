@@ -260,8 +260,8 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		// Adopt-in-place also never went through /vm/start's
 		// softnetState.put (vm.go), so the daemon's in-memory
 		// projectID -> softnet-control-socket map has no entry for
-		// this project either — /vm/apply-egress-enforcement and
-		// /vm/open-egress 412 ("softnet control socket missing") on
+		// this project either — /vm/begin-provisioning and
+		// /vm/end-provisioning 412 ("softnet control socket missing") on
 		// the very next call, and the expose-map push below silently
 		// no-ops instead of actually reaching softnet (see
 		// pushExposeMap's softnetState.get check in expose.go).

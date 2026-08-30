@@ -18,7 +18,7 @@ import (
 // only, so empty after a restart) for every project it finds there — the
 // running VM's softnet child is still alive (setsid'd, survives daemon
 // death) and needs its control socket re-registered so
-// /vm/open-egress and /vm/apply-egress-enforcement work again without a
+// /vm/begin-provisioning and /vm/end-provisioning work again without a
 // fresh /vm/start. It should also best-effort re-push ENFORCED so a
 // softnet that itself restarted (and came back up LOCKED) gets
 // reconciled.
