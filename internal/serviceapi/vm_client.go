@@ -109,12 +109,12 @@ func (c *Client) PassthroughEgress(ctx context.Context, name string, durationSec
 }
 
 // RestrictEgress calls POST /vm/restrict-egress, restoring the
-// project's softnet policy to ENFORCED and cancelling any pending
-// passthrough restore timer. Returns whether there was a window
-// to restrict — false is not an error; the CLI reports it as a
-// no-op.
+// authority mode to restricted (softnet stays FORWARDING; iron-proxy
+// stays in the path) and cancelling any pending passthrough restore
+// timer. Returns whether there was a window to restrict — false is
+// not an error; the CLI reports it as a no-op.
 func (c *Client) RestrictEgress(ctx context.Context, name string) (wasOpen bool, err error) {
-	body, err := json.Marshal(VMApplyEgressEnforcementRequest{Name: name})
+	body, err := json.Marshal(VMProjectRequest{Name: name})
 	if err != nil {
 		return false, err
 	}
@@ -219,7 +219,7 @@ func (c *Client) ApplyIronProxy(ctx context.Context, req VMApplyIronProxyRequest
 // iron-proxy CA) and pre-RunUser — iron-proxy is in the traffic path
 // for the rest of the VM's life from this call onward.
 func (c *Client) BeginProvisioning(ctx context.Context, name string) error {
-	body, err := json.Marshal(VMApplyEgressEnforcementRequest{Name: name})
+	body, err := json.Marshal(VMProjectRequest{Name: name})
 	if err != nil {
 		return err
 	}
@@ -283,7 +283,7 @@ func (c *Client) RepoClone(ctx context.Context, name string, cfg schema.Config, 
 // traffic path for the rest of the VM's life; only the authority mode
 // changes here.
 func (c *Client) EndProvisioning(ctx context.Context, name string) error {
-	body, err := json.Marshal(VMApplyEgressEnforcementRequest{Name: name})
+	body, err := json.Marshal(VMProjectRequest{Name: name})
 	if err != nil {
 		return err
 	}

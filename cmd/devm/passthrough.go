@@ -22,12 +22,11 @@ project's allowlist covers (a one-off ` + "`curl … | bash`" + `, a plugin
 fetch, an ad-hoc apt-get from an unusual mirror). The window auto-restores
 after ` + "`--for`" + ` (default 30s); ` + "`devm restrict`" + ` closes it early.
 
-During the passthrough window, authority is deferred — iron-proxy remains
-in the traffic path, MITM'ing + audit-logging + secret-substituting as usual,
-but gates based on authority (you) rather than the project's allowlist. Meant
-for commands you supervise in real time. The timer is a safety net, not
-a substitute for supervision: anything exfiltrated during the window
-stays exfiltrated after it closes.`,
+During the passthrough window, iron-proxy stays in the path (MITM + audit +
+secret substitution) but the per-request allowlist check is bypassed for
+the window's duration. Meant for commands you supervise in real time. The
+timer is a safety net, not a substitute for supervision: anything
+exfiltrated during the window stays exfiltrated after it closes.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below

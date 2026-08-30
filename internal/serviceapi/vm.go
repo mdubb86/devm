@@ -115,7 +115,7 @@ type VMEgressPassthroughResponse struct {
 
 // VMEgressRestrictResponse is the response for POST
 // /vm/restrict-egress. WasOpen reports whether there was a window
-// to restrict — false means it was already ENFORCED (or the project
+// to restrict — false means it was already restricted (or the project
 // wasn't tracked), which the CLI surfaces as a "nothing to do"
 // message rather than an error.
 type VMEgressRestrictResponse struct {
@@ -123,10 +123,10 @@ type VMEgressRestrictResponse struct {
 }
 
 // EgressStatus is the response for GET /vm/egress-status. Policy is
-// "restricted" (the default ENFORCED posture) or "passthrough" (an
+// "restricted" (the default authority mode) or "passthrough" (an
 // active `devm passthrough` window). PassthroughExpiresAt is set
 // only when a window is active — the deadline at which the daemon
-// will auto-restore ENFORCED.
+// will auto-restore the restricted authority mode.
 type EgressStatus struct {
 	Policy               string     `json:"policy"`
 	PassthroughExpiresAt *time.Time `json:"passthrough_expires_at,omitempty"`
@@ -144,9 +144,9 @@ type EgressStatus struct {
 // before provisioning proceeds.
 type VMEnforcementConfigResponse struct{}
 
-// VMApplyEgressEnforcementRequest is the body shape for POST
-// /vm/begin-provisioning and /vm/end-provisioning.
-type VMApplyEgressEnforcementRequest struct {
+// VMProjectRequest is the {name}-only request body shared by POST
+// /vm/begin-provisioning, /vm/end-provisioning, and /vm/restrict-egress.
+type VMProjectRequest struct {
 	Name string `json:"name"`
 }
 
@@ -737,7 +737,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		var req VMApplyEgressEnforcementRequest
+		var req VMProjectRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
@@ -862,7 +862,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		var req VMApplyEgressEnforcementRequest
+		var req VMProjectRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
@@ -1037,7 +1037,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		var req VMApplyEgressEnforcementRequest // reuses {Name} shape
+		var req VMProjectRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return

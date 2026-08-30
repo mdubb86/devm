@@ -390,7 +390,7 @@ func TestVMStop_MethodNotAllowed(t *testing.T) {
 // TestClientEnforcementConfig_ReadsResponse verifies GET
 // /vm/enforcement-config succeeds (200) once this project's iron-proxy
 // state exists — egress allow-listing and DNS are enforced by softnet
-// over the control socket (POST /vm/apply-egress-enforcement), and
+// over the control socket (POST /vm/end-provisioning), and
 // timesyncd's NTP config is baked into the base image, so the response
 // body itself carries nothing; the endpoint is a precondition check.
 func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {

@@ -12,7 +12,7 @@ no teardown-required prompt (packages changes never land in
 RecreateRequired).
 
 A stopped VM's `devm.yaml` edit isn't applied by a reconcile call —
-it's picked up by the next boot's open-egress window
+it's picked up by the next boot's provisioning window
 (`render.RenderProvisionOpenScript`'s non-first-boot `PackageAdds`/
 `PackageRemoves` converge stage), same as `install:`'s first-boot-only
 stage is skipped on restart (test_88).
