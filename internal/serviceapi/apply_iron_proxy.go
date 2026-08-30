@@ -53,7 +53,7 @@ type VMApplyIronProxyResponse struct {
 	ProjectIP string `json:"project_ip,omitempty"`
 	// TunnelPort is iron-proxy's CONNECT-capable tunnel_listen port —
 	// mirrors VMStartResponse.TunnelPort for adopt-in-place, so the
-	// orchestrator's post-OpenEgress, pre-RunOpen mutagen SetupPhase call
+	// orchestrator's post-RunBundle, pre-RunUser mutagen SetupPhase call
 	// can build the guest-visible HTTP_PROXY URL on either path. Zero in
 	// the VM-never-started (VMRunning=false) case.
 	TunnelPort int `json:"tunnel_port,omitempty"`

@@ -22,8 +22,9 @@ const (
 
 // ProvisionScriptInput is everything the composed guest provisioning script
 // needs baked in. The daemon builds this from schema.Config, then
-// RenderProvisionOpenScript/RenderProvisionEnforcedScript turn it into the
-// two bash scripts run around the softnet ENFORCED flip.
+// RenderProvisionBundleScript/RenderProvisionUserScript/
+// RenderProvisionEnforcedScript turn it into the three bash scripts run
+// around mutagen sync setup and the softnet ENFORCED flip.
 type ProvisionScriptInput struct {
 	FirstBoot        bool
 	Packages         []string // apt packages (first boot only)
@@ -85,23 +86,62 @@ const defaultStepTimeoutSeconds = 600
 // the old per-step provisioner's enableStartServices poll budget.
 const serviceHealthPollSeconds = 10
 
-// RenderProvisionOpenScript composes the OPEN-egress half of provisioning:
-// header, the in-progress marker WRITE, bundle extraction, the unconditional
-// guest-nft flush, and the entire open-egress work window (packages,
-// install:, docker, templates, startup:). It is delivered as `bash -c
-// '<this>'` with the bundle tar on stdin, run while softnet is OPEN — before
-// the ENFORCED flip. Stages are marked with `::devm:stage:<name>::` on
-// stdout; the daemon parses them to drive the spinner AND to classify a
-// failure by the stage it reached. `set -eo pipefail` makes any failing
-// command abort the script immediately.
+// RenderProvisionBundleScript composes the bundle-extract prerequisites that
+// must be in place before mutagen sync can run: the in-progress marker
+// WRITE, extraction of the devm bundle tar (piped in on stdin) to /opt/devm,
+// running its install.sh (CA install, PATH symlinks, mutagen-agent, systemd
+// units, ssh material), and the unconditional guest-nft flush. It is
+// delivered as `bash -c '<this>'` with the bundle tar on stdin, run while
+// softnet is OPEN — before mutagen sync setup and before
+// RenderProvisionUserScript. Always executed, every boot: install.sh is
+// idempotent (cmp -s guards), and the nft flush must clear the base image's
+// policy-drop lock regardless of whether this boot has any user-phase work.
+// `set -eo pipefail` makes any failing command abort the script immediately.
 //
 // The in-progress marker it writes is cleaned up by
-// RenderProvisionEnforcedScript, not here: a crash between the two scripts
-// (host sleep, daemon restart, killed exec) must leave the marker set, so
-// the next `devm shell` sees a dirty VM and tears it down rather than
-// resuming onto an unknown intermediate state — this is what closes the
-// crash-hole where services could otherwise come up under open egress.
-func RenderProvisionOpenScript(in ProvisionScriptInput) []byte {
+// RenderProvisionEnforcedScript, not here: a crash anywhere between this
+// script and the enforced script (host sleep, daemon restart, killed exec)
+// must leave the marker set, so the next `devm shell` sees a dirty VM and
+// tears it down rather than resuming onto an unknown intermediate state —
+// this is what closes the crash-hole where services could otherwise come up
+// under open egress.
+func RenderProvisionBundleScript(in ProvisionScriptInput) []byte {
+	var b strings.Builder
+	p := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
+
+	p("#!/bin/bash")
+	p("set -eo pipefail")
+	// (1) in-progress marker FIRST. /run is tmpfs and /run/devm doesn't
+	// exist yet; the script runs as the unprivileged devm user, so both
+	// the directory and the marker need sudo.
+	p("sudo mkdir -p /run/devm")
+	p("sudo touch %s", inProgressMarker)
+	p("echo ::devm:stage:bundle::")
+	// (2) extract the bundle (tar on stdin) and run the extractor for CA/symlinks
+	p("sudo mkdir -p /opt/devm")
+	p("sudo tar -xC /opt/devm")    // consumes stdin
+	p("sudo /opt/devm/install.sh") // CA install + PATH symlink + mutagen-agent
+
+	// The base image bakes a policy-drop nftables lock (image/builder.go's
+	// nftables-locked.conf) into every fresh clone. softnet is the egress
+	// boundary now, not this guest ruleset, and a leftover policy-drop
+	// would drop softnet's own egress too — flushed unconditionally, every
+	// boot, regardless of whether this boot has a user-phase work window.
+	p("sudo nft flush ruleset")
+
+	return []byte(b.String())
+}
+
+// RenderProvisionUserScript composes the user-declared-work half of
+// provisioning: packages, install:, the docker feature, template
+// installation, and startup:. It is delivered as `bash -c '<this>'` with NO
+// stdin — RenderProvisionBundleScript already extracted /opt/devm and ran
+// install.sh — run while softnet is still OPEN, after mutagen sync has
+// hydrated the workspace and before the ENFORCED flip. Stages are marked
+// with `::devm:stage:<name>::` on stdout; the daemon parses them to drive
+// the spinner AND to classify a failure by the stage it reached. `set -eo
+// pipefail` makes any failing command abort the script immediately.
+func RenderProvisionUserScript(in ProvisionScriptInput) []byte {
 	var b strings.Builder
 	p := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
 	stepTimeout := in.StepTimeoutSeconds
@@ -111,22 +151,6 @@ func RenderProvisionOpenScript(in ProvisionScriptInput) []byte {
 
 	p("#!/bin/bash")
 	p("set -eo pipefail")
-	// (1) in-progress marker FIRST. /run is tmpfs and /run/devm doesn't
-	// exist yet; the script runs as the unprivileged devm user, so both
-	// the directory and the marker need sudo.
-	p("sudo mkdir -p /run/devm")
-	p("sudo touch %s", inProgressMarker)
-	// (2) extract the bundle (tar on stdin) and run the extractor for CA/symlinks
-	p("sudo mkdir -p /opt/devm")
-	p("sudo tar -xC /opt/devm")    // consumes stdin
-	p("sudo /opt/devm/install.sh") // existing CA install + PATH symlink
-
-	// The base image bakes a policy-drop nftables lock (image/builder.go's
-	// nftables-locked.conf) into every fresh clone. softnet is the egress
-	// boundary now, not this guest ruleset, and a leftover policy-drop
-	// would drop softnet's own egress too — flushed unconditionally, every
-	// boot, regardless of whether this boot has an open work window.
-	p("sudo nft flush ruleset")
 
 	if in.hasOpenWork() {
 		p("echo ::devm:stage:open::")
@@ -191,14 +215,14 @@ func RenderProvisionOpenScript(in ProvisionScriptInput) []byte {
 }
 
 // RenderProvisionEnforcedScript composes the ENFORCED-egress half of
-// provisioning, run immediately after RenderProvisionOpenScript succeeds
+// provisioning, run immediately after RenderProvisionUserScript succeeds
 // and softnet has been flipped to ENFORCED. It is delivered as `bash -c
-// '<this>'` with NO stdin — /opt/devm was already extracted by the open
-// script. It starts and health-polls user services, then activates
-// devm.target, and finally clears the in-progress marker the open script
-// wrote — the LAST line, so the marker's presence remains a genuine
-// "provisioning not yet fully complete" signal for the whole exec, not
-// just this half.
+// '<this>'` with NO stdin — /opt/devm was already extracted by
+// RenderProvisionBundleScript. It starts and health-polls user services,
+// then activates devm.target, and finally clears the in-progress marker
+// RenderProvisionBundleScript wrote — the LAST line, so the marker's
+// presence remains a genuine "provisioning not yet fully complete" signal
+// across the whole three-exec run, not just this half.
 func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
 	var b strings.Builder
 	p := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
@@ -273,8 +297,8 @@ func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
 		p("DEVM_GITCONFIG_EOF")
 	}
 
-	// (7) cleanup marker on success — clears the marker RenderProvisionOpenScript
-	// wrote, closing out the two-exec provisioning run.
+	// (7) cleanup marker on success — clears the marker RenderProvisionBundleScript
+	// wrote, closing out the three-exec provisioning run.
 	p("sudo rm -f %s", inProgressMarker)
 
 	return []byte(b.String())

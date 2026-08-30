@@ -76,7 +76,7 @@ type VMStartResponse struct {
 	ProjectIP string `json:"project_ip"`
 	// TunnelPort is iron-proxy's CONNECT-capable tunnel_listen port —
 	// the orchestrator needs it (with softnet.NATAliasIP) to build the
-	// guest-visible HTTP_PROXY URL for its post-OpenEgress, pre-RunOpen
+	// guest-visible HTTP_PROXY URL for its post-RunBundle, pre-RunUser
 	// mutagen SetupPhase call, which the daemon has no visibility into.
 	TunnelPort int `json:"tunnel_port,omitempty"`
 }

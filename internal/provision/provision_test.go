@@ -17,8 +17,8 @@ import (
 )
 
 // fakeStreamTart is a tartExecer that answers the first-boot marker probe
-// from markerPresent and records every ExecStream call the rewritten
-// RunOpen/RunEnforced make (each call appended to argvHistory/stdinHistory),
+// from markerPresent and records every ExecStream call RunBundle/RunUser/
+// RunEnforced make (each call appended to argvHistory/stdinHistory),
 // optionally emitting scripted output lines and a scripted exit code / error
 // on EVERY call.
 type fakeStreamTart struct {
@@ -96,7 +96,7 @@ func baseProvisioner(f *fakeStreamTart, cfg schema.Config) *Provisioner {
 	}
 }
 
-func TestRunOpen_ShipsExactlyOneExecStreamWithScriptAndTar(t *testing.T) {
+func TestRunBundle_ShipsExactlyOneExecStreamWithScriptAndTar(t *testing.T) {
 	f := &fakeStreamTart{} // marker absent → first boot
 	p := baseProvisioner(f, schema.Config{
 		Project:  schema.Project{Name: "myproj"},
@@ -104,34 +104,66 @@ func TestRunOpen_ShipsExactlyOneExecStreamWithScriptAndTar(t *testing.T) {
 		Install:  []string{"echo hi"},
 	})
 	var buf bytes.Buffer
-	require.NoError(t, p.RunOpen(context.Background(), &buf, nil))
+	require.NoError(t, p.RunBundle(context.Background(), &buf, nil))
 
-	require.Equal(t, 1, f.streamCalls, "RunOpen must ship exactly ONE ExecStream")
+	require.Equal(t, 1, f.streamCalls, "RunBundle must ship exactly ONE ExecStream")
 	script := scriptOf(t, f)
 
-	// The open script fail-fasts, writes the in-progress marker, extracts
-	// the bundle, and runs the first-boot work — but does NOT enforce or
-	// start the target (that's RunEnforced's job).
+	// The bundle script fail-fasts, writes the in-progress marker, extracts
+	// the bundle, and runs install.sh — but has no user-phase content
+	// (that's RunUser's job) and does NOT enforce or start the target
+	// (that's RunEnforced's job).
 	assert.Contains(t, script, "set -eo pipefail")
 	assert.Contains(t, script, "touch /run/devm/provisioning")
-	assert.Contains(t, script, "sudo apt-get install -y 'jq'")
-	assert.Contains(t, script, "/opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
+	assert.Contains(t, script, "sudo tar -xC /opt/devm")
+	assert.Contains(t, script, "sudo /opt/devm/install.sh")
+	assert.NotContains(t, script, "sudo apt-get install -y 'jq'")
+	assert.NotContains(t, script, "/opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
 	assert.NotContains(t, script, "systemctl start devm.target")
 	assert.NotContains(t, script, "touch /var/lib/devm/provisioned")
 	assert.NotContains(t, script, "rm -f /run/devm/provisioning")
 
 	// Stdin is the bundle tar; it must be a valid archive carrying the
 	// devm-owned artifacts (install.sh + startup.sh).
-	require.NotEmpty(t, f.lastStdin, "RunOpen's ExecStream stdin must carry the bundle tar")
+	require.NotEmpty(t, f.lastStdin, "RunBundle's ExecStream stdin must carry the bundle tar")
 	names := tarEntryNames(t, f.lastStdin)
 	assert.Contains(t, names, "install.sh")
 	assert.Contains(t, names, "startup.sh")
 }
 
+func TestRunUser_ShipsExactlyOneExecStreamNoStdin(t *testing.T) {
+	f := &fakeStreamTart{} // marker absent → first boot
+	p := baseProvisioner(f, schema.Config{
+		Project:  schema.Project{Name: "myproj"},
+		Packages: []string{"jq"},
+		Install:  []string{"echo hi"},
+	})
+	p.firstBoot = true // simulates RunBundle having already set this
+	var buf bytes.Buffer
+	require.NoError(t, p.RunUser(context.Background(), &buf, nil))
+
+	require.Equal(t, 1, f.streamCalls, "RunUser must ship exactly ONE ExecStream")
+	script := scriptOf(t, f)
+
+	assert.Contains(t, script, "set -eo pipefail")
+	assert.Contains(t, script, "sudo apt-get install -y 'jq'")
+	assert.Contains(t, script, "/opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
+	// No bundle-extraction content — that already happened in RunBundle.
+	assert.NotContains(t, script, "tar -xC /opt/devm")
+	assert.NotContains(t, script, "/opt/devm/install.sh")
+	assert.NotContains(t, script, "nft flush ruleset")
+	assert.NotContains(t, script, "touch /run/devm/provisioning")
+	assert.NotContains(t, script, "systemctl start devm.target")
+	assert.NotContains(t, script, "touch /var/lib/devm/provisioned")
+
+	// No bundle on stdin.
+	assert.Empty(t, f.lastStdin, "RunUser must not send the bundle tar — RunBundle already extracted it")
+}
+
 func TestRunEnforced_ShipsExactlyOneExecStreamNoStdin(t *testing.T) {
 	f := &fakeStreamTart{}
 	p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
-	p.firstBoot = true // simulates RunOpen having already set this
+	p.firstBoot = true // simulates RunBundle having already set this
 	var buf bytes.Buffer
 	require.NoError(t, p.RunEnforced(context.Background(), &buf, nil))
 
@@ -142,13 +174,13 @@ func TestRunEnforced_ShipsExactlyOneExecStreamNoStdin(t *testing.T) {
 	assert.Contains(t, script, "::devm:stage:enforce::")
 	assert.Contains(t, script, "systemctl start devm.target")
 	assert.Contains(t, script, "touch /var/lib/devm/provisioned")
-	// Marker cleanup is the LAST line of the whole two-exec run.
+	// Marker cleanup is the LAST line of the whole three-exec run.
 	assert.Contains(t, script, "rm -f /run/devm/provisioning")
-	// No bundle-extraction content — that already happened in RunOpen.
+	// No bundle-extraction content — that already happened in RunBundle.
 	assert.NotContains(t, script, "tar -xC /opt/devm")
 
 	// No bundle on stdin.
-	assert.Empty(t, f.lastStdin, "RunEnforced must not send the bundle tar — RunOpen already extracted it")
+	assert.Empty(t, f.lastStdin, "RunEnforced must not send the bundle tar — RunBundle already extracted it")
 }
 
 func tarEntryNames(t *testing.T, body []byte) []string {
@@ -166,10 +198,10 @@ func tarEntryNames(t *testing.T, body []byte) []string {
 	return names
 }
 
-func TestRunOpen_ForwardsStreamedLinesToWriterAndOnLine(t *testing.T) {
+func TestRunBundle_ForwardsStreamedLinesToWriterAndOnLine(t *testing.T) {
 	f := &fakeStreamTart{
 		emit: func(onLine func(stream, line string)) {
-			onLine("stdout", "::devm:stage:open::")
+			onLine("stdout", "::devm:stage:bundle::")
 			onLine("stdout", "hello from guest")
 			onLine("stderr", "a warning")
 		},
@@ -178,7 +210,7 @@ func TestRunOpen_ForwardsStreamedLinesToWriterAndOnLine(t *testing.T) {
 
 	var buf bytes.Buffer
 	var seen []string
-	require.NoError(t, p.RunOpen(context.Background(), &buf, func(stream, line string) {
+	require.NoError(t, p.RunBundle(context.Background(), &buf, func(stream, line string) {
 		seen = append(seen, stream+":"+line)
 	}))
 
@@ -186,24 +218,25 @@ func TestRunOpen_ForwardsStreamedLinesToWriterAndOnLine(t *testing.T) {
 	assert.Contains(t, buf.String(), "hello from guest")
 	assert.Contains(t, buf.String(), "a warning")
 	assert.Equal(t, []string{
-		"stdout:::devm:stage:open::",
+		"stdout:::devm:stage:bundle::",
 		"stdout:hello from guest",
 		"stderr:a warning",
 	}, seen)
 }
 
-func TestRunOpenAndEnforced_NonZeroExitClassifiesFailureByStage(t *testing.T) {
+func TestRunBundleUserEnforced_NonZeroExitClassifiesFailureByStage(t *testing.T) {
 	tests := []struct {
 		name         string
 		failAtStage  string
-		runEnforced  bool // true → the failure is simulated in RunEnforced's exec
+		runPhase     string // "bundle" | "user" | "enforced" — which exec the failure is simulated in
 		wantPostInst bool
 	}{
-		{"apt/install phase tears down", "install", false, false},
-		{"docker phase tears down", "docker", false, false},
-		{"templates phase tears down (runs pre-enforce, unenforced)", "templates", false, false},
-		{"enforce phase tears down", "enforce", true, false},
-		{"service phase keeps vm", "services", true, true},
+		{"bundle-extract phase tears down", "bundle", "bundle", false},
+		{"apt/install phase tears down", "install", "user", false},
+		{"docker phase tears down", "docker", "user", false},
+		{"templates phase tears down (runs pre-enforce, unenforced)", "templates", "user", false},
+		{"enforce phase tears down", "enforce", "enforced", false},
+		{"service phase keeps vm", "services", "enforced", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -218,10 +251,13 @@ func TestRunOpenAndEnforced_NonZeroExitClassifiesFailureByStage(t *testing.T) {
 			p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
 
 			var err error
-			if tc.runEnforced {
+			switch tc.runPhase {
+			case "bundle":
+				err = p.RunBundle(context.Background(), io.Discard, nil)
+			case "user":
+				err = p.RunUser(context.Background(), io.Discard, nil)
+			case "enforced":
 				err = p.RunEnforced(context.Background(), io.Discard, nil)
-			} else {
-				err = p.RunOpen(context.Background(), io.Discard, nil)
 			}
 			require.Error(t, err)
 
@@ -233,10 +269,19 @@ func TestRunOpenAndEnforced_NonZeroExitClassifiesFailureByStage(t *testing.T) {
 	}
 }
 
-func TestRunOpen_ExecStreamTransportErrorIsStepFailure(t *testing.T) {
+func TestRunBundle_ExecStreamTransportErrorIsStepFailure(t *testing.T) {
 	f := &fakeStreamTart{streamErr: context.DeadlineExceeded}
 	p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
-	err := p.RunOpen(context.Background(), io.Discard, nil)
+	err := p.RunBundle(context.Background(), io.Discard, nil)
+	require.Error(t, err)
+	var sf *StepFailure
+	require.ErrorAs(t, err, &sf)
+}
+
+func TestRunUser_ExecStreamTransportErrorIsStepFailure(t *testing.T) {
+	f := &fakeStreamTart{streamErr: context.DeadlineExceeded}
+	p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "myproj"}})
+	err := p.RunUser(context.Background(), io.Discard, nil)
 	require.Error(t, err)
 	var sf *StepFailure
 	require.ErrorAs(t, err, &sf)
@@ -251,27 +296,30 @@ func TestRunEnforced_ExecStreamTransportErrorIsStepFailure(t *testing.T) {
 	require.ErrorAs(t, err, &sf)
 }
 
-func TestRunOpenThenEnforced_RestartOmitsFirstBootWork(t *testing.T) {
+func TestRunBundleUserEnforced_RestartOmitsFirstBootWork(t *testing.T) {
 	f := &fakeStreamTart{markerPresent: true} // present → restart, not first boot
 	p := baseProvisioner(f, schema.Config{
 		Project:  schema.Project{Name: "myproj"},
 		Packages: []string{"jq"},
 		Install:  []string{"echo hi"},
 	})
-	require.NoError(t, p.RunOpen(context.Background(), io.Discard, nil))
+	require.NoError(t, p.RunBundle(context.Background(), io.Discard, nil))
+	require.NoError(t, p.RunUser(context.Background(), io.Discard, nil))
 	require.NoError(t, p.RunEnforced(context.Background(), io.Discard, nil))
 
-	openScript := scriptAt(t, f, 0)
-	// First-boot-only work must NOT appear on a restart.
-	assert.NotContains(t, openScript, "apt-get install")
-	assert.NotContains(t, openScript, "echo hi")
-	assert.NotContains(t, openScript, "::devm:stage:packages::")
+	bundleScript := scriptAt(t, f, 0)
 	// The guest-nft flush is unconditional — a restart with no first-boot
-	// or open-stage work still needs the base image's policy-drop lock
+	// or user-phase work still needs the base image's policy-drop lock
 	// cleared, or it would drop softnet's own egress.
-	assert.Contains(t, openScript, "sudo nft flush ruleset")
+	assert.Contains(t, bundleScript, "sudo nft flush ruleset")
 
-	enforcedScript := scriptAt(t, f, 1)
+	userScript := scriptAt(t, f, 1)
+	// First-boot-only work must NOT appear on a restart.
+	assert.NotContains(t, userScript, "apt-get install")
+	assert.NotContains(t, userScript, "echo hi")
+	assert.NotContains(t, userScript, "::devm:stage:packages::")
+
+	enforcedScript := scriptAt(t, f, 2)
 	// And the completion marker is not re-written.
 	assert.NotContains(t, enforcedScript, "touch /var/lib/devm/provisioned")
 	// Enforcement + target still run every boot.
@@ -295,9 +343,10 @@ func TestRunEnforced_RoutingOnlyServiceOmittedButProcessServicesStarted(t *testi
 	assert.NotContains(t, script, "routing-only.service")
 }
 
-func TestRunOpen_TemplatesTriggerDispatcher(t *testing.T) {
-	// devmbundle.Build renders declared templates from a real source file
-	// under the repo root, so give it one.
+func TestRunBundle_SucceedsWithTemplatesDeclared(t *testing.T) {
+	// devmbundle.Build (called by buildBundle, inside RunBundle) renders
+	// declared templates from a real source file under the repo root, so
+	// give it one.
 	repoRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "x"), []byte("hi {{.Project.Name}}\n"), 0o644))
 
@@ -309,7 +358,18 @@ func TestRunOpen_TemplatesTriggerDispatcher(t *testing.T) {
 		},
 	})
 	p.WorkspaceVMPath = repoRoot
-	require.NoError(t, p.RunOpen(context.Background(), io.Discard, nil))
+	require.NoError(t, p.RunBundle(context.Background(), io.Discard, nil))
+}
+
+func TestRunUser_TemplatesTriggerDispatcher(t *testing.T) {
+	f := &fakeStreamTart{}
+	p := baseProvisioner(f, schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"svc": {Exec: []string{"/bin/true"}, Templates: []schema.Template{{Source: "x", Output: "/tmp/y"}}},
+		},
+	})
+	require.NoError(t, p.RunUser(context.Background(), io.Discard, nil))
 	assert.Contains(t, scriptOf(t, f), "install-templates.sh")
 }
 

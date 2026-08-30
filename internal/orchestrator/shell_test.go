@@ -42,8 +42,9 @@ type fakeVMAdmin struct {
 	applyEgressEnforcementCalled int
 	applyEgressEnforcementErr    error
 	// callOrder records the relative order OpenEgress/ApplyEgressEnforcement
-	// were invoked in, for asserting they bracket the RunOpen/RunEnforced
-	// execs — entries append "open-egress" / "apply-egress-enforcement".
+	// were invoked in, for asserting they bracket the RunBundle/RunUser/
+	// RunEnforced execs — entries append "open-egress" /
+	// "apply-egress-enforcement".
 	callOrder []string
 	// logPath, when set, also appends the same markers into a shared file
 	// that the fake tart binary writes its own invocations into, so a test
@@ -363,19 +364,21 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 }
 
 // TestRunShellColdPath_FlipsEgressAroundProvision verifies the Critical fix:
-// the daemon-side softnet OPEN→ENFORCED flip happens BETWEEN the two
-// provisioning execs, not around a single one — OpenEgress, then RunOpen's
-// exec (apt/install:/templates/startup:), then ApplyEgressEnforcement, then
-// RunEnforced's exec (services + devm.target). Without this order services
-// would come up under open (unenforced) egress every boot.
+// the daemon-side softnet OPEN→ENFORCED flip happens BETWEEN RunUser's and
+// RunEnforced's execs, not around a single one — OpenEgress, then
+// RunBundle's exec, then RunUser's exec (apt/install:/templates/startup:),
+// then ApplyEgressEnforcement, then RunEnforced's exec (services +
+// devm.target). Without this order services would come up under open
+// (unenforced) egress every boot.
 //
 // Both fakeVMAdmin (OpenEgress/ApplyEgressEnforcement) and the fake tart
-// binary (the two provisioning ExecStreams' `bash -c`) append markers to the
-// same log file, giving one ordered timeline across both fakes. The fake
-// logs each invocation's full argv verbatim, and a multi-line script argv
-// spans several physical lines in the log — so the two `bash -c` execs are
-// told apart by ORDER (first occurrence = RunOpen, second = RunEnforced),
-// not by grepping a single line for script content.
+// binary (the three provisioning ExecStreams' `bash -c`) append markers to
+// the same log file, giving one ordered timeline across both fakes. The
+// fake logs each invocation's full argv verbatim, and a multi-line script
+// argv spans several physical lines in the log — so the three `bash -c`
+// execs are told apart by ORDER (first occurrence = RunBundle, second =
+// RunUser, third = RunEnforced), not by grepping a single line for script
+// content.
 func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 	fakeInstantMutagenSync(t)
 	repoRoot := t.TempDir()
@@ -413,7 +416,7 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
 
-	openIdx, runOpenIdx, enforceIdx, runEnforcedIdx := -1, -1, -1, -1
+	openIdx, runBundleIdx, runUserIdx, enforceIdx, runEnforcedIdx := -1, -1, -1, -1, -1
 	bashCSeen := 0
 	for i, line := range lines {
 		switch {
@@ -425,37 +428,42 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 			bashCSeen++
 			switch bashCSeen {
 			case 1:
-				runOpenIdx = i
+				runBundleIdx = i
 			case 2:
+				runUserIdx = i
+			case 3:
 				runEnforcedIdx = i
 			}
 		}
 	}
 	require.GreaterOrEqual(t, openIdx, 0, "OPEN-EGRESS marker must be present")
-	require.GreaterOrEqual(t, runOpenIdx, 0, "RunOpen's bash -c exec must be present")
+	require.GreaterOrEqual(t, runBundleIdx, 0, "RunBundle's bash -c exec must be present")
+	require.GreaterOrEqual(t, runUserIdx, 0, "RunUser's bash -c exec must be present")
 	require.GreaterOrEqual(t, enforceIdx, 0, "APPLY-EGRESS-ENFORCEMENT marker must be present")
 	require.GreaterOrEqual(t, runEnforcedIdx, 0, "RunEnforced's bash -c exec must be present")
-	assert.Less(t, openIdx, runOpenIdx, "OpenEgress must run BEFORE RunOpen's exec")
-	assert.Less(t, runOpenIdx, enforceIdx, "ApplyEgressEnforcement must run AFTER RunOpen's exec")
+	assert.Less(t, openIdx, runBundleIdx, "OpenEgress must run BEFORE RunBundle's exec")
+	assert.Less(t, runBundleIdx, runUserIdx, "RunBundle's exec must run BEFORE RunUser's exec")
+	assert.Less(t, runUserIdx, enforceIdx, "ApplyEgressEnforcement must run AFTER RunUser's exec")
 	assert.Less(t, enforceIdx, runEnforcedIdx,
 		"RunEnforced's exec (services + devm.target) must run AFTER ApplyEgressEnforcement — "+
 			"the Critical fix: services must never start under open egress")
 }
 
-// TestProvisionAndAttach_MutagenBeforeRunOpen pins the ordering: the
-// mutagen sync-session setup step runs AFTER OpenEgress (needs
-// iron-proxy for a cold-start guest git clone) but BEFORE RunOpen (so
-// install:/startup: see a hydrated workspace). waitForInitialSyncFn sits
-// between mutagen setup and RunOpen (the extracted FlushAll wait), and
-// runStartupCommandsFn fires right after RunOpen, still under OPEN
-// egress, before ApplyEgressEnforcement.
+// TestProvisionAndAttach_MutagenBeforeRunUser pins the ordering: RunBundle
+// runs right after OpenEgress (extracts /opt/devm + installs the CA
+// iron-proxy needs to MITM a guest git clone); the mutagen sync-session
+// setup step runs AFTER RunBundle but BEFORE RunUser (so install:/startup:
+// see a hydrated workspace). waitForInitialSyncFn sits between mutagen
+// setup and RunUser (the extracted FlushAll wait), and runStartupCommandsFn
+// fires right after RunUser, still under OPEN egress, before
+// ApplyEgressEnforcement.
 //
 // mutagenSetupFn, waitForInitialSyncFn, and runStartupCommandsFn are all
 // faked to append a marker into the same ordered log file fakeTartBinWithLog
 // and fakeVMAdmin both write into, instead of running the real mutagen
 // binary — this is a sequencing test, not an integration test of SetupPhase
 // or FlushAll themselves (covered by internal/serviceapi's own tests).
-func TestProvisionAndAttach_MutagenBeforeRunOpen(t *testing.T) {
+func TestProvisionAndAttach_MutagenBeforeRunUser(t *testing.T) {
 	origMutagen := mutagenSetupFn
 	origWait := waitForInitialSyncFn
 	origRunStartup := runStartupCommandsFn
@@ -540,14 +548,16 @@ func TestProvisionAndAttach_MutagenBeforeRunOpen(t *testing.T) {
 			bashCSeen++
 			switch bashCSeen {
 			case 1:
-				order = append(order, "run-open")
+				order = append(order, "run-bundle")
 			case 2:
+				order = append(order, "run-user")
+			case 3:
 				order = append(order, "run-enforced")
 			}
 		}
 	}
 	assert.Equal(t,
-		[]string{"open-egress", "mutagen", "wait-sync", "run-open", "run-startup", "apply-enforcement", "run-enforced"},
+		[]string{"open-egress", "run-bundle", "mutagen", "wait-sync", "run-user", "run-startup", "apply-enforcement", "run-enforced"},
 		order,
 	)
 }
@@ -708,7 +718,7 @@ func TestRunShellColdPath_ProvisionFail_TearsDownVM(t *testing.T) {
 		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
 	}
 
-	// The RunOpen ExecStream emits the `install` stage marker then
+	// The RunUser ExecStream emits the `install` stage marker then
 	// exits non-zero — an install-phase failure that must tear down.
 	tartBin, logPath := fakeTartBinStageFail(t, repoRoot, "install")
 
@@ -1114,25 +1124,33 @@ exit 0
 }
 
 // fakeTartBinStageFail writes a fake tart binary that logs every
-// invocation and, for the ONE of the two provisioning ExecStreams (`bash -c
-// <script>`) that stage actually runs in, emits the given
+// invocation and, for the ONE of the three provisioning ExecStreams (`bash
+// -c <script>`) that stage actually runs in, emits the given
 // `::devm:stage:<stage>::` marker on stdout and exits non-zero —
-// simulating a script failure at that stage. "enforce" and "services" run
-// in RunEnforced's exec (identified by the enforce-stage marker baked into
-// its script); every other stage
-// (open/packages/install/docker/templates/startup) runs in RunOpen's exec
-// (identified by the bundle-tar extraction baked into its script) — the
-// OTHER exec succeeds normally, exactly as the real split scripts behave.
-// The first-boot marker probe (`test -f /var/lib/devm/provisioned`) reports
-// absent so cold-start takes the first-boot path. Every other call
-// (waitVMReady `true`, teardown `delete`) succeeds / is logged.
+// simulating a script failure at that stage. "bundle" runs in RunBundle's
+// exec (identified by the bundle-tar extraction baked into its script);
+// "enforce" and "services" run in RunEnforced's exec (identified by the
+// enforce-stage marker baked into its script); every other stage
+// (open/packages/install/docker/templates/startup) runs in RunUser's exec
+// (identified by the open-stage marker baked into its script, since
+// RunUser's script has neither the bundle-extract nor the enforce-stage
+// signature) — the OTHER execs succeed normally, exactly as the real split
+// scripts behave. The first-boot marker probe (`test -f
+// /var/lib/devm/provisioned`) reports absent so cold-start takes the
+// first-boot path. Every other call (waitVMReady `true`, teardown
+// `delete`) succeeds / is logged.
 func fakeTartBinStageFail(t *testing.T, dir, stage string) (*tart.Tart, string) {
 	t.Helper()
 	bin := filepath.Join(dir, "tart-fake-stagefail")
 	logPath := filepath.Join(dir, "tart-invocations.log")
-	failMarker := `*"tar -xC /opt/devm"*` // RunOpen's exec
-	if stage == "enforce" || stage == "services" {
+	var failMarker string
+	switch stage {
+	case "bundle":
+		failMarker = `*"tar -xC /opt/devm"*` // RunBundle's exec
+	case "enforce", "services":
 		failMarker = `*"::devm:stage:enforce::"*` // RunEnforced's exec
+	default:
+		failMarker = `*"::devm:stage:open::"*` // RunUser's exec
 	}
 	script := fmt.Sprintf(`#!/bin/sh
 echo "$*" >> %q

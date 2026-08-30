@@ -31,7 +31,7 @@ func recordingGuestExec(calls *[]string, failOnCall int, exitCode int, failMsg s
 // TestDispatchStartupCommands_RunsEachCommandInOrder verifies Task 8:
 // dispatchStartupCommands no longer flushes mutagen itself (that moved
 // upstream to waitForInitialSyncFn, called once in provisionAndAttach
-// before RunOpen) — it just dispatches every startup command's `run <name>`
+// before RunUser) — it just dispatches every startup command's `run <name>`
 // in order.
 func TestDispatchStartupCommands_RunsEachCommandInOrder(t *testing.T) {
 	var calls []string

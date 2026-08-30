@@ -8,7 +8,56 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRenderProvisionOpenScript_Structure(t *testing.T) {
+func TestRenderProvisionBundleScript_Structure(t *testing.T) {
+	s := string(RenderProvisionBundleScript(ProvisionScriptInput{FirstBoot: true}))
+
+	// marker WRITTEN here (not cleaned — that's the enforced script's job)
+	assert.Less(t, strings.Index(s, "touch /run/devm/provisioning"),
+		strings.Index(s, "tar -x"))
+	assert.NotContains(t, s, "rm -f /run/devm/provisioning")
+	// fail-fast
+	assert.Contains(t, s, "set -eo pipefail")
+	// bundle stage marker present, so the daemon can drive a spinner /
+	// classify a bundle-extract failure as teardown-class.
+	assert.Contains(t, s, "::devm:stage:bundle::")
+	// bundle extract + install.sh always run, unconditionally.
+	assert.Contains(t, s, "sudo mkdir -p /opt/devm")
+	assert.Contains(t, s, "sudo tar -xC /opt/devm")
+	assert.Contains(t, s, "sudo /opt/devm/install.sh")
+	// the guest-nft flush is unconditional too.
+	assert.Contains(t, s, "sudo nft flush ruleset")
+	// no user-phase content in this half at all.
+	assert.NotContains(t, s, "::devm:stage:open::")
+	assert.NotContains(t, s, "::devm:stage:packages::")
+	assert.NotContains(t, s, "::devm:stage:install::")
+	assert.NotContains(t, s, "::devm:stage:docker::")
+	assert.NotContains(t, s, "::devm:stage:templates::")
+	assert.NotContains(t, s, "::devm:stage:startup::")
+	// no enforce/services/target content either.
+	assert.NotContains(t, s, "::devm:stage:enforce::")
+	assert.NotContains(t, s, "::devm:stage:services::")
+	assert.NotContains(t, s, "systemctl start devm.target")
+	assert.NotContains(t, s, "touch /var/lib/devm/provisioned")
+}
+
+// TestRenderProvisionBundleScript_UnconditionalRegardlessOfInput pins that
+// the bundle-extract prologue and nft flush run every boot, regardless of
+// FirstBoot/Startup/Packages/etc — install.sh is idempotent, and the flush
+// must clear the base image's policy-drop lock even on a boot with zero
+// user-phase work.
+func TestRenderProvisionBundleScript_UnconditionalRegardlessOfInput(t *testing.T) {
+	s := string(RenderProvisionBundleScript(ProvisionScriptInput{FirstBoot: false}))
+	assert.Contains(t, s, "sudo tar -xC /opt/devm")
+	assert.Contains(t, s, "sudo /opt/devm/install.sh")
+	assert.Contains(t, s, "sudo nft flush ruleset")
+	flushIdx := strings.Index(s, "sudo nft flush ruleset")
+	extractIdx := strings.Index(s, "sudo tar -xC /opt/devm")
+	require.Greater(t, flushIdx, 0)
+	require.Greater(t, extractIdx, 0)
+	assert.Less(t, extractIdx, flushIdx, "extract must run before the flush")
+}
+
+func TestRenderProvisionUserScript_Structure(t *testing.T) {
 	in := ProvisionScriptInput{
 		FirstBoot:        true,
 		Packages:         []string{"jq"},
@@ -18,14 +67,16 @@ func TestRenderProvisionOpenScript_Structure(t *testing.T) {
 		Startup:          []string{"echo boot"},
 		Services:         []string{"web"},
 	}
-	s := string(RenderProvisionOpenScript(in))
+	s := string(RenderProvisionUserScript(in))
 
-	// marker WRITTEN here (not cleaned — that's the enforced script's job)
-	assert.Less(t, strings.Index(s, "touch /run/devm/provisioning"),
-		strings.Index(s, "tar -x"))
-	assert.NotContains(t, s, "rm -f /run/devm/provisioning")
 	// fail-fast
 	assert.Contains(t, s, "set -eo pipefail")
+	// no bundle-extract content in this half at all — that's
+	// RenderProvisionBundleScript's job now.
+	assert.NotContains(t, s, "tar -xC /opt/devm")
+	assert.NotContains(t, s, "/opt/devm/install.sh")
+	assert.NotContains(t, s, "nft flush ruleset")
+	assert.NotContains(t, s, "touch /run/devm/provisioning")
 	// order: open BEFORE startup
 	assert.Less(t, strings.Index(s, "::devm:stage:open::"),
 		strings.Index(s, "::devm:stage:startup::"))
@@ -52,48 +103,28 @@ func TestRenderProvisionOpenScript_Structure(t *testing.T) {
 	assert.Contains(t, s, "timeout 600 /opt/devm/scripts/with-devm-env bash /opt/devm/startup.sh")
 }
 
-func TestRenderProvisionOpenScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
+func TestRenderProvisionUserScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
 	// restart, empty startup, no packages/install/docker/templates → no
 	// open-stage work and no first-boot marker.
-	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
+	s := string(RenderProvisionUserScript(ProvisionScriptInput{
 		FirstBoot: false,
 	}))
 	assert.NotContains(t, s, "::devm:stage:startup::")
 	assert.NotContains(t, s, "::devm:stage:open::")
 	// not first boot → no completion-marker write
 	assert.NotContains(t, s, "touch /var/lib/devm/provisioned")
-	// the guest-nft flush is UNCONDITIONAL — the base image's policy-drop
-	// lock must be cleared every boot even when no open-stage work runs,
-	// or a leftover policy-drop would drop softnet's own egress.
-	assert.Contains(t, s, "sudo nft flush ruleset")
 	// enforcement/target/marker-cleanup are the enforced script's job,
 	// not rendered here at all.
 	assert.NotContains(t, s, "systemctl start devm.target")
 }
 
-// TestRenderProvisionOpenScript_NftFlushUnconditionalAndBeforeOpenStage pins
-// that the guest-nft flush runs BEFORE the open-stage work (so any install/
-// startup/template steps that need egress see it already cleared) and
-// happens regardless of hasOpenWork() — the flush and the open-stage work
-// are independent now.
-func TestRenderProvisionOpenScript_NftFlushUnconditionalAndBeforeOpenStage(t *testing.T) {
-	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
-		FirstBoot:        true,
-		InstallTemplates: true,
-	}))
-	flushIdx := strings.Index(s, "sudo nft flush ruleset")
-	require.Greater(t, flushIdx, 0, "flush must be present")
-	assert.Less(t, flushIdx, strings.Index(s, "::devm:stage:open::"),
-		"flush must run before the open-stage work begins")
-}
-
-// TestRenderProvisionOpenScript_StepTimeoutOverride pins that a non-default
+// TestRenderProvisionUserScript_StepTimeoutOverride pins that a non-default
 // StepTimeoutSeconds replaces the hardcoded 600s default in both the
 // install: and startup: `timeout` wrapping — the daemon threads
 // DEVM_INSTALL_STEP_TIMEOUT_S through Provisioner into this field, and
 // e2e/test_75_install_step_timeout.py depends on it actually taking effect.
-func TestRenderProvisionOpenScript_StepTimeoutOverride(t *testing.T) {
-	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
+func TestRenderProvisionUserScript_StepTimeoutOverride(t *testing.T) {
+	s := string(RenderProvisionUserScript(ProvisionScriptInput{
 		FirstBoot:          true,
 		Install:            []string{"echo hi"},
 		Startup:            []string{"echo boot"},
@@ -104,10 +135,10 @@ func TestRenderProvisionOpenScript_StepTimeoutOverride(t *testing.T) {
 	assert.NotContains(t, s, "timeout 600 ")
 }
 
-func TestRenderProvisionOpenScript_RestartWithTemplatesOpensWindow(t *testing.T) {
+func TestRenderProvisionUserScript_RestartWithTemplatesOpensWindow(t *testing.T) {
 	// A warm restart that still has templates must open the egress window so
 	// a template installer that fetches over the network can run.
-	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
+	s := string(RenderProvisionUserScript(ProvisionScriptInput{
 		FirstBoot:        false,
 		InstallTemplates: true,
 	}))
@@ -118,7 +149,7 @@ func TestRenderProvisionOpenScript_RestartWithTemplatesOpensWindow(t *testing.T)
 	assert.NotContains(t, s, "::devm:stage:docker::")
 }
 
-func TestRenderProvisionOpen_InstallScriptRef_Expands(t *testing.T) {
+func TestRenderProvisionUser_InstallScriptRef_Expands(t *testing.T) {
 	in := ProvisionScriptInput{
 		FirstBoot: true,
 		Install:   []string{"echo raw", ">install-supabase", "echo trailing"},
@@ -127,7 +158,7 @@ func TestRenderProvisionOpen_InstallScriptRef_Expands(t *testing.T) {
 		},
 		StepTimeoutSeconds: 1,
 	}
-	s := string(RenderProvisionOpenScript(in))
+	s := string(RenderProvisionUserScript(in))
 	// Raw entries render unchanged.
 	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo raw'")
 	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo trailing'")
@@ -139,23 +170,23 @@ func TestRenderProvisionOpen_InstallScriptRef_Expands(t *testing.T) {
 	assert.Contains(t, s, "::devm:progress:install:3:3::")
 }
 
-func TestProvisionOpen_PackageConvergeOnNonFirstBoot(t *testing.T) {
+func TestProvisionUser_PackageConvergeOnNonFirstBoot(t *testing.T) {
 	in := ProvisionScriptInput{
 		FirstBoot:      false,
 		PackageAdds:    []string{"sl"},
 		PackageRemoves: []string{"chromium"},
 	}
-	s := string(RenderProvisionOpenScript(in))
+	s := string(RenderProvisionUserScript(in))
 	// Converge renders inside the open window:
 	require.Contains(t, s, "::devm:stage:packages::")
 	require.Contains(t, s, "install -y 'sl'")
 	require.Contains(t, s, "remove -y 'chromium'")
 }
 
-func TestProvisionOpen_ConvergeAloneOpensWindow(t *testing.T) {
+func TestProvisionUser_ConvergeAloneOpensWindow(t *testing.T) {
 	// FirstBoot=false, no startup, no templates, only PackageAdds:
 	// hasOpenWork must be true (the converge needs the open window).
-	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
+	s := string(RenderProvisionUserScript(ProvisionScriptInput{
 		FirstBoot:   false,
 		PackageAdds: []string{"sl"},
 	}))
@@ -164,10 +195,10 @@ func TestProvisionOpen_ConvergeAloneOpensWindow(t *testing.T) {
 	assert.Contains(t, s, "install -y 'sl'")
 }
 
-func TestProvisionOpen_FirstBootIgnoresConvergeFields(t *testing.T) {
+func TestProvisionUser_FirstBootIgnoresConvergeFields(t *testing.T) {
 	// FirstBoot=true renders the full Packages list exactly as today;
 	// PackageAdds/Removes are not rendered (first boot has no drift).
-	s := string(RenderProvisionOpenScript(ProvisionScriptInput{
+	s := string(RenderProvisionUserScript(ProvisionScriptInput{
 		FirstBoot:      true,
 		Packages:       []string{"jq"},
 		PackageAdds:    []string{"sl"},

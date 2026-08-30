@@ -1,11 +1,16 @@
 // Package provision composes and ships the guest provisioning scripts for a
-// Tart VM, split into two execs around the daemon's softnet OPEN→ENFORCED
-// egress flip: RunOpen (render.RenderProvisionOpenScript, with the devm
-// bundle tar on stdin) runs while egress is OPEN, and RunEnforced (render.
-// RenderProvisionEnforcedScript, which starts user services and activates
-// devm.target) runs after the orchestrator has flipped softnet to ENFORCED —
-// so services never come up under open egress. Each script's exit code is
-// that half's provisioning result.
+// Tart VM, split into three execs around mutagen sync setup and the
+// daemon's softnet OPEN→ENFORCED egress flip: RunBundle (render.
+// RenderProvisionBundleScript, with the devm bundle tar on stdin) extracts
+// /opt/devm and runs install.sh — including the CA iron-proxy needs to MITM
+// a guest git clone — before mutagen sync setup runs; RunUser (render.
+// RenderProvisionUserScript) runs packages/install:/docker/templates/
+// startup: after mutagen sync has hydrated the workspace, still under OPEN
+// egress; and RunEnforced (render.RenderProvisionEnforcedScript, which
+// starts user services and activates devm.target) runs after the
+// orchestrator has flipped softnet to ENFORCED — so services never come up
+// under open egress. Each script's exit code is that phase's provisioning
+// result.
 package provision
 
 import (
@@ -77,7 +82,7 @@ type Provisioner struct {
 	// StepTimeoutSeconds bounds every install:/startup: command in the
 	// composed script (render.ProvisionScriptInput.StepTimeoutSeconds). The
 	// daemon fills this from DEVM_INSTALL_STEP_TIMEOUT_S; zero means
-	// "unset" and RenderProvisionOpenScript falls back to its own default.
+	// "unset" and RenderProvisionUserScript falls back to its own default.
 	StepTimeoutSeconds int
 
 	// PackageAdds / PackageRemoves are the apt package drift to converge
@@ -116,9 +121,9 @@ func (f *StepFailure) Unwrap() error { return f.Err }
 // failure is considered post-install: the VM is basically good and the
 // user's service definition is what's broken, so `devm shell` should
 // surface the error but leave the VM running for `tart exec` inspection.
-// Any earlier stage (extract, open, apt, install:, docker, templates,
-// startup:, enforce) is a cold-start-broken state where the VM is worth
-// destroying and re-creating.
+// Any earlier stage (extract, bundle, open, apt, install:, docker,
+// templates, startup:, enforce) is a cold-start-broken state where the VM
+// is worth destroying and re-creating.
 //
 // templates deliberately does NOT keep the VM even though it runs after
 // install:/docker: templates run in the composed script's OPEN (unenforced)
@@ -140,17 +145,16 @@ func IsPostInstallFailure(err error) bool {
 	return stagesAfterInstall[sf.Step]
 }
 
-// RunOpen ships the OPEN-egress half of provisioning (render.
-// RenderProvisionOpenScript) plus the bundle tar in ONE streaming `tart exec
-// -i`, run while softnet is OPEN. It sets p.firstBoot (read by
-// RunEnforced's scriptInput too) from the guest's first-boot marker. Every
-// streamed line is written to w (diagnostic capture) and forwarded to
-// onLine (stage-marker parsing / spinner — may be nil). The script's exit
-// code is the whole result: a non-zero exit returns a *StepFailure
-// classified by the last stage the script reached, so callers can
-// distinguish install-phase from service-phase failures via
-// IsPostInstallFailure.
-func (p *Provisioner) RunOpen(ctx context.Context, w io.Writer, onLine func(stream, line string)) error {
+// RunBundle ships the bundle-extract prerequisites (render.
+// RenderProvisionBundleScript) plus the bundle tar in ONE streaming `tart
+// exec -i`, run while softnet is OPEN, before mutagen sync setup. It sets
+// p.firstBoot (read by RunUser's and RunEnforced's scriptInput too) from
+// the guest's first-boot marker. Every streamed line is written to w
+// (diagnostic capture) and forwarded to onLine (stage-marker parsing /
+// spinner — may be nil). The script's exit code is the whole result: a
+// non-zero exit returns a *StepFailure classified by the last stage the
+// script reached.
+func (p *Provisioner) RunBundle(ctx context.Context, w io.Writer, onLine func(stream, line string)) error {
 	p.firstBoot = !p.markerExists(ctx)
 
 	body, err := p.buildBundle()
@@ -158,23 +162,36 @@ func (p *Provisioner) RunOpen(ctx context.Context, w io.Writer, onLine func(stre
 		return &StepFailure{Step: "extract", Err: err}
 	}
 
-	script := render.RenderProvisionOpenScript(p.scriptInput())
+	script := render.RenderProvisionBundleScript(p.scriptInput())
 	return p.execScript(ctx, script, bytes.NewReader(body), w, onLine)
+}
+
+// RunUser ships the user-declared-work half of provisioning (render.
+// RenderProvisionUserScript) in ONE streaming `tart exec -i`, run while
+// softnet is still OPEN, after mutagen sync has hydrated the workspace and
+// before the ENFORCED flip. No bundle is sent on stdin — RunBundle already
+// extracted /opt/devm. Same StepFailure classification and streaming
+// behavior as RunBundle. Callers must call RunBundle first so p.firstBoot
+// is set from the guest's marker.
+func (p *Provisioner) RunUser(ctx context.Context, w io.Writer, onLine func(stream, line string)) error {
+	script := render.RenderProvisionUserScript(p.scriptInput())
+	return p.execScript(ctx, script, nil, w, onLine)
 }
 
 // RunEnforced ships the ENFORCED-egress half of provisioning (render.
 // RenderProvisionEnforcedScript) in ONE streaming `tart exec -i`, run
 // immediately after softnet has been flipped to ENFORCED. No bundle is sent
-// on stdin — /opt/devm was already extracted by RunOpen. Same
-// StepFailure classification and streaming behavior as RunOpen. Callers
-// must call RunOpen first so p.firstBoot is set from the guest's marker.
+// on stdin — /opt/devm was already extracted by RunBundle. Same
+// StepFailure classification and streaming behavior as RunBundle/RunUser.
+// Callers must call RunBundle first so p.firstBoot is set from the guest's
+// marker.
 func (p *Provisioner) RunEnforced(ctx context.Context, w io.Writer, onLine func(stream, line string)) error {
 	script := render.RenderProvisionEnforcedScript(p.scriptInput())
 	return p.execScript(ctx, script, nil, w, onLine)
 }
 
 // execScript is the shared ExecStream + stage-classification plumbing
-// RunOpen and RunEnforced both use.
+// RunBundle, RunUser, and RunEnforced all use.
 func (p *Provisioner) execScript(ctx context.Context, script []byte, stdin io.Reader, w io.Writer, onLine func(stream, line string)) error {
 	var st stageTracker
 	wrapped := func(stream, line string) {

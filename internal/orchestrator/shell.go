@@ -61,10 +61,11 @@ type VMAdminClient interface {
 	ApplyIronProxy(ctx context.Context, req serviceapi.VMApplyIronProxyRequest) (serviceapi.VMApplyIronProxyResponse, error)
 	// OpenEgress flips the project's softnet control socket to OPEN.
 	// softnet boots LOCKED, so provisionAndAttach calls this immediately
-	// before running RunOpen (the open-egress half of provisioning).
+	// before running prov.RunBundle (which extracts /opt/devm and installs
+	// the CA iron-proxy needs to MITM a guest git clone).
 	OpenEgress(ctx context.Context, name string) error
 	// ApplyEgressEnforcement flips the project's softnet control socket to
-	// ENFORCED. provisionAndAttach calls this immediately after RunOpen
+	// ENFORCED. provisionAndAttach calls this immediately after RunUser
 	// succeeds and BEFORE RunEnforced (which starts user services and
 	// devm.target) — the Critical fix: services must never start under
 	// open egress. warmAttach also calls it, idempotently, as a
@@ -262,6 +263,14 @@ func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName str
 // tears the VM down unless it's a post-install failure, in which case the
 // VM is kept running for in-place debugging (test_51's contract).
 //
+// Sequence: OpenEgress, prov.RunBundle (extracts /opt/devm + installs the
+// CA iron-proxy needs to MITM a guest git clone), mutagenSetupFn +
+// waitForInitialSyncFn (hydrate the workspace through the now CA-trusted
+// iron-proxy), prov.RunUser (packages/install:/docker/templates/startup:),
+// runStartupCommandsFn, ApplyEgressEnforcement, prov.RunEnforced (services +
+// devm.target) — the last three run in that order so services never come up
+// under open egress.
+//
 // projectIP is the project's daemon-allocated 127.42/16 loopback IP —
 // from VMStartResponse on the cold-start path, VMApplyIronProxyResponse
 // on adopt-in-place — seeded into the cold-start StateSnapshot below so
@@ -322,19 +331,36 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	log.Printf("shell: provisioning %s", vmName)
 	reporter.Step("provisioning", false)
 
-	// softnet boots LOCKED. Flip it OPEN before mutagen sync (guest git
-	// clone needs iron-proxy, iron-proxy needs OPEN egress) and before the
-	// open-egress exec runs, so apt/install:/templates/startup: have
-	// egress too.
+	// softnet boots LOCKED. Flip it OPEN before RunBundle (installs the CA
+	// iron-proxy needs to MITM a guest git clone) and before mutagen sync
+	// (guest git clone needs iron-proxy, iron-proxy needs OPEN egress).
 	if err := d.ServiceAPIClient.OpenEgress(ctx, vmName); err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "open egress")
 	}
 
+	// Provisioning output is DIAGNOSTIC — stage names, package install
+	// noise, etc. It belongs on stderr so `devm exec pwd` / `devm shell
+	// -- <cmd>` produce clean stdout that scripts can pipe. Failure details
+	// flow via the returned error plus pp.FailureOutput() below, not via
+	// this writer. pp drives the stage-marker spinner from ExecStream's
+	// line-by-line output.
+	pp := newProvisionProgress(reporter)
+
+	// RunBundle extracts /opt/devm and runs install.sh — CA install,
+	// mutagen-agent, systemd units, ssh material — BEFORE mutagen sync
+	// setup, so the guest's trust store already has the CA iron-proxy
+	// needs to MITM a cold-start guest git clone during mutagenSetupFn.
+	if err := prov.RunBundle(ctx, os.Stderr, pp.Line); err != nil {
+		fmt.Fprint(os.Stderr, pp.FailureOutput())
+		return d.teardownOnFail(ctx, cfg, vmName, err, "provision bundle")
+	}
+	log.Printf("shell: bundle extracted: %s", vmName)
+
 	// mutagen setup runs BEFORE install:/startup: so those steps see a
 	// hydrated workspace. Transport is tart exec (see cmd/tart-mutagen-ssh),
 	// so mutagen has no sshd dependency and can run this early — it only
-	// needs OpenEgress (above) for a cold-start guest git clone through
-	// iron-proxy.
+	// needs OpenEgress + RunBundle (above) for a cold-start guest git clone
+	// through a CA-trusted iron-proxy.
 	fmt.Fprintln(os.Stderr, "::devm:stage:mutagen-sync::")
 	if err := mutagenSetupFn(d, ctx, cfg, vmName, repoRoot, tunnelPort); err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "mutagen setup")
@@ -348,16 +374,9 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		return d.teardownOnFail(ctx, cfg, vmName, err, "wait for initial sync")
 	}
 
-	// Provisioning output is DIAGNOSTIC — stage names, package install
-	// noise, etc. It belongs on stderr so `devm exec pwd` / `devm shell
-	// -- <cmd>` produce clean stdout that scripts can pipe. Failure details
-	// flow via the returned error plus pp.FailureOutput() below, not via
-	// this writer. pp drives the stage-marker spinner from ExecStream's
-	// line-by-line output.
-	pp := newProvisionProgress(reporter)
-	if err := prov.RunOpen(ctx, os.Stderr, pp.Line); err != nil {
+	if err := prov.RunUser(ctx, os.Stderr, pp.Line); err != nil {
 		fmt.Fprint(os.Stderr, pp.FailureOutput())
-		// Open-phase failures (apt/install:/docker/templates/startup:) tear
+		// User-phase failures (apt/install:/docker/templates/startup:) tear
 		// down — the VM is in a cold-start-broken state and the user's fix
 		// belongs in devm.yaml (test_51: install failure = state=absent).
 		return d.teardownOnFail(ctx, cfg, vmName, err, "provision")
@@ -365,7 +384,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	log.Printf("shell: open-egress provisioning done: %s", vmName)
 
 	// Fire per-repo startup commands while egress is still OPEN, right
-	// after RunOpen — the workspace mutagen just hydrated is exactly what
+	// after RunUser — the workspace mutagen just hydrated is exactly what
 	// install:/startup: need to see. Running before ApplyEgressEnforcement
 	// means a startup command isn't limited to the project's
 	// network.allow: list for this window.
@@ -412,8 +431,8 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	log.Printf("shell: snapshot written: %s", vmName)
 
 	// Seed the daemon-side state snapshot too, now that provisioning is
-	// fully green (RunOpen, egress enforcement, and RunEnforced all
-	// succeeded). Best-effort: log but don't fail — a missing snapshot
+	// fully green (RunBundle, RunUser, egress enforcement, and RunEnforced
+	// all succeeded). Best-effort: log but don't fail — a missing snapshot
 	// only degrades to "full diff on next reconcile" (safe), and failing
 	// here would kill a start that otherwise succeeded.
 	templateContents, err := render.RenderTemplatesByBasename(cfg, repoRoot, d.Ident.RuntimeDir(), cfg.Project.Name)
@@ -448,24 +467,25 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 }
 
 // mutagenSetupFn is the test-injection seam for the mutagen sync-session
-// setup step provisionAndAttach runs after OpenEgress and before RunOpen.
-// Production always calls (ShellDeps).setupMutagenSessions; tests
-// substitute a fake to verify sequencing without needing a live VM or the
-// real mutagen binary.
+// setup step provisionAndAttach runs after prov.RunBundle and before
+// prov.RunUser. Production always calls (ShellDeps).setupMutagenSessions;
+// tests substitute a fake to verify sequencing without needing a live VM or
+// the real mutagen binary.
 var mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
 	return d.setupMutagenSessions(ctx, cfg, vmName, repoRoot, tunnelPort)
 }
 
 // waitForInitialSyncFn is the test-injection seam for the wait-for-sync
 // step provisionAndAttach runs immediately after mutagenSetupFn and before
-// RunOpen. Production always calls (ShellDeps).waitForInitialSync; tests
-// substitute a fake to verify sequencing without a live mutagen daemon.
+// prov.RunUser. Production always calls (ShellDeps).waitForInitialSync;
+// tests substitute a fake to verify sequencing without a live mutagen
+// daemon.
 var waitForInitialSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
 	return d.waitForInitialSync(ctx, cfg, vmName)
 }
 
 // waitForInitialSync blocks until every one of vmName's mutagen sync
-// sessions finishes converging, so RunOpen's install:/startup: steps see a
+// sessions finishes converging, so RunUser's install:/startup: steps see a
 // fully hydrated workspace rather than a still-syncing one.
 func (d ShellDeps) waitForInitialSync(ctx context.Context, cfg schema.Config, vmName string) error {
 	mutagenBin, err := mutagen.Ensure(d.Ident.RuntimeDir())
@@ -517,9 +537,9 @@ func (d ShellDeps) setupMutagenSessions(ctx context.Context, cfg schema.Config, 
 }
 
 // runStartupCommandsFn is the test-injection seam for the RunStartupCommands
-// phase provisionAndAttach runs after RunOpen and before
+// phase provisionAndAttach runs after prov.RunUser and before
 // ApplyEgressEnforcement — the workspace is already hydrated (mutagenSetupFn
-// + waitForInitialSyncFn ran before RunOpen) and egress is still OPEN.
+// + waitForInitialSyncFn ran before prov.RunUser) and egress is still OPEN.
 // Production always calls (ShellDeps).runStartupCommands; tests substitute
 // a fake to verify sequencing without needing a live VM or the real
 // mutagen binary.
@@ -587,8 +607,8 @@ func shellSingleQuoted(s string) string {
 // vmName via `tart exec -i <name> sudo bash -s`, script on stdin. Scripts
 // embed their own `sudo -u devm` where they need to drop privileges.
 // Routed through d.Tart (rather than a raw exec.Command) so tests can
-// substitute the same fake tart binary they already use for RunOpen/
-// RunEnforced.
+// substitute the same fake tart binary they already use for RunBundle/
+// RunUser/RunEnforced.
 func (d ShellDeps) guestExec(ctx context.Context, vmName string) serviceapi.GuestExec {
 	return func(script string) (stdout, stderr string, exitCode int, err error) {
 		res := d.Tart.ExecStdin(ctx, vmName, strings.NewReader(script), []string{"sudo", "bash", "-s"})
