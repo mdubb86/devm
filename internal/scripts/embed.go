@@ -8,8 +8,8 @@ var InstallTemplates string
 //go:embed with-devm-env.sh
 var WithDevmEnv string
 
-//go:embed install.sh
-var Install string
+//go:embed install.sh.tmpl
+var InstallTemplate string
 
 //go:embed etc-profile-devm.sh
 var EtcProfileDevm string

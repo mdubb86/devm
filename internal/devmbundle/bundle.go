@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/scripts"
@@ -96,7 +97,11 @@ func Build(in BuildInput) ([]byte, error) {
 		}
 	}
 
-	if err := writeEntry(tw, "install.sh", 0o755, []byte(scripts.Install)); err != nil {
+	installBody, err := render.RenderInstallScript(mutagen.EmbeddedVersion())
+	if err != nil {
+		return nil, fmt.Errorf("render install.sh: %w", err)
+	}
+	if err := writeEntry(tw, "install.sh", 0o755, installBody); err != nil {
 		return nil, err
 	}
 
