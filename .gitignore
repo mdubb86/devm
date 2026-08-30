@@ -54,3 +54,7 @@ internal/guestbin/embed/run
 # mutagen binary embedded (gzipped) into devm at build time.
 # Populated by `just fetch-mutagen`.
 internal/mutagen/embed/*.gz
+
+# tart-mutagen-ssh binary embedded (uncompressed) into devm at build time.
+# Populated by `just _build-tart-mutagen-ssh-embed`.
+internal/tartmutagenssh/embed/tart-mutagen-ssh
