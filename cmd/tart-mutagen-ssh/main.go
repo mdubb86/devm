@@ -55,7 +55,18 @@ func main() {
 		fmt.Fprintf(os.Stderr, "tart-mutagen-ssh: agent path %s (rewritten from mutagen's HOME-relative %q)\n", cmd[0], originalFirst)
 	}
 
-	tartArgs := append([]string{"exec", vm}, cmd...)
+	// mutagen sends the remote command as ONE ssh argv element (a shell
+	// command string, e.g. ".mutagen/agents/… synchronizer --log-level=info").
+	// sshd normally hands this to $SHELL -c so it gets tokenized before exec;
+	// tart exec doesn't do that itself, so we wrap in sh -c to preserve
+	// sshd's shell-execution semantics. Absolute path (from the rewrite
+	// above) ensures the agent resolves regardless of the shell's cwd.
+	//
+	// The `exec ` prefix guarantees POSIX shell replaces itself with the
+	// command rather than fork-wrapping — so no shell process lingers for
+	// the agent's lifetime and signals reach mutagen-agent directly.
+	joined := strings.Join(cmd, " ")
+	tartArgs := []string{"exec", vm, "sh", "-c", "exec " + joined}
 	fmt.Fprintf(os.Stderr, "tart-mutagen-ssh: invoking tart %s\n", strings.Join(tartArgs, " "))
 	c := exec.Command("tart", tartArgs...)
 	c.Stdin = os.Stdin

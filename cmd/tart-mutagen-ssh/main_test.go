@@ -119,9 +119,8 @@ exit 0
 	require.NoError(t, err)
 	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
 	assert.Equal(t, []string{
-		"exec", "testvm",
-		"/home/devm/.mutagen/agents/0.18.1/mutagen-agent",
-		"synchronizer", "--log-level=debug",
+		"exec", "testvm", "sh", "-c",
+		"exec /home/devm/.mutagen/agents/0.18.1/mutagen-agent synchronizer --log-level=debug",
 	}, got)
 }
 
@@ -179,8 +178,8 @@ exit 0
 	body, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
-	assert.Equal(t, []string{"exec", "testvm", "/usr/bin/whoami"}, got,
-		"commands not starting with .mutagen/ must pass through unchanged")
+	assert.Equal(t, []string{"exec", "testvm", "sh", "-c", "exec /usr/bin/whoami"}, got,
+		"commands not starting with .mutagen/ must pass through unchanged (still sh -c wrapped)")
 }
 
 func TestShim_ScpInvocationErrors(t *testing.T) {
