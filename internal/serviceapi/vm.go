@@ -1254,6 +1254,14 @@ type projectInfo struct {
 	TunnelPort int
 	DNSPort    int
 
+	// PolicySocket is the unix socket path the running iron-proxy dials
+	// for policy decisions — the grpc transform's target as recorded in
+	// its on-disk config. Adoption serves the TransformService at exactly
+	// this path (the config is the one source of truth for where the
+	// proxy dials); empty when the config couldn't be read, in which case
+	// adoption falls back to deriving the path.
+	PolicySocket string
+
 	// GuestHTTPPort / GuestHTTPSPort are the daemon's guest-origin listener
 	// pair for this project — where softnet forwards `.test` traffic.
 	// In-memory only: the listeners die with the daemon, so a restart

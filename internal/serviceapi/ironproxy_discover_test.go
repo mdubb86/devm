@@ -121,10 +121,11 @@ func TestLoadIronProxyInfoFromConfig(t *testing.T) {
 	info, err := loadIronProxyInfoFromConfig(path)
 	require.NoError(t, err)
 	assert.Equal(t, projectInfo{
-		HTTPPort:   59481,
-		HTTPSPort:  59482,
-		TunnelPort: 59484,
-		DNSPort:    59483,
+		PolicySocket: "/tmp/p.sock",
+		HTTPPort:     59481,
+		HTTPSPort:    59482,
+		TunnelPort:   59484,
+		DNSPort:      59483,
 	}, info)
 }
 
@@ -227,6 +228,63 @@ func TestRecoverProjectState_ServesSnapshotAllowlist(t *testing.T) {
 // policy re-serve from happening: ports go unrecovered, but the socket
 // still comes up with the allowlist recomputed from the state
 // snapshot.
+// Adoption serves the policy socket at the path RECORDED in iron-proxy's
+// config (the grpc transform's target — the path the running proxy
+// actually dials), never a re-derived one. Re-derivation can disagree
+// with the recording when os.TempDir()'s TMPDIR context differs between
+// the spawning and adopting daemon runs; the config file is the one
+// source of truth for where the proxy dials.
+func TestAdoptOneIronProxy_ServesRecordedPolicyTarget(t *testing.T) {
+	const projectID = "adopt-recorded-target-proj"
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.PurgeProject(projectID)
+	})
+
+	// A recorded target the deriver would never produce.
+	recDir, err := os.MkdirTemp("", "polrec")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(recDir) })
+	recPath := filepath.Join(recDir, "rec.sock")
+
+	cfgPath, err := IronProxyConfigPath(identity.Prod, projectID)
+	require.NoError(t, err)
+	require.NoError(t, writeIronProxyConfig(cfgPath, IronProxyConfig{
+		HTTPListen:   "127.0.0.1:18080",
+		HTTPSListen:  "127.0.0.1:18443",
+		TunnelListen: "127.0.0.1:18081",
+		DNSListen:    "127.0.0.1:18053",
+		DNSProxyIP:   "192.0.2.1",
+		CACertPath:   "/tmp/ca.crt",
+		CAKeyPath:    "/tmp/ca.key",
+		PolicyTarget: "unix://" + recPath,
+	}))
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
+		Cfg: schema.Config{
+			Network: schema.Network{Allow: []schema.AllowEntry{{Host: "example.com"}}},
+		},
+	}))
+
+	sup := supervisor.New(t.TempDir())
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424243, ProjectID: projectID})
+
+	client := dialPolicy(t, recPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.TransformRequest(ctx, policyReq("example.com", "GET", "/"))
+	require.NoError(t, err, "policy must be served at the recorded target, where the proxy dials")
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.GetAction())
+
+	// And nothing serves at the re-derived location — the recorded path
+	// is authoritative, not merely an alias.
+	derived, err := IronPolicySocketPath(identity.Prod, projectID)
+	require.NoError(t, err)
+	_, statErr := os.Stat(derived)
+	assert.True(t, os.IsNotExist(statErr),
+		"no socket may exist at the re-derived path %s when the config records %s", derived, recPath)
+}
+
 func TestAdoptOneIronProxy_UnreadableConfig_StillServesPolicy(t *testing.T) {
 	const projectID = "adopt-no-config-proj"
 	t.Setenv("HOME", t.TempDir())
