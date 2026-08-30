@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -61,15 +62,21 @@ var policyAuthority = NewPolicyAuthority()
 // e2e/test_iron_contract_09_grpc_transform_custom_reject.py). This is
 // what lets a guest tell a policy block from a genuine upstream 403.
 //
-// Projects with no Set() allowlist deny everything: a socket that is
-// serving but unconfigured must fail closed, and doing it here (rather
-// than letting iron-proxy 502 on a missing socket) keeps the reject
-// self-describing.
+// Projects with no SetAllowlist() allowlist deny everything: a socket
+// that is serving but unconfigured must fail closed, and doing it here
+// (rather than letting iron-proxy 502 on a missing socket) keeps the
+// reject self-describing.
+//
+// The authority also owns denial counts: every REJECT it hands out is
+// recorded in denials, and SetAllowlist replays those rows through the
+// new list so `devm denials` never shows a host the current allowlist
+// would now let through.
 type PolicyAuthority struct {
 	mu        sync.Mutex
 	allow     map[string][]string
 	modes     map[string]Mode
 	listeners map[string]*policyListener
+	denials   *Denials
 }
 
 type policyListener struct {
@@ -84,16 +91,32 @@ func NewPolicyAuthority() *PolicyAuthority {
 		allow:     map[string][]string{},
 		modes:     map[string]Mode{},
 		listeners: map[string]*policyListener{},
+		denials:   NewDenials(),
 	}
 }
 
-// Set replaces projectID's allowlist. Takes effect on the next request —
-// no re-serve, no iron-proxy respawn.
-func (p *PolicyAuthority) Set(projectID string, allow []string) {
+// SetAllowlist replaces projectID's allowlist. Takes effect on the next
+// request — no re-serve, no iron-proxy respawn.
+//
+// Every previously-recorded denial row for projectID is replayed against
+// the new list: a row the new list now allows is deleted, so `devm
+// denials` never shows a host that would pass today. Rows still blocked
+// by the new list — and rows blocked by a narrower list after entries
+// were removed — are left alone; a removal can never resolve a row.
+func (p *PolicyAuthority) SetAllowlist(projectID string, allow []string) {
 	cp := append([]string{}, allow...)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.allow[projectID] = cp
+	p.denials.invalidateResolved(projectID, func(host, path string) bool {
+		return policymatch.Allowed(cp, host, path)
+	})
+}
+
+// SnapshotDenials returns projectID's current denial counts, most-denied
+// first. Empty slice when the project has no denials.
+func (p *PolicyAuthority) SnapshotDenials(projectID string) []Denial {
+	return p.denials.Snapshot(projectID)
 }
 
 // SetMode replaces projectID's egress mode. Takes effect on the next
@@ -151,9 +174,30 @@ func (p *PolicyAuthority) EnsureServing(projectID, sock string) error {
 }
 
 // StopServing stops projectID's listener and removes its socket file.
-// The allowlist entry is dropped too — a stopped project's policy is
-// re-Set on its next start.
+// Stop is a listener event, not a policy reset: the allowlist and its
+// denial counts persist so the next EnsureServing/SetAllowlist picks up
+// where the project left off. modes is still dropped — mode
+// non-persistence across a stop is the always-through-iron-proxy
+// feature's contract, independent of policy state. Call PurgeProject
+// instead when the project itself is going away (teardown).
 func (p *PolicyAuthority) StopServing(projectID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if l, ok := p.listeners[projectID]; ok {
+		l.server.Stop()
+		_ = os.Remove(l.sock)
+		delete(p.listeners, projectID)
+	}
+	delete(p.modes, projectID)
+}
+
+// PurgeProject tears down projectID's listener (if any) and deletes
+// every trace of its policy state: allowlist, mode, and denial counts.
+// Call this on teardown/destroy, when the project itself is gone and a
+// future project reusing the name must not inherit stale counts. Use
+// StopServing instead for a plain stop, which preserves state for the
+// next start.
+func (p *PolicyAuthority) PurgeProject(projectID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if l, ok := p.listeners[projectID]; ok {
@@ -163,6 +207,7 @@ func (p *PolicyAuthority) StopServing(projectID string) {
 	}
 	delete(p.allow, projectID)
 	delete(p.modes, projectID)
+	p.denials.clearProject(projectID)
 }
 
 func (p *PolicyAuthority) allowlistFor(projectID string) []string {
@@ -200,6 +245,7 @@ func (s *policyService) TransformRequest(ctx context.Context, req *transformv1.T
 			Action: transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE,
 		}, nil
 	}
+	s.authority.denials.Record(s.projectID, host, reqPath, r.GetMethod(), time.Now().UTC())
 	body, _ := json.Marshal(map[string]string{
 		"blocked_by": "devm-egress-policy",
 		"host":       host,

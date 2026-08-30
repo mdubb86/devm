@@ -12,7 +12,7 @@ import (
 
 // TestInProcessAllowlistSetter_UpdatesAuthorityAndSnapshotWithoutLock
 // proves the reconcile-path adapter reaches the same two effects as
-// the HTTP handler (policyAuthority.Set + snapshot rewrite) without
+// the HTTP handler (policyAuthority.SetAllowlist + snapshot rewrite) without
 // acquiring any ProjectLocks lock — the /vm/reconcile handler already
 // holds req.Name's lock for the ApplyLive call this adapter is reached
 // from, so a second acquisition here would deadlock.

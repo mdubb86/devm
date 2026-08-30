@@ -222,6 +222,7 @@ var retiredTerms = []string{
 	"sandbox_name",
 	"kit-policy", "kit policy",
 	"anchor process", "anchor-alive",
+	"transient egress window",
 }
 
 func TestNoRetiredTermsInSkills(t *testing.T) {

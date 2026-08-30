@@ -14,6 +14,7 @@ import (
 	transformv1 "github.com/mdubb86/devm/internal/ironproxy/transformv1"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/supervisor"
 )
 
 func TestParseIronProxyProjectID(t *testing.T) {
@@ -142,7 +143,10 @@ func TestLoadIronProxyInfoFromConfig_MissingFile(t *testing.T) {
 func TestRecoverProjectState_ReplaysSnapshotRoutes(t *testing.T) {
 	const projectID = "recover-proj"
 	t.Setenv("HOME", t.TempDir())
-	t.Cleanup(func() { ironProxyState.del(projectID) })
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.PurgeProject(projectID)
+	})
 
 	// Mirrors AdoptIronProxies having already rehydrated ironProxyState
 	// from the project's on-disk iron-proxy config before calling
@@ -190,7 +194,7 @@ func TestRecoverProjectState_ServesSnapshotAllowlist(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Cleanup(func() {
 		ironProxyState.del(projectID)
-		policyAuthority.StopServing(projectID)
+		policyAuthority.PurgeProject(projectID)
 	})
 
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
@@ -214,6 +218,83 @@ func TestRecoverProjectState_ServesSnapshotAllowlist(t *testing.T) {
 	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.GetAction())
 }
 
+// TestAdoptOneIronProxy_UnreadableConfig_StillServesPolicy covers the
+// adoption gap where a discovered iron-proxy's on-disk config is
+// missing (or otherwise unreadable) — historically this `continue`d
+// past recoverProjectState entirely, leaving the running adopted VM's
+// egress fail-closed at 502 forever, since the policy socket was never
+// re-served. loadIronProxyInfoFromConfig failing must not stop the
+// policy re-serve from happening: ports go unrecovered, but the socket
+// still comes up with the allowlist recomputed from the state
+// snapshot.
+func TestAdoptOneIronProxy_UnreadableConfig_StillServesPolicy(t *testing.T) {
+	const projectID = "adopt-no-config-proj"
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.PurgeProject(projectID)
+	})
+
+	// No IronProxyConfigPath file is ever written for this project —
+	// loadIronProxyInfoFromConfig must fail with ENOENT.
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
+		Cfg: schema.Config{
+			Network: schema.Network{Allow: []schema.AllowEntry{{Host: "example.com"}}},
+		},
+	}))
+
+	sup := supervisor.New(t.TempDir())
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424242, ProjectID: projectID})
+
+	// With no prior ironProxyState entry, an unreadable config, and no
+	// ProjectIP in the snapshot to restore, no entry must be created at
+	// all — a bare zero-port/zero-everything entry would make
+	// discoverSoftnet push a FORWARDING rule at HostLoopIP:0 and make
+	// healIronProxies' watchdog treat a perfectly healthy adopted proxy
+	// as ProxyMissing and try to kill+respawn it.
+	_, ok := ironProxyState.get(projectID)
+	assert.False(t, ok, "no ironProxyState entry must be created when the config is unreadable and the snapshot has no ProjectIP")
+
+	sockPath, err := IronPolicySocketPath(identity.Prod, projectID)
+	require.NoError(t, err)
+	client := dialPolicy(t, sockPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.TransformRequest(ctx, policyReq("example.com", "GET", "/"))
+	require.NoError(t, err, "policy socket must still be served despite the unreadable config")
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.GetAction())
+	resp, err = client.TransformRequest(ctx, policyReq("blocked.example", "GET", "/"))
+	require.NoError(t, err)
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.GetAction())
+}
+
+// TestAdoptOneIronProxy_UnreadableConfig_ProjectIPStillRestored covers
+// the other half of the ironProxyState contract for an unreadable
+// config: when the snapshot DOES carry a ProjectIP, an entry must still
+// be created (recoverProjectState's ordinary ProjectIP-restore path),
+// even though the config-load failure means no ports get rehydrated.
+func TestAdoptOneIronProxy_UnreadableConfig_ProjectIPStillRestored(t *testing.T) {
+	const projectID = "adopt-no-config-ip-proj"
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.PurgeProject(projectID)
+	})
+
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
+		Cfg:       schema.Config{Project: schema.Project{Name: projectID}},
+		ProjectIP: "127.42.0.11",
+	}))
+
+	sup := supervisor.New(t.TempDir())
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424243, ProjectID: projectID})
+
+	info, ok := ironProxyState.get(projectID)
+	require.True(t, ok, "an entry must be created to carry the restored ProjectIP")
+	assert.Equal(t, "127.42.0.11", info.ProjectIP)
+	assert.Zero(t, info.HTTPPort, "ports must not be recovered when the config file is unreadable")
+}
+
 // TestRecoverProjectState_PreservesRouteModeAcrossRestart pins that a
 // project last put into `devm route local` mode still comes back as
 // ModeLocal after a daemon restart. The recovery path replays snap.Routes
@@ -222,7 +303,10 @@ func TestRecoverProjectState_ServesSnapshotAllowlist(t *testing.T) {
 func TestRecoverProjectState_PreservesRouteModeAcrossRestart(t *testing.T) {
 	const projectID = "recover-mode-proj"
 	t.Setenv("HOME", t.TempDir())
-	t.Cleanup(func() { ironProxyState.del(projectID) })
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.PurgeProject(projectID)
+	})
 
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
 		Cfg: schema.Config{Project: schema.Project{Name: projectID}},
@@ -248,7 +332,10 @@ func TestRecoverProjectState_PreservesRouteModeAcrossRestart(t *testing.T) {
 func TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched(t *testing.T) {
 	const projectID = "no-snapshot-proj"
 	t.Setenv("HOME", t.TempDir())
-	t.Cleanup(func() { ironProxyState.del(projectID) })
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.PurgeProject(projectID)
+	})
 
 	seeded := projectInfo{HTTPPort: 111, HTTPSPort: 222, DNSPort: 333}
 	ironProxyState.put(projectID, seeded)
@@ -272,7 +359,10 @@ func TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched(t *testing.T) 
 func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.T) {
 	const projectID = "vm-down-proj"
 	t.Setenv("HOME", t.TempDir())
-	t.Cleanup(func() { ironProxyState.del(projectID) })
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.PurgeProject(projectID)
+	})
 
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
 		Cfg: schema.Config{Project: schema.Project{Name: projectID}},
@@ -301,7 +391,10 @@ func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.
 func TestRecoverProjectState_RestoresProjectIP(t *testing.T) {
 	const projectID = "recover-ip-proj"
 	t.Setenv("HOME", t.TempDir())
-	t.Cleanup(func() { ironProxyState.del(projectID) })
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.PurgeProject(projectID)
+	})
 
 	ironProxyState.put(projectID, projectInfo{HTTPPort: 59481, HTTPSPort: 59482, DNSPort: 59483})
 
@@ -341,15 +434,20 @@ proxy:
 func TestRecoverProjectState_SetsRestrictedMode(t *testing.T) {
 	const projectID = "recover-restrict-proj"
 	t.Setenv("HOME", t.TempDir())
-	t.Cleanup(func() {
-		ironProxyState.del(projectID)
-		policyAuthority.StopServing(projectID)
-	})
+	t.Cleanup(func() { ironProxyState.del(projectID) })
 
 	// Seed the authority with passthrough mode BEFORE recovery, to prove
 	// recovery actively resets it (not just leaves it at the default).
+	// tempAuth is captured in a local so cleanup can purge it directly:
+	// t.Cleanup callbacks run AFTER this function's own defers, so by
+	// the time a cleanup fires the `defer` below has already restored
+	// the package-level policyAuthority back to orig — a cleanup that
+	// referenced the package-level var would purge orig (a no-op) and
+	// leak tempAuth's grpc listener and socket file.
 	orig := policyAuthority
-	policyAuthority = NewPolicyAuthority()
+	tempAuth := NewPolicyAuthority()
+	t.Cleanup(func() { tempAuth.PurgeProject(projectID) })
+	policyAuthority = tempAuth
 	policyAuthority.SetMode(projectID, ModePassthrough)
 	defer func() { policyAuthority = orig }()
 

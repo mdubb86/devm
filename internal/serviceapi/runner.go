@@ -253,16 +253,9 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		go rebindProjectListeners(ctx, proxy, cfg, id, info.ProjectIP, ntp.Port())
 	}
 
-	// Denials tracker — per-project counts of iron-proxy allow-list
-	// rejects, fed by the supervisor's log tap on iron-proxy stderr.
-	// Adopted iron-proxies from a prior daemon instance don't get tapped
-	// (we only have their PID, not their output stream), so counts
-	// start empty for them until the next SpawnIronProxy respawn.
-	denials := NewDenials()
-
-	RegisterVMHandlers(server, cfg, sup, tr, denials, ntp.Port(), locks, proxy)
-	RegisterReconcileHandler(server, cfg, locks, &realApplyLiver{tr: tr}, &realPackagesApplier{cfg: cfg, tr: tr, sup: sup, denials: denials}, tr, sup, proxy, ntp.Port())
-	RegisterApplyIronProxyHandler(server, cfg, locks, sup, tr, denials, proxy)
+	RegisterVMHandlers(server, cfg, sup, tr, ntp.Port(), locks, proxy)
+	RegisterReconcileHandler(server, cfg, locks, &realApplyLiver{tr: tr}, &realPackagesApplier{tr: tr}, tr, sup, proxy, ntp.Port())
+	RegisterApplyIronProxyHandler(server, cfg, locks, sup, tr, proxy)
 	RegisterHandshakeHandler(server, cfg, build, sup, proxy)
 	RegisterStatusAllHandler(server, cfg, sup, tr, proxy)
 	RegisterWorkspacesHandler(server, cfg)
@@ -330,7 +323,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	{
 		watchdogCtx, cancel := context.WithCancel(ctx)
 		g.Add(func() error {
-			return runIronProxyWatchdog(watchdogCtx, cfg, sup, proxy, locks, denials)
+			return runIronProxyWatchdog(watchdogCtx, cfg, sup, proxy, locks)
 		}, func(error) {
 			cancel()
 		})

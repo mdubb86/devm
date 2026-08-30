@@ -29,12 +29,13 @@ type fakeStopClient struct {
 }
 
 type stopCall struct {
-	name string
+	name    string
+	destroy bool
 }
 
-func (f *fakeStopClient) StopVM(_ context.Context, name string) error {
+func (f *fakeStopClient) StopVM(_ context.Context, name string, destroy bool) error {
 	f.stopCalled++
-	f.stopArgs = append(f.stopArgs, stopCall{name: name})
+	f.stopArgs = append(f.stopArgs, stopCall{name: name, destroy: destroy})
 	return f.stopErr
 }
 

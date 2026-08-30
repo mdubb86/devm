@@ -10,15 +10,15 @@ import (
 // updateSnapshotAfterAllowlistSet loads the current StateSnapshot for
 // projectID and rebuilds snap.Cfg.Network.Allow from allowlist, then
 // persists it. This is the same field recoverProjectState reads back
-// via docker.EffectiveAllowlist(snap.Cfg) to re-Set the policy
-// authority on daemon restart (ironproxy_discover.go), so a live Set
-// here survives a daemon restart without a respawn.
+// via docker.EffectiveAllowlist(snap.Cfg) to re-run SetAllowlist against
+// the policy authority on daemon restart (ironproxy_discover.go), so a
+// live SetAllowlist here survives a daemon restart without a respawn.
 //
 // Existing per-host secret scope is preserved for hosts that remain in
 // the new list — mirrors the allow-rebuild half of
 // mergeAllowlistAndSecrets, but (unlike that function) touches nothing
-// else in snap.Cfg: a plain allowlist Set is not a secret-binding
-// change, so Env / Services[*].Env are left untouched.
+// else in snap.Cfg: a plain allowlist SetAllowlist is not a
+// secret-binding change, so Env / Services[*].Env are left untouched.
 //
 // Requires a snapshot to already exist, same contract as
 // updateSnapshotAfterSpawn: fabricating one here with a zero-valued

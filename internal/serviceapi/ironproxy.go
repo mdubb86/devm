@@ -213,18 +213,11 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 // 0600, user-owned. Idempotent at the supervisor level — if a process
 // with the same key is already running it is replaced by the new one.
 //
-// denials may be nil in contexts where denial tracking isn't wired
-// (unit tests, one-off tools). When non-nil, the tracker is reset for
-// projectID and receives every reject audit line as an io.Writer tap
-// on the supervisor. Reset here — rather than in RunService — so the
-// counts always match the currently running iron-proxy process, not a
-// prior config the user has already thrown away.
-//
 // Note: iron-proxy v0.45.0 doesn't accept config on stdin, so the
 // config lands on disk. Mitigated by file mode 0600 under the user's
 // runtime dir (~/Library/Application Support/devm/). Future improvement:
 // contribute stdin support upstream and switch.
-func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, projectID string, proxyCfg IronProxyConfig, denials *Denials) error {
+func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, projectID string, proxyCfg IronProxyConfig) error {
 	runDir, err := EnsureRuntimeDir(cfg)
 	if err != nil {
 		return fmt.Errorf("runtime dir: %w", err)
@@ -252,7 +245,7 @@ func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Su
 	if err != nil {
 		return fmt.Errorf("policy socket path: %w", err)
 	}
-	policyAuthority.Set(projectID, proxyCfg.AllowList)
+	policyAuthority.SetAllowlist(projectID, proxyCfg.AllowList)
 	if err := policyAuthority.EnsureServing(projectID, sockPath); err != nil {
 		return fmt.Errorf("serve policy: %w", err)
 	}
@@ -269,15 +262,8 @@ func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Su
 	cmd := exec.CommandContext(ctx, shim, binary, "-config", configPath)
 	cmd.Env = append(os.Environ(), proxyCfg.EnvVars()...)
 	key := supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}
-	var spawnErr error
-	if denials != nil {
-		denials.Reset(projectID)
-		spawnErr = ironProxySpawn(ctx, sup, key, cmd, denials.TapWriter(projectID))
-	} else {
-		spawnErr = ironProxySpawn(ctx, sup, key, cmd)
-	}
-	if spawnErr != nil {
-		return spawnErr
+	if err := ironProxySpawn(ctx, sup, key, cmd); err != nil {
+		return err
 	}
 
 	// Discover the grandchild iron-proxy PID (the actual process behind
@@ -359,11 +345,22 @@ func IronPolicySocketPath(cfg identity.Config, projectID string) (string, error)
 		return p, nil
 	}
 	// Deep runtime dirs (long $HOME) blow macOS's 104-byte sun_path cap.
-	// Fall back to the per-user temp dir with a name derived from
-	// identity+project so the path stays deterministic across daemon
-	// restarts (adoption re-derives it) and distinct across identities.
+	// Fall back to a dedicated devm-pol subdir of the per-user temp dir,
+	// with a name derived from identity+project so the path stays
+	// deterministic across daemon restarts (adoption re-derives it) and
+	// distinct across identities. The subdir (not the bare temp dir) and
+	// its 0700 mode keep a stray policy socket from being reachable by
+	// other users on the box; MkdirAll alone won't fix an existing dir's
+	// mode (e.g. left behind with a looser umask), so Chmod is explicit.
+	fallbackDir := filepath.Join(os.TempDir(), "devm-pol")
+	if err := os.MkdirAll(fallbackDir, 0700); err != nil {
+		return "", fmt.Errorf("policy socket fallback dir: %w", err)
+	}
+	if err := os.Chmod(fallbackDir, 0700); err != nil {
+		return "", fmt.Errorf("policy socket fallback dir mode: %w", err)
+	}
 	sum := sha256.Sum256([]byte(cfg.Name + "/" + projectID))
-	p = filepath.Join(os.TempDir(), "devm-pol-"+hex.EncodeToString(sum[:6])+".sock")
+	p = filepath.Join(fallbackDir, hex.EncodeToString(sum[:6])+".sock")
 	if len(p) > 100 {
 		return "", fmt.Errorf("policy socket path too long even in temp dir (%d bytes): %s", len(p), p)
 	}

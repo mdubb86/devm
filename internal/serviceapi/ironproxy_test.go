@@ -46,6 +46,15 @@ func TestIronPolicySocketPath_DeepHomeFallsBackToTempDir(t *testing.T) {
 	p, err := IronPolicySocketPath(identity.Prod, "myproj")
 	require.NoError(t, err)
 	assert.LessOrEqual(t, len(p), 100)
+	// Falls back into a dedicated devm-pol subdir of os.TempDir(), not
+	// loose in the shared temp dir — a stray world-readable socket
+	// there would let any other user on the box connect to the policy
+	// transform.
+	wantDir := filepath.Join(os.TempDir(), "devm-pol")
+	assert.Equal(t, wantDir, filepath.Dir(p), "fallback socket must live under a dedicated devm-pol subdir")
+	info, err := os.Stat(wantDir)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0700), info.Mode().Perm(), "devm-pol dir must be 0700")
 	// Deterministic: adoption after a daemon restart must re-derive the
 	// same path SpawnIronProxy used.
 	p2, err := IronPolicySocketPath(identity.Prod, "myproj")
@@ -83,7 +92,7 @@ func TestSpawnIronProxy_WrapsWithSetsidShim(t *testing.T) {
 		CACertPath:  "/tmp/ca.crt",
 		CAKeyPath:   "/tmp/ca.key",
 	}
-	err := SpawnIronProxy(context.Background(), identity.Prod, sup, "p-shim-test", proxyCfg, nil)
+	err := SpawnIronProxy(context.Background(), identity.Prod, sup, "p-shim-test", proxyCfg)
 	require.NoError(t, err)
 	require.NotNil(t, gotCmd)
 
@@ -124,7 +133,7 @@ func TestSpawnIronProxy_ServesPolicySocketAndSetsTarget(t *testing.T) {
 		CAKeyPath:   "/tmp/ca.key",
 		AllowList:   []string{"example.com"},
 	}
-	require.NoError(t, SpawnIronProxy(context.Background(), identity.Prod, sup, projectID, proxyCfg, nil))
+	require.NoError(t, SpawnIronProxy(context.Background(), identity.Prod, sup, projectID, proxyCfg))
 
 	sockPath, err := IronPolicySocketPath(identity.Prod, projectID)
 	require.NoError(t, err)

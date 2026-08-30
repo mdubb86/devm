@@ -15,7 +15,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `network` | object | live | Iron-proxy outbound allowlist. |
 | `env` | map[string]EnvValue | live | Project-wide environment variables forwarded to all services. |
 | `services` | map[string]Service | varies | Named service definitions; bucket depends on which sub-field changes (see Services section). |
-| `packages` | []string | live | Apt packages. A running VM converges via a transient passthrough window; a stopped VM converges during the next boot's provisioning window. |
+| `packages` | []string | live | Apt packages. A running VM converges under the project's current `network.allow` — the Debian mirrors need to be reachable; a stopped VM converges during the next boot's provisioning window. |
 | `install` | []string | recreate | Shell commands run once at VM creation as the guest `devm` user. NOPASSWD sudo is available for privileged steps. |
 | `startup` | []string | restart | Shell commands run on every boot that opens the provisioning window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as the guest `devm` user, under `passthrough` authority mode (iron-proxy in the path, allowlist not yet gating). NOPASSWD sudo is available for privileged steps. |
 | `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
@@ -172,7 +172,7 @@ V1 scope: refs are only resolved from `install:` and `startup:`. Scripts take no
 
 `[]string` — bucket: **live**.
 
-Apt package names installed via `apt-get install -y`. Adding or removing entries converges without a teardown: on a running VM, the daemon briefly respawns iron-proxy with the apt mirrors added to the allowlist (`deb.debian.org`, `security.debian.org`, plus `download.docker.com` when `docker: true`), runs the apt diff, then restores the original allowlist. On a stopped VM, the same diff converges during the next boot's provisioning window. Reordering the list is a no-op — only membership changes trigger a converge.
+Apt package names installed via `apt-get install -y`. Adding or removing entries converges without a teardown: on a running VM, the daemon runs the apt diff under the project's current `network.allow` — no allowlist widening or restoring. Add `deb.debian.org` and `security.debian.org` (plus `download.docker.com` when `docker: true`) to `network.allow`, or open a `devm passthrough` window and re-run, if the diff 403s (`devm denials` shows the blocked mirrors). On a stopped VM, the same diff converges during the next boot's provisioning window, which runs under open egress regardless. Reordering the list is a no-op — only membership changes trigger a converge.
 
 ```yaml
 packages:

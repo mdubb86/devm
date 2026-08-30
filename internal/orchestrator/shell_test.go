@@ -84,7 +84,7 @@ func (f *fakeVMAdmin) EnforcementConfig(_ context.Context, _ string) (serviceapi
 	return serviceapi.VMEnforcementConfigResponse{}, nil
 }
 
-func (f *fakeVMAdmin) StopVM(_ context.Context, _ string) error {
+func (f *fakeVMAdmin) StopVM(_ context.Context, _ string, _ bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopCalled++

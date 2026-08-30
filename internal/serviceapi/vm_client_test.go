@@ -42,7 +42,7 @@ func newTestServerWithVM(t *testing.T, sup *supervisor.Supervisor, tr *tart.Tart
 
 	socket := filepath.Join(dir, "s.sock")
 	srv := NewServer(socket, Build{Version: "test-version"})
-	RegisterVMHandlers(srv, identity.Prod, sup, tr, nil, 0, NewProjectLocks(), nil)
+	RegisterVMHandlers(srv, identity.Prod, sup, tr, 0, NewProjectLocks(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -139,7 +139,7 @@ func TestVMStop_MissingProjectID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err := c.StopVM(ctx, "")
+	err := c.StopVM(ctx, "", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "vm/stop")
 }
@@ -170,7 +170,7 @@ func TestVMStop_WithVMName_PowersOffGuest(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	err := c.StopVM(ctx, "proj-a")
+	err := c.StopVM(ctx, "proj-a", false)
 	require.NoError(t, err)
 
 	logBytes, err := os.ReadFile(logPath)
@@ -204,7 +204,7 @@ func TestVMStop_RemovesSoftnetState(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	require.NoError(t, c.StopVM(ctx, "proj-stop-sn"))
+	require.NoError(t, c.StopVM(ctx, "proj-stop-sn", false))
 
 	assert.Empty(t, softnetState.get("proj-stop-sn"),
 		"/vm/stop must clear the softnet control-socket record")
@@ -234,7 +234,7 @@ func TestVMStop_NotFound(t *testing.T) {
 	// idempotent — both the iron-proxy and VM stops treat
 	// supervisor.ErrNotFound as success so re-tearing-down or
 	// stopping a project that was never started is silent.
-	err := c.StopVM(ctx, "nonexistent-project")
+	err := c.StopVM(ctx, "nonexistent-project", false)
 	require.NoError(t, err)
 }
 

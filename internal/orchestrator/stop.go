@@ -32,7 +32,7 @@ const (
 // StopVMClient is the subset of *serviceapi.Client this orchestrator
 // uses. Defined here to allow test fakes; the real client satisfies it.
 type StopVMClient interface {
-	StopVM(ctx context.Context, name string) error
+	StopVM(ctx context.Context, name string, destroy bool) error
 }
 
 // StopDeps wires collaborators for RunStop. In and Out drive the
@@ -90,7 +90,12 @@ func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness,
 	// graceful guest shutdown before SIGTERM'ing the tart-run process —
 	// otherwise in-flight guest writes aren't flushed and files from just
 	// before stop are lost (Bug J).
-	_ = d.ServiceAPIClient.StopVM(ctx, name)
+	//
+	// destroy mirrors mode: StopDestroy tells the daemon to purge this
+	// project's egress policy state and denial counts along with the
+	// VM, so a future project reusing the name starts clean; StopPreserve
+	// keeps them for the next start.
+	_ = d.ServiceAPIClient.StopVM(ctx, name, mode == StopDestroy)
 
 	if err := EmitSSHConfig(ctx, d.Ident, d.Tart); err != nil {
 		log.Printf("ssh_config emit failed after stop: %v", err)

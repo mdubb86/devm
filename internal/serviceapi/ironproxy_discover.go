@@ -92,19 +92,60 @@ func AdoptIronProxies(ctx context.Context, cfg identity.Config, sup *supervisor.
 		return err
 	}
 	for _, p := range procs {
-		sup.Adopt(supervisor.Key{ProjectID: p.ProjectID, Role: supervisor.RoleProxy}, p.PID)
-		path, err := IronProxyConfigPath(cfg, p.ProjectID)
-		if err != nil {
-			continue
-		}
-		info, err := loadIronProxyInfoFromConfig(path)
-		if err != nil {
-			continue
-		}
-		ironProxyState.put(p.ProjectID, info)
-		recoverProjectState(ctx, cfg, tr, routes, p.ProjectID)
+		adoptOneIronProxy(ctx, cfg, sup, tr, routes, p)
 	}
 	return nil
+}
+
+// adoptOneIronProxy is AdoptIronProxies's per-process body, split out so
+// it can be unit tested without shelling out to `ps` (DiscoverIronProxies).
+//
+// A failure to rehydrate ironProxyState from the on-disk config (file
+// missing, unreadable, or malformed) is logged and otherwise swallowed —
+// per the "best-effort" contract callers expect — but execution must
+// still reach recoverProjectState. Skipping it (the previous behavior)
+// left a running adopted VM's egress permanently fail-closed at 502:
+// the policy socket is served only by recoverProjectState, and nothing
+// else re-serves it after a daemon restart.
+func adoptOneIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, routes *Routes, p DiscoveredIronProxy) {
+	sup.Adopt(supervisor.Key{ProjectID: p.ProjectID, Role: supervisor.RoleProxy}, p.PID)
+	_, hadEntry := ironProxyState.get(p.ProjectID)
+	info, err := ironProxyInfoForAdopted(cfg, p.ProjectID)
+	if err != nil {
+		daemonlog.Errorf("adopt: rehydrate ports for %s: %v (ports were not recovered; policy is still served)", p.ProjectID, err)
+	} else {
+		ironProxyState.put(p.ProjectID, info)
+	}
+	recoverProjectState(ctx, cfg, tr, routes, p.ProjectID)
+	if err != nil && !hadEntry {
+		// recoverProjectState unconditionally seeds an ironProxyState
+		// entry when a snapshot exists (so it has somewhere to merge a
+		// restored ProjectIP into) — with no prior entry and config-load
+		// having failed, that can leave a bare zero-value entry with no
+		// ProjectIP either. Downstream consumers treat any ironProxyState
+		// entry as "this project has a live iron-proxy": discoverSoftnet
+		// would push a FORWARDING rule at HostLoopIP:0, and
+		// healIronProxies' watchdog would see ProxyMissing and try to
+		// kill+respawn a proxy that's actually running fine. Strip the
+		// entry back out unless the snapshot contributed something
+		// (ProjectIP) worth keeping — restores the pre-adoption "no
+		// entry on unreadable config" property while still letting
+		// policy re-serve happen above.
+		if after, ok := ironProxyState.get(p.ProjectID); ok && after == (projectInfo{}) {
+			ironProxyState.del(p.ProjectID)
+		}
+	}
+}
+
+// ironProxyInfoForAdopted reads back the ports iron-proxy was launched
+// with from its on-disk config file at the path IronProxyConfigPath
+// derives for projectID.
+func ironProxyInfoForAdopted(cfg identity.Config, projectID string) (projectInfo, error) {
+	path, err := IronProxyConfigPath(cfg, projectID)
+	if err != nil {
+		return projectInfo{}, err
+	}
+	return loadIronProxyInfoFromConfig(path)
 }
 
 // recoverProjectState rebuilds the parts of a recovered project's
@@ -139,7 +180,7 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 	} else if sockPath, err := IronPolicySocketPath(cfg, projectID); err != nil {
 		daemonlog.Errorf("policy: socket path for %s: %v (egress stays fail-closed)", projectID, err)
 	} else {
-		policyAuthority.Set(projectID, AppendUniqueHosts(docker.EffectiveAllowlist(snap.Cfg), repoHosts))
+		policyAuthority.SetAllowlist(projectID, AppendUniqueHosts(docker.EffectiveAllowlist(snap.Cfg), repoHosts))
 		policyAuthority.SetMode(projectID, ModeRestricted)
 		if err := policyAuthority.EnsureServing(projectID, sockPath); err != nil {
 			daemonlog.Errorf("policy: serve for adopted %s: %v (egress stays fail-closed)", projectID, err)

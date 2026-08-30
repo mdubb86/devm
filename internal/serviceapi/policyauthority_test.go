@@ -49,7 +49,7 @@ func TestPolicyAuthorityAllowAndReject(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "p.sock")
 
-	pa.Set("projA", []string{"example.com", "*.github.com", "httpbin.org/get*"})
+	pa.SetAllowlist("projA", []string{"example.com", "*.github.com", "httpbin.org/get*"})
 	require.NoError(t, pa.EnsureServing("projA", sock))
 
 	client := dialPolicy(t, sock)
@@ -118,7 +118,7 @@ func TestPolicyAuthorityEnsureServingCreatesSocketDir(t *testing.T) {
 
 	require.NoError(t, pa.EnsureServing("projC", sock))
 
-	pa.Set("projC", []string{"example.com"})
+	pa.SetAllowlist("projC", []string{"example.com"})
 	client := dialPolicy(t, sock)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -137,7 +137,7 @@ func TestPolicyAuthorityLiveUpdateAndRestart(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "p.sock")
 
-	// No Set() yet → unknown project denies (fail-closed at the policy
+	// No SetAllowlist() yet → unknown project denies (fail-closed at the policy
 	// layer, but with devm's explanatory 403, not iron-proxy's 502).
 	require.NoError(t, pa.EnsureServing("projB", sock))
 	client := dialPolicy(t, sock)
@@ -148,8 +148,8 @@ func TestPolicyAuthorityLiveUpdateAndRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.GetAction())
 
-	// Set() takes effect on the next request — no re-serve needed.
-	pa.Set("projB", []string{"example.com"})
+	// SetAllowlist() takes effect on the next request — no re-serve needed.
+	pa.SetAllowlist("projB", []string{"example.com"})
 	resp, err = client.TransformRequest(ctx, policyReq("example.com", "GET", "/"))
 	require.NoError(t, err)
 	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.GetAction())
@@ -164,7 +164,7 @@ func TestPolicyAuthorityLiveUpdateAndRestart(t *testing.T) {
 	pa.StopServing("projB")
 	require.NoError(t, os.WriteFile(sock, nil, 0o600))
 	require.NoError(t, pa.EnsureServing("projB", sock))
-	pa.Set("projB", []string{"example.com"})
+	pa.SetAllowlist("projB", []string{"example.com"})
 	client2 := dialPolicy(t, sock)
 	resp, err = client2.TransformRequest(ctx, policyReq("example.com", "GET", "/"))
 	require.NoError(t, err)
@@ -174,7 +174,7 @@ func TestPolicyAuthorityLiveUpdateAndRestart(t *testing.T) {
 func TestPolicyAuthority_PassthroughShortCircuits(t *testing.T) {
 	p := NewPolicyAuthority()
 	// Set a restrictive allowlist that would reject everything.
-	p.Set("proj1", nil)
+	p.SetAllowlist("proj1", nil)
 	p.SetMode("proj1", ModePassthrough)
 
 	svc := &policyService{authority: p, projectID: "proj1"}
@@ -196,7 +196,7 @@ func TestPolicyAuthority_PassthroughShortCircuits(t *testing.T) {
 
 func TestPolicyAuthority_RestrictedConsultsAllowlist(t *testing.T) {
 	p := NewPolicyAuthority()
-	p.Set("proj1", []string{"allowed.example.com"})
+	p.SetAllowlist("proj1", []string{"allowed.example.com"})
 	p.SetMode("proj1", ModeRestricted)
 
 	svc := &policyService{authority: p, projectID: "proj1"}
@@ -217,7 +217,7 @@ func TestPolicyAuthority_RestrictedConsultsAllowlist(t *testing.T) {
 
 func TestPolicyAuthority_DefaultsToRestricted(t *testing.T) {
 	p := NewPolicyAuthority()
-	p.Set("proj1", []string{"allowed.example.com"})
+	p.SetAllowlist("proj1", []string{"allowed.example.com"})
 	// No SetMode call — should default to restricted.
 
 	svc := &policyService{authority: p, projectID: "proj1"}
@@ -228,6 +228,123 @@ func TestPolicyAuthority_DefaultsToRestricted(t *testing.T) {
 	if resp.GetAction() != transformv1.TransformAction_TRANSFORM_ACTION_REJECT {
 		t.Fatalf("default mode should be restricted (reject), got %v", resp.GetAction())
 	}
+}
+
+// A policy reject lands in the authority's own counts at the decision
+// point; an allow and a passthrough-mode request record nothing.
+func TestPolicyAuthorityRecordsDenials(t *testing.T) {
+	pa := NewPolicyAuthority()
+	t.Cleanup(func() { pa.StopServing("projD") })
+
+	dir, err := os.MkdirTemp("", "pol")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "p.sock")
+	pa.SetAllowlist("projD", []string{"example.com"})
+	require.NoError(t, pa.EnsureServing("projD", sock))
+
+	client := dialPolicy(t, sock)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for range 2 {
+		resp, err := client.TransformRequest(ctx, policyReq("blocked.example:443", "GET", "/x?q=1"))
+		require.NoError(t, err)
+		require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.GetAction())
+	}
+	resp, err := client.TransformRequest(ctx, policyReq("example.com", "GET", "/ok"))
+	require.NoError(t, err)
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.GetAction())
+
+	pa.SetMode("projD", ModePassthrough)
+	resp, err = client.TransformRequest(ctx, policyReq("blocked.example", "GET", "/y"))
+	require.NoError(t, err)
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.GetAction())
+	pa.SetMode("projD", ModeRestricted)
+
+	got := pa.SnapshotDenials("projD")
+	require.Len(t, got, 1)
+	require.Equal(t, "blocked.example", got[0].Host, "recorded port-stripped")
+	require.Equal(t, "/x", got[0].Path, "recorded query-stripped")
+	require.Equal(t, "GET", got[0].Method)
+	require.Equal(t, 2, got[0].Count)
+}
+
+// SetAllowlist replays every stored row through policymatch: rows the new
+// list would allow are deleted, still-blocked rows are kept. One rule —
+// unchanged lists keep everything, removals keep everything.
+func TestPolicyAuthoritySetAllowlistReplaysRows(t *testing.T) {
+	pa := NewPolicyAuthority()
+	t.Cleanup(func() { pa.StopServing("projE") })
+
+	dir, err := os.MkdirTemp("", "pol")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "p.sock")
+	pa.SetAllowlist("projE", []string{"allowed.example"})
+	require.NoError(t, pa.EnsureServing("projE", sock))
+
+	client := dialPolicy(t, sock)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	deny := func(host, path string) {
+		t.Helper()
+		resp, err := client.TransformRequest(ctx, policyReq(host, "GET", path))
+		require.NoError(t, err)
+		require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.GetAction())
+	}
+	deny("a.example", "/one")
+	deny("b.example", "/two")
+	deny("api.svc.example", "/v1/models")
+	deny("api.svc.example", "/admin")
+	require.Len(t, pa.SnapshotDenials("projE"), 4)
+
+	// Unchanged list → everything kept.
+	pa.SetAllowlist("projE", []string{"allowed.example"})
+	require.Len(t, pa.SnapshotDenials("projE"), 4)
+
+	// Add a.example (exact) and a path-scoped entry: the a.example row and
+	// the /v1 row resolve; b.example and /admin stay.
+	pa.SetAllowlist("projE", []string{"allowed.example", "a.example", "api.svc.example/v1/*"})
+	got := pa.SnapshotDenials("projE")
+	require.Len(t, got, 2)
+	hosts := map[string]string{}
+	for _, d := range got {
+		hosts[d.Host+d.Path] = d.Path
+	}
+	require.Contains(t, hosts, "b.example/two")
+	require.Contains(t, hosts, "api.svc.example/admin")
+
+	// Removing entries can never resolve a row → everything kept.
+	pa.SetAllowlist("projE", []string{"allowed.example"})
+	require.Len(t, pa.SnapshotDenials("projE"), 2)
+}
+
+// VM stop preserves policy state and counts; teardown purges everything.
+func TestPolicyAuthorityStopPreservesTeardownPurges(t *testing.T) {
+	pa := NewPolicyAuthority()
+	t.Cleanup(func() { pa.PurgeProject("projF") })
+
+	dir, err := os.MkdirTemp("", "pol")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "p.sock")
+	pa.SetAllowlist("projF", []string{"a.example"})
+	require.NoError(t, pa.EnsureServing("projF", sock))
+	client := dialPolicy(t, sock)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.TransformRequest(ctx, policyReq("blocked.example", "GET", "/x"))
+	require.NoError(t, err)
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.GetAction())
+
+	pa.StopServing("projF")
+	require.Len(t, pa.SnapshotDenials("projF"), 1)
+	pa.SetAllowlist("projF", []string{"a.example"})
+	require.Len(t, pa.SnapshotDenials("projF"), 1, "stop + same-list restart preserves")
+
+	pa.PurgeProject("projF")
+	require.Empty(t, pa.SnapshotDenials("projF"))
 }
 
 func TestPolicyAuthority_StopServingDropsMode(t *testing.T) {

@@ -23,10 +23,12 @@ var denialsCmd = &cobra.Command{
 	Long: `List every host iron-proxy has denied under the current project's
 allow-list, with counts and last-seen timestamps. Sorted most-denied first.
 
-Counts are held in daemon memory for the current iron-proxy process — they
-reset when the sandbox is stopped or the daemon restarts. Use this to figure
-out what to add to ` + "`network.allow`" + ` in devm.yaml when a tool inside the
-sandbox is failing to reach an upstream.`,
+Counts live in daemon memory and survive a sandbox stop/start and iron-proxy
+respawns. Editing ` + "`network.allow`" + ` removes only the rows the new list
+would now allow, keeping still-blocked rows in place. ` + "`devm teardown`" + `
+or a daemon restart clears them. Use this to figure out what to add to
+` + "`network.allow`" + ` in devm.yaml when a tool inside the sandbox is
+failing to reach an upstream.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below
