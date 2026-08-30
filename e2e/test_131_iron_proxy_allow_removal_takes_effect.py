@@ -80,6 +80,11 @@ def test_iron_proxy_allow_removal_takes_effect(devm, workspace, sandbox_name, de
     # Initial config with ONE allow entry so cold-start builds a real
     # iron-proxy allow list.
     workspace.write_devmyaml(
+        # Opt out of the default repos.main (github.com/octocat/Hello-World):
+        # this test's allowlist is narrow (api.github.com only, no wildcard
+        # for github.com), and hydration would clone that repo and get
+        # blocked by the same egress policy this test exercises.
+        no_repo=True,
         install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         network={"allow": ["api.github.com"]},
@@ -100,6 +105,7 @@ def test_iron_proxy_allow_removal_takes_effect(devm, workspace, sandbox_name, de
         # 2. Add httpbin.org.
         devm.unlock()
         workspace.write_devmyaml(
+            no_repo=True,
             install=["true"],
             services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
             network={"allow": ["api.github.com", "httpbin.org"]},
@@ -117,6 +123,7 @@ def test_iron_proxy_allow_removal_takes_effect(devm, workspace, sandbox_name, de
         # 3. Remove httpbin.org.
         devm.unlock()
         workspace.write_devmyaml(
+            no_repo=True,
             install=["true"],
             services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
             network={"allow": ["api.github.com"]},
