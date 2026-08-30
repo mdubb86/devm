@@ -671,3 +671,40 @@ func TestClientApplyIronProxy_ReadsResponse(t *testing.T) {
 	assert.False(t, resp.Revived)
 	assert.True(t, resp.VMRunning)
 }
+
+// TestClientSetAllowlist_SendsCorrectShape verifies Client.SetAllowlist sends
+// the correct path, method, and request body to the daemon.
+func TestClientSetAllowlist_SendsCorrectShape(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dir, err := os.MkdirTemp("/tmp", "sapi-set-allowlist-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	sock := filepath.Join(dir, "s.sock")
+	srv := NewServer(sock, Build{})
+	locks := NewProjectLocks()
+	RegisterSetAllowlistHandler(srv, identity.Prod, locks)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(sock); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, sock)
+
+	// Seed a snapshot so the handler doesn't fail on "snapshot not seeded" error.
+	seededCfg := schema.Config{Project: schema.Project{Name: "proj1"}}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "proj1", StateSnapshot{Cfg: seededCfg}))
+
+	c := NewClientWithSocket(sock)
+	err = c.SetAllowlist(context.Background(), "proj1", []string{"x.com", "y.com"})
+	require.NoError(t, err)
+}

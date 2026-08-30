@@ -299,6 +299,28 @@ func (c *Client) EndProvisioning(ctx context.Context, name string) error {
 	return nil
 }
 
+// SetAllowlist calls POST /vm/set-allowlist to replace the project's
+// full allowlist on the daemon's PolicyAuthority. Takes effect on the
+// next request through iron-proxy — no respawn, no denial-counter
+// reset. Used by reconcile's BucketLive dispatch for KindNetworkAdd/
+// KindNetworkRemove.
+func (c *Client) SetAllowlist(ctx context.Context, name string, allowlist []string) error {
+	body, err := json.Marshal(VMSetAllowlistRequest{Name: name, Allowlist: allowlist})
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	r, err := c.post(ctx, "/vm/set-allowlist", body)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusNoContent {
+		msg, _ := io.ReadAll(r.Body)
+		return fmt.Errorf("vm/set-allowlist: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
 // Denials queries the daemon for iron-proxy allow-list rejects observed
 // this iron-proxy lifetime, per host. Sorted by count desc. Empty slice
 // (never nil) if the project hasn't triggered any denials yet, iron-proxy
