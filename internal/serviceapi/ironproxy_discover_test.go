@@ -106,6 +106,7 @@ func TestLoadIronProxyInfoFromConfig(t *testing.T) {
 		DNSProxyIP:   "192.0.2.1",
 		CACertPath:   "/tmp/ca.crt",
 		CAKeyPath:    "/tmp/ca.key",
+		PolicyTarget: "unix:///tmp/p.sock",
 	}
 	blob, err := cfg.YAML()
 	require.NoError(t, err)

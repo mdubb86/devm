@@ -44,6 +44,10 @@ func rebuildIronProxyConfig(cfg identity.Config, projectID string, snapCfg schem
 	if err != nil {
 		return IronProxyConfig{}, fmt.Errorf("resolve repo hosts: %w", err)
 	}
+	sockPath, err := IronPolicySocketPath(cfg, projectID)
+	if err != nil {
+		return IronProxyConfig{}, fmt.Errorf("policy socket path: %w", err)
+	}
 	return IronProxyConfig{
 		HTTPListen:   ironProxyListenAddr(diskInfo.HTTPPort),
 		HTTPSListen:  ironProxyListenAddr(diskInfo.HTTPSPort),
@@ -53,6 +57,7 @@ func rebuildIronProxyConfig(cfg identity.Config, projectID string, snapCfg schem
 		CACertPath:   filepath.Join(caDir, "ca", "root.crt"),
 		CAKeyPath:    filepath.Join(caDir, "ca", "root.key"),
 		AllowList:    AppendUniqueHosts(docker.EffectiveAllowlist(snapCfg), repoHosts),
+		PolicyTarget: "unix://" + sockPath,
 		Secrets:      secrets,
 	}, nil
 }

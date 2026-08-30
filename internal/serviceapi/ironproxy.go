@@ -67,8 +67,9 @@ type IronProxyConfig struct {
 	// rendered into iron-proxy's YAML — the allow/deny decision lives in
 	// the daemon's PolicyAuthority, which iron-proxy consults per
 	// request via the grpc transform at PolicyTarget. SpawnIronProxy
-	// feeds this list into the authority and persists it in a sidecar
-	// for adoption after a daemon restart.
+	// feeds this list into the authority; after a daemon restart it is
+	// recomputed from the state snapshot rather than persisted anywhere
+	// (see recoverProjectState in ironproxy_discover.go).
 	AllowList []string
 	// PolicyTarget is the grpc transform's target — the unix socket the
 	// daemon serves TransformService on for this project

@@ -99,13 +99,14 @@ func TestSpawnIronProxy_WrapsWithSetsidShim(t *testing.T) {
 
 func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 	cfg := IronProxyConfig{
-		HTTPListen:  "192.168.64.1:8080",
-		HTTPSListen: "192.168.64.1:8443",
-		DNSListen:   "192.168.64.1:8053",
-		DNSProxyIP:  "192.168.64.1",
-		CACertPath:  "/Users/x/Library/Application Support/devm/ca/root.crt",
-		CAKeyPath:   "/Users/x/Library/Application Support/devm/ca/root.key",
-		AllowList:   []string{"github.com", "*.npmjs.org"},
+		HTTPListen:   "192.168.64.1:8080",
+		HTTPSListen:  "192.168.64.1:8443",
+		DNSListen:    "192.168.64.1:8053",
+		DNSProxyIP:   "192.168.64.1",
+		CACertPath:   "/Users/x/Library/Application Support/devm/ca/root.crt",
+		CAKeyPath:    "/Users/x/Library/Application Support/devm/ca/root.key",
+		AllowList:    []string{"github.com", "*.npmjs.org"},
+		PolicyTarget: "unix:///tmp/p.sock",
 	}
 	blob, err := cfg.YAML()
 	require.NoError(t, err)
@@ -137,87 +138,17 @@ func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 	assert.Contains(t, tls["ca_cert"].(string), "root.crt")
 	assert.Contains(t, tls["ca_key"].(string), "root.key")
 
-	// transforms: allowlist domains live under transforms[0].config.domains
+	// transforms: the policy decision is delegated to the daemon via the
+	// grpc transform; no allowlist transform is emitted.
 	transforms := got["transforms"].([]any)
 	require.Len(t, transforms, 1)
 	transform := transforms[0].(map[string]any)
-	assert.Equal(t, "allowlist", transform["name"])
+	assert.Equal(t, "grpc", transform["name"])
 	transformCfg := transform["config"].(map[string]any)
-	domains := transformCfg["domains"].([]any)
-	assert.Equal(t, []any{"github.com", "*.npmjs.org"}, domains)
+	assert.Equal(t, "devm-policy", transformCfg["name"])
+	assert.Equal(t, "unix:///tmp/p.sock", transformCfg["target"])
 }
 
-// Path-bearing allowlist entries emit as allowlist `rules` (host +
-// paths), not as domains — iron-proxy's domains list is host-only, so
-// a "host/path*" string placed there would be dead (never match).
-// Bare hosts stay in domains; patterns for the same host coalesce
-// into one rule; rules for distinct hosts keep first-seen order.
-func TestIronProxyConfigYAML_PathEntriesEmitAsRules(t *testing.T) {
-	c := IronProxyConfig{
-		HTTPListen:  "127.0.0.1:8080",
-		HTTPSListen: "127.0.0.1:8443",
-		DNSListen:   "127.0.0.1:8053",
-		DNSProxyIP:  "192.0.2.1",
-		CACertPath:  "/tmp/root.crt",
-		CAKeyPath:   "/tmp/root.key",
-		AllowList: []string{
-			"github.com",
-			"release-assets.githubusercontent.com/gh-prod/834082440/*",
-			"api.github.com/repos/o/r/releases",
-			"release-assets.githubusercontent.com/gh-prod/916455101/*",
-		},
-	}
-	out, err := c.YAML()
-	require.NoError(t, err)
-	var got map[string]any
-	require.NoError(t, yaml.Unmarshal(out, &got))
-
-	transforms := got["transforms"].([]any)
-	require.Len(t, transforms, 1)
-	transform := transforms[0].(map[string]any)
-	assert.Equal(t, "allowlist", transform["name"])
-	cfg := transform["config"].(map[string]any)
-
-	assert.Equal(t, []any{"github.com"}, cfg["domains"].([]any),
-		"path-bearing entries must not leak into domains")
-
-	rules := cfg["rules"].([]any)
-	require.Len(t, rules, 2)
-	r0 := rules[0].(map[string]any)
-	assert.Equal(t, "release-assets.githubusercontent.com", r0["host"])
-	assert.Equal(t, []any{"/gh-prod/834082440/*", "/gh-prod/916455101/*"}, r0["paths"].([]any),
-		"same-host patterns coalesce into one rule")
-	r1 := rules[1].(map[string]any)
-	assert.Equal(t, "api.github.com", r1["host"])
-	assert.Equal(t, []any{"/repos/o/r/releases"}, r1["paths"].([]any))
-}
-
-// A path-free AllowList must not emit a rules key at all — the
-// domains-only shape is what adopt-in-place compares against for
-// pre-existing configs.
-func TestIronProxyConfigYAML_NoRulesKeyWithoutPathEntries(t *testing.T) {
-	c := IronProxyConfig{
-		HTTPListen:  "127.0.0.1:8080",
-		HTTPSListen: "127.0.0.1:8443",
-		DNSListen:   "127.0.0.1:8053",
-		DNSProxyIP:  "192.0.2.1",
-		CACertPath:  "/tmp/root.crt",
-		CAKeyPath:   "/tmp/root.key",
-		AllowList:   []string{"github.com"},
-	}
-	out, err := c.YAML()
-	require.NoError(t, err)
-	var got map[string]any
-	require.NoError(t, yaml.Unmarshal(out, &got))
-	cfg := got["transforms"].([]any)[0].(map[string]any)["config"].(map[string]any)
-	_, hasRules := cfg["rules"]
-	assert.False(t, hasRules, "rules key must be absent when no entry carries a path")
-}
-
-// An empty AllowList must still emit the allowlist transform, with no
-// domains. iron-proxy v0.45.0 runs no egress check at all when the
-// transform is absent — an omitted transform is allow-all. The
-// deny-all shape is the transform present with `domains: []`.
 // tunnel_listen is iron-proxy's CONNECT/SOCKS5 tunnel port. HTTP_PROXY-
 // consuming clients (git during host-side hydration) MUST reach the tunnel
 // port — the http_listen handler returns 400 for CONNECT. If this test
@@ -233,6 +164,7 @@ func TestBuildIronProxyConfig_EmitsTunnelListenWhenSet(t *testing.T) {
 		DNSProxyIP:   "127.0.0.1",
 		CACertPath:   "/tmp/ca.crt",
 		CAKeyPath:    "/tmp/ca.key",
+		PolicyTarget: "unix:///tmp/p.sock",
 	}
 	blob, err := cfg.YAML()
 	require.NoError(t, err)
@@ -269,25 +201,19 @@ func TestIronProxyURLFor_EmptyForUnknownProject(t *testing.T) {
 	assert.Equal(t, "", ironProxyURLFor("never-spawned"))
 }
 
-func TestBuildIronProxyConfig_EmptyAllowList_EmitsDenyAllTransform(t *testing.T) {
-	cfg := IronProxyConfig{
+// YAML() must refuse to render without a PolicyTarget. iron-proxy runs
+// no egress check at all when no policy transform is present — a config
+// missing the grpc transform would be allow-all, so rendering one is
+// never acceptable.
+func TestBuildIronProxyConfig_NoPolicyTarget_Errors(t *testing.T) {
+	c := IronProxyConfig{
 		HTTPListen:  "127.0.0.1:8080",
 		HTTPSListen: "127.0.0.1:8443",
-		CACertPath:  "/tmp/ca.crt",
-		CAKeyPath:   "/tmp/ca.key",
+		CACertPath:  "/tmp/root.crt",
+		CAKeyPath:   "/tmp/root.key",
 	}
-	blob, err := cfg.YAML()
-	require.NoError(t, err)
-
-	var got map[string]any
-	require.NoError(t, yaml.Unmarshal(blob, &got))
-
-	transforms, ok := got["transforms"].([]any)
-	require.True(t, ok, "transforms key must be present even with an empty AllowList")
-	require.Len(t, transforms, 1)
-	transform := transforms[0].(map[string]any)
-	assert.Equal(t, "allowlist", transform["name"])
-	assert.Equal(t, []any{}, transform["config"].(map[string]any)["domains"])
+	_, err := c.YAML()
+	require.ErrorContains(t, err, "PolicyTarget is required")
 }
 
 func TestIronProxyListenAddr_UsesLoopback(t *testing.T) {
@@ -326,7 +252,8 @@ func secretEntries(t *testing.T, blob []byte) []map[string]any {
 func TestIronProxy_SecretEmission_ReplaceNestingAndRules(t *testing.T) {
 	cfg := IronProxyConfig{
 		HTTPListen: "x:1", HTTPSListen: "x:2", CACertPath: "/c", CAKeyPath: "/k",
-		AllowList: []string{"*"},
+		AllowList:    []string{"*"},
+		PolicyTarget: "unix:///tmp/p.sock",
 		Secrets: []IronSecret{
 			{Name: "github_token", Value: "real-gh", Hosts: []string{"api.github.com", "uploads.github.com"}},
 		},
@@ -365,8 +292,9 @@ func TestIronProxy_SecretEmission_ReplaceNestingAndRules(t *testing.T) {
 func TestIronProxy_SecretWithNoHosts_Omitted(t *testing.T) {
 	cfg := IronProxyConfig{
 		HTTPListen: "x:1", HTTPSListen: "x:2", CACertPath: "/c", CAKeyPath: "/k",
-		AllowList: []string{"*"},
-		Secrets:   []IronSecret{{Name: "unbound", Value: "real", Hosts: nil}},
+		AllowList:    []string{"*"},
+		PolicyTarget: "unix:///tmp/p.sock",
+		Secrets:      []IronSecret{{Name: "unbound", Value: "real", Hosts: nil}},
 	}
 	blob, err := cfg.YAML()
 	require.NoError(t, err)
@@ -376,11 +304,12 @@ func TestIronProxy_SecretWithNoHosts_Omitted(t *testing.T) {
 
 func TestBuildIronProxyConfig_EnablesDNSWhenListenSet(t *testing.T) {
 	cfg := IronProxyConfig{
-		HTTPListen:  "192.168.64.1:8080",
-		HTTPSListen: "192.168.64.1:8443",
-		DNSListen:   "192.168.64.1:8053",
-		CACertPath:  "/c",
-		CAKeyPath:   "/k",
+		HTTPListen:   "192.168.64.1:8080",
+		HTTPSListen:  "192.168.64.1:8443",
+		DNSListen:    "192.168.64.1:8053",
+		CACertPath:   "/c",
+		CAKeyPath:    "/k",
+		PolicyTarget: "unix:///tmp/p.sock",
 	}
 	blob, err := cfg.YAML()
 	require.NoError(t, err)
