@@ -64,9 +64,11 @@ GSD's surface while keeping hand-written `.claude/commands/*.md` and
   `devm start` re-hydrates from git (which does not include the GSD
   install), then `install-gsd-core` fires again on boot in the fresh
   clone. Nothing to remember.
-- **Runs under enforced egress** (`commands.*.startup: true` fires
-  post-hydration, after the allowlist is applied) — hence both npm
-  hosts above must be in `network.allow:`.
+- **Runs under open egress** (`commands.*.startup: true` fires
+  post-hydration, before the allowlist is applied) — the automatic
+  boot-time install has full network access. Both npm hosts stay in
+  `network.allow:` anyway, so a manual `run install-gsd-core` from an
+  enforced-egress `devm shell` session still works.
 - **GSD's persistent state lives in `.planning/`** (workspace-tracked,
   committed). Because it's git-tracked, it survives `devm teardown` on
   its own: the workspace volume is deleted and rehydrated from git on

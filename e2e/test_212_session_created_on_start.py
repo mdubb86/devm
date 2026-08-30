@@ -37,9 +37,9 @@ def test_session_created_on_start(devm, workspace):
         )
 
         assert len(sessions) >= 1
-        # In the new lifecycle, WaitForInitialSync fires before devm start
-        # returns. The session should be past initial-scan and into
-        # steady-state watching.
+        # WaitForInitialSync fires before devm start returns, so the
+        # session should be past initial-scan and into steady-state
+        # watching.
         assert sessions[0]["status"] in ("Watching", "connected-beta", "connecting-beta"), (
             f"expected Watching-class status, got {sessions[0]['status']}"
         )

@@ -80,39 +80,6 @@ func mutagenDataDir(cfg identity.Config) string {
 	return filepath.Join(cfg.RuntimeDir(), "mutagen", "data")
 }
 
-// mutagenHomeDir is HOME for the mutagen daemon and every ssh child it
-// spawns. The daemon runs as root under launchd, so its default HOME is
-// /var/root — where devm's managed ssh_config Include line does NOT live.
-// Redirecting HOME to a devm-owned dir with .ssh/config -> Include of the
-// managed ssh_config makes mutagen's ssh subprocess see the per-project
-// Host block regardless of the launching user.
-func mutagenHomeDir(cfg identity.Config) string {
-	return filepath.Join(cfg.RuntimeDir(), "mutagen", "home")
-}
-
-// ensureMutagenHome creates $mutagenHomeDir/.ssh/config with a single
-// `Include "<managed ssh_config>"` line so ssh under HOME=$mutagenHomeDir
-// resolves devm's per-project Host blocks. Idempotent — the file's
-// content is fixed by cfg.
-func ensureMutagenHome(cfg identity.Config) error {
-	home := mutagenHomeDir(cfg)
-	sshDir := filepath.Join(home, ".ssh")
-	if err := os.MkdirAll(sshDir, 0o700); err != nil {
-		return fmt.Errorf("mutagen home %s: %w", sshDir, err)
-	}
-	configPath := filepath.Join(sshDir, "config")
-	want := "# devm-managed. Points mutagen daemon's ssh at devm's Host blocks.\n" +
-		"Include \"" + filepath.Join(cfg.RuntimeDir(), "ssh_config") + "\"\n"
-	existing, err := os.ReadFile(configPath)
-	if err == nil && string(existing) == want {
-		return nil
-	}
-	if err := os.WriteFile(configPath, []byte(want), 0o600); err != nil {
-		return fmt.Errorf("mutagen home %s: %w", configPath, err)
-	}
-	return nil
-}
-
 // mutagenStopPhaseFn is the test-injection seam for the flush+pause
 // step /vm/stop runs (before gracefulStopVM) against the project's
 // mutagen sessions. Production always extracts the real embedded
@@ -131,17 +98,14 @@ var mutagenStopPhaseFn = func(cfg identity.Config, projectID string) error {
 // with a data directory scoped under cfg.RuntimeDir(), and adopts the
 // resulting PID under supervisor.RoleMutagen.
 //
-// SSH auth for the mutagen daemon's outbound sessions is handled by
-// the user's ~/.ssh/config, which sources internal/serviceapi/sshconfig's
-// devm-managed include. The mutagen daemon runs as the same user as the
-// devm daemon, so its ssh(1) subprocess reads that same config.
+// The daemon's outbound sessions transport via MUTAGEN_SSH_PATH, which
+// points at the tart-mutagen-ssh shim (see cmd/tart-mutagen-ssh) instead
+// of the system ssh client. The shim dispatches through `tart exec`, so
+// the daemon has no sshd dependency and never touches ~/.ssh/config.
 func SpawnMutagen(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor) error {
 	dataDir := mutagenDataDir(cfg)
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return fmt.Errorf("mutagen: data dir %s: %w", dataDir, err)
-	}
-	if err := ensureMutagenHome(cfg); err != nil {
-		return fmt.Errorf("mutagen: home dir: %w", err)
 	}
 
 	bin, err := mutagenEnsureFn(cfg.RuntimeDir())
@@ -153,7 +117,6 @@ func SpawnMutagen(ctx context.Context, cfg identity.Config, sup *supervisor.Supe
 		Binary:  bin,
 		DataDir: dataDir,
 		ExtraEnv: []string{
-			"HOME=" + mutagenHomeDir(cfg),
 			"MUTAGEN_SSH_PATH=" + MutagenSSHDir(cfg),
 		},
 	}
@@ -190,10 +153,10 @@ func AdoptMutagenDaemon(ctx context.Context, cfg identity.Config, sup *superviso
 	// Always stop-and-respawn any adopted daemon: mutagen sessions persist
 	// in DataDir across daemon restarts (mutagen resumes them on next
 	// start), and this guarantees the daemon inherits the current build's
-	// full env — including HOME (points at devm's managed ssh_config so
-	// ssh under root sees per-project Host blocks) and MUTAGEN_DATA_DIRECTORY.
-	// A stale env from a previous devm build would silently break ssh in
-	// ways that only surface at the first sync create.
+	// full env — including MUTAGEN_SSH_PATH (points at the tart-mutagen-ssh
+	// shim) and MUTAGEN_DATA_DIRECTORY. A stale env from a previous devm
+	// build would silently break the sync transport in ways that only
+	// surface at the first sync create.
 	sup.Adopt(key, pid)
 	if err := sup.Stop(ctx, key); err != nil {
 		return fmt.Errorf("mutagen: stop existing daemon pid %d: %w", pid, err)

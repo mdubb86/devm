@@ -164,9 +164,8 @@ func TestSpawnMutagen_SetsMUTAGEN_SSH_PATHEnv(t *testing.T) {
 // daemon on devm daemon start, regardless of binary sha. Mutagen
 // sessions live in DataDir and are resumed automatically on the fresh
 // daemon; this guarantees the daemon inherits the current build's env
-// (notably HOME → devm's managed ssh_config include, so ssh under root
-// sees per-project Host blocks). Adopt-in-place was silently pinning a
-// stale env from a previous devm build.
+// (notably MUTAGEN_SSH_PATH → the tart-mutagen-ssh shim). Adopt-in-place
+// was silently pinning a stale env from a previous devm build.
 func TestAdoptMutagenDaemon_ExistingAlive_StopsAndRespawns(t *testing.T) {
 	cfg := testMutagenCfg(t)
 	sup := supervisor.New(t.TempDir())

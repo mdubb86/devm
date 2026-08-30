@@ -4,7 +4,6 @@ cycle. This validates that pre-installing the agent bypasses SCP.
 """
 from __future__ import annotations
 import os
-import stat
 import subprocess
 import pytest
 

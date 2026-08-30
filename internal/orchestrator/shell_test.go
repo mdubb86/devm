@@ -442,14 +442,13 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 			"the Critical fix: services must never start under open egress")
 }
 
-// TestProvisionAndAttach_MutagenBeforeRunOpen pins the Task 8 reorder: the
-// mutagen sync-session setup step now runs AFTER OpenEgress (needs
+// TestProvisionAndAttach_MutagenBeforeRunOpen pins the ordering: the
+// mutagen sync-session setup step runs AFTER OpenEgress (needs
 // iron-proxy for a cold-start guest git clone) but BEFORE RunOpen (so
-// install:/startup: see a hydrated workspace) — the exact opposite of the
-// v0.20.1 ordering, which ran mutagen setup only after RunEnforced.
-// waitForInitialSyncFn sits between mutagen setup and RunOpen (the
-// extracted FlushAll wait), and runStartupCommandsFn now fires right after
-// RunOpen, still under OPEN egress, before ApplyEgressEnforcement.
+// install:/startup: see a hydrated workspace). waitForInitialSyncFn sits
+// between mutagen setup and RunOpen (the extracted FlushAll wait), and
+// runStartupCommandsFn fires right after RunOpen, still under OPEN
+// egress, before ApplyEgressEnforcement.
 //
 // mutagenSetupFn, waitForInitialSyncFn, and runStartupCommandsFn are all
 // faked to append a marker into the same ordered log file fakeTartBinWithLog
