@@ -40,11 +40,23 @@ func main() {
 	// (relative to HOME). Tart Guest Agent doesn't chdir to the target user's
 	// HOME by default (its Workdir is unset by the tart CLI), so the relative
 	// path doesn't resolve. Rewrite to devm's absolute agent path.
+	var originalFirst string
+	if len(cmd) > 0 {
+		originalFirst = cmd[0]
+	}
 	if len(cmd) > 0 && strings.HasPrefix(cmd[0], ".mutagen/") {
 		cmd[0] = "/home/devm/" + cmd[0]
 	}
 
+	// If we rewrote the agent path, log that so failures upstream can tell
+	// whether the path we asked tart to run actually exists in-guest. tart
+	// exec itself doesn't say "no such file" clearly in some paths.
+	if len(cmd) > 0 && strings.HasPrefix(cmd[0], "/home/devm/.mutagen/") {
+		fmt.Fprintf(os.Stderr, "tart-mutagen-ssh: agent path %s (rewritten from mutagen's HOME-relative %q)\n", cmd[0], originalFirst)
+	}
+
 	tartArgs := append([]string{"exec", vm}, cmd...)
+	fmt.Fprintf(os.Stderr, "tart-mutagen-ssh: invoking tart %s\n", strings.Join(tartArgs, " "))
 	c := exec.Command("tart", tartArgs...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
