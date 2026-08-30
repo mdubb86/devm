@@ -97,6 +97,7 @@ func seedPackagesFixture(t *testing.T, projectID string, allowList []string, exe
 		HTTPSListen:  "127.0.0.1:9443",
 		TunnelListen: "127.0.0.1:9081",
 		DNSListen:    "127.0.0.1:9053",
+		PolicyTarget: "unix:///tmp/p.sock",
 	}))
 
 	allow := make([]schema.AllowEntry, 0, len(allowList))
@@ -234,8 +235,13 @@ func TestApplyPackages_NoProjectAllowlist_RestoreCloses(t *testing.T) {
 	assert.Empty(t, (*events)[2].allowList)
 
 	// The window is only closed if the config the restore spawns with
-	// actually denies. Assert on the emitted YAML, not just the
-	// AllowList slice — that's the layer where the window stayed open.
+	// actually enforces something. rebuildIronProxyConfig fills
+	// PolicyTarget unconditionally, and YAML() refuses to render
+	// without one — so the emitted grpc transform's target proves the
+	// restore delegates to the daemon's PolicyAuthority (re-Set to the
+	// original, now-empty allowlist) rather than iron-proxy running
+	// allow-all. Assert on the emitted YAML, not just the AllowList
+	// slice — that's the layer where the window stayed open.
 	blob, err := (*events)[2].proxyCfg.YAML()
 	require.NoError(t, err)
 	var restored map[string]any
@@ -245,9 +251,9 @@ func TestApplyPackages_NoProjectAllowlist_RestoreCloses(t *testing.T) {
 	require.True(t, ok, "restore config must carry a transforms list; without one iron-proxy allows every host")
 	require.Len(t, transforms, 1)
 	transform := transforms[0].(map[string]any)
-	assert.Equal(t, "allowlist", transform["name"])
-	domains := transform["config"].(map[string]any)["domains"]
-	assert.Equal(t, []any{}, domains, "deny-all is an allowlist transform with no domains")
+	assert.Equal(t, "grpc", transform["name"])
+	assert.NotEmpty(t, transform["config"].(map[string]any)["target"],
+		"grpc transform must carry a non-empty PolicyTarget or iron-proxy allows every host")
 }
 
 func TestApplyPackages_EmptyNoop(t *testing.T) {

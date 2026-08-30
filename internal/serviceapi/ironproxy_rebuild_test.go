@@ -27,6 +27,7 @@ func TestRebuildIronProxyConfig(t *testing.T) {
 		HTTPSListen:  "127.0.0.1:9443",
 		TunnelListen: "127.0.0.1:9081",
 		DNSListen:    "127.0.0.1:9053",
+		PolicyTarget: "unix:///tmp/p.sock",
 	}))
 
 	// Snapshot-shaped schema.Config: one allow entry carrying a
@@ -73,6 +74,7 @@ func TestRebuildIronProxyConfig_DockerExpandsAllowlist(t *testing.T) {
 		HTTPSListen:  "127.0.0.1:9543",
 		TunnelListen: "127.0.0.1:9181",
 		DNSListen:    "127.0.0.1:9153",
+		PolicyTarget: "unix:///tmp/p.sock",
 	}))
 
 	snapCfg := schema.Config{

@@ -71,6 +71,12 @@ class IronProxyConfig:
     dns_listen: str = ""
     dns_proxy_ip: str = ""
     allow_domains: list[str] = field(default_factory=list)
+    # When set, the allow/deny decision is delegated to an external
+    # TransformService: a `grpc` transform pointing at this target (e.g.
+    # "unix:///path/policy.sock") is emitted INSTEAD of the allowlist
+    # transform, and allow_domains is ignored. Mirrors the
+    # grpc-policy-authority design where the devm daemon owns policy.
+    grpc_target: str = ""
     # Maps opaque token (proxy_value, e.g. "__DEVM_SECRET_FOO__") to the
     # env var name iron-proxy reads the real value from (e.g. "DEVM_SECRET_FOO").
     # Pass the actual secret values via spawn(env={...}).
@@ -106,14 +112,22 @@ class IronProxyConfig:
             cfg["dns"]["listen"] = self.dns_listen
             cfg["dns"]["proxy_ip"] = self.dns_proxy_ip
 
-        # The allowlist transform is always emitted, empty domains
-        # included — iron-proxy only runs the egress check when the
-        # transform is present, so an omitted one means allow-all.
-        # Mirrors internal/serviceapi/ironproxy.go's YAML().
-        transforms: list = [{
-            "name": "allowlist",
-            "config": {"domains": list(self.allow_domains)},
-        }]
+        # The policy transform is always emitted — iron-proxy only runs
+        # the egress check when a transform is present, so an omitted one
+        # means allow-all. Either the built-in allowlist (empty domains
+        # included; mirrors internal/serviceapi/ironproxy.go's YAML()) or,
+        # with grpc_target set, a grpc transform delegating the decision
+        # to an external TransformService.
+        if self.grpc_target:
+            transforms: list = [{
+                "name": "grpc",
+                "config": {"name": "devm-policy", "target": self.grpc_target},
+            }]
+        else:
+            transforms = [{
+                "name": "allowlist",
+                "config": {"domains": list(self.allow_domains)},
+            }]
 
         if self.secret_tokens:
             entries = []
