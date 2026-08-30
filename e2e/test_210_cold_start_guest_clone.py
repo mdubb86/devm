@@ -2,10 +2,10 @@
 
 The mutagen-volumes model hydrates repos entirely inside the guest:
 `CloneRepoInGuest` (internal/serviceapi/mutagen_cold_start.go) runs
-`git clone <URL> /home/devm/<label>` as the guest's devm user under
-softnet's egress-enforcement policy — softnet's transparent :80/:443
-intercept routes the clone through iron-proxy's MITM path with no
-HTTP_PROXY needed on the guest side.
+`git clone <URL> /home/devm/<label>` as the guest's devm user during
+the OpenEgress window — softnet is OPEN (unrestricted egress) for the
+clone, not yet enforcing, so no HTTP_PROXY or MITM plumbing is needed
+on the guest side.
 
 Pins:
   - `.git` exists in the guest at `/home/devm/<label>/` after
@@ -22,6 +22,8 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+
+from helpers.mutagen_e2e import mirror_path
 
 pytestmark = pytest.mark.devm
 
@@ -56,6 +58,16 @@ def test_cold_start_guest_clone(devm, workspace):
         assert r.returncode == 0, r.stderr.decode()
         assert "README" in r.stdout.decode(), (
             f"expected README in cloned tree; got:\n{r.stdout.decode()}"
+        )
+
+        # The Mac-side mirror is already populated by the time `devm start`
+        # returns -- WaitForInitialSync blocks start on the initial sync
+        # completing, so no manual `sync flush` is needed here.
+        mirror = mirror_path(workspace.vm_name, label)
+        assert (mirror / "README").exists(), (
+            f"Mac mirror {mirror} missing cloned README right after "
+            f"`devm start` returned -- WaitForInitialSync should have "
+            f"already brought it in sync"
         )
     finally:
         subprocess.run(

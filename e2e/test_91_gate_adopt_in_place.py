@@ -37,6 +37,11 @@ never adopted onto a dirty slate. Was previously unit-only
 (internal/orchestrator/shell_test.go
 TestRunShellRunning_TargetInactiveMarkerPresent_TeardownAndColdStart).
 
+Adopt-in-place also uses the tart-mutagen-ssh transport: the composed
+script's provisioning tail (including mutagen setup) runs the same way
+against an already-running VM as it does on a normal cold start, so
+the project's mutagen sync session comes up under adopt-in-place too.
+
 What it doesn't cover (tested elsewhere):
   - The base image's locked/inert floor itself -> test_90.
   - Warm-attach (already provisioned) / cold-start (stopped) paths ->
@@ -57,6 +62,7 @@ from helpers.direct import (
     get_routes as _get_routes,
     tcp_read_banner as _tcp_read_banner,
 )
+from helpers.mutagen_e2e import session_prefix, sync_list
 from helpers.softnet import env_with_softnet
 from helpers.tart import TartSandbox
 
@@ -219,6 +225,15 @@ def test_adopt_in_place(devm, workspace, sandbox_name):
         target_after = vm.exec("systemctl", "is-active", "devm.target").stdout.strip()
         assert target_after == "active", (
             f"expected devm.target active after adopt-in-place provisioning; got {target_after!r}"
+        )
+
+        # Adopt-in-place's provisioning tail re-ran mutagen setup too --
+        # the project's sync session comes back under the same name
+        # prefix, not just devm.target.
+        sessions = sync_list(session_prefix(project_id))
+        assert sessions, (
+            f"expected at least one mutagen sync session for {project_id!r} "
+            f"after adopt-in-place; `mutagen sync list` returned none"
         )
 
         # Same VM name (trivially true -- we never changed it) and same

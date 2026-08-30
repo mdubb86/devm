@@ -9,9 +9,22 @@ package serviceapi
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/mdubb86/devm/internal/identity"
 )
+
+// MutagenSSHDirName is the subdirectory under the daemon runtime dir
+// that holds the tart-mutagen-ssh shim (as `ssh` and `scp`).
+// MUTAGEN_SSH_PATH points here for the mutagen daemon.
+const MutagenSSHDirName = "mutagen-ssh-dir"
+
+// MutagenSSHDir returns <runtime-dir>/mutagen-ssh-dir. The shim installs
+// under this path as `ssh` and `scp`; mutagen's env-based binary lookup
+// finds them.
+func MutagenSSHDir(cfg identity.Config) string {
+	return filepath.Join(cfg.RuntimeDir(), MutagenSSHDirName)
+}
 
 // EnsureRuntimeDir creates cfg.RuntimeDir() if it doesn't exist (mode
 // 0700). Returns the directory path. Called by the service at startup

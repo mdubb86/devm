@@ -4,7 +4,10 @@ warm-attach branch on an already-provisioned VM.
 
 Exercises the composed provisioning script's boot-integrity gate
 behavior on the ordinary (non-adopt, non-daemon-less) path -- contrast
-with test_90 (daemon-less boot floor) and test_91 (adopt-in-place):
+with test_90 (daemon-less boot floor) and test_91 (adopt-in-place).
+Mutagen setup runs in the same open-egress window as `startup:`, ahead
+of `enforce` -- the workspace is hydrated before either the boot-
+integrity gate or the assertions below ever look at it:
 
   1. `test_normal_cold_start_and_startup_determinism`:
      - A project with `startup:`, a service, and `network.allow:
@@ -65,6 +68,7 @@ NON_ALLOWLISTED_HOST = "https://example.com"
 STARTUP_FETCH_FILE = "/home/devm/.startup-fetch"
 SVC_FETCH_FILE = "/home/devm/.svc-fetch"
 DETERMINISM_SENTINEL = "/home/devm/.startup-determinism-sentinel"
+STARTUP_SAW_WORKSPACE = "startup-saw-workspace"
 
 # internal/serviceapi/vm.go's proxySentinelIP -- the fixed RFC 5737
 # "documentation space" address iron-proxy's DNS listener answers with
@@ -83,6 +87,9 @@ def _runtime_dir() -> Path:
     return Path.home() / "Library/Application Support/devm-e2e"
 
 
+E2E_OUT_LOG = Path.home() / "Library/Logs/com.devm.e2e.service.out.log"
+
+
 @pytest.mark.slow
 @pytest.mark.timeout(600)
 def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name):
@@ -90,6 +97,7 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
     workspace.write_devmyaml(
         startup=[
             f"curl -sf -m 10 {NON_ALLOWLISTED_HOST} -o {STARTUP_FETCH_FILE} || true",
+            f"test -f $WORKSPACE/README && echo {STARTUP_SAW_WORKSPACE}",
         ],
         services={
             "probe": {
@@ -104,12 +112,29 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
         network={"allow": ["api.github.com"]},
     )
 
+    # Scope the log assertion below to this test's own cold-start, not
+    # any stray content from a prior test's run against the same
+    # long-lived daemon log file.
+    log_offset = E2E_OUT_LOG.stat().st_size if E2E_OUT_LOG.exists() else 0
+
     # ---- Cold-start. ----
     r = subprocess.run(
         [devm.path, "shell", "--", "true"],
         cwd=str(workspace.path), capture_output=True, timeout=480,
     )
     assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
+
+    # ---- startup: saw a populated $WORKSPACE: mutagen setup ran ahead of
+    # ---- startup: in the composed script's open-egress window, so the
+    # ---- workspace is already hydrated by the time startup: runs. ----
+    with E2E_OUT_LOG.open(errors="replace") as f:
+        f.seek(log_offset)
+        out_tail = f.read()
+    assert STARTUP_SAW_WORKSPACE in out_tail, (
+        f"expected {STARTUP_SAW_WORKSPACE!r} in the daemon out log "
+        f"(startup: should have seen $WORKSPACE/README already present); "
+        f"got tail:\n{out_tail[-2000:]}"
+    )
 
     # ---- Services active. ----
     svc_state = vm.exec("systemctl", "is-active", "probe.service").stdout.strip()

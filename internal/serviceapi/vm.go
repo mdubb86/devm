@@ -76,8 +76,8 @@ type VMStartResponse struct {
 	ProjectIP string `json:"project_ip"`
 	// TunnelPort is iron-proxy's CONNECT-capable tunnel_listen port —
 	// the orchestrator needs it (with softnet.NATAliasIP) to build the
-	// guest-visible HTTP_PROXY URL for its post-RunEnforced mutagen
-	// SetupPhase call, which the daemon has no visibility into.
+	// guest-visible HTTP_PROXY URL for its post-RunBundle, pre-RunUser
+	// mutagen SetupPhase call, which the daemon has no visibility into.
 	TunnelPort int `json:"tunnel_port,omitempty"`
 }
 
@@ -827,11 +827,12 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 
 		// Flush + pause this project's mutagen sessions before anything
 		// below touches the guest's network or power state — mutagen's
-		// SSH transport needs sshd up and reachable, both of which
-		// gracefulStopVM's in-guest poweroff (further down) ends.
-		// Best-effort: mutagen's own journal handles a crash mid-flush,
-		// so a failure here just means sessions resume unflushed on the
-		// next start instead of failing the stop.
+		// transport is tart exec (see cmd/tart-mutagen-ssh), which needs
+		// the guest running and reachable, and gracefulStopVM's in-guest
+		// poweroff (further down) ends that. Best-effort: mutagen's own
+		// journal handles a crash mid-flush, so a failure here just means
+		// sessions resume unflushed on the next start instead of failing
+		// the stop.
 		if err := mutagenStopPhaseFn(cfg, req.Name); err != nil {
 			daemonlog.Errorf("mutagen stop phase for %s: %v (continuing)", req.Name, err)
 		}

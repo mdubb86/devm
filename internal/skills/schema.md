@@ -283,7 +283,7 @@ Map of named commands scoped to this repo. Each entry:
 | Field | Type | Required | Purpose |
 |---|---|---|---|
 | `exec` | string | yes | Shell command body. `>NAME` references a `scripts:` entry (joined with ` && `, same as `install:`/`startup:` refs). |
-| `startup` | bool | no (default false) | When true, this command fires automatically on every VM boot AFTER the workspace is hydrated (post-`mutagen sync flush`), from this repo's guest cwd. **Runs under ENFORCED egress** — any host it reaches must be in `network.allow:`. |
+| `startup` | bool | no (default false) | When true, this command fires automatically on every VM boot AFTER the workspace is hydrated (post-`mutagen sync flush`), from this repo's guest cwd. **Runs under OPEN egress** (same window as top-level `install:`/`startup:`) — a manual `run <name>` afterward runs under the enforced allowlist instead. |
 
 Names must match `/^[a-z][a-z0-9_-]*$/`. Uniqueness is per-repo; two repos can both name a command `test` — the guest-side `run <name>` dispatcher picks the right one from `$PWD`.
 

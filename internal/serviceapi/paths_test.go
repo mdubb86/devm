@@ -26,3 +26,9 @@ func TestEnsureRuntimeDir_CreatesDirectory(t *testing.T) {
 	parent := filepath.Dir(identity.Prod.SocketPath())
 	assert.Equal(t, parent, dir)
 }
+
+func TestMutagenSSHDir_UnderRuntimeDir(t *testing.T) {
+	got := MutagenSSHDir(identity.Prod)
+	assert.Equal(t, filepath.Join(identity.Prod.RuntimeDir(), MutagenSSHDirName), got)
+	assert.True(t, strings.HasSuffix(got, "mutagen-ssh-dir"))
+}

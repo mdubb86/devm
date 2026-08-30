@@ -44,6 +44,14 @@ A project's `CLAUDE.md` is git-tracked, so both the Mac and the VM see the same 
 
 Inside the guest, `run <name>` looks up `<name>` in the containing repo's `commands:` block (walks up from `$PWD` to find its repo) and runs it from the repo root. Two repos can define the same name; cwd picks the right one. Commands with `startup: true` also fire automatically at cold-start after the workspace is hydrated.
 
+### Mutagen transport
+
+Mutagen syncs the workspace between Mac and guest via a Mac-side shim
+(`cmd/tart-mutagen-ssh`, installed to `<daemon-runtime-dir>/mutagen-ssh-dir/ssh`)
+that dispatches through `tart exec` (Tart's gRPC-over-vsock control
+channel). No sshd is involved in the sync path. sshd remains for
+interactive `ssh devm-<name>` and VS Code Remote-SSH.
+
 ## Where to look next
 
 - `devm skills get schema` — every `devm.yaml` field, its type, and which change bucket it falls in.

@@ -109,16 +109,22 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		if err != nil {
 			return fmt.Errorf("render commands manifest: %w", err)
 		}
+		mutagenAgent, err := mutagen.LinuxArm64Agent()
+		if err != nil {
+			return fmt.Errorf("extract mutagen agent: %w", err)
+		}
 		in := devmbundle.BuildInput{
-			Cfg:                 cfg,
-			RepoRoot:            repoRoot,
-			DaemonRuntimeDir:    daemonRuntimeDir,
-			CARootPEM:           caPEM,
-			SSHAuthorizedPubkey: sshAuthPub,
-			SSHHostPriv:         sshHostPriv,
-			SSHHostPub:          sshHostPub,
-			CommandsManifest:    commandsManifest,
-			Run:                 guestbin.Run(),
+			Cfg:                    cfg,
+			RepoRoot:               repoRoot,
+			DaemonRuntimeDir:       daemonRuntimeDir,
+			CARootPEM:              caPEM,
+			SSHAuthorizedPubkey:    sshAuthPub,
+			SSHHostPriv:            sshHostPriv,
+			SSHHostPub:             sshHostPub,
+			CommandsManifest:       commandsManifest,
+			Run:                    guestbin.Run(),
+			MutagenAgentLinuxArm64: mutagenAgent,
+			MutagenVersion:         strings.TrimPrefix(mutagen.EmbeddedVersion(), "v"),
 		}
 		if cfg.Docker {
 			in.DockerRuncShim = docker.Shim()

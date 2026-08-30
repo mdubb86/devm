@@ -11,6 +11,7 @@ import (
 // long-running stages get their own line; everything else stays under the
 // caller's single "provisioning" spinner (Task 6 starts that).
 var stageLabels = map[string]string{
+	"bundle":   "extracting devm bundle",
 	"open":     "opening network",
 	"packages": "apt install packages",
 	"install":  "run install:",

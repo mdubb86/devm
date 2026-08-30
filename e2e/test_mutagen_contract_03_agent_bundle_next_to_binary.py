@@ -7,6 +7,8 @@ mutagen binary and its agent bundle to `<RuntimeDir>/bin/` on daemon
 startup (internal/mutagen.Ensure). This pin caught a real bug: an earlier
 build shipped only the mutagen binary and every ssh-transport sync failed
 with 'unable to locate agent bundle (search paths: [<bin>/ <bin>/../libexec])'.
+The guest side is now pre-installed via `/opt/devm/bin/mutagen-agent`
+copied by install.sh, so the SCP fallback path is theoretical.
 
 We don't try to force the failure at test time — that would require a
 functional ssh endpoint to reach the agent-install code path. Instead we

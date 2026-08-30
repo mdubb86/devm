@@ -1,6 +1,11 @@
 """89: `startup:` runs on EVERY boot, with open egress, and iron-proxy
 enforcement is still applied afterward.
 
+`startup:` now sees a hydrated workspace: mutagen sync brings the
+primary repo's Mac-side content into the guest before `startup:` runs,
+so a `startup:` command can rely on files that only exist on the Mac
+side pre-boot.
+
 Contrast with `install:` (test_88): `install:` is first-boot-only and
 gated by /var/lib/devm/provisioned. `startup:` has no such gate — it's
 meant for state that needs re-establishing on every boot (e.g. mounts,
@@ -50,6 +55,7 @@ import pytest
 
 from helpers import stop_and_wait_stopped
 from helpers.exec_retry import devm_exec_with_retry
+from helpers.mutagen_e2e import mirror_path
 
 pytestmark = pytest.mark.devm
 
@@ -69,14 +75,31 @@ SVC_FETCH_FILE = "/home/devm/.svc-fetch"
 # different one.
 NON_ALLOWLISTED_HOST = "https://example.com"
 
+# Written into the primary repo's Mac mirror BEFORE `devm start` (below),
+# proving a `startup:` command can see content that only ever existed on
+# the Mac side pre-boot -- mutagen sync must hydrate the guest before
+# startup: runs.
+HYDRATION_MARKER_FILE = "/home/devm/.startup-saw-hydration"
+
 
 @pytest.mark.slow
 @pytest.mark.timeout(600)
 def test_startup_runs_every_boot_open_egress_enforced_after(workspace, devm, sandbox_name):
+    label = workspace.bare_repo_label()
+
+    # Pre-seed a file into the primary repo's Mac-side mirror before the
+    # project has ever started. mutagen syncs it into the guest alongside
+    # the initial clone, so `startup:` seeing it (via `test -f`) proves
+    # hydration completed before `startup:` ran.
+    mirror = mirror_path(workspace.vm_name, label)
+    mirror.mkdir(parents=True, exist_ok=True)
+    (mirror / "mac-seeded-file").write_text("seeded\n")
+
     workspace.write_devmyaml(
         startup=[
             f"echo run >> {COUNT_FILE}",
             f"curl -sf -m 10 {NON_ALLOWLISTED_HOST} -o {STARTUP_FETCH_FILE} || true",
+            f"test -f /home/devm/{label}/mac-seeded-file && touch {HYDRATION_MARKER_FILE}",
         ],
         network={"allow": ["api.github.com"]},
         services={
@@ -123,6 +146,20 @@ def test_startup_runs_every_boot_open_egress_enforced_after(workspace, devm, san
         "startup:'s curl to a non-allow-listed host produced no/empty "
         f"output at {STARTUP_FETCH_FILE} — startup: should run under "
         "open egress, before enforcement locks the guest down"
+    )
+
+    # ---- Assertion 2b: startup: sees a hydrated workspace — the file
+    # ---- pre-seeded into the primary repo's Mac mirror (before `devm
+    # ---- start` ever ran) was synced into the guest before startup:'s
+    # ---- `test -f` check ran. ----
+    hydration_probe = devm_exec_with_retry(
+        devm.path, ["test", "-f", HYDRATION_MARKER_FILE],
+        cwd=str(workspace.path), timeout=30,
+    )
+    assert hydration_probe.returncode == 0, (
+        f"startup: did not see the Mac-seeded file at "
+        f"/home/devm/{label}/mac-seeded-file — the workspace should be "
+        "hydrated via mutagen sync before startup: runs"
     )
 
     # ---- Assertion 3: enforcement intact after boot — the exec:

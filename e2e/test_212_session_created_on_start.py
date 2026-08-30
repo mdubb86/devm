@@ -6,6 +6,7 @@ shape. With no other `repos:`/`volumes:` entries, BuildEntities
 produces exactly one SessionEntity (the primary), so exactly one
 session should exist under the project's name prefix.
 """
+# NOTE: mutagen setup runs pre-install:/startup: under the tart exec transport
 from __future__ import annotations
 import subprocess
 
@@ -33,6 +34,14 @@ def test_session_created_on_start(devm, workspace):
         names = [s["name"] for s in sessions]
         assert names == [expected_name], (
             f"expected exactly one session named {expected_name!r}, got {names!r}"
+        )
+
+        assert len(sessions) >= 1
+        # WaitForInitialSync fires before devm start returns, so the
+        # session should be past initial-scan and into steady-state
+        # watching.
+        assert sessions[0]["status"] in ("Watching", "connected-beta", "connecting-beta"), (
+            f"expected Watching-class status, got {sessions[0]['status']}"
         )
     finally:
         subprocess.run(

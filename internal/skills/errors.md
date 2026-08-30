@@ -56,7 +56,7 @@ Other pre-VM errors from `devm shell`:
 
 ## Repo hydration failures
 
-Repo hydration (`git clone` inside the guest, for `repos:` entries) runs as part of mutagen session setup, after the guest finishes provisioning (RunEnforced) and before the shell attaches — it's neither a daemon-startup nor a provisioner-stage failure, but a cold-start failure here still tears down the VM like any other.
+Repo hydration (`git clone` inside the guest, for `repos:` entries) runs as part of mutagen session setup (stage marker `mutagen-sync`), right after egress opens and before `install:`/`startup:` run — it's neither a daemon-startup nor a provisioner-stage failure, but a cold-start failure here still tears down the VM like any other.
 
 - **Missing secret.** `repos.<name>.secret` names a secret not in the store — cold-start aborts before the clone runs; the error names the missing secret. Fix: `devm secret set <name>`.
 - **Clone auth failure (401).** Usually a missing iron-proxy substitution rule or an expired token. Cold-start aborts and the VM is torn down; the error names the repo URL. Fix: confirm `repos.<name>.secret` holds a token with clone access to that repo.

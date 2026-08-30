@@ -42,6 +42,9 @@ before:
     # Compile the guest-side run binary for linux_arm64. Mirrors the
     # just _build-run-embed recipe. Uncompressed embed, static (no cgo).
     - sh -c 'mkdir -p internal/guestbin/embed && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o internal/guestbin/embed/run ./cmd/run'
+    # Compile the Mac-side tart-mutagen-ssh shim for darwin_arm64. Mirrors
+    # the just _build-tart-mutagen-ssh-embed recipe. Static (no cgo).
+    - sh -c 'mkdir -p internal/tartmutagenssh/embed && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o internal/tartmutagenssh/embed/tart-mutagen-ssh ./cmd/tart-mutagen-ssh'
 
 builds:
   # Tart requires Apple Silicon; amd64 macOS isn't a supported target.

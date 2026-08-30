@@ -7,6 +7,7 @@ resume branch (`if existing.Status == "paused" { SyncResume }`) picks
 the paused session back up on the next start rather than terminating
 and recreating it.
 """
+# NOTE: mutagen setup runs pre-install:/startup: under the tart exec transport
 from __future__ import annotations
 import subprocess
 

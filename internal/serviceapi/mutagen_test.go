@@ -136,13 +136,36 @@ func TestSpawnMutagen_SetsMutagenDataDirectoryEnv(t *testing.T) {
 	assert.Equal(t, mutagenDataDir(cfg), startCalledWith.DataDir)
 }
 
+func TestSpawnMutagen_SetsMUTAGEN_SSH_PATHEnv(t *testing.T) {
+	cfg := testMutagenCfg(t)
+	sup := supervisor.New(t.TempDir())
+
+	origEnsure := mutagenEnsureFn
+	origStart := mutagenDaemonStartFn
+	t.Cleanup(func() {
+		mutagenEnsureFn = origEnsure
+		mutagenDaemonStartFn = origStart
+	})
+
+	mutagenEnsureFn = func(string) (string, error) { return "/fake/bin/mutagen", nil }
+	var startCalledWith *mutagen.CLI
+	mutagenDaemonStartFn = func(cli *mutagen.CLI) (int, error) {
+		startCalledWith = cli
+		return 1, nil
+	}
+
+	require.NoError(t, SpawnMutagen(context.Background(), cfg, sup))
+
+	require.NotNil(t, startCalledWith)
+	assert.Contains(t, startCalledWith.ExtraEnv, "MUTAGEN_SSH_PATH="+MutagenSSHDir(cfg))
+}
+
 // AdoptMutagenDaemon always stops and respawns any existing mutagen
 // daemon on devm daemon start, regardless of binary sha. Mutagen
 // sessions live in DataDir and are resumed automatically on the fresh
 // daemon; this guarantees the daemon inherits the current build's env
-// (notably HOME → devm's managed ssh_config include, so ssh under root
-// sees per-project Host blocks). Adopt-in-place was silently pinning a
-// stale env from a previous devm build.
+// (notably MUTAGEN_SSH_PATH → the tart-mutagen-ssh shim). Adopt-in-place
+// was silently pinning a stale env from a previous devm build.
 func TestAdoptMutagenDaemon_ExistingAlive_StopsAndRespawns(t *testing.T) {
 	cfg := testMutagenCfg(t)
 	sup := supervisor.New(t.TempDir())

@@ -126,3 +126,15 @@ if [ -d /opt/devm/bin ]; then
         fi
     done
 fi
+
+# --- Mutagen agent pre-install (mutagen looks under ~/.mutagen/agents/<version>/mutagen-agent). ---
+if [ -f /opt/devm/bin/mutagen-agent ]; then
+    install -d -o devm -g devm -m 0755 /home/devm/.mutagen
+    install -d -o devm -g devm -m 0755 /home/devm/.mutagen/agents
+    install -d -o devm -g devm -m 0755 /home/devm/.mutagen/agents/{{.MutagenVersion}}
+    if ! cmp -s /opt/devm/bin/mutagen-agent /home/devm/.mutagen/agents/{{.MutagenVersion}}/mutagen-agent; then
+        install -o devm -g devm -m 0755 \
+            /opt/devm/bin/mutagen-agent \
+            /home/devm/.mutagen/agents/{{.MutagenVersion}}/mutagen-agent
+    fi
+fi

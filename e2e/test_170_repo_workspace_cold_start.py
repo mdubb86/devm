@@ -22,6 +22,7 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+import yaml
 
 from helpers.mutagen_e2e import mirror_path, session_prefix, sync_flush, sync_list
 
@@ -44,6 +45,12 @@ def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
                 },
             },
         },
+        # This install: step reads a file that only exists once mutagen
+        # has hydrated $WORKSPACE with the cloned repo. If cold-start ran
+        # install: before hydration finished, this fails and `devm start`
+        # exits non-zero -- the return-code check below is the ordering
+        # proof.
+        install=["test -f $WORKSPACE/README"],  # README ships in the hello-world bare repo
     )
 
     try:
@@ -71,6 +78,16 @@ def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
         )
         assert r.returncode == 0, r.stderr.decode()
         assert "hi" in r.stdout.decode()
+
+        # The startup: command needed no network access of its own — it
+        # only touches the already-hydrated workspace. The devm.yaml's
+        # `network.allow` list carries only what the repo clone needs
+        # (github.com); nothing was added on the command's account.
+        cfg = yaml.safe_load(workspace.devmyaml_path.read_text())
+        assert cfg.get("network", {}).get("allow") == ["github.com"], (
+            f"expected no network.allow entries beyond the repo clone's "
+            f"github.com; got: {cfg.get('network')!r}"
+        )
 
         # Mac mirror populated after a flush.
         sessions = sync_list(session_prefix(workspace.vm_name))

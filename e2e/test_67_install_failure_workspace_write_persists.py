@@ -6,19 +6,21 @@ against a failing install: — test_68 is a strict superset of test_67 (same
 "rc != 0 + VM absent + host file exists" checks, plus content verification
 and ownership/removability), so one boot proves both.
 
-Pins the virtio-fs invariant: files written to $WORKSPACE during a failing
-install: step persist on the host even after the VM is torn down (Bug B's
-teardown-on-fail). Because $WORKSPACE is the same absolute path as the host
-workspace (virtio-fs mirrored paths), writes inside the VM land in the
-shared directory and survive VM teardown.
+Pins the mutagen-mirror persistence invariant: files written to $WORKSPACE
+during a failing install: step persist on the host even after the VM is
+torn down (Bug B's teardown-on-fail). $WORKSPACE is the guest-side path
+mutagen two-way syncs against the primary volume's Mac-side mirror
+(`mirror_path(workspace.vm_name, workspace.bare_repo_label())`) — not a
+shared/mirrored mount — so a write
+inside the VM only survives teardown once mutagen has propagated it to
+that Mac-side mirror.
 
 The probe:
   - install step 1: write a marker to $WORKSPACE/install-wrote.txt
   - install step 2: overwrite it with known content ("HELLO")
-  - install step 3: sync (forces the virtiofs write-back cache to flush to
-    the host before teardown fires — otherwise the write can be lost when
-    tart delete kills the guest before its dirty pages reach the shared
-    workspace)
+  - install step 3: sync (guest-disk hygiene only; persistence here
+    depends on mutagen's own sync session having already propagated the
+    write to the Mac-side mirror, not on the guest's disk cache)
   - install step 4: exit 1 (deliberate failure)
 
 What this pins:
@@ -27,7 +29,8 @@ What this pins:
     test_67 + test_68).
   - The workspace write from install: persists on the host even though the
     VM was torn down (was test_67).
-  - Host process can read the file's content via virtio-fs (was test_68).
+  - Host process can read the file's content from the Mac-side mirror (was
+    test_68).
   - Observed UID/GID/mode are documented via print (not hard asserted,
     since the exact UID mapping is platform-specific) (was test_68).
   - Host process can remove the file without sudo (was test_68).
@@ -39,6 +42,7 @@ import subprocess
 
 import pytest
 
+from helpers.mutagen_e2e import mirror_path
 from helpers.tart import TartSandbox
 
 pytestmark = pytest.mark.devm
@@ -50,10 +54,10 @@ def test_install_failure_workspace_write_persists_and_is_removable(workspace, de
         install=[
             'touch "$WORKSPACE/install-wrote.txt"',
             'sh -c \'echo HELLO > "$WORKSPACE/install-wrote.txt"\'',
-            # sync forces the virtiofs write-back cache to flush to the
-            # host before Bug B's teardown-on-fail fires — otherwise the
-            # write can be lost when tart delete kills the guest before
-            # its dirty pages reach the shared workspace.
+            # sync is guest-disk hygiene only. Persistence across Bug
+            # B's teardown-on-fail depends on mutagen's own sync session
+            # having already propagated the write to the Mac-side
+            # mirror, not on the guest's disk cache.
             "sync",
             "false",  # deliberate failure
         ],
@@ -81,10 +85,10 @@ def test_install_failure_workspace_write_persists_and_is_removable(workspace, de
     # on the host even though the VM was torn down. The write lands in
     # the primary volume's Mac-side storage — workspace.path is just the
     # Mac cwd holding devm.yaml, not shared with the guest.
-    host_path = workspace.volume_path() / "install-wrote.txt"
+    host_path = mirror_path(workspace.vm_name, workspace.bare_repo_label()) / "install-wrote.txt"
     assert host_path.exists(), (
         f"VM-side write to $WORKSPACE did NOT persist on host after "
-        f"install failure + VM teardown. The virtio-fs write-and-survive "
+        f"install failure + VM teardown. The mutagen-mirror write-and-survive "
         f"invariant is broken. devm output:\n"
         f"{p.stdout.decode()}{p.stderr.decode()}"
     )
@@ -96,7 +100,8 @@ def test_install_failure_workspace_write_persists_and_is_removable(workspace, de
     )
 
     # Document observed ownership (not hard-asserted — the exact UID
-    # mapping from root-in-VM to host depends on the virtio-fs config).
+    # mapping from root-in-VM to host depends on the mutagen mirror's
+    # configured ownership).
     st = os.stat(host_path)
     print(f"observed UID={st.st_uid} GID={st.st_gid} mode={oct(st.st_mode & 0o777)}")
     print(f"host process EUID={os.geteuid()}")
