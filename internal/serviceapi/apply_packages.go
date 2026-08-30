@@ -61,7 +61,7 @@ func (a *realPackagesApplier) ApplyPackages(ctx context.Context, projectID strin
 	if exitCode != 0 {
 		err := fmt.Errorf("apply packages: apt exit %d: %s", exitCode, stderr)
 		if strings.Contains(stderr, aptEgressHintSignature) {
-			err = fmt.Errorf("%w (%s)", err, aptEgressHint)
+			err = fmt.Errorf("%w — %s", err, aptEgressHint)
 		}
 		return err
 	}

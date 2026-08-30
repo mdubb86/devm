@@ -1153,9 +1153,6 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			return
 		}
 		snap := policyAuthority.SnapshotDenials(name)
-		if snap == nil {
-			snap = []Denial{}
-		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(snap)
 	})
