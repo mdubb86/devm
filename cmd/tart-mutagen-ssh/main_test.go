@@ -155,6 +155,40 @@ func TestShim_LogsInvocationToStderr(t *testing.T) {
 	assert.Contains(t, output, "/home/devm/.mutagen/agents/0.18.1/mutagen-agent")
 }
 
+func TestShim_LogsInvocationToFile(t *testing.T) {
+	logPath := "/tmp/tart-mutagen-ssh.log"
+	_ = os.Remove(logPath) // clean slate
+	t.Cleanup(func() { _ = os.Remove(logPath) })
+
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "ssh")
+	build := exec.Command("go", "build", "-o", shim, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build shim: %v\n%s", err, out)
+	}
+
+	// Stub tart that exits 0.
+	tartStub := filepath.Join(dir, "tart")
+	require.NoError(t, os.WriteFile(tartStub, []byte("#!/bin/bash\nexit 0\n"), 0o755))
+
+	cmd := exec.Command(shim,
+		"-oConnectTimeout=5",
+		"devm@devm-testvm",
+		".mutagen/agents/0.18.1/mutagen-agent",
+		"synchronizer",
+		"--log-level=debug",
+	)
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("shim run: %v\n%s", err, out)
+	}
+
+	body, err := os.ReadFile(logPath)
+	require.NoError(t, err, "log file should exist after invocation")
+	assert.Contains(t, string(body), "tart-mutagen-ssh: invoking tart")
+	assert.Contains(t, string(body), "testvm")
+}
+
 func TestShim_LeavesNonMutagenPathsAlone(t *testing.T) {
 	dir := t.TempDir()
 	shim := filepath.Join(dir, "ssh")

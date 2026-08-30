@@ -20,18 +20,36 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
+
+// logf appends one line to the shim's own log file at /tmp/tart-mutagen-ssh.log
+// AND writes it to stderr. The file is defense against mutagen's inconsistent
+// stderr-capture (its ClientVersionHandshake failure path drops stderr entirely,
+// so stderr-only logging is invisible for some failure modes).
+//
+// The file is best-effort: append failure is logged to stderr but doesn't fail
+// the shim invocation. Rotation is the user's problem (log is small — a few
+// lines per session).
+func logf(format string, args ...any) {
+	line := fmt.Sprintf("tart-mutagen-ssh: "+format, args...)
+	fmt.Fprintln(os.Stderr, line)
+	if f, err := os.OpenFile("/tmp/tart-mutagen-ssh.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		defer f.Close()
+		fmt.Fprintf(f, "%s %d %s\n", time.Now().Format(time.RFC3339), os.Getpid(), line)
+	}
+}
 
 func main() {
 	switch dispatchName(os.Args[0]) {
 	case "scp":
-		fmt.Fprintln(os.Stderr, "tart-mutagen-ssh: scp invocation not supported — mutagen-agent is pre-installed in the guest, no SCP transfer should occur; this indicates a regression")
+		logf("scp invocation not supported — mutagen-agent is pre-installed in the guest, no SCP transfer should occur; this indicates a regression")
 		os.Exit(2)
 	}
 
 	vm, cmd, err := parseSSHArgs(os.Args[1:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "tart-mutagen-ssh: %v\n", err)
+		logf("%v", err)
 		os.Exit(2)
 	}
 
@@ -52,7 +70,7 @@ func main() {
 	// whether the path we asked tart to run actually exists in-guest. tart
 	// exec itself doesn't say "no such file" clearly in some paths.
 	if len(cmd) > 0 && strings.HasPrefix(cmd[0], "/home/devm/.mutagen/") {
-		fmt.Fprintf(os.Stderr, "tart-mutagen-ssh: agent path %s (rewritten from mutagen's HOME-relative %q)\n", cmd[0], originalFirst)
+		logf("agent path %s (rewritten from mutagen's HOME-relative %q)", cmd[0], originalFirst)
 	}
 
 	// mutagen sends the remote command as ONE ssh argv element (a shell
@@ -67,14 +85,14 @@ func main() {
 	// the agent's lifetime and signals reach mutagen-agent directly.
 	joined := strings.Join(cmd, " ")
 	tartArgs := []string{"exec", vm, "sh", "-c", "exec " + joined}
-	fmt.Fprintf(os.Stderr, "tart-mutagen-ssh: invoking tart %s\n", strings.Join(tartArgs, " "))
+	logf("invoking tart %s", strings.Join(tartArgs, " "))
 	c := exec.Command("tart", tartArgs...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 
 	if err := c.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "tart-mutagen-ssh: exec tart: %v\n", err)
+		logf("exec tart: %v", err)
 		os.Exit(1)
 	}
 
@@ -94,7 +112,7 @@ func main() {
 		if ee, ok := err.(*exec.ExitError); ok {
 			os.Exit(ee.ExitCode())
 		}
-		fmt.Fprintf(os.Stderr, "tart-mutagen-ssh: wait: %v\n", err)
+		logf("wait: %v", err)
 		os.Exit(1)
 	}
 }
