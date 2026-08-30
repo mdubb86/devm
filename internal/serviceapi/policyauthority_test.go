@@ -100,6 +100,34 @@ func TestPolicyAuthorityAllowAndReject(t *testing.T) {
 	require.NotEmpty(t, body.Hint)
 }
 
+// TestPolicyAuthorityEnsureServingCreatesSocketDir pins the fresh-state-dir
+// cold start: EnsureServing must create the socket's parent directory
+// itself rather than relying on a caller (writeIronProxyConfig's MkdirAll
+// in SpawnIronProxy runs AFTER EnsureServing, so on a brand-new state dir
+// the iron-proxy/ subdirectory does not exist yet when we bind).
+func TestPolicyAuthorityEnsureServingCreatesSocketDir(t *testing.T) {
+	pa := NewPolicyAuthority()
+	t.Cleanup(func() { pa.StopServing("projC") })
+
+	dir, err := os.MkdirTemp("", "pol")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	// iron-proxy/ does not exist yet — EnsureServing must create it.
+	sock := filepath.Join(dir, "iron-proxy", "p.sock")
+
+	require.NoError(t, pa.EnsureServing("projC", sock))
+
+	pa.Set("projC", []string{"example.com"})
+	client := dialPolicy(t, sock)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := client.TransformRequest(ctx, policyReq("example.com", "GET", "/"))
+	require.NoError(t, err)
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.GetAction())
+}
+
 func TestPolicyAuthorityLiveUpdateAndRestart(t *testing.T) {
 	pa := NewPolicyAuthority()
 	t.Cleanup(func() { pa.StopServing("projB") })

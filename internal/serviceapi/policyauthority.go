@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"google.golang.org/grpc"
@@ -41,9 +42,9 @@ var policyAuthority = NewPolicyAuthority()
 // than letting iron-proxy 502 on a missing socket) keeps the reject
 // self-describing.
 type PolicyAuthority struct {
-	mu       sync.Mutex
-	allow    map[string][]string
-	listners map[string]*policyListener
+	mu        sync.Mutex
+	allow     map[string][]string
+	listeners map[string]*policyListener
 }
 
 type policyListener struct {
@@ -55,8 +56,8 @@ type policyListener struct {
 // package-level policyAuthority; tests construct their own.
 func NewPolicyAuthority() *PolicyAuthority {
 	return &PolicyAuthority{
-		allow:    map[string][]string{},
-		listners: map[string]*policyListener{},
+		allow:     map[string][]string{},
+		listeners: map[string]*policyListener{},
 	}
 }
 
@@ -76,13 +77,16 @@ func (p *PolicyAuthority) Set(projectID string, allow []string) {
 func (p *PolicyAuthority) EnsureServing(projectID, sock string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if l, ok := p.listners[projectID]; ok {
+	if l, ok := p.listeners[projectID]; ok {
 		if l.sock == sock {
 			return nil
 		}
 		l.server.Stop()
 		_ = os.Remove(l.sock)
-		delete(p.listners, projectID)
+		delete(p.listeners, projectID)
+	}
+	if err := os.MkdirAll(filepath.Dir(sock), 0700); err != nil {
+		return fmt.Errorf("policy socket %s: %w", sock, err)
 	}
 	_ = os.Remove(sock)
 	lis, err := net.Listen("unix", sock)
@@ -91,7 +95,7 @@ func (p *PolicyAuthority) EnsureServing(projectID, sock string) error {
 	}
 	server := grpc.NewServer()
 	transformv1.RegisterTransformServiceServer(server, &policyService{authority: p, projectID: projectID})
-	p.listners[projectID] = &policyListener{sock: sock, server: server}
+	p.listeners[projectID] = &policyListener{sock: sock, server: server}
 	go func() {
 		// Serve returns on server.Stop(); anything else means the
 		// listener died and egress for this project will 502 fail-closed.
@@ -109,10 +113,10 @@ func (p *PolicyAuthority) EnsureServing(projectID, sock string) error {
 func (p *PolicyAuthority) StopServing(projectID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if l, ok := p.listners[projectID]; ok {
+	if l, ok := p.listeners[projectID]; ok {
 		l.server.Stop()
 		_ = os.Remove(l.sock)
-		delete(p.listners, projectID)
+		delete(p.listeners, projectID)
 	}
 	delete(p.allow, projectID)
 }
