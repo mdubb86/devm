@@ -21,7 +21,7 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 			"FOO": {Literal: "bar"},
 		},
 	}
-	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 
 	entries := readTar(t, body)
@@ -50,7 +50,7 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 // explicitly.
 func TestBuild_GuestDocContent(t *testing.T) {
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 
 	entries := readTar(t, body)
@@ -71,7 +71,7 @@ func TestBuild_GuestDocContent(t *testing.T) {
 // against .test hostnames and every iron-proxy-MITM'd HTTPS site.
 func TestBuild_InstallScriptSeedsNSSTrust(t *testing.T) {
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 
 	entries := readTar(t, body)
@@ -105,7 +105,7 @@ func TestBuild_InstallScriptSeedsNSSTrust(t *testing.T) {
 // SEC_ERROR_UNKNOWN_ISSUER.
 func TestBuild_InstallScriptDropsFirefoxPoliciesJSON(t *testing.T) {
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 
 	entries := readTar(t, body)
@@ -128,7 +128,7 @@ func TestBuild_EnvReflectsConfig(t *testing.T) {
 			"MYVAR": {Literal: "myval"},
 		},
 	}
-	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 
 	entries := readTar(t, body)
@@ -142,9 +142,9 @@ func TestBuild_Deterministic(t *testing.T) {
 	// required so future callers can gate re-pipe on content hash
 	// without spurious drift.
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	a, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	a, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
-	b, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	b, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 	assert.Equal(t, a, b)
 }
@@ -173,7 +173,7 @@ func TestBuild_TemplatePathsAreFlatBaseNames(t *testing.T) {
 			},
 		},
 	}
-	body, err := Build(BuildInput{Cfg: cfg, RepoRoot: repoRoot})
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: repoRoot})
 	require.NoError(t, err)
 
 	entries := readTar(t, body)
@@ -200,7 +200,7 @@ type tarEntry struct {
 func TestBuild_TakesBuildInput_Compat(t *testing.T) {
 	// Same inputs as the old (cfg, repoRoot) form should yield the same tar.
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	in := BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"}
+	in := BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"}
 	got, err := Build(in)
 	require.NoError(t, err)
 	require.NotEmpty(t, got)
@@ -229,9 +229,10 @@ func tarEntryNames(t *testing.T, blob []byte) []string {
 
 func TestBuild_TarContainsCA(t *testing.T) {
 	in := BuildInput{
-		Cfg:       schema.Config{Project: schema.Project{Name: "p"}},
-		RepoRoot:  "/tmp/repo",
-		CARootPEM: []byte("-----BEGIN CERTIFICATE-----\nDUMMYDATA\n-----END CERTIFICATE-----\n"),
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		CARootPEM:      []byte("-----BEGIN CERTIFICATE-----\nDUMMYDATA\n-----END CERTIFICATE-----\n"),
 	}
 	blob, err := Build(in)
 	require.NoError(t, err)
@@ -267,7 +268,7 @@ func TestBuild_TarHasNoCaddy(t *testing.T) {
 	cfg := schema.Config{Services: map[string]schema.Service{
 		"api": {Hostname: "api.test", Port: 3000},
 	}}
-	b, err := Build(BuildInput{Cfg: cfg})
+	b, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -280,8 +281,9 @@ func TestBuild_TarHasNoCaddy(t *testing.T) {
 
 func TestBuild_TarContainsDnsmasqDropIn(t *testing.T) {
 	blob, err := Build(BuildInput{
-		Cfg:      schema.Config{Project: schema.Project{Name: "p"}},
-		RepoRoot: "/tmp/repo",
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
 	})
 	require.NoError(t, err)
 	body := readTarEntry(t, blob, "dnsmasq/devm-test.conf")
@@ -296,7 +298,7 @@ func TestBuild_TarContainsServiceUnits(t *testing.T) {
 			"routing": {Hostname: "r.local", Port: 81}, // no Exec/Systemd — skipped
 		},
 	}
-	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 	names := tarEntryNames(t, blob)
 	assert.Contains(t, names, "systemd/web.service")
@@ -333,7 +335,7 @@ func TestBuild_ServiceUnit_InheritsCfgEnv(t *testing.T) {
 			},
 		},
 	}
-	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 	unit := readTarEntry(t, blob, "systemd/web.service")
 	// Rendered unit should carry an Environment= line for GITHUB_TOKEN.
@@ -356,7 +358,7 @@ func TestBuild_ServiceUnit_PerServiceEnvOverridesCfg(t *testing.T) {
 			},
 		},
 	}
-	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 	unit := readTarEntry(t, blob, "systemd/web.service")
 	assert.Contains(t, string(unit), "svc-value")
@@ -368,6 +370,7 @@ func TestBuild_TarContainsDockerShims_WhenDockerTrue(t *testing.T) {
 	blob, err := Build(BuildInput{
 		Cfg:            schema.Config{Project: schema.Project{Name: "p"}, Docker: true},
 		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
 		DockerRuncShim: []byte("runc-shim-elf"),
 		DockerCLIShim:  []byte("docker-shim-elf"),
 	})
@@ -382,6 +385,7 @@ func TestBuild_TarOmitsDockerShims_WhenDockerFalse(t *testing.T) {
 	blob, err := Build(BuildInput{
 		Cfg:            schema.Config{Project: schema.Project{Name: "p"}, Docker: false},
 		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
 		DockerRuncShim: []byte("runc-shim-elf"),
 		DockerCLIShim:  []byte("docker-shim-elf"),
 	})
@@ -393,9 +397,10 @@ func TestBuild_TarOmitsDockerShims_WhenDockerFalse(t *testing.T) {
 
 func TestBuild_IncludesPopWhenPresent(t *testing.T) {
 	blob, err := Build(BuildInput{
-		Cfg:      schema.Config{Project: schema.Project{Name: "p"}},
-		RepoRoot: "/tmp/repo",
-		Pop:      []byte("pop-elf-bytes"),
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		Pop:            []byte("pop-elf-bytes"),
 	})
 	require.NoError(t, err)
 	names := tarEntryNames(t, blob)
@@ -405,8 +410,9 @@ func TestBuild_IncludesPopWhenPresent(t *testing.T) {
 
 func TestBuild_OmitsPopWhenAbsent(t *testing.T) {
 	blob, err := Build(BuildInput{
-		Cfg:      schema.Config{Project: schema.Project{Name: "p"}},
-		RepoRoot: "/tmp/repo",
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
 	})
 	require.NoError(t, err)
 	names := tarEntryNames(t, blob)
@@ -421,7 +427,7 @@ func TestBuild_TarContainsStartupScript_WhenStartupSet(t *testing.T) {
 			"web": {Exec: []string{"/bin/true"}},
 		},
 	}
-	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 
 	names := tarEntryNames(t, blob)
@@ -447,7 +453,7 @@ func TestBuild_AlwaysEmitsStartupScript_WhenStartupUnset(t *testing.T) {
 			"web": {Exec: []string{"/bin/true"}},
 		},
 	}
-	blob, err := Build(BuildInput{Cfg: cfg, RepoRoot: "/tmp/repo"})
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 
 	names := tarEntryNames(t, blob)
@@ -472,6 +478,7 @@ func TestBuild_IncludesEtcProfileDevm(t *testing.T) {
 		Cfg: schema.Config{
 			Project: schema.Project{Name: "p"},
 		},
+		MutagenVersion: "0.18.1",
 	})
 	require.NoError(t, err)
 	entries := readTar(t, body)
@@ -501,7 +508,8 @@ func TestBuild_IncludesEtcProfileDevm(t *testing.T) {
 // cfg.Env don't reach non-wrapper shells.
 func TestBuild_IncludesEtcEnvironment(t *testing.T) {
 	body, err := Build(BuildInput{
-		Cfg: schema.Config{Project: schema.Project{Name: "p"}},
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		MutagenVersion: "0.18.1",
 	})
 	require.NoError(t, err)
 	entries := readTar(t, body)
@@ -564,6 +572,7 @@ func TestBuild_IncludesCommandsManifestAndRunBinary(t *testing.T) {
 		Cfg:              minimalCfg(t),
 		RepoRoot:         t.TempDir(),
 		DaemonRuntimeDir: t.TempDir(),
+		MutagenVersion:   "0.18.1",
 		CommandsManifest: []byte(`{"repos":{}}`),
 		Run:              []byte{0x7f, 'E', 'L', 'F'}, // sentinel; real bytes come from guestbin.Run()
 	}
@@ -586,6 +595,7 @@ func TestBuild_OmitsRunAndManifestWhenEmpty(t *testing.T) {
 		Cfg:              minimalCfg(t),
 		RepoRoot:         t.TempDir(),
 		DaemonRuntimeDir: t.TempDir(),
+		MutagenVersion:   "0.18.1",
 	}
 	body, err := Build(in)
 	require.NoError(t, err)
@@ -599,6 +609,7 @@ func TestBuild_TarContainsSSHMaterial(t *testing.T) {
 	blob, err := Build(BuildInput{
 		Cfg:                 schema.Config{Project: schema.Project{Name: "p"}},
 		RepoRoot:            "/tmp/repo",
+		MutagenVersion:      "0.18.1",
 		SSHAuthorizedPubkey: []byte("ssh-ed25519 AAAA...\n"),
 		SSHHostPriv:         []byte("-----BEGIN OPENSSH PRIVATE KEY-----\n..."),
 		SSHHostPub:          []byte("ssh-ed25519 BBBB...\n"),
@@ -608,4 +619,66 @@ func TestBuild_TarContainsSSHMaterial(t *testing.T) {
 	assert.Contains(t, names, "ssh/authorized_keys")
 	assert.Contains(t, names, "ssh/ssh_host_ed25519_key")
 	assert.Contains(t, names, "ssh/ssh_host_ed25519_key.pub")
+}
+
+func TestBuild_IncludesMutagenAgent(t *testing.T) {
+	in := BuildInput{
+		Cfg:                    minimalCfg(t),
+		RepoRoot:               t.TempDir(),
+		DaemonRuntimeDir:       t.TempDir(),
+		MutagenVersion:         "0.18.1",
+		MutagenAgentLinuxArm64: []byte{0x7f, 'E', 'L', 'F', 'x', 'y', 'z'},
+	}
+	body, err := Build(in)
+	require.NoError(t, err)
+
+	entries := listTarEntries(t, body)
+	require.Contains(t, entries, "bin/mutagen-agent")
+	assert.Equal(t, "\x7fELFxyz", entries["bin/mutagen-agent"].body)
+	assert.Equal(t, int64(0o755), entries["bin/mutagen-agent"].mode)
+}
+
+func TestBuild_OmitsMutagenAgentWhenEmpty(t *testing.T) {
+	in := BuildInput{
+		Cfg:              minimalCfg(t),
+		RepoRoot:         t.TempDir(),
+		DaemonRuntimeDir: t.TempDir(),
+		MutagenVersion:   "0.18.1",
+	}
+	body, err := Build(in)
+	require.NoError(t, err)
+	entries := listTarEntries(t, body)
+	assert.NotContains(t, entries, "bin/mutagen-agent")
+}
+
+func TestBuild_RendersInstallShWithMutagenVersion(t *testing.T) {
+	in := BuildInput{
+		Cfg:              minimalCfg(t),
+		RepoRoot:         t.TempDir(),
+		DaemonRuntimeDir: t.TempDir(),
+		MutagenVersion:   "0.18.1",
+	}
+	body, err := Build(in)
+	require.NoError(t, err)
+
+	entries := listTarEntries(t, body)
+	require.Contains(t, entries, "install.sh")
+	assert.Contains(t, entries["install.sh"].body,
+		"/home/devm/.mutagen/agents/0.18.1",
+		"install.sh must be rendered with mutagen version substituted")
+	assert.NotContains(t, entries["install.sh"].body,
+		"{{.MutagenVersion}}",
+		"install.sh template placeholder must not appear in output")
+}
+
+func TestBuild_ErrorsOnMissingMutagenVersion(t *testing.T) {
+	in := BuildInput{
+		Cfg:              minimalCfg(t),
+		RepoRoot:         t.TempDir(),
+		DaemonRuntimeDir: t.TempDir(),
+		// MutagenVersion intentionally empty
+	}
+	_, err := Build(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutagen version")
 }

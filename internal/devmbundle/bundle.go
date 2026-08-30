@@ -8,7 +8,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/scripts"
@@ -50,6 +49,18 @@ type BuildInput struct {
 	// to bin/run in the tar; install.sh's existing bin/* loop symlinks it
 	// to /usr/local/bin/run. Empty ⇒ no file emitted.
 	Run []byte
+
+	// MutagenAgentLinuxArm64 is the linux/arm64 mutagen-agent binary
+	// bytes. Pre-installed in the guest so mutagen's transport skips its
+	// SCP bootstrap. Empty ⇒ no file emitted (test-only; production
+	// always populates via mutagen.LinuxArm64Agent()).
+	MutagenAgentLinuxArm64 []byte
+
+	// MutagenVersion is the pinned mutagen version (e.g. "0.18.1", no
+	// "v" prefix). Used to render install.sh's mutagen-agent install
+	// path. Empty ⇒ Build fails loud — this field must always be set in
+	// real bundles.
+	MutagenVersion string
 }
 
 // Build returns a tar archive containing the devm-owned artifacts the
@@ -97,7 +108,7 @@ func Build(in BuildInput) ([]byte, error) {
 		}
 	}
 
-	installBody, err := render.RenderInstallScript(mutagen.EmbeddedVersion())
+	installBody, err := render.RenderInstallScript(in.MutagenVersion)
 	if err != nil {
 		return nil, fmt.Errorf("render install.sh: %w", err)
 	}
@@ -198,6 +209,11 @@ func Build(in BuildInput) ([]byte, error) {
 	}
 	if len(in.Run) > 0 {
 		if err := writeEntry(tw, "bin/run", 0o755, in.Run); err != nil {
+			return nil, err
+		}
+	}
+	if len(in.MutagenAgentLinuxArm64) > 0 {
+		if err := writeEntry(tw, "bin/mutagen-agent", 0o755, in.MutagenAgentLinuxArm64); err != nil {
 			return nil, err
 		}
 	}
