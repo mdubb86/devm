@@ -31,7 +31,14 @@ func main() {
 		os.Exit(2)
 	}
 
-	tartArgs := append([]string{"exec", vm, "sudo", "-u", "devm", "-H"}, cmd...)
+	// mutagen passes the remote command as ssh-CLI trailing args; sshd
+	// normally runs those via $SHELL -c "<joined>" with cwd = HOME so
+	// relative paths (e.g. .mutagen/agents/…/mutagen-agent) resolve and
+	// shell metacharacters (~, $HOME) expand. We replicate that here so
+	// mutagen's agent-invocation shape works unchanged over tart exec.
+	joined := strings.Join(cmd, " ")
+	script := `cd "$HOME" && exec ` + joined
+	tartArgs := []string{"exec", vm, "sudo", "-u", "devm", "-H", "bash", "-c", script}
 	c := exec.Command("tart", tartArgs...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout

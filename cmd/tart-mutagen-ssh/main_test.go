@@ -119,9 +119,8 @@ exit 0
 	require.NoError(t, err)
 	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
 	assert.Equal(t, []string{
-		"exec", "testvm", "sudo", "-u", "devm", "-H",
-		".mutagen/agents/0.18.1/mutagen-agent",
-		"synchronizer", "--log-level=debug",
+		"exec", "testvm", "sudo", "-u", "devm", "-H", "bash", "-c",
+		`cd "$HOME" && exec .mutagen/agents/0.18.1/mutagen-agent synchronizer --log-level=debug`,
 	}, got)
 }
 
