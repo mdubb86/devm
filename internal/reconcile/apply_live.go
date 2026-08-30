@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -669,6 +670,19 @@ func cloneOneRepoIfEmpty(exec GuestExec, cfg identity.Config, projectID string, 
 	return cloneRepoInGuest(exec, spec.Repo.URL, spec.Repo.Secret, spec.GuestPath, spec.Repo.IronProxyURL, spec.Repo.GuestCACertPath)
 }
 
+// verifyGitHEAD is apply_live's analogue of serviceapi.verifyGitHEAD —
+// same shape, same rules. Runs `git -C <path> rev-parse --verify HEAD`;
+// returns a non-nil error whose text carries git's stderr on any failure.
+func verifyGitHEAD(macMirrorPath string) error {
+	cmd := exec.Command("git", "-C", macMirrorPath, "rev-parse", "--verify", "HEAD")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
 // setupSingleSession brings spec's mutagen sync session up to date —
 // the apply-live analogue of serviceapi.SetupVolumesPhase for exactly
 // one entity: ensures both sides' mirror dirs exist, verifies the
@@ -698,6 +712,23 @@ func setupSingleSession(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, p
 	if ok, reason := guardOK(macSide, guestSide); !ok {
 		daemonlog.Errorf("mutagen: guard rejected %s: %s", spec.Label, reason)
 		return fmt.Errorf("in-sync guard failed for %s: %s", spec.Label, reason)
+	}
+
+	// Integrity gate: a repo entity's persistent Mac mirror must be
+	// a healthy git checkout before mutagen ever touches it — a
+	// corrupt mirror (truncated .git, missing HEAD object) passed
+	// to sync-create would propagate straight into the guest.
+	if spec.Repo != nil && macSide.Count > 0 {
+		if err := verifyGitHEAD(macMirror); err != nil {
+			daemonlog.Errorf("mutagen: integrity check failed for %s: %v", spec.Label, err)
+			return fmt.Errorf(
+				"repo %s: mac mirror at %s failed integrity check "+
+					"(git rev-parse --verify HEAD: %s) — the persistent checkout "+
+					"appears corrupt; inspect the directory or `devm volume rm %s` "+
+					"to force a fresh clone on next `devm start`",
+				spec.Label, macMirror, err, spec.Label,
+			)
+		}
 	}
 
 	name := mutagenSessionName(projectID, spec.Label)
