@@ -77,10 +77,9 @@ def test_guest_git_https_basic_auth_substitution(devm, workspace):
 
 
     try:
-        # Cold-start: with hydration skipped (pre-seeded volume above),
-        # this only needs to boot the guest and run provisioning —
-        # iron-proxy comes up, and the guest gets .git-credentials /
-        # .gitconfig written per internal/render/gitcredentials.go.
+        # Cold-start: boots the guest and runs hydration through iron-proxy,
+        # then provisioning writes .git-credentials / .gitconfig per
+        # internal/render/gitcredentials.go.
         r = subprocess.run(
             [devm.path, "start"],
             cwd=str(workspace.path),
