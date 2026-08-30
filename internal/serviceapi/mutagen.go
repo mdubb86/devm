@@ -150,9 +150,12 @@ func SpawnMutagen(ctx context.Context, cfg identity.Config, sup *supervisor.Supe
 	}
 
 	cli := &mutagen.CLI{
-		Binary:   bin,
-		DataDir:  dataDir,
-		ExtraEnv: []string{"HOME=" + mutagenHomeDir(cfg)},
+		Binary:  bin,
+		DataDir: dataDir,
+		ExtraEnv: []string{
+			"HOME=" + mutagenHomeDir(cfg),
+			"MUTAGEN_SSH_PATH=" + MutagenSSHDir(cfg),
+		},
 	}
 
 	pid, err := mutagenDaemonStartFn(cli)

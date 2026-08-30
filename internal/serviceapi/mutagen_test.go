@@ -136,6 +136,30 @@ func TestSpawnMutagen_SetsMutagenDataDirectoryEnv(t *testing.T) {
 	assert.Equal(t, mutagenDataDir(cfg), startCalledWith.DataDir)
 }
 
+func TestSpawnMutagen_SetsMUTAGEN_SSH_PATHEnv(t *testing.T) {
+	cfg := testMutagenCfg(t)
+	sup := supervisor.New(t.TempDir())
+
+	origEnsure := mutagenEnsureFn
+	origStart := mutagenDaemonStartFn
+	t.Cleanup(func() {
+		mutagenEnsureFn = origEnsure
+		mutagenDaemonStartFn = origStart
+	})
+
+	mutagenEnsureFn = func(string) (string, error) { return "/fake/bin/mutagen", nil }
+	var startCalledWith *mutagen.CLI
+	mutagenDaemonStartFn = func(cli *mutagen.CLI) (int, error) {
+		startCalledWith = cli
+		return 1, nil
+	}
+
+	require.NoError(t, SpawnMutagen(context.Background(), cfg, sup))
+
+	require.NotNil(t, startCalledWith)
+	assert.Contains(t, startCalledWith.ExtraEnv, "MUTAGEN_SSH_PATH="+MutagenSSHDir(cfg))
+}
+
 // AdoptMutagenDaemon always stops and respawns any existing mutagen
 // daemon on devm daemon start, regardless of binary sha. Mutagen
 // sessions live in DataDir and are resumed automatically on the fresh

@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"time"
@@ -165,6 +166,17 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	if err != nil {
 		return fmt.Errorf("start ntp responder: %w", err)
 	}
+
+	// Install the tart-mutagen-ssh shim before the mutagen daemon starts —
+	// SpawnMutagen points MUTAGEN_SSH_PATH at this directory, so it must
+	// exist before AdoptMutagenDaemon spawns or respawns the daemon
+	// below. Not best-effort: the mutagen daemon can't reach the guest
+	// over the tart transport without it.
+	sshDir, err := EnsureTartMutagenSSH(cfg)
+	if err != nil {
+		return fmt.Errorf("mutagen ssh shim: %w", err)
+	}
+	log.Printf("mutagen: shim installed at %s", sshDir)
 
 	// Adopt (or spawn) the mutagen daemon. Unlike iron-proxy, mutagen is
 	// a single daemon-wide process, not per-project — it's adopted here,
