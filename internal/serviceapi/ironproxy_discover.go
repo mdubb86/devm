@@ -140,6 +140,7 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 		daemonlog.Errorf("policy: socket path for %s: %v (egress stays fail-closed)", projectID, err)
 	} else {
 		policyAuthority.Set(projectID, AppendUniqueHosts(docker.EffectiveAllowlist(snap.Cfg), repoHosts))
+		policyAuthority.SetMode(projectID, ModeRestricted)
 		if err := policyAuthority.EnsureServing(projectID, sockPath); err != nil {
 			daemonlog.Errorf("policy: serve for adopted %s: %v (egress stays fail-closed)", projectID, err)
 		}

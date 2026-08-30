@@ -332,3 +332,37 @@ proxy:
 	_, err := loadIronProxyInfoFromConfig(path)
 	assert.Error(t, err)
 }
+
+// TestRecoverProjectState_SetsRestrictedMode verifies that on daemon
+// startup, recoverProjectState (called per adopted project) forces the
+// project back to restricted mode — the fail-safe default. This ensures
+// that even if a project was left in passthrough mode when the daemon
+// died, recovery resets it to restricted on the next startup.
+func TestRecoverProjectState_SetsRestrictedMode(t *testing.T) {
+	const projectID = "recover-restrict-proj"
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.StopServing(projectID)
+	})
+
+	// Seed the authority with passthrough mode BEFORE recovery, to prove
+	// recovery actively resets it (not just leaves it at the default).
+	orig := policyAuthority
+	policyAuthority = NewPolicyAuthority()
+	policyAuthority.SetMode(projectID, ModePassthrough)
+	defer func() { policyAuthority = orig }()
+
+	// Create a state snapshot with the project's allowlist.
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
+		Cfg: schema.Config{
+			Network: schema.Network{Allow: []schema.AllowEntry{{Host: "github.com"}}},
+		},
+	}))
+
+	recoverProjectState(context.Background(), identity.Prod, tart.New(), NewRoutes(), projectID)
+
+	if got := policyAuthority.modeFor(projectID); got != ModeRestricted {
+		t.Fatalf("recovery should force mode=restricted; got %v", got)
+	}
+}
