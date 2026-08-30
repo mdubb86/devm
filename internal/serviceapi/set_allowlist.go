@@ -1,62 +1,11 @@
 package serviceapi
 
 import (
-	"encoding/json"
 	"fmt"
-	"log"
-	"net/http"
 
-	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 )
-
-// VMSetAllowlistRequest is the body shape for POST /vm/set-allowlist.
-// Sent by the CLI when reconcile detects a BucketLive
-// KindNetworkAdd/KindNetworkRemove change: the full new allowlist is
-// applied to the daemon's PolicyAuthority atomically — no iron-proxy
-// touch, no denial-counter reset.
-type VMSetAllowlistRequest struct {
-	Name      string   `json:"name"`
-	Allowlist []string `json:"allowlist"`
-}
-
-// RegisterSetAllowlistHandler wires POST /vm/set-allowlist. The
-// project lock is acquired for the duration so a concurrent
-// /vm/apply-iron-proxy or /vm/begin-provisioning can't race the
-// authority Set + snapshot write.
-func RegisterSetAllowlistHandler(s *Server, cfg identity.Config, locks *ProjectLocks) {
-	s.Register("/vm/set-allowlist", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		var req VMSetAllowlistRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
-			return
-		}
-		if req.Name == "" {
-			http.Error(w, "name required", http.StatusBadRequest)
-			return
-		}
-
-		unlock := locks.Lock(req.Name)
-		defer unlock()
-
-		policyAuthority.Set(req.Name, req.Allowlist)
-
-		if err := updateSnapshotAfterAllowlistSet(cfg, req.Name, req.Allowlist); err != nil {
-			daemonlog.Errorf("serviceapi: set-allowlist: update snapshot for %s: %v", req.Name, err)
-			http.Error(w, fmt.Sprintf("update snapshot: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		log.Printf("policy: set-allowlist applied for %s (%d hosts)", req.Name, len(req.Allowlist))
-
-		w.WriteHeader(http.StatusNoContent)
-	})
-}
 
 // updateSnapshotAfterAllowlistSet loads the current StateSnapshot for
 // projectID and rebuilds snap.Cfg.Network.Allow from allowlist, then
