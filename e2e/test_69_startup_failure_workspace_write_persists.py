@@ -9,7 +9,8 @@ which tears down the VM).
 Because the VM stays alive, mutagen's sync session for the primary repo
 stays alive too, so a write to $WORKSPACE (the guest-side primary repo
 path) during the service's exec propagates to the Mac-side mirror at
-`workspace.volume_path()`. This test pins that property explicitly.
+`mirror_path(workspace.vm_name, workspace.bare_repo_label())`. This test
+pins that property explicitly.
 
 Setup:
   - install: pre-writes a helper script that writes to $WORKSPACE then
@@ -18,7 +19,8 @@ Setup:
     won't retry).
 
 After cold-start, verify the file is present on the HOST filesystem at
-the primary repo's Mac-side mirror (workspace.volume_path()/startup-wrote.txt).
+the primary repo's Mac-side mirror
+(mirror_path(workspace.vm_name, workspace.bare_repo_label())/startup-wrote.txt).
 
 Also verifies the host can read and remove the file (observes UID/mode
 without hard-asserting the exact values, since the mirror's UID mapping
@@ -34,6 +36,7 @@ import time
 
 import pytest
 
+from helpers.mutagen_e2e import mirror_path
 from helpers.tart import TartSandbox
 
 pytestmark = pytest.mark.devm
@@ -42,11 +45,12 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(180)
 def test_startup_failure_workspace_write_persists_on_host(workspace, devm, sandbox_name):
     # $WORKSPACE is the guest-side primary repo path (/home/devm/<label>),
-    # mutagen-synced to the Mac-side mirror at workspace.volume_path() —
+    # mutagen-synced to the Mac-side mirror at
+    # mirror_path(workspace.vm_name, workspace.bare_repo_label()) —
     # two distinct paths. The write, run inside the guest, targets
     # $WORKSPACE (guest-visible); the host-side read targets the Mac
     # mirror.
-    marker_path = workspace.volume_path() / "startup-wrote.txt"
+    marker_path = mirror_path(workspace.vm_name, workspace.bare_repo_label()) / "startup-wrote.txt"
 
     # Pre-write a helper script via install: to avoid shell metacharacters
     # in ExecStart= (exec: joins argv with spaces without quoting). The

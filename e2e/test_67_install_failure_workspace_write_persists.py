@@ -10,7 +10,8 @@ Pins the mutagen-mirror persistence invariant: files written to $WORKSPACE
 during a failing install: step persist on the host even after the VM is
 torn down (Bug B's teardown-on-fail). $WORKSPACE is the guest-side path
 mutagen two-way syncs against the primary volume's Mac-side mirror
-(`workspace.volume_path()`) — not a shared/mirrored mount — so a write
+(`mirror_path(workspace.vm_name, workspace.bare_repo_label())`) — not a
+shared/mirrored mount — so a write
 inside the VM only survives teardown once mutagen has propagated it to
 that Mac-side mirror.
 
@@ -41,6 +42,7 @@ import subprocess
 
 import pytest
 
+from helpers.mutagen_e2e import mirror_path
 from helpers.tart import TartSandbox
 
 pytestmark = pytest.mark.devm
@@ -83,7 +85,7 @@ def test_install_failure_workspace_write_persists_and_is_removable(workspace, de
     # on the host even though the VM was torn down. The write lands in
     # the primary volume's Mac-side storage — workspace.path is just the
     # Mac cwd holding devm.yaml, not shared with the guest.
-    host_path = workspace.volume_path() / "install-wrote.txt"
+    host_path = mirror_path(workspace.vm_name, workspace.bare_repo_label()) / "install-wrote.txt"
     assert host_path.exists(), (
         f"VM-side write to $WORKSPACE did NOT persist on host after "
         f"install failure + VM teardown. The mutagen-mirror write-and-survive "
