@@ -16,17 +16,17 @@ import (
 var passthroughCmd = &cobra.Command{
 	Use:   "passthrough",
 	Short: "Temporarily open egress for a supervised window (default 30s)",
-	Long: `Flips this project's egress policy from RESTRICTED to PASSTHROUGH for
-a bounded window so you can supervise a command that needs broader
-access than the project's allowlist covers (a one-off ` + "`curl … | bash`" + `,
-a plugin fetch, an ad-hoc apt-get from an unusual mirror). The window
-auto-restores after ` + "`--for`" + ` (default 30s); ` + "`devm restrict`" + ` closes it early.
+	Long: `Flips this project's authority mode to passthrough for a bounded window
+so you can supervise a command that needs broader access than the
+project's allowlist covers (a one-off ` + "`curl … | bash`" + `, a plugin
+fetch, an ad-hoc apt-get from an unusual mirror). The window auto-restores
+after ` + "`--for`" + ` (default 30s); ` + "`devm restrict`" + ` closes it early.
 
-During the passthrough window, egress is fully open — any host, any
-port, direct-to-destination, no MITM, no audit log. Meant for
-commands you supervise in real time. The timer is a safety net, not
-a substitute for supervision: anything exfiltrated during the window
-stays exfiltrated after it closes.`,
+During the passthrough window, iron-proxy stays in the path (MITM + audit +
+secret substitution) but the per-request allowlist check is bypassed for
+the window's duration. Meant for commands you supervise in real time. The
+timer is a safety net, not a substitute for supervision: anything
+exfiltrated during the window stays exfiltrated after it closes.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below

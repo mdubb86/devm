@@ -18,7 +18,7 @@ import (
 // only, so empty after a restart) for every project it finds there — the
 // running VM's softnet child is still alive (setsid'd, survives daemon
 // death) and needs its control socket re-registered so
-// /vm/open-egress and /vm/apply-egress-enforcement work again without a
+// /vm/begin-provisioning and /vm/end-provisioning work again without a
 // fresh /vm/start. It should also best-effort re-push ENFORCED so a
 // softnet that itself restarted (and came back up LOCKED) gets
 // reconciled.
@@ -61,7 +61,7 @@ func TestDiscoverSoftnet_RebuildsStateForRehydratedProjects(t *testing.T) {
 
 	line := <-got
 	assert.Contains(t, line, `"op":"setPolicy"`)
-	assert.Contains(t, line, `"policy":"ENFORCED"`)
+	assert.Contains(t, line, `"policy":"FORWARDING"`)
 	assert.Contains(t, line, `"http":"127.0.0.1:8080"`)
 	assert.Contains(t, line, `"ntp":"127.0.0.1:51234"`)
 }

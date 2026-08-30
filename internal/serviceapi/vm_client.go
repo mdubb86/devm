@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // StartVM asks the daemon to clone (if absent) and start the project VM.
@@ -80,11 +82,11 @@ func (c *Client) StopVM(ctx context.Context, name string) error {
 }
 
 // PassthroughEgress calls POST /vm/passthrough-egress, flipping the
-// project's softnet policy from ENFORCED to OPEN for a bounded
-// window. durationSeconds <= 0 asks the daemon to apply
-// defaultPassthroughSeconds (30). Returns whether the project had an
-// existing open window (drives "opened" vs "renewed" user message)
-// and the seconds the daemon actually armed.
+// project's authority mode to passthrough for a bounded window (iron-proxy
+// remains in the traffic path, MITM'ing + audit-logging + secret-substituting).
+// durationSeconds <= 0 asks the daemon to apply defaultPassthroughSeconds (30).
+// Returns whether the project had an existing open window (drives "opened" vs
+// "renewed" user message) and the seconds the daemon actually armed.
 func (c *Client) PassthroughEgress(ctx context.Context, name string, durationSeconds int) (wasOpen bool, expiresSeconds int, err error) {
 	body, err := json.Marshal(VMEgressPassthroughRequest{Name: name, DurationSeconds: durationSeconds})
 	if err != nil {
@@ -107,12 +109,12 @@ func (c *Client) PassthroughEgress(ctx context.Context, name string, durationSec
 }
 
 // RestrictEgress calls POST /vm/restrict-egress, restoring the
-// project's softnet policy to ENFORCED and cancelling any pending
-// passthrough restore timer. Returns whether there was a window
-// to restrict — false is not an error; the CLI reports it as a
-// no-op.
+// authority mode to restricted (softnet stays FORWARDING; iron-proxy
+// stays in the path) and cancelling any pending passthrough restore
+// timer. Returns whether there was a window to restrict — false is
+// not an error; the CLI reports it as a no-op.
 func (c *Client) RestrictEgress(ctx context.Context, name string) (wasOpen bool, err error) {
-	body, err := json.Marshal(VMApplyEgressEnforcementRequest{Name: name})
+	body, err := json.Marshal(VMProjectRequest{Name: name})
 	if err != nil {
 		return false, err
 	}
@@ -210,45 +212,89 @@ func (c *Client) ApplyIronProxy(ctx context.Context, req VMApplyIronProxyRequest
 	return resp, nil
 }
 
-// OpenEgress calls POST /vm/open-egress, flipping the project's softnet
-// control socket to OPEN. The orchestrator calls this immediately before
-// running the composed provisioning script — softnet boots LOCKED, so
-// without this call apt/install:/templates/startup: would run with no
-// egress at all.
-func (c *Client) OpenEgress(ctx context.Context, name string) error {
-	body, err := json.Marshal(VMApplyEgressEnforcementRequest{Name: name})
+// BeginProvisioning calls POST /vm/begin-provisioning, flipping the
+// project's softnet control socket to ENFORCED-behavior (:80/:443 route
+// to iron-proxy) and the egress policy authority to ModePassthrough.
+// Called post-RunBundle (the guest trust store already has the
+// iron-proxy CA) and pre-RunUser — iron-proxy is in the traffic path
+// for the rest of the VM's life from this call onward.
+func (c *Client) BeginProvisioning(ctx context.Context, name string) error {
+	body, err := json.Marshal(VMProjectRequest{Name: name})
 	if err != nil {
 		return err
 	}
-	r, err := c.post(ctx, "/vm/open-egress", body)
+	r, err := c.post(ctx, "/vm/begin-provisioning", body)
 	if err != nil {
 		return err
 	}
 	defer r.Body.Close()
 	if r.StatusCode != http.StatusNoContent {
 		msg, _ := io.ReadAll(r.Body)
-		return fmt.Errorf("vm/open-egress: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+		return fmt.Errorf("vm/begin-provisioning: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	return nil
 }
 
-// ApplyEgressEnforcement calls POST /vm/apply-egress-enforcement, flipping
-// the project's softnet control socket to ENFORCED. The orchestrator calls
-// this immediately after the composed provisioning script succeeds, so
-// egress is locked down to the real allowlist before the shell attaches.
-func (c *Client) ApplyEgressEnforcement(ctx context.Context, name string) error {
-	body, err := json.Marshal(VMApplyEgressEnforcementRequest{Name: name})
+// VolumeSync calls POST /vm/volume-sync, establishing a mutagen sync
+// session for every entity in cfg (volumes and repos alike). Called
+// after BeginProvisioning and before RepoClone.
+func (c *Client) VolumeSync(ctx context.Context, name string, cfg schema.Config, repoRoot string) error {
+	body, err := json.Marshal(VMVolumeSyncRequest{Name: name, RepoRoot: repoRoot, Cfg: cfg})
 	if err != nil {
 		return err
 	}
-	r, err := c.post(ctx, "/vm/apply-egress-enforcement", body)
+	r, err := c.post(ctx, "/vm/volume-sync", body)
 	if err != nil {
 		return err
 	}
 	defer r.Body.Close()
 	if r.StatusCode != http.StatusNoContent {
 		msg, _ := io.ReadAll(r.Body)
-		return fmt.Errorf("vm/apply-egress-enforcement: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+		return fmt.Errorf("vm/volume-sync: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
+// RepoClone calls POST /vm/repo-clone, running a cold-start git clone
+// through iron-proxy for every repo entity in cfg where the relevant
+// sides are empty. Called after VolumeSync. tunnelPort is iron-proxy's
+// CONNECT-capable tunnel_listen port, needed to build the guest-visible
+// HTTP_PROXY URL.
+func (c *Client) RepoClone(ctx context.Context, name string, cfg schema.Config, repoRoot string, tunnelPort int) error {
+	body, err := json.Marshal(VMRepoCloneRequest{Name: name, RepoRoot: repoRoot, Cfg: cfg, TunnelPort: tunnelPort})
+	if err != nil {
+		return err
+	}
+	r, err := c.post(ctx, "/vm/repo-clone", body)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusNoContent {
+		msg, _ := io.ReadAll(r.Body)
+		return fmt.Errorf("vm/repo-clone: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
+// EndProvisioning calls POST /vm/end-provisioning, flipping the egress
+// policy authority back to ModeRestricted. Called pre-RunEnforced.
+// Softnet stays in ENFORCED-behavior — iron-proxy remains in the
+// traffic path for the rest of the VM's life; only the authority mode
+// changes here.
+func (c *Client) EndProvisioning(ctx context.Context, name string) error {
+	body, err := json.Marshal(VMProjectRequest{Name: name})
+	if err != nil {
+		return err
+	}
+	r, err := c.post(ctx, "/vm/end-provisioning", body)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusNoContent {
+		msg, _ := io.ReadAll(r.Body)
+		return fmt.Errorf("vm/end-provisioning: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	return nil
 }

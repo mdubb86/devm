@@ -35,12 +35,12 @@ func TestSetPolicyWire(t *testing.T) {
 		got <- line
 	}()
 
-	if err := newSoftnetClient(sock).setPolicy("ENFORCED", &Endpoint{HTTPS: "127.0.0.1:8443"}); err != nil {
+	if err := newSoftnetClient(sock).setPolicy("FORWARDING", &Endpoint{HTTPS: "127.0.0.1:8443"}); err != nil {
 		t.Fatal(err)
 	}
 
 	line := <-got
-	if !strings.Contains(line, `"op":"setPolicy"`) || !strings.Contains(line, `"policy":"ENFORCED"`) || !strings.Contains(line, "127.0.0.1:8443") {
+	if !strings.Contains(line, `"op":"setPolicy"`) || !strings.Contains(line, `"policy":"FORWARDING"`) || !strings.Contains(line, "127.0.0.1:8443") {
 		t.Fatalf("bad wire: %s", line)
 	}
 }
@@ -66,12 +66,12 @@ func TestSetPolicyWireNilEndpoint(t *testing.T) {
 		got <- line
 	}()
 
-	if err := newSoftnetClient(sock).setPolicy("OPEN", nil); err != nil {
+	if err := newSoftnetClient(sock).setPolicy("LOCKED", nil); err != nil {
 		t.Fatal(err)
 	}
 
 	line := <-got
-	if !strings.Contains(line, `"op":"setPolicy"`) || !strings.Contains(line, `"policy":"OPEN"`) || strings.Contains(line, "iron_proxy") {
+	if !strings.Contains(line, `"op":"setPolicy"`) || !strings.Contains(line, `"policy":"LOCKED"`) || strings.Contains(line, "iron_proxy") {
 		t.Fatalf("bad wire (expected no iron_proxy key): %s", line)
 	}
 }
@@ -212,7 +212,7 @@ func TestEndpointDecodesIntoForwardTargets(t *testing.T) {
 		GuestHTTP:  "127.0.0.1:5",
 		GuestHTTPS: "127.0.0.1:6",
 	}
-	msg := map[string]any{"op": "setPolicy", "policy": "ENFORCED", "forward_targets": ep}
+	msg := map[string]any{"op": "setPolicy", "policy": "FORWARDING", "forward_targets": ep}
 	b, err := json.Marshal(msg)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

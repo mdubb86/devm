@@ -5,7 +5,7 @@ warm-attach branch on an already-provisioned VM.
 Exercises the composed provisioning script's boot-integrity gate
 behavior on the ordinary (non-adopt, non-daemon-less) path -- contrast
 with test_90 (daemon-less boot floor) and test_91 (adopt-in-place).
-Mutagen setup runs in the same open-egress window as `startup:`, ahead
+Mutagen setup runs in the same provisioning window as `startup:`, ahead
 of `enforce` -- the workspace is hydrated before either the boot-
 integrity gate or the assertions below ever look at it:
 
@@ -15,7 +15,7 @@ integrity gate or the assertions below ever look at it:
        works, a declared service's curl to a NON-allow-listed host is
        BLOCKED (enforcement is up before services start), and
        `startup:`'s curl to a non-allow-listed host SUCCEEDS (it runs
-       inside the composed script's open-egress window, before
+       inside the composed script's provisioning window, before
        `enforce`).
      - DNS resolution for an allow-listed host folds through
        dnsmasq -> iron-proxy: `getent hosts` inside the VM resolves to
@@ -125,7 +125,7 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
     assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
 
     # ---- startup: saw a populated $WORKSPACE: mutagen setup ran ahead of
-    # ---- startup: in the composed script's open-egress window, so the
+    # ---- startup: in the composed script's provisioning window, so the
     # ---- workspace is already hydrated by the time startup: runs. ----
     with E2E_OUT_LOG.open(errors="replace") as f:
         f.seek(log_offset)
@@ -186,11 +186,11 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
     )
 
     # ---- startup:'s curl to a non-allow-listed host SUCCEEDS: it runs
-    # ---- inside the composed script's open-egress window. ----
+    # ---- inside the composed script's provisioning window. ----
     assert file_size(STARTUP_FETCH_FILE) > 0, (
         "startup:'s curl to a non-allow-listed host produced no/empty "
         f"output at {STARTUP_FETCH_FILE} -- startup: should run under "
-        "the open-egress window, before `enforce`"
+        "the provisioning window, before `enforce`"
     )
 
     # ---- Startup determinism: edit startup: to append a NEW sentinel

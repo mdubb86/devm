@@ -8,7 +8,7 @@ import (
 )
 
 func TestPolicyString(t *testing.T) {
-	cases := map[Policy]string{PolicyLocked: "LOCKED", PolicyOpen: "OPEN", PolicyEnforced: "ENFORCED"}
+	cases := map[Policy]string{PolicyLocked: "LOCKED", PolicyForwarding: "FORWARDING"}
 	for p, want := range cases {
 		if got := p.String(); got != want {
 			t.Fatalf("Policy(%d).String() = %q, want %q", int(p), got, want)
@@ -17,12 +17,15 @@ func TestPolicyString(t *testing.T) {
 }
 
 func TestParsePolicy(t *testing.T) {
-	p, err := ParsePolicy("ENFORCED")
-	if err != nil || p != PolicyEnforced {
-		t.Fatalf("ParsePolicy(ENFORCED) = %v, %v", p, err)
+	p, err := ParsePolicy("FORWARDING")
+	if err != nil || p != PolicyForwarding {
+		t.Fatalf("ParsePolicy(FORWARDING) = %v, %v", p, err)
 	}
 	if _, err := ParsePolicy("bogus"); err == nil {
 		t.Fatal("ParsePolicy(bogus) should error")
+	}
+	if _, err := ParsePolicy("OPEN"); err == nil {
+		t.Fatal("ParsePolicy(OPEN) should error")
 	}
 }
 

@@ -22,7 +22,7 @@ import (
 // /tmp is world-writable, so a fixed shared name would let another local
 // user pre-create the dir (MkdirAll on an existing dir is a no-op and
 // won't fix its mode/owner) before the daemon runs, and the daemon would
-// then bind its control socket — the channel carrying LOCKED/OPEN/ENFORCED
+// then bind its control socket — the channel carrying LOCKED/FORWARDING
 // egress-policy commands — inside a directory it doesn't control.
 func softnetSockDir() string {
 	return "/tmp/devm-softnet-" + strconv.Itoa(os.Getuid())

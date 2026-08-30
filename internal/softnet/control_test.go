@@ -11,14 +11,14 @@ func TestApplyControlSetPolicy(t *testing.T) {
 	e := newEgress(nil)
 	_, err := applyControl(e, newIngress(identity.Prod, nil), ControlMsg{
 		Op:             "setPolicy",
-		Policy:         "ENFORCED",
+		Policy:         "FORWARDING",
 		ForwardTargets: &ForwardTargets{HTTPS: "127.0.0.1:8443"},
 	}, nil)
 	if err != nil {
 		t.Fatalf("applyControl: %v", err)
 	}
 	if got, ok := e.target("192.0.2.1", 443); !ok || got != "127.0.0.1:8443" {
-		t.Fatalf("after ENFORCED apply, :443 = %q,%v", got, ok)
+		t.Fatalf("after FORWARDING apply, :443 = %q,%v", got, ok)
 	}
 }
 

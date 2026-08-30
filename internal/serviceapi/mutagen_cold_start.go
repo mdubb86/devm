@@ -33,7 +33,7 @@ type CloneRequest struct {
 // names the git-clone step and carries stderr.
 func CloneRepoInGuest(exec GuestExec, req CloneRequest) error {
 	// Guest egress is transparently routed through iron-proxy by softnet
-	// (:80 → ft.HTTP, :443 → ft.HTTPS under PolicyEnforced), so git just
+	// (:80 → ft.HTTP, :443 → ft.HTTPS under PolicyForwarding), so git just
 	// clones normally — no HTTP_PROXY/HTTPS_PROXY. When a secret is
 	// configured, iron-proxy sees the http.extraheader with the placeholder
 	// token and substitutes the resolved secret on the wire. GIT_SSL_CAINFO

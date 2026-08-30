@@ -1,4 +1,4 @@
-"""89: `startup:` runs on EVERY boot, with open egress, and iron-proxy
+"""89: `startup:` runs on EVERY boot, under passthrough mode, and iron-proxy
 enforcement is still applied afterward.
 
 `startup:` now sees a hydrated workspace: mutagen sync brings the
@@ -9,20 +9,20 @@ side pre-boot.
 Contrast with `install:` (test_88): `install:` is first-boot-only and
 gated by /var/lib/devm/provisioned. `startup:` has no such gate — it's
 meant for state that needs re-establishing on every boot (e.g. mounts,
-tunnels) and runs BEFORE egress enforcement locks the guest down, same
-as `install:` does (test_83). This test pins three things in one
+tunnels) and runs under passthrough mode (authority, not enforcement),
+same as `install:` does (test_83). This test pins three things in one
 project:
 
   1. Every boot: `startup:` appends to a counter file. Cold-start
      (`devm shell`) leaves the counter at 1; a `devm stop` + `devm
      shell` restart bumps it to 2 — unlike `install:`, which stays 1
      across a restart.
-  2. Open egress during `startup:`: one of the startup commands curls
+  2. Passthrough mode during `startup:`: one of the startup commands curls
      a host (example.com) deliberately NOT on `network.allow` (which
      allows only api.github.com — an empty allow list means allow-all
      at the iron-proxy layer, so a real host must be listed for the
      block below to bite). It must succeed, proving `startup:` ran
-     before enforcement was applied.
+     under passthrough mode, not enforcement.
   3. Enforcement intact after boot: a declared service (started in the
      composed script's `::devm:stage:services::` stage, which only
      runs AFTER `::devm:stage:enforce::` has applied the real
@@ -40,7 +40,7 @@ boot (render.RenderProvisionScript / internal/provision.Provisioner)
 instead of separate systemd units — there is no more
 `devm-startup.service` or `devm-enforce.service`. The script always
 runs `startup:` (unconditionally, every boot — no FirstBoot gate,
-unlike `install:`) inside the open-egress window, THEN applies the
+unlike `install:`) under passthrough mode, THEN applies the
 enforced allowlist at the `enforce` stage, THEN starts/health-polls
 declared services at the `services` stage — all in the same `tart
 exec`, so the ordering is a straight-line script sequence, not

@@ -14,10 +14,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mdubb86/devm/internal/caenv"
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/softnet"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -77,7 +80,8 @@ type VMStartResponse struct {
 	// TunnelPort is iron-proxy's CONNECT-capable tunnel_listen port —
 	// the orchestrator needs it (with softnet.NATAliasIP) to build the
 	// guest-visible HTTP_PROXY URL for its post-RunBundle, pre-RunUser
-	// mutagen SetupPhase call, which the daemon has no visibility into.
+	// mutagen SetupReposPhase call, which the daemon has no visibility
+	// into.
 	TunnelPort int `json:"tunnel_port,omitempty"`
 }
 
@@ -111,7 +115,7 @@ type VMEgressPassthroughResponse struct {
 
 // VMEgressRestrictResponse is the response for POST
 // /vm/restrict-egress. WasOpen reports whether there was a window
-// to restrict — false means it was already ENFORCED (or the project
+// to restrict — false means it was already restricted (or the project
 // wasn't tracked), which the CLI surfaces as a "nothing to do"
 // message rather than an error.
 type VMEgressRestrictResponse struct {
@@ -119,10 +123,10 @@ type VMEgressRestrictResponse struct {
 }
 
 // EgressStatus is the response for GET /vm/egress-status. Policy is
-// "restricted" (the default ENFORCED posture) or "passthrough" (an
+// "restricted" (the default authority mode) or "passthrough" (an
 // active `devm passthrough` window). PassthroughExpiresAt is set
 // only when a window is active — the deadline at which the daemon
-// will auto-restore ENFORCED.
+// will auto-restore the restricted authority mode.
 type EgressStatus struct {
 	Policy               string     `json:"policy"`
 	PassthroughExpiresAt *time.Time `json:"passthrough_expires_at,omitempty"`
@@ -131,7 +135,7 @@ type EgressStatus struct {
 // VMEnforcementConfigResponse is the body shape for GET
 // /vm/enforcement-config. Egress allow-listing and DNS resolution are
 // enforced by softnet over the control socket (POST
-// /vm/apply-egress-enforcement), not by guest-side nftables/dnsmasq.
+// /vm/end-provisioning), not by guest-side nftables/dnsmasq.
 // timesyncd's NTP config used to be applied here at runtime
 // (TimesyncdScript); it's now baked into the base image at
 // image/provision-base.sh, since it's static — no per-project or
@@ -140,10 +144,33 @@ type EgressStatus struct {
 // before provisioning proceeds.
 type VMEnforcementConfigResponse struct{}
 
-// VMApplyEgressEnforcementRequest is the body shape for POST
-// /vm/apply-egress-enforcement.
-type VMApplyEgressEnforcementRequest struct {
+// VMProjectRequest is the {name}-only request body shared by POST
+// /vm/begin-provisioning, /vm/end-provisioning, and /vm/restrict-egress.
+type VMProjectRequest struct {
 	Name string `json:"name"`
+}
+
+// VMVolumeSyncRequest is the body shape for POST /vm/volume-sync.
+// Cfg carries the project's full config so the daemon can build the
+// mutagen entity list (BuildEntities) itself — it has no other
+// visibility into the project's volumes/repos configuration.
+type VMVolumeSyncRequest struct {
+	Name string `json:"name"`
+	// RepoRoot is the project's Mac-side working directory absolute
+	// path.
+	RepoRoot string        `json:"repo_root"`
+	Cfg      schema.Config `json:"cfg"`
+}
+
+// VMRepoCloneRequest is the body shape for POST /vm/repo-clone.
+type VMRepoCloneRequest struct {
+	Name     string        `json:"name"`
+	RepoRoot string        `json:"repo_root"`
+	Cfg      schema.Config `json:"cfg"`
+	// TunnelPort is iron-proxy's CONNECT-capable tunnel_listen port —
+	// combined with softnet.NATAliasIP it forms the guest-visible
+	// HTTP_PROXY URL a guest-side git clone needs.
+	TunnelPort int `json:"tunnel_port"`
 }
 
 // VMStatusResponse is the body shape for GET /vm/status.
@@ -279,29 +306,29 @@ func vmRunning(vms []tart.VM, name string) bool {
 	return false
 }
 
-// armPassthroughRestoreTimer schedules egress to be restored to
-// ENFORCED after d, the bound `devm passthrough --for <dur>` (or the
-// default) puts on a supervised window. Installing it via
-// egressPassthroughState.setTimer stops+replaces whatever restore
-// timer was already pending for name, so repeated passthroughs (or a
-// restrict in between) never leave two timers racing.
+// armPassthroughRestoreTimer schedules the policy authority to be
+// restored to ModeRestricted after d, the bound
+// `devm passthrough --for <dur>` (or the default) puts on a
+// supervised window. Installing it via egressPassthroughState.setTimer
+// stops+replaces whatever restore timer was already pending for name,
+// so repeated passthroughs (or a restrict in between) never leave two
+// timers racing.
 //
 // The callback runs on its own goroutine (time.AfterFunc, not
 // inline), so taking locks.Lock(name) here is not nested under any
-// handler's lock. It re-checks egressPassthroughState and the VM's
-// running state right before signalling softnet — by the time it
-// fires, the project may have been stopped, torn down, or restricted
-// early by `devm restrict`, all of which call del/stopTimer and so
-// would have already cancelled this timer; the re-check is therefore
-// belt-and-suspenders against the timer having fired the instant
-// before a racing cancellation.
-func armPassthroughRestoreTimer(locks *ProjectLocks, tr TartLister, ntpPort int, name string, d time.Duration) {
+// handler's lock. It re-checks egressPassthroughState right before
+// flipping the mode — by the time it fires, the project may have been
+// stopped, torn down, or restricted early by `devm restrict`, all of
+// which call del/stopTimer and so would have already cancelled this
+// timer; the re-check is therefore belt-and-suspenders against the
+// timer having fired the instant before a racing cancellation.
+func armPassthroughRestoreTimer(locks *ProjectLocks, name string, d time.Duration) {
 	// Forward-declare t so the closure captures the variable in scope;
 	// value assigned by time.AfterFunc's return below. Callback checks
 	// e.restore == t under the lock — pointer-identity check that
 	// guarantees a stale callback (one whose Stop lost the race with
 	// its own fire, replaced mid-AfterFunc by a newer setTimer) exits
-	// before touching softnet.
+	// before touching the authority.
 	var t *time.Timer
 	t = time.AfterFunc(d, func() {
 		unlock := locks.Lock(name)
@@ -311,27 +338,7 @@ func armPassthroughRestoreTimer(locks *ProjectLocks, tr TartLister, ntpPort int,
 		if !ok || e.restore != t {
 			return // restricted/stopped/torn down since open, or superseded by a newer timer
 		}
-		vms, err := tr.List(context.Background())
-		if err != nil {
-			// Fail closed: a transient `tart list` error means we can't
-			// confirm the VM is stopped, so restore rather than leave
-			// a running VM permissively open past the intended window.
-			daemonlog.Errorf("egress: auto-restore %s: tart list failed, restoring fail-closed: %v", name, err)
-		} else if !vmRunning(vms, name) {
-			egressPassthroughState.del(name)
-			return // VM confirmed stopped — no softnet to signal
-		}
-		sock := softnetState.get(name)
-		info, hasInfo := ironProxyState.get(name)
-		if sock == "" || !hasInfo {
-			// Stop path won the race — state's already cleared, softnet's
-			// gone. Nothing to do.
-			egressPassthroughState.del(name)
-			return
-		}
-		if err := sendSoftnetEnforced(sock, info, ntpPort); err != nil {
-			daemonlog.Errorf("egress: auto-restore %s: %v (window state cleared; softnet may remain OPEN until next reconcile)", name, err)
-		}
+		policyAuthority.SetMode(name, ModeRestricted)
 		egressPassthroughState.del(name)
 	})
 	egressPassthroughState.setTimer(name, t)
@@ -471,7 +478,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// Run options: softnet NIC, no graphics. softnet is the daemon's
 		// sole egress path for every VM it launches. Volumes, repos, and
 		// extra mounts are no longer virtiofs shares — mutagen sync
-		// sessions (SetupPhase, below) carry that traffic instead.
+		// sessions (SetupVolumesPhase, below) carry that traffic instead.
 		opts := tart.RunOpts{
 			NoGraphics: true,
 			NetSoftnet: true,
@@ -716,17 +723,21 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		writeJSON(w, VMEnforcementConfigResponse{})
 	})
 
-	// /vm/open-egress flips a project's softnet control socket to OPEN —
-	// unrestricted egress for the provisioning window (apt, install:,
-	// templates, startup:) before the enforced allowlist is in place.
-	// softnet boots LOCKED, so cold-start provisioning would otherwise run
-	// with no egress at all.
-	s.Register("/vm/open-egress", func(w http.ResponseWriter, r *http.Request) {
+	// /vm/begin-provisioning flips a project's softnet control socket to
+	// ENFORCED-behavior (:80/:443 route to iron-proxy) and the egress
+	// policy authority to ModePassthrough — the provisioning window (apt,
+	// install:, templates, startup:) runs with iron-proxy already in the
+	// traffic path, gated only by the authority's passthrough mode rather
+	// than the real allowlist. Called post-RunBundle (the guest trust
+	// store already has the iron-proxy CA) and pre-RunUser. softnet boots
+	// LOCKED, so cold-start provisioning would otherwise run with no
+	// egress at all.
+	s.Register("/vm/begin-provisioning", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		var req VMApplyEgressEnforcementRequest
+		var req VMProjectRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
@@ -746,31 +757,28 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			return
 		}
 
+		policyAuthority.SetMode(req.Name, ModePassthrough)
+
 		// Full ForwardTargets on every push — setPolicy keeps the previous
 		// endpoint on nil, so a partial push would silently clobber fields.
-		// Under OPEN only the guest-origin fields are consulted (`.test`
-		// works during the provisioning window); the egress fields ride
-		// along inert.
 		openInfo, _ := ironProxyState.get(req.Name)
-		if err := newSoftnetClient(sock).setPolicy("OPEN", endpointFrom(openInfo, ntpPort)); err != nil {
-			http.Error(w, fmt.Sprintf("flip softnet open: %v", err), http.StatusInternalServerError)
+		if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(openInfo, ntpPort)); err != nil {
+			http.Error(w, fmt.Sprintf("flip softnet enforced: %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// /vm/apply-egress-enforcement flips a project's softnet control
-	// socket to ENFORCED, pointing egress at iron-proxy's loopback
-	// endpoint and the daemon's SNTP responder. This is the sole egress
-	// gate under softnet — there is no guest-side nftables/dnsmasq step
-	// left to run here.
-	s.Register("/vm/apply-egress-enforcement", func(w http.ResponseWriter, r *http.Request) {
+	// /vm/volume-sync establishes a mutagen sync session for every entity
+	// (volumes and repos alike) — the uniform half of workspace hydration.
+	// Called after /vm/begin-provisioning and before /vm/repo-clone.
+	s.Register("/vm/volume-sync", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		var req VMApplyEgressEnforcementRequest
+		var req VMVolumeSyncRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
@@ -783,25 +791,91 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		unlock := locks.Lock(req.Name)
 		defer unlock()
 
-		info, ok := ironProxyState.get(req.Name)
-		if !ok {
-			http.Error(w, "iron-proxy state missing — was /vm/start called for this project?",
-				http.StatusPreconditionFailed)
+		entities, err := BuildEntities(&req.Cfg, req.RepoRoot)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("build entities: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		sock := softnetState.get(req.Name)
-		if sock == "" {
-			http.Error(w, "softnet control socket missing — was /vm/start called for this project?",
-				http.StatusPreconditionFailed)
+		mutagenBin, err := mutagenEnsureFn(cfg.RuntimeDir())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("mutagen: extract binary: %v", err), http.StatusInternalServerError)
+			return
+		}
+		mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(cfg)}
+
+		guestSSHTarget := "devm-" + req.Name
+		if err := SetupVolumesPhase(r.Context(), mutagenCLI, cfg, req.Name, entities,
+			tartGuestExec(r.Context(), tr, req.Name), guestSSHTarget); err != nil {
+			http.Error(w, fmt.Sprintf("volume sync: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		if err := sendSoftnetEnforced(sock, info, ntpPort); err != nil {
-			http.Error(w, fmt.Sprintf("flip softnet enforced: %v", err), http.StatusInternalServerError)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// /vm/repo-clone runs a cold-start git clone, through iron-proxy, for
+	// every repo entity where the relevant sides are empty. Called after
+	// /vm/volume-sync — the mutagen sessions it establishes pick up the
+	// freshly-cloned guest content on their own.
+	s.Register("/vm/repo-clone", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMRepoCloneRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
 
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		entities, err := BuildEntities(&req.Cfg, req.RepoRoot)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("build entities: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		ironProxyURL := fmt.Sprintf("http://%s:%d", softnet.NATAliasIP, req.TunnelPort)
+		if err := SetupReposPhase(r.Context(), cfg, req.Name, entities,
+			tartGuestExec(r.Context(), tr, req.Name), ironProxyURL, guestGitCACertPath()); err != nil {
+			http.Error(w, fmt.Sprintf("repo clone: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// /vm/end-provisioning flips the egress policy authority back to
+	// ModeRestricted — the real allowlist governs from here on. Called
+	// pre-RunEnforced. Softnet stays in ENFORCED-behavior (iron-proxy
+	// stays in the traffic path); the authority mode is the only gate
+	// this handler changes.
+	s.Register("/vm/end-provisioning", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMProjectRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		policyAuthority.SetMode(req.Name, ModeRestricted)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -913,10 +987,12 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 	})
 
 	// /vm/passthrough-egress opens a time-bounded egress passthrough
-	// window: flips softnet from ENFORCED to OPEN for the duration,
-	// arms a timer to restore ENFORCED on expiry. Repeat opens
-	// replace the existing timer. Reconcile does NOT close the window;
-	// only the timer, `devm restrict`, or /vm/stop do.
+	// window: flips the policy authority to ModePassthrough for the
+	// duration, arms a timer to restore ModeRestricted on expiry.
+	// Repeat opens replace the existing timer. Reconcile does NOT
+	// close the window; only the timer, `devm restrict`, or /vm/stop
+	// do. Softnet and iron-proxy are untouched — the authority mode
+	// is the entire mechanism.
 	s.Register("/vm/passthrough-egress", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -935,32 +1011,15 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		unlock := locks.Lock(req.Name)
 		defer unlock()
 
-		sock := softnetState.get(req.Name)
-		if sock == "" {
-			http.Error(w, "softnet control socket missing — was /vm/start called for this project?",
-				http.StatusPreconditionFailed)
-			return
-		}
-
 		_, wasOpen := egressPassthroughState.get(req.Name)
-
-		// PolicyOpen doesn't consult ForwardTargets for dispatch
-		// (softnet's target() returns direct-to-destination for that
-		// branch), and setPolicy treats a nil ft as "leave existing
-		// unchanged" — so setPolicy(OPEN, nil) is the whole open path,
-		// no ForwardTargets capture needed.
-		if err := newSoftnetClient(sock).setPolicy("OPEN", nil); err != nil {
-			daemonlog.Errorf("egress: passthrough setPolicy(OPEN) for %s: %v", req.Name, err)
-			http.Error(w, fmt.Sprintf("flip softnet open: %v", err), http.StatusInternalServerError)
-			return
-		}
+		policyAuthority.SetMode(req.Name, ModePassthrough)
 
 		dur := time.Duration(req.DurationSeconds) * time.Second
 		if dur <= 0 {
 			dur = defaultPassthroughSeconds * time.Second
 		}
 		egressPassthroughState.put(req.Name, time.Now().Add(dur))
-		armPassthroughRestoreTimer(locks, tr, ntpPort, req.Name, dur)
+		armPassthroughRestoreTimer(locks, req.Name, dur)
 
 		writeJSON(w, VMEgressPassthroughResponse{
 			WasOpen:        wasOpen,
@@ -969,15 +1028,16 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 	})
 
 	// /vm/restrict-egress closes an active passthrough window: flips
-	// softnet back to ENFORCED, cancels the restore timer, deletes
-	// state. No-op (was_open=false) if no window is active — matches
-	// `devm restrict` idempotency contract from the spec.
+	// the policy authority back to ModeRestricted, cancels the
+	// restore timer, deletes state. No-op (was_open=false) if no
+	// window is active — matches `devm restrict` idempotency
+	// contract from the spec. Softnet and iron-proxy are untouched.
 	s.Register("/vm/restrict-egress", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		var req VMApplyEgressEnforcementRequest // reuses {Name} shape
+		var req VMProjectRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
 			return
@@ -996,25 +1056,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			return
 		}
 
-		sock := softnetState.get(req.Name)
-		info, hasInfo := ironProxyState.get(req.Name)
-		if sock == "" || !hasInfo {
-			// Stop path won a race: no softnet to signal. Clear state
-			// and report was_open=true so the caller sees the
-			// operation was meaningful (the window WAS open when the
-			// caller asked to close it).
-			egressPassthroughState.del(req.Name)
-			writeJSON(w, VMEgressRestrictResponse{WasOpen: true})
-			return
-		}
-		// Read ForwardTargets fresh via sendSoftnetEnforced — any
-		// reconcile-driven allowlist update that landed during the
-		// window takes effect on this close.
-		if err := sendSoftnetEnforced(sock, info, ntpPort); err != nil {
-			daemonlog.Errorf("egress: restrict setPolicy(ENFORCED) for %s: %v", req.Name, err)
-			http.Error(w, fmt.Sprintf("flip softnet enforced: %v", err), http.StatusInternalServerError)
-			return
-		}
+		policyAuthority.SetMode(req.Name, ModeRestricted)
 		egressPassthroughState.del(req.Name)
 		writeJSON(w, VMEgressRestrictResponse{WasOpen: true})
 	})
@@ -1143,22 +1185,36 @@ func prependPathEnv(env []string, dir string) []string {
 	return append(env, "PATH="+dir)
 }
 
-// sendSoftnetEnforced flips a project's softnet control socket to
-// ENFORCED, forwarding egress to iron-proxy's HTTP/HTTPS/DNS listeners and
-// the daemon's SNTP responder. All four addresses are loopback: softnet
-// dials iron-proxy and the NTP responder host-side, so the endpoint it
-// sends is always loopback.
-func sendSoftnetEnforced(sock string, info projectInfo, ntpPort int) error {
-	return newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort))
+// tartGuestExec returns a GuestExec that runs script inside name via
+// `tart exec -i <name> sudo bash -s`, script on stdin — the transport
+// SetupVolumesPhase/SetupReposPhase need for their guest-side scans,
+// clones, and mirror-dir checks.
+func tartGuestExec(ctx context.Context, tr *tart.Tart, name string) GuestExec {
+	return func(script string) (stdout, stderr string, exitCode int, err error) {
+		res := tr.ExecStdin(ctx, name, strings.NewReader(script), []string{"sudo", "bash", "-s"})
+		return res.Stdout, res.Stderr, res.ExitCode, nil
+	}
+}
+
+// guestGitCACertPath returns the guest-side CA bundle path git trusts
+// for a proxied clone — the merged system trust store devm exports as
+// GIT_SSL_CAINFO (see internal/caenv's "SSL_CERT_FILE trap" warning
+// against pointing at the raw devm.crt instead of the merged bundle).
+func guestGitCACertPath() string {
+	for _, v := range caenv.Vars {
+		if v.Key == "GIT_SSL_CAINFO" {
+			return v.Value
+		}
+	}
+	return ""
 }
 
 // endpointFrom builds the loopback softnet Endpoint for a project's
 // stashed projectInfo and the daemon's SNTP responder port. Every
-// setPolicy push — OPEN or ENFORCED, CLI-driven or daemon-restart
-// reconcile — goes through this builder so the wire shape is always
-// complete: setPolicy keeps the previous endpoint on a nil push, so a
-// caller building a partial Endpoint by hand would silently clobber
-// whichever fields it left zero.
+// setPolicy push — CLI-driven or daemon-restart reconcile — goes through
+// this builder so the wire shape is always complete: setPolicy keeps the
+// previous endpoint on a nil push, so a caller building a partial Endpoint
+// by hand would silently clobber whichever fields it left zero.
 //
 // GuestHTTP/GuestHTTPS are left "" when the corresponding port is 0
 // (the guest-origin listener pair hasn't bound yet) rather than

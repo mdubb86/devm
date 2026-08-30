@@ -1,7 +1,8 @@
-"""83: install: steps run BEFORE iron-proxy enforcement is applied.
+"""83: install: steps run UNDER PASSTHROUGH MODE.
 
-install: still runs pre-enforcement, but NOW also post-mutagen-sync —
-the workspace it operates on is hydrated.
+install: runs with authority in passthrough mode (iron-proxy in the path
+but not enforcing the allowlist), and NOW also post-mutagen-sync — the
+workspace it operates on is hydrated.
 
 Iron-proxy is meant to gate the workload (agents / services), not the
 developer's provisioning phase. This test pins that invariant:
@@ -10,18 +11,18 @@ developer's provisioning phase. This test pins that invariant:
     allowed under enforcement.
   - install: has a step that reaches a host NOT on the allow list
     (pypi.org — a real public HTTPS endpoint we don't otherwise gate).
-  - Cold-start MUST succeed — proving install ran with open egress.
+  - Cold-start MUST succeed — proving install ran under passthrough mode.
 
 Then, after cold-start, the same curl call is repeated. It MUST FAIL —
 proving enforcement kicked in AFTER install (before services). Both
-halves together lock the sequencing: install runs open, workload runs
-gated.
+halves together lock the sequencing: install runs under passthrough mode,
+workload runs under enforcement.
 
 Devm dependency: the guest runs ONE composed provisioning script
 (render.RenderProvisionScript / internal/provision.Provisioner) instead
 of the old per-step provisioner. Its `::devm:stage:open::` stage flushes
 the base image's boot-lock nftables ruleset for the whole open window —
-packages/install:/docker/templates/startup: all run under open egress —
+packages/install:/docker/templates/startup: all run under passthrough mode —
 and only the LATER `::devm:stage:enforce::` stage applies the real
 allowlist ruleset, before the `::devm:stage:services::` stage
 starts/health-polls declared services. If somebody ever moves the

@@ -81,7 +81,7 @@ provision: provision stage "<name>": provisioning script exited <N>
 
 | Stage | What it does | Common failure | Fix |
 |---|---|---|---|
-| `open` | Marker for the start of the open-egress work window. Runs whenever there's open-window work to do (first boot, `startup:` commands, or templates); skipped on a warm restart with nothing to run. | Rare | n/a |
+| `open` | Marker for the start of the provisioning window (iron-proxy is in the path under `passthrough` authority mode — MITM'd, audited, secret-substituted, but not allowlist-gated). Runs whenever there's provisioning-window work to do (first boot, `startup:` commands, or templates); skipped on a warm restart with nothing to run. | Rare | n/a |
 | `packages` | `apt-get update` + `apt-get install -y <packages>` on first boot; on a later boot, converges only the added/removed packages if `packages:` changed while stopped. Skipped if there's nothing to do | Package name not found, or `deb.debian.org` not in `network.allow` | Add `deb.debian.org` to `network.allow` in `devm.yaml`; verify package names |
 | `install` | Runs each `install:` command in order, with `$WORKSPACE`, `cfg.env`, and `path:` in scope (first boot only). Each command has a 600s timeout, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | User command exits non-zero, or a step exceeds its timeout (exit 124) | Read the captured output above the error; fix the failing command. For long installs, raise `DEVM_INSTALL_STEP_TIMEOUT_S`. |
 | `docker` | Installs the Docker engine + shim (only when `docker: true`; first boot only) | Docker install failure | Read the captured output; if `network.allow` is missing a Docker registry host, add it |
@@ -107,7 +107,7 @@ curl: (6) Could not resolve host: api.example.com
 
 Under the enforced egress policy, only HTTPS (:443), HTTP (:80), and NTP (:123) leave the VM. HTTP/HTTPS goes through iron-proxy on the Mac, which applies `network.allow`. Two things can produce a connection-refused symptom:
 
-1. **iron-proxy blocked it.** The destination is not listed under `network.allow` in `devm.yaml`, so iron-proxy dropped the request. Fix: add the host to `network.allow` (or change to `- "*"` for open egress if you actually want no allowlist).
+1. **iron-proxy blocked it.** The destination is not listed under `network.allow` in `devm.yaml`, so iron-proxy dropped the request. Fix: add the host to `network.allow` (or change to `- "*"` if you actually want no allowlist).
 2. **The workload tried a non-HTTP port.** Outbound to a port other than 80 or 443 (e.g. 5432, 3306, 6379 for talking to external Postgres/MySQL/Redis) is dropped before iron-proxy sees it — there's nothing to add to `network.allow` that would help. Fix: front the external service with an HTTPS endpoint, or (for peer VMs on the same Mac) use `direct: true` on the target service and address it by hostname.
 
 Check:

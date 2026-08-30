@@ -19,7 +19,7 @@ import (
 // each recovered project it re-puts the deterministic control socket
 // (SoftnetControlSock is a pure function of the project id, so no
 // coordination is needed to reconstruct it) and best-effort re-pushes
-// ENFORCED. The push is a reconcile, not the source of truth — softnet
+// FORWARDING. The push is a reconcile, not the source of truth — softnet
 // already holds its last policy — but it covers the case where softnet
 // itself also restarted and came back up in its LOCKED boot default, and
 // it brings the daemon's in-memory view back in sync either way.
@@ -34,7 +34,7 @@ import (
 // ctx is accepted for parity with AdoptIronProxies and future-proofing
 // (a context-aware dial); the current softnetClient doesn't use it.
 //
-// Alongside the ENFORCED re-push, this also best-effort re-pushes the
+// Alongside the FORWARDING re-push, this also best-effort re-pushes the
 // ingress expose map from each project's persisted config — belt and
 // suspenders: softnet's child process retains its last-applied expose
 // map across a daemon-only restart (it isn't reset like the egress
@@ -42,15 +42,15 @@ import (
 // and the port-claims registry pushExposeMap reconciles as a side
 // effect (see expose.go).
 //
-// ENFORCED re-push ordering vs. rebindProjectListeners (runner.go): a
+// FORWARDING re-push ordering vs. rebindProjectListeners (runner.go): a
 // project with a ProjectIP gets its guest-origin listener pair rebound
 // by a rebindProjectListeners goroutine later in the daemon-restart
-// sequence, which re-pushes ENFORCED once that pair is bound. Nothing
-// orders that goroutine against this one, so pushing ENFORCED here too
+// sequence, which re-pushes FORWARDING once that pair is bound. Nothing
+// orders that goroutine against this one, so pushing FORWARDING here too
 // would race it. Rather than sequence the two passes (which would make
 // this function block on a live softnet dial per project — exactly
 // what the comment above says it must not do), this function skips its
-// own ENFORCED push for any project with a ProjectIP and leaves the
+// own FORWARDING push for any project with a ProjectIP and leaves the
 // rebind pass as the sole post-restart pusher for it. A project with no
 // ProjectIP never goes through rebindProjectListeners, so this push
 // stays the only one it gets — daemon-restart semantics are unchanged
@@ -64,11 +64,11 @@ func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
 		if !ok {
 			continue
 		}
-		needsEnforcedPush := info.ProjectIP == ""
+		needsForwardingPush := info.ProjectIP == ""
 		go func(id, sock string, info projectInfo) {
-			if needsEnforcedPush {
-				if err := newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort)); err != nil {
-					daemonlog.Errorf("serviceapi: discoverSoftnet: setPolicy ENFORCED for %s: %v", id, err)
+			if needsForwardingPush {
+				if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(info, ntpPort)); err != nil {
+					daemonlog.Errorf("serviceapi: discoverSoftnet: setPolicy FORWARDING for %s: %v", id, err)
 				}
 			}
 			if snap, err := ReadStateSnapshot(cfg, id); err == nil && snap != nil {

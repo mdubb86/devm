@@ -90,7 +90,7 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 					info.GuestHTTPSPort = guestHTTPSPort
 					ironProxyState.put(projectID, info)
 					if sock := softnetState.get(projectID); sock != "" {
-						if err := newSoftnetClient(sock).setPolicy("ENFORCED", endpointFrom(info, ntpPort)); err != nil {
+						if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(info, ntpPort)); err != nil {
 							daemonlog.Errorf("serviceapi: guest-origin re-push for %s: %v", projectID, err)
 						}
 					}

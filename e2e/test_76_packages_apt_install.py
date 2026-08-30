@@ -2,7 +2,7 @@
 
 The composed provisioning script runs `apt-get update` then
 `apt-get install -y <pkg>...` in its `packages` stage (first boot only,
-inside the open-egress window). The list comes from cfg.Packages in the
+inside the provisioning window). The list comes from cfg.Packages in the
 schema. iron-proxy must allow deb.debian.org and security.debian.org for
 the install to reach upstream.
 

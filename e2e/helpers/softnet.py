@@ -20,7 +20,7 @@ map (softnetState) from this SAME deterministic path whenever
 /vm/apply-iron-proxy runs (the adopt-in-place path -- see
 apply_iron_proxy.go's softnetState.put). If a raw `tart run` here binds
 its control socket somewhere else, that repopulated map entry points at
-nothing, and /vm/apply-egress-enforcement 412s.
+nothing, and /vm/end-provisioning 412s.
 """
 from __future__ import annotations
 

@@ -15,9 +15,9 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `network` | object | live | Iron-proxy outbound allowlist. |
 | `env` | map[string]EnvValue | live | Project-wide environment variables forwarded to all services. |
 | `services` | map[string]Service | varies | Named service definitions; bucket depends on which sub-field changes (see Services section). |
-| `packages` | []string | live | Apt packages. A running VM converges via a transient egress window; a stopped VM converges on the next boot's open window. |
+| `packages` | []string | live | Apt packages. A running VM converges via a transient passthrough window; a stopped VM converges during the next boot's provisioning window. |
 | `install` | []string | recreate | Shell commands run once at VM creation as the guest `devm` user. NOPASSWD sudo is available for privileged steps. |
-| `startup` | []string | restart | Shell commands run on every boot that opens the egress window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as the guest `devm` user, with open network — before egress enforcement is applied. NOPASSWD sudo is available for privileged steps. |
+| `startup` | []string | restart | Shell commands run on every boot that opens the provisioning window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as the guest `devm` user, under `passthrough` authority mode (iron-proxy in the path, allowlist not yet gating). NOPASSWD sudo is available for privileged steps. |
 | `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
 | `volumes` | map[string]Volume | live | Per-project named persistent stores. Key = volume name; value is either a bare guest path string or a `{path, label, ignore}` mapping. Data lives on the Mac side under `~/Library/Application Support/devm/<projectID>/<label>/` and survives `devm teardown`. See the `volumes` section below. |
 | `repos` | map[string]RepoConfig | varies | Declares the project's git repos to hydrate via `git clone` at cold-start, keyed by an arbitrary schema id. Exactly one entry is the primary workspace repo. `url`/`secret` are **restart-VM** (iron-proxy clones at boot using these); every other field is **live** (mutagen-session-only). Optional — omit for utility VMs with no repo. See the `repos` section below. |
@@ -57,7 +57,7 @@ Each allow entry accepts two forms:
 - **Bare scalar** — just the hostname string: `- api.example.com`
 - **Mapping** — `{host, secrets}`: names a host and lists which `!secret` values iron-proxy may inject on requests to that host only. Secrets not named in any allow entry are omitted from iron-proxy config and never injected.
 
-Bare `*` is the open-egress sentinel: it matches any destination host, permitting unrestricted outbound access through iron-proxy.
+Bare `*` is the wildcard sentinel: it matches any destination host, permitting unrestricted outbound access through iron-proxy.
 
 A host may carry a path pattern: everything from the first `/` scopes reachability to matching request paths. A pattern ending `/*` matches the whole subtree; anything else must match exactly. Query strings never participate in matching — drop them. Secrets on a path-scoped entry still inject host-wide.
 
@@ -68,7 +68,7 @@ network:
     - cdn.example.com/dl/v2/*                # only this path subtree
     - host: api.other.com
       secrets: [my_api_key]                  # inject my_api_key only to this host
-    - "*"                                    # open egress — any host
+    - "*"                                    # wildcard — any host
 ```
 
 ---
@@ -123,7 +123,7 @@ Rules:
 
 Shell commands run once at VM creation time, in order, as the guest `devm` user. Each command runs under `bash -o pipefail -c`. Bootstrap runs first, so `apt-get update` has already been called — user entries can `sudo apt-get install -y <pkg>` directly (the `devm` user has NOPASSWD sudo baked into the base image).
 
-`install` runs **once, on first boot only** — it is gated by a marker (`/var/lib/devm/provisioned`) and is **not** re-run on a later cold start (`devm stop` then `devm shell` reuses the same disk, so installed tools and built artifacts are still there). It runs with **open** network, before egress enforcement is applied. Use `install` for one-time setup. For a command that must run on **every** boot, use `startup:` (every boot, still open network — see below), or a service (`exec:` / `systemd:`) for a long-running process (every boot, under the enforced egress allowlist).
+`install` runs **once, on first boot only** — it is gated by a marker (`/var/lib/devm/provisioned`) and is **not** re-run on a later cold start (`devm stop` then `devm shell` reuses the same disk, so installed tools and built artifacts are still there). It runs during the provisioning window: iron-proxy is in the path under `passthrough` authority mode (MITM'd, audited, secret-substituted, but not allowlist-gated). Use `install` for one-time setup. For a command that must run on **every** boot, use `startup:` (every boot, same provisioning window — see below), or a service (`exec:` / `systemd:`) for a long-running process (every boot, under the restricted allowlist).
 
 Changing `install` requires a full VM teardown and cold start (a fresh VM then re-runs first-boot `install` with the new commands).
 
@@ -135,13 +135,13 @@ Note: `--` in a command's argv is consumed by the internal wrapper; quote it or 
 
 `[]string` — bucket: **restart** (VM stop + cold start; no teardown, no data loss).
 
-Shell commands run on **every** boot where the open-egress window runs, in order, as the guest `devm` user, with **open** network — before egress enforcement is applied. NOPASSWD sudo is available for privileged steps. Runs under one shared shell (exports/`cd` persist between lines), 600s timeout for the whole block (override with `DEVM_INSTALL_STEP_TIMEOUT_S`). Use it for per-boot setup that needs unrestricted network (fetch/refresh something, register the VM, warm a cache).
+Shell commands run on **every** boot where the provisioning window runs, in order, as the guest `devm` user, under `passthrough` authority mode — iron-proxy stays in the path (MITM + audit + secret substitution), but the per-request allowlist isn't gating yet. NOPASSWD sudo is available for privileged steps. Runs under one shared shell (exports/`cd` persist between lines), 600s timeout for the whole block (override with `DEVM_INSTALL_STEP_TIMEOUT_S`). Use it for per-boot setup that needs unrestricted network (fetch/refresh something, register the VM, warm a cache).
 
-The open-egress window itself only runs when there's work for it: first boot, or `startup:` is non-empty, or any service declares `templates:`. A project with no `startup:` and no `templates:` skips the window entirely on a later cold start and goes straight to the enforced allowlist.
+The provisioning window itself only runs when there's work for it: first boot, or `startup:` is non-empty, or any service declares `templates:`. A project with no `startup:` and no `templates:` skips the window entirely on a later cold start and goes straight to the restricted allowlist.
 
 A failing `startup:` command aborts provisioning: `devm.target` never starts, no access is granted, and the VM is torn down — same failure class as a broken `install:` command, not fail-safe.
 
-The three hooks: `install:` = once, first boot, open network. `startup:` = every boot that opens the window, open network. Services (`exec:`/`systemd:`) = every boot, enforced egress — started and health-polled after the allowlist is applied, confirmed healthy before `devm.target` (and therefore access) comes up. Editing `startup:` (**restart** bucket) is deterministic: the freshly-rendered `startup:` runs on the applying `devm stop` + `devm shell` — the edit takes effect on that restart.
+The three hooks: `install:` = once, first boot, `passthrough` authority mode. `startup:` = every boot that opens the provisioning window, `passthrough` authority mode. Services (`exec:`/`systemd:`) = every boot, `restricted` authority mode — started and health-polled after the allowlist is applied, confirmed healthy before `devm.target` (and therefore access) comes up. Editing `startup:` (**restart** bucket) is deterministic: the freshly-rendered `startup:` runs on the applying `devm stop` + `devm shell` — the edit takes effect on that restart.
 
 ---
 
@@ -172,7 +172,7 @@ V1 scope: refs are only resolved from `install:` and `startup:`. Scripts take no
 
 `[]string` — bucket: **live**.
 
-Apt package names installed via `apt-get install -y`. Adding or removing entries converges without a teardown: on a running VM, the daemon briefly respawns iron-proxy with the apt mirrors added to the allowlist (`deb.debian.org`, `security.debian.org`, plus `download.docker.com` when `docker: true`), runs the apt diff, then restores the original allowlist. On a stopped VM, the same diff converges during the next boot's open egress window. Reordering the list is a no-op — only membership changes trigger a converge.
+Apt package names installed via `apt-get install -y`. Adding or removing entries converges without a teardown: on a running VM, the daemon briefly respawns iron-proxy with the apt mirrors added to the allowlist (`deb.debian.org`, `security.debian.org`, plus `download.docker.com` when `docker: true`), runs the apt diff, then restores the original allowlist. On a stopped VM, the same diff converges during the next boot's provisioning window. Reordering the list is a no-op — only membership changes trigger a converge.
 
 ```yaml
 packages:
@@ -283,7 +283,7 @@ Map of named commands scoped to this repo. Each entry:
 | Field | Type | Required | Purpose |
 |---|---|---|---|
 | `exec` | string | yes | Shell command body. `>NAME` references a `scripts:` entry (joined with ` && `, same as `install:`/`startup:` refs). |
-| `startup` | bool | no (default false) | When true, this command fires automatically on every VM boot AFTER the workspace is hydrated (post-`mutagen sync flush`), from this repo's guest cwd. **Runs under OPEN egress** (same window as top-level `install:`/`startup:`) — a manual `run <name>` afterward runs under the enforced allowlist instead. |
+| `startup` | bool | no (default false) | When true, this command fires automatically on every VM boot AFTER the workspace is hydrated (post-`mutagen sync flush`), from this repo's guest cwd. **Runs under `passthrough` authority mode** (same provisioning window as top-level `install:`/`startup:`) — a manual `run <name>` afterward runs under the restricted allowlist instead. |
 
 Names must match `/^[a-z][a-z0-9_-]*$/`. Uniqueness is per-repo; two repos can both name a command `test` — the guest-side `run <name>` dispatcher picks the right one from `$PWD`.
 

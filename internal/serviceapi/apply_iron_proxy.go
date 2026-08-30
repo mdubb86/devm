@@ -53,9 +53,9 @@ type VMApplyIronProxyResponse struct {
 	ProjectIP string `json:"project_ip,omitempty"`
 	// TunnelPort is iron-proxy's CONNECT-capable tunnel_listen port —
 	// mirrors VMStartResponse.TunnelPort for adopt-in-place, so the
-	// orchestrator's post-RunBundle, pre-RunUser mutagen SetupPhase call
-	// can build the guest-visible HTTP_PROXY URL on either path. Zero in
-	// the VM-never-started (VMRunning=false) case.
+	// orchestrator's post-RunBundle, pre-RunUser mutagen SetupReposPhase
+	// call can build the guest-visible HTTP_PROXY URL on either path.
+	// Zero in the VM-never-started (VMRunning=false) case.
 	TunnelPort int `json:"tunnel_port,omitempty"`
 }
 
@@ -260,11 +260,11 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		// Adopt-in-place also never went through /vm/start's
 		// softnetState.put (vm.go), so the daemon's in-memory
 		// projectID -> softnet-control-socket map has no entry for
-		// this project either — /vm/apply-egress-enforcement and
-		// /vm/open-egress 412 ("softnet control socket missing") on
-		// the very next call, and the expose-map push below silently
-		// no-ops instead of actually reaching softnet (see
-		// pushExposeMap's softnetState.get check in expose.go).
+		// this project either — /vm/begin-provisioning 412s
+		// ("softnet control socket missing") on the very next call, and
+		// the expose-map push below silently no-ops instead of actually
+		// reaching softnet (see pushExposeMap's softnetState.get check
+		// in expose.go).
 		// SoftnetControlSock is a pure function of
 		// (cfg.RuntimeDir(), projectID) — deterministic, no
 		// filesystem/process lookup needed — so this re-registration

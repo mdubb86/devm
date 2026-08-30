@@ -103,8 +103,8 @@ func resolveDirection(src, dst cpArg) (direction, error) {
 // mountPassthrough returns the host-side path that mirrors the given
 // guest path, if the guest path lives under one of the project's
 // mirrored repos/volumes. It walks pcfg's label→mirror table (the
-// same repo/volume enumeration SetupPhase uses to set up mutagen sync
-// sessions) and matches the deepest entry whose GuestPath contains
+// same repo/volume enumeration SetupVolumesPhase/SetupReposPhase use to
+// set up mutagen sync sessions) and matches the deepest entry whose GuestPath contains
 // guestPath — a nested volume inside a repo's tree wins over the repo
 // itself. The match translates to <RuntimeDir>/<projectName>/<label>/
 // plus the path relative to the entry's GuestPath; no `.vm` insertion.

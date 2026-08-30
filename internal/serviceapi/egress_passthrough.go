@@ -5,10 +5,7 @@ import (
 	"time"
 )
 
-// defaultPassthroughSeconds is how long `devm passthrough` opens
-// egress for when the caller doesn't specify `--for`. Deliberately
-// short: every second of passthrough is a second where any host on
-// any port is reachable without MITM or audit log.
+// defaultPassthroughSeconds bounds how long `devm passthrough` opens egress for when the caller doesn't specify --for.
 const defaultPassthroughSeconds = 30
 
 // egressPassthroughEntry tracks one project's active passthrough

@@ -1,10 +1,11 @@
-"""121: `devm passthrough` / `devm restrict` — time-bounded egress escape hatch.
+"""121: `devm passthrough` / `devm restrict` — time-bounded authority escape hatch.
 
 Enforced-egress baseline: cold-start with `network.allow: [example.com]`
 and any curl to a non-allowlisted host (`example.org` here) is rejected
-by iron-proxy. `devm passthrough --for 5s` opens the window;
-`devm restrict` closes it early. Timer-driven restore closes it on
-expiry.
+by iron-proxy. `devm passthrough --for 5s` flips the authority mode to
+passthrough (iron-proxy remains in the traffic path, MITM'ing + audit-logging
++ secret-substituting); `devm restrict` closes it early. Timer-driven
+restore closes it on expiry.
 
 What this pins:
   - passthrough opens: curl to a non-allowlisted host succeeds.

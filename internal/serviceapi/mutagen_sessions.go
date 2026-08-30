@@ -24,7 +24,7 @@ type SessionRepoInfo struct {
 
 // SessionEntity is one mirrored path — a repo or a volume — that gets
 // its own mutagen sync session. MacMirrorPath is resolved by
-// SetupPhase (BuildEntities doesn't know the project's runtime
+// SetupVolumesPhase (BuildEntities doesn't know the project's runtime
 // identity) and is populated in place as each entity is set up.
 type SessionEntity struct {
 	Label         string
@@ -121,8 +121,9 @@ func PrimaryGuestPath(cfg *schema.Config, macCwd string) string {
 // BuildEntities enumerates every repo/volume entity in cfg: the
 // primary repo, every secondary repo, and every volumes.<name> entry.
 // A secondary repo without `volume: true` comes back with NoMirror
-// set — it still gets cold-start cloned into the guest, but SetupPhase
-// skips the Mac mirror dir and mutagen sync session for it. macCwd
+// set — it still gets cold-start cloned into the guest (by
+// SetupReposPhase), but SetupVolumesPhase skips the Mac mirror dir and
+// mutagen sync session for it. macCwd
 // resolves both the URL-nil primary's label and, when needed, its
 // clone URL via `git remote get-url origin`.
 func BuildEntities(cfg *schema.Config, macCwd string) ([]SessionEntity, error) {
@@ -194,10 +195,14 @@ func ensureGuestDirScript(guestPath string) string {
 	)
 }
 
+// cloneRepoInGuestFn is the test seam for CloneRepoInGuest — production
+// always dispatches to CloneRepoInGuest itself.
+var cloneRepoInGuestFn = CloneRepoInGuest
+
 // coldStartCloneOnly handles a NoMirror entity: ensure the guest dir
 // exists, then clone into it if it's empty. No Mac mirror dir, no
 // guard check, no mutagen session — the guest clone is the entity's
-// only state.
+// only state. Used by SetupReposPhase.
 func coldStartCloneOnly(exec GuestExec, e *SessionEntity, ironProxyURL, guestCACertPath string) error {
 	if _, stderr, exitCode, err := exec(ensureGuestDirScript(e.GuestPath)); err != nil {
 		return fmt.Errorf("mutagen setup %s: ensure guest dir: %w", e.Label, err)
@@ -213,7 +218,7 @@ func coldStartCloneOnly(exec GuestExec, e *SessionEntity, ironProxyURL, guestCAC
 		return nil
 	}
 
-	if err := CloneRepoInGuest(exec, CloneRequest{
+	if err := cloneRepoInGuestFn(exec, CloneRequest{
 		URL:             e.Repo.URL,
 		SecretName:      e.Repo.Secret,
 		GuestTargetPath: e.GuestPath,
@@ -225,28 +230,93 @@ func coldStartCloneOnly(exec GuestExec, e *SessionEntity, ironProxyURL, guestCAC
 	return nil
 }
 
-// SetupPhase brings every entity's mutagen sync session up to date:
-// ensures both sides' mirror dirs exist, cold-start clones a repo
-// entity into an all-empty guest, verifies the in-sync guard before
-// touching an existing target, then creates a fresh session or resumes
-// a paused one. The VM is left running on a guard rejection — the
-// caller decides whether to surface it to the user and retry.
-func SetupPhase(
+// cloneOneRepoIfEmpty runs a guest git clone for one mirrored repo
+// entity iff both the Mac mirror and the guest side are currently
+// empty. A pure volume (Repo == nil) is a no-op. Used by
+// SetupReposPhase for every entity that isn't NoMirror (NoMirror
+// entities go through coldStartCloneOnly instead, since they have no
+// Mac mirror side to scan).
+func cloneOneRepoIfEmpty(cfg identity.Config, projectID string, e SessionEntity, exec GuestExec, ironProxyURL, guestCACertPath string) error {
+	if e.Repo == nil {
+		return nil
+	}
+
+	macMirror, _, err := ensureMirrorDir(cfg, projectID, e.Label)
+	if err != nil {
+		return fmt.Errorf("mutagen setup %s: ensure mac mirror: %w", e.Label, err)
+	}
+	macSide, err := ScanMac(macMirror)
+	if err != nil {
+		return fmt.Errorf("mutagen setup %s: %w", e.Label, err)
+	}
+	guestSide, err := ScanGuest(exec, e.GuestPath)
+	if err != nil {
+		return fmt.Errorf("mutagen setup %s: %w", e.Label, err)
+	}
+	if macSide.Count > 0 || guestSide.Count > 0 {
+		return nil
+	}
+
+	if err := cloneRepoInGuestFn(exec, CloneRequest{
+		URL:             e.Repo.URL,
+		SecretName:      e.Repo.Secret,
+		GuestTargetPath: e.GuestPath,
+		IronProxyURL:    ironProxyURL,
+		GuestCACertPath: guestCACertPath,
+	}); err != nil {
+		return fmt.Errorf("mutagen setup %s: %w", e.Label, err)
+	}
+	return nil
+}
+
+// SetupReposPhase runs a cold-start git clone for each repo entity
+// where the relevant sides are empty: a NoMirror entity clones iff the
+// guest is empty; a mirrored repo entity clones iff both the Mac
+// mirror and the guest are empty. A pure volume entity is a no-op. No
+// session work happens here — the mutagen sessions SetupVolumesPhase
+// already established pick up the new guest content on their own.
+// Fast no-op when entities has no repos needing a clone.
+func SetupReposPhase(ctx context.Context, cfg identity.Config, projectID string, entities []SessionEntity, exec GuestExec, ironProxyURL, guestCACertPath string) error {
+	for i := range entities {
+		e := &entities[i]
+		if e.Repo == nil {
+			continue
+		}
+		if e.NoMirror {
+			if err := coldStartCloneOnly(exec, e, ironProxyURL, guestCACertPath); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := cloneOneRepoIfEmpty(cfg, projectID, *e, exec, ironProxyURL, guestCACertPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SetupVolumesPhase establishes a mutagen sync session for every
+// entity (volumes and repos alike). Uniform per-entity code path;
+// clone-if-empty for repos is handled separately by SetupReposPhase.
+// It ensures both sides' mirror dirs exist, verifies the in-sync guard
+// before touching an existing target, then creates a fresh session or
+// resumes a paused one. NoMirror entities are skipped entirely — they
+// never get a Mac mirror dir or a mutagen session. The VM is left
+// running on a guard rejection — the caller decides whether to
+// surface it to the user and retry.
+func SetupVolumesPhase(
 	ctx context.Context,
 	cli *mutagen.CLI,
 	cfg identity.Config,
 	projectID string,
 	entities []SessionEntity,
 	exec GuestExec,
-	guestSSHTarget, ironProxyURL, guestCACertPath string,
+	guestSSHTarget string,
 ) error {
 	for i := range entities {
 		e := &entities[i]
 
 		if e.NoMirror {
-			if err := coldStartCloneOnly(exec, e, ironProxyURL, guestCACertPath); err != nil {
-				return err
-			}
 			continue
 		}
 
@@ -264,14 +334,14 @@ func SetupPhase(
 
 		// Warm-attach branch: an existing session for this label already
 		// exists in mutagen's state, so this label is not a first-time
-		// setup — no cold-start clone, no guard check. Resume if paused
-		// (see contract 04 + 05 for the .Paused vs .Status semantics)
-		// and continue. Skipping the guard here matters: between
-		// `devm stop` (pause) and `devm start` (resume), transient
-		// content on either side can nudge the entry counts out of
-		// alignment for the flush that hasn't caught up yet — the guard
-		// is only there to protect a FRESH session-create from silently
-		// destroying content, which is not the situation on resume.
+		// setup — no guard check. Resume if paused (see contract 04 + 05
+		// for the .Paused vs .Status semantics) and continue. Skipping
+		// the guard here matters: between `devm stop` (pause) and
+		// `devm start` (resume), transient content on either side can
+		// nudge the entry counts out of alignment for the flush that
+		// hasn't caught up yet — the guard is only there to protect a
+		// FRESH session-create from silently destroying content, which
+		// is not the situation on resume.
 		name := SessionName(projectID, e.Label)
 		sessions, err := cli.SyncList(name)
 		if err != nil {
@@ -293,31 +363,11 @@ func SetupPhase(
 			continue
 		}
 
-		// Cold-start branch: no session exists yet for this label. Clone
-		// if both sides are empty, then run the guard before we let
-		// mutagen touch the pair.
-		if e.Repo != nil {
-			macSide, err := ScanMac(macMirror)
-			if err != nil {
-				return fmt.Errorf("mutagen setup %s: %w", e.Label, err)
-			}
-			guestSide, err := ScanGuest(exec, e.GuestPath)
-			if err != nil {
-				return fmt.Errorf("mutagen setup %s: %w", e.Label, err)
-			}
-			if macSide.Count == 0 && guestSide.Count == 0 {
-				if err := CloneRepoInGuest(exec, CloneRequest{
-					URL:             e.Repo.URL,
-					SecretName:      e.Repo.Secret,
-					GuestTargetPath: e.GuestPath,
-					IronProxyURL:    ironProxyURL,
-					GuestCACertPath: guestCACertPath,
-				}); err != nil {
-					return fmt.Errorf("mutagen setup %s: %w", e.Label, err)
-				}
-			}
-		}
-
+		// Cold-start branch: no session exists yet for this label. Run
+		// the guard before we let mutagen touch the pair — an
+		// all-empty pair (the common case, before SetupReposPhase has
+		// run its clone) passes trivially, since GuardCheck treats
+		// either side being empty as never conflicting.
 		macSide, err := ScanMac(macMirror)
 		if err != nil {
 			return fmt.Errorf("mutagen setup %s: %w", e.Label, err)

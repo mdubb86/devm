@@ -79,7 +79,7 @@ func (c *softnetClient) send(msg map[string]any) error {
 }
 
 // setPolicy tells softnet to switch its coarse egress policy. ep is the
-// forward targets to forward to when pol is ENFORCED; nil for LOCKED/OPEN,
+// forward targets to forward to when pol is FORWARDING; nil for LOCKED,
 // in which case the forward_targets key is omitted entirely.
 func (c *softnetClient) setPolicy(pol string, ep *Endpoint) error {
 	msg := map[string]any{

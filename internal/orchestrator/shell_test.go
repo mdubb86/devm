@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,15 +38,26 @@ type fakeVMAdmin struct {
 	applyIronProxyRespSet bool // distinguishes an explicit all-false resp from "unset"
 	applyIronProxyErr     error
 
-	openEgressCalled             int
-	openEgressErr                error
-	applyEgressEnforcementCalled int
-	applyEgressEnforcementErr    error
-	// callOrder records the relative order OpenEgress/ApplyEgressEnforcement
-	// were invoked in, for asserting they bracket the RunBundle/RunUser/
-	// RunEnforced execs — entries append "open-egress" /
-	// "apply-egress-enforcement".
+	beginProvisioningCalled int
+	beginProvisioningErr    error
+	volumeSyncCalled        int
+	volumeSyncErr           error
+	repoCloneCalled         int
+	repoCloneErr            error
+	endProvisioningCalled   int
+	endProvisioningErr      error
+	// callOrder records the relative order BeginProvisioning/VolumeSync/
+	// RepoClone/EndProvisioning were invoked in, for asserting they
+	// bracket the RunBundle/RunUser/RunEnforced execs — entries append
+	// "begin-provisioning" / "volume-sync" / "repo-clone" /
+	// "end-provisioning".
 	callOrder []string
+	// softnetCalls records only the calls that flip softnet's control
+	// socket in production — BeginProvisioning. EndProvisioning no
+	// longer touches softnet at all (authority-mode-only), so a test can
+	// assert len(softnetCalls) == 1 after a full cold-start run to prove
+	// EndProvisioning never triggers a second softnet setPolicy push.
+	softnetCalls []string
 	// logPath, when set, also appends the same markers into a shared file
 	// that the fake tart binary writes its own invocations into, so a test
 	// can read one ordered timeline across both fakes.
@@ -96,22 +108,41 @@ func (f *fakeVMAdmin) ApplyIronProxy(_ context.Context, req serviceapi.VMApplyIr
 	return serviceapi.VMApplyIronProxyResponse{Applied: true, VMRunning: true}, nil
 }
 
-func (f *fakeVMAdmin) OpenEgress(_ context.Context, _ string) error {
+func (f *fakeVMAdmin) BeginProvisioning(_ context.Context, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.openEgressCalled++
-	f.callOrder = append(f.callOrder, "open-egress")
-	f.appendLog("OPEN-EGRESS")
-	return f.openEgressErr
+	f.beginProvisioningCalled++
+	f.callOrder = append(f.callOrder, "begin-provisioning")
+	f.softnetCalls = append(f.softnetCalls, "begin-provisioning")
+	f.appendLog("BEGIN-PROVISIONING")
+	return f.beginProvisioningErr
 }
 
-func (f *fakeVMAdmin) ApplyEgressEnforcement(_ context.Context, _ string) error {
+func (f *fakeVMAdmin) VolumeSync(_ context.Context, _ string, _ schema.Config, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.applyEgressEnforcementCalled++
-	f.callOrder = append(f.callOrder, "apply-egress-enforcement")
-	f.appendLog("APPLY-EGRESS-ENFORCEMENT")
-	return f.applyEgressEnforcementErr
+	f.volumeSyncCalled++
+	f.callOrder = append(f.callOrder, "volume-sync")
+	f.appendLog("VOLUME-SYNC")
+	return f.volumeSyncErr
+}
+
+func (f *fakeVMAdmin) RepoClone(_ context.Context, _ string, _ schema.Config, _ string, _ int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.repoCloneCalled++
+	f.callOrder = append(f.callOrder, "repo-clone")
+	f.appendLog("REPO-CLONE")
+	return f.repoCloneErr
+}
+
+func (f *fakeVMAdmin) EndProvisioning(_ context.Context, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.endProvisioningCalled++
+	f.callOrder = append(f.callOrder, "end-provisioning")
+	f.appendLog("END-PROVISIONING")
+	return f.endProvisioningErr
 }
 
 // appendLog writes a marker line into f.logPath, if set, interleaving with
@@ -185,11 +216,11 @@ func minimalCfg() schema.Config {
 }
 
 // fakeInstantMutagenSync stubs waitForInitialSyncFn to a no-op, restoring
-// the original on cleanup. For tests exercising the full cold-start/
-// adopt-in-place path with minimalCfg (no repos/volumes declared):
-// mutagenSetupFn itself no-ops on an empty entity list, but FlushAll
-// (waitForInitialSyncFn's real implementation) always shells out to the
-// live mutagen daemon regardless of entity count — something this test
+// the original on cleanup. volumeSyncFn/repoCloneFn dispatch through
+// ServiceAPIClient (fakeVMAdmin in tests), so they're already
+// test-safe by default; FlushAll (waitForInitialSyncFn's real
+// implementation) is the one step that always shells out to the live
+// mutagen daemon regardless of entity count — something this test
 // sandbox can't reach. Tests that care about mutagen sequencing fake
 // waitForInitialSyncFn themselves instead of using this helper.
 func fakeInstantMutagenSync(t *testing.T) {
@@ -207,7 +238,7 @@ func fakeInstantMutagenSync(t *testing.T) {
 // already running AND devm.target is active (fully provisioned), the
 // daemon is NOT asked to start it again, no provisioning runs, the
 // user shell is spawned via tart exec, and — Fix 2, defense-in-depth —
-// ApplyEgressEnforcement is re-asserted before attach even though this VM
+// EndProvisioning is re-asserted before attach even though this VM
 // should already be enforced from its own cold start.
 func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
 	repoRoot := t.TempDir()
@@ -232,7 +263,7 @@ func TestRunShellWarmPath_AttachesWithoutStart(t *testing.T) {
 
 	admin.mu.Lock()
 	assert.Equal(t, 0, admin.startCalled, "StartVM must NOT be called on the warm path")
-	assert.Equal(t, 1, admin.applyEgressEnforcementCalled,
+	assert.Equal(t, 1, admin.endProvisioningCalled,
 		"warm attach must re-assert ENFORCED before attaching (belt-and-suspenders)")
 	admin.mu.Unlock()
 
@@ -363,15 +394,17 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	assert.Equal(t, "127.42.0.5", got.ProjectIP)
 }
 
-// TestRunShellColdPath_FlipsEgressAroundProvision verifies the Critical fix:
-// the daemon-side softnet OPEN→ENFORCED flip happens BETWEEN RunUser's and
-// RunEnforced's execs, not around a single one — OpenEgress, then
-// RunBundle's exec, then RunUser's exec (apt/install:/templates/startup:),
-// then ApplyEgressEnforcement, then RunEnforced's exec (services +
-// devm.target). Without this order services would come up under open
-// (unenforced) egress every boot.
+// TestRunShellColdPath_FlipsEgressAroundProvision verifies the always-
+// through-iron-proxy lifecycle order: RunBundle's exec runs FIRST (installs
+// the CA iron-proxy needs, offline, still under LOCKED), then
+// BeginProvisioning (softnet ENFORCED-behavior + authority passthrough),
+// then RunUser's exec (apt/install:/templates/startup:), then
+// EndProvisioning (authority restricted), then RunEnforced's exec (services
+// + devm.target). Without this order either the CA wouldn't be trusted yet
+// when iron-proxy comes into the path, or services would come up before the
+// real allowlist takes over.
 //
-// Both fakeVMAdmin (OpenEgress/ApplyEgressEnforcement) and the fake tart
+// Both fakeVMAdmin (BeginProvisioning/EndProvisioning) and the fake tart
 // binary (the three provisioning ExecStreams' `bash -c`) append markers to
 // the same log file, giving one ordered timeline across both fakes. The
 // fake logs each invocation's full argv verbatim, and a multi-line script
@@ -407,9 +440,9 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 	assert.Equal(t, 0, rc)
 
 	admin.mu.Lock()
-	assert.Equal(t, 1, admin.openEgressCalled, "OpenEgress must be called exactly once")
-	assert.Equal(t, 1, admin.applyEgressEnforcementCalled, "ApplyEgressEnforcement must be called exactly once")
-	assert.Equal(t, []string{"open-egress", "apply-egress-enforcement"}, admin.callOrder)
+	assert.Equal(t, 1, admin.beginProvisioningCalled, "BeginProvisioning must be called exactly once")
+	assert.Equal(t, 1, admin.endProvisioningCalled, "EndProvisioning must be called exactly once")
+	assert.Equal(t, []string{"begin-provisioning", "volume-sync", "repo-clone", "end-provisioning"}, admin.callOrder)
 	admin.mu.Unlock()
 
 	logBytes, err := os.ReadFile(logPath)
@@ -420,9 +453,9 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 	bashCSeen := 0
 	for i, line := range lines {
 		switch {
-		case line == "OPEN-EGRESS":
+		case line == "BEGIN-PROVISIONING":
 			openIdx = i
-		case line == "APPLY-EGRESS-ENFORCEMENT":
+		case line == "END-PROVISIONING":
 			enforceIdx = i
 		case strings.Contains(line, "bash -c"):
 			bashCSeen++
@@ -436,39 +469,185 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 			}
 		}
 	}
-	require.GreaterOrEqual(t, openIdx, 0, "OPEN-EGRESS marker must be present")
+	require.GreaterOrEqual(t, openIdx, 0, "BEGIN-PROVISIONING marker must be present")
 	require.GreaterOrEqual(t, runBundleIdx, 0, "RunBundle's bash -c exec must be present")
 	require.GreaterOrEqual(t, runUserIdx, 0, "RunUser's bash -c exec must be present")
-	require.GreaterOrEqual(t, enforceIdx, 0, "APPLY-EGRESS-ENFORCEMENT marker must be present")
+	require.GreaterOrEqual(t, enforceIdx, 0, "END-PROVISIONING marker must be present")
 	require.GreaterOrEqual(t, runEnforcedIdx, 0, "RunEnforced's bash -c exec must be present")
-	assert.Less(t, openIdx, runBundleIdx, "OpenEgress must run BEFORE RunBundle's exec")
-	assert.Less(t, runBundleIdx, runUserIdx, "RunBundle's exec must run BEFORE RunUser's exec")
-	assert.Less(t, runUserIdx, enforceIdx, "ApplyEgressEnforcement must run AFTER RunUser's exec")
+	assert.Less(t, runBundleIdx, openIdx,
+		"RunBundle's exec must run BEFORE BeginProvisioning — the guest trust store must have "+
+			"the iron-proxy CA before iron-proxy comes into the traffic path")
+	assert.Less(t, openIdx, runUserIdx, "BeginProvisioning must run BEFORE RunUser's exec")
+	assert.Less(t, runUserIdx, enforceIdx, "EndProvisioning must run AFTER RunUser's exec")
 	assert.Less(t, enforceIdx, runEnforcedIdx,
-		"RunEnforced's exec (services + devm.target) must run AFTER ApplyEgressEnforcement — "+
-			"the Critical fix: services must never start under open egress")
+		"RunEnforced's exec (services + devm.target) must run AFTER EndProvisioning — "+
+			"the Critical fix: services must never start except under the project's real allowlist")
 }
 
-// TestProvisionAndAttach_MutagenBeforeRunUser pins the ordering: RunBundle
-// runs right after OpenEgress (extracts /opt/devm + installs the CA
-// iron-proxy needs to MITM a guest git clone); the mutagen sync-session
-// setup step runs AFTER RunBundle but BEFORE RunUser (so install:/startup:
-// see a hydrated workspace). waitForInitialSyncFn sits between mutagen
-// setup and RunUser (the extracted FlushAll wait), and runStartupCommandsFn
-// fires right after RunUser, still under OPEN egress, before
-// ApplyEgressEnforcement.
+// TestProvisionAndAttach_StageOrderPostAlwaysThrough locks the full
+// always-through-iron-proxy lifecycle order end to end:
+//  1. RunBundle before BeginProvisioning
+//  2. BeginProvisioning before the volume-sync stage
+//  3. volume-sync before repo-clone
+//  4. repo-clone before RunUser
+//  5. EndProvisioning before RunEnforced
+//  6. EndProvisioning never triggers a softnet setPolicy call
 //
-// mutagenSetupFn, waitForInitialSyncFn, and runStartupCommandsFn are all
-// faked to append a marker into the same ordered log file fakeTartBinWithLog
-// and fakeVMAdmin both write into, instead of running the real mutagen
-// binary — this is a sequencing test, not an integration test of SetupPhase
-// or FlushAll themselves (covered by internal/serviceapi's own tests).
-func TestProvisionAndAttach_MutagenBeforeRunUser(t *testing.T) {
-	origMutagen := mutagenSetupFn
+// (6) is verified via fakeVMAdmin.softnetCalls, which only ever grows on
+// BeginProvisioning — a single entry after a full cold-start run proves
+// EndProvisioning stayed authority-mode-only: softnet flips to
+// ENFORCED-behavior exactly once, at BeginProvisioning, and never flips
+// again.
+func TestProvisionAndAttach_StageOrderPostAlwaysThrough(t *testing.T) {
+	fakeInstantMutagenSync(t)
+	repoRoot := t.TempDir()
+	logPath := filepath.Join(repoRoot, "order.log")
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+		logPath:    logPath,
+	}
+
+	tartBin := fakeTartBinWithLog(t, repoRoot, logPath)
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		Ident:            identity.Prod,
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	writeFakeCA(t, repoRoot)
+
+	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rc)
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+
+	beginIdx, volumeSyncIdx, repoCloneIdx, endIdx := -1, -1, -1, -1
+	runBundleIdx, runUserIdx, runEnforcedIdx := -1, -1, -1
+	bashCSeen := 0
+	for i, line := range lines {
+		switch {
+		case line == "BEGIN-PROVISIONING":
+			beginIdx = i
+		case line == "VOLUME-SYNC":
+			volumeSyncIdx = i
+		case line == "REPO-CLONE":
+			repoCloneIdx = i
+		case line == "END-PROVISIONING":
+			endIdx = i
+		case strings.Contains(line, "bash -c"):
+			bashCSeen++
+			switch bashCSeen {
+			case 1:
+				runBundleIdx = i
+			case 2:
+				runUserIdx = i
+			case 3:
+				runEnforcedIdx = i
+			}
+		}
+	}
+	require.GreaterOrEqual(t, beginIdx, 0, "BEGIN-PROVISIONING marker must be present")
+	require.GreaterOrEqual(t, volumeSyncIdx, 0, "VOLUME-SYNC marker must be present")
+	require.GreaterOrEqual(t, repoCloneIdx, 0, "REPO-CLONE marker must be present")
+	require.GreaterOrEqual(t, endIdx, 0, "END-PROVISIONING marker must be present")
+	require.GreaterOrEqual(t, runBundleIdx, 0, "RunBundle's bash -c exec must be present")
+	require.GreaterOrEqual(t, runUserIdx, 0, "RunUser's bash -c exec must be present")
+	require.GreaterOrEqual(t, runEnforcedIdx, 0, "RunEnforced's bash -c exec must be present")
+
+	assert.Less(t, runBundleIdx, beginIdx, "1. RunBundle must run BEFORE BeginProvisioning")
+	assert.Less(t, beginIdx, volumeSyncIdx, "2. BeginProvisioning must run BEFORE the volume-sync stage")
+	assert.Less(t, volumeSyncIdx, repoCloneIdx, "3. volume-sync must run BEFORE repo-clone")
+	assert.Less(t, repoCloneIdx, runUserIdx, "4. repo-clone must run BEFORE RunUser")
+	assert.Less(t, endIdx, runEnforcedIdx, "5. EndProvisioning must run BEFORE RunEnforced")
+
+	admin.mu.Lock()
+	defer admin.mu.Unlock()
+	assert.Equal(t, []string{"begin-provisioning"}, admin.softnetCalls,
+		"6. EndProvisioning must never trigger a softnet setPolicy call — only "+
+			"BeginProvisioning's flip should appear in softnetCalls")
+}
+
+// TestProvisionAndAttach_EmitsVolumeSyncAndRepoCloneMarkers asserts the
+// split stage markers appear on the stage-marker channel (stderr) and
+// that the old single mutagen-sync marker they replaced does not.
+func TestProvisionAndAttach_EmitsVolumeSyncAndRepoCloneMarkers(t *testing.T) {
+	fakeInstantMutagenSync(t)
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+	}
+	tartBin := fakeTartBin(t, repoRoot)
+
+	userCmd := &stubCmd{waitErr: make(chan error, 1)}
+	userCmd.waitErr <- nil
+	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
+
+	deps := ShellDeps{
+		Ident:            identity.Prod,
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	writeFakeCA(t, repoRoot)
+
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	origStderr := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = origStderr })
+
+	captured := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(r)
+		captured <- string(data)
+	}()
+
+	rc, runErr := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+
+	require.NoError(t, w.Close())
+	output := <-captured
+
+	require.NoError(t, runErr)
+	assert.Equal(t, 0, rc)
+
+	assert.Contains(t, output, "::devm:stage:volume-sync::")
+	assert.Contains(t, output, "::devm:stage:repo-clone::")
+	assert.NotContains(t, output, "::devm:stage:mutagen-sync::")
+}
+
+// TestProvisionAndAttach_VolumeSyncRepoCloneBeforeRunUser pins the
+// ordering: RunBundle runs first (extracts /opt/devm + installs the CA
+// iron-proxy needs to MITM a guest git clone, offline, still under
+// LOCKED); BeginProvisioning follows (softnet ENFORCED-behavior +
+// authority passthrough); volumeSyncFn then repoCloneFn run AFTER
+// BeginProvisioning but BEFORE RunUser (so install:/startup: see a
+// hydrated workspace). waitForInitialSyncFn sits between repoCloneFn and
+// RunUser (the extracted FlushAll wait), and runStartupCommandsFn fires
+// right after RunUser, still under the passthrough egress authority,
+// before EndProvisioning.
+//
+// volumeSyncFn, repoCloneFn, waitForInitialSyncFn, and
+// runStartupCommandsFn are all faked to append a marker into the same
+// ordered log file fakeTartBinWithLog and fakeVMAdmin both write into,
+// instead of dispatching to the daemon — this is a sequencing test, not
+// an integration test of SetupVolumesPhase, SetupReposPhase, or
+// FlushAll themselves (covered by internal/serviceapi's own tests).
+func TestProvisionAndAttach_VolumeSyncRepoCloneBeforeRunUser(t *testing.T) {
+	origVolumeSync := volumeSyncFn
+	origRepoClone := repoCloneFn
 	origWait := waitForInitialSyncFn
 	origRunStartup := runStartupCommandsFn
 	t.Cleanup(func() {
-		mutagenSetupFn = origMutagen
+		volumeSyncFn = origVolumeSync
+		repoCloneFn = origRepoClone
 		waitForInitialSyncFn = origWait
 		runStartupCommandsFn = origRunStartup
 	})
@@ -494,10 +673,15 @@ func TestProvisionAndAttach_MutagenBeforeRunUser(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	var mutagenSetupCalled, waitSyncCalled, runStartupCalled int
-	mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
-		mutagenSetupCalled++
-		appendMarker("MUTAGEN-SETUP")
+	var volumeSyncCalled, repoCloneCalled, waitSyncCalled, runStartupCalled int
+	volumeSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
+		volumeSyncCalled++
+		appendMarker("VOLUME-SYNC")
+		return nil
+	}
+	repoCloneFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
+		repoCloneCalled++
+		appendMarker("REPO-CLONE")
 		return nil
 	}
 	waitForInitialSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
@@ -522,7 +706,8 @@ func TestProvisionAndAttach_MutagenBeforeRunUser(t *testing.T) {
 	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
-	assert.Equal(t, 1, mutagenSetupCalled, "mutagen setup must run exactly once")
+	assert.Equal(t, 1, volumeSyncCalled, "volume sync must run exactly once")
+	assert.Equal(t, 1, repoCloneCalled, "repo clone must run exactly once")
 	assert.Equal(t, 1, waitSyncCalled, "wait-for-initial-sync must run exactly once")
 	assert.Equal(t, 1, runStartupCalled, "run-startup-commands must run exactly once")
 
@@ -534,16 +719,18 @@ func TestProvisionAndAttach_MutagenBeforeRunUser(t *testing.T) {
 	bashCSeen := 0
 	for _, line := range lines {
 		switch {
-		case line == "OPEN-EGRESS":
-			order = append(order, "open-egress")
-		case line == "MUTAGEN-SETUP":
-			order = append(order, "mutagen")
+		case line == "BEGIN-PROVISIONING":
+			order = append(order, "begin-provisioning")
+		case line == "VOLUME-SYNC":
+			order = append(order, "volume-sync")
+		case line == "REPO-CLONE":
+			order = append(order, "repo-clone")
 		case line == "WAIT-SYNC":
 			order = append(order, "wait-sync")
 		case line == "RUN-STARTUP":
 			order = append(order, "run-startup")
-		case line == "APPLY-EGRESS-ENFORCEMENT":
-			order = append(order, "apply-enforcement")
+		case line == "END-PROVISIONING":
+			order = append(order, "end-provisioning")
 		case strings.Contains(line, "bash -c"):
 			bashCSeen++
 			switch bashCSeen {
@@ -557,21 +744,24 @@ func TestProvisionAndAttach_MutagenBeforeRunUser(t *testing.T) {
 		}
 	}
 	assert.Equal(t,
-		[]string{"open-egress", "run-bundle", "mutagen", "wait-sync", "run-user", "run-startup", "apply-enforcement", "run-enforced"},
+		[]string{"run-bundle", "begin-provisioning", "volume-sync", "repo-clone", "wait-sync", "run-user", "run-startup", "end-provisioning", "run-enforced"},
 		order,
 	)
 }
 
 // TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch pins:
-//   - runStartupCommandsFn is called AFTER mutagenSetupFn and waitForInitialSyncFn
+//   - runStartupCommandsFn is called AFTER volumeSyncFn, repoCloneFn, and
+//     waitForInitialSyncFn
 //   - a non-zero exit from a startup command is a teardown-class failure
 //     (asserted separately in TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM)
 func TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch(t *testing.T) {
-	origMutagen := mutagenSetupFn
+	origVolumeSync := volumeSyncFn
+	origRepoClone := repoCloneFn
 	origWait := waitForInitialSyncFn
 	origRun := runStartupCommandsFn
 	t.Cleanup(func() {
-		mutagenSetupFn = origMutagen
+		volumeSyncFn = origVolumeSync
+		repoCloneFn = origRepoClone
 		waitForInitialSyncFn = origWait
 		runStartupCommandsFn = origRun
 	})
@@ -596,9 +786,15 @@ func TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch(t *testing.T)
 
 	var mu sync.Mutex
 	var order []string
-	mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
+	volumeSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
 		mu.Lock()
-		order = append(order, "mutagen")
+		order = append(order, "volume-sync")
+		mu.Unlock()
+		return nil
+	}
+	repoCloneFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
+		mu.Lock()
+		order = append(order, "repo-clone")
 		mu.Unlock()
 		return nil
 	}
@@ -621,8 +817,8 @@ func TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch(t *testing.T)
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, []string{"mutagen", "wait-sync", "run"}, order,
-		"runStartupCommandsFn must run AFTER mutagenSetupFn and waitForInitialSyncFn")
+	assert.Equal(t, []string{"volume-sync", "repo-clone", "wait-sync", "run"}, order,
+		"runStartupCommandsFn must run AFTER volumeSyncFn, repoCloneFn, and waitForInitialSyncFn")
 }
 
 // TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM verifies that a
