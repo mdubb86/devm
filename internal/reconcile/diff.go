@@ -26,9 +26,9 @@ const (
 	// Covers secret rotations (secret values + host bindings live in
 	// iron-proxy's YAML + process env, so a fresh spawn is required) and
 	// synthetic KindIronProxyDown from the watchdog. Allowlist edits do NOT
-	// live here: KindNetworkAdd/Remove are BucketLive and dispatch to the
-	// daemon's PolicyAuthority via /vm/set-allowlist without touching
-	// iron-proxy at all.
+	// live here: KindNetworkAdd/Remove are BucketLive and dispatch in-process
+	// through applyNetworkChange → AllowlistSetter.SetAllowlist → (in daemon)
+	// policyAuthority.Set + snapshot update. No iron-proxy touch.
 	BucketEgressRestart
 )
 

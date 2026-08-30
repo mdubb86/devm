@@ -215,14 +215,12 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 }
 
 // AllowlistSetter is ApplyLive's daemon-authority seam for
-// KindNetworkAdd/KindNetworkRemove: it pushes a full-allowlist
-// replacement to the daemon's PolicyAuthority via POST
-// /vm/set-allowlist. Declared locally — mirroring GuestExec above —
+// KindNetworkAdd/KindNetworkRemove. Declared locally — mirroring GuestExec above —
 // because internal/reconcile can't import internal/serviceapi without
 // a cycle (serviceapi already imports reconcile for Change/ApplyLive).
-// *serviceapi.Client satisfies this interface structurally; production
-// wiring constructs one from within serviceapi, which has no such
-// cycle to worry about.
+// Production implementer: serviceapi.inProcessAllowlistSetter, which calls
+// policyAuthority.Set + updateSnapshotAfterAllowlistSet directly (no HTTP).
+// Also a testing seam: tests substitute a fake to observe batched dispatch.
 type AllowlistSetter interface {
 	SetAllowlist(ctx context.Context, name string, allowlist []string) error
 }

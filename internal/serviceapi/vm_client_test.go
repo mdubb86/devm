@@ -671,4 +671,3 @@ func TestClientApplyIronProxy_ReadsResponse(t *testing.T) {
 	assert.False(t, resp.Revived)
 	assert.True(t, resp.VMRunning)
 }
-

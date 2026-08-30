@@ -83,12 +83,11 @@ func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config
 }
 
 // inProcessAllowlistSetter satisfies reconcile.AllowlistSetter for
-// reconcile-triggered network changes. The /vm/reconcile handler holds
+// reconcile-triggered allowlist writes. The /vm/reconcile handler holds
 // req.Name's project lock across the ApplyLive call this setter is
-// reached from, so SetAllowlist here does NOT acquire any lock — it
-// goes straight to the in-memory PolicyAuthority and the on-disk
-// snapshot writer that /vm/set-allowlist's HTTP handler also uses,
-// bypassing HTTP (and that handler's own lock acquisition) entirely.
+// reached from, so SetAllowlist here does NOT re-acquire it — it writes
+// policyAuthority + snapshot directly. This is the only production
+// implementer of reconcile.AllowlistSetter.
 type inProcessAllowlistSetter struct {
 	cfg identity.Config
 }

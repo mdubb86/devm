@@ -609,7 +609,7 @@ func TestBucketEgressRestartString(t *testing.T) {
 	assert.Equal(t, "egress-restart", BucketEgressRestart.String())
 }
 
-func TestNetworkAndSecretKindsInIronProxyRestartBucket(t *testing.T) {
+func TestNetworkKindsAreLiveSecretKindsAreEgressRestart(t *testing.T) {
 	assert.Equal(t, BucketLive, KindNetworkAdd.Bucket())
 	assert.Equal(t, BucketLive, KindNetworkRemove.Bucket())
 	assert.Equal(t, BucketEgressRestart, KindSecretAdd.Bucket())
