@@ -119,7 +119,7 @@ exit 0
 	require.NoError(t, err)
 	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
 	assert.Equal(t, []string{
-		"exec", "testvm",
+		"exec", "-i", "testvm",
 		"/home/devm/.mutagen/agents/0.18.1/mutagen-agent",
 		"synchronizer", "--log-level=debug",
 	}, got)
@@ -242,7 +242,7 @@ exit 0
 	body, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
-	assert.Equal(t, []string{"exec", "testvm", "/usr/bin/whoami"}, got,
+	assert.Equal(t, []string{"exec", "-i", "testvm", "/usr/bin/whoami"}, got,
 		"commands not starting with .mutagen/ must pass through unchanged")
 }
 

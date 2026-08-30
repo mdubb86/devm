@@ -99,7 +99,10 @@ func main() {
 	// handshake channel) piped straight from mutagen through this process
 	// to tart exec's own child, with no intervening shell fork to disturb
 	// buffering.
-	tartArgs := append([]string{"exec", vm}, tokens...)
+	// -i wires host's stdin to the remote command. Without it, tart exec
+	// gives the remote command /dev/null on stdin — mutagen-agent reads
+	// its handshake stream from stdin, so no -i means immediate EOF.
+	tartArgs := append([]string{"exec", "-i", vm}, tokens...)
 	logf("invoking tart %s", strings.Join(tartArgs, " "))
 	c := exec.Command("tart", tartArgs...)
 	c.Stdin = os.Stdin
