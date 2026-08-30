@@ -1,11 +1,7 @@
 """Pin: iron-proxy is in the path for every guest HTTPS request from
 begin-provisioning onward. An `install:` script that hits an external
-HTTPS host appears in iron-proxy's audit log.
-
-Under v0.21.0, install: ran under OPEN egress — softnet routed direct
-to real IPs, iron-proxy was bypassed, install: hits were absent from
-the audit log. This test is the strongest possible proof of the new
-invariant: audit-log presence.
+HTTPS host appears in iron-proxy's audit log. This test is the strongest
+possible proof of the invariant: audit-log presence.
 """
 from __future__ import annotations
 

@@ -3,12 +3,6 @@ under FORWARDING, both when the daemon-side policy authority is
 restricted AND when it is passthrough — passthrough only relaxes the
 per-request allow-check, it never reopens raw ports.
 
-Regression fence for the intentional trade-off documented in the
-always-through-iron-proxy spec's §Trade-offs: v0.21.0's OPEN softnet
-policy let install:/startup: scripts reach arbitrary ports (git-over-
-SSH :22, custom TCP protocols) direct; FORWARDING never does, in
-either daemon-side mode.
-
 Test: from inside the guest, attempt a raw TCP connect to
 example.com:22 and example.com:3306 (bash's `/dev/tcp` pseudo-device —
 no `nc`/extra packages needed, same technique test_157 uses for its

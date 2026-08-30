@@ -5,14 +5,6 @@ persisted across restart — only the allowlist is (from the state
 snapshot); see `AdoptIronProxies` in the always-through-iron-proxy
 design.
 
-Under v0.21.0's softnet-level OPEN/ENFORCED split there was no
-daemon-side "mode" to reset in the first place. Under the new gRPC
-policy-authority design, adopting into anything other than
-`restricted` would be a fail-open regression: a daemon crash mid
-`devm passthrough` window would otherwise resurrect the open window on
-every subsequent restart, forever, since the timer that would have
-closed it dies with the daemon.
-
 Test:
 1. Cold-start, then open a passthrough window and confirm it is
    actually in effect (a not-allowlisted host reaches through) —
@@ -67,7 +59,7 @@ def test_adopt_in_place_authority_defaults_restricted(devm, workspace, sandbox_n
 
     workspace.write_devmyaml(
         no_repo=True,
-        network={"allow": ["api.github.com"]},
+        network={"allow": ["httpbin.org"]},
         packages=["curl"],
     )
 

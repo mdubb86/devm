@@ -1,11 +1,7 @@
 """Pin: `devm passthrough` flips only the daemon-side policy-authority
-mode; softnet stays FORWARDING throughout. Under v0.21.0, passthrough
-switched softnet to OPEN (bypassing iron-proxy) — a blocked-host
-request made during a v0.21.0 passthrough window would have gotten a
-raw connection failure, never iron-proxy's own reject. Under the new
-design, passthrough windows are strictly better than the surrounding
-restricted state — still MITM'd, still audited, still secret-
-substituted — not weaker.
+mode; softnet stays FORWARDING throughout. Passthrough windows are
+strictly better than the surrounding restricted state — still MITM'd,
+still audited, still secret-substituted — not weaker.
 
 Assertion shape: hit a not-allowlisted host and get devm's own 403
 (`X-Devm-Blocked` header) — proof iron-proxy is in the path. Then
@@ -39,7 +35,7 @@ def test_passthrough_is_mode_only(devm, workspace, sandbox_name):
 
     workspace.write_devmyaml(
         no_repo=True,
-        network={"allow": ["api.github.com"]},
+        network={"allow": ["httpbin.org"]},
         packages=["curl"],
     )
 

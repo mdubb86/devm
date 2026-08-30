@@ -1,8 +1,6 @@
 """Pin: an `install:` script that hits an external HTTPS host with a
 `!secret <name>` env var wired to it sees the substituted value on the
-wire. Under v0.21.0 this was structurally impossible in install: (OPEN
-egress skipped iron-proxy entirely, so the secrets transform never saw
-the request).
+wire.
 
 Uses a `curl -H "Authorization: Bearer __DEVM_SECRET_gh_stub__"` shape
 (placeholder-in-header, not a credential helper) to exercise the same
