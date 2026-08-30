@@ -243,9 +243,15 @@ def test_packages_live_add_fails_loud_without_mirror_allow(workspace, devm, sand
         assert "deb.debian.org" in hosts, (
             f"expected deb.debian.org among the denied hosts; got {hosts}"
         )
-        assert "security.debian.org" in hosts, (
-            f"expected security.debian.org among the denied hosts; got {hosts}"
-        )
+        # security.debian.org is deliberately NOT asserted here: the guest's
+        # apt sources route security updates through deb.debian.org's
+        # /debian-security mirrorlist path, not the separate
+        # security.debian.org host, so apt never dials it -- and under
+        # `bash -e` the converge script aborts as soon as deb.debian.org's
+        # 403 fails `apt-get update`, before any other source is tried.
+        # The aptEgressHint still names both hosts (it's a static remedy
+        # string, not a report of what was actually dialed), so that
+        # assertion is unaffected.
 
         which = _which_sl(devm.path, str(workspace.path))
         assert which.returncode != 0, (
