@@ -137,6 +137,20 @@ func adoptOneIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor
 	}
 }
 
+// policySocketForAdopted returns the unix socket path to serve an
+// adopted project's TransformService on: the path RECORDED in
+// iron-proxy's config (rehydrated into ironProxyState before
+// recoverProjectState runs) — the one place the running proxy actually
+// dials. Falls back to deriving the path only when the config couldn't
+// be read; the true target is unknowable then and the derived path is
+// the best remaining guess.
+func policySocketForAdopted(cfg identity.Config, projectID string) (string, error) {
+	if info, ok := ironProxyState.get(projectID); ok && info.PolicySocket != "" {
+		return info.PolicySocket, nil
+	}
+	return IronPolicySocketPath(cfg, projectID)
+}
+
 // ironProxyInfoForAdopted reads back the ports iron-proxy was launched
 // with from its on-disk config file at the path IronProxyConfigPath
 // derives for projectID.
@@ -177,7 +191,7 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 	repoHosts, err := RepoHosts(snap.Cfg, snap.MacCwd)
 	if err != nil {
 		daemonlog.Errorf("policy: recover repo hosts for %s: %v (egress stays fail-closed)", projectID, err)
-	} else if sockPath, err := IronPolicySocketPath(cfg, projectID); err != nil {
+	} else if sockPath, err := policySocketForAdopted(cfg, projectID); err != nil {
 		daemonlog.Errorf("policy: socket path for %s: %v (egress stays fail-closed)", projectID, err)
 	} else {
 		policyAuthority.SetAllowlist(projectID, AppendUniqueHosts(docker.EffectiveAllowlist(snap.Cfg), repoHosts))
@@ -282,9 +296,22 @@ func loadIronProxyInfoFromConfig(path string) (projectInfo, error) {
 			HTTPSListen  string `yaml:"https_listen"`
 			TunnelListen string `yaml:"tunnel_listen"`
 		} `yaml:"proxy"`
+		Transforms []struct {
+			Name   string `yaml:"name"`
+			Config struct {
+				Target string `yaml:"target"`
+			} `yaml:"config"`
+		} `yaml:"transforms"`
 	}
 	if err := yaml.Unmarshal(blob, &raw); err != nil {
 		return projectInfo{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	policySocket := ""
+	for _, tr := range raw.Transforms {
+		if tr.Name == "grpc" {
+			policySocket = strings.TrimPrefix(tr.Config.Target, "unix://")
+			break
+		}
 	}
 	_, httpPort, err := splitHostPortInt(raw.Proxy.HTTPListen)
 	if err != nil {
@@ -303,10 +330,11 @@ func loadIronProxyInfoFromConfig(path string) (projectInfo, error) {
 		return projectInfo{}, fmt.Errorf("dns.listen: %w", err)
 	}
 	return projectInfo{
-		HTTPPort:   httpPort,
-		HTTPSPort:  httpsPort,
-		TunnelPort: tunnelPort,
-		DNSPort:    dnsPort,
+		HTTPPort:     httpPort,
+		HTTPSPort:    httpsPort,
+		TunnelPort:   tunnelPort,
+		DNSPort:      dnsPort,
+		PolicySocket: policySocket,
 	}, nil
 }
 
