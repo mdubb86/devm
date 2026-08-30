@@ -93,5 +93,6 @@ func TestRebuildIronProxyConfig_DockerExpandsAllowlist(t *testing.T) {
 		"registry-1.docker.io",
 		"auth.docker.io",
 		"production.cloudfront.docker.com",
+		"download.docker.com",
 	}, got.AllowList)
 }
