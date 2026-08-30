@@ -29,6 +29,12 @@ def test_blocked_curl_sees_devm_reject(devm, workspace, sandbox_name):
     from helpers.tart import TartSandbox
 
     workspace.write_devmyaml(
+        # Opt out of the default repos.main (github.com/octocat/Hello-World):
+        # this test's allowlist is deliberately narrow to example.com, and
+        # hydration would clone that repo and get correctly 403'd by the
+        # same policy this test is trying to exercise — before assertions
+        # ever run.
+        no_repo=True,
         network={"allow": ["example.com"]},
         packages=["curl"],
     )
