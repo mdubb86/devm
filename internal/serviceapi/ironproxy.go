@@ -345,11 +345,22 @@ func IronPolicySocketPath(cfg identity.Config, projectID string) (string, error)
 		return p, nil
 	}
 	// Deep runtime dirs (long $HOME) blow macOS's 104-byte sun_path cap.
-	// Fall back to the per-user temp dir with a name derived from
-	// identity+project so the path stays deterministic across daemon
-	// restarts (adoption re-derives it) and distinct across identities.
+	// Fall back to a dedicated devm-pol subdir of the per-user temp dir,
+	// with a name derived from identity+project so the path stays
+	// deterministic across daemon restarts (adoption re-derives it) and
+	// distinct across identities. The subdir (not the bare temp dir) and
+	// its 0700 mode keep a stray policy socket from being reachable by
+	// other users on the box; MkdirAll alone won't fix an existing dir's
+	// mode (e.g. left behind with a looser umask), so Chmod is explicit.
+	fallbackDir := filepath.Join(os.TempDir(), "devm-pol")
+	if err := os.MkdirAll(fallbackDir, 0700); err != nil {
+		return "", fmt.Errorf("policy socket fallback dir: %w", err)
+	}
+	if err := os.Chmod(fallbackDir, 0700); err != nil {
+		return "", fmt.Errorf("policy socket fallback dir mode: %w", err)
+	}
 	sum := sha256.Sum256([]byte(cfg.Name + "/" + projectID))
-	p = filepath.Join(os.TempDir(), "devm-pol-"+hex.EncodeToString(sum[:6])+".sock")
+	p = filepath.Join(fallbackDir, hex.EncodeToString(sum[:6])+".sock")
 	if len(p) > 100 {
 		return "", fmt.Errorf("policy socket path too long even in temp dir (%d bytes): %s", len(p), p)
 	}

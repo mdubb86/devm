@@ -92,19 +92,40 @@ func AdoptIronProxies(ctx context.Context, cfg identity.Config, sup *supervisor.
 		return err
 	}
 	for _, p := range procs {
-		sup.Adopt(supervisor.Key{ProjectID: p.ProjectID, Role: supervisor.RoleProxy}, p.PID)
-		path, err := IronProxyConfigPath(cfg, p.ProjectID)
-		if err != nil {
-			continue
-		}
-		info, err := loadIronProxyInfoFromConfig(path)
-		if err != nil {
-			continue
-		}
-		ironProxyState.put(p.ProjectID, info)
-		recoverProjectState(ctx, cfg, tr, routes, p.ProjectID)
+		adoptOneIronProxy(ctx, cfg, sup, tr, routes, p)
 	}
 	return nil
+}
+
+// adoptOneIronProxy is AdoptIronProxies's per-process body, split out so
+// it can be unit tested without shelling out to `ps` (DiscoverIronProxies).
+//
+// A failure to rehydrate ironProxyState from the on-disk config (file
+// missing, unreadable, or malformed) is logged and otherwise swallowed —
+// per the "best-effort" contract callers expect — but execution must
+// still reach recoverProjectState. Skipping it (the previous behavior)
+// left a running adopted VM's egress permanently fail-closed at 502:
+// the policy socket is served only by recoverProjectState, and nothing
+// else re-serves it after a daemon restart.
+func adoptOneIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, routes *Routes, p DiscoveredIronProxy) {
+	sup.Adopt(supervisor.Key{ProjectID: p.ProjectID, Role: supervisor.RoleProxy}, p.PID)
+	if info, err := ironProxyInfoForAdopted(cfg, p.ProjectID); err != nil {
+		daemonlog.Errorf("adopt: rehydrate ports for %s: %v (ports were not recovered; policy is still served)", p.ProjectID, err)
+	} else {
+		ironProxyState.put(p.ProjectID, info)
+	}
+	recoverProjectState(ctx, cfg, tr, routes, p.ProjectID)
+}
+
+// ironProxyInfoForAdopted reads back the ports iron-proxy was launched
+// with from its on-disk config file at the path IronProxyConfigPath
+// derives for projectID.
+func ironProxyInfoForAdopted(cfg identity.Config, projectID string) (projectInfo, error) {
+	path, err := IronProxyConfigPath(cfg, projectID)
+	if err != nil {
+		return projectInfo{}, err
+	}
+	return loadIronProxyInfoFromConfig(path)
 }
 
 // recoverProjectState rebuilds the parts of a recovered project's
