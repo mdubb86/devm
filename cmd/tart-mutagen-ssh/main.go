@@ -4,8 +4,9 @@
 // running mutagen-agent inside the guest via Tart's gRPC-over-vsock
 // control channel instead of over sshd. `tart exec` already lands as the
 // devm user (devm's provisioner renames Tart's default admin user to
-// devm) with devm's HOME and cwd set natively, so no sudo or shell wrap
-// is needed.
+// devm), so no sudo or shell wrap is needed. Tart Guest Agent doesn't
+// chdir to that user's HOME, so this shim rewrites mutagen's HOME-relative
+// agent path to an absolute one.
 //
 // See docs/superpowers/specs/2026-08-29-mutagen-tart-transport.md for the
 // design.
@@ -34,9 +35,15 @@ func main() {
 		os.Exit(2)
 	}
 
-	// tart exec lands as the devm user with HOME and cwd already set, so
-	// mutagen's relative agent path (e.g. .mutagen/agents/…/mutagen-agent)
-	// resolves correctly without any shell wrap or sudo.
+	// Mutagen assumes sshd's "cd HOME before executing remote command"
+	// semantics and sends its agent path as `.mutagen/agents/<v>/mutagen-agent`
+	// (relative to HOME). Tart Guest Agent doesn't chdir to the target user's
+	// HOME by default (its Workdir is unset by the tart CLI), so the relative
+	// path doesn't resolve. Rewrite to devm's absolute agent path.
+	if len(cmd) > 0 && strings.HasPrefix(cmd[0], ".mutagen/") {
+		cmd[0] = "/home/devm/" + cmd[0]
+	}
+
 	tartArgs := append([]string{"exec", vm}, cmd...)
 	c := exec.Command("tart", tartArgs...)
 	c.Stdin = os.Stdin

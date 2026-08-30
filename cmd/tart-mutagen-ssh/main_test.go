@@ -120,9 +120,36 @@ exit 0
 	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
 	assert.Equal(t, []string{
 		"exec", "testvm",
-		".mutagen/agents/0.18.1/mutagen-agent",
+		"/home/devm/.mutagen/agents/0.18.1/mutagen-agent",
 		"synchronizer", "--log-level=debug",
 	}, got)
+}
+
+func TestShim_LeavesNonMutagenPathsAlone(t *testing.T) {
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "ssh")
+	build := exec.Command("go", "build", "-o", shim, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build shim: %v\n%s", err, out)
+	}
+	logPath := filepath.Join(dir, "tart-argv.log")
+	tartStub := filepath.Join(dir, "tart")
+	stubScript := `#!/bin/bash
+printf '%s\n' "$@" > "` + logPath + `"
+exit 0
+`
+	require.NoError(t, os.WriteFile(tartStub, []byte(stubScript), 0o755))
+
+	cmd := exec.Command(shim, "devm@devm-testvm", "/usr/bin/whoami")
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("shim run: %v\n%s", err, out)
+	}
+	body, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	assert.Equal(t, []string{"exec", "testvm", "/usr/bin/whoami"}, got,
+		"commands not starting with .mutagen/ must pass through unchanged")
 }
 
 func TestShim_ScpInvocationErrors(t *testing.T) {
