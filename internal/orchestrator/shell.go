@@ -48,7 +48,7 @@ type VMAdminClient interface {
 	VMStatus(ctx context.Context, name string) (serviceapi.VMStatusResponse, error)
 	StartVM(ctx context.Context, req serviceapi.VMStartRequest) (serviceapi.VMStartResponse, error)
 	EnforcementConfig(ctx context.Context, name string) (serviceapi.VMEnforcementConfigResponse, error)
-	StopVM(ctx context.Context, name string) error
+	StopVM(ctx context.Context, name string, destroy bool) error
 	// ApplyIronProxy (re)spawns this project's iron-proxy on its
 	// existing MAC_HOST/ports without touching the VM — the same
 	// no-VM-cycle primitive `devm reconcile`'s self-heal
@@ -640,7 +640,10 @@ func (d ShellDeps) teardownVM(ctx context.Context, cfg schema.Config, vmName str
 	teardownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if stopErr := d.ServiceAPIClient.StopVM(teardownCtx, cfg.Project.Name); stopErr != nil {
+	// destroy: true — teardownVM always precedes a tart.Delete of this
+	// VM's disk below, so the daemon should purge this project's egress
+	// policy state and denial counts too.
+	if stopErr := d.ServiceAPIClient.StopVM(teardownCtx, cfg.Project.Name, true); stopErr != nil {
 		// StopVM is best-effort here (VM may be already stopped or gone),
 		// but if it errored for a reason worth diagnosing, we want the
 		// caller to see it — otherwise this class of failure (VM stopped

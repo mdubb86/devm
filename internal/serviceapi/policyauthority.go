@@ -174,9 +174,30 @@ func (p *PolicyAuthority) EnsureServing(projectID, sock string) error {
 }
 
 // StopServing stops projectID's listener and removes its socket file.
-// The allowlist entry is dropped too — a stopped project's policy is
-// re-set via SetAllowlist on its next start.
+// Stop is a listener event, not a policy reset: the allowlist and its
+// denial counts persist so the next EnsureServing/SetAllowlist picks up
+// where the project left off. modes is still dropped — mode
+// non-persistence across a stop is the always-through-iron-proxy
+// feature's contract, independent of policy state. Call PurgeProject
+// instead when the project itself is going away (teardown).
 func (p *PolicyAuthority) StopServing(projectID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if l, ok := p.listeners[projectID]; ok {
+		l.server.Stop()
+		_ = os.Remove(l.sock)
+		delete(p.listeners, projectID)
+	}
+	delete(p.modes, projectID)
+}
+
+// PurgeProject tears down projectID's listener (if any) and deletes
+// every trace of its policy state: allowlist, mode, and denial counts.
+// Call this on teardown/destroy, when the project itself is gone and a
+// future project reusing the name must not inherit stale counts. Use
+// StopServing instead for a plain stop, which preserves state for the
+// next start.
+func (p *PolicyAuthority) PurgeProject(projectID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if l, ok := p.listeners[projectID]; ok {
@@ -186,6 +207,7 @@ func (p *PolicyAuthority) StopServing(projectID string) {
 	}
 	delete(p.allow, projectID)
 	delete(p.modes, projectID)
+	p.denials.clearProject(projectID)
 }
 
 func (p *PolicyAuthority) allowlistFor(projectID string) []string {

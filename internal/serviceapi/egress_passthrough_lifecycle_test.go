@@ -378,7 +378,7 @@ func TestVMStop_ClearsPassthroughState(t *testing.T) {
 	// /vm/stop must clear the passthrough state (state + timer),
 	// even though iron-proxy for this test project isn't actually
 	// running — the top-of-handler defer runs regardless of stop errors.
-	require.NoError(t, c.StopVM(ctx, name))
+	require.NoError(t, c.StopVM(ctx, name, false))
 
 	_, ok := egressPassthroughState.get(name)
 	assert.False(t, ok, "/vm/stop must clear egressPassthroughState so no timer fires against a dead softnet")

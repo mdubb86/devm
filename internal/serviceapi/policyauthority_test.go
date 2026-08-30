@@ -320,6 +320,33 @@ func TestPolicyAuthoritySetAllowlistReplaysRows(t *testing.T) {
 	require.Len(t, pa.SnapshotDenials("projE"), 2)
 }
 
+// VM stop preserves policy state and counts; teardown purges everything.
+func TestPolicyAuthorityStopPreservesTeardownPurges(t *testing.T) {
+	pa := NewPolicyAuthority()
+	t.Cleanup(func() { pa.PurgeProject("projF") })
+
+	dir, err := os.MkdirTemp("", "pol")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "p.sock")
+	pa.SetAllowlist("projF", []string{"a.example"})
+	require.NoError(t, pa.EnsureServing("projF", sock))
+	client := dialPolicy(t, sock)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.TransformRequest(ctx, policyReq("blocked.example", "GET", "/x"))
+	require.NoError(t, err)
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.GetAction())
+
+	pa.StopServing("projF")
+	require.Len(t, pa.SnapshotDenials("projF"), 1)
+	pa.SetAllowlist("projF", []string{"a.example"})
+	require.Len(t, pa.SnapshotDenials("projF"), 1, "stop + same-list restart preserves")
+
+	pa.PurgeProject("projF")
+	require.Empty(t, pa.SnapshotDenials("projF"))
+}
+
 func TestPolicyAuthority_StopServingDropsMode(t *testing.T) {
 	p := NewPolicyAuthority()
 	p.SetMode("proj1", ModePassthrough)

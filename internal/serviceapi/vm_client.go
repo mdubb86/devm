@@ -64,9 +64,12 @@ func (c *Client) EnforcementConfig(ctx context.Context, name string) (VMEnforcem
 
 // StopVM asks the daemon to stop the project VM. The daemon calls
 // `tart stop <name>` first so the guest gets a graceful shutdown before
-// the tart-run process is signalled.
-func (c *Client) StopVM(ctx context.Context, name string) error {
-	body, err := json.Marshal(VMStopRequest{Name: name})
+// the tart-run process is signalled. destroy selects whether the
+// daemon preserves the project's policy state and denial counts
+// (false, a plain stop) or purges them (true, a teardown — the
+// project itself is going away).
+func (c *Client) StopVM(ctx context.Context, name string, destroy bool) error {
+	body, err := json.Marshal(VMStopRequest{Name: name, Destroy: destroy})
 	if err != nil {
 		return err
 	}

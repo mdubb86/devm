@@ -88,8 +88,16 @@ type VMStartResponse struct {
 // VMStopRequest is the body shape for POST /vm/stop. The daemon calls
 // `tart stop <Name>` for a graceful guest shutdown before SIGTERM'ing the
 // supervised tart process.
+//
+// Destroy distinguishes a plain stop (VM disk and policy state
+// preserved for the next start) from a teardown (VM going away for
+// good): false calls policyAuthority.StopServing, true calls
+// policyAuthority.PurgeProject, which also drops the project's
+// allowlist and denial counts. `devm stop` sends false; `devm
+// teardown` and orchestrator-driven destroy paths send true.
 type VMStopRequest struct {
-	Name string `json:"name"`
+	Name    string `json:"name"`
+	Destroy bool   `json:"destroy,omitempty"`
 }
 
 // VMEgressPassthroughRequest is the body shape for POST
@@ -927,15 +935,16 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			proxy.StopProjectListeners(req.Name)
 		}
 		closePopListener(req.Name)
-		policyAuthority.StopServing(req.Name)
+		if req.Destroy {
+			policyAuthority.PurgeProject(req.Name)
+		} else {
+			policyAuthority.StopServing(req.Name)
+		}
 		ReleaseProjectIP(cfg, req.Name)
 		ironProxyState.del(req.Name)
 		// A stopped project frees its claimed host ports for other
 		// projects to take.
 		exposeClaims.release(req.Name)
-		if denials != nil {
-			denials.Reset(req.Name)
-		}
 
 		// Disable the supervisor's auto-respawn for the VM's tart-run
 		// process BEFORE asking the guest to power off. gracefulStopVM's
