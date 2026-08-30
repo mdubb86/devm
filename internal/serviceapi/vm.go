@@ -852,6 +852,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			proxy.StopProjectListeners(req.Name)
 		}
 		closePopListener(req.Name)
+		policyAuthority.StopServing(req.Name)
 		ReleaseProjectIP(cfg, req.Name)
 		ironProxyState.del(req.Name)
 		// A stopped project frees its claimed host ports for other

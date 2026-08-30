@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
+	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -123,6 +124,25 @@ func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart
 	snap, err := ReadStateSnapshot(cfg, projectID)
 	if err != nil || snap == nil {
 		return
+	}
+
+	// Re-serve the policy socket for the adopted iron-proxy. The
+	// allowlist lives only in daemon memory (the grpc transform consults
+	// the PolicyAuthority per request), so until this runs the adopted
+	// proxy fail-closes every guest request with a 502. Recomputed from
+	// the snapshot with the same composition SpawnIronProxy's callers
+	// use; a recompute failure keeps the socket unserved — 502
+	// fail-closed — rather than serving a wrong allowlist.
+	repoHosts, err := RepoHosts(snap.Cfg, snap.MacCwd)
+	if err != nil {
+		daemonlog.Errorf("policy: recover repo hosts for %s: %v (egress stays fail-closed)", projectID, err)
+	} else if sockPath, err := IronPolicySocketPath(cfg, projectID); err != nil {
+		daemonlog.Errorf("policy: socket path for %s: %v (egress stays fail-closed)", projectID, err)
+	} else {
+		policyAuthority.Set(projectID, AppendUniqueHosts(docker.EffectiveAllowlist(snap.Cfg), repoHosts))
+		if err := policyAuthority.EnsureServing(projectID, sockPath); err != nil {
+			daemonlog.Errorf("policy: serve for adopted %s: %v (egress stays fail-closed)", projectID, err)
+		}
 	}
 
 	info, _ := ironProxyState.get(projectID)

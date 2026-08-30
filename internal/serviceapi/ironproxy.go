@@ -2,6 +2,8 @@ package serviceapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +14,6 @@ import (
 
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
-	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/setsidshim"
 	"github.com/mdubb86/devm/internal/softnet"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -62,8 +63,20 @@ type IronProxyConfig struct {
 	DNSProxyIP string
 	CACertPath string
 	CAKeyPath  string
-	AllowList  []string
-	Secrets    []IronSecret
+	// AllowList is the project's effective network.allow set. It is NOT
+	// rendered into iron-proxy's YAML — the allow/deny decision lives in
+	// the daemon's PolicyAuthority, which iron-proxy consults per
+	// request via the grpc transform at PolicyTarget. SpawnIronProxy
+	// feeds this list into the authority and persists it in a sidecar
+	// for adoption after a daemon restart.
+	AllowList []string
+	// PolicyTarget is the grpc transform's target — the unix socket the
+	// daemon serves TransformService on for this project
+	// ("unix:///path/to.sock"). Required: YAML() refuses to render
+	// without it, because iron-proxy treats an absent policy transform
+	// as allow-all.
+	PolicyTarget string
+	Secrets      []IronSecret
 }
 
 // ironProxyListenAddr is the address iron-proxy binds one of its HTTP,
@@ -126,48 +139,22 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 			"listen": "127.0.0.1:0",
 		},
 	}
-	// The allowlist transform is emitted unconditionally, including with
-	// no domains. iron-proxy v0.45.0 runs the egress check only when the
-	// transform is present: with it absent every host is proxied and
-	// allowed, so omitting it for a project with no network.allow would
-	// publish an unrestricted egress path instead of the deny-all one.
-	// `domains: []` is the deny-all shape.
-	//
-	// AllowList entries may carry a path pattern after the hostname
-	// ("host/path/*", see schema.AllowEntry). Those emit as allowlist
-	// `rules` ({host, paths}) — iron-proxy's domains list is host-only,
-	// so a path-bearing string placed there would never match anything.
-	// Patterns for the same host coalesce into one rule, first-seen
-	// host order preserved. The rules key is omitted entirely when no
-	// entry carries a path, keeping the domains-only shape stable for
-	// configs written before path scoping existed.
-	domains := []string{}
-	var ruleHosts []string
-	rulePaths := map[string][]string{}
-	for _, entry := range c.AllowList {
-		e := schema.AllowEntry{Host: entry}
-		p := e.PathPattern()
-		if p == "" {
-			domains = append(domains, entry)
-			continue
-		}
-		h := e.HostPart()
-		if _, seen := rulePaths[h]; !seen {
-			ruleHosts = append(ruleHosts, h)
-		}
-		rulePaths[h] = append(rulePaths[h], p)
-	}
-	allowCfg := map[string]any{"domains": domains}
-	if len(ruleHosts) > 0 {
-		rules := make([]any, 0, len(ruleHosts))
-		for _, h := range ruleHosts {
-			rules = append(rules, map[string]any{"host": h, "paths": rulePaths[h]})
-		}
-		allowCfg["rules"] = rules
+	// The policy transform is emitted unconditionally. iron-proxy runs
+	// the egress check only when a transform is present: with it absent
+	// every host is proxied and allowed, so omitting it would publish an
+	// unrestricted egress path. The transform is `grpc`, delegating each
+	// request's allow/deny to the daemon's PolicyAuthority at
+	// PolicyTarget; if the daemon is unreachable iron-proxy fails closed
+	// with a 502 (pinned by test_iron_contract_09).
+	if c.PolicyTarget == "" {
+		return nil, fmt.Errorf("iron-proxy config: PolicyTarget is required — an absent policy transform would be allow-all")
 	}
 	transforms := []any{map[string]any{
-		"name":   "allowlist",
-		"config": allowCfg,
+		"name": "grpc",
+		"config": map[string]any{
+			"name":   "devm-policy",
+			"target": c.PolicyTarget,
+		},
 	}}
 	var boundSecrets []IronSecret
 	for _, s := range c.Secrets {
@@ -253,6 +240,23 @@ func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Su
 	if err != nil {
 		return fmt.Errorf("config path: %w", err)
 	}
+
+	// Stand up this project's policy authority BEFORE iron-proxy spawns:
+	// the daemon owns allow/deny (served over the unix socket the grpc
+	// transform dials), and a proxy that comes up first would fail
+	// closed with 502s until the socket exists. After a daemon restart,
+	// AdoptIronProxies re-serves the socket with the allowlist
+	// recomputed from the state snapshot.
+	sockPath, err := IronPolicySocketPath(cfg, projectID)
+	if err != nil {
+		return fmt.Errorf("policy socket path: %w", err)
+	}
+	policyAuthority.Set(projectID, proxyCfg.AllowList)
+	if err := policyAuthority.EnsureServing(projectID, sockPath); err != nil {
+		return fmt.Errorf("serve policy: %w", err)
+	}
+	proxyCfg.PolicyTarget = "unix://" + sockPath
+
 	if err := writeIronProxyConfig(configPath, proxyCfg); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
@@ -332,6 +336,28 @@ func secretToken(name string) string {
 // from. "github_token" → "DEVM_SECRET_GITHUB_TOKEN".
 func secretEnvVarName(name string) string {
 	return "DEVM_SECRET_" + strings.ToUpper(name)
+}
+
+// IronPolicySocketPath returns the unix socket the daemon serves this
+// project's TransformService on — the grpc transform's dial target.
+// Named by projectID for debuggability, falling back to a sha256-derived
+// short name when the full path would exceed macOS's 104-byte sun_path
+// cap (bind fails with EINVAL past it; 100 leaves headroom).
+func IronPolicySocketPath(cfg identity.Config, projectID string) (string, error) {
+	runDir, err := EnsureRuntimeDir(cfg)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(runDir, "iron-proxy")
+	p := filepath.Join(dir, projectID+".sock")
+	if len(p) > 100 {
+		sum := sha256.Sum256([]byte(projectID))
+		p = filepath.Join(dir, hex.EncodeToString(sum[:4])+".sock")
+	}
+	if len(p) > 100 {
+		return "", fmt.Errorf("policy socket path too long even hashed (%d bytes): %s", len(p), p)
+	}
+	return p, nil
 }
 
 // IronProxyConfigPath returns the on-disk path SpawnIronProxy writes
