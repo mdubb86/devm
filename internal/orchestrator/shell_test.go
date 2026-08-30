@@ -183,6 +183,23 @@ func minimalCfg() schema.Config {
 	}
 }
 
+// fakeInstantMutagenSync stubs waitForInitialSyncFn to a no-op, restoring
+// the original on cleanup. For tests exercising the full cold-start/
+// adopt-in-place path with minimalCfg (no repos/volumes declared):
+// mutagenSetupFn itself no-ops on an empty entity list, but FlushAll
+// (waitForInitialSyncFn's real implementation) always shells out to the
+// live mutagen daemon regardless of entity count — something this test
+// sandbox can't reach. Tests that care about mutagen sequencing fake
+// waitForInitialSyncFn themselves instead of using this helper.
+func fakeInstantMutagenSync(t *testing.T) {
+	t.Helper()
+	orig := waitForInitialSyncFn
+	t.Cleanup(func() { waitForInitialSyncFn = orig })
+	waitForInitialSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
+		return nil
+	}
+}
+
 // ---------- RunShell tests ----------
 
 // TestRunShellWarmPath_AttachesWithoutStart verifies that when the VM is
@@ -289,6 +306,7 @@ func TestRunShellWarmPath_ForwardsHostTermEnvIntoTartExec(t *testing.T) {
 // successfully. The test only checks orchestration order, not provision
 // output.
 func TestRunShellColdPath_CallsStartVM(t *testing.T) {
+	fakeInstantMutagenSync(t)
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
 		statusResp:     serviceapi.VMStatusResponse{Present: false, Running: false},
@@ -359,6 +377,7 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 // told apart by ORDER (first occurrence = RunOpen, second = RunEnforced),
 // not by grepping a single line for script content.
 func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
+	fakeInstantMutagenSync(t)
 	repoRoot := t.TempDir()
 	logPath := filepath.Join(repoRoot, "order.log")
 	admin := &fakeVMAdmin{
@@ -423,20 +442,29 @@ func TestRunShellColdPath_FlipsEgressAroundProvision(t *testing.T) {
 			"the Critical fix: services must never start under open egress")
 }
 
-// TestRunShellColdPath_MutagenSetupRunsAfterRunEnforced verifies Task
-// 17.5: the mutagen sync-session setup step runs strictly after
-// RunEnforced's exec (which unmasks sshd + installs the project's ssh
-// keys) — running it any earlier would try to ssh into a guest with no
-// keys and no live sshd.
+// TestProvisionAndAttach_MutagenBeforeRunOpen pins the Task 8 reorder: the
+// mutagen sync-session setup step now runs AFTER OpenEgress (needs
+// iron-proxy for a cold-start guest git clone) but BEFORE RunOpen (so
+// install:/startup: see a hydrated workspace) — the exact opposite of the
+// v0.20.1 ordering, which ran mutagen setup only after RunEnforced.
+// waitForInitialSyncFn sits between mutagen setup and RunOpen (the
+// extracted FlushAll wait), and runStartupCommandsFn now fires right after
+// RunOpen, still under OPEN egress, before ApplyEgressEnforcement.
 //
-// mutagenSetupFn is faked to append a marker into the same ordered log
-// file fakeTartBinWithLog and fakeVMAdmin both write into, instead of
-// running the real mutagen binary + entity scan — this is a sequencing
-// test, not an integration test of SetupPhase itself (covered by
-// internal/serviceapi's own SetupPhase tests).
-func TestRunShellColdPath_MutagenSetupRunsAfterRunEnforced(t *testing.T) {
-	orig := mutagenSetupFn
-	defer func() { mutagenSetupFn = orig }()
+// mutagenSetupFn, waitForInitialSyncFn, and runStartupCommandsFn are all
+// faked to append a marker into the same ordered log file fakeTartBinWithLog
+// and fakeVMAdmin both write into, instead of running the real mutagen
+// binary — this is a sequencing test, not an integration test of SetupPhase
+// or FlushAll themselves (covered by internal/serviceapi's own tests).
+func TestProvisionAndAttach_MutagenBeforeRunOpen(t *testing.T) {
+	origMutagen := mutagenSetupFn
+	origWait := waitForInitialSyncFn
+	origRunStartup := runStartupCommandsFn
+	t.Cleanup(func() {
+		mutagenSetupFn = origMutagen
+		waitForInitialSyncFn = origWait
+		runStartupCommandsFn = origRunStartup
+	})
 
 	repoRoot := t.TempDir()
 	logPath := filepath.Join(repoRoot, "order.log")
@@ -451,14 +479,28 @@ func TestRunShellColdPath_MutagenSetupRunsAfterRunEnforced(t *testing.T) {
 	userCmd.waitErr <- nil
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
-	var mutagenSetupCalled int
-	mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
-		mutagenSetupCalled++
+	appendMarker := func(marker string) {
 		fh, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		require.NoError(t, err)
 		defer fh.Close()
-		_, err = fmt.Fprintln(fh, "MUTAGEN-SETUP")
+		_, err = fmt.Fprintln(fh, marker)
 		require.NoError(t, err)
+	}
+
+	var mutagenSetupCalled, waitSyncCalled, runStartupCalled int
+	mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
+		mutagenSetupCalled++
+		appendMarker("MUTAGEN-SETUP")
+		return nil
+	}
+	waitForInitialSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
+		waitSyncCalled++
+		appendMarker("WAIT-SYNC")
+		return nil
+	}
+	runStartupCommandsFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
+		runStartupCalled++
+		appendMarker("RUN-STARTUP")
 		return nil
 	}
 
@@ -474,40 +516,54 @@ func TestRunShellColdPath_MutagenSetupRunsAfterRunEnforced(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, 1, mutagenSetupCalled, "mutagen setup must run exactly once")
+	assert.Equal(t, 1, waitSyncCalled, "wait-for-initial-sync must run exactly once")
+	assert.Equal(t, 1, runStartupCalled, "run-startup-commands must run exactly once")
 
 	logBytes, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
 
-	runEnforcedIdx, mutagenIdx := -1, -1
+	var order []string
 	bashCSeen := 0
-	for i, line := range lines {
+	for _, line := range lines {
 		switch {
+		case line == "OPEN-EGRESS":
+			order = append(order, "open-egress")
+		case line == "MUTAGEN-SETUP":
+			order = append(order, "mutagen")
+		case line == "WAIT-SYNC":
+			order = append(order, "wait-sync")
+		case line == "RUN-STARTUP":
+			order = append(order, "run-startup")
+		case line == "APPLY-EGRESS-ENFORCEMENT":
+			order = append(order, "apply-enforcement")
 		case strings.Contains(line, "bash -c"):
 			bashCSeen++
-			if bashCSeen == 2 {
-				runEnforcedIdx = i
+			switch bashCSeen {
+			case 1:
+				order = append(order, "run-open")
+			case 2:
+				order = append(order, "run-enforced")
 			}
-		case line == "MUTAGEN-SETUP":
-			mutagenIdx = i
 		}
 	}
-	require.GreaterOrEqual(t, runEnforcedIdx, 0, "RunEnforced's bash -c exec must be present")
-	require.GreaterOrEqual(t, mutagenIdx, 0, "mutagen setup marker must be present")
-	assert.Less(t, runEnforcedIdx, mutagenIdx,
-		"mutagen setup must run AFTER RunEnforced — sshd is masked and no project ssh keys "+
-			"exist in the guest until RunEnforced completes")
+	assert.Equal(t,
+		[]string{"open-egress", "mutagen", "wait-sync", "run-open", "run-startup", "apply-enforcement", "run-enforced"},
+		order,
+	)
 }
 
 // TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch pins:
-//   - runStartupCommandsFn is called AFTER mutagenSetupFn
+//   - runStartupCommandsFn is called AFTER mutagenSetupFn and waitForInitialSyncFn
 //   - a non-zero exit from a startup command is a teardown-class failure
 //     (asserted separately in TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM)
 func TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch(t *testing.T) {
 	origMutagen := mutagenSetupFn
+	origWait := waitForInitialSyncFn
 	origRun := runStartupCommandsFn
 	t.Cleanup(func() {
 		mutagenSetupFn = origMutagen
+		waitForInitialSyncFn = origWait
 		runStartupCommandsFn = origRun
 	})
 
@@ -537,6 +593,12 @@ func TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch(t *testing.T)
 		mu.Unlock()
 		return nil
 	}
+	waitForInitialSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
+		mu.Lock()
+		order = append(order, "wait-sync")
+		mu.Unlock()
+		return nil
+	}
 	runStartupCommandsFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
 		mu.Lock()
 		order = append(order, "run")
@@ -550,8 +612,8 @@ func TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch(t *testing.T)
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, []string{"mutagen", "run"}, order,
-		"runStartupCommandsFn must run AFTER mutagenSetupFn")
+	assert.Equal(t, []string{"mutagen", "wait-sync", "run"}, order,
+		"runStartupCommandsFn must run AFTER mutagenSetupFn and waitForInitialSyncFn")
 }
 
 // TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM verifies that a
@@ -560,8 +622,12 @@ func TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch(t *testing.T)
 // non-zero exit must fail loud and leave no zombie VM, unlike a
 // post-install service failure which is kept for debugging.
 func TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM(t *testing.T) {
+	origWait := waitForInitialSyncFn
 	origRun := runStartupCommandsFn
-	t.Cleanup(func() { runStartupCommandsFn = origRun })
+	t.Cleanup(func() {
+		waitForInitialSyncFn = origWait
+		runStartupCommandsFn = origRun
+	})
 
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
@@ -577,6 +643,9 @@ func TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM(t *testing.T) {
 	}
 	writeFakeCA(t, repoRoot)
 
+	waitForInitialSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
+		return nil
+	}
 	runStartupCommandsFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
 		return fmt.Errorf("run repo1/cmd2: exit 42: boom")
 	}
@@ -594,6 +663,7 @@ func TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM(t *testing.T) {
 // service-phase failure (the enforced script's `services` stage) leaves
 // the VM running so the user can debug — install failures still tear down.
 func TestRunShellColdPath_PostInstallFail_KeepsVM(t *testing.T) {
+	fakeInstantMutagenSync(t)
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
 		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
@@ -633,6 +703,7 @@ func TestRunShellColdPath_PostInstallFail_KeepsVM(t *testing.T) {
 // provisioning script fails in an install-phase stage, RunShell asks the
 // daemon to stop the VM AND invokes `tart delete` so no zombie VM is left.
 func TestRunShellColdPath_ProvisionFail_TearsDownVM(t *testing.T) {
+	fakeInstantMutagenSync(t)
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
 		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
@@ -715,6 +786,7 @@ func TestRunShellColdPath_StartVMError(t *testing.T) {
 // provisioning began). RunShell must provision the already-running VM
 // WITHOUT asking the daemon to start it (no StartVM), then attach.
 func TestRunShellRunning_TargetInactiveNoMarker_AdoptsInPlace(t *testing.T) {
+	fakeInstantMutagenSync(t)
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
 		statusResp: serviceapi.VMStatusResponse{Present: true, Running: true},
@@ -811,6 +883,7 @@ func TestRunShellRunning_AdoptInPlace_NoIronProxyRecord_FailsLoud(t *testing.T) 
 // tears the VM down (stop + delete) and falls through to a fresh cold
 // start (StartVM + waitVMReady + provision + attach).
 func TestRunShellRunning_TargetInactiveMarkerPresent_TeardownAndColdStart(t *testing.T) {
+	fakeInstantMutagenSync(t)
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
 		statusResp: serviceapi.VMStatusResponse{Present: true, Running: true},
@@ -891,6 +964,7 @@ func TestRunShellRunning_TargetProbeTransportFlake_RetriesThenWarmAttaches(t *te
 // dirty — which would tear it down needlessly instead of adopting it in
 // place.
 func TestRunShellRunning_DirtyProbeTransportFlake_RetriesThenAdoptsInPlace(t *testing.T) {
+	fakeInstantMutagenSync(t)
 	repoRoot := t.TempDir()
 	admin := &fakeVMAdmin{
 		statusResp: serviceapi.VMStatusResponse{Present: true, Running: true},

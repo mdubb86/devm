@@ -70,7 +70,8 @@ func TestSendSoftnetEnforced(t *testing.T) {
 // TestVMStop_CallsMutagenStopPhaseBeforeGracefulStop verifies Task 18:
 // the /vm/stop handler flushes+pauses the project's mutagen sessions
 // (via mutagenStopPhaseFn) BEFORE gracefulStopVM powers the guest off —
-// mutagen's SSH transport needs sshd up, which the poweroff ends.
+// mutagen's transport is tart exec (cmd/tart-mutagen-ssh), which needs the
+// guest running, and the poweroff ends that.
 //
 // mutagenStopPhaseFn is faked to append a marker into the same log file
 // the fake tart binary writes every invocation into, so both events

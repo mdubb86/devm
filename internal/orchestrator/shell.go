@@ -322,10 +322,30 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	log.Printf("shell: provisioning %s", vmName)
 	reporter.Step("provisioning", false)
 
-	// softnet boots LOCKED. Flip it OPEN before the open-egress exec runs,
-	// so apt/install:/templates/startup: have egress.
+	// softnet boots LOCKED. Flip it OPEN before mutagen sync (guest git
+	// clone needs iron-proxy, iron-proxy needs OPEN egress) and before the
+	// open-egress exec runs, so apt/install:/templates/startup: have
+	// egress too.
 	if err := d.ServiceAPIClient.OpenEgress(ctx, vmName); err != nil {
 		return d.teardownOnFail(ctx, cfg, vmName, err, "open egress")
+	}
+
+	// mutagen setup runs BEFORE install:/startup: so those steps see a
+	// hydrated workspace. Transport is tart exec (see cmd/tart-mutagen-ssh),
+	// so mutagen has no sshd dependency and can run this early — it only
+	// needs OpenEgress (above) for a cold-start guest git clone through
+	// iron-proxy.
+	fmt.Fprintln(os.Stderr, "::devm:stage:mutagen-sync::")
+	if err := mutagenSetupFn(d, ctx, cfg, vmName, repoRoot, tunnelPort); err != nil {
+		return d.teardownOnFail(ctx, cfg, vmName, err, "mutagen setup")
+	}
+	log.Printf("shell: mutagen sessions ready: %s", vmName)
+
+	// Wait for every session's initial sync to settle before install:/
+	// startup: read the workspace — otherwise those steps could race a
+	// still-converging first sync.
+	if err := waitForInitialSyncFn(d, ctx, cfg, vmName); err != nil {
+		return d.teardownOnFail(ctx, cfg, vmName, err, "wait for initial sync")
 	}
 
 	// Provisioning output is DIAGNOSTIC — stage names, package install
@@ -343,6 +363,16 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		return d.teardownOnFail(ctx, cfg, vmName, err, "provision")
 	}
 	log.Printf("shell: open-egress provisioning done: %s", vmName)
+
+	// Fire per-repo startup commands while egress is still OPEN, right
+	// after RunOpen — the workspace mutagen just hydrated is exactly what
+	// install:/startup: need to see. Running before ApplyEgressEnforcement
+	// means a startup command isn't limited to the project's
+	// network.allow: list for this window.
+	if err := runStartupCommandsFn(d, ctx, cfg, vmName, repoRoot); err != nil {
+		return d.teardownOnFail(ctx, cfg, vmName, err, "run startup commands")
+	}
+	log.Printf("shell: startup commands done: %s", vmName)
 
 	// Lock softnet down to the project's real allowlist BEFORE services or
 	// devm.target come up — the Critical fix: services must never start
@@ -386,10 +416,6 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	// succeeded). Best-effort: log but don't fail — a missing snapshot
 	// only degrades to "full diff on next reconcile" (safe), and failing
 	// here would kill a start that otherwise succeeded.
-	//
-	// Ordered BEFORE mutagen setup: EmitSSHConfig below walks state
-	// snapshots to build the ssh_config Host set, and mutagen's ssh
-	// transport needs the Host block for this project already in place.
 	templateContents, err := render.RenderTemplatesByBasename(cfg, repoRoot, d.Ident.RuntimeDir(), cfg.Project.Name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "state: render templates for seed snapshot %s failed: %v\n", cfg.Project.Name, err)
@@ -406,38 +432,13 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)
 	}
 
-	// Emit the ssh_config Host block BEFORE mutagen setup. Mutagen's
-	// sync transport shells out to the system ssh client, which reads
-	// ~/.ssh/config → Include of devm's managed ssh_config. Without the
-	// Host devm-<name> block, ssh has no per-project HostKeyAlias /
-	// UserKnownHostsFile / IdentityFile pointer, falls back to the
-	// user's default known_hosts (which doesn't know this guest), and
-	// `mutagen sync create` fails with "Host key verification failed".
+	// Emit the ssh_config Host block so `ssh devm-<name>` resolves for this
+	// project. Mutagen's own sync transport is tart exec now (see
+	// cmd/tart-mutagen-ssh) and has no dependency on this file — mutagen
+	// setup already ran, above, before this point.
 	if err := EmitSSHConfig(ctx, d.Ident, d.Tart); err != nil {
 		log.Printf("ssh_config emit failed after provisioning: %v", err)
 	}
-
-	// Bring every declared repo/volume's mutagen sync session up to date:
-	// cold-start clone (if needed), guard check, then create or resume the
-	// session. This must run after RunEnforced (unmasks sshd, installs the
-	// project ssh keys) and after OpenEgress (permits guest -> iron-proxy) —
-	// mutagen's ssh transport and a cold-start guest git clone both need
-	// both preconditions in place.
-	if err := mutagenSetupFn(d, ctx, cfg, vmName, repoRoot, tunnelPort); err != nil {
-		return d.teardownOnFail(ctx, cfg, vmName, err, "mutagen setup")
-	}
-	log.Printf("shell: mutagen sessions ready: %s", vmName)
-
-	// Flush every mutagen session, then run every repo's `startup: true`
-	// commands in its guest cwd. Runs under ENFORCED egress (already
-	// flipped above, before RunEnforced) — any host a startup command
-	// reaches must be in the project's network.allow: list. The user
-	// opted in via startup: true, so a non-zero exit here is a loud,
-	// teardown-class failure, not a swallowed warning.
-	if err := runStartupCommandsFn(d, ctx, cfg, vmName, repoRoot); err != nil {
-		return d.teardownOnFail(ctx, cfg, vmName, err, "run startup commands")
-	}
-	log.Printf("shell: startup commands done: %s", vmName)
 
 	reporter.Step("ready", false)
 	reporter.Stop()
@@ -447,11 +448,35 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 }
 
 // mutagenSetupFn is the test-injection seam for the mutagen sync-session
-// setup step provisionAndAttach runs after RunEnforced. Production always
-// calls (ShellDeps).setupMutagenSessions; tests substitute a fake to
-// verify sequencing without needing a live VM or the real mutagen binary.
+// setup step provisionAndAttach runs after OpenEgress and before RunOpen.
+// Production always calls (ShellDeps).setupMutagenSessions; tests
+// substitute a fake to verify sequencing without needing a live VM or the
+// real mutagen binary.
 var mutagenSetupFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
 	return d.setupMutagenSessions(ctx, cfg, vmName, repoRoot, tunnelPort)
+}
+
+// waitForInitialSyncFn is the test-injection seam for the wait-for-sync
+// step provisionAndAttach runs immediately after mutagenSetupFn and before
+// RunOpen. Production always calls (ShellDeps).waitForInitialSync; tests
+// substitute a fake to verify sequencing without a live mutagen daemon.
+var waitForInitialSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
+	return d.waitForInitialSync(ctx, cfg, vmName)
+}
+
+// waitForInitialSync blocks until every one of vmName's mutagen sync
+// sessions finishes converging, so RunOpen's install:/startup: steps see a
+// fully hydrated workspace rather than a still-syncing one.
+func (d ShellDeps) waitForInitialSync(ctx context.Context, cfg schema.Config, vmName string) error {
+	mutagenBin, err := mutagen.Ensure(d.Ident.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("mutagen: extract binary: %w", err)
+	}
+	cli := &mutagen.CLI{
+		Binary:  mutagenBin,
+		DataDir: filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
+	}
+	return serviceapi.FlushAll(cli, vmName)
 }
 
 // setupMutagenSessions builds the mutagen CLI + entity list and calls
@@ -475,13 +500,12 @@ func (d ShellDeps) setupMutagenSessions(ctx context.Context, cfg schema.Config, 
 		return fmt.Errorf("mutagen: build entities: %w", err)
 	}
 
-	// mutagen shells out to the system ssh client. Its `sync create` CLI
-	// has NO ssh-config flags — it relies entirely on the system ssh_config.
-	// The Host devm-<vmName> block in devm's managed ssh_config sets
-	// HostName, HostKeyAlias, UserKnownHostsFile, and IdentityFile; ssh
-	// finds it via ~/.ssh/config's Include line. HOME on the mutagen daemon
-	// is pointed at $RuntimeDir/mutagen/home (see internal/serviceapi/
-	// mutagen.go SpawnMutagen) so ssh reads that Include even under root.
+	// mutagen resolves its ssh subprocess via MUTAGEN_SSH_PATH (set in
+	// SpawnMutagen), which points at the tart-mutagen-ssh shim instead of
+	// the system ssh client — see cmd/tart-mutagen-ssh. The shim parses
+	// "devm@devm-<vmName>" straight off argv and execs `tart exec
+	// <vmName> sudo -u devm ...`; it never touches ~/.ssh/config or does
+	// host-key verification, so mutagen has no sshd dependency here.
 	guestSSHTarget := "devm-" + vmName
 	ironProxyURL := fmt.Sprintf("http://%s:%d", softnet.NATAliasIP, tunnelPort)
 
@@ -493,18 +517,22 @@ func (d ShellDeps) setupMutagenSessions(ctx context.Context, cfg schema.Config, 
 }
 
 // runStartupCommandsFn is the test-injection seam for the RunStartupCommands
-// phase provisionAndAttach runs after mutagenSetupFn. Production always
-// calls (ShellDeps).runStartupCommands; tests substitute a fake to verify
-// sequencing without needing a live VM or the real mutagen binary.
+// phase provisionAndAttach runs after RunOpen and before
+// ApplyEgressEnforcement — the workspace is already hydrated (mutagenSetupFn
+// + waitForInitialSyncFn ran before RunOpen) and egress is still OPEN.
+// Production always calls (ShellDeps).runStartupCommands; tests substitute
+// a fake to verify sequencing without needing a live VM or the real
+// mutagen binary.
 var runStartupCommandsFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
 	return d.runStartupCommands(ctx, cfg, vmName, repoRoot)
 }
 
-// runStartupCommands flushes every mutagen session first (so the workspace
-// is hydrated in both directions), then invokes `run <name>` in each
-// repo's guest cwd for every command with `startup: true`. Runs under
-// enforced egress (this phase is AFTER ApplyEgressEnforcement) — any host a
-// startup command reaches must be in the project's network.allow: list.
+// runStartupCommands invokes `run <name>` in each repo's guest cwd for
+// every command with `startup: true`. Runs under OPEN egress (before
+// ApplyEgressEnforcement) — a startup command isn't limited to the
+// project's network.allow: list for this window. The workspace is already
+// hydrated and flushed by mutagenSetupFn/waitForInitialSyncFn upstream, so
+// no re-flush is needed here.
 //
 // A non-zero exit fails cold-start (loud, teardown-class) — the user opted
 // in via startup: true; silent failure defeats the point.
@@ -514,27 +542,13 @@ func (d ShellDeps) runStartupCommands(ctx context.Context, cfg schema.Config, vm
 		return nil
 	}
 
-	mutagenBin, err := mutagen.Ensure(d.Ident.RuntimeDir())
-	if err != nil {
-		return fmt.Errorf("mutagen: extract binary: %w", err)
-	}
-	cli := &mutagen.CLI{
-		Binary:  mutagenBin,
-		DataDir: filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
-	}
-
-	return runStartupCommandsWithCLI(cli, d.guestExec(ctx, vmName), vmName, startupCmds)
+	return dispatchStartupCommands(d.guestExec(ctx, vmName), vmName, startupCmds)
 }
 
-// runStartupCommandsWithCLI is the RunStartupCommands phase's core logic,
+// dispatchStartupCommands is the RunStartupCommands phase's core logic,
 // factored out of (ShellDeps).runStartupCommands so unit tests can inject a
-// fake mutagen CLI (via mutagen.CLI.Exec) and a fake guestExec, without a
-// live VM or the real mutagen binary.
-func runStartupCommandsWithCLI(cli *mutagen.CLI, exec serviceapi.GuestExec, vmName string, startupCmds []schema.StartupCommand) error {
-	if err := serviceapi.FlushAll(cli, vmName); err != nil {
-		return fmt.Errorf("flush mutagen before startup commands: %w", err)
-	}
-
+// fake guestExec without a live VM.
+func dispatchStartupCommands(exec serviceapi.GuestExec, vmName string, startupCmds []schema.StartupCommand) error {
 	log.Printf("shell: running startup commands: %s (%d)", vmName, len(startupCmds))
 	// Progress marker consumed by newProvisionProgress in provisionAndAttach.
 	fmt.Fprintln(os.Stderr, "::devm:stage:commands::")
