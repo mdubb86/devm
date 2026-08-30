@@ -33,8 +33,8 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketLive, KindPortAdd.Bucket())
 	assert.Equal(t, BucketLive, KindPortRemove.Bucket())
 	assert.Equal(t, BucketLive, KindPortChange.Bucket())
-	assert.Equal(t, BucketEgressRestart, KindNetworkAdd.Bucket())
-	assert.Equal(t, BucketEgressRestart, KindNetworkRemove.Bucket())
+	assert.Equal(t, BucketLive, KindNetworkAdd.Bucket())
+	assert.Equal(t, BucketLive, KindNetworkRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvAdd.Bucket())
 	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
@@ -610,8 +610,8 @@ func TestBucketEgressRestartString(t *testing.T) {
 }
 
 func TestNetworkAndSecretKindsInIronProxyRestartBucket(t *testing.T) {
-	assert.Equal(t, BucketEgressRestart, KindNetworkAdd.Bucket())
-	assert.Equal(t, BucketEgressRestart, KindNetworkRemove.Bucket())
+	assert.Equal(t, BucketLive, KindNetworkAdd.Bucket())
+	assert.Equal(t, BucketLive, KindNetworkRemove.Bucket())
 	assert.Equal(t, BucketEgressRestart, KindSecretAdd.Bucket())
 	assert.Equal(t, BucketEgressRestart, KindSecretRemove.Bucket())
 	assert.Equal(t, BucketEgressRestart, KindSecretChange.Bucket())
