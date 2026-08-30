@@ -18,6 +18,30 @@ import (
 	"github.com/mdubb86/devm/internal/policymatch"
 )
 
+// Mode is the per-project egress response variant. Passthrough lets
+// every request through (iron-proxy still MITMs and substitutes secrets);
+// Restricted consults the project's allowlist for each request. The two
+// modes flip freely mid-life without touching softnet or iron-proxy.
+type Mode int
+
+const (
+	// ModeRestricted (zero value) is the safe default — a project that
+	// has never had SetMode called sees allowlist-gated egress.
+	ModeRestricted Mode = iota
+	ModePassthrough
+)
+
+func (m Mode) String() string {
+	switch m {
+	case ModePassthrough:
+		return "passthrough"
+	case ModeRestricted:
+		return "restricted"
+	default:
+		return fmt.Sprintf("Mode(%d)", int(m))
+	}
+}
+
 // policyAuthority is the daemon-wide egress policy authority behind
 // every project's iron-proxy grpc transform. Package-level for the same
 // reason as ironProxyState: it is daemon-lifetime state shared by the
@@ -44,6 +68,7 @@ var policyAuthority = NewPolicyAuthority()
 type PolicyAuthority struct {
 	mu        sync.Mutex
 	allow     map[string][]string
+	modes     map[string]Mode
 	listeners map[string]*policyListener
 }
 
@@ -57,6 +82,7 @@ type policyListener struct {
 func NewPolicyAuthority() *PolicyAuthority {
 	return &PolicyAuthority{
 		allow:     map[string][]string{},
+		modes:     map[string]Mode{},
 		listeners: map[string]*policyListener{},
 	}
 }
@@ -68,6 +94,23 @@ func (p *PolicyAuthority) Set(projectID string, allow []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.allow[projectID] = cp
+}
+
+// SetMode replaces projectID's egress mode. Takes effect on the next
+// request — no re-serve, no iron-proxy respawn. Safe to call before
+// EnsureServing.
+func (p *PolicyAuthority) SetMode(projectID string, mode Mode) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.modes[projectID] = mode
+}
+
+// modeFor returns projectID's current mode, or ModeRestricted for a
+// project that has never had SetMode called.
+func (p *PolicyAuthority) modeFor(projectID string) Mode {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.modes[projectID]
 }
 
 // EnsureServing binds projectID's TransformService on sock and starts
@@ -119,6 +162,7 @@ func (p *PolicyAuthority) StopServing(projectID string) {
 		delete(p.listeners, projectID)
 	}
 	delete(p.allow, projectID)
+	delete(p.modes, projectID)
 }
 
 func (p *PolicyAuthority) allowlistFor(projectID string) []string {
@@ -136,6 +180,11 @@ type policyService struct {
 }
 
 func (s *policyService) TransformRequest(ctx context.Context, req *transformv1.TransformRequestRequest) (*transformv1.TransformRequestResponse, error) {
+	if s.authority.modeFor(s.projectID) == ModePassthrough {
+		return &transformv1.TransformRequestResponse{
+			Action: transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE,
+		}, nil
+	}
 	r := req.GetRequest()
 	host := policymatch.StripPort(r.GetHost())
 	// r.Url is path+query for proxied requests and empty for CONNECT.

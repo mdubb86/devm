@@ -170,3 +170,74 @@ func TestPolicyAuthorityLiveUpdateAndRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.GetAction())
 }
+
+func TestPolicyAuthority_PassthroughShortCircuits(t *testing.T) {
+	p := NewPolicyAuthority()
+	// Set a restrictive allowlist that would reject everything.
+	p.Set("proj1", nil)
+	p.SetMode("proj1", ModePassthrough)
+
+	svc := &policyService{authority: p, projectID: "proj1"}
+	req := &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Host:   "example.com",
+			Url:    "/blocked",
+			Method: "GET",
+		},
+	}
+	resp, err := svc.TransformRequest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("TransformRequest: %v", err)
+	}
+	if resp.GetAction() != transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE {
+		t.Fatalf("passthrough mode should short-circuit to CONTINUE, got %v", resp.GetAction())
+	}
+}
+
+func TestPolicyAuthority_RestrictedConsultsAllowlist(t *testing.T) {
+	p := NewPolicyAuthority()
+	p.Set("proj1", []string{"allowed.example.com"})
+	p.SetMode("proj1", ModeRestricted)
+
+	svc := &policyService{authority: p, projectID: "proj1"}
+	req := &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Host: "blocked.example.com",
+			Url:  "/",
+		},
+	}
+	resp, err := svc.TransformRequest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("TransformRequest: %v", err)
+	}
+	if resp.GetAction() != transformv1.TransformAction_TRANSFORM_ACTION_REJECT {
+		t.Fatalf("restricted mode should reject unlisted host, got %v", resp.GetAction())
+	}
+}
+
+func TestPolicyAuthority_DefaultsToRestricted(t *testing.T) {
+	p := NewPolicyAuthority()
+	p.Set("proj1", []string{"allowed.example.com"})
+	// No SetMode call — should default to restricted.
+
+	svc := &policyService{authority: p, projectID: "proj1"}
+	req := &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{Host: "blocked.example.com", Url: "/"},
+	}
+	resp, _ := svc.TransformRequest(context.Background(), req)
+	if resp.GetAction() != transformv1.TransformAction_TRANSFORM_ACTION_REJECT {
+		t.Fatalf("default mode should be restricted (reject), got %v", resp.GetAction())
+	}
+}
+
+func TestPolicyAuthority_StopServingDropsMode(t *testing.T) {
+	p := NewPolicyAuthority()
+	p.SetMode("proj1", ModePassthrough)
+	p.StopServing("proj1")
+
+	// After stop, a fresh SetMode should not carry over the old mode state.
+	// Verify by re-checking the internal accessor.
+	if got := p.modeFor("proj1"); got != ModeRestricted {
+		t.Fatalf("StopServing should drop mode; modeFor after stop = %v, want restricted", got)
+	}
+}
