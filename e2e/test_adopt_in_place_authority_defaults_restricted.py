@@ -59,7 +59,7 @@ def test_adopt_in_place_authority_defaults_restricted(devm, workspace, sandbox_n
 
     workspace.write_devmyaml(
         no_repo=True,
-        network={"allow": ["httpbin.org"]},
+        network={"allow": ["example.com"]},
         packages=["curl"],
     )
 

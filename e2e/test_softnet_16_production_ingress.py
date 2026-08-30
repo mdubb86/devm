@@ -138,7 +138,7 @@ def test_softnet_production_ingress_and_ntp():
             {
                 "op": "setPolicy",
                 "policy": "FORWARDING",
-                "iron_proxy": {
+                "forward_targets": {
                     "http": udp_addr,
                     "https": udp_addr,
                     "dns": udp_addr,

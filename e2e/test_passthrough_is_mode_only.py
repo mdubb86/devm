@@ -35,7 +35,7 @@ def test_passthrough_is_mode_only(devm, workspace, sandbox_name):
 
     workspace.write_devmyaml(
         no_repo=True,
-        network={"allow": ["httpbin.org"]},
+        network={"allow": ["example.com"]},
         packages=["curl"],
     )
 

@@ -168,7 +168,7 @@ def test_softnet_production_egress_locked_then_enforced():
             {
                 "op": "setPolicy",
                 "policy": "FORWARDING",
-                "iron_proxy": {
+                "forward_targets": {
                     "http": proxy_addr,
                     "https": proxy_addr,
                     "dns": proxy_addr,
