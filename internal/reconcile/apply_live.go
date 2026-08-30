@@ -64,12 +64,19 @@ import (
 // URL (ironProxyURL, needed only for a repo cold-start clone; pass ""
 // when no repo add/volume-toggle-on is pending).
 //
+// KindNetworkAdd/KindNetworkRemove entries are batched: any number of
+// them in one call dispatch a SINGLE applyNetworkChange, carrying cfg's
+// full new allowlist (cfg.Network.Domains()) rather than a delta summed
+// from the individual changes — the PolicyAuthority's Set API takes the
+// whole list atomically via allowlistClient.
+//
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
-func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot, daemonRuntimeDir string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, mutagenCLI *mutagen.CLI, identCfg identity.Config, ironProxyURL string) error {
+func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot, daemonRuntimeDir string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, mutagenCLI *mutagen.CLI, identCfg identity.Config, ironProxyURL string, allowlistClient AllowlistSetter) error {
 	var templateChanges []Change
 	var mutagenChanges []Change
 	var bundleRebuildNeeded bool
+	var networkChangesPresent bool
 	for _, c := range changes {
 		if c.Bucket() != BucketLive {
 			continue
@@ -96,6 +103,13 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			mutagenChanges = append(mutagenChanges, c)
 		case KindVolumeChange:
 			mutagenChanges = append(mutagenChanges, c)
+		case KindNetworkAdd, KindNetworkRemove:
+			// Batched: any number of KindNetworkAdd/Remove entries in this
+			// change set dispatch as ONE applyNetworkChange call carrying
+			// cfg's full new allowlist — the PolicyAuthority's Set API
+			// takes the whole list atomically, so there's no per-change
+			// incremental add/remove to apply here.
+			networkChangesPresent = true
 		}
 	}
 
@@ -191,7 +205,34 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		}
 	}
 
+	if networkChangesPresent {
+		if err := applyNetworkChange(context.Background(), allowlistClient, vmName, cfg.Network.Domains()); err != nil {
+			return fmt.Errorf("apply network change: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// AllowlistSetter is ApplyLive's daemon-authority seam for
+// KindNetworkAdd/KindNetworkRemove: it pushes a full-allowlist
+// replacement to the daemon's PolicyAuthority via POST
+// /vm/set-allowlist. Declared locally — mirroring GuestExec above —
+// because internal/reconcile can't import internal/serviceapi without
+// a cycle (serviceapi already imports reconcile for Change/ApplyLive).
+// *serviceapi.Client satisfies this interface structurally; production
+// wiring constructs one from within serviceapi, which has no such
+// cycle to worry about.
+type AllowlistSetter interface {
+	SetAllowlist(ctx context.Context, name string, allowlist []string) error
+}
+
+// applyNetworkChange batches every KindNetworkAdd/KindNetworkRemove
+// entry in one ApplyLive call into a single full-allowlist replacement.
+// The Set API takes the whole list atomically — incremental add/remove
+// isn't a thing at the PolicyAuthority layer.
+func applyNetworkChange(ctx context.Context, client AllowlistSetter, projectID string, allowlist []string) error {
+	return client.SetAllowlist(ctx, projectID, allowlist)
 }
 
 // GuestExec runs script inside the guest and returns its stdout,

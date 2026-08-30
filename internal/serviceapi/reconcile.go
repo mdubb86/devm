@@ -73,7 +73,14 @@ func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config
 		return fmt.Errorf("apply live: mutagen: extract binary: %w", err)
 	}
 	mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(identCfg), Exec: mutagen.OSExec}
-	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub, mutagenCLI, identCfg, ironProxyURL)
+	// NewClient(identCfg) dials this same daemon's own socket — the
+	// AllowlistSetter a KindNetworkAdd/Remove change dispatches through
+	// is a self-loop POST to /vm/set-allowlist, not an outbound call.
+	// reconcile.ApplyLive can't construct this itself: internal/reconcile
+	// can't import internal/serviceapi (this package already imports
+	// reconcile), so AllowlistSetter is declared there as a local
+	// interface and satisfied here by the concrete *Client.
+	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub, mutagenCLI, identCfg, ironProxyURL, NewClient(identCfg))
 }
 
 // TartLister is the subset of *tart.Tart the reconcile handler uses to
