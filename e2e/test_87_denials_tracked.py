@@ -31,6 +31,11 @@ def test_denials_tracked_per_project(workspace, devm):
         install=["true"],
         # Narrow allow-list so google.com / example.com trigger a reject.
         network={"allow": ["api.github.com"]},
+        # Opt out of the default repos.main (github.com/octocat/Hello-World):
+        # this allow-list only covers api.github.com, not github.com, so
+        # hydration's clone would get blocked by the same policy this test
+        # is exercising before assertions ever run.
+        no_repo=True,
     )
 
     start = subprocess.run(
