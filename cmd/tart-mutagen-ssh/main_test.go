@@ -119,8 +119,9 @@ exit 0
 	require.NoError(t, err)
 	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
 	assert.Equal(t, []string{
-		"exec", "testvm", "sh", "-c",
-		"exec /home/devm/.mutagen/agents/0.18.1/mutagen-agent synchronizer --log-level=debug",
+		"exec", "testvm",
+		"/home/devm/.mutagen/agents/0.18.1/mutagen-agent",
+		"synchronizer", "--log-level=debug",
 	}, got)
 }
 
@@ -241,8 +242,8 @@ exit 0
 	body, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
-	assert.Equal(t, []string{"exec", "testvm", "sh", "-c", "exec /usr/bin/whoami"}, got,
-		"commands not starting with .mutagen/ must pass through unchanged (still sh -c wrapped)")
+	assert.Equal(t, []string{"exec", "testvm", "/usr/bin/whoami"}, got,
+		"commands not starting with .mutagen/ must pass through unchanged")
 }
 
 func TestShim_ScpInvocationErrors(t *testing.T) {
@@ -257,6 +258,19 @@ func TestShim_ScpInvocationErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, string(out), "scp invocation not supported")
 	assert.Equal(t, 2, cmd.ProcessState.ExitCode())
+}
+
+func TestShim_RejectsShellMetacharacters(t *testing.T) {
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "ssh")
+	build := exec.Command("go", "build", "-o", shim, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build shim: %v\n%s", err, out)
+	}
+	cmd := exec.Command(shim, "devm@devm-vm", "cmd1", "|", "cmd2")
+	out, _ := cmd.CombinedOutput()
+	assert.Contains(t, string(out), "shell metacharacters")
+	assert.Equal(t, 1, cmd.ProcessState.ExitCode())
 }
 
 func TestShim_PropagatesChildExitCode(t *testing.T) {

@@ -55,38 +55,51 @@ func main() {
 		os.Exit(2)
 	}
 
+	// mutagen sends its command as one ssh argv element (a space-joined
+	// command string, e.g. ".mutagen/agents/0.18.1/mutagen-agent synchronizer
+	// --log-level=info"). sshd normally hands this to $SHELL -c which
+	// tokenizes. tart exec doesn't wrap in a shell, and adding one
+	// (sh -c "exec ...") introduced stdio buffering issues that broke
+	// mutagen's handshake. Do the tokenization ourselves in Go: mutagen's
+	// commands never contain shell metacharacters (verified: only paths,
+	// mode keywords, and --flag=value pairs), so strings.Fields is safe.
+	//
+	// If mutagen ever DOES send a metacharacter, log-and-error rather than
+	// silently split wrong.
+	raw := strings.Join(cmd, " ")
+	if strings.ContainsAny(raw, "|&;<>()`$\"'\\") {
+		logf("refusing to run command with shell metacharacters: %q", raw)
+		os.Exit(1)
+	}
+	tokens := strings.Fields(raw)
+	if len(tokens) == 0 {
+		logf("no command tokens after tokenization: %q", raw)
+		os.Exit(2)
+	}
+
 	// Mutagen assumes sshd's "cd HOME before executing remote command"
 	// semantics and sends its agent path as `.mutagen/agents/<v>/mutagen-agent`
 	// (relative to HOME). Tart Guest Agent doesn't chdir to the target user's
 	// HOME by default (its Workdir is unset by the tart CLI), so the relative
 	// path doesn't resolve. Rewrite to devm's absolute agent path.
-	var originalFirst string
-	if len(cmd) > 0 {
-		originalFirst = cmd[0]
-	}
-	if len(cmd) > 0 && strings.HasPrefix(cmd[0], ".mutagen/") {
-		cmd[0] = "/home/devm/" + cmd[0]
+	originalFirst := tokens[0]
+	if strings.HasPrefix(tokens[0], ".mutagen/") {
+		tokens[0] = "/home/devm/" + tokens[0]
 	}
 
 	// If we rewrote the agent path, log that so failures upstream can tell
 	// whether the path we asked tart to run actually exists in-guest. tart
 	// exec itself doesn't say "no such file" clearly in some paths.
-	if len(cmd) > 0 && strings.HasPrefix(cmd[0], "/home/devm/.mutagen/") {
-		logf("agent path %s (rewritten from mutagen's HOME-relative %q)", cmd[0], originalFirst)
+	if strings.HasPrefix(tokens[0], "/home/devm/.mutagen/") {
+		logf("agent path %s (rewritten from mutagen's HOME-relative %q)", tokens[0], originalFirst)
 	}
 
-	// mutagen sends the remote command as ONE ssh argv element (a shell
-	// command string, e.g. ".mutagen/agents/… synchronizer --log-level=info").
-	// sshd normally hands this to $SHELL -c so it gets tokenized before exec;
-	// tart exec doesn't do that itself, so we wrap in sh -c to preserve
-	// sshd's shell-execution semantics. Absolute path (from the rewrite
-	// above) ensures the agent resolves regardless of the shell's cwd.
-	//
-	// The `exec ` prefix guarantees POSIX shell replaces itself with the
-	// command rather than fork-wrapping — so no shell process lingers for
-	// the agent's lifetime and signals reach mutagen-agent directly.
-	joined := strings.Join(cmd, " ")
-	tartArgs := []string{"exec", vm, "sh", "-c", "exec " + joined}
+	// Invoke tart directly with the tokenized command — no sh -c wrapper.
+	// This keeps mutagen's stdio (stdin/stdout, its binary protobuf
+	// handshake channel) piped straight from mutagen through this process
+	// to tart exec's own child, with no intervening shell fork to disturb
+	// buffering.
+	tartArgs := append([]string{"exec", vm}, tokens...)
 	logf("invoking tart %s", strings.Join(tartArgs, " "))
 	c := exec.Command("tart", tartArgs...)
 	c.Stdin = os.Stdin
