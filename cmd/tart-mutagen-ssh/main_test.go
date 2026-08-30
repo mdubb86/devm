@@ -189,6 +189,35 @@ func TestShim_LogsInvocationToFile(t *testing.T) {
 	assert.Contains(t, string(body), "testvm")
 }
 
+func TestShim_TeesChildStderrToLogFile(t *testing.T) {
+	logPath := "/tmp/tart-mutagen-ssh.log"
+	_ = os.Remove(logPath)
+	t.Cleanup(func() { _ = os.Remove(logPath) })
+
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "ssh")
+	build := exec.Command("go", "build", "-o", shim, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build shim: %v\n%s", err, out)
+	}
+
+	// Stub tart that writes a distinctive marker to its own stderr.
+	tartStub := filepath.Join(dir, "tart")
+	marker := "AGENT-CRASHED-MARKER-12345"
+	require.NoError(t, os.WriteFile(tartStub, []byte(
+		"#!/bin/bash\necho '"+marker+"' >&2\nexit 42\n",
+	), 0o755))
+
+	cmd := exec.Command(shim, "devm@devm-vm", "cmd")
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	_ = cmd.Run()
+
+	body, err := os.ReadFile(logPath)
+	require.NoError(t, err, "log file should exist")
+	assert.Contains(t, string(body), marker,
+		"tart child stderr should be teed to the shim log file")
+}
+
 func TestShim_LeavesNonMutagenPathsAlone(t *testing.T) {
 	dir := t.TempDir()
 	shim := filepath.Join(dir, "ssh")

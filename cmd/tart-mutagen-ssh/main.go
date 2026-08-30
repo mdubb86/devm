@@ -13,7 +13,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -89,7 +91,17 @@ func main() {
 	c := exec.Command("tart", tartArgs...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
+	// Tee the child's stderr to both mutagen (via os.Stderr) and our
+	// persistent log file at /tmp/tart-mutagen-ssh.log. Mutagen's
+	// ClientVersionHandshake failure path drops captured stderr entirely,
+	// so this file is our only reliable view of agent-side output.
+	if f, err := os.OpenFile("/tmp/tart-mutagen-ssh.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		defer f.Close()
+		prefix := fmt.Sprintf("%s %d tart-child: ", time.Now().Format(time.RFC3339), os.Getpid())
+		c.Stderr = io.MultiWriter(os.Stderr, &prefixWriter{w: f, prefix: []byte(prefix), atLine: true})
+	} else {
+		c.Stderr = os.Stderr
+	}
 
 	if err := c.Start(); err != nil {
 		logf("exec tart: %v", err)
@@ -161,4 +173,29 @@ func parseSSHArgs(args []string) (string, []string, error) {
 		return "", nil, fmt.Errorf("no command in argv: %v", args)
 	}
 	return vm, cmd, nil
+}
+
+// prefixWriter adds a fixed prefix to every line written to the underlying
+// writer. Used to tag tart-child stderr in the shim log file so it's
+// distinguishable from the shim's own logf lines.
+type prefixWriter struct {
+	w      io.Writer
+	prefix []byte
+	atLine bool // true when the next write starts a new line
+}
+
+func (p *prefixWriter) Write(b []byte) (int, error) {
+	for i, line := range bytes.SplitAfter(b, []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		if i == 0 && !p.atLine {
+			p.w.Write(line)
+		} else {
+			p.w.Write(p.prefix)
+			p.w.Write(line)
+		}
+	}
+	p.atLine = len(b) > 0 && b[len(b)-1] == '\n'
+	return len(b), nil
 }
