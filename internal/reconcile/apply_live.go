@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -63,12 +64,19 @@ import (
 // URL (ironProxyURL, needed only for a repo cold-start clone; pass ""
 // when no repo add/volume-toggle-on is pending).
 //
+// KindNetworkAdd/KindNetworkRemove entries are batched: any number of
+// them in one call dispatch a SINGLE applyNetworkChange, carrying cfg's
+// full new allowlist (cfg.Network.Domains()) rather than a delta summed
+// from the individual changes — the PolicyAuthority's Set API takes the
+// whole list atomically via allowlistClient.
+//
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
-func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot, daemonRuntimeDir string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, mutagenCLI *mutagen.CLI, identCfg identity.Config, ironProxyURL string) error {
+func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config, repoRoot, daemonRuntimeDir string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, mutagenCLI *mutagen.CLI, identCfg identity.Config, ironProxyURL string, allowlistClient AllowlistSetter) error {
 	var templateChanges []Change
 	var mutagenChanges []Change
 	var bundleRebuildNeeded bool
+	var networkChangesPresent bool
 	for _, c := range changes {
 		if c.Bucket() != BucketLive {
 			continue
@@ -95,6 +103,13 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			mutagenChanges = append(mutagenChanges, c)
 		case KindVolumeChange:
 			mutagenChanges = append(mutagenChanges, c)
+		case KindNetworkAdd, KindNetworkRemove:
+			// Batched: any number of KindNetworkAdd/Remove entries in this
+			// change set dispatch as ONE applyNetworkChange call carrying
+			// cfg's full new allowlist — the PolicyAuthority's Set API
+			// takes the whole list atomically, so there's no per-change
+			// incremental add/remove to apply here.
+			networkChangesPresent = true
 		}
 	}
 
@@ -190,7 +205,32 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		}
 	}
 
+	if networkChangesPresent {
+		if err := applyNetworkChange(context.Background(), allowlistClient, vmName, cfg.Network.Domains()); err != nil {
+			return fmt.Errorf("apply network change: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// AllowlistSetter is ApplyLive's daemon-authority seam for
+// KindNetworkAdd/KindNetworkRemove. Declared locally — mirroring GuestExec above —
+// because internal/reconcile can't import internal/serviceapi without
+// a cycle (serviceapi already imports reconcile for Change/ApplyLive).
+// Production implementer: serviceapi.inProcessAllowlistSetter, which calls
+// policyAuthority.Set + updateSnapshotAfterAllowlistSet directly (no HTTP).
+// Also a testing seam: tests substitute a fake to observe batched dispatch.
+type AllowlistSetter interface {
+	SetAllowlist(ctx context.Context, name string, allowlist []string) error
+}
+
+// applyNetworkChange batches every KindNetworkAdd/KindNetworkRemove
+// entry in one ApplyLive call into a single full-allowlist replacement.
+// The Set API takes the whole list atomically — incremental add/remove
+// isn't a thing at the PolicyAuthority layer.
+func applyNetworkChange(ctx context.Context, client AllowlistSetter, projectID string, allowlist []string) error {
+	return client.SetAllowlist(ctx, projectID, allowlist)
 }
 
 // GuestExec runs script inside the guest and returns its stdout,
@@ -669,6 +709,19 @@ func cloneOneRepoIfEmpty(exec GuestExec, cfg identity.Config, projectID string, 
 	return cloneRepoInGuest(exec, spec.Repo.URL, spec.Repo.Secret, spec.GuestPath, spec.Repo.IronProxyURL, spec.Repo.GuestCACertPath)
 }
 
+// verifyGitHEAD is apply_live's analogue of serviceapi.verifyGitHEAD —
+// same shape, same rules. Runs `git -C <path> rev-parse --verify HEAD`;
+// returns a non-nil error whose text carries git's stderr on any failure.
+func verifyGitHEAD(macMirrorPath string) error {
+	cmd := exec.Command("git", "-C", macMirrorPath, "rev-parse", "--verify", "HEAD")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
 // setupSingleSession brings spec's mutagen sync session up to date —
 // the apply-live analogue of serviceapi.SetupVolumesPhase for exactly
 // one entity: ensures both sides' mirror dirs exist, verifies the
@@ -698,6 +751,23 @@ func setupSingleSession(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, p
 	if ok, reason := guardOK(macSide, guestSide); !ok {
 		daemonlog.Errorf("mutagen: guard rejected %s: %s", spec.Label, reason)
 		return fmt.Errorf("in-sync guard failed for %s: %s", spec.Label, reason)
+	}
+
+	// Integrity gate: a repo entity's persistent Mac mirror must be
+	// a healthy git checkout before mutagen ever touches it — a
+	// corrupt mirror (truncated .git, missing HEAD object) passed
+	// to sync-create would propagate straight into the guest.
+	if spec.Repo != nil && macSide.Count > 0 {
+		if err := verifyGitHEAD(macMirror); err != nil {
+			daemonlog.Errorf("mutagen: integrity check failed for %s: %v", spec.Label, err)
+			return fmt.Errorf(
+				"repo %s: mac mirror at %s failed integrity check "+
+					"(git rev-parse --verify HEAD: %s) — the persistent checkout "+
+					"appears corrupt; inspect the directory or `devm volume rm %s` "+
+					"to force a fresh clone on next `devm start`",
+				spec.Label, macMirror, err, spec.Label,
+			)
+		}
 	}
 
 	name := mutagenSessionName(projectID, spec.Label)

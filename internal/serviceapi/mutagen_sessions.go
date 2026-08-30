@@ -1,10 +1,13 @@
 package serviceapi
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
@@ -295,6 +298,20 @@ func SetupReposPhase(ctx context.Context, cfg identity.Config, projectID string,
 	return nil
 }
 
+// verifyGitHEAD runs `git -C <macMirrorPath> rev-parse --verify HEAD`
+// and returns a non-nil error whose text carries git's stderr on any
+// failure — truncated .git, missing HEAD object, or not-a-git-repo all
+// surface the same way.
+func verifyGitHEAD(macMirrorPath string) error {
+	cmd := exec.Command("git", "-C", macMirrorPath, "rev-parse", "--verify", "HEAD")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
 // SetupVolumesPhase establishes a mutagen sync session for every
 // entity (volumes and repos alike). Uniform per-entity code path;
 // clone-if-empty for repos is handled separately by SetupReposPhase.
@@ -381,6 +398,23 @@ func SetupVolumesPhase(
 		if !verdict.OK {
 			daemonlog.Errorf("mutagen: guard rejected %s: %s", e.Label, verdict.Reason)
 			return fmt.Errorf("in-sync guard failed for %s: %s", e.Label, verdict.Reason)
+		}
+
+		// Integrity gate: a repo entity's persistent Mac mirror must be
+		// a healthy git checkout before mutagen ever touches it — a
+		// corrupt mirror (truncated .git, missing HEAD object) passed
+		// to sync-create would propagate straight into the guest.
+		if e.Repo != nil && macSide.Count > 0 {
+			if err := verifyGitHEAD(e.MacMirrorPath); err != nil {
+				daemonlog.Errorf("mutagen: integrity check failed for %s: %v", e.Label, err)
+				return fmt.Errorf(
+					"repo %s: mac mirror at %s failed integrity check "+
+						"(git rev-parse --verify HEAD: %s) — the persistent checkout "+
+						"appears corrupt; inspect the directory or `devm volume rm %s` "+
+						"to force a fresh clone on next `devm start`",
+					e.Label, e.MacMirrorPath, err, e.Label,
+				)
+			}
 		}
 
 		sessionCfg := mutagen.ComposeConfig(e.UserIgnore)

@@ -73,7 +73,28 @@ func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config
 		return fmt.Errorf("apply live: mutagen: extract binary: %w", err)
 	}
 	mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(identCfg), Exec: mutagen.OSExec}
-	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub, mutagenCLI, identCfg, ironProxyURL)
+	// A KindNetworkAdd/Remove change dispatches through the
+	// AllowlistSetter reconcile.ApplyLive is given. reconcile.ApplyLive
+	// can't construct one itself: internal/reconcile can't import
+	// internal/serviceapi (this package already imports reconcile), so
+	// AllowlistSetter is declared there as a local interface and
+	// satisfied here by inProcessAllowlistSetter.
+	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub, mutagenCLI, identCfg, ironProxyURL, &inProcessAllowlistSetter{cfg: identCfg})
+}
+
+// inProcessAllowlistSetter satisfies reconcile.AllowlistSetter for
+// reconcile-triggered allowlist writes. The /vm/reconcile handler holds
+// req.Name's project lock across the ApplyLive call this setter is
+// reached from, so SetAllowlist here does NOT re-acquire it — it writes
+// policyAuthority + snapshot directly. This is the only production
+// implementer of reconcile.AllowlistSetter.
+type inProcessAllowlistSetter struct {
+	cfg identity.Config
+}
+
+func (s *inProcessAllowlistSetter) SetAllowlist(ctx context.Context, name string, allowlist []string) error {
+	policyAuthority.Set(name, allowlist)
+	return updateSnapshotAfterAllowlistSet(s.cfg, name, allowlist)
 }
 
 // TartLister is the subset of *tart.Tart the reconcile handler uses to

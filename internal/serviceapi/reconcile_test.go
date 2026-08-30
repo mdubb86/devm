@@ -566,45 +566,6 @@ func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
 		"live-only reconcile must not clobber SecretHashes to nil")
 }
 
-func TestVMReconcile_NetworkAddSurfacesAsAppliedIronProxy(t *testing.T) {
-	// Network-allow additions are BucketEgressRestart changes: the
-	// daemon does not apply them itself. They must come back to the CLI
-	// via AppliedIronProxy (which the CLI dispatches to
-	// /vm/apply-iron-proxy), not Applied or TeardownRequired.
-	t.Setenv("HOME", t.TempDir())
-	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{
-		Cfg: schema.Config{
-			Project: schema.Project{Name: "p"},
-			Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}},
-		},
-	}))
-
-	req := VMReconcileRequest{
-		Name: "p",
-		Cfg: schema.Config{
-			Project: schema.Project{Name: "p"},
-			Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}, {Host: "b.com"}}},
-		},
-	}
-	body, _ := json.Marshal(req)
-
-	server := NewServer(identity.Prod.SocketPath(), Build{})
-	locks := NewProjectLocks()
-	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"), nil, 0)
-
-	rec := httptest.NewRecorder()
-	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
-	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
-
-	var resp VMReconcileResponse
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.Len(t, resp.AppliedIronProxy, 1)
-	assert.Equal(t, reconcile.KindNetworkAdd, resp.AppliedIronProxy[0].Kind)
-	assert.Equal(t, "b.com", resp.AppliedIronProxy[0].Key)
-	assert.Empty(t, resp.Applied)
-	assert.Empty(t, resp.TeardownRequired)
-}
-
 func TestVMReconcile_MissingIronProxy_EmitsKindIronProxyDown(t *testing.T) {
 	// Self-heal: even with a completely unchanged config, a running VM
 	// whose iron-proxy is missing/stale must surface a synthetic

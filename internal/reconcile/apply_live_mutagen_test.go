@@ -143,6 +143,22 @@ func testApplyIdentity(t *testing.T) identity.Config {
 	return identity.Config{Name: "devm-test", TLD: "test"}
 }
 
+// seedMinimalGitRepo creates the minimal git directory structure in path
+// so that `git rev-parse --verify HEAD` succeeds. Used in tests that
+// set up repo mirrors to pass the integrity check.
+func seedMinimalGitRepo(t *testing.T, path string) {
+	t.Helper()
+	gitDir := filepath.Join(path, ".git")
+	require.NoError(t, os.MkdirAll(gitDir, 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(gitDir, "objects"), 0755))
+	headsDir := filepath.Join(gitDir, "refs", "heads")
+	require.NoError(t, os.MkdirAll(headsDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0644))
+	// Create a minimal main ref pointing to a dummy commit hash so git can
+	// resolve HEAD. The hash doesn't need to be a real object.
+	require.NoError(t, os.WriteFile(filepath.Join(headsDir, "main"), []byte("1234567890abcdef1234567890abcdef12345678\n"), 0644))
+}
+
 // ---------- tests ----------
 
 func TestApplyMutagenSessionChange_VolumeAdd_CreatesSession(t *testing.T) {
@@ -342,10 +358,12 @@ func TestApplyMutagenSessionChange_RepoLabelRename_MovesGuestCloneDirAndRecreate
 	}}
 	rec := &recordingExec{}
 
-	// Pre-seed the old mirror dir with a marker file so the rename's
-	// os.Rename has real content to carry over.
+	// Pre-seed the old mirror dir with a valid git repo so the integrity
+	// check passes, and add a marker file so the rename's os.Rename carries
+	// real content forward.
 	oldMirror := filepath.Join(root, "myproj", "oldname")
 	require.NoError(t, os.MkdirAll(oldMirror, 0700))
+	seedMinimalGitRepo(t, oldMirror)
 	require.NoError(t, os.WriteFile(filepath.Join(oldMirror, "marker.txt"), []byte("hi"), 0o644))
 
 	before := schema.RepoConfig{URL: strPtr("git@example.com:a/repo.git"), Secret: "gh", Volume: boolPtr(true), Label: strPtr("oldname")}
@@ -441,4 +459,46 @@ func TestApplyMutagenSessionChange_RepoOpAdd_VolumeFalse_JustClones(t *testing.T
 	assert.Empty(t, cli.createArgs, "volume:false must never create a mutagen session")
 	assert.True(t, rec.containsCall("git clone"), "must cold-start clone the repo into the guest")
 	assert.True(t, rec.containsCall("/home/devm/extra"), "must clone at the label-derived guest path")
+}
+
+// TestSetupSingleSession_CorruptMacMirrorErrorsBeforeSessionCreate verifies
+// that a repo entity with a corrupt mac mirror is rejected by the integrity
+// gate BEFORE mutagen session creation is attempted.
+func TestSetupSingleSession_CorruptMacMirrorErrorsBeforeSessionCreate(t *testing.T) {
+	root := t.TempDir()
+	withFakeMirrorDir(t, root)
+
+	cli := &fakeMutagenCLI{}
+	rec := &recordingExec{}
+	rec.guestCount = 0 // guest side empty
+
+	spec := sessionSpec{
+		Label:     "myrepo",
+		GuestPath: "/home/devm/myrepo",
+		Repo:      &repoCloneSpec{URL: "https://example.com/r.git"},
+	}
+
+	// Seed broken .git in the mac mirror: only HEAD file, missing .git/objects
+	// and .git/refs directories, so git rev-parse --verify HEAD fails with
+	// "not a git repository" or similar truncated-repo error.
+	mirrorPath := filepath.Join(root, "myproj", "myrepo")
+	gitDir := filepath.Join(mirrorPath, ".git")
+	require.NoError(t, os.MkdirAll(gitDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0644))
+	// Note: intentionally NOT creating .git/objects and .git/refs to trigger
+	// git's truncated-repo error on rev-parse --verify HEAD.
+
+	err := setupSingleSession(rec.exec(), cli.build(), testApplyIdentity(t), "myproj", spec)
+	if err == nil {
+		t.Fatalf("setupSingleSession on corrupt mac mirror returned nil; want error")
+	}
+	if !strings.Contains(err.Error(), "myrepo") {
+		t.Fatalf("error must name the entity label, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "integrity check") {
+		t.Fatalf("error must mention integrity check, got: %v", err)
+	}
+	if got := len(cli.createArgs); got != 0 {
+		t.Fatalf("mutagen session was created despite integrity failure; createArgs=%d", got)
+	}
 }

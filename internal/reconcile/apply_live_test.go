@@ -1,6 +1,7 @@
 package reconcile
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// setAllowlistCall records one fakeAllowlistSetter.SetAllowlist
+// invocation.
+type setAllowlistCall struct {
+	Name      string
+	Allowlist []string
+}
+
+// fakeAllowlistSetter implements AllowlistSetter, capturing every
+// SetAllowlist call so a test can assert batching (one call carrying
+// the full allowlist) instead of a per-change dispatch.
+type fakeAllowlistSetter struct {
+	calls []setAllowlistCall
+}
+
+func (f *fakeAllowlistSetter) SetAllowlist(ctx context.Context, name string, allowlist []string) error {
+	f.calls = append(f.calls, setAllowlistCall{Name: name, Allowlist: allowlist})
+	return nil
+}
 
 // fakeTartForApplyLive returns a *tart.Tart pointing at a shell script
 // that records every invocation's argv (space-joined) as one line in
@@ -83,7 +103,7 @@ func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
 	tr, _ := fakeTartForApplyLive(t, dir)
 	err := ApplyLive(tr, "x", []Change{
 		{Kind: KindInstallChange},
-	}, schema.Config{}, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "")
+	}, schema.Config{}, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	assert.NoError(t, err)
 }
 
@@ -97,7 +117,7 @@ func TestApplyLive_PortKindsAreNoOps(t *testing.T) {
 		{Kind: KindPortAdd, Service: "api", Key: "8080", New: "8080"},
 		{Kind: KindPortRemove, Service: "api", Key: "8080", Old: "8080"},
 		{Kind: KindPortChange, Service: "api", Key: "9090", Old: "8080", New: "9090"},
-	}, schema.Config{}, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "")
+	}, schema.Config{}, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	assert.NoError(t, err)
 }
 
@@ -117,7 +137,7 @@ func TestApplyLive_EnvChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
 
 	err := ApplyLive(tr, "p-vm", []Change{
 		{Kind: KindEnvChange, Key: "FOO", Old: "old", New: "new"},
-	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "")
+	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	require.NoError(t, err)
 
 	// No host-side .devm/ writes.
@@ -138,7 +158,7 @@ func TestApplyLive_EnvAddAndRemove_AlsoPipeBundle_NoWorkspaceWrite(t *testing.T)
 		cfg := schema.Config{Env: map[string]schema.EnvValue{"K": {Literal: "v"}}}
 		err := ApplyLive(tr, "x", []Change{
 			{Kind: kind, Key: "K", New: "v"},
-		}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "")
+		}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 		require.NoError(t, err, "kind=%v", kind)
 
 		_, statErr := os.Stat(filepath.Join(dir, ".devm"))
@@ -155,7 +175,7 @@ func TestApplyLive_MultipleEnvChanges_SingleBundlePipe(t *testing.T) {
 		{Kind: KindEnvAdd, Key: "A", New: "1"},
 		{Kind: KindEnvChange, Key: "B", Old: "x", New: "2"},
 		{Kind: KindEnvAdd, Key: "C", New: "3"},
-	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "")
+	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, countCalls(t, log, "exec -i"), "multiple env changes must still coalesce into a single bundle pipe")
 }
@@ -175,7 +195,7 @@ func TestApplyLive_PathChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
 
 	err := ApplyLive(tr, "p-vm", []Change{
 		{Kind: KindPathChange, Old: "", New: "/workspace/bin"},
-	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "")
+	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(filepath.Join(dir, ".devm"))
@@ -200,7 +220,7 @@ func TestApplyLive_StartupChange_NotLiveApplied(t *testing.T) {
 
 	err := ApplyLive(tr, "p-vm", []Change{
 		{Kind: KindStartupChange},
-	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "")
+	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(filepath.Join(dir, ".devm"))
@@ -214,7 +234,7 @@ func TestApplyLive_NoEnvOrTemplateChange_DoesNotPipeBundle(t *testing.T) {
 	tr, log := fakeTartForApplyLive(t, dir)
 	err := ApplyLive(tr, "x", []Change{
 		{Kind: KindInstallChange},
-	}, schema.Config{}, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "")
+	}, schema.Config{}, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, countCalls(t, log, "exec -i"), "apply_live should not pipe a bundle when there's no env or template change")
 	_, statErr := os.Stat(filepath.Join(dir, ".devm"))
@@ -241,7 +261,7 @@ func TestApplyLive_TemplateChange_PipesBundleThenInvokesDispatcher(t *testing.T)
 		{Kind: KindTemplateChange, Service: "web", Detail: "/etc/foo", New: "installed"},
 		{Kind: KindTemplateChange, Service: "api", Detail: "/etc/bar", New: "installed"},
 	}
-	assert.NoError(t, ApplyLive(tr, "x-sbx", changes, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, ""))
+	assert.NoError(t, ApplyLive(tr, "x-sbx", changes, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil))
 
 	// Bundle piped exactly once regardless of how many templates changed...
 	assert.Equal(t, 1, countCalls(t, log, "exec -i"), "expected exactly one bundle pipe")
@@ -273,7 +293,7 @@ func TestApplyLive_RepoLabelChange_RebuildsBundleAndUpdatesMutagen(t *testing.T)
 			RepoAfter:  &schema.RepoConfig{Label: strPtr("new")},
 		},
 	}
-	require.NoError(t, ApplyLive(tr, "x-sbx", changes, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, ""))
+	require.NoError(t, ApplyLive(tr, "x-sbx", changes, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil))
 
 	// Bundle rebuilt: the repo change alone (no accompanying env/path
 	// change) must set bundleRebuildNeeded, or the guest's commands.json
@@ -302,7 +322,7 @@ func TestApplyLive_ServiceDirectChangeAlone_DoesNotExec(t *testing.T) {
 		},
 	}
 	changes := []Change{{Kind: KindServiceDirectChange, Service: "db"}}
-	require.NoError(t, ApplyLive(tr, "p", changes, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, ""))
+	require.NoError(t, ApplyLive(tr, "p", changes, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil))
 	assert.Equal(t, 0, countCalls(t, log, ""), "a direct-only change must not exec anything in-guest")
 	assert.False(t, logContains(t, log, "flush chain inet devm_filter svc_ingress"))
 }
@@ -315,7 +335,39 @@ func TestApplyLive_NoDirectChange_DoesNotTouchSvcIngress(t *testing.T) {
 	cfg := schema.Config{Docker: true}
 	err := ApplyLive(tr, "x", []Change{
 		{Kind: KindInstallChange},
-	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "")
+	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	require.NoError(t, err)
 	assert.False(t, logContains(t, log, "flush chain inet devm_filter svc_ingress"))
+}
+
+// TestApplyLive_DispatchesKindNetworkAddToSetAllowlist pins the batching
+// contract: any number of KindNetworkAdd/KindNetworkRemove entries in
+// one ApplyLive call dispatch a SINGLE SetAllowlist call, carrying cfg's
+// full new allowlist (cfg.Network.Domains()) — NOT a delta summed from
+// the individual Change.New values. The PolicyAuthority's Set API takes
+// the whole list atomically.
+func TestApplyLive_DispatchesKindNetworkAddToSetAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	tr, _ := fakeTartForApplyLive(t, dir)
+	fakeClient := &fakeAllowlistSetter{}
+
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Network: schema.Network{Allow: []schema.AllowEntry{
+			{Host: "x.com"},
+			{Host: "y.com"},
+		}},
+	}
+
+	changes := []Change{
+		{Kind: KindNetworkAdd, Key: "x.com", New: "x.com"},
+		{Kind: KindNetworkAdd, Key: "y.com", New: "y.com"},
+	}
+
+	err := ApplyLive(tr, "p-vm", changes, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", fakeClient)
+	require.NoError(t, err)
+
+	require.Len(t, fakeClient.calls, 1, "SetAllowlist calls = %d, want 1 (batched)", len(fakeClient.calls))
+	assert.Equal(t, "p-vm", fakeClient.calls[0].Name)
+	assert.Equal(t, []string{"x.com", "y.com"}, fakeClient.calls[0].Allowlist)
 }

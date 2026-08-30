@@ -22,10 +22,13 @@ const (
 	// /opt/devm/startup.sh but only takes effect on the guest's next boot.
 	BucketRestartVM
 	BucketTeardownVM // requires VM delete + cold start (volumes/install rerun)
-	// BucketEgressRestart — regenerate iron-proxy config and respawn
-	// iron-proxy on the same MAC_HOST:port. No VM cycle. Parallel to
-	// BucketLive and BucketTeardownVM (not a severity step): a single
-	// reconcile can produce changes in any combination of buckets.
+	// BucketEgressRestart — regenerate iron-proxy config and respawn.
+	// Covers secret rotations (secret values + host bindings live in
+	// iron-proxy's YAML + process env, so a fresh spawn is required) and
+	// synthetic KindIronProxyDown from the watchdog. Allowlist edits do NOT
+	// live here: KindNetworkAdd/Remove are BucketLive and dispatch in-process
+	// through applyNetworkChange → AllowlistSetter.SetAllowlist → (in daemon)
+	// policyAuthority.Set + snapshot update. No iron-proxy touch.
 	BucketEgressRestart
 )
 
@@ -171,8 +174,8 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindPortAdd:       BucketLive,
 	KindPortRemove:    BucketLive,
 	KindPortChange:    BucketLive,
-	KindNetworkAdd:    BucketEgressRestart,
-	KindNetworkRemove: BucketEgressRestart,
+	KindNetworkAdd:    BucketLive,
+	KindNetworkRemove: BucketLive,
 	// Env changes are applied by rewriting the unit file and restarting
 	// the service via tart exec — no VM recreate needed.
 	KindEnvAdd:    BucketLive,

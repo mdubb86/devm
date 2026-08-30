@@ -401,25 +401,40 @@ func TestSetupPhases_AlignedContentCreatesSession(t *testing.T) {
 		},
 	}
 
-	// Pre-populate the Mac mirror with one real file, then have the
+	// Pre-populate the Mac mirror with a real one-commit git repo (a
+	// repo entity's mirror must pass the integrity gate), then have the
 	// fake guest scan report the exact same count/size/hash a real
 	// ScanGuest would compute for an identical tree — a genuinely
 	// aligned, non-empty pair on both sides.
 	macDir, _, err := ensureMirrorDir(cfg, "myproj", "app")
 	require.NoError(t, err)
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", macDir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	runGit("init", "-q")
 	require.NoError(t, os.WriteFile(filepath.Join(macDir, "foo.txt"), []byte("test"), 0o644))
-	wantHash := hashTopSample([]string{"foo.txt"})
+	runGit("add", "foo.txt")
+	runGit("commit", "-q", "-m", "root")
 
-	exec := func(script string) (string, string, int, error) {
+	macSide, err := ScanMac(macDir)
+	require.NoError(t, err)
+
+	guestExec := func(script string) (string, string, int, error) {
 		if strings.Contains(script, "find .") {
-			return fmt.Sprintf("count=1 size=4 hash=%s\n", wantHash), "", 0, nil
+			return fmt.Sprintf("count=%d size=%d hash=%s\n", macSide.Count, macSide.Size, macSide.TopHash), "", 0, nil
 		}
 		return "", "", 0, nil
 	}
 
-	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, guestExec, "myproj.test")
 	require.NoError(t, err)
-	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
+	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, guestExec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
 
 	require.Len(t, sc.createArgs, 1)
@@ -594,6 +609,105 @@ func TestSetupVolumesPhase_UniformSessionSetup(t *testing.T) {
 }
 
 // ---------- StopPhase / TeardownPhase ----------
+
+// ---------- verifyGitHEAD ----------
+
+func TestVerifyGitHEAD_HappyPath(t *testing.T) {
+	dir := t.TempDir()
+	// Create a real one-commit git repo — smallest valid state that passes rev-parse.
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("commit", "-q", "--allow-empty", "-m", "root")
+	if err := verifyGitHEAD(dir); err != nil {
+		t.Fatalf("verifyGitHEAD on healthy repo: %v", err)
+	}
+}
+
+func TestVerifyGitHEAD_TruncatedGitFailsWithStderr(t *testing.T) {
+	dir := t.TempDir()
+	// Simulate a truncated .git: enough structure (objects/, refs/) for
+	// git to recognize it as a repo, but HEAD points at a ref with no
+	// backing object — the shape a partially-copied mirror leaves behind.
+	if err := os.MkdirAll(filepath.Join(dir, ".git", "objects"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".git", "refs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// No refs/heads/main object exists → rev-parse fails.
+	err := verifyGitHEAD(dir)
+	if err == nil {
+		t.Fatalf("verifyGitHEAD on broken repo returned nil; want error")
+	}
+	if !strings.Contains(err.Error(), "HEAD") && !strings.Contains(err.Error(), "revision") {
+		t.Fatalf("verifyGitHEAD error should carry git's stderr, got: %v", err)
+	}
+}
+
+func TestVerifyGitHEAD_NotARepo(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "random.txt"), []byte("hi"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	err := verifyGitHEAD(dir)
+	if err == nil {
+		t.Fatalf("verifyGitHEAD on non-git-dir returned nil; want error")
+	}
+}
+
+// ---------- SetupVolumesPhase integrity gate ----------
+
+// TestSetupVolumesPhase_CorruptMacMirrorErrorsBeforeSessionCreate locks
+// in the ordering contract: a repo entity whose Mac mirror already has
+// content but fails `git rev-parse --verify HEAD` must fail cold-start
+// loudly, before any mutagen session is created — otherwise mutagen
+// would propagate the corrupt mac-side content into the guest.
+func TestSetupVolumesPhase_CorruptMacMirrorErrorsBeforeSessionCreate(t *testing.T) {
+	cfg := testSessionsIdentity(t)
+	sc := &scriptedCLI{} // no existing sessions
+	cli := sc.build()
+
+	entities := []SessionEntity{
+		{
+			Label:     "myrepo",
+			GuestPath: "/home/devm/myrepo",
+			Repo:      &SessionRepoInfo{URL: "https://example.com/r.git", Secret: "gh"},
+		},
+	}
+
+	// Mac mirror side: populated but with a broken .git — a non-empty,
+	// non-scannable-as-healthy tree that GuardCheck alone would accept
+	// (guest side reports empty, which GuardCheck treats as never
+	// conflicting) but that must never be handed to mutagen.
+	macDir, _, err := ensureMirrorDir(cfg, "myproj", "myrepo")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(macDir, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(macDir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+
+	exec := scriptedGuestExec(true) // guest side reports empty (fresh)
+
+	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	if err == nil {
+		t.Fatalf("SetupVolumesPhase on corrupt mac mirror returned nil; want error")
+	}
+	assert.Contains(t, err.Error(), "myrepo", "error must name the entity label")
+	assert.Contains(t, err.Error(), "integrity check", "error must mention integrity check")
+	assert.Empty(t, sc.createArgs, "mutagen session must not be created despite integrity failure")
+}
 
 func TestStopPhase_FlushAndPauseAll(t *testing.T) {
 	sc := &scriptedCLI{
