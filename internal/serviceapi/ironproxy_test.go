@@ -3,10 +3,12 @@ package serviceapi
 import (
 	"context"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
+	transformv1 "github.com/mdubb86/devm/internal/ironproxy/transformv1"
 	"github.com/mdubb86/devm/internal/setsidshim"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
@@ -60,6 +63,7 @@ func TestIronPolicySocketPath_DeepHomeFallsBackToTempDir(t *testing.T) {
 // bootout` during devm upgrade.
 func TestSpawnIronProxy_WrapsWithSetsidShim(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() { policyAuthority.StopServing("p-shim-test") })
 
 	// Substitute the low-level spawn seam so this test never execs the
 	// shim or iron-proxy — it only inspects the *exec.Cmd that
@@ -95,6 +99,59 @@ func TestSpawnIronProxy_WrapsWithSetsidShim(t *testing.T) {
 	assert.Equal(t, shimPath, gotCmd.Args[0])
 	assert.Equal(t, binaryPath, gotCmd.Args[1], "argv[1] must be the iron-proxy binary path")
 	assert.Equal(t, "-config", gotCmd.Args[2])
+}
+
+// SpawnIronProxy must (a) serve the project's TransformService socket
+// before the proxy process starts and (b) render the grpc transform's
+// target pointing at exactly that socket — otherwise every guest
+// request 502s until something else serves it.
+func TestSpawnIronProxy_ServesPolicySocketAndSetsTarget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const projectID = "p-policy-test"
+	t.Cleanup(func() { policyAuthority.StopServing(projectID) })
+
+	origSpawn := ironProxySpawn
+	t.Cleanup(func() { ironProxySpawn = origSpawn })
+	ironProxySpawn = func(_ context.Context, _ *supervisor.Supervisor, _ supervisor.Key, _ *exec.Cmd, _ ...io.Writer) error {
+		return nil
+	}
+
+	sup := supervisor.New(t.TempDir())
+	proxyCfg := IronProxyConfig{
+		HTTPListen:  "127.0.0.1:0",
+		HTTPSListen: "127.0.0.1:0",
+		CACertPath:  "/tmp/ca.crt",
+		CAKeyPath:   "/tmp/ca.key",
+		AllowList:   []string{"example.com"},
+	}
+	require.NoError(t, SpawnIronProxy(context.Background(), identity.Prod, sup, projectID, proxyCfg, nil))
+
+	sockPath, err := IronPolicySocketPath(identity.Prod, projectID)
+	require.NoError(t, err)
+
+	// The socket must be live: a TransformService client connecting to it
+	// gets an allow verdict for the configured host and a devm 403 for
+	// anything else.
+	client := dialPolicy(t, sockPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.TransformRequest(ctx, policyReq("example.com", "GET", "/"))
+	require.NoError(t, err)
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.GetAction())
+	resp, err = client.TransformRequest(ctx, policyReq("blocked.example", "GET", "/"))
+	require.NoError(t, err)
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.GetAction())
+
+	// The rendered config's grpc transform must dial that same socket.
+	cfgPath, err := IronProxyConfigPath(identity.Prod, projectID)
+	require.NoError(t, err)
+	blob, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(blob, &got))
+	transform := got["transforms"].([]any)[0].(map[string]any)
+	require.Equal(t, "grpc", transform["name"])
+	require.Equal(t, "unix://"+sockPath, transform["config"].(map[string]any)["target"])
 }
 
 func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {

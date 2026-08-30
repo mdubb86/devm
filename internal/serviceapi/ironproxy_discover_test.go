@@ -5,11 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/mdubb86/devm/internal/identity"
+	transformv1 "github.com/mdubb86/devm/internal/ironproxy/transformv1"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -178,6 +180,38 @@ func TestRecoverProjectState_ReplaysSnapshotRoutes(t *testing.T) {
 	require.True(t, ok, "default proxied route (the class the pre-mirror recovery deliberately skipped) must now be replayed")
 	assert.Equal(t, "127.42.0.9", web.BackendHost)
 	assert.Equal(t, 3000, web.BackendPort)
+}
+
+// After a daemon restart, recoverProjectState must re-serve the adopted
+// project's policy socket with the allowlist recomputed from the state
+// snapshot — until it runs, every guest request fail-closes with a 502.
+func TestRecoverProjectState_ServesSnapshotAllowlist(t *testing.T) {
+	const projectID = "recover-policy-proj"
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.StopServing(projectID)
+	})
+
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
+		Cfg: schema.Config{
+			Network: schema.Network{Allow: []schema.AllowEntry{{Host: "example.com"}}},
+		},
+	}))
+
+	recoverProjectState(context.Background(), identity.Prod, nil, NewRoutes(), projectID)
+
+	sockPath, err := IronPolicySocketPath(identity.Prod, projectID)
+	require.NoError(t, err)
+	client := dialPolicy(t, sockPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.TransformRequest(ctx, policyReq("example.com", "GET", "/"))
+	require.NoError(t, err)
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.GetAction())
+	resp, err = client.TransformRequest(ctx, policyReq("blocked.example", "GET", "/"))
+	require.NoError(t, err)
+	require.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.GetAction())
 }
 
 // TestRecoverProjectState_PreservesRouteModeAcrossRestart pins that a
