@@ -73,14 +73,29 @@ func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config
 		return fmt.Errorf("apply live: mutagen: extract binary: %w", err)
 	}
 	mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(identCfg), Exec: mutagen.OSExec}
-	// NewClient(identCfg) dials this same daemon's own socket — the
-	// AllowlistSetter a KindNetworkAdd/Remove change dispatches through
-	// is a self-loop POST to /vm/set-allowlist, not an outbound call.
-	// reconcile.ApplyLive can't construct this itself: internal/reconcile
-	// can't import internal/serviceapi (this package already imports
-	// reconcile), so AllowlistSetter is declared there as a local
-	// interface and satisfied here by the concrete *Client.
-	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub, mutagenCLI, identCfg, ironProxyURL, NewClient(identCfg))
+	// A KindNetworkAdd/Remove change dispatches through the
+	// AllowlistSetter reconcile.ApplyLive is given. reconcile.ApplyLive
+	// can't construct one itself: internal/reconcile can't import
+	// internal/serviceapi (this package already imports reconcile), so
+	// AllowlistSetter is declared there as a local interface and
+	// satisfied here by inProcessAllowlistSetter.
+	return reconcile.ApplyLive(r.tr, vmName, changes, cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub, mutagenCLI, identCfg, ironProxyURL, &inProcessAllowlistSetter{cfg: identCfg})
+}
+
+// inProcessAllowlistSetter satisfies reconcile.AllowlistSetter for
+// reconcile-triggered network changes. The /vm/reconcile handler holds
+// req.Name's project lock across the ApplyLive call this setter is
+// reached from, so SetAllowlist here does NOT acquire any lock — it
+// goes straight to the in-memory PolicyAuthority and the on-disk
+// snapshot writer that /vm/set-allowlist's HTTP handler also uses,
+// bypassing HTTP (and that handler's own lock acquisition) entirely.
+type inProcessAllowlistSetter struct {
+	cfg identity.Config
+}
+
+func (s *inProcessAllowlistSetter) SetAllowlist(ctx context.Context, name string, allowlist []string) error {
+	policyAuthority.Set(name, allowlist)
+	return updateSnapshotAfterAllowlistSet(s.cfg, name, allowlist)
 }
 
 // TartLister is the subset of *tart.Tart the reconcile handler uses to
