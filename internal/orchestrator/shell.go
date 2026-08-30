@@ -686,10 +686,47 @@ func (d ShellDeps) teardownVM(ctx context.Context, cfg schema.Config, vmName str
 func (d ShellDeps) teardownOnFail(ctx context.Context, cfg schema.Config, vmName string, err error, msg string) (int, error) {
 	log.Printf("shell: failed: %s: %v", msg, err)
 	fmt.Fprintf(os.Stderr, "teardown-on-fail: %s: %v\n", msg, err)
+
+	// Best-effort flush of mutagen sessions before destroying the VM. Under
+	// the new lifecycle mutagen sync runs before install:/startup:, so if
+	// those user phases write to $WORKSPACE and then fail, the writes only
+	// reach the Mac mirror if mutagen's watcher happens to sync them before
+	// we destroy the guest-side workspace here. Explicit flush closes that
+	// race — any in-flight writes propagate to Mac before teardown.
+	//
+	// Failures here don't block teardown (we're already in a failure path);
+	// just log.
+	if ferr := flushMutagenOnTeardownFn(d, ctx, cfg, vmName); ferr != nil {
+		log.Printf("shell: teardown flush mutagen failed (continuing): %v", ferr)
+	}
+
 	if terr := d.teardownVM(ctx, cfg, vmName); terr != nil {
 		fmt.Fprintf(os.Stderr, "teardown-on-fail: %v\n", terr)
 	}
 	return -1, fmt.Errorf("%s: %w", msg, err)
+}
+
+// flushMutagenOnTeardownFn is the test-injection seam for teardownOnFail's
+// pre-destroy mutagen flush. Production always calls
+// (ShellDeps).flushMutagenOnTeardown; tests substitute a fake to verify
+// call ordering without a live mutagen daemon.
+var flushMutagenOnTeardownFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
+	return d.flushMutagenOnTeardown(ctx, cfg, vmName)
+}
+
+// flushMutagenOnTeardown builds the mutagen CLI the same way
+// waitForInitialSync does and flushes all of vmName's sync sessions. See
+// teardownOnFail for why this runs before the VM is destroyed.
+func (d ShellDeps) flushMutagenOnTeardown(ctx context.Context, cfg schema.Config, vmName string) error {
+	mutagenBin, err := mutagen.Ensure(d.Ident.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("mutagen: extract binary: %w", err)
+	}
+	cli := &mutagen.CLI{
+		Binary:  mutagenBin,
+		DataDir: filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
+	}
+	return serviceapi.FlushAll(cli, vmName)
 }
 
 // attachShell attaches an interactive shell inside the VM via `tart exec`.

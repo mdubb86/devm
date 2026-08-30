@@ -749,6 +749,70 @@ func TestRunShellColdPath_ProvisionFail_TearsDownVM(t *testing.T) {
 		"tart delete <vm> must run on provision failure so the VM disk is destroyed")
 }
 
+// TestRunShellColdPath_ProvisionFail_FlushesMutagenBeforeTeardown verifies
+// teardownOnFail flushes mutagen sync sessions BEFORE tart delete destroys
+// the VM — closing the race where install:/startup: writes to $WORKSPACE
+// are lost because mutagen's watcher hasn't caught the write yet when
+// teardown destroys the guest-side workspace (pinned by e2e
+// test_67/test_69).
+func TestRunShellColdPath_ProvisionFail_FlushesMutagenBeforeTeardown(t *testing.T) {
+	fakeInstantMutagenSync(t)
+	origFlush := flushMutagenOnTeardownFn
+	t.Cleanup(func() { flushMutagenOnTeardownFn = origFlush })
+
+	repoRoot := t.TempDir()
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+	}
+
+	// The RunUser ExecStream emits the `install` stage marker then exits
+	// non-zero — an install-phase failure that must tear down (and, per
+	// this test, flush mutagen first).
+	tartBin, logPath := fakeTartBinStageFail(t, repoRoot, "install")
+
+	spawner := &stubSpawner{}
+	deps := ShellDeps{
+		Ident:            identity.Prod,
+		Tart:             tartBin,
+		ServiceAPIClient: admin,
+		UserSpawner:      spawner,
+	}
+	writeFakeCA(t, repoRoot)
+
+	var flushCalled int
+	flushMutagenOnTeardownFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
+		flushCalled++
+		fh, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		require.NoError(t, err)
+		defer fh.Close()
+		fmt.Fprintln(fh, "FLUSH-MUTAGEN")
+		return nil
+	}
+
+	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "provision")
+
+	assert.Equal(t, 1, flushCalled, "flushMutagenOnTeardownFn must be called exactly once")
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+
+	flushIdx, deleteIdx := -1, -1
+	for i, line := range lines {
+		switch {
+		case line == "FLUSH-MUTAGEN":
+			flushIdx = i
+		case strings.Contains(line, "delete x-sbx"):
+			deleteIdx = i
+		}
+	}
+	require.GreaterOrEqual(t, flushIdx, 0, "FLUSH-MUTAGEN marker must be present")
+	require.GreaterOrEqual(t, deleteIdx, 0, "tart delete must be present")
+	assert.Less(t, flushIdx, deleteIdx, "mutagen flush must run BEFORE tart delete destroys the VM")
+}
+
 // TestRunShellWarmPath_VMStatusError verifies that a daemon error on
 // VMStatus surfaces as a RunShell error.
 func TestRunShellWarmPath_VMStatusError(t *testing.T) {
