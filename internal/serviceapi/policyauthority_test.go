@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -356,5 +357,48 @@ func TestPolicyAuthority_StopServingDropsMode(t *testing.T) {
 	// Verify by re-checking the internal accessor.
 	if got := p.modeFor("proj1"); got != ModeRestricted {
 		t.Fatalf("StopServing should drop mode; modeFor after stop = %v, want restricted", got)
+	}
+}
+
+// A denial decided just before an allowlist edit must never surface as a
+// row for a now-allowed host after the edit's replay: the decision and
+// its counter row are one atomic step under the authority's lock, so an
+// edit either sweeps the row (decision completed first) or the decision
+// sees the new list (edit completed first). Hammers the real service
+// path in-process while flipping the allowlist to maximize interleaving.
+func TestPolicyAuthorityDecisionAndRecordAreAtomic(t *testing.T) {
+	pa := NewPolicyAuthority()
+	const proj = "projRace"
+	t.Cleanup(func() { pa.PurgeProject(proj) })
+	pa.SetAllowlist(proj, []string{"allowed.example"})
+
+	svc := &policyService{authority: pa, projectID: proj}
+	ctx := context.Background()
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_, _ = svc.TransformRequest(ctx, policyReq("x.example", "GET", "/p"))
+			}
+		}()
+	}
+	defer func() { close(stop); wg.Wait() }()
+
+	for i := range 1000 {
+		pa.SetAllowlist(proj, []string{"allowed.example", "x.example"})
+		for _, d := range pa.SnapshotDenials(proj) {
+			if d.Host == "x.example" {
+				t.Fatalf("iteration %d: row for now-allowed host survived the edit's replay: %+v", i, d)
+			}
+		}
+		pa.SetAllowlist(proj, []string{"allowed.example"})
 	}
 }

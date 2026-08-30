@@ -210,10 +210,32 @@ func (p *PolicyAuthority) PurgeProject(projectID string) {
 	p.denials.clearProject(projectID)
 }
 
+// allowlistFor returns projectID's current allowlist — an observation
+// accessor for tests; the request path decides via decide, never this.
 func (p *PolicyAuthority) allowlistFor(projectID string) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.allow[projectID]
+}
+
+// decide is the egress decision point: under a single lock hold it reads
+// the project's mode and allowlist, evaluates the request, and — when
+// rejecting — records the denial before releasing. An allowlist edit can
+// therefore never interleave between a decision and its counter row: the
+// row either exists when SetAllowlist's replay runs, or the decision runs
+// after the edit and sees the new list. Recording nests the tracker's
+// lock inside p.mu — the same order SetAllowlist's replay uses.
+func (p *PolicyAuthority) decide(projectID, host, path, method string) (allowed bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.modes[projectID] == ModePassthrough {
+		return true
+	}
+	if policymatch.Allowed(p.allow[projectID], host, path) {
+		return true
+	}
+	p.denials.Record(projectID, host, path, method, time.Now().UTC())
+	return false
 }
 
 // policyService implements transformv1.TransformServiceServer for one
@@ -225,11 +247,6 @@ type policyService struct {
 }
 
 func (s *policyService) TransformRequest(ctx context.Context, req *transformv1.TransformRequestRequest) (*transformv1.TransformRequestResponse, error) {
-	if s.authority.modeFor(s.projectID) == ModePassthrough {
-		return &transformv1.TransformRequestResponse{
-			Action: transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE,
-		}, nil
-	}
 	r := req.GetRequest()
 	host := policymatch.StripPort(r.GetHost())
 	// r.Url is path+query for proxied requests and empty for CONNECT.
@@ -240,12 +257,11 @@ func (s *policyService) TransformRequest(ctx context.Context, req *transformv1.T
 	if u, err := url.Parse(r.GetUrl()); err == nil {
 		reqPath = u.Path
 	}
-	if policymatch.Allowed(s.authority.allowlistFor(s.projectID), host, reqPath) {
+	if s.authority.decide(s.projectID, host, reqPath, r.GetMethod()) {
 		return &transformv1.TransformRequestResponse{
 			Action: transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE,
 		}, nil
 	}
-	s.authority.denials.Record(s.projectID, host, reqPath, r.GetMethod(), time.Now().UTC())
 	body, _ := json.Marshal(map[string]string{
 		"blocked_by": "devm-egress-policy",
 		"host":       host,
