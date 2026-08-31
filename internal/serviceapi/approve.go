@@ -156,3 +156,31 @@ func bootstrapApprovedSnapshotOnFirstRun(cfg identity.Config, projectID, macCwd 
 	}
 	return store.Write(projectID, currentDevm, currentMe, "user")
 }
+
+const approveRefusalMessage = `devm.yaml (or devm.me.yaml) has changed since it was last approved.
+Approve the change:
+  - Click the devm menu bar icon → Review, or
+  - Run ` + "`devm approve`" + ` in this terminal to review + approve inline.`
+
+func isApproveDiverged(cfg identity.Config, projectID, macCwd string) (bool, error) {
+	currentDevm, err := os.ReadFile(filepath.Join(macCwd, "devm.yaml"))
+	if err != nil {
+		return false, fmt.Errorf("read devm.yaml: %w", err)
+	}
+	var currentMe []byte
+	if b, err := os.ReadFile(filepath.Join(macCwd, "devm.me.yaml")); err == nil {
+		currentMe = b
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("read devm.me.yaml: %w", err)
+	}
+	store := approve.NewStore(cfg)
+	snap, hasSnap, err := store.Read(projectID)
+	if err != nil {
+		return false, err
+	}
+	if !hasSnap {
+		return true, nil
+	}
+	return approve.HashFile(currentDevm) != approve.HashFile(snap.DevmYAML) ||
+		approve.HashFile(currentMe) != approve.HashFile(snap.MeYAML), nil
+}

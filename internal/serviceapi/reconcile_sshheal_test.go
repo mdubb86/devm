@@ -6,11 +6,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mdubb86/devm/internal/approve"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/schema"
@@ -21,6 +24,17 @@ import (
 // returns the decoded response.
 func postReconcile(t *testing.T, req VMReconcileRequest) VMReconcileResponse {
 	t.Helper()
+	// Ensure WorkspaceHostPath is set for the approve gate check.
+	if req.WorkspaceHostPath == "" {
+		projDir := t.TempDir()
+		// Create a simple devm.yaml matching the cfg.
+		devmYAML := "project:\n  name: " + req.Cfg.Project.Name + "\n"
+		require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte(devmYAML), 0644))
+		// Approve the snapshot so the gate check passes.
+		store := approve.NewStore(identity.Prod)
+		require.NoError(t, store.Write(req.Name, []byte(devmYAML), nil, "user"))
+		req.WorkspaceHostPath = projDir
+	}
 	body, _ := json.Marshal(req)
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	RegisterReconcileHandler(server, identity.Prod, NewProjectLocks(), &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: req.Name}, supervisor.New(t.TempDir()), nil, 0)
