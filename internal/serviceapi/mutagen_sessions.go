@@ -85,7 +85,7 @@ func findPrimaryRepoName(cfg *schema.Config) string {
 // resolveRepoLabel resolves one repos.<name> entry's mutagen sync
 // label: an explicit `label:` always wins; else a repo with a URL uses
 // schema.BareCloneName; else (the URL-nil primary) the basename of
-// macCwd.
+// macCwd, sanitized to strip a leading dot.
 func resolveRepoLabel(r schema.RepoConfig, macCwd string) string {
 	if r.Label != nil {
 		return *r.Label
@@ -93,16 +93,18 @@ func resolveRepoLabel(r schema.RepoConfig, macCwd string) string {
 	if r.URL != nil {
 		return schema.BareCloneName(*r.URL)
 	}
-	return filepath.Base(macCwd)
+	return schema.SanitizeDerivedLabel(filepath.Base(macCwd))
 }
 
 // resolveVolumeLabel resolves one volumes.<name> entry's mutagen sync
-// label: an explicit `label:` always wins; else the leaf dir of Path.
+// label: an explicit `label:` always wins; else the leaf dir of Path,
+// sanitized to strip a leading dot so dotfile-rooted paths like
+// /home/devm/.claude produce a usable default.
 func resolveVolumeLabel(v schema.Volume) string {
 	if v.Label != nil {
 		return *v.Label
 	}
-	return filepath.Base(v.Path)
+	return schema.SanitizeDerivedLabel(filepath.Base(v.Path))
 }
 
 // PrimaryGuestPath returns the guest-side path of cfg's primary
