@@ -66,9 +66,13 @@ import (
 //
 // KindNetworkAdd/KindNetworkRemove entries are batched: any number of
 // them in one call dispatch a SINGLE applyNetworkChange, carrying cfg's
-// full new allowlist (cfg.Network.Domains()) rather than a delta summed
-// from the individual changes — the PolicyAuthority's Set API takes the
-// whole list atomically via allowlistClient.
+// full new effective allowlist (docker.EffectiveAllowlist(cfg) —
+// user-declared hosts plus docker's implicit hosts on docker:true)
+// rather than a delta summed from the individual changes. The
+// PolicyAuthority's Set API takes the whole list atomically via
+// allowlistClient; the same expansion recoverProjectState applies on
+// daemon-restart adopt, so the live path and the adopt path stay in
+// lockstep on the exact set the authority sees.
 //
 // Returns the first error encountered; later changes are not attempted
 // after a failure so the snapshot stays coherent on retry.
@@ -206,7 +210,7 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 	}
 
 	if networkChangesPresent {
-		if err := applyNetworkChange(context.Background(), allowlistClient, vmName, cfg.Network.Domains()); err != nil {
+		if err := applyNetworkChange(context.Background(), allowlistClient, vmName, docker.EffectiveAllowlist(cfg)); err != nil {
 			return fmt.Errorf("apply network change: %w", err)
 		}
 	}

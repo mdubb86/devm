@@ -343,9 +343,9 @@ func TestApplyLive_NoDirectChange_DoesNotTouchSvcIngress(t *testing.T) {
 // TestApplyLive_DispatchesKindNetworkAddToSetAllowlist pins the batching
 // contract: any number of KindNetworkAdd/KindNetworkRemove entries in
 // one ApplyLive call dispatch a SINGLE SetAllowlist call, carrying cfg's
-// full new allowlist (cfg.Network.Domains()) — NOT a delta summed from
-// the individual Change.New values. The PolicyAuthority's Set API takes
-// the whole list atomically.
+// full new effective allowlist — NOT a delta summed from the individual
+// Change.New values. The PolicyAuthority's Set API takes the whole list
+// atomically.
 func TestApplyLive_DispatchesKindNetworkAddToSetAllowlist(t *testing.T) {
 	dir := t.TempDir()
 	tr, _ := fakeTartForApplyLive(t, dir)
@@ -370,4 +370,40 @@ func TestApplyLive_DispatchesKindNetworkAddToSetAllowlist(t *testing.T) {
 	require.Len(t, fakeClient.calls, 1, "SetAllowlist calls = %d, want 1 (batched)", len(fakeClient.calls))
 	assert.Equal(t, "p-vm", fakeClient.calls[0].Name)
 	assert.Equal(t, []string{"x.com", "y.com"}, fakeClient.calls[0].Allowlist)
+}
+
+// TestApplyLive_KindNetworkAdd_DockerTrue_IncludesDockerImplicitHosts pins
+// the effective-allowlist expansion on a docker:true project: a live
+// KindNetworkAdd must carry docker's implicit hosts (Docker Hub image
+// hosts + the docker apt-source) alongside the user's declared allow,
+// or a live reconcile silently drops them from the authority until the
+// next daemon restart (which re-runs docker.EffectiveAllowlist on
+// snap.Cfg via recoverProjectState).
+func TestApplyLive_KindNetworkAdd_DockerTrue_IncludesDockerImplicitHosts(t *testing.T) {
+	dir := t.TempDir()
+	tr, _ := fakeTartForApplyLive(t, dir)
+	fakeClient := &fakeAllowlistSetter{}
+
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Docker:  true,
+		Network: schema.Network{Allow: []schema.AllowEntry{
+			{Host: "a.com"},
+			{Host: "b.com"},
+		}},
+	}
+
+	changes := []Change{{Kind: KindNetworkAdd, Key: "b.com", New: "b.com"}}
+
+	err := ApplyLive(tr, "p-vm", changes, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", fakeClient)
+	require.NoError(t, err)
+
+	require.Len(t, fakeClient.calls, 1)
+	got := fakeClient.calls[0].Allowlist
+	assert.Contains(t, got, "a.com")
+	assert.Contains(t, got, "b.com")
+	assert.Contains(t, got, "registry-1.docker.io")
+	assert.Contains(t, got, "auth.docker.io")
+	assert.Contains(t, got, "production.cloudfront.docker.com")
+	assert.Contains(t, got, "download.docker.com")
 }

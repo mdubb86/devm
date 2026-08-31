@@ -334,31 +334,3 @@ func startReconcileDaemonWithIronProxyCapture(t *testing.T, running bool) (clean
 	return func() { cancel(); <-errCh }, req
 }
 
-func TestRunReconcile_DockerTrueCfg_AllowlistIncludesDockerHubHost(t *testing.T) {
-	// Regression: the reconcile heal path used to build the
-	// apply-iron-proxy allowlist from cfg.Network.Domains() directly,
-	// which drops Docker Hub hosts (unlike cold-start's
-	// docker.EffectiveAllowlist). A docker:true project healed via
-	// reconcile must still get its registry hosts, or `docker pull`
-	// breaks post-heal.
-	cleanup, captured := startReconcileDaemonWithIronProxyCapture(t, true)
-	defer cleanup()
-
-	oldCfg := reconcileMinimalCfg()
-	oldCfg.Docker = true
-	oldCfg.Network = schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}}
-	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: oldCfg}))
-
-	newCfg := oldCfg
-	newCfg.Network = schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}, {Host: "b.com"}}}
-
-	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-	require.NotEmpty(t, res.AppliedIronProxy, "network add is a BucketEgressRestart change")
-
-	assert.Contains(t, captured.Allowlist, "registry-1.docker.io",
-		"docker:true reconcile heal must include Docker Hub hosts in the apply-iron-proxy allowlist")
-	assert.Contains(t, captured.Allowlist, "a.com")
-	assert.Contains(t, captured.Allowlist, "b.com")
-}
