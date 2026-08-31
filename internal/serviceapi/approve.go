@@ -33,6 +33,10 @@ type approveStateResponse struct {
 
 func handleApproveState(cfg identity.Config) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "approve-state: GET only", http.StatusMethodNotAllowed)
+			return
+		}
 		project := r.URL.Query().Get("project")
 		macCwd := r.URL.Query().Get("mac_cwd")
 		if project == "" || macCwd == "" {
@@ -96,6 +100,10 @@ func handleApproveState(cfg identity.Config) http.Handler {
 
 func handleApprove(cfg identity.Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "approve: POST only", http.StatusMethodNotAllowed)
+			return
+		}
 		project := r.URL.Query().Get("project")
 		macCwd := r.URL.Query().Get("mac_cwd")
 		if project == "" || macCwd == "" {

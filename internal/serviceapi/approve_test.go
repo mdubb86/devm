@@ -128,3 +128,17 @@ func TestApprove_RequiresProjectAndMacCwd(t *testing.T) {
 	handleApprove(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/vm/approve", nil))
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
+
+func TestApproveState_RejectsNonGET(t *testing.T) {
+	cfg := identity.Config{Name: "devm-test"}
+	rr := httptest.NewRecorder()
+	handleApproveState(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/vm/approve-state?project=x&mac_cwd=/tmp/y", nil))
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
+
+func TestApprove_RejectsNonPOST(t *testing.T) {
+	cfg := identity.Config{Name: "devm-test"}
+	rr := httptest.NewRecorder()
+	handleApprove(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/vm/approve?project=x&mac_cwd=/tmp/y", nil))
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
