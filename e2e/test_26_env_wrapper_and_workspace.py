@@ -78,10 +78,10 @@ def test_env_and_workspace_propagation(workspace, devm, sandbox_name):
         },
     )
 
-    # Owns cold-start: install: commands only run at first `devm shell`, so
-    # the test itself triggers cold-start after devm.yaml is in place.
+    # Owns cold-start: install: commands only run on `devm start`, so the
+    # test itself triggers cold-start after devm.yaml is in place.
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=300,
     )
     assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"

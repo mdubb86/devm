@@ -34,7 +34,7 @@ func TestFormatStatusText_RunningWithPending(t *testing.T) {
 
 func TestFormatStatusText_Stopped(t *testing.T) {
 	out := FormatStatusText(StatusResult{HasProject: true, Sandbox: "x", State: "stopped"})
-	assert.Contains(t, out, "Sandbox stopped; config changes will apply on next `devm shell`.")
+	assert.Contains(t, out, "Sandbox stopped; config changes will apply on next `devm start`.")
 	assert.NotContains(t, out, "Active sessions")
 }
 
@@ -75,7 +75,7 @@ func TestFormatReconcileText_RestartPending(t *testing.T) {
 	})
 	assert.Contains(t, out, "1 change(s) require restart")
 	assert.Contains(t, out, "~ startup commands")
-	assert.Contains(t, out, "Restart sandbox (`devm stop` + `devm shell`) to apply")
+	assert.Contains(t, out, "Restart sandbox (`devm stop` + `devm start`) to apply")
 	assert.Contains(t, out, "Will hang up 1 active session")
 	assert.NotContains(t, out, "require recreate")
 	assert.NotContains(t, out, "Teardown")
@@ -216,6 +216,31 @@ func TestFormatStatusJSON_RebindOmittedWhenNil(t *testing.T) {
 	proj := parsed["project"].(map[string]any)
 	ironProxy := proj["iron_proxy"].(map[string]any)
 	assert.NotContains(t, ironProxy, "rebind")
+}
+
+// TestFormatStatusJSON_ApproveState verifies the JSON payload carries
+// approve_state: {diverged, approved_since} when the daemon returned a
+// verdict, and approve_state: null when it didn't (old daemon, 404).
+func TestFormatStatusJSON_ApproveState(t *testing.T) {
+	since := "2026-08-30T20:00:00Z"
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveState: &serviceapi.ApproveStateResponse{Diverged: true, ApprovedSince: &since},
+	})
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	as := proj["approve_state"].(map[string]any)
+	assert.Equal(t, true, as["diverged"])
+	assert.Equal(t, since, as["approved_since"])
+}
+
+func TestFormatStatusJSON_ApproveState_NullWhenAbsent(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running"})
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	assert.Contains(t, proj, "approve_state")
+	assert.Nil(t, proj["approve_state"])
 }
 
 func TestFormatReconcileJSON(t *testing.T) {
@@ -424,6 +449,41 @@ func TestFormatStatusText_LANListener_Bound(t *testing.T) {
 	out := FormatStatusText(res)
 	assert.Contains(t, out, "LAN listener: bound on 0.0.0.0:42000 (3 hostnames exposed)")
 	assert.NotContains(t, out, "not bound")
+}
+
+func TestFormatStatusText_ApproveGate_Diverged(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveState: &serviceapi.ApproveStateResponse{Diverged: true},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "devm.yaml has changed since last approval")
+	assert.Contains(t, out, "Review")
+}
+
+func TestFormatStatusText_ApproveGate_UpToDate(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveState: &serviceapi.ApproveStateResponse{Diverged: false},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "Approve gate: up to date.")
+}
+
+// TestFormatStatusText_ApproveGate_SilentWhenNil verifies the
+// approve-gate line is omitted entirely — not rendered as an error —
+// when ApproveState is nil and there was no error, matching the
+// silent-degrade contract for a daemon predating the approve gate.
+func TestFormatStatusText_ApproveGate_SilentWhenNil(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running"}
+	out := FormatStatusText(res)
+	assert.NotContains(t, out, "Approve gate")
+}
+
+func TestFormatStatusText_ApproveGate_CheckFailed(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveError: "dial daemon: connection refused",
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "Approve gate: check failed: dial daemon: connection refused")
 }
 
 func TestFormatDaemonStatus_MismatchColor(t *testing.T) {

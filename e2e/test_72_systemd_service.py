@@ -60,7 +60,7 @@ def test_systemd_service_active_and_reachable(workspace, devm, sandbox_name):
     # and starts it. The provisioner's health poll (10 s budget) confirms
     # active state before returning.
     proc = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path),
         capture_output=True, timeout=300, check=False,
     )

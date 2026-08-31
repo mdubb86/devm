@@ -29,7 +29,8 @@ Two projects that expose the same hostname (e.g. both use `api.test:443`) don't 
 brew install cirruslabs/cli/tart            # Tart is a prerequisite
 brew install --cask mdubb86/tap/devm
 devm install                                # requires sudo
-devm shell                                  # cold-starts the VM, drops you in
+devm start                                  # cold-starts the VM
+devm shell                                  # attaches, drops you in
 ```
 
 ## CLAUDE.md — host/guest split
@@ -55,7 +56,7 @@ interactive `ssh devm-<name>` and VS Code Remote-SSH.
 ## Where to look next
 
 - `devm skills get schema` — every `devm.yaml` field, its type, and which change bucket it falls in.
-- `devm skills get lifecycle` — when to use `devm shell`, `reconcile`, `stop`, `teardown`, and `validate`.
+- `devm skills get lifecycle` — when to use `devm shell`, `devm start`, `reconcile`, `stop`, `teardown`, and `validate`.
 - `devm skills get service` — managing the background service (install, uninstall, restart, logs).
 - `devm skills get routing` — how port declarations, `devm route` commands, and `*.test` hostnames work on the Mac and inside the VM.
 - `devm skills get secrets` — storing credentials in the on-disk secret store and referencing them with `!secret` in `devm.yaml`.

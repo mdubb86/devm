@@ -26,11 +26,17 @@ def test_purge_skips_live_projects(devm, workspace, sandbox_name):
     try:
         # Cold-start creates the VM + the Mac-side volume dir.
         r = subprocess.run(
-            [devm.path, "shell", "--", "sudo", "sh", "-c",
-             "echo alive > /var/lib/scratch/sentinel"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
+
+        r = subprocess.run(
+            [devm.path, "shell", "--", "sudo", "sh", "-c",
+             "echo alive > /var/lib/scratch/sentinel"],
+            cwd=str(workspace.path), capture_output=True, timeout=60,
+        )
+        assert r.returncode == 0, f"sentinel write failed:\n{r.stderr.decode()}"
 
         # Run purge from OUTSIDE the project dir.
         r = subprocess.run(

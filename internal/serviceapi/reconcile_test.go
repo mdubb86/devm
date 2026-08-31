@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/approve"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -22,6 +23,37 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// setupProjectDirWithDevm creates a temporary directory with devm.yaml
+// and optional devm.me.yaml, and approves the snapshot. Used by tests
+// that use WorkspaceHostPath in the reconcile request.
+func setupProjectDirWithDevm(t *testing.T, projectID string, devmContent string, meContent string) (string, *approve.Store) {
+	t.Helper()
+	projDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte(devmContent), 0644))
+	var meBytes []byte
+	if meContent != "" {
+		meBytes = []byte(meContent)
+		require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.me.yaml"), meBytes, 0644))
+	}
+	// Approve the snapshot so the gate check passes.
+	// Pass nil (not empty bytes) for meYAML when there's no devm.me.yaml.
+	store := approve.NewStore(identity.Prod)
+	require.NoError(t, store.Write(projectID, []byte(devmContent), meBytes, "user"))
+	return projDir, store
+}
+
+// setupProjectDirForCfg creates a project dir with a devm.yaml that matches
+// the given cfg, and approves it. This is a convenience for tests that need
+// to provide WorkspaceHostPath but don't care about testing approval divergence.
+func setupProjectDirForCfg(t *testing.T, projectID string, cfg schema.Config) string {
+	t.Helper()
+	// Create minimal YAML with just the project name.
+	// For most tests that aren't testing approval, this is sufficient.
+	devmYAML := fmt.Sprintf("project:\n  name: %s\n", cfg.Project.Name)
+	projDir, _ := setupProjectDirWithDevm(t, projectID, devmYAML, "")
+	return projDir
+}
 
 // registerFakeSoftnet spins up a fake softnet control-socket listener
 // for projectID and registers it in softnetState, so a /vm/reconcile
@@ -131,8 +163,11 @@ func TestVMReconcile_NoSnapshotYet_TreatsAllAsFullDiff(t *testing.T) {
 	// Simulate what cold-start does: write snapshot.
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
 
+	// Setup project dir with devm.yaml matching cfg.
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\npackages:\n  - jq\n", "")
+
 	// Reconcile against unchanged cfg → nothing to do.
-	req := VMReconcileRequest{Name: "p", Cfg: cfg}
+	req := VMReconcileRequest{Name: "p", Cfg: cfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
@@ -170,9 +205,13 @@ func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
+	// Setup project dir with devm.yaml matching the approved snapshot (oldCfg).
+	// The reconcile request will carry newCfg to test the change application.
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nenv:\n  FOO: old\n", "")
+
 	req := VMReconcileRequest{
 		Name: "p", Cfg: newCfg,
-		WorkspaceHostPath: "/tmp/repo",
+		WorkspaceHostPath: projDir,
 	}
 	body, _ := json.Marshal(req)
 
@@ -206,7 +245,8 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 	newCfg := oldCfg
 	newCfg.Install = []string{"true", "false"} // bucket=recreate
 
-	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
@@ -253,7 +293,10 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
-	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
+	// Setup project dir with devm.yaml matching oldCfg (approved state).
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nservices:\n  web:\n    exec:\n      - /bin/true\n    env:\n      OLD: a\n", "")
+
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
@@ -298,7 +341,10 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 
 	registerFakeSoftnet(t, "p")
 
-	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
+	// Setup project dir with devm.yaml matching oldCfg (approved state).
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nservices:\n  web:\n    exec:\n      - /bin/true\ninstall:\n  - true\n", "")
+
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
@@ -483,15 +529,18 @@ func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
 	// an existing secret ref rotates.
 	t.Setenv("HOME", t.TempDir())
 
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{
-		Cfg:          schema.Config{Project: schema.Project{Name: "p"}},
+		Cfg:          cfg,
 		SecretHashes: map[string]string{"TOK": "old-hash"},
 	}))
 
+	projDir := setupProjectDirForCfg(t, "p", cfg)
 	req := VMReconcileRequest{
-		Name:         "p",
-		Cfg:          schema.Config{Project: schema.Project{Name: "p"}},
-		SecretHashes: map[string]string{"TOK": "new-hash"},
+		Name:              "p",
+		Cfg:               cfg,
+		WorkspaceHostPath: projDir,
+		SecretHashes:      map[string]string{"TOK": "new-hash"},
 	}
 	body, _ := json.Marshal(req)
 
@@ -538,9 +587,12 @@ func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
+	// Setup project dir with devm.yaml matching oldCfg (approved state).
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nenv:\n  FOO: old\n", "")
+
 	req := VMReconcileRequest{
 		Name: "p", Cfg: newCfg,
-		WorkspaceHostPath: "/tmp/repo",
+		WorkspaceHostPath: projDir,
 		SecretHashes:      map[string]string{"A": "h1"},
 	}
 	body, _ := json.Marshal(req)
@@ -575,7 +627,8 @@ func TestVMReconcile_MissingIronProxy_EmitsKindIronProxyDown(t *testing.T) {
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
 
-	req := VMReconcileRequest{Name: "p", Cfg: cfg}
+	projDir := setupProjectDirForCfg(t, "p", cfg)
+	req := VMReconcileRequest{Name: "p", Cfg: cfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
@@ -604,7 +657,8 @@ func TestVMReconcile_StoppedVM_MissingIronProxy_DoesNotEmitKindIronProxyDown(t *
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
 
-	req := VMReconcileRequest{Name: "p", Cfg: cfg}
+	projDir := setupProjectDirForCfg(t, "p", cfg)
+	req := VMReconcileRequest{Name: "p", Cfg: cfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
@@ -722,7 +776,8 @@ func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
 	newCfg := oldCfg
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
 
-	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
@@ -773,7 +828,8 @@ func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
-	req := VMReconcileRequest{Name: "p", Cfg: newCfg}
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
@@ -806,10 +862,13 @@ func TestVMReconcile_ForwardsSSHBytesToApplyLive(t *testing.T) {
 	newCfg := oldCfg
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
 
+	// Setup project dir with devm.yaml matching oldCfg (approved state).
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nenv:\n  FOO: old\n", "")
+
 	req := VMReconcileRequest{
 		Name:                "p",
 		Cfg:                 newCfg,
-		WorkspaceHostPath:   "/tmp/repo",
+		WorkspaceHostPath:   projDir,
 		SSHAuthorizedPubkey: []byte("ssh-ed25519 AAAA_pub_marker\n"),
 		SSHHostPriv:         []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nHOST_MARKER\n"),
 		SSHHostPub:          []byte("ssh-ed25519 AAAA_host_pub_marker\n"),
@@ -851,7 +910,8 @@ func TestReconcile_PackageChangesRouteToApplier(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
-	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: "/tmp/repo"}
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
@@ -899,7 +959,8 @@ func TestReconcile_PackagesApplierFailureAbortsAndKeepsSnapshot(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
-	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: "/tmp/repo"}
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
@@ -935,7 +996,8 @@ func TestReconcile_PackagesBeforeApplyLive(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
-	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: "/tmp/repo"}
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
 
 	server := NewServer(identity.Prod.SocketPath(), Build{})
@@ -953,4 +1015,67 @@ func TestReconcile_PackagesBeforeApplyLive(t *testing.T) {
 	require.True(t, apply.called)
 	assert.Equal(t, []string{"packages", "apply_live"}, order,
 		"packages must converge before ApplyLive so a template installer applied in the same reconcile can rely on newly-installed binaries")
+}
+
+func TestReconcile_RefusesWhenDivergedFromApproved(t *testing.T) {
+	// Setup: fake VM state, write devm.yaml, write a DIFFERENT approved snapshot.
+	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "")
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: old\n"), nil, "user"))
+	// Build a minimal VMReconcileRequest body.
+	body := VMReconcileRequest{
+		Name:              "proj-1",
+		WorkspaceHostPath: projDir,
+		Cfg:               schema.Config{Project: schema.Project{Name: "p"}},
+	}
+	buf, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/vm/reconcile", bytes.NewReader(buf))
+	rr := httptest.NewRecorder()
+	// Assumes an exported factory or test seam that constructs the reconcile handler with cfg.
+	newReconcileHandlerForTest(cfg).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusConflict, rr.Code)
+	assert.Contains(t, rr.Body.String(), "approve_required")
+	assert.Contains(t, rr.Body.String(), "devm approve")
+}
+
+func TestReconcile_ProceedsWhenNotDiverged(t *testing.T) {
+	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "")
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
+	body := VMReconcileRequest{Name: "proj-1", WorkspaceHostPath: projDir, Cfg: schema.Config{Project: schema.Project{Name: "p"}}}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/vm/reconcile", bytes.NewReader(buf))
+	rr := httptest.NewRecorder()
+	newReconcileHandlerForTest(cfg).ServeHTTP(rr, req)
+	// The handler will still return an error further down (no fake VM), but NOT 409 approve_required.
+	assert.NotEqual(t, http.StatusConflict, rr.Code)
+	assert.NotContains(t, rr.Body.String(), "approve_required")
+}
+
+// Minimal stubs for test seam; these are never called in approve-gate tests
+// since the gate check runs before actual reconcile work.
+type testApplyStub struct{}
+
+func (t *testApplyStub) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, identCfg identity.Config, ironProxyURL string) error {
+	return nil
+}
+
+type testPackagesStub struct{}
+
+func (t *testPackagesStub) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, macCwd string, adds, removes []string) error {
+	return nil
+}
+
+type testTartListStub struct{}
+
+func (t *testTartListStub) List(ctx context.Context) ([]tart.VM, error) {
+	return []tart.VM{}, nil
+}
+
+// newReconcileHandlerForTest is exposed for approve-gate tests; production code uses the mux registration below.
+func newReconcileHandlerForTest(cfg identity.Config) http.Handler {
+	// For testing, use a minimal lock and stub implementations.
+	// The approve gate check runs before any actual reconcile work,
+	// so these stubs are never actually called in the approve-gate test flow.
+	locks := NewProjectLocks()
+	return reconcileHandler(cfg, locks, &testApplyStub{}, &testPackagesStub{}, &testTartListStub{}, supervisor.New("/tmp"), nil, 0)
 }

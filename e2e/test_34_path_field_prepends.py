@@ -21,6 +21,8 @@ What it doesn't cover (tested elsewhere):
   - Validation rejection of disallowed entries (non-absolute, ~, $VAR)
     -> covered by schema unit tests.
 """
+import subprocess
+
 import pytest
 
 from helpers import Shell, stop_and_wait_stopped
@@ -36,8 +38,14 @@ def test_path_field_prepends(workspace, devm, sandbox_name):
 
     expected_head = f"{workspace.path}/bin"
 
+    r = subprocess.run(
+        [devm.path, "start"],
+        cwd=str(workspace.path), capture_output=True, timeout=60,
+    )
+    assert r.returncode == 0, f"devm start (cold-create) failed:\n{r.stderr.decode()}"
+
     with Shell(devm, cwd=str(workspace.path)) as sh:
-        sh.expect_prompt(timeout=60)
+        sh.expect_prompt(timeout=30)
 
         # Verify $PATH starts with the expanded entry. Using awk so the
         # check is exact-prefix, not just substring (which could falsely

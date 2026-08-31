@@ -409,6 +409,10 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
+		if req.MacCwd == "" {
+			http.Error(w, "mac_cwd required", http.StatusBadRequest)
+			return
+		}
 
 		unlock := locks.Lock(req.Name)
 		defer unlock()
@@ -482,6 +486,24 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				http.Error(w, fmt.Sprintf("tart set --cpu: %v", err), http.StatusInternalServerError)
 				return
 			}
+		}
+
+		if err := bootstrapApprovedSnapshotOnFirstRun(cfg, req.Name, req.MacCwd); err != nil {
+			http.Error(w, fmt.Sprintf("bootstrap approve snapshot: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		if diverged, err := isApproveDiverged(cfg, req.Name, req.MacCwd); err != nil {
+			http.Error(w, fmt.Sprintf("approve check: %v", err), http.StatusInternalServerError)
+			return
+		} else if diverged {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"code":    "approve_required",
+				"message": approveRefusalMessage,
+			})
+			return
 		}
 
 		// Run options: softnet NIC, no graphics. softnet is the daemon's
@@ -707,6 +729,14 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 
 		writeJSON(w, VMStartResponse{ProjectIP: projectIP, TunnelPort: info.TunnelPort})
+	})
+
+	s.Register("/vm/approve-state", func(w http.ResponseWriter, r *http.Request) {
+		handleApproveState(cfg).ServeHTTP(w, r)
+	})
+
+	s.Register("/vm/approve", func(w http.ResponseWriter, r *http.Request) {
+		handleApprove(cfg).ServeHTTP(w, r)
 	})
 
 	// /vm/enforcement-config is a precondition check that this project's

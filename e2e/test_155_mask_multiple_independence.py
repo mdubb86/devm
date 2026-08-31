@@ -22,10 +22,16 @@ def test_mask_multiple_independence(devm, workspace, sandbox_name):
     )
     try:
         r = subprocess.run(
+            [devm.path, "start"],
+            cwd=str(workspace.path), capture_output=True, timeout=300,
+        )
+        assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
+
+        r = subprocess.run(
             [devm.path, "shell", "--", "sh", "-c",
              f"echo a-content > {workspace.path}/dir_a/file && "
              f"echo b-content > {workspace.path}/dir_b/file"],
-            cwd=str(workspace.path), capture_output=True, timeout=300,
+            cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, f"writes failed:\n{r.stderr.decode()}"
 

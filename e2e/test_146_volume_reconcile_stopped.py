@@ -23,7 +23,7 @@ def test_volume_added_while_stopped_picked_up_on_next_shell(devm, workspace, san
     try:
         # Cold-start without a volume.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"first cold-start failed:\n{r.stderr.decode()}"

@@ -50,7 +50,7 @@ network:
 
 ## Connecting
 
-Once the VM is up (`devm shell` or `devm start`), point Orca at it:
+Once the VM is up (`devm start`; `devm shell` only attaches if it's already running), point Orca at it:
 
 - **host:** `devm-<name>` — matches `project.name` in your `devm.yaml`.
 - **port:** 22
@@ -81,7 +81,7 @@ guest. Orca runs `git worktree add` on the remote under this path.
 
 - **`Could not resolve hostname devm-<name>`**: the Include line
   isn't in `~/.ssh/config`. Run `devm install` to see the reminder.
-- **`Connection refused`**: the VM is stopped. `devm shell` starts it.
+- **`Connection refused`**: the VM is stopped. `devm start` brings it up.
 - **`Host key verification failed`**: devm's persistent host key was
   rotated — usually by `devm teardown`. A fresh cold-start regenerates
   the `known_hosts` entry.

@@ -118,11 +118,11 @@ def test_in_vm_https(workspace, devm, sandbox_name):
     )
 
     shell = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=480,
     )
     assert shell.returncode == 0, (
-        f"devm shell cold-start failed:\nstderr={shell.stderr.decode()!r}"
+        f"devm start (cold-start) failed:\nstderr={shell.stderr.decode()!r}"
     )
 
     project_id = workspace.slug

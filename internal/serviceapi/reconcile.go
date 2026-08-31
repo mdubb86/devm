@@ -103,11 +103,9 @@ type TartLister interface {
 	List(ctx context.Context) ([]tart.VM, error)
 }
 
-// RegisterReconcileHandler wires POST /vm/reconcile. sup is consulted
-// (only when the VM is running) to self-heal a missing/stale
-// iron-proxy: see the KindIronProxyDown emit below.
-func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, packages PackagesApplier, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer, ntpPort int) {
-	s.Register("/vm/reconcile", func(w http.ResponseWriter, r *http.Request) {
+// reconcileHandler returns an http.Handler for POST /vm/reconcile.
+func reconcileHandler(cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, packages PackagesApplier, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer, ntpPort int) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
@@ -119,6 +117,20 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 		}
 		if req.Name == "" {
 			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+
+		// Approve-gate check: refuse if diverged from approved snapshot.
+		if diverged, err := isApproveDiverged(cfg, req.Name, req.WorkspaceHostPath); err != nil {
+			http.Error(w, fmt.Sprintf("approve check: %v", err), http.StatusInternalServerError)
+			return
+		} else if diverged {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"code":    "approve_required",
+				"message": approveRefusalMessage,
+			})
 			return
 		}
 
@@ -335,6 +347,14 @@ func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLock
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.Copy(w, bytes.NewReader(body))
 	})
+}
+
+// RegisterReconcileHandler wires POST /vm/reconcile. sup is consulted
+// (only when the VM is running) to self-heal a missing/stale
+// iron-proxy: see the KindIronProxyDown emit below.
+func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, packages PackagesApplier, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer, ntpPort int) {
+	handler := reconcileHandler(cfg, locks, apply, packages, tr, sup, proxy, ntpPort)
+	s.Register("/vm/reconcile", handler.(http.HandlerFunc))
 }
 
 // mergeLiveApplied returns a cfg that equals old_cfg except in the

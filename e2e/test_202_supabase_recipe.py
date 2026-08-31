@@ -251,7 +251,7 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
 
     # Cold-start.
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=600,
     )
     assert r.returncode == 0, (

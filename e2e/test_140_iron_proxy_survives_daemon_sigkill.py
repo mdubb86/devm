@@ -84,7 +84,7 @@ def test_iron_proxy_survives_daemon_sigkill(
     traffic = None
     try:
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"

@@ -42,7 +42,7 @@ def test_dns_works_during_install_step(devm, workspace, sandbox_name):
 
     try:
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, (

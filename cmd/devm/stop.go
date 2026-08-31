@@ -21,7 +21,7 @@ var stopCmd = &cobra.Command{
 	Short: "Stop the VM (preserves disk)",
 	Long: `Prompts before stopping the project VM via the devm daemon supervisor.
 The VM filesystem and installed tools persist; only the running state is
-discarded. Re-launch with devm shell. Use --yes (-y) to skip the prompt.`,
+discarded. Re-launch with devm start. Use --yes (-y) to skip the prompt.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below

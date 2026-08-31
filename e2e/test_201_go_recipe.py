@@ -73,7 +73,7 @@ def test_go_recipe(devm, workspace, sandbox_name):
     # Cold-start. Budget covers Go tarball download + extract + gopls
     # module fetch + build. gopls compile is the long tail.
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=480,
     )
     assert r.returncode == 0, (

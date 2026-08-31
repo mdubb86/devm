@@ -35,11 +35,11 @@ def test_install_failure_surfaces_loud(devm, workspace):
 
     # Run devm shell -- true; expect non-zero (install failure).
     p = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         capture_output=True, cwd=str(workspace.path), timeout=120,
     )
     assert p.returncode != 0, (
-        f"devm shell should exit non-zero when install returns non-zero; "
+        f"devm start should exit non-zero when install returns non-zero; "
         f"got rc={p.returncode}\nstderr={p.stderr.decode()}"
     )
     # No zombie VM should remain.

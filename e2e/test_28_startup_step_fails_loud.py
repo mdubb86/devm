@@ -23,12 +23,12 @@ def test_failed_service_makes_devm_shell_exit_nonzero(workspace, devm):
         restart="no",
     )
     proc = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path),
         capture_output=True, timeout=180,
     )
     assert proc.returncode != 0, (
-        f"devm shell should exit non-zero on service-fail; got rc=0\n"
+        f"devm start should exit non-zero on service-fail; got rc=0\n"
         f"stderr={proc.stderr.decode()!r}"
     )
     err = proc.stderr.decode()

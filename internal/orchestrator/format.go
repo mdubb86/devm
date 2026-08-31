@@ -57,6 +57,19 @@ type StatusResult struct {
 	// unreachable — the format layer omits the line entirely rather
 	// than claiming a status it doesn't have.
 	ProxyHealth *serviceapi.ProxyHealth
+
+	// ApproveState is the daemon's approve-gate verdict for the project
+	// (GET /vm/approve-state): whether devm.yaml/devm.me.yaml have
+	// diverged from the last-approved snapshot. Nil when the daemon
+	// predates the approve gate (404) — the format layer silently
+	// omits the approve-gate line for backward compatibility.
+	ApproveState *serviceapi.ApproveStateResponse
+
+	// ApproveError carries a non-404 failure from the approve-state
+	// probe (network error, malformed response, etc.). The approve
+	// gate is informational only, so `devm status` never fails because
+	// of it — this just lets the format layer report the failure.
+	ApproveError string
 }
 
 // DriftItem is one piece of mismatch between snapshot and live VM state.
@@ -109,7 +122,7 @@ func FormatStatusText(r StatusResult) string {
 	fmt.Fprintln(&b)
 	switch {
 	case r.State == "stopped" || r.State == "absent":
-		fmt.Fprintln(&b, "Sandbox stopped; config changes will apply on next `devm shell`.")
+		fmt.Fprintln(&b, "Sandbox stopped; config changes will apply on next `devm start`.")
 	case r.PendingLive == 0 && r.PendingRecreate == 0:
 		fmt.Fprintln(&b, "In sync.")
 	default:
@@ -126,7 +139,25 @@ func FormatStatusText(r StatusResult) string {
 	b.WriteString(formatProxyHealth(r))
 	b.WriteString(formatIronProxyHealth(r))
 	b.WriteString(formatLANListener(r.Routing))
+	b.WriteString(formatApproveState(r))
 	return b.String()
+}
+
+// formatApproveState renders the approve-gate divergence line. Never
+// blocks `devm status`: silent when ApproveState is nil and there was
+// no error (old daemon, 404 — backward compat), otherwise reports the
+// daemon's verdict or, failing that, that the check itself failed.
+func formatApproveState(r StatusResult) string {
+	switch {
+	case r.ApproveState != nil && r.ApproveState.Diverged:
+		return "\nApprove gate: devm.yaml has changed since last approval — Review with `devm approve` or the menu bar.\n"
+	case r.ApproveState != nil:
+		return "\nApprove gate: up to date.\n"
+	case r.ApproveError != "":
+		return fmt.Sprintf("\nApprove gate: check failed: %s\n", r.ApproveError)
+	default:
+		return ""
+	}
 }
 
 // formatDaemonStatus renders the daemon section. Always fires — the
@@ -459,7 +490,7 @@ func FormatReconcileText(r ReconcileResult) string {
 				fmt.Fprintln(&b, "  "+formatChange(c))
 			}
 			fmt.Fprintln(&b)
-			fmt.Fprintln(&b, "Restart sandbox (`devm stop` + `devm shell`) to apply. No teardown, no data loss.")
+			fmt.Fprintln(&b, "Restart sandbox (`devm stop` + `devm start`) to apply. No teardown, no data loss.")
 			if len(r.Sessions) > 0 && !hangupPrinted {
 				fmt.Fprintf(&b, "Will hang up %d active session(s).\n", len(r.Sessions))
 				hangupPrinted = true
@@ -540,6 +571,10 @@ func FormatStatusJSON(r StatusResult) string {
 		NeedsSecrets bool                     `json:"needs_secrets"`
 		Rebind       *serviceapi.RebindReport `json:"rebind,omitempty"`
 	}
+	type approveState struct {
+		Diverged      bool    `json:"diverged"`
+		ApprovedSince *string `json:"approved_since"`
+	}
 	type project struct {
 		Sandbox        string                   `json:"sandbox"`
 		State          string                   `json:"state"`
@@ -549,6 +584,7 @@ func FormatStatusJSON(r StatusResult) string {
 		Routing        serviceapi.RoutingStatus `json:"routing"`
 		Egress         *serviceapi.EgressStatus `json:"egress,omitempty"`
 		IronProxy      *ironProxy               `json:"iron_proxy,omitempty"`
+		ApproveState   *approveState            `json:"approve_state"`
 	}
 	type body struct {
 		Daemon  daemon   `json:"daemon"`
@@ -601,6 +637,12 @@ func FormatStatusJSON(r StatusResult) string {
 				Status:       string(r.ProxyHealth.Status),
 				NeedsSecrets: r.ProxyHealth.NeedsSecrets,
 				Rebind:       r.ProxyHealth.Rebind,
+			}
+		}
+		if r.ApproveState != nil {
+			b.Project.ApproveState = &approveState{
+				Diverged:      r.ApproveState.Diverged,
+				ApprovedSince: r.ApproveState.ApprovedSince,
 			}
 		}
 	}

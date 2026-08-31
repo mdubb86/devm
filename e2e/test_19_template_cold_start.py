@@ -37,6 +37,8 @@ What it doesn't cover (tested elsewhere):
 """
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from helpers import Shell, stop_and_wait_stopped
@@ -135,11 +137,16 @@ def test_templates_cold_start_ordering_sudo_and_live_reconcile(
         },
     )
 
-    # Owns cold-start: the Shell context is the first `devm shell` — it
-    # triggers cold-start with the yaml already in place, so the
-    # provisioner's install-templates step sees all four templates.
+    # Owns cold-start: `devm start` runs with the yaml already in place, so
+    # the provisioner's install-templates step sees all four templates.
+    r = subprocess.run(
+        [devm.path, "start"],
+        cwd=str(workspace.path), capture_output=True, timeout=180,
+    )
+    assert r.returncode == 0, f"devm start (cold-create) failed:\n{r.stderr.decode()}"
+
     with Shell(devm, cwd=str(workspace.path)) as sh:
-        sh.expect_prompt(timeout=120)
+        sh.expect_prompt(timeout=30)
 
         # ---- test_19: cold render + value substitution. ----
         sh.run_check("test -f /etc/cold.conf", expect_zero=True, timeout=10)

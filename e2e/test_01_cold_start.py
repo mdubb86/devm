@@ -27,6 +27,7 @@ What it doesn't cover (tested elsewhere):
 """
 from __future__ import annotations
 
+import subprocess
 import time
 
 import pytest
@@ -40,11 +41,10 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(180)
 def test_cold_start(workspace, devm, sandbox_name):
     # Write worker service config BEFORE cold-start so the provisioner
-    # deploys it during the first `devm shell` invocation (was
-    # test_07). Use `sleep infinity` (no shell wrapper): exec: joins
-    # argv with spaces for ExecStart=, so shell metacharacters in a
-    # quoted argument would be mis-parsed by systemd. `sleep infinity`
-    # is a single, shell-free token.
+    # deploys it during `devm start` (was test_07). Use `sleep infinity`
+    # (no shell wrapper): exec: joins argv with spaces for ExecStart=, so
+    # shell metacharacters in a quoted argument would be mis-parsed by
+    # systemd. `sleep infinity` is a single, shell-free token.
     workspace.write_devmyaml(
         services={
             "worker": {
@@ -56,8 +56,14 @@ def test_cold_start(workspace, devm, sandbox_name):
 
     sandbox = TartSandbox(name=sandbox_name)
 
+    r = subprocess.run(
+        [devm.path, "start"],
+        cwd=str(workspace.path), capture_output=True, timeout=180,
+    )
+    assert r.returncode == 0, f"devm start (cold-create) failed:\n{r.stderr.decode()}"
+
     with Shell(devm, cwd=str(workspace.path)) as sh:
-        sh.expect_prompt(timeout=120)
+        sh.expect_prompt(timeout=30)
 
         current = sandbox.state()
         assert current == "running", (

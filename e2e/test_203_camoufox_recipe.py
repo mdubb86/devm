@@ -118,7 +118,7 @@ def test_camoufox_recipe(devm, workspace, sandbox_name):
     # Cold-start. Budget covers apt install + venv + pip camoufox +
     # ~1.2 GB pkgman fetch. The binary download is the long tail.
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=1500,
     )
     assert r.returncode == 0, (

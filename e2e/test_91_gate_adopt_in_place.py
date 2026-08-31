@@ -1,4 +1,4 @@
-"""91: `devm shell` adopts a running-but-unprovisioned VM in place, and
+"""91: `devm start` adopts a running-but-unprovisioned VM in place, and
 tears down + cold-starts fresh when it finds a dirty (interrupted
 provisioning) marker instead.
 
@@ -6,14 +6,15 @@ The boot-integrity gate (Task 1) makes the base image boot locked and
 inert: `devm.target` is installed but disabled, so a VM the daemon
 didn't drive through provisioning — a direct `tart run` outside devm,
 most notably — comes up with no ssh/caddy/dnsmasq/egress. Task 7 taught
-`devm shell` to recognize that shape (VM running, `devm.target`
+`devm start` to recognize that shape (VM running, `devm.target`
 inactive, no dirty-provisioning marker) and adopt it in place: run the
 same provisioning tail as a cold start directly against the already-
 running VM, WITHOUT `StartVM`/`tart delete` — same disk, same VM name,
-no teardown.
+no teardown. (The shell/start split moved this logic onto `devm start`;
+`devm shell` is warm-attach only and never adopts.)
 
 `test_adopt_in_place` drives the whole path for real:
-  1. `devm shell` cold-starts a project normally (VM gets provisioned,
+  1. `devm start` cold-starts a project normally (VM gets provisioned,
      disk has real state), including a `direct: true` host-process
      service — exercises the VMIP re-discovery fix
      (apply_iron_proxy.go: `ApplyIronProxy` re-discovers the guest IP
@@ -24,7 +25,7 @@ no teardown.
      entirely — this reproduces exactly the locked/inert shape the
      gate produces for a non-devm boot. Tart may hand out a new DHCP
      lease on this boot, so the guest's IP can genuinely change here.
-  4. `devm shell` again: the daemon must recognize the running-but-
+  4. `devm start` again: the daemon must recognize the running-but-
      unprovisioned VM and adopt it — no `StartVM`, no teardown, same
      disk (a sentinel file planted before the raw boot must survive) —
      and the direct service must route to the (possibly new) guest IP,
@@ -128,7 +129,7 @@ def test_adopt_in_place(devm, workspace, sandbox_name):
 
     # ---- 1. Normal cold-start: real provisioning, real disk state. ----
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=300,
     )
     assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
@@ -192,17 +193,27 @@ def test_adopt_in_place(devm, workspace, sandbox_name):
             f"expected devm.target inactive on a daemon-less boot; got {target_state!r}"
         )
 
-        # ---- 4. `devm shell` again: must adopt in place. ----
+        # ---- 4. `devm start` again: must adopt in place. ----
         r2 = subprocess.run(
-            [devm.path, "shell", "--", "echo", "adopted-and-running"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r2.returncode == 0, (
-            f"devm shell should adopt the running-but-unprovisioned VM and "
+            f"devm start should adopt the running-but-unprovisioned VM and "
             f"exit 0; got rc={r2.returncode}\nstderr={r2.stderr.decode()}"
         )
-        assert b"adopted-and-running" in r2.stdout, (
-            f"command should have run inside the adopted VM; stdout={r2.stdout!r}"
+        # Follow-up warm-attach: proves a real command actually runs
+        # inside the now-adopted (running + provisioned) VM.
+        echoed = subprocess.run(
+            [devm.path, "shell", "--", "echo", "adopted-and-running"],
+            cwd=str(workspace.path), capture_output=True, timeout=60,
+        )
+        assert echoed.returncode == 0, (
+            f"devm shell (warm-attach) should run inside the adopted VM; "
+            f"got rc={echoed.returncode}\nstderr={echoed.stderr.decode()}"
+        )
+        assert b"adopted-and-running" in echoed.stdout, (
+            f"command should have run inside the adopted VM; stdout={echoed.stdout!r}"
         )
 
         stderr2 = r2.stderr.decode()
@@ -318,7 +329,7 @@ def test_adopt_in_place(devm, workspace, sandbox_name):
 def test_teardown_dirty_recovers_with_fresh_cold_start(devm, workspace, sandbox_name):
     """A VM found with `/run/devm/provisioning` present (a previous
     provisioning run was interrupted mid-flight) must NEVER be adopted
-    onto a dirty slate -- `devm shell` tears it down and cold-starts
+    onto a dirty slate -- `devm start` tears it down and cold-starts
     fresh instead. Sibling of `test_adopt_in_place`'s pristine-VM case;
     same raw-boot setup, opposite outcome.
     """
@@ -328,7 +339,7 @@ def test_teardown_dirty_recovers_with_fresh_cold_start(devm, workspace, sandbox_
 
     # ---- 1. Normal cold-start: real provisioning, real disk state. ----
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=300,
     )
     assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
@@ -369,7 +380,7 @@ def test_teardown_dirty_recovers_with_fresh_cold_start(devm, workspace, sandbox_
             f"expected devm.target inactive on a daemon-less boot; got {target_state!r}"
         )
 
-        # Plant the interrupted-provisioning marker `devm shell` looks
+        # Plant the interrupted-provisioning marker `devm start` looks
         # for -- render's inProgressMarker
         # (internal/render/provision.go:20), written before the
         # composed script starts and removed when it finishes. Its
@@ -385,19 +396,30 @@ def test_teardown_dirty_recovers_with_fresh_cold_start(devm, workspace, sandbox_
         marker_check = vm.exec("test", "-f", "/run/devm/provisioning")
         assert marker_check.ok, "dirty marker did not persist on the guest disk"
 
-        # ---- 4. `devm shell` again: must tear down + cold-start fresh,
+        # ---- 4. `devm start` again: must tear down + cold-start fresh,
         # ---- NOT adopt. ----
         r2 = subprocess.run(
-            [devm.path, "shell", "--", "echo", "recovered-fresh"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r2.returncode == 0, (
-            f"devm shell should recover the dirty VM (teardown + cold-start) "
+            f"devm start should recover the dirty VM (teardown + cold-start) "
             f"and exit 0; got rc={r2.returncode}\nstderr={r2.stderr.decode()}"
         )
-        assert b"recovered-fresh" in r2.stdout, (
+        # Follow-up warm-attach: proves a real command actually runs
+        # inside the freshly cold-started VM.
+        echoed = subprocess.run(
+            [devm.path, "shell", "--", "echo", "recovered-fresh"],
+            cwd=str(workspace.path), capture_output=True, timeout=60,
+        )
+        assert echoed.returncode == 0, (
+            f"devm shell (warm-attach) should run inside the freshly "
+            f"cold-started VM; got rc={echoed.returncode}\n"
+            f"stderr={echoed.stderr.decode()}"
+        )
+        assert b"recovered-fresh" in echoed.stdout, (
             f"command should have run inside the freshly cold-started VM; "
-            f"stdout={r2.stdout!r}"
+            f"stdout={echoed.stdout!r}"
         )
 
         stderr2 = r2.stderr.decode()

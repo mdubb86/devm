@@ -21,7 +21,7 @@ def test_mask_added_while_stopped_picked_up_on_next_shell(devm, workspace, sandb
     try:
         # Cold-start without mask.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0

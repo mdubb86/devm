@@ -34,7 +34,7 @@ def test_mask_remove_ebusy_errors_clearly(devm, workspace, sandbox_name):
     try:
         # Cold-start with mask + service running inside it.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"

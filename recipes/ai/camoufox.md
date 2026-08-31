@@ -138,6 +138,7 @@ startup:
 ## Verifying
 
 ```
+devm start                                          # picks up the new install/startup steps
 devm shell
 $ command -v Xvfb dbus-launch                       # both present
 $ dpkg -l libdbus-glib-1-2 libxt6t64 | grep '^ii'  # both installed

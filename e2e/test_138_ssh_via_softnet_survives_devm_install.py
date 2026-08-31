@@ -78,7 +78,7 @@ def test_ssh_via_softnet_survives_devm_install(devm, workspace, sandbox_name, de
     try:
         # 1. Cold-start.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"

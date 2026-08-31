@@ -28,12 +28,12 @@ def test_install_pipeline_failure_fails_loud(workspace, devm):
     )
 
     proc = subprocess.run(
-        [devm.path, "shell"],
+        [devm.path, "start"],
         cwd=str(workspace.path),
         capture_output=True, timeout=90,
     )
     assert proc.returncode != 0, (
-        f"devm shell should exit non-zero on `false | cat` install step "
+        f"devm start should exit non-zero on `false | cat` install step "
         f"(pipefail must be active in the user shell); got rc=0\n"
         f"stdout={proc.stdout.decode()!r}\nstderr={proc.stderr.decode()!r}"
     )

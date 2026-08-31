@@ -65,11 +65,11 @@ def test_install_failure_workspace_write_persists_and_is_removable(workspace, de
 
     # Cold-start; expect failure.
     p = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         capture_output=True, cwd=str(workspace.path), timeout=180,
     )
     assert p.returncode != 0, (
-        f"devm shell should exit non-zero on failing install; got rc=0\n"
+        f"devm start should exit non-zero on failing install; got rc=0\n"
         f"stderr={p.stderr.decode()}"
     )
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mdubb86/devm/internal/approve"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -20,12 +21,30 @@ import (
 	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func reconcileMinimalCfg() schema.Config {
 	return schema.Config{
 		Project: schema.Project{Name: "x"},
 	}
+}
+
+// setupAndApproveCfg creates a temporary directory with devm.yaml matching
+// the given cfg, and pre-approves the snapshot so the approve gate passes.
+// Used by orchestrator-level tests that exercise the full reconcile flow
+// without hardcoding a fake repo root. Returns the tempdir path.
+func setupAndApproveCfg(t *testing.T, projectID string, cfg schema.Config) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	// Marshal cfg to YAML and write devm.yaml.
+	devmYAML, err := yaml.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "devm.yaml"), devmYAML, 0644))
+	// Pre-approve the snapshot so the approve gate check passes.
+	store := approve.NewStore(identity.Prod)
+	require.NoError(t, store.Write(projectID, devmYAML, nil, "user"))
+	return repoRoot
 }
 
 // nopApply is a stand-in for serviceapi.ApplyLiver that records nothing
@@ -198,8 +217,9 @@ func TestRunReconcile_LiveChangeApplies(t *testing.T) {
 
 	newCfg := reconcileMinimalCfg()
 	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+	repoRoot := setupAndApproveCfg(t, "x", newCfg)
 
-	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), repoRoot, ReconcileOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, "applied", res.NextAction)
@@ -214,8 +234,9 @@ func TestRunReconcile_IdenticalBaseline_NothingToDo(t *testing.T) {
 
 	cfg := reconcileMinimalCfg()
 	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: cfg}))
+	repoRoot := setupAndApproveCfg(t, "x", cfg)
 
-	rc, res, err := RunReconcile(identity.Prod, cfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	rc, res, err := RunReconcile(identity.Prod, cfg, fakeTartForSessions(t), repoRoot, ReconcileOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, "nothing_to_do", res.NextAction)
@@ -233,8 +254,9 @@ func TestRunReconcile_TeardownRequired_ClassifiesFlavorAndSessions(t *testing.T)
 
 	newCfg := reconcileMinimalCfg()
 	newCfg.Install = []string{"true", "false"}
+	repoRoot := setupAndApproveCfg(t, "x", newCfg)
 
-	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), repoRoot, ReconcileOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, "needs_approval", res.NextAction)
@@ -261,8 +283,9 @@ func TestRunReconcile_PackagesChange_ClassifiesLive(t *testing.T) {
 
 	newCfg := reconcileMinimalCfg()
 	newCfg.Packages = []string{"jq", "yq"}
+	repoRoot := setupAndApproveCfg(t, "x", newCfg)
 
-	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), "/tmp/fake-repo-root", ReconcileOptions{})
+	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), repoRoot, ReconcileOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, "applied", res.NextAction)
@@ -283,6 +306,33 @@ func TestRunReconcile_DaemonUnreachable_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, -1, rc)
 	assert.Equal(t, ReconcileResult{}, res)
+}
+
+// TestRunReconcile_ApproveRequired_SurfacesMessageVerbatim proves the
+// real production path — cmd/devm/reconcile.go's RunE calls exactly
+// this function — surfaces the daemon's clean multi-line
+// approve_required refusal, not a JSON-wrapped error body. No
+// approve.Store snapshot is written for "x", so isApproveDiverged
+// treats the project as diverged (no snapshot at all) and the daemon
+// refuses with 409 before RunReconcile ever reaches the live-apply or
+// teardown-classification logic.
+func TestRunReconcile_ApproveRequired_SurfacesMessageVerbatim(t *testing.T) {
+	cleanup := startReconcileDaemon(t)
+	defer cleanup()
+
+	cfg := reconcileMinimalCfg()
+	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: cfg}))
+
+	repoRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "devm.yaml"), []byte("project:\n  name: x\n"), 0o644))
+
+	rc, res, err := RunReconcile(identity.Prod, cfg, fakeTartForSessions(t), repoRoot, ReconcileOptions{})
+	require.Error(t, err)
+	assert.Equal(t, -1, rc)
+	assert.Equal(t, ReconcileResult{}, res)
+	assert.Contains(t, err.Error(), "devm.yaml (or devm.me.yaml) has changed since it was last approved.")
+	assert.Contains(t, err.Error(), "Run `devm approve`")
+	assert.NotContains(t, err.Error(), `"code"`, "error must be the daemon's clean message, not the raw JSON body")
 }
 
 // startReconcileDaemonWithIronProxyCapture is a variant of

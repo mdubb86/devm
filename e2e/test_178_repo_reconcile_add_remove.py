@@ -24,7 +24,7 @@ def test_reconcile_adds_secondary_volume(devm, workspace):
     try:
         # Initial cold-start: primary only.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"initial cold-start failed:\n{r.stderr.decode()}"

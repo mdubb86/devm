@@ -48,6 +48,7 @@ const ExitReconcileRequired = 4
 // brew, dev builds) live inside MaybeNudge. Cache means most calls
 // are ~1ms with no network.
 var nudgeForCommand = map[string]struct{}{
+	"approve":   {},
 	"shell":     {},
 	"start":     {},
 	"exec":      {},

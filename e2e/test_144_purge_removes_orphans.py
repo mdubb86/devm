@@ -26,11 +26,17 @@ def test_purge_removes_orphaned_volumes(devm, workspace, sandbox_name):
     try:
         # Cold-start, seed the volume with content.
         r = subprocess.run(
-            [devm.path, "shell", "--", "sudo", "sh", "-c",
-             "echo orphan > /var/lib/scratch/sentinel"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
+
+        r = subprocess.run(
+            [devm.path, "shell", "--", "sudo", "sh", "-c",
+             "echo orphan > /var/lib/scratch/sentinel"],
+            cwd=str(workspace.path), capture_output=True, timeout=60,
+        )
+        assert r.returncode == 0, f"sentinel write failed:\n{r.stderr.decode()}"
         assert os.path.exists(mac_vol_dir), "Mac-side volume dir must exist after cold-start"
 
         # Teardown destroys the VM disk; volume dir remains.

@@ -30,7 +30,7 @@ type ReconcileOptions struct{}
 // RunReconcile does not prompt or execute a recreate itself: it
 // returns the daemon's classification and lets cmd/devm/reconcile.go
 // decide whether to prompt, and to run the teardown + start helpers
-// `devm teardown` / `devm shell` already use, on approval.
+// `devm teardown` / `devm start` already use, on approval.
 //
 // Return codes: 0 on success (regardless of whether a recreate is
 // pending — the caller inspects res.RecreateRequired), -1 when the

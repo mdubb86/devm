@@ -32,7 +32,7 @@ def test_devm_cp_upload_mount_and_pipe_and_download(devm, workspace, sandbox_nam
     try:
         # 1. Cold-start.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, (

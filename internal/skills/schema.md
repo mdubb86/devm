@@ -50,7 +50,7 @@ Controls outbound access enforced by iron-proxy (bucket: **live**).
 |---|---|---|
 | `allow` | []AllowEntry | Hostnames the VM is permitted to reach, matched by SNI for TLS connections or HTTP Host header for plain HTTP. Each entry is a bare host scalar or a `{host, secrets}` mapping. |
 
-On a running VM, `devm reconcile` applies `allow` changes automatically by regenerating iron-proxy's config and respawning it — no VM restart, no prompt. On a stopped VM, changes take effect at the next `devm shell` cold start.
+On a running VM, `devm reconcile` applies `allow` changes automatically by regenerating iron-proxy's config and respawning it — no VM restart, no prompt. On a stopped VM, changes take effect at the next `devm start` cold start.
 
 Each allow entry accepts two forms:
 
@@ -94,7 +94,7 @@ Substitution rules in values:
 
 Per-service `env` entries win over top-level `env` on key collision.
 
-Note: `devm reconcile` detects env changes via per-service `env` entries only. A change to top-level `env` with no corresponding per-service change produces no diff output; it takes effect on the next `devm shell` cold start.
+Note: `devm reconcile` detects env changes via per-service `env` entries only. A change to top-level `env` with no corresponding per-service change produces no diff output; it takes effect on the next `devm start` cold start.
 
 ---
 
@@ -123,7 +123,7 @@ Rules:
 
 Shell commands run once at VM creation time, in order, as the guest `devm` user. Each command runs under `bash -o pipefail -c`. Bootstrap runs first, so `apt-get update` has already been called — user entries can `sudo apt-get install -y <pkg>` directly (the `devm` user has NOPASSWD sudo baked into the base image).
 
-`install` runs **once, on first boot only** — it is gated by a marker (`/var/lib/devm/provisioned`) and is **not** re-run on a later cold start (`devm stop` then `devm shell` reuses the same disk, so installed tools and built artifacts are still there). It runs during the provisioning window: iron-proxy is in the path under `passthrough` authority mode (MITM'd, audited, secret-substituted, but not allowlist-gated). Use `install` for one-time setup. For a command that must run on **every** boot, use `startup:` (every boot, same provisioning window — see below), or a service (`exec:` / `systemd:`) for a long-running process (every boot, under the restricted allowlist).
+`install` runs **once, on first boot only** — it is gated by a marker (`/var/lib/devm/provisioned`) and is **not** re-run on a later cold start (`devm stop` then `devm start` reuses the same disk, so installed tools and built artifacts are still there). It runs during the provisioning window: iron-proxy is in the path under `passthrough` authority mode (MITM'd, audited, secret-substituted, but not allowlist-gated). Use `install` for one-time setup. For a command that must run on **every** boot, use `startup:` (every boot, same provisioning window — see below), or a service (`exec:` / `systemd:`) for a long-running process (every boot, under the restricted allowlist).
 
 Changing `install` requires a full VM teardown and cold start (a fresh VM then re-runs first-boot `install` with the new commands).
 
@@ -141,7 +141,7 @@ The provisioning window itself only runs when there's work for it: first boot, o
 
 A failing `startup:` command aborts provisioning: `devm.target` never starts, no access is granted, and the VM is torn down — same failure class as a broken `install:` command, not fail-safe.
 
-The three hooks: `install:` = once, first boot, `passthrough` authority mode. `startup:` = every boot that opens the provisioning window, `passthrough` authority mode. Services (`exec:`/`systemd:`) = every boot, `restricted` authority mode — started and health-polled after the allowlist is applied, confirmed healthy before `devm.target` (and therefore access) comes up. Editing `startup:` (**restart** bucket) is deterministic: the freshly-rendered `startup:` runs on the applying `devm stop` + `devm shell` — the edit takes effect on that restart.
+The three hooks: `install:` = once, first boot, `passthrough` authority mode. `startup:` = every boot that opens the provisioning window, `passthrough` authority mode. Services (`exec:`/`systemd:`) = every boot, `restricted` authority mode — started and health-polled after the allowlist is applied, confirmed healthy before `devm.target` (and therefore access) comes up. Editing `startup:` (**restart** bucket) is deterministic: the freshly-rendered `startup:` runs on the applying `devm stop` + `devm start` — the edit takes effect on that restart.
 
 ---
 
@@ -334,9 +334,9 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 **live** — Devm applies the change without stopping the VM or ending active sessions. Env, path, template, and package changes are applied directly inside the guest. `volumes:` and most of `repos:` (every field except `url`/`secret`) start, stop, or retarget a mutagen sync session without a VM cycle. Network (`allow`) and secret changes are applied by regenerating iron-proxy's config and respawning it — no VM restart, no prompt.
 
-**restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm shell`. Sits here: `startup:` (edit takes effect on the applying restart) and `repos.<name>.url`/`repos.<name>.secret` (iron-proxy clones the repo at VM boot using these values).
+**restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm start`. Sits here: `startup:` (edit takes effect on the applying restart) and `repos.<name>.url`/`repos.<name>.secret` (iron-proxy clones the repo at VM boot using these values).
 
-**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm shell` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `base_image`, and `project` identity fields.
+**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm start` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `base_image`, and `project` identity fields.
 
 ---
 

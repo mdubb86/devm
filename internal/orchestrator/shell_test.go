@@ -1048,6 +1048,39 @@ func TestRunShellColdPath_StartVMError(t *testing.T) {
 	assert.Contains(t, err.Error(), "start vm")
 }
 
+// TestRunShellColdPath_StartVM_ApproveRequired_SurfacesMessageVerbatim
+// proves the real production path `devm start` drives (runShellFlow ->
+// RunShell -> ServiceAPIClient.StartVM) doesn't mangle the daemon's
+// clean multi-line approve_required refusal — the error RunShell
+// returns still contains the daemon's message text, only prefixed
+// with "start vm: " (mirrors RunReconcile's own "reconcile: " prefix
+// on the same class of error). serviceapi.Client.StartVM is what
+// actually strips the JSON envelope down to this message; this test
+// pins that RunShell's wrapping doesn't undo that.
+func TestRunShellColdPath_StartVM_ApproveRequired_SurfacesMessageVerbatim(t *testing.T) {
+	repoRoot := t.TempDir()
+	const approveRefusalMessage = `devm.yaml (or devm.me.yaml) has changed since it was last approved.
+Approve the change:
+  - Click the devm menu bar icon → Review, or
+  - Run ` + "`devm approve`" + ` in this terminal to review + approve inline.`
+	admin := &fakeVMAdmin{
+		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
+		startErr:   errors.New(approveRefusalMessage),
+	}
+
+	deps := ShellDeps{
+		Ident:            identity.Prod,
+		Tart:             tartPathNotNeeded(t),
+		ServiceAPIClient: admin,
+		UserSpawner:      &stubSpawner{},
+	}
+	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "devm.yaml (or devm.me.yaml) has changed since it was last approved.")
+	assert.Contains(t, err.Error(), "Run `devm approve`")
+	assert.NotContains(t, err.Error(), `"code"`, "error must be the daemon's clean message, not the raw JSON body")
+}
+
 // TestRunShellRunning_TargetInactiveNoMarker_AdoptsInPlace verifies the
 // adopt-in-place branch: the VM process is running, but devm.target isn't
 // active and no dirty-provisioning marker is present — a pristine VM

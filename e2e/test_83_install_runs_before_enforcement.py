@@ -59,7 +59,7 @@ def test_install_runs_before_enforcement(workspace, devm):
     try:
         # Cold-start MUST succeed — meaning install: reached pypi.org.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path),
             capture_output=True,
             timeout=300,

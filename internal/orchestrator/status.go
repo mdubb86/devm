@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -48,6 +49,22 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 	// CA trust state — read-only, no sudo.
 	trusted, _ := serviceapi.CheckCATrusted(ident)
 	res.CATrusted = trusted
+
+	// Approve-gate state — informational only, never blocks `devm
+	// status`. A 404 means the daemon predates the approve gate; the
+	// format layer silently omits the line for that case (backward
+	// compat). Any other error is reported but doesn't fail status.
+	approveCtx, approveCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	approveResp, approveErr := c.ApproveState(approveCtx, cfg.Project.Name, repoRoot)
+	approveCancel()
+	switch {
+	case approveErr == nil:
+		res.ApproveState = &approveResp
+	case errors.Is(approveErr, serviceapi.ErrApproveStateUnsupported):
+		// Old daemon — leave res.ApproveState and res.ApproveError unset.
+	default:
+		res.ApproveError = approveErr.Error()
+	}
 
 	// Proxy health: ask the daemon over the unix socket. Previously
 	// this was a TCP dial to 127.0.0.1:443 with immediate close — but

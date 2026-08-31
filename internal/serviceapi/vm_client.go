@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/mdubb86/devm/internal/schema"
@@ -23,6 +25,17 @@ func (c *Client) StartVM(ctx context.Context, req VMStartRequest) (VMStartRespon
 		return VMStartResponse{}, err
 	}
 	defer r.Body.Close()
+	if r.StatusCode == http.StatusConflict {
+		body, _ := io.ReadAll(r.Body)
+		var parsed struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Code == "approve_required" {
+			return VMStartResponse{}, errors.New(parsed.Message)
+		}
+		return VMStartResponse{}, fmt.Errorf("vm/start: status %d: %s", r.StatusCode, strings.TrimSpace(string(body)))
+	}
 	if r.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(r.Body)
 		return VMStartResponse{}, fmt.Errorf("vm/start: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
@@ -176,6 +189,17 @@ func (c *Client) Reconcile(ctx context.Context, req VMReconcileRequest) (VMRecon
 		return VMReconcileResponse{}, err
 	}
 	defer r.Body.Close()
+	if r.StatusCode == http.StatusConflict {
+		body, _ := io.ReadAll(r.Body)
+		var parsed struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Code == "approve_required" {
+			return VMReconcileResponse{}, errors.New(parsed.Message)
+		}
+		return VMReconcileResponse{}, fmt.Errorf("vm/reconcile: status %d: %s", r.StatusCode, strings.TrimSpace(string(body)))
+	}
 	if r.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(r.Body)
 		return VMReconcileResponse{}, fmt.Errorf("vm/reconcile: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
@@ -345,6 +369,57 @@ func (c *Client) VMStatus(ctx context.Context, name string) (VMStatusResponse, e
 	var resp VMStatusResponse
 	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
 		return VMStatusResponse{}, err
+	}
+	return resp, nil
+}
+
+// ErrApproveStateUnsupported is returned by Client.ApproveState when the
+// daemon 404s /vm/approve-state — an older daemon build predating the
+// approve gate. Callers check via errors.Is and degrade silently
+// (e.g. `devm status` omits the approve-gate line entirely).
+var ErrApproveStateUnsupported = errors.New("daemon does not support approve gate")
+
+// ApproveStateResponse is the subset of GET /vm/approve-state's JSON
+// body that callers outside the approve command need: whether the
+// project's devm.yaml/devm.me.yaml have diverged from the last-approved
+// snapshot, and when that snapshot was recorded. ApprovedSince is nil
+// when no snapshot has ever been written for the project.
+type ApproveStateResponse struct {
+	Diverged      bool    `json:"diverged"`
+	ApprovedSince *string `json:"approved_since"`
+}
+
+// ApproveState queries GET /vm/approve-state for the project rooted at
+// macCwd. Returns ErrApproveStateUnsupported (not a wrapped error) on a
+// 404 so callers can distinguish "old daemon" from a real failure.
+func (c *Client) ApproveState(ctx context.Context, projectID, macCwd string) (ApproveStateResponse, error) {
+	u, err := url.Parse("http://localhost/vm/approve-state")
+	if err != nil {
+		return ApproveStateResponse{}, err
+	}
+	q := u.Query()
+	q.Set("project", projectID)
+	q.Set("mac_cwd", macCwd)
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return ApproveStateResponse{}, err
+	}
+	r, err := c.httpClient.Do(req)
+	if err != nil {
+		return ApproveStateResponse{}, err
+	}
+	defer r.Body.Close()
+	if r.StatusCode == http.StatusNotFound {
+		return ApproveStateResponse{}, ErrApproveStateUnsupported
+	}
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return ApproveStateResponse{}, fmt.Errorf("vm/approve-state: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp ApproveStateResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return ApproveStateResponse{}, err
 	}
 	return resp, nil
 }

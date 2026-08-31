@@ -79,7 +79,7 @@ def test_startup_failure_workspace_write_persists_on_host(workspace, devm, sandb
     # provisioner returns immediately with error → devm shell exits non-zero.
     # The VM stays running (daemon doesn't stop it on provisioner failure).
     subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         capture_output=True, cwd=str(workspace.path),
         timeout=300, check=False,
     )

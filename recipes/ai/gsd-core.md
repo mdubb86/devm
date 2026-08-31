@@ -84,7 +84,7 @@ GSD's surface while keeping hand-written `.claude/commands/*.md` and
 
 ## Verifying
 
-Inside `devm shell`, from the project root:
+`devm start` (picks up the new startup step), then inside `devm shell`, from the project root:
 
 ```
 $ ls .claude/commands/ | grep -c '^gsd-'      # slash commands (>0)

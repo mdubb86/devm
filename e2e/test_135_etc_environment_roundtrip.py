@@ -113,7 +113,7 @@ def test_etc_environment_roundtrip(devm, workspace, sandbox_name):
         # Cold-start via `devm shell -- true`. Same pattern as test_133.
         # Timeout large because first-time base-image pull can be slow.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"

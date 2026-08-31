@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mdubb86/devm/internal/approve"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -123,6 +124,48 @@ func TestVMStart_MissingName(t *testing.T) {
 	_, err := c.StartVM(ctx, VMStartRequest{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "vm/start")
+}
+
+// TestClientStartVM_ApproveRequired verifies that when the daemon
+// refuses /vm/start with 409 approve_required (an existing approved
+// snapshot whose devm.yaml hash no longer matches the one on disk),
+// Client.StartVM returns an error whose message is the daemon's
+// "message" field verbatim, not the raw JSON-wrapped body. Mirrors
+// TestClientReconcile_ApproveRequired.
+//
+// The fake tart binary reports "p" as an already-existing (stopped)
+// VM so the handler skips Clone and reaches the approve-gate check —
+// which runs before `tart run` — without needing a real VM.
+func TestClientStartVM_ApproveRequired(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	store := approve.NewStore(identity.Prod)
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
+		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
+
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "tart-fake")
+	script := "#!/bin/sh\ncase \"$1\" in\n  list) echo '[{\"Name\":\"p\",\"State\":\"stopped\"}]' ;;\nesac\nexit 0\n"
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = binPath
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := c.StartVM(ctx, VMStartRequest{Name: "p", MacCwd: macCwd})
+	require.Error(t, err)
+	assert.Equal(t, approveRefusalMessage, err.Error())
 }
 
 // TestVMStop_MissingProjectID verifies /vm/stop rejects empty project_id.
@@ -297,6 +340,12 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
+	// Create and approve project directory for the approve gate.
+	projDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
+	store := approve.NewStore(identity.Prod)
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+
 	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(dir) })
@@ -324,12 +373,67 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	defer rcancel()
 
 	resp, err := c.Reconcile(rctx, VMReconcileRequest{
-		Name: "p", Cfg: newCfg, WorkspaceHostPath: "/tmp/repo",
+		Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir,
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.Applied, 1)
 	assert.Equal(t, "new", resp.Applied[0].New)
 	assert.Empty(t, resp.TeardownRequired)
+}
+
+// TestClientReconcile_ApproveRequired verifies that when the daemon
+// refuses /vm/reconcile with 409 approve_required (devm.yaml diverged
+// from the last-approved snapshot — here, no snapshot exists at all),
+// Client.Reconcile returns an error whose message is the daemon's
+// "message" field verbatim, not the raw JSON-wrapped body.
+func TestClientReconcile_ApproveRequired(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
+
+	registerFakeSoftnet(t, "p")
+
+	// No approve.Store snapshot written for "p" — isApproveDiverged
+	// treats a missing snapshot as diverged, so the daemon refuses.
+	projDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
+
+	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+
+	srv := NewServer(socket, Build{Version: "test-version"})
+	RegisterReconcileHandler(srv, identity.Prod, NewProjectLocks(), &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-errCh })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, socket)
+
+	c := NewClientWithSocket(socket)
+	rctx, rcancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer rcancel()
+
+	_, err = c.Reconcile(rctx, VMReconcileRequest{
+		Name: "p", Cfg: cfg, WorkspaceHostPath: projDir,
+	})
+	require.Error(t, err)
+	assert.Equal(t, approveRefusalMessage, err.Error())
 }
 
 // TestClientReconcile_MissingFields verifies /vm/reconcile rejects a
@@ -629,6 +733,102 @@ func TestClientRepoClone_MissingName_BadRequest(t *testing.T) {
 	err := c.RepoClone(ctx, "", schema.Config{}, "/tmp/repo-root", 39001)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "name required")
+}
+
+// TestClientApproveState_Diverged verifies Client.ApproveState reports
+// diverged=true and surfaces approved_since when the daemon's snapshot
+// no longer matches the on-disk devm.yaml.
+func TestClientApproveState_Diverged(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	store := approve.NewStore(identity.Prod)
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
+		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
+
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	tr := tart.New()
+	tr.Path = "false"
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := c.ApproveState(ctx, "p", macCwd)
+	require.NoError(t, err)
+	assert.True(t, resp.Diverged)
+	require.NotNil(t, resp.ApprovedSince)
+	assert.NotEmpty(t, *resp.ApprovedSince)
+}
+
+// TestClientApproveState_UpToDate verifies Client.ApproveState reports
+// diverged=false when the on-disk devm.yaml matches the approved
+// snapshot exactly.
+func TestClientApproveState_UpToDate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	contents := []byte("project:\n  name: p\nenv:\n  FOO: same\n")
+	store := approve.NewStore(identity.Prod)
+	require.NoError(t, store.Write("p", contents, nil, "user"))
+
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), contents, 0644))
+
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	tr := tart.New()
+	tr.Path = "false"
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := c.ApproveState(ctx, "p", macCwd)
+	require.NoError(t, err)
+	assert.False(t, resp.Diverged)
+}
+
+// TestClientApproveState_Unsupported verifies Client.ApproveState
+// returns the ErrApproveStateUnsupported sentinel (not a generic
+// error) when the daemon 404s /vm/approve-state — the shape an older,
+// pre-approve-gate daemon build returns for any unknown route.
+func TestClientApproveState_Unsupported(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "sapi-approve-404-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	sock := filepath.Join(dir, "s.sock")
+	srv := NewServer(sock, Build{})
+	// Deliberately no /vm/approve-state route registered — mirrors an
+	// old daemon build.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(sock); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, sock)
+
+	c := NewClientWithSocket(sock)
+	_, err = c.ApproveState(context.Background(), "p", "/tmp/x")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrApproveStateUnsupported)
 }
 
 // TestClientApplyIronProxy_ReadsResponse verifies Client.ApplyIronProxy

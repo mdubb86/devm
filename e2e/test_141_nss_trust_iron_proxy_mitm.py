@@ -45,7 +45,7 @@ def test_nss_trust_iron_proxy_mitm(devm, workspace, sandbox_name):
     try:
         # Cold-start.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path),
             capture_output=True,
             timeout=300,

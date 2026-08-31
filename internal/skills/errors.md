@@ -1,6 +1,6 @@
 ---
 name: errors
-description: Debugging devm — failure shapes from the daemon, the provisioner, and the VM. Use when devm shell fails to come up, or when something inside the VM isn't reachable.
+description: Debugging devm — failure shapes from the daemon, the provisioner, and the VM. Use when devm start fails to bring a VM up, devm shell can't attach, or something inside the VM isn't reachable.
 ---
 
 # Debugging devm
@@ -11,7 +11,7 @@ Failures fall into three layers. Identifying the layer narrows the search to the
 
 | Layer | When it fails | Symptom |
 |---|---|---|
-| **Daemon** | Before the VM starts | `devm shell` prints `query vm status: ...` or another pre-VM error |
+| **Daemon** | Before the VM starts | `devm start` (or `devm shell`) prints `query vm status: ...` or another pre-VM error |
 | **Provisioner** | VM started; provisioning (cold start or warm restart) failed | Output contains `::devm:stage:<name>::` markers followed by `provision: provision stage "<name>": ...` |
 | **Workload** | Provision succeeded; code in the VM can't reach something | Connection refused, DNS failure, or HTTPS cert error inside the VM |
 
@@ -19,7 +19,7 @@ Failures fall into three layers. Identifying the layer narrows the search to the
 
 ## Daemon failures
 
-`devm shell` contacts the daemon over a local socket before doing anything else. If the daemon is not running:
+`devm start` (and `devm shell`) contacts the daemon over a local socket before doing anything else. If the daemon is not running:
 
 ```
 query vm status: <detail>
@@ -43,7 +43,7 @@ If the daemon fails to stay up, check the error log:
 tail -n 50 ~/Library/Logs/com.devm.service.err.log
 ```
 
-Other pre-VM errors from `devm shell`:
+Other pre-VM errors from `devm start`:
 
 | Error prefix | Cause | Fix |
 |---|---|---|
@@ -51,6 +51,7 @@ Other pre-VM errors from `devm shell`:
 | `resolve secrets: missing secrets: [<name>] ...` | A `!secret` reference has no matching file in the on-disk secret store | Run `devm secret set <name>` for each listed name; see `devm skills get secrets` |
 | `start vm: ...` | Daemon rejected the `StartVM` call | Check daemon log at `~/Library/Logs/com.devm.service.err.log` |
 | `vm did not become ready: timeout waiting for vm <name> to become exec-ready` | VM did not accept exec connections within 60 seconds | Run `tart list` to check VM state; daemon log may have more detail |
+| `error: approve required` (exit 2, with the daemon's multi-line message) | `devm.yaml` (or `devm.me.yaml`) diverged from the last-approved snapshot | Click the menu bar icon → Review, or run `devm approve` |
 
 ---
 
@@ -61,13 +62,13 @@ Repo hydration (`git clone` inside the guest, for `repos:` entries) runs at the 
 - **Missing secret.** `repos.<name>.secret` names a secret not in the store — cold-start aborts before the clone runs; the error names the missing secret. Fix: `devm secret set <name>`.
 - **Clone auth failure (401).** Usually a missing iron-proxy substitution rule or an expired token. Cold-start aborts and the VM is torn down; the error names the repo URL. Fix: confirm `repos.<name>.secret` holds a token with clone access to that repo.
 - **Wrong URL / network failure.** Same abort-and-teardown shape; the error surfaces git's raw stderr. Fix: check the URL, or `devm denials` if it looks like a network block.
-- **In-sync guard rejection.** The clone only fires when both the Mac mirror and the guest target are empty. If either side already has content, the guard compares entry count, total size, and a hash of each side's sorted top-100 paths; any mismatch is rejected rather than guessing which side is authoritative, with `in-sync guard failed for <label>: <reason>`. Fix: align the two sides by hand (clear the stale one, or accept the divergence) and re-run `devm shell`.
+- **In-sync guard rejection.** The clone only fires when both the Mac mirror and the guest target are empty. If either side already has content, the guard compares entry count, total size, and a hash of each side's sorted top-100 paths; any mismatch is rejected rather than guessing which side is authoritative, with `in-sync guard failed for <label>: <reason>`. Fix: align the two sides by hand (clear the stale one, or accept the divergence) and re-run `devm start`.
 
 ---
 
 ## Provisioner failures
 
-After the VM starts, provisioning walks a series of stages. Each stage emits a marker (`::devm:stage:<name>::`) that drives the `devm shell` spinner. Iron-proxy runs in `passthrough` authority mode through the `open`→`commands` stages (MITM'd, audited, secret-substituted, but not allowlist-gated) and flips to `restricted` before `enforce`/`services`, so user services always come up under the enforced allowlist. Softnet stays in `FORWARDING` throughout — iron-proxy is the authority.
+After the VM starts, provisioning walks a series of stages. Each stage emits a marker (`::devm:stage:<name>::`) that drives the `devm start` spinner. Iron-proxy runs in `passthrough` authority mode through the `open`→`commands` stages (MITM'd, audited, secret-substituted, but not allowlist-gated) and flips to `restricted` before `enforce`/`services`, so user services always come up under the enforced allowlist. Softnet stays in `FORWARDING` throughout — iron-proxy is the authority.
 
 Any failing command aborts provisioning immediately. On failure the error line is:
 
@@ -90,7 +91,7 @@ provision: provision stage "<name>": provisioning script exited <N>
 | `enforce` | Stage marker only — no in-guest work. Marks the point after which egress is enforced. | Should not fail | n/a |
 | `services` | Enables + starts each declared service unit and health-polls it before `devm.target` (and therefore access) is granted. | Service failed to start (port in use, missing binary, bad config) | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>` |
 
-A failure at any stage from `bundle` through `enforce` leaves the VM in a bad cold-start state — `devm shell` tears it down (the next `devm shell` starts clean). Only `services` keeps the VM for in-place debugging via `tart exec` — it's the sole stage that runs after enforcement, so a failure there is a user-declared service being broken *after* everything else worked. `templates` deliberately does not keep the VM even though it runs after `install:`/`docker:`: it runs under open egress, before `enforce` installs the real allowlist, so a VM kept alive on a `templates` failure would be sitting there unenforced.
+A failure at any stage from `bundle` through `enforce` leaves the VM in a bad cold-start state — `devm start` tears it down (the next `devm start` starts clean). Only `services` keeps the VM for in-place debugging via `tart exec` — it's the sole stage that runs after enforcement, so a failure there is a user-declared service being broken *after* everything else worked. `templates` deliberately does not keep the VM even though it runs after `install:`/`docker:`: it runs under open egress, before `enforce` installs the real allowlist, so a VM kept alive on a `templates` failure would be sitting there unenforced.
 
 ---
 
@@ -125,13 +126,31 @@ curl: (60) SSL certificate problem: unable to get local issuer certificate
 
 Iron-proxy terminates TLS on the Mac and re-signs responses with the devm CA. If the VM does not trust the devm CA, every HTTPS request through the proxy fails with a cert error.
 
-Check the `install devm bundle` step output from the most recent cold start. CA cert installation happens during that step; any CA merge failure surfaces as a `FAIL: devm CA installed to CApath but not merged into ca-certificates.crt bundle` line. If it failed, recreate the VM (delete and re-run `devm shell`) so the provisioner runs again.
+Check the `install devm bundle` step output from the most recent cold start. CA cert installation happens during that step; any CA merge failure surfaces as a `FAIL: devm CA installed to CApath but not merged into ca-certificates.crt bundle` line. If it failed, recreate the VM (delete and re-run `devm start`) so the provisioner runs again.
 
 If the CA cert itself is missing from the Mac (`~/Library/Application Support/devm/ca/root.crt`), or is not trusted in the System Keychain, run `devm install` to regenerate and re-trust it.
 
 ### Token and secret issues
 
 If an API call fails with unexpected credentials or a 401, check whether iron-proxy's token substitution is working correctly. See `devm skills get secrets` for the full secret flow and how to diagnose substitution failures.
+
+---
+
+## Approve gate refusals
+
+`devm start` and `devm reconcile` refuse when the project's `devm.yaml` (or `devm.me.yaml`, if present) diverges from the last-approved snapshot:
+
+```
+error: approve required
+devm.yaml (or devm.me.yaml) has changed since it was last approved.
+Approve the change:
+  - Click the devm menu bar icon → Review, or
+  - Run `devm approve` in this terminal to review + approve inline.
+```
+
+The human must physically approve the change through one of these two paths — there is no `--yes` flag, and scripts cannot approve. `devm approve` is interactive-only; it prints the diff and prompts `y/N` at the terminal.
+
+First-run bootstrap: a project with no prior approval snapshot takes its current `devm.yaml` as the baseline on the first `devm start`. No prompt fires; the check only activates when there is history to compare against.
 
 ---
 

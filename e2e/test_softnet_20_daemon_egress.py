@@ -44,7 +44,7 @@ def test_daemon_softnet_egress(workspace, devm, sandbox_name):
     # --- 1: cold-start through the daemon; `devm shell`/`tart exec`
     # --- control path survives the softnet cutover. ---
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path),
         capture_output=True,
         timeout=300,
