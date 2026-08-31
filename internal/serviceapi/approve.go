@@ -93,3 +93,32 @@ func handleApproveState(cfg identity.Config) http.Handler {
 	}
 	return http.HandlerFunc(fn)
 }
+
+func handleApprove(cfg identity.Config) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		project := r.URL.Query().Get("project")
+		macCwd := r.URL.Query().Get("mac_cwd")
+		if project == "" || macCwd == "" {
+			http.Error(w, "approve: project and mac_cwd query params required", http.StatusBadRequest)
+			return
+		}
+		currentDevm, err := os.ReadFile(filepath.Join(macCwd, "devm.yaml"))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("approve: read devm.yaml: %v", err), http.StatusInternalServerError)
+			return
+		}
+		var currentMe []byte
+		if b, err := os.ReadFile(filepath.Join(macCwd, "devm.me.yaml")); err == nil {
+			currentMe = b
+		} else if !errors.Is(err, os.ErrNotExist) {
+			http.Error(w, fmt.Sprintf("approve: read devm.me.yaml: %v", err), http.StatusInternalServerError)
+			return
+		}
+		store := approve.NewStore(cfg)
+		if err := store.Write(project, currentDevm, currentMe, "user"); err != nil {
+			http.Error(w, fmt.Sprintf("approve: write snapshot: %v", err), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
