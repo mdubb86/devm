@@ -1132,10 +1132,20 @@ func (c Config) Validate() error {
 		if ic == "" {
 			return fmt.Errorf("install[%d] must not be empty", i)
 		}
+		if _, isRef := ParseScriptRef(ic); !isRef {
+			if err := ValidateShellCommand(ic); err != nil {
+				return fmt.Errorf("install[%d]: %w", i, err)
+			}
+		}
 	}
 	for i, sc := range c.Startup {
 		if sc == "" {
 			return fmt.Errorf("startup[%d] must not be empty", i)
+		}
+		if _, isRef := ParseScriptRef(sc); !isRef {
+			if err := ValidateShellCommand(sc); err != nil {
+				return fmt.Errorf("startup[%d]: %w", i, err)
+			}
 		}
 	}
 	// Scripts: validate each script's name and body before checking refs.
@@ -1158,6 +1168,9 @@ func (c Config) Validate() error {
 				}
 				if _, ok := ParseScriptRef(cmd); ok {
 					return fmt.Errorf("scripts[%s][%d]: script-to-script refs are not supported (V1)", name, i)
+				}
+				if err := ValidateShellCommand(cmd); err != nil {
+					return fmt.Errorf("scripts[%s][%d]: %w", name, i, err)
 				}
 			}
 		}
