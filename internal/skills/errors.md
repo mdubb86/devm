@@ -51,6 +51,7 @@ Other pre-VM errors from `devm shell`:
 | `resolve secrets: missing secrets: [<name>] ...` | A `!secret` reference has no matching file in the on-disk secret store | Run `devm secret set <name>` for each listed name; see `devm skills get secrets` |
 | `start vm: ...` | Daemon rejected the `StartVM` call | Check daemon log at `~/Library/Logs/com.devm.service.err.log` |
 | `vm did not become ready: timeout waiting for vm <name> to become exec-ready` | VM did not accept exec connections within 60 seconds | Run `tart list` to check VM state; daemon log may have more detail |
+| `error: approve required` (exit 2, with the daemon's multi-line message) | `devm.yaml` (or `devm.me.yaml`) diverged from the last-approved snapshot | Click the menu bar icon → Review, or run `devm approve` |
 
 ---
 
@@ -132,6 +133,24 @@ If the CA cert itself is missing from the Mac (`~/Library/Application Support/de
 ### Token and secret issues
 
 If an API call fails with unexpected credentials or a 401, check whether iron-proxy's token substitution is working correctly. See `devm skills get secrets` for the full secret flow and how to diagnose substitution failures.
+
+---
+
+## Approve gate refusals
+
+`devm start` and `devm reconcile` refuse when the project's `devm.yaml` (or `devm.me.yaml`, if present) diverges from the last-approved snapshot:
+
+```
+error: approve required
+devm.yaml (or devm.me.yaml) has changed since it was last approved.
+Approve the change:
+  - Click the devm menu bar icon → Review, or
+  - Run `devm approve` in this terminal to review + approve inline.
+```
+
+The human must physically approve the change through one of these two paths — there is no `--yes` flag, and scripts cannot approve. `devm approve` is interactive-only; it prints the diff and prompts `y/N` at the terminal.
+
+First-run bootstrap: a project with no prior approval snapshot takes its current `devm.yaml` as the baseline on the first `devm start`. No prompt fires; the check only activates when there is history to compare against.
 
 ---
 

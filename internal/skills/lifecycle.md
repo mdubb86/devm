@@ -9,7 +9,9 @@ description: devm VM lifecycle commands — shell, reconcile, stop, teardown, st
 
 | Command | What it does |
 |---|---|
-| `devm shell` | Bring the VM up (cold-start if needed) and attach an interactive shell. Attaches immediately if already running. |
+| `devm shell [-- COMMAND]` | Attach a shell (or run COMMAND) inside a running, provisioned sandbox. Errors if the VM is stopped or not yet provisioned; run `devm start` first. |
+| `devm start` | Cold-start (or adopt-in-place) the sandbox. Reads `devm.yaml` and drives every provisioning stage; the only command whose refusal on divergence carries "approve required." |
+| `devm approve` | Review the changes to `devm.yaml` / `devm.me.yaml` since they were last approved and advance the snapshot. Interactive-only; no `--yes` flag ever. |
 | `devm reconcile` | Diff the current config against the in-VM snapshot, apply live-bucket changes, and surface any pending teardown-bucket changes. |
 | `devm stop` | Stop the VM (preserves disk). Use to free resources without losing installed state. |
 | `devm teardown` | Destroy the VM and delete its disk image. Required after teardown-bucket changes. |
@@ -139,6 +141,30 @@ Calls `config.Load` without touching the VM. Validates `devm.yaml` and `devm.me.
 <!-- migration-note-start -->
 `config.Load` runs `CheckUnknownKeys` before the typed parse. Any key that isn't part of the current schema — a typo, or a field removed in a newer devm — hard-fails with an `unknown field "<key>" at <scope>` error listing the valid keys, rather than being silently dropped. There is no per-key migration pointer; removed keys (e.g. `project.id`, `project.vm_name`, `network.allowed_domains`, `project.hostname_apex`) simply surface as unknown fields.
 <!-- migration-note-end -->
+
+---
+
+## The approve gate
+
+The daemon persists a byte-level snapshot of the last-approved
+`devm.yaml` (+ `devm.me.yaml` if present) per project under
+`<RuntimeDir>/<projectID>/approved-snapshot/`. Gated commands
+(`devm start`, `devm reconcile`) refuse when the current file bytes
+differ from the snapshot; the error names two paths to approve:
+
+1. Click the devm menu bar icon → Review (opens a diff window with
+   Approve/Cancel buttons — see the devm Mac app, shipped separately).
+2. Run `devm approve` in the terminal — an interactive-only verb that
+   prints the diff and prompts y/N. **No `--yes` flag.** The human
+   must be present at the terminal to answer; scripts cannot approve.
+
+First-run bootstrap: a project with no prior snapshot has its current
+`devm.yaml` written as the initial snapshot on the first `devm start`.
+No prompt fires; the invariant kicks in as soon as there is history.
+
+`devm status` shows the approve state as an informational line
+("Approve gate: up to date" or "Approve gate: N changes since last
+approval — Review"). Status never blocks.
 
 ---
 
