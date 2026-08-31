@@ -28,6 +28,11 @@ shutdown() {
 on_exit() {
     local rc=$?
     sweep_registry
+    # Leave nothing behind regardless of how the run ended — VM strays,
+    # e2e-slot processes (iron-proxy, softnet, shims), stale temp dirs.
+    # The start-of-run call below covers whatever this one can't (e.g.
+    # SIGKILL on bash itself).
+    sweep_e2e_leftovers
     rm -f "$E2E_REGISTRY"
     exit $rc
 }
@@ -36,50 +41,11 @@ trap on_exit EXIT
 
 uv sync --quiet
 
-# Reap orphan e2e-* tart VMs from prior runs. Test fixtures name their
-# VMs `e2e-<slug>-<hash>` and register them into E2E_REGISTRY for
-# sweep_registry to delete on exit — but the registry only knows
-# about VMs the CURRENT run created. A prior run that died before
-# sweep_registry could fire (SIGKILL on bash, laptop sleep, CI job
-# cancel) leaves its VMs behind, and they cost disk + occasionally
-# hold shared resources (vmnet DHCP leases, tart's per-VM
-# scratch dirs). Sweep them here so a fresh run starts from clean
-# state.
-#
-# Only touches VMs prefixed `e2e-` — same allow-list the e2e test
-# fixtures use and the same shape sweep-leftovers.sh matches. User
-# VMs and `devm-base` are untouched. Silent when nothing's there.
-ORPHAN_VMS=()
-while read -r name; do
-    [ -z "$name" ] && continue
-    ORPHAN_VMS+=("$name")
-done < <(tart list 2>/dev/null | awk 'NR>1 && $2 ~ /^e2e-/ {print $2}')
-if [ "${#ORPHAN_VMS[@]}" -gt 0 ]; then
-    echo "=== e2e: reaping ${#ORPHAN_VMS[@]} orphan e2e-* tart VM(s) ===" >&2
-    for name in "${ORPHAN_VMS[@]}"; do
-        tart stop "$name" >/dev/null 2>&1 || true
-        tart delete "$name" >/dev/null 2>&1 || true
-    done
-fi
-
-# Reap orphan softnet processes from prior runs — belt-and-suspenders
-# for the daemon-side fix (softnet's own shutdown handling now unblocks
-# reliably, and /vm/stop asks it to exit over its control socket; see
-# internal/softnet/softnet.go's acceptUntilShutdown and vm.go's
-# shutdownSoftnet). This still covers a run that died before teardown
-# ever ran — pytest SIGKILL'd mid-test, a laptop sleep, a CI job
-# cancel — the same class of gap the tart VM sweep above covers.
-#
-# softnet is a child `tart run --net-softnet` forks internally, so it
-# never shows up in tart's own process accounting; matched here purely
-# by argv path. `Application Support/devm-e2e/softnet-bin/softnet` is
-# ensureSoftnetSymlink's deterministic path under the e2e identity's
-# RuntimeDir() (internal/identity/identity.go) — matches ONLY e2e
-# softnets, never a real installed daemon's (`.../devm/softnet-bin/`).
-echo "=== e2e: reaping orphan softnet processes ===" >&2
-pkill -TERM -f "$HOME/Library/Application Support/devm-e2e/softnet-bin/softnet" 2>/dev/null || true
-sleep 1
-pkill -KILL -f "$HOME/Library/Application Support/devm-e2e/softnet-bin/softnet" 2>/dev/null || true
+# Start from a clean slate: whatever any prior run left behind — VMs,
+# iron-proxy/softnet/shim processes, temp dirs — goes now. The registry
+# sweep only knows about the CURRENT run's resources; this catches
+# every run that died before its own on_exit could fire.
+sweep_e2e_leftovers
 
 set -m
 uv run pytest -p no:xdist "$@" &
