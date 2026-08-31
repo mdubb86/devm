@@ -410,9 +410,17 @@ func TestSetupPhases_AlignedContentCreatesSession(t *testing.T) {
 	require.NoError(t, err)
 	runGit := func(args ...string) {
 		cmd := exec.Command("git", append([]string{"-C", macDir}, args...)...)
+		// Isolate git from every system / user config source: a hosted CI
+		// runner's /etc/gitconfig may enable maintenance, hooks, or
+		// commit signing that would drop transient files under .git/
+		// between the test's initial scan and SetupVolumesPhase's
+		// re-scan and diverge their entry counts.
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+			"GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_CONFIG_SYSTEM=/dev/null",
+			"GIT_OPTIONAL_LOCKS=0",
 		)
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "git %v: %s", args, out)
@@ -422,12 +430,21 @@ func TestSetupPhases_AlignedContentCreatesSession(t *testing.T) {
 	runGit("add", "foo.txt")
 	runGit("commit", "-q", "-m", "root")
 
-	macSide, err := ScanMac(macDir)
-	require.NoError(t, err)
-
+	// Compute the guest scan output on demand from a fresh mac scan, so
+	// both sides come from the same point in time. Freezing an initial
+	// ScanMac and replaying it later would let any post-commit git
+	// bookkeeping (e.g. transient .git/ files that a background gc or
+	// index cleanup removes) show up as a mac vs guest entry-count
+	// mismatch under SetupVolumesPhase's own ScanMac. This preserves
+	// the test's semantic — "guest reports the same tree the mac has"
+	// — without pinning it to a specific millisecond.
 	guestExec := func(script string) (string, string, int, error) {
 		if strings.Contains(script, "find .") {
-			return fmt.Sprintf("count=%d size=%d hash=%s\n", macSide.Count, macSide.Size, macSide.TopHash), "", 0, nil
+			current, err := ScanMac(macDir)
+			if err != nil {
+				return "", err.Error(), 1, nil
+			}
+			return fmt.Sprintf("count=%d size=%d hash=%s\n", current.Count, current.Size, current.TopHash), "", 0, nil
 		}
 		return "", "", 0, nil
 	}
