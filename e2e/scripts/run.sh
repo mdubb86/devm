@@ -32,7 +32,7 @@ on_exit() {
     # e2e-slot processes (iron-proxy, softnet, shims), stale temp dirs.
     # The start-of-run call below covers whatever this one can't (e.g.
     # SIGKILL on bash itself).
-    sweep_e2e_leftovers
+    purge_e2e_leftovers
     rm -f "$E2E_REGISTRY"
     exit $rc
 }
@@ -45,7 +45,7 @@ uv sync --quiet
 # iron-proxy/softnet/shim processes, temp dirs — goes now. The registry
 # sweep only knows about the CURRENT run's resources; this catches
 # every run that died before its own on_exit could fire.
-sweep_e2e_leftovers
+purge_e2e_leftovers
 
 set -m
 uv run pytest -p no:xdist "$@" &

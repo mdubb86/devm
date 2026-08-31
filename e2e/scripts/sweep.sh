@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # sweep.sh — crash-safe cleanup for the e2e slot.
-# Sourced by run.sh and sweep-leftovers.sh; also runnable standalone
+# Sourced by run.sh and purge-leftovers.sh; also runnable standalone
 # (define E2E_REGISTRY first for sweep_registry).
 
 # sweep_registry removes resources the CURRENT run registered but whose
@@ -27,7 +27,7 @@ sweep_registry() {
     done < "$E2E_REGISTRY"
 }
 
-# sweep_e2e_leftovers removes everything a PRIOR run (or a run that just
+# purge_e2e_leftovers removes everything a PRIOR run (or a run that just
 # ended, cleanly or not) left in the e2e slot: e2e-* tart VMs, every
 # process whose argv references the e2e identity's runtime dir
 # (iron-proxy, softnet, setsid shims, mutagen ssh — the survive-daemon-
@@ -47,7 +47,7 @@ sweep_registry() {
 # here. That only happens for a project whose teardown noop'd against
 # a live daemon — rare, bounded to one process, and cleared by the
 # next bootstrap. The durable fix is daemon-side orphan GC (TODO).
-sweep_e2e_leftovers() {
+purge_e2e_leftovers() {
     local e2e_rundir="$HOME/Library/Application Support/devm-e2e"
 
     local orphan_vms=()
