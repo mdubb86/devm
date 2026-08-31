@@ -2,25 +2,32 @@ package schema
 
 import (
 	"fmt"
+	"strings"
 
-	shellwords "github.com/mattn/go-shellwords"
+	"mvdan.cc/sh/v3/syntax"
 )
 
-// ValidateShellCommand refuses shell strings that a POSIX-style word
-// splitter cannot tokenize — almost always the fingerprint of an
-// unquoted `#` inside a plain YAML scalar. YAML strips ` # …` as a
-// comment before devm ever sees the value; the survivor is a command
-// ending inside an open `"` or `'`, which shellwords rejects and bash
-// would surface a stage later as an unterminated-quote error.
-// Refuses early so the author sees which line and why, at config-load
-// time, rather than after a provisioning cycle burns on it.
+// ValidateShellCommand refuses shell strings that a real bash parser
+// cannot accept — almost always the fingerprint of an unquoted `#`
+// inside a plain YAML scalar. YAML strips ` # …` as a comment before
+// devm ever sees the value; the survivor is a command ending inside
+// an open `"` or `'`, which the parser rejects and bash would
+// surface a stage later as an unterminated-quote error. Refuses
+// early so the author sees which line and why, at config-load time,
+// rather than after a provisioning cycle burns on it.
 //
 // Script refs (`>name`) are the caller's business — this function
 // shell-lints literal command strings only.
+//
+// mvdan.cc/sh/v3/syntax is used rather than a word-splitter because
+// a word-splitter (e.g. github.com/mattn/go-shellwords) stops at the
+// first command separator (`||`, `&&`, `;`, `|`, `&`) and returns
+// the LHS with no error — silently missing an unterminated quote on
+// the RHS of a chain. A real parser sees the whole string.
 func ValidateShellCommand(s string) error {
-	if _, err := shellwords.Parse(s); err != nil {
+	if _, err := syntax.NewParser().Parse(strings.NewReader(s), ""); err != nil {
 		return fmt.Errorf(
-			"shell tokenization failed for %q: %w — "+
+			"shell parse failed for %q: %w — "+
 				"a bare `#` inside an unquoted YAML scalar starts a "+
 				"YAML comment; wrap the whole line in single quotes "+
 				"('...') to keep `#` as text",
