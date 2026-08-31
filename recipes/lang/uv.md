@@ -2,7 +2,7 @@
 name: tool/lang/uv
 category: lang
 display_name: uv (Python)
-description: "Run uv-based Python tooling inside a devm VM behind iron-proxy: pre-seed managed CPython in the open startup window so no GitHub host lands in the runtime allowlist, and keep .venv VM-local."
+description: "Run uv-based Python tooling inside a devm VM behind iron-proxy: pre-seed managed CPython at the `commands` stage (open egress, workspace hydrated) so no GitHub host lands in the runtime allowlist, and keep .venv VM-local."
 keywords: uv python rustls cpython venv datamodel-code-generator pip iron-proxy tls
 since: recipes-vNEXT
 ---
@@ -20,32 +20,39 @@ assets** (`release-assets.githubusercontent.com`), which `github.com` /
 `objects.githubusercontent.com` / `raw.githubusercontent.com` do **not** cover,
 and whose redirect carries a signed URL that can't be predicted.
 
-## devm.yaml additions (recommended: pre-seed at startup)
+## devm.yaml additions (recommended: pre-seed at `commands`)
 
-This is the default because it keeps the **runtime** allowlist minimal — the
-CPython fetch happens in the boot-time open-egress window, so
-`release-assets.githubusercontent.com` never needs to be a runtime host.
+Pre-seed via a `repos.<repo>.commands` entry marked `startup: true`: it fires
+at the `commands` stage, after `repo-clone` has hydrated the workspace and
+while iron-proxy is still in `passthrough`. `.python-version` is read from
+the repo's guest cwd — no `$WORKSPACE` guess, no silent fallback, and no
+runtime allowlist host needed.
 
 ```yaml
 env:
-  UV_PYTHON_DOWNLOADS: manual  # blocks *implicit* runtime auto-fetches; explicit `uv python install` (preseed-python below) still works
+  UV_PYTHON_DOWNLOADS: manual  # blocks *implicit* runtime auto-fetches; explicit `uv python install` (below) still works
 
 scripts:
   install-uv:
     - curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh
     - env UV_INSTALL_DIR=/home/devm/.local/bin INSTALLER_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-  # Runs in the open-egress `startup` window (before iron-proxy flips to
-  # restricted), so the python-build-standalone download works without
-  # allow-listing GitHub release assets. Idempotent — a fast no-op once
-  # the version is cached. Reads the project pin, defaults to 3.12.
-  preseed-python:
-    - /home/devm/.local/bin/uv python install "$(cat "$WORKSPACE/.python-version" 2>/dev/null || echo 3.12)"
 
 install:
   - ">install-uv"
 
-startup:
-  - ">preseed-python"
+repos:
+  main:
+    url: git@github.com:you/your-project.git
+    commands:
+      preseed-python:
+        # Reads `.python-version` from the repo's guest cwd. Runs at the
+        # `commands` stage — after `repo-clone`, still under iron-proxy's
+        # passthrough authority — so no runtime allowlist host is needed.
+        # No fallback: a project missing `.python-version` fails loud
+        # instead of getting a silently-substituted 3.12 that surfaces
+        # later as a confusing `uv sync` mismatch.
+        exec: /home/devm/.local/bin/uv python install "$(cat .python-version)"
+        startup: true
 
 path:
   # login shells get ~/.local/bin via ~/.profile; scripts, services, and
@@ -54,15 +61,15 @@ path:
 ```
 
 `uv python install <v>` is idempotent; the cached interpreter lives VM-local
-under `~/.local/share/uv`, so the startup pre-seed is a fast no-op on every
-boot after the first.
+under `~/.local/share/uv`, so the `commands`-stage pre-seed is a fast no-op
+on every boot after the first.
 
 ### Backup: runtime-download (generic GitHub egress)
 
-If you'd rather not pin a version, or don't want a startup open-egress window on
-every boot, drop `preseed-python` + `UV_PYTHON_DOWNLOADS` and let uv fetch
-CPython on demand — the cost is one permanent GitHub host in the **runtime**
-allowlist:
+If the project has no `.python-version`, or you'd rather not run an open-egress
+pre-seed on every boot, drop the `preseed-python` command + `UV_PYTHON_DOWNLOADS`
+and let uv fetch CPython on demand — the cost is one permanent GitHub host in
+the **runtime** allowlist:
 
 ```yaml
 network:
@@ -110,9 +117,10 @@ env:
 - **`python3` apt package is optional.** uv manages its own interpreters; only
   add `python3` to `packages:` if the project needs a *system* python for other
   reasons.
-- **Version pin is a project concern.** The `3.12` default in `preseed-python`
-  is just a fallback; real projects carry it in `.python-version`. (In BuzzTrack
-  it's 3.12 because `datamodel-code-generator==0.69.0` rejects Debian 13's 3.13.)
+- **`.python-version` is required.** No fallback in the recipe: a missing
+  file fails loud (`cat: .python-version: No such file` → `uv python install
+  ""` errors) rather than silently seeding a stale default. Pin the version
+  the project actually needs.
 - **Not in scope: telemetry noise.** The `DO_NOT_TRACK=1` / `SUPABASE_TELEMETRY=0`
   suggestion (to silence the posthog 403 stacktrace) is tool-agnostic and belongs
   in a devm-global default or the supabase recipe, not here.
@@ -128,10 +136,11 @@ $ uv run python -c "import sys; print(sys.version)"
 $ uvx datamodel-code-generator --version   # exercises rustls TLS through the proxy end-to-end
 ```
 
-Verified live on uv 0.12.2 / Debian 13 arm64: the startup pre-seed downloads
-CPython in the open window (no `release-assets` runtime host); uv's TLS
-handshake through iron-proxy succeeds via the auto-set `UV_SYSTEM_CERTS=1`;
-without the `path:` entry, non-login `uv` is `not found` (127).
+Verified live on uv 0.12.2 / Debian 13 arm64: the `commands`-stage pre-seed
+downloads CPython in the open-egress window (no `release-assets` runtime
+host); uv's TLS handshake through iron-proxy succeeds via the auto-set
+`UV_SYSTEM_CERTS=1`; without the `path:` entry, non-login `uv` is
+`not found` (127).
 
 Upstream: <https://docs.astral.sh/uv/> · network/CA docs:
 <https://docs.astral.sh/uv/reference/environment/>
