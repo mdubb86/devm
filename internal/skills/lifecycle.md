@@ -49,22 +49,27 @@ If the VM is stopped or absent (or was just torn down as a dirty adopt-in-place 
 
 The base image boots **locked and inert**. Egress is locked from the moment the VM comes up; `devm.target` — the unit that gates access to services and the shell — is installed but not enabled. Nothing user-facing starts on a bare boot. A VM the daemon didn't drive through provisioning (direct `tart run`, or a crash before provisioning began) therefore stays inert and locked: no ssh, no reachable services, no egress.
 
-Provisioning is the daemon's job, not the guest's own boot sequence. It walks the guest through these stages:
+Provisioning is the daemon's job, not the guest's own boot sequence. It walks the guest and the Mac side through these stages, in this order:
 
-| Stage | When | What it does |
-|---|---|---|
-| _(preamble)_ | every run | Set up devm's in-guest state and the CA trust. |
-| `open` | first boot, `startup:` non-empty, any service declares `templates:`, or a pending `packages:` diff | Egress opens fully for this window so `apt-get`, `curl … \| bash`, and friends work. |
-| `packages` | first boot (full list), or any later boot with a pending `packages:` diff | `apt-get update` + `apt-get install -y <packages>` on first boot; a targeted apt add/remove converge on a later boot. |
-| `install` | first boot only, if `install:` set | Run each `install:` command in order, open network. |
-| `docker` | first boot only, if `docker: true` | Install the Docker engine + runc shim; gate docker with everything else so it only starts after enforcement. |
-| `templates` | every boot, if any service declares `templates:` | Render every declared template file into its output path. |
-| `startup` | every boot, if `startup:` is non-empty | Run each `startup:` command, open network. |
-| `enforce` | every boot | Stage boundary marking the classifier's teardown/debuggable split — a failure at or before this point is devm's own enforcement being broken, not a user service. Does no in-guest work — the egress policy flip happens on the Mac side. |
-| `services` | every boot | Apply mask overlays; enable + start each declared service unit; health-poll each until active/healthy or timeout — **before** `devm.target` starts. |
-| _(finish)_ | every boot | `systemctl start devm.target` — brings up the gated services (ssh, docker, and your service units), all under enforcement. **Access is granted only now.** |
+| Stage | Side | When | What it does |
+|---|---|---|---|
+| `bundle` | guest | every run | Extract `/opt/devm` into the guest and run `install.sh` (devm CA install, PATH symlinks, mutagen-agent, systemd setup). Also flushes the base image's boot-time nftables lock — softnet is the egress boundary now. |
+| `volume-sync` | Mac | every run, if `volumes:` or `repos:` is set | Establish a mutagen sync session for every volume and repo entity and wait for the initial sync to converge, so later stages see hydrated workspace + volume state. |
+| `repo-clone` | guest | every run, per repo whose Mac-side mirror was empty | Clone the repo into the guest through iron-proxy. Repos with existing mirror content adopt in place instead. |
+| `open` | guest | first boot, `startup:` non-empty, any service declares `templates:`, or a pending `packages:` diff | Egress opens fully for this window so `apt-get`, `curl … \| bash`, and friends work. |
+| `packages` | guest | first boot (full list), or any later boot with a pending `packages:` diff | `apt-get update` + `apt-get install -y <packages>` on first boot; a targeted apt add/remove converge on a later boot. Both flow through the `apt_run` helper (per-file `Acquire::Retries=3` plus an outer three-attempt retry-with-backoff loop) so a transient mirror stall no longer tears the VM down. |
+| `install` | guest | first boot only, if `install:` set | Run each `install:` command in order, open network. |
+| `docker` | guest | first boot only, if `docker: true` | Install the Docker engine + runc shim; gate docker with everything else so it only starts after enforcement. |
+| `templates` | guest | every boot, if any service declares `templates:` | Render every declared template file into its output path. |
+| `startup` | guest | every boot, if `startup:` is non-empty | Run each `startup:` command, open network. |
+| `commands` | guest | every run, per repo command flagged `startup: true` | Run each `repos.<name>.commands.<name>` marked `startup: true` in the repo's guest cwd, as the devm user via `with-devm-env`. Still under open egress. |
+| `enforce` | Mac | every run | Flip softnet's egress policy authority back to restricted. No in-guest work — this is the Mac-side boundary that marks the classifier's teardown/debuggable split. A failure at or before this point is devm's own enforcement being broken, not a user service. |
+| `services` | guest | every run | `daemon-reload` + `unmask ssh`; enable + start each declared service unit; health-poll each (bounded, tolerates `Type=oneshot`) until active/healthy or timeout — **before** `devm.target` starts. |
+| _(finish)_ | guest | every run | `systemctl start devm.target` — brings up the gated services (ssh, docker, and your service units), all under enforcement. **Access is granted only now.** |
 
-Any failing command aborts the whole provisioning run before `devm.target` starts, so a failure never grants access. A failure at the `templates` or `services` stage leaves the VM running for in-place debugging (the user's service/template definition is what's broken); any earlier-stage failure (`open` through `enforce`) tears the VM down — `devm shell` promises loud failure, never a half-created VM left behind.
+"Side" names where the stage marker is emitted from: `guest` stages come from the composed provisioning script; `Mac` stages come from the Mac-side orchestrator between guest scripts.
+
+Any failing command aborts the whole provisioning run before `devm.target` starts, so a failure never grants access. `services` is the only stage that leaves the VM running for in-place debugging — a failure there is the user's service definition being broken *after* everything else worked. A failure at any earlier stage (from `bundle` through `enforce`) tears the VM down — `devm shell` promises loud failure, never a half-created VM left behind. `templates` deliberately does not keep the VM even though it runs after `install:`/`docker:` (it runs under open egress, before `enforce` installs the real allowlist — a VM kept alive on a `templates` failure would be sitting there unenforced).
 
 `install`/`docker` are gated by the `/var/lib/devm/provisioned` marker and only run once, on first boot; they're skipped on a later cold start (`devm stop` + `devm shell` reuses the same disk, so installed tools and built artifacts are still there). `packages` runs its full list on first boot like the others, but also converges a pending `packages:` diff on a later cold start (a running VM instead converges the same diff live, via `devm reconcile`, under the project's current `network.allow` — see `packages` in the schema reference). `startup:` and `templates` run on every boot that opens the window. Restart-time workload otherwise comes back via systemd — enabled units auto-start when `devm.target` activates, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
 
