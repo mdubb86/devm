@@ -52,10 +52,19 @@ const aptEgressHint = "apt egress may be blocked by network.allow — add deb.de
 // itself. The caller (the /vm/reconcile handler, via
 // locks.Lock(projectID)) must hold it for the entire call.
 func (a *realPackagesApplier) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, macCwd string, adds, removes []string) error {
-	script := render.AptConvergeScript(adds, removes)
-	if script == "" {
+	body := render.AptConvergeScript(adds, removes)
+	if body == "" {
 		return nil
 	}
+	// AptConvergeScript's body calls `apt_run`, which is a bash function
+	// defined by AptRetryHelper. In the warm-restart converge path the
+	// helper is emitted once at the top of RenderProvisionUserScript
+	// (which then embeds the converge body). This live-reconcile path
+	// pipes the body straight to `bash -e -o pipefail` with nothing
+	// else, so the helper has to be prepended here — otherwise
+	// `apt_run` is command-not-found and every live packages: diff exits
+	// 127 mid-stream.
+	script := render.AptRetryHelper() + body
 
 	exitCode, stderr := a.exec()(ctx, projectID, script)
 	if exitCode != 0 {

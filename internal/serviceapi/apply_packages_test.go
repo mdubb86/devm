@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/schema"
@@ -26,6 +27,19 @@ func TestApplyPackages_ExecsUnderCurrentPolicy(t *testing.T) {
 
 	assert.Equal(t, projectID, gotVMName)
 	assert.Contains(t, gotScript, "install -y 'sl'")
+
+	// Regression: the shipped script must be self-contained. The
+	// converge body calls the `apt_run` bash function, which is defined
+	// by render.AptRetryHelper. Live reconcile pipes the body straight
+	// to bash with no umbrella script, so the helper has to be
+	// prepended here — the v0.22.1 apt_run introduction shipped without
+	// it and every live packages: diff exited 127 (command not found).
+	assert.Contains(t, gotScript, "apt_run() {",
+		"shipped script must define apt_run before calling it")
+	defIdx := strings.Index(gotScript, "apt_run() {")
+	callIdx := strings.Index(gotScript, "apt_run install")
+	assert.True(t, defIdx >= 0 && callIdx > defIdx,
+		"apt_run must be defined before it is called:\n%s", gotScript)
 }
 
 func TestApplyPackages_FailurePropagates(t *testing.T) {
