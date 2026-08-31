@@ -16,19 +16,22 @@ func AptConvergeScript(adds, removes []string) string {
 	if len(adds) == 0 && len(removes) == 0 {
 		return ""
 	}
-	const apt = "sudo apt-get -o DPkg::Lock::Timeout=60"
 	var b strings.Builder
 	// A prior converge killed mid-dpkg-run leaves the dpkg database
 	// locked in an inconsistent state; repair it first so this (or any
 	// future) converge doesn't wedge on "dpkg was interrupted".
 	b.WriteString("sudo dpkg --configure -a\n")
+	// apt_run is defined at the top of the surrounding script by
+	// AptRetryHelper — Acquire::Retries=3 + DPkg::Lock::Timeout=60 +
+	// outer retry-with-backoff loop, so a transient mirror stall no
+	// longer tears the VM down.
 	if len(adds) > 0 {
-		fmt.Fprintf(&b, "%s update\n", apt)
-		fmt.Fprintf(&b, "%s install -y %s\n", apt, joinQuoted(adds))
+		fmt.Fprintf(&b, "apt_run update\n")
+		fmt.Fprintf(&b, "apt_run install -y %s\n", joinQuoted(adds))
 	}
 	if len(removes) > 0 {
-		fmt.Fprintf(&b, "%s remove -y %s\n", apt, joinQuoted(removes))
-		fmt.Fprintf(&b, "%s autoremove -y\n", apt)
+		fmt.Fprintf(&b, "apt_run remove -y %s\n", joinQuoted(removes))
+		fmt.Fprintf(&b, "apt_run autoremove -y\n")
 	}
 	return b.String()
 }

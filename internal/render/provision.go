@@ -151,18 +151,19 @@ func RenderProvisionUserScript(in ProvisionScriptInput) []byte {
 
 	p("#!/bin/bash")
 	p("set -eo pipefail")
+	p("%s", AptRetryHelper())
 
 	if in.hasOpenWork() {
 		p("echo ::devm:stage:open::")
 		if in.FirstBoot {
 			if len(in.Packages) > 0 {
 				p("echo ::devm:stage:packages::")
-				p("sudo apt-get update -y")
+				p("apt_run update -y")
 				quoted := make([]string, len(in.Packages))
 				for i, pkg := range in.Packages {
 					quoted[i] = shellSingleQuoted(pkg)
 				}
-				p("sudo apt-get install -y %s", strings.Join(quoted, " "))
+				p("apt_run install -y %s", strings.Join(quoted, " "))
 			}
 			if len(in.Install) > 0 {
 				p("echo ::devm:stage:install::")
