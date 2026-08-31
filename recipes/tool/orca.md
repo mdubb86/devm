@@ -62,15 +62,18 @@ devm-managed block is picked up transparently.
 
 ## Opening a project on the VM
 
-The workspace lives at the **same path string as the project directory
-on the Mac**, not under `/home/devm` — but it's a devm-managed volume
-(its own git clone, hydrated via `repo:`), not a live mirror of the
-Mac checkout. In Orca's "add remote project → Browse remote
-filesystem" picker, navigate to:
+The workspace lives at `/home/devm/<label>` on the guest — where
+`<label>` is the repo's explicit `label:` (if set) or defaults to the
+leaf of the Mac project directory. For a Mac project at
+`/Users/<you>/workspace/shelfmates`, the guest path is
+`/home/devm/shelfmates`. It's a devm-managed volume (its own git
+clone, hydrated via `repos:`), not a live mirror of the Mac checkout.
+In Orca's "add remote project → Browse remote filesystem" picker,
+navigate to:
 
-    /Users/<you>/workspace/<project>
+    /home/devm/<label>
 
-`~/workspace` and any legacy `/w/<project>` path do not exist on the
+The Mac-side path (`/Users/…/workspace/…`) does not exist on the
 guest. Orca runs `git worktree add` on the remote under this path.
 `node_modules/` lives in the volume; no Mac-side confusion.
 
