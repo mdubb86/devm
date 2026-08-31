@@ -34,7 +34,7 @@ func TestFormatStatusText_RunningWithPending(t *testing.T) {
 
 func TestFormatStatusText_Stopped(t *testing.T) {
 	out := FormatStatusText(StatusResult{HasProject: true, Sandbox: "x", State: "stopped"})
-	assert.Contains(t, out, "Sandbox stopped; config changes will apply on next `devm shell`.")
+	assert.Contains(t, out, "Sandbox stopped; config changes will apply on next `devm start`.")
 	assert.NotContains(t, out, "Active sessions")
 }
 
@@ -75,7 +75,7 @@ func TestFormatReconcileText_RestartPending(t *testing.T) {
 	})
 	assert.Contains(t, out, "1 change(s) require restart")
 	assert.Contains(t, out, "~ startup commands")
-	assert.Contains(t, out, "Restart sandbox (`devm stop` + `devm shell`) to apply")
+	assert.Contains(t, out, "Restart sandbox (`devm stop` + `devm start`) to apply")
 	assert.Contains(t, out, "Will hang up 1 active session")
 	assert.NotContains(t, out, "require recreate")
 	assert.NotContains(t, out, "Teardown")
@@ -456,7 +456,7 @@ func TestFormatStatusText_ApproveGate_Diverged(t *testing.T) {
 		ApproveState: &serviceapi.ApproveStateResponse{Diverged: true},
 	}
 	out := FormatStatusText(res)
-	assert.Contains(t, out, "changes since last approval")
+	assert.Contains(t, out, "devm.yaml has changed since last approval")
 	assert.Contains(t, out, "Review")
 }
 

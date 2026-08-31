@@ -46,10 +46,11 @@ approve gate refuses at the single point that reads devm.yaml, and
 		if err != nil {
 			return err
 		}
-		pcfg, err := config.Load(repoRoot)
+		projectName, err := config.ReadProjectName(repoRoot)
 		if err != nil {
 			return err
 		}
+		pcfg := schema.Config{Project: schema.Project{Name: projectName}}
 		// daemonHandshake (fingerprint drift check + iron-proxy warning) is
 		// called explicitly here since RunAttach, unlike runShellFlow,
 		// never cold-starts and so never calls it on its own.

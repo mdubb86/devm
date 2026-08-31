@@ -34,6 +34,37 @@ func strictDecode(data []byte, into any) error {
 	return nil
 }
 
+// projectNameOnly decodes just the project.name field, ignoring every
+// other key in devm.yaml.
+type projectNameOnly struct {
+	Project struct {
+		Name string `yaml:"name"`
+	} `yaml:"project"`
+}
+
+// ReadProjectName reads only the project.name field from devm.yaml in
+// dir — no devm.me.yaml merge, no schema validation, no env resolution.
+// For callers like `devm shell` that need the project's identity but
+// must not treat reading devm.yaml as an apply path.
+func ReadProjectName(dir string) (string, error) {
+	basePath := filepath.Join(dir, "devm.yaml")
+	baseBytes, err := os.ReadFile(basePath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("%w in %s", ErrNoConfig, dir)
+		}
+		return "", fmt.Errorf("read %s: %w", basePath, err)
+	}
+	var p projectNameOnly
+	if err := yaml.Unmarshal(baseBytes, &p); err != nil {
+		return "", fmt.Errorf("parse %s: %w", basePath, err)
+	}
+	if p.Project.Name == "" {
+		return "", fmt.Errorf("%s: project.name is required", basePath)
+	}
+	return p.Project.Name, nil
+}
+
 // Load reads devm.yaml (required) and devm.me.yaml (optional) from dir,
 // validates each, deep-merges, and validates the result. Returns the
 // merged validated Config.

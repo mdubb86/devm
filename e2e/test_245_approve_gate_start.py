@@ -1,4 +1,4 @@
-"""241: approve gate — `devm start` refuses on divergence too; first cold-
+"""245: approve gate — `devm start` refuses on divergence too; first cold-
 start auto-approves silently.
 """
 from __future__ import annotations

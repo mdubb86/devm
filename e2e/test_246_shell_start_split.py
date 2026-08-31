@@ -1,4 +1,4 @@
-"""242: `devm shell` no longer starts the VM; the split between shell (warm-
+"""246: `devm shell` no longer starts the VM; the split between shell (warm-
 attach only) and start (sole cold-start owner) is enforced.
 """
 from __future__ import annotations

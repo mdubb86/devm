@@ -223,7 +223,7 @@ func TestStatus_ShowsDivergedApproveState(t *testing.T) {
 	assert.True(t, res.ApproveState.Diverged)
 
 	out := orchestrator.FormatStatusText(res)
-	assert.Contains(t, out, "changes since last approval")
+	assert.Contains(t, out, "devm.yaml has changed since last approval")
 	assert.Contains(t, out, "Review")
 }
 

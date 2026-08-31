@@ -1,4 +1,4 @@
-"""243: on a fresh project (no prior approved snapshot), the first `devm start`
+"""247: on a fresh project (no prior approved snapshot), the first `devm start`
 proceeds without prompting and without printing an approve-required error.
 Follow-up: a subsequent reconcile with no edits is a no-op that does not
 refuse (the snapshot matches).

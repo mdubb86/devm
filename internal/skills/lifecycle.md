@@ -171,8 +171,8 @@ First-run bootstrap: a project with no prior snapshot has its current
 No prompt fires; the invariant kicks in as soon as there is history.
 
 `devm status` shows the approve state as an informational line
-("Approve gate: up to date" or "Approve gate: N changes since last
-approval — Review"). Status never blocks.
+("Approve gate: up to date" or "Approve gate: devm.yaml has changed
+since last approval — Review"). Status never blocks.
 
 ---
 

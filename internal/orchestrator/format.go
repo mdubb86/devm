@@ -122,7 +122,7 @@ func FormatStatusText(r StatusResult) string {
 	fmt.Fprintln(&b)
 	switch {
 	case r.State == "stopped" || r.State == "absent":
-		fmt.Fprintln(&b, "Sandbox stopped; config changes will apply on next `devm shell`.")
+		fmt.Fprintln(&b, "Sandbox stopped; config changes will apply on next `devm start`.")
 	case r.PendingLive == 0 && r.PendingRecreate == 0:
 		fmt.Fprintln(&b, "In sync.")
 	default:
@@ -150,7 +150,7 @@ func FormatStatusText(r StatusResult) string {
 func formatApproveState(r StatusResult) string {
 	switch {
 	case r.ApproveState != nil && r.ApproveState.Diverged:
-		return "\nApprove gate: N changes since last approval — Review with `devm approve` or the menu bar.\n"
+		return "\nApprove gate: devm.yaml has changed since last approval — Review with `devm approve` or the menu bar.\n"
 	case r.ApproveState != nil:
 		return "\nApprove gate: up to date.\n"
 	case r.ApproveError != "":
@@ -490,7 +490,7 @@ func FormatReconcileText(r ReconcileResult) string {
 				fmt.Fprintln(&b, "  "+formatChange(c))
 			}
 			fmt.Fprintln(&b)
-			fmt.Fprintln(&b, "Restart sandbox (`devm stop` + `devm shell`) to apply. No teardown, no data loss.")
+			fmt.Fprintln(&b, "Restart sandbox (`devm stop` + `devm start`) to apply. No teardown, no data loss.")
 			if len(r.Sessions) > 0 && !hangupPrinted {
 				fmt.Fprintf(&b, "Will hang up %d active session(s).\n", len(r.Sessions))
 				hangupPrinted = true

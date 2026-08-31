@@ -349,35 +349,6 @@ func reconcileHandler(cfg identity.Config, locks *ProjectLocks, apply ApplyLiver
 	})
 }
 
-// Minimal stubs for test seam; these are never called in approve-gate tests
-// since the gate check runs before actual reconcile work.
-type testApplyStub struct{}
-
-func (t *testApplyStub) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, identCfg identity.Config, ironProxyURL string) error {
-	return nil
-}
-
-type testPackagesStub struct{}
-
-func (t *testPackagesStub) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, macCwd string, adds, removes []string) error {
-	return nil
-}
-
-type testTartListStub struct{}
-
-func (t *testTartListStub) List(ctx context.Context) ([]tart.VM, error) {
-	return []tart.VM{}, nil
-}
-
-// newReconcileHandlerForTest is exposed for approve-gate tests; production code uses the mux registration below.
-func newReconcileHandlerForTest(cfg identity.Config) http.Handler {
-	// For testing, use a minimal lock and stub implementations.
-	// The approve gate check runs before any actual reconcile work,
-	// so these stubs are never actually called in the approve-gate test flow.
-	locks := NewProjectLocks()
-	return reconcileHandler(cfg, locks, &testApplyStub{}, &testPackagesStub{}, &testTartListStub{}, supervisor.New("/tmp"), nil, 0)
-}
-
 // RegisterReconcileHandler wires POST /vm/reconcile. sup is consulted
 // (only when the VM is running) to self-heal a missing/stale
 // iron-proxy: see the KindIronProxyDown emit below.

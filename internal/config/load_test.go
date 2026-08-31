@@ -356,3 +356,55 @@ repos:
 	assert.Equal(t, ">fmt-check", cfg.Repos["main"].Commands["lint"].Exec)
 	assert.Nil(t, cfg.Repos["main"].Commands["lint"].Startup, "unspecified startup stays nil")
 }
+
+func TestReadProjectName(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  name: myproj
+services:
+  webapp:
+    port: 3000
+    hostname: test.test
+`)
+	name, err := ReadProjectName(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "myproj", name)
+}
+
+func TestReadProjectName_MissingFileIsErrNoConfig(t *testing.T) {
+	_, err := ReadProjectName(t.TempDir())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoConfig)
+}
+
+func TestReadProjectName_MissingNameErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  # missing name
+`)
+	_, err := ReadProjectName(dir)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "name")
+}
+
+// TestReadProjectName_IgnoresContentThatWouldFailFullLoad proves
+// ReadProjectName really is a minimal parse: it reads project.name
+// even from a devm.yaml that Load rejects for an unrelated schema
+// violation (here, the legacy project.vm_name field). Shell must not
+// be blocked by devm.yaml content it doesn't otherwise care about.
+func TestReadProjectName_IgnoresContentThatWouldFailFullLoad(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "devm.yaml", `
+project:
+  name: test
+  vm_name: legacy
+`)
+	_, loadErr := Load(dir)
+	require.Error(t, loadErr, "sanity check: this content must fail full Load")
+
+	name, err := ReadProjectName(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "test", name)
+}

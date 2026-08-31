@@ -22,7 +22,7 @@ var teardownCmd = &cobra.Command{
 	Short: "Destroy the VM entirely (deletes disk)",
 	Long: `Prompts before stopping the project VM and deleting its disk image.
 All installed state is lost. Use --yes (-y) to skip the prompt. The
-workspace volume is preserved; a fresh devm shell will re-run install/startup.`,
+workspace volume is preserved; a fresh devm start will re-run install/startup.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below

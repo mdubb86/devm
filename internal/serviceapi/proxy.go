@@ -484,7 +484,7 @@ func write502BackendDown(w http.ResponseWriter, host, backendHost string, port i
 	fmt.Fprintf(w, "devm: no service listening at %s → %s:%s\n\n",
 		host, backendHost, strconv.Itoa(port))
 	fmt.Fprintf(w, "is your dev server running?\n")
-	fmt.Fprintf(w, "  vm mode:    `devm shell` to bring the sandbox up\n")
+	fmt.Fprintf(w, "  vm mode:    `devm start` to bring the sandbox up\n")
 	fmt.Fprintf(w, "  local mode: start the process this hostname targets\n\n")
 	fmt.Fprintf(w, "(%v)\n", err)
 }

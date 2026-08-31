@@ -1,4 +1,4 @@
-"""240: approve gate — devm reconcile refuses when devm.yaml diverges from
+"""244: approve gate — devm reconcile refuses when devm.yaml diverges from
 the last-approved snapshot; `devm approve` unblocks; subsequent reconcile
 proceeds.
 

@@ -61,7 +61,7 @@ var reconcileCmd = &cobra.Command{
 
 		// Best-effort: re-push routes so a `direct` flip made by this
 		// reconcile is reflected in the daemon's DNS answer right away,
-		// instead of waiting for the next `devm shell` auto-apply.
+		// instead of waiting for the next `devm start` auto-apply.
 		repushRoutes(ident, cfg)
 
 		if len(res.RecreateRequired) == 0 {
@@ -70,7 +70,7 @@ var reconcileCmd = &cobra.Command{
 
 		// Recreate-required path: decide whether to prompt, and on
 		// approval delegate to the same teardown + start helpers
-		// `devm teardown` / `devm shell` already use directly.
+		// `devm teardown` / `devm start` already use directly.
 		if !reconcileYes {
 			if !isatty.IsTerminal(os.Stdin.Fd()) {
 				os.Exit(2)
