@@ -93,12 +93,21 @@ func TestShim_ChildSurvivesShimDeath(t *testing.T) {
 	// Launch shim with a sleep long enough to observe post-shim-death survival.
 	cmd := exec.Command(shim, "sleep", "30")
 	require.NoError(t, cmd.Start())
+	// Kill the shim on any early-exit path so a poll timeout doesn't
+	// leave a shim that eventually spawns a `sleep 30` orphan that
+	// lingers 30s and contributes to load in subsequent tests.
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
 	// Find the sleep child (grandchild from shim's exec.Cmd perspective).
 	// The shim is `cmd.Process.Pid`; the sleep child is a child OF the shim.
-	// Poll rather than a fixed sleep: fork+exec+setsid timing varies under load.
+	// Under `go test ./...` peak fork storm, macOS deprioritises freshly-
+	// forked processes and the shim can take several seconds just to run
+	// Go's runtime init before it ever reaches its own fork/exec of the
+	// sleep child. A 10s budget stays tight enough to catch a genuinely
+	// hung shim (it would never spawn) while surviving load-driven
+	// scheduler starvation.
 	var childPID int
-	deadlineStart := time.Now().Add(2 * time.Second)
+	deadlineStart := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadlineStart) {
 		childPID = findSleepChildOf(t, cmd.Process.Pid)
 		if childPID != 0 {
@@ -156,8 +165,11 @@ func TestShim_IgnoresSIGTERM(t *testing.T) {
 		_ = cmd.Wait()
 	})
 
+	// Under `go test ./...` load, the shim can take multi-seconds to
+	// finish Go runtime init before spawning its own child; see
+	// TestShim_ChildSurvivesShimDeath for the same budget rationale.
 	var childPID int
-	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
 		childPID = findSleepChildOf(t, cmd.Process.Pid)
 		if childPID != 0 {
 			break
