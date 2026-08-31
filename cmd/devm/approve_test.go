@@ -45,12 +45,13 @@ func TestApprove_UnchangedPrintsAlreadyApprovedAndExits(t *testing.T) {
 	defer f.Close()
 	var stdout, stderr bytes.Buffer
 	err := runApprove(approveOpts{
-		daemonURL: f.URL,
-		projectID: "p",
-		macCwd:    "/tmp/x",
-		stdin:     strings.NewReader(""),
-		stdout:    &stdout,
-		stderr:    &stderr,
+		daemonURL:  f.URL,
+		httpClient: f.Client(),
+		projectID:  "p",
+		macCwd:     "/tmp/x",
+		stdin:      strings.NewReader(""),
+		stdout:     &stdout,
+		stderr:     &stderr,
 	})
 	require.NoError(t, err)
 	assert.Contains(t, stdout.String(), "already approved")
@@ -61,23 +62,24 @@ func TestApprove_DivergedYesAdvancesSnapshot(t *testing.T) {
 	cur := base64.StdEncoding.EncodeToString([]byte("project:\n  name: p2\n"))
 	prev := base64.StdEncoding.EncodeToString([]byte("project:\n  name: p1\n"))
 	body, _ := json.Marshal(map[string]any{
-		"project":              "p",
-		"diverged":             true,
-		"current_devm_bytes":   cur,
-		"approved_devm_bytes":  prev,
-		"current_me_bytes":     nil,
-		"approved_me_bytes":    nil,
+		"project":             "p",
+		"diverged":            true,
+		"current_devm_bytes":  cur,
+		"approved_devm_bytes": prev,
+		"current_me_bytes":    nil,
+		"approved_me_bytes":   nil,
 	})
 	f := newFakeApproveDaemon(body)
 	defer f.Close()
 	var stdout, stderr bytes.Buffer
 	err := runApprove(approveOpts{
-		daemonURL: f.URL,
-		projectID: "p",
-		macCwd:    "/tmp/x",
-		stdin:     strings.NewReader("y\n"),
-		stdout:    &stdout,
-		stderr:    &stderr,
+		daemonURL:  f.URL,
+		httpClient: f.Client(),
+		projectID:  "p",
+		macCwd:     "/tmp/x",
+		stdin:      strings.NewReader("y\n"),
+		stdout:     &stdout,
+		stderr:     &stderr,
 	})
 	require.NoError(t, err)
 	assert.Contains(t, stdout.String(), "devm.yaml")
@@ -90,13 +92,13 @@ func TestApprove_DivergedNoDoesNotAdvance(t *testing.T) {
 	prev := base64.StdEncoding.EncodeToString([]byte("project:\n  name: p1\n"))
 	body, _ := json.Marshal(map[string]any{
 		"project": "p", "diverged": true,
-		"current_devm_bytes":  cur, "approved_devm_bytes": prev,
+		"current_devm_bytes": cur, "approved_devm_bytes": prev,
 	})
 	f := newFakeApproveDaemon(body)
 	defer f.Close()
 	var stdout, stderr bytes.Buffer
 	err := runApprove(approveOpts{
-		daemonURL: f.URL, projectID: "p", macCwd: "/tmp/x",
+		daemonURL: f.URL, httpClient: f.Client(), projectID: "p", macCwd: "/tmp/x",
 		stdin: strings.NewReader("n\n"), stdout: &stdout, stderr: &stderr,
 	})
 	assert.Error(t, err, "N answer must exit non-zero")
@@ -109,7 +111,7 @@ func TestApprove_DivergedEOFDoesNotAdvance(t *testing.T) {
 	defer f.Close()
 	var stdout, stderr bytes.Buffer
 	err := runApprove(approveOpts{
-		daemonURL: f.URL, projectID: "p", macCwd: "/tmp/x",
+		daemonURL: f.URL, httpClient: f.Client(), projectID: "p", macCwd: "/tmp/x",
 		stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr,
 	})
 	assert.Error(t, err, "EOF answer must exit non-zero")

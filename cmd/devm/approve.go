@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,12 +21,13 @@ import (
 )
 
 type approveOpts struct {
-	daemonURL string
-	projectID string
-	macCwd    string
-	stdin     io.Reader
-	stdout    io.Writer
-	stderr    io.Writer
+	daemonURL  string
+	httpClient *http.Client
+	projectID  string
+	macCwd     string
+	stdin      io.Reader
+	stdout     io.Writer
+	stderr     io.Writer
 }
 
 var approveCmd = &cobra.Command{
@@ -47,18 +50,31 @@ the terminal to answer. Scripts cannot approve.`,
 		if err != nil {
 			return err
 		}
+		socketPath := cfg.SocketPath()
+		httpc := &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+				},
+			},
+		}
 		return runApprove(approveOpts{
-			daemonURL: daemonURL(),
-			projectID: pid,
-			macCwd:    cwd,
-			stdin:     os.Stdin,
-			stdout:    os.Stdout,
-			stderr:    os.Stderr,
+			daemonURL:  "http://localhost",
+			httpClient: httpc,
+			projectID:  pid,
+			macCwd:     cwd,
+			stdin:      os.Stdin,
+			stdout:     os.Stdout,
+			stderr:     os.Stderr,
 		})
 	},
 }
 
 func runApprove(o approveOpts) error {
+	client := o.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
 	u, err := url.Parse(o.daemonURL + "/vm/approve-state")
 	if err != nil {
 		return fmt.Errorf("build approve-state URL: %w", err)
@@ -67,7 +83,7 @@ func runApprove(o approveOpts) error {
 	q.Set("project", o.projectID)
 	q.Set("mac_cwd", o.macCwd)
 	u.RawQuery = q.Encode()
-	resp, err := http.Get(u.String())
+	resp, err := client.Get(u.String())
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", u, err)
 	}
@@ -110,7 +126,7 @@ func runApprove(o approveOpts) error {
 	q2.Set("project", o.projectID)
 	q2.Set("mac_cwd", o.macCwd)
 	u2.RawQuery = q2.Encode()
-	rsp, err := http.Post(u2.String(), "application/json", nil)
+	rsp, err := client.Post(u2.String(), "application/json", nil)
 	if err != nil {
 		return fmt.Errorf("POST %s: %w", u2, err)
 	}
@@ -174,13 +190,6 @@ func splitLines(b []byte) []string {
 		s = s[:len(s)-1]
 	}
 	return strings.Split(s, "\n")
-}
-
-// daemonURL returns the base URL for reaching the daemon over HTTP.
-// The daemon listens on a Unix socket but uses HTTP request semantics,
-// so this returns the localhost URL used by serviceapi.Client.
-func daemonURL() string {
-	return "http://localhost"
 }
 
 // resolveProjectID loads the devm.yaml from cwd and returns the project.name.
