@@ -142,3 +142,24 @@ func TestApprove_RejectsNonPOST(t *testing.T) {
 	handleApprove(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/vm/approve?project=x&mac_cwd=/tmp/y", nil))
 	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
 }
+
+func TestBootstrapApprovedSnapshotOnFirstRun_WritesInitial(t *testing.T) {
+	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "")
+	err := bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", projDir)
+	require.NoError(t, err)
+	snap, ok, err := store.Read("proj-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "project:\n  name: p\n", string(snap.DevmYAML))
+	assert.Equal(t, "user", snap.Manifest.Source)
+}
+
+func TestBootstrapApprovedSnapshotOnFirstRun_NoOpWhenSnapshotExists(t *testing.T) {
+	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p2\n", "")
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
+	err := bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", projDir)
+	require.NoError(t, err)
+	snap, _, err := store.Read("proj-1")
+	require.NoError(t, err)
+	assert.Equal(t, "project:\n  name: p\n", string(snap.DevmYAML), "bootstrap must not overwrite an existing snapshot")
+}

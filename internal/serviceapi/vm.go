@@ -409,6 +409,10 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
+		if req.MacCwd == "" {
+			http.Error(w, "mac_cwd required", http.StatusBadRequest)
+			return
+		}
 
 		unlock := locks.Lock(req.Name)
 		defer unlock()
@@ -482,6 +486,11 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				http.Error(w, fmt.Sprintf("tart set --cpu: %v", err), http.StatusInternalServerError)
 				return
 			}
+		}
+
+		if err := bootstrapApprovedSnapshotOnFirstRun(cfg, req.Name, req.MacCwd); err != nil {
+			http.Error(w, fmt.Sprintf("bootstrap approve snapshot: %v", err), http.StatusInternalServerError)
+			return
 		}
 
 		// Run options: softnet NIC, no graphics. softnet is the daemon's

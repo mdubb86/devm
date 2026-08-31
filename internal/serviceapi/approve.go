@@ -130,3 +130,29 @@ func handleApprove(cfg identity.Config) http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 }
+
+// bootstrapApprovedSnapshotOnFirstRun writes the project's current
+// devm.yaml + devm.me.yaml (if present) as the initial approved
+// snapshot IF no snapshot exists yet. First-run bootstrap: the file
+// as it is at the first cold-start becomes the baseline.
+func bootstrapApprovedSnapshotOnFirstRun(cfg identity.Config, projectID, macCwd string) error {
+	store := approve.NewStore(cfg)
+	_, hasSnap, err := store.Read(projectID)
+	if err != nil {
+		return fmt.Errorf("bootstrap-approve: read: %w", err)
+	}
+	if hasSnap {
+		return nil
+	}
+	currentDevm, err := os.ReadFile(filepath.Join(macCwd, "devm.yaml"))
+	if err != nil {
+		return fmt.Errorf("bootstrap-approve: read devm.yaml: %w", err)
+	}
+	var currentMe []byte
+	if b, err := os.ReadFile(filepath.Join(macCwd, "devm.me.yaml")); err == nil {
+		currentMe = b
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("bootstrap-approve: read devm.me.yaml: %w", err)
+	}
+	return store.Write(projectID, currentDevm, currentMe, "user")
+}
