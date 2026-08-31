@@ -87,13 +87,16 @@ func TestRoutesLookupExcludesDirect(t *testing.T) {
 	_, ok = r.Lookup("db.test", "")
 	assert.False(t, ok, "direct route must be excluded from the proxy dial path")
 
-	// DNS path: direct host resolves with its project.
-	dr, ok := r.DirectRoute("db.test")
+	// The route table still holds the direct route, flag intact —
+	// excluded from the proxy dial path, not dropped.
+	dr, ok := findRoute(r, "db.test")
 	assert.True(t, ok)
 	assert.Equal(t, "proj", dr.Project)
-	// A proxied host is not a direct route.
-	_, ok = r.DirectRoute("web.test")
-	assert.False(t, ok)
+	assert.True(t, dr.Direct)
+	// A proxied host carries no direct flag.
+	wr, ok := findRoute(r, "web.test")
+	assert.True(t, ok)
+	assert.False(t, wr.Direct)
 
 	// AllByProject still lists both (for the admin/status view).
 	all := r.AllByProject()
@@ -425,4 +428,18 @@ func TestRemoveRoutes_ClearsSnapshotRoutes(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	assert.Empty(t, snap.Routes, "remove must wipe snap.Routes so daemon restart replays nothing")
+}
+
+// findRoute looks a hostname up across every project in the route
+// table. Tests use it to observe routes the proxy dial path
+// deliberately excludes (direct services), which Lookup won't return.
+func findRoute(r *Routes, hostname string) (Route, bool) {
+	for _, routes := range r.AllByProject() {
+		for _, rt := range routes {
+			if rt.Hostname == hostname {
+				return rt, true
+			}
+		}
+	}
+	return Route{}, false
 }

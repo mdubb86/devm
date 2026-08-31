@@ -232,6 +232,11 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
           - github.com
           - objects.githubusercontent.com
           - public.ecr.aws
+          # The recipe defaults to `public.ecr.aws` alone and opens a
+          # `devm passthrough` window for the CloudFront layer blobs.
+          # That's a supervised, human-in-the-loop step, so this test
+          # takes the recipe's documented alternative — the standing
+          # wildcard — to stay unattended.
           - "*.cloudfront.net"
           # Playwright CDN + mirror (recipes/tool/playwright.md).
           - cdn.playwright.dev
