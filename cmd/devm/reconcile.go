@@ -1,13 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/signal"
 	"time"
@@ -24,69 +19,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type reconcileOpts struct {
-	daemonURL  string
-	httpClient *http.Client
-	projectID  string
-	cfg        schema.Config
-	repoRoot   string
-	bindings   map[string]string
-	authPub    []byte
-	hostPriv   []byte
-	hostPub    []byte
-	stderr     io.Writer
-}
-
 var (
 	reconcileYes  bool
 	reconcileJSON bool
 )
-
-func runReconcile(o reconcileOpts) error {
-	client := o.httpClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-
-	// Construct the daemon request.
-	req := serviceapi.VMReconcileRequest{
-		Name:                o.projectID,
-		Cfg:                 o.cfg,
-		WorkspaceHostPath:   o.repoRoot,
-		SecretHashes:        o.bindings,
-		SSHAuthorizedPubkey: o.authPub,
-		SSHHostPriv:         o.hostPriv,
-		SSHHostPub:          o.hostPub,
-	}
-
-	body, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal reconcile request: %w", err)
-	}
-
-	resp, err := client.Post(o.daemonURL+"/vm/reconcile", "application/json", io.NopCloser(bytes.NewReader(body)))
-	if err != nil {
-		return fmt.Errorf("POST /vm/reconcile: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Handle 409 Conflict (approve_required) specially.
-	if resp.StatusCode == http.StatusConflict {
-		var respBody struct{ Code, Message string }
-		if err := json.NewDecoder(resp.Body).Decode(&respBody); err == nil && respBody.Code == "approve_required" {
-			fmt.Fprintln(o.stderr, respBody.Message)
-			return errors.New("approve required")
-		}
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("vm/reconcile: status %d: %s", resp.StatusCode, string(msg))
-	}
-
-	// For now, just return nil on success. The full flow will be implemented separately.
-	return nil
-}
 
 var reconcileCmd = &cobra.Command{
 	Use:   "reconcile",

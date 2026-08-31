@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -176,6 +177,17 @@ func (c *Client) Reconcile(ctx context.Context, req VMReconcileRequest) (VMRecon
 		return VMReconcileResponse{}, err
 	}
 	defer r.Body.Close()
+	if r.StatusCode == http.StatusConflict {
+		body, _ := io.ReadAll(r.Body)
+		var parsed struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Code == "approve_required" {
+			return VMReconcileResponse{}, errors.New(parsed.Message)
+		}
+		return VMReconcileResponse{}, fmt.Errorf("vm/reconcile: status %d: %s", r.StatusCode, strings.TrimSpace(string(body)))
+	}
 	if r.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(r.Body)
 		return VMReconcileResponse{}, fmt.Errorf("vm/reconcile: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))

@@ -285,6 +285,33 @@ func TestRunReconcile_DaemonUnreachable_ReturnsError(t *testing.T) {
 	assert.Equal(t, ReconcileResult{}, res)
 }
 
+// TestRunReconcile_ApproveRequired_SurfacesMessageVerbatim proves the
+// real production path — cmd/devm/reconcile.go's RunE calls exactly
+// this function — surfaces the daemon's clean multi-line
+// approve_required refusal, not a JSON-wrapped error body. No
+// approve.Store snapshot is written for "x", so isApproveDiverged
+// treats the project as diverged (no snapshot at all) and the daemon
+// refuses with 409 before RunReconcile ever reaches the live-apply or
+// teardown-classification logic.
+func TestRunReconcile_ApproveRequired_SurfacesMessageVerbatim(t *testing.T) {
+	cleanup := startReconcileDaemon(t)
+	defer cleanup()
+
+	cfg := reconcileMinimalCfg()
+	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: cfg}))
+
+	repoRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "devm.yaml"), []byte("project:\n  name: x\n"), 0o644))
+
+	rc, res, err := RunReconcile(identity.Prod, cfg, fakeTartForSessions(t), repoRoot, ReconcileOptions{})
+	require.Error(t, err)
+	assert.Equal(t, -1, rc)
+	assert.Equal(t, ReconcileResult{}, res)
+	assert.Contains(t, err.Error(), "devm.yaml (or devm.me.yaml) has changed since it was last approved.")
+	assert.Contains(t, err.Error(), "Run `devm approve`")
+	assert.NotContains(t, err.Error(), `"code"`, "error must be the daemon's clean message, not the raw JSON body")
+}
+
 // startReconcileDaemonWithIronProxyCapture is a variant of
 // startReconcileDaemon that also registers a fake /vm/apply-iron-proxy
 // handler recording the Allowlist it was sent, instead of the real

@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -137,21 +134,4 @@ func startRoutesDaemon(t *testing.T) func() {
 	require.FileExists(t, socket)
 
 	return func() { cancel(); <-errCh }
-}
-
-func TestReconcileCmd_SurfacesApproveRequired(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/vm/reconcile", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		_, _ = w.Write([]byte(`{"code":"approve_required","message":"devm.yaml (or devm.me.yaml) has changed since it was last approved.\nApprove the change:\n  - Click the devm menu bar icon → Review, or\n  - Run ` + "`" + `devm approve` + "`" + ` in this terminal to review + approve inline."}`))
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-	var stderr bytes.Buffer
-	err := runReconcile(reconcileOpts{daemonURL: srv.URL, projectID: "p", stderr: &stderr})
-	require.Error(t, err)
-	assert.Contains(t, stderr.String(), "has changed since it was last approved")
-	assert.Contains(t, stderr.String(), "devm approve")
-	assert.Contains(t, stderr.String(), "menu bar icon")
 }

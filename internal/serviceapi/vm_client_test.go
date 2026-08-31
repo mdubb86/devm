@@ -339,6 +339,61 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	assert.Empty(t, resp.TeardownRequired)
 }
 
+// TestClientReconcile_ApproveRequired verifies that when the daemon
+// refuses /vm/reconcile with 409 approve_required (devm.yaml diverged
+// from the last-approved snapshot — here, no snapshot exists at all),
+// Client.Reconcile returns an error whose message is the daemon's
+// "message" field verbatim, not the raw JSON-wrapped body.
+func TestClientReconcile_ApproveRequired(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
+
+	registerFakeSoftnet(t, "p")
+
+	// No approve.Store snapshot written for "p" — isApproveDiverged
+	// treats a missing snapshot as diverged, so the daemon refuses.
+	projDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
+
+	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+
+	srv := NewServer(socket, Build{Version: "test-version"})
+	RegisterReconcileHandler(srv, identity.Prod, NewProjectLocks(), &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-errCh })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, socket)
+
+	c := NewClientWithSocket(socket)
+	rctx, rcancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer rcancel()
+
+	_, err = c.Reconcile(rctx, VMReconcileRequest{
+		Name: "p", Cfg: cfg, WorkspaceHostPath: projDir,
+	})
+	require.Error(t, err)
+	assert.Equal(t, approveRefusalMessage, err.Error())
+}
+
 // TestClientReconcile_MissingFields verifies /vm/reconcile rejects a
 // request lacking project_id/vm_name, and that the error surfaces the
 // endpoint name for easy grepping.
