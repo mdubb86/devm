@@ -709,6 +709,10 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		writeJSON(w, VMStartResponse{ProjectIP: projectIP, TunnelPort: info.TunnelPort})
 	})
 
+	s.Register("/vm/approve-state", func(w http.ResponseWriter, r *http.Request) {
+		handleApproveState(cfg).ServeHTTP(w, r)
+	})
+
 	// /vm/enforcement-config is a precondition check that this project's
 	// iron-proxy state exists (the orchestrator calls it before
 	// provisioning proceeds). It used to also return the guest-side
