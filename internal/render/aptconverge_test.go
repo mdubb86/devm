@@ -9,10 +9,10 @@ func TestAptConvergeScript_AddsAndRemoves(t *testing.T) {
 	s := AptConvergeScript([]string{"sl", "jq"}, []string{"chromium"})
 	for _, want := range []string{
 		"sudo dpkg --configure -a",
-		"apt-get -o DPkg::Lock::Timeout=60 update",
-		"apt-get -o DPkg::Lock::Timeout=60 install -y 'sl' 'jq'",
-		"apt-get -o DPkg::Lock::Timeout=60 remove -y 'chromium'",
-		"apt-get -o DPkg::Lock::Timeout=60 autoremove -y",
+		"apt_run update",
+		"apt_run install -y 'sl' 'jq'",
+		"apt_run remove -y 'chromium'",
+		"apt_run autoremove -y",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("script missing %q:\n%s", want, s)

@@ -204,7 +204,7 @@ func TestProvisionUser_FirstBootIgnoresConvergeFields(t *testing.T) {
 		PackageAdds:    []string{"sl"},
 		PackageRemoves: []string{"chromium"},
 	}))
-	assert.Contains(t, s, "sudo apt-get install -y 'jq'")
+	assert.Contains(t, s, "apt_run install -y 'jq'")
 	assert.NotContains(t, s, "install -y 'sl'")
 	assert.NotContains(t, s, "remove -y 'chromium'")
 }

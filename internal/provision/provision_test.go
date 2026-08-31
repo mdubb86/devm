@@ -117,7 +117,7 @@ func TestRunBundle_ShipsExactlyOneExecStreamWithScriptAndTar(t *testing.T) {
 	assert.Contains(t, script, "touch /run/devm/provisioning")
 	assert.Contains(t, script, "sudo tar -xC /opt/devm")
 	assert.Contains(t, script, "sudo /opt/devm/install.sh")
-	assert.NotContains(t, script, "sudo apt-get install -y 'jq'")
+	assert.NotContains(t, script, "apt_run install -y 'jq'")
 	assert.NotContains(t, script, "/opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
 	assert.NotContains(t, script, "systemctl start devm.target")
 	assert.NotContains(t, script, "touch /var/lib/devm/provisioned")
@@ -146,7 +146,7 @@ func TestRunUser_ShipsExactlyOneExecStreamNoStdin(t *testing.T) {
 	script := scriptOf(t, f)
 
 	assert.Contains(t, script, "set -eo pipefail")
-	assert.Contains(t, script, "sudo apt-get install -y 'jq'")
+	assert.Contains(t, script, "apt_run install -y 'jq'")
 	assert.Contains(t, script, "/opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
 	// No bundle-extraction content — that already happened in RunBundle.
 	assert.NotContains(t, script, "tar -xC /opt/devm")
