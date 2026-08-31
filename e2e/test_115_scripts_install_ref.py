@@ -36,7 +36,7 @@ def test_scripts_install_ref_expands_and_shares_shell(workspace, devm, sandbox_n
     )
 
     shell = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=480,
     )
     assert shell.returncode == 0, f"cold start failed: {shell.stderr.decode()!r}"

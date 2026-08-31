@@ -61,7 +61,7 @@ def test_allow_path_scoping(devm, workspace):
     )
 
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path),
         capture_output=True,
         timeout=300,

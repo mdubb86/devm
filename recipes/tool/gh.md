@@ -86,6 +86,7 @@ Notes on the shape:
 ## Verifying
 
 ```
+devm start                                    # picks up the new install: step
 devm shell
 $ gh --version                                # gh version X.Y.Z (deb source)
 $ gh api /user                                # your PAT's identity

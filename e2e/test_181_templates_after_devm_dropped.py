@@ -33,7 +33,7 @@ def test_templates_render_without_mac_side_devm_dir(devm, workspace):
 
     try:
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=180,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"

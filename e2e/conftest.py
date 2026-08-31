@@ -320,8 +320,8 @@ def devm_installed(_daemon_matches_devm_bin):
 
 @pytest.fixture
 def tart_sandbox(devm, sandbox_name, workspace) -> TartSandbox:
-    """Cold-starts the project VM via `devm shell -- true` (a no-op command
-    that triggers cold-start + provisioning then exits).
+    """Cold-starts the project VM via `devm start` (returns once the VM is
+    provisioned and running; does not attach a shell).
 
     Tests that need to run commands inside the VM use the returned
     TartSandbox handle. Teardown is automatic via the existing
@@ -329,7 +329,7 @@ def tart_sandbox(devm, sandbox_name, workspace) -> TartSandbox:
     call `devm.teardown(yes=True)` explicitly to verify teardown
     behavior."""
     subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         capture_output=True, cwd=str(workspace.path), timeout=300,
     )
     # We don't fail on non-zero; some tests may want to assert on
@@ -390,7 +390,7 @@ def base_clone() -> Iterator[str]:
     `tart exec` against the pre-daemon boot-integrity gate floor: a
     bare boot of devm-e2e-base itself, not a devm-managed project VM.
 
-    Unlike `tart_sandbox` (which goes through `devm shell` and full
+    Unlike `tart_sandbox` (which goes through `devm start` and full
     provisioning), this fixture never touches the devm daemon — it's
     the raw-clone pattern also used by the session-scoped
     `inspector_vm` fixture, just cloning devm-e2e-base instead of the

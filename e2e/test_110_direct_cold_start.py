@@ -96,11 +96,11 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
     )
 
     shell = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=480,
     )
     assert shell.returncode == 0, (
-        f"devm shell cold-start failed:\nstderr={shell.stderr.decode()!r}"
+        f"devm start (cold-start) failed:\nstderr={shell.stderr.decode()!r}"
     )
 
     project_id = workspace.slug
@@ -215,11 +215,11 @@ def test_direct_cold_start_split_horizon_and_persist(workspace, devm, sandbox_na
         stop_and_wait_stopped(devm, sandbox_name)
 
         reshell = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert reshell.returncode == 0, (
-            f"devm shell (restart existing VM) failed:\n"
+            f"devm start (restart existing VM) failed:\n"
             f"stderr={reshell.stderr.decode()!r}"
         )
 

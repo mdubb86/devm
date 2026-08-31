@@ -43,9 +43,9 @@ devm route vm
 
 If the VM isn't running yet (no `127.42.0.N` allocated for this project), `devm route vm` fails loudly with an error naming the project and pointing at `devm start` — the daemon rejects the apply with `no projectIP allocated for "<project>" — start the VM first: \`devm start\``, which the CLI surfaces wrapped as `apply routes: routes/apply: status 400: ...`.
 
-### Auto-routing on `devm shell`
+### Auto-routing on `devm start`
 
-`devm shell` automatically applies vm-mode routes when the project has no routes registered yet (best-effort, silent if the daemon is down). If you have already run `devm route local`, that routing is preserved across stop/start cycles and `devm shell` does not overwrite it.
+`devm start` automatically applies vm-mode routes when the project has no routes registered yet (best-effort, silent if the daemon is down). If you have already run `devm route local`, that routing is preserved across stop/start cycles and `devm start` does not overwrite it.
 
 ---
 

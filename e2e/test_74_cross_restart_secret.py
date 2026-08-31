@@ -121,7 +121,7 @@ def test_secret_survives_daemon_restart(workspace, devm, sandbox_name, devm_inst
         # iron-proxy config file and spawns iron-proxy with
         # DEVM_SECRET_<NAME>=<value> in its process env.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path),
             capture_output=True, timeout=300,
         )

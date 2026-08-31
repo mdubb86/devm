@@ -60,7 +60,7 @@ def test_stop_preserves_disk_wipes_tmp(devm, workspace, tart_sandbox):
 
     # Restart via devm shell -- true (real boot cycle, not a resume).
     subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         capture_output=True, cwd=str(workspace.path), timeout=180,
     )
 

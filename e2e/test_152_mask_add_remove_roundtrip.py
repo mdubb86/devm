@@ -32,7 +32,7 @@ def test_mask_add_remove_roundtrip(devm, workspace, sandbox_name):
     try:
         # Cold-start (no mask).
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0

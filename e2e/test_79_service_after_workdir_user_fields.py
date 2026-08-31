@@ -92,7 +92,7 @@ def test_after_workdir_user_render_and_take_effect(workspace, devm, sandbox_name
     )
 
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=300,
     )
     assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"

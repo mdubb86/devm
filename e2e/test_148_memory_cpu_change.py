@@ -104,7 +104,7 @@ def test_memory_cpu_change_round_trip(devm, workspace, sandbox_name, devm_instal
     try:
         # 1. Cold-start.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, (

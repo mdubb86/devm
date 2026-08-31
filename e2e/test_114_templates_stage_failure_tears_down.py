@@ -51,11 +51,11 @@ def test_templates_stage_failure_tears_down(devm, workspace):
     )
 
     p = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         capture_output=True, cwd=str(workspace.path), timeout=120,
     )
     assert p.returncode != 0, (
-        f"devm shell should exit non-zero when a template installer fails; "
+        f"devm start should exit non-zero when a template installer fails; "
         f"got rc={p.returncode}\nstderr={p.stderr.decode()}"
     )
     # No zombie VM should remain: a templates-stage failure runs in the

@@ -32,14 +32,14 @@ def test_install_step_exceeds_timeout(workspace, devm):
     env["DEVM_INSTALL_STEP_TIMEOUT_S"] = "1"
     start = time.monotonic()
     proc = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path),
         capture_output=True, timeout=30,
         env=env,
     )
     elapsed = time.monotonic() - start
     assert proc.returncode != 0, (
-        f"devm shell should exit non-zero on install timeout; got rc=0\n"
+        f"devm start should exit non-zero on install timeout; got rc=0\n"
         f"stderr={proc.stderr.decode()!r}"
     )
     err = proc.stderr.decode()

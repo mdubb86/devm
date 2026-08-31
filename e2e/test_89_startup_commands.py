@@ -130,7 +130,7 @@ def test_startup_runs_every_boot_open_egress_enforced_after(workspace, devm, san
 
     # ---- Cold-start. ----
     shell = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=480,
     )
     assert shell.returncode == 0, f"cold start failed: {shell.stderr.decode()!r}"
@@ -194,7 +194,7 @@ def test_startup_runs_every_boot_open_egress_enforced_after(workspace, devm, san
     # ---- which stays at 1 across a restart. ----
     stop_and_wait_stopped(devm, sandbox_name)
     reshell = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=300,
     )
     assert reshell.returncode == 0, f"restart failed: {reshell.stderr.decode()!r}"

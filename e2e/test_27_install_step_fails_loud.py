@@ -1,4 +1,4 @@
-"""27: a failing install: step makes devm shell exit non-zero with structured error.
+"""27: a failing install: step makes devm start exit non-zero with structured error.
 
 Pin for the boot-integrity-gate provisioning UX. The guest runs one
 composed bash script (internal/render.RenderProvisionScript) instead
@@ -20,14 +20,14 @@ def test_install_step_fails_loud(workspace, devm):
         install=["false"],
     )
 
-    # devm shell should exit non-zero. We capture combined stderr.
+    # devm start should exit non-zero. We capture combined stderr.
     proc = subprocess.run(
-        [devm.path, "shell"],
+        [devm.path, "start"],
         cwd=str(workspace.path),
         capture_output=True, timeout=90,
     )
     assert proc.returncode != 0, (
-        f"devm shell should exit non-zero on install failure; got rc=0\n"
+        f"devm start should exit non-zero on install failure; got rc=0\n"
         f"stdout={proc.stdout.decode()!r}\nstderr={proc.stderr.decode()!r}"
     )
     err = proc.stderr.decode()

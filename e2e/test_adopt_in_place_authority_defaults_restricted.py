@@ -65,7 +65,7 @@ def test_adopt_in_place_authority_defaults_restricted(devm, workspace, sandbox_n
 
     try:
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"

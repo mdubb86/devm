@@ -26,6 +26,8 @@ What it doesn't cover (tested elsewhere):
   - Stop (preserves state) vs teardown (destroys state) contrast ->
     test_03, test_sbx_contract_03, test_sbx_contract_04.
 """
+import subprocess
+
 import pytest
 
 from helpers import Shell, stop_and_wait_stopped
@@ -43,8 +45,14 @@ def test_install_change_recreate(workspace, devm, sandbox_name, phase):
     sandbox = TartSandbox(name=sandbox_name)
 
     # Cold start 1: install runs at create → marker-a present.
+    r = subprocess.run(
+        [devm.path, "start"],
+        cwd=str(workspace.path), capture_output=True, timeout=90,
+    )
+    assert r.returncode == 0, f"devm start (cold-create) failed:\n{r.stderr.decode()}"
+
     with Shell(devm, cwd=str(workspace.path)) as sh:
-        sh.expect_prompt(timeout=90)
+        sh.expect_prompt(timeout=30)
         sh.run_check("test -e /tmp/marker-a", expect_zero=True, timeout=15)
         phase("cold-start-1")
 

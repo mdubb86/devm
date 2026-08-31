@@ -128,6 +128,7 @@ env:
 ## Verifying
 
 ```
+devm start                   # picks up the new install: step
 devm shell -- uv --version   # non-login — proves the `path:` entry, not ~/.profile
 devm shell
 $ uv --version

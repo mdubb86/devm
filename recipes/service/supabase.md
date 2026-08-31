@@ -92,7 +92,7 @@ network:
     # survives AWS rebalancing.
 ```
 
-Then `devm route vm` (auto-applied on `devm shell` when no routes exist)
+Then `devm route vm` (auto-applied on `devm start` when no routes exist)
 points every hostname at the VM.
 
 ## Applying to an existing Node.js project
@@ -272,6 +272,7 @@ Missing this means HMR / image loaders reject the hostnames.
 ## Verifying
 
 ```
+devm start                                                        # picks up the new install/startup steps
 devm shell
 $ supabase --version                                              # CLI installed
 $ supabase init && supabase start                                 # ~5-10 min first time

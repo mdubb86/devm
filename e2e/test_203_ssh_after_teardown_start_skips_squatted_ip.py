@@ -40,7 +40,7 @@ E2E_ERR_LOG = Path.home() / "Library/Logs/com.devm.e2e.service.err.log"
 
 def _cold_start(devm, workspace) -> None:
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path),
         capture_output=True,
         timeout=300,

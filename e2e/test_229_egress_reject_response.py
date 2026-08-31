@@ -39,7 +39,7 @@ def test_blocked_curl_sees_devm_reject(devm, workspace, sandbox_name):
         packages=["curl"],
     )
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=300,
     )
     assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"

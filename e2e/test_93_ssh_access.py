@@ -47,7 +47,7 @@ def test_ssh_access_end_to_end(devm, workspace):
 
     # Cold-start via shell (no-op exit, triggers full provisioning)
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path),
         capture_output=True,
         timeout=300,

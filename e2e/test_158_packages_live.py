@@ -87,7 +87,7 @@ def test_packages_live_add_remove(workspace, devm, sandbox_name):
     try:
         # 1. Cold-start with no packages:.
         cold = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert cold.returncode == 0, (
@@ -215,7 +215,7 @@ def test_packages_live_add_fails_loud_without_mirror_allow(workspace, devm, sand
 
     try:
         cold = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert cold.returncode == 0, (

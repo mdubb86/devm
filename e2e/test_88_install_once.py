@@ -22,7 +22,7 @@ SENTINEL = "/home/devm/.devm-install-count"
 def test_install_runs_once_across_restart(workspace, devm, sandbox_name):
     workspace.write_devmyaml(install=[f"echo run >> {SENTINEL}"])
 
-    shell = subprocess.run([devm.path, "shell", "--", "true"],
+    shell = subprocess.run([devm.path, "start"],
                            cwd=str(workspace.path), capture_output=True, timeout=480)
     assert shell.returncode == 0, f"cold start failed: {shell.stderr.decode()!r}"
 
@@ -34,7 +34,7 @@ def test_install_runs_once_across_restart(workspace, devm, sandbox_name):
     assert count() == 1, "install: should have run exactly once on first boot"
 
     stop_and_wait_stopped(devm, sandbox_name)
-    reshell = subprocess.run([devm.path, "shell", "--", "true"],
+    reshell = subprocess.run([devm.path, "start"],
                              cwd=str(workspace.path), capture_output=True, timeout=300)
     assert reshell.returncode == 0, f"restart failed: {reshell.stderr.decode()!r}"
 

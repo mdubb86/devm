@@ -112,7 +112,7 @@ def test_iron_proxy_allow_removal_takes_effect(devm, workspace, sandbox_name, de
         # 1. Cold-start: iron-proxy spawned, policy authority holds the
         # initial allow list.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"

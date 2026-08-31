@@ -1,21 +1,21 @@
 """84: `devm start` brings the VM up; chained `devm exec`/`devm stop` lifecycle.
 
-`devm shell -- true` already cold-starts a VM — but `devm start` is a
-clearer intent for scripts / CI / "warm the VM up in the background
-before I attach later", and `devm exec` is the one-shot equivalent of
-`docker exec`. Consolidated (was also test_85's two VM-needing
-subtests and test_86's stopped-VM variant): one boot chains `devm
-start` -> `devm exec` (one-shot + auto-cd + flag passthrough) -> `devm
-stop` -> `devm exec` failing loud on the now-stopped VM. Each of these
-previously cold-started its own VM to prove one leg of the same
-start/exec/stop lifecycle.
+`devm start` is the sole cold-start owner — a clearer intent for
+scripts / CI / "warm the VM up in the background before I attach
+later" than an interactive `devm shell` — and `devm exec` is the
+one-shot equivalent of `docker exec`. Consolidated (was also test_85's
+two VM-needing subtests and test_86's stopped-VM variant): one boot
+chains `devm start` -> `devm exec` (one-shot + auto-cd + flag
+passthrough) -> `devm stop` -> `devm exec` failing loud on the
+now-stopped VM. Each of these previously cold-started its own VM to
+prove one leg of the same start/exec/stop lifecycle.
 
 What this pins:
   - `devm start` cold-starts an absent VM and returns 0.
   - The VM ends up 'running'; no interactive shell was attached (the
     process returns even without a TTY, without needing bash to exit).
-  - The VM STAYS running after start returns (anchor-alive, same
-    behavior as `devm shell -- true`).
+  - The VM STAYS running after start returns (anchor-alive — `devm
+    shell` never needs to run for the VM to stay up).
   - `devm exec pwd` prints the workspace path (auto-cd to $WORKSPACE,
     the with-devm-env wrapper's contract — was test_85).
   - `devm exec ls -la /` passes flags through to the target command
@@ -25,7 +25,8 @@ What this pins:
     never silently cold-starting (was test_86's stopped-VM variant).
 
 What it doesn't cover (tested elsewhere):
-  - Cold-start via `devm shell` -> test_01, test_50.
+  - Cold-start via `devm start` then interactive `devm shell` attach ->
+    test_01, test_50.
   - Anchor-alive after interactive shell exit -> test_01.
   - devm stop / teardown lifecycle -> test_03, test_05, test_52.
   - `devm exec` with no argv (usage error, no VM needed) -> test_85.

@@ -82,11 +82,11 @@ def test_direct_host_process_no_docker_no_svc_ingress_rule(workspace, devm, sand
     )
 
     shell = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=300,
     )
     assert shell.returncode == 0, (
-        f"devm shell cold-start failed:\nstderr={shell.stderr.decode()!r}"
+        f"devm start (cold-start) failed:\nstderr={shell.stderr.decode()!r}"
     )
 
     pool = pool_ip(workspace.slug)

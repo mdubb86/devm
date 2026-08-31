@@ -39,7 +39,7 @@ def test_egress_enforcement(devm, workspace):
     try:
         # Cold-start.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path),
             capture_output=True,
             timeout=300,
@@ -89,7 +89,7 @@ def test_open_mode_reaches_any_host(devm, workspace):
         network={"allow": ["*"]},
     )
     try:
-        r = subprocess.run([devm.path, "shell", "--", "true"],
+        r = subprocess.run([devm.path, "start"],
                            cwd=str(workspace.path), capture_output=True, timeout=300)
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
 

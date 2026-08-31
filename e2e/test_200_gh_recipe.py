@@ -94,7 +94,7 @@ def test_gh_recipe(devm, workspace, sandbox_name):
         # Cold-start. Budget covers apt update + wget keyring + gh install
         # (which pulls ~10MB of deb) with headroom.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=480,
         )
         assert r.returncode == 0, (

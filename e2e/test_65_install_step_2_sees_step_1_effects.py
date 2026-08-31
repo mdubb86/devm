@@ -87,7 +87,7 @@ def test_install_and_startup_ordering(workspace, devm, sandbox_name):
     # First devm shell IS the cold-start; rc=0 means install steps ran in
     # order (a failing install: step exits devm shell non-zero).
     p = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         capture_output=True, cwd=str(workspace.path), timeout=180,
     )
     assert p.returncode == 0, (

@@ -25,6 +25,8 @@ What it doesn't cover (tested elsewhere):
   - install: that pipes the curl output directly into a shell
     (true `curl|bash`, not curl-to-file): not yet pinned.
 """
+import subprocess
+
 import pytest
 
 from helpers import Shell, stop_and_wait_stopped
@@ -49,8 +51,14 @@ def test_cold_start_with_curl_install(workspace, devm, sandbox_name):
         },
     )
 
+    r = subprocess.run(
+        [devm.path, "start"],
+        cwd=str(workspace.path), capture_output=True, timeout=180,
+    )
+    assert r.returncode == 0, f"devm start (cold-create) failed:\n{r.stderr.decode()}"
+
     with Shell(devm, cwd=str(workspace.path)) as sh:
-        sh.expect_prompt(timeout=90)
+        sh.expect_prompt(timeout=30)
         # The install: ran at sandbox create. The fetched file must
         # exist inside the sandbox.
         sh.run_check("test -s /tmp/devm-e2e-fetch.txt", expect_zero=True, timeout=15)

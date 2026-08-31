@@ -17,7 +17,7 @@ def test_disk_override_grows_root_fs(workspace, devm, sandbox_name):
     workspace.write_devmyaml(disk="64G")
 
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path),
         capture_output=True,
         timeout=300,

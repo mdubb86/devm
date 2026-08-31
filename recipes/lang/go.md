@@ -106,6 +106,7 @@ network:
 ## Verifying
 
 ```
+devm start                               # picks up the new install: step
 devm shell
 $ go version                             # go version go1.26.5 linux/arm64
 $ gopls version                          # golang.org/x/tools/gopls vX.Y.Z

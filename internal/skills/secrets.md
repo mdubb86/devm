@@ -30,7 +30,7 @@ network:
       secrets: [anthropic_key]
 ```
 
-At `devm shell`, the CLI reads `anthropic_key` from the secret store and injects the token `__DEVM_SECRET_anthropic_key__` into the VM's environment under `ANTHROPIC_API_KEY`. Iron-proxy substitutes the real value only on requests destined for hosts listed in `network.allow[].secrets` — a secret not bound to any host is never injected. See **Host scoping** below for details.
+At `devm start`, the CLI reads `anthropic_key` from the secret store and injects the token `__DEVM_SECRET_anthropic_key__` into the VM's environment under `ANTHROPIC_API_KEY`. Iron-proxy substitutes the real value only on requests destined for hosts listed in `network.allow[].secrets` — a secret not bound to any host is never injected. See **Host scoping** below for details.
 
 ---
 
@@ -93,7 +93,7 @@ You may bind one secret across multiple hosts by listing it in multiple allow en
 ## The flow
 
 ```
-devm shell
+devm start
   │
   ├─ reads devm.yaml → finds !secret refs
   ├─ reads each ref's file from ~/Library/Application Support/devm/secrets/<project>/
@@ -123,7 +123,7 @@ Real credential values are never written to disk; they live only in iron-proxy's
 
 ## Failure mode: missing secret
 
-If a `!secret` reference in `devm.yaml` has no matching file in the store, `devm shell` fails immediately with:
+If a `!secret` reference in `devm.yaml` has no matching file in the store, `devm start` fails immediately with:
 
 ```
 missing secrets: [<name>] (set with `devm secret set <name>`)

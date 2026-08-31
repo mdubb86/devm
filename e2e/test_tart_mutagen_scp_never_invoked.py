@@ -39,7 +39,7 @@ exit 42
 
         # A brief write to force sync activity.
         (workspace.path / "trigger.txt").write_text("sync-me")
-        subprocess.run([devm.path, "shell", "--", "true"],
+        subprocess.run([devm.path, "start"],
                        cwd=str(workspace.path), timeout=30)
 
         assert not trap.exists(), \

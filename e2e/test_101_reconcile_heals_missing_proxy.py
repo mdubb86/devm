@@ -102,7 +102,7 @@ def test_reconcile_heals_missing_proxy(devm, workspace, sandbox_name, devm_insta
         """))
 
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"

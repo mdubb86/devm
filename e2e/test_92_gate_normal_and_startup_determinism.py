@@ -26,7 +26,7 @@ integrity gate or the assertions below ever look at it:
        internal/serviceapi/vminject.go), not just an inference from a
        successful curl.
      - Editing `startup:` to append a new command, then a single `devm
-       stop` + `devm shell`, must run the NEW command on THAT boot --
+       stop` + `devm start`, must run the NEW command on THAT boot --
        no second restart needed. This pins the redesigned
        `BucketRestartVM` contract (schema.md/lifecycle.md, Task 8):
        the applying restart runs a freshly-composed script, so the
@@ -35,7 +35,7 @@ integrity gate or the assertions below ever look at it:
   2. `test_service_crash_blocks_target_activation`:
      - A service whose `exec` always exits non-zero makes the composed
        script's `services` stage abort (`set -eo pipefail`) BEFORE
-       `systemctl start devm.target` runs. `devm shell` must exit
+       `systemctl start devm.target` runs. `devm start` must exit
        non-zero (loud) and `devm.target` must NOT be active -- no
        shell access granted on a broken boot.
 
@@ -119,7 +119,7 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
 
     # ---- Cold-start. ----
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=480,
     )
     assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
@@ -194,7 +194,7 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
     )
 
     # ---- Startup determinism: edit startup: to append a NEW sentinel
-    # ---- command; a SINGLE devm stop + devm shell must run it on that
+    # ---- command; a SINGLE devm stop + devm start must run it on that
     # ---- boot -- no extra restart needed. ----
     assert vm.exec("test", "-f", DETERMINISM_SENTINEL).exit_code != 0, (
         "determinism sentinel should not exist before the edit"
@@ -216,7 +216,7 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
     assert stopped == "stopped", f"expected VM stopped, got {stopped!r}"
 
     r2 = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=480,
     )
     assert r2.returncode == 0, f"restart failed:\n{r2.stderr.decode()}"
@@ -240,11 +240,11 @@ def test_service_crash_blocks_target_activation(devm, workspace, sandbox_name):
     )
 
     r = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=180,
     )
     assert r.returncode != 0, (
-        f"devm shell should exit non-zero when a declared service crashes; "
+        f"devm start should exit non-zero when a declared service crashes; "
         f"got rc=0\nstdout={r.stdout.decode()!r}"
     )
     stderr = r.stderr.decode()
@@ -283,7 +283,7 @@ def test_warm_attach_does_not_reprovision(devm, workspace, sandbox_name):
 
     # ---- 1. Cold-start: provisions the VM, devm.target ends up active. ----
     r1 = subprocess.run(
-        [devm.path, "shell", "--", "true"],
+        [devm.path, "start"],
         cwd=str(workspace.path), capture_output=True, timeout=300,
     )
     assert r1.returncode == 0, f"cold-start failed:\n{r1.stderr.decode()}"

@@ -81,7 +81,7 @@ def test_release_then_realloc(devm_path):
     devm_b = None
     try:
         r = subprocess.run(
-            [devm_a.path, "shell", "--", "true"],
+            [devm_a.path, "start"],
             cwd=str(a.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start A failed:\n{r.stderr.decode()!r}"
@@ -105,7 +105,7 @@ def test_release_then_realloc(devm_path):
 
         b, devm_b = _mk_project(devm_path, "b")
         r = subprocess.run(
-            [devm_b.path, "shell", "--", "true"],
+            [devm_b.path, "start"],
             cwd=str(b.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start B failed:\n{r.stderr.decode()!r}"

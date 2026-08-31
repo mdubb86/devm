@@ -65,7 +65,7 @@ def test_mounts_mirrored_readonly_and_persist(workspace, devm, sandbox_name):
         # Owns cold-start: extra mounts are baked into `tart run --dir`
         # args, so the yaml must be in place before the first devm shell.
         r = subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
         )
         assert r.returncode == 0, f"cold-start failed:\n{r.stderr.decode()}"
@@ -124,7 +124,7 @@ def test_mounts_mirrored_readonly_and_persist(workspace, devm, sandbox_name):
         )
 
         subprocess.run(
-            [devm.path, "shell", "--", "true"],
+            [devm.path, "start"],
             capture_output=True, cwd=str(workspace.path), timeout=180,
         )
 

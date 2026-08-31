@@ -23,7 +23,7 @@ project:
 docker: true
 ```
 
-That's the whole setup. `devm shell` provisions:
+That's the whole setup. `devm start` provisions:
 
 - **Docker Engine** via `get.docker.com`. Socket permissioned so `docker` runs without sudo.
 - **`devm-runc-shim`** as the default OCI runtime. Bind-mounts the guest CA into every container so runtime TLS trusts iron-proxy.
