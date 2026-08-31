@@ -65,8 +65,9 @@ func (c RepoCommand) Validate(scripts map[string][]string) error {
 		if len(body) == 0 {
 			return fmt.Errorf(`exec references script %q, which has an empty script body`, name)
 		}
+		return nil
 	}
-	return nil
+	return ValidateShellCommand(c.Exec)
 }
 
 // StartupBool returns c.Startup dereferenced, false when nil.
