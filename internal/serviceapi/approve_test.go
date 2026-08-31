@@ -163,3 +163,12 @@ func TestBootstrapApprovedSnapshotOnFirstRun_NoOpWhenSnapshotExists(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, "project:\n  name: p\n", string(snap.DevmYAML), "bootstrap must not overwrite an existing snapshot")
 }
+
+func TestStart_RefusesWhenDivergedFromApproved(t *testing.T) {
+	// A snapshot exists but differs from the current devm.yaml — start must refuse.
+	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "")
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: old\n"), nil, "user"))
+	diverged, err := isApproveDiverged(cfg, "proj-1", projDir)
+	require.NoError(t, err)
+	assert.True(t, diverged)
+}

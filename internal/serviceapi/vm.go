@@ -493,6 +493,19 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			return
 		}
 
+		if diverged, err := isApproveDiverged(cfg, req.Name, req.MacCwd); err != nil {
+			http.Error(w, fmt.Sprintf("approve check: %v", err), http.StatusInternalServerError)
+			return
+		} else if diverged {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"code":    "approve_required",
+				"message": approveRefusalMessage,
+			})
+			return
+		}
+
 		// Run options: softnet NIC, no graphics. softnet is the daemon's
 		// sole egress path for every VM it launches. Volumes, repos, and
 		// extra mounts are no longer virtiofs shares — mutagen sync
