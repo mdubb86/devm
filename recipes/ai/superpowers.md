@@ -55,8 +55,7 @@ The github entries are scoped to the `obra` owner — installing plugins
 from other marketplaces/owners needs their own `github.com/<owner>/*`
 (+ codeload/raw) entries.
 
-`env` and `services` are the live bucket — after adding, `devm reconcile`
-applies them without restart, then `devm route vm`.
+After adding these, run `devm reconcile` and then `devm route vm`.
 
 **Prereq**: the Claude Code CLI must be installed. Use `tool/ai/claude`
 (the `claude` recipe) first; the plugin install steps here call `claude

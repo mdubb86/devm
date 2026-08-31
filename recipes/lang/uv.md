@@ -34,18 +34,18 @@ scripts:
   install-uv:
     - curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh
     - env UV_INSTALL_DIR=/home/devm/.local/bin INSTALLER_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-  # Runs in the OPEN-network startup window (before egress enforcement), so the
-  # python-build-standalone download works without allow-listing GitHub release
-  # assets. Idempotent — a fast no-op once the version is present. Reads the
-  # project pin, defaults to 3.12.
+  # Runs in the open-egress `startup` window (before iron-proxy flips to
+  # restricted), so the python-build-standalone download works without
+  # allow-listing GitHub release assets. Idempotent — a fast no-op once
+  # the version is cached. Reads the project pin, defaults to 3.12.
   preseed-python:
     - /home/devm/.local/bin/uv python install "$(cat "$WORKSPACE/.python-version" 2>/dev/null || echo 3.12)"
 
 install:
-  - ">install-uv"        # recreate-bucket: uv binary, once per VM lifetime
+  - ">install-uv"
 
 startup:
-  - ">preseed-python"    # restart-bucket: re-runs every boot in the open window (cheap when cached)
+  - ">preseed-python"
 
 path:
   # login shells get ~/.local/bin via ~/.profile; scripts, services, and
@@ -53,11 +53,9 @@ path:
   - /home/devm/.local/bin
 ```
 
-- `install:` (uv binary) is **recreate-bucket** — changing it needs a rebuild.
-- `startup:` (the interpreter pre-seed) is **restart-bucket** — changing the pin
-  takes effect on a plain `devm stop`/`start`, no teardown. It runs on every
-  cold start; `uv python install <v>` is idempotent, so that's a fast no-op once
-  the version is cached VM-local (`~/.local/share/uv`).
+`uv python install <v>` is idempotent; the cached interpreter lives VM-local
+under `~/.local/share/uv`, so the startup pre-seed is a fast no-op on every
+boot after the first.
 
 ### Backup: runtime-download (generic GitHub egress)
 

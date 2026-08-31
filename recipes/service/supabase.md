@@ -20,8 +20,8 @@ Two routing patterns are combined:
   per service.
 - **Postgres** (raw TCP) — uses `direct: true`, which does two things
   automatically: route-aware DNS (`db.<proj>.test → VM_IP` on the Mac,
-  `→ 127.0.0.1` inside the VM), and one nftables accept rule for
-  Mac→container traffic. No proxy hop, no per-port fiddling.
+  `→ 127.0.0.1` inside the VM), and a direct Mac→VM_IP path for the
+  raw TCP traffic. No proxy hop, no per-port fiddling.
 
 Net: `psql postgresql://postgres:postgres@db.<proj>.test:54322/postgres`
 works from the Mac AND from inside the VM, unchanged.

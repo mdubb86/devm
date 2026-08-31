@@ -45,9 +45,8 @@ install:
   - ">install-claude-cli"
 
 startup:
-  # BucketRestartVM: re-links on cold-start AND every restart, since
-  # $HOME is fresh after teardown but the symlink target inside the
-  # volume persists.
+  # Re-link every boot: $HOME is fresh after teardown but the symlink
+  # target inside the volume persists.
   - ">link-claude-config"
 
 env:

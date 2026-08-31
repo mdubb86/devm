@@ -75,8 +75,8 @@ network:
   source are fast.
 
 - **Tools you want always-available go in the `install:` block** so
-  they get reinstalled at every cold-start (`install:` is the
-  teardown bucket). Pattern used here for gopls.
+  they get reinstalled on the next fresh VM. Pattern used here for
+  gopls.
 
 - **Ad-hoc tools land in `$HOME/go/bin`** via `GOBIN`. They don't
   survive `devm teardown` but rebuild fast from cached modules.
