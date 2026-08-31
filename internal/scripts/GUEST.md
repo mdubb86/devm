@@ -31,12 +31,18 @@ something breaks.
 
 ## Filesystem
 
-- `$WORKSPACE` is mounted at the same absolute path string as the
-  project directory on the Mac. It is hydrated at first cold-start via
-  `git clone` through iron-proxy secret substitution (`repos:` in
-  `devm.yaml`), then kept in sync with the Mac side by a mutagen
-  two-way sync session — writes on either side propagate to the other
-  without a manual push/pull.
+- `$WORKSPACE` is at `/home/devm/<label>` on the guest, where
+  `<label>` is the repo's explicit `label:` or, by default, the leaf
+  of the Mac project directory. It is hydrated at first cold-start
+  via `git clone` through iron-proxy secret substitution (`repos:` in
+  `devm.yaml`), then kept in sync with a devm-owned Mac-side mirror
+  by a mutagen two-way sync session — writes on either side
+  propagate to the other without a manual push/pull. **The mirror is
+  a devm-managed directory, not the Mac project directory.** The
+  Mac's project-root `devm.yaml` (what `devm reconcile` reads) is
+  separate; edits made in `$WORKSPACE/devm.yaml` on the guest do
+  NOT reach that file, and today the only way to get them there is a
+  git commit + push + Mac-side pull.
 - **To open a specific guest-side file on the Mac** (e.g. a screenshot
   or generated artifact you just wrote), run `pop <path>` from here —
   it resolves a `$WORKSPACE`-anchored absolute or relative path,
@@ -55,8 +61,10 @@ something breaks.
   suggest `tart stop` on the Mac; it crashes the guest per
   cirruslabs/tart#582, and devm has code to avoid it for this reason.)
 - `sudo systemctl restart <svc>` — restart your own services.
-- Edit `devm.yaml` in `$WORKSPACE`. The edit doesn't take effect until the
-  Mac user runs `devm reconcile`.
+- Edit `devm.yaml` in `$WORKSPACE`. The edit does NOT reach the Mac
+  project directory (which is what `devm reconcile` reads) — for
+  that, commit + push it and have the Mac user pull. A first-class
+  guest → Mac proposal channel is planned; today it's git.
 - Read your own logs: `journalctl -u <svc>`, `/var/log/…`, etc.
 
 ## Lifecycle — what you CANNOT do
@@ -97,6 +105,7 @@ nothing to source manually.
 Always available:
 
 - `IS_SANDBOX=1` — mode detect
-- `WORKSPACE` — absolute path to the project dir (same path string as
-  the Mac project dir; kept in sync via mutagen, see Filesystem)
+- `WORKSPACE` — absolute path to the guest workspace at
+  `/home/devm/<label>` (kept in sync with a Mac-side mirror via
+  mutagen; see Filesystem)
 - Everything else from `env:` in `devm.yaml`.
