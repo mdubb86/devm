@@ -272,6 +272,7 @@ e2e-install *NAMES: (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_bui
 # Doubles as the canonical single-scenario install test.
 e2e-bootstrap: (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build-run-embed) (_build-tart-mutagen-ssh-embed) (_build "e2e")
     @sudo -v
+    e2e/scripts/sweep-leftovers.sh
     @sudo install -m 755 bin/devm-e2e /usr/local/bin/devm-e2e
     /usr/local/bin/devm-e2e install
     @scripts/assert-e2e-installed.sh

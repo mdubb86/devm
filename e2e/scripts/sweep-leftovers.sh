@@ -1,18 +1,13 @@
 #!/usr/bin/env bash
-# sweep-leftovers.sh — best-effort cleanup of anything an earlier run left
-# behind. Use this if a prior run was killed harder than the wrapper could
-# handle (e.g. SIGKILL on bash itself). NOT a normal-path tool.
+# sweep-leftovers.sh — standalone entry point for the e2e-slot leftover
+# sweep. run.sh runs the same sweep automatically before and after every
+# test run; `just e2e-bootstrap` runs this before installing so the slot
+# starts empty. Also fine to run by hand.
 set -uo pipefail
 
-echo "=== e2e leftovers: tart VMs named e2e-* ==="
-mapfile -t SBOXES < <(tart list 2>/dev/null | awk 'NR>1 && $2 ~ /^e2e-/ {print $2}')
-for s in "${SBOXES[@]}"; do
-    echo "  tart delete $s"
-    tart delete "$s" >/dev/null 2>&1 || true
-done
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=./sweep.sh
+source "$SCRIPT_DIR/sweep.sh"
 
-echo "=== e2e leftovers: /tmp/devm-e2e-* and /private/tmp/devm-e2e-* ==="
-rm -rf /tmp/devm-e2e-* /private/tmp/devm-e2e-* 2>/dev/null || true
-
-echo "=== e2e leftovers: orphan iron-proxy processes ==="
-pkill -f 'iron-proxy -config .*/iron-proxy/.*\.yaml' 2>/dev/null || true
+sweep_e2e_leftovers
+echo "e2e slot swept"
