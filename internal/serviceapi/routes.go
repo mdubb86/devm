@@ -155,18 +155,6 @@ func (r *Routes) Lookup(host, project string) (Route, bool) {
 	return route, ok
 }
 
-// DirectRoute returns the direct route for host, if one exists. Used by
-// the DNS server to decide whether to answer VM_IP.
-func (r *Routes) DirectRoute(host string) (Route, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	route, ok := r.hostnameToRoute[host]
-	if !ok || !route.Direct {
-		return Route{}, false
-	}
-	return route, true
-}
-
 // AllByProject is used by GET /routes to render the full table.
 // Returns a copy so callers can't mutate internals.
 func (r *Routes) AllByProject() map[string][]Route {

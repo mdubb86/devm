@@ -15,13 +15,15 @@ inside the VM.
 
 Two routing patterns are combined:
 
-- **HTTP services** — Kong (`api`), Studio, Mailpit — ride the daemon
-  HTTP proxy on the Mac (`:80/:443`, TLS via devm's CA). One `hostname:`
-  per service.
-- **Postgres** (raw TCP) — uses `direct: true`, which does two things
-  automatically: route-aware DNS (`db.<proj>.test → VM_IP` on the Mac,
-  `→ 127.0.0.1` inside the VM), and a direct Mac→VM_IP path for the
-  raw TCP traffic. No proxy hop, no per-port fiddling.
+- **HTTP services** — Kong (`api`), Studio, Mailpit — are HTTP-fronted
+  on both sides: the daemon's ProxyServer serves them to the Mac, its
+  guest-origin listener serves them inside the VM, both with devm's CA.
+  One `hostname:` per service.
+- **Postgres** (raw TCP) — `direct: true`, so it's raw TCP end-to-end
+  instead of HTTP-fronted. A reverse proxy can't front the Postgres
+  wire protocol, and without the flag the in-VM hostname hairpins into
+  the daemon's TLS-terminating listener and fails. See
+  `devm skills get routing`.
 
 Net: `psql postgresql://postgres:postgres@db.<proj>.test:54322/postgres`
 works from the Mac AND from inside the VM, unchanged.
@@ -69,10 +71,15 @@ services:
   supabase-mail:
     port: 54324
     hostname: mail.<proj>.test         # Mailpit — optional but recipe includes it for email flows
+  # Opt-in. Only add this if something reaches Postgres *by hostname*.
+  # The CLI (`status`, `db reset`, migrations) and anything else inside
+  # the VM talks to 127.0.0.1:54322 and needs none of it. Add it for
+  # Mac-side `psql` / GUI tools, or for in-VM code you'd rather point at
+  # a stable hostname than loopback.
   supabase-db:
     port: 54322
     hostname: db.<proj>.test
-    direct: true                      # raw TCP: DNS→VM_IP, +1 firewall rule (auto)
+    direct: true                      # raw TCP end-to-end, not HTTP-fronted
   # supabase-pooler:
   #   port: 54329
   #   hostname: pooler.<proj>.test
@@ -83,17 +90,55 @@ network:
     - github.com/supabase/cli/*           # supabase CLI release download + /releases/latest redirect
     # release-asset storage — supabase/cli assets only
     - release-assets.githubusercontent.com/github-production-release-asset/314160187/*
-    - public.ecr.aws                      # supabase container image registry (manifests)
-    - "*.cloudfront.net"                  # ECR Public blob storage (image layers)
-    # ECR Public returns HTTP 307s to CloudFront for layer blobs, and
-    # AWS can rotate which distribution (`dXXX.cloudfront.net`) serves
-    # them. iron-proxy's allow syntax is a domain glob — `*.cloudfront.net`
-    # matches every subdomain (and bare `cloudfront.net`) so the rule
-    # survives AWS rebalancing.
+    # Image manifests. Layer blobs come from CloudFront and are NOT
+    # allowed here — see "Container image egress" below.
+    - public.ecr.aws
 ```
 
-Then `devm route vm` (auto-applied on `devm shell` when no routes exist)
+Then `devm route vm` (auto-applied on `devm start` when no routes exist)
 points every hostname at the VM.
+
+## Container image egress: pick one
+
+ECR Public serves image manifests from `public.ecr.aws` but 307s the
+layer blobs to a CloudFront distribution, and AWS rotates which
+distribution serves them — no single `dXXXX.cloudfront.net` host stays
+valid. This is only hit on `docker pull`: the first `supabase start`
+after a `devm teardown` (empty `/var/lib/docker`) and the occasional CLI
+image-version bump. Never at runtime once the images are cached.
+
+**The default above — a supervised window.** `public.ecr.aws` is the
+only standing allow, so open egress by hand when a pull is actually due:
+
+```bash
+# on the Mac, from the project directory
+devm passthrough --for 15m
+# in the VM: supabase start   (pulls ~10 images)
+devm restrict                 # close early once the pull finishes
+```
+
+The standing allowlist stays specific and the broad access is
+deliberate, time-boxed, and watched. Cost: on a cold VM `supabase start`
+403s on the first layer fetch until you remember to open the window.
+
+**The alternative — a standing `*.cloudfront.net`.** Add it to
+`network.allow` and pulls just work, no interaction. Understand what
+that grants: CloudFront distributions are self-service. Anyone with an
+AWS account can create one in minutes pointing at any origin they
+control, and it answers on `<theirs>.cloudfront.net`. So the rule isn't
+"allow AWS's CDN" — it's a standing allow for a hostname anyone can mint
+on demand, usable in both directions: arbitrary content in, and data
+POSTed out to an attacker's own origin. That's a permanent hole for a
+need that only exists at provisioning time, which is why it isn't the
+default here.
+
+**Don't split the difference with a path scope.** `*.cloudfront.net/v2/*`
+looks tighter and isn't: the blobs are `/v2/<opaque-uuid>`, so it barely
+narrows anything, and it fails closed on any connection iron-proxy
+doesn't decrypt — the policy check gets no request path, the pattern
+can't match, and the layer fetch 403s. Path scoping is for hosts fetched
+over the devm-CA-trusted path, like the `github.com/supabase/cli/*`
+entry above.
 
 ## Applying to an existing Node.js project
 
@@ -105,13 +150,16 @@ install:
   the app imports (`import { createClient } from '@supabase/supabase-js'`).
   Unrelated to the CLI. Keep it.
 - **`supabase`** (`devDependencies`) — the same CLI as the `.deb`,
-  wrapped for npm so `pnpm supabase start` works. Once the recipe
-  installs the `.deb`, this npm entry is redundant and risks version
-  drift between the two (native `.deb` at latest vs. npm pinned to
-  the last `pnpm install`).
+  wrapped for npm so `pnpm supabase start` works. Either source works;
+  run one, not both, or they drift apart (the `.deb` tracks latest, npm
+  stays where `package.json` pins it). The devDep is reproducible across
+  machines; the `.deb` is on `PATH` for a bare interactive `supabase`.
 
-If `supabase` is in `devDependencies`, ask before removing it — the
-project may deliberately pin a version. If it's absent, nothing to do.
+If `supabase` is in `devDependencies`, ask which source the project
+wants before removing anything — dropping this recipe's
+`install-supabase` script (and its two release-download allow entries)
+is as valid an answer as dropping the devDep. If it's absent, nothing
+to do.
 
 ## Steer agents at the CLI, not `docker exec`
 
@@ -271,6 +319,10 @@ Missing this means HMR / image loaders reject the hostnames.
 
 ## Verifying
 
+On a cold VM the image pull needs an egress window — open it on the Mac
+first (`devm passthrough --for 15m`), or use the standing-wildcard
+alternative.
+
 ```
 devm shell
 $ supabase --version                                              # CLI installed
@@ -303,9 +355,11 @@ $ psql postgresql://postgres:postgres@db.<proj>.test:54322/postgres -c 'SELECT 1
   if the project uses Playwright, since `~/.cache/ms-playwright` is
   VM-local). Ordering bugs (a test that reads `.env` before the step
   generating it) hide behind warm state and only surface on a cold VM.
-- **DNS TTL for `direct:` services is near-zero** — the VM's DHCP address
-  changes on restart, and clients that cache beyond TTL may need a
-  reconnect. Relevant if you leave `psql` sessions open across VM
-  bounces.
+  Teardown empties `/var/lib/docker`, so this is one of the two times
+  the image pull needs an egress window.
+- **`.test` names answer with TTL 0 and only while the project runs** — a
+  stopped project NXDOMAINs rather than resolving stale. Long-lived
+  `psql` sessions don't survive a VM bounce; reconnect after
+  `devm shell`.
 
 Upstream: <https://supabase.com/docs/guides/cli/local-development>

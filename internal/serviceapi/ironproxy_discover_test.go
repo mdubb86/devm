@@ -171,8 +171,9 @@ func TestRecoverProjectState_ReplaysSnapshotRoutes(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, 59481, info.HTTPPort, "pre-seeded ports must survive recoverProjectState")
 
-	direct, ok := routes.DirectRoute("db.recover-proj.test")
+	direct, ok := findRoute(routes, "db.recover-proj.test")
 	require.True(t, ok, "direct route must be replayed")
+	assert.True(t, direct.Direct, "the direct flag must survive the snapshot round-trip")
 	assert.Equal(t, 5432, direct.BackendPort)
 
 	lan, ok := routes.LANLookup("api.recover-proj.test")
@@ -435,8 +436,9 @@ func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.
 	_, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
 
-	route, ok := routes.DirectRoute("db.vm-down-proj.test")
+	route, ok := findRoute(routes, "db.vm-down-proj.test")
 	require.True(t, ok)
+	assert.True(t, route.Direct, "the direct flag must survive the snapshot round-trip")
 	assert.Equal(t, projectID, route.Project)
 }
 
