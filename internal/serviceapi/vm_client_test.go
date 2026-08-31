@@ -126,6 +126,48 @@ func TestVMStart_MissingName(t *testing.T) {
 	assert.Contains(t, err.Error(), "vm/start")
 }
 
+// TestClientStartVM_ApproveRequired verifies that when the daemon
+// refuses /vm/start with 409 approve_required (an existing approved
+// snapshot whose devm.yaml hash no longer matches the one on disk),
+// Client.StartVM returns an error whose message is the daemon's
+// "message" field verbatim, not the raw JSON-wrapped body. Mirrors
+// TestClientReconcile_ApproveRequired.
+//
+// The fake tart binary reports "p" as an already-existing (stopped)
+// VM so the handler skips Clone and reaches the approve-gate check —
+// which runs before `tart run` — without needing a real VM.
+func TestClientStartVM_ApproveRequired(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	store := approve.NewStore(identity.Prod)
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
+		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
+
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "tart-fake")
+	script := "#!/bin/sh\ncase \"$1\" in\n  list) echo '[{\"Name\":\"p\",\"State\":\"stopped\"}]' ;;\nesac\nexit 0\n"
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = binPath
+
+	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	defer cleanup()
+
+	c := NewClientWithSocket(srv.socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := c.StartVM(ctx, VMStartRequest{Name: "p", MacCwd: macCwd})
+	require.Error(t, err)
+	assert.Equal(t, approveRefusalMessage, err.Error())
+}
+
 // TestVMStop_MissingProjectID verifies /vm/stop rejects empty project_id.
 func TestVMStop_MissingProjectID(t *testing.T) {
 	logDir := t.TempDir()

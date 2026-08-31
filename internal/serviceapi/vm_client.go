@@ -24,6 +24,17 @@ func (c *Client) StartVM(ctx context.Context, req VMStartRequest) (VMStartRespon
 		return VMStartResponse{}, err
 	}
 	defer r.Body.Close()
+	if r.StatusCode == http.StatusConflict {
+		body, _ := io.ReadAll(r.Body)
+		var parsed struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Code == "approve_required" {
+			return VMStartResponse{}, errors.New(parsed.Message)
+		}
+		return VMStartResponse{}, fmt.Errorf("vm/start: status %d: %s", r.StatusCode, strings.TrimSpace(string(body)))
+	}
 	if r.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(r.Body)
 		return VMStartResponse{}, fmt.Errorf("vm/start: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))

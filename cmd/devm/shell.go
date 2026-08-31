@@ -19,34 +19,73 @@ import (
 
 var shellCmd = &cobra.Command{
 	Use:   "shell [-- COMMAND...]",
-	Short: "Bootstrap the sandbox (if needed) and attach an interactive session",
-	Long: `Acquires a project-local lock, brings the sandbox to a running state
-if it is stopped, reconciles ports, then attaches an interactive shell.
-The sandbox stays running after the shell exits — use ` + "`devm stop`" + ` to
-stop it or ` + "`devm teardown`" + ` to destroy it.
+	Short: "Attach a shell to a running sandbox (warm attach only)",
+	Long: `Attaches an interactive shell to the running, provisioned sandbox
+for this project. Does NOT start or provision a stopped sandbox — for
+that, run ` + "`devm start`" + ` first, then ` + "`devm shell`" + `.
 
-If the sandbox is already running, devm shell skips bootstrap and
-attaches immediately. Port reconcile only runs on cold start.`,
+If the sandbox is stopped or has not been provisioned yet, prints a
+clear error and exits non-zero. This is the intentional split: the
+approve gate refuses at the single point that reads devm.yaml, and
+` + "`devm shell`" + ` should never accidentally cold-start.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cmdName := "bash"
 		var cmdArgs []string
 		if len(args) > 0 {
 			cmdName = args[0]
 			cmdArgs = args[1:]
 		}
-		return runShellFlow(cmd, cmdName, cmdArgs)
+
+		ident := cfg // capture package identity cfg before it's shadowed below
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("get cwd: %w", err)
+		}
+		repoRoot, err := repohelpers.FindDevmYAML(cwd)
+		if err != nil {
+			return err
+		}
+		pcfg, err := config.Load(repoRoot)
+		if err != nil {
+			return err
+		}
+		// daemonHandshake (fingerprint drift check + iron-proxy warning) is
+		// called explicitly here since RunAttach, unlike runShellFlow,
+		// never cold-starts and so never calls it on its own.
+		if err := daemonHandshake(cmd.Context(), ident, pcfg); err != nil {
+			return err
+		}
+
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+
+		deps := orchestrator.DefaultShellDeps(ident, repoRoot)
+		rc, err := orchestrator.RunAttach(ctx, deps, pcfg.Project.Name, repoRoot, cmdName, cmdArgs, os.Stderr)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				fmt.Fprintln(os.Stderr, "aborted")
+				os.Exit(130)
+			}
+			return err
+		}
+		if rc != 0 {
+			os.Exit(rc)
+		}
+		return nil
 	},
 }
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Bring the sandbox up without attaching a shell",
-	Long: `Cold-starts the sandbox (or attaches to an already-running one) and
-returns immediately. Equivalent to ` + "`devm shell -- true`" + ` but with
-clearer intent — useful in scripts, CI, or when you want the VM
-warmed up in the background before you attach later.
+	Short: "Cold-start (or adopt-in-place) the sandbox",
+	Long: `Brings the sandbox up: cold-starts if stopped, adopts in place if
+running-but-not-provisioned. This is the sole command that reads
+` + "`devm.yaml`" + ` for apply, so it is also the sole command that
+refuses when devm.yaml has changed since it was last approved.
 
-The sandbox stays running until ` + "`devm stop`" + ` or ` + "`devm teardown`" + `.`,
+Returns after the VM is provisioned and ` + "`devm.target`" + ` is up. Attach a
+shell with ` + "`devm shell`" + `.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) > 0 {
 			return fmt.Errorf("devm start takes no arguments (got %v)", args)
