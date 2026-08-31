@@ -117,3 +117,21 @@ func TestApprove_DivergedEOFDoesNotAdvance(t *testing.T) {
 	assert.Error(t, err, "EOF answer must exit non-zero")
 	assert.Equal(t, 0, f.approveHits)
 }
+
+func TestApprove_OldDaemonReturns404_SurfacesUpgradeHint(t *testing.T) {
+	// A pre-approve-gate daemon build 404s any /vm/* route.
+	// runApprove must surface the upgrade hint.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/vm/approve-state", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	var stdout, stderr bytes.Buffer
+	err := runApprove(approveOpts{
+		daemonURL: srv.URL, projectID: "p", macCwd: "/tmp/x",
+		stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daemon does not support approve gate")
+}
