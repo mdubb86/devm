@@ -854,10 +854,32 @@ func (c *Config) PrimaryRepoName() string {
 	return ""
 }
 
+// mutagenLabelRE is mutagen's session-name component grammar: an
+// alphanumeric followed by alphanumerics/underscores/dashes. Any label
+// devm ships to `mutagen sync create --name devm-<project>-<label>`
+// must satisfy this — a `.` or other special char surfaces later as an
+// invalid-session-name error mid-provision.
+var mutagenLabelRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// IsValidLabel reports whether s is a legal mutagen session-component
+// label under mutagenLabelRE. Empty strings are invalid.
+func IsValidLabel(s string) bool {
+	return mutagenLabelRE.MatchString(s)
+}
+
+// SanitizeDerivedLabel strips a leading '.' from a derived-label leaf
+// so common dotfile-rooted paths (e.g. /home/devm/.claude, whose leaf
+// `.claude` mutagen rejects) produce a usable default. Applied only to
+// derivations; explicit `label:` values are pass-through and validated
+// as-is by IsValidLabel.
+func SanitizeDerivedLabel(leaf string) string {
+	return strings.TrimPrefix(leaf, ".")
+}
+
 // ResolveLabel returns the mutagen sync label for one repos.<name>
 // entry: an explicit `label:` always wins; else a repo with a URL
 // uses BareCloneName; else (the URL-nil primary) the basename of
-// macCwd.
+// macCwd, sanitized to strip a leading dot.
 func (r RepoConfig) ResolveLabel(macCwd string) string {
 	if r.Label != nil {
 		return *r.Label
@@ -865,7 +887,7 @@ func (r RepoConfig) ResolveLabel(macCwd string) string {
 	if r.URL != nil {
 		return BareCloneName(*r.URL)
 	}
-	return filepath.Base(macCwd)
+	return SanitizeDerivedLabel(filepath.Base(macCwd))
 }
 
 // PrimaryGuestPath returns cfg's primary repo's guest-side path
@@ -1022,16 +1044,21 @@ func (c *Config) validateRepos() error {
 }
 
 // labelOwner names one entity (a repos: or volumes: entry) that
-// derived or declared a given mutagen sync label.
+// derived or declared a given mutagen sync label. explicit is true
+// when the user set `label:` themselves — determines whether an
+// invalid-label error advises editing the field or adding one.
 type labelOwner struct {
 	kind, name, label string
+	explicit          bool
 }
 
 // validateLabels checks the flat label namespace shared by repos: and
-// volumes: for collisions. An entry's label is its explicit `label:`
-// when set, else derived: repos with url: → bare-clone name; the
+// volumes:: (1) every label (derived or explicit) is a legal mutagen
+// session-component name, and (2) no two entries resolve to the same
+// label. A derived label from repos with url: → bare-clone name; the
 // url-nil primary repo → basename of macCwd (or cwdLabelPlaceholder
-// when macCwd is unknown); volumes → leaf-dir of path:.
+// when macCwd is unknown); volumes → leaf-dir of path:. Derived leafs
+// are run through SanitizeDerivedLabel to strip a leading dot.
 func (c *Config) validateLabels(macCwd string) error {
 	var owners []labelOwner
 
@@ -1043,17 +1070,19 @@ func (c *Config) validateLabels(macCwd string) error {
 	for _, name := range repoNames {
 		r := c.Repos[name]
 		var label string
+		explicit := false
 		switch {
 		case r.Label != nil:
 			label = *r.Label
+			explicit = true
 		case r.URL != nil:
 			label = BareCloneName(*r.URL)
 		case macCwd != "":
-			label = filepath.Base(macCwd)
+			label = SanitizeDerivedLabel(filepath.Base(macCwd))
 		default:
 			label = cwdLabelPlaceholder
 		}
-		owners = append(owners, labelOwner{"repos", name, label})
+		owners = append(owners, labelOwner{"repos", name, label, explicit})
 	}
 
 	volNames := make([]string, 0, len(c.Volumes))
@@ -1064,12 +1093,38 @@ func (c *Config) validateLabels(macCwd string) error {
 	for _, name := range volNames {
 		v := c.Volumes[name]
 		var label string
+		explicit := false
 		if v.Label != nil {
 			label = *v.Label
+			explicit = true
 		} else {
-			label = filepath.Base(v.Path)
+			label = SanitizeDerivedLabel(filepath.Base(v.Path))
 		}
-		owners = append(owners, labelOwner{"volumes", name, label})
+		owners = append(owners, labelOwner{"volumes", name, label, explicit})
+	}
+
+	// Reject any label mutagen would refuse. Derived labels that still
+	// end up invalid after sanitize (e.g. `/home/devm/foo.bar` → `foo.bar`)
+	// tell the user to add an explicit `label:`; explicit invalid labels
+	// tell them to change the field they already wrote.
+	for _, o := range owners {
+		if o.label == cwdLabelPlaceholder {
+			// deferred: real macCwd unknown at this validate site
+			continue
+		}
+		if !IsValidLabel(o.label) {
+			if o.explicit {
+				return fmt.Errorf(
+					"%s.%s: label %q is not a valid mutagen session name "+
+						"(must match [A-Za-z0-9][A-Za-z0-9_-]*)",
+					o.kind, o.name, o.label)
+			}
+			return fmt.Errorf(
+				"%s.%s: derived label %q is not a valid mutagen session name "+
+					"(must match [A-Za-z0-9][A-Za-z0-9_-]*); "+
+					"add an explicit `label:` to this entry",
+				o.kind, o.name, o.label)
+		}
 	}
 
 	seen := map[string]labelOwner{}

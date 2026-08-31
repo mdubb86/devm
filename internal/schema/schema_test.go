@@ -1224,6 +1224,80 @@ func TestValidateLabels_Collision(t *testing.T) {
 	})
 }
 
+// ---------- IsValidLabel + SanitizeDerivedLabel ----------
+
+func TestIsValidLabel(t *testing.T) {
+	for _, tc := range []struct {
+		label string
+		want  bool
+	}{
+		{"claude", true},
+		{"foo-bar", true},
+		{"foo_bar", true},
+		{"a1", true},
+		{"1a", true},
+		{"", false},
+		{".claude", false},
+		{"-leading", false},
+		{"_leading", false},
+		{"foo.bar", false},
+		{"foo bar", false},
+		{"foo/bar", false},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			assert.Equal(t, tc.want, IsValidLabel(tc.label))
+		})
+	}
+}
+
+func TestSanitizeDerivedLabel(t *testing.T) {
+	assert.Equal(t, "claude", SanitizeDerivedLabel(".claude"))
+	assert.Equal(t, "data", SanitizeDerivedLabel("data"))
+	assert.Equal(t, "share", SanitizeDerivedLabel("share"))
+	assert.Equal(t, "", SanitizeDerivedLabel(""))
+	// Only leading dot is stripped; interior dots stay (validate catches them).
+	assert.Equal(t, "foo.bar", SanitizeDerivedLabel("foo.bar"))
+	// Only one leading dot; ".." → "." (still invalid; validate catches).
+	assert.Equal(t, ".", SanitizeDerivedLabel(".."))
+}
+
+// ---------- validateLabels: mutagen-name rejection ----------
+
+func TestValidateLabels_RejectsInvalidExplicit(t *testing.T) {
+	c := Config{Volumes: map[string]Volume{
+		"claude": {Path: "/home/devm/claude", Label: strPtr(".claude")},
+	}}
+	err := c.validateLabels("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "volumes.claude")
+	assert.Contains(t, err.Error(), `label ".claude"`)
+	assert.Contains(t, err.Error(), "not a valid mutagen session name")
+}
+
+func TestValidateLabels_RejectsInvalidDerivedAndAdvisesLabel(t *testing.T) {
+	// /home/devm/foo.bar → derived leaf "foo.bar" (leading-dot strip doesn't
+	// help interior dots) → validate rejects and tells the user to add an
+	// explicit label.
+	c := Config{Volumes: map[string]Volume{
+		"stuff": {Path: "/home/devm/foo.bar"},
+	}}
+	err := c.validateLabels("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "volumes.stuff")
+	assert.Contains(t, err.Error(), `derived label "foo.bar"`)
+	assert.Contains(t, err.Error(), "add an explicit `label:`")
+}
+
+func TestValidateLabels_DotClaudePathSanitizesToValid(t *testing.T) {
+	// The exact shelfmates + tool/ai/claude pattern: /home/devm/.claude
+	// derives leaf ".claude", which sanitizes to "claude" — a valid
+	// mutagen name. No error.
+	c := Config{Volumes: map[string]Volume{
+		"claude": {Path: "/home/devm/.claude"},
+	}}
+	assert.NoError(t, c.validateLabels(""))
+}
+
 // ---------- validateProjectIDReserved ----------
 
 func TestValidateProjectID_ReservedNames(t *testing.T) {
