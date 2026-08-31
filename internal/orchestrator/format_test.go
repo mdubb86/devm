@@ -218,6 +218,31 @@ func TestFormatStatusJSON_RebindOmittedWhenNil(t *testing.T) {
 	assert.NotContains(t, ironProxy, "rebind")
 }
 
+// TestFormatStatusJSON_ApproveState verifies the JSON payload carries
+// approve_state: {diverged, approved_since} when the daemon returned a
+// verdict, and approve_state: null when it didn't (old daemon, 404).
+func TestFormatStatusJSON_ApproveState(t *testing.T) {
+	since := "2026-08-30T20:00:00Z"
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveState: &serviceapi.ApproveStateResponse{Diverged: true, ApprovedSince: &since},
+	})
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	as := proj["approve_state"].(map[string]any)
+	assert.Equal(t, true, as["diverged"])
+	assert.Equal(t, since, as["approved_since"])
+}
+
+func TestFormatStatusJSON_ApproveState_NullWhenAbsent(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running"})
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	assert.Contains(t, proj, "approve_state")
+	assert.Nil(t, proj["approve_state"])
+}
+
 func TestFormatReconcileJSON(t *testing.T) {
 	js := FormatReconcileJSON(ReconcileResult{
 		Rendered: true, SandboxState: "running",
@@ -424,6 +449,41 @@ func TestFormatStatusText_LANListener_Bound(t *testing.T) {
 	out := FormatStatusText(res)
 	assert.Contains(t, out, "LAN listener: bound on 0.0.0.0:42000 (3 hostnames exposed)")
 	assert.NotContains(t, out, "not bound")
+}
+
+func TestFormatStatusText_ApproveGate_Diverged(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveState: &serviceapi.ApproveStateResponse{Diverged: true},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "changes since last approval")
+	assert.Contains(t, out, "Review")
+}
+
+func TestFormatStatusText_ApproveGate_UpToDate(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveState: &serviceapi.ApproveStateResponse{Diverged: false},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "Approve gate: up to date.")
+}
+
+// TestFormatStatusText_ApproveGate_SilentWhenNil verifies the
+// approve-gate line is omitted entirely — not rendered as an error —
+// when ApproveState is nil and there was no error, matching the
+// silent-degrade contract for a daemon predating the approve gate.
+func TestFormatStatusText_ApproveGate_SilentWhenNil(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running"}
+	out := FormatStatusText(res)
+	assert.NotContains(t, out, "Approve gate")
+}
+
+func TestFormatStatusText_ApproveGate_CheckFailed(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveError: "dial daemon: connection refused",
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "Approve gate: check failed: dial daemon: connection refused")
 }
 
 func TestFormatDaemonStatus_MismatchColor(t *testing.T) {
