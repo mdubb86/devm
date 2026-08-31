@@ -56,7 +56,7 @@ Other pre-VM errors from `devm shell`:
 
 ## Repo hydration failures
 
-Repo hydration (`git clone` inside the guest, for `repos:` entries) runs as part of mutagen session setup (stage marker `mutagen-sync`), right after egress opens and before `install:`/`startup:` run — it's neither a daemon-startup nor a provisioner-stage failure, but a cold-start failure here still tears down the VM like any other.
+Repo hydration (`git clone` inside the guest, for `repos:` entries) runs at the `repo-clone` stage, right after `volume-sync` establishes the mutagen sessions and before `install:`/`startup:` run — it's neither a daemon-startup nor an in-guest provisioner-stage failure, but a cold-start failure here still tears down the VM like any other.
 
 - **Missing secret.** `repos.<name>.secret` names a secret not in the store — cold-start aborts before the clone runs; the error names the missing secret. Fix: `devm secret set <name>`.
 - **Clone auth failure (401).** Usually a missing iron-proxy substitution rule or an expired token. Cold-start aborts and the VM is torn down; the error names the repo URL. Fix: confirm `repos.<name>.secret` holds a token with clone access to that repo.
@@ -67,7 +67,7 @@ Repo hydration (`git clone` inside the guest, for `repos:` entries) runs as part
 
 ## Provisioner failures
 
-After the VM starts, provisioning walks a series of stages. Each stage emits a marker (`::devm:stage:<name>::`) that drives the `devm shell` spinner. Egress is OPEN through the `open`→`startup` stages and switches to ENFORCED before `enforce`/`services`, so user services always come up under the enforced allowlist.
+After the VM starts, provisioning walks a series of stages. Each stage emits a marker (`::devm:stage:<name>::`) that drives the `devm shell` spinner. Iron-proxy runs in `passthrough` authority mode through the `open`→`commands` stages (MITM'd, audited, secret-substituted, but not allowlist-gated) and flips to `restricted` before `enforce`/`services`, so user services always come up under the enforced allowlist. Softnet stays in `FORWARDING` throughout — iron-proxy is the authority.
 
 Any failing command aborts provisioning immediately. On failure the error line is:
 
@@ -90,7 +90,7 @@ provision: provision stage "<name>": provisioning script exited <N>
 | `enforce` | Stage marker only — no in-guest work. Marks the point after which egress is enforced. | Should not fail | n/a |
 | `services` | Enables + starts each declared service unit and health-polls it before `devm.target` (and therefore access) is granted. | Service failed to start (port in use, missing binary, bad config) | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>` |
 
-A failure at `open` through `enforce` leaves the VM in a bad cold-start state — `devm shell` tears it down (the next `devm shell` starts clean). A failure at `templates` or `services` leaves a basically-good VM whose user-declared service/template is what's broken, so `devm shell` surfaces the error but keeps the VM running for in-place debugging via `tart exec`.
+A failure at any stage from `bundle` through `enforce` leaves the VM in a bad cold-start state — `devm shell` tears it down (the next `devm shell` starts clean). Only `services` keeps the VM for in-place debugging via `tart exec` — it's the sole stage that runs after enforcement, so a failure there is a user-declared service being broken *after* everything else worked. `templates` deliberately does not keep the VM even though it runs after `install:`/`docker:`: it runs under open egress, before `enforce` installs the real allowlist, so a VM kept alive on a `templates` failure would be sitting there unenforced.
 
 ---
 

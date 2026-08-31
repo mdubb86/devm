@@ -25,8 +25,8 @@ Prereq: the Playwright recipe (`tool/tool/playwright`) — supplies
 scripts:
   install-agent-browser:
     # fnm's `default` alias is on `path:` (per the Node recipe), so
-    # `npm` is on PATH here in the `install:` bucket — no extra env
-    # setup needed. Guard so the step is idempotent.
+    # `npm` is on PATH here in `install:` — no extra env setup needed.
+    # Guard so the step is idempotent.
     - command -v agent-browser >/dev/null 2>&1 || npm install -g agent-browser
 
 install:
@@ -55,9 +55,9 @@ won't load.
   read the same binary but hold their own user-data dirs, so
   Chromium's ProcessSingleton lock never collides. Rule: reuse the
   binary, never share a `--profile`/user-data-dir.
-- **Rehydration.** No extra step — `install:` re-runs on cold-start
-  after teardown; Playwright's own recipe re-runs `playwright install
-  chromium` in the same bucket.
+- **Rehydration.** No extra step — `install:` re-runs on the next
+  fresh VM after teardown; Playwright's own recipe re-runs `playwright
+  install chromium` alongside.
 
 ## Recommended CLAUDE.md line
 

@@ -95,7 +95,7 @@ services:
 
 The guest carries no `.test` configuration of its own. Its DNS queries forward to softnet, which answers every `*.test` name itself: a `direct: true` hostname gets `127.0.0.1` (raw TCP, never leaves the guest); everything else gets a hairpin address that softnet forwards to the daemon's guest-origin listener on the Mac. That listener terminates TLS with the same devm CA the Mac-facing ProxyServer uses — same signer, same chain, the identical cert a Mac browser would get for the same hostname — and dials back into the guest at `127.42.0.N:<service-port>` to reach your service. No key material or signing capability exists inside the VM.
 
-Both `http://api.test` and `https://api.test` work from inside the VM, matching the Mac. This holds under the OPEN policy (the provisioning window) and under ENFORCED; under LOCKED it's denied along with everything else.
+Both `http://api.test` and `https://api.test` work from inside the VM, matching the Mac. This holds under both iron-proxy authority modes — `passthrough` (the provisioning window) and `restricted`; under softnet's `LOCKED` policy it's denied along with everything else.
 
 `*.devm.test` is a separate, always-on zone: it resolves inside the VM to softnet's NAT alias for the Mac's own loopback (`192.168.127.254`), independent of the `.test` handling above. It's used by softnet's own e2e tests.
 
