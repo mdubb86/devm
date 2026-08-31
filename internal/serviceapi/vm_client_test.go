@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mdubb86/devm/internal/approve"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
@@ -297,6 +298,12 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
+	// Create and approve project directory for the approve gate.
+	projDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
+	store := approve.NewStore(identity.Prod)
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+
 	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(dir) })
@@ -324,7 +331,7 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	defer rcancel()
 
 	resp, err := c.Reconcile(rctx, VMReconcileRequest{
-		Name: "p", Cfg: newCfg, WorkspaceHostPath: "/tmp/repo",
+		Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir,
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.Applied, 1)

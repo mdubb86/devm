@@ -31,12 +31,15 @@ func setupProjectDirWithDevm(t *testing.T, projectID string, devmContent string,
 	t.Helper()
 	projDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte(devmContent), 0644))
+	var meBytes []byte
 	if meContent != "" {
-		require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.me.yaml"), []byte(meContent), 0644))
+		meBytes = []byte(meContent)
+		require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.me.yaml"), meBytes, 0644))
 	}
 	// Approve the snapshot so the gate check passes.
+	// Pass nil (not empty bytes) for meYAML when there's no devm.me.yaml.
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write(projectID, []byte(devmContent), []byte(meContent), "user"))
+	require.NoError(t, store.Write(projectID, []byte(devmContent), meBytes, "user"))
 	return projDir, store
 }
 
