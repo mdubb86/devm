@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -91,8 +92,22 @@ func AdoptIronProxies(ctx context.Context, cfg identity.Config, sup *supervisor.
 	if err != nil {
 		return err
 	}
+	// One tart listing decides orphanhood for the whole pass: a proxy
+	// whose project has no VM at all — not even a stopped one — serves
+	// nothing and never will (/vm/start spawns a fresh proxy), so it is
+	// stopped instead of adopted. nil disables the check: with the VM
+	// list unknowable, preserving is the fail-safe direction.
+	var vmNames map[string]bool
+	if vms, err := tr.List(ctx); err != nil {
+		daemonlog.Errorf("adopt: tart list: %v (orphan check disabled for this pass; all discovered proxies adopted)", err)
+	} else {
+		vmNames = make(map[string]bool, len(vms))
+		for _, vm := range vms {
+			vmNames[vm.Name] = true
+		}
+	}
 	for _, p := range procs {
-		adoptOneIronProxy(ctx, cfg, sup, tr, routes, p)
+		adoptOneIronProxy(ctx, cfg, sup, tr, routes, p, vmNames)
 	}
 	return nil
 }
@@ -107,8 +122,24 @@ func AdoptIronProxies(ctx context.Context, cfg identity.Config, sup *supervisor.
 // left a running adopted VM's egress permanently fail-closed at 502:
 // the policy socket is served only by recoverProjectState, and nothing
 // else re-serves it after a daemon restart.
-func adoptOneIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, routes *Routes, p DiscoveredIronProxy) {
-	sup.Adopt(supervisor.Key{ProjectID: p.ProjectID, Role: supervisor.RoleProxy}, p.PID)
+func adoptOneIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, routes *Routes, p DiscoveredIronProxy, vmNames map[string]bool) {
+	key := supervisor.Key{ProjectID: p.ProjectID, Role: supervisor.RoleProxy}
+	sup.Adopt(key, p.PID)
+
+	// Orphan GC: no VM for this project (vmNames non-nil ⇒ the listing
+	// succeeded) means the proxy is a leftover from a torn-down project —
+	// stop it and keep the daemon free of its state, rather than
+	// preserving it forever and letting leftovers accumulate.
+	if vmNames != nil && !vmNames[p.ProjectID] {
+		log.Printf("adopt: no VM for %s — stopping its orphaned iron-proxy (pid %d)", p.ProjectID, p.PID)
+		if err := sup.Stop(ctx, key); err != nil {
+			daemonlog.Errorf("adopt: stop orphaned iron-proxy for %s: %v", p.ProjectID, err)
+		}
+		if sockPath, err := IronPolicySocketPath(cfg, p.ProjectID); err == nil {
+			_ = os.Remove(sockPath)
+		}
+		return
+	}
 	_, hadEntry := ironProxyState.get(p.ProjectID)
 	info, err := ironProxyInfoForAdopted(cfg, p.ProjectID)
 	if err != nil {

@@ -272,7 +272,7 @@ e2e-install *NAMES: (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_bui
 # Doubles as the canonical single-scenario install test.
 e2e-bootstrap: (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build-run-embed) (_build-tart-mutagen-ssh-embed) (_build "e2e")
     @sudo -v
-    e2e/scripts/sweep-leftovers.sh
+    e2e/scripts/purge-leftovers.sh
     @sudo install -m 755 bin/devm-e2e /usr/local/bin/devm-e2e
     /usr/local/bin/devm-e2e install
     @scripts/assert-e2e-installed.sh
@@ -293,7 +293,7 @@ e2e-list:
 
 # Safety-net manual sweep of anything earlier runs left behind.
 e2e-clean:
-    @e2e/scripts/sweep-leftovers.sh
+    @e2e/scripts/purge-leftovers.sh
 
 # Cut a release: interactive picker (patch/minor/major), runs unit
 # tests + gh CI-green check, tags + pushes. CI takes over from there.

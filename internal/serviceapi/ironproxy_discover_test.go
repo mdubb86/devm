@@ -3,7 +3,9 @@ package serviceapi
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -228,6 +230,55 @@ func TestRecoverProjectState_ServesSnapshotAllowlist(t *testing.T) {
 // policy re-serve from happening: ports go unrecovered, but the socket
 // still comes up with the allowlist recomputed from the state
 // snapshot.
+// An adopted iron-proxy whose project has no tart VM at all — not even a
+// stopped one — serves nothing and never will: /vm/start spawns a fresh
+// proxy, and nothing else dials this one. Adoption must stop it and
+// leave no daemon state behind, instead of preserving it forever (the
+// accumulation that produced 29 strays and a squatted pool IP in the
+// field). A real process stands in for the proxy so the stop path's
+// signal delivery is exercised, not stubbed.
+func TestAdoptOneIronProxy_StopsProxyWithNoVM(t *testing.T) {
+	const projectID = "gc-no-vm-proj"
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.PurgeProject(projectID)
+	})
+
+	stand := exec.Command("sleep", "300")
+	require.NoError(t, stand.Start())
+	t.Cleanup(func() { _ = stand.Process.Kill() })
+	// Reap immediately on death: the test is the stand-in's parent, so
+	// without a waiter the killed child would linger as a zombie that
+	// still answers signal 0 — fooling both this test's liveness check
+	// and the supervisor's own death poll. Production adopted pids are
+	// never the daemon's children, so no zombie exists there.
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- stand.Wait() }()
+
+	sup := supervisor.New(t.TempDir())
+	vmNames := map[string]bool{"some-other-project": true}
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: stand.Process.Pid, ProjectID: projectID}, vmNames)
+
+	select {
+	case err := <-waitCh:
+		var exitErr *exec.ExitError
+		require.ErrorAs(t, err, &exitErr, "stand-in must have been signalled, not exited cleanly")
+		require.Equal(t, syscall.SIGTERM, exitErr.Sys().(syscall.WaitStatus).Signal(),
+			"orphan stop must deliver graceful TERM first")
+	case <-time.After(15 * time.Second):
+		t.Fatal("orphaned proxy process was not stopped")
+	}
+
+	// No state, no policy socket.
+	_, ok := ironProxyState.get(projectID)
+	assert.False(t, ok, "orphaned project must not enter ironProxyState")
+	sockPath, err := IronPolicySocketPath(identity.Prod, projectID)
+	require.NoError(t, err)
+	_, statErr := os.Stat(sockPath)
+	assert.True(t, os.IsNotExist(statErr), "no policy socket may be served for an orphaned project")
+}
+
 // Adoption serves the policy socket at the path RECORDED in iron-proxy's
 // config (the grpc transform's target — the path the running proxy
 // actually dials), never a re-derived one. Re-derivation can disagree
@@ -267,7 +318,7 @@ func TestAdoptOneIronProxy_ServesRecordedPolicyTarget(t *testing.T) {
 	}))
 
 	sup := supervisor.New(t.TempDir())
-	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424243, ProjectID: projectID})
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424243, ProjectID: projectID}, map[string]bool{projectID: true})
 
 	client := dialPolicy(t, recPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -302,7 +353,7 @@ func TestAdoptOneIronProxy_UnreadableConfig_StillServesPolicy(t *testing.T) {
 	}))
 
 	sup := supervisor.New(t.TempDir())
-	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424242, ProjectID: projectID})
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424242, ProjectID: projectID}, map[string]bool{projectID: true})
 
 	// With no prior ironProxyState entry, an unreadable config, and no
 	// ProjectIP in the snapshot to restore, no entry must be created at
@@ -345,7 +396,7 @@ func TestAdoptOneIronProxy_UnreadableConfig_ProjectIPStillRestored(t *testing.T)
 	}))
 
 	sup := supervisor.New(t.TempDir())
-	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424243, ProjectID: projectID})
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424243, ProjectID: projectID}, map[string]bool{projectID: true})
 
 	info, ok := ironProxyState.get(projectID)
 	require.True(t, ok, "an entry must be created to carry the restored ProjectIP")
