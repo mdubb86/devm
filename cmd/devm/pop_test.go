@@ -111,6 +111,32 @@ func TestResolvePopTarget_NoMirroredEntries(t *testing.T) {
 	assert.Contains(t, err.Error(), "no primary repo")
 }
 
+// TestRunPop_URL_PassedStraightToOpen — a URL arg bypasses cwd /
+// config load / mirror table and lands in `open` verbatim.
+func TestRunPop_URL_PassedStraightToOpen(t *testing.T) {
+	var captured []string
+	orig := popExecOpen
+	popExecOpen = func(args ...string) error { captured = args; return nil }
+	t.Cleanup(func() { popExecOpen = orig })
+
+	err := runPop(popMacCmd, []string{"https://example.com/thing"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://example.com/thing"}, captured)
+}
+
+// TestRunPop_URL_ForwardsOpenArgs — `-a Firefox` etc. after `--` reach
+// the `open` invocation alongside the URL.
+func TestRunPop_URL_ForwardsOpenArgs(t *testing.T) {
+	var captured []string
+	orig := popExecOpen
+	popExecOpen = func(args ...string) error { captured = args; return nil }
+	t.Cleanup(func() { popExecOpen = orig })
+
+	err := runPop(popMacCmd, []string{"http://localhost:3000", "--", "-a", "Firefox"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"http://localhost:3000", "-a", "Firefox"}, captured)
+}
+
 // TestResolvePopTarget_AbsolutePathOutsideAnyEntry — an absolute path
 // that doesn't fall under any mirrored repo/volume is an error.
 func TestResolvePopTarget_AbsolutePathOutsideAnyEntry(t *testing.T) {

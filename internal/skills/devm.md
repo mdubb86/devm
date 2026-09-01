@@ -61,6 +61,6 @@ interactive `ssh devm-<name>` and VS Code Remote-SSH.
 - `devm skills get routing` — how port declarations, `devm route` commands, and `*.test` hostnames work on the Mac and inside the VM.
 - `devm skills get secrets` — storing credentials in the on-disk secret store and referencing them with `!secret` in `devm.yaml`.
 - `devm skills get errors` — reading supervision error blocks and where logs live.
-- `devm pop mac <path>` — open a Mac-native file with its default app; refuses paths that resolve into a devm-managed volume.
-- `devm pop vm <path>` — open a file from the project's guest workspace (a `$WORKSPACE`-anchored path) with its default app on the Mac.
+- `devm pop mac <path-or-url>` — open a Mac-native file with its default app; refuses paths that resolve into a devm-managed volume. An `http://` / `https://` URL routes straight to the default browser.
+- `devm pop vm <path-or-url>` — open a file from the project's guest workspace (a `$WORKSPACE`-anchored path) with its default app on the Mac. An `http://` / `https://` URL routes straight to the default browser.
 - `devm recipes get tool/service/docker` — docker is a built-in (`docker: true`), not a recipe you install, but the recipe covers the intricacies: the two egress paths (why `docker run` works with no config but `docker build` needs a Dockerfile RUN block), and the exact block to add for build-time HTTPS to survive iron-proxy's MITM.

@@ -17,8 +17,8 @@ description: devm VM lifecycle commands — shell, start, reconcile, stop, teard
 | `devm teardown` | Destroy the VM and delete its disk image. Required after teardown-bucket changes. |
 | `devm status` | Show VM state, active sessions, pending config diff, routing, DNS, CA trust, and proxy health. |
 | `devm validate` | Lint `devm.yaml` (and `devm.me.yaml` if present) without touching the VM. |
-| `devm pop mac <path>` | Open a Mac-native file with its default app; refuses paths that resolve into a devm-managed volume. |
-| `devm pop vm <path>` | Open a file from the project's guest workspace with its default app on the Mac, translating it to its Mac-side volume storage location. |
+| `devm pop mac <path-or-url>` | Open a Mac-native file with its default app; refuses paths that resolve into a devm-managed volume. An `http://` / `https://` URL routes straight to the default browser. |
+| `devm pop vm <path-or-url>` | Open a file from the project's guest workspace with its default app on the Mac, translating it to its Mac-side volume storage location. An `http://` / `https://` URL routes straight to the default browser. |
 
 ---
 

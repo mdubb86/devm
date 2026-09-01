@@ -1,12 +1,14 @@
-// pop is the guest-side binary that ships a "show this file on the
-// Mac" request over to the daemon. It's installed at /opt/devm/bin/pop
+// pop is the guest-side binary that ships a "show this on the Mac"
+// request over to the daemon. It's installed at /opt/devm/bin/pop
 // via the provisioning bundle. The daemon (internal/serviceapi/pop.go)
-// resolves the path (cwd-then-project-root) and hands the resolved
-// Mac path to macOS `open`.
+// either resolves a filesystem path (cwd-then-project-root) to its
+// Mac-side mirror and hands it to macOS `open`, or — when the arg is
+// an http:// / https:// URL — passes the URL straight to `open`
+// (which routes it to the Mac's default browser).
 //
 // Usage:
 //
-//	pop <path> [-- <open-args>...]
+//	pop <path-or-url> [-- <open-args>...]
 //
 // Reaches the daemon over softnet: guest TCP 192.168.127.1:81 is
 // forwarded (softnet ForwardTargets.Pop, per project) to the daemon's
@@ -27,7 +29,7 @@ const popEndpoint = "http://192.168.127.1:81/pop"
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: pop <path> [-- <open-args>...]")
+		fmt.Fprintln(os.Stderr, "usage: pop <path-or-url> [-- <open-args>...]")
 		os.Exit(2)
 	}
 

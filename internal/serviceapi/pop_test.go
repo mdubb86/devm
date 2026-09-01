@@ -141,6 +141,49 @@ func TestPopHandler_ForwardsOpenArgs(t *testing.T) {
 	})
 }
 
+func TestPopHandler_URL_PassedStraightToOpen(t *testing.T) {
+	storage := t.TempDir()
+	guestRoot := "/Users/x/proj"
+	registry := []WorkspaceEntry{{ProjectName: "p", GuestPath: guestRoot, StoragePath: storage}}
+
+	withPopExecSeam(t, func(recs *[]popExecRecord) {
+		body, _ := json.Marshal(map[string]any{
+			"arg": "https://example.com/thing",
+			"cwd": guestRoot + "/src",
+		})
+		req := httptest.NewRequest(http.MethodPost, "/pop", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		handlePop(w, req, "p", registry)
+
+		assert.Equal(t, 200, w.Code, "body: %s", w.Body.String())
+		require.Len(t, *recs, 1)
+		require.Len(t, (*recs)[0].args, 1)
+		assert.Equal(t, "https://example.com/thing", (*recs)[0].args[0],
+			"URL must be passed to `open` verbatim, not translated as a path")
+	})
+}
+
+func TestPopHandler_URL_ForwardsOpenArgs(t *testing.T) {
+	storage := t.TempDir()
+	guestRoot := "/Users/x/proj"
+	registry := []WorkspaceEntry{{ProjectName: "p", GuestPath: guestRoot, StoragePath: storage}}
+
+	withPopExecSeam(t, func(recs *[]popExecRecord) {
+		body, _ := json.Marshal(map[string]any{
+			"arg":       "http://localhost:3000",
+			"cwd":       guestRoot,
+			"open_args": []string{"-a", "Firefox"},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/pop", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		handlePop(w, req, "p", registry)
+
+		assert.Equal(t, 200, w.Code, "body: %s", w.Body.String())
+		require.Len(t, *recs, 1)
+		assert.Equal(t, []string{"http://localhost:3000", "-a", "Firefox"}, (*recs)[0].args)
+	})
+}
+
 func TestPopHandler_AbsoluteGuestArg(t *testing.T) {
 	storage := t.TempDir()
 	guestRoot := "/Users/x/proj"

@@ -83,6 +83,21 @@ func handlePop(w http.ResponseWriter, r *http.Request, projectName string, regis
 		return
 	}
 
+	// URL arg: pass straight to `open`, which routes it to the Mac's
+	// default browser (or the appropriate handler for the scheme). No
+	// path translation, no stat — the arg IS the resource.
+	if strings.HasPrefix(req.Arg, "http://") || strings.HasPrefix(req.Arg, "https://") {
+		openArgs := append([]string{req.Arg}, req.OpenArgs...)
+		if err := popExecOpen(r.Context(), openArgs...); err != nil {
+			daemonlog.Errorf("serviceapi: pop: open %s: %v", req.Arg, err)
+			http.Error(w, fmt.Sprintf("pop: open failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("serviceapi: pop: opened URL %s (project %s)", req.Arg, projectName)
+		fmt.Fprintln(w, req.Arg)
+		return
+	}
+
 	// Candidate 1: cwd + arg (unless arg is absolute).
 	// Candidate 2: project root + arg.
 	// For both, translate to storage, stat, and pick whichever exists first.

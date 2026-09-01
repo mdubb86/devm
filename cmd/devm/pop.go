@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/repohelpers"
@@ -12,6 +13,11 @@ import (
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
 )
+
+// popExecOpen is the exec seam for tests to override macOS `open`.
+var popExecOpen = func(args ...string) error {
+	return exec.Command("open", args...).Run()
+}
 
 var popCmd = &cobra.Command{
 	Use:   "pop",
@@ -43,6 +49,13 @@ func runPop(cmd *cobra.Command, args []string) error {
 	cmd.SilenceUsage = true
 	pathArg, openArgs := splitPathAndOpenArgs(args)
 
+	// URL arg: pass straight to `open`, which routes it to the default
+	// browser (or the appropriate handler for the scheme). No config
+	// load, no mirror-table walk — the URL IS the resource.
+	if strings.HasPrefix(pathArg, "http://") || strings.HasPrefix(pathArg, "https://") {
+		return popExecOpen(append([]string{pathArg}, openArgs...)...)
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -60,7 +73,7 @@ func runPop(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	return exec.Command("open", append([]string{resolved}, openArgs...)...).Run()
+	return popExecOpen(append([]string{resolved}, openArgs...)...)
 }
 
 // splitPathAndOpenArgs splits `<path> [-- <open-args>...]` into the
