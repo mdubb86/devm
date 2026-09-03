@@ -12,6 +12,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
+	"github.com/mdubb86/devm/internal/hostinfo"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
 	"github.com/mdubb86/devm/internal/mutagen"
@@ -324,6 +325,13 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		pkgAdds, pkgRemoves = reconcile.PackageDrift(snap.Cfg, cfg)
 	}
 
+	// Best-effort: resolve the Mac's IANA zone so the guest can mirror
+	// it in the bundle stage. On failure, log and leave the guest at
+	// its baked UTC default — provisioning must not depend on this.
+	macTz, tzErr := hostinfo.ResolveMacTimezone()
+	if tzErr != nil {
+		log.Printf("orchestrator: resolve mac timezone: %v — guest stays at UTC", tzErr)
+	}
 	prov := &provision.Provisioner{
 		Tart:                d.Tart,
 		VMName:              vmName,
@@ -338,6 +346,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		StepTimeoutSeconds:  installStepTimeoutSeconds(),
 		PackageAdds:         pkgAdds,
 		PackageRemoves:      pkgRemoves,
+		MacTimezone:         macTz,
 	}
 	log.Printf("shell: provisioning %s", vmName)
 	reporter.Step("provisioning", false)

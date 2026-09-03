@@ -57,6 +57,32 @@ func TestRenderProvisionBundleScript_UnconditionalRegardlessOfInput(t *testing.T
 	assert.Less(t, extractIdx, flushIdx, "extract must run before the flush")
 }
 
+func TestRenderProvisionBundleScript_MacTimezone_EmittedWhenSet(t *testing.T) {
+	s := string(RenderProvisionBundleScript(ProvisionScriptInput{
+		FirstBoot:   true,
+		MacTimezone: "America/Chicago",
+	}))
+	assert.Contains(t, s, "sudo timedatectl set-timezone 'America/Chicago'",
+		"timezone override must be applied when MacTimezone is set")
+}
+
+func TestRenderProvisionBundleScript_MacTimezone_OmittedWhenEmpty(t *testing.T) {
+	s := string(RenderProvisionBundleScript(ProvisionScriptInput{FirstBoot: true}))
+	assert.NotContains(t, s, "timedatectl",
+		"empty MacTimezone must leave the guest at UTC — no timedatectl call")
+}
+
+func TestRenderProvisionBundleScript_MacTimezone_ShellQuoted(t *testing.T) {
+	// Zone names never contain quotes in practice, but the render must
+	// still shell-quote to guarantee bash-safe args regardless of input.
+	s := string(RenderProvisionBundleScript(ProvisionScriptInput{
+		FirstBoot:   true,
+		MacTimezone: "Etc/GMT+5",
+	}))
+	assert.Contains(t, s, "'Etc/GMT+5'",
+		"MacTimezone must be single-quoted so `+` and any other bash-special char is inert")
+}
+
 func TestRenderProvisionUserScript_Structure(t *testing.T) {
 	in := ProvisionScriptInput{
 		FirstBoot:        true,

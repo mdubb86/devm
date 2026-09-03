@@ -66,6 +66,13 @@ type ProvisionScriptInput struct {
 	// credentials but keeps the config for the user's own credential
 	// helper still gets the store helper wired up.
 	GitConfig string
+
+	// MacTimezone is the Mac's IANA zone name (e.g. "America/Chicago").
+	// When non-empty, the bundle-stage script runs `timedatectl
+	// set-timezone <MacTimezone>` so user-visible timestamps in the
+	// guest match the Mac. Empty means "leave the guest at its baked
+	// UTC default" — the Mac-side resolver couldn't determine a zone.
+	MacTimezone string
 }
 
 // hasOpenWork reports whether the open egress window is needed this boot.
@@ -128,6 +135,15 @@ func RenderProvisionBundleScript(in ProvisionScriptInput) []byte {
 	// would drop softnet's own egress too — flushed unconditionally, every
 	// boot, regardless of whether this boot has a user-phase work window.
 	p("sudo nft flush ruleset")
+
+	// Match guest timezone to the Mac so timestamps in shells, logs,
+	// and running services (databases, browsers) read the same as the
+	// Mac. Idempotent: timedatectl no-ops when already set. Empty
+	// MacTimezone means the CLI couldn't resolve the Mac's zone —
+	// leave the guest at its baked UTC default rather than fail.
+	if in.MacTimezone != "" {
+		p("sudo timedatectl set-timezone %s", shellSingleQuoted(in.MacTimezone))
+	}
 
 	return []byte(b.String())
 }

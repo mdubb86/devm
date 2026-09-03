@@ -92,6 +92,13 @@ type Provisioner struct {
 	PackageAdds    []string
 	PackageRemoves []string
 
+	// MacTimezone is the Mac's IANA zone name, resolved by the CLI
+	// and passed through /vm/start. When non-empty, the bundle script
+	// runs `timedatectl set-timezone <MacTimezone>` in the guest so
+	// user-visible timestamps match the Mac. Empty leaves the guest
+	// at UTC. See internal/hostinfo.ResolveMacTimezone.
+	MacTimezone string
+
 	// firstBoot is true when /var/lib/devm/provisioned is absent — i.e.
 	// this VM has not completed provisioning. Set at the top of Run.
 	firstBoot bool
@@ -241,6 +248,7 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		PackageRemoves:     p.PackageRemoves,
 		GitCredentials:     creds,
 		GitConfig:          gitconfig,
+		MacTimezone:        p.MacTimezone,
 	}
 }
 

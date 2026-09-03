@@ -97,6 +97,36 @@ def test_start_then_exec_then_stop_fails_exec(workspace, devm, sandbox_name):
         f"got stdout={p.stdout.decode()!r} stderr={p.stderr.decode()!r}"
     )
 
+    # ---- Guest timezone matches Mac: bundle stage runs `timedatectl
+    # ---- set-timezone <mac zone>` from the CLI-resolved zone. Compare
+    # ---- IANA names, not abbreviations — DST shifts an abbreviation
+    # ---- (CST/CDT for America/Chicago) but the IANA name is stable
+    # ---- and is what timedatectl actually stores. ----
+    import os as _os
+    mac_tz_target = _os.readlink("/etc/localtime")
+    for prefix in ("/var/db/timezone/zoneinfo/", "/usr/share/zoneinfo/"):
+        if mac_tz_target.startswith(prefix):
+            expected_zone = mac_tz_target[len(prefix):]
+            break
+    else:
+        pytest.skip(f"unexpected /etc/localtime target: {mac_tz_target}")
+
+    p = subprocess.run(
+        [devm.path, "exec", "timedatectl", "show", "--property=Timezone", "--value"],
+        cwd=str(workspace.path),
+        capture_output=True,
+        timeout=30,
+    )
+    assert p.returncode == 0, (
+        f"devm exec timedatectl show failed: rc={p.returncode}\n"
+        f"stdout={p.stdout.decode()!r}\nstderr={p.stderr.decode()!r}"
+    )
+    guest_zone = p.stdout.decode().strip().splitlines()[-1].strip()
+    assert guest_zone == expected_zone, (
+        f"guest timezone {guest_zone!r} should match Mac zone {expected_zone!r} "
+        f"— resolved via /etc/localtime, applied by bundle stage's `timedatectl set-timezone`"
+    )
+
     # ---- devm exec ls -la /: DisableFlagParsing passes flags through
     # ---- to the target command, not to devm (was test_85). ----
     p = subprocess.run(
