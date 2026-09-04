@@ -89,11 +89,12 @@ def test_start_then_exec_then_stop_fails_exec(workspace, devm, sandbox_name):
     # trailing whitespace / echo lines a caller might have set.
     lines = [ln for ln in p.stdout.decode().splitlines() if ln.strip()]
     got = lines[-1] if lines else ""
-    # Workspace mount uses mirrored paths — same absolute path on host
-    # and guest. Compare against the host path (which is what
-    # workspace.path resolves to).
-    assert got == str(workspace.path), (
-        f"expected `pwd` to print workspace path {str(workspace.path)!r}; "
+    # Guest workspace lives at `/home/devm/<label>` (mutagen-synced
+    # mirror). auto-cd via with-devm-env lands in that path; we don't
+    # pin the exact label — the default fixture repo is `Hello-World`,
+    # but the invariant that matters is "landed under /home/devm".
+    assert got.startswith("/home/devm/"), (
+        f"expected `pwd` to land under /home/devm/; "
         f"got stdout={p.stdout.decode()!r} stderr={p.stderr.decode()!r}"
     )
 
