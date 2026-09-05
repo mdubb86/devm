@@ -29,6 +29,18 @@ def _pop_scratch_root() -> Path:
     return Path.home() / "Library" / "Application Support" / "devm-e2e" / "pop-tmp"
 
 
+def _pop_sessions() -> list[Path]:
+    """Live pop-session directories, ignoring macOS metadata (`.DS_Store`
+    and friends Finder / Spotlight may drop into the parent scratch dir
+    when it's under ~/Library/Application Support). Sessions are always
+    directories (`<id>/`); filtering to `is_dir()` keeps the count
+    stable across re-runs of the same test."""
+    root = _pop_scratch_root()
+    if not root.exists():
+        return []
+    return [p for p in root.iterdir() if p.is_dir()]
+
+
 def _wait_for(cond, timeout: float, interval: float = 0.25) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -60,8 +72,8 @@ def test_pop_file_outside_mirror_syncs_and_isolates_siblings(devm, workspace):
 
         # Mac-side: exactly one pop-tmp session dir; contains index.html
         # with matching bytes; does NOT contain secret.txt.
-        assert _wait_for(lambda: _pop_scratch_root().exists() and any(_pop_scratch_root().iterdir()), 10)
-        sessions = list(_pop_scratch_root().iterdir())
+        assert _wait_for(lambda: bool(_pop_sessions()), 10)
+        sessions = _pop_sessions()
         assert len(sessions) == 1
         sdir = sessions[0]
         assert _wait_for(lambda: (sdir / "index.html").exists(), 15)
@@ -106,8 +118,8 @@ def test_pop_dir_outside_mirror_syncs_contents(devm, workspace):
         )
         assert r.returncode == 0, r.stderr.decode()
 
-        assert _wait_for(lambda: _pop_scratch_root().exists() and any(_pop_scratch_root().iterdir()), 10)
-        sessions = list(_pop_scratch_root().iterdir())
+        assert _wait_for(lambda: bool(_pop_sessions()), 10)
+        sessions = _pop_sessions()
         assert len(sessions) == 1
         sdir = sessions[0]
         assert _wait_for(lambda: (sdir / "a.txt").exists() and (sdir / "b.txt").exists(), 15)
@@ -141,8 +153,8 @@ def test_pop_repop_reuses_session(devm, workspace):
             )
             assert r.returncode == 0, r.stderr.decode()
 
-        assert _wait_for(lambda: _pop_scratch_root().exists() and any(_pop_scratch_root().iterdir()), 10)
-        sessions = list(_pop_scratch_root().iterdir())
+        assert _wait_for(lambda: bool(_pop_sessions()), 10)
+        sessions = _pop_sessions()
         assert len(sessions) == 1, (
             f"re-pop of same path should reuse the same session; got {[s.name for s in sessions]}"
         )
@@ -182,7 +194,7 @@ def test_pop_session_gc_and_lifecycle(devm, workspace):
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, r.stderr.decode()
-        assert _wait_for(lambda: len(list(_pop_scratch_root().iterdir())) == 1, 15)
+        assert _wait_for(lambda: len(_pop_sessions()) == 1, 15)
 
         # Touch every 2s for 6s: session survives.
         for _ in range(3):
@@ -192,11 +204,11 @@ def test_pop_session_gc_and_lifecycle(devm, workspace):
             )
             assert r.returncode == 0, r.stderr.decode()
             time.sleep(2)
-        assert len(list(_pop_scratch_root().iterdir())) == 1
+        assert len(_pop_sessions()) == 1
 
         # Stop touching; wait past TTL (5s) plus GC interval (1s) + slack.
         time.sleep(10)
-        assert _wait_for(lambda: not any(_pop_scratch_root().iterdir()), 5), \
+        assert _wait_for(lambda: not bool(_pop_sessions()), 5), \
             "GC should tear down idle session past TTL"
 
         # Lifecycle: re-pop, then devm stop, then re-check scratch swept.
@@ -205,10 +217,10 @@ def test_pop_session_gc_and_lifecycle(devm, workspace):
             cwd=str(workspace.path), capture_output=True, timeout=60,
         )
         assert r.returncode == 0, r.stderr.decode()
-        assert _wait_for(lambda: len(list(_pop_scratch_root().iterdir())) == 1, 15)
+        assert _wait_for(lambda: len(_pop_sessions()) == 1, 15)
         r = subprocess.run([devm.path, "stop", "--yes"], cwd=str(workspace.path), capture_output=True, timeout=60)
         assert r.returncode == 0, r.stderr.decode()
-        assert _wait_for(lambda: not any(_pop_scratch_root().iterdir()), 5), \
+        assert _wait_for(lambda: not bool(_pop_sessions()), 5), \
             "devm stop should sweep this project's pop sessions"
     finally:
         subprocess.run([devm.path, "teardown", "--yes"], cwd=str(workspace.path), timeout=60, capture_output=True)
@@ -233,8 +245,8 @@ def test_pop_mac_cli_out_of_mirror(devm, workspace):
         assert r.returncode == 0, r.stderr.decode()
 
         # Session was created; MacDir contains thing.txt with matching bytes.
-        assert _wait_for(lambda: _pop_scratch_root().exists() and any(_pop_scratch_root().iterdir()), 15)
-        sessions = list(_pop_scratch_root().iterdir())
+        assert _wait_for(lambda: bool(_pop_sessions()), 15)
+        sessions = _pop_sessions()
         assert len(sessions) == 1
         sdir = sessions[0]
         assert _wait_for(lambda: (sdir / "thing.txt").exists(), 15)
