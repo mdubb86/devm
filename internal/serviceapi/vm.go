@@ -671,7 +671,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// closePopListener before the listener is recorded, leaking the
 		// fd. Mirrors ProxyServer.recordProjectListeners in proxy.go.
 		popListeners.Store(req.Name, popLn)
-		go servePopListener(popLn, cfg, req.Name)
+		go servePopListener(popLn, cfg, req.Name, nil, nil, "")
 
 		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read. Merge onto the existing
