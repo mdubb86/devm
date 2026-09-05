@@ -966,8 +966,12 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		if proxy != nil {
 			proxy.StopProjectListeners(req.Name)
 		}
-		SweepProjectPopSessions(popStore, popCLI, cfg, req.Name)
+		// Close the pop listener before sweeping so a pop request
+		// landing mid-stop can't create a session the sweep just
+		// missed — reject new pops first, then drain what's already
+		// in the store.
 		closePopListener(req.Name)
+		SweepProjectPopSessions(popStore, popCLI, cfg, req.Name)
 		if req.Destroy {
 			policyAuthority.PurgeProject(req.Name)
 		} else {

@@ -511,6 +511,15 @@ func TestFormatStatusText_PopSessions_OmittedWhenNil(t *testing.T) {
 	assert.NotContains(t, out, "Pop sessions")
 }
 
+func TestFormatStatusText_PopSessions_RendersCheckFailedOnError(t *testing.T) {
+	r := StatusResult{
+		HasProject: true, Sandbox: "p", State: "running",
+		PopSessionsError: "dial unix /path: connection refused",
+	}
+	out := FormatStatusText(r)
+	assert.Contains(t, out, "Pop sessions: check failed: dial unix /path: connection refused")
+}
+
 func TestFormatDaemonStatus_MismatchColor(t *testing.T) {
 	d := DaemonStatus{
 		Running: true, BinaryPath: "/opt/devm/bin/devm",

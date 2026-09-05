@@ -78,6 +78,13 @@ type StatusResult struct {
 	// count it doesn't have. A non-nil zero-count value also renders
 	// nothing.
 	PopSessions *PopSessionSummary
+
+	// PopSessionsError carries a non-404 failure from the pop-session
+	// summary probe (network error, malformed response, etc.). The
+	// pop-session check is informational only, so `devm status` never
+	// fails because of it — this just lets the format layer report the
+	// failure.
+	PopSessionsError string
 }
 
 // PopSessionSummary is the pop-session count + oldest session age for
@@ -177,15 +184,19 @@ func formatApproveState(r StatusResult) string {
 }
 
 // formatPopSessions renders the pop-session count + oldest age line.
-// Silent when PopSessions is nil (old daemon, or the probe was
-// unreachable) or the count is zero — a project with no open pop
-// sessions has nothing worth reporting.
+// Silent when PopSessions is nil and there was no error (old daemon,
+// or the count is zero — a project with no open pop sessions has
+// nothing worth reporting). When the probe failed with a non-404
+// error, reports that failure instead (mirrors formatApproveState).
 func formatPopSessions(r StatusResult) string {
-	if r.PopSessions == nil || r.PopSessions.Count == 0 {
-		return ""
+	if r.PopSessions != nil && r.PopSessions.Count > 0 {
+		return fmt.Sprintf("\nPop sessions: %d active (oldest: %s)\n",
+			r.PopSessions.Count, r.PopSessions.OldestAge.Round(time.Second))
 	}
-	return fmt.Sprintf("\nPop sessions: %d active (oldest: %s)\n",
-		r.PopSessions.Count, r.PopSessions.OldestAge.Round(time.Second))
+	if r.PopSessionsError != "" {
+		return fmt.Sprintf("\nPop sessions: check failed: %s\n", r.PopSessionsError)
+	}
+	return ""
 }
 
 // formatDaemonStatus renders the daemon section. Always fires — the

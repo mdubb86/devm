@@ -67,9 +67,9 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 	}
 
 	// Pop-session summary — informational only, never blocks `devm
-	// status`. A 404 means the daemon predates this endpoint; any other
-	// error is silently swallowed too, since a stale/unreachable pop
-	// summary isn't worth failing status over.
+	// status`. A 404 means the daemon predates this endpoint. Any other
+	// error doesn't fail status either, but is surfaced via
+	// res.PopSessionsError so the format layer can report it.
 	popCtx, popCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	count, age, popErr := c.PopSessionSummary(popCtx, cfg.Project.Name)
 	popCancel()
@@ -77,9 +77,9 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 	case popErr == nil:
 		res.PopSessions = &PopSessionSummary{Count: count, OldestAge: age}
 	case errors.Is(popErr, serviceapi.ErrPopSessionSummaryUnsupported):
-		// Old daemon — leave res.PopSessions unset.
+		// Old daemon — leave res.PopSessions and res.PopSessionsError unset.
 	default:
-		// Silent: pop-sessions are informational, don't fail status.
+		res.PopSessionsError = popErr.Error()
 	}
 
 	// Proxy health: ask the daemon over the unix socket. Previously
