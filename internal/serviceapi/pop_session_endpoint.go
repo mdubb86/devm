@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
@@ -76,8 +77,35 @@ func popSessionHandler(
 	}
 }
 
-// RegisterPopSessionHandler installs the /pop-session endpoint on the
-// daemon UDS.
+// popSessionSummaryHandler is the UDS GET /pop-session-summary handler.
+// Backs `devm status` — informational only, so it reports a count and
+// oldest-session age rather than the sessions themselves.
+func popSessionSummaryHandler(store *PopSessionStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "pop-session-summary: GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		project := r.URL.Query().Get("project")
+		if project == "" {
+			http.Error(w, "pop-session-summary: project required", http.StatusBadRequest)
+			return
+		}
+		sessions := store.ListForProject(project)
+		var oldest int64
+		if len(sessions) > 0 {
+			oldest = int64(time.Since(sessions[0].CreatedAt).Round(time.Second).Seconds())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"count":              len(sessions),
+			"oldest_age_seconds": oldest,
+		})
+	}
+}
+
+// RegisterPopSessionHandler installs the /pop-session and
+// /pop-session-summary endpoints on the daemon UDS.
 func RegisterPopSessionHandler(
 	server *Server,
 	cfg identity.Config,
@@ -86,4 +114,5 @@ func RegisterPopSessionHandler(
 	guestSSHTargetFor func(project string) string,
 ) {
 	server.Register("/pop-session", popSessionHandler(cfg, store, cli, guestSSHTargetFor))
+	server.Register("/pop-session-summary", popSessionSummaryHandler(store))
 }

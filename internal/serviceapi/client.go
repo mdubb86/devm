@@ -4,14 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/mdubb86/devm/internal/identity"
 )
+
+// ErrPopSessionSummaryUnsupported is returned by
+// Client.PopSessionSummary when the daemon predates the
+// /pop-session-summary endpoint (404) — informational feature-add
+// tolerance, same pattern as ErrApproveStateUnsupported.
+var ErrPopSessionSummaryUnsupported = errors.New("pop-session-summary: endpoint not implemented on this daemon")
 
 // Client talks to the devm service over its Unix domain socket.
 // Used by the CLI to check service health and version, and (in
@@ -228,6 +236,34 @@ func (c *Client) CreatePopSession(ctx context.Context, projectName, guestPath st
 		return "", fmt.Errorf("pop-session: parse response: %w", err)
 	}
 	return out.MacPath, nil
+}
+
+// PopSessionSummary returns the pop-session count and oldest session
+// age for projectName (GET /pop-session-summary). Old daemons that
+// predate this endpoint 404 — the caller gets
+// ErrPopSessionSummaryUnsupported rather than a hard failure, so
+// `devm status` can render nothing rather than an error for the
+// pop-sessions section.
+func (c *Client) PopSessionSummary(ctx context.Context, projectName string) (int, time.Duration, error) {
+	resp, err := c.do(ctx, "GET", "/pop-session-summary?project="+url.QueryEscape(projectName))
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return 0, 0, ErrPopSessionSummaryUnsupported
+	}
+	if resp.StatusCode != 200 {
+		return 0, 0, fmt.Errorf("pop-session-summary: status %d", resp.StatusCode)
+	}
+	var body struct {
+		Count            int   `json:"count"`
+		OldestAgeSeconds int64 `json:"oldest_age_seconds"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return 0, 0, err
+	}
+	return body.Count, time.Duration(body.OldestAgeSeconds) * time.Second, nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string) (*http.Response, error) {
