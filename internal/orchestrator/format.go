@@ -70,6 +70,28 @@ type StatusResult struct {
 	// gate is informational only, so `devm status` never fails because
 	// of it — this just lets the format layer report the failure.
 	ApproveError string
+
+	// PopSessions is the daemon's pop-session count + oldest age for
+	// the project (GET /pop-session-summary). Nil means no data (old
+	// daemon predating this endpoint, or the probe was unreachable) —
+	// the format layer omits the line entirely rather than claiming a
+	// count it doesn't have. A non-nil zero-count value also renders
+	// nothing.
+	PopSessions *PopSessionSummary
+
+	// PopSessionsError carries a non-404 failure from the pop-session
+	// summary probe (network error, malformed response, etc.). The
+	// pop-session check is informational only, so `devm status` never
+	// fails because of it — this just lets the format layer report the
+	// failure.
+	PopSessionsError string
+}
+
+// PopSessionSummary is the pop-session count + oldest session age for
+// a project, as reported by GET /pop-session-summary.
+type PopSessionSummary struct {
+	Count     int
+	OldestAge time.Duration
 }
 
 // DriftItem is one piece of mismatch between snapshot and live VM state.
@@ -140,6 +162,7 @@ func FormatStatusText(r StatusResult) string {
 	b.WriteString(formatIronProxyHealth(r))
 	b.WriteString(formatLANListener(r.Routing))
 	b.WriteString(formatApproveState(r))
+	b.WriteString(formatPopSessions(r))
 	return b.String()
 }
 
@@ -158,6 +181,22 @@ func formatApproveState(r StatusResult) string {
 	default:
 		return ""
 	}
+}
+
+// formatPopSessions renders the pop-session count + oldest age line.
+// Silent when PopSessions is nil and there was no error (old daemon,
+// or the count is zero — a project with no open pop sessions has
+// nothing worth reporting). When the probe failed with a non-404
+// error, reports that failure instead (mirrors formatApproveState).
+func formatPopSessions(r StatusResult) string {
+	if r.PopSessions != nil && r.PopSessions.Count > 0 {
+		return fmt.Sprintf("\nPop sessions: %d active (oldest: %s)\n",
+			r.PopSessions.Count, r.PopSessions.OldestAge.Round(time.Second))
+	}
+	if r.PopSessionsError != "" {
+		return fmt.Sprintf("\nPop sessions: check failed: %s\n", r.PopSessionsError)
+	}
+	return ""
 }
 
 // formatDaemonStatus renders the daemon section. Always fires — the
@@ -575,6 +614,10 @@ func FormatStatusJSON(r StatusResult) string {
 		Diverged      bool    `json:"diverged"`
 		ApprovedSince *string `json:"approved_since"`
 	}
+	type popSessions struct {
+		Count            int   `json:"count"`
+		OldestAgeSeconds int64 `json:"oldest_age_seconds"`
+	}
 	type project struct {
 		Sandbox        string                   `json:"sandbox"`
 		State          string                   `json:"state"`
@@ -585,6 +628,7 @@ func FormatStatusJSON(r StatusResult) string {
 		Egress         *serviceapi.EgressStatus `json:"egress,omitempty"`
 		IronProxy      *ironProxy               `json:"iron_proxy,omitempty"`
 		ApproveState   *approveState            `json:"approve_state"`
+		PopSessions    *popSessions             `json:"pop_sessions"`
 	}
 	type body struct {
 		Daemon  daemon   `json:"daemon"`
@@ -643,6 +687,12 @@ func FormatStatusJSON(r StatusResult) string {
 			b.Project.ApproveState = &approveState{
 				Diverged:      r.ApproveState.Diverged,
 				ApprovedSince: r.ApproveState.ApprovedSince,
+			}
+		}
+		if r.PopSessions != nil && r.PopSessions.Count > 0 {
+			b.Project.PopSessions = &popSessions{
+				Count:            r.PopSessions.Count,
+				OldestAgeSeconds: int64(r.PopSessions.OldestAge.Round(time.Second).Seconds()),
 			}
 		}
 	}

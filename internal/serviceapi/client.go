@@ -1,16 +1,25 @@
 package serviceapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/mdubb86/devm/internal/identity"
 )
+
+// ErrPopSessionSummaryUnsupported is returned by
+// Client.PopSessionSummary when the daemon predates the
+// /pop-session-summary endpoint (404) — informational feature-add
+// tolerance, same pattern as ErrApproveStateUnsupported.
+var ErrPopSessionSummaryUnsupported = errors.New("pop-session-summary: endpoint not implemented on this daemon")
 
 // Client talks to the devm service over its Unix domain socket.
 // Used by the CLI to check service health and version, and (in
@@ -191,6 +200,70 @@ func (c *Client) ProxyReady(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return body.Ready, nil
+}
+
+// CreatePopSession asks the daemon to open a live-sync temp session
+// for guestPath under projectName. Returns the Mac-side path (a file
+// under the session's MacDir for file-kind, MacDir itself for
+// dir-kind). Idempotent: the daemon dedupes on guestPath.
+//
+// isDir is inferred by the caller (the Mac CLI stat's the guest path
+// via the mirror when it can, or requires the caller to know — see
+// cmd/devm/pop.go for the current wiring).
+func (c *Client) CreatePopSession(ctx context.Context, projectName, guestPath string, isDir bool) (string, error) {
+	body, err := json.Marshal(map[string]any{
+		"project": projectName, "guest_path": guestPath, "is_dir": isDir,
+	})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost/pop-session", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("pop-session: status %d: %s", resp.StatusCode, string(b))
+	}
+	var out popSessionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("pop-session: parse response: %w", err)
+	}
+	return out.MacPath, nil
+}
+
+// PopSessionSummary returns the pop-session count and oldest session
+// age for projectName (GET /pop-session-summary). Old daemons that
+// predate this endpoint 404 — the caller gets
+// ErrPopSessionSummaryUnsupported rather than a hard failure, so
+// `devm status` can render nothing rather than an error for the
+// pop-sessions section.
+func (c *Client) PopSessionSummary(ctx context.Context, projectName string) (int, time.Duration, error) {
+	resp, err := c.do(ctx, "GET", "/pop-session-summary?project="+url.QueryEscape(projectName))
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return 0, 0, ErrPopSessionSummaryUnsupported
+	}
+	if resp.StatusCode != 200 {
+		return 0, 0, fmt.Errorf("pop-session-summary: status %d", resp.StatusCode)
+	}
+	var body struct {
+		Count            int   `json:"count"`
+		OldestAgeSeconds int64 `json:"oldest_age_seconds"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return 0, 0, err
+	}
+	return body.Count, time.Duration(body.OldestAgeSeconds) * time.Second, nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string) (*http.Response, error) {

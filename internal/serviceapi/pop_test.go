@@ -204,3 +204,83 @@ func TestPopHandler_AbsoluteGuestArg(t *testing.T) {
 		assert.Equal(t, filepath.Join(storage, "abs.png"), (*recs)[0].args[0])
 	})
 }
+
+func TestPopHandler_NotInMirror_FileKind_CreatesSessionOpensMacTarget(t *testing.T) {
+	cfg := testPopSessionCfg(t)
+
+	scripted := &scriptedCLI{}
+	cli := scripted.build()
+	store := NewPopSessionStore()
+
+	registry := []WorkspaceEntry{{ProjectName: "p", GuestPath: "/home/devm/proj", StoragePath: t.TempDir()}}
+
+	withPopExecSeam(t, func(recs *[]popExecRecord) {
+		body, _ := json.Marshal(map[string]any{
+			"arg":           "/tmp/site/index.html",
+			"cwd":           "/home/devm/proj",
+			"resolved_path": "/tmp/site/index.html",
+			"is_dir":        false,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/pop", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		handlePopWithDeps(w, req, "p", registry, cfg, store, cli, "devm-p")
+
+		assert.Equal(t, 200, w.Code, "body: %s", w.Body.String())
+		require.Len(t, *recs, 1)
+		got := (*recs)[0].args[0]
+		// For a file-scope session, open target is MacDir/<basename>.
+		session, ok := store.Get("/tmp/site/index.html")
+		require.True(t, ok)
+		assert.Equal(t, filepath.Join(session.MacDir, "index.html"), got)
+	})
+}
+
+func TestPopHandler_NotInMirror_DirKind_OpensMacDir(t *testing.T) {
+	cfg := testPopSessionCfg(t)
+
+	scripted := &scriptedCLI{}
+	cli := scripted.build()
+	store := NewPopSessionStore()
+
+	registry := []WorkspaceEntry{{ProjectName: "p", GuestPath: "/home/devm/proj", StoragePath: t.TempDir()}}
+
+	withPopExecSeam(t, func(recs *[]popExecRecord) {
+		body, _ := json.Marshal(map[string]any{
+			"arg":           "/tmp/site",
+			"cwd":           "/home/devm/proj",
+			"resolved_path": "/tmp/site",
+			"is_dir":        true,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/pop", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		handlePopWithDeps(w, req, "p", registry, cfg, store, cli, "devm-p")
+
+		assert.Equal(t, 200, w.Code, "body: %s", w.Body.String())
+		require.Len(t, *recs, 1)
+		session, ok := store.Get("/tmp/site")
+		require.True(t, ok)
+		assert.Equal(t, session.MacDir, (*recs)[0].args[0], "dir-scope opens MacDir itself")
+	})
+}
+
+func TestPopHandler_NotInMirror_NoResolvedPath_Returns404(t *testing.T) {
+	cfg := testPopSessionCfg(t)
+
+	scripted := &scriptedCLI{}
+	cli := scripted.build()
+	store := NewPopSessionStore()
+
+	registry := []WorkspaceEntry{{ProjectName: "p", GuestPath: "/home/devm/proj", StoragePath: t.TempDir()}}
+
+	body, _ := json.Marshal(map[string]any{
+		"arg": "nothing-here.txt",
+		"cwd": "/home/devm/proj",
+		// no resolved_path — stat failed guest-side
+	})
+	req := httptest.NewRequest(http.MethodPost, "/pop", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	handlePopWithDeps(w, req, "p", registry, cfg, store, cli, "devm-p")
+
+	assert.Equal(t, 404, w.Code)
+	assert.Contains(t, w.Body.String(), "no such file")
+}

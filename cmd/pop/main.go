@@ -22,6 +22,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 const popEndpoint = "http://192.168.127.1:81/pop"
@@ -55,11 +57,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	body, err := json.Marshal(map[string]any{
+	bodyMap := map[string]any{
 		"arg":       pathArg,
 		"cwd":       cwd,
 		"open_args": openArgs,
-	})
+	}
+	if !strings.HasPrefix(pathArg, "http://") && !strings.HasPrefix(pathArg, "https://") {
+		resolved, isDir, ok := resolveGuestPath(pathArg, cwd)
+		if ok {
+			bodyMap["resolved_path"] = resolved
+			bodyMap["is_dir"] = isDir
+		}
+	}
+	body, err := json.Marshal(bodyMap)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pop: marshal request: %v\n", err)
 		os.Exit(1)
@@ -86,4 +96,37 @@ func indexOf(ss []string, s string) int {
 		}
 	}
 	return -1
+}
+
+// resolveGuestPath stat's the arg, following symlinks, and reports its
+// canonical absolute path and whether it's a directory. Returns ok=false
+// on stat error, on non-regular/non-directory types (socket, device,
+// pipe — mutagen won't handle these), or when EvalSymlinks fails.
+func resolveGuestPath(arg, cwd string) (canonical string, isDir bool, ok bool) {
+	var candidate string
+	if filepath.IsAbs(arg) {
+		candidate = arg
+	} else {
+		candidate = filepath.Join(cwd, arg)
+	}
+	abs, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", false, false
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", false, false
+	}
+	fi, err := os.Stat(resolved)
+	if err != nil {
+		return "", false, false
+	}
+	m := fi.Mode()
+	if m.IsRegular() {
+		return resolved, false, true
+	}
+	if m.IsDir() {
+		return resolved, true, true
+	}
+	return "", false, false
 }

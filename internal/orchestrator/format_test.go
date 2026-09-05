@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mdubb86/devm/internal/reconcile"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -484,6 +485,39 @@ func TestFormatStatusText_ApproveGate_CheckFailed(t *testing.T) {
 	}
 	out := FormatStatusText(res)
 	assert.Contains(t, out, "Approve gate: check failed: dial daemon: connection refused")
+}
+
+func TestFormatStatusText_PopSessions_Rendered(t *testing.T) {
+	r := StatusResult{
+		HasProject: true, Sandbox: "p", State: "running",
+		PopSessions: &PopSessionSummary{Count: 2, OldestAge: 42 * time.Minute},
+	}
+	out := FormatStatusText(r)
+	assert.Contains(t, out, "Pop sessions: 2 active (oldest: 42m0s)")
+}
+
+func TestFormatStatusText_PopSessions_OmittedWhenZero(t *testing.T) {
+	r := StatusResult{
+		HasProject: true, Sandbox: "p", State: "running",
+		PopSessions: &PopSessionSummary{Count: 0},
+	}
+	out := FormatStatusText(r)
+	assert.NotContains(t, out, "Pop sessions")
+}
+
+func TestFormatStatusText_PopSessions_OmittedWhenNil(t *testing.T) {
+	r := StatusResult{HasProject: true, Sandbox: "p", State: "running"}
+	out := FormatStatusText(r)
+	assert.NotContains(t, out, "Pop sessions")
+}
+
+func TestFormatStatusText_PopSessions_RendersCheckFailedOnError(t *testing.T) {
+	r := StatusResult{
+		HasProject: true, Sandbox: "p", State: "running",
+		PopSessionsError: "dial unix /path: connection refused",
+	}
+	out := FormatStatusText(r)
+	assert.Contains(t, out, "Pop sessions: check failed: dial unix /path: connection refused")
 }
 
 func TestFormatDaemonStatus_MismatchColor(t *testing.T) {

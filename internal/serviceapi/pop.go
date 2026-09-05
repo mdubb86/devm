@@ -2,11 +2,16 @@
 // A per-project HTTP listener (spawned at /vm/start) serves POST /pop:
 //
 //	Body: {"arg": "<path arg>", "cwd": "<abs guest cwd>",
-//	       "open_args": ["-a", "Preview"]}
+//	       "open_args": ["-a", "Preview"],
+//	       "resolved_path": "<abs guest path, if stat succeeded>",
+//	       "is_dir": false}
 //
 // The handler resolves the arg (cwd-first, then project root),
 // translates the guest path to Mac storage, then hands that Mac
-// mirror path directly to `open`.
+// mirror path directly to `open`. When the path isn't covered by any
+// mirror, resolved_path lets it fall back to a pop temp-session — a
+// one-way mutagen sync of just that guest file or directory into a
+// scratch Mac dir — whose synced copy is opened instead.
 //
 // Softnet forwards guest TCP 192.168.127.1:81 to this listener — see
 // internal/softnet/egress.go's Pop branch and internal/serviceapi/
@@ -29,6 +34,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/repohelpers"
 )
 
@@ -40,12 +46,27 @@ var popExecOpen = func(ctx context.Context, args ...string) error {
 }
 
 type popRequest struct {
-	Arg      string   `json:"arg"`
-	Cwd      string   `json:"cwd"`
-	OpenArgs []string `json:"open_args,omitempty"`
+	Arg          string   `json:"arg"`
+	Cwd          string   `json:"cwd"`
+	OpenArgs     []string `json:"open_args,omitempty"`
+	ResolvedPath string   `json:"resolved_path,omitempty"`
+	IsDir        bool     `json:"is_dir,omitempty"`
 }
 
+// handlePop is the transport-agnostic entry: it decodes the request,
+// validates the project/cwd envelope, then delegates. Retained as a
+// shim so existing callers/tests that only need mirror-resolution
+// keep working; new callers use handlePopWithDeps to opt into the
+// out-of-mirror session-creation branch.
 func handlePop(w http.ResponseWriter, r *http.Request, projectName string, registry []WorkspaceEntry) {
+	handlePopWithDeps(w, r, projectName, registry, identity.Config{}, nil, nil, "")
+}
+
+func handlePopWithDeps(
+	w http.ResponseWriter, r *http.Request,
+	projectName string, registry []WorkspaceEntry,
+	cfg identity.Config, store *PopSessionStore, cli *mutagen.CLI, guestSSHTarget string,
+) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -123,20 +144,52 @@ func handlePop(w http.ResponseWriter, r *http.Request, projectName string, regis
 		}
 	}
 
-	if storagePath == "" {
+	if storagePath != "" {
+		openArgs := append([]string{storagePath}, req.OpenArgs...)
+		if err := popExecOpen(r.Context(), openArgs...); err != nil {
+			daemonlog.Errorf("serviceapi: pop: open %s: %v", storagePath, err)
+			http.Error(w, fmt.Sprintf("pop: open failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("serviceapi: pop: opened %s (project %s)", storagePath, projectName)
+		fmt.Fprintln(w, storagePath)
+		return
+	}
+
+	// Not in any mirror. If a resolved guest path is available, spin up
+	// (or reuse) a pop temp-session for it and open the synced Mac copy.
+	if store == nil || req.ResolvedPath == "" {
 		http.Error(w, fmt.Sprintf("pop: no such file %q relative to %s or project root %s", req.Arg, req.Cwd, entry.GuestPath), http.StatusNotFound)
 		return
 	}
 
-	openArgs := append([]string{storagePath}, req.OpenArgs...)
+	kind := PopKindFile
+	if req.IsDir {
+		kind = PopKindDir
+	}
+	session, _, err := store.GetOrCreate(cfg, projectName, req.ResolvedPath, kind, func(ps *PopSession) error {
+		return CreatePopSyncSession(cli, cfg, guestSSHTarget, ps)
+	})
+	if err != nil {
+		daemonlog.Errorf("serviceapi: pop: create session for %s: %v", req.ResolvedPath, err)
+		http.Error(w, fmt.Sprintf("pop: create session: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	target := session.MacDir
+	if session.Kind == PopKindFile {
+		target = filepath.Join(session.MacDir, session.TargetName)
+	}
+	openArgs := append([]string{target}, req.OpenArgs...)
 	if err := popExecOpen(r.Context(), openArgs...); err != nil {
-		daemonlog.Errorf("serviceapi: pop: open %s: %v", storagePath, err)
+		daemonlog.Errorf("serviceapi: pop: open %s: %v", target, err)
 		http.Error(w, fmt.Sprintf("pop: open failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("serviceapi: pop: opened %s (project %s)", storagePath, projectName)
-	fmt.Fprintln(w, storagePath)
+	log.Printf("serviceapi: pop: opened %s (pop-session %s, project %s)", target, session.ID, projectName)
+	fmt.Fprintln(w, target)
 }
 
 // toPathEntries narrows a []WorkspaceEntry down to the minimal shape
@@ -155,9 +208,14 @@ func toPathEntries(registry []WorkspaceEntry) []repohelpers.WorkspacePathEntry {
 var popListeners sync.Map // projectName -> net.Listener
 
 // servePopListener runs a minimal HTTP server on ln that dispatches
-// POST /pop to handlePop for the given project. The workspace registry
-// is fetched fresh per-request so hot-changed state is picked up.
-func servePopListener(ln net.Listener, cfg identity.Config, projectName string) {
+// POST /pop to handlePopWithDeps for the given project. The workspace
+// registry is fetched fresh per-request so hot-changed state is picked
+// up. store, cli, and guestSSHTarget wire up the not-in-mirror
+// pop-temp-session branch; pass store == nil to disable it.
+func servePopListener(
+	ln net.Listener, cfg identity.Config, projectName string,
+	store *PopSessionStore, cli *mutagen.CLI, guestSSHTarget string,
+) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/pop", func(w http.ResponseWriter, r *http.Request) {
 		reg, err := listWorkspaces(cfg)
@@ -165,7 +223,7 @@ func servePopListener(ln net.Listener, cfg identity.Config, projectName string) 
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		handlePop(w, r, projectName, reg)
+		handlePopWithDeps(w, r, projectName, reg, cfg, store, cli, guestSSHTarget)
 	})
 	srv := &http.Server{Handler: mux}
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {

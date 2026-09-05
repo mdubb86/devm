@@ -59,6 +59,15 @@ def test_guest_pop_reaches_daemon_and_resolves(devm, workspace):
             f"daemon log missing pop invocation for {expected_pretty}\n"
             f"last 20 lines:\n{''.join(log_content.splitlines(keepends=True)[-20:])}"
         )
+
+        # Regression: mirror-resolvable pop must NOT spawn a temp session.
+        pop_scratch = Path.home() / "Library" / "Application Support" / "devm-e2e" / "pop-tmp"
+        if pop_scratch.exists():
+            entries = [p for p in pop_scratch.iterdir() if p.is_dir()]
+            assert not entries, (
+                f"mirror-resolvable pop must not create a temp session; "
+                f"found {[e.name for e in entries]} under {pop_scratch}"
+            )
     finally:
         subprocess.run([devm.path, "teardown", "--yes"], cwd=str(workspace.path), timeout=60, capture_output=True)
 

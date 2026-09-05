@@ -183,7 +183,7 @@ func startApproveStatusDaemon(t *testing.T) func() {
 	sup := supervisor.New(t.TempDir())
 	tr := tart.New()
 	tr.Path = "false"
-	serviceapi.RegisterVMHandlers(srv, identity.Prod, sup, tr, 0, serviceapi.NewProjectLocks(), nil)
+	serviceapi.RegisterVMHandlers(srv, identity.Prod, sup, tr, 0, serviceapi.NewProjectLocks(), nil, serviceapi.NewPopSessionStore(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
