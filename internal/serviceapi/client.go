@@ -1,6 +1,7 @@
 package serviceapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -191,6 +192,42 @@ func (c *Client) ProxyReady(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return body.Ready, nil
+}
+
+// CreatePopSession asks the daemon to open a live-sync temp session
+// for guestPath under projectName. Returns the Mac-side path (a file
+// under the session's MacDir for file-kind, MacDir itself for
+// dir-kind). Idempotent: the daemon dedupes on guestPath.
+//
+// isDir is inferred by the caller (the Mac CLI stat's the guest path
+// via the mirror when it can, or requires the caller to know — see
+// cmd/devm/pop.go for the current wiring).
+func (c *Client) CreatePopSession(ctx context.Context, projectName, guestPath string, isDir bool) (string, error) {
+	body, err := json.Marshal(map[string]any{
+		"project": projectName, "guest_path": guestPath, "is_dir": isDir,
+	})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost/pop-session", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("pop-session: status %d: %s", resp.StatusCode, string(b))
+	}
+	var out popSessionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("pop-session: parse response: %w", err)
+	}
+	return out.MacPath, nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string) (*http.Response, error) {
