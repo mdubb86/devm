@@ -69,7 +69,7 @@ exit 0
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	sup := supervisor.New(t.TempDir())
-	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil)
+	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, NewPopSessionStore(), nil)
 
 	body, err := json.Marshal(VMStopRequest{Name: "proj-stop"})
 	require.NoError(t, err)

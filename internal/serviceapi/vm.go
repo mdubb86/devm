@@ -393,8 +393,9 @@ func shutdownSoftnet(projectID string) {
 // per-project listeners once the project IP is allocated, and /vm/stop
 // tears them down. May be nil in tests that don't exercise the proxy
 // lifecycle — StartProjectListeners/StopProjectListeners are skipped
-// in that case.
-func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, ntpPort int, locks *ProjectLocks, proxy *ProxyServer) {
+// in that case. popStore and popCLI back each project's pop HTTP
+// listener (servePopListener) and the /vm/stop teardown sweep.
+func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, ntpPort int, locks *ProjectLocks, proxy *ProxyServer, popStore *PopSessionStore, popCLI *mutagen.CLI) {
 	s.Register("/vm/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -671,7 +672,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// closePopListener before the listener is recorded, leaking the
 		// fd. Mirrors ProxyServer.recordProjectListeners in proxy.go.
 		popListeners.Store(req.Name, popLn)
-		go servePopListener(popLn, cfg, req.Name, nil, nil, "")
+		go servePopListener(popLn, cfg, req.Name, popStore, popCLI, "devm-"+req.Name)
 
 		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read. Merge onto the existing
@@ -965,6 +966,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		if proxy != nil {
 			proxy.StopProjectListeners(req.Name)
 		}
+		SweepProjectPopSessions(popStore, popCLI, cfg, req.Name)
 		closePopListener(req.Name)
 		if req.Destroy {
 			policyAuthority.PurgeProject(req.Name)

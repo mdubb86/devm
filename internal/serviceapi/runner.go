@@ -12,6 +12,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
@@ -187,6 +188,44 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		fmt.Fprintf(os.Stderr, "mutagen adopt: %v\n", err)
 	}
 
+	// Pop-session store: daemon-lifetime singleton backing both the
+	// /pop-session UDS endpoint and each project's pop HTTP listener
+	// (servePopListener, wired via RegisterVMHandlers below). Wipe any
+	// scratch left by a prior daemon instance first — those sessions'
+	// mutagen agents died with the guest process tree, so there's
+	// nothing to adopt. Best-effort: a wipe failure shouldn't block
+	// daemon startup.
+	popStore := NewPopSessionStore()
+	if err := WipePopScratchOnStartup(cfg); err != nil {
+		daemonlog.Errorf("serviceapi: wipe pop-tmp on startup: %v", err)
+	}
+
+	// mutagen CLI for pop-session create/tear-down, shaped like
+	// SpawnMutagen's own CLI (same MUTAGEN_SSH_PATH shim). Calling
+	// mutagenEnsureFn again here is cheap — it's idempotent and the
+	// adopt pass above may not have reached it if AdoptMutagenDaemon
+	// failed.
+	popMutagenBin, err := mutagenEnsureFn(cfg.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("mutagen: extract binary for pop sessions: %w", err)
+	}
+	popCLI := &mutagen.CLI{
+		Binary:   popMutagenBin,
+		DataDir:  mutagenDataDir(cfg),
+		ExtraEnv: []string{"MUTAGEN_SSH_PATH=" + MutagenSSHDir(cfg)},
+	}
+
+	// guestSSHTargetFor resolves a project's tart-mutagen-ssh transport
+	// target only while the project is actually running (ironProxyState
+	// populated by /vm/start) — a pop session created against a stopped
+	// project has nothing to sync to.
+	guestSSHTargetFor := func(projectName string) string {
+		if _, ok := ironProxyState.get(projectName); !ok {
+			return ""
+		}
+		return "devm-" + projectName
+	}
+
 	// Adopt iron-proxy processes left running by a prior daemon
 	// instance. They survive daemon death by design (setsid on
 	// spawn); re-attaching here means /vm/stop and /vm/status
@@ -253,12 +292,13 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		go rebindProjectListeners(ctx, proxy, cfg, id, info.ProjectIP, ntp.Port())
 	}
 
-	RegisterVMHandlers(server, cfg, sup, tr, ntp.Port(), locks, proxy)
+	RegisterVMHandlers(server, cfg, sup, tr, ntp.Port(), locks, proxy, popStore, popCLI)
 	RegisterReconcileHandler(server, cfg, locks, &realApplyLiver{tr: tr}, &realPackagesApplier{tr: tr}, tr, sup, proxy, ntp.Port())
 	RegisterApplyIronProxyHandler(server, cfg, locks, sup, tr, proxy)
 	RegisterHandshakeHandler(server, cfg, build, sup, proxy)
 	RegisterStatusAllHandler(server, cfg, sup, tr, proxy)
 	RegisterWorkspacesHandler(server, cfg)
+	RegisterPopSessionHandler(server, cfg, popStore, popCLI, guestSSHTargetFor)
 
 	var g run.Group
 
@@ -343,11 +383,28 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		})
 	}
 
+	// Pop-session GC actor. Periodically sweeps expired pop sessions
+	// across every project — see RunPopSessionGC. Without this actor,
+	// a pop session whose caller never explicitly tore it down (crash,
+	// forgotten cleanup) would hold its mutagen sync and scratch dir
+	// open indefinitely.
+	{
+		gcCtx, cancel := context.WithCancel(ctx)
+		g.Add(func() error {
+			return RunPopSessionGC(gcCtx, popStore, popCLI, cfg, PopSessionTTL(), PopSessionGCInterval())
+		}, func(error) {
+			cancel()
+		})
+	}
+
 	// Context-cancel actor: when ctx is cancelled (parent signal),
 	// the group returns. Also tears down every project's per-project
 	// HTTP/HTTPS proxy listeners so a graceful daemon exit doesn't leak
 	// bound ports — there's no oklog/run actor for the proxy anymore to
-	// do this via its own interrupt func.
+	// do this via its own interrupt func. Sweeps every live pop session
+	// too, so a daemon restart doesn't strand mutagen syncs and scratch
+	// dirs that WipePopScratchOnStartup would otherwise have to clean
+	// up blind on the next boot.
 	{
 		ctxCancel := make(chan struct{})
 		g.Add(func() error {
@@ -360,6 +417,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		}, func(error) {
 			close(ctxCancel)
 			proxy.StopAll()
+			SweepAllPopSessions(popStore, popCLI, cfg)
 		})
 	}
 
