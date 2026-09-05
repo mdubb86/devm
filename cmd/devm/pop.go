@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -39,9 +43,24 @@ var popVMCmd = &cobra.Command{
 	RunE:  runPop,
 }
 
+// popExecOpen is the test-injection seam for the `open` invocation.
+var popExecOpen = func(args ...string) error {
+	return exec.Command("open", args...).Run()
+}
+
+// createPopSessionFn is the injection seam for cmd/devm/pop_test.go to
+// intercept the daemon call.
+var createPopSessionFn = func(ctx context.Context, ident identity.Config, projectName, guestPath string, isDir bool) (string, error) {
+	return serviceapi.NewClient(ident).CreatePopSession(ctx, projectName, guestPath, isDir)
+}
+
 func runPop(cmd *cobra.Command, args []string) error {
 	cmd.SilenceUsage = true
 	pathArg, openArgs := splitPathAndOpenArgs(args)
+
+	if strings.HasPrefix(pathArg, "http://") || strings.HasPrefix(pathArg, "https://") {
+		return popExecOpen(append([]string{pathArg}, openArgs...)...)
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -57,10 +76,34 @@ func runPop(cmd *cobra.Command, args []string) error {
 	}
 
 	resolved, err := resolvePopTarget(pathArg, repoRoot, loaded)
+	if err == nil {
+		return popExecOpen(append([]string{resolved}, openArgs...)...)
+	}
+
+	if !isOutOfMirrorErr(err) {
+		return err
+	}
+
+	// Fallback: not in any mirror — ask the daemon for a temp sync
+	// session. pathArg is treated as an absolute guest path.
+	if !filepath.IsAbs(pathArg) {
+		return fmt.Errorf("pop: %q is not inside any mirrored repo/volume and is not an absolute guest path — pass an absolute guest path to pop out-of-mirror files", pathArg)
+	}
+	isDir := strings.HasSuffix(pathArg, "/")
+	ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
+	defer cancel()
+	macPath, err := createPopSessionFn(ctx, cfg, loaded.Project.Name, pathArg, isDir)
 	if err != nil {
 		return err
 	}
-	return exec.Command("open", append([]string{resolved}, openArgs...)...).Run()
+	return popExecOpen(append([]string{macPath}, openArgs...)...)
+}
+
+// isOutOfMirrorErr reports whether err is resolvePopTarget's
+// not-in-any-mirror error, the one case runPop falls back to the
+// daemon's pop temp-session instead of failing outright.
+func isOutOfMirrorErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "is not inside any mirrored repo/volume")
 }
 
 // splitPathAndOpenArgs splits `<path> [-- <open-args>...]` into the

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,4 +129,115 @@ func TestResolvePopTarget_AbsolutePathOutsideAnyEntry(t *testing.T) {
 	_, err := resolvePopTarget("/etc/passwd", repoRoot, pcfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not inside any mirrored")
+}
+
+// writePopWorkspace writes a minimal valid devm.yaml (project name +
+// a url-nil primary repo, so config.Load succeeds without touching a
+// real git remote) into a fresh temp dir and returns its path.
+func writePopWorkspace(t *testing.T, projectName string) string {
+	t.Helper()
+	workspace := t.TempDir()
+	yaml := "project:\n  name: " + projectName + "\nrepos:\n  primary: {}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "devm.yaml"), []byte(yaml), 0o644))
+	return workspace
+}
+
+// TestRunPop_FallbackToCreateSession_FileArg — an absolute, out-of-mirror
+// guest path with no trailing slash falls through resolvePopTarget's
+// error into createPopSessionFn with is_dir=false, and opens whatever
+// Mac path the daemon hands back.
+func TestRunPop_FallbackToCreateSession_FileArg(t *testing.T) {
+	workspace := writePopWorkspace(t, "myproj")
+
+	origOpen := popExecOpen
+	origCreate := createPopSessionFn
+	t.Cleanup(func() { popExecOpen = origOpen; createPopSessionFn = origCreate })
+
+	var openArgs []string
+	popExecOpen = func(args ...string) error { openArgs = args; return nil }
+
+	var gotProject, gotPath string
+	var gotIsDir bool
+	createPopSessionFn = func(ctx context.Context, ident identity.Config, projectName, guestPath string, isDir bool) (string, error) {
+		gotProject = projectName
+		gotPath = guestPath
+		gotIsDir = isDir
+		return "/scratch/xyz/index.html", nil
+	}
+
+	cmd := popMacCmd
+	cmd.SetContext(context.Background())
+	t.Chdir(workspace)
+
+	err := runPop(cmd, []string{"/tmp/site/index.html"})
+	require.NoError(t, err)
+	assert.Equal(t, "myproj", gotProject)
+	assert.Equal(t, "/tmp/site/index.html", gotPath)
+	assert.False(t, gotIsDir)
+	assert.Equal(t, []string{"/scratch/xyz/index.html"}, openArgs)
+}
+
+// TestRunPop_FallbackToCreateSession_DirArgWithTrailingSlash — a
+// trailing slash on the out-of-mirror arg signals is_dir=true, and the
+// slash-terminated arg is forwarded to the daemon unchanged.
+func TestRunPop_FallbackToCreateSession_DirArgWithTrailingSlash(t *testing.T) {
+	workspace := writePopWorkspace(t, "myproj2")
+
+	origOpen := popExecOpen
+	origCreate := createPopSessionFn
+	t.Cleanup(func() { popExecOpen = origOpen; createPopSessionFn = origCreate })
+
+	var openArgs []string
+	popExecOpen = func(args ...string) error { openArgs = args; return nil }
+
+	var gotProject, gotPath string
+	var gotIsDir bool
+	createPopSessionFn = func(ctx context.Context, ident identity.Config, projectName, guestPath string, isDir bool) (string, error) {
+		gotProject = projectName
+		gotPath = guestPath
+		gotIsDir = isDir
+		return "/scratch/abc", nil
+	}
+
+	cmd := popMacCmd
+	cmd.SetContext(context.Background())
+	t.Chdir(workspace)
+
+	err := runPop(cmd, []string{"/tmp/site/"})
+	require.NoError(t, err)
+	assert.Equal(t, "myproj2", gotProject)
+	assert.Equal(t, "/tmp/site/", gotPath)
+	assert.True(t, gotIsDir)
+	assert.Equal(t, []string{"/scratch/abc"}, openArgs)
+}
+
+// TestRunPop_FallbackRefusesRelativeArgOutOfMirror — a relative arg
+// that also isn't in any mirror can't be forwarded to the daemon (it
+// has no cwd on the guest to resolve against), so runPop refuses
+// before ever calling createPopSessionFn.
+func TestRunPop_FallbackRefusesRelativeArgOutOfMirror(t *testing.T) {
+	workspace := writePopWorkspace(t, "myproj3")
+
+	origOpen := popExecOpen
+	origCreate := createPopSessionFn
+	t.Cleanup(func() { popExecOpen = origOpen; createPopSessionFn = origCreate })
+
+	popExecOpen = func(args ...string) error {
+		t.Fatal("popExecOpen should not be called")
+		return nil
+	}
+	createCalled := false
+	createPopSessionFn = func(ctx context.Context, ident identity.Config, projectName, guestPath string, isDir bool) (string, error) {
+		createCalled = true
+		return "", nil
+	}
+
+	cmd := popMacCmd
+	cmd.SetContext(context.Background())
+	t.Chdir(workspace)
+
+	err := runPop(cmd, []string{"somefile.html"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not an absolute guest path")
+	assert.False(t, createCalled)
 }
