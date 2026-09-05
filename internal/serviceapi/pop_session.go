@@ -1,6 +1,3 @@
-// Package serviceapi hosts the temp-session store for pop's out-of-
-// mirror branch. A PopSession is one live guest→Mac scratch sync for a
-// path that isn't inside any devm-managed mirror.
 package serviceapi
 
 import (
@@ -14,6 +11,8 @@ import (
 	"github.com/mdubb86/devm/internal/identity"
 )
 
+// PopKind distinguishes whether a PopSession syncs a single file or a
+// whole directory from the guest.
 type PopKind int
 
 const (
@@ -21,6 +20,9 @@ const (
 	PopKindDir  PopKind = 1
 )
 
+// PopSession is one live guest→Mac scratch sync for a path that isn't
+// inside any devm-managed mirror — the state pop's out-of-mirror
+// branch tracks per session.
 type PopSession struct {
 	ID               string
 	ProjectName      string
