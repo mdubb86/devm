@@ -56,19 +56,19 @@ func (g *RealGroundTruth) RespawnIronProxy(ctx context.Context, projectID string
 }
 
 func (g *RealGroundTruth) MutagenLockPID(dataDir string) (int, error) {
-	panic("watchdog: RealGroundTruth.MutagenLockPID not yet wired (Task 5)")
+	return serviceapi.MutagenLockPIDForWatchdog(dataDir)
 }
 
 func (g *RealGroundTruth) RespawnMutagenDaemon(ctx context.Context) error {
-	panic("watchdog: RealGroundTruth.RespawnMutagenDaemon not yet wired (Task 5)")
+	return serviceapi.RespawnMutagenForWatchdog(ctx, g.Cfg, g.Sup)
 }
 
 func (g *RealGroundTruth) MutagenDataDir() string {
-	panic("watchdog: RealGroundTruth.MutagenDataDir not yet wired (Task 5)")
+	return serviceapi.MutagenDataDirForWatchdog(g.Cfg)
 }
 
 func (g *RealGroundTruth) KnownProjectNames() []string {
-	panic("watchdog: RealGroundTruth.KnownProjectNames not yet wired (Task 5)")
+	return serviceapi.KnownProjectNamesForWatchdog(g.Cfg)
 }
 
 func (g *RealGroundTruth) TartList(ctx context.Context) ([]tart.VM, error) {

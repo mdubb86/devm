@@ -80,6 +80,19 @@ func mutagenDataDir(cfg identity.Config) string {
 	return filepath.Join(cfg.RuntimeDir(), "mutagen", "data")
 }
 
+// MutagenLockPIDForWatchdog exposes mutagenLockPID to the watchdog
+// package's mutagen check, which observes the daemon's PID directly
+// off the lock file rather than through a *mutagen.CLI instance.
+func MutagenLockPIDForWatchdog(dataDir string) (int, error) {
+	return mutagenLockPID(dataDir)
+}
+
+// MutagenDataDirForWatchdog exposes mutagenDataDir to the watchdog
+// package's mutagen check.
+func MutagenDataDirForWatchdog(cfg identity.Config) string {
+	return mutagenDataDir(cfg)
+}
+
 // mutagenStopPhaseFn is the test-injection seam for the flush+pause
 // step /vm/stop runs (before gracefulStopVM) against the project's
 // mutagen sessions. Production always extracts the real embedded

@@ -56,9 +56,21 @@ func healMutagen(ctx context.Context, cfg identity.Config, sup *supervisor.Super
 	if sup.Status(key).Present {
 		return nil
 	}
-	if err := spawnMutagenFn(ctx, cfg, sup); err != nil {
+	if err := RespawnMutagenForWatchdog(ctx, cfg, sup); err != nil {
 		return err
 	}
 	log.Printf("serviceapi: mutagen watchdog: respawned mutagen daemon (was missing)")
 	return nil
+}
+
+// RespawnMutagenForWatchdog respawns the mutagen daemon if it is not
+// already present under supervision. Shared by healMutagen and the
+// state-cache watchdog's mutagen check, so both drive the same repair
+// policy.
+func RespawnMutagenForWatchdog(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor) error {
+	key := supervisor.Key{Role: supervisor.RoleMutagen}
+	if sup.Status(key).Present {
+		return nil
+	}
+	return spawnMutagenFn(ctx, cfg, sup)
 }
