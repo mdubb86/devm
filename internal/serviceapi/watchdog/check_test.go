@@ -91,3 +91,5 @@ func (f *fakeGroundTruth) PopSessionSummaryForProject(projectID string) servicea
 	}
 	return f.PopSummaryFn(projectID)
 }
+
+var _ GroundTruth = (*fakeGroundTruth)(nil)
