@@ -72,7 +72,7 @@ func (g *RealGroundTruth) KnownProjectNames() []string {
 }
 
 func (g *RealGroundTruth) TartList(ctx context.Context) ([]tart.VM, error) {
-	panic("watchdog: RealGroundTruth.TartList not yet wired (Task 6)")
+	return g.Tart.List(ctx)
 }
 
 func (g *RealGroundTruth) ApproveHash(macCwd string) (string, string, error) {
