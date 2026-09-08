@@ -360,7 +360,7 @@ func TestAdoptOneIronProxy_UnreadableConfig_StillServesPolicy(t *testing.T) {
 	// ProjectIP in the snapshot to restore, no entry must be created at
 	// all — a bare zero-port/zero-everything entry would make
 	// discoverSoftnet push a FORWARDING rule at HostLoopIP:0 and make
-	// healIronProxies' watchdog treat a perfectly healthy adopted proxy
+	// the iron-proxy watchdog check treat a perfectly healthy adopted proxy
 	// as ProxyMissing and try to kill+respawn it.
 	_, ok := ironProxyState.get(projectID)
 	assert.False(t, ok, "no ironProxyState entry must be created when the config is unreadable and the snapshot has no ProjectIP")

@@ -353,36 +353,6 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// feedback loop caught).
 	server.SetProxyReady(true)
 
-	// Iron-proxy watchdog actor. Periodically walks running projects
-	// and respawns any iron-proxy that has silently died (SIGKILL, hard
-	// crash — anything the setsid shim's session-detach doesn't recover
-	// from). Skips projects that inject secrets — those need CLI
-	// reconcile because secret values never persist to disk. Without
-	// this actor a project whose iron-proxy dies stays broken until the
-	// user notices and reconciles by hand.
-	{
-		watchdogCtx, cancel := context.WithCancel(ctx)
-		g.Add(func() error {
-			return runIronProxyWatchdog(watchdogCtx, cfg, sup, proxy, locks)
-		}, func(error) {
-			cancel()
-		})
-	}
-
-	// Mutagen watchdog actor. Periodically checks whether the
-	// daemon-wide mutagen daemon has silently died and respawns it.
-	// Without this actor, a killed mutagen daemon leaves every
-	// project's volume sync stalled until the user notices and
-	// restarts devm.
-	{
-		watchdogCtx, cancel := context.WithCancel(ctx)
-		g.Add(func() error {
-			return runMutagenWatchdog(watchdogCtx, cfg, sup)
-		}, func(error) {
-			cancel()
-		})
-	}
-
 	// Pop-session GC actor. Periodically sweeps expired pop sessions
 	// across every project — see RunPopSessionGC. Without this actor,
 	// a pop session whose caller never explicitly tore it down (crash,

@@ -156,8 +156,8 @@ func adoptOneIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor
 		// ProjectIP either. Downstream consumers treat any ironProxyState
 		// entry as "this project has a live iron-proxy": discoverSoftnet
 		// would push a FORWARDING rule at HostLoopIP:0, and
-		// healIronProxies' watchdog would see ProxyMissing and try to
-		// kill+respawn a proxy that's actually running fine. Strip the
+		// the iron-proxy watchdog check would see ProxyMissing and try
+		// to kill+respawn a proxy that's actually running fine. Strip the
 		// entry back out unless the snapshot contributed something
 		// (ProjectIP) worth keeping — restores the pre-adoption "no
 		// entry on unreadable config" property while still letting
