@@ -52,5 +52,11 @@ func RespawnIronProxyForWatchdog(
 		}
 		return fmt.Errorf("rebuild config: %w", err)
 	}
-	return spawnIronProxyFn(ctx, cfg, sup, projectID, proxyCfg)
+	// cache is nil here: the watchdog check that calls this repair path
+	// already writes the reconciled ProxyHealth into the cache itself
+	// right after this returns (watchdog_check_iron_proxy.go) — this
+	// respawn only needs the OnUnexpectedExit hook for a LATER crash of
+	// the freshly spawned proxy, which the next watchdog tick still
+	// catches.
+	return spawnIronProxyFn(ctx, cfg, sup, projectID, proxyCfg, nil)
 }

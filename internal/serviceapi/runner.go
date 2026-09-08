@@ -184,7 +184,13 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// ahead of the per-project iron-proxy adopt pass, since no project
 	// state depends on it. Best-effort: a failure (e.g. lsof missing)
 	// shouldn't block daemon startup; the watchdog actor below retries.
-	if err := AdoptMutagenDaemon(ctx, cfg, sup); err != nil {
+	//
+	// cache is nil here: it's constructed further down (Startup ordering
+	// constraint — cache + watchdog come up AFTER this adopt pass). The
+	// synchronous warmup pass right after construction reconciles the
+	// PID this adopt just set, so the cache is warm before the HTTP
+	// server accepts its first connection either way.
+	if err := AdoptMutagenDaemon(ctx, cfg, sup, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "mutagen adopt: %v\n", err)
 	}
 
@@ -398,7 +404,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	{
 		gcCtx, cancel := context.WithCancel(ctx)
 		g.Add(func() error {
-			return RunPopSessionGC(gcCtx, popStore, popCLI, cfg, PopSessionTTL(), PopSessionGCInterval())
+			return RunPopSessionGC(gcCtx, popStore, popCLI, cfg, PopSessionTTL(), PopSessionGCInterval(), cache)
 		}, func(error) {
 			cancel()
 		})

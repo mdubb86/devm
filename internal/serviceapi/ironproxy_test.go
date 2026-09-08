@@ -80,7 +80,7 @@ func TestSpawnIronProxy_WrapsWithSetsidShim(t *testing.T) {
 	var gotCmd *exec.Cmd
 	origSpawn := ironProxySpawn
 	t.Cleanup(func() { ironProxySpawn = origSpawn })
-	ironProxySpawn = func(_ context.Context, _ *supervisor.Supervisor, _ supervisor.Key, cmd *exec.Cmd, _ ...io.Writer) error {
+	ironProxySpawn = func(_ context.Context, _ *supervisor.Supervisor, _ supervisor.Key, cmd *exec.Cmd, _ func(), _ ...io.Writer) error {
 		gotCmd = cmd
 		return nil
 	}
@@ -92,7 +92,7 @@ func TestSpawnIronProxy_WrapsWithSetsidShim(t *testing.T) {
 		CACertPath:  "/tmp/ca.crt",
 		CAKeyPath:   "/tmp/ca.key",
 	}
-	err := SpawnIronProxy(context.Background(), identity.Prod, sup, "p-shim-test", proxyCfg)
+	err := SpawnIronProxy(context.Background(), identity.Prod, sup, "p-shim-test", proxyCfg, nil)
 	require.NoError(t, err)
 	require.NotNil(t, gotCmd)
 
@@ -110,6 +110,45 @@ func TestSpawnIronProxy_WrapsWithSetsidShim(t *testing.T) {
 	assert.Equal(t, "-config", gotCmd.Args[2])
 }
 
+// TestSpawnIronProxy_OnUnexpectedExitWritesCacheMissing pins the
+// crash-callback SpawnIronProxy builds for its supervisor.Spawn call:
+// the ironProxySpawn seam is faked to capture the onUnexpectedExit
+// closure instead of actually spawning anything, and invoking that
+// closure directly must write ProxyMissing into the cache for this
+// project — the mechanism that keeps the cache fresh the instant
+// iron-proxy dies, without waiting for the next watchdog tick.
+func TestSpawnIronProxy_OnUnexpectedExitWritesCacheMissing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const projectID = "p-crash-test"
+	t.Cleanup(func() { policyAuthority.StopServing(projectID) })
+
+	var capturedHook func()
+	origSpawn := ironProxySpawn
+	t.Cleanup(func() { ironProxySpawn = origSpawn })
+	ironProxySpawn = func(_ context.Context, _ *supervisor.Supervisor, _ supervisor.Key, _ *exec.Cmd, onUnexpectedExit func(), _ ...io.Writer) error {
+		capturedHook = onUnexpectedExit
+		return nil
+	}
+
+	sup := supervisor.New(t.TempDir())
+	cache := NewStateCache()
+	cache.SetIronProxyHealth(projectID, ProxyHealth{Status: ProxyOK})
+	proxyCfg := IronProxyConfig{
+		HTTPListen:  "127.0.0.1:0",
+		HTTPSListen: "127.0.0.1:0",
+		CACertPath:  "/tmp/ca.crt",
+		CAKeyPath:   "/tmp/ca.key",
+	}
+	require.NoError(t, SpawnIronProxy(context.Background(), identity.Prod, sup, projectID, proxyCfg, cache))
+	require.NotNil(t, capturedHook, "SpawnIronProxy must pass an onUnexpectedExit hook to the spawn seam")
+
+	capturedHook()
+
+	row, ok := cache.ProjectRow(projectID)
+	require.True(t, ok)
+	assert.Equal(t, ProxyMissing, row.IronProxyHealth.Status, "an unexpected exit must flip the cached health to missing")
+}
+
 // SpawnIronProxy must (a) serve the project's TransformService socket
 // before the proxy process starts and (b) render the grpc transform's
 // target pointing at exactly that socket — otherwise every guest
@@ -121,7 +160,7 @@ func TestSpawnIronProxy_ServesPolicySocketAndSetsTarget(t *testing.T) {
 
 	origSpawn := ironProxySpawn
 	t.Cleanup(func() { ironProxySpawn = origSpawn })
-	ironProxySpawn = func(_ context.Context, _ *supervisor.Supervisor, _ supervisor.Key, _ *exec.Cmd, _ ...io.Writer) error {
+	ironProxySpawn = func(_ context.Context, _ *supervisor.Supervisor, _ supervisor.Key, _ *exec.Cmd, _ func(), _ ...io.Writer) error {
 		return nil
 	}
 
@@ -133,7 +172,7 @@ func TestSpawnIronProxy_ServesPolicySocketAndSetsTarget(t *testing.T) {
 		CAKeyPath:   "/tmp/ca.key",
 		AllowList:   []string{"example.com"},
 	}
-	require.NoError(t, SpawnIronProxy(context.Background(), identity.Prod, sup, projectID, proxyCfg))
+	require.NoError(t, SpawnIronProxy(context.Background(), identity.Prod, sup, projectID, proxyCfg, nil))
 
 	sockPath, err := IronPolicySocketPath(identity.Prod, projectID)
 	require.NoError(t, err)

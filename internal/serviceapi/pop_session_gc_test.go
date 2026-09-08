@@ -45,7 +45,8 @@ func TestGCPopSessionsOnce_SessionPastTTL_TornDown(t *testing.T) {
 	twoHoursAgo := time.Now().Add(-2 * time.Hour)
 	require.NoError(t, os.Chtimes(ps.MacDir, twoHoursAgo, twoHoursAgo))
 
-	removed := GCPopSessionsOnce(store, cli, cfg, time.Hour, time.Now)
+	cache := NewStateCache()
+	removed := GCPopSessionsOnce(store, cli, cfg, time.Hour, time.Now, cache)
 	require.Len(t, removed, 1)
 	assert.Equal(t, ps.ID, removed[0].ID)
 	_, err = os.Stat(ps.MacDir)
@@ -55,6 +56,10 @@ func TestGCPopSessionsOnce_SessionPastTTL_TornDown(t *testing.T) {
 	// sync terminate was invoked for the gc'd session.
 	require.NotEmpty(t, scripted.terminateCall)
 	assert.Equal(t, ps.MutagenSessionID, scripted.terminateCall[len(scripted.terminateCall)-1])
+
+	row, ok := cache.ProjectRow("p")
+	require.True(t, ok, "gc'ing a project's only session must still update its cache row")
+	assert.Equal(t, 0, row.PopSessions.Count, "cache must reflect the session removed by gc")
 }
 
 func TestGCPopSessionsOnce_SessionWithinTTL_Survives(t *testing.T) {
@@ -69,7 +74,7 @@ func TestGCPopSessionsOnce_SessionWithinTTL_Survives(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	removed := GCPopSessionsOnce(store, cli, cfg, time.Hour, time.Now)
+	removed := GCPopSessionsOnce(store, cli, cfg, time.Hour, time.Now, nil)
 	assert.Empty(t, removed)
 	assert.Len(t, store.All(), 1)
 }
@@ -92,10 +97,15 @@ func TestSweepProjectPopSessions_TearsDownAllForProject(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	SweepProjectPopSessions(store, cli, cfg, "p")
+	cache := NewStateCache()
+	SweepProjectPopSessions(store, cli, cfg, "p", cache)
 	remaining := store.All()
 	require.Len(t, remaining, 1)
 	assert.Equal(t, "q", remaining[0].ProjectName)
+
+	row, ok := cache.ProjectRow("p")
+	require.True(t, ok, "sweeping a project must still update its cache row")
+	assert.Equal(t, PopSessionSummary{}, row.PopSessions, "swept project's pop sessions must reset to zero")
 }
 
 func TestSweepAllPopSessions_TearsDownEverySession(t *testing.T) {
@@ -137,7 +147,7 @@ func TestGCPopSessionsOnce_AlreadyRemoved_SkipsTeardown(t *testing.T) {
 	// Win the race ourselves before GC runs.
 	require.NotNil(t, store.RemoveByID(ps.ID))
 
-	removed := GCPopSessionsOnce(store, cli, cfg, time.Hour, time.Now)
+	removed := GCPopSessionsOnce(store, cli, cfg, time.Hour, time.Now, nil)
 	assert.Empty(t, removed, "already-removed session must not be reported as gc'd")
 	assert.Empty(t, scripted.terminateCall, "must not double-terminate a session someone else already removed")
 }
@@ -159,7 +169,7 @@ func TestRunPopSessionGC_TicksAndSweepsUntilCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- RunPopSessionGC(ctx, store, cli, cfg, time.Hour, time.Millisecond)
+		done <- RunPopSessionGC(ctx, store, cli, cfg, time.Hour, time.Millisecond, nil)
 	}()
 
 	require.Eventually(t, func() bool {

@@ -90,6 +90,20 @@ func TestServer_SocketIs0600(t *testing.T) {
 	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
 }
 
+func TestServer_SetProxyReady_UpdatesCache(t *testing.T) {
+	dir := t.TempDir()
+	socket := filepath.Join(dir, "s.sock")
+	srv := NewServer(socket, Build{Version: "test-version"})
+	cache := NewStateCache()
+	srv.SetStateCache(cache)
+
+	srv.SetProxyReady(true)
+	assert.True(t, cache.Global().ProxyReady, "cache must reflect the proxy-ready flag")
+
+	srv.SetProxyReady(false)
+	assert.False(t, cache.Global().ProxyReady, "cache must reflect a later flip back to not-ready")
+}
+
 func TestServer_RegisterAddsEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	socket := filepath.Join(dir, "s.sock")

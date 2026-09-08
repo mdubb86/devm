@@ -96,7 +96,8 @@ func TestSpawnMutagen_CreatesDataDirAndSpawns(t *testing.T) {
 		return os.Getpid(), nil
 	}
 
-	err := SpawnMutagen(context.Background(), cfg, sup)
+	cache := NewStateCache()
+	err := SpawnMutagen(context.Background(), cfg, sup, cache)
 	require.NoError(t, err)
 
 	assert.Equal(t, cfg.RuntimeDir(), ensureCalledWith)
@@ -110,6 +111,8 @@ func TestSpawnMutagen_CreatesDataDirAndSpawns(t *testing.T) {
 	st := sup.Status(supervisor.Key{Role: supervisor.RoleMutagen})
 	assert.True(t, st.Present)
 	assert.Equal(t, os.Getpid(), st.PID)
+
+	assert.Equal(t, os.Getpid(), cache.Global().MutagenDaemonPID, "cache must reflect the freshly spawned daemon's pid")
 }
 
 func TestSpawnMutagen_SetsMutagenDataDirectoryEnv(t *testing.T) {
@@ -130,7 +133,7 @@ func TestSpawnMutagen_SetsMutagenDataDirectoryEnv(t *testing.T) {
 		return 1, nil
 	}
 
-	require.NoError(t, SpawnMutagen(context.Background(), cfg, sup))
+	require.NoError(t, SpawnMutagen(context.Background(), cfg, sup, nil))
 
 	require.NotNil(t, startCalledWith)
 	assert.Equal(t, mutagenDataDir(cfg), startCalledWith.DataDir)
@@ -154,7 +157,7 @@ func TestSpawnMutagen_SetsMUTAGEN_SSH_PATHEnv(t *testing.T) {
 		return 1, nil
 	}
 
-	require.NoError(t, SpawnMutagen(context.Background(), cfg, sup))
+	require.NoError(t, SpawnMutagen(context.Background(), cfg, sup, nil))
 
 	require.NotNil(t, startCalledWith)
 	assert.Contains(t, startCalledWith.ExtraEnv, "MUTAGEN_SSH_PATH="+MutagenSSHDir(cfg))
@@ -182,7 +185,7 @@ func TestAdoptMutagenDaemon_ExistingAlive_StopsAndRespawns(t *testing.T) {
 
 	ensureCalled, startCalled := stubMutagenSpawnSeams(t)
 
-	err := AdoptMutagenDaemon(context.Background(), cfg, sup)
+	err := AdoptMutagenDaemon(context.Background(), cfg, sup, nil)
 	require.NoError(t, err)
 	assert.True(t, *ensureCalled, "existing daemon must be replaced")
 	assert.True(t, *startCalled, "existing daemon must be replaced")
@@ -204,7 +207,7 @@ func TestAdoptMutagenDaemon_ExistingAliveShaMismatches_StopsAndRespawns(t *testi
 
 	ensureCalled, startCalled := stubMutagenSpawnSeams(t)
 
-	err := AdoptMutagenDaemon(context.Background(), cfg, sup)
+	err := AdoptMutagenDaemon(context.Background(), cfg, sup, nil)
 	require.NoError(t, err)
 	assert.True(t, *ensureCalled, "sha mismatch must respawn")
 	assert.True(t, *startCalled, "sha mismatch must respawn")
@@ -229,10 +232,12 @@ func TestAdoptMutagenDaemon_NoneAlive_Spawns(t *testing.T) {
 
 	ensureCalled, startCalled := stubMutagenSpawnSeams(t)
 
-	err := AdoptMutagenDaemon(context.Background(), cfg, sup)
+	cache := NewStateCache()
+	err := AdoptMutagenDaemon(context.Background(), cfg, sup, cache)
 	require.NoError(t, err)
 	assert.True(t, *ensureCalled)
 	assert.True(t, *startCalled)
+	assert.Equal(t, os.Getpid(), cache.Global().MutagenDaemonPID, "cache must reflect the daemon spawned during adoption")
 
 	st := sup.Status(supervisor.Key{Role: supervisor.RoleMutagen})
 	assert.True(t, st.Present)

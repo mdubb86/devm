@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/mdubb86/devm/internal/approve"
 	"github.com/mdubb86/devm/internal/identity"
@@ -98,7 +99,7 @@ func handleApproveState(cfg identity.Config) http.Handler {
 	return http.HandlerFunc(fn)
 }
 
-func handleApprove(cfg identity.Config) http.Handler {
+func handleApprove(cfg identity.Config, cache *StateCache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "approve: POST only", http.StatusMethodNotAllowed)
@@ -127,6 +128,24 @@ func handleApprove(cfg identity.Config) http.Handler {
 			http.Error(w, fmt.Sprintf("approve: write snapshot: %v", err), http.StatusInternalServerError)
 			return
 		}
+
+		// The just-written snapshot IS the current bytes — current and
+		// approved converge by definition, so Diverged is always false
+		// immediately after a successful approve.
+		if cache != nil {
+			devmSHA := approve.HashFile(currentDevm)
+			meSHA := approve.HashFile(currentMe)
+			since := time.Now()
+			cache.SetApproveState(project, ApproveStateSummary{
+				Diverged:        false,
+				CurrentDevmSHA:  devmSHA,
+				ApprovedDevmSHA: devmSHA,
+				CurrentMeSHA:    meSHA,
+				ApprovedMeSHA:   meSHA,
+				ApprovedSince:   &since,
+			})
+		}
+
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

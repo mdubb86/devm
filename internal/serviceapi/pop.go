@@ -59,13 +59,14 @@ type popRequest struct {
 // keep working; new callers use handlePopWithDeps to opt into the
 // out-of-mirror session-creation branch.
 func handlePop(w http.ResponseWriter, r *http.Request, projectName string, registry []WorkspaceEntry) {
-	handlePopWithDeps(w, r, projectName, registry, identity.Config{}, nil, nil, "")
+	handlePopWithDeps(w, r, projectName, registry, identity.Config{}, nil, nil, "", nil)
 }
 
 func handlePopWithDeps(
 	w http.ResponseWriter, r *http.Request,
 	projectName string, registry []WorkspaceEntry,
 	cfg identity.Config, store *PopSessionStore, cli *mutagen.CLI, guestSSHTarget string,
+	cache *StateCache,
 ) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -168,13 +169,16 @@ func handlePopWithDeps(
 	if req.IsDir {
 		kind = PopKindDir
 	}
-	session, _, err := store.GetOrCreate(cfg, projectName, req.ResolvedPath, kind, func(ps *PopSession) error {
+	session, created, err := store.GetOrCreate(cfg, projectName, req.ResolvedPath, kind, func(ps *PopSession) error {
 		return CreatePopSyncSession(cli, cfg, guestSSHTarget, ps)
 	})
 	if err != nil {
 		daemonlog.Errorf("serviceapi: pop: create session for %s: %v", req.ResolvedPath, err)
 		http.Error(w, fmt.Sprintf("pop: create session: %v", err), http.StatusInternalServerError)
 		return
+	}
+	if created && cache != nil {
+		cache.SetPopSessionSummary(projectName, PopSessionSummaryForProjectForWatchdog(store, projectName))
 	}
 
 	target := session.MacDir
@@ -215,6 +219,7 @@ var popListeners sync.Map // projectName -> net.Listener
 func servePopListener(
 	ln net.Listener, cfg identity.Config, projectName string,
 	store *PopSessionStore, cli *mutagen.CLI, guestSSHTarget string,
+	cache *StateCache,
 ) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/pop", func(w http.ResponseWriter, r *http.Request) {
@@ -223,7 +228,7 @@ func servePopListener(
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		handlePopWithDeps(w, r, projectName, reg, cfg, store, cli, guestSSHTarget)
+		handlePopWithDeps(w, r, projectName, reg, cfg, store, cli, guestSSHTarget, cache)
 	})
 	srv := &http.Server{Handler: mux}
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {

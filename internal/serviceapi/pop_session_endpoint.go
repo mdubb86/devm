@@ -32,6 +32,7 @@ func popSessionHandler(
 	store *PopSessionStore,
 	cli *mutagen.CLI,
 	guestSSHTargetFor func(project string) string,
+	cache *StateCache,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -60,13 +61,16 @@ func popSessionHandler(
 			http.Error(w, fmt.Sprintf("pop-session: project %q not running", req.Project), http.StatusNotFound)
 			return
 		}
-		session, _, err := store.GetOrCreate(cfg, req.Project, req.GuestPath, kind, func(ps *PopSession) error {
+		session, created, err := store.GetOrCreate(cfg, req.Project, req.GuestPath, kind, func(ps *PopSession) error {
 			return CreatePopSyncSession(cli, cfg, guestSSHTarget, ps)
 		})
 		if err != nil {
 			daemonlog.Errorf("serviceapi: pop-session: create for %s: %v", req.GuestPath, err)
 			http.Error(w, fmt.Sprintf("pop-session: create: %v", err), http.StatusInternalServerError)
 			return
+		}
+		if created && cache != nil {
+			cache.SetPopSessionSummary(req.Project, PopSessionSummaryForProjectForWatchdog(store, req.Project))
 		}
 		target := session.MacDir
 		if session.Kind == PopKindFile {
@@ -105,8 +109,9 @@ func popSessionSummaryHandler(store *PopSessionStore) http.HandlerFunc {
 }
 
 // RegisterPopSessionHandler installs the /pop-session and
-// /pop-session-summary endpoints on the daemon UDS. cache is plumbed
-// through for a future ship's use; not read yet.
+// /pop-session-summary endpoints on the daemon UDS. cache is written
+// by /pop-session on a freshly created session; not yet read by
+// /pop-session-summary.
 func RegisterPopSessionHandler(
 	server *Server,
 	cfg identity.Config,
@@ -115,6 +120,6 @@ func RegisterPopSessionHandler(
 	guestSSHTargetFor func(project string) string,
 	cache *StateCache,
 ) {
-	server.Register("/pop-session", popSessionHandler(cfg, store, cli, guestSSHTargetFor))
+	server.Register("/pop-session", popSessionHandler(cfg, store, cli, guestSSHTargetFor, cache))
 	server.Register("/pop-session-summary", popSessionSummaryHandler(store))
 }

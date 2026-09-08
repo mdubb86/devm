@@ -304,6 +304,20 @@ func gracefulStopVM(ctx context.Context, tr vmStopper, name string) {
 	}
 }
 
+// vmCrashCallback builds the supervisor.Spawn onUnexpectedExit hook for
+// a project's VM: the instant the tart-run process dies without
+// DisableRestart having been called first (a real crash, not the
+// graceful poweroff path in /vm/stop), the cache's VMState flips to
+// stopped — no need to wait for the next watchdog tick to notice.
+// cache may be nil (tests that don't wire one).
+func vmCrashCallback(cache *StateCache, name string) func() {
+	return func() {
+		if cache != nil {
+			cache.SetVMState(name, VMStopped)
+		}
+	}
+}
+
 // vmRunning reports whether the named VM appears running in a `tart list`.
 func vmRunning(vms []tart.VM, name string) bool {
 	for _, v := range vms {
@@ -395,7 +409,9 @@ func shutdownSoftnet(projectID string) {
 // lifecycle — StartProjectListeners/StopProjectListeners are skipped
 // in that case. popStore and popCLI back each project's pop HTTP
 // listener (servePopListener) and the /vm/stop teardown sweep. cache
-// is plumbed through for a future ship's use; not read yet.
+// is the daemon's StateCache — /vm/start and /vm/stop write the
+// resulting VM/proxy state into it on success, and the VM's supervised
+// process writes it again on an unexpected crash (see vmCrashCallback).
 func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, ntpPort int, locks *ProjectLocks, proxy *ProxyServer, popStore *PopSessionStore, popCLI *mutagen.CLI, cache *StateCache) {
 	s.Register("/vm/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -546,7 +562,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		softnetState.put(req.Name, sock)
 
 		key := supervisor.Key{ProjectID: req.Name, Role: supervisor.RoleVM}
-		if err := sup.Spawn(ctx, key, cmd); err != nil {
+		if err := sup.Spawn(ctx, key, cmd, vmCrashCallback(cache, req.Name)); err != nil {
 			http.Error(w, fmt.Sprintf("supervisor spawn: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -650,7 +666,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			AllowList:  req.AllowList,
 			Secrets:    ironSecrets,
 		}
-		if err := SpawnIronProxy(r.Context(), cfg, sup, req.Name, proxyCfg); err != nil {
+		if err := SpawnIronProxy(r.Context(), cfg, sup, req.Name, proxyCfg, cache); err != nil {
 			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -673,7 +689,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// closePopListener before the listener is recorded, leaking the
 		// fd. Mirrors ProxyServer.recordProjectListeners in proxy.go.
 		popListeners.Store(req.Name, popLn)
-		go servePopListener(popLn, cfg, req.Name, popStore, popCLI, "devm-"+req.Name)
+		go servePopListener(popLn, cfg, req.Name, popStore, popCLI, "devm-"+req.Name, cache)
 
 		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read. Merge onto the existing
@@ -730,6 +746,12 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			ironProxyState.put(req.Name, info)
 		}
 
+		if cache != nil {
+			cache.SetMacCwd(req.Name, req.MacCwd)
+			cache.SetVMState(req.Name, VMRunning)
+			cache.SetIronProxyHealth(req.Name, ProxyHealth{Status: ProxyOK})
+		}
+
 		writeJSON(w, VMStartResponse{ProjectIP: projectIP, TunnelPort: info.TunnelPort})
 	})
 
@@ -738,7 +760,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 	})
 
 	s.Register("/vm/approve", func(w http.ResponseWriter, r *http.Request) {
-		handleApprove(cfg).ServeHTTP(w, r)
+		handleApprove(cfg, cache).ServeHTTP(w, r)
 	})
 
 	// /vm/enforcement-config is a precondition check that this project's
@@ -972,7 +994,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// missed — reject new pops first, then drain what's already
 		// in the store.
 		closePopListener(req.Name)
-		SweepProjectPopSessions(popStore, popCLI, cfg, req.Name)
+		SweepProjectPopSessions(popStore, popCLI, cfg, req.Name, cache)
 		if req.Destroy {
 			policyAuthority.PurgeProject(req.Name)
 		} else {
@@ -1030,6 +1052,16 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// pushed gracefulStopVM toward its full grace-period ceiling).
 		shutdownSoftnet(req.Name)
 		softnetState.del(req.Name)
+
+		if cache != nil {
+			if req.Destroy {
+				cache.RemoveProject(req.Name)
+			} else {
+				cache.SetVMState(req.Name, VMStopped)
+				cache.SetIronProxyHealth(req.Name, ProxyHealth{Status: ProxyMissing})
+			}
+		}
+
 		w.WriteHeader(http.StatusNoContent)
 	})
 

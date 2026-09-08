@@ -69,13 +69,21 @@ exit 0
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	sup := supervisor.New(t.TempDir())
-	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, NewPopSessionStore(), nil, NewStateCache())
+	cache := NewStateCache()
+	cache.SetVMState("proj-stop", VMRunning)
+	cache.SetIronProxyHealth("proj-stop", ProxyHealth{Status: ProxyOK})
+	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, NewPopSessionStore(), nil, cache)
 
 	body, err := json.Marshal(VMStopRequest{Name: "proj-stop"})
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/stop", bytes.NewReader(body)))
 	require.Equal(t, http.StatusNoContent, rec.Code, "body=%s", rec.Body.String())
+
+	row, ok := cache.ProjectRow("proj-stop")
+	require.True(t, ok, "a non-destroy stop must keep the project's cache row")
+	assert.Equal(t, VMStopped, row.VMState, "cache must reflect the VM as stopped")
+	assert.Equal(t, ProxyMissing, row.IronProxyHealth.Status, "cache must reflect iron-proxy as torn down")
 
 	assert.Equal(t, []string{"proj-stop"}, stopArgs, "StopPhase must be called for the right projectID")
 
@@ -95,6 +103,58 @@ exit 0
 	require.GreaterOrEqual(t, listIdx, 0, "gracefulStopVM's tart list call must be present")
 	assert.Less(t, stopIdx, listIdx,
 		"mutagen sessions must be flushed+paused BEFORE the VM's guest is powered off")
+}
+
+// TestVMCrashCallback_WritesVMStoppedToCache pins the onUnexpectedExit
+// hook /vm/start wires into sup.Spawn for the VM's tart-run process
+// (see vmCrashCallback + supervisor.Spawn's OnUnexpectedExit mechanism,
+// exercised end-to-end at the supervisor layer by
+// TestSpawn_OnUnexpectedExitFiresOnCrash). Confirms the closure itself
+// writes the right project's VMState to stopped, and is nil-safe.
+func TestVMCrashCallback_WritesVMStoppedToCache(t *testing.T) {
+	cache := NewStateCache()
+	cache.SetVMState("proj", VMRunning)
+
+	vmCrashCallback(cache, "proj")()
+
+	row, ok := cache.ProjectRow("proj")
+	require.True(t, ok)
+	assert.Equal(t, VMStopped, row.VMState)
+
+	assert.NotPanics(t, func() { vmCrashCallback(nil, "proj")() }, "nil cache must be a safe no-op")
+}
+
+// TestVMStop_Destroy_RemovesCacheRow verifies /vm/stop's teardown path
+// (Destroy=true) removes the project's cache row entirely, rather than
+// just marking the VM stopped — RemoveProject, not SetVMState.
+func TestVMStop_Destroy_RemovesCacheRow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoRoot := t.TempDir()
+
+	binPath := filepath.Join(repoRoot, "tart-fake")
+	script := "#!/bin/sh\ncase \"$1\" in\n  list) echo '[]' ;;\nesac\nexit 0\n"
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = binPath
+
+	ironProxyState.put("proj-destroy", projectInfo{})
+	t.Cleanup(func() { ironProxyState.del("proj-destroy") })
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	sup := supervisor.New(t.TempDir())
+	cache := NewStateCache()
+	cache.SetVMState("proj-destroy", VMRunning)
+	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, NewPopSessionStore(), nil, cache)
+
+	body, err := json.Marshal(VMStopRequest{Name: "proj-destroy", Destroy: true})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/stop", bytes.NewReader(body)))
+	require.Equal(t, http.StatusNoContent, rec.Code, "body=%s", rec.Body.String())
+
+	_, ok := cache.ProjectRow("proj-destroy")
+	assert.False(t, ok, "a destroy stop must remove the project's cache row entirely")
 }
 
 // TestEndpointFrom_MapsAllFieldsToLoopback verifies endpointFrom — the

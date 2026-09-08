@@ -88,7 +88,7 @@ func TestApprove_AdvancesSnapshotToCurrentBytes(t *testing.T) {
 	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "env:\n  X: 1\n")
 	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1&mac_cwd="+projDir, nil)
 	rr := httptest.NewRecorder()
-	handleApprove(cfg).ServeHTTP(rr, req)
+	handleApprove(cfg, nil).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNoContent, rr.Code)
 	snap, ok, err := store.Read("proj-1")
 	require.NoError(t, err)
@@ -98,12 +98,29 @@ func TestApprove_AdvancesSnapshotToCurrentBytes(t *testing.T) {
 	assert.Equal(t, "user", snap.Manifest.Source)
 }
 
+func TestApprove_UpdatesCache(t *testing.T) {
+	cfg, projDir, _ := approveTestSetup(t, "project:\n  name: p\n", "env:\n  X: 1\n")
+	cache := NewStateCache()
+	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1&mac_cwd="+projDir, nil)
+	rr := httptest.NewRecorder()
+	handleApprove(cfg, cache).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	row, ok := cache.ProjectRow("proj-1")
+	require.True(t, ok, "approve must create a cache row for the project")
+	assert.False(t, row.ApproveState.Diverged, "a just-approved project can't be diverged")
+	assert.Equal(t, row.ApproveState.CurrentDevmSHA, row.ApproveState.ApprovedDevmSHA)
+	assert.Equal(t, row.ApproveState.CurrentMeSHA, row.ApproveState.ApprovedMeSHA)
+	assert.NotEmpty(t, row.ApproveState.CurrentDevmSHA)
+	require.NotNil(t, row.ApproveState.ApprovedSince)
+}
+
 func TestApprove_IdempotentOnAlreadyApproved(t *testing.T) {
 	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
 	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1&mac_cwd="+projDir, nil)
 	rr := httptest.NewRecorder()
-	handleApprove(cfg).ServeHTTP(rr, req)
+	handleApprove(cfg, nil).ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusNoContent, rr.Code)
 }
 
@@ -114,7 +131,7 @@ func TestApprove_RemovesStaleMeYAMLWhenAbsentOnMac(t *testing.T) {
 	// Mac side does not have me.yaml. Approve must remove the old copy from the snapshot.
 	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1&mac_cwd="+projDir, nil)
 	rr := httptest.NewRecorder()
-	handleApprove(cfg).ServeHTTP(rr, req)
+	handleApprove(cfg, nil).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNoContent, rr.Code)
 	snap, ok, err := store.Read("proj-1")
 	require.NoError(t, err)
@@ -125,7 +142,7 @@ func TestApprove_RemovesStaleMeYAMLWhenAbsentOnMac(t *testing.T) {
 func TestApprove_RequiresProjectAndMacCwd(t *testing.T) {
 	cfg := identity.Config{Name: "devm-test"}
 	rr := httptest.NewRecorder()
-	handleApprove(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/vm/approve", nil))
+	handleApprove(cfg, nil).ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/vm/approve", nil))
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
@@ -139,7 +156,7 @@ func TestApproveState_RejectsNonGET(t *testing.T) {
 func TestApprove_RejectsNonPOST(t *testing.T) {
 	cfg := identity.Config{Name: "devm-test"}
 	rr := httptest.NewRecorder()
-	handleApprove(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/vm/approve?project=x&mac_cwd=/tmp/y", nil))
+	handleApprove(cfg, nil).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/vm/approve?project=x&mac_cwd=/tmp/y", nil))
 	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
 }
 

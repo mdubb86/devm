@@ -171,7 +171,11 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 			}
 		}
 
-		if err := spawnIronProxyFn(r.Context(), cfg, sup, req.Name, newCfg); err != nil {
+		// cache is nil: /vm/apply-iron-proxy predates Task 10's cache
+		// plumbing and isn't one of the four cache-aware handlers — the
+		// watchdog's iron-proxy check still catches a later crash within
+		// one tick.
+		if err := spawnIronProxyFn(r.Context(), cfg, sup, req.Name, newCfg, nil); err != nil {
 			http.Error(w, fmt.Sprintf("spawn iron-proxy: %v", err), http.StatusInternalServerError)
 			return
 		}

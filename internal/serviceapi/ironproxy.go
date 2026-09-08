@@ -25,8 +25,8 @@ import (
 // sup.Spawn; tests substitute a fake to capture the constructed
 // *exec.Cmd (argv, path) without actually exec'ing the shim or
 // iron-proxy.
-var ironProxySpawn = func(ctx context.Context, sup *supervisor.Supervisor, key supervisor.Key, cmd *exec.Cmd, taps ...io.Writer) error {
-	return sup.Spawn(ctx, key, cmd, taps...)
+var ironProxySpawn = func(ctx context.Context, sup *supervisor.Supervisor, key supervisor.Key, cmd *exec.Cmd, onUnexpectedExit func(), taps ...io.Writer) error {
+	return sup.Spawn(ctx, key, cmd, onUnexpectedExit, taps...)
 }
 
 // IronSecret is one host-scoped secret to substitute. Value is the real
@@ -217,7 +217,12 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 // config lands on disk. Mitigated by file mode 0600 under the user's
 // runtime dir (~/Library/Application Support/devm/). Future improvement:
 // contribute stdin support upstream and switch.
-func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, projectID string, proxyCfg IronProxyConfig) error {
+//
+// cache, when non-nil, is written with ProxyMissing the instant this
+// iron-proxy exits unexpectedly (supervisor's OnUnexpectedExit hook) —
+// callers that don't have a StateCache wired (e.g. /vm/apply-iron-proxy,
+// which predates Task 10's cache plumbing) pass nil.
+func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, projectID string, proxyCfg IronProxyConfig, cache *StateCache) error {
 	runDir, err := EnsureRuntimeDir(cfg)
 	if err != nil {
 		return fmt.Errorf("runtime dir: %w", err)
@@ -262,7 +267,12 @@ func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Su
 	cmd := exec.CommandContext(ctx, shim, binary, "-config", configPath)
 	cmd.Env = append(os.Environ(), proxyCfg.EnvVars()...)
 	key := supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}
-	if err := ironProxySpawn(ctx, sup, key, cmd); err != nil {
+	onProxyCrash := func() {
+		if cache != nil {
+			cache.SetIronProxyHealth(projectID, ProxyHealth{Status: ProxyMissing})
+		}
+	}
+	if err := ironProxySpawn(ctx, sup, key, cmd, onProxyCrash); err != nil {
 		return err
 	}
 

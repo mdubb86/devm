@@ -115,7 +115,12 @@ var mutagenStopPhaseFn = func(cfg identity.Config, projectID string) error {
 // points at the tart-mutagen-ssh shim (see cmd/tart-mutagen-ssh) instead
 // of the system ssh client. The shim dispatches through `tart exec`, so
 // the daemon has no sshd dependency and never touches ~/.ssh/config.
-func SpawnMutagen(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor) error {
+//
+// cache, when non-nil, is stamped with the new daemon PID immediately —
+// per-project MutagenHealth stays whatever the last watchdog tick (or
+// an OnUnexpectedExit callback) observed; a fresh PID alone doesn't
+// prove any given project's sync is healthy.
+func SpawnMutagen(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, cache *StateCache) error {
 	dataDir := mutagenDataDir(cfg)
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return fmt.Errorf("mutagen: data dir %s: %w", dataDir, err)
@@ -142,6 +147,9 @@ func SpawnMutagen(ctx context.Context, cfg identity.Config, sup *supervisor.Supe
 	key := supervisor.Key{Role: supervisor.RoleMutagen}
 	sup.Adopt(key, pid)
 	log.Printf("mutagen: adopted daemon pid=%d bin=%s data=%s", pid, bin, dataDir)
+	if cache != nil {
+		cache.SetMutagenDaemonPID(pid)
+	}
 	return nil
 }
 
@@ -151,14 +159,14 @@ func SpawnMutagen(ctx context.Context, cfg identity.Config, sup *supervisor.Supe
 // means devm was upgraded since that daemon started, so it's stopped
 // and a fresh one spawned from the current embedded binary. If none is
 // running, SpawnMutagen starts one.
-func AdoptMutagenDaemon(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor) error {
+func AdoptMutagenDaemon(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, cache *StateCache) error {
 	dataDir := mutagenDataDir(cfg)
 	pid, err := mutagenLockPID(dataDir)
 	if err != nil {
 		return fmt.Errorf("mutagen: check running daemon: %w", err)
 	}
 	if pid == 0 {
-		return SpawnMutagen(ctx, cfg, sup)
+		return SpawnMutagen(ctx, cfg, sup, cache)
 	}
 
 	key := supervisor.Key{Role: supervisor.RoleMutagen}
@@ -175,7 +183,7 @@ func AdoptMutagenDaemon(ctx context.Context, cfg identity.Config, sup *superviso
 		return fmt.Errorf("mutagen: stop existing daemon pid %d: %w", pid, err)
 	}
 	log.Printf("mutagen: stopped existing daemon pid=%d, respawning with current env", pid)
-	return SpawnMutagen(ctx, cfg, sup)
+	return SpawnMutagen(ctx, cfg, sup, cache)
 }
 
 // StopMutagen stops the mutagen daemon supervised under

@@ -23,7 +23,8 @@ func TestPopSessionEndpoint_FileKind_ReturnsMacDirTarget(t *testing.T) {
 	guestPath := filepath.Join(t.TempDir(), "guest-tree", "site", "index.html")
 
 	resolveSSH := func(project string) string { return "devm-" + project }
-	handler := popSessionHandler(cfg, store, cli, resolveSSH)
+	cache := NewStateCache()
+	handler := popSessionHandler(cfg, store, cli, resolveSSH, cache)
 
 	body, _ := json.Marshal(map[string]any{
 		"project":    "p",
@@ -43,6 +44,10 @@ func TestPopSessionEndpoint_FileKind_ReturnsMacDirTarget(t *testing.T) {
 	session, ok := store.Get(guestPath)
 	require.True(t, ok)
 	assert.Equal(t, filepath.Join(session.MacDir, "index.html"), resp.MacPath)
+
+	row, ok := cache.ProjectRow("p")
+	require.True(t, ok, "a new pop session must create a cache row for the project")
+	assert.Equal(t, 1, row.PopSessions.Count, "cache must reflect the freshly created session")
 }
 
 func TestPopSessionEndpoint_DirKind_ReturnsMacDirItself(t *testing.T) {
@@ -54,7 +59,7 @@ func TestPopSessionEndpoint_DirKind_ReturnsMacDirItself(t *testing.T) {
 	guestPath := filepath.Join(t.TempDir(), "guest-tree", "site")
 
 	resolveSSH := func(project string) string { return "devm-" + project }
-	handler := popSessionHandler(cfg, store, cli, resolveSSH)
+	handler := popSessionHandler(cfg, store, cli, resolveSSH, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"project": "p", "guest_path": guestPath, "is_dir": true,
@@ -78,7 +83,7 @@ func TestPopSessionEndpoint_MissingProject_400(t *testing.T) {
 	scripted := &scriptedCLI{}
 	cli := scripted.build()
 	store := NewPopSessionStore()
-	handler := popSessionHandler(cfg, store, cli, func(string) string { return "devm-x" })
+	handler := popSessionHandler(cfg, store, cli, func(string) string { return "devm-x" }, nil)
 
 	body, _ := json.Marshal(map[string]any{"guest_path": "/tmp/x"})
 	req := httptest.NewRequest(http.MethodPost, "/pop-session", bytes.NewReader(body))
@@ -92,7 +97,7 @@ func TestPopSessionEndpoint_MissingGuestPath_400(t *testing.T) {
 	scripted := &scriptedCLI{}
 	cli := scripted.build()
 	store := NewPopSessionStore()
-	handler := popSessionHandler(cfg, store, cli, func(string) string { return "devm-x" })
+	handler := popSessionHandler(cfg, store, cli, func(string) string { return "devm-x" }, nil)
 
 	body, _ := json.Marshal(map[string]any{"project": "p"})
 	req := httptest.NewRequest(http.MethodPost, "/pop-session", bytes.NewReader(body))
@@ -106,7 +111,7 @@ func TestPopSessionEndpoint_RelativeGuestPath_400(t *testing.T) {
 	scripted := &scriptedCLI{}
 	cli := scripted.build()
 	store := NewPopSessionStore()
-	handler := popSessionHandler(cfg, store, cli, func(string) string { return "devm-x" })
+	handler := popSessionHandler(cfg, store, cli, func(string) string { return "devm-x" }, nil)
 
 	body, _ := json.Marshal(map[string]any{"project": "p", "guest_path": "relative/path"})
 	req := httptest.NewRequest(http.MethodPost, "/pop-session", bytes.NewReader(body))
@@ -120,7 +125,7 @@ func TestPopSessionEndpoint_UnknownProject_404(t *testing.T) {
 	scripted := &scriptedCLI{}
 	cli := scripted.build()
 	store := NewPopSessionStore()
-	handler := popSessionHandler(cfg, store, cli, func(string) string { return "" })
+	handler := popSessionHandler(cfg, store, cli, func(string) string { return "" }, nil)
 
 	body, _ := json.Marshal(map[string]any{"project": "p", "guest_path": "/tmp/x"})
 	req := httptest.NewRequest(http.MethodPost, "/pop-session", bytes.NewReader(body))
@@ -134,7 +139,7 @@ func TestPopSessionEndpoint_NonPost_405(t *testing.T) {
 	scripted := &scriptedCLI{}
 	cli := scripted.build()
 	store := NewPopSessionStore()
-	handler := popSessionHandler(cfg, store, cli, func(string) string { return "devm-x" })
+	handler := popSessionHandler(cfg, store, cli, func(string) string { return "devm-x" }, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/pop-session", nil)
 	w := httptest.NewRecorder()

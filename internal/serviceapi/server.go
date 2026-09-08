@@ -81,6 +81,9 @@ func NewServer(socketPath string, build Build) *Server {
 // the crash instead of pretending nothing was ever running.
 func (s *Server) SetProxyReady(ready bool) {
 	s.proxyReady.Store(ready)
+	if s.cache != nil {
+		s.cache.SetProxyReady(ready)
+	}
 }
 
 // SetStateCache wires the daemon's StateCache into the server so

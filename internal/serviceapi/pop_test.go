@@ -223,7 +223,7 @@ func TestPopHandler_NotInMirror_FileKind_CreatesSessionOpensMacTarget(t *testing
 		})
 		req := httptest.NewRequest(http.MethodPost, "/pop", bytes.NewReader(body))
 		w := httptest.NewRecorder()
-		handlePopWithDeps(w, req, "p", registry, cfg, store, cli, "devm-p")
+		handlePopWithDeps(w, req, "p", registry, cfg, store, cli, "devm-p", nil)
 
 		assert.Equal(t, 200, w.Code, "body: %s", w.Body.String())
 		require.Len(t, *recs, 1)
@@ -233,6 +233,36 @@ func TestPopHandler_NotInMirror_FileKind_CreatesSessionOpensMacTarget(t *testing
 		require.True(t, ok)
 		assert.Equal(t, filepath.Join(session.MacDir, "index.html"), got)
 	})
+}
+
+func TestPopHandler_NotInMirror_CreatesSession_UpdatesCache(t *testing.T) {
+	cfg := testPopSessionCfg(t)
+
+	scripted := &scriptedCLI{}
+	cli := scripted.build()
+	store := NewPopSessionStore()
+	cache := NewStateCache()
+
+	registry := []WorkspaceEntry{{ProjectName: "p", GuestPath: "/home/devm/proj", StoragePath: t.TempDir()}}
+
+	withPopExecSeam(t, func(recs *[]popExecRecord) {
+		body, _ := json.Marshal(map[string]any{
+			"arg":           "/tmp/site/index.html",
+			"cwd":           "/home/devm/proj",
+			"resolved_path": "/tmp/site/index.html",
+			"is_dir":        false,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/pop", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		handlePopWithDeps(w, req, "p", registry, cfg, store, cli, "devm-p", cache)
+
+		assert.Equal(t, 200, w.Code, "body: %s", w.Body.String())
+		require.Len(t, *recs, 1)
+	})
+
+	row, ok := cache.ProjectRow("p")
+	require.True(t, ok, "a new pop session must create a cache row for the project")
+	assert.Equal(t, 1, row.PopSessions.Count, "cache must reflect the freshly created session")
 }
 
 func TestPopHandler_NotInMirror_DirKind_OpensMacDir(t *testing.T) {
@@ -253,7 +283,7 @@ func TestPopHandler_NotInMirror_DirKind_OpensMacDir(t *testing.T) {
 		})
 		req := httptest.NewRequest(http.MethodPost, "/pop", bytes.NewReader(body))
 		w := httptest.NewRecorder()
-		handlePopWithDeps(w, req, "p", registry, cfg, store, cli, "devm-p")
+		handlePopWithDeps(w, req, "p", registry, cfg, store, cli, "devm-p", nil)
 
 		assert.Equal(t, 200, w.Code, "body: %s", w.Body.String())
 		require.Len(t, *recs, 1)
@@ -279,7 +309,7 @@ func TestPopHandler_NotInMirror_NoResolvedPath_Returns404(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodPost, "/pop", bytes.NewReader(body))
 	w := httptest.NewRecorder()
-	handlePopWithDeps(w, req, "p", registry, cfg, store, cli, "devm-p")
+	handlePopWithDeps(w, req, "p", registry, cfg, store, cli, "devm-p", nil)
 
 	assert.Equal(t, 404, w.Code)
 	assert.Contains(t, w.Body.String(), "no such file")

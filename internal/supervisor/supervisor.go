@@ -145,7 +145,15 @@ func (s *Supervisor) Adopt(k Key, pid int) {
 // stdout+stderr alongside the on-disk log file. Used by the daemon to
 // consume structured audit output (e.g., iron-proxy's reject records)
 // without a second copy on disk. Nil taps are silently skipped.
-func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd, taps ...io.Writer) error {
+//
+// onUnexpectedExit, if non-nil, fires synchronously the instant pexec
+// reports k's child gone without DisableRestart having been called for
+// it first — i.e. a real crash, not an expected exit like the graceful
+// VM poweroff path in vm.go. It runs before the backoff decides whether
+// to respawn, so callers can mark cached state stale (e.g. StateCache)
+// the moment the process is confirmed down rather than waiting for the
+// next watchdog tick.
+func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd, onUnexpectedExit func(), taps ...io.Writer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -196,6 +204,9 @@ func (s *Supervisor) Spawn(ctx context.Context, k Key, cmd *exec.Cmd, taps ...io
 		OnUnexpectedExit: func(ctx context.Context, exitCode int) bool {
 			if disable.Load() {
 				return false // expected exit — do not respawn
+			}
+			if onUnexpectedExit != nil {
+				onUnexpectedExit()
 			}
 			return backoff.onExit(ctx, exitCode)
 		},

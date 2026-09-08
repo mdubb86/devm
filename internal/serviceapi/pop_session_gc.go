@@ -62,15 +62,19 @@ func popSessionLastChangeAt(macDir string) time.Time {
 }
 
 // GCPopSessionsOnce sweeps sessions whose last-change age is >= ttl.
-// Returns the sessions that were torn down.
+// Returns the sessions that were torn down. cache, when non-nil, gets a
+// fresh PopSessionSummary for every project that had at least one
+// session removed.
 func GCPopSessionsOnce(
 	store *PopSessionStore,
 	cli *mutagen.CLI,
 	cfg identity.Config,
 	ttl time.Duration,
 	now func() time.Time,
+	cache *StateCache,
 ) []PopSession {
 	var removed []PopSession
+	affected := make(map[string]struct{})
 	for _, ps := range store.All() {
 		last := popSessionLastChangeAt(ps.MacDir)
 		if last.IsZero() {
@@ -89,6 +93,12 @@ func GCPopSessionsOnce(
 		log.Printf("pop session %s: gc'd (idle %s) project=%s path=%s",
 			got.ID, now().Sub(last).Round(time.Second), got.ProjectName, got.GuestPath)
 		removed = append(removed, *got)
+		affected[got.ProjectName] = struct{}{}
+	}
+	if cache != nil {
+		for projectName := range affected {
+			cache.SetPopSessionSummary(projectName, PopSessionSummaryForProjectForWatchdog(store, projectName))
+		}
 	}
 	return removed
 }
@@ -101,6 +111,7 @@ func RunPopSessionGC(
 	cli *mutagen.CLI,
 	cfg identity.Config,
 	ttl, interval time.Duration,
+	cache *StateCache,
 ) error {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -109,7 +120,7 @@ func RunPopSessionGC(
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
-			GCPopSessionsOnce(store, cli, cfg, ttl, time.Now)
+			GCPopSessionsOnce(store, cli, cfg, ttl, time.Now, cache)
 		}
 	}
 }
@@ -131,7 +142,7 @@ func SweepAllPopSessions(store *PopSessionStore, cli *mutagen.CLI, cfg identity.
 // SweepProjectPopSessions tears down every session belonging to
 // projectName. Called from /vm/stop and /vm/teardown before releasing
 // the project's VM.
-func SweepProjectPopSessions(store *PopSessionStore, cli *mutagen.CLI, cfg identity.Config, projectName string) {
+func SweepProjectPopSessions(store *PopSessionStore, cli *mutagen.CLI, cfg identity.Config, projectName string, cache *StateCache) {
 	for _, ps := range store.ListForProject(projectName) {
 		got := store.RemoveByID(ps.ID)
 		if got == nil {
@@ -140,6 +151,9 @@ func SweepProjectPopSessions(store *PopSessionStore, cli *mutagen.CLI, cfg ident
 		if err := TearDownPopSyncSession(cli, cfg, *got); err != nil {
 			daemonlog.Errorf("pop session %s: tear down (project sweep): %v", got.ID, err)
 		}
+	}
+	if cache != nil {
+		cache.SetPopSessionSummary(projectName, PopSessionSummary{})
 	}
 }
 

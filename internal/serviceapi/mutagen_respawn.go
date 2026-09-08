@@ -18,5 +18,8 @@ func RespawnMutagenForWatchdog(ctx context.Context, cfg identity.Config, sup *su
 	if sup.Status(key).Present {
 		return nil
 	}
-	return spawnMutagenFn(ctx, cfg, sup)
+	// cache is nil: the mutagen check that calls this repair path already
+	// writes the reconciled PID + per-project MutagenHealth into the
+	// cache itself right after this returns (watchdog_check_mutagen.go).
+	return spawnMutagenFn(ctx, cfg, sup, nil)
 }

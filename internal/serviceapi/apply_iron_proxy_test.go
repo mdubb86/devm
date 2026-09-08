@@ -200,7 +200,7 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
 		var lerr error
 		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
 		return lerr
@@ -280,7 +280,7 @@ func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
 		var lerr error
 		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
 		return lerr
@@ -353,7 +353,7 @@ func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
 		var lerr error
 		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
 		return lerr
@@ -414,7 +414,7 @@ func TestApplyIronProxy_PreservesGuestOriginPorts(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
 		var lerr error
 		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
 		return lerr
@@ -482,7 +482,7 @@ func TestApplyIronProxy_AdoptInPlace_StartsGuestOriginListeners(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
 		var lerr error
 		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
 		return lerr

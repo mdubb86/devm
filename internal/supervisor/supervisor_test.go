@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -110,7 +111,7 @@ func TestSupervisor_SpawnActuallyRunsChild(t *testing.T) {
 
 	k := Key{ProjectID: "test", Role: RoleVM}
 	cmd := exec.Command("sh", "-c", "echo running > "+marker)
-	require.NoError(t, s.Spawn(context.Background(), k, cmd))
+	require.NoError(t, s.Spawn(context.Background(), k, cmd, nil))
 
 	// Poll briefly: the child should have run and written the marker.
 	deadline := time.Now().Add(3 * time.Second)
@@ -237,7 +238,7 @@ func TestDisableRestart_PreventsRespawnOnUnexpectedExit(t *testing.T) {
 
 	k := Key{ProjectID: "flaky", Role: RoleVM}
 	cmd := exec.Command("sh", "-c", "echo start >> "+counter+"; sleep 0.3; exit 1")
-	require.NoError(t, s.Spawn(context.Background(), k, cmd))
+	require.NoError(t, s.Spawn(context.Background(), k, cmd, nil))
 
 	// Disable promptly, well before the child's 0.3s exit.
 	s.DisableRestart(k)
@@ -257,6 +258,52 @@ func TestDisableRestart_PreventsRespawnOnUnexpectedExit(t *testing.T) {
 	state := s.Status(k)
 	assert.True(t, state.Present, "DisableRestart must not remove the registry entry")
 	assert.False(t, state.Running, "process should have exited and not been respawned")
+}
+
+// TestSpawn_OnUnexpectedExitFiresOnCrash spawns a child that exits
+// non-zero on its own (a real crash) and asserts the onUnexpectedExit
+// hook passed to Spawn fires — the mechanism serviceapi's cache-write
+// callbacks (RoleVM/RoleProxy) depend on to learn a supervised process
+// died without waiting for the next watchdog tick.
+func TestSpawn_OnUnexpectedExitFiresOnCrash(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+	defer func() { _ = s.pm.Stop() }()
+
+	var fired atomic.Bool
+	k := Key{ProjectID: "crashy", Role: RoleVM}
+	cmd := exec.Command("sh", "-c", "exit 1")
+	require.NoError(t, s.Spawn(context.Background(), k, cmd, func() { fired.Store(true) }))
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if fired.Load() {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("onUnexpectedExit hook never fired after child crashed")
+}
+
+// TestSpawn_OnUnexpectedExitSkippedAfterDisableRestart confirms the
+// hook does NOT fire for an expected exit — DisableRestart is called
+// before the child exits, mirroring /vm/stop's graceful-poweroff path
+// in vm.go, which must not have its cache-write callback mistake a
+// clean shutdown for a crash.
+func TestSpawn_OnUnexpectedExitSkippedAfterDisableRestart(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+	defer func() { _ = s.pm.Stop() }()
+
+	var fired atomic.Bool
+	k := Key{ProjectID: "graceful", Role: RoleVM}
+	cmd := exec.Command("sh", "-c", "sleep 0.3; exit 0")
+	require.NoError(t, s.Spawn(context.Background(), k, cmd, func() { fired.Store(true) }))
+
+	s.DisableRestart(k)
+
+	time.Sleep(1 * time.Second)
+	assert.False(t, fired.Load(), "onUnexpectedExit hook must not fire for a DisableRestart'd expected exit")
 }
 
 // TestDisableRestart_UnknownKey_Noop confirms DisableRestart is safe to
@@ -287,7 +334,7 @@ func TestSupervisor_ChildInheritsDaemonEnv(t *testing.T) {
 
 	k := Key{ProjectID: "envtest", Role: RoleVM}
 	cmd := exec.Command("sh", "-c", "echo $DEVM_SPAWN_TEST_MARKER > "+out)
-	require.NoError(t, s.Spawn(context.Background(), k, cmd))
+	require.NoError(t, s.Spawn(context.Background(), k, cmd, nil))
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
