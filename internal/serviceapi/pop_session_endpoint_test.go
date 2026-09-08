@@ -147,6 +147,43 @@ func TestPopSessionEndpoint_NonPost_405(t *testing.T) {
 	assert.Equal(t, 405, w.Code)
 }
 
+func TestPopSessionSummary_SeededRow_RoundTrips(t *testing.T) {
+	cache := NewStateCache()
+	cache.SetPopSessionSummary("proj", PopSessionSummary{Count: 3, OldestAgeSeconds: 42})
+	handler := popSessionSummaryHandler(cache)
+
+	req := httptest.NewRequest(http.MethodGet, "/pop-session-summary?project=proj", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	require.Equal(t, 200, w.Code, "body: %s", w.Body.String())
+	var resp struct {
+		Count            int   `json:"count"`
+		OldestAgeSeconds int64 `json:"oldest_age_seconds"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 3, resp.Count)
+	assert.Equal(t, int64(42), resp.OldestAgeSeconds)
+}
+
+func TestPopSessionSummary_UnknownProject_ZeroValues(t *testing.T) {
+	cache := NewStateCache()
+	handler := popSessionSummaryHandler(cache)
+
+	req := httptest.NewRequest(http.MethodGet, "/pop-session-summary?project=missing", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	require.Equal(t, 200, w.Code, "body: %s", w.Body.String())
+	var resp struct {
+		Count            int   `json:"count"`
+		OldestAgeSeconds int64 `json:"oldest_age_seconds"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 0, resp.Count)
+	assert.Equal(t, int64(0), resp.OldestAgeSeconds)
+}
+
 func TestRegisterPopSessionHandler_InstallsRoute(t *testing.T) {
 	cfg := testPopSessionCfg(t)
 	scripted := &scriptedCLI{}
