@@ -12,7 +12,7 @@ type approveCheck struct{}
 
 func NewApproveCheck() Check { return &approveCheck{} }
 
-func (approveCheck) Name() string { return "approve" }
+func (approveCheck) Name() string { return "approve-state" }
 
 func (approveCheck) Run(ctx context.Context, cache *serviceapi.StateCache, gt GroundTruth) (bool, error) {
 	driftedAny := false
