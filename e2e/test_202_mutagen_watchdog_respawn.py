@@ -1,16 +1,16 @@
-"""202: the mutagen watchdog respawns a killed mutagen daemon.
+"""202: the state watchdog respawns a killed mutagen daemon.
 
-Task 12's `runMutagenWatchdog` (internal/serviceapi/mutagen_watchdog.go)
-polls every 30s (`mutagenWatchdogInterval`) and respawns the mutagen
-daemon via `SpawnMutagen` whenever the supervisor no longer has it —
-e.g. a hard crash or SIGKILL, as opposed to a graceful `devm service
-restart` (test_200), which tears mutagen down deliberately and relies
-on `AdoptMutagenDaemon`'s startup path instead.
+The state watchdog's mutagen check runs every 60s and respawns the
+mutagen daemon via `SpawnMutagen` whenever the supervisor no longer
+has it — e.g. a hard crash or SIGKILL, as opposed to a graceful `devm
+service restart` (test_200), which tears mutagen down deliberately and
+relies on `AdoptMutagenDaemon`'s startup path instead.
 
 Sequence:
   1. Find the running mutagen daemon PID (as in test_200).
   2. `kill -9` it directly — hard crash, no graceful signal.
-  3. Poll every 2s for up to 45s for a NEW pid to take over the lock.
+  3. Poll every 2s for up to 90s for a NEW pid to take over the lock
+     (60s tick + slack).
   4. Assert the new PID differs from the old one (respawned, not the
      same process lingering) and that it's still a direct child of the
      devm-e2e daemon.
@@ -59,7 +59,7 @@ def _ppid_of(pid: int) -> int | None:
     return int(out) if out else None
 
 
-@pytest.mark.timeout(90)
+@pytest.mark.timeout(180)
 def test_mutagen_watchdog_respawn(devm_path, devm_installed):
     subprocess.run([devm_path, "status"], capture_output=True, timeout=20)
 
@@ -73,7 +73,7 @@ def test_mutagen_watchdog_respawn(devm_path, devm_installed):
     # and respawn it.
     os.kill(old_pid, signal.SIGKILL)
 
-    deadline = time.monotonic() + 45
+    deadline = time.monotonic() + 90
     new_pid: int | None = None
     while time.monotonic() < deadline:
         pid = _mutagen_pid()
@@ -83,9 +83,8 @@ def test_mutagen_watchdog_respawn(devm_path, devm_installed):
         time.sleep(2)
 
     assert new_pid is not None, (
-        f"mutagen watchdog never respawned a new daemon within 45s of "
-        f"SIGKILLing pid={old_pid} (mutagenWatchdogInterval is 30s — "
-        f"see internal/serviceapi/mutagen_watchdog.go)"
+        f"state watchdog never respawned a new mutagen daemon within 90s "
+        f"of SIGKILLing pid={old_pid} (state watchdog ticks every 60s)"
     )
     assert new_pid != old_pid, "respawned pid is identical to the killed pid"
 
