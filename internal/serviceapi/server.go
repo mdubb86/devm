@@ -97,10 +97,16 @@ func (s *Server) SetStateCache(cache *StateCache) {
 // actor started this daemon's lifetime. Used by `devm status` in place
 // of a raw TCP dial to 127.0.0.1:443 (which drops the connection
 // mid-TLS handshake and spams the daemon log with "TLS handshake
-// error … EOF").
+// error … EOF"). Served from cache; falls back to the atomic flag
+// directly if the cache hasn't been wired yet (SetStateCache runs
+// before the server accepts requests, so this is defensive only).
 func (s *Server) handleProxyStatus(w http.ResponseWriter, _ *http.Request) {
+	ready := s.proxyReady.Load()
+	if s.cache != nil {
+		ready = s.cache.Global().ProxyReady
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]bool{"ready": s.proxyReady.Load()})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ready": ready})
 }
 
 // Register adds a handler at the given pattern. Used by later ships
@@ -115,9 +121,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
+	build := s.build
+	if s.cache != nil {
+		build = s.cache.Global().Build
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(s.build)
+	_ = json.NewEncoder(w).Encode(build)
 }
 
 // Serve binds the Unix socket and serves until ctx is cancelled.

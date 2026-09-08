@@ -43,9 +43,9 @@ func RegisterWorkspacesHandler(s *Server, cfg identity.Config) {
 	})
 }
 
-// listWorkspaces mirrors listProjectStatuses' StateDir enumeration,
-// then expands each project's persisted Cfg into one WorkspaceEntry
-// per mirrored repo/volume.
+// listWorkspaces enumerates every persisted StateSnapshot in
+// StateDir(), then expands each project's persisted Cfg into one
+// WorkspaceEntry per mirrored repo/volume.
 func listWorkspaces(cfg identity.Config) ([]WorkspaceEntry, error) {
 	entries, err := os.ReadDir(StateDir(cfg))
 	if err != nil {

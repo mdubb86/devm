@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
@@ -83,8 +82,10 @@ func popSessionHandler(
 
 // popSessionSummaryHandler is the UDS GET /pop-session-summary handler.
 // Backs `devm status` — informational only, so it reports a count and
-// oldest-session age rather than the sessions themselves.
-func popSessionSummaryHandler(store *PopSessionStore) http.HandlerFunc {
+// oldest-session age rather than the sessions themselves. Served from
+// cache; a project with no cache row reports zero values, same as a
+// project with no pop sessions ever created.
+func popSessionSummaryHandler(cache *StateCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "pop-session-summary: GET only", http.StatusMethodNotAllowed)
@@ -95,23 +96,19 @@ func popSessionSummaryHandler(store *PopSessionStore) http.HandlerFunc {
 			http.Error(w, "pop-session-summary: project required", http.StatusBadRequest)
 			return
 		}
-		sessions := store.ListForProject(project)
-		var oldest int64
-		if len(sessions) > 0 {
-			oldest = int64(time.Since(sessions[0].CreatedAt).Round(time.Second).Seconds())
-		}
+		row, _ := cache.ProjectRow(project)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"count":              len(sessions),
-			"oldest_age_seconds": oldest,
+			"count":              row.PopSessions.Count,
+			"oldest_age_seconds": row.PopSessions.OldestAgeSeconds,
 		})
 	}
 }
 
 // RegisterPopSessionHandler installs the /pop-session and
-// /pop-session-summary endpoints on the daemon UDS. cache is written
-// by /pop-session on a freshly created session; not yet read by
-// /pop-session-summary.
+// /pop-session-summary endpoints on the daemon UDS. /pop-session
+// writes a freshly created session's summary into cache;
+// /pop-session-summary reads it back from there.
 func RegisterPopSessionHandler(
 	server *Server,
 	cfg identity.Config,
@@ -121,5 +118,5 @@ func RegisterPopSessionHandler(
 	cache *StateCache,
 ) {
 	server.Register("/pop-session", popSessionHandler(cfg, store, cli, guestSSHTargetFor, cache))
-	server.Register("/pop-session-summary", popSessionSummaryHandler(store))
+	server.Register("/pop-session-summary", popSessionSummaryHandler(cache))
 }

@@ -6,20 +6,19 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
-	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // fakeStatusAllTart reports a fixed running-VM set without shelling
-// out to `tart`, mirroring fakeTartList in reconcile_test.go.
+// out to `tart`, mirroring fakeTartList in reconcile_test.go. Only
+// consulted for orphan detection now — cache rows carry each tracked
+// project's own VM-running state.
 type fakeStatusAllTart struct {
 	running map[string]bool
 }
@@ -32,25 +31,18 @@ func (f *fakeStatusAllTart) List(ctx context.Context) ([]tart.VM, error) {
 	return vms, nil
 }
 
-func writeStatusAllSnapshot(t *testing.T, projectID string, cfg schema.Config) {
-	t.Helper()
-	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: cfg}))
-}
-
 func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	writeStatusAllSnapshot(t, "running-proj", schema.Config{
-		Project: schema.Project{Name: "running-proj"},
-	})
-	writeStatusAllSnapshot(t, "stopped-proj", schema.Config{
-		Project: schema.Project{Name: "stopped-proj"},
-	})
+	cache := NewStateCache()
+	cache.SetVMState("running-proj", VMRunning)
+	cache.SetIronProxyHealth("running-proj", ProxyHealth{Status: ProxyMissing})
+	cache.SetVMState("stopped-proj", VMStopped)
 
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
 	sup := supervisor.New(t.TempDir())
-	tr := &fakeStatusAllTart{running: map[string]bool{"running-proj": true}}
-	RegisterStatusAllHandler(srv, identity.Prod, sup, tr, nil, NewStateCache())
+	tr := &fakeStatusAllTart{running: map[string]bool{}}
+	RegisterStatusAllHandler(srv, identity.Prod, sup, tr, nil, cache)
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
@@ -68,8 +60,6 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 	running := byID["running-proj"]
 	assert.Equal(t, "running-proj", running.Name)
 	assert.True(t, running.VMRunning)
-	// No live iron-proxy process and no config file on disk for this
-	// project — ComputeProxyHealth reports MISSING.
 	assert.Equal(t, ProxyMissing, running.Proxy.Status)
 
 	stopped := byID["stopped-proj"]
@@ -77,7 +67,7 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 	assert.False(t, stopped.VMRunning)
 }
 
-func TestStatusAll_NoSnapshots_EmptyList(t *testing.T) {
+func TestStatusAll_NoCacheRows_EmptyList(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
@@ -92,28 +82,6 @@ func TestStatusAll_NoSnapshots_EmptyList(t *testing.T) {
 	var rows []ProjectStatus
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rows))
 	assert.Empty(t, rows)
-}
-
-func TestStatusAll_SkipsNonJSONAndMalformedFiles(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	require.NoError(t, os.MkdirAll(StateDir(identity.Prod), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(StateDir(identity.Prod), "notes.txt"), []byte("hi"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(StateDir(identity.Prod), "broken.json"), []byte("{not json"), 0o600))
-	writeStatusAllSnapshot(t, "good", schema.Config{Project: schema.Project{Name: "good"}})
-
-	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
-	sup := supervisor.New(t.TempDir())
-	tr := &fakeStatusAllTart{running: map[string]bool{}}
-	RegisterStatusAllHandler(srv, identity.Prod, sup, tr, nil, NewStateCache())
-
-	rec := httptest.NewRecorder()
-	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	var rows []ProjectStatus
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rows))
-	require.Len(t, rows, 1)
-	assert.Equal(t, "good", rows[0].Name)
 }
 
 func TestStatusAll_TartListError_Returns500(t *testing.T) {

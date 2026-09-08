@@ -147,10 +147,12 @@ func TestRunStatus_RunningEmptySnapshotIsInSync(t *testing.T) {
 // startHandshakeDaemon spins up a real serviceapi.Server with the
 // /handshake endpoint registered on a temp Unix socket, and points
 // $HOME at a temp dir so identity.Prod.SocketPath() (and therefore
-// RunStatus's internal serviceapi.NewClient()) resolves to it. sup has
-// no adopted iron-proxy PID for any project, so a handshake for any
-// project_id reports ProxyMissing — the daemon is reachable, it just
-// has nothing healthy to report. Returns a cleanup func.
+// RunStatus's internal serviceapi.NewClient()) resolves to it.
+// /handshake serves proxy health from the StateCache, so project "x"
+// (statusMinimalCfg's project name) is seeded as a known project with
+// a missing iron-proxy — matching what a real daemon's watchdog
+// warmup would already have reconciled for a project that has run
+// before but has nothing healthy to report. Returns a cleanup func.
 func startHandshakeDaemon(t *testing.T) func() {
 	t.Helper()
 	// Unix domain socket paths are capped at ~104 bytes on macOS/BSD;
@@ -167,7 +169,10 @@ func startHandshakeDaemon(t *testing.T) func() {
 	socket := identity.Prod.SocketPath()
 	sup := supervisor.New(t.TempDir())
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, serviceapi.Build{Version: "test"}, sup, nil, serviceapi.NewStateCache())
+	cache := serviceapi.NewStateCache()
+	cache.SetBuild(serviceapi.Build{Version: "test"})
+	cache.SetIronProxyHealth("x", serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing})
+	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, serviceapi.Build{Version: "test"}, sup, nil, cache)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

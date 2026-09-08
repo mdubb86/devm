@@ -40,8 +40,12 @@ func captureStderr(t *testing.T, fn func()) string {
 // /handshake endpoint registered, bound to a temp socket under a
 // $HOME-scoped runtime dir. daemonHandshake talks to it via the
 // default serviceapi.NewClient(), which resolves the socket from
-// identity.Prod.SocketPath().
-func startHandshakeDaemon(t *testing.T, build serviceapi.Build) func() {
+// identity.Prod.SocketPath(). /handshake now serves Build and
+// per-project proxy health from the StateCache, so build is seeded
+// there directly; projectProxy seeds project "p"'s iron-proxy health
+// (nil means the project has no cache row — matches a project that
+// has never run).
+func startHandshakeDaemon(t *testing.T, build serviceapi.Build, projectProxy *serviceapi.ProxyHealth) func() {
 	t.Helper()
 	// os.MkdirTemp("/tmp", ...) rather than t.TempDir(): the latter nests
 	// under a path keyed on the test name, which blows macOS's ~104-byte
@@ -56,7 +60,12 @@ func startHandshakeDaemon(t *testing.T, build serviceapi.Build) func() {
 	socket := identity.Prod.SocketPath()
 	srv := serviceapi.NewServer(socket, build)
 	sup := supervisor.New(t.TempDir())
-	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, build, sup, nil, serviceapi.NewStateCache())
+	cache := serviceapi.NewStateCache()
+	cache.SetBuild(build)
+	if projectProxy != nil {
+		cache.SetIronProxyHealth("p", *projectProxy)
+	}
+	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, build, sup, nil, cache)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -79,7 +88,7 @@ func TestDaemonHandshake_FingerprintMatch_NoError(t *testing.T) {
 	Fingerprint = "fp-match"
 	t.Cleanup(func() { Fingerprint = origFingerprint })
 
-	cleanup := startHandshakeDaemon(t, serviceapi.Build{Fingerprint: "fp-match"})
+	cleanup := startHandshakeDaemon(t, serviceapi.Build{Fingerprint: "fp-match"}, nil)
 	defer cleanup()
 
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
@@ -92,7 +101,7 @@ func TestDaemonHandshake_FingerprintDrift_ReturnsActionableError(t *testing.T) {
 	Fingerprint = "fp-cli"
 	t.Cleanup(func() { Fingerprint = origFingerprint })
 
-	cleanup := startHandshakeDaemon(t, serviceapi.Build{Fingerprint: "fp-daemon", BinaryPath: "/daemon/path"})
+	cleanup := startHandshakeDaemon(t, serviceapi.Build{Fingerprint: "fp-daemon", BinaryPath: "/daemon/path"}, nil)
 	defer cleanup()
 
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
@@ -123,10 +132,10 @@ func TestDaemonHandshake_ProxyDrift_WarnsAndDoesNotHeal(t *testing.T) {
 	Fingerprint = "fp-match"
 	t.Cleanup(func() { Fingerprint = origFingerprint })
 
-	// A fresh supervisor + no state snapshot for "p" means
-	// ComputeProxyHealth reports ProxyMissing (no live process, no
-	// config file on disk).
-	cleanup := startHandshakeDaemon(t, serviceapi.Build{Fingerprint: "fp-match"})
+	// "p" is seeded into the cache as a known project with a missing
+	// iron-proxy — the state a real daemon's watchdog warmup would have
+	// already reconciled by the time any /handshake request lands.
+	cleanup := startHandshakeDaemon(t, serviceapi.Build{Fingerprint: "fp-match"}, &serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing})
 	defer cleanup()
 
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}

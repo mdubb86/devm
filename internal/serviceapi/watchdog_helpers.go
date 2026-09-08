@@ -11,10 +11,8 @@ import (
 
 // KnownProjectNamesForWatchdog enumerates every persisted per-project
 // state snapshot in StateDir(cfg) and returns their project names,
-// sorted for deterministic iteration. Mirrors the directory walk in
-// listProjectStatuses (statusall.go), minus the VM/proxy joins that
-// handler needs — the watchdog only needs the project name set so it
-// knows which rows to touch.
+// sorted for deterministic iteration — the watchdog's Checks use this
+// to know which cache rows to reconcile.
 func KnownProjectNamesForWatchdog(cfg identity.Config) []string {
 	entries, err := os.ReadDir(StateDir(cfg))
 	if err != nil {

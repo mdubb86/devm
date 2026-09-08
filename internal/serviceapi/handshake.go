@@ -10,26 +10,28 @@ import (
 
 // HandshakeResponse is the body of GET /handshake. Build is always present
 // (the daemon-sync fingerprint check the CLI does on every daemon-touching
-// command). Proxy is present only when a project name is supplied, and carries
-// the project's iron-proxy health so the command can report drift to the
-// user — `devm reconcile` is the only thing that heals it. Proxy is present
-// only when the project name is supplied.
+// command). Proxy carries the project's iron-proxy health so the command
+// can report drift to the user — `devm reconcile` is the only thing that
+// heals it. Proxy is nil when no project name is supplied, or when the
+// named project has no StateCache row (it has never run).
 type HandshakeResponse struct {
 	Build Build        `json:"build"`
 	Proxy *ProxyHealth `json:"proxy,omitempty"`
 }
 
-// RegisterHandshakeHandler wires GET /handshake. build is the daemon's
-// identity (same value /version reports); sup is queried for proxy
-// health. cache is plumbed through for a future ship's use; not read
-// yet.
+// RegisterHandshakeHandler wires GET /handshake. Build and per-project
+// proxy health are both served from cache — cache.SetBuild is called
+// once at daemon startup (see runner.go) so cache.Global().Build is
+// always the daemon's identity by request time.
 func RegisterHandshakeHandler(s *Server, cfg identity.Config, build Build, sup *supervisor.Supervisor, proxy *ProxyServer, cache *StateCache) {
 	s.Register("/handshake", func(w http.ResponseWriter, r *http.Request) {
-		resp := HandshakeResponse{Build: build}
+		resp := HandshakeResponse{Build: cache.Global().Build}
 		if name := r.URL.Query().Get("name"); name != "" {
 			if err := validProjectID(name); err == nil {
-				h := ComputeProxyHealth(cfg, sup, proxy, name)
-				resp.Proxy = &h
+				if row, ok := cache.ProjectRow(name); ok {
+					h := row.IronProxyHealth
+					resp.Proxy = &h
+				}
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")

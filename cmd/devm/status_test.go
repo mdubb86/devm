@@ -32,8 +32,9 @@ func (f *fakeStatusTart) List(ctx context.Context) ([]tart.VM, error) {
 
 // startStatusAllDaemon spins a real serviceapi.Server with only
 // /status/all registered, bound to a temp socket — same technique
-// startHandshakeDaemon uses in handshake_test.go.
-func startStatusAllDaemon(t *testing.T, running map[string]bool) func() {
+// startHandshakeDaemon uses in handshake_test.go. /status/all serves
+// its rows from cache, so callers pre-seed it.
+func startStatusAllDaemon(t *testing.T, running map[string]bool, cache *serviceapi.StateCache) func() {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "sapi-sa-")
 	require.NoError(t, err)
@@ -45,7 +46,7 @@ func startStatusAllDaemon(t *testing.T, running map[string]bool) func() {
 	socket := identity.Prod.SocketPath()
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "dev"})
 	sup := supervisor.New(t.TempDir())
-	serviceapi.RegisterStatusAllHandler(srv, identity.Prod, sup, &fakeStatusTart{running: running}, nil, serviceapi.NewStateCache())
+	serviceapi.RegisterStatusAllHandler(srv, identity.Prod, sup, &fakeStatusTart{running: running}, nil, cache)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -69,12 +70,11 @@ func startStatusAllDaemon(t *testing.T, running map[string]bool) func() {
 // itself since that os.Exit()s on drift — see anyProjectNeedsReconcile
 // for the unit-tested decision logic.
 func TestStatusAll_ClientRoundTrip(t *testing.T) {
-	cleanup := startStatusAllDaemon(t, map[string]bool{"p": true})
+	cache := serviceapi.NewStateCache()
+	cache.SetVMState("p", serviceapi.VMRunning)
+	cache.SetIronProxyHealth("p", serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing})
+	cleanup := startStatusAllDaemon(t, map[string]bool{"p": true}, cache)
 	defer cleanup()
-
-	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "p", serviceapi.StateSnapshot{
-		Cfg: schema.Config{Project: schema.Project{Name: "p"}},
-	}))
 
 	rows, err := serviceapi.NewClient(identity.Prod).StatusAll(context.Background())
 	require.NoError(t, err)
