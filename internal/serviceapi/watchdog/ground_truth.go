@@ -76,11 +76,11 @@ func (g *RealGroundTruth) TartList(ctx context.Context) ([]tart.VM, error) {
 }
 
 func (g *RealGroundTruth) ApproveHash(macCwd string) (string, string, error) {
-	panic("watchdog: RealGroundTruth.ApproveHash not yet wired (Task 7)")
+	return serviceapi.HashCurrentFilesForWatchdog(macCwd)
 }
 
 func (g *RealGroundTruth) ReadApprovedSnapshot(projectID string) (string, string, *time.Time, bool, error) {
-	panic("watchdog: RealGroundTruth.ReadApprovedSnapshot not yet wired (Task 7)")
+	return serviceapi.ReadApprovedSnapshotForWatchdog(g.Cfg, projectID)
 }
 
 func (g *RealGroundTruth) PopSessionSummaryForProject(projectID string) serviceapi.PopSessionSummary {
