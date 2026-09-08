@@ -145,6 +145,18 @@ func (s *PopSessionStore) ListForProject(projectName string) []PopSession {
 	return out
 }
 
+// PopSessionSummaryForProjectForWatchdog computes the same
+// count/oldest-age summary as popSessionSummaryHandler, for the
+// watchdog's pop-session check to compare against the cache.
+func PopSessionSummaryForProjectForWatchdog(store *PopSessionStore, projectID string) PopSessionSummary {
+	sessions := store.ListForProject(projectID)
+	var oldest int64
+	if len(sessions) > 0 {
+		oldest = int64(time.Since(sessions[0].CreatedAt).Round(time.Second).Seconds())
+	}
+	return PopSessionSummary{Count: len(sessions), OldestAgeSeconds: oldest}
+}
+
 // All returns copies of every session.
 func (s *PopSessionStore) All() []PopSession {
 	s.mu.Lock()

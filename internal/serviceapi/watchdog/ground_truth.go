@@ -84,7 +84,7 @@ func (g *RealGroundTruth) ReadApprovedSnapshot(projectID string) (string, string
 }
 
 func (g *RealGroundTruth) PopSessionSummaryForProject(projectID string) serviceapi.PopSessionSummary {
-	panic("watchdog: RealGroundTruth.PopSessionSummaryForProject not yet wired (Task 8)")
+	return serviceapi.PopSessionSummaryForProjectForWatchdog(g.PopStore, projectID)
 }
 
 var _ GroundTruth = (*RealGroundTruth)(nil)
