@@ -79,7 +79,7 @@ func listProjectStatuses(ctx context.Context, cfg identity.Config, sup *supervis
 		out = append(out, ProjectStatus{
 			Name:      projectID,
 			VMRunning: running[projectID],
-			Proxy:     computeProxyHealth(cfg, sup, proxy, projectID),
+			Proxy:     ComputeProxyHealth(cfg, sup, proxy, projectID),
 		})
 	}
 

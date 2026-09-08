@@ -69,7 +69,7 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 	assert.Equal(t, "running-proj", running.Name)
 	assert.True(t, running.VMRunning)
 	// No live iron-proxy process and no config file on disk for this
-	// project — computeProxyHealth reports MISSING.
+	// project — ComputeProxyHealth reports MISSING.
 	assert.Equal(t, ProxyMissing, running.Proxy.Status)
 
 	stopped := byID["stopped-proj"]

@@ -38,7 +38,7 @@ type RebindReport struct {
 	LastError string      `json:"last_error,omitempty"`
 }
 
-// computeProxyHealth classifies a project's iron-proxy. Lock-free snapshot
+// ComputeProxyHealth classifies a project's iron-proxy. Lock-free snapshot
 // read used only to decide; the respawn re-validates under the per-project
 // lock. MISSING when no live proxy or no config file; STALE when the live
 // proxy was spawned from a version stamp that differs from the current
@@ -48,7 +48,7 @@ type RebindReport struct {
 // on-disk store regardless). proxy is consulted for the most recent
 // startup-rebind outcome; nil is tolerated (some callers don't have a
 // *ProxyServer in scope).
-func computeProxyHealth(cfg identity.Config, sup *supervisor.Supervisor, proxy *ProxyServer, projectID string) ProxyHealth {
+func ComputeProxyHealth(cfg identity.Config, sup *supervisor.Supervisor, proxy *ProxyServer, projectID string) ProxyHealth {
 	snap, _ := ReadStateSnapshot(cfg, projectID)
 	needsSecrets := false
 	if snap != nil {

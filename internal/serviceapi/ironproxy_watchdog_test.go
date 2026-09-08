@@ -49,9 +49,9 @@ func TestHealIronProxies_RespawnsMissing(t *testing.T) {
 	})
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
-	// No iron-proxy running for the project → computeProxyHealth
+	// No iron-proxy running for the project → ComputeProxyHealth
 	// returns Missing (no supervisor entry + config exists on disk).
-	require.Equal(t, ProxyMissing, computeProxyHealth(identity.Prod, sup, nil, projectID).Status)
+	require.Equal(t, ProxyMissing, ComputeProxyHealth(identity.Prod, sup, nil, projectID).Status)
 
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
@@ -120,7 +120,7 @@ func TestHealIronProxies_RespawnsSecretsProjects(t *testing.T) {
 	})
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
-	require.Equal(t, ProxyMissing, computeProxyHealth(identity.Prod, sup, nil, projectID).Status)
+	require.Equal(t, ProxyMissing, ComputeProxyHealth(identity.Prod, sup, nil, projectID).Status)
 
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
@@ -187,7 +187,7 @@ func TestHealIronProxies_RespawnUsesSnapshotMacCwd(t *testing.T) {
 	})
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
-	require.Equal(t, ProxyMissing, computeProxyHealth(identity.Prod, sup, nil, projectID).Status)
+	require.Equal(t, ProxyMissing, ComputeProxyHealth(identity.Prod, sup, nil, projectID).Status)
 
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
@@ -234,7 +234,7 @@ func TestHealIronProxies_SkipsHealthyProject(t *testing.T) {
 	writePreExistingIronProxyConfig(t, projectID, "127.0.0.1", httpPort, httpsPort, dnsPort)
 
 	// Adopt a real long-lived child pid so supervisor.Status reports
-	// Present+Running (kill(pid, 0) probe); computeProxyHealth then
+	// Present+Running (kill(pid, 0) probe); ComputeProxyHealth then
 	// returns OK. Same pattern as apply_iron_proxy_test.go's
 	// TestApplyIronProxy_RunningRestartSucceeds.
 	cmd := exec.Command("sleep", "30")
@@ -254,7 +254,7 @@ func TestHealIronProxies_SkipsHealthyProject(t *testing.T) {
 	ironProxyState.put(projectID, projectInfo{ProjectIP: "127.42.0.7"})
 	t.Cleanup(func() { ironProxyState.del(projectID) })
 
-	require.Equal(t, ProxyOK, computeProxyHealth(identity.Prod, sup, nil, projectID).Status)
+	require.Equal(t, ProxyOK, ComputeProxyHealth(identity.Prod, sup, nil, projectID).Status)
 
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
@@ -270,7 +270,7 @@ func TestHealIronProxies_SkipsHealthyProject(t *testing.T) {
 
 // ironproxyEmbedShaForTest returns the current embedded iron-proxy sha
 // as a fake ProxyVersion so the snapshot's ProxyVersion matches the
-// current embed and computeProxyHealth doesn't classify it as STALE.
+// current embed and ComputeProxyHealth doesn't classify it as STALE.
 func ironproxyEmbedShaForTest() string {
 	// Import lives in an inlined func so the main watchdog file doesn't
 	// need it just for a test string.

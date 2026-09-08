@@ -197,7 +197,7 @@ func reconcileHandler(cfg identity.Config, locks *ProjectLocks, apply ApplyLiver
 		// /vm/apply-iron-proxy whenever AppliedIronProxy is non-empty.
 		// Gated on running: a stopped VM has no live iron-proxy to heal.
 		if running {
-			if computeProxyHealth(cfg, sup, proxy, req.Name).Status != ProxyOK {
+			if ComputeProxyHealth(cfg, sup, proxy, req.Name).Status != ProxyOK {
 				ironProxy = append(ironProxy, reconcile.Change{Kind: reconcile.KindIronProxyDown})
 			}
 		}

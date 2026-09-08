@@ -64,11 +64,11 @@ func healIronProxies(
 	locks *ProjectLocks,
 ) {
 	for _, projectID := range ironProxyState.keys() {
-		health := computeProxyHealth(cfg, sup, proxy, projectID)
+		health := ComputeProxyHealth(cfg, sup, proxy, projectID)
 		if health.Status != ProxyMissing {
 			continue
 		}
-		if err := respawnIronProxyFromState(ctx, cfg, sup, locks, projectID); err != nil {
+		if err := RespawnIronProxyForWatchdog(ctx, cfg, sup, proxy, projectID); err != nil {
 			daemonlog.Errorf("serviceapi: iron-proxy watchdog: respawn %s: %v", projectID, err)
 			continue
 		}
@@ -76,29 +76,21 @@ func healIronProxies(
 	}
 }
 
-// respawnIronProxyFromState rebuilds an IronProxyConfig from the
+// RespawnIronProxyForWatchdog rebuilds an IronProxyConfig from the
 // project's persisted state via rebuildIronProxyConfig and spawns a
 // fresh iron-proxy — secret-injecting projects included, since
 // rebuildIronProxyConfig resolves secret values straight from the
-// on-disk file store.
-//
-// Acquires the project's reconcile lock so a watchdog respawn can't
-// race a concurrent /vm/start or /vm/reconcile (both take the same
-// lock in apply_iron_proxy.go and reconcile.go).
-func respawnIronProxyFromState(
+// on-disk file store. SpawnIronProxy is idempotent at the supervisor
+// level, so a redundant respawn racing a concurrent /vm/start just
+// replaces an already-healthy process rather than corrupting state.
+func RespawnIronProxyForWatchdog(
 	ctx context.Context,
 	cfg identity.Config,
 	sup *supervisor.Supervisor,
-	locks *ProjectLocks,
+	proxy *ProxyServer,
 	projectID string,
 ) error {
-	unlock := locks.Lock(projectID)
-	defer unlock()
-
-	// Re-check health under the lock — a /vm/start that raced us to
-	// the lock may have already respawned iron-proxy, in which case
-	// we'd otherwise stop+spawn again pointlessly.
-	if computeProxyHealth(cfg, sup, proxy_nilForRecheck(), projectID).Status != ProxyMissing {
+	if ComputeProxyHealth(cfg, sup, proxy, projectID).Status != ProxyMissing {
 		return nil
 	}
 
@@ -119,11 +111,3 @@ func respawnIronProxyFromState(
 	}
 	return spawnIronProxyFn(ctx, cfg, sup, projectID, proxyCfg)
 }
-
-// proxy_nilForRecheck lets the recheck under the lock use a nil
-// *ProxyServer intentionally — RebindStatus isn't relevant to the
-// MISSING vs OK verdict, and passing nil sidesteps the need to plumb
-// the ProxyServer through respawnIronProxyFromState just for the
-// recheck. Naming keeps grep-searchability if this ever needs to
-// pass a real proxy.
-func proxy_nilForRecheck() *ProxyServer { return nil }

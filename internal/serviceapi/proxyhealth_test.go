@@ -21,7 +21,7 @@ func TestComputeProxyHealth(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sup := supervisor.New(t.TempDir())
 	// No proxy, no config file → MISSING.
-	h := computeProxyHealth(identity.Prod, sup, nil, "p")
+	h := ComputeProxyHealth(identity.Prod, sup, nil, "p")
 	assert.Equal(t, ProxyMissing, h.Status)
 	assert.False(t, h.NeedsSecrets) // no snapshot → no secret refs known
 	// Write a snapshot with a secret ref + a config file + stamp mismatch → still MISSING (no live proxy) + NeedsSecrets true.
@@ -31,7 +31,7 @@ func TestComputeProxyHealth(t *testing.T) {
 	}))
 	// (config-file presence + live-proxy cases are exercised in the integration test in Task 8;
 	//  here assert the secret-ref half is wired.)
-	h = computeProxyHealth(identity.Prod, sup, nil, "p")
+	h = ComputeProxyHealth(identity.Prod, sup, nil, "p")
 	assert.Equal(t, ProxyMissing, h.Status)
 	assert.True(t, h.NeedsSecrets)
 }
@@ -52,7 +52,7 @@ func TestComputeProxyHealth_IncludesRebindStatus(t *testing.T) {
 		LastError: "bind :80: helper: connection refused",
 	})
 
-	h := computeProxyHealth(identity.Prod, sup, proxy, "p")
+	h := ComputeProxyHealth(identity.Prod, sup, proxy, "p")
 	require.NotNil(t, h.Rebind, "Rebind must be populated when a rebind was recorded")
 	assert.Equal(t, RebindFailed, h.Rebind.State)
 	assert.Equal(t, 3, h.Rebind.Attempts)
@@ -69,6 +69,6 @@ func TestComputeProxyHealth_RebindNilWhenNoAttempt(t *testing.T) {
 	require.NoError(t, err)
 	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
 
-	h := computeProxyHealth(identity.Prod, sup, proxy, "p")
+	h := ComputeProxyHealth(identity.Prod, sup, proxy, "p")
 	assert.Nil(t, h.Rebind)
 }

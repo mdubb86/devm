@@ -634,7 +634,7 @@ func TestVMReconcile_MissingIronProxy_EmitsKindIronProxyDown(t *testing.T) {
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	// A fresh supervisor with no adopted iron-proxy process reports the
-	// proxy as not Present/Running → computeProxyHealth returns MISSING.
+	// proxy as not Present/Running → ComputeProxyHealth returns MISSING.
 	sup := supervisor.New(t.TempDir())
 	RegisterReconcileHandler(server, identity.Prod, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, sup, nil, 0)
 
@@ -677,10 +677,10 @@ func TestVMReconcile_StoppedVM_MissingIronProxy_DoesNotEmitKindIronProxyDown(t *
 }
 
 // healthyIronProxySupervisor returns a *supervisor.Supervisor for which
-// computeProxyHealth(sup, projectID) reports ProxyOK: an adopted PID
+// ComputeProxyHealth(sup, projectID) reports ProxyOK: an adopted PID
 // that's actually alive (this test process itself, so Status() reports
 // Running=true without spawning anything) plus a stub on-disk config
-// file (computeProxyHealth only checks that it exists). Tests that
+// file (ComputeProxyHealth only checks that it exists). Tests that
 // aren't exercising the Task 4 self-heal path need this so the heal
 // doesn't spuriously add a KindIronProxyDown to AppliedIronProxy.
 func healthyIronProxySupervisor(t *testing.T, projectID string) *supervisor.Supervisor {

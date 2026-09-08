@@ -44,11 +44,11 @@ type RealGroundTruth struct {
 }
 
 func (g *RealGroundTruth) IronProxyHealth(ctx context.Context, projectID string) serviceapi.ProxyHealth {
-	panic("watchdog: RealGroundTruth.IronProxyHealth not yet wired (Task 4)")
+	return serviceapi.ComputeProxyHealth(g.Cfg, g.Sup, g.Proxy, projectID)
 }
 
 func (g *RealGroundTruth) RespawnIronProxy(ctx context.Context, projectID string) error {
-	panic("watchdog: RealGroundTruth.RespawnIronProxy not yet wired (Task 4)")
+	return serviceapi.RespawnIronProxyForWatchdog(ctx, g.Cfg, g.Sup, g.Proxy, projectID)
 }
 
 func (g *RealGroundTruth) MutagenLockPID(dataDir string) (int, error) {

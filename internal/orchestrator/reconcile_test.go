@@ -179,10 +179,10 @@ func registerFakeSoftnetForOrchestratorTest(t *testing.T, projectID string) {
 }
 
 // healthyIronProxySupervisor returns a *supervisor.Supervisor that
-// reports projectID's iron-proxy as healthy (computeProxyHealth ==
+// reports projectID's iron-proxy as healthy (ComputeProxyHealth ==
 // ProxyOK): an adopted PID that's actually alive (this test process
 // itself, so Status() reports Running=true without spawning anything)
-// plus a stub on-disk config file (computeProxyHealth only checks that
+// plus a stub on-disk config file (ComputeProxyHealth only checks that
 // it exists). Task 4's reconcile self-heal fires whenever the iron-proxy
 // is NOT OK; tests that aren't exercising that heal path need a
 // healthy baseline so it stays out of their way.

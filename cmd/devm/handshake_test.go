@@ -124,7 +124,7 @@ func TestDaemonHandshake_ProxyDrift_WarnsAndDoesNotHeal(t *testing.T) {
 	t.Cleanup(func() { Fingerprint = origFingerprint })
 
 	// A fresh supervisor + no state snapshot for "p" means
-	// computeProxyHealth reports ProxyMissing (no live process, no
+	// ComputeProxyHealth reports ProxyMissing (no live process, no
 	// config file on disk).
 	cleanup := startHandshakeDaemon(t, serviceapi.Build{Fingerprint: "fp-match"})
 	defer cleanup()
@@ -143,7 +143,7 @@ func TestDaemonHandshake_ProxyDrift_WarnsAndDoesNotHeal(t *testing.T) {
 
 // TestDaemonHandshake_ProxyDrift_VMStopped_NoWarning pins the "don't
 // nag when a cold-start will heal" case: post-upgrade or after any
-// stop, computeProxyHealth reports ProxyMissing, but `devm shell` /
+// stop, ComputeProxyHealth reports ProxyMissing, but `devm shell` /
 // `devm start` will cold-start and /vm/start respawns iron-proxy
 // fresh. Warning users to run `devm reconcile` in that state tells
 // them to run a command that's redundant with what they just typed.

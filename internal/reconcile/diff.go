@@ -126,7 +126,7 @@ const (
 	// KindIronProxyDown is a synthetic change: not produced by diffing
 	// old vs new config, but emitted by the reconcile handler when a
 	// running VM's iron-proxy is missing or stale (see
-	// serviceapi.computeProxyHealth). Carries no config drift of its
+	// serviceapi.ComputeProxyHealth). Carries no config drift of its
 	// own — it exists purely to route through the same
 	// BucketEgressRestart / AppliedIronProxy path that respawns
 	// iron-proxy.

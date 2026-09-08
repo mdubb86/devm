@@ -26,7 +26,7 @@ func RegisterHandshakeHandler(s *Server, cfg identity.Config, build Build, sup *
 		resp := HandshakeResponse{Build: build}
 		if name := r.URL.Query().Get("name"); name != "" {
 			if err := validProjectID(name); err == nil {
-				h := computeProxyHealth(cfg, sup, proxy, name)
+				h := ComputeProxyHealth(cfg, sup, proxy, name)
 				resp.Proxy = &h
 			}
 		}
