@@ -6,6 +6,8 @@ Also verifies the daemon error log carries the drift-detection line.
 """
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -34,7 +36,7 @@ def test_watchdog_respawns_mutagen_daemon(devm, workspace):
         pid = _mutagen_daemon_pid()
         assert pid is not None, "mutagen daemon should be running"
 
-        subprocess.run(["kill", "-9", str(pid)], check=True)
+        os.kill(pid, signal.SIGKILL)
         time.sleep(2)
         assert _mutagen_daemon_pid() is None
 

@@ -31,8 +31,9 @@ def test_watchdog_reconciles_vm_after_external_tart_stop(devm, workspace):
         assert row is not None and row["vm_running"] is True
 
         # External stop — bypasses devm.
-        subprocess.run(["tart", "stop", workspace.vm_name],
-                       capture_output=True, timeout=60, check=True)
+        r = subprocess.run(["tart", "stop", workspace.vm_name],
+                           capture_output=True, timeout=60)
+        assert r.returncode == 0, r.stderr.decode()
 
         # Wait for the watchdog to notice + reconcile. Up to 90s.
         deadline = time.monotonic() + 90

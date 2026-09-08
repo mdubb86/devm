@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 
 import pytest
 
@@ -27,6 +28,7 @@ def test_status_all_populated_immediately_after_service_restart(devm, workspace)
         r = subprocess.run([devm.path, "service", "restart"],
                            capture_output=True, timeout=60)
         assert r.returncode == 0, r.stderr.decode()
+        time.sleep(2)  # let launchd bootstrap complete + daemon bind its UDS socket
 
         # Immediately query /status/all via `devm status --all --json`.
         # If warmup is broken (async or missing), the row would be

@@ -8,6 +8,8 @@ watchdog's tick.
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import time
 
@@ -35,7 +37,7 @@ def test_watchdog_respawns_iron_proxy_after_external_kill(devm, workspace):
         pid = _iron_proxy_pid(workspace.vm_name)
         assert pid is not None, "iron-proxy should be running after devm start"
 
-        subprocess.run(["kill", "-9", str(pid)], check=True)
+        os.kill(pid, signal.SIGKILL)
         time.sleep(2)
         assert _iron_proxy_pid(workspace.vm_name) is None
 
