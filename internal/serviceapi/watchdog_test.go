@@ -1,4 +1,4 @@
-package watchdog
+package serviceapi
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -19,7 +18,7 @@ type recordingCheck struct {
 
 func (c *recordingCheck) Name() string { return c.name }
 
-func (c *recordingCheck) Run(ctx context.Context, cache *serviceapi.StateCache, gt GroundTruth) (bool, error) {
+func (c *recordingCheck) Run(ctx context.Context, cache *StateCache, gt GroundTruth) (bool, error) {
 	c.runCount++
 	return c.drifted, c.err
 }
@@ -31,7 +30,7 @@ func TestStateWatchdog_RunOnce_CallsEveryCheck(t *testing.T) {
 		&recordingCheck{name: "c"},
 	}
 
-	w := NewStateWatchdog(serviceapi.NewStateCache(), nil, checks, 60*time.Second)
+	w := NewStateWatchdog(NewStateCache(), nil, checks, 60*time.Second)
 	drifts := w.RunOnce(context.Background())
 
 	assert.Equal(t, 1, drifts)
@@ -43,7 +42,7 @@ func TestStateWatchdog_RunOnce_CallsEveryCheck(t *testing.T) {
 
 func TestStateWatchdog_Run_FiresRunOnce_ThenCancels(t *testing.T) {
 	check := &recordingCheck{name: "ticking"}
-	w := NewStateWatchdog(serviceapi.NewStateCache(), nil, []Check{check}, 5*time.Millisecond)
+	w := NewStateWatchdog(NewStateCache(), nil, []Check{check}, 5*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -68,7 +67,7 @@ func TestStateWatchdog_RunOnce_CheckError_LoggedNotFatal(t *testing.T) {
 		&recordingCheck{name: "drifted", drifted: true},
 	}
 
-	w := NewStateWatchdog(serviceapi.NewStateCache(), nil, checks, 60*time.Second)
+	w := NewStateWatchdog(NewStateCache(), nil, checks, 60*time.Second)
 	drifts := w.RunOnce(context.Background())
 
 	assert.Equal(t, 1, drifts)

@@ -1,4 +1,4 @@
-package watchdog
+package serviceapi
 
 import (
 	"context"
@@ -7,16 +7,16 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/sandbox/tart"
-	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
-// fakeGroundTruth is a shared test fake all check_*_test.go files
-// use. Only the methods a given test needs get set; the rest panic
-// so a test accidentally invoking an unset dependency fails loudly.
+// fakeGroundTruth is a shared test fake all watchdog_check_*_test.go
+// files use. Only the methods a given test needs get set; the rest
+// panic so a test accidentally invoking an unset dependency fails
+// loudly.
 type fakeGroundTruth struct {
 	mu sync.Mutex
 
-	IronProxyHealthFn func(ctx context.Context, projectID string) serviceapi.ProxyHealth
+	IronProxyHealthFn func(ctx context.Context, projectID string) ProxyHealth
 	RespawnIronFn     func(ctx context.Context, projectID string) error
 
 	MutagenPIDFn     func(dataDir string) (int, error)
@@ -29,10 +29,10 @@ type fakeGroundTruth struct {
 	ApproveHashFn  func(macCwd string) (string, string, error)
 	ReadSnapshotFn func(projectID string) (string, string, *time.Time, bool, error)
 
-	PopSummaryFn func(projectID string) serviceapi.PopSessionSummary
+	PopSummaryFn func(projectID string) PopSessionSummary
 }
 
-func (f *fakeGroundTruth) IronProxyHealth(ctx context.Context, projectID string) serviceapi.ProxyHealth {
+func (f *fakeGroundTruth) IronProxyHealth(ctx context.Context, projectID string) ProxyHealth {
 	if f.IronProxyHealthFn == nil {
 		panic("fake: IronProxyHealthFn not set")
 	}
@@ -85,7 +85,7 @@ func (f *fakeGroundTruth) ReadApprovedSnapshot(projectID string) (string, string
 	return f.ReadSnapshotFn(projectID)
 }
 
-func (f *fakeGroundTruth) PopSessionSummaryForProject(projectID string) serviceapi.PopSessionSummary {
+func (f *fakeGroundTruth) PopSessionSummaryForProject(projectID string) PopSessionSummary {
 	if f.PopSummaryFn == nil {
 		panic("fake: PopSummaryFn not set")
 	}

@@ -1,11 +1,10 @@
-package watchdog
+package serviceapi
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
-	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 type ironProxyCheck struct{}
@@ -14,7 +13,7 @@ func NewIronProxyCheck() Check { return &ironProxyCheck{} }
 
 func (ironProxyCheck) Name() string { return "iron-proxy" }
 
-func (ironProxyCheck) Run(ctx context.Context, cache *serviceapi.StateCache, gt GroundTruth) (bool, error) {
+func (ironProxyCheck) Run(ctx context.Context, cache *StateCache, gt GroundTruth) (bool, error) {
 	driftedAny := false
 	var firstErr error
 	for _, projectID := range gt.KnownProjectNames() {
@@ -26,7 +25,7 @@ func (ironProxyCheck) Run(ctx context.Context, cache *serviceapi.StateCache, gt 
 		}
 		driftedAny = true
 		var repairErr error
-		if observed.Status == serviceapi.ProxyMissing {
+		if observed.Status == ProxyMissing {
 			if err := gt.RespawnIronProxy(ctx, projectID); err != nil {
 				repairErr = err
 				daemonlog.Errorf("watchdog: drift on iron-proxy for %s: repair failed: %v",

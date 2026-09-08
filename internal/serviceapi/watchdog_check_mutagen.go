@@ -1,11 +1,10 @@
-package watchdog
+package serviceapi
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
-	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 type mutagenCheck struct{}
@@ -14,7 +13,7 @@ func NewMutagenCheck() Check { return &mutagenCheck{} }
 
 func (mutagenCheck) Name() string { return "mutagen" }
 
-func (mutagenCheck) Run(ctx context.Context, cache *serviceapi.StateCache, gt GroundTruth) (bool, error) {
+func (mutagenCheck) Run(ctx context.Context, cache *StateCache, gt GroundTruth) (bool, error) {
 	expectedPID := cache.Global().MutagenDaemonPID
 	observed, err := gt.MutagenLockPID(gt.MutagenDataDir())
 	if err != nil {
@@ -48,12 +47,12 @@ func (mutagenCheck) Run(ctx context.Context, cache *serviceapi.StateCache, gt Gr
 	}
 
 	cache.SetMutagenDaemonPID(finalPID)
-	healthStatus := serviceapi.MutagenOK
+	healthStatus := MutagenOK
 	if finalPID == 0 {
-		healthStatus = serviceapi.MutagenDead
+		healthStatus = MutagenDead
 	}
 	for _, p := range gt.KnownProjectNames() {
-		cache.SetMutagenHealth(p, serviceapi.MutagenHealth{Status: healthStatus})
+		cache.SetMutagenHealth(p, MutagenHealth{Status: healthStatus})
 		cache.TouchProjectReconciled(p)
 	}
 	cache.TouchGlobalReconciled()

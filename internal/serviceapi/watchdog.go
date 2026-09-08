@@ -1,13 +1,13 @@
-// Package watchdog is the daemon's state reconciler. See
+// StateWatchdog is the daemon's state reconciler. See
 // docs/superpowers/specs/2026-09-08-state-cache-watchdog-design.md.
 //
-// The StateWatchdog runs a structured check set every 60s: each check
-// reads expected state from the StateCache, observes ground truth via
-// the GroundTruth interface, on drift applies its repair policy (or
+// It runs a structured check set every 60s: each check reads expected
+// state from the StateCache, observes ground truth via the
+// GroundTruth interface, on drift applies its repair policy (or
 // updates the cache to reflect reality), and touches the row's
 // LastReconciledAt. Warmup at boot fires the same checks once,
 // synchronously, before the HTTP server accepts its first connection.
-package watchdog
+package serviceapi
 
 import (
 	"context"
@@ -15,13 +15,12 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
-	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 // StateWatchdog runs a fixed set of Checks on a tick, reconciling the
 // StateCache against ground truth.
 type StateWatchdog struct {
-	cache  *serviceapi.StateCache
+	cache  *StateCache
 	gt     GroundTruth
 	checks []Check
 	tick   time.Duration
@@ -29,7 +28,7 @@ type StateWatchdog struct {
 
 // NewStateWatchdog builds a StateWatchdog over checks, firing every
 // tick when run via Run.
-func NewStateWatchdog(cache *serviceapi.StateCache, gt GroundTruth, checks []Check, tick time.Duration) *StateWatchdog {
+func NewStateWatchdog(cache *StateCache, gt GroundTruth, checks []Check, tick time.Duration) *StateWatchdog {
 	return &StateWatchdog{cache: cache, gt: gt, checks: checks, tick: tick}
 }
 

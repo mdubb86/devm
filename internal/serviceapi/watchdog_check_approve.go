@@ -1,11 +1,10 @@
-package watchdog
+package serviceapi
 
 import (
 	"context"
 	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
-	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 type approveCheck struct{}
@@ -14,7 +13,7 @@ func NewApproveCheck() Check { return &approveCheck{} }
 
 func (approveCheck) Name() string { return "approve-state" }
 
-func (approveCheck) Run(ctx context.Context, cache *serviceapi.StateCache, gt GroundTruth) (bool, error) {
+func (approveCheck) Run(ctx context.Context, cache *StateCache, gt GroundTruth) (bool, error) {
 	driftedAny := false
 	var firstErr error
 	for _, projectID := range gt.KnownProjectNames() {
@@ -43,7 +42,7 @@ func (approveCheck) Run(ctx context.Context, cache *serviceapi.StateCache, gt Gr
 			continue
 		}
 
-		newSummary := serviceapi.ApproveStateSummary{
+		newSummary := ApproveStateSummary{
 			CurrentDevmSHA:  currentDevm,
 			CurrentMeSHA:    currentMe,
 			ApprovedDevmSHA: approvedDevm,
@@ -70,7 +69,7 @@ func (approveCheck) Run(ctx context.Context, cache *serviceapi.StateCache, gt Gr
 	return driftedAny, firstErr
 }
 
-func approveStateEqual(a, b serviceapi.ApproveStateSummary) bool {
+func approveStateEqual(a, b ApproveStateSummary) bool {
 	return a.Diverged == b.Diverged &&
 		a.CurrentDevmSHA == b.CurrentDevmSHA &&
 		a.ApprovedDevmSHA == b.ApprovedDevmSHA &&

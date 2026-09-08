@@ -1,16 +1,15 @@
-package watchdog
+package serviceapi
 
 import (
 	"context"
 	"testing"
 
-	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMutagenCheck_NoDrift_TouchesReconciled(t *testing.T) {
-	cache := serviceapi.NewStateCache()
+	cache := NewStateCache()
 	cache.SetMutagenDaemonPID(1234)
 	fake := &fakeGroundTruth{
 		DataDir:      "/tmp/mutagen-data",
@@ -26,9 +25,9 @@ func TestMutagenCheck_NoDrift_TouchesReconciled(t *testing.T) {
 }
 
 func TestMutagenCheck_DaemonDied_RespawnedAndCacheUpdated(t *testing.T) {
-	cache := serviceapi.NewStateCache()
+	cache := NewStateCache()
 	cache.SetMutagenDaemonPID(1234)
-	cache.SetMutagenHealth("p", serviceapi.MutagenHealth{Status: serviceapi.MutagenOK})
+	cache.SetMutagenHealth("p", MutagenHealth{Status: MutagenOK})
 	respawned := false
 	calls := 0
 	fake := &fakeGroundTruth{
@@ -53,13 +52,13 @@ func TestMutagenCheck_DaemonDied_RespawnedAndCacheUpdated(t *testing.T) {
 	assert.True(t, respawned)
 	assert.Equal(t, 5678, cache.Global().MutagenDaemonPID)
 	row, _ := cache.ProjectRow("p")
-	assert.Equal(t, serviceapi.MutagenOK, row.MutagenHealth.Status)
+	assert.Equal(t, MutagenOK, row.MutagenHealth.Status)
 }
 
 func TestMutagenCheck_RespawnFailed_HealthReflectsDead(t *testing.T) {
-	cache := serviceapi.NewStateCache()
+	cache := NewStateCache()
 	cache.SetMutagenDaemonPID(1234)
-	cache.SetMutagenHealth("p", serviceapi.MutagenHealth{Status: serviceapi.MutagenOK})
+	cache.SetMutagenHealth("p", MutagenHealth{Status: MutagenOK})
 	fake := &fakeGroundTruth{
 		DataDir:      "/tmp/m",
 		Projects:     []string{"p"},
@@ -74,5 +73,5 @@ func TestMutagenCheck_RespawnFailed_HealthReflectsDead(t *testing.T) {
 	assert.True(t, drifted)
 	assert.Equal(t, 0, cache.Global().MutagenDaemonPID)
 	row, _ := cache.ProjectRow("p")
-	assert.Equal(t, serviceapi.MutagenDead, row.MutagenHealth.Status)
+	assert.Equal(t, MutagenDead, row.MutagenHealth.Status)
 }

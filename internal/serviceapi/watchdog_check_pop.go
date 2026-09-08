@@ -1,10 +1,9 @@
-package watchdog
+package serviceapi
 
 import (
 	"context"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
-	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 type popCheck struct{}
@@ -13,7 +12,7 @@ func NewPopCheck() Check { return &popCheck{} }
 
 func (popCheck) Name() string { return "pop-session" }
 
-func (popCheck) Run(ctx context.Context, cache *serviceapi.StateCache, gt GroundTruth) (bool, error) {
+func (popCheck) Run(ctx context.Context, cache *StateCache, gt GroundTruth) (bool, error) {
 	driftedAny := false
 	for _, projectID := range gt.KnownProjectNames() {
 		expected, _ := cache.ProjectRow(projectID)

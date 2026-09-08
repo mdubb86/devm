@@ -1,9 +1,7 @@
-package watchdog
+package serviceapi
 
 import (
 	"context"
-
-	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
 // Check is one structured check the state watchdog performs on each
@@ -12,5 +10,5 @@ import (
 // no-op), then update the cache with the final observed state.
 type Check interface {
 	Name() string
-	Run(ctx context.Context, cache *serviceapi.StateCache, gt GroundTruth) (drifted bool, err error)
+	Run(ctx context.Context, cache *StateCache, gt GroundTruth) (drifted bool, err error)
 }

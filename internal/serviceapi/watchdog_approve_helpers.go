@@ -11,10 +11,10 @@ import (
 )
 
 // HashCurrentFilesForWatchdog reads devm.yaml + devm.me.yaml from
-// macCwd and returns their canonical hashes, for the watchdog
-// package's approve-state check. devm.me.yaml is optional — its
-// absence hashes as approve.HashFile(nil), same as every other
-// approve-gate read path.
+// macCwd and returns their canonical hashes, for the watchdog's
+// approve-state check. devm.me.yaml is optional — its absence hashes
+// as approve.HashFile(nil), same as every other approve-gate read
+// path.
 func HashCurrentFilesForWatchdog(macCwd string) (currentDevmSHA, currentMeSHA string, err error) {
 	currentDevm, err := os.ReadFile(filepath.Join(macCwd, "devm.yaml"))
 	if err != nil {
@@ -30,7 +30,7 @@ func HashCurrentFilesForWatchdog(macCwd string) (currentDevmSHA, currentMeSHA st
 }
 
 // ReadApprovedSnapshotForWatchdog wraps approve.Store.Read for the
-// watchdog package's approve-state check.
+// watchdog's approve-state check.
 func ReadApprovedSnapshotForWatchdog(cfg identity.Config, projectID string) (devmSHA, meSHA string, since *time.Time, hasSnap bool, err error) {
 	snap, hasSnap, err := approve.NewStore(cfg).Read(projectID)
 	if err != nil {

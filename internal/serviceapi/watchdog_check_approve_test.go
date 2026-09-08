@@ -1,20 +1,19 @@
-package watchdog
+package serviceapi
 
 import (
 	"context"
 	"testing"
 	"time"
 
-	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestApproveCheck_NoDrift_TouchesReconciled(t *testing.T) {
 	since := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	cache := serviceapi.NewStateCache()
+	cache := NewStateCache()
 	cache.SetMacCwd("p", "/mac/p")
-	cache.SetApproveState("p", serviceapi.ApproveStateSummary{
+	cache.SetApproveState("p", ApproveStateSummary{
 		Diverged:        false,
 		CurrentDevmSHA:  "a",
 		ApprovedDevmSHA: "a",
@@ -44,9 +43,9 @@ func TestApproveCheck_NoDrift_TouchesReconciled(t *testing.T) {
 }
 
 func TestApproveCheck_CurrentFileChanged_CacheReconciles(t *testing.T) {
-	cache := serviceapi.NewStateCache()
+	cache := NewStateCache()
 	cache.SetMacCwd("p", "/mac/p")
-	cache.SetApproveState("p", serviceapi.ApproveStateSummary{
+	cache.SetApproveState("p", ApproveStateSummary{
 		Diverged:        false,
 		CurrentDevmSHA:  "a",
 		ApprovedDevmSHA: "a",
@@ -74,9 +73,9 @@ func TestApproveCheck_CurrentFileChanged_CacheReconciles(t *testing.T) {
 }
 
 func TestApproveCheck_EmptyMacCwd_Skipped(t *testing.T) {
-	cache := serviceapi.NewStateCache()
+	cache := NewStateCache()
 	// No SetMacCwd call — MacCwd stays "" (project not started yet).
-	cache.SetApproveState("p", serviceapi.ApproveStateSummary{Diverged: true, CurrentDevmSHA: "x"})
+	cache.SetApproveState("p", ApproveStateSummary{Diverged: true, CurrentDevmSHA: "x"})
 	fake := &fakeGroundTruth{
 		Projects: []string{"p"},
 		ApproveHashFn: func(macCwd string) (string, string, error) {
