@@ -220,8 +220,8 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 //
 // cache, when non-nil, is written with ProxyMissing the instant this
 // iron-proxy exits unexpectedly (supervisor's OnUnexpectedExit hook) —
-// callers that don't have a StateCache wired (e.g. /vm/apply-iron-proxy,
-// which predates Task 10's cache plumbing) pass nil.
+// callers operating outside the main cache-aware flow (e.g. /vm/apply-iron-proxy)
+// pass nil.
 func SpawnIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, projectID string, proxyCfg IronProxyConfig, cache *StateCache) error {
 	runDir, err := EnsureRuntimeDir(cfg)
 	if err != nil {

@@ -410,12 +410,9 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		})
 	}
 
-	// StateWatchdog actor: fires every check every 60s, reconciling
-	// the StateCache against ground truth (silent VM crashes, an
-	// external `tart stop`, iron-proxy dying invisibly, out-of-band
-	// devm.yaml edits). Replaces the old per-subsystem iron-proxy and
-	// mutagen watchdog actors — this is the one that watches
-	// everything.
+	// State watchdog: reconciles the daemon's state cache against ground
+	// truth every 60s, respawning subsystems (iron-proxy, mutagen) whose
+	// repair policy calls for it. See watchdog_check_*.go for each check.
 	{
 		wCtx, cancel := context.WithCancel(ctx)
 		g.Add(func() error {
