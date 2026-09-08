@@ -1,0 +1,84 @@
+package watchdog
+
+import (
+	"context"
+	"time"
+
+	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/mutagen"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/supervisor"
+)
+
+// GroundTruth is the test-injection seam for watchdog checks. Each
+// check reads only the methods it needs, so a fake in a test can
+// provide the minimal set. Populated in full by the real impl below.
+type GroundTruth interface {
+	IronProxyHealth(ctx context.Context, projectID string) serviceapi.ProxyHealth
+	RespawnIronProxy(ctx context.Context, projectID string) error
+
+	MutagenLockPID(dataDir string) (int, error)
+	RespawnMutagenDaemon(ctx context.Context) error
+	MutagenDataDir() string
+	KnownProjectNames() []string
+
+	TartList(ctx context.Context) ([]tart.VM, error)
+
+	ApproveHash(macCwd string) (currentDevmSHA, currentMeSHA string, err error)
+	ReadApprovedSnapshot(projectID string) (devmSHA, meSHA string, since *time.Time, hasSnap bool, err error)
+
+	PopSessionSummaryForProject(projectID string) serviceapi.PopSessionSummary
+}
+
+// RealGroundTruth is the production implementation. Each method is
+// filled in by its owning check's task; unimplemented methods panic
+// so a wiring mistake surfaces immediately in dev.
+type RealGroundTruth struct {
+	Cfg        identity.Config
+	Tart       *tart.Tart
+	Sup        *supervisor.Supervisor
+	Proxy      *serviceapi.ProxyServer
+	MutagenCLI *mutagen.CLI
+	PopStore   *serviceapi.PopSessionStore
+}
+
+func (g *RealGroundTruth) IronProxyHealth(ctx context.Context, projectID string) serviceapi.ProxyHealth {
+	panic("watchdog: RealGroundTruth.IronProxyHealth not yet wired (Task 4)")
+}
+
+func (g *RealGroundTruth) RespawnIronProxy(ctx context.Context, projectID string) error {
+	panic("watchdog: RealGroundTruth.RespawnIronProxy not yet wired (Task 4)")
+}
+
+func (g *RealGroundTruth) MutagenLockPID(dataDir string) (int, error) {
+	panic("watchdog: RealGroundTruth.MutagenLockPID not yet wired (Task 5)")
+}
+
+func (g *RealGroundTruth) RespawnMutagenDaemon(ctx context.Context) error {
+	panic("watchdog: RealGroundTruth.RespawnMutagenDaemon not yet wired (Task 5)")
+}
+
+func (g *RealGroundTruth) MutagenDataDir() string {
+	panic("watchdog: RealGroundTruth.MutagenDataDir not yet wired (Task 5)")
+}
+
+func (g *RealGroundTruth) KnownProjectNames() []string {
+	panic("watchdog: RealGroundTruth.KnownProjectNames not yet wired (Task 5)")
+}
+
+func (g *RealGroundTruth) TartList(ctx context.Context) ([]tart.VM, error) {
+	panic("watchdog: RealGroundTruth.TartList not yet wired (Task 6)")
+}
+
+func (g *RealGroundTruth) ApproveHash(macCwd string) (string, string, error) {
+	panic("watchdog: RealGroundTruth.ApproveHash not yet wired (Task 7)")
+}
+
+func (g *RealGroundTruth) ReadApprovedSnapshot(projectID string) (string, string, *time.Time, bool, error) {
+	panic("watchdog: RealGroundTruth.ReadApprovedSnapshot not yet wired (Task 7)")
+}
+
+func (g *RealGroundTruth) PopSessionSummaryForProject(projectID string) serviceapi.PopSessionSummary {
+	panic("watchdog: RealGroundTruth.PopSessionSummaryForProject not yet wired (Task 8)")
+}
