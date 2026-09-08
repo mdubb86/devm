@@ -105,13 +105,15 @@ func popSessionSummaryHandler(store *PopSessionStore) http.HandlerFunc {
 }
 
 // RegisterPopSessionHandler installs the /pop-session and
-// /pop-session-summary endpoints on the daemon UDS.
+// /pop-session-summary endpoints on the daemon UDS. cache is plumbed
+// through for a future ship's use; not read yet.
 func RegisterPopSessionHandler(
 	server *Server,
 	cfg identity.Config,
 	store *PopSessionStore,
 	cli *mutagen.CLI,
 	guestSSHTargetFor func(project string) string,
+	cache *StateCache,
 ) {
 	server.Register("/pop-session", popSessionHandler(cfg, store, cli, guestSSHTargetFor))
 	server.Register("/pop-session-summary", popSessionSummaryHandler(store))

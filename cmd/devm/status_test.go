@@ -45,7 +45,7 @@ func startStatusAllDaemon(t *testing.T, running map[string]bool) func() {
 	socket := identity.Prod.SocketPath()
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "dev"})
 	sup := supervisor.New(t.TempDir())
-	serviceapi.RegisterStatusAllHandler(srv, identity.Prod, sup, &fakeStatusTart{running: running}, nil)
+	serviceapi.RegisterStatusAllHandler(srv, identity.Prod, sup, &fakeStatusTart{running: running}, nil, serviceapi.NewStateCache())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -183,7 +183,7 @@ func startApproveStatusDaemon(t *testing.T) func() {
 	sup := supervisor.New(t.TempDir())
 	tr := tart.New()
 	tr.Path = "false"
-	serviceapi.RegisterVMHandlers(srv, identity.Prod, sup, tr, 0, serviceapi.NewProjectLocks(), nil, serviceapi.NewPopSessionStore(), nil)
+	serviceapi.RegisterVMHandlers(srv, identity.Prod, sup, tr, 0, serviceapi.NewProjectLocks(), nil, serviceapi.NewPopSessionStore(), nil, serviceapi.NewStateCache())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

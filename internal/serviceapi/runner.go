@@ -263,6 +263,42 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// above just populated.
 	discoverSoftnet(ctx, cfg, ntp.Port())
 
+	// StateCache — the daemon's single authoritative in-memory model
+	// of every project's state. RealGroundTruth wraps the daemon's
+	// singletons (tart, supervisor, proxy, mutagen CLI, pop store) so
+	// each Check can observe reality without reaching for daemon
+	// globals directly. Locks must be set — RealGroundTruth.
+	// RespawnIronProxy takes the per-project reconcile lock so a
+	// watchdog-driven respawn can't race a concurrent /vm/start or
+	// /vm/reconcile; leaving it nil nil-derefs on first drift.
+	cache := NewStateCache()
+	cache.SetBuild(build)
+	gt := &RealGroundTruth{
+		Cfg: cfg, Tart: tr, Sup: sup, Proxy: proxy,
+		MutagenCLI: popCLI,
+		PopStore:   popStore,
+		Locks:      locks,
+	}
+	checks := []Check{
+		NewIronProxyCheck(),
+		NewMutagenCheck(),
+		NewVMCheck(),
+		NewApproveCheck(),
+		NewPopCheck(),
+	}
+	sw := NewStateWatchdog(cache, gt, checks, 60*time.Second)
+
+	// Synchronous warmup: run every check once before the HTTP server
+	// accepts its first connection, so no request ever reads a cold
+	// cache. Bounded so a single hung check (e.g. a stuck `tart list`)
+	// can't stall daemon startup indefinitely — RunOnce doesn't return
+	// an error (only a drift count), so a timeout here isn't fatal;
+	// each check logs its own errors and the watchdog actor below
+	// retries every 60s regardless.
+	warmupCtx, warmupCancel := context.WithTimeout(ctx, 30*time.Second)
+	sw.RunOnce(warmupCtx)
+	warmupCancel()
+
 	// Surface devm VMs the daemon has lost track of (running, devm
 	// sidecar artifacts on disk, no state snapshot) — their softnets
 	// squat pool IP binds invisibly. Goroutine: tart list can take
@@ -292,13 +328,14 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		go rebindProjectListeners(ctx, proxy, cfg, id, info.ProjectIP, ntp.Port())
 	}
 
-	RegisterVMHandlers(server, cfg, sup, tr, ntp.Port(), locks, proxy, popStore, popCLI)
+	server.SetStateCache(cache)
+	RegisterVMHandlers(server, cfg, sup, tr, ntp.Port(), locks, proxy, popStore, popCLI, cache)
 	RegisterReconcileHandler(server, cfg, locks, &realApplyLiver{tr: tr}, &realPackagesApplier{tr: tr}, tr, sup, proxy, ntp.Port())
 	RegisterApplyIronProxyHandler(server, cfg, locks, sup, tr, proxy)
-	RegisterHandshakeHandler(server, cfg, build, sup, proxy)
-	RegisterStatusAllHandler(server, cfg, sup, tr, proxy)
+	RegisterHandshakeHandler(server, cfg, build, sup, proxy, cache)
+	RegisterStatusAllHandler(server, cfg, sup, tr, proxy, cache)
 	RegisterWorkspacesHandler(server, cfg)
-	RegisterPopSessionHandler(server, cfg, popStore, popCLI, guestSSHTargetFor)
+	RegisterPopSessionHandler(server, cfg, popStore, popCLI, guestSSHTargetFor, cache)
 
 	var g run.Group
 
@@ -362,6 +399,21 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		gcCtx, cancel := context.WithCancel(ctx)
 		g.Add(func() error {
 			return RunPopSessionGC(gcCtx, popStore, popCLI, cfg, PopSessionTTL(), PopSessionGCInterval())
+		}, func(error) {
+			cancel()
+		})
+	}
+
+	// StateWatchdog actor: fires every check every 60s, reconciling
+	// the StateCache against ground truth (silent VM crashes, an
+	// external `tart stop`, iron-proxy dying invisibly, out-of-band
+	// devm.yaml edits). Replaces the old per-subsystem iron-proxy and
+	// mutagen watchdog actors — this is the one that watches
+	// everything.
+	{
+		wCtx, cancel := context.WithCancel(ctx)
+		g.Add(func() error {
+			return sw.Run(wCtx)
 		}, func(error) {
 			cancel()
 		})

@@ -17,7 +17,7 @@ func TestHandshake_WithProjectID(t *testing.T) {
 	build := Build{Version: "dev", Commit: "abc123", Fingerprint: "fp1"}
 	srv := NewServer(identity.Prod.SocketPath(), build)
 	sup := supervisor.New(t.TempDir())
-	RegisterHandshakeHandler(srv, identity.Prod, build, sup, nil)
+	RegisterHandshakeHandler(srv, identity.Prod, build, sup, nil, NewStateCache())
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/handshake?name=p", nil))
@@ -35,7 +35,7 @@ func TestHandshake_NoProjectID(t *testing.T) {
 	build := Build{Version: "dev", Commit: "abc123", Fingerprint: "fp1"}
 	srv := NewServer(identity.Prod.SocketPath(), build)
 	sup := supervisor.New(t.TempDir())
-	RegisterHandshakeHandler(srv, identity.Prod, build, sup, nil)
+	RegisterHandshakeHandler(srv, identity.Prod, build, sup, nil, NewStateCache())
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/handshake", nil))

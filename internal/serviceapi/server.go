@@ -20,6 +20,7 @@ type Server struct {
 	build      Build
 	mux        *http.ServeMux
 	proxyReady atomic.Bool
+	cache      *StateCache
 }
 
 // Build describes the daemon binary's build identity, reported via
@@ -80,6 +81,13 @@ func NewServer(socketPath string, build Build) *Server {
 // the crash instead of pretending nothing was ever running.
 func (s *Server) SetProxyReady(ready bool) {
 	s.proxyReady.Store(ready)
+}
+
+// SetStateCache wires the daemon's StateCache into the server so
+// handleVersion and handleProxyStatus can read it. Called by
+// runner.go once the cache is constructed and warmed.
+func (s *Server) SetStateCache(cache *StateCache) {
+	s.cache = cache
 }
 
 // handleProxyStatus returns {"ready":bool} — was the reverse-proxy

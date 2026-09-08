@@ -20,8 +20,10 @@ type HandshakeResponse struct {
 }
 
 // RegisterHandshakeHandler wires GET /handshake. build is the daemon's
-// identity (same value /version reports); sup is queried for proxy health.
-func RegisterHandshakeHandler(s *Server, cfg identity.Config, build Build, sup *supervisor.Supervisor, proxy *ProxyServer) {
+// identity (same value /version reports); sup is queried for proxy
+// health. cache is plumbed through for a future ship's use; not read
+// yet.
+func RegisterHandshakeHandler(s *Server, cfg identity.Config, build Build, sup *supervisor.Supervisor, proxy *ProxyServer, cache *StateCache) {
 	s.Register("/handshake", func(w http.ResponseWriter, r *http.Request) {
 		resp := HandshakeResponse{Build: build}
 		if name := r.URL.Query().Get("name"); name != "" {

@@ -28,8 +28,9 @@ type ProjectStatus struct {
 
 // RegisterStatusAllHandler wires GET /status/all. sup is queried for
 // each project's iron-proxy health; tr supplies the running-VM set.
-// Purely a read-only report — it never spawns anything.
-func RegisterStatusAllHandler(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr TartLister, proxy *ProxyServer) {
+// Purely a read-only report — it never spawns anything. cache is
+// plumbed through for a future ship's use; not read yet.
+func RegisterStatusAllHandler(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr TartLister, proxy *ProxyServer, cache *StateCache) {
 	s.Register("/status/all", func(w http.ResponseWriter, r *http.Request) {
 		out, err := listProjectStatuses(r.Context(), cfg, sup, tr, proxy)
 		if err != nil {

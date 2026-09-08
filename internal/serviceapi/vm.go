@@ -394,8 +394,9 @@ func shutdownSoftnet(projectID string) {
 // tears them down. May be nil in tests that don't exercise the proxy
 // lifecycle — StartProjectListeners/StopProjectListeners are skipped
 // in that case. popStore and popCLI back each project's pop HTTP
-// listener (servePopListener) and the /vm/stop teardown sweep.
-func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, ntpPort int, locks *ProjectLocks, proxy *ProxyServer, popStore *PopSessionStore, popCLI *mutagen.CLI) {
+// listener (servePopListener) and the /vm/stop teardown sweep. cache
+// is plumbed through for a future ship's use; not read yet.
+func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, ntpPort int, locks *ProjectLocks, proxy *ProxyServer, popStore *PopSessionStore, popCLI *mutagen.CLI, cache *StateCache) {
 	s.Register("/vm/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)

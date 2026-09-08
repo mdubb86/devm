@@ -153,7 +153,7 @@ func TestRegisterPopSessionHandler_InstallsRoute(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	srv := NewServer(filepath.Join(dir, "s.sock"), Build{Version: "test-version"})
 
-	RegisterPopSessionHandler(srv, cfg, store, cli, func(string) string { return "devm-p" })
+	RegisterPopSessionHandler(srv, cfg, store, cli, func(string) string { return "devm-p" }, NewStateCache())
 
 	body, _ := json.Marshal(map[string]any{
 		"project": "p", "guest_path": "/tmp/registered", "is_dir": true,

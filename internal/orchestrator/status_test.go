@@ -167,7 +167,7 @@ func startHandshakeDaemon(t *testing.T) func() {
 	socket := identity.Prod.SocketPath()
 	sup := supervisor.New(t.TempDir())
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, serviceapi.Build{Version: "test"}, sup, nil)
+	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, serviceapi.Build{Version: "test"}, sup, nil, serviceapi.NewStateCache())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
