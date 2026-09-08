@@ -33,7 +33,10 @@ type GroundTruth interface {
 
 // RealGroundTruth is the production implementation. Each method is
 // filled in by its owning check's task; unimplemented methods panic
-// so a wiring mistake surfaces immediately in dev.
+// so a wiring mistake surfaces immediately in dev. Locks must be set
+// to the daemon's shared *ProjectLocks (runner.go) — RespawnIronProxy
+// takes the per-project reconcile lock so a watchdog respawn can't
+// race a concurrent /vm/start or /vm/reconcile.
 type RealGroundTruth struct {
 	Cfg        identity.Config
 	Tart       *tart.Tart
@@ -41,6 +44,7 @@ type RealGroundTruth struct {
 	Proxy      *serviceapi.ProxyServer
 	MutagenCLI *mutagen.CLI
 	PopStore   *serviceapi.PopSessionStore
+	Locks      *serviceapi.ProjectLocks
 }
 
 func (g *RealGroundTruth) IronProxyHealth(ctx context.Context, projectID string) serviceapi.ProxyHealth {
@@ -48,7 +52,7 @@ func (g *RealGroundTruth) IronProxyHealth(ctx context.Context, projectID string)
 }
 
 func (g *RealGroundTruth) RespawnIronProxy(ctx context.Context, projectID string) error {
-	return serviceapi.RespawnIronProxyForWatchdog(ctx, g.Cfg, g.Sup, g.Proxy, projectID)
+	return serviceapi.RespawnIronProxyForWatchdog(ctx, g.Cfg, g.Sup, g.Proxy, projectID, g.Locks)
 }
 
 func (g *RealGroundTruth) MutagenLockPID(dataDir string) (int, error) {
