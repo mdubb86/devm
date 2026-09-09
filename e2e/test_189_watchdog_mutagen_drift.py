@@ -17,12 +17,22 @@ import pytest
 pytestmark = pytest.mark.devm
 
 
+_MUTAGEN_LOCK = str(
+    Path.home() / "Library" / "Application Support" / "devm-e2e"
+    / "mutagen" / "data" / "daemon" / "daemon.lock"
+)
+
+
 def _mutagen_daemon_pid() -> int | None:
-    r = subprocess.run(["pgrep", "-f", "mutagen daemon start"],
-                       capture_output=True, timeout=10)
+    # ps identifies BOTH the prod and e2e mutagen daemons as
+    # `mutagen daemon run` — they differ only by MUTAGEN_DATA_DIRECTORY,
+    # invisible to ps. The lock file uniquely identifies the e2e daemon,
+    # so lsof on it returns the right pid regardless of what other
+    # mutagen processes exist. Same pattern as test_202.
+    r = subprocess.run(["lsof", "-t", _MUTAGEN_LOCK], capture_output=True, text=True, timeout=10)
     if r.returncode != 0:
         return None
-    pid = r.stdout.decode().strip().split("\n")[0]
+    pid = r.stdout.strip().split("\n")[0]
     return int(pid) if pid else None
 
 
