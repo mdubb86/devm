@@ -67,6 +67,33 @@ _build PROFILE:
         codesign --sign - --force --options=runtime --identifier com.mdubb86.devm.helper "$helper_out"; \
     fi
 
+# Build the Mac menu-bar app for the prod identity. Requires xcodegen
+# and Xcode. Produces bin/devm.app, signed with SIGN_IDENTITY.
+mac-build:
+    @which xcodegen >/dev/null || { echo "xcodegen required: brew install xcodegen" >&2; exit 1; }
+    @which xcodebuild >/dev/null || { echo "xcodebuild required: install Xcode" >&2; exit 1; }
+    cd mac/devm && xcodegen
+    xcodebuild -project mac/devm/devm.xcodeproj -scheme devm-prod -configuration Release \
+        -derivedDataPath mac/devm/build \
+        CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY='{{SIGN_IDENTITY}}' \
+        build
+    mkdir -p bin
+    rm -rf bin/devm.app
+    cp -R mac/devm/build/Build/Products/Release/devm.app bin/devm.app
+
+# E2e variant with a separate bundle id + LaunchAgent label.
+mac-build-e2e:
+    @which xcodegen >/dev/null || { echo "xcodegen required: brew install xcodegen" >&2; exit 1; }
+    @which xcodebuild >/dev/null || { echo "xcodebuild required: install Xcode" >&2; exit 1; }
+    cd mac/devm && xcodegen
+    xcodebuild -project mac/devm/devm.xcodeproj -scheme devm-e2e -configuration Release \
+        -derivedDataPath mac/devm/build \
+        CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY='{{SIGN_IDENTITY}}' \
+        build
+    mkdir -p bin
+    rm -rf bin/devm-e2e.app
+    cp -R mac/devm/build/Build/Products/Release/devm-e2e.app bin/devm-e2e.app
+
 # Build the darwin/arm64 devm-helper binary for PROFILE ("prod" or
 # "e2e") and gzip it into the embed directory. `//go:embed
 # embed/devm-helper.gz` in internal/helper/embed.go requires this file

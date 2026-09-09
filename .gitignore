@@ -59,3 +59,7 @@ internal/mutagen/embed/*.gz
 # tart-mutagen-ssh binary embedded (uncompressed) into devm at build time.
 # Populated by `just _build-tart-mutagen-ssh-embed`.
 internal/tartmutagenssh/embed/tart-mutagen-ssh
+
+# xcodebuild derived data for the Mac menu-bar app.
+# Populated by `just mac-build` / `just mac-build-e2e`.
+mac/devm/build/
