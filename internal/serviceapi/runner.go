@@ -338,8 +338,8 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	RegisterVMHandlers(server, cfg, sup, tr, ntp.Port(), locks, proxy, popStore, popCLI, cache)
 	RegisterReconcileHandler(server, cfg, locks, &realApplyLiver{tr: tr}, &realPackagesApplier{tr: tr}, tr, sup, proxy, ntp.Port())
 	RegisterApplyIronProxyHandler(server, cfg, locks, sup, tr, proxy)
-	RegisterHandshakeHandler(server, cfg, build, sup, proxy, cache)
-	RegisterStatusAllHandler(server, cfg, sup, tr, proxy, cache)
+	RegisterHandshakeHandler(server, cache)
+	RegisterStatusAllHandler(server, cfg, tr, cache)
 	RegisterWorkspacesHandler(server, cfg)
 	RegisterPopSessionHandler(server, cfg, popStore, popCLI, guestSSHTargetFor, cache)
 

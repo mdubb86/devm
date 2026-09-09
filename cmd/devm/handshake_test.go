@@ -11,7 +11,6 @@ import (
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
-	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,13 +58,12 @@ func startHandshakeDaemon(t *testing.T, build serviceapi.Build, projectProxy *se
 	require.NoError(t, err)
 	socket := identity.Prod.SocketPath()
 	srv := serviceapi.NewServer(socket, build)
-	sup := supervisor.New(t.TempDir())
 	cache := serviceapi.NewStateCache()
 	cache.SetBuild(build)
 	if projectProxy != nil {
 		cache.SetIronProxyHealth("p", *projectProxy)
 	}
-	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, build, sup, nil, cache)
+	serviceapi.RegisterHandshakeHandler(srv, cache)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -178,8 +176,7 @@ func TestDaemonHandshake_ProxyDrift_VMStopped_NoWarning(t *testing.T) {
 	socket := identity.Prod.SocketPath()
 	build := serviceapi.Build{Fingerprint: "fp-match"}
 	srv := serviceapi.NewServer(socket, build)
-	sup := supervisor.New(t.TempDir())
-	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, build, sup, nil, serviceapi.NewStateCache())
+	serviceapi.RegisterHandshakeHandler(srv, serviceapi.NewStateCache())
 	// Stub /vm/status returning "not running". No supervisor / tart
 	// wiring needed since daemonHandshake only reads the Running field.
 	srv.Register("/vm/status", func(w http.ResponseWriter, _ *http.Request) {

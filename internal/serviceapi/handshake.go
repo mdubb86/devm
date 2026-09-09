@@ -3,9 +3,6 @@ package serviceapi
 import (
 	"encoding/json"
 	"net/http"
-
-	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/supervisor"
 )
 
 // HandshakeResponse is the body of GET /handshake. Build is always present
@@ -23,7 +20,7 @@ type HandshakeResponse struct {
 // proxy health are both served from cache — cache.SetBuild is called
 // once at daemon startup (see runner.go) so cache.Global().Build is
 // always the daemon's identity by request time.
-func RegisterHandshakeHandler(s *Server, cfg identity.Config, build Build, sup *supervisor.Supervisor, proxy *ProxyServer, cache *StateCache) {
+func RegisterHandshakeHandler(s *Server, cache *StateCache) {
 	s.Register("/handshake", func(w http.ResponseWriter, r *http.Request) {
 		resp := HandshakeResponse{Build: cache.Global().Build}
 		if name := r.URL.Query().Get("name"); name != "" {

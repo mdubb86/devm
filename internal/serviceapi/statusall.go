@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/supervisor"
 )
 
 // ProjectStatus is one row of GET /status/all — a cross-project
@@ -29,7 +28,7 @@ type ProjectStatus struct {
 // orphan detection (see detectOrphanVMs), which stays a live tart
 // query — an orphan is by definition a VM with no cache row. Purely a
 // read-only report — it never spawns anything.
-func RegisterStatusAllHandler(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr TartLister, proxy *ProxyServer, cache *StateCache) {
+func RegisterStatusAllHandler(s *Server, cfg identity.Config, tr TartLister, cache *StateCache) {
 	s.Register("/status/all", func(w http.ResponseWriter, r *http.Request) {
 		out, err := projectStatusesFromCache(r.Context(), cfg, tr, cache)
 		if err != nil {

@@ -87,6 +87,13 @@ func DiscoverIronProxies(ctx context.Context, cfg identity.Config) ([]Discovered
 // — all of that is in-memory-only and otherwise lost on daemon
 // restart, breaking ingress/DNS for a VM that's still running under an
 // orphaned iron-proxy.
+// This function runs before the StateCache exists — see runner.go's
+// startup sequence: mutagen adopt → iron-proxy adopt → softnet
+// discover → NewStateCache → StateWatchdog.RunOnce (warmup). Every
+// adopted project is picked up by the watchdog's synchronous warmup
+// pass immediately after this, populating the cache from ground truth
+// before the HTTP server accepts its first request. That's why
+// nothing here writes to the cache directly.
 func AdoptIronProxies(ctx context.Context, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, routes *Routes) error {
 	procs, err := DiscoverIronProxies(ctx, cfg)
 	if err != nil {

@@ -11,7 +11,6 @@ import (
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
-	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -167,12 +166,11 @@ func startHandshakeDaemon(t *testing.T) func() {
 	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
 	require.NoError(t, err)
 	socket := identity.Prod.SocketPath()
-	sup := supervisor.New(t.TempDir())
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
 	cache := serviceapi.NewStateCache()
 	cache.SetBuild(serviceapi.Build{Version: "test"})
 	cache.SetIronProxyHealth("x", serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing})
-	serviceapi.RegisterHandshakeHandler(srv, identity.Prod, serviceapi.Build{Version: "test"}, sup, nil, cache)
+	serviceapi.RegisterHandshakeHandler(srv, cache)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

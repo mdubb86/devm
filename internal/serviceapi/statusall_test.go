@@ -10,7 +10,6 @@ import (
 
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
-	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,9 +39,8 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 	cache.SetVMState("stopped-proj", VMStopped)
 
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
-	sup := supervisor.New(t.TempDir())
 	tr := &fakeStatusAllTart{running: map[string]bool{}}
-	RegisterStatusAllHandler(srv, identity.Prod, sup, tr, nil, cache)
+	RegisterStatusAllHandler(srv, identity.Prod, tr, cache)
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
@@ -71,9 +69,8 @@ func TestStatusAll_NoCacheRows_EmptyList(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
-	sup := supervisor.New(t.TempDir())
 	tr := &fakeStatusAllTart{running: map[string]bool{}}
-	RegisterStatusAllHandler(srv, identity.Prod, sup, tr, nil, NewStateCache())
+	RegisterStatusAllHandler(srv, identity.Prod, tr, NewStateCache())
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
@@ -88,8 +85,7 @@ func TestStatusAll_TartListError_Returns500(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
-	sup := supervisor.New(t.TempDir())
-	RegisterStatusAllHandler(srv, identity.Prod, sup, erroringTartLister{}, nil, NewStateCache())
+	RegisterStatusAllHandler(srv, identity.Prod, erroringTartLister{}, NewStateCache())
 
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
