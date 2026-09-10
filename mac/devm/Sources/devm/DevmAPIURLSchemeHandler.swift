@@ -3,6 +3,7 @@ import WebKit
 
 enum DevmAPIURLSchemeHandlerError: Error {
     case missingRequestURL
+    case unparsableRequestURL(URL)
     case invalidHTTPResponse(status: Int)
 }
 
@@ -11,6 +12,8 @@ extension DevmAPIURLSchemeHandlerError: LocalizedError {
         switch self {
         case .missingRequestURL:
             return "devm-api request had no URL"
+        case .unparsableRequestURL(let url):
+            return "could not parse devm-api request URL: \(url)"
         case .invalidHTTPResponse(let status):
             return "could not construct an HTTP response for status \(status)"
         }
@@ -40,7 +43,10 @@ final class DevmAPIURLSchemeHandler: NSObject, WKURLSchemeHandler {
             return
         }
 
-        let daemonPath = Self.daemonPath(for: url)
+        guard let daemonPath = Self.daemonPath(for: url) else {
+            urlSchemeTask.didFailWithError(DevmAPIURLSchemeHandlerError.unparsableRequestURL(url))
+            return
+        }
         let taskID = ObjectIdentifier(urlSchemeTask as AnyObject)
 
         UnixSocketClient.request(
@@ -87,16 +93,27 @@ final class DevmAPIURLSchemeHandler: NSObject, WKURLSchemeHandler {
     /// Combines the request URL's host and path into the daemon-facing
     /// path, preserving the query string and dropping the fragment (URL
     /// parsing already excludes the fragment from both components).
-    static func daemonPath(for url: URL) -> String {
-        let host = url.host ?? ""
+    ///
+    /// Uses the percent-*encoded* path/query (`URLComponents`), not
+    /// `URL.path`/`URL.query` — those decode on read, which would corrupt
+    /// the raw HTTP request line (`%20` becoming a literal space) and
+    /// silently collapse an encoded `%2F` into a route-separating `/`.
+    /// `percentEncodedPath` also preserves a trailing slash, which
+    /// `URL.path` strips.
+    static func daemonPath(for url: URL) -> String? {
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        let host = comps.host ?? ""
+        let encodedPath = comps.percentEncodedPath
         let path: String
         if host.isEmpty {
-            path = url.path.isEmpty ? "/" : url.path
+            path = encodedPath.isEmpty ? "/" : encodedPath
         } else {
-            path = "/" + host + url.path
+            path = "/" + host + encodedPath
         }
 
-        if let query = url.query, !query.isEmpty {
+        if let query = comps.percentEncodedQuery, !query.isEmpty {
             return path + "?" + query
         }
         return path

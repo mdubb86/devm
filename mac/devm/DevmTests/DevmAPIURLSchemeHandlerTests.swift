@@ -83,6 +83,122 @@ final class DevmAPIURLSchemeHandlerTests: XCTestCase {
             DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/all?project=p#frag")!),
             "/vm/status/all?project=p"
         )
+        XCTAssertEqual(
+            DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/foo%20bar")!),
+            "/vm/status/foo%20bar"
+        )
+        XCTAssertEqual(
+            DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status%2Fall")!),
+            "/vm/status%2Fall"
+        )
+        XCTAssertEqual(
+            DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/all/")!),
+            "/vm/status/all/"
+        )
+        XCTAssertEqual(
+            DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/all?project=a%2Fb")!),
+            "/vm/status/all?project=a%2Fb"
+        )
+        XCTAssertEqual(
+            DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api:///vm/status/all")!),
+            "/vm/status/all"
+        )
+        XCTAssertEqual(
+            DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm")!),
+            "/vm"
+        )
+    }
+
+    // MARK: - Percent-encoding and trailing-slash fidelity on the wire
+
+    func testPercentEncodedSpacePreservedOnWire() throws {
+        let listener = try CapturingUnixListener(path: newSocketPath())
+
+        let handler = DevmAPIURLSchemeHandler(socketPath: listener.path)
+        let webView = WKWebView()
+        let task = MockURLSchemeTask(url: URL(string: "devm-api://vm/status/foo%20bar")!)
+
+        let exp = expectation(description: "task finishes")
+        task.onFinish = { exp.fulfill() }
+        handler.webView(webView, start: task)
+        wait(for: [exp], timeout: 2.0)
+
+        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status/foo%20bar HTTP/1.1")
+    }
+
+    func testPercentEncodedSlashPreservedOnWire() throws {
+        let listener = try CapturingUnixListener(path: newSocketPath())
+
+        let handler = DevmAPIURLSchemeHandler(socketPath: listener.path)
+        let webView = WKWebView()
+        let task = MockURLSchemeTask(url: URL(string: "devm-api://vm/status%2Fall")!)
+
+        let exp = expectation(description: "task finishes")
+        task.onFinish = { exp.fulfill() }
+        handler.webView(webView, start: task)
+        wait(for: [exp], timeout: 2.0)
+
+        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status%2Fall HTTP/1.1")
+    }
+
+    func testTrailingSlashPreservedOnWire() throws {
+        let listener = try CapturingUnixListener(path: newSocketPath())
+
+        let handler = DevmAPIURLSchemeHandler(socketPath: listener.path)
+        let webView = WKWebView()
+        let task = MockURLSchemeTask(url: URL(string: "devm-api://vm/status/all/")!)
+
+        let exp = expectation(description: "task finishes")
+        task.onFinish = { exp.fulfill() }
+        handler.webView(webView, start: task)
+        wait(for: [exp], timeout: 2.0)
+
+        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status/all/ HTTP/1.1")
+    }
+
+    func testPercentEncodedQueryPreservedOnWire() throws {
+        let listener = try CapturingUnixListener(path: newSocketPath())
+
+        let handler = DevmAPIURLSchemeHandler(socketPath: listener.path)
+        let webView = WKWebView()
+        let task = MockURLSchemeTask(url: URL(string: "devm-api://vm/status/all?project=a%2Fb")!)
+
+        let exp = expectation(description: "task finishes")
+        task.onFinish = { exp.fulfill() }
+        handler.webView(webView, start: task)
+        wait(for: [exp], timeout: 2.0)
+
+        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status/all?project=a%2Fb HTTP/1.1")
+    }
+
+    func testEmptyHostStillWorksOnWire() throws {
+        let listener = try CapturingUnixListener(path: newSocketPath())
+
+        let handler = DevmAPIURLSchemeHandler(socketPath: listener.path)
+        let webView = WKWebView()
+        let task = MockURLSchemeTask(url: URL(string: "devm-api:///vm/status/all")!)
+
+        let exp = expectation(description: "task finishes")
+        task.onFinish = { exp.fulfill() }
+        handler.webView(webView, start: task)
+        wait(for: [exp], timeout: 2.0)
+
+        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status/all HTTP/1.1")
+    }
+
+    func testMissingPathBecomesHostOnlyOnWire() throws {
+        let listener = try CapturingUnixListener(path: newSocketPath())
+
+        let handler = DevmAPIURLSchemeHandler(socketPath: listener.path)
+        let webView = WKWebView()
+        let task = MockURLSchemeTask(url: URL(string: "devm-api://vm")!)
+
+        let exp = expectation(description: "task finishes")
+        task.onFinish = { exp.fulfill() }
+        handler.webView(webView, start: task)
+        wait(for: [exp], timeout: 2.0)
+
+        XCTAssertEqual(listener.capturedRequestLine, "GET /vm HTTP/1.1")
     }
 
     // MARK: - Failure
