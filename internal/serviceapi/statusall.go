@@ -17,10 +17,21 @@ type ProjectStatus struct {
 	Name      string      `json:"name"`
 	VMRunning bool        `json:"vm_running"`
 	Proxy     ProxyHealth `json:"proxy"`
+	MacCwd    string      `json:"mac_cwd,omitempty"`
+	// ApproveState is nil when the cache has no approve-gate signal
+	// tracked for the project yet.
+	ApproveState *ApproveStateJSON `json:"approve_state,omitempty"`
 	// Orphaned marks a running VM that carries devm sidecar artifacts
 	// but no state snapshot — devm-created, daemon lost track of it
 	// (see detectOrphanVMs). Such rows have no meaningful Proxy value.
 	Orphaned bool `json:"orphaned,omitempty"`
+}
+
+// ApproveStateJSON is the subset of ApproveStateSummary exposed on the
+// wire — v1 only needs the boolean; SHAs/since stay internal until a
+// consumer needs them.
+type ApproveStateJSON struct {
+	Diverged bool `json:"diverged"`
 }
 
 // RegisterStatusAllHandler wires GET /status/all. Every project row
@@ -47,10 +58,17 @@ func projectStatusesFromCache(ctx context.Context, cfg identity.Config, tr TartL
 	rows := cache.AllProjectRows()
 	out := make([]ProjectStatus, 0, len(rows))
 	for name, row := range rows {
+		var approve *ApproveStateJSON
+		// ApproveState is a value type; treat zero-value as "not tracked yet".
+		if row.ApproveState != (ApproveStateSummary{}) {
+			approve = &ApproveStateJSON{Diverged: row.ApproveState.Diverged}
+		}
 		out = append(out, ProjectStatus{
-			Name:      name,
-			VMRunning: row.VMState == VMRunning,
-			Proxy:     row.IronProxyHealth,
+			Name:         name,
+			VMRunning:    row.VMState == VMRunning,
+			Proxy:        row.IronProxyHealth,
+			MacCwd:       row.MacCwd,
+			ApproveState: approve,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
