@@ -25,8 +25,11 @@ extension DevmAPIURLSchemeHandlerError: LocalizedError {
 ///
 /// `devm-api://vm/status/all?project=x` parses (per RFC 3986, since a
 /// custom scheme followed by "//" introduces an authority component) with
-/// host="vm" and path="/status/all" — those are recombined into the
-/// daemon path "/vm/status/all?project=x".
+/// host="vm" and path="/status/all". The daemon's routes have no `/vm`
+/// prefix, so only the path (plus query) is forwarded: "/status/all?project=x".
+/// The "vm" host is a placeholder required by URL syntax — RFC 3986 needs
+/// something between `://` and the path — and carries no meaning to the
+/// daemon.
 final class DevmAPIURLSchemeHandler: NSObject, WKURLSchemeHandler {
     let socketPath: String
 
@@ -90,9 +93,11 @@ final class DevmAPIURLSchemeHandler: NSObject, WKURLSchemeHandler {
         return stoppedTasks.contains(taskID)
     }
 
-    /// Combines the request URL's host and path into the daemon-facing
-    /// path, preserving the query string and dropping the fragment (URL
-    /// parsing already excludes the fragment from both components).
+    /// Extracts the request URL's path as the daemon-facing path,
+    /// preserving the query string and dropping the fragment (URL parsing
+    /// already excludes the fragment from both components). The URL's host
+    /// (e.g. "vm") is a syntactic placeholder only and is never part of the
+    /// daemon path.
     ///
     /// Uses the percent-*encoded* path/query (`URLComponents`), not
     /// `URL.path`/`URL.query` — those decode on read, which would corrupt
@@ -104,13 +109,9 @@ final class DevmAPIURLSchemeHandler: NSObject, WKURLSchemeHandler {
         guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return nil
         }
-        let host = comps.host ?? ""
-        let encodedPath = comps.percentEncodedPath
-        let path: String
-        if host.isEmpty {
-            path = encodedPath.isEmpty ? "/" : encodedPath
-        } else {
-            path = "/" + host + encodedPath
+        let path = comps.percentEncodedPath
+        guard !path.isEmpty, path != "/" else {
+            return nil
         }
 
         if let query = comps.percentEncodedQuery, !query.isEmpty {

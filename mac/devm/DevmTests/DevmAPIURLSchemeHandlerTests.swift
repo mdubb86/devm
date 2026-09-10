@@ -37,7 +37,7 @@ final class DevmAPIURLSchemeHandlerTests: XCTestCase {
         handler.webView(webView, start: task)
         wait(for: [exp], timeout: 2.0)
 
-        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status/all HTTP/1.1")
+        XCTAssertEqual(listener.capturedRequestLine, "GET /status/all HTTP/1.1")
     }
 
     func testPreservesQueryString() throws {
@@ -52,7 +52,7 @@ final class DevmAPIURLSchemeHandlerTests: XCTestCase {
         handler.webView(webView, start: task)
         wait(for: [exp], timeout: 2.0)
 
-        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status/all?project=p HTTP/1.1")
+        XCTAssertEqual(listener.capturedRequestLine, "GET /status/all?project=p HTTP/1.1")
     }
 
     func testDropsFragment() throws {
@@ -67,45 +67,61 @@ final class DevmAPIURLSchemeHandlerTests: XCTestCase {
         handler.webView(webView, start: task)
         wait(for: [exp], timeout: 2.0)
 
-        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status/all?project=p HTTP/1.1")
+        XCTAssertEqual(listener.capturedRequestLine, "GET /status/all?project=p HTTP/1.1")
     }
 
     func testDaemonPathHelperDirectly() {
         XCTAssertEqual(
             DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/all")!),
-            "/vm/status/all"
+            "/status/all"
         )
         XCTAssertEqual(
             DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/all?project=p")!),
-            "/vm/status/all?project=p"
+            "/status/all?project=p"
         )
         XCTAssertEqual(
             DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/all?project=p#frag")!),
-            "/vm/status/all?project=p"
+            "/status/all?project=p"
         )
         XCTAssertEqual(
             DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/foo%20bar")!),
-            "/vm/status/foo%20bar"
+            "/status/foo%20bar"
         )
         XCTAssertEqual(
             DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status%2Fall")!),
-            "/vm/status%2Fall"
+            "/status%2Fall"
         )
         XCTAssertEqual(
             DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/all/")!),
-            "/vm/status/all/"
+            "/status/all/"
         )
         XCTAssertEqual(
             DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/all?project=a%2Fb")!),
-            "/vm/status/all?project=a%2Fb"
+            "/status/all?project=a%2Fb"
         )
         XCTAssertEqual(
             DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api:///vm/status/all")!),
             "/vm/status/all"
         )
         XCTAssertEqual(
-            DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm")!),
-            "/vm"
+            DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/version")!),
+            "/version"
+        )
+        XCTAssertNil(DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm")!))
+    }
+
+    func testDaemonPathDoesNotIncludeHostSegment() {
+        // The bug this guards: daemonPath(for:) must forward only the URL's
+        // path component to the daemon. The daemon's routes (/status/all,
+        // /version, etc.) have no /vm prefix — "vm" is a syntactic
+        // placeholder host, not a daemon route segment.
+        XCTAssertEqual(
+            DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/all")!),
+            "/status/all"
+        )
+        XCTAssertNotEqual(
+            DevmAPIURLSchemeHandler.daemonPath(for: URL(string: "devm-api://vm/status/all")!),
+            "/vm/status/all"
         )
     }
 
@@ -123,7 +139,7 @@ final class DevmAPIURLSchemeHandlerTests: XCTestCase {
         handler.webView(webView, start: task)
         wait(for: [exp], timeout: 2.0)
 
-        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status/foo%20bar HTTP/1.1")
+        XCTAssertEqual(listener.capturedRequestLine, "GET /status/foo%20bar HTTP/1.1")
     }
 
     func testPercentEncodedSlashPreservedOnWire() throws {
@@ -138,7 +154,7 @@ final class DevmAPIURLSchemeHandlerTests: XCTestCase {
         handler.webView(webView, start: task)
         wait(for: [exp], timeout: 2.0)
 
-        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status%2Fall HTTP/1.1")
+        XCTAssertEqual(listener.capturedRequestLine, "GET /status%2Fall HTTP/1.1")
     }
 
     func testTrailingSlashPreservedOnWire() throws {
@@ -153,7 +169,7 @@ final class DevmAPIURLSchemeHandlerTests: XCTestCase {
         handler.webView(webView, start: task)
         wait(for: [exp], timeout: 2.0)
 
-        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status/all/ HTTP/1.1")
+        XCTAssertEqual(listener.capturedRequestLine, "GET /status/all/ HTTP/1.1")
     }
 
     func testPercentEncodedQueryPreservedOnWire() throws {
@@ -168,7 +184,7 @@ final class DevmAPIURLSchemeHandlerTests: XCTestCase {
         handler.webView(webView, start: task)
         wait(for: [exp], timeout: 2.0)
 
-        XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status/all?project=a%2Fb HTTP/1.1")
+        XCTAssertEqual(listener.capturedRequestLine, "GET /status/all?project=a%2Fb HTTP/1.1")
     }
 
     func testEmptyHostStillWorksOnWire() throws {
@@ -186,10 +202,11 @@ final class DevmAPIURLSchemeHandlerTests: XCTestCase {
         XCTAssertEqual(listener.capturedRequestLine, "GET /vm/status/all HTTP/1.1")
     }
 
-    func testMissingPathBecomesHostOnlyOnWire() throws {
-        let listener = try CapturingUnixListener(path: newSocketPath())
-
-        let handler = DevmAPIURLSchemeHandler(socketPath: listener.path)
+    func testMissingPathFailsWithUnparsableRequestURL() throws {
+        // "devm-api://vm" has no path beyond the placeholder host, so
+        // there is no daemon route to forward to — the handler must fail
+        // the task rather than send an empty or host-only request.
+        let handler = DevmAPIURLSchemeHandler(socketPath: newSocketPath())
         let webView = WKWebView()
         let task = MockURLSchemeTask(url: URL(string: "devm-api://vm")!)
 
@@ -198,7 +215,16 @@ final class DevmAPIURLSchemeHandlerTests: XCTestCase {
         handler.webView(webView, start: task)
         wait(for: [exp], timeout: 2.0)
 
-        XCTAssertEqual(listener.capturedRequestLine, "GET /vm HTTP/1.1")
+        guard let error = task.receivedError as? DevmAPIURLSchemeHandlerError else {
+            XCTFail("expected DevmAPIURLSchemeHandlerError, got \(String(describing: task.receivedError))")
+            return
+        }
+        switch error {
+        case .unparsableRequestURL:
+            break
+        default:
+            XCTFail("expected .unparsableRequestURL, got \(error)")
+        }
     }
 
     // MARK: - Failure
