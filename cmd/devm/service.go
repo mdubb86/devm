@@ -265,8 +265,11 @@ func runInstallFlow(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
+	// Non-fatal: `just mac-build[-e2e]` is a separate build step from
+	// the daemon build. A caller who hasn't run it should still be
+	// able to install the daemon.
 	if err := installMenuApp(cfg, repoRoot); err != nil {
-		return fmt.Errorf("install menu-bar app: %w", err)
+		fmt.Fprintf(os.Stderr, "menu-bar app not installed: %v\n", err)
 	}
 
 	return nil

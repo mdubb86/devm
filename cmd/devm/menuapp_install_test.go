@@ -65,7 +65,7 @@ func TestInstallMenuApp_CopiesAppAndWritesPlist(t *testing.T) {
 	assert.Equal(t, 1, bootstrapCalls)
 }
 
-func TestInstallMenuApp_MissingAppFailsStrict(t *testing.T) {
+func TestInstallMenuApp_MissingAppReturnsError(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	repoRoot := filepath.Join(tmp, "src")
@@ -74,6 +74,18 @@ func TestInstallMenuApp_MissingAppFailsStrict(t *testing.T) {
 	err := installMenuApp(identity.Prod, repoRoot)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "just mac-build")
+	assert.NotContains(t, err.Error(), "just mac-build-e2e")
+}
+
+func TestInstallMenuApp_MissingAppRecipeIsE2EAware(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	repoRoot := filepath.Join(tmp, "src")
+	require.NoError(t, os.MkdirAll(repoRoot, 0755))
+
+	err := installMenuApp(identity.E2E, repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "just mac-build-e2e")
 }
 
 func TestUninstallMenuApp_RemovesAppAndPlist(t *testing.T) {

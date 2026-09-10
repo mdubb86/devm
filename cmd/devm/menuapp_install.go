@@ -92,13 +92,19 @@ func installMenuAppAt(cfg identity.Config, srcAppPath, appsDir string) error {
 }
 
 // installMenuApp is the production entry point, called from
-// runInstallFlow. Strict: fails if the .app hasn't been built, directing
-// the user to `just mac-build` rather than silently skipping the
-// menu-bar app.
+// runInstallFlow. Non-fatal by contract from the caller's side: `just
+// mac-build[-e2e]` is a separate build step from the daemon build, and
+// a caller who hasn't run it should still be able to install the
+// daemon — runInstallFlow logs this error to stderr rather than
+// failing the whole install.
 func installMenuApp(cfg identity.Config, repoRoot string) error {
 	srcApp := filepath.Join(repoRoot, "bin", menuAppBundleName(cfg)+".app")
 	if _, err := os.Stat(srcApp); err != nil {
-		return fmt.Errorf("menu-bar app not built at %s (run: just mac-build): %w", srcApp, err)
+		recipe := "just mac-build"
+		if cfg == identity.E2E {
+			recipe = "just mac-build-e2e"
+		}
+		return fmt.Errorf("menu-bar app not built at %s (run: %s): %w", srcApp, recipe, err)
 	}
 	return installMenuAppAt(cfg, srcApp, "/Applications")
 }
