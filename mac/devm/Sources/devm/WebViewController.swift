@@ -8,6 +8,7 @@ final class WebViewController: NSViewController {
         let config = WKWebViewConfiguration()
         let handler = DevmAPIURLSchemeHandler(socketPath: AppIdentity.current.socketPath)
         config.setURLSchemeHandler(handler, forURLScheme: "devm-api")
+        AppVersionBridge.install(on: config)
 
         let wv = WKWebView(frame: .zero, configuration: config)
         if #available(macOS 13.3, *) {

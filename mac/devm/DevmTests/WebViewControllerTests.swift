@@ -12,4 +12,12 @@ final class WebViewControllerTests: XCTestCase {
         XCTAssertNotNil(handler)
         XCTAssertTrue(handler is DevmAPIURLSchemeHandler)
     }
+
+    func testInstallsAppVersionBridge() {
+        let vc = WebViewController()
+        vc.loadView()
+
+        let scripts = vc.webView.configuration.userContentController.userScripts
+        XCTAssertTrue(scripts.contains { $0.source.contains("window.__DEVM_APP_FINGERPRINT__") })
+    }
 }

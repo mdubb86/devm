@@ -68,4 +68,38 @@ describe('ProjectStore', () => {
     expect(store.projects).toHaveLength(0);
     expect(store.daemonReachable).toBe(true);
   });
+
+  it('checkVersion() sets daemonFingerprint from getVersion() response', async () => {
+    mockFetch.mockResolvedValue(
+      okResponse({ version: '1.0.0', commit: 'abc', date: '2026-01-01', fingerprint: 'deadbeef' }),
+    );
+    const store = new ProjectStore();
+    await store.checkVersion();
+    expect(store.daemonFingerprint).toBe('deadbeef');
+  });
+
+  it('versionSkew is true when fingerprints differ', () => {
+    const store = new ProjectStore();
+    store.appFingerprint = 'app-fp';
+    store.daemonFingerprint = 'daemon-fp';
+    expect(store.versionSkew).toBe(true);
+  });
+
+  it('versionSkew is false when fingerprints match', () => {
+    const store = new ProjectStore();
+    store.appFingerprint = 'fp';
+    store.daemonFingerprint = 'fp';
+    expect(store.versionSkew).toBe(false);
+  });
+
+  it('versionSkew is false when either fingerprint is null', () => {
+    const store = new ProjectStore();
+    store.appFingerprint = null;
+    store.daemonFingerprint = 'daemon-fp';
+    expect(store.versionSkew).toBe(false);
+
+    store.appFingerprint = 'app-fp';
+    store.daemonFingerprint = null;
+    expect(store.versionSkew).toBe(false);
+  });
 });

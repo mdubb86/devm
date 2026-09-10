@@ -26,15 +26,18 @@
 		64437DE73300AD6987004DED /* DevmAPIURLSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0E9D26D516FD9BF7D92F3AA /* DevmAPIURLSchemeHandler.swift */; };
 		658DE43A3CED04C3A00A9ABF /* GeneratedBuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB3CFF9BAF6957F47C87B608 /* GeneratedBuildInfo.swift */; };
 		7020015ABBBEAF802011FFE9 /* gui.css in Resources */ = {isa = PBXBuildFile; fileRef = D0CBD5E592AFFC80087904E3 /* gui.css */; };
+		76FDCA5E1F406B4A94573092 /* AppVersionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B16FD3F0995D1EAE18953AF9 /* AppVersionBridge.swift */; };
 		8FCF7D8D5B9693D273F48541 /* UnixSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C81624E0CE48448D5A5D0B6B /* UnixSocketClient.swift */; };
 		8FDE60F0F414F39CCDA9FF7A /* gui.html in Resources */ = {isa = PBXBuildFile; fileRef = 1E72F47A53AF368F34022540 /* gui.html */; };
 		908644319A7D5311C7C55A73 /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7AE227FD9911E25AE26A6E4 /* BuildInfo.swift */; };
 		995078CBE9B0C3E67BDD3CF9 /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7AE227FD9911E25AE26A6E4 /* BuildInfo.swift */; };
+		A72372708C057419686F144E /* AppVersionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B16FD3F0995D1EAE18953AF9 /* AppVersionBridge.swift */; };
 		BEF4791B1B3BD78AADD9E71A /* WebViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2ABE4AAAE66CECE9E24A0C6 /* WebViewController.swift */; };
 		C8C34B619566450466CD9B6E /* DevmAPIURLSchemeHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0745CFF1D8418BE268F6B9AB /* DevmAPIURLSchemeHandlerTests.swift */; };
 		CB5054BE4C3776BBA51C8440 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4E5677CC5F95F2ADDFCE0627 /* Assets.xcassets */; };
 		CFA58ED68277E9095DCACA35 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E844F20AE6D48655DE97882 /* AppIdentity.swift */; };
 		DC6940B10E85EFD77C15E338 /* DevmAPIURLSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0E9D26D516FD9BF7D92F3AA /* DevmAPIURLSchemeHandler.swift */; };
+		F4C4896B3FC5C26E21C0EB9C /* AppVersionBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F595E421D0EC94AE1E646E41 /* AppVersionBridgeTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -60,6 +63,7 @@
 		64535DF389BF19B5DCEDA710 /* WebViewControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewControllerTests.swift; sourceTree = "<group>"; };
 		7B6483A802451D215037C9AF /* DevmApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevmApp.swift; sourceTree = "<group>"; };
 		8A6AC4C1703256B5B6DBFA42 /* gui.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = gui.js; sourceTree = "<group>"; };
+		B16FD3F0995D1EAE18953AF9 /* AppVersionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppVersionBridge.swift; sourceTree = "<group>"; };
 		B7AE227FD9911E25AE26A6E4 /* BuildInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildInfo.swift; sourceTree = "<group>"; };
 		BB3CFF9BAF6957F47C87B608 /* GeneratedBuildInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneratedBuildInfo.swift; sourceTree = "<group>"; };
 		C81624E0CE48448D5A5D0B6B /* UnixSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnixSocketClient.swift; sourceTree = "<group>"; };
@@ -67,6 +71,7 @@
 		D2ABE4AAAE66CECE9E24A0C6 /* WebViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewController.swift; sourceTree = "<group>"; };
 		E004362DC6291108506378D5 /* UnixSocketClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnixSocketClientTests.swift; sourceTree = "<group>"; };
 		E0E9D26D516FD9BF7D92F3AA /* DevmAPIURLSchemeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevmAPIURLSchemeHandler.swift; sourceTree = "<group>"; };
+		F595E421D0EC94AE1E646E41 /* AppVersionBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppVersionBridgeTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -74,6 +79,7 @@
 			isa = PBXGroup;
 			children = (
 				1E844F20AE6D48655DE97882 /* AppIdentity.swift */,
+				B16FD3F0995D1EAE18953AF9 /* AppVersionBridge.swift */,
 				B7AE227FD9911E25AE26A6E4 /* BuildInfo.swift */,
 				E0E9D26D516FD9BF7D92F3AA /* DevmAPIURLSchemeHandler.swift */,
 				7B6483A802451D215037C9AF /* DevmApp.swift */,
@@ -109,6 +115,7 @@
 		6008F213B8899911E25312F0 /* DevmTests */ = {
 			isa = PBXGroup;
 			children = (
+				F595E421D0EC94AE1E646E41 /* AppVersionBridgeTests.swift */,
 				5FF79B6F7DEBFFF460DC2CB2 /* BuildInfoTests.swift */,
 				0745CFF1D8418BE268F6B9AB /* DevmAPIURLSchemeHandlerTests.swift */,
 				E004362DC6291108506378D5 /* UnixSocketClientTests.swift */,
@@ -260,6 +267,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CFA58ED68277E9095DCACA35 /* AppIdentity.swift in Sources */,
+				A72372708C057419686F144E /* AppVersionBridge.swift in Sources */,
 				908644319A7D5311C7C55A73 /* BuildInfo.swift in Sources */,
 				64437DE73300AD6987004DED /* DevmAPIURLSchemeHandler.swift in Sources */,
 				21FF9AC86BD5416F83D63254 /* DevmApp.swift in Sources */,
@@ -274,6 +282,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F4C4896B3FC5C26E21C0EB9C /* AppVersionBridgeTests.swift in Sources */,
 				43531B03225CB2C516C28297 /* BuildInfoTests.swift in Sources */,
 				C8C34B619566450466CD9B6E /* DevmAPIURLSchemeHandlerTests.swift in Sources */,
 				5316F5AFBA66B42B11A93CDC /* UnixSocketClientTests.swift in Sources */,
@@ -286,6 +295,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3CF7734606901EE34A44F6D5 /* AppIdentity.swift in Sources */,
+				76FDCA5E1F406B4A94573092 /* AppVersionBridge.swift in Sources */,
 				995078CBE9B0C3E67BDD3CF9 /* BuildInfo.swift in Sources */,
 				DC6940B10E85EFD77C15E338 /* DevmAPIURLSchemeHandler.swift in Sources */,
 				3127D104967E3F20E81A0B35 /* DevmApp.swift in Sources */,
