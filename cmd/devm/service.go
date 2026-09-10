@@ -261,6 +261,14 @@ func runInstallFlow(ctx context.Context) error {
 		fmt.Fprintf(os.Stderr, "[devm] added ssh access include line to ~/.ssh/config\n")
 	}
 
+	repoRoot, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve working directory: %w", err)
+	}
+	if err := installMenuApp(cfg, repoRoot); err != nil {
+		return fmt.Errorf("install menu-bar app: %w", err)
+	}
+
 	return nil
 }
 
@@ -687,6 +695,8 @@ var uninstallCmd = &cobra.Command{
 		if !bytes.Equal(before, after) {
 			fmt.Fprintf(os.Stderr, "[devm] removed ssh access include line from ~/.ssh/config\n")
 		}
+
+		_ = uninstallMenuApp(cfg)
 
 		_ = os.Remove(cfg.SocketPath())
 		// Runtime dir is user-owned (holds the CA key, iron-proxy configs,
