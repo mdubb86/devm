@@ -59,6 +59,21 @@ func TestProxy_ForwardsRequestToUnixSocket(t *testing.T) {
 	assert.Equal(t, `{"received":"/vm/status/all"}`, string(body))
 }
 
+func TestProxy_SetsCORSHeaderOnResponse(t *testing.T) {
+	sockPath := newFakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	})
+
+	ts := httptest.NewServer(newProxy(sockPath))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/version")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, "*", resp.Header.Get("Access-Control-Allow-Origin"))
+}
+
 func TestProxy_QueryStringPreserved(t *testing.T) {
 	sockPath := newFakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, r.URL.RawQuery)

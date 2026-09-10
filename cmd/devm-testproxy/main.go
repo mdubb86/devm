@@ -1,10 +1,11 @@
 // devm-testproxy is a tiny HTTP-over-TCP -> HTTP-over-Unix-socket proxy
-// used by the mac/webview Playwright e2e tests. A Chromium extension
-// can't dial a Unix socket directly; this binary bridges the gap so
-// the extension can reach the real e2e daemon at
+// used by the mac/webview Playwright e2e tests. Chromium can't dial a
+// Unix socket directly; this binary bridges the gap so a real browser
+// page can reach the e2e daemon at
 // ~/Library/Application Support/devm-e2e/devm.sock over plain TCP.
 //
-// It is a pure L7 forwarder: no auth, no path rewriting, no filtering.
+// It is a pure L7 forwarder: no auth, no path rewriting, no request
+// filtering. The one response addition is a CORS header — see newProxy.
 package main
 
 import (
@@ -40,9 +41,14 @@ func main() {
 
 // newProxy returns an http.Handler that forwards every request it
 // receives to the Unix socket at socketPath, streaming the response
-// back unmodified.
+// back with a single addition: Access-Control-Allow-Origin, so a
+// browser page on a different origin (the Playwright harness's static
+// file server for gui.html) can fetch() it. Chromium enforces CORS
+// against 127.0.0.1 the same as any other origin, and this proxy's
+// only consumer is that browser-driven test suite, so allowing any
+// origin here doesn't widen a real attack surface.
 func newProxy(socketPath string) http.Handler {
-	return &httputil.ReverseProxy{
+	reverseProxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = "unix"
@@ -56,6 +62,11 @@ func newProxy(socketPath string) http.Handler {
 			},
 		},
 	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		reverseProxy.ServeHTTP(w, r)
+	})
 }
 
 // run listens on 127.0.0.1:port and forwards every request to the

@@ -85,6 +85,17 @@ mac-webview-test:
 build-testproxy:
     go build -o bin/devm-testproxy ./cmd/devm-testproxy
 
+# Run the mac/webview Playwright e2e suite against the real e2e daemon.
+# Drives the actual gui.html + gui.js bundle in a real Chromium page,
+# through devm-testproxy, against ~/Library/Application Support/devm-e2e/devm.sock —
+# no mocks. Requires the e2e daemon already running ("just e2e-bootstrap").
+#
+# One-time setup: `cd mac/webview && npx playwright install chromium`
+# (not run automatically here — it downloads a browser).
+mac-webview-e2e: build-testproxy mac-webview-build
+    cd mac/webview && [ -d node_modules ] || npm install
+    cd mac/webview && npx playwright test --config test/e2e/playwright.config.ts
+
 # Build the Mac menu-bar app for the prod identity. Requires xcodegen
 # and Xcode. Produces bin/devm.app, signed with SIGN_IDENTITY.
 mac-build: mac-webview-build

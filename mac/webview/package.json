@@ -5,9 +5,11 @@
   "scripts": {
     "build": "node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test --config test/e2e/playwright.config.ts"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@sveltejs/vite-plugin-svelte": "4.0.4",
     "@testing-library/svelte": "5.4.2",
     "autoprefixer": "10.5.5",
