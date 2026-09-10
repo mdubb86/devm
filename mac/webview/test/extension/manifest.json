@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "devm-test-proxy",
+  "version": "1.0",
+  "description": "Rewrites devm-api:// fetches to a loopback proxy (test-only).",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "declarativeNetRequest",
+    "storage"
+  ],
+  "host_permissions": [
+    "devm-api://*/*",
+    "http://127.0.0.1/*"
+  ]
+}
