@@ -15,6 +15,10 @@ devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-proje
 - **the devm daemon** — owns the VM lifecycle (start, stop), runs its own built-in ProxyServer for `*.test` ingress on the Mac, and spawns per-project iron-proxy for egress enforcement. Managed with `devm service`.
 - **The Tart VM** — runs your code on a Debian Linux base image. It has no direct path to the internet: every outbound flow is intercepted on the Mac. Under the enforced egress policy, only allowlisted HTTPS hosts and NTP reach the outside; everything else is dropped.
 
+## Menu-bar app
+
+**Menu-bar app (`/Applications/devm.app`).** A resident macOS menu-bar item; click it → "Open devm" → a graphical status dashboard shows every project's VM state, iron-proxy health, and approve-gate divergence. Refreshes every second while visible. Installed automatically by `devm install`. First launch shows the "unidentified developer" Gatekeeper warning; right-click → Open once to accept.
+
 ## Where the allowlist lives
 
 `network.allow` in `devm.yaml` is the egress allowlist — each entry names a hostname (or `*` for open egress) your code may reach, and optionally declares which `!secret` values iron-proxy may inject on requests to that host. Iron-proxy on the Mac inspects each outbound HTTP/HTTPS request by SNI (TLS) or `Host` header (plain HTTP) and consults `network.allow`. Matches are proxied through — with any declared `!secret` values injected on requests to that host — and non-matches are dropped with a diagnostic body the workload sees as a 502.

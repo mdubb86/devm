@@ -9,6 +9,8 @@ description: devm VM lifecycle commands — shell, start, reconcile, stop, teard
 
 | Command | What it does |
 |---|---|
+| `devm install` | Installs the daemon (LaunchDaemon) + menu-bar app (LaunchAgent). One sudo prompt for the daemon; the app install is non-sudo. |
+| `devm uninstall` | Removes both. |
 | `devm shell [-- COMMAND]` | Attach a shell (or run COMMAND) inside a running, provisioned sandbox. Errors if the VM is stopped or not yet provisioned; run `devm start` first. |
 | `devm start` | Cold-start (or adopt-in-place) the sandbox. Reads `devm.yaml` and drives every provisioning stage; the only command whose refusal on divergence carries "approve required." |
 | `devm approve` | Review the changes to `devm.yaml` / `devm.me.yaml` since they were last approved and advance the snapshot. Interactive-only; no `--yes` flag ever. |
