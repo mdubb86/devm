@@ -1,10 +1,10 @@
 // Shared Playwright fixtures for the mac/webview status-screen e2e suite.
 //
 // These tests drive the real gui.html + gui.js bundle in a real Chromium
-// page against the real e2e daemon — no mocks. Two things make that
-// possible without a Chromium extension (T14's first attempt found
-// Chromium rejects fetch() to a custom devm-api:// scheme before any
-// extension hook can fire):
+// page against the real e2e daemon — no mocks. Chromium rejects
+// fetch() to a custom devm-api:// scheme at the JS Fetch API level,
+// before any request-interception hook could fire, so reaching the
+// daemon from a real browser page takes two things instead:
 //
 //  1. api.ts (mac/webview/src/lib/api.ts) reads an injectable
 //     window.__DEVM_API_BASE__. Production leaves it unset and falls
