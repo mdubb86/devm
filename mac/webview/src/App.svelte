@@ -1,7 +1,11 @@
 <script lang="ts">
-  let message = $state('hello devm');
+  import { onMount, onDestroy } from 'svelte';
+  import { ProjectStore } from './lib/store.svelte';
+  import StatusScreen from './components/StatusScreen.svelte';
+
+  const store = new ProjectStore();
+  onMount(() => store.start());
+  onDestroy(() => store.stop());
 </script>
 
-<main class="p-8">
-  <h1 class="text-2xl font-semibold">{message}</h1>
-</main>
+<StatusScreen {store} />

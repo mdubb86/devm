@@ -6,6 +6,7 @@ export class ProjectStore {
   daemonReachable = $state(true);
   lastError = $state<string | null>(null);
   private timer: ReturnType<typeof setInterval> | null = null;
+  private generation = 0;
 
   start(intervalMs = 1000): void {
     if (this.timer !== null) return;
@@ -16,6 +17,7 @@ export class ProjectStore {
   }
 
   stop(): void {
+    this.generation++;
     if (this.timer !== null) {
       clearInterval(this.timer);
       this.timer = null;
@@ -23,11 +25,15 @@ export class ProjectStore {
   }
 
   async refreshNow(): Promise<void> {
+    const generation = this.generation;
     try {
-      this.projects = await getStatusAll();
+      const projects = await getStatusAll();
+      if (generation !== this.generation) return;
+      this.projects = projects;
       this.daemonReachable = true;
       this.lastError = null;
     } catch (e) {
+      if (generation !== this.generation) return;
       this.daemonReachable = false;
       this.lastError = e instanceof Error ? e.message : String(e);
     }

@@ -51,4 +51,21 @@ describe('ProjectStore', () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(mockFetch).not.toHaveBeenCalled();
   });
+
+  it('discards a fetch that resolves after stop() was called', async () => {
+    let resolveFetch: (r: Response) => void;
+    mockFetch.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    const store = new ProjectStore();
+    store.start();
+    // refreshNow() has fired and is awaiting the still-pending fetch.
+    store.stop();
+    resolveFetch!(okResponse([{ name: 'stale', vm_running: true, proxy: { status: 'ok', needs_secrets: false } }]));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.projects).toHaveLength(0);
+    expect(store.daemonReachable).toBe(true);
+  });
 });
