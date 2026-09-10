@@ -11,5 +11,8 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     globals: true,
+    // Default include stops at "*.test.ts"; rune-based stores live in
+    // "*.svelte.ts" files, so their tests are "*.test.svelte.ts".
+    include: ['src/**/*.{test,spec}.ts', 'src/**/*.{test,spec}.svelte.ts'],
   },
 });
