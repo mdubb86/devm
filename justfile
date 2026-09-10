@@ -78,6 +78,13 @@ mac-webview-test:
     cd mac/webview && [ -d node_modules ] || npm install
     cd mac/webview && npm test
 
+# Build devm-testproxy: a TCP<->Unix-socket HTTP bridge used by the
+# mac/webview Playwright e2e suite to reach the e2e daemon's socket
+# from a Chromium extension (which can't dial Unix sockets directly).
+# Not part of the release; test tooling only.
+build-testproxy:
+    go build -o bin/devm-testproxy ./cmd/devm-testproxy
+
 # Build the Mac menu-bar app for the prod identity. Requires xcodegen
 # and Xcode. Produces bin/devm.app, signed with SIGN_IDENTITY.
 mac-build: mac-webview-build
