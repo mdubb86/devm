@@ -73,3 +73,17 @@ targets:
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/devm.app/Contents/MacOS/devm"
         BUNDLE_LOADER: "$(TEST_HOST)"
         GENERATE_INFOPLIST_FILE: YES
+  devm-uitests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: DevmUITests
+    dependencies:
+      - target: devm-prod
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mdubb86.devm.menuapp.uitests
+        GENERATE_INFOPLIST_FILE: YES
+    scheme:
+      testTargets:
+        - devm-uitests
