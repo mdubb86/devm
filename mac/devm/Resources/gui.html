@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>devm</title>
+  <style>body { font: 14px -apple-system; padding: 24px; }</style>
+</head>
+<body>
+  <h1>devm</h1>
+  <p id="out">loading…</p>
+  <script>
+    fetch('devm-api://version')
+      .then(r => r.json())
+      .then(d => document.getElementById('out').textContent = 'daemon: ' + JSON.stringify(d))
+      .catch(e => document.getElementById('out').textContent = 'daemon unreachable: ' + e.message);
+  </script>
+</body>
+</html>

@@ -10,12 +10,10 @@ final class MainWindow {
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
+        let vc = WebViewController()
+        let w = NSWindow(contentViewController: vc)
+        w.setContentSize(NSSize(width: 900, height: 600))
+        w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         w.title = "devm"
         w.center()
         w.isReleasedWhenClosed = false

@@ -13,10 +13,15 @@
 		21FF9AC86BD5416F83D63254 /* DevmApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B6483A802451D215037C9AF /* DevmApp.swift */; };
 		3127D104967E3F20E81A0B35 /* DevmApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B6483A802451D215037C9AF /* DevmApp.swift */; };
 		3CF7734606901EE34A44F6D5 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E844F20AE6D48655DE97882 /* AppIdentity.swift */; };
+		45FA2246C040B65F1CDA6E09 /* WebViewControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64535DF389BF19B5DCEDA710 /* WebViewControllerTests.swift */; };
 		4C1E4E9F351AFD4430CE8FA3 /* UnixSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C81624E0CE48448D5A5D0B6B /* UnixSocketClient.swift */; };
+		4CC63A08741F040D3638761E /* gui.html in Resources */ = {isa = PBXBuildFile; fileRef = 1E72F47A53AF368F34022540 /* gui.html */; };
 		5316F5AFBA66B42B11A93CDC /* UnixSocketClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E004362DC6291108506378D5 /* UnixSocketClientTests.swift */; };
+		5C59BC06C56E972AE649AD8F /* WebViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2ABE4AAAE66CECE9E24A0C6 /* WebViewController.swift */; };
 		64437DE73300AD6987004DED /* DevmAPIURLSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0E9D26D516FD9BF7D92F3AA /* DevmAPIURLSchemeHandler.swift */; };
 		8FCF7D8D5B9693D273F48541 /* UnixSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C81624E0CE48448D5A5D0B6B /* UnixSocketClient.swift */; };
+		8FDE60F0F414F39CCDA9FF7A /* gui.html in Resources */ = {isa = PBXBuildFile; fileRef = 1E72F47A53AF368F34022540 /* gui.html */; };
+		BEF4791B1B3BD78AADD9E71A /* WebViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2ABE4AAAE66CECE9E24A0C6 /* WebViewController.swift */; };
 		C8C34B619566450466CD9B6E /* DevmAPIURLSchemeHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0745CFF1D8418BE268F6B9AB /* DevmAPIURLSchemeHandlerTests.swift */; };
 		CB5054BE4C3776BBA51C8440 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4E5677CC5F95F2ADDFCE0627 /* Assets.xcassets */; };
 		CFA58ED68277E9095DCACA35 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E844F20AE6D48655DE97882 /* AppIdentity.swift */; };
@@ -35,14 +40,17 @@
 
 /* Begin PBXFileReference section */
 		0745CFF1D8418BE268F6B9AB /* DevmAPIURLSchemeHandlerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevmAPIURLSchemeHandlerTests.swift; sourceTree = "<group>"; };
+		1E72F47A53AF368F34022540 /* gui.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = gui.html; sourceTree = "<group>"; };
 		1E844F20AE6D48655DE97882 /* AppIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIdentity.swift; sourceTree = "<group>"; };
 		27FF5FADD3B6D10B42DB0CA2 /* MainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindow.swift; sourceTree = "<group>"; };
 		3750231D1A6589A125ED1B4D /* devm-tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "devm-tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		40469DE56C9AB136E0FEFB8C /* devm-e2e.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "devm-e2e.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4C22B8D1EF56B1E4C0D594B8 /* devm-prod.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "devm-prod.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4E5677CC5F95F2ADDFCE0627 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		64535DF389BF19B5DCEDA710 /* WebViewControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewControllerTests.swift; sourceTree = "<group>"; };
 		7B6483A802451D215037C9AF /* DevmApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevmApp.swift; sourceTree = "<group>"; };
 		C81624E0CE48448D5A5D0B6B /* UnixSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnixSocketClient.swift; sourceTree = "<group>"; };
+		D2ABE4AAAE66CECE9E24A0C6 /* WebViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewController.swift; sourceTree = "<group>"; };
 		E004362DC6291108506378D5 /* UnixSocketClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnixSocketClientTests.swift; sourceTree = "<group>"; };
 		E0E9D26D516FD9BF7D92F3AA /* DevmAPIURLSchemeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevmAPIURLSchemeHandler.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -56,6 +64,7 @@
 				7B6483A802451D215037C9AF /* DevmApp.swift */,
 				27FF5FADD3B6D10B42DB0CA2 /* MainWindow.swift */,
 				C81624E0CE48448D5A5D0B6B /* UnixSocketClient.swift */,
+				D2ABE4AAAE66CECE9E24A0C6 /* WebViewController.swift */,
 			);
 			name = devm;
 			path = Sources/devm;
@@ -86,6 +95,7 @@
 			children = (
 				0745CFF1D8418BE268F6B9AB /* DevmAPIURLSchemeHandlerTests.swift */,
 				E004362DC6291108506378D5 /* UnixSocketClientTests.swift */,
+				64535DF389BF19B5DCEDA710 /* WebViewControllerTests.swift */,
 			);
 			path = DevmTests;
 			sourceTree = "<group>";
@@ -94,6 +104,7 @@
 			isa = PBXGroup;
 			children = (
 				4E5677CC5F95F2ADDFCE0627 /* Assets.xcassets */,
+				1E72F47A53AF368F34022540 /* gui.html */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -205,6 +216,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				039C5CD4722BAF18056F4DED /* Assets.xcassets in Resources */,
+				4CC63A08741F040D3638761E /* gui.html in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -213,6 +225,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CB5054BE4C3776BBA51C8440 /* Assets.xcassets in Resources */,
+				8FDE60F0F414F39CCDA9FF7A /* gui.html in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -228,6 +241,7 @@
 				21FF9AC86BD5416F83D63254 /* DevmApp.swift in Sources */,
 				0220F062B1C4B9BE3027CCBE /* MainWindow.swift in Sources */,
 				8FCF7D8D5B9693D273F48541 /* UnixSocketClient.swift in Sources */,
+				BEF4791B1B3BD78AADD9E71A /* WebViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -237,6 +251,7 @@
 			files = (
 				C8C34B619566450466CD9B6E /* DevmAPIURLSchemeHandlerTests.swift in Sources */,
 				5316F5AFBA66B42B11A93CDC /* UnixSocketClientTests.swift in Sources */,
+				45FA2246C040B65F1CDA6E09 /* WebViewControllerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -249,6 +264,7 @@
 				3127D104967E3F20E81A0B35 /* DevmApp.swift in Sources */,
 				0349EB14C892077D1EBB50CE /* MainWindow.swift in Sources */,
 				4C1E4E9F351AFD4430CE8FA3 /* UnixSocketClient.swift in Sources */,
+				5C59BC06C56E972AE649AD8F /* WebViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
