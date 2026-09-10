@@ -13,17 +13,33 @@
 		21FF9AC86BD5416F83D63254 /* DevmApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B6483A802451D215037C9AF /* DevmApp.swift */; };
 		3127D104967E3F20E81A0B35 /* DevmApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B6483A802451D215037C9AF /* DevmApp.swift */; };
 		3CF7734606901EE34A44F6D5 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E844F20AE6D48655DE97882 /* AppIdentity.swift */; };
+		4C1E4E9F351AFD4430CE8FA3 /* UnixSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C81624E0CE48448D5A5D0B6B /* UnixSocketClient.swift */; };
+		5316F5AFBA66B42B11A93CDC /* UnixSocketClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E004362DC6291108506378D5 /* UnixSocketClientTests.swift */; };
+		8FCF7D8D5B9693D273F48541 /* UnixSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C81624E0CE48448D5A5D0B6B /* UnixSocketClient.swift */; };
 		CB5054BE4C3776BBA51C8440 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4E5677CC5F95F2ADDFCE0627 /* Assets.xcassets */; };
 		CFA58ED68277E9095DCACA35 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E844F20AE6D48655DE97882 /* AppIdentity.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		7D825260EF73A93AC4F02DBE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5235ACBE0641C916B41355D2 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 86E41E6E61399D2B81F911BE;
+			remoteInfo = "devm-prod";
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		1E844F20AE6D48655DE97882 /* AppIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIdentity.swift; sourceTree = "<group>"; };
 		27FF5FADD3B6D10B42DB0CA2 /* MainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindow.swift; sourceTree = "<group>"; };
+		3750231D1A6589A125ED1B4D /* devm-tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "devm-tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		40469DE56C9AB136E0FEFB8C /* devm-e2e.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "devm-e2e.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4C22B8D1EF56B1E4C0D594B8 /* devm-prod.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "devm-prod.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4E5677CC5F95F2ADDFCE0627 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7B6483A802451D215037C9AF /* DevmApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevmApp.swift; sourceTree = "<group>"; };
+		C81624E0CE48448D5A5D0B6B /* UnixSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnixSocketClient.swift; sourceTree = "<group>"; };
+		E004362DC6291108506378D5 /* UnixSocketClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnixSocketClientTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -33,6 +49,7 @@
 				1E844F20AE6D48655DE97882 /* AppIdentity.swift */,
 				7B6483A802451D215037C9AF /* DevmApp.swift */,
 				27FF5FADD3B6D10B42DB0CA2 /* MainWindow.swift */,
+				C81624E0CE48448D5A5D0B6B /* UnixSocketClient.swift */,
 			);
 			name = devm;
 			path = Sources/devm;
@@ -42,6 +59,7 @@
 			isa = PBXGroup;
 			children = (
 				18169AEC5A5B76E6E359F391 /* devm */,
+				6008F213B8899911E25312F0 /* DevmTests */,
 				6B4A263A467480E1FF6D6176 /* Resources */,
 				5C6574CE7355FD7EF51954BD /* Products */,
 			);
@@ -52,8 +70,17 @@
 			children = (
 				40469DE56C9AB136E0FEFB8C /* devm-e2e.app */,
 				4C22B8D1EF56B1E4C0D594B8 /* devm-prod.app */,
+				3750231D1A6589A125ED1B4D /* devm-tests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		6008F213B8899911E25312F0 /* DevmTests */ = {
+			isa = PBXGroup;
+			children = (
+				E004362DC6291108506378D5 /* UnixSocketClientTests.swift */,
+			);
+			path = DevmTests;
 			sourceTree = "<group>";
 		};
 		6B4A263A467480E1FF6D6176 /* Resources */ = {
@@ -67,6 +94,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		316A99D88861B69BBCF5AAE5 /* devm-tests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CDC9F59BEEBC6B83A028DF72 /* Build configuration list for PBXNativeTarget "devm-tests" */;
+			buildPhases = (
+				D70290EC016BF30C82FBAC9D /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				03A424D552F9428964100A09 /* PBXTargetDependency */,
+			);
+			name = "devm-tests";
+			packageProductDependencies = (
+			);
+			productName = "devm-tests";
+			productReference = 3750231D1A6589A125ED1B4D /* devm-tests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		86E41E6E61399D2B81F911BE /* devm-prod */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = D512ED52789415F49705E701 /* Build configuration list for PBXNativeTarget "devm-prod" */;
@@ -112,6 +157,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					316A99D88861B69BBCF5AAE5 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Manual;
+					};
 					86E41E6E61399D2B81F911BE = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Manual;
@@ -138,6 +187,7 @@
 			targets = (
 				86E41E6E61399D2B81F911BE /* devm-prod */,
 				DB2A76D0AEC2A7C6B964EB1A /* devm-e2e */,
+				316A99D88861B69BBCF5AAE5 /* devm-tests */,
 			);
 		};
 /* End PBXProject section */
@@ -169,6 +219,15 @@
 				CFA58ED68277E9095DCACA35 /* AppIdentity.swift in Sources */,
 				21FF9AC86BD5416F83D63254 /* DevmApp.swift in Sources */,
 				0220F062B1C4B9BE3027CCBE /* MainWindow.swift in Sources */,
+				8FCF7D8D5B9693D273F48541 /* UnixSocketClient.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D70290EC016BF30C82FBAC9D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5316F5AFBA66B42B11A93CDC /* UnixSocketClientTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -179,10 +238,19 @@
 				3CF7734606901EE34A44F6D5 /* AppIdentity.swift in Sources */,
 				3127D104967E3F20E81A0B35 /* DevmApp.swift in Sources */,
 				0349EB14C892077D1EBB50CE /* MainWindow.swift in Sources */,
+				4C1E4E9F351AFD4430CE8FA3 /* UnixSocketClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		03A424D552F9428964100A09 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 86E41E6E61399D2B81F911BE /* devm-prod */;
+			targetProxy = 7D825260EF73A93AC4F02DBE /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		0A736B4415C580E56F709D36 /* Release */ = {
@@ -366,6 +434,40 @@
 			};
 			name = Debug;
 		};
+		B693D4EFB7A7853C021B0DB3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mdubb86.devm.menuapp.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/devm.app/Contents/MacOS/devm";
+			};
+			name = Debug;
+		};
+		ED44891D439916DBCDA52679 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mdubb86.devm.menuapp.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/devm.app/Contents/MacOS/devm";
+			};
+			name = Release;
+		};
 		F7504E35BAACE07CDE3AA4AA /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -401,6 +503,15 @@
 			buildConfigurations = (
 				57C9A747F72C12BC5C0ED4BA /* Debug */,
 				9A563DAA9F01ACD8DABCCE4A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CDC9F59BEEBC6B83A028DF72 /* Build configuration list for PBXNativeTarget "devm-tests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B693D4EFB7A7853C021B0DB3 /* Debug */,
+				ED44891D439916DBCDA52679 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

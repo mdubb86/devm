@@ -34,6 +34,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.mdubb86.devm.menuapp
         PRODUCT_NAME: devm
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEVM_PROD
+    scheme:
+      testTargets:
+        - devm-tests
   devm-e2e:
     type: application
     platform: macOS
@@ -57,3 +60,16 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.mdubb86.devm-e2e.menuapp
         PRODUCT_NAME: devm-e2e
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEVM_E2E
+  devm-tests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: DevmTests
+    dependencies:
+      - target: devm-prod
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mdubb86.devm.menuapp.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/devm.app/Contents/MacOS/devm"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
