@@ -63,3 +63,11 @@ internal/tartmutagenssh/embed/tart-mutagen-ssh
 # xcodebuild derived data for the Mac menu-bar app.
 # Populated by `just mac-build` / `just mac-build-e2e`.
 mac/devm/build/
+
+# Svelte webview bundle embedded into the Mac app's Resources/.
+# Populated by `just mac-webview-build` (a `mac-build` / `mac-build-e2e`
+# dependency) from mac/webview/.
+mac/devm/Resources/gui.html
+mac/devm/Resources/gui.js
+mac/devm/Resources/gui.js.map
+mac/devm/Resources/gui.css

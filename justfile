@@ -67,9 +67,20 @@ _build PROFILE:
         codesign --sign - --force --options=runtime --identifier com.mdubb86.devm.helper "$helper_out"; \
     fi
 
+# Build the Svelte webview bundle into mac/devm/Resources/. Requires
+# node + npm; installs deps on first run.
+mac-webview-build:
+    @which npm >/dev/null || { echo "npm required: brew install node" >&2; exit 1; }
+    cd mac/webview && [ -d node_modules ] || npm install
+    cd mac/webview && npm run build
+
+mac-webview-test:
+    cd mac/webview && [ -d node_modules ] || npm install
+    cd mac/webview && npm test
+
 # Build the Mac menu-bar app for the prod identity. Requires xcodegen
 # and Xcode. Produces bin/devm.app, signed with SIGN_IDENTITY.
-mac-build:
+mac-build: mac-webview-build
     @which xcodegen >/dev/null || { echo "xcodegen required: brew install xcodegen" >&2; exit 1; }
     @which xcodebuild >/dev/null || { echo "xcodebuild required: install Xcode" >&2; exit 1; }
     cd mac/devm && xcodegen
@@ -89,7 +100,7 @@ mac-build:
     cp -R mac/devm/build/Build/Products/Release/devm.app bin/devm.app
 
 # E2e variant with a separate bundle id + LaunchAgent label.
-mac-build-e2e:
+mac-build-e2e: mac-webview-build
     @which xcodegen >/dev/null || { echo "xcodegen required: brew install xcodegen" >&2; exit 1; }
     @which xcodebuild >/dev/null || { echo "xcodebuild required: install Xcode" >&2; exit 1; }
     cd mac/devm && xcodegen
