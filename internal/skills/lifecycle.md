@@ -170,7 +170,8 @@ The daemon persists a byte-level snapshot of the last-approved
 differ from the snapshot; the error names two paths to approve:
 
 1. Click the devm menu bar icon → Review (opens a diff window with
-   Approve/Cancel buttons — see the devm Mac app, shipped separately).
+   Approve/Cancel buttons — the menu-bar app is installed by `devm
+   install`, see `devm skills get service`).
 2. Run `devm approve` in the terminal — an interactive-only verb that
    prints the diff and prompts y/N. **No `--yes` flag.** The human
    must be present at the terminal to answer; scripts cannot approve.
