@@ -51,6 +51,7 @@ export class ProjectStore {
       if (generation !== this.generation) return;
       this.daemonReachable = false;
       this.lastError = e instanceof Error ? e.message : String(e);
+      console.error('refreshNow failed:', e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     }
   }
 
@@ -58,8 +59,8 @@ export class ProjectStore {
     try {
       const build = await getVersion();
       this.daemonFingerprint = build.fingerprint ?? null;
-    } catch {
-      // Ignore — daemonReachable already tracks reachability.
+    } catch (e) {
+      console.error('checkVersion failed:', e instanceof Error ? `${e.name}: ${e.message}` : String(e));
     }
   }
 }

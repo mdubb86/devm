@@ -5,7 +5,7 @@ struct DevmApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("devm", image: "MenuBarIcon") {
+        MenuBarExtra("devm", systemImage: "hammer.circle") {
             Button("Open devm") { MainWindow.shared.show() }
             Divider()
             Button("Quit") { NSApp.terminate(nil) }
@@ -16,6 +16,8 @@ struct DevmApp: App {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // LSUIElement=true keeps us out of the dock; nothing to do here yet.
+        if CommandLine.arguments.contains("--show-window") {
+            MainWindow.shared.show()
+        }
     }
 }

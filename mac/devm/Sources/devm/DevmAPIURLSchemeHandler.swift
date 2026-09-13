@@ -1,5 +1,8 @@
 import Foundation
 import WebKit
+import os.log
+
+private let schemeLog = Logger(subsystem: "com.mdubb86.devm.mac", category: "scheme")
 
 enum DevmAPIURLSchemeHandlerError: Error {
     case missingRequestURL
@@ -62,11 +65,19 @@ final class DevmAPIURLSchemeHandler: NSObject, WKURLSchemeHandler {
 
             switch result {
             case .success(let (status, headers, body)):
+                // gui.html loads from file:// origin, so fetch() to devm-api://
+                // is cross-origin. WebKit needs an explicit
+                // Access-Control-Allow-Origin header on the response or it
+                // rejects the entire response as "Load failed" — the daemon
+                // itself has no notion of CORS since its wire protocol is a
+                // Unix socket, so the scheme handler synthesizes the header.
+                var respHeaders = headers
+                respHeaders["Access-Control-Allow-Origin"] = "*"
                 guard let response = HTTPURLResponse(
                     url: url,
                     statusCode: status,
                     httpVersion: "HTTP/1.1",
-                    headerFields: headers
+                    headerFields: respHeaders
                 ) else {
                     urlSchemeTask.didFailWithError(DevmAPIURLSchemeHandlerError.invalidHTTPResponse(status: status))
                     return
@@ -75,6 +86,7 @@ final class DevmAPIURLSchemeHandler: NSObject, WKURLSchemeHandler {
                 urlSchemeTask.didReceive(body)
                 urlSchemeTask.didFinish()
             case .failure(let error):
+                schemeLog.error("dial failed: path=\(daemonPath, privacy: .public) socket=\(self.socketPath, privacy: .public) error=\(String(describing: error), privacy: .public)")
                 urlSchemeTask.didFailWithError(error)
             }
         }
