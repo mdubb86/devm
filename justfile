@@ -320,7 +320,7 @@ e2e-recipe *NAMES:
 # swallows the resulting `Password:` prompt with no way to type at it.
 # The refresher is killed on any exit path (normal, error, ^C via
 # trap).
-e2e-install *NAMES: (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build "e2e")
+e2e-install *NAMES: (_build-helper-embed "e2e") (_build-setsid-shim-embed) mac-build-e2e (_build "e2e")
     #!/usr/bin/env bash
     set -uo pipefail
     sudo -v

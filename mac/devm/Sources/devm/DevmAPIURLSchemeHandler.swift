@@ -61,6 +61,7 @@ final class DevmAPIURLSchemeHandler: NSObject, WKURLSchemeHandler {
             path: daemonPath,
             body: urlSchemeTask.request.httpBody
         ) { [weak self] result in
+            defer { self?.markTaskComplete(taskID) }
             guard let self = self, !self.isStopped(taskID) else { return }
 
             switch result {
@@ -103,6 +104,17 @@ final class DevmAPIURLSchemeHandler: NSObject, WKURLSchemeHandler {
         lock.lock()
         defer { lock.unlock() }
         return stoppedTasks.contains(taskID)
+    }
+
+    /// Removes taskID from stoppedTasks once the UnixSocketClient completion
+    /// has finished (delivered or not — the isStopped check above already
+    /// happened). Without this, stoppedTasks would grow unbounded across the
+    /// resident menu-bar app's process lifetime as tasks are stopped and
+    /// never revisited.
+    private func markTaskComplete(_ taskID: ObjectIdentifier) {
+        lock.lock()
+        stoppedTasks.remove(taskID)
+        lock.unlock()
     }
 
     /// Extracts the request URL's path as the daemon-facing path,

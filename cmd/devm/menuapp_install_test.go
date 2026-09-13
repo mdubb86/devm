@@ -70,8 +70,13 @@ func TestInstallMenuApp_MissingAppReturnsError(t *testing.T) {
 	t.Setenv("HOME", tmp)
 	repoRoot := filepath.Join(tmp, "src")
 	require.NoError(t, os.MkdirAll(repoRoot, 0755))
+	// appsDir exists but has no pre-existing <name>.app, so there is no
+	// fallback and this must error.
+	appsDir := filepath.Join(tmp, "Applications")
+	require.NoError(t, os.MkdirAll(appsDir, 0755))
 
-	err := installMenuApp(identity.Prod, repoRoot)
+	srcApp := filepath.Join(repoRoot, "bin", "devm.app")
+	err := installMenuAppOrRegisterAt(identity.Prod, srcApp, appsDir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "just mac-build")
 	assert.NotContains(t, err.Error(), "just mac-build-e2e")
@@ -82,10 +87,46 @@ func TestInstallMenuApp_MissingAppRecipeIsE2EAware(t *testing.T) {
 	t.Setenv("HOME", tmp)
 	repoRoot := filepath.Join(tmp, "src")
 	require.NoError(t, os.MkdirAll(repoRoot, 0755))
+	appsDir := filepath.Join(tmp, "Applications")
+	require.NoError(t, os.MkdirAll(appsDir, 0755))
 
-	err := installMenuApp(identity.E2E, repoRoot)
+	srcApp := filepath.Join(repoRoot, "bin", "devm-e2e.app")
+	err := installMenuAppOrRegisterAt(identity.E2E, srcApp, appsDir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "just mac-build-e2e")
+}
+
+func TestInstallMenuApp_FallsBackToPreExistingAppInApplications(t *testing.T) {
+	// The Homebrew-cask path: the cask's `app "devm.app"` stanza has
+	// already placed the bundle in appsDir, but bin/devm.app (the
+	// source-build output) doesn't exist because this is a brew install,
+	// not a `just mac-build` one. installMenuAppOrRegisterAt must skip
+	// the copy and just register the LaunchAgent against the app that's
+	// already there.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	repoRoot := filepath.Join(tmp, "src")
+	require.NoError(t, os.MkdirAll(repoRoot, 0755))
+
+	appsDir := filepath.Join(tmp, "Applications")
+	require.NoError(t, os.MkdirAll(filepath.Join(appsDir, "devm.app"), 0755))
+
+	var bootstrapCalls int
+	launchctlBootstrap = func(uid int, plistPath string) error {
+		bootstrapCalls++
+		return nil
+	}
+	defer func() { launchctlBootstrap = defaultLaunchctlBootstrap }()
+
+	srcApp := filepath.Join(repoRoot, "bin", "devm.app") // not built
+	err := installMenuAppOrRegisterAt(identity.Prod, srcApp, appsDir)
+	require.NoError(t, err)
+
+	plistBytes, err := os.ReadFile(launchAgentPlistPath(identity.Prod))
+	require.NoError(t, err)
+	assert.Contains(t, string(plistBytes), "com.mdubb86.devm.menuapp")
+
+	assert.Equal(t, 1, bootstrapCalls)
 }
 
 func TestUninstallMenuApp_RemovesAppAndPlist(t *testing.T) {

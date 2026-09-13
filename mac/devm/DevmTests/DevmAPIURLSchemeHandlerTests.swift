@@ -285,6 +285,59 @@ final class DevmAPIURLSchemeHandlerTests: XCTestCase {
         XCTAssertTrue(task.receivedData.isEmpty)
     }
 
+    func testStoppedTaskEntryClearedAfterCompletionAllowsReuseOfSameObjectIdentifier() throws {
+        // Regression test: stoppedTasks must not grow unbounded across the
+        // resident menu-bar app's process lifetime. If a taskID isn't
+        // removed once its completion has run, a later WKURLSchemeTask that
+        // reuses the same ObjectIdentifier (a real risk once the first task
+        // is deallocated) would be wrongly treated as already-stopped and
+        // have its response silently dropped. We reuse the same
+        // MockURLSchemeTask instance (guaranteeing the same
+        // ObjectIdentifier) across two request cycles to prove the first
+        // cycle's stop entry doesn't poison the second.
+        // TestUnixListener accepts exactly one connection then closes and
+        // unlinks its socket path, so each request cycle below binds its
+        // own listener to the same path (free again once the prior
+        // listener's server-side thread finishes, which happens
+        // independently of whether the client stopped).
+        let socketPath = newSocketPath()
+        let handler = DevmAPIURLSchemeHandler(socketPath: socketPath)
+        let webView = WKWebView()
+        let task = MockURLSchemeTask(url: URL(string: "devm-api://vm/status/all")!)
+
+        // First cycle: stop before the socket completion can run, so the
+        // completion's isStopped check drops the response and the handler
+        // is left holding a stoppedTasks entry for this ObjectIdentifier.
+        let firstListener = try TestUnixListener(path: socketPath, behavior: .echo(body: #"{"ok":true}"#))
+        let firstNeverFinishes = expectation(description: "stopped task must not finish")
+        firstNeverFinishes.isInverted = true
+        task.onFinish = { firstNeverFinishes.fulfill() }
+        handler.webView(webView, start: task)
+        handler.webView(webView, stop: task)
+        wait(for: [firstNeverFinishes], timeout: 1.0)
+        _ = firstListener
+
+        // Let the in-flight completion run to (a) confirm it drops the
+        // response and (b) clear the stoppedTasks entry.
+        let settle = expectation(description: "settle")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settle.fulfill() }
+        wait(for: [settle], timeout: 2.0)
+
+        // Second cycle: same object identity, never stopped, fresh listener
+        // on the now-free path. If the first cycle's entry wasn't cleared,
+        // this would be wrongly dropped too.
+        let secondListener = try TestUnixListener(path: socketPath, behavior: .echo(body: #"{"ok":true}"#))
+        let secondFinishes = expectation(description: "reused-identity task delivers")
+        task.onFinish = { secondFinishes.fulfill() }
+        handler.webView(webView, start: task)
+        wait(for: [secondFinishes], timeout: 2.0)
+        _ = secondListener
+
+        XCTAssertNil(task.receivedError)
+        XCTAssertEqual((task.receivedResponse as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual(String(data: task.receivedData, encoding: .utf8), #"{"ok":true}"#)
+    }
+
     // MARK: - Helpers
 
     private func newSocketPath() -> String {

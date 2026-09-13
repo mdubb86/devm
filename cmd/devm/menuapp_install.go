@@ -25,7 +25,7 @@ func defaultLaunchctlBootout(uid int, label string) error {
 }
 
 // menuAppBundleName returns "devm" or "devm-e2e" — matches the
-// xcodebuild product name (see mac/App, T1-T15).
+// xcodebuild product name.
 func menuAppBundleName(cfg identity.Config) string {
 	return cfg.Name
 }
@@ -73,7 +73,15 @@ func installMenuAppAt(cfg identity.Config, srcAppPath, appsDir string) error {
 	if err := copyAppBundle(srcAppPath, dstAppPath); err != nil {
 		return fmt.Errorf("copy .app: %w", err)
 	}
+	return registerLaunchAgent(cfg)
+}
 
+// registerLaunchAgent writes the LaunchAgent plist for cfg's menu-bar app
+// and bootstraps it via launchctl. Idempotent — replaces any prior
+// registration. Shared by installMenuAppAt (fresh .app copy) and the
+// Homebrew-cask fallback in installMenuAppOrRegisterAt, where the .app
+// is already in place and only the LaunchAgent needs registering.
+func registerLaunchAgent(cfg identity.Config) error {
 	plistPath := launchAgentPlistPath(cfg)
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0755); err != nil {
 		return fmt.Errorf("create LaunchAgents dir: %w", err)
@@ -91,6 +99,33 @@ func installMenuAppAt(cfg identity.Config, srcAppPath, appsDir string) error {
 	return nil
 }
 
+// installMenuAppOrRegisterAt is the test-friendly form of installMenuApp:
+// srcAppPath and appsDir are explicit rather than resolved from the repo
+// layout and /Applications.
+//
+// A source build at srcAppPath (`just mac-build[-e2e]`) is the normal
+// case and copies fresh into appsDir. When srcAppPath is missing but
+// appsDir already holds a <name>.app, that's the Homebrew-cask install
+// path: the cask's `app "devm.app"` stanza already placed the bundle
+// before `devm install` ever runs, so the copy step is skipped and only
+// the LaunchAgent is registered against the pre-existing bundle. If
+// neither is present, returns an actionable error naming the build
+// recipe.
+func installMenuAppOrRegisterAt(cfg identity.Config, srcAppPath, appsDir string) error {
+	if _, err := os.Stat(srcAppPath); err != nil {
+		installedAppPath := filepath.Join(appsDir, menuAppBundleName(cfg)+".app")
+		if _, statErr := os.Stat(installedAppPath); statErr == nil {
+			return registerLaunchAgent(cfg)
+		}
+		recipe := "just mac-build"
+		if cfg == identity.E2E {
+			recipe = "just mac-build-e2e"
+		}
+		return fmt.Errorf("menu-bar app not built at %s or installed at %s (run: %s): %w", srcAppPath, installedAppPath, recipe, err)
+	}
+	return installMenuAppAt(cfg, srcAppPath, appsDir)
+}
+
 // installMenuApp is the production entry point, called from
 // runInstallFlow. Non-fatal by contract from the caller's side: `just
 // mac-build[-e2e]` is a separate build step from the daemon build, and
@@ -99,14 +134,7 @@ func installMenuAppAt(cfg identity.Config, srcAppPath, appsDir string) error {
 // failing the whole install.
 func installMenuApp(cfg identity.Config, repoRoot string) error {
 	srcApp := filepath.Join(repoRoot, "bin", menuAppBundleName(cfg)+".app")
-	if _, err := os.Stat(srcApp); err != nil {
-		recipe := "just mac-build"
-		if cfg == identity.E2E {
-			recipe = "just mac-build-e2e"
-		}
-		return fmt.Errorf("menu-bar app not built at %s (run: %s): %w", srcApp, recipe, err)
-	}
-	return installMenuAppAt(cfg, srcApp, "/Applications")
+	return installMenuAppOrRegisterAt(cfg, srcApp, "/Applications")
 }
 
 // uninstallMenuAppAt is the test-friendly form of uninstallMenuApp, with

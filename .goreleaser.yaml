@@ -157,7 +157,18 @@ homebrew_casks:
     # xattr in a postflight hook so first-run doesn't pop the "cannot
     # verify developer" dialog. Standard pattern for OSS CLIs without
     # paid notarization.
+    #
+    # `app "devm.app"` is the native Homebrew Cask DSL stanza (works
+    # against any archive format the cask downloads, not just DMGs —
+    # goreleaser's own `app:` cask field is Pro-only and DMG-specific,
+    # so it's declared here via custom_block instead). It moves the
+    # menu-bar app bundle from the extracted tar.gz into /Applications
+    # so `devm install`'s Homebrew fallback path (installMenuApp in
+    # cmd/devm/menuapp_install.go) finds it already there and only
+    # needs to register the LaunchAgent.
     custom_block: |
+      app "devm.app"
+
       postflight do
         system_command "/usr/bin/xattr",
                        args: ["-rd", "com.apple.quarantine", staged_path]
