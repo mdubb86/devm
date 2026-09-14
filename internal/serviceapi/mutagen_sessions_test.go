@@ -607,6 +607,70 @@ func TestSetupReposPhase_ClonesOnlyEmptyRepos(t *testing.T) {
 	assert.Equal(t, []string{"/home/devm/repoEmpty"}, cloneCalls, "clone calls = repoEmpty only")
 }
 
+// TestSetupReposPhase_InstallsPreCommitHook asserts SetupReposPhase
+// attempts the pre-commit hook install for every repo entity — both
+// the NoMirror cold-start-clone-only path and the mirrored
+// clone-if-empty path — after the clone step runs, whether or not
+// anything actually got cloned.
+func TestSetupReposPhase_InstallsPreCommitHook(t *testing.T) {
+	cfg := testSessionsIdentity(t)
+
+	origClone := cloneRepoInGuestFn
+	cloneRepoInGuestFn = func(exec GuestExec, req CloneRequest) error { return nil }
+	defer func() { cloneRepoInGuestFn = origClone }()
+
+	var gitCommonDirCalls []string
+	exec := func(script string) (string, string, int, error) {
+		if strings.Contains(script, "rev-parse --git-common-dir") {
+			gitCommonDirCalls = append(gitCommonDirCalls, script)
+			return "/home/devm/.git", "", 0, nil
+		}
+		if strings.Contains(script, "find .") {
+			return "count=0 size=0 hash=-\n", "", 0, nil
+		}
+		return "", "", 0, nil
+	}
+
+	entities := []SessionEntity{
+		{Label: "noMirrorRepo", GuestPath: "/home/devm/noMirrorRepo", NoMirror: true, Repo: &SessionRepoInfo{URL: "https://github.com/x/n.git", Secret: "gh_stub"}},
+		{Label: "mirroredRepo", GuestPath: "/home/devm/mirroredRepo", Repo: &SessionRepoInfo{URL: "https://github.com/x/m.git", Secret: "gh_stub"}},
+	}
+
+	err := SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://mac-loopback:tunnel", "/etc/ssl/certs/devm.crt")
+	require.NoError(t, err)
+
+	require.Len(t, gitCommonDirCalls, 2, "SetupReposPhase must attempt hook install for every repo entity")
+}
+
+// TestSetupReposPhase_HookInstallFailureDoesNotBlockPhase asserts a
+// failing hook install (guest exec error) is logged and swallowed —
+// the hook is a guidance layer, not a correctness gate, so
+// SetupReposPhase must still return nil.
+func TestSetupReposPhase_HookInstallFailureDoesNotBlockPhase(t *testing.T) {
+	cfg := testSessionsIdentity(t)
+
+	origClone := cloneRepoInGuestFn
+	cloneRepoInGuestFn = func(exec GuestExec, req CloneRequest) error { return nil }
+	defer func() { cloneRepoInGuestFn = origClone }()
+
+	exec := func(script string) (string, string, int, error) {
+		if strings.Contains(script, "rev-parse --git-common-dir") {
+			return "", "fatal: not a git repository", 1, nil
+		}
+		if strings.Contains(script, "find .") {
+			return "count=0 size=0 hash=-\n", "", 0, nil
+		}
+		return "", "", 0, nil
+	}
+
+	entities := []SessionEntity{
+		{Label: "repo", GuestPath: "/home/devm/repo", Repo: &SessionRepoInfo{URL: "https://github.com/x/r.git", Secret: "gh_stub"}},
+	}
+
+	err := SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://mac-loopback:tunnel", "/etc/ssl/certs/devm.crt")
+	require.NoError(t, err, "a hook install failure must not fail SetupReposPhase")
+}
+
 func TestSetupVolumesPhase_UniformSessionSetup(t *testing.T) {
 	cfg := testSessionsIdentity(t)
 	sc := &scriptedCLI{} // no existing sessions
