@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -169,4 +170,22 @@ func TestPropose_SecondProposalOverwritesMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "second", meta.Reason)
+}
+
+// TestPropose_ListenerRegisteredOnStart pins that serveProposeListener
+// records the listener in proposeListeners and closeProposeListener
+// removes it.
+func TestPropose_ListenerRegisteredOnStart(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+
+	proposeListeners.Store("proj", ln)
+	got, ok := proposeListeners.Load("proj")
+	require.True(t, ok)
+	assert.Equal(t, ln, got.(net.Listener))
+
+	closeProposeListener("proj")
+	_, ok = proposeListeners.Load("proj")
+	assert.False(t, ok, "closeProposeListener must delete entry")
 }

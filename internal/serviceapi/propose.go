@@ -26,10 +26,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
@@ -123,4 +126,30 @@ func handleProposeForProject(cfg identity.Config, projectName string, cache *Sta
 
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+// proposeListeners tracks each running project's propose HTTP listener
+// so /vm/stop can close it by project name. Mirrors pop.go's
+// popListeners.
+var proposeListeners sync.Map // projectName -> net.Listener
+
+// serveProposeListener runs a minimal HTTP server on ln that dispatches
+// POST /propose to handleProposeForProject for the given project.
+func serveProposeListener(ln net.Listener, cfg identity.Config, projectName string, cache *StateCache) {
+	mux := http.NewServeMux()
+	mux.Handle("/propose", handleProposeForProject(cfg, projectName, cache))
+	srv := &http.Server{Handler: mux}
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		daemonlog.Errorf("serviceapi: propose: listener for %s exited: %v", projectName, err)
+	}
+}
+
+// closeProposeListener closes and forgets projectName's propose
+// listener, if any. Called from /vm/stop teardown.
+func closeProposeListener(projectName string) {
+	if v, ok := proposeListeners.LoadAndDelete(projectName); ok {
+		if ln, ok := v.(net.Listener); ok {
+			ln.Close()
+		}
+	}
 }

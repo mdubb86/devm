@@ -28,6 +28,11 @@ type Endpoint struct {
 	// Pop is the Mac-side host:port softnet forwards guest TCP destined
 	// for 192.168.127.1:81 to — the daemon's per-project pop listener.
 	Pop string `json:"pop,omitempty"`
+
+	// Propose is the Mac-side host:port softnet forwards guest TCP
+	// destined for 192.168.127.1:82 to — the daemon's per-project
+	// propose listener.
+	Propose string `json:"propose,omitempty"`
 }
 
 // softnetClient is the daemon-side handle to one VM's softnet control
