@@ -12,7 +12,7 @@ project_name: devm
 before:
   hooks:
     - go mod tidy
-    - sh -c 'IRON_PROXY_VERSION="${IRON_PROXY_VERSION:-v0.45.0}" && ver="$(echo "$IRON_PROXY_VERSION" | sed "s/^v//")" && mkdir -p internal/ironproxy/embed && curl -fsSL -o /tmp/iron-proxy.tar.gz "https://github.com/ironsh/iron-proxy/releases/download/${IRON_PROXY_VERSION}/iron-proxy_${ver}_darwin_arm64.tar.gz" && tar -xzf /tmp/iron-proxy.tar.gz -C /tmp iron-proxy && gzip -c /tmp/iron-proxy > internal/ironproxy/embed/iron-proxy.gz && rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy'
+    - sh -c 'IRON_PROXY_VERSION="${IRON_PROXY_VERSION:-v0.45.0}" && ver="$(echo "$IRON_PROXY_VERSION" | sed "s/^v//")" && mkdir -p internal/ironproxy/embed && curl -fsSL -o /tmp/iron-proxy.tar.gz "https://github.com/paradigmxyz/iron-proxy/releases/download/${IRON_PROXY_VERSION}/iron-proxy_${ver}_darwin_arm64.tar.gz" && tar -xzf /tmp/iron-proxy.tar.gz -C /tmp iron-proxy && gzip -c /tmp/iron-proxy > internal/ironproxy/embed/iron-proxy.gz && rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy'
     # Fetch the pinned mutagen binary + its agents tarball into the
     # embed dir. Both //go:embed pragmas in internal/mutagen/embed.go
     # need them on disk at compile time. MUTAGEN_VERSION mirrors the
