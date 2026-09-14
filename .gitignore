@@ -52,6 +52,10 @@ internal/guestbin/embed/pop
 # Populated by `just _build-run-embed`.
 internal/guestbin/embed/run
 
+# propose binary embedded (uncompressed) into devm at build time.
+# Populated by `just _build-propose-embed`.
+internal/guestbin/embed/propose
+
 # mutagen binary embedded (gzipped) into devm at build time.
 # Populated by `just fetch-mutagen`.
 internal/mutagen/embed/*.gz

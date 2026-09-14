@@ -330,6 +330,7 @@ func (p *Provisioner) buildBundle() ([]byte, error) {
 		SSHHostPriv:            p.SSHHostPriv,
 		SSHHostPub:             p.SSHHostPub,
 		Pop:                    guestbin.Pop(),
+		Propose:                guestbin.Propose(),
 		CommandsManifest:       commandsManifest,
 		Run:                    guestbin.Run(),
 		MutagenAgentLinuxArm64: mutagenAgent,

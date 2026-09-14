@@ -40,6 +40,10 @@ type BuildInput struct {
 
 	Pop []byte
 
+	// Propose is the compiled linux/arm64 propose binary (see cmd/propose).
+	// Written to /opt/devm/bin/propose. Nil in tests that don't need it.
+	Propose []byte
+
 	// CommandsManifest is the pre-rendered body of /opt/devm/commands.json
 	// (see internal/render/commands.go's RenderCommandsManifest). Empty ⇒
 	// no file emitted.
@@ -199,6 +203,12 @@ func Build(in BuildInput) ([]byte, error) {
 	if len(in.Pop) > 0 {
 		if err := writeEntry(tw, "bin/pop", 0o755, in.Pop); err != nil {
 			return nil, err
+		}
+	}
+
+	if len(in.Propose) > 0 {
+		if err := writeEntry(tw, "bin/propose", 0o755, in.Propose); err != nil {
+			return nil, fmt.Errorf("propose entry: %w", err)
 		}
 	}
 

@@ -419,6 +419,30 @@ func TestBuild_OmitsPopWhenAbsent(t *testing.T) {
 	assert.NotContains(t, names, "bin/pop")
 }
 
+func TestBuild_IncludesProposeWhenPresent(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		Propose:        []byte("propose-elf-bytes"),
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.Contains(t, names, "bin/propose")
+	assert.Equal(t, []byte("propose-elf-bytes"), readTarEntry(t, blob, "bin/propose"))
+}
+
+func TestBuild_OmitsProposeWhenAbsent(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.NotContains(t, names, "bin/propose")
+}
+
 func TestBuild_TarContainsStartupScript_WhenStartupSet(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
