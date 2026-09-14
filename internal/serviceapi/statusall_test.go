@@ -97,3 +97,71 @@ type erroringTartLister struct{}
 func (erroringTartLister) List(ctx context.Context) ([]tart.VM, error) {
 	return nil, errors.New("tart list failed")
 }
+
+func TestStatusAll_IncludesMacCwd(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cache := NewStateCache()
+	cache.SetMacCwd("proj", "/Users/foo/bar")
+	cache.SetVMState("proj", VMRunning)
+
+	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
+	RegisterStatusAllHandler(srv, identity.Prod, &fakeStatusAllTart{running: map[string]bool{}}, cache)
+
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	assert.Contains(t, rec.Body.String(), `"mac_cwd":"/Users/foo/bar"`)
+
+	var rows []ProjectStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, "/Users/foo/bar", rows[0].MacCwd)
+}
+
+func TestStatusAll_IncludesApproveState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cache := NewStateCache()
+	cache.SetApproveState("proj", ApproveStateSummary{
+		Diverged:        true,
+		CurrentDevmSHA:  "abc",
+		ApprovedDevmSHA: "def",
+	})
+
+	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
+	RegisterStatusAllHandler(srv, identity.Prod, &fakeStatusAllTart{running: map[string]bool{}}, cache)
+
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	assert.Contains(t, rec.Body.String(), `"approve_state":{"diverged":true}`)
+
+	var rows []ProjectStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].ApproveState)
+	assert.True(t, rows[0].ApproveState.Diverged)
+}
+
+func TestStatusAll_MacCwdAndApproveState_OmittedWhenUnset(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cache := NewStateCache()
+	cache.SetVMState("proj", VMRunning)
+
+	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
+	RegisterStatusAllHandler(srv, identity.Prod, &fakeStatusAllTart{running: map[string]bool{}}, cache)
+
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	assert.NotContains(t, rec.Body.String(), "mac_cwd")
+	assert.NotContains(t, rec.Body.String(), "approve_state")
+
+	var rows []ProjectStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	assert.Empty(t, rows[0].MacCwd)
+	assert.Nil(t, rows[0].ApproveState)
+}

@@ -1,0 +1,89 @@
+name: devm
+options:
+  bundleIdPrefix: com.mdubb86
+  deploymentTarget:
+    macOS: "13.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "devm-dev"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+targets:
+  devm-prod:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/devm
+      - path: Resources
+    info:
+      path: Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: "public.app-category.developer-tools"
+        LSMinimumSystemVersion: "13.0"
+    entitlements:
+      path: devm.entitlements
+      properties:
+        com.apple.security.network.client: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mdubb86.devm.menuapp
+        PRODUCT_NAME: devm
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEVM_PROD
+    scheme:
+      testTargets:
+        - devm-tests
+  devm-e2e:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/devm
+      - path: Resources
+    info:
+      path: Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: "public.app-category.developer-tools"
+        LSMinimumSystemVersion: "13.0"
+    entitlements:
+      path: devm.entitlements
+      properties:
+        com.apple.security.network.client: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mdubb86.devm-e2e.menuapp
+        PRODUCT_NAME: devm-e2e
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEVM_E2E
+  devm-tests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: DevmTests
+    dependencies:
+      - target: devm-prod
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mdubb86.devm.menuapp.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/devm.app/Contents/MacOS/devm"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+  devm-uitests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: DevmUITests
+    dependencies:
+      - target: devm-prod
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mdubb86.devm.menuapp.uitests
+        GENERATE_INFOPLIST_FILE: YES
+    scheme:
+      testTargets:
+        - devm-uitests

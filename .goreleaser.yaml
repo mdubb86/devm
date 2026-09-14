@@ -45,6 +45,9 @@ before:
     # Compile the Mac-side tart-mutagen-ssh shim for darwin_arm64. Mirrors
     # the just _build-tart-mutagen-ssh-embed recipe. Static (no cgo).
     - sh -c 'mkdir -p internal/tartmutagenssh/embed && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o internal/tartmutagenssh/embed/tart-mutagen-ssh ./cmd/tart-mutagen-ssh'
+    # Build the signed menu-bar app bundle at bin/devm.app so the
+    # archives step below can package it alongside the daemon binary.
+    - just mac-build
 
 builds:
   # Tart requires Apple Silicon; amd64 macOS isn't a supported target.
@@ -98,6 +101,11 @@ archives:
       - LICENSE
       - README.md
       - THIRD_PARTY_NOTICES.md
+      # devm.app is a directory bundle (Contents/{MacOS,Resources,...});
+      # goreleaser walks src recursively when it names a directory, so
+      # this pulls the whole bundle into the tarball under devm.app/.
+      - src: bin/devm.app
+        dst: devm.app
 
 checksum:
   name_template: "checksums.txt"
@@ -149,7 +157,18 @@ homebrew_casks:
     # xattr in a postflight hook so first-run doesn't pop the "cannot
     # verify developer" dialog. Standard pattern for OSS CLIs without
     # paid notarization.
+    #
+    # `app "devm.app"` is the native Homebrew Cask DSL stanza (works
+    # against any archive format the cask downloads, not just DMGs —
+    # goreleaser's own `app:` cask field is Pro-only and DMG-specific,
+    # so it's declared here via custom_block instead). It moves the
+    # menu-bar app bundle from the extracted tar.gz into /Applications
+    # so `devm install`'s Homebrew fallback path (installMenuApp in
+    # cmd/devm/menuapp_install.go) finds it already there and only
+    # needs to register the LaunchAgent.
     custom_block: |
+      app "devm.app"
+
       postflight do
         system_command "/usr/bin/xattr",
                        args: ["-rd", "com.apple.quarantine", staged_path]

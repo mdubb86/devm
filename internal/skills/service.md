@@ -21,12 +21,13 @@ Registers the daemon with launchd. It:
 2. Configures `/etc/resolver/test` so the system resolver forwards `*.test` queries to the daemon's DNS port.
 3. Generates a local CA (if none exists) and trusts it in the System Keychain.
 4. Bootstraps the daemon and starts it immediately.
+5. Installs the devm menu-bar app to `/Applications` and registers it as a per-user LaunchAgent (RunAtLoad + KeepAlive), so it launches at login and relaunches on crash.
 
 ```
 devm uninstall
 ```
 
-Removes the plist, unregisters the daemon, removes `/etc/resolver/test`, and removes the CA certificate from the System Keychain.
+Removes the plist, unregisters the daemon, removes `/etc/resolver/test`, removes the CA certificate from the System Keychain, and uninstalls the menu-bar app + its LaunchAgent.
 
 ---
 
