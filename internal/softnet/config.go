@@ -74,6 +74,13 @@ type ForwardTargets struct {
 	// from setPolicy payloads when unset (older daemons or projects
 	// without pop wired up).
 	Pop string `json:"pop,omitempty"`
+
+	// Propose is the Mac-side host:port where softnet forwards guest TCP
+	// traffic destined for 192.168.127.1:82. Serves the daemon's per-
+	// project propose HTTP listener (internal/serviceapi/propose.go).
+	// Omitted from setPolicy payloads when unset (older daemons or
+	// projects without propose wired up).
+	Propose string `json:"propose,omitempty"`
 }
 
 // ExposePort is one host->guest ingress mapping.

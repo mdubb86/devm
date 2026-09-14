@@ -69,3 +69,46 @@ func TestForwardTargets_PopOmittedWhenEmpty(t *testing.T) {
 		t.Fatalf("marshaled JSON should omit unset pop field: %s", blob)
 	}
 }
+
+// TestForwardTargets_ProposeField_JSONRoundtrip pins that Propose
+// round-trips through JSON when set.
+func TestForwardTargets_ProposeField_JSONRoundtrip(t *testing.T) {
+	in := &ForwardTargets{
+		HTTP:    "127.0.0.1:1000",
+		HTTPS:   "127.0.0.1:1001",
+		DNS:     "127.0.0.1:1002",
+		NTP:     "127.0.0.1:1003",
+		Pop:     "127.0.0.1:1004",
+		Propose: "127.0.0.1:1005",
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out ForwardTargets
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Propose != "127.0.0.1:1005" {
+		t.Fatalf("Propose lost: got %q want %q", out.Propose, "127.0.0.1:1005")
+	}
+}
+
+// TestForwardTargets_ProposeOmittedWhenEmpty pins that Propose is
+// optional — an old daemon that doesn't set it produces JSON without
+// the field.
+func TestForwardTargets_ProposeOmittedWhenEmpty(t *testing.T) {
+	in := &ForwardTargets{
+		HTTP:  "127.0.0.1:1000",
+		HTTPS: "127.0.0.1:1001",
+		DNS:   "127.0.0.1:1002",
+		NTP:   "127.0.0.1:1003",
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), "propose") {
+		t.Fatalf("propose should be omitted when empty; got: %s", b)
+	}
+}

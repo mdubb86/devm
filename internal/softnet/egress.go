@@ -136,6 +136,16 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 		return ft.Pop, ft.Pop != ""
 	}
 
+	// The daemon's per-project propose listener is reached at the
+	// gateway IP's dedicated port, forwarded regardless of the policy
+	// switch below — mirrors pop's :81 hairpin.
+	if dstIP == GatewayIP && dport == 82 {
+		if ft == nil {
+			return "", false
+		}
+		return ft.Propose, ft.Propose != ""
+	}
+
 	switch pol {
 	case PolicyForwarding:
 		if ft == nil {
