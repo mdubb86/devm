@@ -119,6 +119,36 @@ func TestEgress_DoesNotForwardPopPortWhenPopUnset(t *testing.T) {
 	}
 }
 
+// TestEgress_ForwardsProposePortToTarget pins that TCP to
+// 192.168.127.1:82 routes to ForwardTargets.Propose when set.
+func TestEgress_ForwardsProposePortToTarget(t *testing.T) {
+	e := newEgress(nil)
+	e.setPolicy(PolicyForwarding, &ForwardTargets{
+		Propose: "127.0.0.1:65432",
+	})
+	target, ok := e.target(GatewayIP, 82)
+	if !ok {
+		t.Fatal("TCP:82 to gateway must forward under FORWARDING with Propose set")
+	}
+	if target != "127.0.0.1:65432" {
+		t.Fatalf("target = %q, want %q", target, "127.0.0.1:65432")
+	}
+}
+
+// TestEgress_ProposePortDeniedWhenPropoeUnset pins that :82 is
+// denied — not silently forwarded elsewhere — when Propose hasn't
+// been set.
+func TestEgress_ProposePortDeniedWhenProposeUnset(t *testing.T) {
+	e := newEgress(nil)
+	e.setPolicy(PolicyForwarding, &ForwardTargets{
+		HTTP:  "127.0.0.1:1000",
+		HTTPS: "127.0.0.1:1001",
+	})
+	if _, ok := e.target(GatewayIP, 82); ok {
+		t.Fatal("TCP:82 must be denied when Propose is unset")
+	}
+}
+
 // TestSpliceReturnsByteCounts pins that splice reports how many bytes
 // flowed each direction — the counts callers log to detect splices
 // that established but never carried data.

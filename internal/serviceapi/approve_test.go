@@ -189,3 +189,61 @@ func TestStart_RefusesWhenDivergedFromApproved(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, diverged)
 }
+
+func TestApproveState_IncludesProposalWhenPresent(t *testing.T) {
+	cfg := identity.Config{Name: "devm-test"}
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	macCwd := filepath.Join(tmp, "proj")
+	require.NoError(t, os.MkdirAll(macCwd, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte("name: p\n"), 0o644))
+
+	// Seed a proposal.
+	require.NoError(t, WriteLastProposal(cfg, "proj", ProposalMetadata{
+		Cwd:       "/home/devm/proj",
+		Branch:    "feature-x",
+		Reason:    "test reason",
+		Timestamp: "2026-09-14T12:00:00Z",
+		Source:    "guest",
+		Kind:      "devm.yaml",
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj&mac_cwd="+macCwd, nil)
+	rr := httptest.NewRecorder()
+	handleApproveState(cfg).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp approveStateResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.NotNil(t, resp.Proposal)
+	assert.Equal(t, "feature-x", resp.Proposal.Branch)
+	assert.Equal(t, "test reason", resp.Proposal.Reason)
+	assert.Equal(t, "guest", resp.Proposal.Source)
+}
+
+func TestApprove_ClearsProposalOnSuccess(t *testing.T) {
+	cfg := identity.Config{Name: "devm-test"}
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	macCwd := filepath.Join(tmp, "proj")
+	require.NoError(t, os.MkdirAll(macCwd, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte("name: p\n"), 0o644))
+
+	// Seed a proposal.
+	require.NoError(t, WriteLastProposal(cfg, "proj", ProposalMetadata{
+		Cwd:       "/x",
+		Reason:    "x",
+		Timestamp: "2026-09-14T00:00:00Z",
+		Source:    "guest",
+		Kind:      "devm.yaml",
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj&mac_cwd="+macCwd, nil)
+	rr := httptest.NewRecorder()
+	handleApprove(cfg, nil).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	_, ok, err := ReadLastProposal(cfg, "proj")
+	require.NoError(t, err)
+	assert.False(t, ok, "proposal must be cleared after successful approve")
+}

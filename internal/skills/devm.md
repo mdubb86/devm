@@ -57,6 +57,13 @@ that dispatches through `tart exec` (Tart's gRPC-over-vsock control
 channel). No sshd is involved in the sync path. sshd remains for
 interactive `ssh devm-<name>` and VS Code Remote-SSH.
 
+## Propose channel
+
+**Propose channel.** Guest-side agents call `/opt/devm/bin/propose` to
+send a `devm.yaml` edit to the Mac side without a git round-trip.
+Installed at cold-start. Companion pre-commit hook refuses direct
+`git commit devm.yaml` to steer edits through the same channel.
+
 ## Where to look next
 
 - `devm skills get schema` — every `devm.yaml` field, its type, and which change bucket it falls in.

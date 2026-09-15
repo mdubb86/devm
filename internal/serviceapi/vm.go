@@ -691,6 +691,24 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		popListeners.Store(req.Name, popLn)
 		go servePopListener(popLn, cfg, req.Name, popStore, popCLI, "devm-"+req.Name, cache)
 
+		// Allocate a port and bind the per-project propose HTTP listener.
+		// Softnet forwards guest 192.168.127.1:82 → this port via
+		// ForwardTargets.Propose in endpointFrom below.
+		proposePort, err := pickPort()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("pick propose port: %v", err), http.StatusInternalServerError)
+			return
+		}
+		proposeLn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", proposePort))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("bind propose listener: %v", err), http.StatusInternalServerError)
+			return
+		}
+		// Register before spawning the serve goroutine — see the popLn
+		// comment above for why.
+		proposeListeners.Store(req.Name, proposeLn)
+		go serveProposeListener(proposeLn, cfg, req.Name, cache)
+
 		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read. Merge onto the existing
 		// entry rather than overwrite — AllocateProjectIP above already
@@ -702,6 +720,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info.TunnelPort = tunnelPort
 		info.DNSPort = dnsPort
 		info.PopPort = popPort
+		info.ProposePort = proposePort
 		ironProxyState.put(req.Name, info)
 
 		// Apply VM-side config via tart exec. timesyncd's NTP config is
@@ -994,6 +1013,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// missed — reject new pops first, then drain what's already
 		// in the store.
 		closePopListener(req.Name)
+		closeProposeListener(req.Name)
 		SweepProjectPopSessions(popStore, popCLI, cfg, req.Name, cache)
 		if req.Destroy {
 			policyAuthority.PurgeProject(req.Name)
@@ -1310,6 +1330,9 @@ func endpointFrom(info projectInfo, ntpPort int) *Endpoint {
 	if info.PopPort != 0 {
 		e.Pop = ironProxyListenAddr(info.PopPort)
 	}
+	if info.ProposePort != 0 {
+		e.Propose = ironProxyListenAddr(info.ProposePort)
+	}
 	return e
 }
 
@@ -1342,6 +1365,11 @@ type projectInfo struct {
 	// softnet forwards guest TCP 192.168.127.1:81. In-memory only, set
 	// at /vm/start and cleared at /vm/stop via closePopListener.
 	PopPort int
+
+	// ProposePort is the daemon's per-project propose HTTP listener —
+	// where softnet forwards guest TCP 192.168.127.1:82. In-memory only,
+	// set at /vm/start and cleared at /vm/stop via closeProposeListener.
+	ProposePort int
 
 	// ProjectIP is the project's allocated 127.42/16 loopback IP. All
 	// ingress listeners (softnet direct ports, softnet SSH, daemon HTTP

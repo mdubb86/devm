@@ -1,5 +1,5 @@
 // Package guestbin embeds guest-side binaries devm ships into the VM
-// via the provisioning bundle. Currently: pop, run.
+// via the provisioning bundle. Currently: pop, run, propose.
 //
 // The embed is uncompressed (matches internal/docker/embed.go's runc
 // shim) — the binary is small and provisioning-time extraction is
@@ -27,3 +27,13 @@ var runBin []byte
 // Run returns the compiled linux/arm64 run binary bytes for the
 // provisioning bundle (internal/devmbundle) to write to /opt/devm/bin/run.
 func Run() []byte { return runBin }
+
+//go:generate sh -c "cd ../../ && GOOS=linux GOARCH=arm64 go build -o internal/guestbin/embed/propose ./cmd/propose"
+
+//go:embed embed/propose
+var proposeBin []byte
+
+// Propose returns the compiled linux/arm64 propose binary bytes for
+// the provisioning bundle (internal/devmbundle) to write to
+// /opt/devm/bin/propose.
+func Propose() []byte { return proposeBin }

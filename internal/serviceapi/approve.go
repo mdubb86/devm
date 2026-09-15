@@ -13,23 +13,24 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/approve"
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 )
 
 type approveStateResponse struct {
-	Project             string  `json:"project"`
-	Diverged            bool    `json:"diverged"`
-	CurrentDevmSHA      string  `json:"current_devm_sha"`
-	ApprovedDevmSHA     string  `json:"approved_devm_sha"`
-	CurrentMeSHA        string  `json:"current_me_sha"`
-	ApprovedMeSHA       string  `json:"approved_me_sha"`
-	CurrentDevmBytes    string  `json:"current_devm_bytes"`
-	ApprovedDevmBytes   *string `json:"approved_devm_bytes"`
-	CurrentMeBytes      *string `json:"current_me_bytes"`
-	ApprovedMeBytes     *string `json:"approved_me_bytes"`
-	ApprovedSince       *string `json:"approved_since"`
-	ApprovedSource      *string `json:"approved_source"`
-	Proposal            any     `json:"proposal"` // Plan C fills this in; always nil for now.
+	Project             string             `json:"project"`
+	Diverged            bool               `json:"diverged"`
+	CurrentDevmSHA      string             `json:"current_devm_sha"`
+	ApprovedDevmSHA     string             `json:"approved_devm_sha"`
+	CurrentMeSHA        string             `json:"current_me_sha"`
+	ApprovedMeSHA       string             `json:"approved_me_sha"`
+	CurrentDevmBytes    string             `json:"current_devm_bytes"`
+	ApprovedDevmBytes   *string            `json:"approved_devm_bytes"`
+	CurrentMeBytes      *string            `json:"current_me_bytes"`
+	ApprovedMeBytes     *string            `json:"approved_me_bytes"`
+	ApprovedSince       *string            `json:"approved_since"`
+	ApprovedSource      *string            `json:"approved_source"`
+	Proposal            *ProposalMetadata  `json:"proposal"`
 }
 
 func handleApproveState(cfg identity.Config) http.Handler {
@@ -93,6 +94,11 @@ func handleApproveState(cfg identity.Config) http.Handler {
 		} else {
 			resp.Diverged = true
 		}
+		if meta, ok, err := ReadLastProposal(cfg, project); err != nil {
+			daemonlog.Errorf("approve-state: read last-proposal: %v", err)
+		} else if ok {
+			resp.Proposal = meta
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}
@@ -127,6 +133,10 @@ func handleApprove(cfg identity.Config, cache *StateCache) http.Handler {
 		if err := store.Write(project, currentDevm, currentMe, "user"); err != nil {
 			http.Error(w, fmt.Sprintf("approve: write snapshot: %v", err), http.StatusInternalServerError)
 			return
+		}
+
+		if err := ClearLastProposal(cfg, project); err != nil {
+			daemonlog.Errorf("approve: clear last-proposal: %v", err)
 		}
 
 		// The just-written snapshot IS the current bytes — current and
