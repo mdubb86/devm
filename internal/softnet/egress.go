@@ -96,9 +96,9 @@ func (e *egress) testAnswer(fqdn string) (net.IP, bool) {
 }
 
 // target maps an outbound TCP flow to a host dial address per current policy.
-// LOCKED drops everything; FORWARDING routes :80/:443 to iron-proxy (and the
-// two hairpins below, regardless of policy). ok=false => RST the flow. Pure;
-// unit-tested.
+// LOCKED drops everything before either hairpin below is ever reached;
+// FORWARDING additionally routes :80/:443 to iron-proxy. ok=false => RST the
+// flow. Pure; unit-tested.
 func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 	pol, ft := e.snapshot()
 	if dstIP == NATAliasIP {
@@ -127,8 +127,10 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 	}
 
 	// The daemon's per-project pop listener is reached at the gateway IP's
-	// dedicated port, forwarded regardless of the policy switch below —
-	// mirrors the .test hairpin's early decision above.
+	// dedicated port. Under PolicyForwarding this hairpin fires before the
+	// FORWARDING dispatch switch below; under PolicyLocked the whole target()
+	// function already returned above, so the hairpin never runs during boot
+	// lock.
 	if dstIP == GatewayIP && dport == 81 {
 		if ft == nil {
 			return "", false
@@ -136,9 +138,11 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 		return ft.Pop, ft.Pop != ""
 	}
 
-	// The daemon's per-project propose listener is reached at the
-	// gateway IP's dedicated port, forwarded regardless of the policy
-	// switch below — mirrors pop's :81 hairpin.
+	// The daemon's per-project propose listener is reached at the gateway
+	// IP's dedicated port. Under PolicyForwarding this hairpin fires before
+	// the FORWARDING dispatch switch below; under PolicyLocked the whole
+	// target() function already returned above, so the hairpin never runs
+	// during boot lock. Mirrors pop's :81 hairpin.
 	if dstIP == GatewayIP && dport == 82 {
 		if ft == nil {
 			return "", false

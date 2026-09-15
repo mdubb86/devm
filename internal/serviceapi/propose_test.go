@@ -113,6 +113,34 @@ func TestPropose_UnsupportedKindReturns400(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), "kind")
 }
 
+func TestPropose_OversizedBodyRejected(t *testing.T) {
+	macCwd := filepath.Join(t.TempDir(), "proj")
+	h, _, _ := buildProposeHandler(t, macCwd)
+
+	// A YAML payload alone over 1 MiB, well past maxProposeBodyBytes once
+	// wrapped in the JSON envelope and base64-inflated.
+	oversizedYAML := bytes.Repeat([]byte("a"), maxProposeBodyBytes+1)
+	reqBody, err := json.Marshal(map[string]any{
+		"yaml":   base64.StdEncoding.EncodeToString(oversizedYAML),
+		"cwd":    "/x",
+		"branch": "",
+		"reason": "",
+		"kind":   "devm.yaml",
+	})
+	require.NoError(t, err)
+
+	httpReq := httptest.NewRequest(http.MethodPost, "/propose", bytes.NewReader(reqBody))
+	httpReq.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httpReq)
+
+	assert.True(t, rr.Code == http.StatusBadRequest || rr.Code == http.StatusRequestEntityTooLarge, "got %d", rr.Code)
+
+	// No file written.
+	_, statErr := os.Stat(filepath.Join(macCwd, "devm.yaml"))
+	assert.True(t, os.IsNotExist(statErr), "devm.yaml must not exist")
+}
+
 func TestPropose_InvalidBase64Returns400(t *testing.T) {
 	macCwd := filepath.Join(t.TempDir(), "proj")
 	h, _, _ := buildProposeHandler(t, macCwd)

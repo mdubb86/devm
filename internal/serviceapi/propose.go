@@ -41,6 +41,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// maxProposeBodyBytes caps the /propose request body. devm.yaml is
+// small; this keeps a runaway or malicious guest agent from making
+// the daemon buffer unbounded memory.
+const maxProposeBodyBytes = 1 << 20 // 1 MiB
+
 type proposeRequest struct {
 	YAML   string `json:"yaml"`
 	Cwd    string `json:"cwd"`
@@ -57,6 +62,7 @@ func handleProposeForProject(cfg identity.Config, projectName string, cache *Sta
 			http.Error(w, "propose: POST only", http.StatusMethodNotAllowed)
 			return
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxProposeBodyBytes)
 		var req proposeRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("propose: decode body: %v", err), http.StatusBadRequest)

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,6 +49,38 @@ func TestPost_Daemon400Exit2(t *testing.T) {
 	defer srv.Close()
 	code := doPost(srv.URL, []byte("x"), "/x", "", "")
 	assert.Equal(t, 2, code)
+}
+
+func TestPost_Daemon404Exit2(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	stderr := captureStderr(t, func() {
+		code := doPost(srv.URL, []byte("x"), "/x", "", "")
+		assert.Equal(t, 2, code)
+	})
+	assert.Contains(t, stderr, "daemon does not support propose channel — upgrade the Mac side")
+}
+
+// captureStderr redirects os.Stderr for the duration of fn and returns
+// everything written to it.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+
+	fn()
+
+	require.NoError(t, w.Close())
+	os.Stderr = orig
+
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+	return string(out)
 }
 
 func TestGitBranch_NotAGitRepo_ReturnsEmpty(t *testing.T) {

@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 const proposeEndpoint = "http://192.168.127.1:82/propose"
@@ -103,7 +104,15 @@ func doPost(endpoint string, yamlBytes []byte, cwd, branch, reason string) int {
 		fmt.Fprintf(os.Stderr, "propose: marshal: %v\n", err)
 		return 1
 	}
-	resp, err := http.Post(endpoint, "application/json", bytes.NewReader(body))
+	httpReq, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "propose: build request: %v\n", err)
+		return 1
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "propose: could not reach devm daemon on 192.168.127.1:82 — is the VM properly started?\n%v\n", err)
 		return 1
@@ -116,6 +125,10 @@ func doPost(endpoint string, yamlBytes []byte, cwd, branch, reason string) int {
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == http.StatusBadRequest {
 		fmt.Fprintf(os.Stderr, "propose: %s\n", strings.TrimSpace(string(respBody)))
+		return 2
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		fmt.Fprintln(os.Stderr, "propose: daemon does not support propose channel — upgrade the Mac side")
 		return 2
 	}
 	fmt.Fprintf(os.Stderr, "propose: daemon returned %d: %s\n", resp.StatusCode, strings.TrimSpace(string(respBody)))
