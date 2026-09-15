@@ -67,6 +67,24 @@ something breaks.
   guest → Mac proposal channel is planned; today it's git.
 - Read your own logs: `journalctl -u <svc>`, `/var/log/…`, etc.
 
+## Propose a devm.yaml change
+
+The guest can propose an edit to the project's `devm.yaml` without
+going through git. From inside the guest:
+
+    /opt/devm/bin/propose [--reason "why"] path/to/new-devm.yaml
+    # or: cat new-devm.yaml | /opt/devm/bin/propose --reason "why"
+
+The Mac daemon validates the YAML, writes it into the project
+directory, and records the guest's attribution (branch, reason,
+cwd). The approve gate then fires on the next `devm reconcile` or
+`devm start` — running `devm approve` (in the terminal or from the
+menu-bar) advances the snapshot and clears the pending proposal.
+
+A pre-commit hook in this repo refuses `git commit devm.yaml`
+directly — the intended path for guest-side edits is `propose`.
+`git commit --no-verify` bypasses the hook.
+
 ## Lifecycle — what you CANNOT do
 
 - `devm reconcile`, `devm stop`, `devm start`, `devm teardown`,
