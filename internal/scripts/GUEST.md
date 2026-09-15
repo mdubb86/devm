@@ -63,8 +63,8 @@ something breaks.
 - `sudo systemctl restart <svc>` — restart your own services.
 - Edit `devm.yaml` in `$WORKSPACE`. The edit does NOT reach the Mac
   project directory (which is what `devm reconcile` reads) — for
-  that, commit + push it and have the Mac user pull. A first-class
-  guest → Mac proposal channel is planned; today it's git.
+  that, use `/opt/devm/bin/propose` (see below) or commit + push it
+  and have the Mac user pull.
 - Read your own logs: `journalctl -u <svc>`, `/var/log/…`, etc.
 
 ## Propose a devm.yaml change
