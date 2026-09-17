@@ -60,6 +60,28 @@ func TestCwdRegistry_FindProjectByCwd(t *testing.T) {
 	assert.Empty(t, name)
 }
 
+func TestCwdRegistry_FindProjectByCwd_WalksUp(t *testing.T) {
+	cfg := identity.Prod
+	t.Setenv("HOME", t.TempDir())
+
+	require.NoError(t, AddCwdAlias(cfg, "proj", "/Users/x/proj"))
+
+	name, ok, err := FindProjectByCwd(cfg, "/Users/x/proj/subdir/deeper")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, "proj", name)
+
+	name, ok, err = FindProjectByCwd(cfg, "/Users/x/other/sub")
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, name)
+
+	name, ok, err = FindProjectByCwd(cfg, "/Users/x/proj")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, "proj", name)
+}
+
 func TestCwdRegistry_StateDirLayout(t *testing.T) {
 	cfg := identity.Prod
 	t.Setenv("HOME", "/some/home")

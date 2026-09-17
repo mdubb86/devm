@@ -71,8 +71,9 @@ func ReadCwdAliases(cfg identity.Config, name string) ([]string, error) {
 }
 
 // FindProjectByCwd walks every <RuntimeDir>/*/cwds.json looking for
-// cwd. Returns the matching project name, or ("", false, nil) when
-// none matches.
+// cwd or an ancestor of cwd. Returns the matching project name, or
+// ("", false, nil) when none matches. Walks cwd up its path components
+// until an exact match is found or the root is reached.
 func FindProjectByCwd(cfg identity.Config, cwd string) (string, bool, error) {
 	entries, err := os.ReadDir(cfg.RuntimeDir())
 	if errors.Is(err, os.ErrNotExist) {
@@ -81,6 +82,7 @@ func FindProjectByCwd(cfg identity.Config, cwd string) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("cwd-registry scan: %w", err)
 	}
+	registered := map[string]string{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -90,10 +92,17 @@ func FindProjectByCwd(cfg identity.Config, cwd string) (string, bool, error) {
 			return "", false, err
 		}
 		for _, a := range aliases {
-			if a == cwd {
-				return e.Name(), true, nil
-			}
+			registered[a] = e.Name()
 		}
 	}
-	return "", false, nil
+	for p := cwd; ; {
+		if name, ok := registered[p]; ok {
+			return name, true, nil
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return "", false, nil
+		}
+		p = parent
+	}
 }
