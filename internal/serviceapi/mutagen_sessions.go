@@ -294,10 +294,6 @@ func SetupReposPhase(ctx context.Context, cfg identity.Config, projectID string,
 		} else if err := cloneOneRepoIfEmpty(cfg, projectID, *e, exec, ironProxyURL, guestCACertPath); err != nil {
 			return err
 		}
-		if err := InstallPreCommitHook(exec, e.Label); err != nil {
-			daemonlog.Errorf("SetupReposPhase: install pre-commit hook for %s: %v", e.Label, err)
-			// Do NOT return — the hook is a guidance layer, not a correctness gate.
-		}
 	}
 	return nil
 }
