@@ -26,13 +26,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             MainWindow.shared.show()
         }
 
+        #if DEBUG
         // Test-only seed hook: XCUITest has no controllable data source for
         // the real daemon, so it drives the badge directly instead of
-        // starting the poller.
+        // starting the poller. Gated to DEBUG so it is compiled out of the
+        // Release build `just mac-build` ships — never present in the
+        // binary that gets installed as the prod daemon's companion app.
         if ProcessInfo.processInfo.environment["DEVM_TEST_SEED_DIVERGED"] == "1" {
             BadgeState.shared.anyDiverged = true
             return
         }
+        #endif
 
         let poller = BackgroundPoller(socketPath: AppIdentity.current.socketPath) { anyDiverged in
             DispatchQueue.main.async {
