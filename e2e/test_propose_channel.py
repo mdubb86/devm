@@ -1,21 +1,29 @@
-"""Propose channel: a guest-side `propose` call writes devm.yaml on the
-Mac side, the approve gate fires on the next reconcile, `devm approve`
-records attribution and clears it, and reconcile then proceeds.
+"""Propose channel: a guest-side `propose` call signals a devm.yaml
+edit to the Mac side, the approve gate fires on the next reconcile,
+`devm approve` records attribution and clears it, and reconcile then
+proceeds.
 
-Exercises the full path: cmd/propose (guest binary) -> softnet
+The guest binary sends attribution only -- cwd, branch, reason, kind,
+source -- never the config bytes themselves. Those reach the daemon
+exclusively through the project's dedicated config-sync mutagen
+session (internal/serviceapi/config_sync.go), so this test edits
+devm.yaml on the Mac side directly and waits for the sync tick to land
+it in the guest before signaling propose from there.
+
+Exercises the full path: internal/serviceapi/config_sync.go's
+bidirectional sync -> cmd/propose (guest binary) -> softnet
 192.168.127.1:82 -> internal/serviceapi's per-project /propose
 listener -> WriteLastProposal -> the approve-gate refusal in
 internal/serviceapi/approve.go -> `devm approve` -> ClearLastProposal.
 """
 from __future__ import annotations
 
-import base64
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
-import yaml
 
 pytestmark = pytest.mark.devm
 
@@ -31,19 +39,30 @@ def test_propose_channel(workspace, devm, sandbox_name):
         )
         assert cold.returncode == 0, f"start failed: {cold.stderr.decode()!r}"
 
-        # Build a modified devm.yaml (add a trivial env var -- a LIVE-bucket
-        # change reconcile can apply without a recreate, so this test isn't
-        # coupled to guest apt/network plumbing) and ship it from the guest
-        # via `propose`, exactly as a guest-side agent would.
-        cfg = yaml.safe_load(workspace.devmyaml_path.read_text())
-        cfg.setdefault("env", {})["DEVM_PROPOSE_E2E"] = "1"
-        new_content = yaml.safe_dump(cfg, sort_keys=False)
-        encoded = base64.b64encode(new_content.encode()).decode()
+        # Mac-side edit -- a LIVE-bucket env var, so once approved,
+        # reconcile can apply it without a recreate.
+        workspace.patch_devmyaml(env={"DEVM_PROPOSE_E2E": "1"})
 
+        # Wait for the config-sync mutagen session to land the edit in
+        # the guest before signaling propose from there.
+        deadline = time.monotonic() + 30
+        guest_content = ""
+        while time.monotonic() < deadline:
+            cat = subprocess.run(
+                [devm.path, "exec", "cat", "/home/devm/devm.yaml"],
+                cwd=str(workspace.path), capture_output=True, timeout=15,
+            )
+            guest_content = cat.stdout.decode()
+            if "DEVM_PROPOSE_E2E" in guest_content:
+                break
+            time.sleep(1)
+        assert "DEVM_PROPOSE_E2E" in guest_content, (
+            f"guest never saw the Mac-side edit:\n{guest_content}"
+        )
+
+        # Guest-side propose: signal only, no config bytes in the call.
         propose = subprocess.run(
-            [devm.path, "shell", "--", "bash", "-c",
-             f"echo {encoded} | base64 -d > /tmp/new-devm.yaml && "
-             f"/opt/devm/bin/propose --reason 'add env var' /tmp/new-devm.yaml"],
+            [devm.path, "exec", "/opt/devm/bin/propose", "--reason", "add env var"],
             cwd=str(workspace.path), capture_output=True, timeout=30,
         )
         assert propose.returncode == 0, (
@@ -52,8 +71,15 @@ def test_propose_channel(workspace, devm, sandbox_name):
             f"stderr: {propose.stderr.decode()!r}"
         )
 
-        # Mac side sees the proposed content, byte for byte.
-        assert workspace.devmyaml_path.read_text() == new_content
+        # last-proposal.json carries the guest's attribution.
+        meta_path = (
+            Path.home() / "Library" / "Application Support" / "devm-e2e"
+            / sandbox_name / "last-proposal.json"
+        )
+        assert meta_path.exists(), f"no last-proposal.json at {meta_path}"
+        meta = json.loads(meta_path.read_text())
+        assert meta["source"] == "guest", meta
+        assert meta["reason"] == "add env var", meta
 
         # The approve gate fires on the next reconcile -- --yes does NOT
         # bypass it (same contract test_244 pins for a Mac-side edit).
@@ -65,16 +91,6 @@ def test_propose_channel(workspace, devm, sandbox_name):
         stderr = refuse.stderr.decode()
         assert "changed since it was last approved" in stderr, stderr
         assert "devm approve" in stderr, stderr
-
-        # last-proposal.json carries the guest's attribution.
-        meta_path = (
-            Path.home() / "Library" / "Application Support" / "devm-e2e"
-            / sandbox_name / "last-proposal.json"
-        )
-        assert meta_path.exists(), f"no last-proposal.json at {meta_path}"
-        meta = json.loads(meta_path.read_text())
-        assert meta["source"] == "guest", meta
-        assert meta["reason"] == "add env var", meta
 
         # `devm approve` advances the approved snapshot and clears the
         # proposal metadata.
