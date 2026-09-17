@@ -259,6 +259,7 @@ func TestPropose_SourceMacIsPreserved(t *testing.T) {
 func TestPropose_UnixSocketHandlerRoutesByProjectQueryParam(t *testing.T) {
 	cfg := identity.Prod
 	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, os.MkdirAll(stateDirForProject(cfg, "proj"), 0o755))
 	h := handleProposeUnixSocket(cfg)
 
 	rr := postPropose(h, "/vm/propose?project=proj", map[string]any{
@@ -276,6 +277,31 @@ func TestPropose_UnixSocketHandlerRoutesByProjectQueryParam(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "mac", meta.Source)
 	assert.Equal(t, "mac-side edit", meta.Reason)
+}
+
+// TestPropose_UnixSocketUnknownProjectReturns404 pins I2: the Mac-side
+// /vm/propose?project=<name> handler must validate that project
+// against the registry before recording anything under its state
+// dir — unlike the softnet listener (bound per-project at start, so
+// trusted), this handler's project comes from an arbitrary query
+// param a caller could set to any name.
+func TestPropose_UnixSocketUnknownProjectReturns404(t *testing.T) {
+	cfg := identity.Prod
+	t.Setenv("HOME", t.TempDir())
+	h := handleProposeUnixSocket(cfg)
+
+	rr := postPropose(h, "/vm/propose?project=nonexistent", map[string]any{
+		"cwd":    "/x",
+		"branch": "main",
+		"reason": "",
+		"kind":   "devm.yaml",
+	})
+
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+	assert.Contains(t, rr.Body.String(), "nonexistent")
+
+	_, ok, _ := ReadLastProposal(cfg, "nonexistent")
+	assert.False(t, ok, "no metadata should be written for an unknown project")
 }
 
 func TestPropose_UnixSocketHandlerRequiresProjectParam(t *testing.T) {

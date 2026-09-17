@@ -182,6 +182,19 @@ func handleProposeUnixSocket(cfg identity.Config) http.Handler {
 			http.Error(w, "propose: project query param required", http.StatusBadRequest)
 			return
 		}
+		// The softnet listener is bound per-project at start, so its
+		// projectName is trusted — only this Unix-socket path takes an
+		// arbitrary caller-supplied project query param, so only it
+		// needs to check the project actually exists before recording
+		// a proposal under its state dir.
+		if _, err := os.Stat(stateDirForProject(cfg, projectName)); errors.Is(err, os.ErrNotExist) {
+			http.Error(w, fmt.Sprintf("propose: unknown project %q", projectName), http.StatusNotFound)
+			return
+		} else if err != nil {
+			daemonlog.Errorf("serviceapi: propose: stat state dir for %s: %v", projectName, err)
+			http.Error(w, fmt.Sprintf("propose: stat state dir: %v", err), http.StatusInternalServerError)
+			return
+		}
 		req, ok := decodeProposeBody(w, r)
 		if !ok {
 			return

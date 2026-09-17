@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,15 +17,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	reason string
-	kind   string
-)
-
 var proposeCmd = &cobra.Command{
 	Use:   "propose",
 	Short: "Signal the daemon that devm.yaml (or devm.me.yaml) has been edited and is ready for review.",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		reason, _ := cmd.Flags().GetString("reason")
+		kind, _ := cmd.Flags().GetString("kind")
 		cwd, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("propose: cwd: %w", err)
@@ -47,8 +45,8 @@ var proposeCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(proposeCmd)
-	proposeCmd.Flags().StringVar(&reason, "reason", "", "Optional human-readable reason for the change.")
-	proposeCmd.Flags().StringVar(&kind, "kind", "devm.yaml", "Which config file this proposal targets: devm.yaml or devm.me.yaml.")
+	proposeCmd.Flags().String("reason", "", "Optional human-readable reason for the change.")
+	proposeCmd.Flags().String("kind", "devm.yaml", "Which config file this proposal targets: devm.yaml or devm.me.yaml.")
 }
 
 // runMacPropose is the testable seam: uses http.DefaultClient for tests.
@@ -58,11 +56,22 @@ func runMacPropose(baseURL, cwd, reason, kind string) int {
 }
 
 // runMacProposeWithClient does the actual work with an injectable http.Client.
-// Returns: 0 on 204 success, 2 on 4xx daemon error, 1 on transport/other error.
+// Returns: 0 on 204 success, 2 on a daemon HTTP error response (4xx/5xx —
+// reached the daemon, it rejected the request), 1 on a transport error
+// (couldn't reach the daemon at all, e.g. the socket is down) or any
+// other error.
 func runMacProposeWithClient(baseURL, cwd, reason, kind string, client *http.Client) int {
 	rp, err := resolveProjectFromURLWithClient(baseURL, cwd, client)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
+		// resolveProjectFromURLWithClient wraps a transport failure
+		// (e.g. daemon socket down) as a *url.Error via %w; a daemon
+		// HTTP error response is instead a plain formatted string with
+		// no such wrapping. Only the former is a transport error.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			return 1
+		}
 		return 2
 	}
 

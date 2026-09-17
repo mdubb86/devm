@@ -72,6 +72,15 @@ func TestMacPropose_ResolveFails_Returns2(t *testing.T) {
 	assert.Equal(t, 2, code)
 }
 
+// TestMacPropose_TransportError_Returns1 pins M2's exit-code split: a
+// resolve-project call that never reaches the daemon (socket down,
+// nothing listening) must exit 1, not 2 — 2 is reserved for a daemon
+// HTTP error response, which never happened here.
+func TestMacPropose_TransportError_Returns1(t *testing.T) {
+	code := runMacPropose("http://127.0.0.1:1", "/Users/x/proj", "test", "devm.yaml")
+	assert.Equal(t, 1, code)
+}
+
 func TestMacPropose_DaemonBadRequest_Returns2(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/vm/resolve-project" {
