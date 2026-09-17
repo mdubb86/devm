@@ -25,10 +25,6 @@ var volumeLsCmd = &cobra.Command{
 	Short: "List this project's repos and volumes (name, label, kind, guest path, Mac path, size)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
 		resolved, err := resolveProjectFn()
 		if err != nil {
 			return err
@@ -40,7 +36,7 @@ var volumeLsCmd = &cobra.Command{
 		// cfg is the package-level identity.Config set by
 		// identity.Load() in main.go — resolves to identity.Prod for
 		// the shipped devm binary and identity.E2E for devm-e2e.
-		return runVolumeLs(cfg, userCfg, cwd, os.Stdout)
+		return runVolumeLs(cfg, userCfg, resolved.Cwd, os.Stdout)
 	},
 }
 

@@ -14,6 +14,7 @@ import (
 type resolveResponse struct {
 	Name     string `json:"name"`
 	StateDir string `json:"state_dir"`
+	Cwd      string `json:"cwd"`
 }
 
 func TestResolveProject_Match(t *testing.T) {
@@ -30,6 +31,27 @@ func TestResolveProject_Match(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
 	assert.Equal(t, "shelfmates", resp.Name)
 	assert.Contains(t, resp.StateDir, "shelfmates")
+	assert.Equal(t, "/Users/x/code/shelfmates", resp.Cwd)
+}
+
+// TestResolveProject_MatchWalksUpToAncestor pins I1's fix: a call from
+// a subdirectory of a registered project must return the registered
+// ancestor cwd (not the raw request cwd) so downstream CLI verbs treat
+// the project root, not the subdir, as repoRoot.
+func TestResolveProject_MatchWalksUpToAncestor(t *testing.T) {
+	cfg := identity.Prod
+	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, AddCwdAlias(cfg, "proj", "/Users/x/proj"))
+
+	req := httptest.NewRequest(http.MethodPost, "/vm/resolve-project?cwd=/Users/x/proj/subdir/deeper", nil)
+	rr := httptest.NewRecorder()
+	handleResolveProject(cfg).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
+	var resp resolveResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	assert.Equal(t, "proj", resp.Name)
+	assert.Equal(t, "/Users/x/proj", resp.Cwd)
 }
 
 func TestResolveProject_Miss404(t *testing.T) {

@@ -13,12 +13,18 @@ import (
 	"strings"
 )
 
-// ResolvedProject is what resolveProjectFromCwd returns on match:
-// the daemon's canonical project name and the state directory (under
-// which devm.yaml, devm.me.yaml, approved-snapshot/ etc. live).
+// ResolvedProject is what resolveProjectFromCwd returns on match: the
+// daemon's canonical project name, the state directory (under which
+// devm.yaml, devm.me.yaml, approved-snapshot/ etc. live), and Cwd —
+// the registered ancestor of the caller's actual cwd (which may be a
+// subdirectory of the project root). Downstream code that needs the
+// project root as a Mac-side path (mount/label resolution, template
+// rendering, secret-file resolution, etc.) must use Cwd, never a
+// fresh os.Getwd() call — the caller may be invoking from a subdir.
 type ResolvedProject struct {
 	Name     string `json:"name"`
 	StateDir string `json:"state_dir"`
+	Cwd      string `json:"cwd"`
 }
 
 // resolveProjectFn is resolveProjectFromCwd by default; tests override

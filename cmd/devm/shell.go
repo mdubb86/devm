@@ -37,10 +37,6 @@ approve gate refuses at the single point that reads devm.yaml, and
 		}
 
 		ident := cfg // capture package identity cfg before it's shadowed below
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("get cwd: %w", err)
-		}
 		resolved, err := resolveProjectFn()
 		if err != nil {
 			return err
@@ -56,8 +52,8 @@ approve gate refuses at the single point that reads devm.yaml, and
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
 
-		deps := orchestrator.DefaultShellDeps(ident, cwd)
-		rc, err := orchestrator.RunAttach(ctx, deps, pcfg.Project.Name, cwd, cmdName, cmdArgs, os.Stderr)
+		deps := orchestrator.DefaultShellDeps(ident, resolved.Cwd)
+		rc, err := orchestrator.RunAttach(ctx, deps, pcfg.Project.Name, resolved.Cwd, cmdName, cmdArgs, os.Stderr)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				fmt.Fprintln(os.Stderr, "aborted")
@@ -193,10 +189,6 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	// Past arg parsing — errors from here on are runtime, not usage.
 	cmd.SilenceUsage = true
 	ident := cfg // capture package identity cfg before it's shadowed below
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("get cwd: %w", err)
-	}
 	resolved, err := resolveProjectFn()
 	if err != nil {
 		return err
@@ -262,8 +254,8 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 		}
 	}()
 
-	deps := orchestrator.DefaultShellDeps(ident, cwd)
-	rc, err := orchestrator.RunShell(ctx, deps, cfg, cwd, cfg.Project.Name, cmdName, cmdArgs)
+	deps := orchestrator.DefaultShellDeps(ident, resolved.Cwd)
+	rc, err := orchestrator.RunShell(ctx, deps, cfg, resolved.Cwd, cfg.Project.Name, cmdName, cmdArgs)
 	if err != nil {
 		// SIGINT during cold start cancels ctx. Suppress the noisy
 		// "context canceled" stack and exit 130 (SIGINT convention).

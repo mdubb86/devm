@@ -85,9 +85,10 @@ func TestStatusAll_ClientRoundTrip(t *testing.T) {
 }
 
 // TestStatus_InvalidConfigSurfacesError: a devm.yaml that exists but
-// fails validation must error out of `devm status`, not silently fall
-// back to daemon-only mode (which prints the misleading "no devm.yaml
-// in cwd" line).
+// fails validation must error out of `devm status`, not be swallowed
+// into the no-project daemon-only status view (HasProject: false),
+// which would silently mask the invalid config behind a report on the
+// daemon alone.
 func TestStatus_InvalidConfigSurfacesError(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),

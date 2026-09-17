@@ -171,12 +171,23 @@ func writePopWorkspace(t *testing.T, projectName string) string {
 
 // stubResolveProjectFn overrides resolveProjectFn for the duration of
 // the test to bypass the daemon socket, returning name/stateDir as the
-// resolved project.
+// resolved project. Cwd defaults to stateDir — tests that need Cwd to
+// differ from stateDir (e.g. proving the subdir-invocation fix, I1)
+// should use stubResolveProjectFnWithCwd instead.
 func stubResolveProjectFn(t *testing.T, name, stateDir string) {
+	t.Helper()
+	stubResolveProjectFnWithCwd(t, name, stateDir, stateDir)
+}
+
+// stubResolveProjectFnWithCwd is stubResolveProjectFn with an
+// independently-set Cwd — the registered project-root ancestor the
+// daemon would return, which may differ from the caller's actual
+// os.Getwd() when devm is invoked from a subdirectory of the project.
+func stubResolveProjectFnWithCwd(t *testing.T, name, stateDir, cwd string) {
 	t.Helper()
 	orig := resolveProjectFn
 	resolveProjectFn = func() (ResolvedProject, error) {
-		return ResolvedProject{Name: name, StateDir: stateDir}, nil
+		return ResolvedProject{Name: name, StateDir: stateDir, Cwd: cwd}, nil
 	}
 	t.Cleanup(func() { resolveProjectFn = orig })
 }

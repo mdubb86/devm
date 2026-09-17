@@ -62,10 +62,6 @@ exit code.`,
 		}
 
 		ident := cfg // capture package identity cfg before it's shadowed below
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
 
 		var res orchestrator.StatusResult
 		switch resolved, resolveErr := resolveProjectFn(); {
@@ -80,7 +76,7 @@ exit code.`,
 				return err
 			}
 			tr := tart.New()
-			res, err = orchestrator.RunStatus(ident, cfg, tr, cwd, Fingerprint)
+			res, err = orchestrator.RunStatus(ident, cfg, tr, resolved.Cwd, Fingerprint)
 			if err != nil {
 				return err
 			}

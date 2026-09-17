@@ -32,7 +32,7 @@ func handleRegisterProject(cfg identity.Config) http.Handler {
 			return
 		}
 		// Reject if cwd is already registered under a different project.
-		if existing, ok, err := FindProjectByCwd(cfg, cwd); err != nil {
+		if existing, _, ok, err := FindProjectByCwd(cfg, cwd); err != nil {
 			http.Error(w, fmt.Sprintf("register-project: %v", err), http.StatusInternalServerError)
 			return
 		} else if ok && existing != name {

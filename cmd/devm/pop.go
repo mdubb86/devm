@@ -64,10 +64,6 @@ func runPop(cmd *cobra.Command, args []string) error {
 		return popExecOpen(append([]string{pathArg}, openArgs...)...)
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
 	resolvedProject, err := resolveProjectFn()
 	if err != nil {
 		return err
@@ -77,7 +73,7 @@ func runPop(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	resolvedPath, err := resolvePopTarget(pathArg, cwd, loaded)
+	resolvedPath, err := resolvePopTarget(pathArg, resolvedProject.Cwd, loaded)
 	if err == nil {
 		return popExecOpen(append([]string{resolvedPath}, openArgs...)...)
 	}

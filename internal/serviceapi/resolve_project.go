@@ -14,6 +14,7 @@ import (
 type resolveProjectResponse struct {
 	Name     string `json:"name"`
 	StateDir string `json:"state_dir"`
+	Cwd      string `json:"cwd"`
 }
 
 func handleResolveProject(cfg identity.Config) http.Handler {
@@ -27,7 +28,7 @@ func handleResolveProject(cfg identity.Config) http.Handler {
 			http.Error(w, "resolve-project: cwd query param required", http.StatusBadRequest)
 			return
 		}
-		name, ok, err := FindProjectByCwd(cfg, cwd)
+		name, matchedCwd, ok, err := FindProjectByCwd(cfg, cwd)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("resolve-project: scan: %v", err), http.StatusInternalServerError)
 			return
@@ -39,6 +40,7 @@ func handleResolveProject(cfg identity.Config) http.Handler {
 		resp := resolveProjectResponse{
 			Name:     name,
 			StateDir: stateDirForProject(cfg, name),
+			Cwd:      matchedCwd,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)

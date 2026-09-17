@@ -49,15 +49,17 @@ func TestCwdRegistry_FindProjectByCwd(t *testing.T) {
 	require.NoError(t, AddCwdAlias(cfg, "alpha", "/Users/x/alpha"))
 	require.NoError(t, AddCwdAlias(cfg, "beta", "/Users/x/beta"))
 
-	name, ok, err := FindProjectByCwd(cfg, "/Users/x/beta")
+	name, matchedCwd, ok, err := FindProjectByCwd(cfg, "/Users/x/beta")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, "beta", name)
+	assert.Equal(t, "/Users/x/beta", matchedCwd)
 
-	name, ok, err = FindProjectByCwd(cfg, "/Users/x/unknown")
+	name, matchedCwd, ok, err = FindProjectByCwd(cfg, "/Users/x/unknown")
 	assert.NoError(t, err)
 	assert.False(t, ok)
 	assert.Empty(t, name)
+	assert.Empty(t, matchedCwd)
 }
 
 func TestCwdRegistry_FindProjectByCwd_WalksUp(t *testing.T) {
@@ -66,20 +68,23 @@ func TestCwdRegistry_FindProjectByCwd_WalksUp(t *testing.T) {
 
 	require.NoError(t, AddCwdAlias(cfg, "proj", "/Users/x/proj"))
 
-	name, ok, err := FindProjectByCwd(cfg, "/Users/x/proj/subdir/deeper")
+	name, matchedCwd, ok, err := FindProjectByCwd(cfg, "/Users/x/proj/subdir/deeper")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, "proj", name)
+	assert.Equal(t, "/Users/x/proj", matchedCwd)
 
-	name, ok, err = FindProjectByCwd(cfg, "/Users/x/other/sub")
+	name, matchedCwd, ok, err = FindProjectByCwd(cfg, "/Users/x/other/sub")
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Empty(t, name)
+	assert.Empty(t, matchedCwd)
 
-	name, ok, err = FindProjectByCwd(cfg, "/Users/x/proj")
+	name, matchedCwd, ok, err = FindProjectByCwd(cfg, "/Users/x/proj")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, "proj", name)
+	assert.Equal(t, "/Users/x/proj", matchedCwd)
 }
 
 func TestCwdRegistry_StateDirLayout(t *testing.T) {
