@@ -55,7 +55,7 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 	// format layer silently omits the line for that case (backward
 	// compat). Any other error is reported but doesn't fail status.
 	approveCtx, approveCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	approveResp, approveErr := c.ApproveState(approveCtx, cfg.Project.Name, repoRoot)
+	approveResp, approveErr := c.ApproveState(approveCtx, cfg.Project.Name)
 	approveCancel()
 	switch {
 	case approveErr == nil:

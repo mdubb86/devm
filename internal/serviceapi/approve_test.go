@@ -17,24 +17,25 @@ import (
 )
 
 // approveTestSetup writes a project's devm.yaml (+ optional
-// devm.me.yaml) into a tempdir, sets HOME to a separate tempdir, and
-// returns (identityCfg, projectDir, snapshotStore).
-func approveTestSetup(t *testing.T, devm, me string) (identity.Config, string, *approve.Store) {
+// devm.me.yaml) into its state dir under a tempdir HOME, and returns
+// (identityCfg, stateDir, snapshotStore).
+func approveTestSetup(t *testing.T, project, devm, me string) (identity.Config, string, *approve.Store) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	projDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte(devm), 0644))
-	if me != "" {
-		require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.me.yaml"), []byte(me), 0644))
-	}
 	cfg := identity.Config{Name: "devm-test"}
-	return cfg, projDir, approve.NewStore(cfg)
+	stateDir := stateDirForProject(cfg, project)
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte(devm), 0644))
+	if me != "" {
+		require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.me.yaml"), []byte(me), 0644))
+	}
+	return cfg, stateDir, approve.NewStore(cfg)
 }
 
 func TestApproveState_NoSnapshotReportsDiverged(t *testing.T) {
-	cfg, projDir, _ := approveTestSetup(t, "project:\n  name: p\n", "")
-	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj-1&mac_cwd="+projDir, nil)
+	cfg, _, _ := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj-1", nil)
 	rr := httptest.NewRecorder()
 	handleApproveState(cfg).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -46,9 +47,9 @@ func TestApproveState_NoSnapshotReportsDiverged(t *testing.T) {
 }
 
 func TestApproveState_SnapshotEqualReportsNotDiverged(t *testing.T) {
-	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "env:\n  X: 1\n")
+	cfg, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "env:\n  X: 1\n")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), []byte("env:\n  X: 1\n"), "user"))
-	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj-1&mac_cwd="+projDir, nil)
+	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj-1", nil)
 	rr := httptest.NewRecorder()
 	handleApproveState(cfg).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -59,9 +60,9 @@ func TestApproveState_SnapshotEqualReportsNotDiverged(t *testing.T) {
 }
 
 func TestApproveState_ChangedByteReportsDiverged(t *testing.T) {
-	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p2\n", "")
+	cfg, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p2\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
-	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj-1&mac_cwd="+projDir, nil)
+	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj-1", nil)
 	rr := httptest.NewRecorder()
 	handleApproveState(cfg).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -70,23 +71,17 @@ func TestApproveState_ChangedByteReportsDiverged(t *testing.T) {
 	assert.Equal(t, true, resp["diverged"])
 }
 
-func TestApproveState_RequiresProjectAndMacCwd(t *testing.T) {
+func TestApproveState_RequiresProject(t *testing.T) {
 	cfg := identity.Config{Name: "devm-test"}
-	for _, url := range []string{
-		"/vm/approve-state",
-		"/vm/approve-state?project=x",
-		"/vm/approve-state?mac_cwd=/tmp/y",
-	} {
-		rr := httptest.NewRecorder()
-		handleApproveState(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, url, nil))
-		require.Equal(t, http.StatusBadRequest, rr.Code, "url=%s", url)
-		assert.True(t, strings.Contains(rr.Body.String(), "project") || strings.Contains(rr.Body.String(), "mac_cwd"))
-	}
+	rr := httptest.NewRecorder()
+	handleApproveState(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/vm/approve-state", nil))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.True(t, strings.Contains(rr.Body.String(), "project"))
 }
 
 func TestApprove_AdvancesSnapshotToCurrentBytes(t *testing.T) {
-	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "env:\n  X: 1\n")
-	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1&mac_cwd="+projDir, nil)
+	cfg, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "env:\n  X: 1\n")
+	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1", nil)
 	rr := httptest.NewRecorder()
 	handleApprove(cfg, nil).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNoContent, rr.Code)
@@ -99,9 +94,9 @@ func TestApprove_AdvancesSnapshotToCurrentBytes(t *testing.T) {
 }
 
 func TestApprove_UpdatesCache(t *testing.T) {
-	cfg, projDir, _ := approveTestSetup(t, "project:\n  name: p\n", "env:\n  X: 1\n")
+	cfg, _, _ := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "env:\n  X: 1\n")
 	cache := NewStateCache()
-	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1&mac_cwd="+projDir, nil)
+	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1", nil)
 	rr := httptest.NewRecorder()
 	handleApprove(cfg, cache).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNoContent, rr.Code)
@@ -116,20 +111,20 @@ func TestApprove_UpdatesCache(t *testing.T) {
 }
 
 func TestApprove_IdempotentOnAlreadyApproved(t *testing.T) {
-	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "")
+	cfg, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
-	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1&mac_cwd="+projDir, nil)
+	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1", nil)
 	rr := httptest.NewRecorder()
 	handleApprove(cfg, nil).ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusNoContent, rr.Code)
 }
 
 func TestApprove_RemovesStaleMeYAMLWhenAbsentOnMac(t *testing.T) {
-	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "")
+	cfg, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	// Prior snapshot has a me.yaml.
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), []byte("env:\n  OLD: 1\n"), "user"))
 	// Mac side does not have me.yaml. Approve must remove the old copy from the snapshot.
-	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1&mac_cwd="+projDir, nil)
+	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1", nil)
 	rr := httptest.NewRecorder()
 	handleApprove(cfg, nil).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNoContent, rr.Code)
@@ -139,7 +134,7 @@ func TestApprove_RemovesStaleMeYAMLWhenAbsentOnMac(t *testing.T) {
 	assert.Nil(t, snap.MeYAML)
 }
 
-func TestApprove_RequiresProjectAndMacCwd(t *testing.T) {
+func TestApprove_RequiresProject(t *testing.T) {
 	cfg := identity.Config{Name: "devm-test"}
 	rr := httptest.NewRecorder()
 	handleApprove(cfg, nil).ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/vm/approve", nil))
@@ -149,20 +144,20 @@ func TestApprove_RequiresProjectAndMacCwd(t *testing.T) {
 func TestApproveState_RejectsNonGET(t *testing.T) {
 	cfg := identity.Config{Name: "devm-test"}
 	rr := httptest.NewRecorder()
-	handleApproveState(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/vm/approve-state?project=x&mac_cwd=/tmp/y", nil))
+	handleApproveState(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/vm/approve-state?project=x", nil))
 	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
 }
 
 func TestApprove_RejectsNonPOST(t *testing.T) {
 	cfg := identity.Config{Name: "devm-test"}
 	rr := httptest.NewRecorder()
-	handleApprove(cfg, nil).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/vm/approve?project=x&mac_cwd=/tmp/y", nil))
+	handleApprove(cfg, nil).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/vm/approve?project=x", nil))
 	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
 }
 
 func TestBootstrapApprovedSnapshotOnFirstRun_WritesInitial(t *testing.T) {
-	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "")
-	err := bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", projDir)
+	cfg, stateDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	err := bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", stateDir)
 	require.NoError(t, err)
 	snap, ok, err := store.Read("proj-1")
 	require.NoError(t, err)
@@ -172,9 +167,9 @@ func TestBootstrapApprovedSnapshotOnFirstRun_WritesInitial(t *testing.T) {
 }
 
 func TestBootstrapApprovedSnapshotOnFirstRun_NoOpWhenSnapshotExists(t *testing.T) {
-	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p2\n", "")
+	cfg, stateDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p2\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
-	err := bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", projDir)
+	err := bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", stateDir)
 	require.NoError(t, err)
 	snap, _, err := store.Read("proj-1")
 	require.NoError(t, err)
@@ -183,20 +178,15 @@ func TestBootstrapApprovedSnapshotOnFirstRun_NoOpWhenSnapshotExists(t *testing.T
 
 func TestStart_RefusesWhenDivergedFromApproved(t *testing.T) {
 	// A snapshot exists but differs from the current devm.yaml — start must refuse.
-	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "")
+	cfg, stateDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: old\n"), nil, "user"))
-	diverged, err := isApproveDiverged(cfg, "proj-1", projDir)
+	diverged, err := isApproveDiverged(cfg, "proj-1", stateDir)
 	require.NoError(t, err)
 	assert.True(t, diverged)
 }
 
 func TestApproveState_IncludesProposalWhenPresent(t *testing.T) {
-	cfg := identity.Config{Name: "devm-test"}
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	macCwd := filepath.Join(tmp, "proj")
-	require.NoError(t, os.MkdirAll(macCwd, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte("name: p\n"), 0o644))
+	cfg, _, _ := approveTestSetup(t, "proj", "name: p\n", "")
 
 	// Seed a proposal.
 	require.NoError(t, WriteLastProposal(cfg, "proj", ProposalMetadata{
@@ -208,7 +198,7 @@ func TestApproveState_IncludesProposalWhenPresent(t *testing.T) {
 		Kind:      "devm.yaml",
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj&mac_cwd="+macCwd, nil)
+	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj", nil)
 	rr := httptest.NewRecorder()
 	handleApproveState(cfg).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -222,12 +212,7 @@ func TestApproveState_IncludesProposalWhenPresent(t *testing.T) {
 }
 
 func TestApprove_ClearsProposalOnSuccess(t *testing.T) {
-	cfg := identity.Config{Name: "devm-test"}
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	macCwd := filepath.Join(tmp, "proj")
-	require.NoError(t, os.MkdirAll(macCwd, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte("name: p\n"), 0o644))
+	cfg, _, _ := approveTestSetup(t, "proj", "name: p\n", "")
 
 	// Seed a proposal.
 	require.NoError(t, WriteLastProposal(cfg, "proj", ProposalMetadata{
@@ -238,7 +223,7 @@ func TestApprove_ClearsProposalOnSuccess(t *testing.T) {
 		Kind:      "devm.yaml",
 	}))
 
-	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj&mac_cwd="+macCwd, nil)
+	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj", nil)
 	rr := httptest.NewRecorder()
 	handleApprove(cfg, nil).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNoContent, rr.Code)

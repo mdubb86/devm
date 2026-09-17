@@ -1019,7 +1019,7 @@ func TestReconcile_PackagesBeforeApplyLive(t *testing.T) {
 
 func TestReconcile_RefusesWhenDivergedFromApproved(t *testing.T) {
 	// Setup: fake VM state, write devm.yaml, write a DIFFERENT approved snapshot.
-	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "")
+	cfg, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: old\n"), nil, "user"))
 	// Build a minimal VMReconcileRequest body.
 	body := VMReconcileRequest{
@@ -1039,7 +1039,7 @@ func TestReconcile_RefusesWhenDivergedFromApproved(t *testing.T) {
 }
 
 func TestReconcile_ProceedsWhenNotDiverged(t *testing.T) {
-	cfg, projDir, store := approveTestSetup(t, "project:\n  name: p\n", "")
+	cfg, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
 	body := VMReconcileRequest{Name: "proj-1", WorkspaceHostPath: projDir, Cfg: schema.Config{Project: schema.Project{Name: "p"}}}
 	buf, _ := json.Marshal(body)

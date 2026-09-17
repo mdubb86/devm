@@ -48,7 +48,6 @@ func TestApprove_UnchangedPrintsAlreadyApprovedAndExits(t *testing.T) {
 		daemonURL:  f.URL,
 		httpClient: f.Client(),
 		projectID:  "p",
-		macCwd:     "/tmp/x",
 		stdin:      strings.NewReader(""),
 		stdout:     &stdout,
 		stderr:     &stderr,
@@ -76,7 +75,6 @@ func TestApprove_DivergedYesAdvancesSnapshot(t *testing.T) {
 		daemonURL:  f.URL,
 		httpClient: f.Client(),
 		projectID:  "p",
-		macCwd:     "/tmp/x",
 		stdin:      strings.NewReader("y\n"),
 		stdout:     &stdout,
 		stderr:     &stderr,
@@ -98,7 +96,7 @@ func TestApprove_DivergedNoDoesNotAdvance(t *testing.T) {
 	defer f.Close()
 	var stdout, stderr bytes.Buffer
 	err := runApprove(approveOpts{
-		daemonURL: f.URL, httpClient: f.Client(), projectID: "p", macCwd: "/tmp/x",
+		daemonURL: f.URL, httpClient: f.Client(), projectID: "p",
 		stdin: strings.NewReader("n\n"), stdout: &stdout, stderr: &stderr,
 	})
 	assert.Error(t, err, "N answer must exit non-zero")
@@ -111,7 +109,7 @@ func TestApprove_DivergedEOFDoesNotAdvance(t *testing.T) {
 	defer f.Close()
 	var stdout, stderr bytes.Buffer
 	err := runApprove(approveOpts{
-		daemonURL: f.URL, httpClient: f.Client(), projectID: "p", macCwd: "/tmp/x",
+		daemonURL: f.URL, httpClient: f.Client(), projectID: "p",
 		stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr,
 	})
 	assert.Error(t, err, "EOF answer must exit non-zero")
@@ -129,7 +127,7 @@ func TestApprove_OldDaemonReturns404_SurfacesUpgradeHint(t *testing.T) {
 	defer srv.Close()
 	var stdout, stderr bytes.Buffer
 	err := runApprove(approveOpts{
-		daemonURL: srv.URL, projectID: "p", macCwd: "/tmp/x",
+		daemonURL: srv.URL, projectID: "p",
 		stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr,
 	})
 	require.Error(t, err)

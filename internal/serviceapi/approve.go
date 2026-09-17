@@ -40,18 +40,18 @@ func handleApproveState(cfg identity.Config) http.Handler {
 			return
 		}
 		project := r.URL.Query().Get("project")
-		macCwd := r.URL.Query().Get("mac_cwd")
-		if project == "" || macCwd == "" {
-			http.Error(w, "approve-state: project and mac_cwd query params required", http.StatusBadRequest)
+		if project == "" {
+			http.Error(w, "approve-state: project query param required", http.StatusBadRequest)
 			return
 		}
-		currentDevm, err := os.ReadFile(filepath.Join(macCwd, "devm.yaml"))
+		stateDir := stateDirForProject(cfg, project)
+		currentDevm, err := os.ReadFile(filepath.Join(stateDir, "devm.yaml"))
 		if err != nil {
 			http.Error(w, fmt.Sprintf("approve-state: read devm.yaml: %v", err), http.StatusInternalServerError)
 			return
 		}
 		var currentMe []byte
-		if b, err := os.ReadFile(filepath.Join(macCwd, "devm.me.yaml")); err == nil {
+		if b, err := os.ReadFile(filepath.Join(stateDir, "devm.me.yaml")); err == nil {
 			currentMe = b
 		} else if !errors.Is(err, os.ErrNotExist) {
 			http.Error(w, fmt.Sprintf("approve-state: read devm.me.yaml: %v", err), http.StatusInternalServerError)
@@ -112,18 +112,18 @@ func handleApprove(cfg identity.Config, cache *StateCache) http.Handler {
 			return
 		}
 		project := r.URL.Query().Get("project")
-		macCwd := r.URL.Query().Get("mac_cwd")
-		if project == "" || macCwd == "" {
-			http.Error(w, "approve: project and mac_cwd query params required", http.StatusBadRequest)
+		if project == "" {
+			http.Error(w, "approve: project query param required", http.StatusBadRequest)
 			return
 		}
-		currentDevm, err := os.ReadFile(filepath.Join(macCwd, "devm.yaml"))
+		stateDir := stateDirForProject(cfg, project)
+		currentDevm, err := os.ReadFile(filepath.Join(stateDir, "devm.yaml"))
 		if err != nil {
 			http.Error(w, fmt.Sprintf("approve: read devm.yaml: %v", err), http.StatusInternalServerError)
 			return
 		}
 		var currentMe []byte
-		if b, err := os.ReadFile(filepath.Join(macCwd, "devm.me.yaml")); err == nil {
+		if b, err := os.ReadFile(filepath.Join(stateDir, "devm.me.yaml")); err == nil {
 			currentMe = b
 		} else if !errors.Is(err, os.ErrNotExist) {
 			http.Error(w, fmt.Sprintf("approve: read devm.me.yaml: %v", err), http.StatusInternalServerError)

@@ -744,8 +744,9 @@ func TestClientApproveState_Diverged(t *testing.T) {
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
 
-	macCwd := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
+	stateDir := stateDirForProject(identity.Prod, "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"),
 		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
 
 	logDir := t.TempDir()
@@ -760,7 +761,7 @@ func TestClientApproveState_Diverged(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	resp, err := c.ApproveState(ctx, "p", macCwd)
+	resp, err := c.ApproveState(ctx, "p")
 	require.NoError(t, err)
 	assert.True(t, resp.Diverged)
 	require.NotNil(t, resp.ApprovedSince)
@@ -777,8 +778,9 @@ func TestClientApproveState_UpToDate(t *testing.T) {
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", contents, nil, "user"))
 
-	macCwd := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), contents, 0644))
+	stateDir := stateDirForProject(identity.Prod, "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), contents, 0644))
 
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
@@ -792,7 +794,7 @@ func TestClientApproveState_UpToDate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	resp, err := c.ApproveState(ctx, "p", macCwd)
+	resp, err := c.ApproveState(ctx, "p")
 	require.NoError(t, err)
 	assert.False(t, resp.Diverged)
 }
@@ -826,7 +828,7 @@ func TestClientApproveState_Unsupported(t *testing.T) {
 	require.FileExists(t, sock)
 
 	c := NewClientWithSocket(sock)
-	_, err = c.ApproveState(context.Background(), "p", "/tmp/x")
+	_, err = c.ApproveState(context.Background(), "p")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrApproveStateUnsupported)
 }
