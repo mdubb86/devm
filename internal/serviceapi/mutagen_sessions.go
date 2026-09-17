@@ -432,6 +432,10 @@ func SetupVolumesPhase(
 			return fmt.Errorf("mutagen setup %s: create session: %w", e.Label, err)
 		}
 	}
+
+	if err := SetupConfigSync(ctx, cli, cfg, projectID); err != nil {
+		return fmt.Errorf("setup config sync: %w", err)
+	}
 	return nil
 }
 
@@ -440,6 +444,10 @@ func SetupVolumesPhase(
 // not block the others — mutagen's own journal handles a crash
 // mid-flush on the next resume.
 func StopPhase(cli *mutagen.CLI, projectID string) error {
+	if err := StopConfigSync(context.Background(), cli, projectID); err != nil {
+		daemonlog.Errorf("stop config sync: %v", err)
+	}
+
 	sessions, err := cli.SyncList(SessionNamePrefix(projectID))
 	if err != nil {
 		return fmt.Errorf("mutagen stop %s: list sessions: %w", projectID, err)

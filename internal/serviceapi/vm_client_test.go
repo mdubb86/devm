@@ -663,13 +663,18 @@ func TestClientEndProvisioning_NoSoftnetStateRequired(t *testing.T) {
 
 // TestClientVolumeSync_NoEntities_Succeeds verifies POST /vm/volume-sync
 // succeeds (204) for a project config with no repos or volumes —
-// SetupVolumesPhase's entity loop no-ops, so the handler never needs a
-// live mutagen daemon or guest to reach. mutagenEnsureFn is still faked
-// (the handler resolves the binary path unconditionally) so the test
-// never touches a real runtime dir.
+// SetupVolumesPhase's entity loop no-ops, but SetupConfigSync still
+// runs unconditionally (every project gets a config-sync session
+// regardless of entities), so mutagenEnsureFn must resolve to a binary
+// that answers `sync list`/`sync create` rather than a nonexistent path.
 func TestClientVolumeSync_NoEntities_Succeeds(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // SetupConfigSync now writes under cfg.RuntimeDir() unconditionally
+
 	origEnsure := mutagenEnsureFn
-	mutagenEnsureFn = func(string) (string, error) { return "/fake/bin/mutagen", nil }
+	bin := filepath.Join(t.TempDir(), "mutagen")
+	script := "#!/bin/sh\ncase \"$1 $2\" in\n  \"sync list\") echo '[]' ;;\n  \"sync create\") echo 'Created session sess-fake' ;;\nesac\nexit 0\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	mutagenEnsureFn = func(string) (string, error) { return bin, nil }
 	t.Cleanup(func() { mutagenEnsureFn = origEnsure })
 
 	logDir := t.TempDir()

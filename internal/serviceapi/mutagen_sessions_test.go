@@ -265,6 +265,22 @@ func scriptedGuestExec(guestEmpty bool) GuestExec {
 	}
 }
 
+// findCreateArgs returns the sync-create args slice whose --name value
+// is name, or nil if no such call happened. SetupVolumesPhase now
+// always creates a project-level config-sync session alongside any
+// per-entity sessions, so tests asserting on a specific entity's
+// create call need to pick it out of a create list with 1+ entries.
+func findCreateArgs(calls [][]string, name string) []string {
+	for _, args := range calls {
+		for i, a := range args {
+			if a == "--name" && i+1 < len(args) && args[i+1] == name {
+				return args
+			}
+		}
+	}
+	return nil
+}
+
 func testSessionsIdentity(t *testing.T) identity.Config {
 	t.Helper()
 	tmp := t.TempDir()
@@ -292,11 +308,11 @@ func TestSetupPhases_ColdStartClonesThenCreates(t *testing.T) {
 	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
 
-	require.Len(t, sc.createArgs, 1)
-	args := sc.createArgs[0]
-	assert.Contains(t, args, "--name")
-	assert.Contains(t, args, "devm-myproj-app")
+	require.Len(t, sc.createArgs, 2, "one for the app entity, one for the project's config-sync session")
+	args := findCreateArgs(sc.createArgs, "devm-myproj-app")
+	require.NotNil(t, args, "app entity session must be created")
 	assert.Contains(t, args, "devm@myproj.test:/home/devm/app")
+	assert.NotNil(t, findCreateArgs(sc.createArgs, ConfigSyncSessionName("myproj")), "config-sync session must be created too")
 }
 
 func TestSetupVolumesPhase_WarmStartResumesPausedSession(t *testing.T) {
@@ -328,7 +344,9 @@ func TestSetupVolumesPhase_WarmStartResumesPausedSession(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"sess-1"}, sc.resumeCalls)
-	assert.Empty(t, sc.createArgs, "warm resume must not regenerate config or create a session")
+	require.Len(t, sc.createArgs, 1, "the entity session must not be regenerated, but the project's config-sync session still gets created")
+	assert.Nil(t, findCreateArgs(sc.createArgs, "devm-myproj-app"), "warm-attached entity session must not be recreated")
+	assert.NotNil(t, findCreateArgs(sc.createArgs, ConfigSyncSessionName("myproj")))
 }
 
 // TestSetupPhases_WarmAttachRepoDoesNotCloneAgain locks in the safety
@@ -383,7 +401,8 @@ func TestSetupPhases_WarmAttachRepoDoesNotCloneAgain(t *testing.T) {
 	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
 
-	assert.Empty(t, sc.createArgs, "warm-attached session must not be recreated")
+	assert.Nil(t, findCreateArgs(sc.createArgs, "devm-myproj-app"), "warm-attached session must not be recreated")
+	assert.NotNil(t, findCreateArgs(sc.createArgs, ConfigSyncSessionName("myproj")), "config-sync session still gets created unconditionally")
 	assert.Empty(t, sc.resumeCalls, "an already-active (non-paused) session must not be resumed")
 	assert.Empty(t, cloneCalls, "warm-attach composition must short-circuit the clone seam when both sides are non-empty")
 }
@@ -454,7 +473,7 @@ func TestSetupPhases_AlignedContentCreatesSession(t *testing.T) {
 	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, guestExec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
 
-	require.Len(t, sc.createArgs, 1)
+	require.Len(t, sc.createArgs, 2, "one for the app entity, one for the project's config-sync session")
 }
 
 func TestSetupVolumesPhase_DivergentGuardRejects(t *testing.T) {
@@ -522,7 +541,8 @@ func TestSetupPhases_NoMirrorEntity_ClonesButNoSession(t *testing.T) {
 
 	require.Len(t, cloneScripts, 1, "cold-start clone must run for a NoMirror entity")
 	assert.Contains(t, cloneScripts[0], "git@github.com:me/data.git")
-	assert.Empty(t, sc.createArgs, "mutagen sync create must never be called for a NoMirror entity")
+	assert.Nil(t, findCreateArgs(sc.createArgs, "devm-myproj-data"), "mutagen sync create must never be called for a NoMirror entity")
+	assert.NotNil(t, findCreateArgs(sc.createArgs, ConfigSyncSessionName("myproj")), "the project's config-sync session is unaffected by NoMirror entities")
 	assert.Empty(t, sc.resumeCalls, "mutagen sync resume must never be called for a NoMirror entity")
 
 	// No Mac mirror dir should have been created for a NoMirror entity.
@@ -564,7 +584,8 @@ func TestSetupReposPhase_NoMirrorEntity_AlreadyClonedSkipsClone(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Empty(t, cloneScripts, "an already-populated guest dir must not be re-cloned")
-	assert.Empty(t, sc.createArgs)
+	assert.Nil(t, findCreateArgs(sc.createArgs, "devm-myproj-data"))
+	assert.NotNil(t, findCreateArgs(sc.createArgs, ConfigSyncSessionName("myproj")))
 }
 
 // TestSetupReposPhase_ClonesOnlyEmptyRepos exercises SetupReposPhase in
@@ -686,7 +707,8 @@ func TestSetupVolumesPhase_UniformSessionSetup(t *testing.T) {
 	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, scriptedGuestExec(true), "myproj.test")
 	require.NoError(t, err)
 
-	assert.Len(t, sc.createArgs, 3, "sessions created for all entities including repos")
+	assert.Len(t, sc.createArgs, 4, "sessions created for all entities including repos, plus the project's config-sync session")
+	assert.NotNil(t, findCreateArgs(sc.createArgs, ConfigSyncSessionName("myproj")))
 }
 
 // ---------- StopPhase / TeardownPhase ----------
