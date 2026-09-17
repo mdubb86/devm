@@ -26,7 +26,7 @@ type fakeGroundTruth struct {
 
 	TartListFn func(ctx context.Context) ([]tart.VM, error)
 
-	ApproveHashFn  func(macCwd string) (string, string, error)
+	ApproveHashFn  func(projectID string) (string, string, error)
 	ReadSnapshotFn func(projectID string) (string, string, *time.Time, bool, error)
 
 	PopSummaryFn func(projectID string) PopSessionSummary
@@ -71,11 +71,11 @@ func (f *fakeGroundTruth) TartList(ctx context.Context) ([]tart.VM, error) {
 	return f.TartListFn(ctx)
 }
 
-func (f *fakeGroundTruth) ApproveHash(macCwd string) (string, string, error) {
+func (f *fakeGroundTruth) ApproveHash(projectID string) (string, string, error) {
 	if f.ApproveHashFn == nil {
 		panic("fake: ApproveHashFn not set")
 	}
-	return f.ApproveHashFn(macCwd)
+	return f.ApproveHashFn(projectID)
 }
 
 func (f *fakeGroundTruth) ReadApprovedSnapshot(projectID string) (string, string, *time.Time, bool, error) {

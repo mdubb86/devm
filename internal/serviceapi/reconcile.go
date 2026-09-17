@@ -121,7 +121,9 @@ func reconcileHandler(cfg identity.Config, locks *ProjectLocks, apply ApplyLiver
 		}
 
 		// Approve-gate check: refuse if diverged from approved snapshot.
-		if diverged, err := isApproveDiverged(cfg, req.Name, req.WorkspaceHostPath); err != nil {
+		// devm.yaml lives in the project's state dir, not
+		// WorkspaceHostPath (the repo checkout reconcile operates on).
+		if diverged, err := isApproveDiverged(cfg, req.Name, stateDirForProject(cfg, req.Name)); err != nil {
 			http.Error(w, fmt.Sprintf("approve check: %v", err), http.StatusInternalServerError)
 			return
 		} else if diverged {

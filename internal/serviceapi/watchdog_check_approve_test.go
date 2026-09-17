@@ -23,8 +23,8 @@ func TestApproveCheck_NoDrift_TouchesReconciled(t *testing.T) {
 	})
 	fake := &fakeGroundTruth{
 		Projects: []string{"p"},
-		ApproveHashFn: func(macCwd string) (string, string, error) {
-			assert.Equal(t, "/mac/p", macCwd)
+		ApproveHashFn: func(projectID string) (string, string, error) {
+			assert.Equal(t, "p", projectID)
 			return "a", "b", nil
 		},
 		ReadSnapshotFn: func(projectID string) (string, string, *time.Time, bool, error) {
@@ -52,7 +52,7 @@ func TestApproveCheck_CurrentFileChanged_CacheReconciles(t *testing.T) {
 	})
 	fake := &fakeGroundTruth{
 		Projects: []string{"p"},
-		ApproveHashFn: func(macCwd string) (string, string, error) {
+		ApproveHashFn: func(projectID string) (string, string, error) {
 			// devm.yaml edited on disk since the cache last saw it.
 			return "b", "", nil
 		},
@@ -78,7 +78,7 @@ func TestApproveCheck_EmptyMacCwd_Skipped(t *testing.T) {
 	cache.SetApproveState("p", ApproveStateSummary{Diverged: true, CurrentDevmSHA: "x"})
 	fake := &fakeGroundTruth{
 		Projects: []string{"p"},
-		ApproveHashFn: func(macCwd string) (string, string, error) {
+		ApproveHashFn: func(projectID string) (string, string, error) {
 			t.Fatalf("ApproveHash must not be called when mac_cwd is empty")
 			return "", "", nil
 		},

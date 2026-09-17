@@ -506,12 +506,13 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			}
 		}
 
-		if err := bootstrapApprovedSnapshotOnFirstRun(cfg, req.Name, req.MacCwd); err != nil {
+		configDir := stateDirForProject(cfg, req.Name)
+		if err := bootstrapApprovedSnapshotOnFirstRun(cfg, req.Name, configDir); err != nil {
 			http.Error(w, fmt.Sprintf("bootstrap approve snapshot: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		if diverged, err := isApproveDiverged(cfg, req.Name, req.MacCwd); err != nil {
+		if diverged, err := isApproveDiverged(cfg, req.Name, configDir); err != nil {
 			http.Error(w, fmt.Sprintf("approve check: %v", err), http.StatusInternalServerError)
 			return
 		} else if diverged {

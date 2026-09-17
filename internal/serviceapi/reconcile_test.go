@@ -26,7 +26,9 @@ import (
 
 // setupProjectDirWithDevm creates a temporary directory with devm.yaml
 // and optional devm.me.yaml, and approves the snapshot. Used by tests
-// that use WorkspaceHostPath in the reconcile request.
+// that use WorkspaceHostPath in the reconcile request. The approve
+// gate itself reads devm.yaml from the project's state dir (not
+// WorkspaceHostPath), so the same content is also seeded there.
 func setupProjectDirWithDevm(t *testing.T, projectID string, devmContent string, meContent string) (string, *approve.Store) {
 	t.Helper()
 	projDir := t.TempDir()
@@ -36,6 +38,14 @@ func setupProjectDirWithDevm(t *testing.T, projectID string, devmContent string,
 		meBytes = []byte(meContent)
 		require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.me.yaml"), meBytes, 0644))
 	}
+
+	stateDir := stateDirForProject(identity.Prod, projectID)
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte(devmContent), 0644))
+	if meBytes != nil {
+		require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.me.yaml"), meBytes, 0644))
+	}
+
 	// Approve the snapshot so the gate check passes.
 	// Pass nil (not empty bytes) for meYAML when there's no devm.me.yaml.
 	store := approve.NewStore(identity.Prod)

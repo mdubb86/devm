@@ -11,17 +11,17 @@ import (
 )
 
 // HashCurrentFilesForWatchdog reads devm.yaml + devm.me.yaml from
-// macCwd and returns their canonical hashes, for the watchdog's
-// approve-state check. devm.me.yaml is optional — its absence hashes
-// as approve.HashFile(nil), same as every other approve-gate read
-// path.
-func HashCurrentFilesForWatchdog(macCwd string) (currentDevmSHA, currentMeSHA string, err error) {
-	currentDevm, err := os.ReadFile(filepath.Join(macCwd, "devm.yaml"))
+// configDir (the project's state dir) and returns their canonical
+// hashes, for the watchdog's approve-state check. devm.me.yaml is
+// optional — its absence hashes as approve.HashFile(nil), same as
+// every other approve-gate read path.
+func HashCurrentFilesForWatchdog(configDir string) (currentDevmSHA, currentMeSHA string, err error) {
+	currentDevm, err := os.ReadFile(filepath.Join(configDir, "devm.yaml"))
 	if err != nil {
 		return "", "", err
 	}
 	var currentMe []byte
-	if b, err := os.ReadFile(filepath.Join(macCwd, "devm.me.yaml")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(configDir, "devm.me.yaml")); err == nil {
 		currentMe = b
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", "", err

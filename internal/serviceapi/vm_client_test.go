@@ -142,9 +142,12 @@ func TestClientStartVM_ApproveRequired(t *testing.T) {
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
 
-	macCwd := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
+	stateDir := stateDirForProject(identity.Prod, "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"),
 		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
+
+	macCwd := t.TempDir()
 
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
@@ -340,9 +343,14 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
-	// Create and approve project directory for the approve gate.
+	// Create and approve project directory for the approve gate. The
+	// approve-gate check reads devm.yaml from the project's state dir,
+	// not WorkspaceHostPath — projDir below is the separate workspace
+	// path the rest of reconcile operates on.
 	projDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
+	stateDir := stateDirForProject(identity.Prod, "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
 
@@ -400,8 +408,12 @@ func TestClientReconcile_ApproveRequired(t *testing.T) {
 
 	// No approve.Store snapshot written for "p" — isApproveDiverged
 	// treats a missing snapshot as diverged, so the daemon refuses.
+	// The approve-gate check reads devm.yaml from the project's state
+	// dir; projDir is the separate workspace path reconcile itself uses.
 	projDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
+	stateDir := stateDirForProject(identity.Prod, "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
 
 	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
 	require.NoError(t, err)
