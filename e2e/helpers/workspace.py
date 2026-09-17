@@ -5,6 +5,7 @@ devm.yaml. The Workspace knows how to write a minimal config and
 how to patch named sections without breaking YAML.
 """
 from __future__ import annotations
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -21,15 +22,18 @@ E2E_FIXTURE_REPO_URL = "https://github.com/octocat/Hello-World.git"
 
 
 class Workspace:
-    def __init__(self, path: Path, slug: str, vm_name: str, port_offset: int = 51000):
+    def __init__(self, path: Path, slug: str, vm_name: str, port_offset: int = 51000, devm_path: str | None = None):
         self.path = Path(path)
         self.slug = slug
         self.vm_name = vm_name
         self.port_offset = port_offset
 
+        if devm_path:
+            subprocess.run([devm_path, "init", self.vm_name], cwd=str(self.path), check=True)
+
     @property
     def devmyaml_path(self) -> Path:
-        return self.path / "devm.yaml"
+        return Path.home() / "Library" / "Application Support" / "devm-e2e" / self.vm_name / "devm.yaml"
 
     def bare_repo_url(self) -> str:
         """Return the URL of the shared public remote every test's default
@@ -49,10 +53,10 @@ class Workspace:
         return "Hello-World"
 
     def teardown(self) -> None:
-        """Present for symmetry with fixtures that manage per-workspace
-        resources; no-op today.
-        """
-        return None
+        """Clean up daemon state directory for this workspace."""
+        state_dir = Path.home() / "Library" / "Application Support" / "devm-e2e" / self.vm_name
+        if state_dir.exists():
+            shutil.rmtree(state_dir, ignore_errors=True)
 
     def volume_path(self, name: str | None = None) -> Path:
         """Return the Mac-side volume storage path for a project volume.
@@ -118,14 +122,18 @@ class Workspace:
             cfg["network"] = {"allow": ["github.com"]}
         for k, v in sections.items():
             cfg[k] = v
-        self.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+        yaml_path = self.devmyaml_path
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        yaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
     def patch_devmyaml(self, **sections: Any) -> None:
         """Update named top-level sections in the existing devm.yaml."""
-        cfg = yaml.safe_load(self.devmyaml_path.read_text()) or {}
+        yaml_path = self.devmyaml_path
+        cfg = yaml.safe_load(yaml_path.read_text()) or {}
         for k, v in sections.items():
             cfg[k] = v
-        self.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        yaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
     def proxy_log_path(self) -> Path:
         """Mac-side path to this project's iron-proxy audit log under the
@@ -152,7 +160,9 @@ class Workspace:
         on every call.
         """
         import yaml
-        cfg = yaml.safe_load(self.devmyaml_path.read_text()) or {}
+        yaml_path = self.devmyaml_path
+        cfg = yaml.safe_load(yaml_path.read_text()) or {}
         services = cfg.setdefault("services", {})
         services[name] = {"exec": exec, "restart": restart, **extra}
-        self.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        yaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
