@@ -35,6 +35,10 @@ class Workspace:
     def devmyaml_path(self) -> Path:
         return Path.home() / "Library" / "Application Support" / "devm-e2e" / self.vm_name / "devm.yaml"
 
+    @property
+    def devmmeyaml_path(self) -> Path:
+        return Path.home() / "Library" / "Application Support" / "devm-e2e" / self.vm_name / "devm.me.yaml"
+
     def bare_repo_url(self) -> str:
         """Return the URL of the shared public remote every test's default
         `repos.main` points at. Guest clones it through iron-proxy's
