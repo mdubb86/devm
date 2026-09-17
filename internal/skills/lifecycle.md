@@ -21,7 +21,9 @@ description: devm VM lifecycle commands — shell, start, reconcile, stop, teard
 | `devm validate` | Lint `devm.yaml` (and `devm.me.yaml` if present) without touching the VM. |
 | `devm pop mac <path-or-url>` | Open a Mac-native file with its default app; refuses paths that resolve into a devm-managed volume. An `http://` / `https://` URL routes straight to the default browser. Out-of-mirror paths get a live-sync session (see `devm status` for count). |
 | `devm pop vm <path-or-url>` | Open a file from the project's guest workspace with its default app on the Mac, translating it to its Mac-side volume storage location. An `http://` / `https://` URL routes straight to the default browser. Out-of-mirror paths get a live-sync session (see `devm status` for count). |
-| `/opt/devm/bin/propose` | Guest → Mac channel for devm.yaml edits. Writes the file on the Mac side; approve gate fires as normal. |
+| `devm init <name>` | Register the current directory as a devm project. Creates the per-project state directory and seed devm.yaml. |
+| `devm propose` | Signal that devm.yaml (or --kind devm.me.yaml) has been edited and is ready for review. |
+| `/opt/devm/bin/propose` | Guest-side signal-only endpoint. Same signal as `devm propose` — bytes reach the Mac via sync. |
 
 `devm pop` — test/tuning overrides (read once at daemon start):
 

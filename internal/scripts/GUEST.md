@@ -67,23 +67,23 @@ something breaks.
   and have the Mac user pull.
 - Read your own logs: `journalctl -u <svc>`, `/var/log/…`, etc.
 
-## Propose a devm.yaml change
+## devm.yaml lives on the Mac; you edit /home/devm/devm.yaml
 
-The guest can propose an edit to the project's `devm.yaml` without
-going through git. From inside the guest:
+The devm.yaml this VM runs against lives on the Mac, not in your repo.
+It's synced bidirectionally to `/home/devm/devm.yaml`; edit that file
+and your change reaches the Mac automatically.
 
-    /opt/devm/bin/propose [--reason "why"] path/to/new-devm.yaml
-    # or: cat new-devm.yaml | /opt/devm/bin/propose --reason "why"
+When you're done editing, tell the daemon it's ready for review:
 
-The Mac daemon validates the YAML, writes it into the project
-directory, and records the guest's attribution (branch, reason,
-cwd). The approve gate then fires on the next `devm reconcile` or
-`devm start` — running `devm approve` (in the terminal or from the
-menu-bar) advances the snapshot and clears the pending proposal.
+    /opt/devm/bin/propose --reason "add postgres for feature-X"
 
-A pre-commit hook in this repo refuses `git commit devm.yaml`
-directly — the intended path for guest-side edits is `propose`.
-`git commit --no-verify` bypasses the hook.
+That records your attribution (branch, cwd, reason) as pending. The
+human approves via `devm approve` or the menu bar; `devm reconcile`
+then applies your change.
+
+devm.me.yaml works the same way; pass `--kind devm.me.yaml`.
+
+No commits, no push/pull. The file is not in your repo.
 
 ## Lifecycle — what you CANNOT do
 
