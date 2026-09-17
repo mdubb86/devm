@@ -882,3 +882,25 @@ func TestTeardownPhase_TerminateAll(t *testing.T) {
 
 	assert.ElementsMatch(t, []string{"s1", "s2", "s3"}, sc.terminateCall)
 }
+
+// TestTeardownPhase_TerminatesConfigSyncSession locks in that
+// `devm stop --destroy` cleans up the project's dedicated config-sync
+// session too — its name ("devm-config-<projectID>") does not share
+// the "devm-<projectID>-" prefix every other per-entity session does,
+// so TeardownPhase must terminate it via a separate StopConfigSync
+// call rather than picking it up in the SessionNamePrefix-filtered
+// list.
+func TestTeardownPhase_TerminatesConfigSyncSession(t *testing.T) {
+	sc := &scriptedCLI{
+		listSessions: []mutagen.SyncSession{
+			{ID: "s1", Name: "devm-myproj-app", Status: "watching"},
+			{ID: "cfg1", Name: "devm-config-myproj", Status: "watching"},
+		},
+	}
+	cli := sc.build()
+
+	err := TeardownPhase(cli, "myproj")
+	require.NoError(t, err)
+
+	assert.ElementsMatch(t, []string{"s1", "cfg1"}, sc.terminateCall)
+}

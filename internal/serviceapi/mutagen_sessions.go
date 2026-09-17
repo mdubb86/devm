@@ -497,6 +497,10 @@ func FlushAll(cli *mutagen.CLI, projectID string) error {
 // TeardownPhase permanently terminates every mutagen session belonging
 // to projectID, best-effort.
 func TeardownPhase(cli *mutagen.CLI, projectID string) error {
+	if err := StopConfigSync(context.Background(), cli, projectID); err != nil {
+		daemonlog.Errorf("mutagen teardown %s: terminate config sync: %v", projectID, err)
+	}
+
 	sessions, err := cli.SyncList(SessionNamePrefix(projectID))
 	if err != nil {
 		return fmt.Errorf("mutagen teardown %s: list sessions: %w", projectID, err)
