@@ -1229,6 +1229,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 	})
 
 	s.mux.Handle("/vm/resolve-project", handleResolveProject(cfg))
+	s.mux.Handle("/vm/register-project", handleRegisterProject(cfg))
 
 	// /denials — read-only view of policy-authority allow-list rejects
 	// for a project. Sorted by count desc. Empty array is a normal state
