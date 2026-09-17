@@ -71,17 +71,26 @@ func recordProposal(cfg identity.Config, projectName string, req proposeRequest)
 	// into devm.yaml) — nothing to validate against.
 	configPath := filepath.Join(stateDirForProject(cfg, projectName), req.Kind)
 	onDisk, readErr := os.ReadFile(configPath)
-	if readErr == nil && req.Kind == "devm.yaml" {
-		if verr := schema.CheckUnknownKeys(onDisk); verr != nil {
-			return http.StatusBadRequest, fmt.Sprintf("propose: yaml: %v", verr), nil
+	switch {
+	case readErr == nil:
+		if req.Kind == "devm.yaml" {
+			if verr := schema.CheckUnknownKeys(onDisk); verr != nil {
+				return http.StatusBadRequest, fmt.Sprintf("propose: yaml: %v", verr), nil
+			}
+			var parsed schema.Config
+			if verr := yamlDecodeStrict(onDisk, &parsed); verr != nil {
+				return http.StatusBadRequest, fmt.Sprintf("propose: yaml parse: %v", verr), nil
+			}
+			if verr := parsed.Validate(); verr != nil {
+				return http.StatusBadRequest, fmt.Sprintf("propose: yaml validate: %v", verr), nil
+			}
 		}
-		var parsed schema.Config
-		if verr := yamlDecodeStrict(onDisk, &parsed); verr != nil {
-			return http.StatusBadRequest, fmt.Sprintf("propose: yaml parse: %v", verr), nil
-		}
-		if verr := parsed.Validate(); verr != nil {
-			return http.StatusBadRequest, fmt.Sprintf("propose: yaml validate: %v", verr), nil
-		}
+	case errors.Is(readErr, os.ErrNotExist):
+		// No on-disk file yet — sync may not have landed it. Validation
+		// is skipped; metadata still records the signal.
+	default:
+		return http.StatusInternalServerError, fmt.Sprintf("propose: read on-disk file: %v", readErr),
+			fmt.Errorf("propose: read on-disk %s for %s: %w", req.Kind, projectName, readErr)
 	}
 
 	source := req.Source

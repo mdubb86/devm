@@ -170,6 +170,54 @@ func TestPropose_InvalidOnDiskFileRejects(t *testing.T) {
 	assert.False(t, ok, "no metadata should be written when on-disk validation fails")
 }
 
+// invalidPartialMeYAML would fail schema.Config.Validate if it were
+// ever run against it (unknown top-level key, no project.name) — it
+// exists to prove the devm.me.yaml branch skips validation rather than
+// happening to pass it.
+const invalidPartialMeYAML = "not_a_real_top_level_key: true\n"
+
+func TestPropose_MeYamlAcceptedWithoutValidation(t *testing.T) {
+	h, cfg := buildProposeHandler(t)
+	writeStateDirFile(t, cfg, "devm.me.yaml", invalidPartialMeYAML)
+
+	rr := postPropose(h, "/propose", map[string]any{
+		"cwd":    "/x",
+		"branch": "main",
+		"reason": "me override",
+		"kind":   "devm.me.yaml",
+	})
+
+	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+
+	meta, ok, err := ReadLastProposal(cfg, "proj")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "devm.me.yaml", meta.Kind)
+}
+
+// TestPropose_UnreadableOnDiskFileReturns500 pins that a read failure
+// other than "file does not exist" is a loud 500, not a silently
+// skipped validation. A directory in place of the expected file
+// reproduces an EISDIR read error portably (no permission-mode /
+// root-user flakiness).
+func TestPropose_UnreadableOnDiskFileReturns500(t *testing.T) {
+	h, cfg := buildProposeHandler(t)
+	dir := stateDirForProject(cfg, "proj")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "devm.yaml"), 0o755))
+
+	rr := postPropose(h, "/propose", map[string]any{
+		"cwd":    "/x",
+		"branch": "main",
+		"reason": "",
+		"kind":   "devm.yaml",
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	_, ok, _ := ReadLastProposal(cfg, "proj")
+	assert.False(t, ok, "no metadata should be written when the on-disk read fails")
+}
+
 func TestPropose_SourceDefaultsToGuestWhenEmpty(t *testing.T) {
 	h, cfg := buildProposeHandler(t)
 
