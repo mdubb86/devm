@@ -10,7 +10,6 @@ import (
 
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/schema"
 
 	"github.com/spf13/cobra"
@@ -30,18 +29,18 @@ var volumeLsCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		repoRoot, err := repohelpers.FindDevmYAML(cwd)
+		resolved, err := resolveProjectFn()
 		if err != nil {
 			return err
 		}
-		userCfg, err := config.Load(repoRoot)
+		userCfg, err := config.Load(resolved.StateDir)
 		if err != nil {
 			return fmt.Errorf("locate devm.yaml: %w (run `devm volume ls` from a project root)", err)
 		}
 		// cfg is the package-level identity.Config set by
 		// identity.Load() in main.go — resolves to identity.Prod for
 		// the shipped devm binary and identity.E2E for devm-e2e.
-		return runVolumeLs(cfg, userCfg, repoRoot, os.Stdout)
+		return runVolumeLs(cfg, userCfg, cwd, os.Stdout)
 	},
 }
 

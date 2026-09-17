@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mdubb86/devm/internal/config"
-	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
@@ -32,15 +31,11 @@ failing to reach an upstream.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below
-		cwd, err := os.Getwd()
+		resolved, err := resolveProjectFn()
 		if err != nil {
 			return err
 		}
-		repoRoot, err := repohelpers.FindDevmYAML(cwd)
-		if err != nil {
-			return err
-		}
-		cfg, err := config.Load(repoRoot)
+		cfg, err := config.Load(resolved.StateDir)
 		if err != nil {
 			return err
 		}

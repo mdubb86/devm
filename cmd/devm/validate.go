@@ -2,10 +2,8 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/mdubb86/devm/internal/config"
-	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/spf13/cobra"
 )
 
@@ -15,15 +13,11 @@ var validateCmd = &cobra.Command{
 	Long:  `Validate devm.yaml (and devm.me.yaml if present) against the schema.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		wd, err := os.Getwd()
+		resolved, err := resolveProjectFn()
 		if err != nil {
 			return err
 		}
-		repoRoot, err := repohelpers.FindDevmYAML(wd)
-		if err != nil {
-			return err
-		}
-		cfg, err := config.Load(repoRoot)
+		cfg, err := config.Load(resolved.StateDir)
 		if err != nil {
 			return err
 		}

@@ -94,6 +94,7 @@ func TestStatus_InvalidConfigSurfacesError(t *testing.T) {
 		[]byte("project:\n  name: p\n  vm_name: legacy\n"), 0o644))
 	t.Chdir(dir)
 	t.Setenv("HOME", t.TempDir())
+	stubResolveProjectFn(t, "p", dir)
 
 	statusCmd.SetContext(context.Background())
 	err := statusCmd.RunE(statusCmd, nil)

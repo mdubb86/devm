@@ -21,6 +21,10 @@ type ResolvedProject struct {
 	StateDir string `json:"state_dir"`
 }
 
+// resolveProjectFn is resolveProjectFromCwd by default; tests override
+// it to inject a fake resolver and bypass the daemon socket.
+var resolveProjectFn = resolveProjectFromCwd
+
 // resolveProjectFromCwd POSTs os.Getwd() to /vm/resolve-project and
 // returns the daemon's answer. On 404, returns an error whose message
 // is the daemon's response body (containing the `devm init` hint).

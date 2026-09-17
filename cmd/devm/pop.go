@@ -11,7 +11,6 @@ import (
 
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
@@ -69,18 +68,18 @@ func runPop(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	repoRoot, err := repohelpers.FindDevmYAML(cwd)
+	resolvedProject, err := resolveProjectFn()
 	if err != nil {
 		return err
 	}
-	loaded, err := config.Load(repoRoot)
+	loaded, err := config.Load(resolvedProject.StateDir)
 	if err != nil {
 		return err
 	}
 
-	resolved, err := resolvePopTarget(pathArg, repoRoot, loaded)
+	resolvedPath, err := resolvePopTarget(pathArg, cwd, loaded)
 	if err == nil {
-		return popExecOpen(append([]string{resolved}, openArgs...)...)
+		return popExecOpen(append([]string{resolvedPath}, openArgs...)...)
 	}
 
 	if !isOutOfMirrorErr(err) {

@@ -17,7 +17,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mdubb86/devm/internal/config"
-	"github.com/mdubb86/devm/internal/repohelpers"
 )
 
 type approveOpts struct {
@@ -46,7 +45,7 @@ the terminal to answer. Scripts cannot approve.`,
 		if err != nil {
 			return fmt.Errorf("resolve cwd: %w", err)
 		}
-		pid, err := resolveProjectID(cwd)
+		pid, err := resolveProjectID()
 		if err != nil {
 			return err
 		}
@@ -192,13 +191,14 @@ func splitLines(b []byte) []string {
 	return strings.Split(s, "\n")
 }
 
-// resolveProjectID loads the devm.yaml from cwd and returns the project.name.
-func resolveProjectID(cwd string) (string, error) {
-	repoRoot, err := repohelpers.FindDevmYAML(cwd)
+// resolveProjectID resolves the current project via the daemon and
+// returns the project.name.
+func resolveProjectID() (string, error) {
+	resolved, err := resolveProjectFn()
 	if err != nil {
 		return "", err
 	}
-	cfg, err := config.Load(repoRoot)
+	cfg, err := config.Load(resolved.StateDir)
 	if err != nil {
 		return "", fmt.Errorf("locate devm.yaml: %w", err)
 	}

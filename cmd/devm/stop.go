@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/orchestrator"
-	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
@@ -25,15 +23,11 @@ discarded. Re-launch with devm start. Use --yes (-y) to skip the prompt.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("get cwd: %w", err)
-		}
-		repoRoot, err := repohelpers.FindDevmYAML(cwd)
+		resolved, err := resolveProjectFn()
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(repoRoot)
+		cfg, err := config.Load(resolved.StateDir)
 		if err != nil {
 			return err
 		}

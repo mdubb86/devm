@@ -11,7 +11,6 @@ import (
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/orchestrator"
-	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
@@ -42,15 +41,11 @@ approve gate refuses at the single point that reads devm.yaml, and
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)
 		}
-		repoRoot, err := repohelpers.FindDevmYAML(cwd)
+		resolved, err := resolveProjectFn()
 		if err != nil {
 			return err
 		}
-		projectName, err := config.ReadProjectName(repoRoot)
-		if err != nil {
-			return err
-		}
-		pcfg := schema.Config{Project: schema.Project{Name: projectName}}
+		pcfg := schema.Config{Project: schema.Project{Name: resolved.Name}}
 		// daemonHandshake (fingerprint drift check + iron-proxy warning) is
 		// called explicitly here since RunAttach, unlike runShellFlow,
 		// never cold-starts and so never calls it on its own.
@@ -61,8 +56,8 @@ approve gate refuses at the single point that reads devm.yaml, and
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
 
-		deps := orchestrator.DefaultShellDeps(ident, repoRoot)
-		rc, err := orchestrator.RunAttach(ctx, deps, pcfg.Project.Name, repoRoot, cmdName, cmdArgs, os.Stderr)
+		deps := orchestrator.DefaultShellDeps(ident, cwd)
+		rc, err := orchestrator.RunAttach(ctx, deps, pcfg.Project.Name, cwd, cmdName, cmdArgs, os.Stderr)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				fmt.Fprintln(os.Stderr, "aborted")
@@ -150,15 +145,11 @@ TTY/PTY handling is auto-detected from the caller's stdin:
 			return fmt.Errorf("exec requires a COMMAND — see `devm exec --help`")
 		}
 		ident := cfg // capture package identity cfg before it's shadowed below
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("get cwd: %w", err)
-		}
-		repoRoot, err := repohelpers.FindDevmYAML(cwd)
+		resolved, err := resolveProjectFn()
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(repoRoot)
+		cfg, err := config.Load(resolved.StateDir)
 		if err != nil {
 			return err
 		}
@@ -206,11 +197,11 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
 	}
-	repoRoot, err := repohelpers.FindDevmYAML(cwd)
+	resolved, err := resolveProjectFn()
 	if err != nil {
 		return err
 	}
-	cfg, err := config.Load(repoRoot)
+	cfg, err := config.Load(resolved.StateDir)
 	if err != nil {
 		return err
 	}
@@ -271,8 +262,8 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 		}
 	}()
 
-	deps := orchestrator.DefaultShellDeps(ident, repoRoot)
-	rc, err := orchestrator.RunShell(ctx, deps, cfg, repoRoot, cfg.Project.Name, cmdName, cmdArgs)
+	deps := orchestrator.DefaultShellDeps(ident, cwd)
+	rc, err := orchestrator.RunShell(ctx, deps, cfg, cwd, cfg.Project.Name, cmdName, cmdArgs)
 	if err != nil {
 		// SIGINT during cold start cancels ctx. Suppress the noisy
 		// "context canceled" stack and exit 130 (SIGINT convention).
