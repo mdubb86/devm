@@ -1228,6 +1228,8 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
+	s.mux.Handle("/vm/resolve-project", handleResolveProject(cfg))
+
 	// /denials — read-only view of policy-authority allow-list rejects
 	// for a project. Sorted by count desc. Empty array is a normal state
 	// (no rejects yet, or the project's allow-list was just replaced).
