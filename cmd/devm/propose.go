@@ -95,7 +95,7 @@ func runMacProposeWithClient(baseURL, cwd, reason, kind string, client *http.Cli
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNoContent {
-		fmt.Fprintf(os.Stdout, "Proposal recorded for %q. Approve via `devm approve` or the menu bar.\n", rp.Name)
+		fmt.Fprintf(os.Stdout, "Proposal recorded for %q. Approve via 'devm approve' or the menu bar.\n", rp.Name)
 		return 0
 	}
 

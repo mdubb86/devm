@@ -65,7 +65,10 @@ func resolveProjectFromURLWithClient(baseURL, cwd string, httpClient *http.Clien
 		return ResolvedProject{}, fmt.Errorf("resolve-project: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ResolvedProject{}, fmt.Errorf("resolve-project: read body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return ResolvedProject{}, fmt.Errorf("%s", strings.TrimSpace(string(body)))
 	}

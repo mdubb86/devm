@@ -69,7 +69,10 @@ func runInitWithClient(baseURL, cwd, name string, httpClient *http.Client) (stri
 		return "", fmt.Errorf("init: reach daemon: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("init: read body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("%s", strings.TrimSpace(string(body)))
 	}

@@ -84,6 +84,21 @@ func TestRun_KindFlag(t *testing.T) {
 	assert.Equal(t, "devm.me.yaml", got.Kind)
 }
 
+func TestRun_NoArgs(t *testing.T) {
+	var got proposeBody
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	code := run([]string{}, srv.URL, "/somewhere")
+	assert.Equal(t, 0, code)
+	assert.Equal(t, "", got.Reason)
+	assert.Equal(t, "devm.yaml", got.Kind)
+	assert.Equal(t, "guest", got.Source)
+}
+
 func TestRun_ReasonAndKindFlags(t *testing.T) {
 	var got proposeBody
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
