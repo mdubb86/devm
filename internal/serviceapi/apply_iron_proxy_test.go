@@ -67,7 +67,7 @@ func TestApplyIronProxy_VMStopped_NoConfigFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, nil)
 
 	// Simulate cold-start (`devm start` / `devm shell`) having already
 	// seeded the snapshot with the real schema.Config — a prior
@@ -119,7 +119,7 @@ func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	srv := NewServer(identity.Prod.SocketPath(), Build{})
 	sup := supervisor.New(t.TempDir())
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, nil)
 
 	body, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      "never-started",
@@ -207,7 +207,7 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	}
 
 	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID) })
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIP(t, "192.168.64.50"), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      projectID,
@@ -286,7 +286,7 @@ func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 		return lerr
 	}
 
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      projectID,
@@ -359,7 +359,7 @@ func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 		return lerr
 	}
 
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      projectID,
@@ -422,7 +422,7 @@ func TestApplyIronProxy_PreservesGuestOriginPorts(t *testing.T) {
 
 	// proxy is nil here — this test pins the merge itself, independent
 	// of whether a *ProxyServer is wired (F4 covers that separately).
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), nil)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      projectID,
@@ -493,7 +493,7 @@ func TestApplyIronProxy_AdoptInPlace_StartsGuestOriginListeners(t *testing.T) {
 	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
 	t.Cleanup(proxy.StopAll)
 
-	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, fakeTartIPFails(), proxy)
+	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, proxy)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
 		Name:      projectID,

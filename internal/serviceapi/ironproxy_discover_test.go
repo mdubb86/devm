@@ -167,7 +167,7 @@ func TestRecoverProjectState_ReplaysSnapshotRoutes(t *testing.T) {
 	}))
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
+	recoverProjectState(identity.Prod, routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
@@ -207,7 +207,7 @@ func TestRecoverProjectState_ServesSnapshotAllowlist(t *testing.T) {
 		},
 	}))
 
-	recoverProjectState(context.Background(), identity.Prod, nil, NewRoutes(), projectID)
+	recoverProjectState(identity.Prod, NewRoutes(), projectID)
 
 	sockPath, err := IronPolicySocketPath(identity.Prod, projectID)
 	require.NoError(t, err)
@@ -426,7 +426,7 @@ func TestRecoverProjectState_PreservesRouteModeAcrossRestart(t *testing.T) {
 	}))
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
+	recoverProjectState(identity.Prod, routes, projectID)
 
 	rt, ok := routes.Lookup("api.recover-mode-proj.test", projectID)
 	require.True(t, ok)
@@ -451,7 +451,7 @@ func TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched(t *testing.T) 
 	ironProxyState.put(projectID, seeded)
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
+	recoverProjectState(identity.Prod, routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
@@ -482,7 +482,7 @@ func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.
 	}))
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
+	recoverProjectState(identity.Prod, routes, projectID)
 
 	_, ok := ironProxyState.get(projectID)
 	assert.True(t, ok)
@@ -515,7 +515,7 @@ func TestRecoverProjectState_RestoresProjectIP(t *testing.T) {
 	}))
 
 	routes := NewRoutes()
-	recoverProjectState(context.Background(), identity.Prod, tart.New(), routes, projectID)
+	recoverProjectState(identity.Prod, routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
 	require.True(t, ok)
@@ -569,7 +569,7 @@ func TestRecoverProjectState_SetsRestrictedMode(t *testing.T) {
 		},
 	}))
 
-	recoverProjectState(context.Background(), identity.Prod, tart.New(), NewRoutes(), projectID)
+	recoverProjectState(identity.Prod, NewRoutes(), projectID)
 
 	if got := policyAuthority.modeFor(projectID); got != ModeRestricted {
 		t.Fatalf("recovery should force mode=restricted; got %v", got)

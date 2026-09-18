@@ -15,7 +15,6 @@ import (
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/ironproxy"
-	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
@@ -82,7 +81,7 @@ const (
 // health, or persisting the snapshot returns 500 and leaves the
 // snapshot untouched (except the two success/no-op paths, which
 // deliberately advance SecretHashes).
-func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *ProjectLocks, sup *supervisor.Supervisor, tr *tart.Tart, proxy *ProxyServer) {
+func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *ProjectLocks, sup *supervisor.Supervisor, proxy *ProxyServer) {
 	s.Register("/vm/apply-iron-proxy", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)

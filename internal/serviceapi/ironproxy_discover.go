@@ -154,7 +154,7 @@ func adoptOneIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor
 	} else {
 		ironProxyState.put(p.ProjectID, info)
 	}
-	recoverProjectState(ctx, cfg, tr, routes, p.ProjectID)
+	recoverProjectState(cfg, routes, p.ProjectID)
 	if err != nil && !hadEntry {
 		// recoverProjectState unconditionally seeds an ironProxyState
 		// entry when a snapshot exists (so it has somewhere to merge a
@@ -213,7 +213,7 @@ func ironProxyInfoForAdopted(cfg identity.Config, projectID string) (projectInfo
 // snap.Routes existed) simply leaves nothing to recover — the user's
 // next `devm shell` / `devm route local|vm` re-populates both the
 // live table and the snapshot.
-func recoverProjectState(ctx context.Context, cfg identity.Config, tr *tart.Tart, routes *Routes, projectID string) {
+func recoverProjectState(cfg identity.Config, routes *Routes, projectID string) {
 	snap, err := ReadStateSnapshot(cfg, projectID)
 	if err != nil || snap == nil {
 		return
