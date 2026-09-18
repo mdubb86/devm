@@ -85,15 +85,17 @@ func TestStatusAll_ClientRoundTrip(t *testing.T) {
 }
 
 // TestStatus_InvalidConfigSurfacesError: a devm.yaml that exists but
-// fails validation must error out of `devm status`, not silently fall
-// back to daemon-only mode (which prints the misleading "no devm.yaml
-// in cwd" line).
+// fails validation must error out of `devm status`, not be swallowed
+// into the no-project daemon-only status view (HasProject: false),
+// which would silently mask the invalid config behind a report on the
+// daemon alone.
 func TestStatus_InvalidConfigSurfacesError(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),
 		[]byte("project:\n  name: p\n  vm_name: legacy\n"), 0o644))
 	t.Chdir(dir)
 	t.Setenv("HOME", t.TempDir())
+	stubResolveProjectFn(t, "p", dir)
 
 	statusCmd.SetContext(context.Background())
 	err := statusCmd.RunE(statusCmd, nil)
@@ -207,8 +209,9 @@ func TestStatus_ShowsDivergedApproveState(t *testing.T) {
 	cleanup := startApproveStatusDaemon(t)
 	defer cleanup()
 
-	projDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"),
+	stateDir := filepath.Join(identity.Prod.RuntimeDir(), "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"),
 		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
 
 	store := approve.NewStore(identity.Prod)
@@ -216,7 +219,7 @@ func TestStatus_ShowsDivergedApproveState(t *testing.T) {
 
 	tr := tart.New()
 	tr.Path = "false"
-	res, err := orchestrator.RunStatus(identity.Prod, schema.Config{Project: schema.Project{Name: "p"}}, tr, projDir, "")
+	res, err := orchestrator.RunStatus(identity.Prod, schema.Config{Project: schema.Project{Name: "p"}}, tr, stateDir, "")
 	require.NoError(t, err)
 	require.NotNil(t, res.ApproveState)
 	assert.True(t, res.ApproveState.Diverged)
@@ -234,15 +237,16 @@ func TestStatus_ShowsUpToDateApproveState(t *testing.T) {
 	defer cleanup()
 
 	contents := []byte("project:\n  name: p\nenv:\n  FOO: same\n")
-	projDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), contents, 0644))
+	stateDir := filepath.Join(identity.Prod.RuntimeDir(), "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), contents, 0644))
 
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", contents, nil, "user"))
 
 	tr := tart.New()
 	tr.Path = "false"
-	res, err := orchestrator.RunStatus(identity.Prod, schema.Config{Project: schema.Project{Name: "p"}}, tr, projDir, "")
+	res, err := orchestrator.RunStatus(identity.Prod, schema.Config{Project: schema.Project{Name: "p"}}, tr, stateDir, "")
 	require.NoError(t, err)
 	require.NotNil(t, res.ApproveState)
 	assert.False(t, res.ApproveState.Diverged)

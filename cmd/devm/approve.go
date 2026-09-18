@@ -17,14 +17,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mdubb86/devm/internal/config"
-	"github.com/mdubb86/devm/internal/repohelpers"
 )
 
 type approveOpts struct {
 	daemonURL  string
 	httpClient *http.Client
 	projectID  string
-	macCwd     string
 	stdin      io.Reader
 	stdout     io.Writer
 	stderr     io.Writer
@@ -42,11 +40,7 @@ subsequent ` + "`devm reconcile`" + ` / ` + "`devm start`" + ` proceed.
 This command NEVER accepts a --yes flag: the human must be present at
 the terminal to answer. Scripts cannot approve.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("resolve cwd: %w", err)
-		}
-		pid, err := resolveProjectID(cwd)
+		pid, err := resolveProjectID()
 		if err != nil {
 			return err
 		}
@@ -62,7 +56,6 @@ the terminal to answer. Scripts cannot approve.`,
 			daemonURL:  "http://localhost",
 			httpClient: httpc,
 			projectID:  pid,
-			macCwd:     cwd,
 			stdin:      os.Stdin,
 			stdout:     os.Stdout,
 			stderr:     os.Stderr,
@@ -81,7 +74,6 @@ func runApprove(o approveOpts) error {
 	}
 	q := u.Query()
 	q.Set("project", o.projectID)
-	q.Set("mac_cwd", o.macCwd)
 	u.RawQuery = q.Encode()
 	resp, err := client.Get(u.String())
 	if err != nil {
@@ -124,7 +116,6 @@ func runApprove(o approveOpts) error {
 	u2, _ := url.Parse(o.daemonURL + "/vm/approve")
 	q2 := u2.Query()
 	q2.Set("project", o.projectID)
-	q2.Set("mac_cwd", o.macCwd)
 	u2.RawQuery = q2.Encode()
 	rsp, err := client.Post(u2.String(), "application/json", nil)
 	if err != nil {
@@ -192,13 +183,14 @@ func splitLines(b []byte) []string {
 	return strings.Split(s, "\n")
 }
 
-// resolveProjectID loads the devm.yaml from cwd and returns the project.name.
-func resolveProjectID(cwd string) (string, error) {
-	repoRoot, err := repohelpers.FindDevmYAML(cwd)
+// resolveProjectID resolves the current project via the daemon and
+// returns the project.name.
+func resolveProjectID() (string, error) {
+	resolved, err := resolveProjectFn()
 	if err != nil {
 		return "", err
 	}
-	cfg, err := config.Load(repoRoot)
+	cfg, err := config.Load(resolved.StateDir)
 	if err != nil {
 		return "", fmt.Errorf("locate devm.yaml: %w", err)
 	}

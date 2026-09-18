@@ -43,6 +43,7 @@ What it doesn't cover (tested elsewhere):
   - Cold-start path: -> test_34.
   - path: validation rejection -> schema unit tests.
 """
+import subprocess
 import time
 
 import pytest
@@ -73,6 +74,15 @@ def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
             },
         },
     )
+
+    approve = subprocess.run(
+        [devm.path, "approve"],
+        cwd=str(workspace.path), input=b"y\n",
+        capture_output=True, timeout=30,
+    )
+    assert approve.returncode == 0, f"approve failed: {approve.stderr.decode()!r}"
+    assert "approved" in approve.stdout.decode()
+
     devm.reconcile(yes=True, timeout=60)
 
     expected_head = f"{workspace.path}/bin"
@@ -112,6 +122,15 @@ def test_env_inject_and_live_change(workspace, devm, tart_sandbox):
             },
             path=["$WORKSPACE/bin"],
         )
+
+        approve = subprocess.run(
+            [devm.path, "approve"],
+            cwd=str(workspace.path), input=b"y\n",
+            capture_output=True, timeout=30,
+        )
+        assert approve.returncode == 0, f"approve failed: {approve.stderr.decode()!r}"
+        assert "approved" in approve.stdout.decode()
+
         devm.reconcile(yes=True, timeout=60)
 
         # First shell still sees the OLD values — already-attached

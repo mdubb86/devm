@@ -57,6 +57,14 @@ def test_reconcile_prompt_flow(workspace, devm, tart_sandbox):
         devm.unlock()
         workspace.patch_devmyaml(install=["touch /tmp/reconcile-probe"])
 
+        approve = subprocess.run(
+            [devm.path, "approve"],
+            cwd=str(workspace.path), input=b"y\n",
+            capture_output=True, timeout=30,
+        )
+        assert approve.returncode == 0, f"approve failed: {approve.stderr.decode()!r}"
+        assert "approved" in approve.stdout.decode()
+
         # Run reconcile --json with stdin from /dev/null (non-TTY).
         # Expect exit 2 and JSON with next_action=needs_approval.
         p = subprocess.run(

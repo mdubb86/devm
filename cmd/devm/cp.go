@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/config"
-	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
@@ -170,9 +169,9 @@ inferred from which arg wears the colon:
   devm cp :/var/log/x.log ./x.log             # guest → host
   devm cp buzztrack:/root/dump.sql ./         # explicit project
 
-":/path" alone infers the project from the devm.yaml in the current
-working directory; "project:/path" is always explicit. "-" is stdin
-(as src) or stdout (as dst) for streaming from/to pipes.
+":/path" alone infers the project registered for the current working
+directory; "project:/path" is always explicit. "-" is stdin (as src)
+or stdout (as dst) for streaming from/to pipes.
 
 Transport is auto-selected: if the guest path lives under the shared
 workspace mount, the copy is a plain host-side cp into the shared
@@ -213,29 +212,25 @@ the daemon exec channel; writes to root-owned paths (/etc, /var,
 
 // resolveProject picks the project name and loads its schema. When
 // explicit is non-empty it's the project from `project:/path` and no
-// CWD walk is needed (in which case repoRoot is empty and cfg is the
-// zero value — mount detection still returns "not mounted" for every
-// path, forcing pipe transport, which is the right conservative
+// daemon lookup is needed (in which case repoRoot is empty and cfg is
+// the zero value — mount detection still returns "not mounted" for
+// every path, forcing pipe transport, which is the right conservative
 // default when we don't know the project's mount table). When empty,
-// walk up from CWD to find the project root and load it.
+// resolve the project from cwd via the daemon and load it.
 func resolveProject(explicit string) (name, repoRoot string, cfg schema.Config, err error) {
 	if explicit != "" {
 		// Explicit project name — no local devm.yaml required.
 		return explicit, "", schema.Config{}, nil
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", "", schema.Config{}, fmt.Errorf("get cwd: %w", err)
-	}
-	repoRoot, err = repohelpers.FindDevmYAML(cwd)
+	resolved, err := resolveProjectFn()
 	if err != nil {
 		return "", "", schema.Config{}, fmt.Errorf("locate devm.yaml: %w (run `devm cp` from a project root or use `project:/path` syntax)", err)
 	}
-	loaded, err := config.Load(repoRoot)
+	loaded, err := config.Load(resolved.StateDir)
 	if err != nil {
 		return "", "", schema.Config{}, fmt.Errorf("locate devm.yaml: %w (run `devm cp` from a project root or use `project:/path` syntax)", err)
 	}
-	return loaded.Project.Name, repoRoot, loaded, nil
+	return loaded.Project.Name, resolved.Cwd, loaded, nil
 }
 
 // runCp is the transport-dispatcher after arg parsing + project

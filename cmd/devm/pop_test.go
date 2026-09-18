@@ -159,7 +159,8 @@ func TestResolvePopTarget_AbsolutePathOutsideAnyEntry(t *testing.T) {
 
 // writePopWorkspace writes a minimal valid devm.yaml (project name +
 // a url-nil primary repo, so config.Load succeeds without touching a
-// real git remote) into a fresh temp dir and returns its path.
+// real git remote) into a fresh temp dir and returns its path. Callers
+// point resolveProjectFn's fake StateDir at this directory.
 func writePopWorkspace(t *testing.T, projectName string) string {
 	t.Helper()
 	workspace := t.TempDir()
@@ -168,12 +169,36 @@ func writePopWorkspace(t *testing.T, projectName string) string {
 	return workspace
 }
 
+// stubResolveProjectFn overrides resolveProjectFn for the duration of
+// the test to bypass the daemon socket, returning name/stateDir as the
+// resolved project. Cwd defaults to stateDir — tests that need Cwd to
+// differ from stateDir (e.g. proving the subdir-invocation fix, I1)
+// should use stubResolveProjectFnWithCwd instead.
+func stubResolveProjectFn(t *testing.T, name, stateDir string) {
+	t.Helper()
+	stubResolveProjectFnWithCwd(t, name, stateDir, stateDir)
+}
+
+// stubResolveProjectFnWithCwd is stubResolveProjectFn with an
+// independently-set Cwd — the registered project-root ancestor the
+// daemon would return, which may differ from the caller's actual
+// os.Getwd() when devm is invoked from a subdirectory of the project.
+func stubResolveProjectFnWithCwd(t *testing.T, name, stateDir, cwd string) {
+	t.Helper()
+	orig := resolveProjectFn
+	resolveProjectFn = func() (ResolvedProject, error) {
+		return ResolvedProject{Name: name, StateDir: stateDir, Cwd: cwd}, nil
+	}
+	t.Cleanup(func() { resolveProjectFn = orig })
+}
+
 // TestRunPop_FallbackToCreateSession_FileArg — an absolute, out-of-mirror
 // guest path with no trailing slash falls through resolvePopTarget's
 // error into createPopSessionFn with is_dir=false, and opens whatever
 // Mac path the daemon hands back.
 func TestRunPop_FallbackToCreateSession_FileArg(t *testing.T) {
 	workspace := writePopWorkspace(t, "myproj")
+	stubResolveProjectFn(t, "myproj", workspace)
 
 	origOpen := popExecOpen
 	origCreate := createPopSessionFn
@@ -208,6 +233,7 @@ func TestRunPop_FallbackToCreateSession_FileArg(t *testing.T) {
 // slash-terminated arg is forwarded to the daemon unchanged.
 func TestRunPop_FallbackToCreateSession_DirArgWithTrailingSlash(t *testing.T) {
 	workspace := writePopWorkspace(t, "myproj2")
+	stubResolveProjectFn(t, "myproj2", workspace)
 
 	origOpen := popExecOpen
 	origCreate := createPopSessionFn
@@ -243,6 +269,7 @@ func TestRunPop_FallbackToCreateSession_DirArgWithTrailingSlash(t *testing.T) {
 // before ever calling createPopSessionFn.
 func TestRunPop_FallbackRefusesRelativeArgOutOfMirror(t *testing.T) {
 	workspace := writePopWorkspace(t, "myproj3")
+	stubResolveProjectFn(t, "myproj3", workspace)
 
 	origOpen := popExecOpen
 	origCreate := createPopSessionFn

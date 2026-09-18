@@ -142,9 +142,12 @@ func TestClientStartVM_ApproveRequired(t *testing.T) {
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
 
-	macCwd := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
+	stateDir := stateDirForProject(identity.Prod, "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"),
 		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
+
+	macCwd := t.TempDir()
 
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
@@ -340,9 +343,14 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
-	// Create and approve project directory for the approve gate.
+	// Create and approve project directory for the approve gate. The
+	// approve-gate check reads devm.yaml from the project's state dir,
+	// not WorkspaceHostPath — projDir below is the separate workspace
+	// path the rest of reconcile operates on.
 	projDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
+	stateDir := stateDirForProject(identity.Prod, "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
 
@@ -400,8 +408,12 @@ func TestClientReconcile_ApproveRequired(t *testing.T) {
 
 	// No approve.Store snapshot written for "p" — isApproveDiverged
 	// treats a missing snapshot as diverged, so the daemon refuses.
+	// The approve-gate check reads devm.yaml from the project's state
+	// dir; projDir is the separate workspace path reconcile itself uses.
 	projDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
+	stateDir := stateDirForProject(identity.Prod, "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
 
 	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
 	require.NoError(t, err)
@@ -651,13 +663,18 @@ func TestClientEndProvisioning_NoSoftnetStateRequired(t *testing.T) {
 
 // TestClientVolumeSync_NoEntities_Succeeds verifies POST /vm/volume-sync
 // succeeds (204) for a project config with no repos or volumes —
-// SetupVolumesPhase's entity loop no-ops, so the handler never needs a
-// live mutagen daemon or guest to reach. mutagenEnsureFn is still faked
-// (the handler resolves the binary path unconditionally) so the test
-// never touches a real runtime dir.
+// SetupVolumesPhase's entity loop no-ops, but SetupConfigSync still
+// runs unconditionally (every project gets a config-sync session
+// regardless of entities), so mutagenEnsureFn must resolve to a binary
+// that answers `sync list`/`sync create` rather than a nonexistent path.
 func TestClientVolumeSync_NoEntities_Succeeds(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // SetupConfigSync now writes under cfg.RuntimeDir() unconditionally
+
 	origEnsure := mutagenEnsureFn
-	mutagenEnsureFn = func(string) (string, error) { return "/fake/bin/mutagen", nil }
+	bin := filepath.Join(t.TempDir(), "mutagen")
+	script := "#!/bin/sh\ncase \"$1 $2\" in\n  \"sync list\") echo '[]' ;;\n  \"sync create\") echo 'Created session sess-fake' ;;\nesac\nexit 0\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	mutagenEnsureFn = func(string) (string, error) { return bin, nil }
 	t.Cleanup(func() { mutagenEnsureFn = origEnsure })
 
 	logDir := t.TempDir()
@@ -744,8 +761,9 @@ func TestClientApproveState_Diverged(t *testing.T) {
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
 
-	macCwd := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
+	stateDir := stateDirForProject(identity.Prod, "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"),
 		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
 
 	logDir := t.TempDir()
@@ -760,7 +778,7 @@ func TestClientApproveState_Diverged(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	resp, err := c.ApproveState(ctx, "p", macCwd)
+	resp, err := c.ApproveState(ctx, "p")
 	require.NoError(t, err)
 	assert.True(t, resp.Diverged)
 	require.NotNil(t, resp.ApprovedSince)
@@ -777,8 +795,9 @@ func TestClientApproveState_UpToDate(t *testing.T) {
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", contents, nil, "user"))
 
-	macCwd := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), contents, 0644))
+	stateDir := stateDirForProject(identity.Prod, "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), contents, 0644))
 
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
@@ -792,7 +811,7 @@ func TestClientApproveState_UpToDate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	resp, err := c.ApproveState(ctx, "p", macCwd)
+	resp, err := c.ApproveState(ctx, "p")
 	require.NoError(t, err)
 	assert.False(t, resp.Diverged)
 }
@@ -826,7 +845,7 @@ func TestClientApproveState_Unsupported(t *testing.T) {
 	require.FileExists(t, sock)
 
 	c := NewClientWithSocket(sock)
-	_, err = c.ApproveState(context.Background(), "p", "/tmp/x")
+	_, err = c.ApproveState(context.Background(), "p")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrApproveStateUnsupported)
 }

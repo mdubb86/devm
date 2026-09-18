@@ -1,30 +1,28 @@
-// propose is the daemon-side entry point for guest "propose" requests.
-// A per-project HTTP listener (spawned at /vm/start) serves POST /propose:
+// propose is the daemon-side entry point for "propose" requests — a
+// signal that <state-dir>/<kind> changed, carrying attribution only.
+// The actual bytes reach the daemon through the project's mutagen
+// sync session (see devm.yaml/devm.me.yaml sync setup in vm.go); this
+// handler never reads or writes the config file itself. It optionally
+// re-validates the file already on disk at <state-dir>/<kind> —
+// schema.CheckUnknownKeys + a strict (KnownFields) decode +
+// schema.Config.Validate, the same checks internal/config.Load
+// applies to devm.yaml — and always records attribution to
+// <RuntimeDir>/<projectID>/last-proposal.json. The Approve gate
+// (Piece 1) fires on the next gated command as if a human had edited
+// the file.
 //
-//	Body: {"yaml": "<base64>", "cwd": "<abs guest cwd>",
-//	       "branch": "<git branch or empty>",
-//	       "reason": "<--reason arg or empty>",
-//	       "kind": "devm.yaml"}
+// Two listeners share the recorder below (recordProposal):
 //
-// The handler validates the YAML through schema.CheckUnknownKeys + a
-// strict (KnownFields) decode + schema.Config.Validate — the same
-// checks internal/config.Load applies to the base devm.yaml, minus the
-// directory-scoped concerns (devm.me.yaml merge, $WORKSPACE env
-// resolution, root-relative volume/label checks) that don't apply to a
-// proposal validated before it has ever touched disk. It then
-// atomically writes the YAML to <MacCwd>/<kind> and records
-// attribution to <RuntimeDir>/<projectID>/last-proposal.json. The
-// Approve gate (Piece 1) fires on the next gated command as if a human
-// had edited the file.
-//
-// Softnet forwards guest TCP 192.168.127.1:82 to this listener — see
-// internal/softnet/egress.go's Propose branch and internal/serviceapi/
-// vm.go's /vm/start.
+//   - A per-project HTTP listener (spawned at /vm/start) serves
+//     POST /propose for the guest. Softnet forwards guest TCP
+//     192.168.127.1:82 to this listener — see internal/softnet/egress.go's
+//     Propose branch and this package's vm.go /vm/start wiring.
+//   - The daemon's main Unix-socket mux serves
+//     POST /vm/propose?project=<name> for the Mac CLI.
 package serviceapi
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,96 +39,168 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// maxProposeBodyBytes caps the /propose request body. devm.yaml is
-// small; this keeps a runaway or malicious guest agent from making
-// the daemon buffer unbounded memory.
+// maxProposeBodyBytes caps a propose request body. Bodies are
+// metadata-only JSON now that bytes flow through mutagen sync; 1 MiB
+// is generous headroom against a runaway or malicious caller.
 const maxProposeBodyBytes = 1 << 20 // 1 MiB
 
 type proposeRequest struct {
-	YAML   string `json:"yaml"`
 	Cwd    string `json:"cwd"`
 	Branch string `json:"branch"`
 	Reason string `json:"reason"`
 	Kind   string `json:"kind"`
+	// Source identifies which side issued the signal: "guest" or
+	// "mac". Empty defaults to "guest" — the guest binary predates
+	// this field and won't send it until it's updated.
+	Source string `json:"source"`
+}
+
+// recordProposal validates the on-disk file for req.Kind under the
+// project's state dir (skipped when the file is missing — sync may
+// not have landed it yet, and a signal that arrives ahead of its
+// bytes still deserves attribution), then writes req's attribution to
+// last-proposal.json via WriteLastProposal. Returns the HTTP status
+// and body callers should write, and any internal (non-4xx) error for
+// the caller to log.
+func recordProposal(cfg identity.Config, projectName string, req proposeRequest) (statusCode int, body string, err error) {
+	if req.Kind != "devm.yaml" && req.Kind != "devm.me.yaml" {
+		return http.StatusBadRequest, fmt.Sprintf("propose: unsupported kind %q", req.Kind), nil
+	}
+
+	// devm.me.yaml has no schema of its own (it's a partial merged
+	// into devm.yaml) — nothing to validate against.
+	configPath := filepath.Join(stateDirForProject(cfg, projectName), req.Kind)
+	onDisk, readErr := os.ReadFile(configPath)
+	switch {
+	case readErr == nil:
+		if req.Kind == "devm.yaml" {
+			if verr := schema.CheckUnknownKeys(onDisk); verr != nil {
+				return http.StatusBadRequest, fmt.Sprintf("propose: yaml: %v", verr), nil
+			}
+			var parsed schema.Config
+			if verr := yamlDecodeStrict(onDisk, &parsed); verr != nil {
+				return http.StatusBadRequest, fmt.Sprintf("propose: yaml parse: %v", verr), nil
+			}
+			if verr := parsed.Validate(); verr != nil {
+				return http.StatusBadRequest, fmt.Sprintf("propose: yaml validate: %v", verr), nil
+			}
+		}
+	case errors.Is(readErr, os.ErrNotExist):
+		// No on-disk file yet — sync may not have landed it. Validation
+		// is skipped; metadata still records the signal.
+	default:
+		return http.StatusInternalServerError, fmt.Sprintf("propose: read on-disk file: %v", readErr),
+			fmt.Errorf("propose: read on-disk %s for %s: %w", req.Kind, projectName, readErr)
+	}
+
+	source := req.Source
+	if source == "" {
+		source = "guest"
+	}
+
+	if werr := WriteLastProposal(cfg, projectName, ProposalMetadata{
+		Cwd:       req.Cwd,
+		Branch:    req.Branch,
+		Reason:    req.Reason,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Source:    source,
+		Kind:      req.Kind,
+	}); werr != nil {
+		return http.StatusInternalServerError, fmt.Sprintf("propose: metadata: %v", werr),
+			fmt.Errorf("propose: metadata for %s: %w", projectName, werr)
+	}
+
+	return http.StatusNoContent, "", nil
+}
+
+// yamlDecodeStrict runs yaml.v3 with KnownFields(true) so any unknown
+// key — top-level or nested — hard-fails with a yaml-native error.
+// Mirrors internal/config/load.go's strictDecode; not shared because
+// that one is unexported in a different package.
+func yamlDecodeStrict(data []byte, into any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	return dec.Decode(into)
+}
+
+// decodeProposeBody reads r's body (capped at maxProposeBodyBytes)
+// into a proposeRequest, writing a 400 to w on failure. The bool
+// return reports whether decoding succeeded — callers stop on false.
+func decodeProposeBody(w http.ResponseWriter, r *http.Request) (proposeRequest, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxProposeBodyBytes)
+	var req proposeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("propose: decode body: %v", err), http.StatusBadRequest)
+		return proposeRequest{}, false
+	}
+	return req, true
+}
+
+// writeProposalResult applies recordProposal's outcome to w, logging
+// any internal error through daemonlog.Errorf first.
+func writeProposalResult(w http.ResponseWriter, statusCode int, body string, err error) {
+	if err != nil {
+		daemonlog.Errorf("serviceapi: %v", err)
+	}
+	if statusCode != http.StatusNoContent {
+		http.Error(w, body, statusCode)
+		return
+	}
+	w.WriteHeader(statusCode)
 }
 
 // handleProposeForProject returns the per-project POST /propose
-// handler. Route registered by vm.go's /vm/start wiring.
-func handleProposeForProject(cfg identity.Config, projectName string, cache *StateCache) http.Handler {
+// handler serving the guest side. Route registered by vm.go's
+// /vm/start wiring, on the project's softnet listener.
+func handleProposeForProject(cfg identity.Config, projectName string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "propose: POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxProposeBodyBytes)
-		var req proposeRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("propose: decode body: %v", err), http.StatusBadRequest)
+		req, ok := decodeProposeBody(w, r)
+		if !ok {
 			return
 		}
-		if req.Kind != "devm.yaml" {
-			http.Error(w, fmt.Sprintf("propose: unsupported kind %q (only devm.yaml)", req.Kind), http.StatusBadRequest)
-			return
-		}
-		yamlBytes, err := base64.StdEncoding.DecodeString(req.YAML)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("propose: base64 decode: %v", err), http.StatusBadRequest)
-			return
-		}
+		statusCode, body, err := recordProposal(cfg, projectName, req)
+		writeProposalResult(w, statusCode, body, err)
+	})
+}
 
-		if err := schema.CheckUnknownKeys(yamlBytes); err != nil {
-			http.Error(w, fmt.Sprintf("propose: yaml: %v", err), http.StatusBadRequest)
+// handleProposeUnixSocket returns the daemon main-socket
+// POST /vm/propose?project=<name> handler serving the Mac CLI.
+// Registered by vm.go's RegisterVMHandlers alongside
+// /vm/resolve-project and /vm/register-project.
+func handleProposeUnixSocket(cfg identity.Config) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "propose: POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		var parsed schema.Config
-		dec := yaml.NewDecoder(bytes.NewReader(yamlBytes))
-		dec.KnownFields(true)
-		if err := dec.Decode(&parsed); err != nil {
-			http.Error(w, fmt.Sprintf("propose: yaml parse: %v", err), http.StatusBadRequest)
+		projectName := r.URL.Query().Get("project")
+		if projectName == "" {
+			http.Error(w, "propose: project query param required", http.StatusBadRequest)
 			return
 		}
-		if err := parsed.Validate(); err != nil {
-			http.Error(w, fmt.Sprintf("propose: yaml validate: %v", err), http.StatusBadRequest)
+		// The softnet listener is bound per-project at start, so its
+		// projectName is trusted — only this Unix-socket path takes an
+		// arbitrary caller-supplied project query param, so only it
+		// needs to check the project actually exists before recording
+		// a proposal under its state dir.
+		if _, err := os.Stat(stateDirForProject(cfg, projectName)); errors.Is(err, os.ErrNotExist) {
+			http.Error(w, fmt.Sprintf("propose: unknown project %q", projectName), http.StatusNotFound)
+			return
+		} else if err != nil {
+			daemonlog.Errorf("serviceapi: propose: stat state dir for %s: %v", projectName, err)
+			http.Error(w, fmt.Sprintf("propose: stat state dir: %v", err), http.StatusInternalServerError)
 			return
 		}
-
-		row, ok := cache.ProjectRow(projectName)
-		if !ok || row.MacCwd == "" {
-			daemonlog.Errorf("serviceapi: propose: no mac_cwd for project %s", projectName)
-			http.Error(w, fmt.Sprintf("propose: no mac_cwd for project %q", projectName), http.StatusInternalServerError)
+		req, ok := decodeProposeBody(w, r)
+		if !ok {
 			return
 		}
-
-		// Atomic tmp+rename write of the YAML.
-		targetPath := filepath.Join(row.MacCwd, req.Kind)
-		tmp := targetPath + ".tmp"
-		if err := os.WriteFile(tmp, yamlBytes, 0o644); err != nil {
-			daemonlog.Errorf("serviceapi: propose: write tmp for %s: %v", projectName, err)
-			http.Error(w, fmt.Sprintf("propose: write tmp: %v", err), http.StatusInternalServerError)
-			return
-		}
-		if err := os.Rename(tmp, targetPath); err != nil {
-			_ = os.Remove(tmp)
-			daemonlog.Errorf("serviceapi: propose: rename for %s: %v", projectName, err)
-			http.Error(w, fmt.Sprintf("propose: rename: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		// Record attribution metadata.
-		if err := WriteLastProposal(cfg, projectName, ProposalMetadata{
-			Cwd:       req.Cwd,
-			Branch:    req.Branch,
-			Reason:    req.Reason,
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Source:    "guest",
-			Kind:      req.Kind,
-		}); err != nil {
-			daemonlog.Errorf("serviceapi: propose: write last-proposal metadata for %s: %v", projectName, err)
-			http.Error(w, fmt.Sprintf("propose: metadata: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		w.WriteHeader(http.StatusNoContent)
+		statusCode, body, err := recordProposal(cfg, projectName, req)
+		writeProposalResult(w, statusCode, body, err)
 	})
 }
 
@@ -141,9 +211,9 @@ var proposeListeners sync.Map // projectName -> net.Listener
 
 // serveProposeListener runs a minimal HTTP server on ln that dispatches
 // POST /propose to handleProposeForProject for the given project.
-func serveProposeListener(ln net.Listener, cfg identity.Config, projectName string, cache *StateCache) {
+func serveProposeListener(ln net.Listener, cfg identity.Config, projectName string) {
 	mux := http.NewServeMux()
-	mux.Handle("/propose", handleProposeForProject(cfg, projectName, cache))
+	mux.Handle("/propose", handleProposeForProject(cfg, projectName))
 	srv := &http.Server{Handler: mux}
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		daemonlog.Errorf("serviceapi: propose: listener for %s exited: %v", projectName, err)

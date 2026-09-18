@@ -59,10 +59,13 @@ interactive `ssh devm-<name>` and VS Code Remote-SSH.
 
 ## Propose channel
 
-**Propose channel.** Guest-side agents call `/opt/devm/bin/propose` to
-send a `devm.yaml` edit to the Mac side without a git round-trip.
-Installed at cold-start. Companion pre-commit hook refuses direct
-`git commit devm.yaml` to steer edits through the same channel.
+**Propose channel.** `devm propose` runs on either the Mac or the
+guest; it signals the daemon that the human-approved config file has
+been edited and is ready for review. The file itself lives on the
+Mac at `~/Library/Application Support/devm/<name>/devm.yaml` and is
+synced bidirectionally to the guest at `/home/devm/devm.yaml`. The
+approve gate refuses `devm reconcile`/`devm start` until the human
+approves the change.
 
 ## Where to look next
 

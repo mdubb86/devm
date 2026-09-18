@@ -294,10 +294,6 @@ func SetupReposPhase(ctx context.Context, cfg identity.Config, projectID string,
 		} else if err := cloneOneRepoIfEmpty(cfg, projectID, *e, exec, ironProxyURL, guestCACertPath); err != nil {
 			return err
 		}
-		if err := InstallPreCommitHook(exec, e.Label); err != nil {
-			daemonlog.Errorf("SetupReposPhase: install pre-commit hook for %s: %v", e.Label, err)
-			// Do NOT return — the hook is a guidance layer, not a correctness gate.
-		}
 	}
 	return nil
 }
@@ -432,6 +428,10 @@ func SetupVolumesPhase(
 			return fmt.Errorf("mutagen setup %s: create session: %w", e.Label, err)
 		}
 	}
+
+	if err := SetupConfigSync(ctx, cli, cfg, projectID); err != nil {
+		return fmt.Errorf("setup config sync: %w", err)
+	}
 	return nil
 }
 
@@ -440,6 +440,10 @@ func SetupVolumesPhase(
 // not block the others — mutagen's own journal handles a crash
 // mid-flush on the next resume.
 func StopPhase(cli *mutagen.CLI, projectID string) error {
+	if err := StopConfigSync(context.Background(), cli, projectID); err != nil {
+		daemonlog.Errorf("stop config sync: %v", err)
+	}
+
 	sessions, err := cli.SyncList(SessionNamePrefix(projectID))
 	if err != nil {
 		return fmt.Errorf("mutagen stop %s: list sessions: %w", projectID, err)
@@ -489,6 +493,10 @@ func FlushAll(cli *mutagen.CLI, projectID string) error {
 // TeardownPhase permanently terminates every mutagen session belonging
 // to projectID, best-effort.
 func TeardownPhase(cli *mutagen.CLI, projectID string) error {
+	if err := StopConfigSync(context.Background(), cli, projectID); err != nil {
+		daemonlog.Errorf("mutagen teardown %s: terminate config sync: %v", projectID, err)
+	}
+
 	sessions, err := cli.SyncList(SessionNamePrefix(projectID))
 	if err != nil {
 		return fmt.Errorf("mutagen teardown %s: list sessions: %w", projectID, err)

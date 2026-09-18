@@ -19,11 +19,12 @@ func (approveCheck) Run(ctx context.Context, cache *StateCache, gt GroundTruth) 
 	for _, projectID := range gt.KnownProjectNames() {
 		expected, _ := cache.ProjectRow(projectID)
 		if expected.MacCwd == "" {
-			// Project not started yet — no files on the Mac side to hash.
+			// MacCwd is only set once /vm/start has run for this project;
+			// its absence signals "not started yet" — skip the check.
 			continue
 		}
 
-		currentDevm, currentMe, err := gt.ApproveHash(expected.MacCwd)
+		currentDevm, currentMe, err := gt.ApproveHash(projectID)
 		if err != nil {
 			daemonlog.Errorf("watchdog: approve check: observe hash for %s: %v", projectID, err)
 			cache.TouchProjectReconciled(projectID)

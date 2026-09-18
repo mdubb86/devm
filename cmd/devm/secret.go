@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/config"
-	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/secret"
 
 	"github.com/spf13/cobra"
@@ -134,15 +133,11 @@ func runSecretDelete(b secret.Backend, projectID, name string) error {
 }
 
 func currentProjectID() (string, error) {
-	cwd, err := os.Getwd()
+	resolved, err := resolveProjectFn()
 	if err != nil {
 		return "", err
 	}
-	repoRoot, err := repohelpers.FindDevmYAML(cwd)
-	if err != nil {
-		return "", err
-	}
-	cfg, err := config.Load(repoRoot)
+	cfg, err := config.Load(resolved.StateDir)
 	if err != nil {
 		return "", fmt.Errorf("locate devm.yaml: %w (run `devm secret` from a project root)", err)
 	}

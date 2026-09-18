@@ -41,6 +41,13 @@ func setupAndApproveCfg(t *testing.T, projectID string, cfg schema.Config) strin
 	devmYAML, err := yaml.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "devm.yaml"), devmYAML, 0644))
+
+	// The daemon's approve-gate check reads devm.yaml from the
+	// project's state dir, not repoRoot — seed it there too.
+	stateDir := filepath.Join(identity.Prod.RuntimeDir(), projectID)
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), devmYAML, 0644))
+
 	// Pre-approve the snapshot so the approve gate check passes.
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write(projectID, devmYAML, nil, "user"))
@@ -325,6 +332,13 @@ func TestRunReconcile_ApproveRequired_SurfacesMessageVerbatim(t *testing.T) {
 
 	repoRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "devm.yaml"), []byte("project:\n  name: x\n"), 0o644))
+
+	// The approve-gate check reads devm.yaml from the project's state
+	// dir, not repoRoot. No approve snapshot is written, so the
+	// daemon still treats this as diverged and refuses.
+	stateDir := filepath.Join(identity.Prod.RuntimeDir(), "x")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte("project:\n  name: x\n"), 0o644))
 
 	rc, res, err := RunReconcile(identity.Prod, cfg, fakeTartForSessions(t), repoRoot, ReconcileOptions{})
 	require.Error(t, err)

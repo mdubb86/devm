@@ -389,17 +389,16 @@ type ApproveStateResponse struct {
 	ApprovedSince *string `json:"approved_since"`
 }
 
-// ApproveState queries GET /vm/approve-state for the project rooted at
-// macCwd. Returns ErrApproveStateUnsupported (not a wrapped error) on a
-// 404 so callers can distinguish "old daemon" from a real failure.
-func (c *Client) ApproveState(ctx context.Context, projectID, macCwd string) (ApproveStateResponse, error) {
+// ApproveState queries GET /vm/approve-state for projectID. Returns
+// ErrApproveStateUnsupported (not a wrapped error) on a 404 so callers
+// can distinguish "old daemon" from a real failure.
+func (c *Client) ApproveState(ctx context.Context, projectID string) (ApproveStateResponse, error) {
 	u, err := url.Parse("http://localhost/vm/approve-state")
 	if err != nil {
 		return ApproveStateResponse{}, err
 	}
 	q := u.Query()
 	q.Set("project", projectID)
-	q.Set("mac_cwd", macCwd)
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {

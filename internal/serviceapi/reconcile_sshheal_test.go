@@ -24,12 +24,19 @@ import (
 // returns the decoded response.
 func postReconcile(t *testing.T, req VMReconcileRequest) VMReconcileResponse {
 	t.Helper()
-	// Ensure WorkspaceHostPath is set for the approve gate check.
+	// Ensure WorkspaceHostPath is set, and devm.yaml exists in the
+	// project's state dir, for the approve gate check (which reads
+	// from the state dir, not WorkspaceHostPath).
 	if req.WorkspaceHostPath == "" {
 		projDir := t.TempDir()
 		// Create a simple devm.yaml matching the cfg.
 		devmYAML := "project:\n  name: " + req.Cfg.Project.Name + "\n"
 		require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte(devmYAML), 0644))
+
+		stateDir := stateDirForProject(identity.Prod, req.Name)
+		require.NoError(t, os.MkdirAll(stateDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte(devmYAML), 0644))
+
 		// Approve the snapshot so the gate check passes.
 		store := approve.NewStore(identity.Prod)
 		require.NoError(t, store.Write(req.Name, []byte(devmYAML), nil, "user"))

@@ -124,6 +124,13 @@ func TestStart_SurfacesApproveRequired(t *testing.T) {
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
 
+	// The approve-gate check reads devm.yaml from the project's state
+	// dir, not MacCwd.
+	stateDir := filepath.Join(identity.Prod.RuntimeDir(), "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"),
+		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
+
 	macCwd := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
 		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))

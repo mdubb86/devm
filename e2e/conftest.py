@@ -150,7 +150,7 @@ def workspace(request, devm_path, sandbox_name) -> Iterator[Workspace]:
         # identity (iron-proxy/routes/state keys) and the tart VM name. Use
         # the unique sandbox_name for both so identity lookups (workspace.slug)
         # match what the daemon keys on.
-        ws = Workspace(path, slug=sandbox_name, vm_name=sandbox_name, port_offset=port_offset)
+        ws = Workspace(path, slug=sandbox_name, vm_name=sandbox_name, port_offset=port_offset, devm_path=devm_path)
         ws.write_devmyaml()  # minimal config; tests can call write_devmyaml again with extras
         # If the test's devm.yaml references any `secret:` values, seed the
         # devm secret store before yielding so cold-start doesn't fail on

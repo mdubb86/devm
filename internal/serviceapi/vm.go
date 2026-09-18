@@ -506,12 +506,13 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			}
 		}
 
-		if err := bootstrapApprovedSnapshotOnFirstRun(cfg, req.Name, req.MacCwd); err != nil {
+		configDir := stateDirForProject(cfg, req.Name)
+		if err := bootstrapApprovedSnapshotOnFirstRun(cfg, req.Name, configDir); err != nil {
 			http.Error(w, fmt.Sprintf("bootstrap approve snapshot: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		if diverged, err := isApproveDiverged(cfg, req.Name, req.MacCwd); err != nil {
+		if diverged, err := isApproveDiverged(cfg, req.Name, configDir); err != nil {
 			http.Error(w, fmt.Sprintf("approve check: %v", err), http.StatusInternalServerError)
 			return
 		} else if diverged {
@@ -707,7 +708,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// Register before spawning the serve goroutine — see the popLn
 		// comment above for why.
 		proposeListeners.Store(req.Name, proposeLn)
-		go serveProposeListener(proposeLn, cfg, req.Name, cache)
+		go serveProposeListener(proposeLn, cfg, req.Name)
 
 		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read. Merge onto the existing
@@ -1227,6 +1228,10 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	})
+
+	s.mux.Handle("/vm/resolve-project", handleResolveProject(cfg))
+	s.mux.Handle("/vm/register-project", handleRegisterProject(cfg))
+	s.mux.Handle("/vm/propose", handleProposeUnixSocket(cfg))
 
 	// /denials — read-only view of policy-authority allow-list rejects
 	// for a project. Sorted by count desc. Empty array is a normal state
