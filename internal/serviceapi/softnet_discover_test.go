@@ -56,7 +56,9 @@ func TestDiscoverSoftnet_RebuildsStateForRehydratedProjects(t *testing.T) {
 
 	discoverSoftnet(context.Background(), identity.Prod, 51234)
 
-	assert.Equal(t, sock, softnetState.get(projectID),
+	gotSock, ok := softnetState.get(projectID)
+	assert.True(t, ok, "discoverSoftnet must register the project in softnetState")
+	assert.Equal(t, sock, gotSock,
 		"discoverSoftnet must re-put the deterministic control sock for every rehydrated project")
 
 	line := <-got

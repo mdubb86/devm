@@ -29,7 +29,7 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 func Run(cfg identity.Config, args []string) error {
 	fs := flag.NewFlagSet("softnet", flag.ContinueOnError)
 	vmFD := fs.Int("vm-fd", -1, "fd carrying the guest NIC socket")
-	vmMac := fs.String("vm-mac-address", "", "guest NIC MAC")
+	_ = fs.String("vm-mac-address", "", "guest NIC MAC (accepted from tart; ignored — softnet learns the MAC via ARP/DHCP)")
 	var allow, block, expose multiFlag
 	fs.Var(&allow, "allow", "allow CIDR (recorded, ignored)")
 	fs.Var(&block, "block", "block CIDR (recorded, ignored)")
@@ -40,7 +40,6 @@ func Run(cfg identity.Config, args []string) error {
 	if *vmFD < 0 {
 		return fmt.Errorf("--vm-fd is required")
 	}
-	_ = vmMac
 
 	f := os.NewFile(uintptr(*vmFD), "vmnet")
 	if f == nil {

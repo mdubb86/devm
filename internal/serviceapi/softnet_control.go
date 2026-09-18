@@ -193,10 +193,11 @@ func (s *softnetStore) put(projectID, sock string) {
 	s.m[projectID] = sock
 }
 
-func (s *softnetStore) get(projectID string) string {
+func (s *softnetStore) get(projectID string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.m[projectID]
+	v, ok := s.m[projectID]
+	return v, ok
 }
 
 func (s *softnetStore) del(projectID string) {

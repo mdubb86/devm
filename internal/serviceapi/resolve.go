@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -64,7 +65,11 @@ func listWorkspaces(cfg identity.Config) ([]WorkspaceEntry, error) {
 		projectID := strings.TrimSuffix(name, ".json")
 
 		snap, err := ReadStateSnapshot(cfg, projectID)
-		if err != nil || snap == nil {
+		if err != nil {
+			daemonlog.Errorf("serviceapi: listWorkspaces: read state snapshot for %s: %v", projectID, err)
+			continue
+		}
+		if snap == nil {
 			continue
 		}
 		out = append(out, projectWorkspaceEntries(cfg, projectID, &snap.Cfg)...)

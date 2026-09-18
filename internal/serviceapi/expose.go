@@ -59,8 +59,8 @@ func computeDirectTestHosts(cfg schema.Config) []string {
 // socket. Same registration contract as pushExposeMap: an empty softnetState
 // entry means a lifecycle registration step was skipped — fail loud.
 func pushTestHosts(projectID string, hosts []string) error {
-	sock := softnetState.get(projectID)
-	if sock == "" {
+	sock, ok := softnetState.get(projectID)
+	if !ok {
 		return fmt.Errorf("no softnet control socket registered for %q", projectID)
 	}
 	return newSoftnetClient(sock).setTestHosts(hosts)
@@ -96,8 +96,8 @@ func pushExposeMap(projectID string, ports []softnet.ExposePort) error {
 	if err := exposeClaims.reconcile(projectID, keys); err != nil {
 		return err
 	}
-	sock := softnetState.get(projectID)
-	if sock == "" {
+	sock, ok := softnetState.get(projectID)
+	if !ok {
 		return fmt.Errorf("push expose map for %s: softnet control socket not registered — /vm/start (or /vm/apply-iron-proxy for adopt-in-place) must be called first", projectID)
 	}
 	if err := newSoftnetClient(sock).setExposeMap(ports); err != nil {

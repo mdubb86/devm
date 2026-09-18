@@ -237,17 +237,18 @@ func TestEndpointDecodesIntoForwardTargets(t *testing.T) {
 func TestSoftnetStore(t *testing.T) {
 	s := &softnetStore{m: make(map[string]string)}
 
-	if got := s.get("proj1"); got != "" {
-		t.Fatalf("expected empty for unknown project, got %q", got)
+	if _, ok := s.get("proj1"); ok {
+		t.Fatal("expected not-ok for unknown project")
 	}
 
 	s.put("proj1", "/tmp/proj1.sock")
-	if got := s.get("proj1"); got != "/tmp/proj1.sock" {
-		t.Fatalf("get after put: got %q", got)
+	got, ok := s.get("proj1")
+	if !ok || got != "/tmp/proj1.sock" {
+		t.Fatalf("get after put: got %q ok=%v", got, ok)
 	}
 
 	s.del("proj1")
-	if got := s.get("proj1"); got != "" {
-		t.Fatalf("expected empty after del, got %q", got)
+	if _, ok := s.get("proj1"); ok {
+		t.Fatal("expected not-ok after del")
 	}
 }

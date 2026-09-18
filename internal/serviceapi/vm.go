@@ -369,8 +369,8 @@ func armPassthroughRestoreTimer(locks *ProjectLocks, name string, d time.Duratio
 // shutdownSoftnet asks projectID's softnet child to exit, over its control
 // socket, if the daemon has one recorded. Best-effort and silent when there
 // is nothing to shut down (projectID's VM was never started, or /vm/stop
-// already ran for it) — softnetState.get returning "" is the normal case
-// for a project whose softnet, if any, is already gone.
+// already ran for it) — an unregistered project is the normal case for one
+// whose softnet, if any, is already gone.
 //
 // This exists because softnet is not a process the daemon spawns/tracks
 // directly: `tart run --net-softnet` forks it internally as its own child,
@@ -381,8 +381,8 @@ func armPassthroughRestoreTimer(locks *ProjectLocks, name string, d time.Duratio
 // outlives its owning VM as an orphan, still holding the project's bound
 // 127.42.0.N port for the next cold-start to collide with.
 func shutdownSoftnet(projectID string) {
-	sock := softnetState.get(projectID)
-	if sock == "" {
+	sock, ok := softnetState.get(projectID)
+	if !ok {
 		return
 	}
 	if err := newSoftnetClient(sock).shutdown(); err != nil {
@@ -833,8 +833,8 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		unlock := locks.Lock(req.Name)
 		defer unlock()
 
-		sock := softnetState.get(req.Name)
-		if sock == "" {
+		sock, ok := softnetState.get(req.Name)
+		if !ok {
 			http.Error(w, "softnet control socket missing — was /vm/start called for this project?",
 				http.StatusPreconditionFailed)
 			return

@@ -252,8 +252,8 @@ func TestVMStop_RemovesSoftnetState(t *testing.T) {
 
 	require.NoError(t, c.StopVM(ctx, "proj-stop-sn", false))
 
-	assert.Empty(t, softnetState.get("proj-stop-sn"),
-		"/vm/stop must clear the softnet control-socket record")
+	_, ok := softnetState.get("proj-stop-sn")
+	assert.False(t, ok, "/vm/stop must clear the softnet control-socket record")
 }
 
 // TestVMStop_NotFound verifies /vm/stop is idempotent for an unknown
