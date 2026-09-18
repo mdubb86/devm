@@ -533,7 +533,7 @@ func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {
 
 // TestClientEnforcementConfig_MissingProjectState verifies the endpoint
 // 404/412s (surfaced as a Client error) when /vm/start was never called
-// for the project — there's no MAC_HOST/ports to compute config from.
+// for the project — there's no loopback IP/ports to compute config from.
 func TestClientEnforcementConfig_MissingProjectState(t *testing.T) {
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)

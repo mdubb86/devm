@@ -47,18 +47,18 @@ func fakeTartIPFails() *tart.Tart {
 // per-project path so /vm/apply-iron-proxy can pull ports out of it.
 // The tunnel_listen port is offset by 1 from http_listen — arbitrary,
 // just a distinct value the readback can pin.
-func writePreExistingIronProxyConfig(t *testing.T, projectID, macHost string, httpPort, httpsPort, dnsPort int) {
+func writePreExistingIronProxyConfig(t *testing.T, projectID, hostLoopIP string, httpPort, httpsPort, dnsPort int) {
 	t.Helper()
 	path, err := IronProxyConfigPath(identity.Prod, projectID)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	body := []byte(
 		"dns:\n" +
-			"  listen: " + macHost + ":" + strconv.Itoa(dnsPort) + "\n" +
+			"  listen: " + hostLoopIP + ":" + strconv.Itoa(dnsPort) + "\n" +
 			"proxy:\n" +
-			"  http_listen: " + macHost + ":" + strconv.Itoa(httpPort) + "\n" +
-			"  https_listen: " + macHost + ":" + strconv.Itoa(httpsPort) + "\n" +
-			"  tunnel_listen: " + macHost + ":" + strconv.Itoa(httpPort+1) + "\n",
+			"  http_listen: " + hostLoopIP + ":" + strconv.Itoa(httpPort) + "\n" +
+			"  https_listen: " + hostLoopIP + ":" + strconv.Itoa(httpsPort) + "\n" +
+			"  tunnel_listen: " + hostLoopIP + ":" + strconv.Itoa(httpPort+1) + "\n",
 	)
 	require.NoError(t, os.WriteFile(path, body, 0o600))
 }
@@ -136,7 +136,7 @@ func TestApplyIronProxy_NeverColdStarted_FailsLoud(t *testing.T) {
 
 // TestApplyIronProxy_RunningRestartSucceeds covers the "iron-proxy was
 // already running" happy path: a real config file exists on disk (so
-// MAC_HOST:port is preserved), the supervisor reports the process as
+// loopback-IP:port is preserved), the supervisor reports the process as
 // alive (simulated via Adopt on a real child pid, mirroring
 // TestSupervisor_AdoptedStatusAndStop), and the handler must stop the
 // old process, spawn a fresh one, verify it's listening, and persist
@@ -162,14 +162,14 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg}))
 
-	macHost := "127.0.0.1"
+	hostLoopIP := "127.0.0.1"
 	httpPort, err := pickPort()
 	require.NoError(t, err)
 	httpsPort, err := pickPort()
 	require.NoError(t, err)
 	dnsPort, err := pickPort()
 	require.NoError(t, err)
-	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
+	writePreExistingIronProxyConfig(t, projectID, hostLoopIP, httpPort, httpsPort, dnsPort)
 
 	// Simulate "iron-proxy already running" by adopting a real,
 	// long-lived child process's pid — supervisor.Status only checks
@@ -264,14 +264,14 @@ func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg, ProjectIP: "127.42.0.9"}))
 
-	macHost := "127.0.0.1"
+	hostLoopIP := "127.0.0.1"
 	httpPort, err := pickPort()
 	require.NoError(t, err)
 	httpsPort, err := pickPort()
 	require.NoError(t, err)
 	dnsPort, err := pickPort()
 	require.NoError(t, err)
-	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
+	writePreExistingIronProxyConfig(t, projectID, hostLoopIP, httpPort, httpsPort, dnsPort)
 
 	// The VM is still running this daemon lifetime: ironProxyState
 	// already holds the project IP /vm/start allocated.
@@ -337,14 +337,14 @@ func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 	}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg}))
 
-	macHost := "127.0.0.1"
+	hostLoopIP := "127.0.0.1"
 	httpPort, err := pickPort()
 	require.NoError(t, err)
 	httpsPort, err := pickPort()
 	require.NoError(t, err)
 	dnsPort, err := pickPort()
 	require.NoError(t, err)
-	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
+	writePreExistingIronProxyConfig(t, projectID, hostLoopIP, httpPort, httpsPort, dnsPort)
 
 	// Adopt-in-place: no prior ironProxyState entry for this project this
 	// daemon lifetime — mirrors the state before /vm/apply-iron-proxy is
@@ -398,14 +398,14 @@ func TestApplyIronProxy_PreservesGuestOriginPorts(t *testing.T) {
 	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg, ProjectIP: "127.42.0.9"}))
 
-	macHost := "127.0.0.1"
+	hostLoopIP := "127.0.0.1"
 	httpPort, err := pickPort()
 	require.NoError(t, err)
 	httpsPort, err := pickPort()
 	require.NoError(t, err)
 	dnsPort, err := pickPort()
 	require.NoError(t, err)
-	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
+	writePreExistingIronProxyConfig(t, projectID, hostLoopIP, httpPort, httpsPort, dnsPort)
 
 	// Simulate a prior /vm/start (or apply-iron-proxy) having already
 	// started and stashed this project's guest-origin listener pair.
@@ -470,14 +470,14 @@ func TestApplyIronProxy_AdoptInPlace_StartsGuestOriginListeners(t *testing.T) {
 	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg}))
 
-	macHost := "127.0.0.1"
+	hostLoopIP := "127.0.0.1"
 	httpPort, err := pickPort()
 	require.NoError(t, err)
 	httpsPort, err := pickPort()
 	require.NoError(t, err)
 	dnsPort, err := pickPort()
 	require.NoError(t, err)
-	writePreExistingIronProxyConfig(t, projectID, macHost, httpPort, httpsPort, dnsPort)
+	writePreExistingIronProxyConfig(t, projectID, hostLoopIP, httpPort, httpsPort, dnsPort)
 
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })

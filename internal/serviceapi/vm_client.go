@@ -213,7 +213,7 @@ func (c *Client) Reconcile(ctx context.Context, req VMReconcileRequest) (VMRecon
 
 // ApplyIronProxy calls POST /vm/apply-iron-proxy with the freshly
 // resolved allowlist and secrets. The daemon regenerates the
-// per-project iron-proxy config on the SAME MAC_HOST:port as the
+// per-project iron-proxy config on the SAME loopback-IP:port as the
 // pre-existing config on disk, restarts iron-proxy if it was
 // running, or spawns it if the config existed but iron-proxy was
 // dead. Returns VMApplyIronProxyResponse.VMRunning=false when there

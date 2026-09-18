@@ -103,7 +103,7 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 
 		hashes := secretHashesFromBindings(req.Secrets)
 
-		// Read the existing iron-proxy config for ports + MAC_HOST. The
+		// Read the existing iron-proxy config for ports + loopback IP. The
 		// dnsmasq inside the guest is already pointing at these ports;
 		// we must preserve them or DNS silently breaks.
 		cfgPath, err := IronProxyConfigPath(cfg, req.Name)
@@ -140,7 +140,7 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		for _, sb := range req.Secrets {
 			secrets = append(secrets, IronSecret{Name: sb.Name, Value: sb.Value, Hosts: sb.Hosts})
 		}
-		// Build fresh config on the SAME MAC_HOST + ports pulled from
+		// Build fresh config on the SAME loopback IP + ports pulled from
 		// the on-disk config above.
 		newCfg := IronProxyConfig{
 			HTTPListen:   ironProxyListenAddr(diskInfo.HTTPPort),
@@ -194,7 +194,7 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 
 		// Rehydrate ironProxyState from the same on-disk config so
 		// /vm/enforcement-config keeps working for this project — it
-		// reads MAC_HOST/ports/Docker from ironProxyState, not from
+		// reads loopback IP/ports/Docker from ironProxyState, not from
 		// disk. Without this, a caller that reaches this handler with
 		// an empty ironProxyState (the VM's own process was never
 		// (re)started here, e.g. adopt-in-place after `devm stop`

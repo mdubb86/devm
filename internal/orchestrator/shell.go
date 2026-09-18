@@ -51,7 +51,7 @@ type VMAdminClient interface {
 	EnforcementConfig(ctx context.Context, name string) (serviceapi.VMEnforcementConfigResponse, error)
 	StopVM(ctx context.Context, name string, destroy bool) error
 	// ApplyIronProxy (re)spawns this project's iron-proxy on its
-	// existing MAC_HOST/ports without touching the VM — the same
+	// existing loopback IP/ports without touching the VM — the same
 	// no-VM-cycle primitive `devm reconcile`'s self-heal
 	// (BucketEgressRestart) uses. Adopt-in-place needs it: a prior
 	// `devm stop` tears iron-proxy down along with the VM, so a VM
@@ -161,7 +161,7 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 			// Adopt-in-place deliberately skips StartVM below (the VM
 			// process is already up), but StartVM is also the only
 			// thing that normally (re)spawns this project's iron-proxy.
-			// Revive it explicitly on its last-known MAC_HOST/ports so
+			// Revive it explicitly on its last-known loopback IP/ports so
 			// the provisioning tail's EnforcementConfig fetch (next,
 			// inside provisionAndAttach) has a live iron-proxy to read.
 			applyResp, err := d.ServiceAPIClient.ApplyIronProxy(ctx, serviceapi.VMApplyIronProxyRequest{

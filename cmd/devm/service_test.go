@@ -19,7 +19,7 @@ func TestBuildUninstallScript_ReapsIronProxyChildren(t *testing.T) {
 	// (setsid on spawn — see runner.go). Uninstall must SIGTERM them
 	// itself; without this the e2e harness has to reap orphans, and
 	// real users end up with iron-proxy processes sitting on
-	// MAC_HOST:port bindings that leak across uninstall/reinstall.
+	// loopback-IP:port bindings that leak across uninstall/reinstall.
 	script := buildUninstallScript(cfg, "/usr/local/bin/devm")
 
 	require.True(t, strings.Contains(script, "launchctl bootout system/com.devm.service"),
