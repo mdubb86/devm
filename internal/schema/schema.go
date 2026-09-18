@@ -29,6 +29,29 @@ type SecretRef struct {
 	Name string
 }
 
+// rejectUnknownYAMLKeys returns an error naming the first key in node
+// (a MappingNode) whose name is not in known. Used by types with a
+// custom UnmarshalYAML — yaml.v3's decoder-level KnownFields(true)
+// does not propagate through node.Decode calls inside UnmarshalYAML,
+// so each such type has to enforce its own known-key check to catch
+// typos. `kind` names the type for the error message
+// (`unknown field %q at <kind>`).
+func rejectUnknownYAMLKeys(node *yaml.Node, kind string, known []string) error {
+	set := make(map[string]bool, len(known))
+	for _, k := range known {
+		set[k] = true
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i].Value
+		if !set[key] {
+			return fmt.Errorf(
+				"unknown field %q at %s (line %d) — valid: %s",
+				key, kind, node.Content[i].Line, strings.Join(known, ", "))
+		}
+	}
+	return nil
+}
+
 // EnvValue is either a literal string or a SecretRef. devm.yaml's
 // env: map decodes to map[string]EnvValue.
 type EnvValue struct {
@@ -269,18 +292,8 @@ var serviceKnownFields = []string{
 // `services.api.replicaz: 3` without this explicit check.
 func (s *Service) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind == yaml.MappingNode {
-		known := make(map[string]bool, len(serviceKnownFields))
-		for _, k := range serviceKnownFields {
-			known[k] = true
-		}
-		for i := 0; i < len(node.Content); i += 2 {
-			key := node.Content[i].Value
-			if !known[key] {
-				return fmt.Errorf(
-					"unknown field %q at service (line %d) — valid: %s",
-					key, node.Content[i].Line,
-					strings.Join(serviceKnownFields, ", "))
-			}
+		if err := rejectUnknownYAMLKeys(node, "service", serviceKnownFields); err != nil {
+			return err
 		}
 	}
 	var raw serviceYAML

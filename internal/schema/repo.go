@@ -2,7 +2,6 @@ package schema
 
 import (
 	"fmt"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -64,18 +63,8 @@ func (v *Volume) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind != yaml.MappingNode {
 		return fmt.Errorf("volume must be a string (guest path) or a mapping (line %d)", node.Line)
 	}
-	known := make(map[string]bool, len(volumeKnownFields))
-	for _, k := range volumeKnownFields {
-		known[k] = true
-	}
-	for i := 0; i < len(node.Content); i += 2 {
-		key := node.Content[i].Value
-		if !known[key] {
-			return fmt.Errorf(
-				"unknown field %q at volume (line %d) — valid: %s",
-				key, node.Content[i].Line,
-				strings.Join(volumeKnownFields, ", "))
-		}
+	if err := rejectUnknownYAMLKeys(node, "volume", volumeKnownFields); err != nil {
+		return err
 	}
 	type raw struct {
 		Path   string   `yaml:"path"`
@@ -97,18 +86,8 @@ func (r *RepoConfig) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind != yaml.MappingNode {
 		return fmt.Errorf("repo must be a mapping (line %d)", node.Line)
 	}
-	known := make(map[string]bool, len(repoKnownFields))
-	for _, k := range repoKnownFields {
-		known[k] = true
-	}
-	for i := 0; i < len(node.Content); i += 2 {
-		key := node.Content[i].Value
-		if !known[key] {
-			return fmt.Errorf(
-				"unknown field %q at repo (line %d) — valid: %s",
-				key, node.Content[i].Line,
-				strings.Join(repoKnownFields, ", "))
-		}
+	if err := rejectUnknownYAMLKeys(node, "repo", repoKnownFields); err != nil {
+		return err
 	}
 	type raw struct {
 		URL      *string                `yaml:"url,omitempty"`
