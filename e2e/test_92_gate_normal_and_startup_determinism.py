@@ -95,6 +95,7 @@ E2E_OUT_LOG = Path.home() / "Library/Logs/com.devm.e2e.service.out.log"
 def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name):
     vm = TartSandbox(name=sandbox_name)
     workspace.write_devmyaml(
+        no_repo=True,
         startup=[
             f"curl -sf -m 10 {NON_ALLOWLISTED_HOST} -o {STARTUP_FETCH_FILE} || true",
             f"test -f $WORKSPACE/README && echo {STARTUP_SAW_WORKSPACE}",

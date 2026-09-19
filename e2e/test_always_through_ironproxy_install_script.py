@@ -16,6 +16,7 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(300)
 def test_install_script_hits_iron_proxy(devm, workspace):
     workspace.write_devmyaml(
+        no_repo=True,
         install=["curl -fsSL https://astral.sh/uv/install.sh -o /tmp/u.sh"],
         network={"allow": ["astral.sh", "deb.debian.org", "security.debian.org"]},
     )

@@ -74,6 +74,7 @@ def test_iron_proxy_survives_daemon_sigkill(
     devm, workspace, sandbox_name, devm_installed,
 ):
     workspace.write_devmyaml(
+        no_repo=True,
         install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         # Real allowlist so iron-proxy writes an audit line for every

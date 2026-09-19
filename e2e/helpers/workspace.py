@@ -65,13 +65,16 @@ class Workspace:
     def volume_path(self, name: str | None = None) -> Path:
         """Return the Mac-side volume storage path for a project volume.
 
-        name=None -> primary (the daemon derives the primary volume's
-        name from the basename of the Mac cwd, i.e. this workspace dir).
+        name=None -> primary volume. The primary label is derived from
+        `bare_repo_url()` via `schema.BareCloneName`; for the current
+        fixture (github.com/octocat/Hello-World.git) that resolves to
+        `bare_repo_label()` = "Hello-World".
+
         Hardcoded to the devm-e2e identity's RuntimeDir to match the
         daemon under test (see internal/identity.E2E.RuntimeDir()).
         """
         if name is None:
-            name = self.path.name
+            name = self.bare_repo_label()
         return Path.home() / "Library/Application Support/devm-e2e/volumes" / self.vm_name / name
 
     def write_devmyaml(self, *, no_repo: bool = False, **sections: Any) -> None:
@@ -97,6 +100,22 @@ class Workspace:
         if sections.get("repo") is False:
             no_repo = True
             del sections["repo"]
+        # Guard: a custom `network:` block silently replaces the fixture's
+        # default `network.allow=[github.com]`; if the caller ALSO keeps the
+        # default `repos.main` (fixture repo lives on github.com), the guest
+        # can't clone the repo and cold-start silently degrades. Force the
+        # caller to be explicit: either add `github.com`/`*` to the custom
+        # allowlist, opt out of the default repo with `no_repo=True`, or
+        # pass an explicit `repos={...}` block.
+        if not no_repo and "repos" not in sections and "network" in sections:
+            allow = sections["network"].get("allow", []) if isinstance(sections["network"], dict) else []
+            if "github.com" not in allow and "*" not in allow:
+                raise ValueError(
+                    "write_devmyaml: custom network= block does not include 'github.com' or '*', "
+                    "but the default fixture repo (github.com/octocat/Hello-World) is still enabled. "
+                    "Either add 'github.com' to network.allow, pass '*' to open everything, "
+                    "or add no_repo=True to omit the fixture repo."
+                )
         if not no_repo and "repos" not in sections:
             # bare_repo_url() is github's public octocat/Hello-World repo,
             # cloneable without auth. Omitting `secret:` tells the daemon

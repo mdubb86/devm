@@ -40,6 +40,7 @@ _RESPONSE = (
 @pytest.mark.timeout(300)
 def test_systemd_service_active_and_reachable(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
+        no_repo=True,
         packages=["netcat-openbsd"],
         network={"allow": ["deb.debian.org", "security.debian.org"]},
     )

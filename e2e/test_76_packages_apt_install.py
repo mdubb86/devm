@@ -32,6 +32,7 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(300)
 def test_packages_installs_apt_binary(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
+        no_repo=True,
         packages=["jq"],
         network={
             "allow": [

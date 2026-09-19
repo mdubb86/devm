@@ -24,6 +24,10 @@ def test_docker_build_transparent(workspace, devm):
         docker=True,
         network={
             "allow": [
+                # github.com covers the fixture's default repos.main
+                # (github.com/octocat/Hello-World) which supplies the
+                # primary volume backing $WORKSPACE below.
+                "github.com",
                 "api.github.com",
                 # Debian's apt mirrors — the build's `apt-get update &&
                 # apt-get install -y curl` exits early with 403 without

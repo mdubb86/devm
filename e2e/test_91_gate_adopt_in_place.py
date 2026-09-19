@@ -111,6 +111,7 @@ def test_adopt_in_place(devm, workspace, sandbox_name):
     # cycle below), so the adopt-in-place provisioning tail in step 4
     # skips this and stays fast.
     workspace.write_devmyaml(
+        no_repo=True,
         packages=["netcat-openbsd"],
         network={"allow": ["deb.debian.org", "security.debian.org"]},
         services={

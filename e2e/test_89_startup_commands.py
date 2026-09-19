@@ -96,6 +96,7 @@ def test_startup_runs_every_boot_open_egress_enforced_after(workspace, devm, san
     (mirror / "mac-seeded-file").write_text("seeded\n")
 
     workspace.write_devmyaml(
+        no_repo=True,
         startup=[
             f"echo run >> {COUNT_FILE}",
             f"curl -sf -m 10 {NON_ALLOWLISTED_HOST} -o {STARTUP_FETCH_FILE} || true",

@@ -44,6 +44,7 @@ def test_guest_git_identity_mirrored(devm, workspace):
         ["git", "-C", str(workspace.path), "config", "user.email", _TEST_EMAIL], check=True,
     )
     workspace.write_devmyaml(
+        no_repo=True,
         packages=["git"],
         network={"allow": ["deb.debian.org", "security.debian.org"]},
     )

@@ -38,6 +38,7 @@ def test_nss_trust_iron_proxy_mitm(devm, workspace, sandbox_name):
     # Playwright, no CDN download — the assertion is about devm's
     # NSS seeding, not about any specific browser distribution.
     workspace.write_devmyaml(
+        no_repo=True,
         install=["true"],
         packages=["chromium"],
         network={"allow": ["api.github.com"]},

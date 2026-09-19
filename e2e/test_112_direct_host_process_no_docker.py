@@ -62,6 +62,7 @@ def test_direct_host_process_no_docker_no_svc_ingress_rule(workspace, devm, sand
     # which needs the Debian mirrors allow-listed for the apt install
     # to reach them through iron-proxy.
     workspace.write_devmyaml(
+        no_repo=True,
         packages=["netcat-openbsd"],
         network={"allow": ["deb.debian.org", "security.debian.org"]},
         services={

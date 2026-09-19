@@ -34,6 +34,7 @@ def test_daemon_softnet_egress(workspace, devm, sandbox_name):
     # devm.yaml with a restrictive network.allow — same allow-listed
     # host test_43 uses (known-good against the real upstream).
     workspace.write_devmyaml(
+        no_repo=True,
         install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         network={"allow": ["api.github.com"]},

@@ -23,6 +23,7 @@ def test_egress_enforcement(devm, workspace):
     """Cold-start with allow-list; verify allowed/blocked behavior."""
     # devm.yaml with network.allow + one !secret entry.
     workspace.write_devmyaml(
+        no_repo=True,
         install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         network={"allow": ["api.github.com"]},

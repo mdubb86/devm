@@ -45,6 +45,7 @@ def _tart_pid(vm_name: str) -> int | None:
 @pytest.mark.timeout(900)
 def test_iron_proxy_reconcile_allowlist_add(workspace, devm):
     workspace.write_devmyaml(
+        no_repo=True,
         network={
             "allow": [
                 "httpbin.org",
@@ -99,6 +100,13 @@ def test_iron_proxy_reconcile_allowlist_add(workspace, devm):
     cfg["network"]["allow"].append("example.com")
     workspace.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
+    approve = subprocess.run(
+        [devm.path, "approve"],
+        cwd=str(workspace.path), input=b"y\n",
+        capture_output=True, timeout=30,
+    )
+    assert approve.returncode == 0, f"approve failed: {approve.stderr.decode()!r}"
+
     reconcile = subprocess.run(
         [devm.path, "reconcile"],
         cwd=str(workspace.path),
@@ -108,10 +116,9 @@ def test_iron_proxy_reconcile_allowlist_add(workspace, devm):
         f"devm reconcile failed:\nstderr={reconcile.stderr.decode()!r}"
     )
     out = reconcile.stdout.decode()
-    assert "network egress change" in out, (
-        f"reconcile stdout missing network-egress section: {out!r}"
+    assert "allow network example.com" in out, (
+        f"reconcile stdout missing allow-network apply line: {out!r}"
     )
-    assert "example.com" in out
 
     # Small settle — iron-proxy needs a moment to re-bind on the
     # preserved port; guest DNS uses the same forwarding target.

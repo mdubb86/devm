@@ -46,6 +46,7 @@ def test_install_runs_before_enforcement(workspace, devm):
     # active during install, curl to pypi.org would return 502 and the
     # install step would fail with `curl -sf` exiting non-zero.
     workspace.write_devmyaml(
+        no_repo=True,
         install=[
             # Reach a real public host that is NOT on the allow list.
             # `curl -sf` exits non-zero on any HTTP >=400 (which iron-proxy

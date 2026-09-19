@@ -40,6 +40,7 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(900)
 def test_docker_first_class_end_to_end(workspace, devm):
     workspace.write_devmyaml(
+        no_repo=True,
         docker=True,
         network={
             "allow": [

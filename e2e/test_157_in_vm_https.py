@@ -98,6 +98,7 @@ def test_in_vm_https(workspace, devm, sandbox_name):
     db_script = f"while true; do printf '%s' '{BANNER.decode()}' | nc -l -p {DB_PORT}; done"
 
     workspace.write_devmyaml(
+        no_repo=True,
         packages=["netcat-openbsd", "openssl"],
         network={"allow": ["deb.debian.org", "security.debian.org"]},
         services={

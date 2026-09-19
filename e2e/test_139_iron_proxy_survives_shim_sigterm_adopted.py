@@ -52,6 +52,7 @@ def test_iron_proxy_survives_shim_sigterm_adopted(
     devm, workspace, sandbox_name, devm_installed,
 ):
     workspace.write_devmyaml(
+        no_repo=True,
         install=["true"],
         network={"allow": ["httpbin.org"]},
     )

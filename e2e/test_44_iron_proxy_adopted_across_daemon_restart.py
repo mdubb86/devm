@@ -47,6 +47,7 @@ def _iron_proxy_pid_for(project_id: str) -> int | None:
 @pytest.mark.slow
 def test_iron_proxy_survives_daemon_restart(devm, workspace, sandbox_name, devm_installed):
     workspace.write_devmyaml(
+        no_repo=True,
         install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         network={"allow": ["httpbin.org"]},
