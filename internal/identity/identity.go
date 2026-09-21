@@ -102,6 +102,13 @@ func Load() Config {
 	panic("identity.Load: unknown profile: " + Profile)
 }
 
+// IsE2E reports whether this Config is the e2e identity. Gates test-only
+// behavior (e.g. file-based delay hooks under RuntimeDir()) so a prod
+// daemon never reads or reacts to them.
+func (c Config) IsE2E() bool {
+	return c.Name == E2E.Name
+}
+
 // RuntimeDir is where the daemon persists per-user state (socket,
 // iron-proxy configs, CA material, project state snapshots).
 // ~/Library/Application Support/<Name>/. On errors reading the home

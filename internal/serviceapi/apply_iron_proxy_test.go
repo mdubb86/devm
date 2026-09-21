@@ -200,10 +200,20 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, sup *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
 		var lerr error
 		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
-		return lerr
+		if lerr != nil {
+			return lerr
+		}
+		// Mirrors what the real SpawnIronProxy does: register the newly
+		// spawned process with the supervisor so the handler's
+		// post-health-check identity check (sup.Status(key).Running)
+		// finds it alive. Any live pid works — Status only checks
+		// liveness via kill(pid, 0) — so the test binary's own pid
+		// stands in for the real iron-proxy child.
+		sup.Adopt(key, os.Getpid())
+		return nil
 	}
 
 	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID) })
@@ -280,10 +290,17 @@ func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, sup *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
 		var lerr error
 		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
-		return lerr
+		if lerr != nil {
+			return lerr
+		}
+		// See TestApplyIronProxy_RunningRestartSucceeds: mirrors the real
+		// SpawnIronProxy registering the child with the supervisor, which
+		// the handler's post-health-check identity check now requires.
+		sup.Adopt(supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}, os.Getpid())
+		return nil
 	}
 
 	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, nil)
@@ -353,10 +370,17 @@ func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, sup *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
 		var lerr error
 		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
-		return lerr
+		if lerr != nil {
+			return lerr
+		}
+		// See TestApplyIronProxy_RunningRestartSucceeds: mirrors the real
+		// SpawnIronProxy registering the child with the supervisor, which
+		// the handler's post-health-check identity check now requires.
+		sup.Adopt(supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}, os.Getpid())
+		return nil
 	}
 
 	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, nil)
@@ -414,10 +438,17 @@ func TestApplyIronProxy_PreservesGuestOriginPorts(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, sup *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
 		var lerr error
 		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
-		return lerr
+		if lerr != nil {
+			return lerr
+		}
+		// See TestApplyIronProxy_RunningRestartSucceeds: mirrors the real
+		// SpawnIronProxy registering the child with the supervisor, which
+		// the handler's post-health-check identity check now requires.
+		sup.Adopt(supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}, os.Getpid())
+		return nil
 	}
 
 	// proxy is nil here — this test pins the merge itself, independent
@@ -482,10 +513,17 @@ func TestApplyIronProxy_AdoptInPlace_StartsGuestOriginListeners(t *testing.T) {
 	origSpawn := spawnIronProxyFn
 	t.Cleanup(func() { spawnIronProxyFn = origSpawn })
 	var ln net.Listener
-	spawnIronProxyFn = func(_ context.Context, _ identity.Config, _ *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
+	spawnIronProxyFn = func(_ context.Context, _ identity.Config, sup *supervisor.Supervisor, _ string, proxyCfg IronProxyConfig, _ *StateCache) error {
 		var lerr error
 		ln, lerr = net.Listen("tcp", proxyCfg.HTTPSListen)
-		return lerr
+		if lerr != nil {
+			return lerr
+		}
+		// See TestApplyIronProxy_RunningRestartSucceeds: mirrors the real
+		// SpawnIronProxy registering the child with the supervisor, which
+		// the handler's post-health-check identity check now requires.
+		sup.Adopt(supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}, os.Getpid())
+		return nil
 	}
 
 	ca, err := loadOrGenerateCAAt(identity.Prod, t.TempDir())

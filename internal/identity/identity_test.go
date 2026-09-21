@@ -143,6 +143,15 @@ func TestGroupGID_Distinct(t *testing.T) {
 	}
 }
 
+func TestIsE2E(t *testing.T) {
+	if Prod.IsE2E() {
+		t.Errorf("Prod.IsE2E() = true, want false")
+	}
+	if !E2E.IsE2E() {
+		t.Errorf("E2E.IsE2E() = false, want true")
+	}
+}
+
 func TestRuntimeDir(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	if got := Prod.RuntimeDir(); got != filepath.Join(home, "Library", "Application Support", "devm") {

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
@@ -170,6 +172,21 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 			}
 		}
 
+		// e2e-only delay hook: lets the e2e suite inject a pause between
+		// the stop-gate above and the spawn below, wide enough for a test
+		// to bind the target port out from under the about-to-spawn
+		// iron-proxy (proves the health-check bug at apply_iron_proxy_test
+		// and the fix's identity check below). cfg.IsE2E() keeps prod
+		// daemons from ever touching the filesystem for this.
+		if cfg.IsE2E() {
+			delayPath := filepath.Join(cfg.RuntimeDir(), "e2e-test-hooks", "apply-iron-proxy-delay-ms")
+			if data, err := os.ReadFile(delayPath); err == nil {
+				if ms, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && ms > 0 {
+					time.Sleep(time.Duration(ms) * time.Millisecond)
+				}
+			}
+		}
+
 		// cache is nil: /vm/apply-iron-proxy operates outside the main
 		// cache-aware VM lifecycle (a targeted reconcile for drift in
 		// allow-list or secret bindings). The state watchdog's iron-proxy
@@ -183,6 +200,19 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		if !waitIronProxyHealthy(healthAddr) {
 			http.Error(w, fmt.Sprintf("iron-proxy spawned but did not bind %s within 2s", healthAddr),
 				http.StatusInternalServerError)
+			return
+		}
+		// waitIronProxyHealthy only proves something accepts connections
+		// on healthAddr — not that it's the iron-proxy we just spawned.
+		// If the bind lost a race to a squatter, iron-proxy logs a fatal
+		// error and exits almost immediately, but the squatter still
+		// answers the dial above and the check reports a false positive.
+		// The supervisor's process-monitor observes the exit and flips
+		// Running false; check that here so a fake-healthy squatter can't
+		// slip a 200 back to the caller while the real iron-proxy is dead.
+		if st := sup.Status(key); !st.Running {
+			http.Error(w, fmt.Sprintf("iron-proxy exited after spawn (port %s likely held by another process)",
+				healthAddr), http.StatusInternalServerError)
 			return
 		}
 
