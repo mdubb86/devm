@@ -26,14 +26,19 @@ the spawn, bind the squatter mid-pause, let the spawn (and its losing
 bind) proceed.
 
 Sequence:
-  1. Cold-start with network.allow=[api.github.com], no_repo=True.
-  2. Read iron-proxy's on-disk config for the HTTPS listen port.
-  3. Arm the delay hook (3000ms).
-  4. In parallel: kick off `devm approve` + `devm reconcile --yes`
-     (adds example.com to network.allow, which fires
-     apply-iron-proxy), and shortly after, bind a squatter socket to
-     iron-proxy's HTTPS port and hold it.
-  5. Assert reconcile FAILS with the identity-check's error message.
+  1. devm.yaml declares `env.TEST_TOKEN: !secret TEST_TOKEN`; plant
+     the secret's initial value.
+  2. Cold-start (iron-proxy spawns holding the initial secret hash).
+  3. Read iron-proxy's on-disk config for the HTTPS listen port.
+  4. Arm the delay hook (3000ms).
+  5. Rotate the secret's value. `devm reconcile --yes` now sees a
+     KindSecretChange → BucketEgressRestart → apply-iron-proxy fires
+     (secret rotations respawn iron-proxy; allowlist edits do not —
+     those are BucketLive and skip this handler entirely).
+  6. In the delay window a squatter thread polls until it wins the
+     freed HTTPS port and holds it. iron-proxy's spawn then loses the
+     bind race and exits.
+  7. Assert reconcile FAILS with the identity-check's error message.
 """
 from __future__ import annotations
 
@@ -68,14 +73,38 @@ def _iron_proxy_https_port(vm_name: str) -> int:
 @pytest.mark.slow
 @pytest.mark.timeout(900)
 def test_iron_proxy_apply_port_squat(workspace, devm):
+    # Plant the secret BEFORE cold-start so iron-proxy comes up with
+    # its value already baked into the hash iron-proxy tracks.
+    subprocess.run(
+        [devm.path, "secret", "set", "TEST_TOKEN"],
+        input=b"v1\n",
+        cwd=str(workspace.path),
+        capture_output=True, timeout=15, check=True,
+    )
+
+    # write_devmyaml's YAML dumper won't emit a `!secret` tag, so
+    # hand-craft the file. Fixture guard needs github.com in allow
+    # because we're not passing no_repo=True (secret reconcile needs a
+    # cold-started, running project). Actually — no_repo=True is fine
+    # too since apply-iron-proxy doesn't touch the repo.
     workspace.write_devmyaml(
         no_repo=True,
+        env={"TEST_TOKEN": "placeholder"},
         network={
             "allow": [
-                "api.github.com",
+                # `{host, secrets}` shape: iron-proxy is authorized to
+                # substitute TEST_TOKEN's value into requests targeting
+                # api.github.com. Env reference + host binding both need
+                # to be present or schema validation refuses cold-start.
+                {"host": "api.github.com", "secrets": ["TEST_TOKEN"]},
             ],
         },
     )
+    # write_devmyaml uses safe_dump which can't emit `!secret` tags;
+    # patch it in as raw YAML.
+    raw = workspace.devmyaml_path.read_text()
+    raw = raw.replace("TEST_TOKEN: placeholder", "TEST_TOKEN: !secret TEST_TOKEN")
+    workspace.devmyaml_path.write_text(raw)
 
     start = subprocess.run(
         [devm.path, "start"],
@@ -99,31 +128,47 @@ def test_iron_proxy_apply_port_squat(workspace, devm):
     squatter_error: list[BaseException] = []
 
     def _squat() -> None:
+        """Poll until the port is free (iron-proxy released it in the
+        stop-gate) then bind before the delay hook expires and spawn
+        runs. Retries at 50ms intervals for up to 10s — apply-iron-proxy
+        may take longer than a fixed sleep to reach its stop-gate under
+        e2e load, so a fixed lead-time races unreliably.
+        """
         nonlocal squatter
-        try:
-            time.sleep(0.5)
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("127.0.0.1", https_port))
-            s.listen(1)
+            try:
+                s.bind(("127.0.0.1", https_port))
+            except OSError:
+                s.close()
+                time.sleep(0.05)
+                continue
+            try:
+                s.listen(1)
+            except OSError as exc:
+                s.close()
+                squatter_error.append(exc)
+                return
             squatter = s
-        except BaseException as exc:  # pragma: no cover - surfaced via squatter_error
-            squatter_error.append(exc)
+            return
+        squatter_error.append(TimeoutError(
+            f"squatter never won port {https_port} within 10s — "
+            f"apply-iron-proxy stop-gate never released it, or the "
+            f"delay hook fired and spawn re-bound before poll"
+        ))
 
     try:
-        # Allowlist change + approve first — mirrors test_92's pattern
-        # (devm.yaml is host-immutable while the VM runs; `devm approve`
-        # unlocks it for the reconcile that follows).
-        cfg = yaml.safe_load(workspace.devmyaml_path.read_text())
-        cfg["network"]["allow"].append("example.com")
-        workspace.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
-
-        approve = subprocess.run(
-            [devm.path, "approve"],
-            cwd=str(workspace.path), input=b"y\n",
-            capture_output=True, timeout=30,
+        # Rotate the secret's on-disk value. reconcile will see a
+        # KindSecretChange → BucketEgressRestart → apply-iron-proxy.
+        # No devm.yaml edit; approve gate stays out of it.
+        subprocess.run(
+            [devm.path, "secret", "set", "TEST_TOKEN"],
+            input=b"v2\n",
+            cwd=str(workspace.path),
+            capture_output=True, timeout=15, check=True,
         )
-        assert approve.returncode == 0, f"approve failed: {approve.stderr.decode()!r}"
 
         squat_thread = threading.Thread(target=_squat, daemon=True)
         squat_thread.start()

@@ -207,11 +207,24 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 		// If the bind lost a race to a squatter, iron-proxy logs a fatal
 		// error and exits almost immediately, but the squatter still
 		// answers the dial above and the check reports a false positive.
+		//
 		// The supervisor's process-monitor observes the exit and flips
-		// Running false; check that here so a fake-healthy squatter can't
-		// slip a 200 back to the caller while the real iron-proxy is dead.
+		// Running false, but it also auto-restarts on backoff — so a
+		// single-shot Running check can catch a *between-restart* window
+		// where iron-proxy is transiently "running" mid-crash-loop.
+		// Poll a stability window: require Running=true across two
+		// checks 800ms apart. The backoff base is 1s, so if iron-proxy
+		// is crash-looping on bind conflict, at least one of the checks
+		// falls inside the "waiting for restart" gap and Running is
+		// false. If iron-proxy is stably running, both checks pass.
 		if st := sup.Status(key); !st.Running {
 			http.Error(w, fmt.Sprintf("iron-proxy exited after spawn (port %s likely held by another process)",
+				healthAddr), http.StatusInternalServerError)
+			return
+		}
+		time.Sleep(800 * time.Millisecond)
+		if st := sup.Status(key); !st.Running {
+			http.Error(w, fmt.Sprintf("iron-proxy crash-looping after spawn (port %s likely held by another process)",
 				healthAddr), http.StatusInternalServerError)
 			return
 		}
