@@ -1287,6 +1287,15 @@ func (c Config) Validate() error {
 			if svc.Port < 1 || svc.Port > 65535 {
 				return fmt.Errorf("services.%s: port %d out of range (1-65535)", name, svc.Port)
 			}
+			// Port 22 is reserved for devm's guest SSH tunnel — the
+			// per-project softnet ingress always exposes the guest's
+			// :22 on the host at :22 (see internal/serviceapi/expose.go
+			// computeExposeMap). A service that also claims :22 collides
+			// with SSH in ingress.apply, which keys by HostPort and
+			// last-write-wins silently.
+			if svc.Port == 22 {
+				return fmt.Errorf("services.%s: port 22 is reserved for devm's guest SSH tunnel", name)
+			}
 			if prev, ok := seenPorts[svc.Port]; ok {
 				return fmt.Errorf("duplicate port %d in services %s and %s", svc.Port, prev, name)
 			}

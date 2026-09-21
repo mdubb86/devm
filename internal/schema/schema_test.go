@@ -118,6 +118,21 @@ func TestConfigValidatesPortRange(t *testing.T) {
 	assert.NoError(t, ok.Validate())
 }
 
+// TestConfigRejectsServiceOnPort22 pins the reserved-port check: port
+// 22 is always exposed by devm's SSH tunnel via computeExposeMap
+// (internal/serviceapi/expose.go), so a service also claiming it would
+// silently lose or win the ingress key in softnet's HostPort-keyed map.
+func TestConfigRejectsServiceOnPort22(t *testing.T) {
+	cfg := Config{
+		Project:  Project{Name: "p"},
+		Services: map[string]Service{"impostor-ssh": {Port: 22}},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "port 22 is reserved")
+	assert.Contains(t, err.Error(), "impostor-ssh")
+}
+
 func TestConfigValidatesInstallSteps(t *testing.T) {
 	cfg := Config{
 		Project: Project{Name: "x"},
