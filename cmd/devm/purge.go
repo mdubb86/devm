@@ -68,15 +68,16 @@ func (r realVMLister) List() ([]string, error) {
 // project.name from colliding with one of these in the first place,
 // so the two lists describe the same set of reserved names.
 var purgeSkipDirs = map[string]bool{
-	"bin":         true, // devm-installed binaries (iron-proxy, mutagen, setsidshim, ...)
-	"state":       true, // per-project state JSON
-	"iron-proxy":  true, // per-project iron-proxy configs
-	"mutagen":     true, // global mutagen daemon state + per-project session configs
-	"ssh":         true, // per-project SSH key material for guest reach
-	"secrets":     true, // file-backed secret store
-	"ca":          true, // devm's root CA material
-	"softnet-bin": true, // softnet binary + per-project sockets
-	"volumes":     true, // legacy layout artifact
+	"bin":             true, // devm-installed binaries (iron-proxy, mutagen, setsidshim, ...)
+	"state":           true, // per-project state JSON
+	"iron-proxy":      true, // per-project iron-proxy configs
+	"mutagen":         true, // global mutagen daemon state + per-project session configs
+	"mutagen-ssh-dir": true, // tart-mutagen-ssh shim the mutagen daemon's MUTAGEN_SSH_PATH points at
+	"ssh":             true, // per-project SSH key material for guest reach
+	"secrets":         true, // file-backed secret store
+	"ca":              true, // devm's root CA material
+	"softnet-bin":     true, // softnet binary + per-project sockets
+	"volumes":         true, // legacy layout artifact
 }
 
 // runPurge is factored for testability. runtimeDir is

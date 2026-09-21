@@ -818,13 +818,13 @@ func ParseMemorySize(s string) (int, error) {
 	return n * 1024, nil
 }
 
-// reservedProjectIDs are devm-internal storage directory names under
+// ReservedProjectIDs are devm-internal storage directory names under
 // the daemon's Application Support root. A project.name colliding
 // with one of these would shadow devm's own storage layout. Must
 // agree with cmd/devm's purgeSkipDirs — same set of reserved names.
-var reservedProjectIDs = map[string]bool{
+var ReservedProjectIDs = map[string]bool{
 	"bin": true, "state": true, "iron-proxy": true,
-	"mutagen": true, "ssh": true, "secrets": true,
+	"mutagen": true, "mutagen-ssh-dir": true, "ssh": true, "secrets": true,
 	"ca": true, "softnet-bin": true, "volumes": true,
 }
 
@@ -832,7 +832,7 @@ var reservedProjectIDs = map[string]bool{
 // a devm-internal storage directory name.
 func (c *Config) validateProjectIDReserved() error {
 	name := c.Project.Name
-	if reservedProjectIDs[name] {
+	if ReservedProjectIDs[name] {
 		return fmt.Errorf("project.name %q collides with a devm-internal storage dir — pick another name", name)
 	}
 	return nil

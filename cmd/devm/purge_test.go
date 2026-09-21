@@ -7,9 +7,32 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestPurgeSkipDirs_MatchesReservedProjectIDs pins the invariant the
+// two comments in purge.go and internal/schema/schema.go both promise:
+// the set of dirs purge protects under RuntimeDir must equal the set
+// of project.name values devm.yaml validation rejects. If either
+// drifts, `devm purge` deletes a live daemon directory (or, less
+// dangerously, refuses to purge a valid project). See mutagen-ssh-dir
+// for the concrete regression this test exists to prevent.
+func TestPurgeSkipDirs_MatchesReservedProjectIDs(t *testing.T) {
+	purge := make([]string, 0, len(purgeSkipDirs))
+	for k := range purgeSkipDirs {
+		purge = append(purge, k)
+	}
+	reserved := make([]string, 0, len(schema.ReservedProjectIDs))
+	for k := range schema.ReservedProjectIDs {
+		reserved = append(reserved, k)
+	}
+	assert.ElementsMatch(t, purge, reserved,
+		"purgeSkipDirs (cmd/devm/purge.go) and schema.ReservedProjectIDs "+
+			"(internal/schema/schema.go) must contain identical entries — "+
+			"see the comments above each map. Add missing keys to BOTH.")
+}
 
 // fakeVMLister is the test double for the tart client so tests don't
 // depend on a live Tart install.
