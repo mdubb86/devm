@@ -243,6 +243,14 @@ func TestBuildIronProxyConfig_HasExpectedFields(t *testing.T) {
 	assert.Contains(t, tls["ca_cert"].(string), "root.crt")
 	assert.Contains(t, tls["ca_key"].(string), "root.key")
 
+	// Leaf lifetime must outlast any proxy's uptime by a wide margin —
+	// iron-proxy ages its cert cache on the monotonic clock, which stops
+	// while the Mac sleeps, so a cached leaf outlives the NotAfter it
+	// stamped from the wall clock. Reaching that expiry at all is the
+	// bug; a year of headroom means a live proxy never gets there.
+	assert.Equal(t, leafCertExpiryHours, tls["leaf_cert_expiry_hours"],
+		"tls.leaf_cert_expiry_hours must be emitted so the cert cache never reaches expiry in a live proxy")
+
 	// transforms: the policy decision is delegated to the daemon via the
 	// grpc transform; no allowlist transform is emitted.
 	transforms := got["transforms"].([]any)

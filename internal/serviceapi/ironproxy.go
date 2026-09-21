@@ -20,6 +20,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// leafCertExpiryHours is the lifetime iron-proxy stamps onto the leaf
+// certificates it mints, and also the TTL of the cache it keeps them
+// in. The cache ages on Go's monotonic clock, which stops while the Mac
+// sleeps, but NotAfter comes off the wall clock — so a cached leaf
+// outlives its own NotAfter by however long the host slept, and the
+// proxy serves a certificate the guest correctly rejects. Reaching that
+// expiry at all is what triggers the bug, so the lifetime is set far
+// beyond any proxy's uptime rather than tuned: a shorter one only
+// trades longer outages for more frequent ones.
+const leafCertExpiryHours = 8760 // 1 year
+
 // ironProxySpawn is the test-injection seam for the actual process
 // spawn inside SpawnIronProxy. Production always delegates to
 // sup.Spawn; tests substitute a fake to capture the constructed
@@ -126,8 +137,9 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 			return m
 		}(),
 		"tls": map[string]any{
-			"ca_cert": c.CACertPath,
-			"ca_key":  c.CAKeyPath,
+			"ca_cert":                c.CACertPath,
+			"ca_key":                 c.CAKeyPath,
+			"leaf_cert_expiry_hours": leafCertExpiryHours,
 		},
 		// Metrics listen on a loopback ephemeral port. Loopback-only
 		// because iron-proxy v0.45.0's metrics server exposes only
