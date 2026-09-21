@@ -188,9 +188,14 @@ def test_iron_proxy_apply_port_squat(workspace, devm):
             f"reconcile should have FAILED (squatter held iron-proxy's port); "
             f"got rc=0, stdout={reconcile.stdout.decode()!r}"
         )
-        assert "iron-proxy exited after spawn" in stderr, (
-            f"expected the apply-iron-proxy identity-check failure in stderr; got {stderr!r}"
-        )
+        # Identity check surfaces one of two messages depending on
+        # timing: "exited after spawn" (first check catches the exit)
+        # or "crash-looping after spawn" (second check catches the
+        # backoff-restart gap). Either is a correct fail-loud.
+        assert (
+            "iron-proxy exited after spawn" in stderr
+            or "iron-proxy crash-looping after spawn" in stderr
+        ), f"expected the apply-iron-proxy identity-check failure in stderr; got {stderr!r}"
     finally:
         if squatter is not None:
             squatter.close()
