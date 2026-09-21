@@ -397,7 +397,7 @@ fetch-iron-proxy:
       echo "Fetching iron-proxy {{IRON_PROXY_VERSION}}..." ; \
       ver="$(echo '{{IRON_PROXY_VERSION}}' | sed 's/^v//')" ; \
       curl -fsSL -o /tmp/iron-proxy.tar.gz \
-        "https://github.com/ironsh/iron-proxy/releases/download/{{IRON_PROXY_VERSION}}/iron-proxy_${ver}_darwin_arm64.tar.gz" ; \
+        "https://github.com/paradigmxyz/iron-proxy/releases/download/{{IRON_PROXY_VERSION}}/iron-proxy_${ver}_darwin_arm64.tar.gz" ; \
       tar -xzf /tmp/iron-proxy.tar.gz -C /tmp iron-proxy ; \
       gzip -c /tmp/iron-proxy > internal/ironproxy/embed/iron-proxy.gz ; \
       rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy ; \

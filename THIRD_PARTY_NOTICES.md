@@ -9,7 +9,7 @@ via `//go:embed` at `internal/ironproxy/embed/iron-proxy.gz`. The daemon
 decompresses it to `~/Library/Application Support/devm/bin/iron-proxy`
 on startup and spawns it per project for allow-listed egress
 enforcement. It's the darwin/arm64 release build unchanged from
-[iron-proxy v0.45.0](https://github.com/ironsh/iron-proxy/releases/tag/v0.45.0).
+[iron-proxy v0.45.0](https://github.com/paradigmxyz/iron-proxy/releases/tag/v0.45.0).
 
 iron-proxy is licensed under the Apache License, Version 2.0:
 
