@@ -71,11 +71,18 @@ class Workspace:
         `bare_repo_label()` = "Hello-World".
 
         Hardcoded to the devm-e2e identity's RuntimeDir to match the
-        daemon under test (see internal/identity.E2E.RuntimeDir()).
+        daemon under test (see internal/identity.E2E.RuntimeDir()) and
+        to serviceapi.mirrorMacDir's <RuntimeDir>/<projectID>/<label>
+        layout (internal/serviceapi/volumes.go) — projectID is the
+        devm.yaml project name, which equals vm_name here. There is no
+        `volumes/` path segment: that layout was dropped in 97d1030
+        ("mirror storage under <runtimeDir>/<projectID>/<label>/"); a
+        leftover `volumes/` dir under RuntimeDir is a legacy artifact
+        `devm purge` knows to clean up, not a live mirror location.
         """
         if name is None:
             name = self.bare_repo_label()
-        return Path.home() / "Library/Application Support/devm-e2e/volumes" / self.vm_name / name
+        return Path.home() / "Library/Application Support/devm-e2e" / self.vm_name / name
 
     def write_devmyaml(self, *, no_repo: bool = False, **sections: Any) -> None:
         """Write a fresh devm.yaml. Extra sections (install, services, env,
