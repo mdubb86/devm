@@ -20,6 +20,45 @@ type multiFlag []string
 func (m *multiFlag) String() string     { return "" }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
+// Lifecycle
+//
+// softnet is a child `tart run --net-softnet` forks internally (see the
+// `serves guest frames on the vm-fd connection` note on Run below). Its
+// lifetime tracks the vm-fd, not the daemon and not the guest kernel.
+// There are three distinct "restart" cases; softnet handles them
+// differently:
+//
+//  1. VM-down (`tart run` process exits). The vm-fd closes →
+//     acceptUntilShutdown's read loop ends → softnet exits. A fresh
+//     `tart run` forks a brand-new softnet; no state carries over.
+//     Historically this didn't always fire cleanly (see
+//     internal/serviceapi/softnet_reap.go: ReapOrphanSoftnets), so PPID==1
+//     detection catches survivors on daemon startup.
+//
+//  2. In-place guest reboot (`tart run` persists, guest kernel reboots).
+//     The vm-fd stays open, so softnet keeps running and its gvisor
+//     netstack — built once by newNetwork(), never rebuilt — is REUSED
+//     across the guest boot. This works implicitly today because:
+//     - Tart's guest MAC is stable across reboots, so the guest's
+//     fresh DHCPDISCOVER lands the same lease from ipPool.
+//     - gvisor's TCP conntrack ages out stale flows on its own timeout;
+//     guest-side is dead, so real traffic RSTs correctly.
+//     - ARP cache (guest MAC → guest IP) is still valid.
+//     - Everything Mac-side (ingress listeners, egress policy) is
+//     orthogonal to guest state.
+//     Nothing explicitly detects the reboot or resets softnet's state;
+//     if a wedge surfaces (e.g. long hangs to the guest immediately post-
+//     reboot), the workaround is `devm stop && devm start` and the fix
+//     would be to detect a fresh DHCPDISCOVER against an already-leased
+//     MAC and rebuild the gvisor stack. Not built.
+//
+//  3. Daemon restart (VM stays up, daemon reconnects). softnet is REUSED:
+//     internal/serviceapi/softnet_control.go's discoverSoftnet reconnects
+//     to the existing control socket rather than respawning softnet,
+//     because the daemon never owned the process in the first place.
+//     Same reasoning as case 2 — the netstack persists because it's fine
+//     for it to persist.
+//
 // Run is the softnet entrypoint (invoked via the `softnet` argv[0] alias). It
 // parses tart's contract flags, assembles the netstack, egress, and DNS, then
 // serves guest frames on the vm-fd connection until it closes or a signal
