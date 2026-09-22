@@ -43,3 +43,15 @@ func TestInit_DaemonConflictSurfacesMessage(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "already exists"))
 }
+
+// TestResolveInitName pins the "no positional arg → cwd basename"
+// default that `devm init` (without a name) relies on.
+func TestResolveInitName(t *testing.T) {
+	// Explicit arg wins.
+	assert.Equal(t, "explicit-name", resolveInitName([]string{"explicit-name"}, "/Users/x/some-cwd"))
+	// No arg → basename of cwd.
+	assert.Equal(t, "shelfmates", resolveInitName(nil, "/Users/x/code/shelfmates"))
+	assert.Equal(t, "shelfmates", resolveInitName([]string{}, "/Users/x/code/shelfmates"))
+	// Trailing slash still resolves via filepath.Base.
+	assert.Equal(t, "shelfmates", resolveInitName(nil, "/Users/x/code/shelfmates/"))
+}
