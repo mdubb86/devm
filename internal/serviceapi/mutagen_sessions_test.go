@@ -303,7 +303,7 @@ func TestSetupPhases_ColdStartClonesThenCreates(t *testing.T) {
 
 	exec := scriptedGuestExec(true) // mac mirror is freshly created (empty), guest empty too
 
-	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", "/Users/me/myproj", entities, exec, "myproj.test")
 	require.NoError(t, err)
 	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
@@ -338,7 +338,7 @@ func TestSetupVolumesPhase_WarmStartResumesPausedSession(t *testing.T) {
 
 	exec := scriptedGuestExec(false) // both sides populated + aligned (same scan values)
 
-	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", "/Users/me/myproj", entities, exec, "myproj.test")
 	require.NoError(t, err)
 	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
@@ -396,7 +396,7 @@ func TestSetupPhases_WarmAttachRepoDoesNotCloneAgain(t *testing.T) {
 	}
 	t.Cleanup(func() { cloneRepoInGuestFn = origClone })
 
-	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", "/Users/me/myproj", entities, exec, "myproj.test")
 	require.NoError(t, err)
 	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
@@ -468,7 +468,7 @@ func TestSetupPhases_AlignedContentCreatesSession(t *testing.T) {
 		return "", "", 0, nil
 	}
 
-	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, guestExec, "myproj.test")
+	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", "/Users/me/myproj", entities, guestExec, "myproj.test")
 	require.NoError(t, err)
 	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, guestExec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
@@ -503,7 +503,7 @@ func TestSetupVolumesPhase_DivergentGuardRejects(t *testing.T) {
 		return "", "", 0, nil
 	}
 
-	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", "/Users/me/myproj", entities, exec, "myproj.test")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "app")
 	assert.Empty(t, sc.createArgs, "guard rejection must not create a session")
@@ -534,7 +534,7 @@ func TestSetupPhases_NoMirrorEntity_ClonesButNoSession(t *testing.T) {
 		},
 	}
 
-	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", "/Users/me/myproj", entities, exec, "myproj.test")
 	require.NoError(t, err)
 	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
@@ -578,7 +578,7 @@ func TestSetupReposPhase_NoMirrorEntity_AlreadyClonedSkipsClone(t *testing.T) {
 		},
 	}
 
-	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", "/Users/me/myproj", entities, exec, "myproj.test")
 	require.NoError(t, err)
 	err = SetupReposPhase(context.Background(), cfg, "myproj", entities, exec, "http://127.0.0.1:5555", "/etc/ssl/certs/devm-ca.crt")
 	require.NoError(t, err)
@@ -640,7 +640,7 @@ func TestSetupVolumesPhase_UniformSessionSetup(t *testing.T) {
 		{Label: "repoPopulated", GuestPath: "/home/devm/repoPopulated", Repo: &SessionRepoInfo{URL: "https://github.com/x/p.git", Secret: "gh_stub"}},
 	}
 
-	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, scriptedGuestExec(true), "myproj.test")
+	err := SetupVolumesPhase(context.Background(), cli, cfg, "myproj", "/Users/me/myproj", entities, scriptedGuestExec(true), "myproj.test")
 	require.NoError(t, err)
 
 	assert.Len(t, sc.createArgs, 4, "sessions created for all entities including repos, plus the project's config-sync session")
@@ -739,7 +739,7 @@ func TestSetupVolumesPhase_CorruptMacMirrorErrorsBeforeSessionCreate(t *testing.
 
 	exec := scriptedGuestExec(true) // guest side reports empty (fresh)
 
-	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", entities, exec, "myproj.test")
+	err = SetupVolumesPhase(context.Background(), cli, cfg, "myproj", "/Users/me/myproj", entities, exec, "myproj.test")
 	if err == nil {
 		t.Fatalf("SetupVolumesPhase on corrupt mac mirror returned nil; want error")
 	}

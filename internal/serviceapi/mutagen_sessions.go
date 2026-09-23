@@ -326,6 +326,7 @@ func SetupVolumesPhase(
 	cli *mutagen.CLI,
 	cfg identity.Config,
 	projectID string,
+	macCwd string,
 	entities []SessionEntity,
 	exec GuestExec,
 	guestSSHTarget string,
@@ -429,7 +430,7 @@ func SetupVolumesPhase(
 		}
 	}
 
-	if err := SetupConfigSync(ctx, cli, cfg, projectID); err != nil {
+	if err := SetupConfigSync(ctx, cli, cfg, projectID, macCwd); err != nil {
 		return fmt.Errorf("setup config sync: %w", err)
 	}
 	return nil

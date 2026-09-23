@@ -888,7 +888,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(cfg)}
 
 		guestSSHTarget := "devm-" + req.Name
-		if err := SetupVolumesPhase(r.Context(), mutagenCLI, cfg, req.Name, entities,
+		if err := SetupVolumesPhase(r.Context(), mutagenCLI, cfg, req.Name, req.RepoRoot, entities,
 			tartGuestExec(r.Context(), tr, req.Name), guestSSHTarget); err != nil {
 			http.Error(w, fmt.Sprintf("volume sync: %v", err), http.StatusInternalServerError)
 			return
