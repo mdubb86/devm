@@ -40,8 +40,11 @@ def test_session_created_on_start(devm, workspace):
         # WaitForInitialSync fires before devm start returns, so the
         # session should be past initial-scan and into steady-state
         # watching.
-        assert sessions[0]["status"] in ("Watching", "connected-beta", "connecting-beta"), (
-            f"expected Watching-class status, got {sessions[0]['status']}"
+        # Mutagen 0.19+ reports statuses in lowercase; earlier versions used
+        # capitalized "Watching". Accept both forms.
+        status = sessions[0]["status"]
+        assert status.lower() in ("watching", "connected-beta", "connecting-beta"), (
+            f"expected Watching-class status, got {status}"
         )
     finally:
         subprocess.run(
