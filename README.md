@@ -80,6 +80,17 @@ A few things devm does so your `devm.yaml` doesn't have to:
   prints a structured error showing which step failed and what it printed.
 * **The `ncurses-term` package is installed** (modern terminfo for TUIs).
 
+## Hiding devm.yaml from git
+
+devm.yaml lives at the project root. Keep it out of the repo without tracking a `.gitignore` entry:
+
+```bash
+echo devm.yaml >> .git/info/exclude
+echo devm.me.yaml >> .git/info/exclude
+```
+
+`.git/info/exclude` is git's per-clone ignore list — shared across worktrees of the same repo via `git-common-dir`.
+
 ## Docker builds and iron-proxy
 
 When you enable `docker: true` in `devm.yaml`, devm installs upstream
