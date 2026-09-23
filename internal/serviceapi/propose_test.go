@@ -296,23 +296,52 @@ func TestPropose_UnixSocketHandlerRoutesByProjectQueryParam(t *testing.T) {
 // dir — unlike the softnet listener (bound per-project at start, so
 // trusted), this handler's project comes from an arbitrary query
 // param a caller could set to any name.
-func TestPropose_UnixSocketUnknownProjectReturns404(t *testing.T) {
+// TestPropose_GuestSourceRequiresRunningProject pins that a guest-source
+// propose against a project not in the cache (VM not running) fails
+// precondition — the mac-side-cwd fallback only kicks in for source="mac".
+func TestPropose_GuestSourceRequiresRunningProject(t *testing.T) {
 	cfg := identity.Prod
 	t.Setenv("HOME", t.TempDir())
 	h := handleProposeUnixSocket(cfg, NewStateCache())
 
 	rr := postPropose(h, "/vm/propose?project=nonexistent", map[string]any{
-		"cwd":    "/x",
+		"cwd":    "/home/devm/proj",
 		"branch": "main",
 		"reason": "",
 		"kind":   "devm.yaml",
+		"source": "guest",
 	})
 
-	assert.Equal(t, http.StatusNotFound, rr.Code)
-	assert.Contains(t, rr.Body.String(), "nonexistent")
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
 
 	_, ok, _ := ReadLastProposal(cfg, "nonexistent")
-	assert.False(t, ok, "no metadata should be written for an unknown project")
+	assert.False(t, ok, "no metadata should be written when the guest hits an unregistered project")
+}
+
+// TestPropose_MacSourceBeforeStartUsesRequestCwd pins that a mac-source
+// propose against a project not in the cache falls back to the request
+// body's cwd — the CLI walked up to find devm.yaml and passed that path,
+// which is enough to validate and attribute without /vm/start having run.
+func TestPropose_MacSourceBeforeStartUsesRequestCwd(t *testing.T) {
+	cfg := identity.Prod
+	t.Setenv("HOME", t.TempDir())
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte(validDevmYAML), 0o644))
+
+	h := handleProposeUnixSocket(cfg, NewStateCache())
+	rr := postPropose(h, "/vm/propose?project=p", map[string]any{
+		"cwd":    macCwd,
+		"reason": "t",
+		"kind":   "devm.yaml",
+		"source": "mac",
+	})
+
+	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+
+	got, ok, err := ReadLastProposal(cfg, "p")
+	require.NoError(t, err)
+	require.True(t, ok, "metadata should be written")
+	assert.Equal(t, macCwd, got.Cwd)
 }
 
 func TestPropose_UnixSocketHandlerRequiresProjectParam(t *testing.T) {

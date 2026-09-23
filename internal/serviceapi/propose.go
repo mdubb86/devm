@@ -67,8 +67,18 @@ func recordProposal(cfg identity.Config, cache *StateCache, projectName string, 
 		return http.StatusBadRequest, fmt.Sprintf("propose: unsupported kind %q", req.Kind), nil
 	}
 
-	row, ok := cache.ProjectRow(projectName)
-	if !ok || row.MacCwd == "" {
+	row, _ := cache.ProjectRow(projectName)
+	macCwd := row.MacCwd
+	if macCwd == "" && req.Source == "mac" && req.Cwd != "" {
+		// Mac-side propose may run before /vm/start (the cache's
+		// MacCwd is empty until then). The CLI walked up cwd to find
+		// devm.yaml and passes that path in req.Cwd — trust it. The
+		// Unix socket is user-permission gated, so this isn't
+		// arbitrary network input. Guest-side propose sends a guest
+		// path in req.Cwd and cannot use this fallback.
+		macCwd = req.Cwd
+	}
+	if macCwd == "" {
 		return http.StatusPreconditionFailed,
 			fmt.Sprintf("propose: project %q not started; run `devm start` from its directory first", projectName),
 			nil
@@ -76,7 +86,7 @@ func recordProposal(cfg identity.Config, cache *StateCache, projectName string, 
 
 	// devm.me.yaml has no schema of its own (it's a partial merged
 	// into devm.yaml) — nothing to validate against.
-	configPath := filepath.Join(row.MacCwd, req.Kind)
+	configPath := filepath.Join(macCwd, req.Kind)
 	onDisk, readErr := os.ReadFile(configPath)
 	switch {
 	case readErr == nil:
@@ -186,19 +196,6 @@ func handleProposeUnixSocket(cfg identity.Config, cache *StateCache) http.Handle
 		projectName := r.URL.Query().Get("project")
 		if projectName == "" {
 			http.Error(w, "propose: project query param required", http.StatusBadRequest)
-			return
-		}
-		// The softnet listener is bound per-project at start, so its
-		// projectName is trusted — only this Unix-socket path takes an
-		// arbitrary caller-supplied project query param, so only it
-		// needs to check the project actually exists before recording
-		// a proposal under its state dir.
-		if _, err := os.Stat(stateDirForProject(cfg, projectName)); errors.Is(err, os.ErrNotExist) {
-			http.Error(w, fmt.Sprintf("propose: unknown project %q", projectName), http.StatusNotFound)
-			return
-		} else if err != nil {
-			daemonlog.Errorf("serviceapi: propose: stat state dir for %s: %v", projectName, err)
-			http.Error(w, fmt.Sprintf("propose: stat state dir: %v", err), http.StatusInternalServerError)
 			return
 		}
 		req, ok := decodeProposeBody(w, r)
