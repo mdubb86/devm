@@ -1053,6 +1053,37 @@ func TestReconcile_ProceedsWhenNotDiverged(t *testing.T) {
 	assert.NotContains(t, rr.Body.String(), "approve_required")
 }
 
+// TestReconcile_BootstrapsSnapshotOnFirstSight verifies that /vm/reconcile
+// on a fresh project (no approve snapshot yet, no prior /vm/start) writes
+// the current devm.yaml as the baseline and proceeds — mirroring
+// /vm/start's first-run behavior. Prevents the earlier regression where
+// reconcile-before-start refused with 409 approve_required for lack of a
+// baseline.
+func TestReconcile_BootstrapsSnapshotOnFirstSight(t *testing.T) {
+	cfg, _, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	// No prior snapshot: reconcile is the first-sight event.
+	_, hasSnap, err := store.Read("proj-1")
+	require.NoError(t, err)
+	require.False(t, hasSnap, "test setup: snapshot must not exist yet")
+
+	body := VMReconcileRequest{Name: "proj-1", WorkspaceHostPath: projDir, Cfg: schema.Config{Project: schema.Project{Name: "p"}}}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/vm/reconcile", bytes.NewReader(buf))
+	rr := httptest.NewRecorder()
+	newReconcileHandlerForTest(cfg).ServeHTTP(rr, req)
+
+	// The handler continues past the approve gate (may fail later with no
+	// fake VM), but must NOT refuse with 409 approve_required.
+	assert.NotEqual(t, http.StatusConflict, rr.Code)
+	assert.NotContains(t, rr.Body.String(), "approve_required")
+
+	// The bootstrap must have written the current devm.yaml as the baseline.
+	snap, hasSnap, err := store.Read("proj-1")
+	require.NoError(t, err)
+	require.True(t, hasSnap, "reconcile must bootstrap the snapshot on first sight")
+	assert.Equal(t, "project:\n  name: p\n", string(snap.DevmYAML))
+}
+
 // TestReconcile_RequiresWorkspaceHostPath verifies /vm/reconcile rejects
 // a request with a name but no workspace_host_path (400), rather than
 // reaching the approve-gate check and reading a relative "devm.yaml"

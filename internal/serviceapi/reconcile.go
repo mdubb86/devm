@@ -124,6 +124,15 @@ func reconcileHandler(cfg identity.Config, locks *ProjectLocks, apply ApplyLiver
 			return
 		}
 
+		// First-sight bootstrap: the current devm.yaml/devm.me.yaml
+		// becomes the baseline the first time the daemon sees this
+		// project. Mirrors /vm/start so `devm reconcile` on a project
+		// that hasn't started yet doesn't refuse for lack of a baseline.
+		if err := bootstrapApprovedSnapshotOnFirstRun(cfg, req.Name, req.WorkspaceHostPath); err != nil {
+			http.Error(w, fmt.Sprintf("bootstrap approve snapshot: %v", err), http.StatusInternalServerError)
+			return
+		}
+
 		// Approve-gate check: refuse if diverged from approved snapshot.
 		// devm.yaml lives at WorkspaceHostPath — the project's Mac cwd,
 		// same value the CLI sends as MacCwd to /vm/start.
