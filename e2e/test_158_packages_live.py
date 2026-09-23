@@ -170,6 +170,15 @@ def test_packages_live_add_remove(workspace, devm, sandbox_name):
         workspace.patch_devmyaml(packages=["sl"])
         devm.approve()
 
+        # `devm shell` is warm-attach-only; the cold-start that
+        # converges the new packages has to come from `devm start`.
+        start = subprocess.run(
+            [devm.path, "start"], cwd=str(workspace.path),
+            capture_output=True, timeout=300,
+        )
+        assert start.returncode == 0, (
+            f"stopped-VM start failed:\nstderr={start.stderr.decode()!r}"
+        )
         boot = subprocess.run(
             [devm.path, "shell", "--", "which", "sl"],
             cwd=str(workspace.path), capture_output=True, timeout=300,
