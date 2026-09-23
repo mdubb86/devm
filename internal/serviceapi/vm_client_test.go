@@ -21,8 +21,10 @@ import (
 )
 
 // newTestServerWithVM returns a Server with VM handlers registered
-// on a temp socket. sup and tr are the live collaborators for the
-// handler (callers may substitute a real or stub supervisor/tart).
+// on a temp socket, plus the *StateCache they were registered
+// against (for tests that need to seed cache.SetMacCwd). sup and tr
+// are the live collaborators for the handler (callers may substitute
+// a real or stub supervisor/tart).
 //
 // mutagenStopPhaseFn is faked to a no-op for the fixture's lifetime:
 // its production default shells out to the real mutagen binary and
@@ -31,7 +33,7 @@ import (
 // that specifically want to assert /vm/stop's mutagen wiring (e.g.
 // TestVMStop_CallsMutagenStopPhaseBeforeGracefulStop) set up their own
 // server directly instead of going through this fixture.
-func newTestServerWithVM(t *testing.T, sup *supervisor.Supervisor, tr *tart.Tart) (*Server, func()) {
+func newTestServerWithVM(t *testing.T, sup *supervisor.Supervisor, tr *tart.Tart) (*Server, *StateCache, func()) {
 	t.Helper()
 	origMutagenStopPhaseFn := mutagenStopPhaseFn
 	mutagenStopPhaseFn = func(identity.Config, string) error { return nil }
@@ -43,7 +45,8 @@ func newTestServerWithVM(t *testing.T, sup *supervisor.Supervisor, tr *tart.Tart
 
 	socket := filepath.Join(dir, "s.sock")
 	srv := NewServer(socket, Build{Version: "test-version"})
-	RegisterVMHandlers(srv, identity.Prod, sup, tr, 0, NewProjectLocks(), nil, NewPopSessionStore(), nil, NewStateCache())
+	cache := NewStateCache()
+	RegisterVMHandlers(srv, identity.Prod, sup, tr, 0, NewProjectLocks(), nil, NewPopSessionStore(), nil, cache)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -58,7 +61,7 @@ func newTestServerWithVM(t *testing.T, sup *supervisor.Supervisor, tr *tart.Tart
 	}
 	require.FileExists(t, socket)
 
-	return srv, func() { cancel(); <-errCh }
+	return srv, cache, func() { cancel(); <-errCh }
 }
 
 // TestVMStatus_Empty verifies that /vm/status returns present=false for
@@ -69,7 +72,7 @@ func TestVMStatus_Empty(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false" // don't actually run tart; IP won't be called in this test
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -92,7 +95,7 @@ func TestVMStatus_MissingProjectID(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	// Hit the raw endpoint without project_id.
@@ -113,7 +116,7 @@ func TestVMStart_MissingName(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -142,12 +145,9 @@ func TestClientStartVM_ApproveRequired(t *testing.T) {
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
 
-	stateDir := stateDirForProject(identity.Prod, "p")
-	require.NoError(t, os.MkdirAll(stateDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"),
-		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
-
 	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
+		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
 
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
@@ -159,7 +159,7 @@ func TestClientStartVM_ApproveRequired(t *testing.T) {
 	tr := tart.New()
 	tr.Path = binPath
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -178,7 +178,7 @@ func TestVMStop_MissingProjectID(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -209,7 +209,7 @@ func TestVMStop_WithVMName_PowersOffGuest(t *testing.T) {
 	tr := tart.New()
 	tr.Path = bin
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -240,7 +240,7 @@ func TestVMStop_RemovesSoftnetState(t *testing.T) {
 	tr := tart.New()
 	tr.Path = bin
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	softnetState.put("proj-stop-sn", "/tmp/does-not-matter.sock")
@@ -269,7 +269,7 @@ func TestVMStop_NotFound(t *testing.T) {
 	tr := tart.New()
 	tr.Path = bin
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -292,7 +292,7 @@ func TestVMStatus_MethodNotAllowed(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -312,7 +312,7 @@ func TestVMStart_MethodNotAllowed(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -343,14 +343,11 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 
 	registerFakeSoftnet(t, "p")
 
-	// Create and approve project directory for the approve gate. The
-	// approve-gate check reads devm.yaml from the project's state dir,
-	// not WorkspaceHostPath — projDir below is the separate workspace
-	// path the rest of reconcile operates on.
+	// Create and approve project directory for the approve gate.
+	// projDir is WorkspaceHostPath, the project's Mac cwd, where the
+	// approve-gate check reads devm.yaml from.
 	projDir := t.TempDir()
-	stateDir := stateDirForProject(identity.Prod, "p")
-	require.NoError(t, os.MkdirAll(stateDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
 
@@ -408,12 +405,10 @@ func TestClientReconcile_ApproveRequired(t *testing.T) {
 
 	// No approve.Store snapshot written for "p" — isApproveDiverged
 	// treats a missing snapshot as diverged, so the daemon refuses.
-	// The approve-gate check reads devm.yaml from the project's state
-	// dir; projDir is the separate workspace path reconcile itself uses.
+	// projDir is WorkspaceHostPath, the project's Mac cwd, where the
+	// approve-gate check reads devm.yaml from.
 	projDir := t.TempDir()
-	stateDir := stateDirForProject(identity.Prod, "p")
-	require.NoError(t, os.MkdirAll(stateDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
 
 	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
 	require.NoError(t, err)
@@ -490,7 +485,7 @@ func TestVMStop_MethodNotAllowed(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -515,7 +510,7 @@ func TestClientEnforcementConfig_ReadsResponse(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 	t.Cleanup(func() { ironProxyState.del("proj-enf") })
 
@@ -540,7 +535,7 @@ func TestClientEnforcementConfig_MissingProjectState(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -564,7 +559,7 @@ func TestClientBeginProvisioning_SendsPolicyForwarding(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	sockDir, err := os.MkdirTemp("", "softnet-open")
@@ -626,7 +621,7 @@ func TestClientBeginProvisioning_MissingSoftnetState(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -651,7 +646,7 @@ func TestClientEndProvisioning_NoSoftnetStateRequired(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -682,7 +677,7 @@ func TestClientVolumeSync_NoEntities_Succeeds(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -701,7 +696,7 @@ func TestClientVolumeSync_MissingName_BadRequest(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -722,7 +717,7 @@ func TestClientRepoClone_NoEntities_Succeeds(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -740,7 +735,7 @@ func TestClientRepoClone_MissingName_BadRequest(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -761,9 +756,8 @@ func TestClientApproveState_Diverged(t *testing.T) {
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
 
-	stateDir := stateDirForProject(identity.Prod, "p")
-	require.NoError(t, os.MkdirAll(stateDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"),
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
 		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
 
 	logDir := t.TempDir()
@@ -771,8 +765,9 @@ func TestClientApproveState_Diverged(t *testing.T) {
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, cache, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
+	cache.SetMacCwd("p", macCwd)
 
 	c := NewClientWithSocket(srv.socketPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -795,17 +790,17 @@ func TestClientApproveState_UpToDate(t *testing.T) {
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", contents, nil, "user"))
 
-	stateDir := stateDirForProject(identity.Prod, "p")
-	require.NoError(t, os.MkdirAll(stateDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), contents, 0644))
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), contents, 0644))
 
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
 	tr := tart.New()
 	tr.Path = "false"
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, cache, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
+	cache.SetMacCwd("p", macCwd)
 
 	c := NewClientWithSocket(srv.socketPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

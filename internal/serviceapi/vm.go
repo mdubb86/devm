@@ -506,13 +506,17 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			}
 		}
 
-		configDir := stateDirForProject(cfg, req.Name)
-		if err := bootstrapApprovedSnapshotOnFirstRun(cfg, req.Name, configDir); err != nil {
+		// req.MacCwd (validated non-empty above) is where devm.yaml
+		// lives — the cache isn't populated with it until this handler
+		// succeeds (see cache.SetMacCwd below), so the approve-gate
+		// check reads the request field directly rather than going
+		// through the cache.
+		if err := bootstrapApprovedSnapshotOnFirstRun(cfg, req.Name, req.MacCwd); err != nil {
 			http.Error(w, fmt.Sprintf("bootstrap approve snapshot: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		if diverged, err := isApproveDiverged(cfg, req.Name, configDir); err != nil {
+		if diverged, err := isApproveDiverged(cfg, req.Name, req.MacCwd); err != nil {
 			http.Error(w, fmt.Sprintf("approve check: %v", err), http.StatusInternalServerError)
 			return
 		} else if diverged {
@@ -776,7 +780,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 	})
 
 	s.Register("/vm/approve-state", func(w http.ResponseWriter, r *http.Request) {
-		handleApproveState(cfg).ServeHTTP(w, r)
+		handleApproveState(cfg, cache).ServeHTTP(w, r)
 	})
 
 	s.Register("/vm/approve", func(w http.ResponseWriter, r *http.Request) {

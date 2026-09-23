@@ -17,23 +17,35 @@ import (
 	"github.com/mdubb86/devm/internal/identity"
 )
 
-type approveStateResponse struct {
-	Project             string             `json:"project"`
-	Diverged            bool               `json:"diverged"`
-	CurrentDevmSHA      string             `json:"current_devm_sha"`
-	ApprovedDevmSHA     string             `json:"approved_devm_sha"`
-	CurrentMeSHA        string             `json:"current_me_sha"`
-	ApprovedMeSHA       string             `json:"approved_me_sha"`
-	CurrentDevmBytes    string             `json:"current_devm_bytes"`
-	ApprovedDevmBytes   *string            `json:"approved_devm_bytes"`
-	CurrentMeBytes      *string            `json:"current_me_bytes"`
-	ApprovedMeBytes     *string            `json:"approved_me_bytes"`
-	ApprovedSince       *string            `json:"approved_since"`
-	ApprovedSource      *string            `json:"approved_source"`
-	Proposal            *ProposalMetadata  `json:"proposal"`
+// projectConfigPath returns <macCwd>/<kind> for project name, where
+// kind is "devm.yaml" or "devm.me.yaml". Returns "" when the project
+// isn't in the cache or has no MacCwd yet — callers must treat that
+// as "project not started".
+func projectConfigPath(cache *StateCache, name, kind string) string {
+	row, ok := cache.ProjectRow(name)
+	if !ok || row.MacCwd == "" {
+		return ""
+	}
+	return filepath.Join(row.MacCwd, kind)
 }
 
-func handleApproveState(cfg identity.Config) http.Handler {
+type approveStateResponse struct {
+	Project           string            `json:"project"`
+	Diverged          bool              `json:"diverged"`
+	CurrentDevmSHA    string            `json:"current_devm_sha"`
+	ApprovedDevmSHA   string            `json:"approved_devm_sha"`
+	CurrentMeSHA      string            `json:"current_me_sha"`
+	ApprovedMeSHA     string            `json:"approved_me_sha"`
+	CurrentDevmBytes  string            `json:"current_devm_bytes"`
+	ApprovedDevmBytes *string           `json:"approved_devm_bytes"`
+	CurrentMeBytes    *string           `json:"current_me_bytes"`
+	ApprovedMeBytes   *string           `json:"approved_me_bytes"`
+	ApprovedSince     *string           `json:"approved_since"`
+	ApprovedSource    *string           `json:"approved_source"`
+	Proposal          *ProposalMetadata `json:"proposal"`
+}
+
+func handleApproveState(cfg identity.Config, cache *StateCache) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "approve-state: GET only", http.StatusMethodNotAllowed)
@@ -44,14 +56,21 @@ func handleApproveState(cfg identity.Config) http.Handler {
 			http.Error(w, "approve-state: project query param required", http.StatusBadRequest)
 			return
 		}
-		stateDir := stateDirForProject(cfg, project)
-		currentDevm, err := os.ReadFile(filepath.Join(stateDir, "devm.yaml"))
+		devmPath := projectConfigPath(cache, project, "devm.yaml")
+		if devmPath == "" {
+			// Project hasn't run /vm/start yet, so there's no MacCwd to
+			// read devm.yaml from — nothing to report, not an error.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(approveStateResponse{Project: project})
+			return
+		}
+		currentDevm, err := os.ReadFile(devmPath)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("approve-state: read devm.yaml: %v", err), http.StatusInternalServerError)
 			return
 		}
 		var currentMe []byte
-		if b, err := os.ReadFile(filepath.Join(stateDir, "devm.me.yaml")); err == nil {
+		if b, err := os.ReadFile(projectConfigPath(cache, project, "devm.me.yaml")); err == nil {
 			currentMe = b
 		} else if !errors.Is(err, os.ErrNotExist) {
 			http.Error(w, fmt.Sprintf("approve-state: read devm.me.yaml: %v", err), http.StatusInternalServerError)
@@ -116,14 +135,19 @@ func handleApprove(cfg identity.Config, cache *StateCache) http.Handler {
 			http.Error(w, "approve: project query param required", http.StatusBadRequest)
 			return
 		}
-		stateDir := stateDirForProject(cfg, project)
-		currentDevm, err := os.ReadFile(filepath.Join(stateDir, "devm.yaml"))
+		devmPath := projectConfigPath(cache, project, "devm.yaml")
+		if devmPath == "" {
+			daemonlog.Errorf("approve: project %q has no MacCwd in cache", project)
+			http.Error(w, fmt.Sprintf("approve: project %q not started; run `devm start` from its directory first", project), http.StatusPreconditionFailed)
+			return
+		}
+		currentDevm, err := os.ReadFile(devmPath)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("approve: read devm.yaml: %v", err), http.StatusInternalServerError)
 			return
 		}
 		var currentMe []byte
-		if b, err := os.ReadFile(filepath.Join(stateDir, "devm.me.yaml")); err == nil {
+		if b, err := os.ReadFile(projectConfigPath(cache, project, "devm.me.yaml")); err == nil {
 			currentMe = b
 		} else if !errors.Is(err, os.ErrNotExist) {
 			http.Error(w, fmt.Sprintf("approve: read devm.me.yaml: %v", err), http.StatusInternalServerError)
@@ -141,20 +165,19 @@ func handleApprove(cfg identity.Config, cache *StateCache) http.Handler {
 
 		// The just-written snapshot IS the current bytes — current and
 		// approved converge by definition, so Diverged is always false
-		// immediately after a successful approve.
-		if cache != nil {
-			devmSHA := approve.HashFile(currentDevm)
-			meSHA := approve.HashFile(currentMe)
-			since := time.Now()
-			cache.SetApproveState(project, ApproveStateSummary{
-				Diverged:        false,
-				CurrentDevmSHA:  devmSHA,
-				ApprovedDevmSHA: devmSHA,
-				CurrentMeSHA:    meSHA,
-				ApprovedMeSHA:   meSHA,
-				ApprovedSince:   &since,
-			})
-		}
+		// immediately after a successful approve. cache is non-nil here:
+		// the projectConfigPath lookup above already dereferenced it.
+		devmSHA := approve.HashFile(currentDevm)
+		meSHA := approve.HashFile(currentMe)
+		since := time.Now()
+		cache.SetApproveState(project, ApproveStateSummary{
+			Diverged:        false,
+			CurrentDevmSHA:  devmSHA,
+			ApprovedDevmSHA: devmSHA,
+			CurrentMeSHA:    meSHA,
+			ApprovedMeSHA:   meSHA,
+			ApprovedSince:   &since,
+		})
 
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -164,7 +187,7 @@ func handleApprove(cfg identity.Config, cache *StateCache) http.Handler {
 // devm.yaml + devm.me.yaml (if present) as the initial approved
 // snapshot IF no snapshot exists yet. First-run bootstrap: the file
 // as it is at the first cold-start becomes the baseline. configDir is
-// the directory containing devm.yaml (the project's state dir).
+// the project's Mac cwd — where devm.yaml lives.
 func bootstrapApprovedSnapshotOnFirstRun(cfg identity.Config, projectID, configDir string) error {
 	store := approve.NewStore(cfg)
 	_, hasSnap, err := store.Read(projectID)
@@ -193,7 +216,7 @@ Approve the change:
   - Run ` + "`devm approve`" + ` in this terminal to review + approve inline.`
 
 // isApproveDiverged reports whether devm.yaml/devm.me.yaml at
-// configDir (the project's state dir) differ from the last-approved
+// configDir (the project's Mac cwd) differ from the last-approved
 // snapshot.
 func isApproveDiverged(cfg identity.Config, projectID, configDir string) (bool, error) {
 	currentDevm, err := os.ReadFile(filepath.Join(configDir, "devm.yaml"))

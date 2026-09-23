@@ -24,7 +24,7 @@ type GroundTruth interface {
 
 	TartList(ctx context.Context) ([]tart.VM, error)
 
-	ApproveHash(projectID string) (currentDevmSHA, currentMeSHA string, err error)
+	ApproveHash(projectID, macCwd string) (currentDevmSHA, currentMeSHA string, err error)
 	ReadApprovedSnapshot(projectID string) (devmSHA, meSHA string, since *time.Time, hasSnap bool, err error)
 
 	PopSessionSummaryForProject(projectID string) PopSessionSummary
@@ -74,8 +74,8 @@ func (g *RealGroundTruth) TartList(ctx context.Context) ([]tart.VM, error) {
 	return g.Tart.List(ctx)
 }
 
-func (g *RealGroundTruth) ApproveHash(projectID string) (string, string, error) {
-	return HashCurrentFilesForWatchdog(stateDirForProject(g.Cfg, projectID))
+func (g *RealGroundTruth) ApproveHash(projectID, macCwd string) (string, string, error) {
+	return HashCurrentFilesForWatchdog(macCwd)
 }
 
 func (g *RealGroundTruth) ReadApprovedSnapshot(projectID string) (string, string, *time.Time, bool, error) {
