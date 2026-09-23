@@ -1,15 +1,15 @@
 // propose is the daemon-side entry point for "propose" requests — a
-// signal that <state-dir>/<kind> changed, carrying attribution only.
-// The actual bytes reach the daemon through the project's mutagen
-// sync session (see devm.yaml/devm.me.yaml sync setup in vm.go); this
+// signal that <macCwd>/<kind> changed, carrying attribution only. The
+// actual bytes reach the daemon through the project's mutagen sync
+// session (see devm.yaml/devm.me.yaml sync setup in vm.go); this
 // handler never reads or writes the config file itself. It optionally
-// re-validates the file already on disk at <state-dir>/<kind> —
-// schema.CheckUnknownKeys + a strict (KnownFields) decode +
-// schema.Config.Validate, the same checks internal/config.Load
-// applies to devm.yaml — and always records attribution to
-// <RuntimeDir>/<projectID>/last-proposal.json. The Approve gate
-// (Piece 1) fires on the next gated command as if a human had edited
-// the file.
+// re-validates the file already on disk at <macCwd>/<kind> (macCwd
+// resolved from the state cache's ProjectRow) — schema.CheckUnknownKeys
+// + a strict (KnownFields) decode + schema.Config.Validate, the same
+// checks internal/config.Load applies to devm.yaml — and always
+// records attribution to <RuntimeDir>/<projectID>/last-proposal.json.
+// The Approve gate (Piece 1) fires on the next gated command as if a
+// human had edited the file.
 //
 // Two listeners share the recorder below (recordProposal):
 //
@@ -56,20 +56,28 @@ type proposeRequest struct {
 }
 
 // recordProposal validates the on-disk file for req.Kind under the
-// project's state dir (skipped when the file is missing — sync may
-// not have landed it yet, and a signal that arrives ahead of its
-// bytes still deserves attribution), then writes req's attribution to
-// last-proposal.json via WriteLastProposal. Returns the HTTP status
-// and body callers should write, and any internal (non-4xx) error for
-// the caller to log.
-func recordProposal(cfg identity.Config, projectName string, req proposeRequest) (statusCode int, body string, err error) {
+// project's macCwd, resolved from cache (skipped when the file is
+// missing — sync may not have landed it yet, and a signal that
+// arrives ahead of its bytes still deserves attribution), then writes
+// req's attribution to last-proposal.json via WriteLastProposal.
+// Returns the HTTP status and body callers should write, and any
+// internal (non-4xx) error for the caller to log.
+func recordProposal(cfg identity.Config, cache *StateCache, projectName string, req proposeRequest) (statusCode int, body string, err error) {
 	if req.Kind != "devm.yaml" && req.Kind != "devm.me.yaml" {
 		return http.StatusBadRequest, fmt.Sprintf("propose: unsupported kind %q", req.Kind), nil
 	}
 
+	row, ok := cache.ProjectRow(projectName)
+	if !ok || row.MacCwd == "" {
+		daemonlog.Errorf("propose: project %q has no MacCwd in cache", projectName)
+		return http.StatusPreconditionFailed,
+			fmt.Sprintf("propose: project %q not started; run `devm start` from its directory first", projectName),
+			nil
+	}
+
 	// devm.me.yaml has no schema of its own (it's a partial merged
 	// into devm.yaml) — nothing to validate against.
-	configPath := filepath.Join(stateDirForProject(cfg, projectName), req.Kind)
+	configPath := filepath.Join(row.MacCwd, req.Kind)
 	onDisk, readErr := os.ReadFile(configPath)
 	switch {
 	case readErr == nil:
@@ -152,7 +160,7 @@ func writeProposalResult(w http.ResponseWriter, statusCode int, body string, err
 // handleProposeForProject returns the per-project POST /propose
 // handler serving the guest side. Route registered by vm.go's
 // /vm/start wiring, on the project's softnet listener.
-func handleProposeForProject(cfg identity.Config, projectName string) http.Handler {
+func handleProposeForProject(cfg identity.Config, cache *StateCache, projectName string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "propose: POST only", http.StatusMethodNotAllowed)
@@ -162,7 +170,7 @@ func handleProposeForProject(cfg identity.Config, projectName string) http.Handl
 		if !ok {
 			return
 		}
-		statusCode, body, err := recordProposal(cfg, projectName, req)
+		statusCode, body, err := recordProposal(cfg, cache, projectName, req)
 		writeProposalResult(w, statusCode, body, err)
 	})
 }
@@ -171,7 +179,7 @@ func handleProposeForProject(cfg identity.Config, projectName string) http.Handl
 // POST /vm/propose?project=<name> handler serving the Mac CLI.
 // Registered by vm.go's RegisterVMHandlers alongside
 // /vm/resolve-project and /vm/register-project.
-func handleProposeUnixSocket(cfg identity.Config) http.Handler {
+func handleProposeUnixSocket(cfg identity.Config, cache *StateCache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "propose: POST only", http.StatusMethodNotAllowed)
@@ -199,7 +207,7 @@ func handleProposeUnixSocket(cfg identity.Config) http.Handler {
 		if !ok {
 			return
 		}
-		statusCode, body, err := recordProposal(cfg, projectName, req)
+		statusCode, body, err := recordProposal(cfg, cache, projectName, req)
 		writeProposalResult(w, statusCode, body, err)
 	})
 }
@@ -211,9 +219,9 @@ var proposeListeners sync.Map // projectName -> net.Listener
 
 // serveProposeListener runs a minimal HTTP server on ln that dispatches
 // POST /propose to handleProposeForProject for the given project.
-func serveProposeListener(ln net.Listener, cfg identity.Config, projectName string) {
+func serveProposeListener(ln net.Listener, cfg identity.Config, cache *StateCache, projectName string) {
 	mux := http.NewServeMux()
-	mux.Handle("/propose", handleProposeForProject(cfg, projectName))
+	mux.Handle("/propose", handleProposeForProject(cfg, cache, projectName))
 	srv := &http.Server{Handler: mux}
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		daemonlog.Errorf("serviceapi: propose: listener for %s exited: %v", projectName, err)

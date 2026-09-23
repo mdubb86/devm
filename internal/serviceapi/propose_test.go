@@ -20,14 +20,16 @@ const validDevmYAML = "project:\n  name: myproj\n"
 const invalidDevmYAML = "project:\n  name: myproj\nnetwork: {unclosed\n"
 
 // buildProposeHandler returns the softnet per-project /propose handler
-// for "proj", plus the identity.Config it was built against so tests
-// can read back metadata and write state-dir fixtures.
-func buildProposeHandler(t *testing.T) (http.Handler, identity.Config) {
+// for "proj", plus the identity.Config and *StateCache it was built
+// against so tests can read back metadata, seed the cache, and write
+// fixtures.
+func buildProposeHandler(t *testing.T) (http.Handler, identity.Config, *StateCache) {
 	t.Helper()
 	cfg := identity.Prod
 	t.Setenv("HOME", t.TempDir())
-	h := handleProposeForProject(cfg, "proj")
-	return h, cfg
+	cache := NewStateCache()
+	h := handleProposeForProject(cfg, cache, "proj")
+	return h, cfg, cache
 }
 
 func postPropose(h http.Handler, path string, req map[string]any) *httptest.ResponseRecorder {
@@ -39,17 +41,19 @@ func postPropose(h http.Handler, path string, req map[string]any) *httptest.Resp
 	return rr
 }
 
-// writeStateDirFile writes content at <state-dir>/<name> for "proj",
-// creating the state dir if needed.
-func writeStateDirFile(t *testing.T, cfg identity.Config, name, content string) {
+// writeMacCwdFile registers a fresh macCwd for "proj" in cache and
+// writes content at <macCwd>/<name>, mirroring where the propose
+// handler now resolves the on-disk config from.
+func writeMacCwdFile(t *testing.T, cache *StateCache, name, content string) string {
 	t.Helper()
-	dir := stateDirForProject(cfg, "proj")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
+	dir := t.TempDir()
+	cache.SetMacCwd("proj", dir)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
+	return dir
 }
 
 func TestPropose_UnsupportedKindReturns400(t *testing.T) {
-	h, _ := buildProposeHandler(t)
+	h, _, _ := buildProposeHandler(t)
 
 	rr := postPropose(h, "/propose", map[string]any{
 		"cwd":    "/x",
@@ -63,7 +67,7 @@ func TestPropose_UnsupportedKindReturns400(t *testing.T) {
 }
 
 func TestPropose_OversizedBodyRejected(t *testing.T) {
-	h, cfg := buildProposeHandler(t)
+	h, cfg, _ := buildProposeHandler(t)
 
 	// A reason field alone over 1 MiB — well past maxProposeBodyBytes
 	// once wrapped in the JSON envelope.
@@ -88,8 +92,9 @@ func TestPropose_OversizedBodyRejected(t *testing.T) {
 }
 
 func TestPropose_MissingProjectStateDirIgnoredWhenFileMissing(t *testing.T) {
-	h, cfg := buildProposeHandler(t)
-	// Deliberately do NOT create the state dir or a devm.yaml — the
+	h, cfg, cache := buildProposeHandler(t)
+	cache.SetMacCwd("proj", t.TempDir())
+	// Deliberately do NOT write a devm.yaml into macCwd — the
 	// signal-only handler has nothing on disk to validate against yet.
 
 	rr := postPropose(h, "/propose", map[string]any{
@@ -113,7 +118,8 @@ func TestPropose_MissingProjectStateDirIgnoredWhenFileMissing(t *testing.T) {
 }
 
 func TestPropose_SecondProposalOverwritesMetadata(t *testing.T) {
-	h, cfg := buildProposeHandler(t)
+	h, cfg, cache := buildProposeHandler(t)
+	cache.SetMacCwd("proj", t.TempDir())
 
 	post := func(reason string) {
 		rr := postPropose(h, "/propose", map[string]any{
@@ -135,8 +141,8 @@ func TestPropose_SecondProposalOverwritesMetadata(t *testing.T) {
 }
 
 func TestPropose_ValidatesOnDiskFileWhenPresent(t *testing.T) {
-	h, cfg := buildProposeHandler(t)
-	writeStateDirFile(t, cfg, "devm.yaml", validDevmYAML)
+	h, cfg, cache := buildProposeHandler(t)
+	writeMacCwdFile(t, cache, "devm.yaml", validDevmYAML)
 
 	rr := postPropose(h, "/propose", map[string]any{
 		"cwd":    "/x",
@@ -154,8 +160,8 @@ func TestPropose_ValidatesOnDiskFileWhenPresent(t *testing.T) {
 }
 
 func TestPropose_InvalidOnDiskFileRejects(t *testing.T) {
-	h, cfg := buildProposeHandler(t)
-	writeStateDirFile(t, cfg, "devm.yaml", invalidDevmYAML)
+	h, cfg, cache := buildProposeHandler(t)
+	writeMacCwdFile(t, cache, "devm.yaml", invalidDevmYAML)
 
 	rr := postPropose(h, "/propose", map[string]any{
 		"cwd":    "/x",
@@ -177,8 +183,8 @@ func TestPropose_InvalidOnDiskFileRejects(t *testing.T) {
 const invalidPartialMeYAML = "not_a_real_top_level_key: true\n"
 
 func TestPropose_MeYamlAcceptedWithoutValidation(t *testing.T) {
-	h, cfg := buildProposeHandler(t)
-	writeStateDirFile(t, cfg, "devm.me.yaml", invalidPartialMeYAML)
+	h, cfg, cache := buildProposeHandler(t)
+	writeMacCwdFile(t, cache, "devm.me.yaml", invalidPartialMeYAML)
 
 	rr := postPropose(h, "/propose", map[string]any{
 		"cwd":    "/x",
@@ -201,9 +207,10 @@ func TestPropose_MeYamlAcceptedWithoutValidation(t *testing.T) {
 // reproduces an EISDIR read error portably (no permission-mode /
 // root-user flakiness).
 func TestPropose_UnreadableOnDiskFileReturns500(t *testing.T) {
-	h, cfg := buildProposeHandler(t)
-	dir := stateDirForProject(cfg, "proj")
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "devm.yaml"), 0o755))
+	h, cfg, cache := buildProposeHandler(t)
+	macCwd := t.TempDir()
+	cache.SetMacCwd("proj", macCwd)
+	require.NoError(t, os.MkdirAll(filepath.Join(macCwd, "devm.yaml"), 0o755))
 
 	rr := postPropose(h, "/propose", map[string]any{
 		"cwd":    "/x",
@@ -219,7 +226,8 @@ func TestPropose_UnreadableOnDiskFileReturns500(t *testing.T) {
 }
 
 func TestPropose_SourceDefaultsToGuestWhenEmpty(t *testing.T) {
-	h, cfg := buildProposeHandler(t)
+	h, cfg, cache := buildProposeHandler(t)
+	cache.SetMacCwd("proj", t.TempDir())
 
 	rr := postPropose(h, "/propose", map[string]any{
 		"cwd":    "/x",
@@ -236,7 +244,8 @@ func TestPropose_SourceDefaultsToGuestWhenEmpty(t *testing.T) {
 }
 
 func TestPropose_SourceMacIsPreserved(t *testing.T) {
-	h, cfg := buildProposeHandler(t)
+	h, cfg, cache := buildProposeHandler(t)
+	cache.SetMacCwd("proj", t.TempDir())
 
 	rr := postPropose(h, "/propose", map[string]any{
 		"cwd":    "/x",
@@ -260,7 +269,9 @@ func TestPropose_UnixSocketHandlerRoutesByProjectQueryParam(t *testing.T) {
 	cfg := identity.Prod
 	t.Setenv("HOME", t.TempDir())
 	require.NoError(t, os.MkdirAll(stateDirForProject(cfg, "proj"), 0o755))
-	h := handleProposeUnixSocket(cfg)
+	cache := NewStateCache()
+	cache.SetMacCwd("proj", t.TempDir())
+	h := handleProposeUnixSocket(cfg, cache)
 
 	rr := postPropose(h, "/vm/propose?project=proj", map[string]any{
 		"cwd":    "/Users/dev/proj",
@@ -288,7 +299,7 @@ func TestPropose_UnixSocketHandlerRoutesByProjectQueryParam(t *testing.T) {
 func TestPropose_UnixSocketUnknownProjectReturns404(t *testing.T) {
 	cfg := identity.Prod
 	t.Setenv("HOME", t.TempDir())
-	h := handleProposeUnixSocket(cfg)
+	h := handleProposeUnixSocket(cfg, NewStateCache())
 
 	rr := postPropose(h, "/vm/propose?project=nonexistent", map[string]any{
 		"cwd":    "/x",
@@ -307,7 +318,7 @@ func TestPropose_UnixSocketUnknownProjectReturns404(t *testing.T) {
 func TestPropose_UnixSocketHandlerRequiresProjectParam(t *testing.T) {
 	cfg := identity.Prod
 	t.Setenv("HOME", t.TempDir())
-	h := handleProposeUnixSocket(cfg)
+	h := handleProposeUnixSocket(cfg, NewStateCache())
 
 	rr := postPropose(h, "/vm/propose", map[string]any{
 		"cwd":  "/x",
@@ -321,7 +332,7 @@ func TestPropose_UnixSocketHandlerRequiresProjectParam(t *testing.T) {
 func TestPropose_UnixSocketHandlerMethodNotAllowed(t *testing.T) {
 	cfg := identity.Prod
 	t.Setenv("HOME", t.TempDir())
-	h := handleProposeUnixSocket(cfg)
+	h := handleProposeUnixSocket(cfg, NewStateCache())
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/vm/propose?project=proj", nil)
 	rr := httptest.NewRecorder()
@@ -331,13 +342,62 @@ func TestPropose_UnixSocketHandlerMethodNotAllowed(t *testing.T) {
 }
 
 func TestPropose_MethodNotAllowed(t *testing.T) {
-	h, _ := buildProposeHandler(t)
+	h, _, _ := buildProposeHandler(t)
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/propose", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httpReq)
 
 	assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
+
+// TestPropose_ValidatesAtMacCwd pins that the Mac-side
+// /vm/propose?project=<name> handler validates devm.yaml at the
+// project's macCwd (resolved from the state cache), not under its
+// state dir — the state dir is deliberately left without the file to
+// prove the old path isn't what's read.
+func TestPropose_ValidatesAtMacCwd(t *testing.T) {
+	cfg := identity.Prod
+	t.Setenv("HOME", t.TempDir())
+	cache := NewStateCache()
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte(validDevmYAML), 0o644))
+	cache.SetMacCwd("p", macCwd)
+
+	stateDir := stateDirForProject(cfg, "p")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	_, statErr := os.Stat(filepath.Join(stateDir, "devm.yaml"))
+	require.True(t, os.IsNotExist(statErr))
+
+	h := handleProposeUnixSocket(cfg, cache)
+	rr := postPropose(h, "/vm/propose?project=p", map[string]any{
+		"reason": "t",
+		"kind":   "devm.yaml",
+		"source": "mac",
+	})
+
+	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+}
+
+// TestPropose_NoMacCwdInCacheReturns412 pins that a project the cache
+// has no MacCwd for (never started, or the daemon restarted since)
+// fails the precondition rather than reading a stale or empty path.
+func TestPropose_NoMacCwdInCacheReturns412(t *testing.T) {
+	cfg := identity.Prod
+	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, os.MkdirAll(stateDirForProject(cfg, "p"), 0o755))
+	h := handleProposeUnixSocket(cfg, NewStateCache())
+
+	rr := postPropose(h, "/vm/propose?project=p", map[string]any{
+		"reason": "t",
+		"kind":   "devm.yaml",
+		"source": "mac",
+	})
+
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+
+	_, ok, _ := ReadLastProposal(cfg, "p")
+	assert.False(t, ok, "no metadata should be written when the project has no MacCwd")
 }
 
 // TestPropose_ListenerRegisteredOnStart pins that serveProposeListener

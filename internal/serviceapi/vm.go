@@ -708,7 +708,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// Register before spawning the serve goroutine — see the popLn
 		// comment above for why.
 		proposeListeners.Store(req.Name, proposeLn)
-		go serveProposeListener(proposeLn, cfg, req.Name)
+		go serveProposeListener(proposeLn, cfg, cache, req.Name)
 
 		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read. Merge onto the existing
@@ -1231,7 +1231,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 
 	s.mux.Handle("/vm/resolve-project", handleResolveProject(cfg))
 	s.mux.Handle("/vm/register-project", handleRegisterProject(cfg))
-	s.mux.Handle("/vm/propose", handleProposeUnixSocket(cfg))
+	s.mux.Handle("/vm/propose", handleProposeUnixSocket(cfg, cache))
 
 	// /denials — read-only view of policy-authority allow-list rejects
 	// for a project. Sorted by count desc. Empty array is a normal state
