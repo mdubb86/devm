@@ -89,7 +89,7 @@ def test_reconcile_heals_missing_proxy(devm, workspace, sandbox_name, devm_insta
     assert proc.returncode == 0, proc.stderr.decode()
 
     try:
-        workspace.devmyaml_path.write_text(textwrap.dedent(f"""\
+        workspace.devm_yaml_path.write_text(textwrap.dedent(f"""\
             project:
               name: {workspace.vm_name}
             env:

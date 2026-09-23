@@ -102,9 +102,9 @@ def test_iron_proxy_apply_port_squat(workspace, devm):
     )
     # write_devmyaml uses safe_dump which can't emit `!secret` tags;
     # patch it in as raw YAML.
-    raw = workspace.devmyaml_path.read_text()
+    raw = workspace.devm_yaml_path.read_text()
     raw = raw.replace("TEST_TOKEN: placeholder", "TEST_TOKEN: !secret TEST_TOKEN")
-    workspace.devmyaml_path.write_text(raw)
+    workspace.devm_yaml_path.write_text(raw)
 
     start = subprocess.run(
         [devm.path, "start"],

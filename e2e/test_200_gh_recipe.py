@@ -67,7 +67,7 @@ def test_gh_recipe(devm, workspace, sandbox_name):
     assert proc.returncode == 0, proc.stderr.decode()
 
     try:
-        workspace.devmyaml_path.write_text(textwrap.dedent(f"""\
+        workspace.devm_yaml_path.write_text(textwrap.dedent(f"""\
             project:
               name: {workspace.vm_name}
             packages:

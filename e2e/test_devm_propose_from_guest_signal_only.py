@@ -33,7 +33,7 @@ def test_guest_propose_records_no_bytes(workspace, devm, sandbox_name):
         assert cold.returncode == 0, f"start failed: {cold.stderr.decode()!r}"
 
         workspace.patch_devmyaml(env={"GUEST_PROPOSE_E2E": "1"})
-        before = workspace.devmyaml_path.read_text()
+        before = workspace.devm_yaml_path.read_text()
 
         guest = subprocess.run(
             [devm.path, "exec", "/opt/devm/bin/propose", "--reason", "add y"],
@@ -56,7 +56,7 @@ def test_guest_propose_records_no_bytes(workspace, devm, sandbox_name):
 
         # propose sent no config bytes -- the Mac-side file the human
         # edited is exactly what it was before the guest call.
-        assert workspace.devmyaml_path.read_text() == before
+        assert workspace.devm_yaml_path.read_text() == before
     finally:
         subprocess.run(
             [devm.path, "teardown", "--yes"],

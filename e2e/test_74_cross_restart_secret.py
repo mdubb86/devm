@@ -104,7 +104,7 @@ def test_secret_survives_daemon_restart(workspace, devm, sandbox_name, devm_inst
         # Rewrite devm.yaml with the !secret reference and network.allow
         # binding. yaml.safe_dump cannot emit YAML tags, so we write
         # the file directly.
-        workspace.devmyaml_path.write_text(textwrap.dedent(f"""\
+        workspace.devm_yaml_path.write_text(textwrap.dedent(f"""\
             project:
               name: {workspace.vm_name}
             env:

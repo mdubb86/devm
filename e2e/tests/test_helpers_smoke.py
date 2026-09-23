@@ -115,7 +115,7 @@ def test_add_systemd_service_writes_block(tmp_path):
     ws.write_devmyaml(no_repo=True)
     ws.add_systemd_service("greeter", exec=["/usr/bin/echo", "hi"])
     import yaml
-    cfg = yaml.safe_load(ws.devmyaml_path.read_text())
+    cfg = yaml.safe_load(ws.devm_yaml_path.read_text())
     assert cfg["services"]["greeter"]["exec"] == ["/usr/bin/echo", "hi"]
     assert cfg["services"]["greeter"]["restart"] == "always"
 
@@ -127,7 +127,7 @@ def test_add_systemd_service_idempotent_last_wins(tmp_path):
     ws.add_systemd_service("svc", exec=["/bin/a"])
     ws.add_systemd_service("svc", exec=["/bin/b"], restart="no")
     import yaml
-    cfg = yaml.safe_load(ws.devmyaml_path.read_text())
+    cfg = yaml.safe_load(ws.devm_yaml_path.read_text())
     assert cfg["services"]["svc"]["exec"] == ["/bin/b"]
     assert cfg["services"]["svc"]["restart"] == "no"
 

@@ -105,9 +105,9 @@ def _set_direct(workspace, devm, value: bool) -> None:
     # this re-locks it (unlock -> edit -> reconcile always ends locked,
     # per test_120_config_lock.py), so each call needs its own unlock.
     devm.unlock()
-    cfg = yaml.safe_load(workspace.devmyaml_path.read_text())
+    cfg = yaml.safe_load(workspace.devm_yaml_path.read_text())
     cfg["services"]["nc"]["direct"] = value
-    workspace.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    workspace.devm_yaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
 
 @pytest.mark.slow

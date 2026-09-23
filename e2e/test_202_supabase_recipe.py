@@ -181,7 +181,7 @@ def test_supabase_recipe(devm, workspace, sandbox_name):
 
     # devm.yaml — the recipe's shape, verbatim, plus a tiny http.server
     # for the /auth/confirm landing page and Playwright's runtime deps.
-    workspace.devmyaml_path.write_text(textwrap.dedent(f"""\
+    workspace.devm_yaml_path.write_text(textwrap.dedent(f"""\
         project:
           name: {proj}
         repo:

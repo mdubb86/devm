@@ -51,7 +51,7 @@ def test_install_script_env_secret_substitution(devm, workspace):
     # yaml.safe_dump can't emit the `!secret` custom tag devm.yaml needs
     # for env: — write the config directly (same pattern as
     # test_101_reconcile_heals_missing_proxy / test_132 / test_74).
-    workspace.devmyaml_path.write_text(textwrap.dedent(f"""\
+    workspace.devm_yaml_path.write_text(textwrap.dedent(f"""\
         project:
           name: {workspace.vm_name}
         env:

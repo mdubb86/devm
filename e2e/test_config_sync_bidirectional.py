@@ -58,7 +58,7 @@ def test_config_flows_both_ways(workspace, devm):
         deadline = time.monotonic() + 30
         mac_content = ""
         while time.monotonic() < deadline:
-            mac_content = workspace.devmyaml_path.read_text()
+            mac_content = workspace.devm_yaml_path.read_text()
             if "GUEST_WRITE" in mac_content:
                 break
             time.sleep(1)

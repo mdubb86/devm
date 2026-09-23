@@ -40,7 +40,7 @@ def test_repo_hydration_fails_loud(devm, workspace, sandbox_name, case):
     if case == "bad_secret":
         # yaml.safe_dump can't emit the `!secret` tag, so this one is
         # written directly (same technique as test_74).
-        workspace.devmyaml_path.write_text(f"""\
+        workspace.devm_yaml_path.write_text(f"""\
 project:
   name: {workspace.vm_name}
 repo:
