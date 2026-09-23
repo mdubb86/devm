@@ -1233,8 +1233,6 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	s.mux.Handle("/vm/resolve-project", handleResolveProject(cfg))
-	s.mux.Handle("/vm/register-project", handleRegisterProject(cfg))
 	s.mux.Handle("/vm/propose", handleProposeUnixSocket(cfg, cache))
 
 	// /denials — read-only view of policy-authority allow-list rejects
