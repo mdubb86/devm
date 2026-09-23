@@ -142,7 +142,6 @@ func handleApprove(cfg identity.Config, cache *StateCache) http.Handler {
 		}
 		devmPath := projectConfigPath(cache, project, "devm.yaml")
 		if devmPath == "" {
-			daemonlog.Errorf("approve: project %q has no MacCwd in cache", project)
 			http.Error(w, fmt.Sprintf("approve: project %q not started; run `devm start` from its directory first", project), http.StatusPreconditionFailed)
 			return
 		}

@@ -69,7 +69,6 @@ func recordProposal(cfg identity.Config, cache *StateCache, projectName string, 
 
 	row, ok := cache.ProjectRow(projectName)
 	if !ok || row.MacCwd == "" {
-		daemonlog.Errorf("propose: project %q has no MacCwd in cache", projectName)
 		return http.StatusPreconditionFailed,
 			fmt.Sprintf("propose: project %q not started; run `devm start` from its directory first", projectName),
 			nil
@@ -177,8 +176,7 @@ func handleProposeForProject(cfg identity.Config, cache *StateCache, projectName
 
 // handleProposeUnixSocket returns the daemon main-socket
 // POST /vm/propose?project=<name> handler serving the Mac CLI.
-// Registered by vm.go's RegisterVMHandlers alongside
-// /vm/resolve-project and /vm/register-project.
+// Registered by vm.go's RegisterVMHandlers.
 func handleProposeUnixSocket(cfg identity.Config, cache *StateCache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

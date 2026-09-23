@@ -21,7 +21,7 @@ E2E_FIXTURE_REPO_URL = "https://github.com/octocat/Hello-World.git"
 
 
 class Workspace:
-    def __init__(self, path: Path, slug: str, vm_name: str, port_offset: int = 51000, devm_path: str | None = None):
+    def __init__(self, path: Path, slug: str, vm_name: str, port_offset: int = 51000):
         self.path = Path(path)
         self.slug = slug
         self.vm_name = vm_name
