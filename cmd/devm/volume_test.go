@@ -234,7 +234,7 @@ func TestVolumeLs_UsesResolvedCwdNotSubdirGetwd(t *testing.T) {
 	require.NoError(t, err)
 	out := buf.String()
 
-	assert.Contains(t, out, "/home/devm/proj", "label must come from the resolved project root (Cwd), not the raw os.Getwd() subdir")
+	assert.Contains(t, out, "/home/devm/proj", "label must come from the resolved project root (MacCwd), not the raw os.Getwd() subdir")
 	assert.NotContains(t, out, "deeper")
 }
 
