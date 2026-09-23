@@ -115,6 +115,7 @@ def test_denials_replay_invalidation_on_allowlist_edit(workspace, devm, sandbox_
         network={"allow": ["example.com", "example.org"]},
         packages=["curl"],
     )
+    devm.approve()
     r = subprocess.run(
         [devm.path, "reconcile", "--yes"],
         cwd=str(workspace.path), capture_output=True, timeout=60,

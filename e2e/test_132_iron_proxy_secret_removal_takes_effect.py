@@ -160,6 +160,7 @@ env:
   MY_LITERAL_ENV: "no-secret"
 """
         )
+        devm.approve()
         r = subprocess.run(
             [devm.path, "reconcile", "--yes"],
             cwd=str(workspace.path), capture_output=True, timeout=120,

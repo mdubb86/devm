@@ -63,6 +63,7 @@ def test_allowlist_edit_leaves_iron_proxy_alive(devm, workspace):
             network={"allow": ["example.com", "httpbin.org"]},
             packages=["curl"],
         )
+        devm.approve()
         r = subprocess.run(
             [devm.path, "reconcile", "--yes"],
             cwd=str(workspace.path), capture_output=True, timeout=60,

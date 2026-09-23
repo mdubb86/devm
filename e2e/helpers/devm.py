@@ -81,6 +81,18 @@ class Devm:
         """No-op: see unlock()."""
         return subprocess.CompletedProcess(args=["lock"], returncode=0, stdout=b"", stderr=b"")
 
+    def approve(self, *, timeout: float = 30.0) -> subprocess.CompletedProcess:
+        """Run `devm approve`, feeding `y\\n` on stdin to confirm the
+        interactive prompt. Used after an intra-test devm.yaml edit to
+        clear the approve gate before the next reconcile / start.
+        Raises DevmError on non-zero exit.
+        """
+        full = [self.path, "approve"]
+        p = subprocess.run(full, input=b"y\n", capture_output=True, timeout=timeout, cwd=self.cwd, check=False)
+        if p.returncode != 0:
+            raise DevmError(full, p.returncode, p.stdout.decode(), p.stderr.decode())
+        return p
+
     def status(
         self,
         *,

@@ -147,6 +147,7 @@ def test_iron_proxy_allow_removal_takes_effect(devm, workspace, sandbox_name, de
             network={"allow": ["api.github.com", "httpbin.org"]},
             packages=["curl"],
         )
+        devm.approve()
         r = subprocess.run(
             [devm.path, "reconcile", "--yes"],
             cwd=str(workspace.path), capture_output=True, timeout=120,
@@ -176,6 +177,7 @@ def test_iron_proxy_allow_removal_takes_effect(devm, workspace, sandbox_name, de
             network={"allow": ["api.github.com"]},
             packages=["curl"],
         )
+        devm.approve()
         r = subprocess.run(
             [devm.path, "reconcile", "--yes"],
             cwd=str(workspace.path), capture_output=True, timeout=120,
