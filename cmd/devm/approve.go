@@ -23,6 +23,7 @@ type approveOpts struct {
 	daemonURL  string
 	httpClient *http.Client
 	projectID  string
+	cwd        string
 	stdin      io.Reader
 	stdout     io.Writer
 	stderr     io.Writer
@@ -40,9 +41,13 @@ subsequent ` + "`devm reconcile`" + ` / ` + "`devm start`" + ` proceed.
 This command NEVER accepts a --yes flag: the human must be present at
 the terminal to answer. Scripts cannot approve.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pid, err := resolveProjectID()
+		resolved, err := discoverProjectFn()
 		if err != nil {
 			return err
+		}
+		loaded, err := config.Load(resolved.MacCwd)
+		if err != nil {
+			return fmt.Errorf("locate devm.yaml: %w", err)
 		}
 		socketPath := cfg.SocketPath()
 		httpc := &http.Client{
@@ -55,7 +60,8 @@ the terminal to answer. Scripts cannot approve.`,
 		return runApprove(approveOpts{
 			daemonURL:  "http://localhost",
 			httpClient: httpc,
-			projectID:  pid,
+			projectID:  loaded.Project.Name,
+			cwd:        resolved.MacCwd,
 			stdin:      os.Stdin,
 			stdout:     os.Stdout,
 			stderr:     os.Stderr,
@@ -74,6 +80,9 @@ func runApprove(o approveOpts) error {
 	}
 	q := u.Query()
 	q.Set("project", o.projectID)
+	if o.cwd != "" {
+		q.Set("cwd", o.cwd)
+	}
 	u.RawQuery = q.Encode()
 	resp, err := client.Get(u.String())
 	if err != nil {
@@ -116,6 +125,9 @@ func runApprove(o approveOpts) error {
 	u2, _ := url.Parse(o.daemonURL + "/vm/approve")
 	q2 := u2.Query()
 	q2.Set("project", o.projectID)
+	if o.cwd != "" {
+		q2.Set("cwd", o.cwd)
+	}
 	u2.RawQuery = q2.Encode()
 	rsp, err := client.Post(u2.String(), "application/json", nil)
 	if err != nil {
@@ -181,20 +193,6 @@ func splitLines(b []byte) []string {
 		s = s[:len(s)-1]
 	}
 	return strings.Split(s, "\n")
-}
-
-// resolveProjectID resolves the current project via the daemon and
-// returns the project.name.
-func resolveProjectID() (string, error) {
-	resolved, err := discoverProjectFn()
-	if err != nil {
-		return "", err
-	}
-	cfg, err := config.Load(resolved.MacCwd)
-	if err != nil {
-		return "", fmt.Errorf("locate devm.yaml: %w", err)
-	}
-	return cfg.Project.Name, nil
 }
 
 func init() {

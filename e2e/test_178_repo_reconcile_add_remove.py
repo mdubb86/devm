@@ -50,6 +50,7 @@ def test_reconcile_adds_secondary_volume(devm, workspace):
             },
         )
 
+        devm.approve()
         result = devm.reconcile(yes=True, timeout=300)
         assert result.returncode == 0, result.stderr.decode()
 

@@ -114,6 +114,7 @@ def test_packages_live_add_remove(workspace, devm, sandbox_name):
         # the running VM under the current allowlist (which already
         # covers the Debian mirrors).
         workspace.patch_devmyaml(packages=["sl"])
+        devm.approve()
         add = devm.reconcile(yes=True, timeout=240)
         add_out = add.stdout.decode()
         assert add.returncode == 0, (
@@ -142,6 +143,7 @@ def test_packages_live_add_remove(workspace, devm, sandbox_name):
 
         # 3. LIVE remove: back to packages: [].
         workspace.patch_devmyaml(packages=[])
+        devm.approve()
         remove = devm.reconcile(yes=True, timeout=180)
         remove_out = remove.stdout.decode()
         assert remove.returncode == 0, (
@@ -166,6 +168,7 @@ def test_packages_live_add_remove(workspace, devm, sandbox_name):
         # its boot's open window -- no reconcile call needed.
         stop_and_wait_stopped(devm, sandbox_name)
         workspace.patch_devmyaml(packages=["sl"])
+        devm.approve()
 
         boot = subprocess.run(
             [devm.path, "shell", "--", "which", "sl"],
@@ -224,6 +227,7 @@ def test_packages_live_add_fails_loud_without_mirror_allow(workspace, devm, sand
         )
 
         workspace.patch_devmyaml(packages=["sl"])
+        devm.approve()
         add = devm.reconcile(yes=True, timeout=120, check=False)
         out = add.stdout.decode() + add.stderr.decode()
         assert add.returncode != 0, (

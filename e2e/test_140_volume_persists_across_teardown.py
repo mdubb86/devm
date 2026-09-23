@@ -123,6 +123,7 @@ def test_volume_persists_across_teardown(devm, workspace, sandbox_name):
         )
         # `check-restored` startup command tests `$WORKSPACE/primary-sentinel`
         # after hydration -- a fire before sync completes would fail cold-start.
+        devm.approve()
         r = subprocess.run(
             [devm.path, "start"], cwd=str(workspace.path),
             capture_output=True, timeout=300,

@@ -60,6 +60,7 @@ def _write_mac_mirror(vm_name: str, label: str, files: dict[str, str]) -> None:
 def _add_volume_and_reconcile(devm, workspace, label: str, guest_path: str):
     devm.unlock()
     workspace.patch_devmyaml(volumes={label: guest_path})
+    devm.approve()
     return devm.reconcile(yes=True, timeout=60, check=False)
 
 

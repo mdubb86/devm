@@ -34,6 +34,22 @@ func stateDirForProject(cfg identity.Config, name string) string {
 	return filepath.Join(cfg.RuntimeDir(), name)
 }
 
+// resolveMacCwdForRead picks a project's Mac cwd for reading devm.yaml
+// / devm.me.yaml. Prefers the state cache (set by /vm/start and
+// persisted across daemon restarts). Falls back to a caller-supplied
+// cwd query param — used by CLI verbs like approve that can be run on
+// a project the daemon doesn't currently track (e.g. after
+// `devm teardown --yes` clears the cache entry). Returns "" only when
+// neither source is available.
+func resolveMacCwdForRead(cache *StateCache, project, reqCwd string) string {
+	if cache != nil {
+		if row, ok := cache.ProjectRow(project); ok && row.MacCwd != "" {
+			return row.MacCwd
+		}
+	}
+	return reqCwd
+}
+
 type approveStateResponse struct {
 	Project           string            `json:"project"`
 	Diverged          bool              `json:"diverged"`
@@ -61,21 +77,24 @@ func handleApproveState(cfg identity.Config, cache *StateCache) http.Handler {
 			http.Error(w, "approve-state: project query param required", http.StatusBadRequest)
 			return
 		}
-		devmPath := projectConfigPath(cache, project, "devm.yaml")
-		if devmPath == "" {
-			// Project hasn't run /vm/start yet, so there's no MacCwd to
-			// read devm.yaml from — nothing to report, not an error.
+		macCwd := resolveMacCwdForRead(cache, project, r.URL.Query().Get("cwd"))
+		if macCwd == "" {
+			// No MacCwd from cache OR request — nothing to compare
+			// against. Return an empty response (not-diverged) rather
+			// than surfacing an error; this preserves the older
+			// "silent no-op" behavior for callers that don't yet pass cwd.
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(approveStateResponse{Project: project})
 			return
 		}
+		devmPath := filepath.Join(macCwd, "devm.yaml")
 		currentDevm, err := os.ReadFile(devmPath)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("approve-state: read devm.yaml: %v", err), http.StatusInternalServerError)
 			return
 		}
 		var currentMe []byte
-		if b, err := os.ReadFile(projectConfigPath(cache, project, "devm.me.yaml")); err == nil {
+		if b, err := os.ReadFile(filepath.Join(macCwd, "devm.me.yaml")); err == nil {
 			currentMe = b
 		} else if !errors.Is(err, os.ErrNotExist) {
 			http.Error(w, fmt.Sprintf("approve-state: read devm.me.yaml: %v", err), http.StatusInternalServerError)
@@ -140,18 +159,18 @@ func handleApprove(cfg identity.Config, cache *StateCache) http.Handler {
 			http.Error(w, "approve: project query param required", http.StatusBadRequest)
 			return
 		}
-		devmPath := projectConfigPath(cache, project, "devm.yaml")
-		if devmPath == "" {
+		macCwd := resolveMacCwdForRead(cache, project, r.URL.Query().Get("cwd"))
+		if macCwd == "" {
 			http.Error(w, fmt.Sprintf("approve: project %q not started; run `devm start` from its directory first", project), http.StatusPreconditionFailed)
 			return
 		}
-		currentDevm, err := os.ReadFile(devmPath)
+		currentDevm, err := os.ReadFile(filepath.Join(macCwd, "devm.yaml"))
 		if err != nil {
 			http.Error(w, fmt.Sprintf("approve: read devm.yaml: %v", err), http.StatusInternalServerError)
 			return
 		}
 		var currentMe []byte
-		if b, err := os.ReadFile(projectConfigPath(cache, project, "devm.me.yaml")); err == nil {
+		if b, err := os.ReadFile(filepath.Join(macCwd, "devm.me.yaml")); err == nil {
 			currentMe = b
 		} else if !errors.Is(err, os.ErrNotExist) {
 			http.Error(w, fmt.Sprintf("approve: read devm.me.yaml: %v", err), http.StatusInternalServerError)
