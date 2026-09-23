@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,7 +11,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMacPropose_SendsMetadataWithSource(t *testing.T) {
+func withDiscoverProject(t *testing.T, rp LocalProject, err error) {
+	t.Helper()
+	orig := discoverProjectFn
+	discoverProjectFn = func() (LocalProject, error) {
+		return rp, err
+	}
+	t.Cleanup(func() { discoverProjectFn = orig })
+}
+
+func TestPropose_SendsMetadataWithSource(t *testing.T) {
+	withDiscoverProject(t, LocalProject{MacCwd: "/Users/x/proj", Name: "p"}, nil)
+
 	var captured struct {
 		Cwd    string `json:"cwd"`
 		Reason string `json:"reason"`
@@ -18,20 +30,14 @@ func TestMacPropose_SendsMetadataWithSource(t *testing.T) {
 		Source string `json:"source"`
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/vm/resolve-project" {
-			_ = json.NewEncoder(w).Encode(map[string]string{"name": "p", "state_dir": "/x/p"})
-			return
-		}
-		if r.URL.Path == "/vm/propose" {
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		t.Fatalf("unexpected path: %s", r.URL.Path)
+		require.Equal(t, "/vm/propose", r.URL.Path)
+		require.Equal(t, "p", r.URL.Query().Get("project"))
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
 
-	code := runMacPropose(srv.URL, "/Users/x/proj", "add example.com", "devm.yaml")
+	code := runMacPropose(srv.URL, "add example.com", "devm.yaml")
 	assert.Equal(t, 0, code)
 	assert.Equal(t, "/Users/x/proj", captured.Cwd)
 	assert.Equal(t, "add example.com", captured.Reason)
@@ -39,78 +45,67 @@ func TestMacPropose_SendsMetadataWithSource(t *testing.T) {
 	assert.Equal(t, "mac", captured.Source)
 }
 
-func TestMacPropose_EmptyReasonOK(t *testing.T) {
+func TestPropose_EmptyReasonOK(t *testing.T) {
+	withDiscoverProject(t, LocalProject{MacCwd: "/Users/x/proj", Name: "p"}, nil)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/vm/resolve-project" {
-			_ = json.NewEncoder(w).Encode(map[string]string{"name": "p", "state_dir": "/x/p"})
-			return
-		}
-		if r.URL.Path == "/vm/propose" {
-			var body struct{ Reason string }
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			assert.Equal(t, "", body.Reason, "empty reason should be sent as-is")
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
+		require.Equal(t, "/vm/propose", r.URL.Path)
+		var body struct{ Reason string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		assert.Equal(t, "", body.Reason, "empty reason should be sent as-is")
+		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
 
-	code := runMacPropose(srv.URL, "/Users/x/proj", "", "devm.yaml")
+	code := runMacPropose(srv.URL, "", "devm.yaml")
 	assert.Equal(t, 0, code)
 }
 
-func TestMacPropose_ResolveFails_Returns2(t *testing.T) {
+func TestPropose_DiscoverFails_Returns2(t *testing.T) {
+	withDiscoverProject(t, LocalProject{}, errors.New("discover-project: no devm.yaml found"))
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/vm/resolve-project" {
-			http.Error(w, "resolve-project: cwd not registered", http.StatusNotFound)
-			return
-		}
+		t.Fatalf("unexpected request to daemon: %s", r.URL.Path)
 	}))
 	defer srv.Close()
 
-	code := runMacPropose(srv.URL, "/Users/x/unknown", "test", "devm.yaml")
+	code := runMacPropose(srv.URL, "test", "devm.yaml")
 	assert.Equal(t, 2, code)
 }
 
-// TestMacPropose_TransportError_Returns1 pins M2's exit-code split: a
-// resolve-project call that never reaches the daemon (socket down,
-// nothing listening) must exit 1, not 2 — 2 is reserved for a daemon
-// HTTP error response, which never happened here.
-func TestMacPropose_TransportError_Returns1(t *testing.T) {
-	code := runMacPropose("http://127.0.0.1:1", "/Users/x/proj", "test", "devm.yaml")
+// TestPropose_TransportError_Returns1 pins the exit-code split: a
+// propose call that never reaches the daemon (socket down, nothing
+// listening) must exit 1, not 2 — 2 is reserved for a daemon HTTP error
+// response, which never happened here.
+func TestPropose_TransportError_Returns1(t *testing.T) {
+	withDiscoverProject(t, LocalProject{MacCwd: "/Users/x/proj", Name: "p"}, nil)
+
+	code := runMacPropose("http://127.0.0.1:1", "test", "devm.yaml")
 	assert.Equal(t, 1, code)
 }
 
-func TestMacPropose_DaemonBadRequest_Returns2(t *testing.T) {
+func TestPropose_DaemonBadRequest_Returns2(t *testing.T) {
+	withDiscoverProject(t, LocalProject{MacCwd: "/Users/x/proj", Name: "p"}, nil)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/vm/resolve-project" {
-			_ = json.NewEncoder(w).Encode(map[string]string{"name": "p", "state_dir": "/x/p"})
-			return
-		}
-		if r.URL.Path == "/vm/propose" {
-			http.Error(w, "propose: invalid kind", http.StatusBadRequest)
-			return
-		}
+		require.Equal(t, "/vm/propose", r.URL.Path)
+		http.Error(w, "propose: invalid kind", http.StatusBadRequest)
 	}))
 	defer srv.Close()
 
-	code := runMacPropose(srv.URL, "/Users/x/proj", "test", "invalid.yaml")
+	code := runMacPropose(srv.URL, "test", "invalid.yaml")
 	assert.Equal(t, 2, code)
 }
 
-func TestMacPropose_DaemonError_Returns1(t *testing.T) {
+func TestPropose_DaemonError_Returns1(t *testing.T) {
+	withDiscoverProject(t, LocalProject{MacCwd: "/Users/x/proj", Name: "p"}, nil)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/vm/resolve-project" {
-			_ = json.NewEncoder(w).Encode(map[string]string{"name": "p", "state_dir": "/x/p"})
-			return
-		}
-		if r.URL.Path == "/vm/propose" {
-			http.Error(w, "propose: internal error", http.StatusInternalServerError)
-			return
-		}
+		require.Equal(t, "/vm/propose", r.URL.Path)
+		http.Error(w, "propose: internal error", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
-	code := runMacPropose(srv.URL, "/Users/x/proj", "test", "devm.yaml")
+	code := runMacPropose(srv.URL, "test", "devm.yaml")
 	assert.Equal(t, 1, code)
 }

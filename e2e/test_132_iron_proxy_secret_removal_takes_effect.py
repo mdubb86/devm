@@ -100,7 +100,7 @@ def test_iron_proxy_secret_removal_takes_effect(devm, workspace, sandbox_name, d
     )
     assert proc.returncode == 0, f"secret set failed:\n{proc.stderr.decode()}"
 
-    workspace.devmyaml_path.write_text(
+    workspace.devm_yaml_path.write_text(
         f"""project:
   name: {workspace.slug}
 
@@ -140,7 +140,7 @@ env:
 
         # 2. Remove the !secret ref by rewriting devm.yaml without it.
         devm.unlock()
-        workspace.devmyaml_path.write_text(
+        workspace.devm_yaml_path.write_text(
             f"""project:
   name: {workspace.slug}
 

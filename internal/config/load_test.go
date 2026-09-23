@@ -356,3 +356,36 @@ repos:
 	assert.Equal(t, ">fmt-check", cfg.Repos["main"].Commands["lint"].Exec)
 	assert.Nil(t, cfg.Repos["main"].Commands["lint"].Startup, "unspecified startup stays nil")
 }
+
+func TestReadProjectName_ReturnsProjectName(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),
+		[]byte("project:\n  name: shelfmates\n"), 0o644))
+	name, err := ReadProjectName(dir)
+	require.NoError(t, err)
+	require.Equal(t, "shelfmates", name)
+}
+
+func TestReadProjectName_MissingFile(t *testing.T) {
+	dir := t.TempDir()
+	_, err := ReadProjectName(dir)
+	require.ErrorIs(t, err, ErrNoConfig)
+}
+
+func TestReadProjectName_MissingProjectName(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),
+		[]byte("project:\n  # no name here\n"), 0o644))
+	_, err := ReadProjectName(dir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing project.name")
+}
+
+func TestReadProjectName_ParseError(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),
+		[]byte("project: :\n"), 0o644))
+	_, err := ReadProjectName(dir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "parse")
+}

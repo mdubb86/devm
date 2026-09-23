@@ -42,7 +42,7 @@ pytestmark = pytest.mark.recipe
 
 @pytest.mark.timeout(1800)
 def test_camoufox_recipe(devm, workspace, sandbox_name):
-    workspace.devmyaml_path.write_text(textwrap.dedent(f"""\
+    workspace.devm_yaml_path.write_text(textwrap.dedent(f"""\
         project:
           name: {workspace.vm_name}
         packages:

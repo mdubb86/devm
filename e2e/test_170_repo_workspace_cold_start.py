@@ -83,7 +83,7 @@ def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
         # only touches the already-hydrated workspace. The devm.yaml's
         # `network.allow` list carries only what the repo clone needs
         # (github.com); nothing was added on the command's account.
-        cfg = yaml.safe_load(workspace.devmyaml_path.read_text())
+        cfg = yaml.safe_load(workspace.devm_yaml_path.read_text())
         assert cfg.get("network", {}).get("allow") == ["github.com"], (
             f"expected no network.allow entries beyond the repo clone's "
             f"github.com; got: {cfg.get('network')!r}"

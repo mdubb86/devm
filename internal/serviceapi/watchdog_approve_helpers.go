@@ -11,7 +11,7 @@ import (
 )
 
 // HashCurrentFilesForWatchdog reads devm.yaml + devm.me.yaml from
-// configDir (the project's state dir) and returns their canonical
+// configDir (the project's Mac cwd) and returns their canonical
 // hashes, for the watchdog's approve-state check. devm.me.yaml is
 // optional — its absence hashes as approve.HashFile(nil), same as
 // every other approve-gate read path.

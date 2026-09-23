@@ -160,7 +160,7 @@ func TestResolvePopTarget_AbsolutePathOutsideAnyEntry(t *testing.T) {
 // writePopWorkspace writes a minimal valid devm.yaml (project name +
 // a url-nil primary repo, so config.Load succeeds without touching a
 // real git remote) into a fresh temp dir and returns its path. Callers
-// point resolveProjectFn's fake StateDir at this directory.
+// point discoverProjectFn's fake MacCwd at this directory.
 func writePopWorkspace(t *testing.T, projectName string) string {
 	t.Helper()
 	workspace := t.TempDir()
@@ -169,27 +169,16 @@ func writePopWorkspace(t *testing.T, projectName string) string {
 	return workspace
 }
 
-// stubResolveProjectFn overrides resolveProjectFn for the duration of
-// the test to bypass the daemon socket, returning name/stateDir as the
-// resolved project. Cwd defaults to stateDir — tests that need Cwd to
-// differ from stateDir (e.g. proving the subdir-invocation fix, I1)
-// should use stubResolveProjectFnWithCwd instead.
-func stubResolveProjectFn(t *testing.T, name, stateDir string) {
+// stubResolveProjectFn overrides discoverProjectFn for the duration of
+// the test to bypass the filesystem walk, returning name/macCwd as the
+// discovered project.
+func stubResolveProjectFn(t *testing.T, name, macCwd string) {
 	t.Helper()
-	stubResolveProjectFnWithCwd(t, name, stateDir, stateDir)
-}
-
-// stubResolveProjectFnWithCwd is stubResolveProjectFn with an
-// independently-set Cwd — the registered project-root ancestor the
-// daemon would return, which may differ from the caller's actual
-// os.Getwd() when devm is invoked from a subdirectory of the project.
-func stubResolveProjectFnWithCwd(t *testing.T, name, stateDir, cwd string) {
-	t.Helper()
-	orig := resolveProjectFn
-	resolveProjectFn = func() (ResolvedProject, error) {
-		return ResolvedProject{Name: name, StateDir: stateDir, Cwd: cwd}, nil
+	orig := discoverProjectFn
+	discoverProjectFn = func() (LocalProject, error) {
+		return LocalProject{Name: name, MacCwd: macCwd}, nil
 	}
-	t.Cleanup(func() { resolveProjectFn = orig })
+	t.Cleanup(func() { discoverProjectFn = orig })
 }
 
 // TestRunPop_FallbackToCreateSession_FileArg — an absolute, out-of-mirror

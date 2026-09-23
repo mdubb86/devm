@@ -26,9 +26,8 @@ import (
 
 // setupProjectDirWithDevm creates a temporary directory with devm.yaml
 // and optional devm.me.yaml, and approves the snapshot. Used by tests
-// that use WorkspaceHostPath in the reconcile request. The approve
-// gate itself reads devm.yaml from the project's state dir (not
-// WorkspaceHostPath), so the same content is also seeded there.
+// that use WorkspaceHostPath in the reconcile request — the approve
+// gate reads devm.yaml from WorkspaceHostPath (the project's Mac cwd).
 func setupProjectDirWithDevm(t *testing.T, projectID string, devmContent string, meContent string) (string, *approve.Store) {
 	t.Helper()
 	projDir := t.TempDir()
@@ -37,13 +36,6 @@ func setupProjectDirWithDevm(t *testing.T, projectID string, devmContent string,
 	if meContent != "" {
 		meBytes = []byte(meContent)
 		require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.me.yaml"), meBytes, 0644))
-	}
-
-	stateDir := stateDirForProject(identity.Prod, projectID)
-	require.NoError(t, os.MkdirAll(stateDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte(devmContent), 0644))
-	if meBytes != nil {
-		require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.me.yaml"), meBytes, 0644))
 	}
 
 	// Approve the snapshot so the gate check passes.
@@ -1029,7 +1021,7 @@ func TestReconcile_PackagesBeforeApplyLive(t *testing.T) {
 
 func TestReconcile_RefusesWhenDivergedFromApproved(t *testing.T) {
 	// Setup: fake VM state, write devm.yaml, write a DIFFERENT approved snapshot.
-	cfg, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	cfg, _, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: old\n"), nil, "user"))
 	// Build a minimal VMReconcileRequest body.
 	body := VMReconcileRequest{
@@ -1049,7 +1041,7 @@ func TestReconcile_RefusesWhenDivergedFromApproved(t *testing.T) {
 }
 
 func TestReconcile_ProceedsWhenNotDiverged(t *testing.T) {
-	cfg, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	cfg, _, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
 	body := VMReconcileRequest{Name: "proj-1", WorkspaceHostPath: projDir, Cfg: schema.Config{Project: schema.Project{Name: "p"}}}
 	buf, _ := json.Marshal(body)
@@ -1059,6 +1051,22 @@ func TestReconcile_ProceedsWhenNotDiverged(t *testing.T) {
 	// The handler will still return an error further down (no fake VM), but NOT 409 approve_required.
 	assert.NotEqual(t, http.StatusConflict, rr.Code)
 	assert.NotContains(t, rr.Body.String(), "approve_required")
+}
+
+// TestReconcile_RequiresWorkspaceHostPath verifies /vm/reconcile rejects
+// a request with a name but no workspace_host_path (400), rather than
+// reaching the approve-gate check and reading a relative "devm.yaml"
+// off the daemon's own cwd.
+func TestReconcile_RequiresWorkspaceHostPath(t *testing.T) {
+	cfg := identity.Config{Name: "devm-test"}
+	body := VMReconcileRequest{Name: "proj-1", Cfg: schema.Config{Project: schema.Project{Name: "p"}}}
+	buf, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/vm/reconcile", bytes.NewReader(buf))
+	rr := httptest.NewRecorder()
+	newReconcileHandlerForTest(cfg).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "workspace_host_path")
 }
 
 // Minimal stubs for test seam; these are never called in approve-gate tests

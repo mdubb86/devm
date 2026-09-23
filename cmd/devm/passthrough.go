@@ -28,11 +28,11 @@ exfiltrated during the window stays exfiltrated after it closes.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below
-		resolved, err := resolveProjectFn()
+		resolved, err := discoverProjectFn()
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(resolved.StateDir)
+		cfg, err := config.Load(resolved.MacCwd)
 		if err != nil {
 			return err
 		}
@@ -78,11 +78,11 @@ window is active.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below
-		resolved, err := resolveProjectFn()
+		resolved, err := discoverProjectFn()
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(resolved.StateDir)
+		cfg, err := config.Load(resolved.MacCwd)
 		if err != nil {
 			return err
 		}

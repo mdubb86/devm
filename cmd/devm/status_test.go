@@ -170,7 +170,9 @@ func TestAnyProjectNeedsReconcile(t *testing.T) {
 // tart-list call harmlessly errors instead of shelling out to a real
 // tart binary — these tests only exercise the approve-state section of
 // `devm status`, so the sandbox itself stays "absent" throughout.
-func startApproveStatusDaemon(t *testing.T) func() {
+// Returns the daemon's *StateCache (callers seed cache.SetMacCwd so the
+// approve-gate handler can resolve devm.yaml's location) and a cleanup.
+func startApproveStatusDaemon(t *testing.T) (*serviceapi.StateCache, func()) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "sapi-approve-status-")
 	require.NoError(t, err)
@@ -184,7 +186,8 @@ func startApproveStatusDaemon(t *testing.T) func() {
 	sup := supervisor.New(t.TempDir())
 	tr := tart.New()
 	tr.Path = "false"
-	serviceapi.RegisterVMHandlers(srv, identity.Prod, sup, tr, 0, serviceapi.NewProjectLocks(), nil, serviceapi.NewPopSessionStore(), nil, serviceapi.NewStateCache())
+	cache := serviceapi.NewStateCache()
+	serviceapi.RegisterVMHandlers(srv, identity.Prod, sup, tr, 0, serviceapi.NewProjectLocks(), nil, serviceapi.NewPopSessionStore(), nil, cache)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -199,27 +202,27 @@ func startApproveStatusDaemon(t *testing.T) func() {
 	}
 	require.FileExists(t, socket)
 
-	return func() { cancel(); <-errCh }
+	return cache, func() { cancel(); <-errCh }
 }
 
 // TestStatus_ShowsDivergedApproveState verifies `devm status`'s
 // approve-gate line reports the daemon's divergence verdict when the
 // on-disk devm.yaml no longer matches the last-approved snapshot.
 func TestStatus_ShowsDivergedApproveState(t *testing.T) {
-	cleanup := startApproveStatusDaemon(t)
+	cache, cleanup := startApproveStatusDaemon(t)
 	defer cleanup()
 
-	stateDir := filepath.Join(identity.Prod.RuntimeDir(), "p")
-	require.NoError(t, os.MkdirAll(stateDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"),
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
 		[]byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
+	cache.SetMacCwd("p", macCwd)
 
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
 
 	tr := tart.New()
 	tr.Path = "false"
-	res, err := orchestrator.RunStatus(identity.Prod, schema.Config{Project: schema.Project{Name: "p"}}, tr, stateDir, "")
+	res, err := orchestrator.RunStatus(identity.Prod, schema.Config{Project: schema.Project{Name: "p"}}, tr, macCwd, "")
 	require.NoError(t, err)
 	require.NotNil(t, res.ApproveState)
 	assert.True(t, res.ApproveState.Diverged)
@@ -233,20 +236,20 @@ func TestStatus_ShowsDivergedApproveState(t *testing.T) {
 // approve-gate line reports "up to date" when the on-disk devm.yaml
 // matches the last-approved snapshot exactly.
 func TestStatus_ShowsUpToDateApproveState(t *testing.T) {
-	cleanup := startApproveStatusDaemon(t)
+	cache, cleanup := startApproveStatusDaemon(t)
 	defer cleanup()
 
 	contents := []byte("project:\n  name: p\nenv:\n  FOO: same\n")
-	stateDir := filepath.Join(identity.Prod.RuntimeDir(), "p")
-	require.NoError(t, os.MkdirAll(stateDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), contents, 0644))
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), contents, 0644))
+	cache.SetMacCwd("p", macCwd)
 
 	store := approve.NewStore(identity.Prod)
 	require.NoError(t, store.Write("p", contents, nil, "user"))
 
 	tr := tart.New()
 	tr.Path = "false"
-	res, err := orchestrator.RunStatus(identity.Prod, schema.Config{Project: schema.Project{Name: "p"}}, tr, stateDir, "")
+	res, err := orchestrator.RunStatus(identity.Prod, schema.Config{Project: schema.Project{Name: "p"}}, tr, macCwd, "")
 	require.NoError(t, err)
 	require.NotNil(t, res.ApproveState)
 	assert.False(t, res.ApproveState.Diverged)

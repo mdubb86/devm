@@ -119,11 +119,15 @@ func reconcileHandler(cfg identity.Config, locks *ProjectLocks, apply ApplyLiver
 			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
+		if req.WorkspaceHostPath == "" {
+			http.Error(w, "reconcile: workspace_host_path required", http.StatusBadRequest)
+			return
+		}
 
 		// Approve-gate check: refuse if diverged from approved snapshot.
-		// devm.yaml lives in the project's state dir, not
-		// WorkspaceHostPath (the repo checkout reconcile operates on).
-		if diverged, err := isApproveDiverged(cfg, req.Name, stateDirForProject(cfg, req.Name)); err != nil {
+		// devm.yaml lives at WorkspaceHostPath — the project's Mac cwd,
+		// same value the CLI sends as MacCwd to /vm/start.
+		if diverged, err := isApproveDiverged(cfg, req.Name, req.WorkspaceHostPath); err != nil {
 			http.Error(w, fmt.Sprintf("approve check: %v", err), http.StatusInternalServerError)
 			return
 		} else if diverged {

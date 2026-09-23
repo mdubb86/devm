@@ -96,9 +96,9 @@ def test_iron_proxy_reconcile_allowlist_add(workspace, devm):
     # editing — the reconcile call below re-locks it (unlock -> edit ->
     # reconcile always ends locked, per test_120_config_lock.py).
     devm.unlock()
-    cfg = yaml.safe_load(workspace.devmyaml_path.read_text())
+    cfg = yaml.safe_load(workspace.devm_yaml_path.read_text())
     cfg["network"]["allow"].append("example.com")
-    workspace.devmyaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    workspace.devm_yaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
     approve = subprocess.run(
         [devm.path, "approve"],

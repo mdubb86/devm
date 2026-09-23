@@ -24,7 +24,7 @@ func (approveCheck) Run(ctx context.Context, cache *StateCache, gt GroundTruth) 
 			continue
 		}
 
-		currentDevm, currentMe, err := gt.ApproveHash(projectID)
+		currentDevm, currentMe, err := gt.ApproveHash(projectID, expected.MacCwd)
 		if err != nil {
 			daemonlog.Errorf("watchdog: approve check: observe hash for %s: %v", projectID, err)
 			cache.TouchProjectReconciled(projectID)

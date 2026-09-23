@@ -506,13 +506,17 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			}
 		}
 
-		configDir := stateDirForProject(cfg, req.Name)
-		if err := bootstrapApprovedSnapshotOnFirstRun(cfg, req.Name, configDir); err != nil {
+		// req.MacCwd (validated non-empty above) is where devm.yaml
+		// lives — the cache isn't populated with it until this handler
+		// succeeds (see cache.SetMacCwd below), so the approve-gate
+		// check reads the request field directly rather than going
+		// through the cache.
+		if err := bootstrapApprovedSnapshotOnFirstRun(cfg, req.Name, req.MacCwd); err != nil {
 			http.Error(w, fmt.Sprintf("bootstrap approve snapshot: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		if diverged, err := isApproveDiverged(cfg, req.Name, configDir); err != nil {
+		if diverged, err := isApproveDiverged(cfg, req.Name, req.MacCwd); err != nil {
 			http.Error(w, fmt.Sprintf("approve check: %v", err), http.StatusInternalServerError)
 			return
 		} else if diverged {
@@ -708,7 +712,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// Register before spawning the serve goroutine — see the popLn
 		// comment above for why.
 		proposeListeners.Store(req.Name, proposeLn)
-		go serveProposeListener(proposeLn, cfg, req.Name)
+		go serveProposeListener(proposeLn, cfg, cache, req.Name)
 
 		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read. Merge onto the existing
@@ -776,7 +780,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 	})
 
 	s.Register("/vm/approve-state", func(w http.ResponseWriter, r *http.Request) {
-		handleApproveState(cfg).ServeHTTP(w, r)
+		handleApproveState(cfg, cache).ServeHTTP(w, r)
 	})
 
 	s.Register("/vm/approve", func(w http.ResponseWriter, r *http.Request) {
@@ -888,7 +892,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(cfg)}
 
 		guestSSHTarget := "devm-" + req.Name
-		if err := SetupVolumesPhase(r.Context(), mutagenCLI, cfg, req.Name, entities,
+		if err := SetupVolumesPhase(r.Context(), mutagenCLI, cfg, req.Name, req.RepoRoot, entities,
 			tartGuestExec(r.Context(), tr, req.Name), guestSSHTarget); err != nil {
 			http.Error(w, fmt.Sprintf("volume sync: %v", err), http.StatusInternalServerError)
 			return
@@ -1229,9 +1233,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	s.mux.Handle("/vm/resolve-project", handleResolveProject(cfg))
-	s.mux.Handle("/vm/register-project", handleRegisterProject(cfg))
-	s.mux.Handle("/vm/propose", handleProposeUnixSocket(cfg))
+	s.mux.Handle("/vm/propose", handleProposeUnixSocket(cfg, cache))
 
 	// /denials — read-only view of policy-authority allow-list rejects
 	// for a project. Sorted by count desc. Empty array is a normal state

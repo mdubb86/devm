@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,10 +22,6 @@ var proposeCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		reason, _ := cmd.Flags().GetString("reason")
 		kind, _ := cmd.Flags().GetString("kind")
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("propose: cwd: %w", err)
-		}
 		socketPath := cfg.SocketPath()
 		httpc := &http.Client{
 			Transport: &http.Transport{
@@ -35,7 +30,7 @@ var proposeCmd = &cobra.Command{
 				},
 			},
 		}
-		code := runMacProposeWithClient("http://localhost", cwd, reason, kind, httpc)
+		code := runMacProposeWithClient("http://localhost", reason, kind, httpc)
 		if code != 0 {
 			os.Exit(code)
 		}
@@ -51,33 +46,25 @@ func init() {
 
 // runMacPropose is the testable seam: uses http.DefaultClient for tests.
 // Real CLI callers use runMacProposeWithClient with a Unix-socket client.
-func runMacPropose(baseURL, cwd, reason, kind string) int {
-	return runMacProposeWithClient(baseURL, cwd, reason, kind, http.DefaultClient)
+func runMacPropose(baseURL, reason, kind string) int {
+	return runMacProposeWithClient(baseURL, reason, kind, http.DefaultClient)
 }
 
 // runMacProposeWithClient does the actual work with an injectable http.Client.
-// Returns: 0 on 204 success, 2 on a daemon HTTP error response (4xx/5xx —
-// reached the daemon, it rejected the request), 1 on a transport error
-// (couldn't reach the daemon at all, e.g. the socket is down) or any
-// other error.
-func runMacProposeWithClient(baseURL, cwd, reason, kind string, client *http.Client) int {
-	rp, err := resolveProjectFromURLWithClient(baseURL, cwd, client)
+// Returns: 0 on 204 success; 2 on a local discovery failure or a daemon 4xx
+// response (reached the daemon, it rejected the request); 1 on a transport
+// error (couldn't reach the daemon at all, e.g. the socket is down) or a
+// daemon 5xx response.
+func runMacProposeWithClient(baseURL, reason, kind string, client *http.Client) int {
+	rp, err := discoverProjectFn()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
-		// resolveProjectFromURLWithClient wraps a transport failure
-		// (e.g. daemon socket down) as a *url.Error via %w; a daemon
-		// HTTP error response is instead a plain formatted string with
-		// no such wrapping. Only the former is a transport error.
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			return 1
-		}
 		return 2
 	}
 
 	body, _ := json.Marshal(map[string]string{
-		"cwd":    cwd,
-		"branch": gitBranchMac(cwd),
+		"cwd":    rp.MacCwd,
+		"branch": gitBranchMac(rp.MacCwd),
 		"reason": reason,
 		"kind":   kind,
 		"source": "mac",

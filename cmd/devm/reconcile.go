@@ -32,16 +32,16 @@ var reconcileCmd = &cobra.Command{
 			return err
 		}
 		ident := cfg // capture package identity cfg before it's shadowed below
-		resolved, err := resolveProjectFn()
+		resolved, err := discoverProjectFn()
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(resolved.StateDir)
+		cfg, err := config.Load(resolved.MacCwd)
 		if err != nil {
 			return err
 		}
 		tr := tart.New()
-		rc, res, err := orchestrator.RunReconcile(ident, cfg, tr, resolved.Cwd, orchestrator.ReconcileOptions{})
+		rc, res, err := orchestrator.RunReconcile(ident, cfg, tr, resolved.MacCwd, orchestrator.ReconcileOptions{})
 		if err != nil {
 			return err
 		}

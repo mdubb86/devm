@@ -321,11 +321,16 @@ func verifyGitHEAD(macMirrorPath string) error {
 // never get a Mac mirror dir or a mutagen session. The VM is left
 // running on a guard rejection — the caller decides whether to
 // surface it to the user and retry.
+//
+// macCwd is the project's Mac-side working directory. It is threaded
+// through to SetupConfigSync as that session's alpha path (the source
+// of devm.yaml / devm.me.yaml).
 func SetupVolumesPhase(
 	ctx context.Context,
 	cli *mutagen.CLI,
 	cfg identity.Config,
 	projectID string,
+	macCwd string,
 	entities []SessionEntity,
 	exec GuestExec,
 	guestSSHTarget string,
@@ -429,7 +434,7 @@ func SetupVolumesPhase(
 		}
 	}
 
-	if err := SetupConfigSync(ctx, cli, cfg, projectID); err != nil {
+	if err := SetupConfigSync(ctx, cli, cfg, projectID, macCwd); err != nil {
 		return fmt.Errorf("setup config sync: %w", err)
 	}
 	return nil

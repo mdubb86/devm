@@ -203,21 +203,19 @@ func TestRunVolumeLs_SecondaryRepoVolumeFalse_BlankMacPath(t *testing.T) {
 
 // TestVolumeLs_UsesResolvedCwdNotSubdirGetwd pins I1: `devm volume ls`
 // invoked from a subdirectory of the project must resolve the URL-nil
-// primary repo's label against the daemon-resolved project root
-// (ResolvedProject.Cwd), never against the raw os.Getwd() subdir.
+// primary repo's label against the discovered project root
+// (LocalProject.MacCwd), never against the raw os.Getwd() subdir.
 func TestVolumeLs_UsesResolvedCwdNotSubdirGetwd(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	stateDir := t.TempDir()
-	yaml := "project:\n  name: p\nrepos:\n  app: {}\n"
-	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte(yaml), 0o644))
-
 	projectRoot := filepath.Join(t.TempDir(), "proj")
 	subdir := filepath.Join(projectRoot, "sub", "deeper")
 	require.NoError(t, os.MkdirAll(subdir, 0o755))
+	yaml := "project:\n  name: p\nrepos:\n  app: {}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(projectRoot, "devm.yaml"), []byte(yaml), 0o644))
 
-	stubResolveProjectFnWithCwd(t, "p", stateDir, projectRoot)
+	stubResolveProjectFn(t, "p", projectRoot)
 	t.Chdir(subdir)
 
 	r, w, err := os.Pipe()
@@ -236,7 +234,7 @@ func TestVolumeLs_UsesResolvedCwdNotSubdirGetwd(t *testing.T) {
 	require.NoError(t, err)
 	out := buf.String()
 
-	assert.Contains(t, out, "/home/devm/proj", "label must come from the resolved project root (Cwd), not the raw os.Getwd() subdir")
+	assert.Contains(t, out, "/home/devm/proj", "label must come from the resolved project root (MacCwd), not the raw os.Getwd() subdir")
 	assert.NotContains(t, out, "deeper")
 }
 

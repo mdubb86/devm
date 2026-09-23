@@ -13,11 +13,11 @@ var validateCmd = &cobra.Command{
 	Long:  `Validate devm.yaml (and devm.me.yaml if present) against the schema.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		resolved, err := resolveProjectFn()
+		resolved, err := discoverProjectFn()
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(resolved.StateDir)
+		cfg, err := config.Load(resolved.MacCwd)
 		if err != nil {
 			return err
 		}

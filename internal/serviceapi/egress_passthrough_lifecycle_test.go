@@ -147,7 +147,7 @@ func TestPassthroughEgress_FlipsAuthorityMode(t *testing.T) {
 	tr := tart.New()
 	tr.Path = bin
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	const name = "passthrough-flip"
@@ -183,7 +183,7 @@ func TestPassthroughEgress_ZeroDurationUsesDefault(t *testing.T) {
 	tr := tart.New()
 	tr.Path = bin
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	const name = "passthrough-default-dur"
@@ -213,7 +213,7 @@ func TestPassthroughEgress_ReplacesInFlightTimer(t *testing.T) {
 	tr := tart.New()
 	tr.Path = bin
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	const name = "passthrough-replace-timer"
@@ -251,7 +251,7 @@ func TestRestrictEgress_ClearsStateAndFlipsAuthorityMode(t *testing.T) {
 	tr := tart.New()
 	tr.Path = bin
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	const name = "restrict-clears"
@@ -292,7 +292,7 @@ func TestRestrictEgress_UnknownProject_NoOpNoError(t *testing.T) {
 	tr := tart.New()
 	tr.Path = bin
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	c := NewClientWithSocket(srv.socketPath)
@@ -313,7 +313,7 @@ func TestPassthroughEgress_TimerFiresRestore(t *testing.T) {
 	tr := tart.New()
 	tr.Path = bin
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	const name = "passthrough-timer"
@@ -354,7 +354,7 @@ func TestVMStop_ClearsPassthroughState(t *testing.T) {
 	tr := tart.New()
 	tr.Path = bin
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	const name = "stop-clears-passthrough"
@@ -402,7 +402,7 @@ func TestEgressStatus_ReportsPassthroughAndRestricted(t *testing.T) {
 	tr := tart.New()
 	tr.Path = bin
 
-	srv, cleanup := newTestServerWithVM(t, sup, tr)
+	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
 	const name = "egress-status-report"

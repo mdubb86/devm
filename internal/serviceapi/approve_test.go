@@ -17,27 +17,29 @@ import (
 )
 
 // approveTestSetup writes a project's devm.yaml (+ optional
-// devm.me.yaml) into its state dir under a tempdir HOME, and returns
-// (identityCfg, stateDir, snapshotStore).
-func approveTestSetup(t *testing.T, project, devm, me string) (identity.Config, string, *approve.Store) {
+// devm.me.yaml) into a fresh macCwd, registers it in a fresh
+// *StateCache via SetMacCwd, and returns (identityCfg, cache, macCwd,
+// snapshotStore).
+func approveTestSetup(t *testing.T, project, devm, me string) (identity.Config, *StateCache, string, *approve.Store) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	cfg := identity.Config{Name: "devm-test"}
-	stateDir := stateDirForProject(cfg, project)
-	require.NoError(t, os.MkdirAll(stateDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte(devm), 0644))
+	macCwd := t.TempDir()
+	cache := NewStateCache()
+	cache.SetMacCwd(project, macCwd)
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte(devm), 0644))
 	if me != "" {
-		require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.me.yaml"), []byte(me), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.me.yaml"), []byte(me), 0644))
 	}
-	return cfg, stateDir, approve.NewStore(cfg)
+	return cfg, cache, macCwd, approve.NewStore(cfg)
 }
 
 func TestApproveState_NoSnapshotReportsDiverged(t *testing.T) {
-	cfg, _, _ := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	cfg, cache, _, _ := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj-1", nil)
 	rr := httptest.NewRecorder()
-	handleApproveState(cfg).ServeHTTP(rr, req)
+	handleApproveState(cfg, cache).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
@@ -47,11 +49,11 @@ func TestApproveState_NoSnapshotReportsDiverged(t *testing.T) {
 }
 
 func TestApproveState_SnapshotEqualReportsNotDiverged(t *testing.T) {
-	cfg, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "env:\n  X: 1\n")
+	cfg, cache, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "env:\n  X: 1\n")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), []byte("env:\n  X: 1\n"), "user"))
 	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj-1", nil)
 	rr := httptest.NewRecorder()
-	handleApproveState(cfg).ServeHTTP(rr, req)
+	handleApproveState(cfg, cache).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
@@ -60,11 +62,11 @@ func TestApproveState_SnapshotEqualReportsNotDiverged(t *testing.T) {
 }
 
 func TestApproveState_ChangedByteReportsDiverged(t *testing.T) {
-	cfg, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p2\n", "")
+	cfg, cache, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p2\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
 	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj-1", nil)
 	rr := httptest.NewRecorder()
-	handleApproveState(cfg).ServeHTTP(rr, req)
+	handleApproveState(cfg, cache).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
@@ -73,17 +75,32 @@ func TestApproveState_ChangedByteReportsDiverged(t *testing.T) {
 
 func TestApproveState_RequiresProject(t *testing.T) {
 	cfg := identity.Config{Name: "devm-test"}
+	cache := NewStateCache()
 	rr := httptest.NewRecorder()
-	handleApproveState(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/vm/approve-state", nil))
+	handleApproveState(cfg, cache).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/vm/approve-state", nil))
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	assert.True(t, strings.Contains(rr.Body.String(), "project"))
 }
 
+func TestApproveState_NoMacCwdInCacheReportsNothing(t *testing.T) {
+	cfg := identity.Config{Name: "devm-test"}
+	cache := NewStateCache()
+	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=never-started", nil)
+	rr := httptest.NewRecorder()
+	handleApproveState(cfg, cache).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, "an unstarted project is not an error — nothing to report yet")
+	var resp approveStateResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	assert.Equal(t, "never-started", resp.Project)
+	assert.False(t, resp.Diverged)
+	assert.Empty(t, resp.CurrentDevmSHA)
+}
+
 func TestApprove_AdvancesSnapshotToCurrentBytes(t *testing.T) {
-	cfg, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "env:\n  X: 1\n")
+	cfg, cache, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "env:\n  X: 1\n")
 	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1", nil)
 	rr := httptest.NewRecorder()
-	handleApprove(cfg, nil).ServeHTTP(rr, req)
+	handleApprove(cfg, cache).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNoContent, rr.Code)
 	snap, ok, err := store.Read("proj-1")
 	require.NoError(t, err)
@@ -94,8 +111,7 @@ func TestApprove_AdvancesSnapshotToCurrentBytes(t *testing.T) {
 }
 
 func TestApprove_UpdatesCache(t *testing.T) {
-	cfg, _, _ := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "env:\n  X: 1\n")
-	cache := NewStateCache()
+	cfg, cache, _, _ := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "env:\n  X: 1\n")
 	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1", nil)
 	rr := httptest.NewRecorder()
 	handleApprove(cfg, cache).ServeHTTP(rr, req)
@@ -111,22 +127,22 @@ func TestApprove_UpdatesCache(t *testing.T) {
 }
 
 func TestApprove_IdempotentOnAlreadyApproved(t *testing.T) {
-	cfg, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	cfg, cache, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
 	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1", nil)
 	rr := httptest.NewRecorder()
-	handleApprove(cfg, nil).ServeHTTP(rr, req)
+	handleApprove(cfg, cache).ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusNoContent, rr.Code)
 }
 
 func TestApprove_RemovesStaleMeYAMLWhenAbsentOnMac(t *testing.T) {
-	cfg, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	cfg, cache, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	// Prior snapshot has a me.yaml.
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), []byte("env:\n  OLD: 1\n"), "user"))
 	// Mac side does not have me.yaml. Approve must remove the old copy from the snapshot.
 	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1", nil)
 	rr := httptest.NewRecorder()
-	handleApprove(cfg, nil).ServeHTTP(rr, req)
+	handleApprove(cfg, cache).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNoContent, rr.Code)
 	snap, ok, err := store.Read("proj-1")
 	require.NoError(t, err)
@@ -136,28 +152,41 @@ func TestApprove_RemovesStaleMeYAMLWhenAbsentOnMac(t *testing.T) {
 
 func TestApprove_RequiresProject(t *testing.T) {
 	cfg := identity.Config{Name: "devm-test"}
+	cache := NewStateCache()
 	rr := httptest.NewRecorder()
-	handleApprove(cfg, nil).ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/vm/approve", nil))
+	handleApprove(cfg, cache).ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/vm/approve", nil))
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestApprove_NoMacCwdInCacheReturns412(t *testing.T) {
+	cfg := identity.Config{Name: "devm-test"}
+	cache := NewStateCache()
+	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=never-started", nil)
+	rr := httptest.NewRecorder()
+	handleApprove(cfg, cache).ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	assert.Contains(t, rr.Body.String(), "never-started")
 }
 
 func TestApproveState_RejectsNonGET(t *testing.T) {
 	cfg := identity.Config{Name: "devm-test"}
+	cache := NewStateCache()
 	rr := httptest.NewRecorder()
-	handleApproveState(cfg).ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/vm/approve-state?project=x", nil))
+	handleApproveState(cfg, cache).ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/vm/approve-state?project=x", nil))
 	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
 }
 
 func TestApprove_RejectsNonPOST(t *testing.T) {
 	cfg := identity.Config{Name: "devm-test"}
+	cache := NewStateCache()
 	rr := httptest.NewRecorder()
-	handleApprove(cfg, nil).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/vm/approve?project=x", nil))
+	handleApprove(cfg, cache).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/vm/approve?project=x", nil))
 	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
 }
 
 func TestBootstrapApprovedSnapshotOnFirstRun_WritesInitial(t *testing.T) {
-	cfg, stateDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
-	err := bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", stateDir)
+	cfg, _, macCwd, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	err := bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", macCwd)
 	require.NoError(t, err)
 	snap, ok, err := store.Read("proj-1")
 	require.NoError(t, err)
@@ -167,9 +196,9 @@ func TestBootstrapApprovedSnapshotOnFirstRun_WritesInitial(t *testing.T) {
 }
 
 func TestBootstrapApprovedSnapshotOnFirstRun_NoOpWhenSnapshotExists(t *testing.T) {
-	cfg, stateDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p2\n", "")
+	cfg, _, macCwd, store := approveTestSetup(t, "proj-1", "project:\n  name: p2\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
-	err := bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", stateDir)
+	err := bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", macCwd)
 	require.NoError(t, err)
 	snap, _, err := store.Read("proj-1")
 	require.NoError(t, err)
@@ -178,15 +207,15 @@ func TestBootstrapApprovedSnapshotOnFirstRun_NoOpWhenSnapshotExists(t *testing.T
 
 func TestStart_RefusesWhenDivergedFromApproved(t *testing.T) {
 	// A snapshot exists but differs from the current devm.yaml — start must refuse.
-	cfg, stateDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	cfg, _, macCwd, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: old\n"), nil, "user"))
-	diverged, err := isApproveDiverged(cfg, "proj-1", stateDir)
+	diverged, err := isApproveDiverged(cfg, "proj-1", macCwd)
 	require.NoError(t, err)
 	assert.True(t, diverged)
 }
 
 func TestApproveState_IncludesProposalWhenPresent(t *testing.T) {
-	cfg, _, _ := approveTestSetup(t, "proj", "name: p\n", "")
+	cfg, cache, _, _ := approveTestSetup(t, "proj", "name: p\n", "")
 
 	// Seed a proposal.
 	require.NoError(t, WriteLastProposal(cfg, "proj", ProposalMetadata{
@@ -200,7 +229,7 @@ func TestApproveState_IncludesProposalWhenPresent(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj", nil)
 	rr := httptest.NewRecorder()
-	handleApproveState(cfg).ServeHTTP(rr, req)
+	handleApproveState(cfg, cache).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 
 	var resp approveStateResponse
@@ -212,7 +241,7 @@ func TestApproveState_IncludesProposalWhenPresent(t *testing.T) {
 }
 
 func TestApprove_ClearsProposalOnSuccess(t *testing.T) {
-	cfg, _, _ := approveTestSetup(t, "proj", "name: p\n", "")
+	cfg, cache, _, _ := approveTestSetup(t, "proj", "name: p\n", "")
 
 	// Seed a proposal.
 	require.NoError(t, WriteLastProposal(cfg, "proj", ProposalMetadata{
@@ -225,7 +254,7 @@ func TestApprove_ClearsProposalOnSuccess(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj", nil)
 	rr := httptest.NewRecorder()
-	handleApprove(cfg, nil).ServeHTTP(rr, req)
+	handleApprove(cfg, cache).ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNoContent, rr.Code)
 
 	_, ok, err := ReadLastProposal(cfg, "proj")

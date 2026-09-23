@@ -33,7 +33,7 @@ services:
       - path: node_modules
 """.format(name=workspace.slug)
     devm.unlock()  # devm.yaml may be locked from any prior write
-    workspace.devmyaml_path.write_text(yaml_body)
+    workspace.devm_yaml_path.write_text(yaml_body)
     try:
         r = subprocess.run(
             [devm.path, "validate"],

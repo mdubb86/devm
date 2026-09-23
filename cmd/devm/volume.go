@@ -25,18 +25,18 @@ var volumeLsCmd = &cobra.Command{
 	Short: "List this project's repos and volumes (name, label, kind, guest path, Mac path, size)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		resolved, err := resolveProjectFn()
+		resolved, err := discoverProjectFn()
 		if err != nil {
 			return err
 		}
-		userCfg, err := config.Load(resolved.StateDir)
+		userCfg, err := config.Load(resolved.MacCwd)
 		if err != nil {
 			return fmt.Errorf("locate devm.yaml: %w (run `devm volume ls` from a project root)", err)
 		}
 		// cfg is the package-level identity.Config set by
 		// identity.Load() in main.go — resolves to identity.Prod for
 		// the shipped devm binary and identity.E2E for devm-e2e.
-		return runVolumeLs(cfg, userCfg, resolved.Cwd, os.Stdout)
+		return runVolumeLs(cfg, userCfg, resolved.MacCwd, os.Stdout)
 	},
 }
 
