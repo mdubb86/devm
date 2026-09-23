@@ -119,6 +119,10 @@ func reconcileHandler(cfg identity.Config, locks *ProjectLocks, apply ApplyLiver
 			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
+		if req.WorkspaceHostPath == "" {
+			http.Error(w, "reconcile: workspace_host_path required", http.StatusBadRequest)
+			return
+		}
 
 		// Approve-gate check: refuse if diverged from approved snapshot.
 		// devm.yaml lives at WorkspaceHostPath — the project's Mac cwd,

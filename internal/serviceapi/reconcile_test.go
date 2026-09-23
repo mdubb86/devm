@@ -1053,6 +1053,22 @@ func TestReconcile_ProceedsWhenNotDiverged(t *testing.T) {
 	assert.NotContains(t, rr.Body.String(), "approve_required")
 }
 
+// TestReconcile_RequiresWorkspaceHostPath verifies /vm/reconcile rejects
+// a request with a name but no workspace_host_path (400), rather than
+// reaching the approve-gate check and reading a relative "devm.yaml"
+// off the daemon's own cwd.
+func TestReconcile_RequiresWorkspaceHostPath(t *testing.T) {
+	cfg := identity.Config{Name: "devm-test"}
+	body := VMReconcileRequest{Name: "proj-1", Cfg: schema.Config{Project: schema.Project{Name: "p"}}}
+	buf, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/vm/reconcile", bytes.NewReader(buf))
+	rr := httptest.NewRecorder()
+	newReconcileHandlerForTest(cfg).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "workspace_host_path")
+}
+
 // Minimal stubs for test seam; these are never called in approve-gate tests
 // since the gate check runs before actual reconcile work.
 type testApplyStub struct{}
