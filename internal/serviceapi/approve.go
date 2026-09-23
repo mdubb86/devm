@@ -29,6 +29,11 @@ func projectConfigPath(cache *StateCache, name, kind string) string {
 	return filepath.Join(row.MacCwd, kind)
 }
 
+// stateDirForProject returns <RuntimeDir>/<name>, home to the approved-snapshot dir and last-proposal.json.
+func stateDirForProject(cfg identity.Config, name string) string {
+	return filepath.Join(cfg.RuntimeDir(), name)
+}
+
 type approveStateResponse struct {
 	Project           string            `json:"project"`
 	Diverged          bool              `json:"diverged"`
