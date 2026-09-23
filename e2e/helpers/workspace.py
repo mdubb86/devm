@@ -6,7 +6,6 @@ how to patch named sections without breaking YAML.
 """
 from __future__ import annotations
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -28,16 +27,13 @@ class Workspace:
         self.vm_name = vm_name
         self.port_offset = port_offset
 
-        if devm_path:
-            subprocess.run([devm_path, "init", self.vm_name], cwd=str(self.path), check=True)
+    @property
+    def devm_yaml_path(self) -> Path:
+        return self.path / "devm.yaml"
 
     @property
-    def devmyaml_path(self) -> Path:
-        return Path.home() / "Library" / "Application Support" / "devm-e2e" / self.vm_name / "devm.yaml"
-
-    @property
-    def devmmeyaml_path(self) -> Path:
-        return Path.home() / "Library" / "Application Support" / "devm-e2e" / self.vm_name / "devm.me.yaml"
+    def devm_me_yaml_path(self) -> Path:
+        return self.path / "devm.me.yaml"
 
     def bare_repo_url(self) -> str:
         """Return the URL of the shared public remote every test's default
@@ -152,13 +148,13 @@ class Workspace:
             cfg["network"] = {"allow": ["github.com"]}
         for k, v in sections.items():
             cfg[k] = v
-        yaml_path = self.devmyaml_path
+        yaml_path = self.devm_yaml_path
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
         yaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
     def patch_devmyaml(self, **sections: Any) -> None:
         """Update named top-level sections in the existing devm.yaml."""
-        yaml_path = self.devmyaml_path
+        yaml_path = self.devm_yaml_path
         cfg = yaml.safe_load(yaml_path.read_text()) or {}
         for k, v in sections.items():
             cfg[k] = v
@@ -190,7 +186,7 @@ class Workspace:
         on every call.
         """
         import yaml
-        yaml_path = self.devmyaml_path
+        yaml_path = self.devm_yaml_path
         cfg = yaml.safe_load(yaml_path.read_text()) or {}
         services = cfg.setdefault("services", {})
         services[name] = {"exec": exec, "restart": restart, **extra}
