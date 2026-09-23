@@ -101,3 +101,30 @@ func Load(dir string) (schema.Config, error) {
 	}
 	return merged, nil
 }
+
+// ReadProjectName parses devm.yaml at dir and returns only the
+// project.name field. Used by the CLI at entry to identify the project
+// without running full schema validation. Returns ErrNoConfig if the
+// file is absent.
+func ReadProjectName(dir string) (string, error) {
+	basePath := filepath.Join(dir, "devm.yaml")
+	body, err := os.ReadFile(basePath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("%w in %s", ErrNoConfig, dir)
+		}
+		return "", fmt.Errorf("read %s: %w", basePath, err)
+	}
+	var probe struct {
+		Project struct {
+			Name string `yaml:"name"`
+		} `yaml:"project"`
+	}
+	if err := yaml.Unmarshal(body, &probe); err != nil {
+		return "", fmt.Errorf("parse %s: %w", basePath, err)
+	}
+	if probe.Project.Name == "" {
+		return "", fmt.Errorf("%s: missing project.name", basePath)
+	}
+	return probe.Project.Name, nil
+}
