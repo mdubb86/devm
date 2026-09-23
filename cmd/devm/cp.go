@@ -222,15 +222,15 @@ func resolveProject(explicit string) (name, repoRoot string, cfg schema.Config, 
 		// Explicit project name — no local devm.yaml required.
 		return explicit, "", schema.Config{}, nil
 	}
-	resolved, err := resolveProjectFn()
+	resolved, err := discoverProjectFn()
 	if err != nil {
 		return "", "", schema.Config{}, fmt.Errorf("locate devm.yaml: %w (run `devm cp` from a project root or use `project:/path` syntax)", err)
 	}
-	loaded, err := config.Load(resolved.StateDir)
+	loaded, err := config.Load(resolved.MacCwd)
 	if err != nil {
 		return "", "", schema.Config{}, fmt.Errorf("locate devm.yaml: %w (run `devm cp` from a project root or use `project:/path` syntax)", err)
 	}
-	return loaded.Project.Name, resolved.Cwd, loaded, nil
+	return loaded.Project.Name, resolved.MacCwd, loaded, nil
 }
 
 // runCp is the transport-dispatcher after arg parsing + project

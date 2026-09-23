@@ -186,11 +186,11 @@ func splitLines(b []byte) []string {
 // resolveProjectID resolves the current project via the daemon and
 // returns the project.name.
 func resolveProjectID() (string, error) {
-	resolved, err := resolveProjectFn()
+	resolved, err := discoverProjectFn()
 	if err != nil {
 		return "", err
 	}
-	cfg, err := config.Load(resolved.StateDir)
+	cfg, err := config.Load(resolved.MacCwd)
 	if err != nil {
 		return "", fmt.Errorf("locate devm.yaml: %w", err)
 	}

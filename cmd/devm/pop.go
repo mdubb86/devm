@@ -64,16 +64,16 @@ func runPop(cmd *cobra.Command, args []string) error {
 		return popExecOpen(append([]string{pathArg}, openArgs...)...)
 	}
 
-	resolvedProject, err := resolveProjectFn()
+	resolvedProject, err := discoverProjectFn()
 	if err != nil {
 		return err
 	}
-	loaded, err := config.Load(resolvedProject.StateDir)
+	loaded, err := config.Load(resolvedProject.MacCwd)
 	if err != nil {
 		return err
 	}
 
-	resolvedPath, err := resolvePopTarget(pathArg, resolvedProject.Cwd, loaded)
+	resolvedPath, err := resolvePopTarget(pathArg, resolvedProject.MacCwd, loaded)
 	if err == nil {
 		return popExecOpen(append([]string{resolvedPath}, openArgs...)...)
 	}

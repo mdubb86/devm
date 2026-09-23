@@ -23,11 +23,11 @@ discarded. Re-launch with devm start. Use --yes (-y) to skip the prompt.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below
-		resolved, err := resolveProjectFn()
+		resolved, err := discoverProjectFn()
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(resolved.StateDir)
+		cfg, err := config.Load(resolved.MacCwd)
 		if err != nil {
 			return err
 		}

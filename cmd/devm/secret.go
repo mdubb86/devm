@@ -133,11 +133,11 @@ func runSecretDelete(b secret.Backend, projectID, name string) error {
 }
 
 func currentProjectID() (string, error) {
-	resolved, err := resolveProjectFn()
+	resolved, err := discoverProjectFn()
 	if err != nil {
 		return "", err
 	}
-	cfg, err := config.Load(resolved.StateDir)
+	cfg, err := config.Load(resolved.MacCwd)
 	if err != nil {
 		return "", fmt.Errorf("locate devm.yaml: %w (run `devm secret` from a project root)", err)
 	}

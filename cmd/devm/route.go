@@ -36,11 +36,11 @@ func applyRoute(mode serviceapi.RouteMode) func(*cobra.Command, []string) error 
 			return err
 		}
 		ident := cfg // capture package identity cfg before it's shadowed below
-		resolvedProject, err := resolveProjectFn()
+		resolvedProject, err := discoverProjectFn()
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(resolvedProject.StateDir)
+		cfg, err := config.Load(resolvedProject.MacCwd)
 		if err != nil {
 			return err
 		}

@@ -64,11 +64,11 @@ exit code.`,
 		ident := cfg // capture package identity cfg before it's shadowed below
 
 		var res orchestrator.StatusResult
-		switch resolved, resolveErr := resolveProjectFn(); {
+		switch resolved, resolveErr := discoverProjectFn(); {
 		case resolveErr == nil:
 			// Project mode: full status including sandbox VM, routing,
 			// DNS, CA, proxy — plus daemon status via ProbeDaemon.
-			cfg, err := config.Load(resolved.StateDir)
+			cfg, err := config.Load(resolved.MacCwd)
 			if err != nil {
 				// devm.yaml exists but is unreadable or invalid — that's
 				// an error the user needs to see, not a "no project"
@@ -76,7 +76,7 @@ exit code.`,
 				return err
 			}
 			tr := tart.New()
-			res, err = orchestrator.RunStatus(ident, cfg, tr, resolved.Cwd, Fingerprint)
+			res, err = orchestrator.RunStatus(ident, cfg, tr, resolved.MacCwd, Fingerprint)
 			if err != nil {
 				return err
 			}
