@@ -19,10 +19,6 @@ Flow:
      Guest sees ~4GB RAM, 4 CPUs, swap resized to new ~mem/2
      (devm-swap.service re-runs on the restart and recomputes).
 
-Uses `config_lock: false` in the devm.yaml so the mid-test edit
-doesn't need `devm unlock`; config_lock's own coverage is
-test_120_config_lock.py.
-
 Sudo-gated (install-marker family): full VM cold-start + reconcile
 restart both need the installed daemon and Touch ID.
 """
@@ -97,9 +93,7 @@ def _guest_swappiness(devm_path: str, workspace_path: str) -> int:
 @pytest.mark.slow
 @pytest.mark.timeout(900)
 def test_memory_cpu_change_round_trip(devm, workspace, sandbox_name, devm_installed):
-    # config_lock: false so the mid-test devm.yaml edit doesn't fight
-    # host-immutability. config_lock's own coverage is test_120.
-    workspace.write_devmyaml(memory="8G", cpu=6, config_lock=False)
+    workspace.write_devmyaml(memory="8G", cpu=6)
 
     try:
         # 1. Cold-start.

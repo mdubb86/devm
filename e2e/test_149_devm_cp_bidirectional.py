@@ -27,7 +27,7 @@ pytestmark = pytest.mark.devm
 @pytest.mark.slow
 @pytest.mark.timeout(600)
 def test_devm_cp_upload_mount_and_pipe_and_download(devm, workspace, sandbox_name, devm_installed, tmp_path):
-    workspace.write_devmyaml(config_lock=False)
+    workspace.write_devmyaml()
 
     try:
         # 1. Cold-start.
