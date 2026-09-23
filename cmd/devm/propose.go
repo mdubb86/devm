@@ -51,10 +51,10 @@ func runMacPropose(baseURL, reason, kind string) int {
 }
 
 // runMacProposeWithClient does the actual work with an injectable http.Client.
-// Returns: 0 on 204 success, 2 on a local discovery failure or a daemon
-// HTTP error response (4xx/5xx — reached the daemon, it rejected the
-// request), 1 on a transport error (couldn't reach the daemon at all,
-// e.g. the socket is down) or any other error.
+// Returns: 0 on 204 success; 2 on a local discovery failure or a daemon 4xx
+// response (reached the daemon, it rejected the request); 1 on a transport
+// error (couldn't reach the daemon at all, e.g. the socket is down) or a
+// daemon 5xx response.
 func runMacProposeWithClient(baseURL, reason, kind string, client *http.Client) int {
 	rp, err := discoverProjectFn()
 	if err != nil {
