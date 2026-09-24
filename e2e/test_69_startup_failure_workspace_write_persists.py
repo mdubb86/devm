@@ -63,13 +63,19 @@ def test_startup_failure_workspace_write_persists_on_host(workspace, devm, sandb
 
     # Write config BEFORE cold-start so the provisioner deploys failsvc.
     workspace.write_devmyaml(
-        install=[install_script],
         services={
             "failsvc": {
                 "exec": ["/tmp/run-failsvc.sh"],
                 "restart": "no",
             },
         },
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        f"  {install_script}\n"
+        "}\n"
     )
 
     sandbox = TartSandbox(name=sandbox_name)

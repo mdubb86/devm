@@ -43,7 +43,14 @@ HEAL_POLL = 3
 @pytest.mark.slow
 @pytest.mark.timeout(360)
 def test_clock_heals_after_forced_skew(workspace, devm):
-    workspace.write_devmyaml(install=["true"])
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
+    )
 
     start = subprocess.run(
         [devm.path, "start"],

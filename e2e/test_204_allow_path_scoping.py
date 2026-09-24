@@ -56,8 +56,14 @@ def test_allow_path_scoping(devm, workspace):
     # unrelated to what this test pins.
     workspace.write_devmyaml(
         no_repo=True,
-        install=["true"],
         network={"allow": ["api.github.com/octocat"]},
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
 
     r = subprocess.run(

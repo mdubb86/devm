@@ -18,8 +18,14 @@ pytestmark = pytest.mark.devm
 @pytest.mark.slow
 def test_purge_removes_orphaned_volumes(devm, workspace, sandbox_name):
     workspace.write_devmyaml(
-        install=["true"],
         volumes={"scratch": "/var/lib/scratch"},
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
     home = os.path.expanduser("~")
     mac_vol_dir = workspace.volume_path("scratch").parent

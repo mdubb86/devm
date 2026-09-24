@@ -630,26 +630,22 @@ func TestProvisionAndAttach_EmitsVolumeSyncAndRepoCloneMarkers(t *testing.T) {
 // authority passthrough); volumeSyncFn then repoCloneFn run AFTER
 // BeginProvisioning but BEFORE RunUser (so install:/startup: see a
 // hydrated workspace). waitForInitialSyncFn sits between repoCloneFn and
-// RunUser (the extracted FlushAll wait), and runStartupCommandsFn fires
-// right after RunUser, still under the passthrough egress authority,
-// before EndProvisioning.
+// RunUser (the extracted FlushAll wait).
 //
-// volumeSyncFn, repoCloneFn, waitForInitialSyncFn, and
-// runStartupCommandsFn are all faked to append a marker into the same
-// ordered log file fakeTartBinWithLog and fakeVMAdmin both write into,
-// instead of dispatching to the daemon — this is a sequencing test, not
-// an integration test of SetupVolumesPhase, SetupReposPhase, or
-// FlushAll themselves (covered by internal/serviceapi's own tests).
+// volumeSyncFn, repoCloneFn, and waitForInitialSyncFn are all faked to
+// append a marker into the same ordered log file fakeTartBinWithLog and
+// fakeVMAdmin both write into, instead of dispatching to the daemon —
+// this is a sequencing test, not an integration test of
+// SetupVolumesPhase, SetupReposPhase, or FlushAll themselves (covered by
+// internal/serviceapi's own tests).
 func TestProvisionAndAttach_VolumeSyncRepoCloneBeforeRunUser(t *testing.T) {
 	origVolumeSync := volumeSyncFn
 	origRepoClone := repoCloneFn
 	origWait := waitForInitialSyncFn
-	origRunStartup := runStartupCommandsFn
 	t.Cleanup(func() {
 		volumeSyncFn = origVolumeSync
 		repoCloneFn = origRepoClone
 		waitForInitialSyncFn = origWait
-		runStartupCommandsFn = origRunStartup
 	})
 
 	repoRoot := t.TempDir()
@@ -673,7 +669,7 @@ func TestProvisionAndAttach_VolumeSyncRepoCloneBeforeRunUser(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	var volumeSyncCalled, repoCloneCalled, waitSyncCalled, runStartupCalled int
+	var volumeSyncCalled, repoCloneCalled, waitSyncCalled int
 	volumeSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
 		volumeSyncCalled++
 		appendMarker("VOLUME-SYNC")
@@ -687,11 +683,6 @@ func TestProvisionAndAttach_VolumeSyncRepoCloneBeforeRunUser(t *testing.T) {
 	waitForInitialSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
 		waitSyncCalled++
 		appendMarker("WAIT-SYNC")
-		return nil
-	}
-	runStartupCommandsFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
-		runStartupCalled++
-		appendMarker("RUN-STARTUP")
 		return nil
 	}
 
@@ -709,7 +700,6 @@ func TestProvisionAndAttach_VolumeSyncRepoCloneBeforeRunUser(t *testing.T) {
 	assert.Equal(t, 1, volumeSyncCalled, "volume sync must run exactly once")
 	assert.Equal(t, 1, repoCloneCalled, "repo clone must run exactly once")
 	assert.Equal(t, 1, waitSyncCalled, "wait-for-initial-sync must run exactly once")
-	assert.Equal(t, 1, runStartupCalled, "run-startup-commands must run exactly once")
 
 	logBytes, err := os.ReadFile(logPath)
 	require.NoError(t, err)
@@ -727,8 +717,6 @@ func TestProvisionAndAttach_VolumeSyncRepoCloneBeforeRunUser(t *testing.T) {
 			order = append(order, "repo-clone")
 		case line == "WAIT-SYNC":
 			order = append(order, "wait-sync")
-		case line == "RUN-STARTUP":
-			order = append(order, "run-startup")
 		case line == "END-PROVISIONING":
 			order = append(order, "end-provisioning")
 		case strings.Contains(line, "bash -c"):
@@ -744,124 +732,9 @@ func TestProvisionAndAttach_VolumeSyncRepoCloneBeforeRunUser(t *testing.T) {
 		}
 	}
 	assert.Equal(t,
-		[]string{"run-bundle", "begin-provisioning", "volume-sync", "repo-clone", "wait-sync", "run-user", "run-startup", "end-provisioning", "run-enforced"},
+		[]string{"run-bundle", "begin-provisioning", "volume-sync", "repo-clone", "wait-sync", "run-user", "end-provisioning", "run-enforced"},
 		order,
 	)
-}
-
-// TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch pins:
-//   - runStartupCommandsFn is called AFTER volumeSyncFn, repoCloneFn, and
-//     waitForInitialSyncFn
-//   - a non-zero exit from a startup command is a teardown-class failure
-//     (asserted separately in TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM)
-func TestProvisionAndAttach_RunStartupCommands_SequenceAndDispatch(t *testing.T) {
-	origVolumeSync := volumeSyncFn
-	origRepoClone := repoCloneFn
-	origWait := waitForInitialSyncFn
-	origRun := runStartupCommandsFn
-	t.Cleanup(func() {
-		volumeSyncFn = origVolumeSync
-		repoCloneFn = origRepoClone
-		waitForInitialSyncFn = origWait
-		runStartupCommandsFn = origRun
-	})
-
-	repoRoot := t.TempDir()
-	admin := &fakeVMAdmin{
-		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
-	}
-	tartBin := fakeTartBin(t, repoRoot)
-
-	userCmd := &stubCmd{waitErr: make(chan error, 1)}
-	userCmd.waitErr <- nil
-	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
-
-	deps := ShellDeps{
-		Ident:            identity.Prod,
-		Tart:             tartBin,
-		ServiceAPIClient: admin,
-		UserSpawner:      spawner,
-	}
-	writeFakeCA(t, repoRoot)
-
-	var mu sync.Mutex
-	var order []string
-	volumeSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
-		mu.Lock()
-		order = append(order, "volume-sync")
-		mu.Unlock()
-		return nil
-	}
-	repoCloneFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string, tunnelPort int) error {
-		mu.Lock()
-		order = append(order, "repo-clone")
-		mu.Unlock()
-		return nil
-	}
-	waitForInitialSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
-		mu.Lock()
-		order = append(order, "wait-sync")
-		mu.Unlock()
-		return nil
-	}
-	runStartupCommandsFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
-		mu.Lock()
-		order = append(order, "run")
-		mu.Unlock()
-		return nil
-	}
-
-	rc, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, []string{"volume-sync", "repo-clone", "wait-sync", "run"}, order,
-		"runStartupCommandsFn must run AFTER volumeSyncFn, repoCloneFn, and waitForInitialSyncFn")
-}
-
-// TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM verifies that a
-// failing startup command (runStartupCommandsFn returns an error) is a
-// teardown-class failure — the user opted into startup: true, so a
-// non-zero exit must fail loud and leave no zombie VM, unlike a
-// post-install service failure which is kept for debugging.
-func TestRunShellColdPath_RunStartupCommandsFail_TearsDownVM(t *testing.T) {
-	origWait := waitForInitialSyncFn
-	origRun := runStartupCommandsFn
-	t.Cleanup(func() {
-		waitForInitialSyncFn = origWait
-		runStartupCommandsFn = origRun
-	})
-
-	repoRoot := t.TempDir()
-	admin := &fakeVMAdmin{
-		statusResp: serviceapi.VMStatusResponse{Present: false, Running: false},
-	}
-	tartBin := fakeTartBin(t, repoRoot)
-	spawner := &stubSpawner{}
-	deps := ShellDeps{
-		Ident:            identity.Prod,
-		Tart:             tartBin,
-		ServiceAPIClient: admin,
-		UserSpawner:      spawner,
-	}
-	writeFakeCA(t, repoRoot)
-
-	waitForInitialSyncFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
-		return nil
-	}
-	runStartupCommandsFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
-		return fmt.Errorf("run repo1/cmd2: exit 42: boom")
-	}
-
-	_, err := RunShell(context.Background(), deps, minimalCfg(), repoRoot, "x-sbx", "bash", nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "run startup commands")
-
-	admin.mu.Lock()
-	assert.Equal(t, 1, admin.stopCalled, "StopVM must be called on startup-command failure")
-	admin.mu.Unlock()
 }
 
 // TestRunShellColdPath_PostInstallFail_KeepsVM verifies that a

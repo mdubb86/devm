@@ -18,17 +18,21 @@ import (
 )
 
 const (
-	dirName          = "approved-snapshot"
-	fileDevmYAML     = "devm.yaml"
-	fileMeYAML       = "devm.me.yaml"
-	fileManifest     = "manifest.json"
-	sourceUser       = "user"
-	sourceGuest      = "guest"
+	dirName      = "approved-snapshot"
+	fileDevmYAML = "devm.yaml"
+	fileMeYAML   = "devm.me.yaml"
+	fileDevmSH   = "devm.sh"
+	fileMeSH     = "devm.me.sh"
+	fileManifest = "manifest.json"
+	sourceUser   = "user"
+	sourceGuest  = "guest"
 )
 
 type Snapshot struct {
 	DevmYAML []byte
 	MeYAML   []byte
+	DevmSH   []byte
+	DevmMeSH []byte
 	Manifest Manifest
 }
 
@@ -76,13 +80,26 @@ func (s *Store) Read(projectID string) (Snapshot, bool, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Snapshot{}, false, fmt.Errorf("approve: read devm.me.yaml: %w", err)
 	}
-	return Snapshot{DevmYAML: devmBytes, MeYAML: meBytes, Manifest: m}, true, nil
+	var devmSHBytes []byte
+	if b, err := os.ReadFile(filepath.Join(d, fileDevmSH)); err == nil {
+		devmSHBytes = b
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Snapshot{}, false, fmt.Errorf("approve: read devm.sh: %w", err)
+	}
+	var meSHBytes []byte
+	if b, err := os.ReadFile(filepath.Join(d, fileMeSH)); err == nil {
+		meSHBytes = b
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Snapshot{}, false, fmt.Errorf("approve: read devm.me.sh: %w", err)
+	}
+	return Snapshot{DevmYAML: devmBytes, MeYAML: meBytes, DevmSH: devmSHBytes, DevmMeSH: meSHBytes, Manifest: m}, true, nil
 }
 
-// Write atomically advances the approved snapshot. Passing meYAML=nil
-// means "no devm.me.yaml on Mac side" — any prior stored copy is
-// removed so a subsequent Read reflects that absence.
-func (s *Store) Write(projectID string, devmYAML, meYAML []byte, source string) error {
+// Write atomically advances the approved snapshot. Passing meYAML,
+// devmSH, or devmMeSH as nil means "not present on the Mac side" —
+// any prior stored copy is removed so a subsequent Read reflects that
+// absence.
+func (s *Store) Write(projectID string, devmYAML, meYAML, devmSH, devmMeSH []byte, source string) error {
 	if projectID == "" {
 		return errors.New("approve: projectID must not be empty")
 	}
@@ -96,14 +113,14 @@ func (s *Store) Write(projectID string, devmYAML, meYAML []byte, source string) 
 	if err := writeAtomic(filepath.Join(d, fileDevmYAML), devmYAML); err != nil {
 		return err
 	}
-	if meYAML == nil {
-		if err := os.Remove(filepath.Join(d, fileMeYAML)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("approve: remove stale me.yaml: %w", err)
-		}
-	} else {
-		if err := writeAtomic(filepath.Join(d, fileMeYAML), meYAML); err != nil {
-			return err
-		}
+	if err := writeOrRemove(filepath.Join(d, fileMeYAML), meYAML); err != nil {
+		return err
+	}
+	if err := writeOrRemove(filepath.Join(d, fileDevmSH), devmSH); err != nil {
+		return err
+	}
+	if err := writeOrRemove(filepath.Join(d, fileMeSH), devmMeSH); err != nil {
+		return err
 	}
 	m := Manifest{Timestamp: time.Now().UTC(), Source: source}
 	manifestBytes, err := json.MarshalIndent(m, "", "  ")
@@ -125,6 +142,20 @@ func HashFile(b []byte) string {
 	}
 	sum := sha256.Sum256(b)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// writeOrRemove writes b to path, or — when b is nil, meaning the
+// file isn't present on the Mac side — removes any stale copy left
+// over from a prior snapshot so a subsequent Read reflects the
+// absence.
+func writeOrRemove(path string, b []byte) error {
+	if b == nil {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("approve: remove stale %s: %w", filepath.Base(path), err)
+		}
+		return nil
+	}
+	return writeAtomic(path, b)
 }
 
 // writeAtomic writes bytes to path via a sibling .tmp + rename.

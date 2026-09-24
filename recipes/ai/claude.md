@@ -17,38 +17,7 @@ allow list is explicit.
 ## devm.yaml additions
 
 ```yaml
-scripts:
-  # Install the Claude CLI and expose it on the system PATH.
-  install-claude-cli:
-    # Symlink FIRST — the installer runs `claude`, which writes ~/.claude.json.
-    # With the symlink in place it writes through into the volume (or reads the
-    # persisted config); without it, a fresh stub lands at $HOME root and the
-    # startup save-back would copy it over the volume config on every
-    # re-provision (install: always precedes startup:).
-    - ln -sf /home/devm/.claude/.claude.json /home/devm/.claude.json
-    - curl -fsSL https://claude.ai/install.sh | bash
-    - sudo install -m 755 /home/devm/.local/bin/claude /usr/local/bin/claude
-
-  # Persist ~/.claude.json (login/account/history) via a volume-backed
-  # symlink, re-linked every boot. Not CLAUDE_CONFIG_DIR: the VS Code
-  # extension and Orca ignore that env var and read/write the default
-  # ~/.claude.json regardless, so the default path must stay canonical.
-  link-claude-config:
-    # Restore-only save-back: fold a real ~/.claude.json to the volume only if
-    # it's genuinely onboarded (hasCompletedOnboarding — a fresh install stub
-    # has oauthAccount too, so that's no discriminator) or the volume has no
-    # config yet; then re-link.
-    - if [ -f /home/devm/.claude.json ] && [ ! -L /home/devm/.claude.json ]; then if grep -qE '"hasCompletedOnboarding"[[:space:]]*:[[:space:]]*true' /home/devm/.claude.json 2>/dev/null || [ ! -f /home/devm/.claude/.claude.json ]; then cp -f /home/devm/.claude.json /home/devm/.claude/.claude.json; fi; fi
-    - ln -sf /home/devm/.claude/.claude.json /home/devm/.claude.json
-
-install:
-  - ">install-claude-cli"
-
-startup:
-  # Re-link every boot: $HOME is fresh after teardown but the symlink
-  # target inside the volume persists.
-  - ">link-claude-config"
-
+# devm.yaml
 env:
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
 
@@ -70,6 +39,43 @@ network:
     - docs.claude.com           # WebFetch — official docs (user guides)
     - code.claude.com           # WebFetch — official docs (Claude Code, SDK)
     - raw.githubusercontent.com/anthropics/*  # plugin marketplace + /release-notes
+```
+```bash
+# devm.sh
+
+# Symlink FIRST — the installer runs `claude`, which writes ~/.claude.json.
+# With the symlink in place it writes through into the volume (or reads the
+# persisted config); without it, a fresh stub lands at $HOME root and the
+# next link-claude-config would copy it over the volume config on every
+# re-provision (install() always precedes startup()).
+install() {
+  ln -sf /home/devm/.claude/.claude.json /home/devm/.claude.json
+  curl -fsSL https://claude.ai/install.sh | bash
+  sudo install -m 755 /home/devm/.local/bin/claude /usr/local/bin/claude
+}
+
+# Persist ~/.claude.json (login/account/history) via a volume-backed
+# symlink, re-linked every boot. Not CLAUDE_CONFIG_DIR: the VS Code
+# extension and Orca ignore that env var and read/write the default
+# ~/.claude.json regardless, so the default path must stay canonical.
+link-claude-config() {
+  # Restore-only save-back: fold a real ~/.claude.json to the volume only if
+  # it's genuinely onboarded (hasCompletedOnboarding — a fresh install stub
+  # has oauthAccount too, so that's no discriminator) or the volume has no
+  # config yet; then re-link.
+  if [ -f /home/devm/.claude.json ] && [ ! -L /home/devm/.claude.json ]; then
+    if grep -qE '"hasCompletedOnboarding"[[:space:]]*:[[:space:]]*true' /home/devm/.claude.json 2>/dev/null || [ ! -f /home/devm/.claude/.claude.json ]; then
+      cp -f /home/devm/.claude.json /home/devm/.claude/.claude.json
+    fi
+  fi
+  ln -sf /home/devm/.claude/.claude.json /home/devm/.claude.json
+}
+
+startup() {
+  # Re-link every boot: $HOME is fresh after teardown but the symlink
+  # target inside the volume persists.
+  link-claude-config
+}
 ```
 
 ## Notes
@@ -103,7 +109,7 @@ network:
   binary at `/home/devm/.local/bin/claude` (Claude's self-check
   canonical user path — must stay there). Second step copies it to
   `/usr/local/bin/claude` so it's on the system PATH for any user.
-  Ephemeral — the installer re-runs on every cold-start (`install:`
+  Ephemeral — the installer re-runs on every cold-start (`install()`
   runs once per VM lifetime).
 - **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`** kills Sentry error
   reporting + telemetry. Cleaner than allowlisting `*.sentry.io`.

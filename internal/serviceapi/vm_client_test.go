@@ -143,7 +143,7 @@ func TestClientStartVM_ApproveRequired(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, nil, nil, "user"))
 
 	macCwd := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
@@ -349,7 +349,7 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	projDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, nil, nil, "user"))
 
 	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
 	require.NoError(t, err)
@@ -388,27 +388,33 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 
 // TestClientReconcile_ApproveRequired verifies that when the daemon
 // refuses /vm/reconcile with 409 approve_required (devm.yaml diverged
-// from the last-approved snapshot — here, no snapshot exists at all),
-// Client.Reconcile returns an error whose message is the daemon's
-// "message" field verbatim, not the raw JSON-wrapped body.
+// from the last-approved snapshot), Client.Reconcile returns an error
+// whose message is the daemon's "message" field verbatim, not the raw
+// JSON-wrapped body.
 func TestClientReconcile_ApproveRequired(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	createTestCA(t)
 
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
-		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "new"}},
 	}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
 
 	registerFakeSoftnet(t, "p")
 
-	// No approve.Store snapshot written for "p" — isApproveDiverged
-	// treats a missing snapshot as diverged, so the daemon refuses.
-	// projDir is WorkspaceHostPath, the project's Mac cwd, where the
-	// approve-gate check reads devm.yaml from.
+	// Seed an approved snapshot with the OLD devm.yaml, then put the
+	// NEW devm.yaml on disk — isApproveDiverged compares bytes and
+	// refuses because they differ. projDir is WorkspaceHostPath, the
+	// project's Mac cwd, where the approve-gate check reads devm.yaml
+	// from.
 	projDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
+	require.NoError(t, approve.NewStore(identity.Prod).Write(
+		"p",
+		[]byte("project:\n  name: p\nenv:\n  FOO: old\n"),
+		nil, nil, nil, "user",
+	))
+	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: new\n"), 0644))
 
 	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
 	require.NoError(t, err)
@@ -754,7 +760,7 @@ func TestClientApproveState_Diverged(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, nil, nil, "user"))
 
 	macCwd := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
@@ -788,7 +794,7 @@ func TestClientApproveState_UpToDate(t *testing.T) {
 
 	contents := []byte("project:\n  name: p\nenv:\n  FOO: same\n")
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write("p", contents, nil, "user"))
+	require.NoError(t, store.Write("p", contents, nil, nil, nil, "user"))
 
 	macCwd := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), contents, 0644))

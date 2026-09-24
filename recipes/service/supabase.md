@@ -31,6 +31,7 @@ works from the Mac AND from inside the VM, unchanged.
 ## devm.yaml additions
 
 ```yaml
+# devm.yaml
 docker: true                          # supabase start spins up ~10 containers
 
 env:
@@ -42,24 +43,6 @@ env:
 
 packages:
   - postgresql-client   # `psql` — handy for local queries, migrations, troubleshooting
-
-scripts:
-  # supabase CLI: canonical `.deb` per supabase's docs (Releases page).
-  # `.deb` releases only publish version-embedded names — no `latest`
-  # alias — so resolve the tag by following github.com's own
-  # /releases/latest → /releases/tag/vX.Y.Z redirect, then download the
-  # correctly-named `.deb`. dpkg tracks the package and future re-runs
-  # (new release) replace files cleanly. Broken into steps here because
-  # the tag has to survive between commands — `scripts:` runs them under
-  # one shell so `$TAG` stays live.
-  install-supabase:
-    - TAG=$(curl -sIL -o /dev/null -w '%{url_effective}' https://github.com/supabase/cli/releases/latest | xargs basename)
-    - curl -fsSL -o /tmp/supabase.deb "https://github.com/supabase/cli/releases/download/${TAG}/supabase_${TAG#v}_linux_arm64.deb"
-    - sudo dpkg -i /tmp/supabase.deb
-    - rm /tmp/supabase.deb
-
-install:
-  - ">install-supabase"
 
 services:
   supabase-api:
@@ -93,6 +76,22 @@ network:
     # Image manifests. Layer blobs come from CloudFront and are NOT
     # allowed here — see "Container image egress" below.
     - public.ecr.aws
+```
+```bash
+# devm.sh
+
+# supabase CLI: canonical `.deb` per supabase's docs (Releases page).
+# `.deb` releases only publish version-embedded names — no `latest`
+# alias — so resolve the tag by following github.com's own
+# /releases/latest → /releases/tag/vX.Y.Z redirect, then download the
+# correctly-named `.deb`. dpkg tracks the package and future re-runs
+# (new release) replace files cleanly.
+install() {
+  TAG=$(curl -sIL -o /dev/null -w '%{url_effective}' https://github.com/supabase/cli/releases/latest | xargs basename)
+  curl -fsSL -o /tmp/supabase.deb "https://github.com/supabase/cli/releases/download/${TAG}/supabase_${TAG#v}_linux_arm64.deb"
+  sudo dpkg -i /tmp/supabase.deb
+  rm /tmp/supabase.deb
+}
 ```
 
 Then `devm route vm` (auto-applied on `devm start` when no routes exist)
@@ -144,7 +143,7 @@ entry above.
 
 Two supabase npm packages sometimes appear in `package.json` — they do
 different jobs and only one is redundant with the recipe's `.deb`
-install:
+install (below):
 
 - **`@supabase/supabase-js`** (`dependencies`) — the runtime JS client
   the app imports (`import { createClient } from '@supabase/supabase-js'`).
@@ -156,10 +155,9 @@ install:
   machines; the `.deb` is on `PATH` for a bare interactive `supabase`.
 
 If `supabase` is in `devDependencies`, ask which source the project
-wants before removing anything — dropping this recipe's
-`install-supabase` script (and its two release-download allow entries)
-is as valid an answer as dropping the devDep. If it's absent, nothing
-to do.
+wants before removing anything — dropping this recipe's `install()`
+function (and its two release-download allow entries) is as valid an
+answer as dropping the devDep. If it's absent, nothing to do.
 
 ## Steer agents at the CLI, not `docker exec`
 

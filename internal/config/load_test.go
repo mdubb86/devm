@@ -34,13 +34,13 @@ services:
 
 // Reproduces a real bug hit during a shelfmates cold-start:
 //
-//   scripts:
-//     install-gsd-core:
-//       - cd "$WORKSPACE" && npx ...
+//	scripts:
+//	  install-gsd-core:
+//	    - cd "$WORKSPACE" && npx ...
 //
-//   provisioning fails with:
-//     bash: line 1: cd: /Users/michael/workspace/shelfmates:
-//                       No such file or directory
+//	provisioning fails with:
+//	  bash: line 1: cd: /Users/michael/workspace/shelfmates:
+//	                    No such file or directory
 //
 // The `cd "$WORKSPACE"` line runs INSIDE THE GUEST. The guest resolves
 // $WORKSPACE from its shell env, which is populated from /etc/environment
@@ -310,7 +310,7 @@ repo:
 	assert.Contains(t, err.Error(), "repo")
 }
 
-func TestLoad_RejectsUnknownCommandField(t *testing.T) {
+func TestLoad_RejectsMappingShapeCommands(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
@@ -321,11 +321,10 @@ repos:
     commands:
       install:
         exec: pnpm install
-        run_on_setup: true
 `)
 	_, err := Load(dir)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "run_on_setup")
+	assert.Contains(t, err.Error(), "!!map")
 }
 
 func TestLoad_RepoCommandsRoundTrip(t *testing.T) {
@@ -333,28 +332,21 @@ func TestLoad_RepoCommandsRoundTrip(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   name: test
-scripts:
-  fmt-check:
-    - echo fmt
 repos:
   main:
     secret: gh
     commands:
-      install:
-        exec: pnpm install
-        startup: true
-      lint:
-        exec: ">fmt-check"
+      - install
+      - lint
+`)
+	writeFile(t, dir, "devm.sh", `
+install() { true; }
+lint() { true; }
 `)
 	cfg, err := Load(dir)
 	require.NoError(t, err)
 	require.Contains(t, cfg.Repos, "main")
-	require.Contains(t, cfg.Repos["main"].Commands, "install")
-	assert.Equal(t, "pnpm install", cfg.Repos["main"].Commands["install"].Exec)
-	require.NotNil(t, cfg.Repos["main"].Commands["install"].Startup)
-	assert.True(t, *cfg.Repos["main"].Commands["install"].Startup)
-	assert.Equal(t, ">fmt-check", cfg.Repos["main"].Commands["lint"].Exec)
-	assert.Nil(t, cfg.Repos["main"].Commands["lint"].Startup, "unspecified startup stays nil")
+	assert.Equal(t, []string{"install", "lint"}, cfg.Repos["main"].Commands)
 }
 
 func TestReadProjectName_ReturnsProjectName(t *testing.T) {
@@ -388,4 +380,42 @@ func TestReadProjectName_ParseError(t *testing.T) {
 	_, err := ReadProjectName(dir)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "parse")
+}
+
+func TestLoad_PopulatesFunctionsFromDevmSH(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),
+		[]byte("project:\n  name: p\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.sh"),
+		[]byte(`
+install() { echo hi; }
+run-tests() { true; }
+`), 0o644))
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"install", "run-tests"}, cfg.Functions)
+}
+
+func TestLoad_MergesDevmMeSHFunctions(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),
+		[]byte("project:\n  name: p\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.sh"),
+		[]byte(`install() { true; }`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.me.sh"),
+		[]byte(`install() { true; }
+extra() { true; }`), 0o644))
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	// install appears once (dedup); extra is added.
+	assert.ElementsMatch(t, []string{"install", "extra"}, cfg.Functions)
+}
+
+func TestLoad_NoDevmSHYieldsEmptyFunctions(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),
+		[]byte("project:\n  name: p\n"), 0o644))
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Functions)
 }

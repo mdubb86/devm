@@ -22,20 +22,20 @@ Prereq: the Playwright recipe (`tool/tool/playwright`) — supplies
 ## devm.yaml additions
 
 ```yaml
-scripts:
-  install-agent-browser:
-    # fnm's `default` alias is on `path:` (per the Node recipe), so
-    # `npm` is on PATH here in `install:` — no extra env setup needed.
-    # Guard so the step is idempotent.
-    - command -v agent-browser >/dev/null 2>&1 || npm install -g agent-browser
-
-install:
-  # After the Node + Playwright installs.
-  - ">install-agent-browser"
-
+# devm.yaml
 network:
   allow:
     - registry.npmjs.org       # npm install -g agent-browser
+```
+```bash
+# devm.sh
+
+# fnm's `default` alias is on `path:` (per the Node recipe), so `npm`
+# is on PATH here in install() — no extra env setup needed. Guard so
+# the step is idempotent. Runs after the Node + Playwright installs.
+install() {
+  command -v agent-browser >/dev/null 2>&1 || npm install -g agent-browser
+}
 ```
 
 Runtime egress: **navigation is subject to `network.allow`.**
@@ -55,7 +55,7 @@ won't load.
   read the same binary but hold their own user-data dirs, so
   Chromium's ProcessSingleton lock never collides. Rule: reuse the
   binary, never share a `--profile`/user-data-dir.
-- **Rehydration.** No extra step — `install:` re-runs on the next
+- **Rehydration.** No extra step — `install()` re-runs on the next
   fresh VM after teardown; Playwright's own recipe re-runs `playwright
   install chromium` alongside.
 

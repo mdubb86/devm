@@ -201,6 +201,44 @@ func TestPropose_MeYamlAcceptedWithoutValidation(t *testing.T) {
 	assert.Equal(t, "devm.me.yaml", meta.Kind)
 }
 
+func TestPropose_DevmSHAccepted(t *testing.T) {
+	h, cfg, cache := buildProposeHandler(t)
+	writeMacCwdFile(t, cache, "devm.sh", "install() {\n  true\n}\n")
+
+	rr := postPropose(h, "/propose", map[string]any{
+		"cwd":    "/x",
+		"branch": "main",
+		"reason": "add install fn",
+		"kind":   "devm.sh",
+	})
+
+	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+
+	meta, ok, err := ReadLastProposal(cfg, "proj")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "devm.sh", meta.Kind)
+}
+
+func TestPropose_DevmMeSHAccepted(t *testing.T) {
+	h, cfg, cache := buildProposeHandler(t)
+	writeMacCwdFile(t, cache, "devm.me.sh", "startup() {\n  true\n}\n")
+
+	rr := postPropose(h, "/propose", map[string]any{
+		"cwd":    "/x",
+		"branch": "main",
+		"reason": "override startup",
+		"kind":   "devm.me.sh",
+	})
+
+	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+
+	meta, ok, err := ReadLastProposal(cfg, "proj")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "devm.me.sh", meta.Kind)
+}
+
 // TestPropose_UnreadableOnDiskFileReturns500 pins that a read failure
 // other than "file does not exist" is a loud 500, not a silently
 // skipped validation. A directory in place of the expected file

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mdubb86/devm/internal/render"
@@ -140,7 +141,7 @@ func Build(in BuildInput) ([]byte, error) {
 	sort.Strings(svcNames)
 	for _, name := range svcNames {
 		svc := in.Cfg.Services[name]
-		if svc.Systemd == "" && len(svc.Exec) == 0 {
+		if svc.Systemd == "" && svc.ExecFunc == "" && len(svc.ExecArgv) == 0 {
 			continue
 		}
 		// Merge top-level env into per-service env so cfg.Env entries
@@ -154,22 +155,19 @@ func Build(in BuildInput) ([]byte, error) {
 			merged[k] = v
 		}
 		svc.Env = merged
-		unit := render.RenderService(name, svc)
+		unit, wrapperPath, wrapperBody, err := render.RenderService(svc, name, nil, in.Cfg.Path)
+		if err != nil {
+			return nil, fmt.Errorf("render service %q unit: %w", name, err)
+		}
 		if err := writeEntry(tw, "systemd/"+name+".service", 0o644, unit); err != nil {
 			return nil, err
 		}
-	}
-
-	// startup.sh is always emitted, for every project: the provisioning
-	// script (internal/provision) runs it before applying enforcement
-	// and starting devm.target. startup.sh lands at /opt/devm/startup.sh
-	// directly — GuestInstallScript extracts the tar straight into
-	// /opt/devm, so a top-level entry needs no further install.sh copy
-	// step (unlike systemd/*.service, which install.sh copies into
-	// /etc/systemd/system/). An empty cfg.Startup renders a no-op
-	// script that exits 0.
-	if err := writeEntry(tw, "startup.sh", 0o755, render.RenderStartupScript(in.Cfg.Startup, in.Cfg.Scripts)); err != nil {
-		return nil, err
+		if wrapperPath != "" {
+			rel := strings.TrimPrefix(wrapperPath, GuestRoot+"/")
+			if err := writeEntry(tw, rel, 0o755, wrapperBody); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	if len(in.SSHAuthorizedPubkey) > 0 {

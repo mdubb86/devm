@@ -17,9 +17,13 @@ func TestServiceValidate(t *testing.T) {
 	s := Service{Port: 3000}
 	assert.NoError(t, s.Validate())
 
-	// exec-only service: no port, just exec
-	execOnly := Service{Exec: []string{"/usr/bin/redis-server"}}
+	// exec-only service: no port, just exec (argv form)
+	execOnly := Service{ExecArgv: []string{"/usr/bin/redis-server"}}
 	assert.NoError(t, execOnly.Validate())
+
+	// exec-only service: no port, just exec (function-name form)
+	execFuncOnly := Service{ExecFunc: "start-redis"}
+	assert.NoError(t, execFuncOnly.Validate())
 
 	emptyWorkspace := Service{}
 	assert.Error(t, emptyWorkspace.Validate(), "service must have canonical, exec, or systemd")
@@ -133,37 +137,6 @@ func TestConfigRejectsServiceOnPort22(t *testing.T) {
 	assert.Contains(t, err.Error(), "impostor-ssh")
 }
 
-func TestConfigValidatesInstallSteps(t *testing.T) {
-	cfg := Config{
-		Project: Project{Name: "x"},
-		Install: []string{
-			"", // invalid
-		},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "install[0]")
-}
-
-func TestConfig_StartupRoundTrip(t *testing.T) {
-	in := []byte("project:\n  name: p\nstartup:\n  - \"echo one\"\n  - \"echo two\"\n")
-	var cfg Config
-	require.NoError(t, yaml.Unmarshal(in, &cfg))
-	assert.Equal(t, []string{"echo one", "echo two"}, cfg.Startup)
-}
-
-func TestConfigValidatesStartupSteps(t *testing.T) {
-	cfg := Config{
-		Project: Project{Name: "x"},
-		Startup: []string{
-			"", // invalid
-		},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "startup[0]")
-}
-
 // TestServicePortPolymorphicUnmarshal exercises the single-field `port:`
 // polymorphic decode that accepts either an int (just sandbox port) or
 // a "IP:PORT" string (interface + sandbox port).
@@ -271,6 +244,50 @@ func TestServiceExposeHostYAMLRoundTrip(t *testing.T) {
 	var roundTripped Service
 	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
 	assert.True(t, roundTripped.ExposeHost, "expose_host must survive marshal/unmarshal round-trip (snapshot storage relies on this)")
+}
+
+// TestServiceExecYAMLRoundTrip_ScalarIsFunctionForm exercises the
+// `exec:` field's scalar shape through the real custom decode/encode
+// path (serviceYAML.Exec, Service.decodeExecNode, Service.MarshalYAML)
+// — a bare scalar names a devm.sh/devm.me.sh function, not a literal
+// command.
+func TestServiceExecYAMLRoundTrip_ScalarIsFunctionForm(t *testing.T) {
+	var svc Service
+	require.NoError(t, yaml.Unmarshal([]byte("exec: start-worker\n"), &svc))
+	assert.Equal(t, "start-worker", svc.ExecFunc)
+	assert.Empty(t, svc.ExecArgv)
+
+	out, err := yaml.Marshal(svc)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "exec: start-worker")
+
+	var roundTripped Service
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.Equal(t, "start-worker", roundTripped.ExecFunc)
+}
+
+// TestServiceExecYAMLRoundTrip_SequenceIsArgvForm exercises the
+// `exec:` field's sequence shape — a list is a literal argv, run with
+// no shell.
+func TestServiceExecYAMLRoundTrip_SequenceIsArgvForm(t *testing.T) {
+	var svc Service
+	require.NoError(t, yaml.Unmarshal([]byte("exec:\n  - /usr/bin/redis-server\n  - --save\n"), &svc))
+	assert.Equal(t, []string{"/usr/bin/redis-server", "--save"}, svc.ExecArgv)
+	assert.Empty(t, svc.ExecFunc)
+
+	out, err := yaml.Marshal(svc)
+	require.NoError(t, err)
+
+	var roundTripped Service
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.Equal(t, []string{"/usr/bin/redis-server", "--save"}, roundTripped.ExecArgv)
+}
+
+func TestServiceExecYAML_MappingRejected(t *testing.T) {
+	var svc Service
+	err := yaml.Unmarshal([]byte("exec:\n  foo: bar\n"), &svc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exec")
 }
 
 func TestService_Validate_ExposeHostRequiresHostname(t *testing.T) {
@@ -400,8 +417,6 @@ env:
 services:
   api:
     port: 8080
-install:
-  - true
 path:
   - $WORKSPACE/bin
 packages:
@@ -458,8 +473,8 @@ func TestTemplateValidate(t *testing.T) {
 
 func TestService_SystemdOverride_ExclusiveWithDeclarative(t *testing.T) {
 	s := Service{
-		Systemd: "[Unit]\n[Service]\nExecStart=/bin/true",
-		Exec:    []string{"/bin/true"},
+		Systemd:  "[Unit]\n[Service]\nExecStart=/bin/true",
+		ExecArgv: []string{"/bin/true"},
 	}
 	err := s.Validate()
 	require.Error(t, err)
@@ -480,7 +495,7 @@ func TestService_Restart_ValidValues(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.val, func(t *testing.T) {
-			s := Service{Exec: []string{"/bin/true"}, Restart: c.val}
+			s := Service{ExecArgv: []string{"/bin/true"}, Restart: c.val}
 			err := s.Validate()
 			if c.ok {
 				require.NoError(t, err)
@@ -836,124 +851,6 @@ func TestDiskUnsetHasNoOverride(t *testing.T) {
 
 func TestCheckUnknownKeysAllowsDisk(t *testing.T) {
 	require.NoError(t, CheckUnknownKeys([]byte("disk: 64G\nproject:\n  name: x\n")))
-}
-
-// ---------- scripts: field tests ----------
-
-func TestValidate_Scripts_Valid(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{
-			"install-supabase": {"echo one", "echo two"},
-		},
-		Install: []string{">install-supabase"},
-	}
-	assert.NoError(t, cfg.Validate())
-}
-
-func TestValidate_Scripts_InvalidName(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{"Bad Name": {"echo one"}},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Bad Name")
-}
-
-func TestValidate_Scripts_EmptyCommand(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{"foo": {"echo one", ""}},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "scripts[foo][1]")
-}
-
-func TestValidate_Scripts_EmptyBody(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{"foo": {}},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "scripts[foo]")
-	assert.Contains(t, err.Error(), "empty")
-}
-
-func TestValidate_Scripts_ScriptToScriptRefRejected(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{
-			"foo": {"echo one", ">bar"},
-		},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "scripts[foo][1]")
-	assert.Contains(t, err.Error(), "script-to-script")
-}
-
-func TestValidate_Scripts_UndefinedRefInInstall(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Install: []string{">install-supabase"},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "install[0]")
-	assert.Contains(t, err.Error(), "install-supabase")
-}
-
-func TestValidate_Scripts_UndefinedRefInStartup(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Startup: []string{">boot"},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "startup[0]")
-	assert.Contains(t, err.Error(), "boot")
-}
-
-func TestValidate_Scripts_RefWithInvalidName(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Install: []string{"> Bad Name"},
-		Scripts: map[string][]string{"Bad Name": {"echo one"}},
-	}
-	// The invalid name error fires first (from the map key check).
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Bad Name")
-}
-
-func TestValidate_Scripts_UnusedScript_NoError(t *testing.T) {
-	// Unused is a warning-level condition; Validate does not error.
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{"never-called": {"echo hi"}},
-	}
-	assert.NoError(t, cfg.Validate())
-}
-
-func TestScripts_YAMLRoundTrip(t *testing.T) {
-	in := []byte(`
-project:
-  name: p
-scripts:
-  install-supabase:
-    - echo one
-    - echo two
-install:
-  - ">install-supabase"
-`)
-	var cfg Config
-	require.NoError(t, yaml.Unmarshal(in, &cfg))
-	require.NoError(t, cfg.Validate())
-	assert.Equal(t, []string{"echo one", "echo two"}, cfg.Scripts["install-supabase"])
-	assert.Equal(t, []string{">install-supabase"}, cfg.Install)
 }
 
 func TestConfig_ReposMap_UnmarshalYAML(t *testing.T) {
@@ -1347,93 +1244,71 @@ func TestBareCloneName(t *testing.T) {
 
 func TestConfigValidate_RepoCommands(t *testing.T) {
 	valid := Config{
-		Project: Project{Name: "p"},
+		Project:   Project{Name: "p"},
+		Functions: []string{"install", "test"},
 		Repos: map[string]RepoConfig{
 			"main": {
-				Secret: "github",
-				Commands: map[string]RepoCommand{
-					"install": {Exec: "pnpm install", Startup: p(true)},
-					"test":    {Exec: "pnpm test"},
-				},
+				Secret:   "github",
+				Commands: []string{"install", "test"},
 			},
 		},
 	}
 	assert.NoError(t, valid.Validate())
 
 	invalid := Config{
-		Project: Project{Name: "p"},
+		Project:   Project{Name: "p"},
+		Functions: []string{"test"},
 		Repos: map[string]RepoConfig{
 			"main": {
-				Secret: "github",
-				Commands: map[string]RepoCommand{
-					"Install": {Exec: "pnpm install"},
-				},
+				Secret:   "github",
+				Commands: []string{"Install"},
 			},
 		},
 	}
 	err := invalid.Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "command name")
+	assert.Contains(t, err.Error(), "function name")
 }
 
-func TestConfig_StartupCommands_OrderAndResolution(t *testing.T) {
+// ---------- Config.Validate + function references ----------
+
+func TestValidate_RepoCommandsFunctionMustExist(t *testing.T) {
 	cfg := Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{
-			"gsd": {"npx foo", "npx bar"},
-		},
+		Project:   Project{Name: "p"},
+		Functions: []string{"defined-fn"},
 		Repos: map[string]RepoConfig{
-			"v1": {
-				URL:   p("https://example/v1.git"),
-				Label: p("v1"),
-				Commands: map[string]RepoCommand{
-					"seed": {Exec: "python seed.py", Startup: p(true)},
-					"test": {Exec: "pytest"},
-				},
-			},
-			"main": {
-				Label:  p("work"),
-				Secret: "gh",
-				Commands: map[string]RepoCommand{
-					"install": {Exec: "pnpm install", Startup: p(true)},
-					"gsd":     {Exec: ">gsd", Startup: p(true)},
-					"lint":    {Exec: "pnpm lint"},
-				},
-			},
+			"main": {Commands: []string{"defined-fn", "missing-fn"}},
 		},
 	}
-	got := cfg.StartupCommands("/host/cwd")
-	require.Len(t, got, 3)
-	// Sort key: repo asc, then command asc.
-	assert.Equal(t, StartupCommand{
-		Repo: "main", Name: "gsd",
-		GuestCwd: "/home/devm/work",
-		Exec:     "npx foo && npx bar",
-	}, got[0])
-	assert.Equal(t, StartupCommand{
-		Repo: "main", Name: "install",
-		GuestCwd: "/home/devm/work",
-		Exec:     "pnpm install",
-	}, got[1])
-	assert.Equal(t, StartupCommand{
-		Repo: "v1", Name: "seed",
-		GuestCwd: "/home/devm/v1",
-		Exec:     "python seed.py",
-	}, got[2])
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing-fn")
+	assert.Contains(t, err.Error(), "commands")
 }
 
-func TestConfig_StartupCommands_NoneWhenAllStartupFalse(t *testing.T) {
+func TestValidate_ServiceExecFuncMustExist(t *testing.T) {
 	cfg := Config{
-		Project: Project{Name: "p"},
-		Repos: map[string]RepoConfig{
-			"main": {
-				Label:  p("work"),
-				Secret: "gh",
-				Commands: map[string]RepoCommand{
-					"test": {Exec: "pnpm test"},
-				},
-			},
+		Project:   Project{Name: "p"},
+		Functions: []string{"declared-svc"},
+		Services: map[string]Service{
+			"worker": {ExecFunc: "declared-svc"},
+			"orphan": {ExecFunc: "not-in-devm-sh"},
 		},
 	}
-	assert.Empty(t, cfg.StartupCommands("/host"))
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not-in-devm-sh")
+	assert.Contains(t, err.Error(), "exec")
+}
+
+func TestValidate_ServiceExecArgv_NeverChecksAgainstFunctions(t *testing.T) {
+	// Argv-form exec is a literal command, not a devm.sh function
+	// reference — it must never be checked against Functions.
+	cfg := Config{
+		Project: Project{Name: "p"},
+		Services: map[string]Service{
+			"worker": {ExecArgv: []string{"/usr/bin/redis-server"}},
+		},
+	}
+	assert.NoError(t, cfg.Validate())
 }

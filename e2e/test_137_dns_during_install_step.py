@@ -36,8 +36,13 @@ def test_dns_works_during_install_step(devm, workspace, sandbox_name):
     # egress is required — dnsmasq's local answer suffices. If dnsmasq
     # isn't listening on 127.0.0.1:53 at install-step time, getent
     # returns non-zero and the whole install pipeline fails.
-    workspace.write_devmyaml(
-        install=["getent hosts anything.test"],
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  getent hosts anything.test\n"
+        "}\n"
     )
 
     try:

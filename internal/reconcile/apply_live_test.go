@@ -102,7 +102,7 @@ func TestApplyLive_SkipsRecreateKinds(t *testing.T) {
 	dir := t.TempDir()
 	tr, _ := fakeTartForApplyLive(t, dir)
 	err := ApplyLive(tr, "x", []Change{
-		{Kind: KindInstallChange},
+		{Kind: KindImageChange},
 	}, schema.Config{}, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	assert.NoError(t, err)
 }
@@ -204,36 +204,33 @@ func TestApplyLive_PathChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
 	assert.Equal(t, 1, countCalls(t, log, "exec -i"), "path-only change must still pipe a bundle")
 }
 
-// TestApplyLive_StartupChange_NotLiveApplied pins that KindStartupChange
-// is skipped by ApplyLive entirely: it's BucketRestartVM, not
-// BucketLive, so the caller routes it through the recreate path (VM
-// stop + cold start) instead. The freshly-rendered /opt/devm/startup.sh
-// reaches the guest via the provisioner's normal bundle install on that
-// next boot, not a live pipe.
-func TestApplyLive_StartupChange_NotLiveApplied(t *testing.T) {
+// TestApplyLive_RestartVMChange_NotLiveApplied pins that a
+// BucketRestartVM kind (e.g. KindMemoryChange) is skipped by ApplyLive
+// entirely: the caller routes it through the recreate path (VM stop +
+// cold start) instead of a live pipe.
+func TestApplyLive_RestartVMChange_NotLiveApplied(t *testing.T) {
 	dir := t.TempDir()
 	tr, log := fakeTartForApplyLive(t, dir)
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
-		Startup: []string{"echo one", "echo two"},
 	}
 
 	err := ApplyLive(tr, "p-vm", []Change{
-		{Kind: KindStartupChange},
+		{Kind: KindMemoryChange},
 	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(filepath.Join(dir, ".devm"))
 	assert.True(t, os.IsNotExist(statErr), "ApplyLive must not touch the workspace")
 	assert.Equal(t, 0, countCalls(t, log, "exec -i"),
-		"KindStartupChange is BucketRestartVM, not BucketLive — ApplyLive must not pipe a bundle for it")
+		"KindMemoryChange is BucketRestartVM, not BucketLive — ApplyLive must not pipe a bundle for it")
 }
 
 func TestApplyLive_NoEnvOrTemplateChange_DoesNotPipeBundle(t *testing.T) {
 	dir := t.TempDir()
 	tr, log := fakeTartForApplyLive(t, dir)
 	err := ApplyLive(tr, "x", []Change{
-		{Kind: KindInstallChange},
+		{Kind: KindImageChange},
 	}, schema.Config{}, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, countCalls(t, log, "exec -i"), "apply_live should not pipe a bundle when there's no env or template change")
@@ -334,7 +331,7 @@ func TestApplyLive_NoDirectChange_DoesNotTouchSvcIngress(t *testing.T) {
 	tr, log := fakeTartForApplyLive(t, dir)
 	cfg := schema.Config{Docker: true}
 	err := ApplyLive(tr, "x", []Change{
-		{Kind: KindInstallChange},
+		{Kind: KindImageChange},
 	}, cfg, dir, dir, nil, nil, nil, nil, nil, identity.Config{}, "", nil)
 	require.NoError(t, err)
 	assert.False(t, logContains(t, log, "flush chain inet devm_filter svc_ingress"))

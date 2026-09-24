@@ -1,27 +1,23 @@
-// run is the guest-side task dispatcher. Reads /opt/devm/commands.json,
-// walks up from $PWD to find its containing repo, and execs the named
-// command inside that repo's guestPath with bash -c.
-//
-// See docs/superpowers/specs/2026-08-29-repo-commands.md for the design.
+// run is the guest-side command dispatcher. Reads /opt/devm/commands.json,
+// walks up from $PWD to find its containing repo, verifies the requested
+// name is registered for that repo, then sources devm.sh (+devm.me.sh) and
+// invokes the named function from the repo's guest path.
 package main
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"syscall"
 )
 
 const defaultManifest = "/opt/devm/commands.json"
 
 type manifest struct {
 	Repos map[string]struct {
-		GuestPath string `json:"guestPath"`
-		Commands  map[string]struct {
-			Exec    string `json:"exec"`
-			Startup bool   `json:"startup"`
-		} `json:"commands"`
+		GuestPath string   `json:"guestPath"`
+		Commands  []string `json:"commands"`
 	} `json:"repos"`
 }
 
@@ -55,36 +51,33 @@ func main() {
 	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
 		cwd = resolved
 	}
-	repoName, repoPath, cmdBody, ok := lookup(m, cwd, name)
+
+	repoName, guestPath, ok := findRepo(m, cwd)
 	if !ok {
-		if repoName == "" {
-			fmt.Fprintf(os.Stderr, "run: no devm repo in current directory (cwd: %s)\n", cwd)
-		} else {
-			fmt.Fprintf(os.Stderr, "run: no command %q in repo %q\n", name, repoName)
-		}
+		fmt.Fprintln(os.Stderr, "run: not inside a registered repo")
+		os.Exit(1)
+	}
+	if !registered(m.Repos[repoName].Commands, name) {
+		fmt.Fprintf(os.Stderr, "run: command %s not registered in repo %s\n", name, repoName)
 		os.Exit(1)
 	}
 
-	cmd := exec.Command("bash", "-c", cmdBody)
-	cmd.Dir = repoPath
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			os.Exit(ee.ExitCode())
-		}
+	scriptBody := fmt.Sprintf(`set -eo pipefail
+source /home/devm/devm.sh
+[ -f /home/devm/devm.me.sh ] && source /home/devm/devm.me.sh
+cd "%s"
+%s`, guestPath, name)
+
+	if err := syscall.Exec("/bin/bash", []string{"bash", "-c", scriptBody}, os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "run: exec bash: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// lookup finds the repo whose guestPath is a prefix of cwd (deepest wins,
-// walking up from cwd). Returns (repoName, repoPath, cmdBody, ok).
-// ok=false and repoName="" ⇒ cwd is outside any repo.
-// ok=false and repoName!="" ⇒ cwd is inside repoName but the command is
-// undefined.
-func lookup(m manifest, cwd, name string) (string, string, string, bool) {
+// findRepo finds the repo whose guestPath is a prefix of cwd (walking up
+// from cwd). Returns (repoName, guestPath, ok); ok=false means cwd is
+// outside every registered repo.
+func findRepo(m manifest, cwd string) (string, string, bool) {
 	cleaned := filepath.Clean(cwd)
 	for dir := cleaned; ; dir = filepath.Dir(dir) {
 		for repoName, repo := range m.Repos {
@@ -93,15 +86,21 @@ func lookup(m manifest, cwd, name string) (string, string, string, bool) {
 				guestPath = resolved
 			}
 			if filepath.Clean(guestPath) == dir {
-				cmd, ok := repo.Commands[name]
-				if !ok {
-					return repoName, "", "", false
-				}
-				return repoName, repo.GuestPath, cmd.Exec, true
+				return repoName, repo.GuestPath, true
 			}
 		}
 		if dir == "/" || dir == "." {
-			return "", "", "", false
+			return "", "", false
 		}
 	}
+}
+
+// registered reports whether name appears in commands.
+func registered(commands []string, name string) bool {
+	for _, c := range commands {
+		if c == name {
+			return true
+		}
+	}
+	return false
 }

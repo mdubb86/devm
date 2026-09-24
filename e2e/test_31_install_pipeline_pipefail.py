@@ -23,8 +23,13 @@ def test_install_pipeline_failure_fails_loud(workspace, devm):
     # `false | cat` exits 0 without pipefail (cat's rc), non-zero WITH
     # pipefail (false's rc propagates). This is the canonical test for
     # pipefail being active.
-    workspace.write_devmyaml(
-        install=["false | cat"],
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  false | cat\n"
+        "}\n"
     )
 
     proc = subprocess.run(

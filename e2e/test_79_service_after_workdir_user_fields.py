@@ -55,18 +55,6 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(180)
 def test_after_workdir_user_render_and_take_effect(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
-        install=[
-            # Create a probe user; make /tmp/probe-* pre-writable by them.
-            "sudo useradd --create-home --shell /bin/sh e2euser",
-            "sudo touch /tmp/probe-whoami /tmp/probe-pwd && "
-            "sudo chown e2euser:e2euser /tmp/probe-whoami /tmp/probe-pwd",
-            # asroot: write UID, then loop forever.
-            "printf '#!/bin/sh\\nid -u > /tmp/uid-as-root\\nexec sleep infinity\\n'"
-            " > /tmp/run-asroot.sh && chmod +x /tmp/run-asroot.sh",
-            # asdev: same for non-root user.
-            "printf '#!/bin/sh\\nid -u > /tmp/uid-as-dev\\nexec sleep infinity\\n'"
-            " > /tmp/run-asdev.sh && chmod +x /tmp/run-asdev.sh",
-        ],
         services={
             "probe": {
                 "exec": [
@@ -89,6 +77,22 @@ def test_after_workdir_user_render_and_take_effect(workspace, devm, sandbox_name
                 "restart": "always",
             },
         },
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        # Create a probe user; make /tmp/probe-* pre-writable by them.
+        "  sudo useradd --create-home --shell /bin/sh e2euser\n"
+        "  sudo touch /tmp/probe-whoami /tmp/probe-pwd && "
+        "sudo chown e2euser:e2euser /tmp/probe-whoami /tmp/probe-pwd\n"
+        # asroot: write UID, then loop forever.
+        "  printf '#!/bin/sh\\nid -u > /tmp/uid-as-root\\nexec sleep infinity\\n'"
+        " > /tmp/run-asroot.sh && chmod +x /tmp/run-asroot.sh\n"
+        # asdev: same for non-root user.
+        "  printf '#!/bin/sh\\nid -u > /tmp/uid-as-dev\\nexec sleep infinity\\n'"
+        " > /tmp/run-asdev.sh && chmod +x /tmp/run-asdev.sh\n"
+        "}\n"
     )
 
     r = subprocess.run(

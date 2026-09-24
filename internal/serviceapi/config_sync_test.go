@@ -31,8 +31,8 @@ func TestSetupConfigSync_CreatesSessionWithScopedFilter(t *testing.T) {
 	assert.Contains(t, args, "devm@devm-myproj:/home/devm")
 
 	// The generated config file must scope the include filter to
-	// exactly devm.yaml and devm.me.yaml — nothing else in <macCwd>
-	// may cross.
+	// exactly devm.yaml, devm.me.yaml, devm.sh, and devm.me.sh —
+	// nothing else in <macCwd> may cross.
 	configPath := mutagen.ConfigFilePath(mutagenSessionsDir(cfg), "myproj", configSyncLabel)
 	body, err := os.ReadFile(configPath)
 	require.NoError(t, err)
@@ -40,6 +40,8 @@ func TestSetupConfigSync_CreatesSessionWithScopedFilter(t *testing.T) {
 	assert.Contains(t, content, `"*"`, "blanket ignore must be present")
 	assert.Contains(t, content, `"!devm.yaml"`, "devm.yaml must be un-ignored")
 	assert.Contains(t, content, `"!devm.me.yaml"`, "devm.me.yaml must be un-ignored")
+	assert.Contains(t, content, `"!devm.sh"`, "devm.sh must be un-ignored")
+	assert.Contains(t, content, `"!devm.me.sh"`, "devm.me.sh must be un-ignored")
 }
 
 func TestSetupConfigSync_AlphaIsMacCwd(t *testing.T) {

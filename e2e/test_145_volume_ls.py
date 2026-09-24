@@ -21,13 +21,17 @@ pytestmark = pytest.mark.devm
 @pytest.mark.slow
 def test_volume_ls(devm, workspace, sandbox_name):
     workspace.write_devmyaml(
-        install=[
-            "sudo mkdir -p /var/lib/data /var/lib/cache && sudo sh -c 'echo x > /var/lib/data/sentinel'",
-        ],
         volumes={
             "data":  "/var/lib/data",
             "cache": "/var/lib/cache",
         },
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  sudo mkdir -p /var/lib/data /var/lib/cache && sudo sh -c 'echo x > /var/lib/data/sentinel'\n"
+        "}\n"
     )
     try:
         r = subprocess.run(

@@ -34,7 +34,7 @@ func postReconcile(t *testing.T, req VMReconcileRequest) VMReconcileResponse {
 
 		// Approve the snapshot so the gate check passes.
 		store := approve.NewStore(identity.Prod)
-		require.NoError(t, store.Write(req.Name, []byte(devmYAML), nil, "user"))
+		require.NoError(t, store.Write(req.Name, []byte(devmYAML), nil, nil, nil, "user"))
 		req.WorkspaceHostPath = projDir
 	}
 	body, _ := json.Marshal(req)

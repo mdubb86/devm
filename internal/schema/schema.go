@@ -247,18 +247,28 @@ type Service struct {
 	Templates []Template          `yaml:"templates,omitempty"`
 
 	// Tart-era service execution fields. Systemd is mutually exclusive
-	// with the declarative fields (Exec, Restart, After, WorkDir, User).
-	Exec    []string `yaml:"exec,omitempty"`
-	WorkDir string   `yaml:"workdir,omitempty"`
-	Restart string   `yaml:"restart,omitempty"`
-	After   []string `yaml:"after,omitempty"`
-	User    string   `yaml:"user,omitempty"`
-	Systemd string   `yaml:"systemd,omitempty"`
+	// with the declarative fields (ExecFunc/ExecArgv, Restart, After,
+	// WorkDir, User).
+	//
+	// ExecFunc is set when the YAML `exec:` source was a scalar
+	// string — a devm.sh/devm.me.sh function name, validated against
+	// Config.Functions. ExecArgv is set when the source was a
+	// sequence — a literal argv run with no shell. Exactly one is
+	// populated by Service.UnmarshalYAML; both empty means the
+	// service declares no process (routing-only or systemd-managed).
+	ExecFunc string   `yaml:"-"`
+	ExecArgv []string `yaml:"-"`
+	WorkDir  string   `yaml:"workdir,omitempty"`
+	Restart  string   `yaml:"restart,omitempty"`
+	After    []string `yaml:"after,omitempty"`
+	User     string   `yaml:"user,omitempty"`
+	Systemd  string   `yaml:"systemd,omitempty"`
 }
 
-// serviceYAML is the on-the-wire shape. `port` is a yaml.Node so we
-// can decode it as either int or string and populate both Service.Port
-// and Service.BindIP from a single field.
+// serviceYAML is the on-the-wire shape. `port` and `exec` are
+// yaml.Node fields so each can decode polymorphically: `port` as
+// either int or string, `exec` as either a scalar (function name) or
+// a sequence (literal argv).
 type serviceYAML struct {
 	Port       yaml.Node           `yaml:"port,omitempty"`
 	Hostname   string              `yaml:"hostname,omitempty"`
@@ -266,7 +276,7 @@ type serviceYAML struct {
 	ExposeHost bool                `yaml:"expose_host,omitempty"`
 	Env        map[string]EnvValue `yaml:"env,omitempty"`
 	Templates  []Template          `yaml:"templates,omitempty"`
-	Exec       []string            `yaml:"exec,omitempty"`
+	Exec       yaml.Node           `yaml:"exec,omitempty"`
 	WorkDir    string              `yaml:"workdir,omitempty"`
 	Restart    string              `yaml:"restart,omitempty"`
 	After      []string            `yaml:"after,omitempty"`
@@ -305,13 +315,42 @@ func (s *Service) UnmarshalYAML(node *yaml.Node) error {
 	s.ExposeHost = raw.ExposeHost
 	s.Env = raw.Env
 	s.Templates = raw.Templates
-	s.Exec = raw.Exec
 	s.WorkDir = raw.WorkDir
 	s.Restart = raw.Restart
 	s.After = raw.After
 	s.User = raw.User
 	s.Systemd = raw.Systemd
+	if err := s.decodeExecNode(raw.Exec); err != nil {
+		return err
+	}
 	return s.decodePortNode(raw.Port)
+}
+
+// decodeExecNode populates exactly one of ExecFunc/ExecArgv from the
+// `exec:` YAML node, based on its shape:
+//   - scalar (`exec: build`): a devm.sh/devm.me.sh function name → ExecFunc
+//   - sequence (`exec: [/bin/foo, bar]`): literal argv → ExecArgv
+func (s *Service) decodeExecNode(n yaml.Node) error {
+	switch n.Kind {
+	case 0:
+		return nil // no exec set
+	case yaml.ScalarNode:
+		var fn string
+		if err := n.Decode(&fn); err != nil {
+			return fmt.Errorf("exec: %w", err)
+		}
+		s.ExecFunc = fn
+		return nil
+	case yaml.SequenceNode:
+		var argv []string
+		if err := n.Decode(&argv); err != nil {
+			return fmt.Errorf("exec: %w", err)
+		}
+		s.ExecArgv = argv
+		return nil
+	default:
+		return fmt.Errorf("exec: must be a function name (string) or an argv list")
+	}
 }
 
 func (s *Service) decodePortNode(n yaml.Node) error {
@@ -357,7 +396,7 @@ func (s Service) MarshalYAML() (interface{}, error) {
 		ExposeHost bool                `yaml:"expose_host,omitempty"`
 		Env        map[string]EnvValue `yaml:"env,omitempty"`
 		Templates  []Template          `yaml:"templates,omitempty"`
-		Exec       []string            `yaml:"exec,omitempty"`
+		Exec       interface{}         `yaml:"exec,omitempty"`
 		WorkDir    string              `yaml:"workdir,omitempty"`
 		Restart    string              `yaml:"restart,omitempty"`
 		After      []string            `yaml:"after,omitempty"`
@@ -369,7 +408,6 @@ func (s Service) MarshalYAML() (interface{}, error) {
 		ExposeHost: s.ExposeHost,
 		Env:        s.Env,
 		Templates:  s.Templates,
-		Exec:       s.Exec,
 		WorkDir:    s.WorkDir,
 		Restart:    s.Restart,
 		After:      s.After,
@@ -382,6 +420,12 @@ func (s Service) MarshalYAML() (interface{}, error) {
 		} else {
 			out.Port = fmt.Sprintf("%s:%d", s.BindIP, s.Port)
 		}
+	}
+	switch {
+	case s.ExecFunc != "":
+		out.Exec = s.ExecFunc
+	case len(s.ExecArgv) > 0:
+		out.Exec = s.ExecArgv
 	}
 	return out, nil
 }
@@ -408,13 +452,13 @@ func (s Service) Validate() error {
 	if s.BindIP != "" && s.Port == 0 {
 		return fmt.Errorf("port bind interface requires a sandbox port")
 	}
-	if s.Port == 0 && len(s.Exec) == 0 && s.Systemd == "" {
+	if s.Port == 0 && s.ExecFunc == "" && len(s.ExecArgv) == 0 && s.Systemd == "" {
 		return fmt.Errorf("service must define a port, exec, or systemd")
 	}
 
 	// systemd override is mutually exclusive with declarative fields.
 	if s.Systemd != "" {
-		if len(s.Exec) > 0 || s.Restart != "" || len(s.After) > 0 ||
+		if s.ExecFunc != "" || len(s.ExecArgv) > 0 || s.Restart != "" || len(s.After) > 0 ||
 			s.WorkDir != "" || s.User != "" {
 			return fmt.Errorf("service.systemd is mutually exclusive with exec/restart/after/workdir/user")
 		}
@@ -473,7 +517,7 @@ func (p Project) Validate() error {
 // internal/config/load.go).
 var topLevelKnownFields = []string{
 	"project", "base_image", "docker", "network", "env",
-	"services", "install", "startup", "scripts", "path", "packages", "disk", "memory", "cpu",
+	"services", "path", "packages", "disk", "memory", "cpu",
 	"volumes", "repos",
 }
 
@@ -702,37 +746,6 @@ type Config struct {
 	// via `apt-get install -y` during Tart VM provisioning.
 	Packages []string `yaml:"packages,omitempty"`
 
-	// Install is the list of shell commands run ONCE at sandbox create
-	// time, in declaration order, as root. Each command is executed
-	// under `bash -e -o pipefail -c`, wrapped by with-devm-env.sh so
-	// the project env (WORKSPACE_DIR, cfg.Env values, path: entries) is
-	// live inside the command. A failing step aborts provisioning.
-	//
-	// Affordances from the base image (no apt-get update needed):
-	//   * ncurses-term is preinstalled (modern terminfo for TUIs).
-	//   * en_US.UTF-8 locale is generated so LANG/LC_* forwarding lands
-	//     on a real locale.
-	Install []string `yaml:"install,omitempty"`
-
-	// Startup is the list of shell commands run on EVERY boot, in
-	// declaration order, as root under `bash -o pipefail -c`, with open
-	// network (before egress enforcement). Contrast with Install (once,
-	// first boot) and services (every boot, enforced egress).
-	Startup []string `yaml:"startup,omitempty"`
-
-	// Scripts is the project's library of named multi-command shell
-	// snippets. A script's key must match [a-z][a-z0-9-]* (kebab-case,
-	// starts with a letter). Its value is an ordered list of shell
-	// commands. When referenced from install: or startup: as a string
-	// beginning with `>NAME`, the engine joins the commands with " && "
-	// and runs them under one `bash -eo pipefail -c` (install:) or
-	// emits them inline into startup.sh (startup: shares a shell
-	// already). Variables set in step N are visible in step N+1.
-	//
-	// V1 scope: refs only from install: and startup:. No parameters,
-	// no script-to-script calls.
-	Scripts map[string][]string `yaml:"scripts,omitempty"`
-
 	// Path is a list of directories prepended to PATH inside the
 	// sandbox. Reaches all four executable entrypoints (install,
 	// startup foreground, startup background, interactive shell) via
@@ -770,6 +783,11 @@ type Config struct {
 	// nil = use image default. Applied via `tart set --cpu` at VM
 	// start; a change reconciles as BucketRestartVM.
 	Cpu *int `yaml:"cpu,omitempty"`
+
+	// Functions is the sorted, deduplicated union of top-level function
+	// names declared in devm.sh and devm.me.sh at the project root.
+	// Populated by config.Load; ignored on YAML (un)marshal via the "-" tag.
+	Functions []string `yaml:"-"`
 }
 
 // ParseDiskSize parses a `disk:` value like "64G" or "64GB" into an
@@ -914,66 +932,6 @@ func (c *Config) PrimaryGuestPath(macCwd string) string {
 		return ""
 	}
 	return filepath.Join(GuestHomeDir, c.Repos[name].ResolveLabel(macCwd))
-}
-
-// StartupCommand names one command that must fire during the orchestrator's
-// RunStartupCommands phase (after the volume-sync/repo-clone stages hydrate
-// the workspace).
-// Exec has any leading ">NAME" script reference already expanded and joined
-// with " && " — the caller invokes it as a bash string in GuestCwd.
-type StartupCommand struct {
-	Repo     string
-	Name     string
-	GuestCwd string
-	Exec     string
-}
-
-// StartupCommands enumerates every command flagged `startup: true`, ordered
-// by repo name then command name. macCwd is the Mac-side project root —
-// used only to compute the URL-omitted-primary repo's default label.
-func (c Config) StartupCommands(macCwd string) []StartupCommand {
-	if len(c.Repos) == 0 {
-		return nil
-	}
-	repoNames := make([]string, 0, len(c.Repos))
-	for name := range c.Repos {
-		repoNames = append(repoNames, name)
-	}
-	sort.Strings(repoNames)
-
-	var out []StartupCommand
-	for _, repoName := range repoNames {
-		r := c.Repos[repoName]
-		if len(r.Commands) == 0 {
-			continue
-		}
-		cmdNames := make([]string, 0, len(r.Commands))
-		for cmd := range r.Commands {
-			cmdNames = append(cmdNames, cmd)
-		}
-		sort.Strings(cmdNames)
-		guestCwd := filepath.Join(GuestHomeDir, r.ResolveLabel(macCwd))
-		for _, cmdName := range cmdNames {
-			cmd := r.Commands[cmdName]
-			if !cmd.StartupBool() {
-				continue
-			}
-			body := cmd.Exec
-			if name, ok := ParseScriptRef(cmd.Exec); ok {
-				// invariant: Config.Validate rejects >NAME refs whose target
-				// script is undefined, so c.Scripts[name] is guaranteed
-				// non-nil here.
-				body = strings.Join(c.Scripts[name], " && ")
-			}
-			out = append(out, StartupCommand{
-				Repo:     repoName,
-				Name:     cmdName,
-				GuestCwd: guestCwd,
-				Exec:     body,
-			})
-		}
-	}
-	return out
 }
 
 // BareCloneName derives a repo's default label from its clone URL:
@@ -1196,75 +1154,6 @@ func (c Config) Validate() error {
 			return fmt.Errorf("cpu: %d must be a positive integer", *c.Cpu)
 		}
 	}
-	for i, ic := range c.Install {
-		if ic == "" {
-			return fmt.Errorf("install[%d] must not be empty", i)
-		}
-		if _, isRef := ParseScriptRef(ic); !isRef {
-			if err := ValidateShellCommand(ic); err != nil {
-				return fmt.Errorf("install[%d]: %w", i, err)
-			}
-		}
-	}
-	for i, sc := range c.Startup {
-		if sc == "" {
-			return fmt.Errorf("startup[%d] must not be empty", i)
-		}
-		if _, isRef := ParseScriptRef(sc); !isRef {
-			if err := ValidateShellCommand(sc); err != nil {
-				return fmt.Errorf("startup[%d]: %w", i, err)
-			}
-		}
-	}
-	// Scripts: validate each script's name and body before checking refs.
-	{
-		names := make([]string, 0, len(c.Scripts))
-		for name := range c.Scripts {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			if err := ValidateScriptName(name); err != nil {
-				return fmt.Errorf("scripts: %w", err)
-			}
-			if len(c.Scripts[name]) == 0 {
-				return fmt.Errorf("scripts[%s]: script body must not be empty", name)
-			}
-			for i, cmd := range c.Scripts[name] {
-				if cmd == "" {
-					return fmt.Errorf("scripts[%s][%d] must not be empty", name, i)
-				}
-				if _, ok := ParseScriptRef(cmd); ok {
-					return fmt.Errorf("scripts[%s][%d]: script-to-script refs are not supported (V1)", name, i)
-				}
-				if err := ValidateShellCommand(cmd); err != nil {
-					return fmt.Errorf("scripts[%s][%d]: %w", name, i, err)
-				}
-			}
-		}
-		// Install: refs — check name resolves.
-		for i, entry := range c.Install {
-			if refName, ok := ParseScriptRef(entry); ok {
-				if err := ValidateScriptName(refName); err != nil {
-					return fmt.Errorf("install[%d]: %w", i, err)
-				}
-				if _, exists := c.Scripts[refName]; !exists {
-					return fmt.Errorf("install[%d]: reference to undefined script %q", i, refName)
-				}
-			}
-		}
-		// Startup: refs — same check.
-		for i, entry := range c.Startup {
-			if refName, ok := ParseScriptRef(entry); ok {
-				if err := ValidateScriptName(refName); err != nil {
-					return fmt.Errorf("startup[%d]: %w", i, err)
-				}
-				if _, exists := c.Scripts[refName]; !exists {
-					return fmt.Errorf("startup[%d]: reference to undefined script %q", i, refName)
-				}
-			}
-		}
-	}
 	names := make([]string, 0, len(c.Services))
 	for name := range c.Services {
 		names = append(names, name)
@@ -1318,10 +1207,13 @@ func (c Config) Validate() error {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			if err := c.Repos[name].validateCommands(c.Scripts); err != nil {
+			if err := c.Repos[name].validateCommands(); err != nil {
 				return fmt.Errorf("repo %q: %w", name, err)
 			}
 		}
+	}
+	if err := c.validateFunctionReferences(); err != nil {
+		return err
 	}
 	if err := c.validateProjectIDReserved(); err != nil {
 		return err
@@ -1383,6 +1275,49 @@ func (c Config) validateSecretBindings() error {
 		return fmt.Errorf(
 			"secret %s bound to a host in network.allow but never referenced by an env value — add `SOME_VAR: !secret <name>` under env:, or it is never delivered to the guest",
 			strings.Join(quoteAll(undelivered), ", "))
+	}
+	return nil
+}
+
+// validateFunctionReferences checks that every function name referenced
+// from devm.yaml resolves against Config.Functions — the sorted,
+// deduplicated union of top-level function names devm.sh and
+// devm.me.sh declared (populated by config.Load). Two reference
+// sites: repos.<name>.commands (each entry) and services.<name>.exec
+// when its YAML source was a scalar (Service.ExecFunc). Iteration is
+// sorted so the first mismatch in map order is deterministic.
+func (c Config) validateFunctionReferences() error {
+	funcSet := make(map[string]bool, len(c.Functions))
+	for _, f := range c.Functions {
+		funcSet[f] = true
+	}
+
+	repoNames := make([]string, 0, len(c.Repos))
+	for name := range c.Repos {
+		repoNames = append(repoNames, name)
+	}
+	sort.Strings(repoNames)
+	for _, name := range repoNames {
+		for _, fn := range c.Repos[name].Commands {
+			if !funcSet[fn] {
+				return fmt.Errorf(`repos.%s.commands: function %q is not defined in devm.sh (or devm.me.sh)`, name, fn)
+			}
+		}
+	}
+
+	svcNames := make([]string, 0, len(c.Services))
+	for name := range c.Services {
+		svcNames = append(svcNames, name)
+	}
+	sort.Strings(svcNames)
+	for _, name := range svcNames {
+		fn := c.Services[name].ExecFunc
+		if fn == "" {
+			continue
+		}
+		if !funcSet[fn] {
+			return fmt.Errorf(`services.%s.exec: function %q is not defined in devm.sh (or devm.me.sh)`, name, fn)
+		}
 	}
 	return nil
 }

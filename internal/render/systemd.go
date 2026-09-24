@@ -6,13 +6,28 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/scriptfile"
 )
 
-// RenderService generates a systemd unit file for the given service.
-// If svc.Systemd is non-empty, returns it verbatim (full-override
-// path; the user is responsible for After=devm-ready.target etc.).
-// Otherwise generates from the declarative fields with sensible
-// defaults that hook into devm-ready.target.
+// ServiceWrapperGuestDir is the guest-side directory holding one
+// wrapper script per function-ref (ExecFunc) service. A function-form
+// service's ExecStart= points at <ServiceWrapperGuestDir>/<name>.sh.
+const ServiceWrapperGuestDir = "/opt/devm/service-wrappers"
+
+// RenderService generates a systemd unit file for the given service,
+// plus — for a function-ref (ExecFunc) service — the wrapper script
+// its ExecStart= points at. If svc.Systemd is non-empty, the unit is
+// returned verbatim (full-override path; the user is responsible for
+// After=devm-ready.target etc.) and wrapperPath/wrapperBody are empty.
+// Otherwise the unit is generated from the declarative fields with
+// sensible defaults that hook into devm-ready.target.
+//
+// env and pathPrepend seed the wrapper's exports and PATH prepend
+// (scriptfile.WrapperInput); svc.Env is merged on top so per-service
+// values win, matching the unit's own EnvironmentFile+Environment=
+// precedence. An ExecArgv (argv-form) service emits ExecStart=<argv>
+// directly and returns an empty wrapperPath/wrapperBody — no wrapper
+// is rendered.
 //
 // The declarative path declares WantedBy=devm.target ([Install]), but
 // that's enable-bookkeeping, not the start trigger: the composed
@@ -22,12 +37,14 @@ import (
 // granted. Ordering relative to enforcement is therefore not a
 // systemd concern here.
 //
-// The returned bytes are the unit file contents — write at
-// /etc/systemd/system/<name>.service inside the VM.
-func RenderService(name string, svc schema.Service) []byte {
+// unitBody is the unit file contents — write at
+// /etc/systemd/system/<name>.service inside the VM. wrapperBody, when
+// non-empty, is written at wrapperPath (== ServiceWrapperGuestDir +
+// "/" + name + ".sh"), mode 0755.
+func RenderService(svc schema.Service, name string, env map[string]string, pathPrepend []string) (unitBody []byte, wrapperPath string, wrapperBody []byte, err error) {
 	if svc.Systemd != "" {
 		// Trim trailing whitespace, ensure exactly one final newline.
-		return []byte(strings.TrimRight(svc.Systemd, " \t\n") + "\n")
+		return []byte(strings.TrimRight(svc.Systemd, " \t\n") + "\n"), "", nil, nil
 	}
 
 	var b strings.Builder
@@ -43,8 +60,29 @@ func RenderService(name string, svc schema.Service) []byte {
 
 	// [Service]
 	b.WriteString("\n[Service]\n")
-	if len(svc.Exec) > 0 {
-		fmt.Fprintf(&b, "ExecStart=%s\n", systemdQuoteArgv(svc.Exec))
+	switch {
+	case svc.ExecFunc != "":
+		wrapperPath = ServiceWrapperGuestDir + "/" + name + ".sh"
+		wrapEnv := make(map[string]string, len(env)+len(svc.Env))
+		for k, v := range env {
+			wrapEnv[k] = v
+		}
+		for k, v := range svc.Env {
+			wrapEnv[k] = v.Render()
+		}
+		body, werr := scriptfile.RenderWrapper(scriptfile.WrapperInput{
+			FunctionName: svc.ExecFunc,
+			Env:          wrapEnv,
+			PathPrepend:  pathPrepend,
+			Cwd:          svc.WorkDir,
+		})
+		if werr != nil {
+			return nil, "", nil, fmt.Errorf("render service %q wrapper: %w", name, werr)
+		}
+		wrapperBody = []byte(body)
+		fmt.Fprintf(&b, "ExecStart=%s\n", wrapperPath)
+	case len(svc.ExecArgv) > 0:
+		fmt.Fprintf(&b, "ExecStart=%s\n", systemdQuoteArgv(svc.ExecArgv))
 	}
 	if svc.WorkDir != "" {
 		fmt.Fprintf(&b, "WorkingDirectory=%s\n", svc.WorkDir)
@@ -83,38 +121,7 @@ func RenderService(name string, svc schema.Service) []byte {
 	b.WriteString("\n[Install]\n")
 	b.WriteString("WantedBy=devm.target\n")
 
-	return []byte(b.String())
-}
-
-// RenderStartupScript generates the bash script the composed
-// provisioning script (RenderProvisionScript) invokes via
-// `/opt/devm/with-devm-env bash /opt/devm/startup.sh`. Each cfg.Startup
-// entry is emitted verbatim, one per line. Entries that reference a
-// named script (`>NAME`) are replaced by the underlying commands of
-// `scripts[NAME]`, each on its own line — startup.sh runs as one bash
-// process, so no && joining is needed (vars carry across lines
-// naturally). `set -eo pipefail` means any failing command aborts the
-// run, matching install:'s failure semantics. An empty cmds produces
-// just the shebang + set line: a valid no-op that exits 0.
-//
-// The returned bytes are the script contents — write at
-// /opt/devm/startup.sh inside the VM, mode 0755.
-func RenderStartupScript(cmds []string, scripts map[string][]string) []byte {
-	var b strings.Builder
-	b.WriteString("#!/bin/bash\n")
-	b.WriteString("set -eo pipefail\n")
-	for _, cmd := range cmds {
-		if name, ok := schema.ParseScriptRef(cmd); ok {
-			for _, sub := range scripts[name] {
-				b.WriteString(sub)
-				b.WriteString("\n")
-			}
-			continue
-		}
-		b.WriteString(cmd)
-		b.WriteString("\n")
-	}
-	return []byte(b.String())
+	return []byte(b.String()), wrapperPath, wrapperBody, nil
 }
 
 // systemdQuoteArgv renders an argv slice for systemd ExecStart=. Systemd's

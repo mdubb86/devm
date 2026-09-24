@@ -24,9 +24,15 @@ def test_egress_enforcement(devm, workspace):
     # devm.yaml with network.allow + one !secret entry.
     workspace.write_devmyaml(
         no_repo=True,
-        install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         network={"allow": ["api.github.com"]},
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
 
     # Plant a test secret first.
@@ -85,9 +91,15 @@ def test_egress_enforcement(devm, workspace):
 def test_open_mode_reaches_any_host(devm, workspace):
     """network.allow: ['*'] reaches a host that the restrictive test blocks."""
     workspace.write_devmyaml(
-        install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         network={"allow": ["*"]},
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
     try:
         r = subprocess.run([devm.path, "start"],

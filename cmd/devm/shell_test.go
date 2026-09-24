@@ -122,7 +122,7 @@ func TestStart_SurfacesApproveRequired(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, nil, nil, "user"))
 
 	// The approve-gate check reads devm.yaml from the project's state
 	// dir, not MacCwd.
@@ -170,6 +170,6 @@ func TestStart_SurfacesApproveRequired(t *testing.T) {
 	defer rcancel()
 	_, err := c.StartVM(rctx, serviceapi.VMStartRequest{Name: "p", MacCwd: macCwd})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "devm.yaml (or devm.me.yaml) has changed since it was last approved.")
+	assert.Contains(t, err.Error(), "devm.yaml (or devm.me.yaml, devm.sh, devm.me.sh) has changed since it was last approved.")
 	assert.Contains(t, err.Error(), "devm approve")
 }

@@ -3,6 +3,7 @@ package schema
 import (
 	"fmt"
 
+	"github.com/mdubb86/devm/internal/scriptfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -33,9 +34,9 @@ type RepoConfig struct {
 	// Ignore lists mutagen sync ignore patterns.
 	Ignore []string `yaml:"ignore,omitempty"`
 
-	// Commands lists named commands runnable against this repo, keyed
-	// by command name.
-	Commands map[string]RepoCommand `yaml:"commands,omitempty"`
+	// Commands lists the devm.sh/devm.me.sh function names runnable
+	// against this repo via `run <name>`.
+	Commands []string `yaml:"commands,omitempty"`
 }
 
 var repoKnownFields = []string{"url", "secret", "label", "volume", "primary", "ignore", "commands"}
@@ -90,13 +91,13 @@ func (r *RepoConfig) UnmarshalYAML(node *yaml.Node) error {
 		return err
 	}
 	type raw struct {
-		URL      *string                `yaml:"url,omitempty"`
-		Secret   string                 `yaml:"secret,omitempty"`
-		Label    *string                `yaml:"label,omitempty"`
-		Volume   *bool                  `yaml:"volume,omitempty"`
-		Primary  *bool                  `yaml:"primary,omitempty"`
-		Ignore   []string               `yaml:"ignore,omitempty"`
-		Commands map[string]RepoCommand `yaml:"commands,omitempty"`
+		URL      *string  `yaml:"url,omitempty"`
+		Secret   string   `yaml:"secret,omitempty"`
+		Label    *string  `yaml:"label,omitempty"`
+		Volume   *bool    `yaml:"volume,omitempty"`
+		Primary  *bool    `yaml:"primary,omitempty"`
+		Ignore   []string `yaml:"ignore,omitempty"`
+		Commands []string `yaml:"commands,omitempty"`
 	}
 	var raw2 raw
 	if err := node.Decode(&raw2); err != nil {
@@ -109,5 +110,18 @@ func (r *RepoConfig) UnmarshalYAML(node *yaml.Node) error {
 	r.Primary = raw2.Primary
 	r.Ignore = raw2.Ignore
 	r.Commands = raw2.Commands
+	return nil
+}
+
+// validateCommands checks every entry in r.Commands matches
+// scriptfile.FunctionNameRE. Iteration is over the list as declared —
+// order in the YAML is preserved and any error names the offending
+// entry directly.
+func (r RepoConfig) validateCommands() error {
+	for _, name := range r.Commands {
+		if err := scriptfile.ValidateFunctionName(name); err != nil {
+			return fmt.Errorf("command %q: %w", name, err)
+		}
+	}
 	return nil
 }

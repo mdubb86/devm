@@ -101,7 +101,6 @@ func TestRunBundle_ShipsExactlyOneExecStreamWithScriptAndTar(t *testing.T) {
 	p := baseProvisioner(f, schema.Config{
 		Project:  schema.Project{Name: "myproj"},
 		Packages: []string{"jq"},
-		Install:  []string{"echo hi"},
 	})
 	var buf bytes.Buffer
 	require.NoError(t, p.RunBundle(context.Background(), &buf, nil))
@@ -118,17 +117,15 @@ func TestRunBundle_ShipsExactlyOneExecStreamWithScriptAndTar(t *testing.T) {
 	assert.Contains(t, script, "sudo tar -xC /opt/devm")
 	assert.Contains(t, script, "sudo /opt/devm/install.sh")
 	assert.NotContains(t, script, "apt_run install -y 'jq'")
-	assert.NotContains(t, script, "/opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
 	assert.NotContains(t, script, "systemctl start devm.target")
 	assert.NotContains(t, script, "touch /var/lib/devm/provisioned")
 	assert.NotContains(t, script, "rm -f /run/devm/provisioning")
 
 	// Stdin is the bundle tar; it must be a valid archive carrying the
-	// devm-owned artifacts (install.sh + startup.sh).
+	// devm-owned artifacts.
 	require.NotEmpty(t, f.lastStdin, "RunBundle's ExecStream stdin must carry the bundle tar")
 	names := tarEntryNames(t, f.lastStdin)
 	assert.Contains(t, names, "install.sh")
-	assert.Contains(t, names, "startup.sh")
 }
 
 func TestRunUser_ShipsExactlyOneExecStreamNoStdin(t *testing.T) {
@@ -136,7 +133,6 @@ func TestRunUser_ShipsExactlyOneExecStreamNoStdin(t *testing.T) {
 	p := baseProvisioner(f, schema.Config{
 		Project:  schema.Project{Name: "myproj"},
 		Packages: []string{"jq"},
-		Install:  []string{"echo hi"},
 	})
 	p.firstBoot = true // simulates RunBundle having already set this
 	var buf bytes.Buffer
@@ -147,7 +143,6 @@ func TestRunUser_ShipsExactlyOneExecStreamNoStdin(t *testing.T) {
 
 	assert.Contains(t, script, "set -eo pipefail")
 	assert.Contains(t, script, "apt_run install -y 'jq'")
-	assert.Contains(t, script, "/opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
 	// No bundle-extraction content — that already happened in RunBundle.
 	assert.NotContains(t, script, "tar -xC /opt/devm")
 	assert.NotContains(t, script, "/opt/devm/install.sh")
@@ -301,7 +296,6 @@ func TestRunBundleUserEnforced_RestartOmitsFirstBootWork(t *testing.T) {
 	p := baseProvisioner(f, schema.Config{
 		Project:  schema.Project{Name: "myproj"},
 		Packages: []string{"jq"},
-		Install:  []string{"echo hi"},
 	})
 	require.NoError(t, p.RunBundle(context.Background(), io.Discard, nil))
 	require.NoError(t, p.RunUser(context.Background(), io.Discard, nil))
@@ -316,7 +310,6 @@ func TestRunBundleUserEnforced_RestartOmitsFirstBootWork(t *testing.T) {
 	userScript := scriptAt(t, f, 1)
 	// First-boot-only work must NOT appear on a restart.
 	assert.NotContains(t, userScript, "apt-get install")
-	assert.NotContains(t, userScript, "echo hi")
 	assert.NotContains(t, userScript, "::devm:stage:packages::")
 
 	enforcedScript := scriptAt(t, f, 2)
@@ -333,7 +326,7 @@ func TestRunEnforced_RoutingOnlyServiceOmittedButProcessServicesStarted(t *testi
 		Project: schema.Project{Name: "myproj"},
 		Services: map[string]schema.Service{
 			"routing-only": {Hostname: "x.test", Port: 8080},
-			"with-exec":    {Exec: []string{"/bin/true"}},
+			"with-exec":    {ExecArgv: []string{"/bin/true"}},
 		},
 	})
 	require.NoError(t, p.RunEnforced(context.Background(), io.Discard, nil))
@@ -354,7 +347,7 @@ func TestRunBundle_SucceedsWithTemplatesDeclared(t *testing.T) {
 	p := baseProvisioner(f, schema.Config{
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
-			"svc": {Exec: []string{"/bin/true"}, Templates: []schema.Template{{Source: "x", Output: "/tmp/y"}}},
+			"svc": {ExecArgv: []string{"/bin/true"}, Templates: []schema.Template{{Source: "x", Output: "/tmp/y"}}},
 		},
 	})
 	p.WorkspaceVMPath = repoRoot
@@ -366,7 +359,7 @@ func TestRunUser_TemplatesTriggerDispatcher(t *testing.T) {
 	p := baseProvisioner(f, schema.Config{
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
-			"svc": {Exec: []string{"/bin/true"}, Templates: []schema.Template{{Source: "x", Output: "/tmp/y"}}},
+			"svc": {ExecArgv: []string{"/bin/true"}, Templates: []schema.Template{{Source: "x", Output: "/tmp/y"}}},
 		},
 	})
 	require.NoError(t, p.RunUser(context.Background(), io.Discard, nil))
@@ -375,7 +368,8 @@ func TestRunUser_TemplatesTriggerDispatcher(t *testing.T) {
 
 func TestScriptInput_NoReposEmptyCredentials(t *testing.T) {
 	p := &Provisioner{Cfg: schema.Config{}}
-	in := p.scriptInput()
+	in, err := p.scriptInput()
+	require.NoError(t, err)
 	assert.Equal(t, "", in.GitCredentials, "no repos ⇒ no credentials lines")
 	assert.Equal(t, "", in.GitConfig, "no repos ⇒ no gitconfig")
 }
@@ -389,26 +383,11 @@ func TestScriptInput_PopulatesGitCredentialsFromReposMap(t *testing.T) {
 			},
 		},
 	}
-	in := p.scriptInput()
+	in, err := p.scriptInput()
+	require.NoError(t, err)
 	assert.Contains(t, in.GitCredentials,
 		"https://x-access-token:__DEVM_SECRET_gh_token__@github.com/mdubb86/sewtrue.git")
 	assert.Contains(t, in.GitConfig, "useHttpPath = true")
-}
-
-func TestProvisioner_ScriptInput_PassesScripts(t *testing.T) {
-	p := &Provisioner{
-		Cfg: schema.Config{
-			Project: schema.Project{Name: "p"},
-			Install: []string{">install-supabase"},
-			Scripts: map[string][]string{
-				"install-supabase": {"echo one", "echo two"},
-			},
-		},
-		firstBoot: true,
-	}
-	in := p.scriptInput()
-	assert.Equal(t, []string{"echo one", "echo two"}, in.Scripts["install-supabase"])
-	assert.Equal(t, []string{">install-supabase"}, in.Install)
 }
 
 // makeRepoWithIdentity creates a fixture git repo at a temp dir with a
@@ -457,7 +436,8 @@ func TestScriptInput_IdentityOnlyEmitsGitconfigNotCredentials(t *testing.T) {
 		MacCwd: dir,
 		Cfg:    schema.Config{},
 	}
-	in := p.scriptInput()
+	in, err := p.scriptInput()
+	require.NoError(t, err)
 	assert.NotEmpty(t, in.GitConfig, "identity alone must still emit a gitconfig")
 	assert.Contains(t, in.GitConfig, "[user]\n    name = Fixture User\n    email = fixture@example.com\n")
 	assert.Equal(t, "", in.GitCredentials, "no repo bindings ⇒ no .git-credentials lines")
@@ -465,7 +445,8 @@ func TestScriptInput_IdentityOnlyEmitsGitconfigNotCredentials(t *testing.T) {
 
 func TestScriptInput_NoReposNoIdentity_BothFieldsEmpty(t *testing.T) {
 	p := &Provisioner{Cfg: schema.Config{}}
-	in := p.scriptInput()
+	in, err := p.scriptInput()
+	require.NoError(t, err)
 	assert.Equal(t, "", in.GitCredentials, "no repos, no identity ⇒ no credentials")
 	assert.Equal(t, "", in.GitConfig, "no repos, no identity ⇒ no gitconfig")
 }
@@ -481,6 +462,39 @@ func TestScriptInput_GitConfigCarriesIdentityWhenReposDeclared(t *testing.T) {
 			},
 		},
 	}
-	in := p.scriptInput()
+	in, err := p.scriptInput()
+	require.NoError(t, err)
 	assert.Contains(t, in.GitConfig, "[user]\n    name = Fixture User\n    email = fixture@example.com\n")
+}
+
+func TestScriptInput_InstallFunctionRendersWrapperBody(t *testing.T) {
+	p := &Provisioner{
+		Cfg: schema.Config{
+			Functions: []string{"install"},
+			Env: map[string]schema.EnvValue{
+				"FOO": {Literal: "bar"},
+			},
+		},
+	}
+	in, err := p.scriptInput()
+	require.NoError(t, err)
+	assert.Contains(t, in.InstallWrapperBody, "source /home/devm/devm.sh")
+	assert.Contains(t, in.InstallWrapperBody, "install")
+	assert.Contains(t, in.InstallWrapperBody, `export FOO="bar"`)
+	assert.Equal(t, "", in.StartupWrapperBody, "startup not declared ⇒ empty body")
+}
+
+func TestScriptInput_AbsentFunctionYieldsEmptyWrapperBody(t *testing.T) {
+	p := &Provisioner{
+		Cfg: schema.Config{
+			Functions: []string{},
+			Env: map[string]schema.EnvValue{
+				"FOO": {Literal: "bar"},
+			},
+		},
+	}
+	in, err := p.scriptInput()
+	require.NoError(t, err)
+	assert.Equal(t, "", in.InstallWrapperBody, "install not declared ⇒ empty body")
+	assert.Equal(t, "", in.StartupWrapperBody, "startup not declared ⇒ empty body")
 }

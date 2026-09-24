@@ -55,7 +55,13 @@ def test_reconcile_prompt_flow(workspace, devm, tart_sandbox):
         # per the "unlock -> edit -> reconcile always ends locked" invariant
         # (see test_120_config_lock.py).
         devm.unlock()
-        workspace.patch_devmyaml(install=["touch /tmp/reconcile-probe"])
+        workspace.write_devm_sh(
+            "#!/usr/bin/env bash\n"
+            "set -eo pipefail\n"
+            "install() {\n"
+            "  touch /tmp/reconcile-probe\n"
+            "}\n"
+        )
 
         approve = subprocess.run(
             [devm.path, "approve"],

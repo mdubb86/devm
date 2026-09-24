@@ -30,7 +30,6 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 		"scripts/with-devm-env":        0o755,
 		"scripts/install-templates.sh": 0o755,
 		"install.sh":                   0o755,
-		"startup.sh":                   0o755,
 		"GUEST.md":                     0o644,
 	}
 	for path, mode := range want {
@@ -294,7 +293,7 @@ func TestBuild_TarContainsServiceUnits(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
-			"web":     {Exec: []string{"/bin/true"}, Hostname: "w.local", Port: 80},
+			"web":     {ExecArgv: []string{"/bin/true"}, Hostname: "w.local", Port: 80},
 			"routing": {Hostname: "r.local", Port: 81}, // no Exec/Systemd — skipped
 		},
 	}
@@ -303,6 +302,42 @@ func TestBuild_TarContainsServiceUnits(t *testing.T) {
 	names := tarEntryNames(t, blob)
 	assert.Contains(t, names, "systemd/web.service")
 	assert.NotContains(t, names, "systemd/routing.service")
+}
+
+func TestBuild_TarContainsServiceWrapper_ForExecFunc(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"worker": {ExecFunc: "run-worker"},
+		},
+	}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+
+	unit := readTarEntry(t, blob, "systemd/worker.service")
+	assert.Contains(t, string(unit), "ExecStart=/opt/devm/service-wrappers/worker.sh")
+
+	entries := readTar(t, blob)
+	wrapper, ok := entries["service-wrappers/worker.sh"]
+	require.True(t, ok, "bundle missing service-wrappers/worker.sh")
+	assert.Equal(t, int64(0o755), wrapper.mode&0o777)
+	assert.Contains(t, string(wrapper.body), "run-worker")
+	assert.Contains(t, string(wrapper.body), "source /home/devm/devm.sh")
+}
+
+func TestBuild_NoServiceWrapper_ForExecArgv(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"web": {ExecArgv: []string{"/bin/true"}},
+		},
+	}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	for _, name := range names {
+		assert.NotContains(t, name, "service-wrappers/", "argv-form service must not emit a wrapper file")
+	}
 }
 
 func readTar(t *testing.T, blob []byte) map[string]tarEntry {
@@ -330,7 +365,7 @@ func TestBuild_ServiceUnit_InheritsCfgEnv(t *testing.T) {
 		},
 		Services: map[string]schema.Service{
 			"web": {
-				Exec: []string{"/bin/true"}, // eligible for a unit
+				ExecArgv: []string{"/bin/true"}, // eligible for a unit
 				// no per-service env — the cfg-level entry must reach the rendered unit
 			},
 		},
@@ -353,8 +388,8 @@ func TestBuild_ServiceUnit_PerServiceEnvOverridesCfg(t *testing.T) {
 		Env:     map[string]schema.EnvValue{"K": {Literal: "cfg-value"}},
 		Services: map[string]schema.Service{
 			"web": {
-				Exec: []string{"/bin/true"},
-				Env:  map[string]schema.EnvValue{"K": {Literal: "svc-value"}},
+				ExecArgv: []string{"/bin/true"},
+				Env:      map[string]schema.EnvValue{"K": {Literal: "svc-value"}},
 			},
 		},
 	}
@@ -443,54 +478,22 @@ func TestBuild_OmitsProposeWhenAbsent(t *testing.T) {
 	assert.NotContains(t, names, "bin/propose")
 }
 
-func TestBuild_TarContainsStartupScript_WhenStartupSet(t *testing.T) {
+func TestBuild_ServiceUnitJoinsDevmTarget(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
-		Startup: []string{"echo hi"},
 		Services: map[string]schema.Service{
-			"web": {Exec: []string{"/bin/true"}},
+			"web": {ExecArgv: []string{"/bin/true"}},
 		},
 	}
 	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 
 	names := tarEntryNames(t, blob)
-	assert.Contains(t, names, "startup.sh")
 	assert.NotContains(t, names, "systemd/devm-startup.service")
 	assert.NotContains(t, names, "systemd/devm-enforce.service")
 
-	startupScript := readTarEntry(t, blob, "startup.sh")
-	assert.Contains(t, string(startupScript), "echo hi")
-
-	// Declared service units join devm.target.
 	webUnit := readTarEntry(t, blob, "systemd/web.service")
 	assert.Contains(t, string(webUnit), "WantedBy=devm.target")
-}
-
-func TestBuild_AlwaysEmitsStartupScript_WhenStartupUnset(t *testing.T) {
-	// The startup.sh mechanism is always registered, for every project
-	// — not opt-in on startup: being set. An empty cfg.Startup still
-	// gets startup.sh; it's just a no-op script.
-	cfg := schema.Config{
-		Project: schema.Project{Name: "p"},
-		Services: map[string]schema.Service{
-			"web": {Exec: []string{"/bin/true"}},
-		},
-	}
-	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
-	require.NoError(t, err)
-
-	names := tarEntryNames(t, blob)
-	assert.Contains(t, names, "startup.sh")
-	assert.NotContains(t, names, "systemd/devm-startup.service")
-	assert.NotContains(t, names, "systemd/devm-enforce.service")
-
-	startupScript := readTarEntry(t, blob, "startup.sh")
-	assert.Equal(t, "#!/bin/bash\nset -eo pipefail\n", string(startupScript))
-
-	webUnit := readTarEntry(t, blob, "systemd/web.service")
-	assert.Contains(t, string(webUnit), "WantedBy=devm.target",
-		"declared service units join devm.target, startup: set or not")
 }
 
 // TestBuild_IncludesEtcProfileDevm proves the bundle carries the

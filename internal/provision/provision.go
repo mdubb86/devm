@@ -33,6 +33,7 @@ import (
 	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/scriptfile"
 )
 
 // tartExecer is the subset of *tart.Tart used by Provisioner. Defined as
@@ -169,7 +170,11 @@ func (p *Provisioner) RunBundle(ctx context.Context, w io.Writer, onLine func(st
 		return &StepFailure{Step: "extract", Err: err}
 	}
 
-	script := render.RenderProvisionBundleScript(p.scriptInput())
+	in, err := p.scriptInput()
+	if err != nil {
+		return &StepFailure{Step: "extract", Err: err}
+	}
+	script := render.RenderProvisionBundleScript(in)
 	return p.execScript(ctx, script, bytes.NewReader(body), w, onLine)
 }
 
@@ -181,7 +186,11 @@ func (p *Provisioner) RunBundle(ctx context.Context, w io.Writer, onLine func(st
 // behavior as RunBundle. Callers must call RunBundle first so p.firstBoot
 // is set from the guest's marker.
 func (p *Provisioner) RunUser(ctx context.Context, w io.Writer, onLine func(stream, line string)) error {
-	script := render.RenderProvisionUserScript(p.scriptInput())
+	in, err := p.scriptInput()
+	if err != nil {
+		return &StepFailure{Step: "install", Err: err}
+	}
+	script := render.RenderProvisionUserScript(in)
 	return p.execScript(ctx, script, nil, w, onLine)
 }
 
@@ -193,7 +202,11 @@ func (p *Provisioner) RunUser(ctx context.Context, w io.Writer, onLine func(stre
 // Callers must call RunBundle first so p.firstBoot is set from the guest's
 // marker.
 func (p *Provisioner) RunEnforced(ctx context.Context, w io.Writer, onLine func(stream, line string)) error {
-	script := render.RenderProvisionEnforcedScript(p.scriptInput())
+	in, err := p.scriptInput()
+	if err != nil {
+		return &StepFailure{Step: "enforce", Err: err}
+	}
+	script := render.RenderProvisionEnforcedScript(in)
 	return p.execScript(ctx, script, nil, w, onLine)
 }
 
@@ -223,7 +236,7 @@ func (p *Provisioner) execScript(ctx context.Context, script []byte, stdin io.Re
 }
 
 // scriptInput assembles the ProvisionScriptInput from the project config.
-func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
+func (p *Provisioner) scriptInput() (render.ProvisionScriptInput, error) {
 	// Emit the gitconfig when either repo bindings exist OR the git
 	// identity resolves — otherwise a bare workspace with an
 	// identity-only config gets no /home/devm/.gitconfig at all.
@@ -234,14 +247,17 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 	if len(bindings) > 0 || identity.UserName != "" || identity.UserEmail != "" {
 		creds, gitconfig = render.RenderGitCredentials(bindings, identity)
 	}
+	installBody, startupBody, err := p.phaseWrapperBodies()
+	if err != nil {
+		return render.ProvisionScriptInput{}, err
+	}
 	return render.ProvisionScriptInput{
 		FirstBoot:          p.firstBoot,
 		Packages:           p.Cfg.Packages,
-		Install:            p.Cfg.Install,
+		InstallWrapperBody: installBody,
 		Docker:             p.Cfg.Docker,
 		InstallTemplates:   p.hasTemplates(),
-		Startup:            p.Cfg.Startup,
-		Scripts:            p.Cfg.Scripts,
+		StartupWrapperBody: startupBody,
 		Services:           p.serviceUnits(),
 		StepTimeoutSeconds: p.StepTimeoutSeconds,
 		PackageAdds:        p.PackageAdds,
@@ -249,7 +265,57 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 		GitCredentials:     creds,
 		GitConfig:          gitconfig,
 		MacTimezone:        p.MacTimezone,
+	}, nil
+}
+
+// phaseWrapperBodies renders the install/startup magic-function wrapper
+// bodies (scriptfile.RenderWrapper: source devm.sh + devm.me.sh, export
+// WORKSPACE/cfg.Env, prepend cfg.Path, invoke the function) for whichever
+// of "install"/"startup" is declared in p.Cfg.Functions. A phase whose
+// function isn't declared gets an empty body — RenderProvisionUserScript
+// skips that phase entirely.
+func (p *Provisioner) phaseWrapperBodies() (install, startup string, err error) {
+	funcSet := make(map[string]struct{}, len(p.Cfg.Functions))
+	for _, f := range p.Cfg.Functions {
+		funcSet[f] = struct{}{}
 	}
+
+	// $WORKSPACE mirrors schema.ResolveEnv's own resolution (internal/
+	// config/load.go): the primary repo's guest path, or GuestHomeDir
+	// for a repo-less project.
+	workspace := p.Cfg.PrimaryGuestPath(p.MacCwd)
+	if workspace == "" {
+		workspace = schema.GuestHomeDir
+	}
+	env := map[string]string{"WORKSPACE": workspace}
+	for k, v := range p.Cfg.Env {
+		if v.IsSecret() {
+			continue
+		}
+		env[k] = v.Literal
+	}
+
+	if _, ok := funcSet["install"]; ok {
+		install, err = scriptfile.RenderWrapper(scriptfile.WrapperInput{
+			FunctionName: "install",
+			Env:          env,
+			PathPrepend:  p.Cfg.Path,
+		})
+		if err != nil {
+			return "", "", fmt.Errorf("render install wrapper: %w", err)
+		}
+	}
+	if _, ok := funcSet["startup"]; ok {
+		startup, err = scriptfile.RenderWrapper(scriptfile.WrapperInput{
+			FunctionName: "startup",
+			Env:          env,
+			PathPrepend:  p.Cfg.Path,
+		})
+		if err != nil {
+			return "", "", fmt.Errorf("render startup wrapper: %w", err)
+		}
+	}
+	return install, startup, nil
 }
 
 // gitIdentity reads the Mac-side effective git user.name/user.email for
@@ -353,7 +419,7 @@ func (p *Provisioner) buildBundle() ([]byte, error) {
 func (p *Provisioner) serviceUnits() []string {
 	var names []string
 	for name, svc := range p.Cfg.Services {
-		if svc.Systemd == "" && len(svc.Exec) == 0 {
+		if svc.Systemd == "" && svc.ExecFunc == "" && len(svc.ExecArgv) == 0 {
 			continue
 		}
 		names = append(names, name)

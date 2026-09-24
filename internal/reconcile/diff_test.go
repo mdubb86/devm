@@ -39,8 +39,7 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
 
-	// Teardown+shell: install, image, identity
-	assert.Equal(t, BucketTeardownVM, KindInstallChange.Bucket())
+	// Teardown+shell: image, identity
 	assert.Equal(t, BucketTeardownVM, KindImageChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindIdentityChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindDockerToggle.Bucket())
@@ -78,13 +77,6 @@ func TestComputePackagesChange_ReorderIsNoop(t *testing.T) {
 func TestPackageKindsAreLive(t *testing.T) {
 	require.Equal(t, BucketLive, KindPackageAdd.Bucket())
 	require.Equal(t, BucketLive, KindPackageRemove.Bucket())
-}
-
-func TestDiff_StartupChange_IsBucketRestartVM(t *testing.T) {
-	// startup: is a boot hook, not a running-service field — a change
-	// only takes effect on the VM's next boot, so it's BucketRestartVM
-	// (VM stop + cold start), not BucketLive.
-	assert.Equal(t, BucketRestartVM, KindStartupChange.Bucket())
 }
 
 func TestComputePathChange(t *testing.T) {
@@ -189,10 +181,10 @@ func TestComputeGlobalEnvChanges(t *testing.T) {
 
 func TestDiff_ServiceExecChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"old"}},
+		"api": {ExecArgv: []string{"old"}},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"new"}},
+		"api": {ExecArgv: []string{"new"}},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
@@ -209,10 +201,10 @@ func TestDiff_ServiceExecChange_IsBucketLive(t *testing.T) {
 
 func TestDiff_ServiceRestartChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, Restart: "no"},
+		"api": {ExecArgv: []string{"run"}, Restart: "no"},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, Restart: "always"},
+		"api": {ExecArgv: []string{"run"}, Restart: "always"},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
@@ -228,10 +220,10 @@ func TestDiff_ServiceRestartChange_IsBucketLive(t *testing.T) {
 
 func TestDiff_ServiceAfterChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, After: []string{"network.target"}},
+		"api": {ExecArgv: []string{"run"}, After: []string{"network.target"}},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, After: []string{"network.target", "db.service"}},
+		"api": {ExecArgv: []string{"run"}, After: []string{"network.target", "db.service"}},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
@@ -247,10 +239,10 @@ func TestDiff_ServiceAfterChange_IsBucketLive(t *testing.T) {
 
 func TestDiff_ServiceWorkdirChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, WorkDir: "/old"},
+		"api": {ExecArgv: []string{"run"}, WorkDir: "/old"},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, WorkDir: "/new"},
+		"api": {ExecArgv: []string{"run"}, WorkDir: "/new"},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
@@ -266,10 +258,10 @@ func TestDiff_ServiceWorkdirChange_IsBucketLive(t *testing.T) {
 
 func TestDiff_ServiceUserChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, User: "alice"},
+		"api": {ExecArgv: []string{"run"}, User: "alice"},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, User: "bob"},
+		"api": {ExecArgv: []string{"run"}, User: "bob"},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
@@ -362,33 +354,6 @@ func TestDiff_PackagesChange_IsBucketLive(t *testing.T) {
 	assert.True(t, found, "expected KindPackageAdd")
 }
 
-func TestComputeInstallChanges(t *testing.T) {
-	old := schema.Config{Install: []string{"apt-get install -y jq"}}
-	new := schema.Config{Install: []string{"apt-get install -y jq curl"}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
-	require.NoError(t, err)
-	assert.Len(t, changes, 1)
-	assert.Equal(t, KindInstallChange, changes[0].Kind)
-}
-
-func TestComputeStartupChanges(t *testing.T) {
-	old := schema.Config{Startup: []string{"echo one"}}
-	new := schema.Config{Startup: []string{"echo one", "echo two"}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
-	require.NoError(t, err)
-	assert.Len(t, changes, 1)
-	assert.Equal(t, KindStartupChange, changes[0].Kind)
-	assert.Equal(t, BucketRestartVM, changes[0].Bucket())
-
-	// Identical startup: lists → no change.
-	same := schema.Config{Startup: []string{"echo one", "echo two"}}
-	changes, err = ComputeAllChanges(same, same, t.TempDir(), t.TempDir(), nil, nil, nil)
-	require.NoError(t, err)
-	for _, c := range changes {
-		assert.NotEqual(t, KindStartupChange, c.Kind, "identical startup: must not produce a change")
-	}
-}
-
 func TestComputeImageChange(t *testing.T) {
 	// BaseImage is now an empty struct; image changes are detected
 	// via identity change or install changes. Test that no KindImageChange
@@ -441,7 +406,6 @@ func TestComputeAllChanges_NoOp(t *testing.T) {
 			"api": {Port: 8080, Env: map[string]schema.EnvValue{"X": {Literal: "y"}}},
 		},
 		Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}},
-		Install: []string{"true"},
 	}
 	changes, err := ComputeAllChanges(cfg, cfg, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
@@ -456,23 +420,23 @@ func TestRecreateFlavorPickMax(t *testing.T) {
 	// Any teardown wins
 	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
 		{Kind: KindPortAdd},
-		{Kind: KindInstallChange},
+		{Kind: KindImageChange},
 	}))
 	// Single teardown change alone also picks teardown.
 	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
-		{Kind: KindInstallChange},
+		{Kind: KindImageChange},
 	}))
 
-	// BucketRestartVM (KindStartupChange) alone picks FlavorRestartVM —
+	// BucketRestartVM (KindMemoryChange) alone picks FlavorRestartVM —
 	// VM stop + cold start, no teardown.
 	assert.Equal(t, FlavorRestartVM, RecreateFlavor([]Change{
-		{Kind: KindStartupChange},
+		{Kind: KindMemoryChange},
 	}))
 	// A teardown change alongside a restart change still wins — can't
 	// go higher than teardown.
 	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
-		{Kind: KindStartupChange},
-		{Kind: KindInstallChange},
+		{Kind: KindMemoryChange},
+		{Kind: KindImageChange},
 	}))
 }
 

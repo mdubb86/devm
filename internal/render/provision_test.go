@@ -85,13 +85,13 @@ func TestRenderProvisionBundleScript_MacTimezone_ShellQuoted(t *testing.T) {
 
 func TestRenderProvisionUserScript_Structure(t *testing.T) {
 	in := ProvisionScriptInput{
-		FirstBoot:        true,
-		Packages:         []string{"jq"},
-		Install:          []string{"echo hi"},
-		Docker:           true,
-		InstallTemplates: true,
-		Startup:          []string{"echo boot"},
-		Services:         []string{"web"},
+		FirstBoot:          true,
+		Packages:           []string{"jq"},
+		InstallWrapperBody: "echo hi",
+		Docker:             true,
+		InstallTemplates:   true,
+		StartupWrapperBody: "echo boot",
+		Services:           []string{"web"},
 	}
 	s := string(RenderProvisionUserScript(in))
 
@@ -114,7 +114,7 @@ func TestRenderProvisionUserScript_Structure(t *testing.T) {
 	assert.NotContains(t, s, "touch /var/lib/devm/provisioned")
 	// templates dispatcher runs through the wrapper, in the open window
 	assert.Contains(t, s, "/opt/devm/scripts/with-devm-env bash /opt/devm/scripts/install-templates.sh")
-	// install commands run through the with-devm-env wrapper (correct path)
+	// install body runs through the with-devm-env wrapper (correct path)
 	assert.Contains(t, s, "/opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
 	// docker feature installs the runc-shim runtime via daemon.json
 	assert.Contains(t, s, "/etc/docker/daemon.json")
@@ -123,10 +123,9 @@ func TestRenderProvisionUserScript_Structure(t *testing.T) {
 	for _, st := range []string{"packages", "install", "docker", "templates", "startup"} {
 		assert.Contains(t, s, "::devm:stage:"+st+"::")
 	}
-	// install: commands are individually timeout-wrapped
+	// install and startup bodies each run under their own timeout budget
 	assert.Contains(t, s, "timeout 600 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
-	// startup: runs under one aggregate timeout budget for the script
-	assert.Contains(t, s, "timeout 600 /opt/devm/scripts/with-devm-env bash /opt/devm/startup.sh")
+	assert.Contains(t, s, "timeout 600 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo boot'")
 }
 
 func TestRenderProvisionUserScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
@@ -152,12 +151,12 @@ func TestRenderProvisionUserScript_NoOpenWindowWhenNothingOpen(t *testing.T) {
 func TestRenderProvisionUserScript_StepTimeoutOverride(t *testing.T) {
 	s := string(RenderProvisionUserScript(ProvisionScriptInput{
 		FirstBoot:          true,
-		Install:            []string{"echo hi"},
-		Startup:            []string{"echo boot"},
+		InstallWrapperBody: "echo hi",
+		StartupWrapperBody: "echo boot",
 		StepTimeoutSeconds: 1,
 	}))
 	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo hi'")
-	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash /opt/devm/startup.sh")
+	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo boot'")
 	assert.NotContains(t, s, "timeout 600 ")
 }
 
@@ -173,27 +172,6 @@ func TestRenderProvisionUserScript_RestartWithTemplatesOpensWindow(t *testing.T)
 	// but no first-boot-only work
 	assert.NotContains(t, s, "::devm:stage:packages::")
 	assert.NotContains(t, s, "::devm:stage:docker::")
-}
-
-func TestRenderProvisionUser_InstallScriptRef_Expands(t *testing.T) {
-	in := ProvisionScriptInput{
-		FirstBoot: true,
-		Install:   []string{"echo raw", ">install-supabase", "echo trailing"},
-		Scripts: map[string][]string{
-			"install-supabase": {"TAG=v1", "echo $TAG"},
-		},
-		StepTimeoutSeconds: 1,
-	}
-	s := string(RenderProvisionUserScript(in))
-	// Raw entries render unchanged.
-	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo raw'")
-	assert.Contains(t, s, "timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'echo trailing'")
-	// The ref expands to a single bash -c with commands joined by " && ".
-	assert.Contains(t, s, `timeout 1 /opt/devm/scripts/with-devm-env bash -eo pipefail -c 'TAG=v1 && echo $TAG'`)
-	// Progress markers: three steps total (raw + ref + raw).
-	assert.Contains(t, s, "::devm:progress:install:1:3::")
-	assert.Contains(t, s, "::devm:progress:install:2:3::")
-	assert.Contains(t, s, "::devm:progress:install:3:3::")
 }
 
 func TestProvisionUser_PackageConvergeOnNonFirstBoot(t *testing.T) {

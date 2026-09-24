@@ -17,24 +17,9 @@ and interactive shells all see `node`/`npm`/`npx` uniformly.
 ## devm.yaml additions
 
 ```yaml
+# devm.yaml
 packages:
   - unzip                     # fnm install script downloads a zipped binary
-
-scripts:
-  install-fnm-and-node:
-    # fnm — single-binary Node version manager. --skip-shell avoids
-    # touching ~/.bashrc; devm.yaml `path:` below handles PATH.
-    - curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell
-    # Copy the user-owned binary to system PATH so `fnm` works from
-    # every user + non-login shell + service unit.
-    - sudo install -m 755 /home/devm/.local/share/fnm/fnm /usr/local/bin/fnm
-    # Install the current LTS + mark it as default. The default alias
-    # is a stable symlinked bin dir — the `path:` entry below tracks it.
-    - fnm install --lts
-    - fnm default lts-latest
-
-install:
-  - ">install-fnm-and-node"
 
 path:
   # fnm's `default` alias always points at the active default's bin —
@@ -51,6 +36,21 @@ network:
     - nodejs.org                      # fnm's default Node distribution mirror
     - registry.npmjs.org              # npm/pnpm/yarn package downloads
     - api.npmjs.org                   # npm metadata (search / audit / stats); pnpm hits it
+```
+```bash
+# devm.sh
+install() {
+  # fnm — single-binary Node version manager. --skip-shell avoids
+  # touching ~/.bashrc; devm.yaml `path:` above handles PATH.
+  curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell
+  # Copy the user-owned binary to system PATH so `fnm` works from
+  # every user + non-login shell + service unit.
+  sudo install -m 755 /home/devm/.local/share/fnm/fnm /usr/local/bin/fnm
+  # Install the current LTS + mark it as default. The default alias
+  # is a stable symlinked bin dir — the `path:` entry above tracks it.
+  fnm install --lts
+  fnm default lts-latest
+}
 ```
 
 ## Notes

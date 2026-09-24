@@ -102,10 +102,16 @@ def test_iron_proxy_allow_removal_takes_effect(devm, workspace, sandbox_name, de
         # for github.com), and hydration would clone that repo and get
         # blocked by the same egress policy this test exercises.
         no_repo=True,
-        install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         network={"allow": ["api.github.com"]},
         packages=["curl"],
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
 
     try:
@@ -142,7 +148,6 @@ def test_iron_proxy_allow_removal_takes_effect(devm, workspace, sandbox_name, de
         devm.unlock()
         workspace.write_devmyaml(
             no_repo=True,
-            install=["true"],
             services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
             network={"allow": ["api.github.com", "httpbin.org"]},
             packages=["curl"],
@@ -172,7 +177,6 @@ def test_iron_proxy_allow_removal_takes_effect(devm, workspace, sandbox_name, de
         devm.unlock()
         workspace.write_devmyaml(
             no_repo=True,
-            install=["true"],
             services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
             network={"allow": ["api.github.com"]},
             packages=["curl"],

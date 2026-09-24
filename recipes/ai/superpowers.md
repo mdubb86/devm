@@ -19,16 +19,9 @@ socket, and a Mac-openable URL.
 ## devm.yaml additions
 
 ```yaml
+# devm.yaml
 packages:
   - git                                           # claude plugin marketplace add shells out to git
-
-scripts:
-  install-superpowers:
-    - claude plugin marketplace add https://github.com/anthropics/claude-plugins-official
-    - claude plugin install superpowers@claude-plugins-official
-
-install:
-  - ">install-superpowers"
 
 env:
   BRAINSTORM_PORT: "5180"                          # pin the port
@@ -50,6 +43,13 @@ network:
     - objects.githubusercontent.com  # github LFS (not owner-scoped in the URL)
     - raw.githubusercontent.com/obra/*  # plugin marketplace index
 ```
+```bash
+# devm.sh
+install() {
+  claude plugin marketplace add https://github.com/anthropics/claude-plugins-official
+  claude plugin install superpowers@claude-plugins-official
+}
+```
 
 The github entries are scoped to the `obra` owner — installing plugins
 from other marketplaces/owners needs their own `github.com/<owner>/*`
@@ -65,7 +65,7 @@ plugin` at provision time and will fail loud if the binary isn't on PATH.
 
 Superpowers' `start-server.sh` and `server.cjs` don't honor most of the
 env vars out of the box. Five small sed edits fix that. **They are NOT
-wired into `install:`** — a Superpowers upgrade would silently revert
+wired into `install()`** — a Superpowers upgrade would silently revert
 them and the companion would die with no signal. Run these when setting
 up the companion (ask Claude to re-apply if an upgrade breaks a line —
 each edit is described by *intent*, so it can be relocated):
@@ -124,7 +124,7 @@ Security note).
 ## Notes
 
 - **User-scope install**: lands in `~/.claude/plugins/cache/…` — available
-  across every project on the machine. `install:` runs once per VM
+  across every project on the machine. `install()` runs once per VM
   lifetime; `claude plugin marketplace add` is idempotent.
 - **Why `0.0.0.0`**: `devm route vm` dials the service port over softnet
   → the guest's primary interface, not loopback. A `127.0.0.1` bind is

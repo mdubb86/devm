@@ -63,8 +63,13 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 			if soverride.Templates != nil {
 				svc.Templates = *soverride.Templates
 			}
-			if soverride.Exec != nil {
-				svc.Exec = *soverride.Exec
+			if soverride.ExecFunc != nil {
+				svc.ExecFunc = *soverride.ExecFunc
+				svc.ExecArgv = nil
+			}
+			if soverride.ExecArgv != nil {
+				svc.ExecArgv = *soverride.ExecArgv
+				svc.ExecFunc = ""
 			}
 			if soverride.WorkDir != nil {
 				svc.WorkDir = *soverride.WorkDir
@@ -83,12 +88,6 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 			}
 			out.Services[name] = svc
 		}
-	}
-	if override.Install != nil {
-		out.Install = *override.Install
-	}
-	if override.Startup != nil {
-		out.Startup = *override.Startup
 	}
 	if override.Path != nil {
 		out.Path = *override.Path

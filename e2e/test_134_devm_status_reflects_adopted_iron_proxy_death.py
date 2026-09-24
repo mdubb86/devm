@@ -93,9 +93,15 @@ def test_devm_status_reflects_adopted_iron_proxy_death(
 ):
     workspace.write_devmyaml(
         no_repo=True,
-        install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         network={"allow": ["httpbin.org"]},
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
 
     try:

@@ -97,11 +97,6 @@ def test_startup_runs_every_boot_open_egress_enforced_after(workspace, devm, san
 
     workspace.write_devmyaml(
         no_repo=True,
-        startup=[
-            f"echo run >> {COUNT_FILE}",
-            f"curl -sf -m 10 {NON_ALLOWLISTED_HOST} -o {STARTUP_FETCH_FILE} || true",
-            f"test -f /home/devm/{label}/mac-seeded-file && touch {HYDRATION_MARKER_FILE}",
-        ],
         network={"allow": ["api.github.com"]},
         services={
             "probe": {
@@ -113,6 +108,15 @@ def test_startup_runs_every_boot_open_egress_enforced_after(workspace, devm, san
                 "restart": "always",
             },
         },
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "startup() {\n"
+        f"  echo run >> {COUNT_FILE}\n"
+        f"  curl -sf -m 10 {NON_ALLOWLISTED_HOST} -o {STARTUP_FETCH_FILE} || true\n"
+        f"  test -f /home/devm/{label}/mac-seeded-file && touch {HYDRATION_MARKER_FILE}\n"
+        "}\n"
     )
 
     def count() -> int:

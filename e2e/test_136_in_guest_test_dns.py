@@ -34,7 +34,14 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(600)
 @pytest.mark.slow
 def test_dot_test_resolves_to_loopback_in_guest(devm, workspace, sandbox_name):
-    workspace.write_devmyaml(install=["true"])
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
+    )
 
     try:
         r = subprocess.run(

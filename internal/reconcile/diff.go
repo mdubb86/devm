@@ -18,8 +18,7 @@ const (
 	BucketLive Bucket = iota // applicable to a running sandbox without ending sessions
 	// BucketRestartVM — requires VM stop + cold start, no teardown; the
 	// provisioner re-establishes the change on the next boot. Used by
-	// KindStartupChange: a `startup:` edit is re-rendered into
-	// /opt/devm/startup.sh but only takes effect on the guest's next boot.
+	// memory/CPU overrides and repo URL/secret mutations.
 	BucketRestartVM
 	BucketTeardownVM // requires VM delete + cold start (volumes/install rerun)
 	// BucketEgressRestart — regenerate iron-proxy config and respawn.
@@ -87,7 +86,6 @@ const (
 	KindEnvAdd
 	KindEnvRemove
 	KindEnvChange
-	KindInstallChange
 	// KindPackageAdd / KindPackageRemove fire once per apt package
 	// present in exactly one of old/new `packages:` (set semantics —
 	// reordering the list is a no-op). Key = package name. BucketLive:
@@ -117,12 +115,6 @@ const (
 	KindSecretAdd
 	KindSecretRemove
 	KindSecretChange
-	// KindStartupChange fires when the ordered `startup:` command list
-	// differs between old and new config. Content edits and add/remove
-	// of the key both surface here; see the changeBucket comment for
-	// why this is BucketRestartVM (VM stop + cold start, not a
-	// teardown) rather than BucketLive.
-	KindStartupChange
 	// KindIronProxyDown is a synthetic change: not produced by diffing
 	// old vs new config, but emitted by the reconcile handler when a
 	// running VM's iron-proxy is missing or stale (see
@@ -155,15 +147,13 @@ const (
 	// it by reallocating the IP and rebinding listeners. Old = the
 	// cross-wired IP, New = the replacement.
 	KindSSHEndpointHealed
-	// KindCommandsChange fires when a repo's `commands:` map differs
-	// between old and new config. One Change per changed command per
-	// field: Op=OpAdd/OpRemove for whole-entry add/remove (Repo=repo
-	// name, Key=command name), Op=OpMutate per changed field on a
-	// command present in both (Field="Exec"/"Startup"). Bucket:
-	// BucketLive — the manifest that carries `run <name>` dispatch
-	// data is rebuilt and piped into the guest on every live bundle
-	// rebuild (same path env/path changes already use), no VM cycle
-	// needed.
+	// KindCommandsChange fires when a repo's `commands:` list differs
+	// between old and new config. One Change per added/removed function
+	// name: Op=OpAdd/OpRemove (Repo=repo name, Key=function name).
+	// Bucket: BucketLive — the manifest that carries `run <name>`
+	// dispatch data is rebuilt and piped into the guest on every live
+	// bundle rebuild (same path env/path changes already use), no VM
+	// cycle needed.
 	KindCommandsChange
 )
 
@@ -181,11 +171,8 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindEnvAdd:    BucketLive,
 	KindEnvRemove: BucketLive,
 	KindEnvChange: BucketLive,
-	// install: commands happen on first boot; can't re-run cleanly on a
-	// half-installed VM.
-	KindInstallChange: BucketTeardownVM,
-	// apt is idempotent and declarative — unlike install: scripts,
-	// package changes converge on a live VM.
+	// apt is idempotent and declarative — package changes converge on a
+	// live VM.
 	KindPackageAdd:     BucketLive,
 	KindPackageRemove:  BucketLive,
 	KindImageChange:    BucketTeardownVM,
@@ -214,11 +201,6 @@ var changeBucket = map[ChangeKind]Bucket{
 	// Direct: re-push routes (DNS), re-push the softnet expose map and
 	// direct-host DNS set — live.
 	KindServiceDirectChange: BucketLive,
-	// startup: re-rendered into /opt/devm/startup.sh; a live bundle
-	// re-pipe carries the new content to the guest, but it only takes
-	// effect on the VM's NEXT boot (startup: is a boot hook, not a
-	// running-service field) — VM stop + cold start, no teardown.
-	KindStartupChange: BucketRestartVM,
 	// Secrets: iron-proxy config carries resolved values; a rotation
 	// requires regenerating that config and respawning iron-proxy.
 	KindSecretAdd:    BucketEgressRestart,
@@ -302,7 +284,7 @@ const (
 	FlavorLiveOnly FlavorKind = iota // no recreate, only live applies
 	// FlavorRestartVM — requires VM stop + cold start, no teardown.
 	// Reached whenever a change sits in BucketRestartVM (e.g.
-	// KindStartupChange) and nothing more severe is also pending.
+	// KindMemoryChange) and nothing more severe is also pending.
 	FlavorRestartVM
 	FlavorTeardownVM // requires VM delete + cold start
 )
@@ -372,8 +354,8 @@ func ComputePortChanges(old, new schema.Config) []Change {
 
 // ComputeAllChanges returns the full set of diffs between old and new
 // configs. Order: ports, network, env (per service), service unit fields
-// (per service), install, startup, packages, volumes, repos, commands,
-// image, identity, templates, path, secrets.
+// (per service), packages, volumes, repos, commands, image, identity,
+// templates, path, secrets.
 // Within each section, service/volume/repo/command names are sorted
 // alphabetically for determinism.
 //
@@ -401,8 +383,6 @@ func ComputeAllChanges(
 	out = append(out, computeServiceUnitChanges(old, new)...)
 	out = append(out, computeDirectChanges(old, new)...)
 	out = append(out, computeHostnameChanges(old, new)...)
-	out = append(out, computeInstallChanges(old, new)...)
-	out = append(out, computeStartupChanges(old, new)...)
 	out = append(out, computePackagesChange(old, new)...)
 	out = append(out, computeVolumeChanges(old, new)...)
 	out = append(out, computeRepoChanges(old, new)...)
@@ -507,7 +487,7 @@ func computeServiceUnitChanges(old, new schema.Config) []Change {
 	var out []Change
 	for _, svc := range unionServiceNames(old.Services, new.Services) {
 		o, n := old.Services[svc], new.Services[svc]
-		if !stringSliceEqual(o.Exec, n.Exec) {
+		if o.ExecFunc != n.ExecFunc || !stringSliceEqual(o.ExecArgv, n.ExecArgv) {
 			out = append(out, Change{Kind: KindServiceExecChange, Service: svc})
 		}
 		if o.Restart != n.Restart {
@@ -556,25 +536,6 @@ func computeHostnameChanges(old, new schema.Config) []Change {
 		}
 	}
 	return out
-}
-
-func computeInstallChanges(old, new schema.Config) []Change {
-	if stringSliceEqual(old.Install, new.Install) {
-		return nil
-	}
-	return []Change{{Kind: KindInstallChange}}
-}
-
-// computeStartupChanges emits KindStartupChange when the ordered
-// `startup:` command list differs between old and new config. Compared
-// as an ordered slice (like Install/Packages) rather than by
-// membership — reordering the boot commands is itself a meaningful
-// change.
-func computeStartupChanges(old, new schema.Config) []Change {
-	if stringSliceEqual(old.Startup, new.Startup) {
-		return nil
-	}
-	return []Change{{Kind: KindStartupChange}}
 }
 
 // PackageDrift diffs the `packages:` list between old and new config as a
@@ -739,59 +700,51 @@ func repoFieldChanges(name string, o, n schema.RepoConfig) []Change {
 }
 
 // computeCommandsChanges emits one KindCommandsChange per changed
-// command across every repo's `commands:` map. A command present in
-// exactly one of old/new emits a single OpAdd/OpRemove Change; a
-// command present in both emits one OpMutate Change per changed field
-// (Exec, Startup). Repos are walked in sorted order (unionRepoNames)
-// and each repo's commands in sorted order (unionCommandNames), so
-// output is fully deterministic regardless of map iteration order.
+// function name across every repo's `commands:` list. A name present
+// in exactly one of old/new emits a single OpAdd/OpRemove Change.
+// Repos are walked in sorted order (unionRepoNames) and each repo's
+// commands in sorted order (unionCommandNames), so output is fully
+// deterministic regardless of map iteration order.
 func computeCommandsChanges(old, new schema.Config) []Change {
 	var out []Change
 	for _, repoName := range unionRepoNames(old.Repos, new.Repos) {
 		oldCmds := old.Repos[repoName].Commands
 		newCmds := new.Repos[repoName].Commands
+		oldSet := stringSet(oldCmds)
+		newSet := stringSet(newCmds)
 		for _, cmdName := range unionCommandNames(oldCmds, newCmds) {
-			oldCmd, oldOk := oldCmds[cmdName]
-			newCmd, newOk := newCmds[cmdName]
+			_, oldOk := oldSet[cmdName]
+			_, newOk := newSet[cmdName]
 			switch {
 			case !oldOk && newOk:
 				out = append(out, Change{Kind: KindCommandsChange, Op: OpAdd, Repo: repoName, Key: cmdName,
-					New: newCmd.Exec, NewValue: newCmd})
+					New: cmdName, NewValue: cmdName})
 			case oldOk && !newOk:
 				out = append(out, Change{Kind: KindCommandsChange, Op: OpRemove, Repo: repoName, Key: cmdName,
-					Old: oldCmd.Exec, OldValue: oldCmd})
-			default:
-				out = append(out, commandFieldChanges(repoName, cmdName, oldCmd, newCmd)...)
+					Old: cmdName, OldValue: cmdName})
 			}
 		}
 	}
 	return out
 }
 
-// commandFieldChanges diffs a single command present in both old and
-// new, emitting one OpMutate Change per field that differs.
-func commandFieldChanges(repo, name string, o, n schema.RepoCommand) []Change {
-	var out []Change
-	if o.Exec != n.Exec {
-		out = append(out, Change{Kind: KindCommandsChange, Op: OpMutate, Repo: repo, Key: name, Field: "Exec",
-			Old: o.Exec, New: n.Exec, OldValue: o.Exec, NewValue: n.Exec})
+// stringSet builds a lookup set from a string slice.
+func stringSet(s []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(s))
+	for _, v := range s {
+		set[v] = struct{}{}
 	}
-	if !boolPtrEqual(o.Startup, n.Startup) {
-		out = append(out, Change{Kind: KindCommandsChange, Op: OpMutate, Repo: repo, Key: name, Field: "Startup",
-			Old: formatBoolPtr(o.Startup), New: formatBoolPtr(n.Startup),
-			OldValue: o.Startup, NewValue: n.Startup})
-	}
-	return out
+	return set
 }
 
-// unionCommandNames returns the sorted union of keys across both
-// per-repo Commands maps, for deterministic diff-walk ordering.
-func unionCommandNames(a, b map[string]schema.RepoCommand) []string {
+// unionCommandNames returns the sorted union of names across both
+// per-repo Commands lists, for deterministic diff-walk ordering.
+func unionCommandNames(a, b []string) []string {
 	set := make(map[string]struct{}, len(a)+len(b))
-	for k := range a {
+	for _, k := range a {
 		set[k] = struct{}{}
 	}
-	for k := range b {
+	for _, k := range b {
 		set[k] = struct{}{}
 	}
 	out := make([]string, 0, len(set))

@@ -47,14 +47,18 @@ def test_install_runs_before_enforcement(workspace, devm):
     # install step would fail with `curl -sf` exiting non-zero.
     workspace.write_devmyaml(
         no_repo=True,
-        install=[
-            # Reach a real public host that is NOT on the allow list.
-            # `curl -sf` exits non-zero on any HTTP >=400 (which iron-proxy
-            # returns as 502 for non-allowlisted SNI) OR on TLS failure.
-            "curl -sf -o /dev/null --max-time 15 https://pypi.org/simple/",
-        ],
         services={"idle": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         network={"allow": ["api.github.com"]},
+    )
+    # Reach a real public host that is NOT on the allow list. `curl -sf`
+    # exits non-zero on any HTTP >=400 (which iron-proxy returns as 502
+    # for non-allowlisted SNI) OR on TLS failure.
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  curl -sf -o /dev/null --max-time 15 https://pypi.org/simple/\n"
+        "}\n"
     )
 
     try:

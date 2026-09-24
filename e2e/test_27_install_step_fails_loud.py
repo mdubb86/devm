@@ -16,8 +16,13 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(120)
 def test_install_step_fails_loud(workspace, devm):
-    workspace.write_devmyaml(
-        install=["false"],
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  false\n"
+        "}\n"
     )
 
     # devm start should exit non-zero. We capture combined stderr.

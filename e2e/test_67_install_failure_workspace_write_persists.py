@@ -1,8 +1,8 @@
 """67+68: install failure — $WORKSPACE writes persist, are readable, and
 are removable on the host after VM teardown.
 
-Merges two tests using the identical `install=[touch, ..., false]` shape
-against a failing install: — test_68 is a strict superset of test_67 (same
+Merges two tests using the identical touch/overwrite/sync/false install()
+body against a failing install: — test_68 is a strict superset of test_67 (same
 "rc != 0 + VM absent + host file exists" checks, plus content verification
 and ownership/removability), so one boot proves both.
 
@@ -50,17 +50,20 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(180)
 def test_install_failure_workspace_write_persists_and_is_removable(workspace, devm):
-    workspace.write_devmyaml(
-        install=[
-            'touch "$WORKSPACE/install-wrote.txt"',
-            'sh -c \'echo HELLO > "$WORKSPACE/install-wrote.txt"\'',
-            # sync is guest-disk hygiene only. Persistence across Bug
-            # B's teardown-on-fail depends on mutagen's own sync session
-            # having already propagated the write to the Mac-side
-            # mirror, not on the guest's disk cache.
-            "sync",
-            "false",  # deliberate failure
-        ],
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        '  touch "$WORKSPACE/install-wrote.txt"\n'
+        """  sh -c 'echo HELLO > "$WORKSPACE/install-wrote.txt"'\n"""
+        # sync is guest-disk hygiene only. Persistence across Bug B's
+        # teardown-on-fail depends on mutagen's own sync session having
+        # already propagated the write to the Mac-side mirror, not on
+        # the guest's disk cache.
+        "  sync\n"
+        "  false\n"  # deliberate failure
+        "}\n"
     )
 
     # Cold-start; expect failure.

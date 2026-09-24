@@ -439,7 +439,8 @@ func mergeLiveApplied(old, new schema.Config, applied []reconcile.Change) schema
 		case reconcile.KindServiceExecChange:
 			svc := merged.Services[c.Service]
 			if newSvc, ok := new.Services[c.Service]; ok {
-				svc.Exec = newSvc.Exec
+				svc.ExecFunc = newSvc.ExecFunc
+				svc.ExecArgv = newSvc.ExecArgv
 				merged.Services[c.Service] = svc
 			}
 		case reconcile.KindServiceRestartChange:

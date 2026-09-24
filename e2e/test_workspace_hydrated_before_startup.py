@@ -12,8 +12,13 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(400)
 def test_startup_sees_hydrated_workspace(devm, workspace):
-    workspace.write_devmyaml(
-        startup=["test -f $WORKSPACE/README"],
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "startup() {\n"
+        "  test -f $WORKSPACE/README\n"
+        "}\n"
     )
     # Cold-start
     r = subprocess.run([devm.path, "start"], cwd=str(workspace.path),

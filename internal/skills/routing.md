@@ -101,7 +101,7 @@ Both `http://api.test` and `https://api.test` work from inside the VM, matching 
 
 In-guest `.test` traffic depends on the daemon and softnet being up — a query answered by softnet still needs the daemon's guest-origin listener alive on the other end of the hairpin.
 
-Under enforced egress, outbound traffic to external destinations is restricted: only HTTPS (:443), HTTP (:80), and NTP (:123) leave the VM. Everything else (arbitrary TCP ports, other UDP) is dropped. HTTP/HTTPS goes through iron-proxy on the Mac and hits the `network.allow` check. During the provisioning window (first boot / `startup:` / template installs), egress is open so `apt-get install` and `curl … | bash` work.
+Under enforced egress, outbound traffic to external destinations is restricted: only HTTPS (:443), HTTP (:80), and NTP (:123) leave the VM. Everything else (arbitrary TCP ports, other UDP) is dropped. HTTP/HTTPS goes through iron-proxy on the Mac and hits the `network.allow` check. During the provisioning window (first boot / `startup()` in devm.sh / template installs), egress is open so `apt-get install` and `curl … | bash` work.
 
 ---
 

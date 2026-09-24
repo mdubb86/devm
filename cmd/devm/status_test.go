@@ -218,7 +218,7 @@ func TestStatus_ShowsDivergedApproveState(t *testing.T) {
 	cache.SetMacCwd("p", macCwd)
 
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, nil, nil, "user"))
 
 	tr := tart.New()
 	tr.Path = "false"
@@ -245,7 +245,7 @@ func TestStatus_ShowsUpToDateApproveState(t *testing.T) {
 	cache.SetMacCwd("p", macCwd)
 
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write("p", contents, nil, "user"))
+	require.NoError(t, store.Write("p", contents, nil, nil, nil, "user"))
 
 	tr := tart.New()
 	tr.Path = "false"

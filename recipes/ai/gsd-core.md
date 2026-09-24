@@ -17,18 +17,26 @@ GSD's generated output should be gitignored.
 ## devm.yaml additions
 
 ```yaml
+# devm.yaml
 repos:
   main:
     secret: gh_token
-    commands:
-      install-gsd-core:
-        exec: npx @opengsd/gsd-core --claude --local
-        startup: true
+    commands: [install-gsd-core]
 
 network:
   allow:
     - registry.npmjs.org         # npx fetches @opengsd/gsd-core here
     - api.npmjs.org              # metadata + audit
+```
+```bash
+# devm.sh
+install-gsd-core() {
+  npx @opengsd/gsd-core --claude --local
+}
+
+startup() {
+  cd "$WORKSPACE" && install-gsd-core
+}
 ```
 
 ## .gitignore additions
@@ -64,11 +72,11 @@ GSD's surface while keeping hand-written `.claude/commands/*.md` and
   `devm start` re-hydrates from git (which does not include the GSD
   install), then `install-gsd-core` fires again on boot in the fresh
   clone. Nothing to remember.
-- **Runs under open egress** (`commands.*.startup: true` fires
-  post-hydration, before the allowlist is applied) — the automatic
-  boot-time install has full network access. Both npm hosts stay in
-  `network.allow:` anyway, so a manual `run install-gsd-core` from an
-  enforced-egress `devm shell` session still works.
+- **Runs under open egress** (`startup()` fires post-hydration, before
+  the allowlist is enforced) — the automatic boot-time install has
+  full network access. Both npm hosts stay in `network.allow:`
+  anyway, so a manual `run install-gsd-core` from an enforced-egress
+  `devm shell` session still works.
 - **GSD's persistent state lives in `.planning/`** (workspace-tracked,
   committed). Because it's git-tracked, it survives `devm teardown` on
   its own: the workspace volume is deleted and rehydrated from git on

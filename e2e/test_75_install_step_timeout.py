@@ -27,7 +27,14 @@ def test_install_step_exceeds_timeout(workspace, devm):
     # silently ignored (the regression this test pins), `sleep 5` would
     # simply finish and `devm shell` would exit 0 well inside that budget —
     # this test would then fail on the returncode assertion below, not hang.
-    workspace.write_devmyaml(install=["sleep 5"])
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  sleep 5\n"
+        "}\n"
+    )
     env = os.environ.copy()
     env["DEVM_INSTALL_STEP_TIMEOUT_S"] = "1"
     start = time.monotonic()

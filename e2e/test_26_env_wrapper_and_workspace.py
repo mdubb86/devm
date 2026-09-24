@@ -62,10 +62,6 @@ def test_env_and_workspace_propagation(workspace, devm, sandbox_name):
             "FROM_KIT_60": EXPECTED_KIT,
             "CLAUDE_CONFIG_DIR": "$WORKSPACE/.claude",
         },
-        install=[
-            "printenv WORKSPACE > /tmp/install-ws 2>&1 || true",
-            'printf "%s" "$FROM_KIT_60" > /tmp/install-mark-60',
-        ],
         services={
             "wscheck": {
                 "exec": ["sh", "-c", "printenv WORKSPACE > /tmp/startup-ws 2>&1 || true"],
@@ -76,6 +72,14 @@ def test_env_and_workspace_propagation(workspace, devm, sandbox_name):
                 "restart": "no",
             },
         },
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  printenv WORKSPACE > /tmp/install-ws 2>&1 || true\n"
+        '  printf "%s" "$FROM_KIT_60" > /tmp/install-mark-60\n'
+        "}\n"
     )
 
     # Owns cold-start: install: commands only run on `devm start`, so the

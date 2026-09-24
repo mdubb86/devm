@@ -2,7 +2,7 @@
 name: tool/lang/uv
 category: lang
 display_name: uv (Python)
-description: "Run uv-based Python tooling inside a devm VM behind iron-proxy: pre-seed managed CPython at the `commands` stage (open egress, workspace hydrated) so no GitHub host lands in the runtime allowlist, and keep .venv VM-local."
+description: "Run uv-based Python tooling inside a devm VM behind iron-proxy: pre-seed managed CPython from `startup()` (open egress, workspace hydrated) so no GitHub host lands in the runtime allowlist, and keep .venv VM-local."
 keywords: uv python rustls cpython venv datamodel-code-generator pip iron-proxy tls
 since: recipes-vNEXT
 ---
@@ -20,49 +20,51 @@ assets** (`release-assets.githubusercontent.com`), which `github.com` /
 `objects.githubusercontent.com` / `raw.githubusercontent.com` do **not** cover,
 and whose redirect carries a signed URL that can't be predicted.
 
-## devm.yaml additions (recommended: pre-seed at `commands`)
+## devm.yaml additions (recommended: pre-seed in `startup()`)
 
-Pre-seed via a `repos.<repo>.commands` entry marked `startup: true`: it fires
-at the `commands` stage, after `repo-clone` has hydrated the workspace and
-while iron-proxy is still in `passthrough`. `.python-version` is read from
-the repo's guest cwd — no `$WORKSPACE` guess, no silent fallback, and no
-runtime allowlist host needed.
+Pre-seed via a `repos.<repo>.commands` entry called from `startup()`: both
+`install()` and `startup()` run after mutagen has hydrated the workspace,
+still under open egress, so `.python-version` is readable from the repo's
+guest path with no runtime allowlist host needed.
 
 ```yaml
+# devm.yaml
 env:
   UV_PYTHON_DOWNLOADS: manual  # blocks *implicit* runtime auto-fetches; explicit `uv python install` (below) still works
-
-scripts:
-  install-uv:
-    - curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh
-    - env UV_INSTALL_DIR=/home/devm/.local/bin INSTALLER_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-
-install:
-  - ">install-uv"
 
 repos:
   main:
     url: git@github.com:you/your-project.git
-    commands:
-      preseed-python:
-        # Reads `.python-version` from the repo's guest cwd. Runs at the
-        # `commands` stage — after `repo-clone`, still under iron-proxy's
-        # passthrough authority — so no runtime allowlist host is needed.
-        # No fallback: a project missing `.python-version` fails loud
-        # instead of getting a silently-substituted 3.12 that surfaces
-        # later as a confusing `uv sync` mismatch.
-        exec: /home/devm/.local/bin/uv python install "$(cat .python-version)"
-        startup: true
+    commands: [preseed-python]
 
 path:
   # login shells get ~/.local/bin via ~/.profile; scripts, services, and
   # `devm shell -- cmd` only see it with this entry
   - /home/devm/.local/bin
 ```
+```bash
+# devm.sh
+install() {
+  curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh
+  env UV_INSTALL_DIR=/home/devm/.local/bin INSTALLER_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
+}
+
+# Reads `.python-version` from the repo's guest cwd. No fallback: a
+# project missing `.python-version` fails loud instead of getting a
+# silently-substituted 3.12 that surfaces later as a confusing `uv
+# sync` mismatch.
+preseed-python() {
+  uv python install "$(cat .python-version)"
+}
+
+startup() {
+  cd "$WORKSPACE" && preseed-python
+}
+```
 
 `uv python install <v>` is idempotent; the cached interpreter lives VM-local
-under `~/.local/share/uv`, so the `commands`-stage pre-seed is a fast no-op
-on every boot after the first.
+under `~/.local/share/uv`, so the `startup()` pre-seed is a fast no-op on
+every boot after the first.
 
 ### Backup: runtime-download (generic GitHub egress)
 
@@ -128,7 +130,7 @@ env:
 ## Verifying
 
 ```
-devm start                   # picks up the new install: step
+devm start                   # picks up the new install()/startup() steps
 devm shell -- uv --version   # non-login — proves the `path:` entry, not ~/.profile
 devm shell
 $ uv --version
@@ -137,7 +139,7 @@ $ uv run python -c "import sys; print(sys.version)"
 $ uvx datamodel-code-generator --version   # exercises rustls TLS through the proxy end-to-end
 ```
 
-Verified live on uv 0.12.2 / Debian 13 arm64: the `commands`-stage pre-seed
+Verified live on uv 0.12.2 / Debian 13 arm64: the `startup()` pre-seed
 downloads CPython in the open-egress window (no `release-assets` runtime
 host); uv's TLS handshake through iron-proxy succeeds via the auto-set
 `UV_SYSTEM_CERTS=1`; without the `path:` entry, non-login `uv` is

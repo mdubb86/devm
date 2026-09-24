@@ -59,12 +59,6 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(180)
 def test_install_and_startup_ordering(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
-        install=[
-            "touch /tmp/from-step-1",
-            # If step 2 starts before step 1 finishes, this fails and
-            # devm shell exits non-zero (loud failure per test_51).
-            "test -f /tmp/from-step-1",
-        ],
         services={
             "step1": {
                 "exec": ["sh", "-c", "touch /tmp/s1-ran"],
@@ -82,6 +76,16 @@ def test_install_and_startup_ordering(workspace, devm, sandbox_name):
                 "restart": "no",
             },
         },
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  touch /tmp/from-step-1\n"
+        # If step 2 starts before step 1 finishes, this fails and
+        # devm shell exits non-zero (loud failure per test_51).
+        "  test -f /tmp/from-step-1\n"
+        "}\n"
     )
 
     # First devm shell IS the cold-start; rc=0 means install steps ran in

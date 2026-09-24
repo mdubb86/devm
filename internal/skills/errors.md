@@ -57,7 +57,7 @@ Other pre-VM errors from `devm start`:
 
 ## Repo hydration failures
 
-Repo hydration (`git clone` inside the guest, for `repos:` entries) runs at the `repo-clone` stage, right after `volume-sync` establishes the mutagen sessions and before `install:`/`startup:` run — it's neither a daemon-startup nor an in-guest provisioner-stage failure, but a cold-start failure here still tears down the VM like any other.
+Repo hydration (`git clone` inside the guest, for `repos:` entries) runs at the `repo-clone` stage, right after `volume-sync` establishes the mutagen sessions and before `install()`/`startup()` run — it's neither a daemon-startup nor an in-guest provisioner-stage failure, but a cold-start failure here still tears down the VM like any other.
 
 - **Missing secret.** `repos.<name>.secret` names a secret not in the store — cold-start aborts before the clone runs; the error names the missing secret. Fix: `devm secret set <name>`.
 - **Clone auth failure (401).** Usually a missing iron-proxy substitution rule or an expired token. Cold-start aborts and the VM is torn down; the error names the repo URL. Fix: confirm `repos.<name>.secret` holds a token with clone access to that repo.
@@ -76,22 +76,22 @@ Any failing command aborts provisioning immediately. On failure the error line i
 provision: provision stage "<name>": provisioning script exited <N>
 ```
 
-`<name>` is the LAST stage marker reached before the abort. `<N>` is the exit code — e.g. `124` means a `timeout`-wrapped `install:`/`startup:` command was killed for exceeding its budget. The output immediately above the error line is the captured non-marker stdout/stderr from the run; read that first.
+`<name>` is the LAST stage marker reached before the abort. `<N>` is the exit code — e.g. `124` means a `timeout`-wrapped `install()`/`startup()` body was killed for exceeding its budget. The output immediately above the error line is the captured non-marker stdout/stderr from the run; read that first.
 
 ### Stage reference
 
 | Stage | What it does | Common failure | Fix |
 |---|---|---|---|
-| `open` | Marker for the start of the provisioning window (iron-proxy is in the path under `passthrough` authority mode — MITM'd, audited, secret-substituted, but not allowlist-gated). Runs whenever there's provisioning-window work to do (first boot, `startup:` commands, or templates); skipped on a warm restart with nothing to run. | Rare | n/a |
+| `open` | Marker for the start of the provisioning window (iron-proxy is in the path under `passthrough` authority mode — MITM'd, audited, secret-substituted, but not allowlist-gated). Runs whenever there's provisioning-window work to do (first boot, a `startup()` function, or templates); skipped on a warm restart with nothing to run. | Rare | n/a |
 | `packages` | `apt-get update` + `apt-get install -y <packages>` on first boot; on a later boot, converges only the added/removed packages if `packages:` changed while stopped. Skipped if there's nothing to do | Package name not found, or `deb.debian.org` not in `network.allow` | Add `deb.debian.org` to `network.allow` in `devm.yaml`; verify package names |
-| `install` | Runs each `install:` command in order, with `$WORKSPACE`, `cfg.env`, and `path:` in scope (first boot only). Each command has a 600s timeout, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | User command exits non-zero, or a step exceeds its timeout (exit 124) | Read the captured output above the error; fix the failing command. For long installs, raise `DEVM_INSTALL_STEP_TIMEOUT_S`. |
+| `install` | Runs the `install()` function's body from `devm.sh` (if defined), with `$WORKSPACE`, `cfg.env`, and `path:` in scope (first boot only). Has a 600s timeout, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | The function exits non-zero, or exceeds its timeout (exit 124) | Read the captured output above the error; fix the failing command. For long installs, raise `DEVM_INSTALL_STEP_TIMEOUT_S`. |
 | `docker` | Installs the Docker engine + shim (only when `docker: true`; first boot only) | Docker install failure | Read the captured output; if `network.allow` is missing a Docker registry host, add it |
 | `templates` | Renders every `services[*].templates` entry into its declared output path. Runs on ANY boot that has templates declared. | Template output path unwritable (e.g. `/etc/foo` without `sudo: true` on the template) or template source render error | Add `sudo: true` to the template if the output is under a root-owned dir; otherwise fix the template source |
-| `startup` | Runs every `startup:` command in one shared bash process (exports/`cd` persist between lines), wrapped in a single aggregate `timeout` — default 600s, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | A command exits non-zero, or the combined script exceeds its timeout | Read the captured output above the error; fix the failing command, or raise `DEVM_INSTALL_STEP_TIMEOUT_S` |
+| `startup` | Runs the `startup()` function's body from `devm.sh` (if defined) as a single bash process, wrapped in a `timeout` — default 600s, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | The function exits non-zero, or exceeds its timeout | Read the captured output above the error; fix the failing command, or raise `DEVM_INSTALL_STEP_TIMEOUT_S` |
 | `enforce` | Stage marker only — no in-guest work. Marks the point after which egress is enforced. | Should not fail | n/a |
 | `services` | Enables + starts each declared service unit and health-polls it before `devm.target` (and therefore access) is granted. | Service failed to start (port in use, missing binary, bad config) | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>` |
 
-A failure at any stage from `bundle` through `enforce` leaves the VM in a bad cold-start state — `devm start` tears it down (the next `devm start` starts clean). Only `services` keeps the VM for in-place debugging via `tart exec` — it's the sole stage that runs after enforcement, so a failure there is a user-declared service being broken *after* everything else worked. `templates` deliberately does not keep the VM even though it runs after `install:`/`docker:`: it runs under open egress, before `enforce` installs the real allowlist, so a VM kept alive on a `templates` failure would be sitting there unenforced.
+A failure at any stage from `bundle` through `enforce` leaves the VM in a bad cold-start state — `devm start` tears it down (the next `devm start` starts clean). Only `services` keeps the VM for in-place debugging via `tart exec` — it's the sole stage that runs after enforcement, so a failure there is a user-declared service being broken *after* everything else worked. `templates` deliberately does not keep the VM even though it runs after `install()`/`docker:`: it runs under open egress, before `enforce` installs the real allowlist, so a VM kept alive on a `templates` failure would be sitting there unenforced.
 
 ---
 
