@@ -35,6 +35,14 @@ class Workspace:
     def devm_me_yaml_path(self) -> Path:
         return self.path / "devm.me.yaml"
 
+    @property
+    def devm_sh_path(self) -> Path:
+        return self.path / "devm.sh"
+
+    @property
+    def devm_me_sh_path(self) -> Path:
+        return self.path / "devm.me.sh"
+
     def bare_repo_url(self) -> str:
         """Return the URL of the shared public remote every test's default
         `repos.main` points at. Guest clones it through iron-proxy's
@@ -151,6 +159,12 @@ class Workspace:
         yaml_path = self.devm_yaml_path
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
         yaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+
+    def write_devm_sh(self, content: str) -> None:
+        self.devm_sh_path.write_text(content)
+
+    def write_devm_me_sh(self, content: str) -> None:
+        self.devm_me_sh_path.write_text(content)
 
     def patch_devmyaml(self, **sections: Any) -> None:
         """Update named top-level sections in the existing devm.yaml."""
