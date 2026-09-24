@@ -96,10 +96,6 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
     vm = TartSandbox(name=sandbox_name)
     workspace.write_devmyaml(
         no_repo=True,
-        startup=[
-            f"curl -sf -m 10 {NON_ALLOWLISTED_HOST} -o {STARTUP_FETCH_FILE} || true",
-            f"test -f $WORKSPACE/README && echo {STARTUP_SAW_WORKSPACE}",
-        ],
         services={
             "probe": {
                 "exec": [
@@ -111,6 +107,14 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
             },
         },
         network={"allow": ["api.github.com"]},
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "startup() {\n"
+        f"  curl -sf -m 10 {NON_ALLOWLISTED_HOST} -o {STARTUP_FETCH_FILE} || true\n"
+        f"  test -f $WORKSPACE/README && echo {STARTUP_SAW_WORKSPACE}\n"
+        "}\n"
     )
 
     # Scope the log assertion below to this test's own cold-start, not
@@ -206,12 +210,15 @@ def test_normal_cold_start_and_startup_determinism(devm, workspace, sandbox_name
     # but the explicit unlock here is still required since this edit
     # happens BEFORE the stop, while the VM (and the lock) is still up.
     devm.unlock()
-    workspace.patch_devmyaml(
-        startup=[
-            f"curl -sf -m 10 {NON_ALLOWLISTED_HOST} -o {STARTUP_FETCH_FILE} || true",
-            f"echo ran > {DETERMINISM_SENTINEL}",
-        ],
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "startup() {\n"
+        f"  curl -sf -m 10 {NON_ALLOWLISTED_HOST} -o {STARTUP_FETCH_FILE} || true\n"
+        f"  echo ran > {DETERMINISM_SENTINEL}\n"
+        "}\n"
     )
+    devm.approve()
     devm.stop(yes=True)
     stopped = vm.wait_state("stopped", timeout=30.0)
     assert stopped == "stopped", f"expected VM stopped, got {stopped!r}"

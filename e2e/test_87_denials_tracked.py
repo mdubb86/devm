@@ -28,7 +28,6 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(300)
 def test_denials_tracked_per_project(workspace, devm):
     workspace.write_devmyaml(
-        install=["true"],
         # Narrow allow-list so google.com / example.com trigger a reject.
         network={"allow": ["api.github.com"]},
         # Opt out of the default repos.main (github.com/octocat/Hello-World):
@@ -36,6 +35,13 @@ def test_denials_tracked_per_project(workspace, devm):
         # hydration's clone would get blocked by the same policy this test
         # is exercising before assertions ever run.
         no_repo=True,
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
 
     start = subprocess.run(

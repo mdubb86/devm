@@ -31,7 +31,14 @@ pytestmark = pytest.mark.devm
 def test_install_failure_surfaces_loud(devm, workspace):
     # Override the workspace config to use a failing install step.
     # `false` always exits 1.
-    workspace.write_devmyaml(install=["false"])
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  false\n"
+        "}\n"
+    )
 
     # Run devm shell -- true; expect non-zero (install failure).
     p = subprocess.run(

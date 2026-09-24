@@ -20,7 +20,14 @@ SENTINEL = "/home/devm/.devm-install-count"
 @pytest.mark.slow
 @pytest.mark.timeout(600)
 def test_install_runs_once_across_restart(workspace, devm, sandbox_name):
-    workspace.write_devmyaml(install=[f"echo run >> {SENTINEL}"])
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        f"  echo run >> {SENTINEL}\n"
+        "}\n"
+    )
 
     shell = subprocess.run([devm.path, "start"],
                            cwd=str(workspace.path), capture_output=True, timeout=480)

@@ -56,20 +56,42 @@ def test_workspace_write_with_services_install(tmp_path):
     ws = Workspace(tmp_path, slug="x", vm_name="e2e-x-aaaa")
     ws.write_devmyaml(
         no_repo=True,
-        install=["touch /tmp/m"],
         services={"api": {"port": 8080}},
     )
+    ws.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  touch /tmp/m\n"
+        "}\n"
+    )
     cfg = yaml.safe_load((tmp_path / "devm.yaml").read_text())
-    assert cfg["install"] == ["touch /tmp/m"]
     assert cfg["services"]["api"]["port"] == 8080
+    sh = (tmp_path / "devm.sh").read_text()
+    assert "install() {" in sh
+    assert "touch /tmp/m" in sh
 
 
-def test_workspace_patch_devmyaml(tmp_path):
+def test_workspace_write_devm_sh_overwrites(tmp_path):
     ws = Workspace(tmp_path, slug="x", vm_name="e2e-x-aaaa")
-    ws.write_devmyaml(no_repo=True, install=["touch /tmp/a"])
-    ws.patch_devmyaml(install=["touch /tmp/b"])
-    cfg = yaml.safe_load((tmp_path / "devm.yaml").read_text())
-    assert cfg["install"] == ["touch /tmp/b"]
+    ws.write_devmyaml(no_repo=True)
+    ws.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  touch /tmp/a\n"
+        "}\n"
+    )
+    ws.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  touch /tmp/b\n"
+        "}\n"
+    )
+    sh = (tmp_path / "devm.sh").read_text()
+    assert "touch /tmp/b" in sh
+    assert "touch /tmp/a" not in sh
 
 
 # --- devm ---

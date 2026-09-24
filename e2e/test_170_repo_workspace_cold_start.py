@@ -37,20 +37,27 @@ def test_repo_workspace_cold_start(devm, workspace, sandbox_name):
             "main": {
                 "url": workspace.bare_repo_url(),
                 "primary": True,
-                "commands": {
-                    "install": {
-                        "exec": "echo hi > $WORKSPACE/startup-sentinel",
-                        "startup": True,
-                    },
-                },
+                "commands": ["write-sentinel"],
             },
         },
-        # This install: step reads a file that only exists once mutagen
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        # This install() step reads a file that only exists once mutagen
         # has hydrated $WORKSPACE with the cloned repo. If cold-start ran
-        # install: before hydration finished, this fails and `devm start`
-        # exits non-zero -- the return-code check below is the ordering
-        # proof.
-        install=["test -f $WORKSPACE/README"],  # README ships in the hello-world bare repo
+        # install() before hydration finished, this fails and `devm
+        # start` exits non-zero -- the return-code check below is the
+        # ordering proof. README ships in the hello-world bare repo.
+        "  test -f $WORKSPACE/README\n"
+        "}\n"
+        "write-sentinel() {\n"
+        "  echo hi > $WORKSPACE/startup-sentinel\n"
+        "}\n"
+        "startup() {\n"
+        f"  (cd /home/devm/{label} && write-sentinel)\n"
+        "}\n"
     )
 
     try:

@@ -112,17 +112,22 @@ def test_volume_persists_across_teardown(devm, workspace, sandbox_name):
                 "main": {
                     "url": workspace.bare_repo_url(),
                     "primary": True,
-                    "commands": {
-                        "check-restored": {
-                            "exec": "test -f $WORKSPACE/primary-sentinel",
-                            "startup": True,
-                        },
-                    },
+                    "commands": ["check-restored"],
                 },
             },
         )
         # `check-restored` startup command tests `$WORKSPACE/primary-sentinel`
         # after hydration -- a fire before sync completes would fail cold-start.
+        workspace.write_devm_sh(
+            "#!/usr/bin/env bash\n"
+            "set -eo pipefail\n"
+            "check-restored() {\n"
+            "  test -f $WORKSPACE/primary-sentinel\n"
+            "}\n"
+            "startup() {\n"
+            f"  (cd /home/devm/{primary_label} && check-restored)\n"
+            "}\n"
+        )
         devm.approve()
         r = subprocess.run(
             [devm.path, "start"], cwd=str(workspace.path),

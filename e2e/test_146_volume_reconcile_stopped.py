@@ -19,7 +19,14 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(600)
 @pytest.mark.slow
 def test_volume_added_while_stopped_picked_up_on_next_shell(devm, workspace, sandbox_name):
-    workspace.write_devmyaml(install=["true"])
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
+    )
     try:
         # Cold-start without a volume.
         r = subprocess.run(
@@ -37,7 +44,6 @@ def test_volume_added_while_stopped_picked_up_on_next_shell(devm, workspace, san
         # Add the volume declaration while stopped.
         devm.unlock()
         workspace.patch_devmyaml(
-            install=["true"],
             volumes={"scratch": "/var/lib/scratch"},
         )
         devm.approve()

@@ -37,18 +37,22 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(180)
 def test_cold_start_with_curl_install(workspace, devm, sandbox_name):
     workspace.write_devmyaml(
-        install=[
-            # Tiny, stable: a single byte from a github-hosted file.
-            # github.com is the canonical reliable host. Keep the URL
-            # extremely short-lived so a network blip is the only thing
-            # that can plausibly break this — not a flaky upstream.
-            "curl -fsSL https://raw.githubusercontent.com/octocat/Hello-World/master/README > /tmp/devm-e2e-fetch.txt",
-        ],
         # Declare github.com in network.allow so curl can reach it during
         # install: (iron-proxy enforces the allow list uniformly).
         network={
             "allow": ["github.com", "raw.githubusercontent.com"],
         },
+    )
+    # Tiny, stable: a single byte from a github-hosted file. github.com
+    # is the canonical reliable host. Keep the URL extremely short-lived
+    # so a network blip is the only thing that can plausibly break this
+    # — not a flaky upstream.
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  curl -fsSL https://raw.githubusercontent.com/octocat/Hello-World/master/README > /tmp/devm-e2e-fetch.txt\n"
+        "}\n"
     )
 
     r = subprocess.run(

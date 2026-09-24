@@ -79,22 +79,6 @@ def test_templates_cold_start_ordering_sudo_and_live_reconcile(
     )
 
     workspace.write_devmyaml(
-        # Pre-write the ordering probe script via install: to avoid shell
-        # metacharacters in ExecStart= (exec: joins argv with spaces
-        # without quoting, so a complex inline script would be
-        # mis-parsed by systemd). Records template content (or
-        # TEMPLATE_MISSING) then execs sleep infinity so the health
-        # poll sees "active".
-        install=[
-            "printf '#!/bin/sh\\n"
-            "if [ -f /etc/order.conf ]; then\\n"
-            "  cat /etc/order.conf > /tmp/startup-saw-template\\n"
-            "else\\n"
-            "  echo TEMPLATE_MISSING > /tmp/startup-saw-template\\n"
-            "fi\\n"
-            "exec sleep infinity\\n"
-            "' > /tmp/probe.sh && chmod +x /tmp/probe.sh",
-        ],
         services={
             "coldsvc": {
                 "port": 8080,
@@ -135,6 +119,25 @@ def test_templates_cold_start_ordering_sudo_and_live_reconcile(
                 ],
             },
         },
+    )
+    # Pre-write the ordering probe script via install() to avoid shell
+    # metacharacters in ExecStart= (exec: joins argv with spaces
+    # without quoting, so a complex inline script would be mis-parsed
+    # by systemd). Records template content (or TEMPLATE_MISSING) then
+    # execs sleep infinity so the health poll sees "active".
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  printf '#!/bin/sh\\n"
+        "if [ -f /etc/order.conf ]; then\\n"
+        "  cat /etc/order.conf > /tmp/startup-saw-template\\n"
+        "else\\n"
+        "  echo TEMPLATE_MISSING > /tmp/startup-saw-template\\n"
+        "fi\\n"
+        "exec sleep infinity\\n"
+        "' > /tmp/probe.sh && chmod +x /tmp/probe.sh\n"
+        "}\n"
     )
 
     # Owns cold-start: `devm start` runs with the yaml already in place, so

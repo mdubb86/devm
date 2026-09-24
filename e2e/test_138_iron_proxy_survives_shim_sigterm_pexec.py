@@ -68,8 +68,14 @@ def test_iron_proxy_survives_shim_sigterm_pexec_managed(
 ):
     workspace.write_devmyaml(
         no_repo=True,
-        install=["true"],
         network={"allow": ["httpbin.org"]},
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
 
     try:

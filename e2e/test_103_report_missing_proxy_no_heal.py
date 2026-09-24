@@ -43,8 +43,14 @@ _EXIT_RECONCILE_REQUIRED = 4
 @pytest.mark.timeout(300)
 def test_report_missing_proxy_no_heal(devm, workspace, sandbox_name, devm_installed, devm_path, tmp_path):
     workspace.write_devmyaml(
-        install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
 
     r = subprocess.run(

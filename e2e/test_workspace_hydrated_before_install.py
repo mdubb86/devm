@@ -12,8 +12,13 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(300)
 def test_install_sees_hydrated_workspace(devm, workspace):
-    workspace.write_devmyaml(
-        install=["test -f $WORKSPACE/README && echo install-saw-workspace"],
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  test -f $WORKSPACE/README && echo install-saw-workspace\n"
+        "}\n"
     )
     r = subprocess.run([devm.path, "start"], cwd=str(workspace.path),
                        capture_output=True, timeout=180)

@@ -15,17 +15,21 @@ def test_startup_open_manual_enforced(devm, workspace):
             "main": {
                 "url": workspace.bare_repo_url(),
                 "primary": True,
-                "commands": {
-                    "fetch": {
-                        # pypi.org is not on network.allow (default
-                        # allow is github.com only): open during
-                        # startup, enforced for a manual run below.
-                        "exec": "curl -sSf --max-time 10 https://pypi.org/simple/ > /dev/null",
-                        "startup": True,
-                    },
-                },
+                "commands": ["fetch"],
             },
         },
+    )
+    # pypi.org is not on network.allow (default allow is github.com
+    # only): open during startup, enforced for a manual run below.
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "fetch() {\n"
+        "  curl -sSf --max-time 10 https://pypi.org/simple/ > /dev/null\n"
+        "}\n"
+        "startup() {\n"
+        f"  (cd /home/devm/{workspace.bare_repo_label()} && fetch)\n"
+        "}\n"
     )
     r = subprocess.run([devm.path, "start"], cwd=str(workspace.path),
                        capture_output=True, timeout=180)

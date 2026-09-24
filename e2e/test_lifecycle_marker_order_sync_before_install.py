@@ -10,8 +10,13 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(300)
 def test_stage_marker_order(devm, workspace):
-    workspace.write_devmyaml(
-        install=["echo install-ran"],
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  echo install-ran\n"
+        "}\n"
     )
     r = subprocess.run([devm.path, "start"], cwd=str(workspace.path),
                        capture_output=True, timeout=180)

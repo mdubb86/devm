@@ -17,8 +17,14 @@ pytestmark = pytest.mark.devm
 def test_install_script_hits_iron_proxy(devm, workspace):
     workspace.write_devmyaml(
         no_repo=True,
-        install=["curl -fsSL https://astral.sh/uv/install.sh -o /tmp/u.sh"],
         network={"allow": ["astral.sh", "deb.debian.org", "security.debian.org"]},
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  curl -fsSL https://astral.sh/uv/install.sh -o /tmp/u.sh\n"
+        "}\n"
     )
     try:
         r = subprocess.run(

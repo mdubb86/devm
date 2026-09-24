@@ -35,9 +35,15 @@ def test_daemon_softnet_egress(workspace, devm, sandbox_name):
     # host test_43 uses (known-good against the real upstream).
     workspace.write_devmyaml(
         no_repo=True,
-        install=["true"],
         services={"sleep": {"exec": ["/bin/sleep", "infinity"], "restart": "always"}},
         network={"allow": ["api.github.com"]},
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
 
     sandbox = TartSandbox(name=sandbox_name)

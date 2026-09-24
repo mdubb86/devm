@@ -38,8 +38,13 @@ pytestmark = pytest.mark.devm
 
 @pytest.mark.timeout(120)
 def test_install_change_recreate(workspace, devm, sandbox_name, phase):
-    workspace.write_devmyaml(
-        install=["touch /tmp/marker-a"],
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  touch /tmp/marker-a\n"
+        "}\n"
     )
     phase("setup")
     sandbox = TartSandbox(name=sandbox_name)
@@ -64,9 +69,14 @@ def test_install_change_recreate(workspace, devm, sandbox_name, phase):
         # unlock before editing — the recreate's relaunch re-locks it at
         # cold-start, same as the initial boot did.
         devm.unlock()
-        workspace.patch_devmyaml(
-            install=["touch /tmp/marker-b"],
+        workspace.write_devm_sh(
+            "#!/usr/bin/env bash\n"
+            "set -eo pipefail\n"
+            "install() {\n"
+            "  touch /tmp/marker-b\n"
+            "}\n"
         )
+        devm.approve()
         devm.reconcile(yes=True, timeout=90, check=False)
 
         # User shell dies — sandbox was rm'd underneath.

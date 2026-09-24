@@ -105,8 +105,14 @@ def test_etc_environment_roundtrip(devm, workspace, sandbox_name):
     # shapes correctly (verified by write_devmyaml + reconcile).
     env_map = {f"K_{name}": yaml_input for name, yaml_input, _ in ACCEPT_CASES}
     workspace.write_devmyaml(
-        install=["true"],
         env=env_map,
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
 
     try:

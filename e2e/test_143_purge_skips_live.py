@@ -20,8 +20,14 @@ pytestmark = pytest.mark.devm
 @pytest.mark.slow
 def test_purge_skips_live_projects(devm, workspace, sandbox_name):
     workspace.write_devmyaml(
-        install=["true"],
         volumes={"scratch": "/var/lib/scratch"},
+    )
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  true\n"
+        "}\n"
     )
     try:
         # Cold-start creates the VM + the Mac-side volume dir.
