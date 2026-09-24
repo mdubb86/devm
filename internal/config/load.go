@@ -99,8 +99,8 @@ func Load(dir string) (schema.Config, error) {
 	// $WORKSPACE expands to the primary repo's GUEST path (e.g.
 	// /home/devm/<label>) — NOT the Mac cwd. Under mutagen-volumes the
 	// guest no longer mirrors the Mac's absolute path; every place
-	// $WORKSPACE surfaces is a guest-side context (install:, startup:,
-	// scripts, service envs) so it must resolve to a path the guest can
+	// $WORKSPACE surfaces is a guest-side context (devm.sh's install()/
+	// startup(), service envs) so it must resolve to a path the guest can
 	// chdir into. Repo-less projects fall back to /home/devm.
 	workspace := merged.PrimaryGuestPath(dir)
 	if workspace == "" {

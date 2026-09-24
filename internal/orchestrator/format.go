@@ -801,10 +801,6 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "env_remove"
 	case reconcile.KindEnvChange:
 		return "env_change"
-	case reconcile.KindInstallChange:
-		return "install_change"
-	case reconcile.KindStartupChange:
-		return "startup_change"
 	case reconcile.KindPackageAdd:
 		return "package_add"
 	case reconcile.KindPackageRemove:
@@ -880,10 +876,6 @@ func formatChange(c reconcile.Change) string {
 		return fmt.Sprintf("- env: %s.%s", c.Service, c.Key)
 	case reconcile.KindEnvChange:
 		return fmt.Sprintf("~ env: %s.%s: %q → %q", c.Service, c.Key, c.Old, c.New)
-	case reconcile.KindInstallChange:
-		return "~ install commands"
-	case reconcile.KindStartupChange:
-		return "~ startup commands"
 	case reconcile.KindPackageAdd:
 		return fmt.Sprintf("+ package %s", c.Key)
 	case reconcile.KindPackageRemove:

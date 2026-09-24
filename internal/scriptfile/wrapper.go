@@ -58,8 +58,8 @@ func RenderWrapper(in WrapperInput) (string, error) {
 }
 
 // bashEscape prepares a value for a double-quoted bash string literal:
-// backslash-escape `"` and `$`. That's enough for env values that hold
-// arbitrary bytes; there is no shell-command interpretation intended.
+// backslash-escape `\`, `"`, and `$`. That's enough for env values that
+// hold arbitrary bytes; there is no shell-command interpretation intended.
 func bashEscape(v string) string {
 	v = strings.ReplaceAll(v, `\`, `\\`)
 	v = strings.ReplaceAll(v, `"`, `\"`)

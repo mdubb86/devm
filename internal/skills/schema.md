@@ -16,9 +16,6 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `env` | map[string]EnvValue | live | Project-wide environment variables forwarded to all services. |
 | `services` | map[string]Service | varies | Named service definitions; bucket depends on which sub-field changes (see Services section). |
 | `packages` | []string | live | Apt packages. A running VM converges under the project's current `network.allow` — the Debian mirrors need to be reachable; a stopped VM converges during the next boot's provisioning window. |
-| `install` | []string | recreate | Shell commands run once at VM creation as the guest `devm` user. NOPASSWD sudo is available for privileged steps. |
-| `startup` | []string | restart | Shell commands run on every boot that opens the provisioning window (first boot, or `startup:` itself non-empty, or any service declares `templates:`), in order, as the guest `devm` user, under `passthrough` authority mode (iron-proxy in the path, allowlist not yet gating). NOPASSWD sudo is available for privileged steps. |
-| `scripts` | map[string][]string | (see below) | Named library of reusable multi-command shell snippets, referenced from `install:`/`startup:` via a `>NAME` entry. |
 | `volumes` | map[string]Volume | live | Per-project named persistent stores. Key = volume name; value is either a bare guest path string or a `{path, label, ignore}` mapping. Data lives on the Mac side under `~/Library/Application Support/devm/<projectID>/<label>/` and survives `devm teardown`. See the `volumes` section below. |
 | `repos` | map[string]RepoConfig | varies | Declares the project's git repos to hydrate via `git clone` at cold-start, keyed by an arbitrary schema id. Exactly one entry is the primary workspace repo. `url`/`secret` are **restart-VM** (iron-proxy clones at boot using these); every other field is **live** (mutagen-session-only). Optional — omit for utility VMs with no repo. See the `repos` section below. |
 | `path` | []string | live | Directories prepended to `$PATH` inside the VM. |
@@ -117,54 +114,42 @@ Rules:
 
 ---
 
-## `install`
+## `devm.sh`
 
-`[]string` — bucket: **recreate**.
+Not a `devm.yaml` field — a sibling file at the project root. `devm.sh` is
+a bash function library: every top-level `name() { ... }` (or `function
+name { ... }`) declaration becomes a callable function, named
+`[a-z][a-z0-9-]*` (kebab-case, starting with a letter).
 
-Shell commands run once at VM creation time, in order, as the guest `devm` user. Each command runs under `bash -o pipefail -c`. Bootstrap runs first, so `apt-get update` has already been called — user entries can `sudo apt-get install -y <pkg>` directly (the `devm` user has NOPASSWD sudo baked into the base image).
+Two function names are magic, called automatically by the provisioner:
 
-`install` runs **once, on first boot only** — it is gated by a marker (`/var/lib/devm/provisioned`) and is **not** re-run on a later cold start (`devm stop` then `devm start` reuses the same disk, so installed tools and built artifacts are still there). It runs during the provisioning window: iron-proxy is in the path under `passthrough` authority mode (MITM'd, audited, secret-substituted, but not allowlist-gated). Use `install` for one-time setup. For a command that must run on **every** boot, use `startup:` (every boot, same provisioning window — see below), or a service (`exec:` / `systemd:`) for a long-running process (every boot, under the restricted allowlist).
+- **`install()`** — runs once, on first boot only (gated by
+  `/var/lib/devm/provisioned`, same as before). Use for one-time setup:
+  `sudo apt-get install -y <pkg>`, toolchain downloads, anything that
+  shouldn't repeat on every boot.
+- **`startup()`** — runs on every boot that opens the provisioning
+  window (first boot, or any service declares `templates:`), before the
+  allowlist restricts egress. Use for per-boot setup that needs
+  unrestricted network (fetch/refresh something, warm a cache).
 
-Changing `install` requires a full VM teardown and cold start (a fresh VM then re-runs first-boot `install` with the new commands).
+Both run as the guest `devm` user under `passthrough` authority mode
+(iron-proxy in the path, MITM'd and audited, but not allowlist-gated
+yet), with NOPASSWD sudo available. A failing `install()` or `startup()`
+aborts provisioning: `devm.target` never starts, no access is granted,
+and the VM is torn down.
 
-Note: `--` in a command's argv is consumed by the internal wrapper; quote it or split the command into multiple steps.
+Every other function name is only called where something references it:
 
----
+- `repos.<name>.commands` — function names runnable against that repo
+  via `run <name>` from the guest shell.
+- `services.<name>.exec` (string form) — the function backing that
+  service's process; devm renders a wrapper unit that invokes it.
+- from inside `devm.sh` itself — functions can call each other like any
+  bash script.
 
-## `startup`
-
-`[]string` — bucket: **restart** (VM stop + cold start; no teardown, no data loss).
-
-Shell commands run on **every** boot where the provisioning window runs, in order, as the guest `devm` user, under `passthrough` authority mode — iron-proxy stays in the path (MITM + audit + secret substitution), but the per-request allowlist isn't gating yet. NOPASSWD sudo is available for privileged steps. Runs under one shared shell (exports/`cd` persist between lines), 600s timeout for the whole block (override with `DEVM_INSTALL_STEP_TIMEOUT_S`). Use it for per-boot setup that needs unrestricted network (fetch/refresh something, register the VM, warm a cache).
-
-The provisioning window itself only runs when there's work for it: first boot, or `startup:` is non-empty, or any service declares `templates:`. A project with no `startup:` and no `templates:` skips the window entirely on a later cold start and goes straight to the restricted allowlist.
-
-A failing `startup:` command aborts provisioning: `devm.target` never starts, no access is granted, and the VM is torn down — same failure class as a broken `install:` command, not fail-safe.
-
-The three hooks: `install:` = once, first boot, `passthrough` authority mode. `startup:` = every boot that opens the provisioning window, `passthrough` authority mode. Services (`exec:`/`systemd:`) = every boot, `restricted` authority mode — started and health-polled after the allowlist is applied, confirmed healthy before `devm.target` (and therefore access) comes up. Editing `startup:` (**restart** bucket) is deterministic: the freshly-rendered `startup:` runs on the applying `devm stop` + `devm start` — the edit takes effect on that restart.
-
----
-
-## `scripts`
-
-`map[string][]string` — bucket: none of its own; a change only takes effect through whichever hook references it (`install:` → recreate, `startup:` → restart).
-
-A named library of reusable multi-command shell snippets. Each key is the script name and must match `[a-z][a-z0-9-]*` (kebab-case, starting with a letter). Each value is an ordered list of shell commands.
-
-Reference a script from `install:` or `startup:` with a single string entry of the form `>NAME`:
-
-```yaml
-scripts:
-  install-supabase:
-    - curl -fsSL https://example.com/install.sh -o /tmp/install.sh
-    - bash /tmp/install.sh
-install:
-  - ">install-supabase"
-```
-
-When referenced from `install:`, the engine joins the script's commands with ` && ` and runs them under one `bash -eo pipefail -c` invocation. When referenced from `startup:`, the commands are emitted inline into `startup.sh` (which already runs under one shared shell), so variables set in one step are visible in later steps.
-
-V1 scope: refs are only resolved from `install:` and `startup:`. Scripts take no parameters and cannot call other scripts.
+`devm.me.sh` is a per-machine override: same shape, sourced after
+`devm.sh` so its definitions win on name collision (last-source-wins),
+same pairing as `devm.me.yaml`.
 
 ---
 
@@ -198,7 +183,7 @@ Named service definitions. Each key is the service name.
 | `expose_host` | bool | live | Opt this service's `hostname` into devm's shared LAN dispatcher (host `0.0.0.0:42000`), so other devices on the LAN can reach it by hostname. Requires `hostname`. Independent of `direct`. Default `false`. |
 | `env` | map[string]EnvValue | live | Per-service environment variables (same `!secret` syntax as top-level `env`). |
 | `templates` | []Template | live | Files rendered from source scripts and written into the VM. Each has `source` (project-relative path), `output` (absolute path in VM), and optional `sudo` (default `false`; set `true` when `output` is under a root-owned dir like `/etc` so the installer escalates and the resulting file lands root-owned). |
-| `exec` | []string | live | Command and arguments to run as the service process. |
+| `exec` | string or []string | live | The service's process. A single string names a `devm.sh`/`devm.me.sh` function to run (devm renders a wrapper unit that invokes it); a list is a literal argv (command + arguments) run directly. |
 | `workdir` | string | live | Working directory for the service process. |
 | `restart` | string | live | Restart policy: `no`, `on-failure`, or `always`. |
 | `after` | []string | live | Service names this service waits for at start (ordering only). |
@@ -323,9 +308,9 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 **live** — Devm applies the change without stopping the VM or ending active sessions. Env, path, template, and package changes are applied directly inside the guest. `volumes:` and most of `repos:` (every field except `url`/`secret`) start, stop, or retarget a mutagen sync session without a VM cycle. Network (`allow`) and secret changes are applied by regenerating iron-proxy's config and respawning it — no VM restart, no prompt.
 
-**restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm start`. Sits here: `startup:` (edit takes effect on the applying restart) and `repos.<name>.url`/`repos.<name>.secret` (iron-proxy clones the repo at VM boot using these values).
+**restart** — VM stop + cold start, no teardown/data-loss. `devm reconcile` reports it as a distinct category from recreate, and the fix is `devm stop` + `devm start`. Sits here: `memory`/`cpu` overrides and `repos.<name>.url`/`repos.<name>.secret` (iron-proxy clones the repo at VM boot using these values). `devm.sh`/`devm.me.sh` edits (including `install()`/`startup()` bodies) aren't diffed by reconcile — see `devm skills get lifecycle` for how those actually propagate.
 
-**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm start` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `install` commands, `base_image`, and `project` identity fields.
+**recreate** — the VM must be fully deleted and recreated. `devm reconcile` prints the pending changes; a subsequent `devm start` performs the teardown and cold start. Fields in this bucket are baked in at VM creation time and cannot be patched onto a running VM: `base_image`, `project` identity fields, `docker` toggle, and `disk` size.
 
 ---
 

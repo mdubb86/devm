@@ -35,7 +35,7 @@ func ValidateFunctionName(name string) error {
 // skipped: not addressable from devm.yaml, so ignoring them is safe.
 //
 // Not a full bash parser. Reads line-by-line, tracks brace depth by
-// counting `{`/`}` outside quotes, skips comments and heredoc bodies.
+// counting `{`/`}` outside quotes, and skips comments.
 // Good enough for the shape users actually write in devm.sh; anything
 // exotic (e.g. eval-generated function defs) simply isn't enumerable
 // and would surface at run time.

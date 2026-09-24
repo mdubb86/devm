@@ -92,9 +92,7 @@ func scanForRetiredTerms(body string, terms []string) []string {
 	var hits []string
 	lower := strings.ToLower(body)
 	for _, t := range terms {
-		// Whole-word match: `\bsbx\b` style, allowing `.`, `-`, `_`
-		// inside the term itself (e.g. install-all-ok).
-		re := regexp.MustCompile(`\b` + regexp.QuoteMeta(t) + `\b`)
+		re := regexp.MustCompile(retiredTermPattern(t))
 		if re.MatchString(lower) {
 			hits = append(hits, t)
 		}
@@ -102,8 +100,21 @@ func scanForRetiredTerms(body string, terms []string) []string {
 	return hits
 }
 
+// retiredTermPattern builds a match-boundary regex for a retired term.
+// `\b` (a transition between a word char and a non-word char) only
+// works when the term itself starts/ends on a word character — a term
+// like "install:" or ">NAME" ends/starts on punctuation, and `\b` can
+// never match on either side of that character (colon and backtick,
+// say, are both non-word, so there's no word/non-word transition to
+// anchor on). Consuming a single non-word boundary character (or the
+// string edge) via a character class instead works for every term
+// regardless of what it starts/ends with.
+func retiredTermPattern(t string) string {
+	return `(?:^|[^\w])` + regexp.QuoteMeta(strings.ToLower(t)) + `(?:$|[^\w])`
+}
+
 func TestScanForRetiredTerms_TableTests(t *testing.T) {
-	terms := []string{"sbx", "allowed_domains", "wrap-fg", "kit policy"}
+	terms := []string{"sbx", "allowed_domains", "wrap-fg", "kit policy", "install:", ">NAME", "Config.Install"}
 	tests := []struct {
 		name string
 		body string
@@ -153,6 +164,30 @@ func TestScanForRetiredTerms_TableTests(t *testing.T) {
 			name: "doesn't catch when kit and policy are separated",
 			body: "use kit other words policy when restricting network",
 			want: nil,
+		},
+		{
+			// Regression pin: a term ending in punctuation (":") must
+			// still match when immediately followed by more punctuation
+			// (a closing backtick) — plain `\b` can't anchor there since
+			// neither ':' nor '`' is a word character.
+			name: "catches a term ending in punctuation before more punctuation",
+			body: "reference it from `install:` or `startup:`",
+			want: []string{"install:"},
+		},
+		{
+			// Regression pin: a term starting with punctuation (">")
+			// must still match when preceded by punctuation.
+			name: "catches a term starting with punctuation after punctuation",
+			body: "a single string entry of the form `>NAME`",
+			want: []string{">NAME"},
+		},
+		{
+			// Regression pin: the term itself may carry uppercase (Go
+			// type names) while the scan lowercases the body — the term
+			// must be lowercased too or it can never match.
+			name: "matches a mixed-case term against the lowercased body",
+			body: "Config.Install used to hold the field.",
+			want: []string{"Config.Install"},
 		},
 	}
 	for _, tc := range tests {
@@ -223,6 +258,14 @@ var retiredTerms = []string{
 	"kit-policy", "kit policy",
 	"anchor process", "anchor-alive",
 	"transient egress window",
+	// devm.yaml install:/startup:/scripts: fields, retired in favor of
+	// the devm.sh two-file model (install()/startup() functions).
+	// Backtick-wrapped so `scripts:` (the retired top-level field) can't
+	// false-positive on the unrelated /opt/devm/scripts guest directory
+	// (e.g. "/opt/devm/scripts:$PATH" legitimately contains "scripts:").
+	"`install:`", "`startup:`", "`scripts:`", "`>NAME`",
+	"commands.<name>.exec", "commands.<name>.startup",
+	"Config.Install", "Config.Startup", "Config.Scripts", "Service.Exec",
 }
 
 func TestNoRetiredTermsInSkills(t *testing.T) {

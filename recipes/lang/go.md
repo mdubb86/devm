@@ -46,6 +46,9 @@ install() {
   # first, then build the download URL from it.
   VER=$(curl -sSL https://go.dev/VERSION?m=text | head -1)
   curl -fsSL "https://go.dev/dl/${VER}.linux-arm64.tar.gz" | sudo tar -xz -C /usr/local
+  # `go` resolves here because `path: [/usr/local/go/bin, ...]` above is
+  # already in this shell's PATH (devm prepends cfg.Path before running
+  # install()) — not because this script sources anything itself.
   go install golang.org/x/tools/gopls@latest
 }
 ```

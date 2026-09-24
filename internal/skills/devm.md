@@ -47,7 +47,7 @@ A project's `CLAUDE.md` is git-tracked, so both the Mac and the VM see the same 
 
 ## `run <name>` — repo task dispatcher
 
-Inside the guest, `run <name>` looks up `<name>` in the containing repo's `commands:` block (walks up from `$PWD` to find its repo) and runs it from the repo root. Two repos can define the same name; cwd picks the right one. Commands with `startup: true` also fire automatically at cold-start after the workspace is hydrated.
+Inside the guest, `run <name>` looks up `<name>` in the containing repo's `commands:` block (walks up from `$PWD` to find its repo) and runs it from the repo root. Two repos can define the same name; cwd picks the right one. `commands:` is just a list of function names, defined in the project's `devm.sh` (or `devm.me.sh`) — nothing fires automatically at cold-start on its own. To run something at cold-start, call it from `startup()` (every boot that opens the provisioning window) or `install()` (first boot only) in `devm.sh`.
 
 ### Mutagen transport
 
@@ -60,12 +60,14 @@ interactive `ssh devm-<name>` and VS Code Remote-SSH.
 ## Propose channel
 
 **Propose channel.** `devm propose` runs on either the Mac or the
-guest; it signals the daemon that the human-approved config file has
-been edited and is ready for review. The file itself lives on the
-Mac at `~/Library/Application Support/devm/<name>/devm.yaml` and is
-synced bidirectionally to the guest at `/home/devm/devm.yaml`. The
-approve gate refuses `devm reconcile`/`devm start` until the human
-approves the change.
+guest; it signals the daemon that a human-approved config file has
+been edited and is ready for review. Four files carry this contract:
+`devm.yaml`, `devm.me.yaml`, `devm.sh`, `devm.me.sh`. Each lives on the
+Mac under `~/Library/Application Support/devm/<name>/` and is synced
+bidirectionally to the same filename under `/home/devm/` in the guest.
+The approve gate refuses
+`devm reconcile`/`devm start` when any of the four has changed since
+the last approval, until the human approves the change.
 
 ## Where to look next
 

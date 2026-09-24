@@ -51,31 +51,31 @@ func TestFormatReconcileText_RecreatePending(t *testing.T) {
 	out := FormatReconcileText(ReconcileResult{
 		Applied: []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
 		RecreateRequired: []reconcile.Change{
-			{Kind: reconcile.KindInstallChange},
+			{Kind: reconcile.KindImageChange},
 		},
 		Flavor:   reconcile.FlavorTeardownVM,
 		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 	})
 	assert.Contains(t, out, "Applied 1 live change")
 	assert.Contains(t, out, "1 change(s) require recreate")
-	assert.Contains(t, out, "~ install commands")
+	assert.Contains(t, out, "~ base image")
 	assert.Contains(t, out, "Teardown + recreate sandbox?")
 	assert.Contains(t, out, "Will hang up 1 active session")
 	assert.NotContains(t, out, "require restart")
 }
 
 func TestFormatReconcileText_RestartPending(t *testing.T) {
-	// KindStartupChange is BucketRestartVM — distinct "restart" category,
+	// KindMemoryChange is BucketRestartVM — distinct "restart" category,
 	// not folded into the "recreate" (teardown) section.
 	out := FormatReconcileText(ReconcileResult{
 		RecreateRequired: []reconcile.Change{
-			{Kind: reconcile.KindStartupChange},
+			{Kind: reconcile.KindMemoryChange, Old: "4G", New: "8G"},
 		},
 		Flavor:   reconcile.FlavorRestartVM,
 		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 	})
 	assert.Contains(t, out, "1 change(s) require restart")
-	assert.Contains(t, out, "~ startup commands")
+	assert.Contains(t, out, "~ memory: 4G → 8G")
 	assert.Contains(t, out, "Restart sandbox (`devm stop` + `devm start`) to apply")
 	assert.Contains(t, out, "Will hang up 1 active session")
 	assert.NotContains(t, out, "require recreate")
@@ -85,22 +85,22 @@ func TestFormatReconcileText_RestartPending(t *testing.T) {
 func TestFormatReconcileText_RestartAndRecreatePending_BothSectionsRender(t *testing.T) {
 	out := FormatReconcileText(ReconcileResult{
 		RecreateRequired: []reconcile.Change{
-			{Kind: reconcile.KindStartupChange},
-			{Kind: reconcile.KindInstallChange},
+			{Kind: reconcile.KindMemoryChange, Old: "4G", New: "8G"},
+			{Kind: reconcile.KindImageChange},
 		},
 		Flavor: reconcile.FlavorTeardownVM,
 	})
 	assert.Contains(t, out, "1 change(s) require restart")
-	assert.Contains(t, out, "~ startup commands")
+	assert.Contains(t, out, "~ memory: 4G → 8G")
 	assert.Contains(t, out, "1 change(s) require recreate")
-	assert.Contains(t, out, "~ install commands")
+	assert.Contains(t, out, "~ base image")
 }
 
 func TestFormatReconcileText_RestartAndRecreatePending_HangupPrintedOnce(t *testing.T) {
 	out := FormatReconcileText(ReconcileResult{
 		RecreateRequired: []reconcile.Change{
-			{Kind: reconcile.KindStartupChange},
-			{Kind: reconcile.KindInstallChange},
+			{Kind: reconcile.KindMemoryChange, Old: "4G", New: "8G"},
+			{Kind: reconcile.KindImageChange},
 		},
 		Flavor:   reconcile.FlavorTeardownVM,
 		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
@@ -248,7 +248,7 @@ func TestFormatReconcileJSON(t *testing.T) {
 	js := FormatReconcileJSON(ReconcileResult{
 		Rendered: true, SandboxState: "running",
 		Applied:          []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
-		RecreateRequired: []reconcile.Change{{Kind: reconcile.KindInstallChange}},
+		RecreateRequired: []reconcile.Change{{Kind: reconcile.KindImageChange}},
 		Flavor:           reconcile.FlavorTeardownVM,
 		Sessions:         []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
 		NextAction:       "needs_approval",
@@ -260,7 +260,7 @@ func TestFormatReconcileJSON(t *testing.T) {
 	rec := parsed["recreate_required"].(map[string]any)
 	changes := rec["changes"].([]any)
 	require.Len(t, changes, 1)
-	assert.Equal(t, "install_change", changes[0].(map[string]any)["kind"])
+	assert.Equal(t, "image_change", changes[0].(map[string]any)["kind"])
 	assert.NotContains(t, parsed, "restart_required")
 }
 
@@ -268,8 +268,8 @@ func TestFormatReconcileJSON_RestartRequired_SeparateFromRecreate(t *testing.T) 
 	js := FormatReconcileJSON(ReconcileResult{
 		Rendered: true, SandboxState: "running",
 		RecreateRequired: []reconcile.Change{
-			{Kind: reconcile.KindStartupChange},
-			{Kind: reconcile.KindInstallChange},
+			{Kind: reconcile.KindMemoryChange},
+			{Kind: reconcile.KindImageChange},
 		},
 		Flavor:     reconcile.FlavorTeardownVM,
 		NextAction: "needs_approval",
@@ -280,12 +280,12 @@ func TestFormatReconcileJSON_RestartRequired_SeparateFromRecreate(t *testing.T) 
 	restart := parsed["restart_required"].(map[string]any)
 	restartChanges := restart["changes"].([]any)
 	require.Len(t, restartChanges, 1)
-	assert.Equal(t, "startup_change", restartChanges[0].(map[string]any)["kind"])
+	assert.Equal(t, "memory_change", restartChanges[0].(map[string]any)["kind"])
 
 	recreate := parsed["recreate_required"].(map[string]any)
 	recreateChanges := recreate["changes"].([]any)
 	require.Len(t, recreateChanges, 1)
-	assert.Equal(t, "install_change", recreateChanges[0].(map[string]any)["kind"])
+	assert.Equal(t, "image_change", recreateChanges[0].(map[string]any)["kind"])
 }
 
 func TestFormatStatusText_ProxyUnreachable(t *testing.T) {
@@ -694,12 +694,6 @@ func TestFormatChange_ServiceDirect(t *testing.T) {
 	assert.Equal(t, "~ service direct: db: off", formatChange(turnedOff))
 
 	assert.Equal(t, "service_direct_change", changeKindJSON(reconcile.KindServiceDirectChange))
-}
-
-func TestFormatChange_Startup(t *testing.T) {
-	change := reconcile.Change{Kind: reconcile.KindStartupChange}
-	assert.Equal(t, "~ startup commands", formatChange(change))
-	assert.Equal(t, "startup_change", changeKindJSON(reconcile.KindStartupChange))
 }
 
 func TestFormatChange_Package(t *testing.T) {

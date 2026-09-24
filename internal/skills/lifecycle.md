@@ -22,7 +22,7 @@ description: devm VM lifecycle commands — shell, start, reconcile, stop, teard
 | `devm pop mac <path-or-url>` | Open a Mac-native file with its default app; refuses paths that resolve into a devm-managed volume. An `http://` / `https://` URL routes straight to the default browser. Out-of-mirror paths get a live-sync session (see `devm status` for count). |
 | `devm pop vm <path-or-url>` | Open a file from the project's guest workspace with its default app on the Mac, translating it to its Mac-side volume storage location. An `http://` / `https://` URL routes straight to the default browser. Out-of-mirror paths get a live-sync session (see `devm status` for count). |
 | `devm init <name>` | Register the current directory as a devm project. Creates the per-project state directory and seed devm.yaml. |
-| `devm propose` | Signal that devm.yaml (or --kind devm.me.yaml) has been edited and is ready for review. |
+| `devm propose` | Signal that devm.yaml, devm.me.yaml, devm.sh, or devm.me.sh (`--kind`) has been edited and is ready for review. |
 | `/opt/devm/bin/propose` | Guest-side signal-only endpoint. Same signal as `devm propose` — bytes reach the Mac via sync. |
 
 `devm pop` — test/tuning overrides (read once at daemon start):
@@ -78,22 +78,21 @@ Provisioning is the daemon's job, not the guest's own boot sequence. It walks th
 | `bundle` | guest | every run | Extract `/opt/devm` into the guest and run `install.sh` (devm CA install, PATH symlinks, mutagen-agent, systemd setup). Also flushes the base image's boot-time nftables lock — softnet is the egress boundary now. |
 | `volume-sync` | Mac | every run, if `volumes:` or `repos:` is set | Establish a mutagen sync session for every volume and repo entity and wait for the initial sync to converge, so later stages see hydrated workspace + volume state. |
 | `repo-clone` | guest | every run, per repo whose Mac-side mirror was empty | Clone the repo into the guest through iron-proxy. Repos with existing mirror content adopt in place instead. |
-| `open` | guest | first boot, `startup:` non-empty, any service declares `templates:`, or a pending `packages:` diff | Egress opens fully for this window so `apt-get`, `curl … \| bash`, and friends work. |
+| `open` | guest | first boot, `startup()` defined in devm.sh, any service declares `templates:`, or a pending `packages:` diff | Egress opens fully for this window so `apt-get`, `curl … \| bash`, and friends work. |
 | `packages` | guest | first boot (full list), or any later boot with a pending `packages:` diff | `apt-get update` + `apt-get install -y <packages>` on first boot; a targeted apt add/remove converge on a later boot. Both flow through the `apt_run` helper (per-file `Acquire::Retries=3` plus an outer three-attempt retry-with-backoff loop) so a transient mirror stall no longer tears the VM down. |
-| `install` | guest | first boot only, if `install:` set | Run each `install:` command in order, open network. |
+| `install` | guest | first boot only, if `install()` is defined in devm.sh | Run the `install()` function's body, open network. |
 | `docker` | guest | first boot only, if `docker: true` | Install the Docker engine + runc shim; gate docker with everything else so it only starts after enforcement. |
 | `templates` | guest | every boot, if any service declares `templates:` | Render every declared template file into its output path. |
-| `startup` | guest | every boot, if `startup:` is non-empty | Run each `startup:` command, open network. |
-| `commands` | guest | every run, per repo command flagged `startup: true` | Run each `repos.<name>.commands.<name>` marked `startup: true` in the repo's guest cwd, as the devm user via `with-devm-env`. Still under open egress. |
+| `startup` | guest | every boot, if `startup()` is defined in devm.sh | Run the `startup()` function's body, open network. |
 | `enforce` | Mac | every run | Flip softnet's egress policy authority back to restricted. No in-guest work — this is the Mac-side boundary that marks the classifier's teardown/debuggable split. A failure at or before this point is devm's own enforcement being broken, not a user service. |
 | `services` | guest | every run | `daemon-reload` + `unmask ssh`; enable + start each declared service unit; health-poll each (bounded, tolerates `Type=oneshot`) until active/healthy or timeout — **before** `devm.target` starts. |
 | _(finish)_ | guest | every run | `systemctl start devm.target` — brings up the gated services (ssh, docker, and your service units), all under enforcement. **Access is granted only now.** |
 
 "Side" names where the stage marker is emitted from: `guest` stages come from the composed provisioning script; `Mac` stages come from the Mac-side orchestrator between guest scripts.
 
-Any failing command aborts the whole provisioning run before `devm.target` starts, so a failure never grants access. `services` is the only stage that leaves the VM running for in-place debugging — a failure there is the user's service definition being broken *after* everything else worked. A failure at any earlier stage (from `bundle` through `enforce`) tears the VM down — `devm start` promises loud failure, never a half-created VM left behind. `templates` deliberately does not keep the VM even though it runs after `install:`/`docker:` (it runs under open egress, before `enforce` installs the real allowlist — a VM kept alive on a `templates` failure would be sitting there unenforced).
+Any failing command aborts the whole provisioning run before `devm.target` starts, so a failure never grants access. `services` is the only stage that leaves the VM running for in-place debugging — a failure there is the user's service definition being broken *after* everything else worked. A failure at any earlier stage (from `bundle` through `enforce`) tears the VM down — `devm start` promises loud failure, never a half-created VM left behind. `templates` deliberately does not keep the VM even though it runs after `install()`/`docker:` (it runs under open egress, before `enforce` installs the real allowlist — a VM kept alive on a `templates` failure would be sitting there unenforced).
 
-`install`/`docker` are gated by the `/var/lib/devm/provisioned` marker and only run once, on first boot; they're skipped on a later cold start (`devm stop` + `devm start` reuses the same disk, so installed tools and built artifacts are still there). `packages` runs its full list on first boot like the others, but also converges a pending `packages:` diff on a later cold start (a running VM instead converges the same diff live, via `devm reconcile`, under the project's current `network.allow` — see `packages` in the schema reference). `startup:` and `templates` run on every boot that opens the window. Restart-time workload otherwise comes back via systemd — enabled units auto-start when `devm.target` activates, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
+`install`/`docker` are gated by the `/var/lib/devm/provisioned` marker and only run once, on first boot; they're skipped on a later cold start (`devm stop` + `devm start` reuses the same disk, so installed tools and built artifacts are still there). `packages` runs its full list on first boot like the others, but also converges a pending `packages:` diff on a later cold start (a running VM instead converges the same diff live, via `devm reconcile`, under the project's current `network.allow` — see `packages` in the schema reference). `startup()` and `templates` run on every boot that opens the window. Restart-time workload otherwise comes back via systemd — enabled units auto-start when `devm.target` activates, and `devm stop` powers the guest off cleanly (`systemctl poweroff`) so docker containers with a restart policy are recorded as running-on-boot and come back up.
 
 ---
 
@@ -115,7 +114,7 @@ Sandbox stopped; config changes will apply on next `devm start`.
 
 - **Package add / remove** is also BucketLive, but converges through a separate path, not `ApplyLive`: the daemon runs the apt diff inside the VM under the project's current `network.allow` — no allowlist widening, no restore, no teardown, no restart. `deb.debian.org` and `security.debian.org` (plus `download.docker.com` when `docker: true`) need to already be in `network.allow` for the diff to succeed.
 
-- **BucketRestartVM changes** (e.g. `startup:` edits) are surfaced as pending under a distinct "restart" section, separate from recreate. On approval `devm reconcile` stops the VM (preserving its disk — no teardown); the user then runs `devm start` to cold-start and pick up the change. This is deterministic — the applying restart runs the freshly-composed provisioning script, so the change takes effect on that restart, not on some later boot.
+- **BucketRestartVM changes** (e.g. `memory`/`cpu` overrides, `repos.<name>.url`/`secret`) are surfaced as pending under a distinct "restart" section, separate from recreate. On approval `devm reconcile` stops the VM (preserving its disk — no teardown); the user then runs `devm start` to cold-start and pick up the change. This is deterministic — the applying restart runs the freshly-composed provisioning script, so the change takes effect on that restart, not on some later boot.
 
 - **BucketTeardownVM changes** are surfaced as pending under the "recreate" section. `devm reconcile` prompts the user; on approval it stops or tears down the VM automatically. The user then runs `devm start` to rebuild.
 
@@ -223,7 +222,6 @@ The VM must be fully deleted and recreated. `devm reconcile` surfaces these as p
 
 | Kind | Trigger |
 |---|---|
-| `install` change | `install:` command list differs |
 | Image change | `base_image:` field differs. Note: `BaseImage` is an empty struct with no fields; structural equality is always true, so `KindImageChange` cannot fire from a `devm.yaml` edit. |
 | Identity change | `project:` identity fields differ |
 
@@ -233,4 +231,23 @@ VM stop + cold start — no teardown, no data loss. `devm reconcile` surfaces th
 
 | Kind | Trigger |
 |---|---|
-| `startup` change | `startup:` command list differs. Deterministic: the daemon composes a fresh `startup.sh` and runs it inside the single provisioning script on the applying `devm stop` + `devm start` — the edit takes effect on that restart. |
+| Memory / CPU change | `memory:`/`cpu:` differ. Applied via `tart set` on the stopped VM. |
+| Repo URL / Secret change | `repos.<name>.url` or `repos.<name>.secret` differs — iron-proxy clones the repo at VM boot using these values. |
+
+### `devm.sh` and `devm.me.sh` edits
+
+Function bodies in `devm.sh`/`devm.me.sh` (including `install()` and
+`startup()`) live outside `schema.Config` entirely, so `devm reconcile`'s
+diff machinery has nothing to compare and never surfaces a "restart" or
+"recreate" bucket entry for them. The signal that does cover them is the
+approve gate (see below): any edit to `devm.sh` or `devm.me.sh` blocks
+`devm reconcile`/`devm start` until `devm approve` runs, at which point
+the next reconcile/start re-renders the wrapper bodies from the
+now-approved file and applies them at whichever lifecycle event actually
+re-runs that function.
+
+In practice: after editing `install()`, only a `devm teardown` + `devm
+start` re-runs it (it's gated by the first-boot marker, so a plain
+restart won't pick it up). After editing `startup()`, a `devm stop` +
+`devm start` is enough — it runs on every boot that opens the
+provisioning window.

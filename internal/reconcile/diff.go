@@ -18,8 +18,7 @@ const (
 	BucketLive Bucket = iota // applicable to a running sandbox without ending sessions
 	// BucketRestartVM — requires VM stop + cold start, no teardown; the
 	// provisioner re-establishes the change on the next boot. Used by
-	// KindStartupChange: a startup edit is re-rendered into the boot-time
-	// provisioning script but only takes effect on the guest's next boot.
+	// memory/CPU overrides and repo URL/secret mutations.
 	BucketRestartVM
 	BucketTeardownVM // requires VM delete + cold start (volumes/install rerun)
 	// BucketEgressRestart — regenerate iron-proxy config and respawn.
@@ -87,7 +86,6 @@ const (
 	KindEnvAdd
 	KindEnvRemove
 	KindEnvChange
-	KindInstallChange
 	// KindPackageAdd / KindPackageRemove fire once per apt package
 	// present in exactly one of old/new `packages:` (set semantics —
 	// reordering the list is a no-op). Key = package name. BucketLive:
@@ -117,12 +115,6 @@ const (
 	KindSecretAdd
 	KindSecretRemove
 	KindSecretChange
-	// KindStartupChange fires when the ordered `startup:` command list
-	// differs between old and new config. Content edits and add/remove
-	// of the key both surface here; see the changeBucket comment for
-	// why this is BucketRestartVM (VM stop + cold start, not a
-	// teardown) rather than BucketLive.
-	KindStartupChange
 	// KindIronProxyDown is a synthetic change: not produced by diffing
 	// old vs new config, but emitted by the reconcile handler when a
 	// running VM's iron-proxy is missing or stale (see
@@ -179,11 +171,8 @@ var changeBucket = map[ChangeKind]Bucket{
 	KindEnvAdd:    BucketLive,
 	KindEnvRemove: BucketLive,
 	KindEnvChange: BucketLive,
-	// install: commands happen on first boot; can't re-run cleanly on a
-	// half-installed VM.
-	KindInstallChange: BucketTeardownVM,
-	// apt is idempotent and declarative — unlike install: scripts,
-	// package changes converge on a live VM.
+	// apt is idempotent and declarative — package changes converge on a
+	// live VM.
 	KindPackageAdd:     BucketLive,
 	KindPackageRemove:  BucketLive,
 	KindImageChange:    BucketTeardownVM,
@@ -212,10 +201,6 @@ var changeBucket = map[ChangeKind]Bucket{
 	// Direct: re-push routes (DNS), re-push the softnet expose map and
 	// direct-host DNS set — live.
 	KindServiceDirectChange: BucketLive,
-	// startup: re-rendered into the boot-time provisioning script; it
-	// only takes effect on the VM's NEXT boot (startup: is a boot hook,
-	// not a running-service field) — VM stop + cold start, no teardown.
-	KindStartupChange: BucketRestartVM,
 	// Secrets: iron-proxy config carries resolved values; a rotation
 	// requires regenerating that config and respawning iron-proxy.
 	KindSecretAdd:    BucketEgressRestart,
@@ -299,7 +284,7 @@ const (
 	FlavorLiveOnly FlavorKind = iota // no recreate, only live applies
 	// FlavorRestartVM — requires VM stop + cold start, no teardown.
 	// Reached whenever a change sits in BucketRestartVM (e.g.
-	// KindStartupChange) and nothing more severe is also pending.
+	// KindMemoryChange) and nothing more severe is also pending.
 	FlavorRestartVM
 	FlavorTeardownVM // requires VM delete + cold start
 )
@@ -369,8 +354,8 @@ func ComputePortChanges(old, new schema.Config) []Change {
 
 // ComputeAllChanges returns the full set of diffs between old and new
 // configs. Order: ports, network, env (per service), service unit fields
-// (per service), install, startup, packages, volumes, repos, commands,
-// image, identity, templates, path, secrets.
+// (per service), packages, volumes, repos, commands, image, identity,
+// templates, path, secrets.
 // Within each section, service/volume/repo/command names are sorted
 // alphabetically for determinism.
 //
@@ -398,8 +383,6 @@ func ComputeAllChanges(
 	out = append(out, computeServiceUnitChanges(old, new)...)
 	out = append(out, computeDirectChanges(old, new)...)
 	out = append(out, computeHostnameChanges(old, new)...)
-	out = append(out, computeInstallChanges(old, new)...)
-	out = append(out, computeStartupChanges(old, new)...)
 	out = append(out, computePackagesChange(old, new)...)
 	out = append(out, computeVolumeChanges(old, new)...)
 	out = append(out, computeRepoChanges(old, new)...)
@@ -553,24 +536,6 @@ func computeHostnameChanges(old, new schema.Config) []Change {
 		}
 	}
 	return out
-}
-
-// computeInstallChanges detects a change to the project's install phase.
-// The phase body lives in the project's devm.sh, not on schema.Config,
-// so there is nothing here yet to compare — KindInstallChange's bucket
-// mapping stays in place for the day a comparable signal is threaded
-// through.
-func computeInstallChanges(old, new schema.Config) []Change {
-	return nil
-}
-
-// computeStartupChanges detects a change to the project's startup phase.
-// The phase body lives in the project's devm.sh, not on schema.Config,
-// so there is nothing here yet to compare — KindStartupChange's bucket
-// mapping stays in place for the day a comparable signal is threaded
-// through.
-func computeStartupChanges(old, new schema.Config) []Change {
-	return nil
 }
 
 // PackageDrift diffs the `packages:` list between old and new config as a

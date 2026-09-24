@@ -39,8 +39,7 @@ func TestChangeKindBuckets(t *testing.T) {
 	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
 	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
 
-	// Teardown+shell: install, image, identity
-	assert.Equal(t, BucketTeardownVM, KindInstallChange.Bucket())
+	// Teardown+shell: image, identity
 	assert.Equal(t, BucketTeardownVM, KindImageChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindIdentityChange.Bucket())
 	assert.Equal(t, BucketTeardownVM, KindDockerToggle.Bucket())
@@ -78,13 +77,6 @@ func TestComputePackagesChange_ReorderIsNoop(t *testing.T) {
 func TestPackageKindsAreLive(t *testing.T) {
 	require.Equal(t, BucketLive, KindPackageAdd.Bucket())
 	require.Equal(t, BucketLive, KindPackageRemove.Bucket())
-}
-
-func TestDiff_StartupChange_IsBucketRestartVM(t *testing.T) {
-	// startup: is a boot hook, not a running-service field — a change
-	// only takes effect on the VM's next boot, so it's BucketRestartVM
-	// (VM stop + cold start), not BucketLive.
-	assert.Equal(t, BucketRestartVM, KindStartupChange.Bucket())
 }
 
 func TestComputePathChange(t *testing.T) {
@@ -428,23 +420,23 @@ func TestRecreateFlavorPickMax(t *testing.T) {
 	// Any teardown wins
 	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
 		{Kind: KindPortAdd},
-		{Kind: KindInstallChange},
+		{Kind: KindImageChange},
 	}))
 	// Single teardown change alone also picks teardown.
 	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
-		{Kind: KindInstallChange},
+		{Kind: KindImageChange},
 	}))
 
-	// BucketRestartVM (KindStartupChange) alone picks FlavorRestartVM —
+	// BucketRestartVM (KindMemoryChange) alone picks FlavorRestartVM —
 	// VM stop + cold start, no teardown.
 	assert.Equal(t, FlavorRestartVM, RecreateFlavor([]Change{
-		{Kind: KindStartupChange},
+		{Kind: KindMemoryChange},
 	}))
 	// A teardown change alongside a restart change still wins — can't
 	// go higher than teardown.
 	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
-		{Kind: KindStartupChange},
-		{Kind: KindInstallChange},
+		{Kind: KindMemoryChange},
+		{Kind: KindImageChange},
 	}))
 }
 

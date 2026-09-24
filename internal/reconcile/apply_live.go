@@ -49,11 +49,10 @@ import (
 // changes the guestPath commands.json records and/or the $WORKSPACE
 // /etc/environment folds in, so without it a rename leaves the guest's
 // `run <name>` dispatcher and $WORKSPACE pointed at the old path.
-// KindStartupChange is NOT live-applied — it's BucketRestartVM, not
-// BucketLive, so the caller routes it through the recreate path (VM
-// stop + cold start, which picks up the freshly-rendered startup phase
-// on that next boot). For each changed template, this function logs a
-// "consuming services may need restart" line to stderr.
+// A BucketRestartVM change (e.g. KindMemoryChange) is NOT live-applied —
+// the caller routes it through the recreate path (VM stop + cold start)
+// instead. For each changed template, this function logs a "consuming
+// services may need restart" line to stderr.
 //
 // KindRepoChange/KindVolumeChange entries ALSO route through
 // applyMutagenSessionChange, which needs a live mutagen daemon
