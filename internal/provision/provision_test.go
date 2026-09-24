@@ -368,7 +368,8 @@ func TestRunUser_TemplatesTriggerDispatcher(t *testing.T) {
 
 func TestScriptInput_NoReposEmptyCredentials(t *testing.T) {
 	p := &Provisioner{Cfg: schema.Config{}}
-	in := p.scriptInput()
+	in, err := p.scriptInput()
+	require.NoError(t, err)
 	assert.Equal(t, "", in.GitCredentials, "no repos ⇒ no credentials lines")
 	assert.Equal(t, "", in.GitConfig, "no repos ⇒ no gitconfig")
 }
@@ -382,7 +383,8 @@ func TestScriptInput_PopulatesGitCredentialsFromReposMap(t *testing.T) {
 			},
 		},
 	}
-	in := p.scriptInput()
+	in, err := p.scriptInput()
+	require.NoError(t, err)
 	assert.Contains(t, in.GitCredentials,
 		"https://x-access-token:__DEVM_SECRET_gh_token__@github.com/mdubb86/sewtrue.git")
 	assert.Contains(t, in.GitConfig, "useHttpPath = true")
@@ -434,7 +436,8 @@ func TestScriptInput_IdentityOnlyEmitsGitconfigNotCredentials(t *testing.T) {
 		MacCwd: dir,
 		Cfg:    schema.Config{},
 	}
-	in := p.scriptInput()
+	in, err := p.scriptInput()
+	require.NoError(t, err)
 	assert.NotEmpty(t, in.GitConfig, "identity alone must still emit a gitconfig")
 	assert.Contains(t, in.GitConfig, "[user]\n    name = Fixture User\n    email = fixture@example.com\n")
 	assert.Equal(t, "", in.GitCredentials, "no repo bindings ⇒ no .git-credentials lines")
@@ -442,7 +445,8 @@ func TestScriptInput_IdentityOnlyEmitsGitconfigNotCredentials(t *testing.T) {
 
 func TestScriptInput_NoReposNoIdentity_BothFieldsEmpty(t *testing.T) {
 	p := &Provisioner{Cfg: schema.Config{}}
-	in := p.scriptInput()
+	in, err := p.scriptInput()
+	require.NoError(t, err)
 	assert.Equal(t, "", in.GitCredentials, "no repos, no identity ⇒ no credentials")
 	assert.Equal(t, "", in.GitConfig, "no repos, no identity ⇒ no gitconfig")
 }
@@ -458,6 +462,39 @@ func TestScriptInput_GitConfigCarriesIdentityWhenReposDeclared(t *testing.T) {
 			},
 		},
 	}
-	in := p.scriptInput()
+	in, err := p.scriptInput()
+	require.NoError(t, err)
 	assert.Contains(t, in.GitConfig, "[user]\n    name = Fixture User\n    email = fixture@example.com\n")
+}
+
+func TestScriptInput_InstallFunctionRendersWrapperBody(t *testing.T) {
+	p := &Provisioner{
+		Cfg: schema.Config{
+			Functions: []string{"install"},
+			Env: map[string]schema.EnvValue{
+				"FOO": {Literal: "bar"},
+			},
+		},
+	}
+	in, err := p.scriptInput()
+	require.NoError(t, err)
+	assert.Contains(t, in.InstallWrapperBody, "source /home/devm/devm.sh")
+	assert.Contains(t, in.InstallWrapperBody, "install")
+	assert.Contains(t, in.InstallWrapperBody, `export FOO="bar"`)
+	assert.Equal(t, "", in.StartupWrapperBody, "startup not declared ⇒ empty body")
+}
+
+func TestScriptInput_AbsentFunctionYieldsEmptyWrapperBody(t *testing.T) {
+	p := &Provisioner{
+		Cfg: schema.Config{
+			Functions: []string{},
+			Env: map[string]schema.EnvValue{
+				"FOO": {Literal: "bar"},
+			},
+		},
+	}
+	in, err := p.scriptInput()
+	require.NoError(t, err)
+	assert.Equal(t, "", in.InstallWrapperBody, "install not declared ⇒ empty body")
+	assert.Equal(t, "", in.StartupWrapperBody, "startup not declared ⇒ empty body")
 }
