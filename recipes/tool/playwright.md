@@ -61,9 +61,9 @@ chromium` from the venv.
   `e2e:install` after a rebuild (the libs persist via `packages:`).
   Alternatives if the re-download hurts:
   - **Provision-time install** — `npx --yes playwright@<pin> install chromium`
-    as an `install:` step. Runs in the open-egress window, so both CDN hosts
-    come off the runtime allowlist; the cost is a second copy of the version
-    pin in devm.yaml.
+    from `install()` in devm.sh. Runs in the open-egress window, so both CDN
+    hosts come off the runtime allowlist; the cost is a second copy of the
+    version pin in devm.yaml.
   - **Volume the cache** — `volumes: { pwcache: /home/devm/.cache/ms-playwright }`.
     Survives teardown, but ~1 GB, and it goes stale against a bumped
     `@playwright/test` (a stale cache just triggers a re-download, so it only

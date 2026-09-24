@@ -9,8 +9,8 @@ since: recipes-v1.0.0
 
 # Docker
 
-> **Note:** unlike most recipes, Docker is *not* installed via a `devm.yaml`
-> `install:` block. Set `docker: true` at the top level and devm's built-in
+> **Note:** unlike most recipes, Docker is *not* installed via a `devm.sh`
+> `install()` function. Set `docker: true` at the top level and devm's built-in
 > docker feature handles Engine install, runtime shim, and the docker CLI
 > shim. This recipe documents the intricacies of that built-in feature —
 > the two egress paths, and how devm makes build-time HTTPS transparent.

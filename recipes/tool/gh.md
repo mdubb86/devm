@@ -48,17 +48,7 @@ To rotate later, re-run `devm secret set GH_TOKEN` and
 ## devm.yaml
 
 ```yaml
-install:
-  - "sudo mkdir -p -m 755 /etc/apt/keyrings"
-  - "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null"
-  - "sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg"
-  - "echo 'deb [arch=arm64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null"
-  # Targeted update — only refreshes cli.github.com, safe to re-run
-  # under enforced egress (the base Debian mirrors aren't allowlisted
-  # at runtime).
-  - "sudo apt-get update -o Dir::Etc::sourcelist=sources.list.d/github-cli.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0"
-  - "sudo apt-get install -y gh"
-
+# devm.yaml
 env:
   GH_TOKEN: !secret GH_TOKEN
 
@@ -68,6 +58,20 @@ network:
     - host: api.github.com
       secrets: [GH_TOKEN]     # runtime: iron-proxy substitutes
     - github.com              # only if you'll clone/push over HTTPS
+```
+```bash
+# devm.sh
+install() {
+  sudo mkdir -p -m 755 /etc/apt/keyrings
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
+  sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  echo 'deb [arch=arm64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+  # Targeted update — only refreshes cli.github.com, safe to re-run
+  # under enforced egress (the base Debian mirrors aren't allowlisted
+  # at runtime).
+  sudo apt-get update -o Dir::Etc::sourcelist=sources.list.d/github-cli.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+  sudo apt-get install -y gh
+}
 ```
 
 Notes on the shape:
@@ -86,7 +90,7 @@ Notes on the shape:
 ## Verifying
 
 ```
-devm start                                    # picks up the new install: step
+devm start                                    # picks up the new install() step
 devm shell
 $ gh --version                                # gh version X.Y.Z (deb source)
 $ gh api /user                                # your PAT's identity

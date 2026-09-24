@@ -22,26 +22,13 @@ guest-only storage, so there's no cross-platform pollution to avoid.
 ## devm.yaml additions
 
 ```yaml
+# devm.yaml
 path:
   - /usr/local/go/bin       # Go toolchain (from the tarball extract)
   - /home/devm/go/bin       # $GOBIN — where `go install X` drops binaries
 
 env:
   GOBIN: /home/devm/go/bin
-
-scripts:
-  # go.dev only publishes version-embedded tarball names — no `latest`
-  # alias — so resolve the current stable release from `/VERSION?m=text`
-  # first, then build the download URL from it. Broken into steps here
-  # because the version has to survive between commands — `scripts:`
-  # runs them under one shell so `$VER` stays live.
-  install-go-toolchain:
-    - VER=$(curl -sSL https://go.dev/VERSION?m=text | head -1)
-    - curl -fsSL "https://go.dev/dl/${VER}.linux-arm64.tar.gz" | sudo tar -xz -C /usr/local
-
-install:
-  - ">install-go-toolchain"
-  - "go install golang.org/x/tools/gopls@latest"
 
 network:
   allow:
@@ -50,6 +37,17 @@ network:
     - proxy.golang.org      # `go mod download` + `go install` module proxy
     - sum.golang.org        # checksum database verification
     - github.com            # direct VCS fallback for un-proxied modules
+```
+```bash
+# devm.sh
+install() {
+  # go.dev only publishes version-embedded tarball names — no `latest`
+  # alias — so resolve the current stable release from `/VERSION?m=text`
+  # first, then build the download URL from it.
+  VER=$(curl -sSL https://go.dev/VERSION?m=text | head -1)
+  curl -fsSL "https://go.dev/dl/${VER}.linux-arm64.tar.gz" | sudo tar -xz -C /usr/local
+  go install golang.org/x/tools/gopls@latest
+}
 ```
 
 ## Notes
@@ -61,12 +59,10 @@ network:
   `VER=go1.26.5` (or whatever version) inline instead. Tart is Apple
   Silicon only, so `linux-arm64` is the only variant needed.
 
-- **Single `GOBIN` target.** Both the install: step (`go install
-  gopls`) and any ad-hoc runtime `go install X@latest` land in
-  `/home/devm/go/bin` — that's `env: GOBIN: ...` in action. Earlier
-  iterations split system-wide vs user via `GOBIN=/usr/local/bin go
-  install ...` in the install: line, but devm has one user (`devm`),
-  so there's no multi-user story to solve.
+- **Single `GOBIN` target.** Both `install()`'s `go install gopls`
+  and any ad-hoc runtime `go install X@latest` land in
+  `/home/devm/go/bin` — that's `env: GOBIN: ...` in action. devm has
+  one user (`devm`), so there's no multi-user story to solve.
 
 - **No env overrides for `GOMODCACHE` / `GOCACHE`.** Both live under
   `$HOME` in guest-only storage by default — no risk of linux/arm64
@@ -74,9 +70,8 @@ network:
   re-downloads on teardown are cheap; build cache rebuilds from cached
   source are fast.
 
-- **Tools you want always-available go in the `install:` block** so
-  they get reinstalled on the next fresh VM. Pattern used here for
-  gopls.
+- **Tools you want always-available go in `install()`** so they get
+  reinstalled on the next fresh VM. Pattern used here for gopls.
 
 - **Ad-hoc tools land in `$HOME/go/bin`** via `GOBIN`. They don't
   survive `devm teardown` but rebuild fast from cached modules.
@@ -106,7 +101,7 @@ network:
 ## Verifying
 
 ```
-devm start                               # picks up the new install: step
+devm start                               # picks up the new install() step
 devm shell
 $ go version                             # go version go1.26.5 linux/arm64
 $ gopls version                          # golang.org/x/tools/gopls vX.Y.Z

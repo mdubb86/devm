@@ -26,6 +26,7 @@ in a devm VM that shells to `camoufox.launch_persistent_context`
 ## devm.yaml additions
 
 ```yaml
+# devm.yaml
 packages:
   # Camoufox-specific — not covered by Playwright's Firefox deps list
   # (see note below), not pulled by chromium's Depends chain.
@@ -63,22 +64,25 @@ volumes:
   # A volume here keeps the binary teardown-durable so the fetch runs
   # once per Mac disk, not once per VM lifetime.
   camoufox: /home/devm/.cache/camoufox
+```
+```bash
+# devm.sh
 
-startup:
-  # Bridge devm's CA into camoufox's Firefox trust. devm drops
-  # /etc/firefox/policies/policies.json with a SecurityDevices entry
-  # pointing at p11-kit-trust.so; stock Firefox reads that path
-  # directly. Camoufox's binary lives at
-  # ~/.cache/camoufox/browsers/official/<version>/camoufox-bin and
-  # reads its install-dir distribution/policies.json — a symlink there
-  # routes it to the canonical file. The glob covers the version
-  # segment; pkgman.fetch (below or manual) must have run first, so
-  # this belongs in startup: rather than install:.
-  - >
-    for d in /home/devm/.cache/camoufox/browsers/official/*/; do
-      mkdir -p "$d/distribution"
-      ln -sfn /etc/firefox/policies/policies.json "$d/distribution/policies.json"
-    done
+# Bridge devm's CA into camoufox's Firefox trust. devm drops
+# /etc/firefox/policies/policies.json with a SecurityDevices entry
+# pointing at p11-kit-trust.so; stock Firefox reads that path
+# directly. Camoufox's binary lives at
+# ~/.cache/camoufox/browsers/official/<version>/camoufox-bin and
+# reads its install-dir distribution/policies.json — a symlink there
+# routes it to the canonical file. The glob covers the version
+# segment; pkgman.fetch (below or manual) must have run first, so
+# this belongs in startup() rather than install().
+startup() {
+  for d in /home/devm/.cache/camoufox/browsers/official/*/; do
+    mkdir -p "$d/distribution"
+    ln -sfn /etc/firefox/policies/policies.json "$d/distribution/policies.json"
+  done
+}
 ```
 
 ## Notes
@@ -121,15 +125,15 @@ startup:
   devm concern per se, but worth flagging so recipe adopters aren't
   surprised.
 - **First-launch download is ~1.2 GB.** Ride the open-egress
-  provisioning window (i.e. call `pkgman.fetch()` from an `install:`
-  or `startup:` script) if you don't want the runtime allowlist to
-  carry the two GitHub hosts. Otherwise the recipe as written above
-  keeps them on the runtime list.
+  provisioning window (i.e. call `pkgman.fetch()` from `install()`
+  or `startup()`) if you don't want the runtime allowlist to carry
+  the two GitHub hosts. Otherwise the recipe as written above keeps
+  them on the runtime list.
 - **HTTPS through iron-proxy just works** — including for hosts under
   Camoufox's control (Update Ping to `aus5.mozilla.org`, etc.) and
   any allowlisted app URL the workload hits. Every iron-proxy MITM
   cert is signed by devm's root CA, which is loaded into Firefox via
-  the `startup:` symlink above (`p11-kit-trust.so` bridges the system
+  the `startup()` symlink above (`p11-kit-trust.so` bridges the system
   CA store into NSS, so per-profile `certutil` dances aren't needed).
   Without the symlink you'll see `SEC_ERROR_UNKNOWN_ISSUER` on the
   first HTTPS fetch through iron-proxy — the recipe is complete only
