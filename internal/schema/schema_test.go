@@ -1199,11 +1199,8 @@ func TestConfigValidate_RepoCommands(t *testing.T) {
 		Project: Project{Name: "p"},
 		Repos: map[string]RepoConfig{
 			"main": {
-				Secret: "github",
-				Commands: map[string]RepoCommand{
-					"install": {Exec: "pnpm install", Startup: p(true)},
-					"test":    {Exec: "pnpm test"},
-				},
+				Secret:   "github",
+				Commands: []string{"install", "test"},
 			},
 		},
 	}
@@ -1213,67 +1210,12 @@ func TestConfigValidate_RepoCommands(t *testing.T) {
 		Project: Project{Name: "p"},
 		Repos: map[string]RepoConfig{
 			"main": {
-				Secret: "github",
-				Commands: map[string]RepoCommand{
-					"Install": {Exec: "pnpm install"},
-				},
+				Secret:   "github",
+				Commands: []string{"Install"},
 			},
 		},
 	}
 	err := invalid.Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "command name")
-}
-
-func TestConfig_StartupCommands_OrderAndResolution(t *testing.T) {
-	cfg := Config{
-		Project: Project{Name: "p"},
-		Repos: map[string]RepoConfig{
-			"v1": {
-				URL:   p("https://example/v1.git"),
-				Label: p("v1"),
-				Commands: map[string]RepoCommand{
-					"seed": {Exec: "python seed.py", Startup: p(true)},
-					"test": {Exec: "pytest"},
-				},
-			},
-			"main": {
-				Label:  p("work"),
-				Secret: "gh",
-				Commands: map[string]RepoCommand{
-					"install": {Exec: "pnpm install", Startup: p(true)},
-					"lint":    {Exec: "pnpm lint"},
-				},
-			},
-		},
-	}
-	got := cfg.StartupCommands("/host/cwd")
-	require.Len(t, got, 2)
-	// Sort key: repo asc, then command asc.
-	assert.Equal(t, StartupCommand{
-		Repo: "main", Name: "install",
-		GuestCwd: "/home/devm/work",
-		Exec:     "pnpm install",
-	}, got[0])
-	assert.Equal(t, StartupCommand{
-		Repo: "v1", Name: "seed",
-		GuestCwd: "/home/devm/v1",
-		Exec:     "python seed.py",
-	}, got[1])
-}
-
-func TestConfig_StartupCommands_NoneWhenAllStartupFalse(t *testing.T) {
-	cfg := Config{
-		Project: Project{Name: "p"},
-		Repos: map[string]RepoConfig{
-			"main": {
-				Label:  p("work"),
-				Secret: "gh",
-				Commands: map[string]RepoCommand{
-					"test": {Exec: "pnpm test"},
-				},
-			},
-		},
-	}
-	assert.Empty(t, cfg.StartupCommands("/host"))
+	assert.Contains(t, err.Error(), "function name")
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,16 +37,11 @@ const twoRepoManifest = `{
   "repos": {
     "main": {
       "guestPath": "MAIN",
-      "commands": {
-        "install": {"exec": "echo main-install && pwd", "startup": true},
-        "test":    {"exec": "echo main-test",           "startup": false}
-      }
+      "commands": ["install", "test"]
     },
     "v1": {
       "guestPath": "V1",
-      "commands": {
-        "test": {"exec": "echo v1-test", "startup": false}
-      }
+      "commands": ["test"]
     }
   }
 }`
@@ -61,50 +57,6 @@ func prepareTree(t *testing.T) (string, string, string) {
 	require.NoError(t, os.MkdirAll(v1Dir, 0o755))
 	body := strings.NewReplacer("MAIN", mainDir, "V1", v1Dir).Replace(twoRepoManifest)
 	return writeManifest(t, base, body), mainDir, v1Dir
-}
-
-func TestRun_DispatchesFromCwd(t *testing.T) {
-	bin := buildRun(t)
-	manifest, mainDir, _ := prepareTree(t)
-
-	cmd := exec.Command(bin, "install")
-	cmd.Dir = mainDir
-	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "output: %s", out)
-	assert.Contains(t, string(out), "main-install")
-	assert.Contains(t, string(out), mainDir, "pwd should confirm run cd'd into the repo")
-}
-
-func TestRun_DispatchesFromNestedCwd(t *testing.T) {
-	bin := buildRun(t)
-	manifest, mainDir, _ := prepareTree(t)
-
-	cmd := exec.Command(bin, "install")
-	cmd.Dir = filepath.Join(mainDir, "subdir")
-	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "output: %s", out)
-	assert.Contains(t, string(out), "main-install")
-}
-
-func TestRun_SameNameDifferentRepos(t *testing.T) {
-	bin := buildRun(t)
-	manifest, mainDir, v1Dir := prepareTree(t)
-
-	fromMain := exec.Command(bin, "test")
-	fromMain.Dir = mainDir
-	fromMain.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
-	mainOut, err := fromMain.CombinedOutput()
-	require.NoError(t, err, "output: %s", mainOut)
-	assert.Contains(t, string(mainOut), "main-test")
-
-	fromV1 := exec.Command(bin, "test")
-	fromV1.Dir = v1Dir
-	fromV1.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
-	v1Out, err := fromV1.CombinedOutput()
-	require.NoError(t, err, "output: %s", v1Out)
-	assert.Contains(t, string(v1Out), "v1-test")
 }
 
 func TestRun_ErrorNoArg(t *testing.T) {
@@ -128,37 +80,7 @@ func TestRun_ErrorOutsideRepo(t *testing.T) {
 	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
-	assert.Contains(t, string(out), "no devm repo in current directory")
-}
-
-// TestRun_EmptyCommandsRepo_ErrorsNoCommand is a regression test:
-// render.RenderCommandsManifest used to omit a repo with zero declared
-// commands from the manifest entirely, so a cwd inside such a repo hit
-// the "no devm repo in current directory" branch — misleading, since
-// the cwd IS in a devm repo. With the repo present in the manifest
-// (commands: {}), the same lookup must instead report "no command"
-// against the correct repo name.
-func TestRun_EmptyCommandsRepo_ErrorsNoCommand(t *testing.T) {
-	bin := buildRun(t)
-	base := t.TempDir()
-	mainDir := filepath.Join(base, "main-repo")
-	require.NoError(t, os.MkdirAll(mainDir, 0o755))
-	manifest := writeManifest(t, base, strings.NewReplacer("MAIN", mainDir).Replace(`{
-	  "repos": {
-	    "main": {
-	      "guestPath": "MAIN",
-	      "commands": {}
-	    }
-	  }
-	}`))
-
-	cmd := exec.Command(bin, "install")
-	cmd.Dir = mainDir
-	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err)
-	assert.Contains(t, string(out), `no command "install" in repo "main"`)
-	assert.NotContains(t, string(out), "no devm repo in current directory")
+	assert.Contains(t, string(out), "run: not inside a registered repo")
 }
 
 func TestRun_ErrorUnknownCommand(t *testing.T) {
@@ -169,5 +91,106 @@ func TestRun_ErrorUnknownCommand(t *testing.T) {
 	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
-	assert.Contains(t, string(out), `no command "bogus" in repo "main"`)
+	assert.Contains(t, string(out), "run: command bogus not registered in repo main")
+}
+
+func TestRun_ErrorFromNestedCwd_StillResolvesRepo(t *testing.T) {
+	// The command is unregistered, but the error must still name "main" —
+	// proof that findRepo walked up from the nested cwd to the repo root
+	// before checking registration.
+	bin := buildRun(t)
+	manifest, mainDir, _ := prepareTree(t)
+	cmd := exec.Command(bin, "bogus")
+	cmd.Dir = filepath.Join(mainDir, "subdir")
+	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err)
+	assert.Contains(t, string(out), "run: command bogus not registered in repo main")
+}
+
+// TestRun_EmptyCommandsRepo_ErrorsNoCommand is a regression test:
+// render.RenderCommandsManifest used to omit a repo with zero declared
+// commands from the manifest entirely, so a cwd inside such a repo hit
+// the "not inside a registered repo" branch — misleading, since the cwd
+// IS in a devm repo. With the repo present in the manifest (commands:
+// []), the same lookup must instead report "not registered" against the
+// correct repo name.
+func TestRun_EmptyCommandsRepo_ErrorsNoCommand(t *testing.T) {
+	bin := buildRun(t)
+	base := t.TempDir()
+	mainDir := filepath.Join(base, "main-repo")
+	require.NoError(t, os.MkdirAll(mainDir, 0o755))
+	manifest := writeManifest(t, base, strings.NewReplacer("MAIN", mainDir).Replace(`{
+	  "repos": {
+	    "main": {
+	      "guestPath": "MAIN",
+	      "commands": []
+	    }
+	  }
+	}`))
+
+	cmd := exec.Command(bin, "install")
+	cmd.Dir = mainDir
+	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err)
+	assert.Contains(t, string(out), "run: command install not registered in repo main")
+}
+
+// ---------- pure-logic unit tests (no subprocess, no guest filesystem) ----------
+
+// resolvedTempDir returns a symlink-resolved t.TempDir() — main() resolves
+// $PWD the same way before calling findRepo, and on macOS t.TempDir() lives
+// under a symlink (/tmp -> /private/tmp), so tests must resolve it too or
+// the guestPath comparison never matches.
+func resolvedTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	return resolved
+}
+
+func TestFindRepo_WalksUpFromNestedCwd(t *testing.T) {
+	base := resolvedTempDir(t)
+	mainDir := filepath.Join(base, "main-repo")
+	require.NoError(t, os.MkdirAll(filepath.Join(mainDir, "a", "b"), 0o755))
+
+	var m manifest
+	body := strings.NewReplacer("MAIN", mainDir).Replace(`{"repos":{"main":{"guestPath":"MAIN","commands":["install"]}}}`)
+	require.NoError(t, json.Unmarshal([]byte(body), &m))
+
+	repoName, guestPath, ok := findRepo(m, filepath.Join(mainDir, "a", "b"))
+	require.True(t, ok)
+	assert.Equal(t, "main", repoName)
+	assert.Equal(t, mainDir, guestPath)
+}
+
+func TestFindRepo_OutsideAnyRepo(t *testing.T) {
+	var m manifest
+	require.NoError(t, json.Unmarshal([]byte(`{"repos":{"main":{"guestPath":"/nowhere","commands":["install"]}}}`), &m))
+	_, _, ok := findRepo(m, t.TempDir())
+	assert.False(t, ok)
+}
+
+func TestFindRepo_SameNameDifferentRepos_PicksByGuestPath(t *testing.T) {
+	base := resolvedTempDir(t)
+	mainDir := filepath.Join(base, "main-repo")
+	v1Dir := filepath.Join(base, "v1-repo")
+	require.NoError(t, os.MkdirAll(mainDir, 0o755))
+	require.NoError(t, os.MkdirAll(v1Dir, 0o755))
+
+	var m manifest
+	body := strings.NewReplacer("MAIN", mainDir, "V1", v1Dir).Replace(twoRepoManifest)
+	require.NoError(t, json.Unmarshal([]byte(body), &m))
+
+	repoName, _, ok := findRepo(m, v1Dir)
+	require.True(t, ok)
+	assert.Equal(t, "v1", repoName)
+}
+
+func TestRegistered(t *testing.T) {
+	assert.True(t, registered([]string{"install", "test"}, "test"))
+	assert.False(t, registered([]string{"install", "test"}, "bogus"))
+	assert.False(t, registered(nil, "install"))
 }

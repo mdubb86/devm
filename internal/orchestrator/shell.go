@@ -278,7 +278,7 @@ func (d ShellDeps) warmAttach(ctx context.Context, vmName, repoRoot, cmdName str
 // passthrough), volumeSyncFn (mutagen sessions for every entity),
 // repoCloneFn (cold-start guest git clone through the now CA-trusted
 // iron-proxy) + waitForInitialSyncFn, prov.RunUser
-// (packages/install:/docker/templates/startup:), runStartupCommandsFn,
+// (packages/install:/docker/templates/startup:),
 // EndProvisioning (authority restricted), prov.RunEnforced (services +
 // devm.target) — the last two run in that order so services never come
 // up except under the project's real allowlist.
@@ -411,16 +411,6 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	}
 	log.Printf("shell: provisioning (passthrough egress) done: %s", vmName)
 
-	// Fire per-repo startup commands under passthrough, right after
-	// RunUser — the workspace volume-sync/repo-clone just hydrated is
-	// exactly what install:/startup: need to see. Running before
-	// EndProvisioning means a startup command isn't limited to the
-	// project's network.allow: list for this window.
-	if err := runStartupCommandsFn(d, ctx, cfg, vmName, repoRoot); err != nil {
-		return d.teardownOnFail(ctx, cfg, vmName, err, "run startup commands")
-	}
-	log.Printf("shell: startup commands done: %s", vmName)
-
 	// Flip the egress policy authority back to restricted BEFORE services
 	// or devm.target come up — the Critical fix: services must never
 	// start except under the project's real allowlist. Softnet stays in
@@ -536,86 +526,6 @@ func (d ShellDeps) waitForInitialSync(ctx context.Context, cfg schema.Config, vm
 		DataDir: filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
 	}
 	return serviceapi.FlushAll(cli, vmName)
-}
-
-// runStartupCommandsFn is the test-injection seam for the RunStartupCommands
-// phase provisionAndAttach runs after prov.RunUser and before
-// EndProvisioning — the workspace is already hydrated (volumeSyncFn +
-// repoCloneFn + waitForInitialSyncFn ran before prov.RunUser) and the
-// egress authority is still passthrough. Production always calls
-// (ShellDeps).runStartupCommands; tests substitute a fake to verify
-// sequencing without needing a live VM or the real mutagen binary.
-var runStartupCommandsFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
-	return d.runStartupCommands(ctx, cfg, vmName, repoRoot)
-}
-
-// runStartupCommands invokes `run <name>` in each repo's guest cwd for
-// every command with `startup: true`. Runs under the passthrough egress
-// authority (before EndProvisioning) — a startup command isn't limited
-// to the project's network.allow: list for this window. The workspace is
-// already hydrated and flushed by volumeSyncFn/repoCloneFn/
-// waitForInitialSyncFn upstream, so no re-flush is needed here.
-//
-// A non-zero exit fails cold-start (loud, teardown-class) — the user opted
-// in via startup: true; silent failure defeats the point.
-func (d ShellDeps) runStartupCommands(ctx context.Context, cfg schema.Config, vmName, repoRoot string) error {
-	startupCmds := cfg.StartupCommands(repoRoot)
-	if len(startupCmds) == 0 {
-		return nil
-	}
-
-	return dispatchStartupCommands(d.guestExec(ctx, vmName), vmName, startupCmds)
-}
-
-// dispatchStartupCommands is the RunStartupCommands phase's core logic,
-// factored out of (ShellDeps).runStartupCommands so unit tests can inject a
-// fake guestExec without a live VM.
-func dispatchStartupCommands(exec serviceapi.GuestExec, vmName string, startupCmds []schema.StartupCommand) error {
-	log.Printf("shell: running startup commands: %s (%d)", vmName, len(startupCmds))
-	// Progress marker consumed by newProvisionProgress in provisionAndAttach.
-	fmt.Fprintln(os.Stderr, "::devm:stage:commands::")
-
-	for _, cmd := range startupCmds {
-		fmt.Fprintf(os.Stderr, "::devm:progress:commands:%s:%s::\n", cmd.Repo, cmd.Name)
-		// Runs as the devm user (guestExec's script already runs as root via
-		// `sudo bash -s`; sudo -u devm here drops to the devm user so PATH /
-		// HOME resolve the same way an interactive `run` invocation would
-		// see them).
-		script := fmt.Sprintf(
-			"sudo -u devm -H bash -c 'cd %s && %s /usr/local/bin/run %s'",
-			shellSingleQuoted(cmd.GuestCwd), devmbundle.GuestWrapper, shellSingleQuoted(cmd.Name),
-		)
-		stdout, stderr, exitCode, err := exec(script)
-		if err != nil {
-			return fmt.Errorf("run %s/%s: exec: %w", cmd.Repo, cmd.Name, err)
-		}
-		if exitCode != 0 {
-			return fmt.Errorf("run %s/%s: exit %d: %s\n%s",
-				cmd.Repo, cmd.Name, exitCode, stderr, stdout)
-		}
-	}
-	return nil
-}
-
-// shellSingleQuoted wraps s in single quotes for use as a bash literal.
-// Duplicated from render.shellSingleQuoted (unexported there) rather than
-// exporting it — the orchestrator has no other reason to depend on render's
-// internals.
-func shellSingleQuoted(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// guestExec returns a serviceapi.GuestExec that runs a script inside
-// vmName via `tart exec -i <name> sudo bash -s`, script on stdin. Scripts
-// embed their own `sudo -u devm` where they need to drop privileges.
-// Routed through d.Tart (rather than a raw exec.Command) so tests can
-// substitute the same fake tart binary they already use for RunBundle/
-// RunUser/RunEnforced.
-func (d ShellDeps) guestExec(ctx context.Context, vmName string) serviceapi.GuestExec {
-	return func(script string) (stdout, stderr string, exitCode int, err error) {
-		res := d.Tart.ExecStdin(ctx, vmName, strings.NewReader(script), []string{"sudo", "bash", "-s"})
-		return res.Stdout, res.Stderr, res.ExitCode, nil
-	}
 }
 
 // defaultInstallStepTimeoutSeconds is installStepTimeoutSeconds' fallback

@@ -155,15 +155,13 @@ const (
 	// it by reallocating the IP and rebinding listeners. Old = the
 	// cross-wired IP, New = the replacement.
 	KindSSHEndpointHealed
-	// KindCommandsChange fires when a repo's `commands:` map differs
-	// between old and new config. One Change per changed command per
-	// field: Op=OpAdd/OpRemove for whole-entry add/remove (Repo=repo
-	// name, Key=command name), Op=OpMutate per changed field on a
-	// command present in both (Field="Exec"/"Startup"). Bucket:
-	// BucketLive — the manifest that carries `run <name>` dispatch
-	// data is rebuilt and piped into the guest on every live bundle
-	// rebuild (same path env/path changes already use), no VM cycle
-	// needed.
+	// KindCommandsChange fires when a repo's `commands:` list differs
+	// between old and new config. One Change per added/removed function
+	// name: Op=OpAdd/OpRemove (Repo=repo name, Key=function name).
+	// Bucket: BucketLive — the manifest that carries `run <name>`
+	// dispatch data is rebuilt and piped into the guest on every live
+	// bundle rebuild (same path env/path changes already use), no VM
+	// cycle needed.
 	KindCommandsChange
 )
 
@@ -737,59 +735,51 @@ func repoFieldChanges(name string, o, n schema.RepoConfig) []Change {
 }
 
 // computeCommandsChanges emits one KindCommandsChange per changed
-// command across every repo's `commands:` map. A command present in
-// exactly one of old/new emits a single OpAdd/OpRemove Change; a
-// command present in both emits one OpMutate Change per changed field
-// (Exec, Startup). Repos are walked in sorted order (unionRepoNames)
-// and each repo's commands in sorted order (unionCommandNames), so
-// output is fully deterministic regardless of map iteration order.
+// function name across every repo's `commands:` list. A name present
+// in exactly one of old/new emits a single OpAdd/OpRemove Change.
+// Repos are walked in sorted order (unionRepoNames) and each repo's
+// commands in sorted order (unionCommandNames), so output is fully
+// deterministic regardless of map iteration order.
 func computeCommandsChanges(old, new schema.Config) []Change {
 	var out []Change
 	for _, repoName := range unionRepoNames(old.Repos, new.Repos) {
 		oldCmds := old.Repos[repoName].Commands
 		newCmds := new.Repos[repoName].Commands
+		oldSet := stringSet(oldCmds)
+		newSet := stringSet(newCmds)
 		for _, cmdName := range unionCommandNames(oldCmds, newCmds) {
-			oldCmd, oldOk := oldCmds[cmdName]
-			newCmd, newOk := newCmds[cmdName]
+			_, oldOk := oldSet[cmdName]
+			_, newOk := newSet[cmdName]
 			switch {
 			case !oldOk && newOk:
 				out = append(out, Change{Kind: KindCommandsChange, Op: OpAdd, Repo: repoName, Key: cmdName,
-					New: newCmd.Exec, NewValue: newCmd})
+					New: cmdName, NewValue: cmdName})
 			case oldOk && !newOk:
 				out = append(out, Change{Kind: KindCommandsChange, Op: OpRemove, Repo: repoName, Key: cmdName,
-					Old: oldCmd.Exec, OldValue: oldCmd})
-			default:
-				out = append(out, commandFieldChanges(repoName, cmdName, oldCmd, newCmd)...)
+					Old: cmdName, OldValue: cmdName})
 			}
 		}
 	}
 	return out
 }
 
-// commandFieldChanges diffs a single command present in both old and
-// new, emitting one OpMutate Change per field that differs.
-func commandFieldChanges(repo, name string, o, n schema.RepoCommand) []Change {
-	var out []Change
-	if o.Exec != n.Exec {
-		out = append(out, Change{Kind: KindCommandsChange, Op: OpMutate, Repo: repo, Key: name, Field: "Exec",
-			Old: o.Exec, New: n.Exec, OldValue: o.Exec, NewValue: n.Exec})
+// stringSet builds a lookup set from a string slice.
+func stringSet(s []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(s))
+	for _, v := range s {
+		set[v] = struct{}{}
 	}
-	if !boolPtrEqual(o.Startup, n.Startup) {
-		out = append(out, Change{Kind: KindCommandsChange, Op: OpMutate, Repo: repo, Key: name, Field: "Startup",
-			Old: formatBoolPtr(o.Startup), New: formatBoolPtr(n.Startup),
-			OldValue: o.Startup, NewValue: n.Startup})
-	}
-	return out
+	return set
 }
 
-// unionCommandNames returns the sorted union of keys across both
-// per-repo Commands maps, for deterministic diff-walk ordering.
-func unionCommandNames(a, b map[string]schema.RepoCommand) []string {
+// unionCommandNames returns the sorted union of names across both
+// per-repo Commands lists, for deterministic diff-walk ordering.
+func unionCommandNames(a, b []string) []string {
 	set := make(map[string]struct{}, len(a)+len(b))
-	for k := range a {
+	for _, k := range a {
 		set[k] = struct{}{}
 	}
-	for k := range b {
+	for _, k := range b {
 		set[k] = struct{}{}
 	}
 	out := make([]string, 0, len(set))

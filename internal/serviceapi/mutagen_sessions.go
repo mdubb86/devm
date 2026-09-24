@@ -471,11 +471,12 @@ func StopPhase(cli *mutagen.CLI, projectID string) error {
 }
 
 // FlushAll blocks until every non-paused mutagen sync session belonging to
-// projectID has completed its current sync cycle. Called by the orchestrator's
-// RunStartupCommands phase to guarantee the workspace is hydrated (both
-// directions) before a startup command reads from it.
+// projectID has completed its current sync cycle. Called by the
+// orchestrator's waitForInitialSync, before prov.RunUser, to guarantee the
+// workspace is hydrated (both directions) before provisioning reads from
+// it.
 //
-// Fail-fast: returns the first non-nil SyncFlush error. A startup command
+// Fail-fast: returns the first non-nil SyncFlush error. Provisioning
 // racing an unflushed entity would read a partial workspace anyway.
 // Paused sessions are skipped (mirrors StopPhase's rationale: `mutagen sync
 // flush` on a paused session errors "session is paused" with no upside).

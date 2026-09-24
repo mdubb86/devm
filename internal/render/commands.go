@@ -15,36 +15,26 @@ type commandsManifest struct {
 }
 
 type manifestRepo struct {
-	GuestPath string                     `json:"guestPath"`
-	Commands  map[string]manifestCommand `json:"commands"`
-}
-
-type manifestCommand struct {
-	Exec    string `json:"exec"`
-	Startup bool   `json:"startup"`
+	GuestPath string   `json:"guestPath"`
+	Commands  []string `json:"commands"` // function names allowed via `run <name>`
 }
 
 // RenderCommandsManifest emits the deterministic JSON body of
 // /opt/devm/commands.json. Always emits a valid JSON body — an empty
 // repos map when cfg has no repos — so callers ship the file
 // unconditionally. Every declared repo appears in the manifest even
-// with zero commands (commands: {}): the guest's `run` dispatcher uses
+// with zero commands (commands: []): the guest's `run` dispatcher uses
 // a repo's presence in this map to distinguish "cwd is outside any
 // devm repo" from "cwd is in a repo that just has no such command."
 func RenderCommandsManifest(cfg schema.Config, macCwd string) ([]byte, error) {
 	out := commandsManifest{Repos: map[string]manifestRepo{}}
 	for repoName, r := range cfg.Repos {
-		repo := manifestRepo{
+		commands := make([]string, len(r.Commands))
+		copy(commands, r.Commands)
+		out.Repos[repoName] = manifestRepo{
 			GuestPath: filepath.Join(schema.GuestHomeDir, r.ResolveLabel(macCwd)),
-			Commands:  make(map[string]manifestCommand, len(r.Commands)),
+			Commands:  commands,
 		}
-		for cmdName, c := range r.Commands {
-			repo.Commands[cmdName] = manifestCommand{
-				Exec:    c.Exec,
-				Startup: c.StartupBool(),
-			}
-		}
-		out.Repos[repoName] = repo
 	}
 	// encoding/json sorts map keys lexically → byte-identical across runs.
 	return json.Marshal(out)

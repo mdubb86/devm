@@ -499,28 +499,24 @@ func TestMergeLiveApplied_Commands(t *testing.T) {
 	old := schema.Config{
 		Project: schema.Project{Name: "p"},
 		Repos: map[string]schema.RepoConfig{
-			"main": {Commands: map[string]schema.RepoCommand{
-				"install": {Exec: "old install"},
-			}},
+			"main": {Commands: []string{"install"}},
 		},
 	}
 	newCfg := schema.Config{
 		Project: schema.Project{Name: "p"},
 		Repos: map[string]schema.RepoConfig{
-			"main": {Commands: map[string]schema.RepoCommand{
-				"install": {Exec: "new install"},
-			}},
+			"main": {Commands: []string{"install", "lint"}},
 		},
 	}
 	applied := []reconcile.Change{{
-		Kind: reconcile.KindCommandsChange, Repo: "main", Key: "install",
-		Old: "old install", New: "new install",
+		Kind: reconcile.KindCommandsChange, Op: reconcile.OpAdd, Repo: "main", Key: "lint",
+		New: "lint",
 	}}
 
 	merged := mergeLiveApplied(old, newCfg, applied)
 
 	require.Contains(t, merged.Repos, "main")
-	assert.Equal(t, "new install", merged.Repos["main"].Commands["install"].Exec)
+	assert.Equal(t, []string{"install", "lint"}, merged.Repos["main"].Commands)
 }
 
 func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {

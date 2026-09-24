@@ -5,45 +5,22 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
 func p[T any](v T) *T { return &v }
 
-func TestRepoCommand_Validate(t *testing.T) {
+func TestRepoConfig_ValidateCommands_NameShape(t *testing.T) {
 	cases := []struct {
 		name    string
-		cmd     RepoCommand
+		cmds    []string
 		wantErr string
 	}{
-		{"literal exec ok", RepoCommand{Exec: "pnpm install"}, ""},
-		{"empty exec", RepoCommand{Exec: ""}, "exec is required"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			err := c.cmd.Validate()
-			if c.wantErr == "" {
-				assert.NoError(t, err)
-				return
-			}
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), c.wantErr)
-		})
-	}
-}
-
-func TestRepoConfig_ValidateCommands_NameShapeAndDupes(t *testing.T) {
-	cases := []struct {
-		name    string
-		cmds    map[string]RepoCommand
-		wantErr string
-	}{
-		{"lowercase-and-digits ok", map[string]RepoCommand{"install2": {Exec: "true"}}, ""},
-		{"kebab ok", map[string]RepoCommand{"fmt-check": {Exec: "true"}}, ""},
-		{"underscore ok", map[string]RepoCommand{"fmt_check": {Exec: "true"}}, ""},
-		{"starts with digit", map[string]RepoCommand{"1install": {Exec: "true"}}, "command name"},
-		{"uppercase", map[string]RepoCommand{"Install": {Exec: "true"}}, "command name"},
-		{"empty name", map[string]RepoCommand{"": {Exec: "true"}}, "command name"},
+		{"lowercase-and-digits ok", []string{"install2"}, ""},
+		{"kebab ok", []string{"fmt-check"}, ""},
+		{"starts with digit", []string{"1install"}, "function name"},
+		{"uppercase", []string{"Install"}, "function name"},
+		{"underscore rejected", []string{"fmt_check"}, "function name"},
+		{"empty name", []string{""}, "function name"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -59,18 +36,6 @@ func TestRepoConfig_ValidateCommands_NameShapeAndDupes(t *testing.T) {
 	}
 }
 
-func TestRepoCommand_UnmarshalYAML_UnknownKeyRejected(t *testing.T) {
-	src := []byte(`
-exec: pnpm test
-run_on_setup: true
-`)
-	var cmd RepoCommand
-	err := yamlUnmarshal(src, &cmd)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "run_on_setup")
-	assert.Contains(t, err.Error(), "unknown")
-}
-
-func yamlUnmarshal(b []byte, v any) error {
-	return yaml.Unmarshal(b, v)
+func TestRepoConfig_ValidateCommands_EmptyIsValid(t *testing.T) {
+	assert.NoError(t, RepoConfig{}.validateCommands())
 }

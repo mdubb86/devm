@@ -15,9 +15,7 @@ func TestDiff_CommandsAdded(t *testing.T) {
 	new := schema.Config{Repos: map[string]schema.RepoConfig{
 		"main": {
 			Label: strPtr("work"), Secret: "gh",
-			Commands: map[string]schema.RepoCommand{
-				"install": {Exec: "pnpm install", Startup: boolPtr(true)},
-			},
+			Commands: []string{"install"},
 		},
 	}}
 	changes := computeCommandsChanges(old, new)
@@ -33,9 +31,7 @@ func TestDiff_CommandsRemoved(t *testing.T) {
 	old := schema.Config{Repos: map[string]schema.RepoConfig{
 		"main": {
 			Label: strPtr("work"), Secret: "gh",
-			Commands: map[string]schema.RepoCommand{
-				"install": {Exec: "pnpm install"},
-			},
+			Commands: []string{"install"},
 		},
 	}}
 	new := schema.Config{Repos: map[string]schema.RepoConfig{
@@ -50,83 +46,18 @@ func TestDiff_CommandsRemoved(t *testing.T) {
 	assert.Equal(t, "install", changes[0].Key)
 }
 
-func TestDiff_CommandsEditedExecOrStartup(t *testing.T) {
-	base := schema.Config{Repos: map[string]schema.RepoConfig{
-		"main": {
-			Label: strPtr("work"), Secret: "gh",
-			Commands: map[string]schema.RepoCommand{
-				"install": {Exec: "pnpm install"},
-			},
-		},
-	}}
-
-	// Edit exec only.
-	next := schema.Config{Repos: map[string]schema.RepoConfig{
-		"main": {
-			Label: strPtr("work"), Secret: "gh",
-			Commands: map[string]schema.RepoCommand{
-				"install": {Exec: "pnpm install --frozen-lockfile"},
-			},
-		},
-	}}
-	changes := computeCommandsChanges(base, next)
-	require.Len(t, changes, 1)
-	assert.Equal(t, KindCommandsChange, changes[0].Kind)
-	assert.Equal(t, OpMutate, changes[0].Op)
-	assert.Equal(t, "Exec", changes[0].Field)
-	assert.Equal(t, BucketLive, changes[0].Bucket())
-
-	// Toggle startup:true only, exec unchanged.
-	next2 := schema.Config{Repos: map[string]schema.RepoConfig{
-		"main": {
-			Label: strPtr("work"), Secret: "gh",
-			Commands: map[string]schema.RepoCommand{
-				"install": {Exec: "pnpm install", Startup: boolPtr(true)},
-			},
-		},
-	}}
-	changes2 := computeCommandsChanges(base, next2)
-	require.Len(t, changes2, 1)
-	assert.Equal(t, KindCommandsChange, changes2[0].Kind)
-	assert.Equal(t, OpMutate, changes2[0].Op)
-	assert.Equal(t, "Startup", changes2[0].Field)
-	assert.Equal(t, BucketLive, changes2[0].Bucket())
-}
-
 func TestDiff_CommandsNoChange(t *testing.T) {
 	cfg := schema.Config{Repos: map[string]schema.RepoConfig{
-		"main": {Commands: map[string]schema.RepoCommand{
-			"install": {Exec: "pnpm install", Startup: boolPtr(true)},
-		}},
+		"main": {Commands: []string{"install"}},
 	}}
 	assert.Empty(t, computeCommandsChanges(cfg, cfg))
-}
-
-func TestDiff_CommandsMultipleFieldsSameCommand(t *testing.T) {
-	old := schema.Config{Repos: map[string]schema.RepoConfig{
-		"main": {Commands: map[string]schema.RepoCommand{
-			"install": {Exec: "pnpm install"},
-		}},
-	}}
-	new := schema.Config{Repos: map[string]schema.RepoConfig{
-		"main": {Commands: map[string]schema.RepoCommand{
-			"install": {Exec: "pnpm install --frozen-lockfile", Startup: boolPtr(true)},
-		}},
-	}}
-	changes := computeCommandsChanges(old, new)
-	assert.Len(t, changes, 2)
 }
 
 func TestDiff_CommandsSortedDeterministic(t *testing.T) {
 	old := schema.Config{}
 	new := schema.Config{Repos: map[string]schema.RepoConfig{
-		"zeta": {Commands: map[string]schema.RepoCommand{
-			"lint": {Exec: "lint"},
-		}},
-		"alpha": {Commands: map[string]schema.RepoCommand{
-			"test":    {Exec: "test"},
-			"install": {Exec: "install"},
-		}},
+		"zeta":  {Commands: []string{"lint"}},
+		"alpha": {Commands: []string{"test", "install"}},
 	}}
 	changes := computeCommandsChanges(old, new)
 	require.Len(t, changes, 3)
@@ -148,10 +79,8 @@ func TestComputeAllChanges_IncludesCommands(t *testing.T) {
 	}}
 	new := schema.Config{Repos: map[string]schema.RepoConfig{
 		"main": {
-			Secret: "gh",
-			Commands: map[string]schema.RepoCommand{
-				"install": {Exec: "pnpm install"},
-			},
+			Secret:   "gh",
+			Commands: []string{"install"},
 		},
 	}}
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)

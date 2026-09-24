@@ -310,7 +310,7 @@ repo:
 	assert.Contains(t, err.Error(), "repo")
 }
 
-func TestLoad_RejectsUnknownCommandField(t *testing.T) {
+func TestLoad_RejectsMappingShapeCommands(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "devm.yaml", `
 project:
@@ -321,11 +321,10 @@ repos:
     commands:
       install:
         exec: pnpm install
-        run_on_setup: true
 `)
 	_, err := Load(dir)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "run_on_setup")
+	assert.Contains(t, err.Error(), "!!map")
 }
 
 func TestLoad_RepoCommandsRoundTrip(t *testing.T) {
@@ -337,21 +336,13 @@ repos:
   main:
     secret: gh
     commands:
-      install:
-        exec: pnpm install
-        startup: true
-      lint:
-        exec: "echo fmt"
+      - install
+      - lint
 `)
 	cfg, err := Load(dir)
 	require.NoError(t, err)
 	require.Contains(t, cfg.Repos, "main")
-	require.Contains(t, cfg.Repos["main"].Commands, "install")
-	assert.Equal(t, "pnpm install", cfg.Repos["main"].Commands["install"].Exec)
-	require.NotNil(t, cfg.Repos["main"].Commands["install"].Startup)
-	assert.True(t, *cfg.Repos["main"].Commands["install"].Startup)
-	assert.Equal(t, "echo fmt", cfg.Repos["main"].Commands["lint"].Exec)
-	assert.Nil(t, cfg.Repos["main"].Commands["lint"].Startup, "unspecified startup stays nil")
+	assert.Equal(t, []string{"install", "lint"}, cfg.Repos["main"].Commands)
 }
 
 func TestReadProjectName_ReturnsProjectName(t *testing.T) {
