@@ -247,18 +247,28 @@ type Service struct {
 	Templates []Template          `yaml:"templates,omitempty"`
 
 	// Tart-era service execution fields. Systemd is mutually exclusive
-	// with the declarative fields (Exec, Restart, After, WorkDir, User).
-	Exec    []string `yaml:"exec,omitempty"`
-	WorkDir string   `yaml:"workdir,omitempty"`
-	Restart string   `yaml:"restart,omitempty"`
-	After   []string `yaml:"after,omitempty"`
-	User    string   `yaml:"user,omitempty"`
-	Systemd string   `yaml:"systemd,omitempty"`
+	// with the declarative fields (ExecFunc/ExecArgv, Restart, After,
+	// WorkDir, User).
+	//
+	// ExecFunc is set when the YAML `exec:` source was a scalar
+	// string — a devm.sh/devm.me.sh function name, validated against
+	// Config.Functions. ExecArgv is set when the source was a
+	// sequence — a literal argv run with no shell. Exactly one is
+	// populated by Service.UnmarshalYAML; both empty means the
+	// service declares no process (routing-only or systemd-managed).
+	ExecFunc string   `yaml:"-"`
+	ExecArgv []string `yaml:"-"`
+	WorkDir  string   `yaml:"workdir,omitempty"`
+	Restart  string   `yaml:"restart,omitempty"`
+	After    []string `yaml:"after,omitempty"`
+	User     string   `yaml:"user,omitempty"`
+	Systemd  string   `yaml:"systemd,omitempty"`
 }
 
-// serviceYAML is the on-the-wire shape. `port` is a yaml.Node so we
-// can decode it as either int or string and populate both Service.Port
-// and Service.BindIP from a single field.
+// serviceYAML is the on-the-wire shape. `port` and `exec` are
+// yaml.Node fields so each can decode polymorphically: `port` as
+// either int or string, `exec` as either a scalar (function name) or
+// a sequence (literal argv).
 type serviceYAML struct {
 	Port       yaml.Node           `yaml:"port,omitempty"`
 	Hostname   string              `yaml:"hostname,omitempty"`
@@ -266,7 +276,7 @@ type serviceYAML struct {
 	ExposeHost bool                `yaml:"expose_host,omitempty"`
 	Env        map[string]EnvValue `yaml:"env,omitempty"`
 	Templates  []Template          `yaml:"templates,omitempty"`
-	Exec       []string            `yaml:"exec,omitempty"`
+	Exec       yaml.Node           `yaml:"exec,omitempty"`
 	WorkDir    string              `yaml:"workdir,omitempty"`
 	Restart    string              `yaml:"restart,omitempty"`
 	After      []string            `yaml:"after,omitempty"`
@@ -305,13 +315,42 @@ func (s *Service) UnmarshalYAML(node *yaml.Node) error {
 	s.ExposeHost = raw.ExposeHost
 	s.Env = raw.Env
 	s.Templates = raw.Templates
-	s.Exec = raw.Exec
 	s.WorkDir = raw.WorkDir
 	s.Restart = raw.Restart
 	s.After = raw.After
 	s.User = raw.User
 	s.Systemd = raw.Systemd
+	if err := s.decodeExecNode(raw.Exec); err != nil {
+		return err
+	}
 	return s.decodePortNode(raw.Port)
+}
+
+// decodeExecNode populates exactly one of ExecFunc/ExecArgv from the
+// `exec:` YAML node, based on its shape:
+//   - scalar (`exec: build`): a devm.sh/devm.me.sh function name → ExecFunc
+//   - sequence (`exec: [/bin/foo, bar]`): literal argv → ExecArgv
+func (s *Service) decodeExecNode(n yaml.Node) error {
+	switch n.Kind {
+	case 0:
+		return nil // no exec set
+	case yaml.ScalarNode:
+		var fn string
+		if err := n.Decode(&fn); err != nil {
+			return fmt.Errorf("exec: %w", err)
+		}
+		s.ExecFunc = fn
+		return nil
+	case yaml.SequenceNode:
+		var argv []string
+		if err := n.Decode(&argv); err != nil {
+			return fmt.Errorf("exec: %w", err)
+		}
+		s.ExecArgv = argv
+		return nil
+	default:
+		return fmt.Errorf("exec: must be a function name (string) or an argv list")
+	}
 }
 
 func (s *Service) decodePortNode(n yaml.Node) error {
@@ -357,7 +396,7 @@ func (s Service) MarshalYAML() (interface{}, error) {
 		ExposeHost bool                `yaml:"expose_host,omitempty"`
 		Env        map[string]EnvValue `yaml:"env,omitempty"`
 		Templates  []Template          `yaml:"templates,omitempty"`
-		Exec       []string            `yaml:"exec,omitempty"`
+		Exec       interface{}         `yaml:"exec,omitempty"`
 		WorkDir    string              `yaml:"workdir,omitempty"`
 		Restart    string              `yaml:"restart,omitempty"`
 		After      []string            `yaml:"after,omitempty"`
@@ -369,7 +408,6 @@ func (s Service) MarshalYAML() (interface{}, error) {
 		ExposeHost: s.ExposeHost,
 		Env:        s.Env,
 		Templates:  s.Templates,
-		Exec:       s.Exec,
 		WorkDir:    s.WorkDir,
 		Restart:    s.Restart,
 		After:      s.After,
@@ -382,6 +420,12 @@ func (s Service) MarshalYAML() (interface{}, error) {
 		} else {
 			out.Port = fmt.Sprintf("%s:%d", s.BindIP, s.Port)
 		}
+	}
+	switch {
+	case s.ExecFunc != "":
+		out.Exec = s.ExecFunc
+	case len(s.ExecArgv) > 0:
+		out.Exec = s.ExecArgv
 	}
 	return out, nil
 }
@@ -408,13 +452,13 @@ func (s Service) Validate() error {
 	if s.BindIP != "" && s.Port == 0 {
 		return fmt.Errorf("port bind interface requires a sandbox port")
 	}
-	if s.Port == 0 && len(s.Exec) == 0 && s.Systemd == "" {
+	if s.Port == 0 && s.ExecFunc == "" && len(s.ExecArgv) == 0 && s.Systemd == "" {
 		return fmt.Errorf("service must define a port, exec, or systemd")
 	}
 
 	// systemd override is mutually exclusive with declarative fields.
 	if s.Systemd != "" {
-		if len(s.Exec) > 0 || s.Restart != "" || len(s.After) > 0 ||
+		if s.ExecFunc != "" || len(s.ExecArgv) > 0 || s.Restart != "" || len(s.After) > 0 ||
 			s.WorkDir != "" || s.User != "" {
 			return fmt.Errorf("service.systemd is mutually exclusive with exec/restart/after/workdir/user")
 		}
@@ -1168,6 +1212,9 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	if err := c.validateFunctionReferences(); err != nil {
+		return err
+	}
 	if err := c.validateProjectIDReserved(); err != nil {
 		return err
 	}
@@ -1228,6 +1275,49 @@ func (c Config) validateSecretBindings() error {
 		return fmt.Errorf(
 			"secret %s bound to a host in network.allow but never referenced by an env value — add `SOME_VAR: !secret <name>` under env:, or it is never delivered to the guest",
 			strings.Join(quoteAll(undelivered), ", "))
+	}
+	return nil
+}
+
+// validateFunctionReferences checks that every function name referenced
+// from devm.yaml resolves against Config.Functions — the sorted,
+// deduplicated union of top-level function names devm.sh and
+// devm.me.sh declared (populated by config.Load). Two reference
+// sites: repos.<name>.commands (each entry) and services.<name>.exec
+// when its YAML source was a scalar (Service.ExecFunc). Iteration is
+// sorted so the first mismatch in map order is deterministic.
+func (c Config) validateFunctionReferences() error {
+	funcSet := make(map[string]bool, len(c.Functions))
+	for _, f := range c.Functions {
+		funcSet[f] = true
+	}
+
+	repoNames := make([]string, 0, len(c.Repos))
+	for name := range c.Repos {
+		repoNames = append(repoNames, name)
+	}
+	sort.Strings(repoNames)
+	for _, name := range repoNames {
+		for _, fn := range c.Repos[name].Commands {
+			if !funcSet[fn] {
+				return fmt.Errorf(`repos.%s.commands: function %q is not defined in devm.sh (or devm.me.sh)`, name, fn)
+			}
+		}
+	}
+
+	svcNames := make([]string, 0, len(c.Services))
+	for name := range c.Services {
+		svcNames = append(svcNames, name)
+	}
+	sort.Strings(svcNames)
+	for _, name := range svcNames {
+		fn := c.Services[name].ExecFunc
+		if fn == "" {
+			continue
+		}
+		if !funcSet[fn] {
+			return fmt.Errorf(`services.%s.exec: function %q is not defined in devm.sh (or devm.me.sh)`, name, fn)
+		}
 	}
 	return nil
 }

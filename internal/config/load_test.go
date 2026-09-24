@@ -339,6 +339,10 @@ repos:
       - install
       - lint
 `)
+	writeFile(t, dir, "devm.sh", `
+install() { true; }
+lint() { true; }
+`)
 	cfg, err := Load(dir)
 	require.NoError(t, err)
 	require.Contains(t, cfg.Repos, "main")

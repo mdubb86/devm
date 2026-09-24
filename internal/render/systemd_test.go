@@ -32,7 +32,7 @@ func TestRenderService_FullOverride_NormalizesTrailingWhitespace(t *testing.T) {
 }
 
 func TestRenderService_Declarative_HasDefaults(t *testing.T) {
-	svc := schema.Service{Exec: []string{"/usr/bin/npm", "run", "dev"}}
+	svc := schema.Service{ExecArgv: []string{"/usr/bin/npm", "run", "dev"}}
 	got := string(RenderService("api", svc))
 
 	assert.Contains(t, got, "[Unit]")
@@ -50,19 +50,19 @@ func TestRenderService_Declarative_HasDefaults(t *testing.T) {
 }
 
 func TestRenderService_JoinsDevmTarget(t *testing.T) {
-	out := string(RenderService("web", schema.Service{Exec: []string{"run"}}))
+	out := string(RenderService("web", schema.Service{ExecArgv: []string{"run"}}))
 	require.Contains(t, out, "WantedBy=devm.target")
 	require.NotContains(t, out, "devm-enforce.service")
 }
 
 func TestRenderService_Declarative_AllFields(t *testing.T) {
 	svc := schema.Service{
-		Exec:    []string{"/bin/sleep", "infinity"},
-		WorkDir: "/var/lib/foo",
-		User:    "appuser",
-		Env:     map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "debug"}, "API_KEY": {Literal: "x"}},
-		After:   []string{"postgresql.service", "redis.service"},
-		Restart: "always",
+		ExecArgv: []string{"/bin/sleep", "infinity"},
+		WorkDir:  "/var/lib/foo",
+		User:     "appuser",
+		Env:      map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "debug"}, "API_KEY": {Literal: "x"}},
+		After:    []string{"postgresql.service", "redis.service"},
+		Restart:  "always",
 	}
 	got := string(RenderService("worker", svc))
 
@@ -80,7 +80,7 @@ func TestRenderService_Declarative_AllFields(t *testing.T) {
 }
 
 func TestRenderService_Declarative_NoEnv_OmitsEnvironmentLine(t *testing.T) {
-	svc := schema.Service{Exec: []string{"/bin/true"}}
+	svc := schema.Service{ExecArgv: []string{"/bin/true"}}
 	got := string(RenderService("x", svc))
 	assert.NotContains(t, got, "Environment=")
 }
@@ -96,7 +96,7 @@ func TestRenderService_Declarative_HostnameAndPortOnlyService(t *testing.T) {
 }
 
 func TestRenderService_DeclarativeIncludesEnvironmentFile(t *testing.T) {
-	svc := schema.Service{Exec: []string{"run"}}
+	svc := schema.Service{ExecArgv: []string{"run"}}
 	got := string(RenderService("api", svc))
 	assert.Contains(t, got, "EnvironmentFile=-/etc/environment\n")
 }
@@ -113,7 +113,7 @@ func TestRenderService_EnvironmentFileBeforeEnvironment(t *testing.T) {
 	// Environment= lines override for the same key. Per-service env
 	// must beat /etc/environment.
 	svc := schema.Service{
-		Exec: []string{"run"},
+		ExecArgv: []string{"run"},
 		Env: map[string]schema.EnvValue{
 			"PORT": {Literal: "8080"},
 		},

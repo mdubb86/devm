@@ -189,10 +189,10 @@ func TestComputeGlobalEnvChanges(t *testing.T) {
 
 func TestDiff_ServiceExecChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"old"}},
+		"api": {ExecArgv: []string{"old"}},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"new"}},
+		"api": {ExecArgv: []string{"new"}},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
@@ -209,10 +209,10 @@ func TestDiff_ServiceExecChange_IsBucketLive(t *testing.T) {
 
 func TestDiff_ServiceRestartChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, Restart: "no"},
+		"api": {ExecArgv: []string{"run"}, Restart: "no"},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, Restart: "always"},
+		"api": {ExecArgv: []string{"run"}, Restart: "always"},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
@@ -228,10 +228,10 @@ func TestDiff_ServiceRestartChange_IsBucketLive(t *testing.T) {
 
 func TestDiff_ServiceAfterChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, After: []string{"network.target"}},
+		"api": {ExecArgv: []string{"run"}, After: []string{"network.target"}},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, After: []string{"network.target", "db.service"}},
+		"api": {ExecArgv: []string{"run"}, After: []string{"network.target", "db.service"}},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
@@ -247,10 +247,10 @@ func TestDiff_ServiceAfterChange_IsBucketLive(t *testing.T) {
 
 func TestDiff_ServiceWorkdirChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, WorkDir: "/old"},
+		"api": {ExecArgv: []string{"run"}, WorkDir: "/old"},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, WorkDir: "/new"},
+		"api": {ExecArgv: []string{"run"}, WorkDir: "/new"},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)
@@ -266,10 +266,10 @@ func TestDiff_ServiceWorkdirChange_IsBucketLive(t *testing.T) {
 
 func TestDiff_ServiceUserChange_IsBucketLive(t *testing.T) {
 	old := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, User: "alice"},
+		"api": {ExecArgv: []string{"run"}, User: "alice"},
 	})
 	new := cfgWithServices(map[string]schema.Service{
-		"api": {Exec: []string{"run"}, User: "bob"},
+		"api": {ExecArgv: []string{"run"}, User: "bob"},
 	})
 	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)

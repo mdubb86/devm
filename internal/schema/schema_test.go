@@ -17,9 +17,13 @@ func TestServiceValidate(t *testing.T) {
 	s := Service{Port: 3000}
 	assert.NoError(t, s.Validate())
 
-	// exec-only service: no port, just exec
-	execOnly := Service{Exec: []string{"/usr/bin/redis-server"}}
+	// exec-only service: no port, just exec (argv form)
+	execOnly := Service{ExecArgv: []string{"/usr/bin/redis-server"}}
 	assert.NoError(t, execOnly.Validate())
+
+	// exec-only service: no port, just exec (function-name form)
+	execFuncOnly := Service{ExecFunc: "start-redis"}
+	assert.NoError(t, execFuncOnly.Validate())
 
 	emptyWorkspace := Service{}
 	assert.Error(t, emptyWorkspace.Validate(), "service must have canonical, exec, or systemd")
@@ -242,6 +246,50 @@ func TestServiceExposeHostYAMLRoundTrip(t *testing.T) {
 	assert.True(t, roundTripped.ExposeHost, "expose_host must survive marshal/unmarshal round-trip (snapshot storage relies on this)")
 }
 
+// TestServiceExecYAMLRoundTrip_ScalarIsFunctionForm exercises the
+// `exec:` field's scalar shape through the real custom decode/encode
+// path (serviceYAML.Exec, Service.decodeExecNode, Service.MarshalYAML)
+// — a bare scalar names a devm.sh/devm.me.sh function, not a literal
+// command.
+func TestServiceExecYAMLRoundTrip_ScalarIsFunctionForm(t *testing.T) {
+	var svc Service
+	require.NoError(t, yaml.Unmarshal([]byte("exec: start-worker\n"), &svc))
+	assert.Equal(t, "start-worker", svc.ExecFunc)
+	assert.Empty(t, svc.ExecArgv)
+
+	out, err := yaml.Marshal(svc)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "exec: start-worker")
+
+	var roundTripped Service
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.Equal(t, "start-worker", roundTripped.ExecFunc)
+}
+
+// TestServiceExecYAMLRoundTrip_SequenceIsArgvForm exercises the
+// `exec:` field's sequence shape — a list is a literal argv, run with
+// no shell.
+func TestServiceExecYAMLRoundTrip_SequenceIsArgvForm(t *testing.T) {
+	var svc Service
+	require.NoError(t, yaml.Unmarshal([]byte("exec:\n  - /usr/bin/redis-server\n  - --save\n"), &svc))
+	assert.Equal(t, []string{"/usr/bin/redis-server", "--save"}, svc.ExecArgv)
+	assert.Empty(t, svc.ExecFunc)
+
+	out, err := yaml.Marshal(svc)
+	require.NoError(t, err)
+
+	var roundTripped Service
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.Equal(t, []string{"/usr/bin/redis-server", "--save"}, roundTripped.ExecArgv)
+}
+
+func TestServiceExecYAML_MappingRejected(t *testing.T) {
+	var svc Service
+	err := yaml.Unmarshal([]byte("exec:\n  foo: bar\n"), &svc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exec")
+}
+
 func TestService_Validate_ExposeHostRequiresHostname(t *testing.T) {
 	svc := Service{
 		Port:       80,
@@ -425,8 +473,8 @@ func TestTemplateValidate(t *testing.T) {
 
 func TestService_SystemdOverride_ExclusiveWithDeclarative(t *testing.T) {
 	s := Service{
-		Systemd: "[Unit]\n[Service]\nExecStart=/bin/true",
-		Exec:    []string{"/bin/true"},
+		Systemd:  "[Unit]\n[Service]\nExecStart=/bin/true",
+		ExecArgv: []string{"/bin/true"},
 	}
 	err := s.Validate()
 	require.Error(t, err)
@@ -447,7 +495,7 @@ func TestService_Restart_ValidValues(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.val, func(t *testing.T) {
-			s := Service{Exec: []string{"/bin/true"}, Restart: c.val}
+			s := Service{ExecArgv: []string{"/bin/true"}, Restart: c.val}
 			err := s.Validate()
 			if c.ok {
 				require.NoError(t, err)
@@ -1196,7 +1244,8 @@ func TestBareCloneName(t *testing.T) {
 
 func TestConfigValidate_RepoCommands(t *testing.T) {
 	valid := Config{
-		Project: Project{Name: "p"},
+		Project:   Project{Name: "p"},
+		Functions: []string{"install", "test"},
 		Repos: map[string]RepoConfig{
 			"main": {
 				Secret:   "github",
@@ -1207,7 +1256,8 @@ func TestConfigValidate_RepoCommands(t *testing.T) {
 	assert.NoError(t, valid.Validate())
 
 	invalid := Config{
-		Project: Project{Name: "p"},
+		Project:   Project{Name: "p"},
+		Functions: []string{"test"},
 		Repos: map[string]RepoConfig{
 			"main": {
 				Secret:   "github",
@@ -1218,4 +1268,47 @@ func TestConfigValidate_RepoCommands(t *testing.T) {
 	err := invalid.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "function name")
+}
+
+// ---------- Config.Validate + function references ----------
+
+func TestValidate_RepoCommandsFunctionMustExist(t *testing.T) {
+	cfg := Config{
+		Project:   Project{Name: "p"},
+		Functions: []string{"defined-fn"},
+		Repos: map[string]RepoConfig{
+			"main": {Commands: []string{"defined-fn", "missing-fn"}},
+		},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing-fn")
+	assert.Contains(t, err.Error(), "commands")
+}
+
+func TestValidate_ServiceExecFuncMustExist(t *testing.T) {
+	cfg := Config{
+		Project:   Project{Name: "p"},
+		Functions: []string{"declared-svc"},
+		Services: map[string]Service{
+			"worker": {ExecFunc: "declared-svc"},
+			"orphan": {ExecFunc: "not-in-devm-sh"},
+		},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not-in-devm-sh")
+	assert.Contains(t, err.Error(), "exec")
+}
+
+func TestValidate_ServiceExecArgv_NeverChecksAgainstFunctions(t *testing.T) {
+	// Argv-form exec is a literal command, not a devm.sh function
+	// reference — it must never be checked against Functions.
+	cfg := Config{
+		Project: Project{Name: "p"},
+		Services: map[string]Service{
+			"worker": {ExecArgv: []string{"/usr/bin/redis-server"}},
+		},
+	}
+	assert.NoError(t, cfg.Validate())
 }

@@ -43,8 +43,8 @@ func RenderService(name string, svc schema.Service) []byte {
 
 	// [Service]
 	b.WriteString("\n[Service]\n")
-	if len(svc.Exec) > 0 {
-		fmt.Fprintf(&b, "ExecStart=%s\n", systemdQuoteArgv(svc.Exec))
+	if len(svc.ExecArgv) > 0 {
+		fmt.Fprintf(&b, "ExecStart=%s\n", systemdQuoteArgv(svc.ExecArgv))
 	}
 	if svc.WorkDir != "" {
 		fmt.Fprintf(&b, "WorkingDirectory=%s\n", svc.WorkDir)

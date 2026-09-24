@@ -55,6 +55,14 @@ func Load(dir string) (schema.Config, error) {
 	if err := strictDecode(baseBytes, &base); err != nil {
 		return schema.Config{}, fmt.Errorf("parse %s: %w", basePath, err)
 	}
+	// Functions must be populated before any Validate call: Validate
+	// checks every repos.<name>.commands and services.<name>.exec
+	// function reference against this set.
+	funcs, err := loadFunctions(dir)
+	if err != nil {
+		return schema.Config{}, err
+	}
+	base.Functions = funcs
 	if err := base.Validate(); err != nil {
 		return schema.Config{}, fmt.Errorf("%s: %w", basePath, err)
 	}
@@ -102,11 +110,6 @@ func Load(dir string) (schema.Config, error) {
 		return schema.Config{}, fmt.Errorf("resolve env: %w", err)
 	}
 
-	funcs, err := loadFunctions(dir)
-	if err != nil {
-		return schema.Config{}, err
-	}
-	merged.Functions = funcs
 	return merged, nil
 }
 

@@ -350,7 +350,7 @@ func (p *Provisioner) buildBundle() ([]byte, error) {
 func (p *Provisioner) serviceUnits() []string {
 	var names []string
 	for name, svc := range p.Cfg.Services {
-		if svc.Systemd == "" && len(svc.Exec) == 0 {
+		if svc.Systemd == "" && svc.ExecFunc == "" && len(svc.ExecArgv) == 0 {
 			continue
 		}
 		names = append(names, name)

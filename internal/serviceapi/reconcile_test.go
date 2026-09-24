@@ -281,8 +281,8 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"web": {
-				Exec: []string{"/bin/true"},
-				Env:  map[string]schema.EnvValue{"OLD": {Literal: "a"}},
+				ExecArgv: []string{"/bin/true"},
+				Env:      map[string]schema.EnvValue{"OLD": {Literal: "a"}},
 			},
 		},
 	}
@@ -328,7 +328,7 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
 			"web": {
-				Exec: []string{"/bin/true"},
+				ExecArgv: []string{"/bin/true"},
 			},
 		},
 		Docker: false,
@@ -337,7 +337,7 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 
 	newCfg := oldCfg
 	newSvc := oldCfg.Services["web"]
-	newSvc.Exec = []string{"/bin/echo", "hi"} // live change
+	newSvc.ExecArgv = []string{"/bin/echo", "hi"} // live change
 	newCfg.Services = map[string]schema.Service{"web": newSvc}
 	newCfg.Docker = true // teardown-required addition
 
@@ -361,7 +361,7 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	// Live change (exec) landed in snapshot.
-	assert.Equal(t, []string{"/bin/echo", "hi"}, got.Cfg.Services["web"].Exec)
+	assert.Equal(t, []string{"/bin/echo", "hi"}, got.Cfg.Services["web"].ExecArgv)
 	// Pending docker change did NOT land — old value preserved so next
 	// reconcile still surfaces the docker toggle as teardown_required.
 	assert.False(t, got.Cfg.Docker)

@@ -63,8 +63,13 @@ func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, e
 			if soverride.Templates != nil {
 				svc.Templates = *soverride.Templates
 			}
-			if soverride.Exec != nil {
-				svc.Exec = *soverride.Exec
+			if soverride.ExecFunc != nil {
+				svc.ExecFunc = *soverride.ExecFunc
+				svc.ExecArgv = nil
+			}
+			if soverride.ExecArgv != nil {
+				svc.ExecArgv = *soverride.ExecArgv
+				svc.ExecFunc = ""
 			}
 			if soverride.WorkDir != nil {
 				svc.WorkDir = *soverride.WorkDir

@@ -293,7 +293,7 @@ func TestBuild_TarContainsServiceUnits(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
-			"web":     {Exec: []string{"/bin/true"}, Hostname: "w.local", Port: 80},
+			"web":     {ExecArgv: []string{"/bin/true"}, Hostname: "w.local", Port: 80},
 			"routing": {Hostname: "r.local", Port: 81}, // no Exec/Systemd — skipped
 		},
 	}
@@ -329,7 +329,7 @@ func TestBuild_ServiceUnit_InheritsCfgEnv(t *testing.T) {
 		},
 		Services: map[string]schema.Service{
 			"web": {
-				Exec: []string{"/bin/true"}, // eligible for a unit
+				ExecArgv: []string{"/bin/true"}, // eligible for a unit
 				// no per-service env — the cfg-level entry must reach the rendered unit
 			},
 		},
@@ -352,8 +352,8 @@ func TestBuild_ServiceUnit_PerServiceEnvOverridesCfg(t *testing.T) {
 		Env:     map[string]schema.EnvValue{"K": {Literal: "cfg-value"}},
 		Services: map[string]schema.Service{
 			"web": {
-				Exec: []string{"/bin/true"},
-				Env:  map[string]schema.EnvValue{"K": {Literal: "svc-value"}},
+				ExecArgv: []string{"/bin/true"},
+				Env:      map[string]schema.EnvValue{"K": {Literal: "svc-value"}},
 			},
 		},
 	}
@@ -446,7 +446,7 @@ func TestBuild_ServiceUnitJoinsDevmTarget(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
-			"web": {Exec: []string{"/bin/true"}},
+			"web": {ExecArgv: []string{"/bin/true"}},
 		},
 	}
 	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})

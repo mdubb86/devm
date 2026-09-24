@@ -66,7 +66,7 @@ func TestServiceOverrideExecReplacement(t *testing.T) {
 	base := schema.Config{
 		Services: map[string]schema.Service{
 			"redis": {
-				Exec: []string{"redis-server", "/etc/redis.conf"},
+				ExecArgv: []string{"redis-server", "/etc/redis.conf"},
 			},
 		},
 	}
@@ -74,13 +74,35 @@ func TestServiceOverrideExecReplacement(t *testing.T) {
 	override := schema.ConfigOverride{
 		Services: map[string]schema.ServiceOverride{
 			"redis": {
-				Exec: &newExec,
+				ExecArgv: &newExec,
 			},
 		},
 	}
 	merged, err := Merge(base, override)
 	require.NoError(t, err)
-	assert.Equal(t, newExec, merged.Services["redis"].Exec)
+	assert.Equal(t, newExec, merged.Services["redis"].ExecArgv)
+}
+
+func TestServiceOverrideExecFuncReplacement(t *testing.T) {
+	base := schema.Config{
+		Services: map[string]schema.Service{
+			"redis": {
+				ExecArgv: []string{"redis-server", "/etc/redis.conf"},
+			},
+		},
+	}
+	newFunc := "start-redis"
+	override := schema.ConfigOverride{
+		Services: map[string]schema.ServiceOverride{
+			"redis": {
+				ExecFunc: &newFunc,
+			},
+		},
+	}
+	merged, err := Merge(base, override)
+	require.NoError(t, err)
+	assert.Equal(t, "start-redis", merged.Services["redis"].ExecFunc)
+	assert.Nil(t, merged.Services["redis"].ExecArgv, "ExecFunc override must clear the prior argv form")
 }
 
 func TestMerge_OverridesPath(t *testing.T) {

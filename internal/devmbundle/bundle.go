@@ -140,7 +140,7 @@ func Build(in BuildInput) ([]byte, error) {
 	sort.Strings(svcNames)
 	for _, name := range svcNames {
 		svc := in.Cfg.Services[name]
-		if svc.Systemd == "" && len(svc.Exec) == 0 {
+		if svc.Systemd == "" && svc.ExecFunc == "" && len(svc.ExecArgv) == 0 {
 			continue
 		}
 		// Merge top-level env into per-service env so cfg.Env entries

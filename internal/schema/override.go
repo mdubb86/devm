@@ -24,12 +24,16 @@ type ServiceOverride struct {
 	ExposeHost *bool               `yaml:"expose_host,omitempty"`
 	Env        map[string]EnvValue `yaml:"env,omitempty"`
 	Templates  *[]Template         `yaml:"templates,omitempty"`
-	Exec       *[]string           `yaml:"exec,omitempty"`
-	WorkDir    *string             `yaml:"workdir,omitempty"`
-	Restart    *string             `yaml:"restart,omitempty"`
-	After      *[]string           `yaml:"after,omitempty"`
-	User       *string             `yaml:"user,omitempty"`
-	Systemd    *string             `yaml:"systemd,omitempty"`
+	// ExecFunc/ExecArgv mirror Service's split: an override `exec:`
+	// scalar sets ExecFunc (function-name form), a sequence sets
+	// ExecArgv (literal argv form). At most one is non-nil.
+	ExecFunc *string   `yaml:"-"`
+	ExecArgv *[]string `yaml:"-"`
+	WorkDir  *string   `yaml:"workdir,omitempty"`
+	Restart  *string   `yaml:"restart,omitempty"`
+	After    *[]string `yaml:"after,omitempty"`
+	User     *string   `yaml:"user,omitempty"`
+	Systemd  *string   `yaml:"systemd,omitempty"`
 }
 
 type serviceOverrideYAML struct {
@@ -39,7 +43,7 @@ type serviceOverrideYAML struct {
 	ExposeHost *bool               `yaml:"expose_host,omitempty"`
 	Env        map[string]EnvValue `yaml:"env,omitempty"`
 	Templates  *[]Template         `yaml:"templates,omitempty"`
-	Exec       *[]string           `yaml:"exec,omitempty"`
+	Exec       yaml.Node           `yaml:"exec,omitempty"`
 	WorkDir    *string             `yaml:"workdir,omitempty"`
 	Restart    *string             `yaml:"restart,omitempty"`
 	After      *[]string           `yaml:"after,omitempty"`
@@ -57,12 +61,23 @@ func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
 	o.ExposeHost = raw.ExposeHost
 	o.Env = raw.Env
 	o.Templates = raw.Templates
-	o.Exec = raw.Exec
 	o.WorkDir = raw.WorkDir
 	o.Restart = raw.Restart
 	o.After = raw.After
 	o.User = raw.User
 	o.Systemd = raw.Systemd
+	if raw.Exec.Kind != 0 {
+		var tmp Service
+		if err := tmp.decodeExecNode(raw.Exec); err != nil {
+			return err
+		}
+		if tmp.ExecFunc != "" {
+			o.ExecFunc = &tmp.ExecFunc
+		}
+		if len(tmp.ExecArgv) > 0 {
+			o.ExecArgv = &tmp.ExecArgv
+		}
+	}
 	if raw.Port.Kind == 0 {
 		return nil
 	}

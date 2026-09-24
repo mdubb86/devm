@@ -504,7 +504,7 @@ func computeServiceUnitChanges(old, new schema.Config) []Change {
 	var out []Change
 	for _, svc := range unionServiceNames(old.Services, new.Services) {
 		o, n := old.Services[svc], new.Services[svc]
-		if !stringSliceEqual(o.Exec, n.Exec) {
+		if o.ExecFunc != n.ExecFunc || !stringSliceEqual(o.ExecArgv, n.ExecArgv) {
 			out = append(out, Change{Kind: KindServiceExecChange, Service: svc})
 		}
 		if o.Restart != n.Restart {

@@ -326,7 +326,7 @@ func TestRunEnforced_RoutingOnlyServiceOmittedButProcessServicesStarted(t *testi
 		Project: schema.Project{Name: "myproj"},
 		Services: map[string]schema.Service{
 			"routing-only": {Hostname: "x.test", Port: 8080},
-			"with-exec":    {Exec: []string{"/bin/true"}},
+			"with-exec":    {ExecArgv: []string{"/bin/true"}},
 		},
 	})
 	require.NoError(t, p.RunEnforced(context.Background(), io.Discard, nil))
@@ -347,7 +347,7 @@ func TestRunBundle_SucceedsWithTemplatesDeclared(t *testing.T) {
 	p := baseProvisioner(f, schema.Config{
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
-			"svc": {Exec: []string{"/bin/true"}, Templates: []schema.Template{{Source: "x", Output: "/tmp/y"}}},
+			"svc": {ExecArgv: []string{"/bin/true"}, Templates: []schema.Template{{Source: "x", Output: "/tmp/y"}}},
 		},
 	})
 	p.WorkspaceVMPath = repoRoot
@@ -359,7 +359,7 @@ func TestRunUser_TemplatesTriggerDispatcher(t *testing.T) {
 	p := baseProvisioner(f, schema.Config{
 		Project: schema.Project{Name: "p"},
 		Services: map[string]schema.Service{
-			"svc": {Exec: []string{"/bin/true"}, Templates: []schema.Template{{Source: "x", Output: "/tmp/y"}}},
+			"svc": {ExecArgv: []string{"/bin/true"}, Templates: []schema.Template{{Source: "x", Output: "/tmp/y"}}},
 		},
 	})
 	require.NoError(t, p.RunUser(context.Background(), io.Discard, nil))
