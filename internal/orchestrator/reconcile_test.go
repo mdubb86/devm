@@ -318,10 +318,10 @@ func TestRunReconcile_DaemonUnreachable_ReturnsError(t *testing.T) {
 // TestRunReconcile_ApproveRequired_SurfacesMessageVerbatim proves the
 // real production path — cmd/devm/reconcile.go's RunE calls exactly
 // this function — surfaces the daemon's clean multi-line
-// approve_required refusal, not a JSON-wrapped error body. No
-// approve.Store snapshot is written for "x", so isApproveDiverged
-// treats the project as diverged (no snapshot at all) and the daemon
-// refuses with 409 before RunReconcile ever reaches the live-apply or
+// approve_required refusal, not a JSON-wrapped error body. Seeds an
+// approved snapshot with an OLD devm.yaml and writes a NEW devm.yaml
+// on disk, so isApproveDiverged fires and the daemon refuses with 409
+// before RunReconcile ever reaches the live-apply or
 // teardown-classification logic.
 func TestRunReconcile_ApproveRequired_SurfacesMessageVerbatim(t *testing.T) {
 	cleanup := startReconcileDaemon(t)
@@ -331,14 +331,17 @@ func TestRunReconcile_ApproveRequired_SurfacesMessageVerbatim(t *testing.T) {
 	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: cfg}))
 
 	repoRoot := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "devm.yaml"), []byte("project:\n  name: x\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "devm.yaml"), []byte("project:\n  name: x\n  version: new\n"), 0o644))
 
-	// The approve-gate check reads devm.yaml from the project's state
-	// dir, not repoRoot. No approve snapshot is written, so the
-	// daemon still treats this as diverged and refuses.
-	stateDir := filepath.Join(identity.Prod.RuntimeDir(), "x")
-	require.NoError(t, os.MkdirAll(stateDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "devm.yaml"), []byte("project:\n  name: x\n"), 0o644))
+	// Seed an approved snapshot with an OLDER devm.yaml than what's
+	// on disk, so isApproveDiverged fires. The approve-gate check
+	// reads devm.yaml from repoRoot (WorkspaceHostPath), not the
+	// state dir.
+	require.NoError(t, approve.NewStore(identity.Prod).Write(
+		"x",
+		[]byte("project:\n  name: x\n  version: old\n"),
+		nil, nil, nil, "user",
+	))
 
 	rc, res, err := RunReconcile(identity.Prod, cfg, fakeTartForSessions(t), repoRoot, ReconcileOptions{})
 	require.Error(t, err)
