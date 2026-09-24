@@ -304,6 +304,42 @@ func TestBuild_TarContainsServiceUnits(t *testing.T) {
 	assert.NotContains(t, names, "systemd/routing.service")
 }
 
+func TestBuild_TarContainsServiceWrapper_ForExecFunc(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"worker": {ExecFunc: "run-worker"},
+		},
+	}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+
+	unit := readTarEntry(t, blob, "systemd/worker.service")
+	assert.Contains(t, string(unit), "ExecStart=/opt/devm/service-wrappers/worker.sh")
+
+	entries := readTar(t, blob)
+	wrapper, ok := entries["service-wrappers/worker.sh"]
+	require.True(t, ok, "bundle missing service-wrappers/worker.sh")
+	assert.Equal(t, int64(0o755), wrapper.mode&0o777)
+	assert.Contains(t, string(wrapper.body), "run-worker")
+	assert.Contains(t, string(wrapper.body), "source /home/devm/devm.sh")
+}
+
+func TestBuild_NoServiceWrapper_ForExecArgv(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: map[string]schema.Service{
+			"web": {ExecArgv: []string{"/bin/true"}},
+		},
+	}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	for _, name := range names {
+		assert.NotContains(t, name, "service-wrappers/", "argv-form service must not emit a wrapper file")
+	}
+}
+
 func readTar(t *testing.T, blob []byte) map[string]tarEntry {
 	t.Helper()
 	tr := tar.NewReader(bytes.NewReader(blob))

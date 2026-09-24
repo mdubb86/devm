@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mdubb86/devm/internal/render"
@@ -154,9 +155,18 @@ func Build(in BuildInput) ([]byte, error) {
 			merged[k] = v
 		}
 		svc.Env = merged
-		unit := render.RenderService(name, svc)
+		unit, wrapperPath, wrapperBody, err := render.RenderService(svc, name, nil, in.Cfg.Path)
+		if err != nil {
+			return nil, fmt.Errorf("render service %q unit: %w", name, err)
+		}
 		if err := writeEntry(tw, "systemd/"+name+".service", 0o644, unit); err != nil {
 			return nil, err
+		}
+		if wrapperPath != "" {
+			rel := strings.TrimPrefix(wrapperPath, GuestRoot+"/")
+			if err := writeEntry(tw, rel, 0o755, wrapperBody); err != nil {
+				return nil, err
+			}
 		}
 	}
 

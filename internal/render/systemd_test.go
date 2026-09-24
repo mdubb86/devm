@@ -9,6 +9,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// renderUnit calls RenderService with no extra wrapper env/path inputs
+// and returns just the unit body, for tests that only care about the
+// unit — the argv-form and full-override shapes exercised below never
+// populate wrapperPath/wrapperBody.
+func renderUnit(t *testing.T, name string, svc schema.Service) string {
+	t.Helper()
+	unit, _, _, err := RenderService(svc, name, nil, nil)
+	require.NoError(t, err)
+	return string(unit)
+}
+
+func TestRenderService_ExecFuncEmitsWrapper(t *testing.T) {
+	unit, wrapperPath, wrapperBody, err := RenderService(schema.Service{
+		ExecFunc: "run-worker",
+	}, "worker", nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "/opt/devm/service-wrappers/worker.sh", wrapperPath)
+	assert.Contains(t, string(unit), "ExecStart=/opt/devm/service-wrappers/worker.sh")
+	assert.Contains(t, string(wrapperBody), "source /home/devm/devm.sh")
+	assert.Contains(t, string(wrapperBody), "run-worker")
+}
+
+func TestRenderService_ExecArgvNoWrapper(t *testing.T) {
+	unit, wrapperPath, _, err := RenderService(schema.Service{
+		ExecArgv: []string{"/usr/bin/foo", "--arg"},
+	}, "cache", nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, wrapperPath, "argv shape must not emit a wrapper")
+	assert.Contains(t, string(unit), "ExecStart=/usr/bin/foo --arg")
+}
+
 func TestRenderService_FullOverride_VerbatimReturn(t *testing.T) {
 	override := `[Unit]
 Description=custom
@@ -17,7 +48,7 @@ ExecStart=/bin/true
 Type=oneshot
 `
 	svc := schema.Service{Systemd: override}
-	got := string(RenderService("api", svc))
+	got := renderUnit(t, "api", svc)
 	// Verbatim (with trailing newline normalized).
 	assert.Equal(t, override, got)
 }
@@ -25,7 +56,7 @@ Type=oneshot
 func TestRenderService_FullOverride_NormalizesTrailingWhitespace(t *testing.T) {
 	override := "[Unit]\nDescription=custom\n[Service]\nExecStart=/bin/true\n\n\n   \n"
 	svc := schema.Service{Systemd: override}
-	got := string(RenderService("api", svc))
+	got := renderUnit(t, "api", svc)
 	// Trimmed trailing whitespace + exactly one newline.
 	assert.True(t, strings.HasSuffix(got, "ExecStart=/bin/true\n"))
 	assert.False(t, strings.HasSuffix(got, "\n\n"))
@@ -33,7 +64,7 @@ func TestRenderService_FullOverride_NormalizesTrailingWhitespace(t *testing.T) {
 
 func TestRenderService_Declarative_HasDefaults(t *testing.T) {
 	svc := schema.Service{ExecArgv: []string{"/usr/bin/npm", "run", "dev"}}
-	got := string(RenderService("api", svc))
+	got := renderUnit(t, "api", svc)
 
 	assert.Contains(t, got, "[Unit]")
 	assert.Contains(t, got, "Description=devm service: api")
@@ -50,7 +81,7 @@ func TestRenderService_Declarative_HasDefaults(t *testing.T) {
 }
 
 func TestRenderService_JoinsDevmTarget(t *testing.T) {
-	out := string(RenderService("web", schema.Service{ExecArgv: []string{"run"}}))
+	out := renderUnit(t, "web", schema.Service{ExecArgv: []string{"run"}})
 	require.Contains(t, out, "WantedBy=devm.target")
 	require.NotContains(t, out, "devm-enforce.service")
 }
@@ -64,7 +95,7 @@ func TestRenderService_Declarative_AllFields(t *testing.T) {
 		After:    []string{"postgresql.service", "redis.service"},
 		Restart:  "always",
 	}
-	got := string(RenderService("worker", svc))
+	got := renderUnit(t, "worker", svc)
 
 	assert.Contains(t, got, "WorkingDirectory=/var/lib/foo")
 	assert.Contains(t, got, "User=appuser")
@@ -81,7 +112,7 @@ func TestRenderService_Declarative_AllFields(t *testing.T) {
 
 func TestRenderService_Declarative_NoEnv_OmitsEnvironmentLine(t *testing.T) {
 	svc := schema.Service{ExecArgv: []string{"/bin/true"}}
-	got := string(RenderService("x", svc))
+	got := renderUnit(t, "x", svc)
 	assert.NotContains(t, got, "Environment=")
 }
 
@@ -91,20 +122,20 @@ func TestRenderService_Declarative_HostnameAndPortOnlyService(t *testing.T) {
 	// for the orchestrator to detect "nothing to run" and skip
 	// systemctl enable.
 	svc := schema.Service{Hostname: "api.test", Port: 8080}
-	got := string(RenderService("api", svc))
+	got := renderUnit(t, "api", svc)
 	assert.NotContains(t, got, "ExecStart=")
 }
 
 func TestRenderService_DeclarativeIncludesEnvironmentFile(t *testing.T) {
 	svc := schema.Service{ExecArgv: []string{"run"}}
-	got := string(RenderService("api", svc))
+	got := renderUnit(t, "api", svc)
 	assert.Contains(t, got, "EnvironmentFile=-/etc/environment\n")
 }
 
 func TestRenderService_FullOverride_NoEnvironmentFileAdded(t *testing.T) {
 	// User-provided full override is verbatim — devm doesn't inject.
 	svc := schema.Service{Systemd: "[Unit]\nDescription=raw\n\n[Service]\nExecStart=/bin/true\n"}
-	got := string(RenderService("api", svc))
+	got := renderUnit(t, "api", svc)
 	assert.NotContains(t, got, "EnvironmentFile=-/etc/environment")
 }
 
@@ -118,7 +149,7 @@ func TestRenderService_EnvironmentFileBeforeEnvironment(t *testing.T) {
 			"PORT": {Literal: "8080"},
 		},
 	}
-	got := string(RenderService("api", svc))
+	got := renderUnit(t, "api", svc)
 	envFileIdx := strings.Index(got, "EnvironmentFile=-/etc/environment")
 	envLineIdx := strings.Index(got, "Environment=PORT=8080")
 	require.NotEqual(t, -1, envFileIdx)
