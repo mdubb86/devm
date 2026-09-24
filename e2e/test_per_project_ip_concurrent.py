@@ -141,8 +141,9 @@ def test_per_project_ip_concurrent_isolation(devm_path):
     b, devm_b = _mk_project(devm_path, "b")
     try:
         for ws, d in ((a, devm_a), (b, devm_b)):
+            # `devm shell` is warm-attach-only; cold-start via `devm start`.
             r = subprocess.run(
-                [d.path, "shell", "--", "true"],
+                [d.path, "start"],
                 cwd=str(ws.path), capture_output=True, timeout=480,
             )
             assert r.returncode == 0, (
