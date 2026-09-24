@@ -41,7 +41,7 @@ func setupProjectDirWithDevm(t *testing.T, projectID string, devmContent string,
 	// Approve the snapshot so the gate check passes.
 	// Pass nil (not empty bytes) for meYAML when there's no devm.me.yaml.
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write(projectID, []byte(devmContent), meBytes, "user"))
+	require.NoError(t, store.Write(projectID, []byte(devmContent), meBytes, nil, nil, "user"))
 	return projDir, store
 }
 
@@ -1018,7 +1018,7 @@ func TestReconcile_PackagesBeforeApplyLive(t *testing.T) {
 func TestReconcile_RefusesWhenDivergedFromApproved(t *testing.T) {
 	// Setup: fake VM state, write devm.yaml, write a DIFFERENT approved snapshot.
 	cfg, _, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
-	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: old\n"), nil, "user"))
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: old\n"), nil, nil, nil, "user"))
 	// Build a minimal VMReconcileRequest body.
 	body := VMReconcileRequest{
 		Name:              "proj-1",
@@ -1038,7 +1038,7 @@ func TestReconcile_RefusesWhenDivergedFromApproved(t *testing.T) {
 
 func TestReconcile_ProceedsWhenNotDiverged(t *testing.T) {
 	cfg, _, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
-	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, nil, nil, "user"))
 	body := VMReconcileRequest{Name: "proj-1", WorkspaceHostPath: projDir, Cfg: schema.Config{Project: schema.Project{Name: "p"}}}
 	buf, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/vm/reconcile", bytes.NewReader(buf))

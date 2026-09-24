@@ -28,7 +28,7 @@ func TestStore_WriteReadRoundtripUserBothFiles(t *testing.T) {
 	s, _ := newTestStore(t)
 	dv := []byte("project:\n  name: p\n")
 	me := []byte("env:\n  DEBUG: 1\n")
-	require.NoError(t, s.Write("proj-1", dv, me, "user"))
+	require.NoError(t, s.Write("proj-1", dv, me, nil, nil, "user"))
 	snap, ok, err := s.Read("proj-1")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -41,7 +41,7 @@ func TestStore_WriteReadRoundtripUserBothFiles(t *testing.T) {
 func TestStore_WriteReadRoundtripNoMeYAML(t *testing.T) {
 	s, _ := newTestStore(t)
 	dv := []byte("project:\n  name: p\n")
-	require.NoError(t, s.Write("proj-1", dv, nil, "guest"))
+	require.NoError(t, s.Write("proj-1", dv, nil, nil, nil, "guest"))
 	snap, ok, err := s.Read("proj-1")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -50,18 +50,35 @@ func TestStore_WriteReadRoundtripNoMeYAML(t *testing.T) {
 	assert.Equal(t, "guest", snap.Manifest.Source)
 }
 
+func TestStore_WriteReadRoundtripScriptFiles(t *testing.T) {
+	s, _ := newTestStore(t)
+	dv := []byte("project:\n  name: p\n")
+	sh := []byte("install() { true; }\n")
+	meSH := []byte("me_override() { true; }\n")
+	require.NoError(t, s.Write("proj-1", dv, nil, sh, meSH, "user"))
+	snap, ok, err := s.Read("proj-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sh, snap.DevmSH)
+	assert.Equal(t, meSH, snap.DevmMeSH)
+}
+
 func TestStore_WriteIsAtomic(t *testing.T) {
 	// Write twice; the second must fully replace the first (no torn
 	// hybrid). Assert via re-Read matches the second write.
 	s, root := newTestStore(t)
-	require.NoError(t, s.Write("proj-1", []byte("first"), []byte("first-me"), "user"))
-	require.NoError(t, s.Write("proj-1", []byte("second"), nil, "guest"))
+	require.NoError(t, s.Write("proj-1", []byte("first"), []byte("first-me"), []byte("first-sh"), []byte("first-me-sh"), "user"))
+	require.NoError(t, s.Write("proj-1", []byte("second"), nil, nil, nil, "guest"))
 	snap, ok, err := s.Read("proj-1")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, []byte("second"), snap.DevmYAML)
 	assert.Nil(t, snap.MeYAML, "second write with no meYAML must remove the old me file")
+	assert.Nil(t, snap.DevmSH, "second write with no devmSH must remove the old devm.sh file")
+	assert.Nil(t, snap.DevmMeSH, "second write with no devmMeSH must remove the old devm.me.sh file")
 	assert.NoFileExists(t, filepath.Join(root, "Library", "Application Support", "devm-test-approve", "proj-1", "approved-snapshot", "devm.me.yaml"))
+	assert.NoFileExists(t, filepath.Join(root, "Library", "Application Support", "devm-test-approve", "proj-1", "approved-snapshot", "devm.sh"))
+	assert.NoFileExists(t, filepath.Join(root, "Library", "Application Support", "devm-test-approve", "proj-1", "approved-snapshot", "devm.me.sh"))
 }
 
 func TestHashFile_DeterministicAndDifferent(t *testing.T) {
@@ -72,7 +89,7 @@ func TestHashFile_DeterministicAndDifferent(t *testing.T) {
 
 func TestStore_WriteRejectsEmptyProjectID(t *testing.T) {
 	s, _ := newTestStore(t)
-	err := s.Write("", []byte("x"), nil, "user")
+	err := s.Write("", []byte("x"), nil, nil, nil, "user")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "projectID")
 }

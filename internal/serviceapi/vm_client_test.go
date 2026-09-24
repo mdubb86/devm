@@ -143,7 +143,7 @@ func TestClientStartVM_ApproveRequired(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, nil, nil, "user"))
 
 	macCwd := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
@@ -349,7 +349,7 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	projDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte("project:\n  name: p\nenv:\n  FOO: old\n"), 0644))
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, nil, nil, "user"))
 
 	dir, err := os.MkdirTemp("/tmp", "sapi-reconcile-")
 	require.NoError(t, err)
@@ -754,7 +754,7 @@ func TestClientApproveState_Diverged(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, "user"))
+	require.NoError(t, store.Write("p", []byte("project:\n  name: p\nenv:\n  FOO: old\n"), nil, nil, nil, "user"))
 
 	macCwd := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
@@ -788,7 +788,7 @@ func TestClientApproveState_UpToDate(t *testing.T) {
 
 	contents := []byte("project:\n  name: p\nenv:\n  FOO: same\n")
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write("p", contents, nil, "user"))
+	require.NoError(t, store.Write("p", contents, nil, nil, nil, "user"))
 
 	macCwd := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), contents, 0644))

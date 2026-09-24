@@ -97,11 +97,15 @@ func runApprove(o approveOpts) error {
 		return fmt.Errorf("approve-state returned %s: %s", resp.Status, body)
 	}
 	var state struct {
-		Diverged          bool    `json:"diverged"`
-		CurrentDevmBytes  string  `json:"current_devm_bytes"`
-		ApprovedDevmBytes *string `json:"approved_devm_bytes"`
-		CurrentMeBytes    *string `json:"current_me_bytes"`
-		ApprovedMeBytes   *string `json:"approved_me_bytes"`
+		Diverged              bool    `json:"diverged"`
+		CurrentDevmBytes      string  `json:"current_devm_bytes"`
+		ApprovedDevmBytes     *string `json:"approved_devm_bytes"`
+		CurrentMeBytes        *string `json:"current_me_bytes"`
+		ApprovedMeBytes       *string `json:"approved_me_bytes"`
+		CurrentScriptBytes    *string `json:"current_script_bytes"`
+		ApprovedScriptBytes   *string `json:"approved_script_bytes"`
+		CurrentMeScriptBytes  *string `json:"current_me_script_bytes"`
+		ApprovedMeScriptBytes *string `json:"approved_me_script_bytes"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
 		return fmt.Errorf("decode approve-state: %w", err)
@@ -112,6 +116,8 @@ func runApprove(o approveOpts) error {
 	}
 	printDiffSection(o.stdout, "devm.yaml", decodeOrNil(state.ApprovedDevmBytes), decodeOrNil(&state.CurrentDevmBytes))
 	printDiffSection(o.stdout, "devm.me.yaml", decodeOrNil(state.ApprovedMeBytes), decodeOrNil(state.CurrentMeBytes))
+	printDiffSection(o.stdout, "devm.sh", decodeOrNil(state.ApprovedScriptBytes), decodeOrNil(state.CurrentScriptBytes))
+	printDiffSection(o.stdout, "devm.me.sh", decodeOrNil(state.ApprovedMeScriptBytes), decodeOrNil(state.CurrentMeScriptBytes))
 	fmt.Fprint(o.stdout, "\nApprove these changes? [y/N] ")
 	reader := bufio.NewReader(o.stdin)
 	line, err := reader.ReadString('\n')

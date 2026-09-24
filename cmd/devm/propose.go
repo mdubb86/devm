@@ -41,7 +41,7 @@ var proposeCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(proposeCmd)
 	proposeCmd.Flags().String("reason", "", "Optional human-readable reason for the change.")
-	proposeCmd.Flags().String("kind", "devm.yaml", "Which config file this proposal targets: devm.yaml or devm.me.yaml.")
+	proposeCmd.Flags().String("kind", "devm.yaml", "Which config file this proposal targets: devm.yaml, devm.me.yaml, devm.sh, or devm.me.sh.")
 }
 
 // runMacPropose is the testable seam: uses http.DefaultClient for tests.

@@ -50,7 +50,7 @@ func TestApproveState_NoSnapshotReportsDiverged(t *testing.T) {
 
 func TestApproveState_SnapshotEqualReportsNotDiverged(t *testing.T) {
 	cfg, cache, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "env:\n  X: 1\n")
-	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), []byte("env:\n  X: 1\n"), "user"))
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), []byte("env:\n  X: 1\n"), nil, nil, "user"))
 	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj-1", nil)
 	rr := httptest.NewRecorder()
 	handleApproveState(cfg, cache).ServeHTTP(rr, req)
@@ -63,7 +63,7 @@ func TestApproveState_SnapshotEqualReportsNotDiverged(t *testing.T) {
 
 func TestApproveState_ChangedByteReportsDiverged(t *testing.T) {
 	cfg, cache, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p2\n", "")
-	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, nil, nil, "user"))
 	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj-1", nil)
 	rr := httptest.NewRecorder()
 	handleApproveState(cfg, cache).ServeHTTP(rr, req)
@@ -128,7 +128,7 @@ func TestApprove_UpdatesCache(t *testing.T) {
 
 func TestApprove_IdempotentOnAlreadyApproved(t *testing.T) {
 	cfg, cache, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
-	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, nil, nil, "user"))
 	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1", nil)
 	rr := httptest.NewRecorder()
 	handleApprove(cfg, cache).ServeHTTP(rr, req)
@@ -138,7 +138,7 @@ func TestApprove_IdempotentOnAlreadyApproved(t *testing.T) {
 func TestApprove_RemovesStaleMeYAMLWhenAbsentOnMac(t *testing.T) {
 	cfg, cache, _, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
 	// Prior snapshot has a me.yaml.
-	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), []byte("env:\n  OLD: 1\n"), "user"))
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), []byte("env:\n  OLD: 1\n"), nil, nil, "user"))
 	// Mac side does not have me.yaml. Approve must remove the old copy from the snapshot.
 	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj-1", nil)
 	rr := httptest.NewRecorder()
@@ -197,7 +197,7 @@ func TestBootstrapApprovedSnapshotOnFirstRun_WritesInitial(t *testing.T) {
 
 func TestBootstrapApprovedSnapshotOnFirstRun_NoOpWhenSnapshotExists(t *testing.T) {
 	cfg, _, macCwd, store := approveTestSetup(t, "proj-1", "project:\n  name: p2\n", "")
-	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, "user"))
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, nil, nil, "user"))
 	err := bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", macCwd)
 	require.NoError(t, err)
 	snap, _, err := store.Read("proj-1")
@@ -208,10 +208,27 @@ func TestBootstrapApprovedSnapshotOnFirstRun_NoOpWhenSnapshotExists(t *testing.T
 func TestStart_RefusesWhenDivergedFromApproved(t *testing.T) {
 	// A snapshot exists but differs from the current devm.yaml — start must refuse.
 	cfg, _, macCwd, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
-	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: old\n"), nil, "user"))
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: old\n"), nil, nil, nil, "user"))
 	diverged, err := isApproveDiverged(cfg, "proj-1", macCwd)
 	require.NoError(t, err)
 	assert.True(t, diverged)
+}
+
+func TestApproveGate_DivergesOnDevmSHChange(t *testing.T) {
+	cfg, _, macCwd, _ := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.sh"), []byte("install() {\n  true\n}\n"), 0644))
+
+	require.NoError(t, bootstrapApprovedSnapshotOnFirstRun(cfg, "proj-1", macCwd))
+
+	diverged, err := isApproveDiverged(cfg, "proj-1", macCwd)
+	require.NoError(t, err)
+	assert.False(t, diverged, "freshly bootstrapped snapshot must not be diverged")
+
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.sh"), []byte("install() {\n  echo changed\n}\n"), 0644))
+
+	diverged, err = isApproveDiverged(cfg, "proj-1", macCwd)
+	require.NoError(t, err)
+	assert.True(t, diverged, "editing devm.sh after bootstrap must diverge")
 }
 
 func TestApproveState_IncludesProposalWhenPresent(t *testing.T) {

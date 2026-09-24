@@ -51,19 +51,27 @@ func resolveMacCwdForRead(cache *StateCache, project, reqCwd string) string {
 }
 
 type approveStateResponse struct {
-	Project           string            `json:"project"`
-	Diverged          bool              `json:"diverged"`
-	CurrentDevmSHA    string            `json:"current_devm_sha"`
-	ApprovedDevmSHA   string            `json:"approved_devm_sha"`
-	CurrentMeSHA      string            `json:"current_me_sha"`
-	ApprovedMeSHA     string            `json:"approved_me_sha"`
-	CurrentDevmBytes  string            `json:"current_devm_bytes"`
-	ApprovedDevmBytes *string           `json:"approved_devm_bytes"`
-	CurrentMeBytes    *string           `json:"current_me_bytes"`
-	ApprovedMeBytes   *string           `json:"approved_me_bytes"`
-	ApprovedSince     *string           `json:"approved_since"`
-	ApprovedSource    *string           `json:"approved_source"`
-	Proposal          *ProposalMetadata `json:"proposal"`
+	Project               string            `json:"project"`
+	Diverged              bool              `json:"diverged"`
+	CurrentDevmSHA        string            `json:"current_devm_sha"`
+	ApprovedDevmSHA       string            `json:"approved_devm_sha"`
+	CurrentMeSHA          string            `json:"current_me_sha"`
+	ApprovedMeSHA         string            `json:"approved_me_sha"`
+	CurrentScriptSHA      string            `json:"current_script_sha"`
+	ApprovedScriptSHA     string            `json:"approved_script_sha"`
+	CurrentMeScriptSHA    string            `json:"current_me_script_sha"`
+	ApprovedMeScriptSHA   string            `json:"approved_me_script_sha"`
+	CurrentDevmBytes      string            `json:"current_devm_bytes"`
+	ApprovedDevmBytes     *string           `json:"approved_devm_bytes"`
+	CurrentMeBytes        *string           `json:"current_me_bytes"`
+	ApprovedMeBytes       *string           `json:"approved_me_bytes"`
+	CurrentScriptBytes    *string           `json:"current_script_bytes"`
+	ApprovedScriptBytes   *string           `json:"approved_script_bytes"`
+	CurrentMeScriptBytes  *string           `json:"current_me_script_bytes"`
+	ApprovedMeScriptBytes *string           `json:"approved_me_script_bytes"`
+	ApprovedSince         *string           `json:"approved_since"`
+	ApprovedSource        *string           `json:"approved_source"`
+	Proposal              *ProposalMetadata `json:"proposal"`
 }
 
 func handleApproveState(cfg identity.Config, cache *StateCache) http.Handler {
@@ -100,6 +108,20 @@ func handleApproveState(cfg identity.Config, cache *StateCache) http.Handler {
 			http.Error(w, fmt.Sprintf("approve-state: read devm.me.yaml: %v", err), http.StatusInternalServerError)
 			return
 		}
+		var currentScript []byte
+		if b, err := os.ReadFile(filepath.Join(macCwd, "devm.sh")); err == nil {
+			currentScript = b
+		} else if !errors.Is(err, os.ErrNotExist) {
+			http.Error(w, fmt.Sprintf("approve-state: read devm.sh: %v", err), http.StatusInternalServerError)
+			return
+		}
+		var currentMeScript []byte
+		if b, err := os.ReadFile(filepath.Join(macCwd, "devm.me.sh")); err == nil {
+			currentMeScript = b
+		} else if !errors.Is(err, os.ErrNotExist) {
+			http.Error(w, fmt.Sprintf("approve-state: read devm.me.sh: %v", err), http.StatusInternalServerError)
+			return
+		}
 		store := approve.NewStore(cfg)
 		snap, hasSnap, err := store.Read(project)
 		if err != nil {
@@ -108,32 +130,59 @@ func handleApproveState(cfg identity.Config, cache *StateCache) http.Handler {
 		}
 		curDevmSHA := approve.HashFile(currentDevm)
 		curMeSHA := approve.HashFile(currentMe)
+		curScriptSHA := approve.HashFile(currentScript)
+		curMeScriptSHA := approve.HashFile(currentMeScript)
 		resp := approveStateResponse{
-			Project:          project,
-			CurrentDevmSHA:   curDevmSHA,
-			CurrentMeSHA:     curMeSHA,
-			CurrentDevmBytes: base64.StdEncoding.EncodeToString(currentDevm),
-			ApprovedDevmSHA:  "absent",
-			ApprovedMeSHA:    "absent",
+			Project:             project,
+			CurrentDevmSHA:      curDevmSHA,
+			CurrentMeSHA:        curMeSHA,
+			CurrentScriptSHA:    curScriptSHA,
+			CurrentMeScriptSHA:  curMeScriptSHA,
+			CurrentDevmBytes:    base64.StdEncoding.EncodeToString(currentDevm),
+			ApprovedDevmSHA:     "absent",
+			ApprovedMeSHA:       "absent",
+			ApprovedScriptSHA:   "absent",
+			ApprovedMeScriptSHA: "absent",
 		}
 		if currentMe != nil {
 			s := base64.StdEncoding.EncodeToString(currentMe)
 			resp.CurrentMeBytes = &s
 		}
+		if currentScript != nil {
+			s := base64.StdEncoding.EncodeToString(currentScript)
+			resp.CurrentScriptBytes = &s
+		}
+		if currentMeScript != nil {
+			s := base64.StdEncoding.EncodeToString(currentMeScript)
+			resp.CurrentMeScriptBytes = &s
+		}
 		if hasSnap {
 			resp.ApprovedDevmSHA = approve.HashFile(snap.DevmYAML)
 			resp.ApprovedMeSHA = approve.HashFile(snap.MeYAML)
+			resp.ApprovedScriptSHA = approve.HashFile(snap.DevmSH)
+			resp.ApprovedMeScriptSHA = approve.HashFile(snap.DevmMeSH)
 			s := base64.StdEncoding.EncodeToString(snap.DevmYAML)
 			resp.ApprovedDevmBytes = &s
 			if snap.MeYAML != nil {
 				s := base64.StdEncoding.EncodeToString(snap.MeYAML)
 				resp.ApprovedMeBytes = &s
 			}
+			if snap.DevmSH != nil {
+				s := base64.StdEncoding.EncodeToString(snap.DevmSH)
+				resp.ApprovedScriptBytes = &s
+			}
+			if snap.DevmMeSH != nil {
+				s := base64.StdEncoding.EncodeToString(snap.DevmMeSH)
+				resp.ApprovedMeScriptBytes = &s
+			}
 			since := snap.Manifest.Timestamp.Format("2006-01-02T15:04:05Z")
 			src := snap.Manifest.Source
 			resp.ApprovedSince = &since
 			resp.ApprovedSource = &src
-			resp.Diverged = resp.CurrentDevmSHA != resp.ApprovedDevmSHA || resp.CurrentMeSHA != resp.ApprovedMeSHA
+			resp.Diverged = resp.CurrentDevmSHA != resp.ApprovedDevmSHA ||
+				resp.CurrentMeSHA != resp.ApprovedMeSHA ||
+				resp.CurrentScriptSHA != resp.ApprovedScriptSHA ||
+				resp.CurrentMeScriptSHA != resp.ApprovedMeScriptSHA
 		} else {
 			resp.Diverged = true
 		}
@@ -176,8 +225,22 @@ func handleApprove(cfg identity.Config, cache *StateCache) http.Handler {
 			http.Error(w, fmt.Sprintf("approve: read devm.me.yaml: %v", err), http.StatusInternalServerError)
 			return
 		}
+		var currentScript []byte
+		if b, err := os.ReadFile(filepath.Join(macCwd, "devm.sh")); err == nil {
+			currentScript = b
+		} else if !errors.Is(err, os.ErrNotExist) {
+			http.Error(w, fmt.Sprintf("approve: read devm.sh: %v", err), http.StatusInternalServerError)
+			return
+		}
+		var currentMeScript []byte
+		if b, err := os.ReadFile(filepath.Join(macCwd, "devm.me.sh")); err == nil {
+			currentMeScript = b
+		} else if !errors.Is(err, os.ErrNotExist) {
+			http.Error(w, fmt.Sprintf("approve: read devm.me.sh: %v", err), http.StatusInternalServerError)
+			return
+		}
 		store := approve.NewStore(cfg)
-		if err := store.Write(project, currentDevm, currentMe, "user"); err != nil {
+		if err := store.Write(project, currentDevm, currentMe, currentScript, currentMeScript, "user"); err != nil {
 			http.Error(w, fmt.Sprintf("approve: write snapshot: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -230,17 +293,29 @@ func bootstrapApprovedSnapshotOnFirstRun(cfg identity.Config, projectID, configD
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("bootstrap-approve: read devm.me.yaml: %w", err)
 	}
-	return store.Write(projectID, currentDevm, currentMe, "user")
+	var currentScript []byte
+	if b, err := os.ReadFile(filepath.Join(configDir, "devm.sh")); err == nil {
+		currentScript = b
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("bootstrap-approve: read devm.sh: %w", err)
+	}
+	var currentMeScript []byte
+	if b, err := os.ReadFile(filepath.Join(configDir, "devm.me.sh")); err == nil {
+		currentMeScript = b
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("bootstrap-approve: read devm.me.sh: %w", err)
+	}
+	return store.Write(projectID, currentDevm, currentMe, currentScript, currentMeScript, "user")
 }
 
-const approveRefusalMessage = `devm.yaml (or devm.me.yaml) has changed since it was last approved.
+const approveRefusalMessage = `devm.yaml (or devm.me.yaml, devm.sh, devm.me.sh) has changed since it was last approved.
 Approve the change:
   - Click the devm menu bar icon → Review, or
   - Run ` + "`devm approve`" + ` in this terminal to review + approve inline.`
 
-// isApproveDiverged reports whether devm.yaml/devm.me.yaml at
-// configDir (the project's Mac cwd) differ from the last-approved
-// snapshot.
+// isApproveDiverged reports whether devm.yaml/devm.me.yaml/devm.sh/
+// devm.me.sh at configDir (the project's Mac cwd) differ from the
+// last-approved snapshot.
 func isApproveDiverged(cfg identity.Config, projectID, configDir string) (bool, error) {
 	currentDevm, err := os.ReadFile(filepath.Join(configDir, "devm.yaml"))
 	if err != nil {
@@ -252,6 +327,18 @@ func isApproveDiverged(cfg identity.Config, projectID, configDir string) (bool, 
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return false, fmt.Errorf("read devm.me.yaml: %w", err)
 	}
+	var currentScript []byte
+	if b, err := os.ReadFile(filepath.Join(configDir, "devm.sh")); err == nil {
+		currentScript = b
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("read devm.sh: %w", err)
+	}
+	var currentMeScript []byte
+	if b, err := os.ReadFile(filepath.Join(configDir, "devm.me.sh")); err == nil {
+		currentMeScript = b
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("read devm.me.sh: %w", err)
+	}
 	store := approve.NewStore(cfg)
 	snap, hasSnap, err := store.Read(projectID)
 	if err != nil {
@@ -261,5 +348,7 @@ func isApproveDiverged(cfg identity.Config, projectID, configDir string) (bool, 
 		return true, nil
 	}
 	return approve.HashFile(currentDevm) != approve.HashFile(snap.DevmYAML) ||
-		approve.HashFile(currentMe) != approve.HashFile(snap.MeYAML), nil
+		approve.HashFile(currentMe) != approve.HashFile(snap.MeYAML) ||
+		approve.HashFile(currentScript) != approve.HashFile(snap.DevmSH) ||
+		approve.HashFile(currentMeScript) != approve.HashFile(snap.DevmMeSH), nil
 }

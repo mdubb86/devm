@@ -63,7 +63,9 @@ type proposeRequest struct {
 // Returns the HTTP status and body callers should write, and any
 // internal (non-4xx) error for the caller to log.
 func recordProposal(cfg identity.Config, cache *StateCache, projectName string, req proposeRequest) (statusCode int, body string, err error) {
-	if req.Kind != "devm.yaml" && req.Kind != "devm.me.yaml" {
+	switch req.Kind {
+	case "devm.yaml", "devm.me.yaml", "devm.sh", "devm.me.sh":
+	default:
 		return http.StatusBadRequest, fmt.Sprintf("propose: unsupported kind %q", req.Kind), nil
 	}
 
@@ -85,7 +87,8 @@ func recordProposal(cfg identity.Config, cache *StateCache, projectName string, 
 	}
 
 	// devm.me.yaml has no schema of its own (it's a partial merged
-	// into devm.yaml) — nothing to validate against.
+	// into devm.yaml), and devm.sh/devm.me.sh are shell scripts, not
+	// YAML — none of them have anything to validate against.
 	configPath := filepath.Join(macCwd, req.Kind)
 	onDisk, readErr := os.ReadFile(configPath)
 	switch {

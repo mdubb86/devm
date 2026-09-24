@@ -50,7 +50,7 @@ func setupAndApproveCfg(t *testing.T, projectID string, cfg schema.Config) strin
 
 	// Pre-approve the snapshot so the approve gate check passes.
 	store := approve.NewStore(identity.Prod)
-	require.NoError(t, store.Write(projectID, devmYAML, nil, "user"))
+	require.NoError(t, store.Write(projectID, devmYAML, nil, nil, nil, "user"))
 	return repoRoot
 }
 
@@ -344,7 +344,7 @@ func TestRunReconcile_ApproveRequired_SurfacesMessageVerbatim(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, -1, rc)
 	assert.Equal(t, ReconcileResult{}, res)
-	assert.Contains(t, err.Error(), "devm.yaml (or devm.me.yaml) has changed since it was last approved.")
+	assert.Contains(t, err.Error(), "devm.yaml (or devm.me.yaml, devm.sh, devm.me.sh) has changed since it was last approved.")
 	assert.Contains(t, err.Error(), "Run `devm approve`")
 	assert.NotContains(t, err.Error(), `"code"`, "error must be the daemon's clean message, not the raw JSON body")
 }
