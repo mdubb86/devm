@@ -377,3 +377,41 @@ func TestReadProjectName_ParseError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "parse")
 }
+
+func TestLoad_PopulatesFunctionsFromDevmSH(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),
+		[]byte("project:\n  name: p\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.sh"),
+		[]byte(`
+install() { echo hi; }
+run-tests() { true; }
+`), 0o644))
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"install", "run-tests"}, cfg.Functions)
+}
+
+func TestLoad_MergesDevmMeSHFunctions(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),
+		[]byte("project:\n  name: p\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.sh"),
+		[]byte(`install() { true; }`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.me.sh"),
+		[]byte(`install() { true; }
+extra() { true; }`), 0o644))
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	// install appears once (dedup); extra is added.
+	assert.ElementsMatch(t, []string{"install", "extra"}, cfg.Functions)
+}
+
+func TestLoad_NoDevmSHYieldsEmptyFunctions(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"),
+		[]byte("project:\n  name: p\n"), 0o644))
+	cfg, err := Load(dir)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Functions)
+}

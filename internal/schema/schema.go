@@ -739,6 +739,11 @@ type Config struct {
 	// nil = use image default. Applied via `tart set --cpu` at VM
 	// start; a change reconciles as BucketRestartVM.
 	Cpu *int `yaml:"cpu,omitempty"`
+
+	// Functions is the sorted, deduplicated union of top-level function
+	// names declared in devm.sh and devm.me.sh at the project root.
+	// Populated by config.Load; ignored on YAML (un)marshal via the "-" tag.
+	Functions []string `yaml:"-"`
 }
 
 // ParseDiskSize parses a `disk:` value like "64G" or "64GB" into an

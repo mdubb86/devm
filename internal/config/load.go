@@ -7,8 +7,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/scriptfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -99,6 +101,12 @@ func Load(dir string) (schema.Config, error) {
 	if err := schema.ResolveEnv(&merged, workspace); err != nil {
 		return schema.Config{}, fmt.Errorf("resolve env: %w", err)
 	}
+
+	funcs, err := loadFunctions(dir)
+	if err != nil {
+		return schema.Config{}, err
+	}
+	merged.Functions = funcs
 	return merged, nil
 }
 
@@ -127,4 +135,34 @@ func ReadProjectName(dir string) (string, error) {
 		return "", fmt.Errorf("%s: missing project.name", basePath)
 	}
 	return probe.Project.Name, nil
+}
+
+// loadFunctions reads devm.sh and devm.me.sh from dir and returns the
+// sorted, deduplicated union of top-level function names parsed from both
+// files. Missing files are silently skipped (no error). Returns a sorted
+// slice; the slice is nil only if neither file exists.
+func loadFunctions(dir string) ([]string, error) {
+	set := map[string]struct{}{}
+	for _, name := range []string{"devm.sh", "devm.me.sh"} {
+		body, err := os.ReadFile(filepath.Join(dir, name))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", name, err)
+		}
+		found, err := scriptfile.Parse(body)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", name, err)
+		}
+		for _, f := range found {
+			set[f] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for f := range set {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out, nil
 }
