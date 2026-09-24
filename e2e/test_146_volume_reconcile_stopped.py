@@ -40,9 +40,16 @@ def test_volume_added_while_stopped_picked_up_on_next_shell(devm, workspace, san
             install=["true"],
             volumes={"scratch": "/var/lib/scratch"},
         )
+        devm.approve()
 
         # Cold-start again — the new volume must appear at the target
-        # (empty in this case, since neither side had content).
+        # (empty in this case, since neither side had content). `devm shell`
+        # is warm-attach-only so bring the VM up explicitly first.
+        start = subprocess.run(
+            [devm.path, "start"], cwd=str(workspace.path),
+            capture_output=True, timeout=300,
+        )
+        assert start.returncode == 0, f"cold-start after edit failed:\n{start.stderr.decode()}"
         r = subprocess.run(
             [devm.path, "shell", "--", "sudo", "sh", "-c",
              "mountpoint -q /var/lib/scratch && echo mounted || echo NOT_MOUNTED"],

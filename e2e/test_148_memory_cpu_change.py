@@ -140,6 +140,7 @@ def test_memory_cpu_change_round_trip(devm, workspace, sandbox_name, devm_instal
 
         # 3. Downsize: edit devm.yaml, reconcile (BucketRestartVM).
         workspace.patch_devmyaml(memory="4G", cpu=4)
+        devm.approve()
         rec = devm.reconcile(yes=True, timeout=300)
         assert rec.returncode == 0, (
             f"reconcile --yes failed:\n"
