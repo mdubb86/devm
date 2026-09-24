@@ -241,11 +241,11 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	oldCfg := schema.Config{
 		Project: schema.Project{Name: "p"},
-		Install: []string{"true"},
+		Docker:  false,
 	}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 	newCfg := oldCfg
-	newCfg.Install = []string{"true", "false"} // bucket=recreate
+	newCfg.Docker = true // bucket=recreate
 
 	projDir := setupProjectDirForCfg(t, "p", oldCfg)
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
@@ -263,11 +263,11 @@ func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	assert.NotEmpty(t, resp.TeardownRequired)
 
-	// Snapshot NOT overwritten with new_cfg (install change is pending).
+	// Snapshot NOT overwritten with new_cfg (docker change is pending).
 	got, err := ReadStateSnapshot(identity.Prod, "p")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, []string{"true"}, got.Cfg.Install, "install change must not be persisted until user acts")
+	assert.False(t, got.Cfg.Docker, "docker change must not be persisted until user acts")
 }
 
 func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
@@ -318,10 +318,10 @@ func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
 
 func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *testing.T) {
 	// One reconcile carries BOTH a per-service live change (service
-	// exec) AND a top-level teardown-required change (install).
+	// exec) AND a top-level teardown-required change (docker toggle).
 	// Applying the live exec must not silently absorb the pending
-	// install change into the snapshot. Next reconcile must still
-	// surface the install change as teardown_required.
+	// docker change into the snapshot. Next reconcile must still
+	// surface the docker change as teardown_required.
 	t.Setenv("HOME", t.TempDir())
 	createTestCA(t)
 	oldCfg := schema.Config{
@@ -331,7 +331,7 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 				Exec: []string{"/bin/true"},
 			},
 		},
-		Install: []string{"true"},
+		Docker: false,
 	}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
 
@@ -339,12 +339,12 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 	newSvc := oldCfg.Services["web"]
 	newSvc.Exec = []string{"/bin/echo", "hi"} // live change
 	newCfg.Services = map[string]schema.Service{"web": newSvc}
-	newCfg.Install = []string{"true", "false"} // teardown-required addition
+	newCfg.Docker = true // teardown-required addition
 
 	registerFakeSoftnet(t, "p")
 
 	// Setup project dir with devm.yaml matching oldCfg (approved state).
-	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nservices:\n  web:\n    exec:\n      - /bin/true\ninstall:\n  - true\n", "")
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nservices:\n  web:\n    exec:\n      - /bin/true\n", "")
 
 	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
 	body, _ := json.Marshal(req)
@@ -362,9 +362,9 @@ func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *tes
 	require.NotNil(t, got)
 	// Live change (exec) landed in snapshot.
 	assert.Equal(t, []string{"/bin/echo", "hi"}, got.Cfg.Services["web"].Exec)
-	// Pending install change did NOT land — old install preserved so
-	// next reconcile still surfaces the install add as teardown_required.
-	assert.Equal(t, []string{"true"}, got.Cfg.Install)
+	// Pending docker change did NOT land — old value preserved so next
+	// reconcile still surfaces the docker toggle as teardown_required.
+	assert.False(t, got.Cfg.Docker)
 }
 
 func TestMergeLiveApplied_Direct(t *testing.T) {

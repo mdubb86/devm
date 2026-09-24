@@ -256,11 +256,11 @@ func TestRunReconcile_TeardownRequired_ClassifiesFlavorAndSessions(t *testing.T)
 	defer cleanup()
 
 	oldCfg := reconcileMinimalCfg()
-	oldCfg.Install = []string{"true"}
+	oldCfg.Docker = false
 	require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, "x", serviceapi.StateSnapshot{Cfg: oldCfg}))
 
 	newCfg := reconcileMinimalCfg()
-	newCfg.Install = []string{"true", "false"}
+	newCfg.Docker = true
 	repoRoot := setupAndApproveCfg(t, "x", newCfg)
 
 	rc, res, err := RunReconcile(identity.Prod, newCfg, fakeTartForSessions(t), repoRoot, ReconcileOptions{})
@@ -268,7 +268,7 @@ func TestRunReconcile_TeardownRequired_ClassifiesFlavorAndSessions(t *testing.T)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, "needs_approval", res.NextAction)
 	require.Len(t, res.RecreateRequired, 1)
-	assert.Equal(t, reconcile.KindInstallChange, res.RecreateRequired[0].Kind)
+	assert.Equal(t, reconcile.KindDockerToggle, res.RecreateRequired[0].Kind)
 	assert.Equal(t, reconcile.FlavorTeardownVM, res.Flavor)
 	assert.Empty(t, res.Applied)
 	// probeSessions is best-effort against a fake tart that always
@@ -397,4 +397,3 @@ func startReconcileDaemonWithIronProxyCapture(t *testing.T, running bool) (clean
 
 	return func() { cancel(); <-errCh }, req
 }
-

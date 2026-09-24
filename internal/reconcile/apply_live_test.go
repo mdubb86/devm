@@ -207,15 +207,13 @@ func TestApplyLive_PathChange_PipesBundle_NoWorkspaceWrite(t *testing.T) {
 // TestApplyLive_StartupChange_NotLiveApplied pins that KindStartupChange
 // is skipped by ApplyLive entirely: it's BucketRestartVM, not
 // BucketLive, so the caller routes it through the recreate path (VM
-// stop + cold start) instead. The freshly-rendered /opt/devm/startup.sh
-// reaches the guest via the provisioner's normal bundle install on that
-// next boot, not a live pipe.
+// stop + cold start) instead. The freshly-rendered startup phase reaches
+// the guest via the provisioner's normal boot sequence, not a live pipe.
 func TestApplyLive_StartupChange_NotLiveApplied(t *testing.T) {
 	dir := t.TempDir()
 	tr, log := fakeTartForApplyLive(t, dir)
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
-		Startup: []string{"echo one", "echo two"},
 	}
 
 	err := ApplyLive(tr, "p-vm", []Change{

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/mdubb86/devm/internal/docker"
-	"github.com/mdubb86/devm/internal/schema"
 )
 
 // Guest-side paths the composed provisioning script references. These
@@ -15,7 +14,6 @@ import (
 const (
 	guestWrapper     = "/opt/devm/scripts/with-devm-env"
 	guestDispatcher  = "/opt/devm/scripts/install-templates.sh"
-	guestStartupSh   = "/opt/devm/startup.sh"
 	provisionedMark  = "/var/lib/devm/provisioned"
 	inProgressMarker = "/run/devm/provisioning"
 )
@@ -26,19 +24,19 @@ const (
 // RenderProvisionEnforcedScript turn it into the three bash scripts run
 // around mutagen sync setup and the softnet ENFORCED flip.
 type ProvisionScriptInput struct {
-	FirstBoot        bool
-	Packages         []string // apt packages (first boot only)
-	Install          []string // install: commands (first boot only)
-	Docker           bool     // run the docker feature (first boot only)
-	InstallTemplates bool     // run the template dispatcher (every open boot)
-	Startup          []string // startup: commands (every boot)
-	// Scripts is the resolved scripts library from Config.Scripts. Used
-	// to expand ">NAME" references in Install and Startup entries at
-	// render time. The map is passed as-is by the caller; validation
-	// (name shape, empty commands, undefined refs) has already happened
-	// in schema.Config.Validate — the renderer trusts what it receives.
-	Scripts  map[string][]string
-	Services []string // service unit names to enable+start (health-polled)
+	FirstBoot bool
+	Packages  []string // apt packages (first boot only)
+	// InstallWrapperBody is a fully-rendered bash script the install
+	// phase executes on first boot. Empty means "no install phase to
+	// run."
+	InstallWrapperBody string
+	Docker             bool // run the docker feature (first boot only)
+	InstallTemplates   bool // run the template dispatcher (every open boot)
+	// StartupWrapperBody is a fully-rendered bash script the startup
+	// phase executes on every boot. Empty means "no startup phase to
+	// run."
+	StartupWrapperBody string
+	Services           []string // service unit names to enable+start (health-polled)
 
 	// StepTimeoutSeconds bounds every install:/startup: command (the
 	// `timeout %d` wrapping both stages). Zero means "unset" and falls back
@@ -77,7 +75,7 @@ type ProvisionScriptInput struct {
 
 // hasOpenWork reports whether the open egress window is needed this boot.
 func (in ProvisionScriptInput) hasOpenWork() bool {
-	return in.FirstBoot || len(in.Startup) > 0 || in.InstallTemplates ||
+	return in.FirstBoot || in.StartupWrapperBody != "" || in.InstallTemplates ||
 		len(in.PackageAdds)+len(in.PackageRemoves) > 0
 }
 
@@ -181,16 +179,9 @@ func RenderProvisionUserScript(in ProvisionScriptInput) []byte {
 				}
 				p("apt_run install -y %s", strings.Join(quoted, " "))
 			}
-			if len(in.Install) > 0 {
+			if in.InstallWrapperBody != "" {
 				p("echo ::devm:stage:install::")
-				for i, cmd := range in.Install {
-					p("echo ::devm:progress:install:%d:%d::", i+1, len(in.Install))
-					body := cmd
-					if name, ok := schema.ParseScriptRef(cmd); ok {
-						body = strings.Join(in.Scripts[name], " && ")
-					}
-					p("timeout %d %s bash -eo pipefail -c %s", stepTimeout, guestWrapper, shellSingleQuoted(body))
-				}
+				p("timeout %d %s bash -eo pipefail -c %s", stepTimeout, guestWrapper, shellSingleQuoted(in.InstallWrapperBody))
 			}
 			if in.Docker {
 				p("echo ::devm:stage:docker::")
@@ -215,16 +206,12 @@ func RenderProvisionUserScript(in ProvisionScriptInput) []byte {
 			// so re-running on a warm boot is safe.
 			p("%s bash %s", guestWrapper, guestDispatcher)
 		}
-		if len(in.Startup) > 0 {
+		if in.StartupWrapperBody != "" {
 			p("echo ::devm:stage:startup::")
-			// One timeout budget for the whole script, not per line inside
-			// it: startup.sh's commands share a single bash process (env
-			// exports / cd from an earlier line are visible to a later
-			// one), and wrapping each line in its own `bash -c` subshell
-			// would silently break that. install:'s commands, in
-			// contrast, were always independent invocations (no shared
-			// shell state), so each gets its own budget above.
-			p("timeout %d %s bash %s", stepTimeout, guestWrapper, guestStartupSh)
+			// One timeout budget for the whole body, run as a single bash
+			// process — env exports / cd from an earlier line stay visible
+			// to a later one.
+			p("timeout %d %s bash -eo pipefail -c %s", stepTimeout, guestWrapper, shellSingleQuoted(in.StartupWrapperBody))
 		}
 	}
 

@@ -18,8 +18,8 @@ const (
 	BucketLive Bucket = iota // applicable to a running sandbox without ending sessions
 	// BucketRestartVM — requires VM stop + cold start, no teardown; the
 	// provisioner re-establishes the change on the next boot. Used by
-	// KindStartupChange: a `startup:` edit is re-rendered into
-	// /opt/devm/startup.sh but only takes effect on the guest's next boot.
+	// KindStartupChange: a startup edit is re-rendered into the boot-time
+	// provisioning script but only takes effect on the guest's next boot.
 	BucketRestartVM
 	BucketTeardownVM // requires VM delete + cold start (volumes/install rerun)
 	// BucketEgressRestart — regenerate iron-proxy config and respawn.
@@ -214,10 +214,9 @@ var changeBucket = map[ChangeKind]Bucket{
 	// Direct: re-push routes (DNS), re-push the softnet expose map and
 	// direct-host DNS set — live.
 	KindServiceDirectChange: BucketLive,
-	// startup: re-rendered into /opt/devm/startup.sh; a live bundle
-	// re-pipe carries the new content to the guest, but it only takes
-	// effect on the VM's NEXT boot (startup: is a boot hook, not a
-	// running-service field) — VM stop + cold start, no teardown.
+	// startup: re-rendered into the boot-time provisioning script; it
+	// only takes effect on the VM's NEXT boot (startup: is a boot hook,
+	// not a running-service field) — VM stop + cold start, no teardown.
 	KindStartupChange: BucketRestartVM,
 	// Secrets: iron-proxy config carries resolved values; a rotation
 	// requires regenerating that config and respawning iron-proxy.
@@ -558,23 +557,22 @@ func computeHostnameChanges(old, new schema.Config) []Change {
 	return out
 }
 
+// computeInstallChanges detects a change to the project's install phase.
+// The phase body lives in the project's devm.sh, not on schema.Config,
+// so there is nothing here yet to compare — KindInstallChange's bucket
+// mapping stays in place for the day a comparable signal is threaded
+// through.
 func computeInstallChanges(old, new schema.Config) []Change {
-	if stringSliceEqual(old.Install, new.Install) {
-		return nil
-	}
-	return []Change{{Kind: KindInstallChange}}
+	return nil
 }
 
-// computeStartupChanges emits KindStartupChange when the ordered
-// `startup:` command list differs between old and new config. Compared
-// as an ordered slice (like Install/Packages) rather than by
-// membership — reordering the boot commands is itself a meaningful
-// change.
+// computeStartupChanges detects a change to the project's startup phase.
+// The phase body lives in the project's devm.sh, not on schema.Config,
+// so there is nothing here yet to compare — KindStartupChange's bucket
+// mapping stays in place for the day a comparable signal is threaded
+// through.
 func computeStartupChanges(old, new schema.Config) []Change {
-	if stringSliceEqual(old.Startup, new.Startup) {
-		return nil
-	}
-	return []Change{{Kind: KindStartupChange}}
+	return nil
 }
 
 // PackageDrift diffs the `packages:` list between old and new config as a

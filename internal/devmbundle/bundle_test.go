@@ -30,7 +30,6 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 		"scripts/with-devm-env":        0o755,
 		"scripts/install-templates.sh": 0o755,
 		"install.sh":                   0o755,
-		"startup.sh":                   0o755,
 		"GUEST.md":                     0o644,
 	}
 	for path, mode := range want {
@@ -443,10 +442,9 @@ func TestBuild_OmitsProposeWhenAbsent(t *testing.T) {
 	assert.NotContains(t, names, "bin/propose")
 }
 
-func TestBuild_TarContainsStartupScript_WhenStartupSet(t *testing.T) {
+func TestBuild_ServiceUnitJoinsDevmTarget(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
-		Startup: []string{"echo hi"},
 		Services: map[string]schema.Service{
 			"web": {Exec: []string{"/bin/true"}},
 		},
@@ -455,42 +453,11 @@ func TestBuild_TarContainsStartupScript_WhenStartupSet(t *testing.T) {
 	require.NoError(t, err)
 
 	names := tarEntryNames(t, blob)
-	assert.Contains(t, names, "startup.sh")
 	assert.NotContains(t, names, "systemd/devm-startup.service")
 	assert.NotContains(t, names, "systemd/devm-enforce.service")
 
-	startupScript := readTarEntry(t, blob, "startup.sh")
-	assert.Contains(t, string(startupScript), "echo hi")
-
-	// Declared service units join devm.target.
 	webUnit := readTarEntry(t, blob, "systemd/web.service")
 	assert.Contains(t, string(webUnit), "WantedBy=devm.target")
-}
-
-func TestBuild_AlwaysEmitsStartupScript_WhenStartupUnset(t *testing.T) {
-	// The startup.sh mechanism is always registered, for every project
-	// — not opt-in on startup: being set. An empty cfg.Startup still
-	// gets startup.sh; it's just a no-op script.
-	cfg := schema.Config{
-		Project: schema.Project{Name: "p"},
-		Services: map[string]schema.Service{
-			"web": {Exec: []string{"/bin/true"}},
-		},
-	}
-	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
-	require.NoError(t, err)
-
-	names := tarEntryNames(t, blob)
-	assert.Contains(t, names, "startup.sh")
-	assert.NotContains(t, names, "systemd/devm-startup.service")
-	assert.NotContains(t, names, "systemd/devm-enforce.service")
-
-	startupScript := readTarEntry(t, blob, "startup.sh")
-	assert.Equal(t, "#!/bin/bash\nset -eo pipefail\n", string(startupScript))
-
-	webUnit := readTarEntry(t, blob, "systemd/web.service")
-	assert.Contains(t, string(webUnit), "WantedBy=devm.target",
-		"declared service units join devm.target, startup: set or not")
 }
 
 // TestBuild_IncludesEtcProfileDevm proves the bundle carries the

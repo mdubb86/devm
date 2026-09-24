@@ -34,13 +34,13 @@ services:
 
 // Reproduces a real bug hit during a shelfmates cold-start:
 //
-//   scripts:
-//     install-gsd-core:
-//       - cd "$WORKSPACE" && npx ...
+//	scripts:
+//	  install-gsd-core:
+//	    - cd "$WORKSPACE" && npx ...
 //
-//   provisioning fails with:
-//     bash: line 1: cd: /Users/michael/workspace/shelfmates:
-//                       No such file or directory
+//	provisioning fails with:
+//	  bash: line 1: cd: /Users/michael/workspace/shelfmates:
+//	                    No such file or directory
 //
 // The `cd "$WORKSPACE"` line runs INSIDE THE GUEST. The guest resolves
 // $WORKSPACE from its shell env, which is populated from /etc/environment
@@ -333,9 +333,6 @@ func TestLoad_RepoCommandsRoundTrip(t *testing.T) {
 	writeFile(t, dir, "devm.yaml", `
 project:
   name: test
-scripts:
-  fmt-check:
-    - echo fmt
 repos:
   main:
     secret: gh
@@ -344,7 +341,7 @@ repos:
         exec: pnpm install
         startup: true
       lint:
-        exec: ">fmt-check"
+        exec: "echo fmt"
 `)
 	cfg, err := Load(dir)
 	require.NoError(t, err)
@@ -353,7 +350,7 @@ repos:
 	assert.Equal(t, "pnpm install", cfg.Repos["main"].Commands["install"].Exec)
 	require.NotNil(t, cfg.Repos["main"].Commands["install"].Startup)
 	assert.True(t, *cfg.Repos["main"].Commands["install"].Startup)
-	assert.Equal(t, ">fmt-check", cfg.Repos["main"].Commands["lint"].Exec)
+	assert.Equal(t, "echo fmt", cfg.Repos["main"].Commands["lint"].Exec)
 	assert.Nil(t, cfg.Repos["main"].Commands["lint"].Startup, "unspecified startup stays nil")
 }
 

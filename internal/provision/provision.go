@@ -237,11 +237,8 @@ func (p *Provisioner) scriptInput() render.ProvisionScriptInput {
 	return render.ProvisionScriptInput{
 		FirstBoot:          p.firstBoot,
 		Packages:           p.Cfg.Packages,
-		Install:            p.Cfg.Install,
 		Docker:             p.Cfg.Docker,
 		InstallTemplates:   p.hasTemplates(),
-		Startup:            p.Cfg.Startup,
-		Scripts:            p.Cfg.Scripts,
 		Services:           p.serviceUnits(),
 		StepTimeoutSeconds: p.StepTimeoutSeconds,
 		PackageAdds:        p.PackageAdds,

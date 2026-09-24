@@ -160,18 +160,6 @@ func Build(in BuildInput) ([]byte, error) {
 		}
 	}
 
-	// startup.sh is always emitted, for every project: the provisioning
-	// script (internal/provision) runs it before applying enforcement
-	// and starting devm.target. startup.sh lands at /opt/devm/startup.sh
-	// directly — GuestInstallScript extracts the tar straight into
-	// /opt/devm, so a top-level entry needs no further install.sh copy
-	// step (unlike systemd/*.service, which install.sh copies into
-	// /etc/systemd/system/). An empty cfg.Startup renders a no-op
-	// script that exits 0.
-	if err := writeEntry(tw, "startup.sh", 0o755, render.RenderStartupScript(in.Cfg.Startup, in.Cfg.Scripts)); err != nil {
-		return nil, err
-	}
-
 	if len(in.SSHAuthorizedPubkey) > 0 {
 		if err := writeEntry(tw, "ssh/authorized_keys", 0o600, in.SSHAuthorizedPubkey); err != nil {
 			return nil, err

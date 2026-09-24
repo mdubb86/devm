@@ -473,7 +473,7 @@ func (p Project) Validate() error {
 // internal/config/load.go).
 var topLevelKnownFields = []string{
 	"project", "base_image", "docker", "network", "env",
-	"services", "install", "startup", "scripts", "path", "packages", "disk", "memory", "cpu",
+	"services", "path", "packages", "disk", "memory", "cpu",
 	"volumes", "repos",
 }
 
@@ -702,37 +702,6 @@ type Config struct {
 	// via `apt-get install -y` during Tart VM provisioning.
 	Packages []string `yaml:"packages,omitempty"`
 
-	// Install is the list of shell commands run ONCE at sandbox create
-	// time, in declaration order, as root. Each command is executed
-	// under `bash -e -o pipefail -c`, wrapped by with-devm-env.sh so
-	// the project env (WORKSPACE_DIR, cfg.Env values, path: entries) is
-	// live inside the command. A failing step aborts provisioning.
-	//
-	// Affordances from the base image (no apt-get update needed):
-	//   * ncurses-term is preinstalled (modern terminfo for TUIs).
-	//   * en_US.UTF-8 locale is generated so LANG/LC_* forwarding lands
-	//     on a real locale.
-	Install []string `yaml:"install,omitempty"`
-
-	// Startup is the list of shell commands run on EVERY boot, in
-	// declaration order, as root under `bash -o pipefail -c`, with open
-	// network (before egress enforcement). Contrast with Install (once,
-	// first boot) and services (every boot, enforced egress).
-	Startup []string `yaml:"startup,omitempty"`
-
-	// Scripts is the project's library of named multi-command shell
-	// snippets. A script's key must match [a-z][a-z0-9-]* (kebab-case,
-	// starts with a letter). Its value is an ordered list of shell
-	// commands. When referenced from install: or startup: as a string
-	// beginning with `>NAME`, the engine joins the commands with " && "
-	// and runs them under one `bash -eo pipefail -c` (install:) or
-	// emits them inline into startup.sh (startup: shares a shell
-	// already). Variables set in step N are visible in step N+1.
-	//
-	// V1 scope: refs only from install: and startup:. No parameters,
-	// no script-to-script calls.
-	Scripts map[string][]string `yaml:"scripts,omitempty"`
-
 	// Path is a list of directories prepended to PATH inside the
 	// sandbox. Reaches all four executable entrypoints (install,
 	// startup foreground, startup background, interactive shell) via
@@ -958,18 +927,11 @@ func (c Config) StartupCommands(macCwd string) []StartupCommand {
 			if !cmd.StartupBool() {
 				continue
 			}
-			body := cmd.Exec
-			if name, ok := ParseScriptRef(cmd.Exec); ok {
-				// invariant: Config.Validate rejects >NAME refs whose target
-				// script is undefined, so c.Scripts[name] is guaranteed
-				// non-nil here.
-				body = strings.Join(c.Scripts[name], " && ")
-			}
 			out = append(out, StartupCommand{
 				Repo:     repoName,
 				Name:     cmdName,
 				GuestCwd: guestCwd,
-				Exec:     body,
+				Exec:     cmd.Exec,
 			})
 		}
 	}
@@ -1196,75 +1158,6 @@ func (c Config) Validate() error {
 			return fmt.Errorf("cpu: %d must be a positive integer", *c.Cpu)
 		}
 	}
-	for i, ic := range c.Install {
-		if ic == "" {
-			return fmt.Errorf("install[%d] must not be empty", i)
-		}
-		if _, isRef := ParseScriptRef(ic); !isRef {
-			if err := ValidateShellCommand(ic); err != nil {
-				return fmt.Errorf("install[%d]: %w", i, err)
-			}
-		}
-	}
-	for i, sc := range c.Startup {
-		if sc == "" {
-			return fmt.Errorf("startup[%d] must not be empty", i)
-		}
-		if _, isRef := ParseScriptRef(sc); !isRef {
-			if err := ValidateShellCommand(sc); err != nil {
-				return fmt.Errorf("startup[%d]: %w", i, err)
-			}
-		}
-	}
-	// Scripts: validate each script's name and body before checking refs.
-	{
-		names := make([]string, 0, len(c.Scripts))
-		for name := range c.Scripts {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			if err := ValidateScriptName(name); err != nil {
-				return fmt.Errorf("scripts: %w", err)
-			}
-			if len(c.Scripts[name]) == 0 {
-				return fmt.Errorf("scripts[%s]: script body must not be empty", name)
-			}
-			for i, cmd := range c.Scripts[name] {
-				if cmd == "" {
-					return fmt.Errorf("scripts[%s][%d] must not be empty", name, i)
-				}
-				if _, ok := ParseScriptRef(cmd); ok {
-					return fmt.Errorf("scripts[%s][%d]: script-to-script refs are not supported (V1)", name, i)
-				}
-				if err := ValidateShellCommand(cmd); err != nil {
-					return fmt.Errorf("scripts[%s][%d]: %w", name, i, err)
-				}
-			}
-		}
-		// Install: refs — check name resolves.
-		for i, entry := range c.Install {
-			if refName, ok := ParseScriptRef(entry); ok {
-				if err := ValidateScriptName(refName); err != nil {
-					return fmt.Errorf("install[%d]: %w", i, err)
-				}
-				if _, exists := c.Scripts[refName]; !exists {
-					return fmt.Errorf("install[%d]: reference to undefined script %q", i, refName)
-				}
-			}
-		}
-		// Startup: refs — same check.
-		for i, entry := range c.Startup {
-			if refName, ok := ParseScriptRef(entry); ok {
-				if err := ValidateScriptName(refName); err != nil {
-					return fmt.Errorf("startup[%d]: %w", i, err)
-				}
-				if _, exists := c.Scripts[refName]; !exists {
-					return fmt.Errorf("startup[%d]: reference to undefined script %q", i, refName)
-				}
-			}
-		}
-	}
 	names := make([]string, 0, len(c.Services))
 	for name := range c.Services {
 		names = append(names, name)
@@ -1318,7 +1211,7 @@ func (c Config) Validate() error {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			if err := c.Repos[name].validateCommands(c.Scripts); err != nil {
+			if err := c.Repos[name].validateCommands(); err != nil {
 				return fmt.Errorf("repo %q: %w", name, err)
 			}
 		}

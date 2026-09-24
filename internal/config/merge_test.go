@@ -62,20 +62,6 @@ func TestMergeServiceEnvMergesKeys(t *testing.T) {
 	assert.Equal(t, "http://api.local", merged.Services["webapp"].Env["API_URL"].Literal, "override key added")
 }
 
-func TestConfigOverrideInstallReplacement(t *testing.T) {
-	base := schema.Config{
-		Install: []string{"apt-get install -y jq"},
-	}
-	replacement := []string{"npm install -g typescript"}
-	override := schema.ConfigOverride{
-		Install: &replacement,
-	}
-	merged, err := Merge(base, override)
-	require.NoError(t, err)
-	require.Len(t, merged.Install, 1)
-	assert.Equal(t, "npm install -g typescript", merged.Install[0])
-}
-
 func TestServiceOverrideExecReplacement(t *testing.T) {
 	base := schema.Config{
 		Services: map[string]schema.Service{

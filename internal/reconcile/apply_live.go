@@ -51,11 +51,9 @@ import (
 // `run <name>` dispatcher and $WORKSPACE pointed at the old path.
 // KindStartupChange is NOT live-applied — it's BucketRestartVM, not
 // BucketLive, so the caller routes it through the recreate path (VM
-// stop + cold start; see internal/provision's setupBootEnforcement /
-// runStartupCommands, which pick up the freshly-rendered
-// /opt/devm/startup.sh on that next boot). For each changed template,
-// this function logs a "consuming services may need restart" line to
-// stderr.
+// stop + cold start, which picks up the freshly-rendered startup phase
+// on that next boot). For each changed template, this function logs a
+// "consuming services may need restart" line to stderr.
 //
 // KindRepoChange/KindVolumeChange entries ALSO route through
 // applyMutagenSessionChange, which needs a live mutagen daemon

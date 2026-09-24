@@ -111,7 +111,7 @@ func TestRunStatus_RunningInSync(t *testing.T) {
 
 func TestRunStatus_RunningPendingMixed(t *testing.T) {
 	snapCfg := statusMinimalCfg()
-	snapCfg.Install = []string{"old"}
+	snapCfg.Docker = false
 	snapYAML, _ := yaml.Marshal(snapCfg)
 	tr := makeFakeTartStatus(t,
 		`[{"Name":"x","State":"running"}]`,
@@ -119,12 +119,12 @@ func TestRunStatus_RunningPendingMixed(t *testing.T) {
 		"",
 	)
 	newCfg := statusMinimalCfg()
-	newCfg.Install = []string{"new"}
+	newCfg.Docker = true
 	newCfg.Services = map[string]schema.Service{"api": {Port: 8080}}
 	res, err := RunStatus(identity.Prod, newCfg, tr, "/tmp/fake", "test-fp")
 	assert.NoError(t, err)
 	assert.Equal(t, 1, res.PendingLive)     // port_add
-	assert.Equal(t, 1, res.PendingRecreate) // install_change
+	assert.Equal(t, 1, res.PendingRecreate) // docker_toggle
 }
 
 func TestRunStatus_RunningEmptySnapshotIsInSync(t *testing.T) {

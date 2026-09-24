@@ -14,16 +14,13 @@ func p[T any](v T) *T { return &v }
 func TestRenderCommandsManifest_Shape(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
-		Scripts: map[string][]string{
-			"gsd": {"npx foo", "npx bar"},
-		},
 		Repos: map[string]schema.RepoConfig{
 			"main": {
 				Label:  p("work"),
 				Secret: "gh",
 				Commands: map[string]schema.RepoCommand{
 					"install": {Exec: "pnpm install", Startup: p(true)},
-					"gsd":     {Exec: ">gsd", Startup: p(true)},
+					"gsd":     {Exec: "npx foo && npx bar", Startup: p(true)},
 					"lint":    {Exec: "pnpm lint"},
 				},
 			},
@@ -53,8 +50,7 @@ func TestRenderCommandsManifest_Shape(t *testing.T) {
 	assert.Equal(t, "/home/devm/work", got.Repos["main"].GuestPath)
 	assert.Equal(t, "pnpm install", got.Repos["main"].Commands["install"].Exec)
 	assert.True(t, got.Repos["main"].Commands["install"].Startup)
-	assert.Equal(t, "npx foo && npx bar", got.Repos["main"].Commands["gsd"].Exec,
-		"script refs must be resolved at render time")
+	assert.Equal(t, "npx foo && npx bar", got.Repos["main"].Commands["gsd"].Exec)
 	assert.False(t, got.Repos["main"].Commands["lint"].Startup, "unspecified startup renders as false")
 
 	assert.Equal(t, "/home/devm/v1", got.Repos["v1"].GuestPath)

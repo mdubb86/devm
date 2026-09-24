@@ -133,37 +133,6 @@ func TestConfigRejectsServiceOnPort22(t *testing.T) {
 	assert.Contains(t, err.Error(), "impostor-ssh")
 }
 
-func TestConfigValidatesInstallSteps(t *testing.T) {
-	cfg := Config{
-		Project: Project{Name: "x"},
-		Install: []string{
-			"", // invalid
-		},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "install[0]")
-}
-
-func TestConfig_StartupRoundTrip(t *testing.T) {
-	in := []byte("project:\n  name: p\nstartup:\n  - \"echo one\"\n  - \"echo two\"\n")
-	var cfg Config
-	require.NoError(t, yaml.Unmarshal(in, &cfg))
-	assert.Equal(t, []string{"echo one", "echo two"}, cfg.Startup)
-}
-
-func TestConfigValidatesStartupSteps(t *testing.T) {
-	cfg := Config{
-		Project: Project{Name: "x"},
-		Startup: []string{
-			"", // invalid
-		},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "startup[0]")
-}
-
 // TestServicePortPolymorphicUnmarshal exercises the single-field `port:`
 // polymorphic decode that accepts either an int (just sandbox port) or
 // a "IP:PORT" string (interface + sandbox port).
@@ -400,8 +369,6 @@ env:
 services:
   api:
     port: 8080
-install:
-  - true
 path:
   - $WORKSPACE/bin
 packages:
@@ -838,124 +805,6 @@ func TestCheckUnknownKeysAllowsDisk(t *testing.T) {
 	require.NoError(t, CheckUnknownKeys([]byte("disk: 64G\nproject:\n  name: x\n")))
 }
 
-// ---------- scripts: field tests ----------
-
-func TestValidate_Scripts_Valid(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{
-			"install-supabase": {"echo one", "echo two"},
-		},
-		Install: []string{">install-supabase"},
-	}
-	assert.NoError(t, cfg.Validate())
-}
-
-func TestValidate_Scripts_InvalidName(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{"Bad Name": {"echo one"}},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Bad Name")
-}
-
-func TestValidate_Scripts_EmptyCommand(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{"foo": {"echo one", ""}},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "scripts[foo][1]")
-}
-
-func TestValidate_Scripts_EmptyBody(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{"foo": {}},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "scripts[foo]")
-	assert.Contains(t, err.Error(), "empty")
-}
-
-func TestValidate_Scripts_ScriptToScriptRefRejected(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{
-			"foo": {"echo one", ">bar"},
-		},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "scripts[foo][1]")
-	assert.Contains(t, err.Error(), "script-to-script")
-}
-
-func TestValidate_Scripts_UndefinedRefInInstall(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Install: []string{">install-supabase"},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "install[0]")
-	assert.Contains(t, err.Error(), "install-supabase")
-}
-
-func TestValidate_Scripts_UndefinedRefInStartup(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Startup: []string{">boot"},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "startup[0]")
-	assert.Contains(t, err.Error(), "boot")
-}
-
-func TestValidate_Scripts_RefWithInvalidName(t *testing.T) {
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Install: []string{"> Bad Name"},
-		Scripts: map[string][]string{"Bad Name": {"echo one"}},
-	}
-	// The invalid name error fires first (from the map key check).
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Bad Name")
-}
-
-func TestValidate_Scripts_UnusedScript_NoError(t *testing.T) {
-	// Unused is a warning-level condition; Validate does not error.
-	cfg := &Config{
-		Project: Project{Name: "p"},
-		Scripts: map[string][]string{"never-called": {"echo hi"}},
-	}
-	assert.NoError(t, cfg.Validate())
-}
-
-func TestScripts_YAMLRoundTrip(t *testing.T) {
-	in := []byte(`
-project:
-  name: p
-scripts:
-  install-supabase:
-    - echo one
-    - echo two
-install:
-  - ">install-supabase"
-`)
-	var cfg Config
-	require.NoError(t, yaml.Unmarshal(in, &cfg))
-	require.NoError(t, cfg.Validate())
-	assert.Equal(t, []string{"echo one", "echo two"}, cfg.Scripts["install-supabase"])
-	assert.Equal(t, []string{">install-supabase"}, cfg.Install)
-}
-
 func TestConfig_ReposMap_UnmarshalYAML(t *testing.T) {
 	y := `project:
   name: shelfmates
@@ -1379,9 +1228,6 @@ func TestConfigValidate_RepoCommands(t *testing.T) {
 func TestConfig_StartupCommands_OrderAndResolution(t *testing.T) {
 	cfg := Config{
 		Project: Project{Name: "p"},
-		Scripts: map[string][]string{
-			"gsd": {"npx foo", "npx bar"},
-		},
 		Repos: map[string]RepoConfig{
 			"v1": {
 				URL:   p("https://example/v1.git"),
@@ -1396,30 +1242,24 @@ func TestConfig_StartupCommands_OrderAndResolution(t *testing.T) {
 				Secret: "gh",
 				Commands: map[string]RepoCommand{
 					"install": {Exec: "pnpm install", Startup: p(true)},
-					"gsd":     {Exec: ">gsd", Startup: p(true)},
 					"lint":    {Exec: "pnpm lint"},
 				},
 			},
 		},
 	}
 	got := cfg.StartupCommands("/host/cwd")
-	require.Len(t, got, 3)
+	require.Len(t, got, 2)
 	// Sort key: repo asc, then command asc.
-	assert.Equal(t, StartupCommand{
-		Repo: "main", Name: "gsd",
-		GuestCwd: "/home/devm/work",
-		Exec:     "npx foo && npx bar",
-	}, got[0])
 	assert.Equal(t, StartupCommand{
 		Repo: "main", Name: "install",
 		GuestCwd: "/home/devm/work",
 		Exec:     "pnpm install",
-	}, got[1])
+	}, got[0])
 	assert.Equal(t, StartupCommand{
 		Repo: "v1", Name: "seed",
 		GuestCwd: "/home/devm/v1",
 		Exec:     "python seed.py",
-	}, got[2])
+	}, got[1])
 }
 
 func TestConfig_StartupCommands_NoneWhenAllStartupFalse(t *testing.T) {

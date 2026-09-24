@@ -127,41 +127,6 @@ func TestRenderService_EnvironmentFileBeforeEnvironment(t *testing.T) {
 		"EnvironmentFile= must appear before Environment= so per-service env overrides /etc/environment")
 }
 
-func TestRenderStartupScript(t *testing.T) {
-	s := string(RenderStartupScript([]string{"echo a", "echo b"}, nil))
-	assert.True(t, strings.HasPrefix(s, "#!/bin/bash\nset -eo pipefail\n"))
-	assert.Contains(t, s, "echo a\n")
-	assert.Contains(t, s, "echo b\n")
-	assert.Less(t, strings.Index(s, "echo a"), strings.Index(s, "echo b"))
-	// Verbatim — no single-quote escaping in a script body.
-	assert.False(t, strings.Contains(s, `'\''`))
-}
-
-func TestRenderStartupScript_Empty_IsNoOp(t *testing.T) {
-	s := string(RenderStartupScript(nil, nil))
-	assert.Equal(t, "#!/bin/bash\nset -eo pipefail\n", s)
-}
-
-func TestRenderStartupScript_ScriptRef_ExpandsInline(t *testing.T) {
-	s := string(RenderStartupScript(
-		[]string{"echo raw", ">boot-fixup", "echo trailing"},
-		map[string][]string{"boot-fixup": {"FOO=bar", "echo $FOO"}},
-	))
-	assert.Contains(t, s, "echo raw\n")
-	assert.Contains(t, s, "FOO=bar\n")
-	assert.Contains(t, s, "echo $FOO\n")
-	assert.Contains(t, s, "echo trailing\n")
-	// No && joining; startup.sh already shares a shell.
-	assert.NotContains(t, s, "FOO=bar &&")
-}
-
-func TestRenderStartupScript_NoScriptsMap_Unchanged(t *testing.T) {
-	// Existing behavior preserved when there are no refs.
-	s := string(RenderStartupScript([]string{"echo a", "echo b"}, nil))
-	assert.Contains(t, s, "echo a\n")
-	assert.Contains(t, s, "echo b\n")
-}
-
 func TestSystemdQuoteArgv(t *testing.T) {
 	cases := []struct {
 		name string

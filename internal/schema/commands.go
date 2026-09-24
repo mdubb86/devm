@@ -10,11 +10,9 @@ import (
 )
 
 // RepoCommand is one entry under `repos.<name>.commands`. Exec is
-// required; a leading ">NAME" references a scripts: entry (joined with
-// " && " at render time, same as install:/startup: script refs).
-// Startup=nil means "not a startup command" — the pointer keeps parity
-// with every other optional bool in the schema (see repo CLAUDE.md's
-// nullable-pointer rule).
+// required. Startup=nil means "not a startup command" — the pointer
+// keeps parity with every other optional bool in the schema (see repo
+// CLAUDE.md's nullable-pointer rule).
 type RepoCommand struct {
 	Exec    string `yaml:"exec"`
 	Startup *bool  `yaml:"startup,omitempty"`
@@ -52,20 +50,10 @@ func (c *RepoCommand) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-// Validate checks one command against the config's scripts library.
-func (c RepoCommand) Validate(scripts map[string][]string) error {
+// Validate checks one command's exec is present and shell-parseable.
+func (c RepoCommand) Validate() error {
 	if strings.TrimSpace(c.Exec) == "" {
 		return fmt.Errorf("exec is required")
-	}
-	if name, ok := ParseScriptRef(c.Exec); ok {
-		body, exists := scripts[name]
-		if !exists {
-			return fmt.Errorf(`exec references script %q, which is not defined in scripts:`, name)
-		}
-		if len(body) == 0 {
-			return fmt.Errorf(`exec references script %q, which has an empty script body`, name)
-		}
-		return nil
 	}
 	return ValidateShellCommand(c.Exec)
 }
@@ -76,10 +64,10 @@ func (c RepoCommand) StartupBool() bool { return c.Startup != nil && *c.Startup 
 var commandNameRE = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 // validateCommands validates every command in this repo's Commands map
-// against the config's scripts library and the command-name shape rule.
-// Called from RepoConfig.Validate. Iteration is sorted so a config with
-// multiple errors surfaces them deterministically.
-func (r RepoConfig) validateCommands(scripts map[string][]string) error {
+// against the command-name shape rule and its own Validate. Called from
+// RepoConfig.Validate. Iteration is sorted so a config with multiple
+// errors surfaces them deterministically.
+func (r RepoConfig) validateCommands() error {
 	if len(r.Commands) == 0 {
 		return nil
 	}
@@ -92,7 +80,7 @@ func (r RepoConfig) validateCommands(scripts map[string][]string) error {
 		if !commandNameRE.MatchString(name) {
 			return fmt.Errorf("command name %q: must match /^[a-z][a-z0-9_-]*$/", name)
 		}
-		if err := r.Commands[name].Validate(scripts); err != nil {
+		if err := r.Commands[name].Validate(); err != nil {
 			return fmt.Errorf("command %q: %w", name, err)
 		}
 	}

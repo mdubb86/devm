@@ -362,33 +362,6 @@ func TestDiff_PackagesChange_IsBucketLive(t *testing.T) {
 	assert.True(t, found, "expected KindPackageAdd")
 }
 
-func TestComputeInstallChanges(t *testing.T) {
-	old := schema.Config{Install: []string{"apt-get install -y jq"}}
-	new := schema.Config{Install: []string{"apt-get install -y jq curl"}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
-	require.NoError(t, err)
-	assert.Len(t, changes, 1)
-	assert.Equal(t, KindInstallChange, changes[0].Kind)
-}
-
-func TestComputeStartupChanges(t *testing.T) {
-	old := schema.Config{Startup: []string{"echo one"}}
-	new := schema.Config{Startup: []string{"echo one", "echo two"}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
-	require.NoError(t, err)
-	assert.Len(t, changes, 1)
-	assert.Equal(t, KindStartupChange, changes[0].Kind)
-	assert.Equal(t, BucketRestartVM, changes[0].Bucket())
-
-	// Identical startup: lists → no change.
-	same := schema.Config{Startup: []string{"echo one", "echo two"}}
-	changes, err = ComputeAllChanges(same, same, t.TempDir(), t.TempDir(), nil, nil, nil)
-	require.NoError(t, err)
-	for _, c := range changes {
-		assert.NotEqual(t, KindStartupChange, c.Kind, "identical startup: must not produce a change")
-	}
-}
-
 func TestComputeImageChange(t *testing.T) {
 	// BaseImage is now an empty struct; image changes are detected
 	// via identity change or install changes. Test that no KindImageChange
@@ -441,7 +414,6 @@ func TestComputeAllChanges_NoOp(t *testing.T) {
 			"api": {Port: 8080, Env: map[string]schema.EnvValue{"X": {Literal: "y"}}},
 		},
 		Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}},
-		Install: []string{"true"},
 	}
 	changes, err := ComputeAllChanges(cfg, cfg, t.TempDir(), t.TempDir(), nil, nil, nil)
 	require.NoError(t, err)

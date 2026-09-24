@@ -86,37 +86,6 @@ func RenderService(name string, svc schema.Service) []byte {
 	return []byte(b.String())
 }
 
-// RenderStartupScript generates the bash script the composed
-// provisioning script (RenderProvisionScript) invokes via
-// `/opt/devm/with-devm-env bash /opt/devm/startup.sh`. Each cfg.Startup
-// entry is emitted verbatim, one per line. Entries that reference a
-// named script (`>NAME`) are replaced by the underlying commands of
-// `scripts[NAME]`, each on its own line — startup.sh runs as one bash
-// process, so no && joining is needed (vars carry across lines
-// naturally). `set -eo pipefail` means any failing command aborts the
-// run, matching install:'s failure semantics. An empty cmds produces
-// just the shebang + set line: a valid no-op that exits 0.
-//
-// The returned bytes are the script contents — write at
-// /opt/devm/startup.sh inside the VM, mode 0755.
-func RenderStartupScript(cmds []string, scripts map[string][]string) []byte {
-	var b strings.Builder
-	b.WriteString("#!/bin/bash\n")
-	b.WriteString("set -eo pipefail\n")
-	for _, cmd := range cmds {
-		if name, ok := schema.ParseScriptRef(cmd); ok {
-			for _, sub := range scripts[name] {
-				b.WriteString(sub)
-				b.WriteString("\n")
-			}
-			continue
-		}
-		b.WriteString(cmd)
-		b.WriteString("\n")
-	}
-	return []byte(b.String())
-}
-
 // systemdQuoteArgv renders an argv slice for systemd ExecStart=. Systemd's
 // parser splits ExecStart on whitespace unless args are double-quoted with
 // C-style escapes (see systemd.service(5) COMMAND LINES). Elements that

@@ -11,25 +11,17 @@ import (
 func p[T any](v T) *T { return &v }
 
 func TestRepoCommand_Validate(t *testing.T) {
-	scripts := map[string][]string{
-		"fmt-check": {"echo fmt"},
-		"empty":     {},
-	}
-
 	cases := []struct {
 		name    string
 		cmd     RepoCommand
 		wantErr string
 	}{
 		{"literal exec ok", RepoCommand{Exec: "pnpm install"}, ""},
-		{"script-ref ok", RepoCommand{Exec: ">fmt-check"}, ""},
 		{"empty exec", RepoCommand{Exec: ""}, "exec is required"},
-		{"ref to missing script", RepoCommand{Exec: ">missing"}, `references script "missing"`},
-		{"ref to empty script", RepoCommand{Exec: ">empty"}, "empty script"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := c.cmd.Validate(scripts)
+			err := c.cmd.Validate()
 			if c.wantErr == "" {
 				assert.NoError(t, err)
 				return
@@ -56,7 +48,7 @@ func TestRepoConfig_ValidateCommands_NameShapeAndDupes(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := RepoConfig{Commands: c.cmds}
-			err := r.validateCommands(nil)
+			err := r.validateCommands()
 			if c.wantErr == "" {
 				assert.NoError(t, err)
 				return

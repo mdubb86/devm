@@ -84,8 +84,6 @@ type ConfigOverride struct {
 	Docker   *bool                      `yaml:"docker,omitempty"`
 	Env      map[string]EnvValue        `yaml:"env,omitempty"`
 	Services map[string]ServiceOverride `yaml:"services,omitempty"`
-	Install  *[]string                  `yaml:"install,omitempty"`
-	Startup  *[]string                  `yaml:"startup,omitempty"`
 	Path     *[]string                  `yaml:"path,omitempty"`
 	Packages *[]string                  `yaml:"packages,omitempty"`
 	Disk     *string                    `yaml:"disk,omitempty"`
