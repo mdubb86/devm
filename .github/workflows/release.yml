@@ -18,6 +18,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # just runs the goreleaser hooks that wrap the Mac app build
+      # (see `just mac-build` in .goreleaser.yaml). xcodegen generates
+      # the Xcode project mac-build shells into. Xcode itself is
+      # pre-installed on macos-latest.
+      - name: Install just + xcodegen
+        run: brew install just xcodegen
       # Random per-build stamp injected into main.Fingerprint via
       # goreleaser's ldflags (see .goreleaser.yaml). CLI + daemon share
       # this value at compile time; drift detection compares them at
