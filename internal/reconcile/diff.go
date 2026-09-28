@@ -155,6 +155,13 @@ const (
 	// bundle rebuild (same path env/path changes already use), no VM
 	// cycle needed.
 	KindCommandsChange
+	// KindBundleRefresh is a synthetic change: emitted when the stored
+	// snapshot's BundleFingerprint differs from the daemon's current
+	// Build.Fingerprint. Signals that the guest is executing bundle
+	// bytes (gdevm, GUEST.md, env template, commands manifest) from an
+	// earlier daemon build and routes through the same live bundle-pipe
+	// path a config-derived change would take.
+	KindBundleRefresh
 )
 
 // changeBucket is the single source of truth that maps each ChangeKind
@@ -221,6 +228,9 @@ var changeBucket = map[ChangeKind]Bucket{
 	// manifest), not a boot-time script — a live bundle rebuild
 	// carries the change, no VM cycle needed.
 	KindCommandsChange: BucketLive,
+	// Bundle drift converges through the same live bundle-pipe path
+	// as any other daemon-owned-blob change.
+	KindBundleRefresh: BucketLive,
 }
 
 // Bucket returns the bucket this ChangeKind belongs to.
@@ -369,11 +379,22 @@ func ComputePortChanges(old, new schema.Config) []Change {
 // `oldSecretHashes` is the last-applied SecretHashes map from the same
 // snapshot; `newSecretHashes` is the freshly-hashed set the CLI just
 // resolved. Both nil means "no secret drift to consider".
+//
+// `storedBundleFingerprint` is the last-applied
+// StateSnapshot.BundleFingerprint (empty when the snapshot predates
+// the field, or when no snapshot exists); `currentBundleFingerprint`
+// is what the daemon would stamp on a fresh pipe right now. A caller
+// that observes without converging (e.g. `devm status`) passes empty
+// `currentBundleFingerprint` to silence the drift check; any other
+// caller passes the value from `serviceapi.CurrentBundleFingerprint`.
+// Drift emits a single `KindBundleRefresh` change routed through the
+// existing bundle-pipe path.
 func ComputeAllChanges(
 	old, new schema.Config,
 	repoRoot, daemonRuntimeDir string,
 	lastAppliedTemplates map[string]string,
 	oldSecretHashes, newSecretHashes map[string]string,
+	storedBundleFingerprint, currentBundleFingerprint string,
 ) ([]Change, error) {
 	var out []Change
 	out = append(out, ComputePortChanges(old, new)...)
@@ -399,6 +420,9 @@ func ComputeAllChanges(
 	}
 	out = append(out, tmplChanges...)
 	out = append(out, computeSecretChanges(newSecretHashes, oldSecretHashes)...)
+	if currentBundleFingerprint != "" && storedBundleFingerprint != currentBundleFingerprint {
+		out = append(out, Change{Kind: KindBundleRefresh})
+	}
 	return out, nil
 }
 

@@ -104,7 +104,10 @@ type TartLister interface {
 }
 
 // reconcileHandler returns an http.Handler for POST /vm/reconcile.
-func reconcileHandler(cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, packages PackagesApplier, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer, ntpPort int) http.Handler {
+// cache is read for the current bundle fingerprint so ComputeAllChanges
+// can emit KindBundleRefresh when the stored snapshot's
+// BundleFingerprint has drifted from what the daemon would stamp now.
+func reconcileHandler(cfg identity.Config, cache *StateCache, locks *ProjectLocks, apply ApplyLiver, packages PackagesApplier, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer, ntpPort int) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -177,15 +180,18 @@ func reconcileHandler(cfg identity.Config, locks *ProjectLocks, apply ApplyLiver
 		var base schema.Config
 		var lastAppliedTemplates map[string]string
 		var oldSecretHashes map[string]string
+		var storedBundleFingerprint string
 		if oldSnap != nil {
 			base = oldSnap.Cfg
 			lastAppliedTemplates = oldSnap.TemplateContents
 			oldSecretHashes = oldSnap.SecretHashes
+			storedBundleFingerprint = oldSnap.BundleFingerprint
 		}
 
 		changes, err := reconcile.ComputeAllChanges(
 			base, req.Cfg, req.WorkspaceHostPath, cfg.RuntimeDir(), lastAppliedTemplates,
 			oldSecretHashes, req.SecretHashes,
+			storedBundleFingerprint, CurrentBundleFingerprint(cache),
 		)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("diff: %v", err), http.StatusInternalServerError)
@@ -367,8 +373,8 @@ func reconcileHandler(cfg identity.Config, locks *ProjectLocks, apply ApplyLiver
 // RegisterReconcileHandler wires POST /vm/reconcile. sup is consulted
 // (only when the VM is running) to self-heal a missing/stale
 // iron-proxy: see the KindIronProxyDown emit below.
-func RegisterReconcileHandler(s *Server, cfg identity.Config, locks *ProjectLocks, apply ApplyLiver, packages PackagesApplier, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer, ntpPort int) {
-	handler := reconcileHandler(cfg, locks, apply, packages, tr, sup, proxy, ntpPort)
+func RegisterReconcileHandler(s *Server, cfg identity.Config, cache *StateCache, locks *ProjectLocks, apply ApplyLiver, packages PackagesApplier, tr TartLister, sup *supervisor.Supervisor, proxy *ProxyServer, ntpPort int) {
+	handler := reconcileHandler(cfg, cache, locks, apply, packages, tr, sup, proxy, ntpPort)
 	s.Register("/vm/reconcile", handler.(http.HandlerFunc))
 }
 

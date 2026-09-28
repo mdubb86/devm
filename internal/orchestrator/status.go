@@ -160,7 +160,9 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 		snapCfg = stateSnap.Cfg
 		lastAppliedTemplates = stateSnap.TemplateContents
 	}
-	statusChanges, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot, ident.RuntimeDir(), lastAppliedTemplates, nil, nil)
+	// devm status observes without converging: empty
+	// currentBundleFingerprint opts out of bundle-drift emission.
+	statusChanges, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot, ident.RuntimeDir(), lastAppliedTemplates, nil, nil, "", "")
 	if err != nil {
 		return res, fmt.Errorf("compute changes: %w", err)
 	}

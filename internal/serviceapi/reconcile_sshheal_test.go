@@ -39,7 +39,7 @@ func postReconcile(t *testing.T, req VMReconcileRequest) VMReconcileResponse {
 	}
 	body, _ := json.Marshal(req)
 	server := NewServer(identity.Prod.SocketPath(), Build{})
-	RegisterReconcileHandler(server, identity.Prod, NewProjectLocks(), &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: req.Name}, supervisor.New(t.TempDir()), nil, 0)
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), NewProjectLocks(), &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: req.Name}, supervisor.New(t.TempDir()), nil, 0)
 	rec := httptest.NewRecorder()
 	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())

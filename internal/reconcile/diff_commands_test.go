@@ -83,7 +83,7 @@ func TestComputeAllChanges_IncludesCommands(t *testing.T) {
 			Commands: []string{"install"},
 		},
 	}}
-	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil)
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
 	require.NoError(t, err)
 	found := false
 	for _, c := range changes {

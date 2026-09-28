@@ -357,7 +357,7 @@ func TestClientReconcile_RoundTrip(t *testing.T) {
 	socket := filepath.Join(dir, "s.sock")
 
 	srv := NewServer(socket, Build{Version: "test-version"})
-	RegisterReconcileHandler(srv, identity.Prod, NewProjectLocks(), &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+	RegisterReconcileHandler(srv, identity.Prod, NewStateCache(), NewProjectLocks(), &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -422,7 +422,7 @@ func TestClientReconcile_ApproveRequired(t *testing.T) {
 	socket := filepath.Join(dir, "s.sock")
 
 	srv := NewServer(socket, Build{Version: "test-version"})
-	RegisterReconcileHandler(srv, identity.Prod, NewProjectLocks(), &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+	RegisterReconcileHandler(srv, identity.Prod, NewStateCache(), NewProjectLocks(), &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -461,7 +461,7 @@ func TestClientReconcile_MissingFields(t *testing.T) {
 	socket := filepath.Join(dir, "s.sock")
 
 	srv := NewServer(socket, Build{})
-	RegisterReconcileHandler(srv, identity.Prod, NewProjectLocks(), &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+	RegisterReconcileHandler(srv, identity.Prod, NewStateCache(), NewProjectLocks(), &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
