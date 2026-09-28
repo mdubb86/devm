@@ -401,7 +401,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// BundleFingerprint doesn't match the current one before the daemon
 	// announces itself ready, so the first `devm status` after boot
 	// reflects settled state.
-	BundleDriftCatchup(cfg, cache, tr)
+	BundleDriftCatchup(cfg, cache, tr, locks)
 
 	server.SetProxyReady(true)
 

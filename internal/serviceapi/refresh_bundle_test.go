@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,6 +65,19 @@ func TestRefreshGuestBundle_MissingSnapshotReturns412ish(t *testing.T) {
 	tr := fakeExecStdinTart(t)
 	_, err := RefreshGuestBundle(context.Background(), cfg, cache, tr, "no-such-proj")
 	require.Error(t, err, "no snapshot → error (VM was never provisioned; cold-start writes the initial snapshot)")
+}
+
+func TestRefreshGuestBundle_MissingSnapshotErrorSatisfiesSentinel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := identity.Prod
+	cache := NewStateCache()
+	cache.SetBuild(Build{Fingerprint: "new-fp"})
+	tr := fakeExecStdinTart(t)
+
+	_, err := RefreshGuestBundle(context.Background(), cfg, cache, tr, "nonexistent")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNoStateSnapshot),
+		"missing-snapshot error must satisfy errors.Is(ErrNoStateSnapshot) so callers can dispatch precisely")
 }
 
 func TestRefreshGuestBundle_TartPipeFailureDoesNotStampFingerprint(t *testing.T) {

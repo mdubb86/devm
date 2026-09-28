@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
@@ -15,6 +14,13 @@ import (
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 )
+
+// ErrNoStateSnapshot is returned by RefreshGuestBundle when the project
+// has no stored StateSnapshot — the VM has never been started, so there
+// is no baseline cfg to rebuild the bundle from. The HTTP handler
+// dispatches this precondition to 412 Precondition Failed via errors.Is
+// rather than string-matching the error message.
+var ErrNoStateSnapshot = errors.New("no state snapshot")
 
 // bundleCatchupPerProjectTimeout caps how long the startup drift sweep
 // waits on any one project's guest-agent pipe. A wedged guest agent
@@ -61,7 +67,7 @@ func RefreshGuestBundle(ctx context.Context, cfg identity.Config, cache *StateCa
 		return RefreshSummary{}, fmt.Errorf("refresh-bundle: read state: %w", err)
 	}
 	if snap == nil {
-		return RefreshSummary{}, fmt.Errorf("refresh-bundle: no state snapshot for %q — VM must be started first via `devm start`", projectID)
+		return RefreshSummary{}, fmt.Errorf("refresh-bundle: %w: for %q — VM must be started first via `devm start`", ErrNoStateSnapshot, projectID)
 	}
 
 	// Resolve daemon runtime dir + per-project material the bundle
@@ -142,7 +148,7 @@ func handleRefreshBundleForProject(cfg identity.Config, cache *StateCache, tr *t
 			// Distinguish the missing-snapshot precondition from
 			// operational errors so callers get an actionable
 			// status code.
-			if strings.Contains(err.Error(), "no state snapshot") {
+			if errors.Is(err, ErrNoStateSnapshot) {
 				http.Error(w, err.Error(), http.StatusPreconditionFailed)
 				return
 			}
@@ -163,11 +169,19 @@ func handleRefreshBundleForProject(cfg identity.Config, cache *StateCache, tr *t
 // sweep continues to the next, so one broken project can't stall the
 // startup path.
 //
+// Takes locks so each per-project refresh queues against a concurrent
+// /vm/reconcile or /refresh-bundle on the same project — same
+// mutual-exclusion contract those handlers already honor when they
+// call RefreshGuestBundle. Startup ordering keeps this sweep serial
+// with the HTTP accept loop today, but a future refactor that binds
+// the listener earlier would race the same StateSnapshot read-modify-
+// write without this lock.
+//
 // Called synchronously from RunService's startup path after
 // AdoptIronProxies and before SetProxyReady(true), so `devm status`
 // reflects the settled post-refresh state on the first query after the
 // daemon becomes healthy.
-func BundleDriftCatchup(cfg identity.Config, cache *StateCache, tr *tart.Tart) {
+func BundleDriftCatchup(cfg identity.Config, cache *StateCache, tr *tart.Tart, locks *ProjectLocks) {
 	current := CurrentBundleFingerprint(cache)
 	if current == "" {
 		return
@@ -185,7 +199,10 @@ func BundleDriftCatchup(cfg identity.Config, cache *StateCache, tr *tart.Tart) {
 			continue
 		}
 		oldFP := snap.BundleFingerprint
-		if err := refreshOneForCatchup(cfg, cache, tr, projectID); err != nil {
+		unlock := locks.Lock(projectID)
+		err = refreshOneForCatchup(cfg, cache, tr, projectID)
+		unlock()
+		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				daemonlog.Errorf("refresh-bundle: startup catchup: sweep-timeout %s after %s: %v", projectID, bundleCatchupPerProjectTimeout, err)
 			} else {
