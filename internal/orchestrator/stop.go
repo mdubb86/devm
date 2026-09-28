@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -35,13 +34,12 @@ type StopVMClient interface {
 	StopVM(ctx context.Context, name string, destroy bool) error
 }
 
-// StopDeps wires collaborators for RunStop. In and Out drive the
-// confirmation prompt; tests inject strings.NewReader / bytes.Buffer.
-// When In is nil, os.Stdin is used; when Out is nil, os.Stderr.
+// StopDeps wires collaborators for RunStop. Out sinks the human-
+// readable progress lines RunStop emits; tests inject bytes.Buffer.
+// When Out is nil, os.Stderr is used.
 type StopDeps struct {
 	Tart             *tart.Tart
 	ServiceAPIClient StopVMClient
-	In               io.Reader
 	Out              io.Writer
 	// Ident is the daemon identity (prod vs. e2e) this stop/teardown
 	// operates under — threaded into the state-snapshot/sshkeys/
@@ -51,33 +49,16 @@ type StopDeps struct {
 }
 
 // RunStop implements both `devm stop` (mode=StopPreserve) and
-// `devm teardown` (mode=StopDestroy). autoApprove skips the
-// interactive prompt. Return code: 0 on success; 1 on user refusal.
+// `devm teardown` (mode=StopDestroy). Return code: 0 on success.
 //
 // name is both the daemon admin StopVM key and the Tart VM name used
 // for disk deletion on teardown.
 //
-// The ctx parameter is currently advisory — it is accepted for
-// signature consistency with RunShell, but the interactive prompt
-// will block on stdin indefinitely; users cancel by ctrl-c at the
-// terminal, which kills the devm process.
-func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness, autoApprove bool) (int, error) {
-	if d.In == nil {
-		d.In = os.Stdin
-	}
+// The caller is responsible for any interactive confirmation before
+// invoking RunStop; this function always proceeds unconditionally.
+func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness) (int, error) {
 	if d.Out == nil {
 		d.Out = os.Stderr
-	}
-
-	if !autoApprove {
-		approved, err := promptStopConfirm(d.In, d.Out, name, mode)
-		if err != nil {
-			return -1, err
-		}
-		if !approved {
-			fmt.Fprintln(d.Out, "aborted")
-			return 1, nil
-		}
 	}
 
 	// Ask the daemon supervisor to stop the VM. Best-effort: continue
@@ -220,19 +201,3 @@ func removeArtifact(out io.Writer, path string) {
 	}
 }
 
-// promptStopConfirm prints the action description and asks for [y/N].
-// Returns true on "y"/"yes" (case-insensitive); false otherwise.
-func promptStopConfirm(in io.Reader, out io.Writer, name string, mode Destructiveness) (bool, error) {
-	action := "Stop"
-	if mode == StopDestroy {
-		action = "Tear down"
-	}
-	fmt.Fprintf(out, "%s VM %s? [y/N]: ", action, name)
-	br := bufio.NewReader(in)
-	line, err := br.ReadString('\n')
-	if err != nil && line == "" {
-		return false, nil
-	}
-	resp := strings.ToLower(strings.TrimSpace(line))
-	return resp == "y" || resp == "yes", nil
-}

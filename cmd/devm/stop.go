@@ -12,14 +12,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var stopYes bool
+// stopYesCompat is the deprecated --yes/-y flag: no-op, accepted so
+// scripts and muscle memory that still pass it don't break.
+var stopYesCompat bool
 
 var stopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the VM (preserves disk)",
-	Long: `Prompts before stopping the project VM via the devm daemon supervisor.
-The VM filesystem and installed tools persist; only the running state is
-discarded. Re-launch with devm start. Use --yes (-y) to skip the prompt.`,
+	Long: `Stops the project VM via the devm daemon supervisor. The VM
+filesystem and installed tools persist; only the running state is
+discarded. Re-launch with devm start.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below
@@ -41,9 +43,8 @@ discarded. Re-launch with devm start. Use --yes (-y) to skip the prompt.`,
 			Tart:             tart.New(),
 			ServiceAPIClient: serviceapi.NewClient(ident),
 			Ident:            ident,
-			// In/Out left nil → os.Stdin/os.Stderr.
 		}
-		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.Name, orchestrator.StopPreserve, stopYes)
+		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.Name, orchestrator.StopPreserve)
 		if err != nil {
 			return err
 		}
@@ -55,6 +56,7 @@ discarded. Re-launch with devm start. Use --yes (-y) to skip the prompt.`,
 }
 
 func init() {
-	stopCmd.Flags().BoolVarP(&stopYes, "yes", "y", false, "Skip the confirmation prompt")
+	stopCmd.Flags().BoolVarP(&stopYesCompat, "yes", "y", false, "deprecated no-op; stop is always non-interactive")
+	_ = stopCmd.Flags().MarkHidden("yes")
 	rootCmd.AddCommand(stopCmd)
 }

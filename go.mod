@@ -8,7 +8,6 @@ require (
 	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/insomniacslk/dhcp v0.0.0-20240710054256-ddd8a41251c9
 	github.com/kardianos/service v1.2.4
-	github.com/mattn/go-isatty v0.0.22
 	github.com/miekg/dns v1.1.72
 	github.com/oklog/run v1.2.0
 	github.com/pterm/pterm v0.12.83
@@ -54,6 +53,7 @@ require (
 	github.com/hashicorp/go-version v1.8.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/lithammer/fuzzysearch v1.1.8 // indirect
+	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mattn/go-runewidth v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.14 // indirect

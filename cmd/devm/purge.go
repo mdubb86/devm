@@ -152,14 +152,13 @@ func runPurge(runtimeDir string, lister vmLister, dryRun, yes bool, out io.Write
 		return nil
 	}
 
-	if !yes {
-		fmt.Fprintf(out, "delete? [y/N]: ")
-		var resp string
-		_, _ = fmt.Fscanln(os.Stdin, &resp)
-		if resp != "y" && resp != "Y" {
-			fmt.Fprintln(out, "cancelled")
-			return nil
-		}
+	ok, err := confirmDestructive("delete?", yes)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		fmt.Fprintln(out, "cancelled")
+		return nil
 	}
 	for _, p := range candidates {
 		dir := filepath.Join(runtimeDir, p)

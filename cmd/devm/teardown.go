@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"time"
@@ -18,9 +19,12 @@ var teardownYes bool
 var teardownCmd = &cobra.Command{
 	Use:   "teardown",
 	Short: "Destroy the VM entirely (deletes disk)",
-	Long: `Prompts before stopping the project VM and deleting its disk image.
-All installed state is lost. Use --yes (-y) to skip the prompt. The
-workspace volume is preserved; a fresh devm start will re-run install/startup.`,
+	Long: `Stops the project VM and deletes its disk image. All installed
+state is lost. The workspace volume is preserved; a fresh devm start
+will re-run install/startup.
+
+Prompts on a terminal; refuses non-interactively unless --yes (-y)
+is passed.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg // capture package identity cfg before it's shadowed below
@@ -35,6 +39,16 @@ workspace volume is preserved; a fresh devm start will re-run install/startup.`,
 		if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
 			return err
 		}
+
+		ok, err := confirmDestructive("Tear down VM "+cfg.Project.Name+"?", teardownYes)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Fprintln(os.Stderr, "aborted")
+			os.Exit(1)
+		}
+
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
 
@@ -53,7 +67,7 @@ workspace volume is preserved; a fresh devm start will re-run install/startup.`,
 			ServiceAPIClient: c,
 			Ident:            ident,
 		}
-		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.Name, orchestrator.StopDestroy, teardownYes)
+		rc, err := orchestrator.RunStop(ctx, deps, cfg.Project.Name, orchestrator.StopDestroy)
 		if err != nil {
 			return err
 		}
@@ -65,6 +79,6 @@ workspace volume is preserved; a fresh devm start will re-run install/startup.`,
 }
 
 func init() {
-	teardownCmd.Flags().BoolVarP(&teardownYes, "yes", "y", false, "Skip the confirmation prompt")
+	teardownCmd.Flags().BoolVarP(&teardownYes, "yes", "y", false, "Run without the interactive confirmation prompt")
 	rootCmd.AddCommand(teardownCmd)
 }

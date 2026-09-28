@@ -43,17 +43,15 @@ func (f *fakeStopClient) StopVM(_ context.Context, name string, destroy bool) er
 
 func TestRunStopPreserve_CallsStopVM(t *testing.T) {
 	admin := &fakeStopClient{}
-	in := strings.NewReader("y\n")
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
 		Ident:            identity.Prod,
 		Tart:             tartPathNotNeeded(t),
 		ServiceAPIClient: admin,
-		In:               in,
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", StopPreserve, false)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopPreserve)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, 1, admin.stopCalled, "StopVM must be called once")
@@ -67,59 +65,19 @@ func TestRunStopDestroy_CallsStopVMThenDeletesDisk(t *testing.T) {
 
 	// fakeTartBin from shell_test.go: exits 0 for all subcommands.
 	tr := fakeTartBin(t, repoRoot)
-	in := strings.NewReader("y\n")
 	out := &bytes.Buffer{}
 
 	deps := StopDeps{
 		Ident:            identity.Prod,
 		Tart:             tr,
 		ServiceAPIClient: admin,
-		In:               in,
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy, false)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, 1, admin.stopCalled, "StopVM must be called before disk delete")
 	assert.Contains(t, out.String(), "Deleted VM proj-123")
-}
-
-func TestRunStopRefusalWithNo(t *testing.T) {
-	admin := &fakeStopClient{}
-	in := strings.NewReader("n\n")
-	out := &bytes.Buffer{}
-
-	deps := StopDeps{
-		Ident:            identity.Prod,
-		Tart:             tartPathNotNeeded(t),
-		ServiceAPIClient: admin,
-		In:               in,
-		Out:              out,
-	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", StopPreserve, false)
-	require.NoError(t, err)
-	assert.Equal(t, 1, rc, "refusal exits 1")
-	assert.Equal(t, 0, admin.stopCalled, "StopVM must not be called after refusal")
-	assert.Contains(t, out.String(), "aborted")
-	assert.Contains(t, out.String(), "[y/N]")
-}
-
-func TestRunStopAutoApproveSkipsPrompt(t *testing.T) {
-	admin := &fakeStopClient{}
-	in := strings.NewReader("") // nothing to read
-	out := &bytes.Buffer{}
-
-	deps := StopDeps{
-		Ident:            identity.Prod,
-		Tart:             tartPathNotNeeded(t),
-		ServiceAPIClient: admin,
-		In:               in,
-		Out:              out,
-	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", StopPreserve, true)
-	require.NoError(t, err)
-	assert.Equal(t, 0, rc)
-	assert.Equal(t, 1, admin.stopCalled)
 }
 
 func TestRunStopDaemonFailContinuesForTeardown(t *testing.T) {
@@ -140,7 +98,7 @@ func TestRunStopDaemonFailContinuesForTeardown(t *testing.T) {
 		ServiceAPIClient: admin,
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy, true)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, 1, admin.stopCalled, "daemon stop must still be attempted")
@@ -165,10 +123,9 @@ func TestRunStopDestroy_RemovesStateSnapshot(t *testing.T) {
 		Ident:            identity.Prod,
 		Tart:             tr,
 		ServiceAPIClient: admin,
-		In:               strings.NewReader("y\n"),
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy, false)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 
@@ -202,47 +159,15 @@ func TestRunStopDestroy_RemovesSSHState(t *testing.T) {
 		Ident:            identity.Prod,
 		Tart:             tr,
 		ServiceAPIClient: admin,
-		In:               strings.NewReader("y\n"),
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy, false)
+	rc, err := RunStop(context.Background(), deps, "proj-123", StopDestroy)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 
 	// Verify SSH directory is gone after teardown
 	_, err = os.Stat(sshDir)
 	assert.True(t, os.IsNotExist(err), "ssh project dir must be gone after --destroy")
-}
-
-func TestRunStopPromptText(t *testing.T) {
-	// StopPreserve prompt says "Stop VM"
-	admin := &fakeStopClient{}
-	inStop := strings.NewReader("n\n")
-	outStop := &bytes.Buffer{}
-	deps := StopDeps{
-		Ident:            identity.Prod,
-		Tart:             tartPathNotNeeded(t),
-		ServiceAPIClient: admin,
-		In:               inStop,
-		Out:              outStop,
-	}
-	_, err := RunStop(context.Background(), deps, "proj-123", StopPreserve, false)
-	require.NoError(t, err)
-	assert.Contains(t, outStop.String(), "Stop VM proj-123")
-
-	// StopDestroy prompt says "Tear down VM"
-	inTear := strings.NewReader("n\n")
-	outTear := &bytes.Buffer{}
-	deps2 := StopDeps{
-		Ident:            identity.Prod,
-		Tart:             tartPathNotNeeded(t),
-		ServiceAPIClient: &fakeStopClient{},
-		In:               inTear,
-		Out:              outTear,
-	}
-	_, err = RunStop(context.Background(), deps2, "proj-123", StopDestroy, false)
-	require.NoError(t, err)
-	assert.Contains(t, outTear.String(), "Tear down VM proj-123")
 }
 
 func TestDestructivenessIdentity(t *testing.T) {
@@ -282,7 +207,7 @@ func TestRunStopDestroy_CallsMutagenTeardownBeforeDelete(t *testing.T) {
 		ServiceAPIClient: admin,
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-mutagen", StopDestroy, true)
+	rc, err := RunStop(context.Background(), deps, "proj-mutagen", StopDestroy)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Equal(t, []string{"proj-mutagen"}, teardownArgs, "TeardownPhase must be called for the right projectID")
@@ -326,7 +251,7 @@ func TestRunStopPreserve_DoesNotCallMutagenTeardown(t *testing.T) {
 		ServiceAPIClient: admin,
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-mutagen", StopPreserve, true)
+	rc, err := RunStop(context.Background(), deps, "proj-mutagen", StopPreserve)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.False(t, called, "StopPreserve must not terminate mutagen sessions")
@@ -395,10 +320,10 @@ func TestRunStopDestroy_ReapsStraysOnDeletePath(t *testing.T) {
 		Ident:            identity.Prod,
 		Tart:             tr,
 		ServiceAPIClient: &fakeStopClient{},
-		In:               strings.NewReader("y\n"),
+
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-reap", StopDestroy, false)
+	rc, err := RunStop(context.Background(), deps, "proj-reap", StopDestroy)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 
@@ -424,10 +349,10 @@ func TestRunStopDestroy_ReapsStraysOnAbsentPath(t *testing.T) {
 		Ident:            identity.Prod,
 		Tart:             tr,
 		ServiceAPIClient: &fakeStopClient{},
-		In:               strings.NewReader("y\n"),
+
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-orphan", StopDestroy, false)
+	rc, err := RunStop(context.Background(), deps, "proj-orphan", StopDestroy)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.Contains(t, out.String(), "already absent",
@@ -454,10 +379,10 @@ func TestRunStopDestroy_ReapsWhenArtifactsAbsent(t *testing.T) {
 		Ident:            identity.Prod,
 		Tart:             tr,
 		ServiceAPIClient: &fakeStopClient{},
-		In:               strings.NewReader("y\n"),
+
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-clean", StopDestroy, false)
+	rc, err := RunStop(context.Background(), deps, "proj-clean", StopDestroy)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 	assert.NotContains(t, out.String(), "warning:",
@@ -485,10 +410,10 @@ func TestRunStopDestroy_PreservesUserData(t *testing.T) {
 		Ident:            identity.Prod,
 		Tart:             tr,
 		ServiceAPIClient: &fakeStopClient{},
-		In:               strings.NewReader("y\n"),
+
 		Out:              out,
 	}
-	rc, err := RunStop(context.Background(), deps, "proj-preserve", StopDestroy, false)
+	rc, err := RunStop(context.Background(), deps, "proj-preserve", StopDestroy)
 	require.NoError(t, err)
 	assert.Equal(t, 0, rc)
 

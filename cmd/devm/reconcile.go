@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/mattn/go-isatty"
 	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/orchestrator"
@@ -66,16 +65,13 @@ var reconcileCmd = &cobra.Command{
 		// Recreate-required path: decide whether to prompt, and on
 		// approval delegate to the same teardown + start helpers
 		// `devm teardown` / `devm start` already use directly.
-		if !reconcileYes {
-			if !isatty.IsTerminal(os.Stdin.Fd()) {
-				os.Exit(2)
-			}
-			fmt.Print("[y/N]: ")
-			var resp string
-			_, _ = fmt.Fscanln(os.Stdin, &resp)
-			if resp != "y" && resp != "Y" {
-				os.Exit(1)
-			}
+		ok, err := confirmDestructive("recreate required — proceed?", reconcileYes)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Fprintln(os.Stderr, "aborted")
+			os.Exit(1)
 		}
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -90,7 +86,7 @@ var reconcileCmd = &cobra.Command{
 		if res.Flavor == reconcile.FlavorTeardownVM {
 			mode = orchestrator.StopDestroy
 		}
-		if _, err := orchestrator.RunStop(ctx, stopDeps, cfg.Project.Name, mode, true); err != nil {
+		if _, err := orchestrator.RunStop(ctx, stopDeps, cfg.Project.Name, mode); err != nil {
 			return fmt.Errorf("recreate (%s): %w", res.Flavor, err)
 		}
 
