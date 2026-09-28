@@ -57,12 +57,18 @@ func build(srcDir, outPath, version string) error {
 		return err
 	}
 
-	var parsed []recipe
+	var parsed []parsedRecipe
 	err = filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
+			// A sibling <name>-assets/ dir holds asset files, not
+			// recipes; ingestAssets walks it after the recipe is
+			// inserted, so the recipe walk must not descend into it.
+			if strings.HasSuffix(d.Name(), "-assets") {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if filepath.Ext(path) != ".md" {
@@ -75,7 +81,7 @@ func build(srcDir, outPath, version string) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
-		parsed = append(parsed, r)
+		parsed = append(parsed, parsedRecipe{recipe: r, path: path})
 		return nil
 	})
 	if err != nil {
@@ -98,7 +104,8 @@ func build(srcDir, outPath, version string) error {
 		return err
 	}
 
-	for _, r := range parsed {
+	for _, pr := range parsed {
+		r := pr.recipe
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO recipes
 			   (name, category, display_name, description, keywords, content, since, updated_at)
@@ -117,8 +124,77 @@ func build(srcDir, outPath, version string) error {
 		if err != nil {
 			return fmt.Errorf("fts insert %s: %w", r.Name, err)
 		}
+		if err := ingestAssets(ctx, tx, r, pr.path); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
+}
+
+// parsedRecipe pairs a parsed recipe with the source path we read it
+// from, so the tx loop can find its sibling <name>-assets/ dir.
+type parsedRecipe struct {
+	recipe recipe
+	path   string
+}
+
+// ingestAssets walks the sibling <name>-assets/ directory of the recipe
+// at recipePath and inserts one row per regular file into the assets
+// table on the given transaction. Symlinks that resolve outside the
+// assets root are rejected, as are paths that fail
+// recipes.ValidAssetPath. A missing or empty dir is a no-op.
+func ingestAssets(ctx context.Context, tx *sql.Tx, r recipe, recipePath string) error {
+	recipeBase := strings.TrimSuffix(filepath.Base(recipePath), ".md")
+	assetsDir := filepath.Join(filepath.Dir(recipePath), recipeBase+"-assets")
+
+	realAssetsDir, err := filepath.EvalSymlinks(assetsDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("assets dir %s: %w", assetsDir, err)
+	}
+
+	return filepath.WalkDir(realAssetsDir, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		// Resolve each entry so a symlink pointing outside the assets
+		// root is caught by the Rel check below.
+		real, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			return fmt.Errorf("evalsymlinks %s: %w", p, err)
+		}
+		rel, err := filepath.Rel(realAssetsDir, real)
+		if err != nil {
+			return fmt.Errorf("rel %s: %w", real, err)
+		}
+		if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			return fmt.Errorf("asset %s escapes recipe assets dir (resolved: %s)", p, real)
+		}
+		relSlash := filepath.ToSlash(rel)
+		if err := recipes.ValidAssetPath(relSlash); err != nil {
+			return fmt.Errorf("%s: %w", p, err)
+		}
+		info, err := os.Stat(real)
+		if err != nil {
+			return err
+		}
+		body, err := os.ReadFile(real)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO assets(recipe_name, path, content, size, mode) VALUES (?, ?, ?, ?, ?)`,
+			r.Name, relSlash, body, info.Size(), uint32(info.Mode().Perm()),
+		); err != nil {
+			return fmt.Errorf("insert asset %s/%s: %w", r.Name, relSlash, err)
+		}
+		return nil
+	})
 }
 
 func parseRecipe(srcDir, path string) (recipe, error) {

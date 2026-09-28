@@ -20,6 +20,11 @@ var ErrAssetNotFound = errors.New("asset not found")
 // callers should use errors.Is, not string match.
 var ErrInvalidAssetPath = errors.New("invalid asset path")
 
+// ValidAssetPath is the exported wrapper around validAssetPath, so
+// callers outside this package (e.g. the build-recipes-db tool) apply
+// the same rule at build time that Query enforces at read time.
+func ValidAssetPath(p string) error { return validAssetPath(p) }
+
 // validAssetPath returns nil if p is a safe relative asset path.
 // Rules:
 //   - non-empty

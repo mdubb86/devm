@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -12,6 +14,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// validRecipeBytes returns a minimal recipe body with every required
+// frontmatter field set, so tests that focus on assets don't have to
+// hand-craft one.
+func validRecipeBytes(name string) []byte {
+	return []byte(fmt.Sprintf(
+		"---\nname: %s\ncategory: tool\ndisplay_name: Foo\ndescription: desc\nkeywords: k\nsince: recipes-v2.0.0\n---\n\nbody",
+		name,
+	))
+}
 
 const fixturePython = `---
 name: tool/lang/python
@@ -93,6 +105,108 @@ func TestBuild_MissingNameErrors(t *testing.T) {
 		[]byte("---\ncategory: lang\n---\nbody\n"), 0o644))
 	err := build(src, filepath.Join(t.TempDir(), "out.db"), "v")
 	require.Error(t, err)
+}
+
+func TestBuild_IncludesAssets(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "tool"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "tool", "foo.md"),
+		[]byte("---\nname: tool/foo\ncategory: tool\ndisplay_name: Foo\ndescription: desc\nkeywords: k\nsince: recipes-v2.0.0\n---\n\nbody"),
+		0o644))
+	assetsDir := filepath.Join(src, "tool", "foo-assets")
+	require.NoError(t, os.MkdirAll(filepath.Join(assetsDir, "skills"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsDir, "skills", "one.md"), []byte("alpha"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsDir, "top.txt"), []byte("beta"), 0o644))
+
+	out := filepath.Join(t.TempDir(), "recipes.db")
+	require.NoError(t, build(src, out, "recipes-v2.0.0"))
+
+	db, err := sql.Open("sqlite", out)
+	require.NoError(t, err)
+	defer db.Close()
+
+	rows, err := db.Query(
+		`SELECT path, content, size, mode FROM assets WHERE recipe_name = ? ORDER BY path`,
+		"tool/foo",
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	type row struct {
+		Path    string
+		Content []byte
+		Size    int64
+		Mode    uint32
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		require.NoError(t, rows.Scan(&r.Path, &r.Content, &r.Size, &r.Mode))
+		got = append(got, r)
+	}
+	require.Len(t, got, 2)
+	assert.Equal(t, "skills/one.md", got[0].Path)
+	assert.Equal(t, []byte("alpha"), got[0].Content)
+	assert.Equal(t, int64(5), got[0].Size)
+	assert.Equal(t, "top.txt", got[1].Path)
+}
+
+func TestBuild_EmptyAssetsDir_NoRows(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "tool"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "tool", "foo.md"),
+		validRecipeBytes("tool/foo"), 0o644))
+	// Empty assets dir — must not error, must not produce rows.
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "tool", "foo-assets"), 0o755))
+
+	out := filepath.Join(t.TempDir(), "recipes.db")
+	require.NoError(t, build(src, out, "recipes-v2.0.0"))
+
+	db, err := sql.Open("sqlite", out)
+	require.NoError(t, err)
+	defer db.Close()
+
+	var count int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM assets WHERE recipe_name = ?`, "tool/foo").Scan(&count))
+	assert.Zero(t, count)
+}
+
+func TestBuild_RejectsSymlinkEscape(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "tool"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "tool", "foo.md"),
+		validRecipeBytes("tool/foo"), 0o644))
+	assetsDir := filepath.Join(src, "tool", "foo-assets")
+	require.NoError(t, os.MkdirAll(assetsDir, 0o755))
+	// Create a target outside the source tree and a symlink into it.
+	outside := filepath.Join(t.TempDir(), "victim.txt")
+	require.NoError(t, os.WriteFile(outside, []byte("secret"), 0o600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(assetsDir, "escape.txt")))
+
+	out := filepath.Join(t.TempDir(), "recipes.db")
+	err := build(src, out, "recipes-v2.0.0")
+	require.Error(t, err)
+	assert.Contains(t, strings.ToLower(err.Error()), "escap")
+}
+
+func TestBuild_RejectsInvalidAssetPath(t *testing.T) {
+	// A file whose relative path would be rejected by validAssetPath —
+	// e.g. a file whose name contains a backslash (rare on unix but
+	// filesystem-legal). Simulate by writing a filename with a backslash
+	// and checking build errors.
+	src := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "tool"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "tool", "foo.md"),
+		validRecipeBytes("tool/foo"), 0o644))
+	assetsDir := filepath.Join(src, "tool", "foo-assets")
+	require.NoError(t, os.MkdirAll(assetsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsDir, "a\\b.md"), []byte("x"), 0o644))
+
+	out := filepath.Join(t.TempDir(), "recipes.db")
+	err := build(src, out, "recipes-v2.0.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid asset path")
 }
 
 func TestBuild_RecordsMeta(t *testing.T) {
