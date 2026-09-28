@@ -122,6 +122,56 @@ var recipesGetCmd = &cobra.Command{
 	},
 }
 
+var recipesAssetCmd = &cobra.Command{
+	Use:   "asset",
+	Short: "List or fetch a recipe's bundled assets",
+}
+
+var recipesAssetLsCmd = &cobra.Command{
+	Use:   "ls <name>",
+	Short: "List a recipe's asset paths (size, mode, path — tab-separated, sorted)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		q, err := openCachedQuery()
+		if err != nil {
+			return err
+		}
+		defer q.Close()
+		listing, err := q.ListAssets(cmd.Context(), args[0])
+		if err != nil {
+			return err
+		}
+		out := cmd.OutOrStdout()
+		for _, a := range listing {
+			if _, err := fmt.Fprintf(out, "%d\t%o\t%s\n", a.Size, a.Mode, a.Path); err != nil {
+				return err
+			}
+		}
+		return nil
+	},
+}
+
+var recipesAssetGetCmd = &cobra.Command{
+	Use:   "get <name> <path>",
+	Short: "Print an asset's raw bytes to stdout (no envelope, no trailing newline)",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		q, err := openCachedQuery()
+		if err != nil {
+			return err
+		}
+		defer q.Close()
+		body, err := q.GetAsset(cmd.Context(), args[0], args[1])
+		if err != nil {
+			return err
+		}
+		_, err = cmd.OutOrStdout().Write(body)
+		return err
+	},
+}
+
 var recipesSyncCmd = &cobra.Command{
 	Use:   "sync",
 	Short: "Force-fetch the latest recipes.db from GitHub",
@@ -169,6 +219,9 @@ func init() {
 	recipesCmd.AddCommand(recipesListCmd)
 	recipesCmd.AddCommand(recipesSearchCmd)
 	recipesCmd.AddCommand(recipesGetCmd)
+	recipesAssetCmd.AddCommand(recipesAssetLsCmd)
+	recipesAssetCmd.AddCommand(recipesAssetGetCmd)
+	recipesCmd.AddCommand(recipesAssetCmd)
 	recipesCmd.AddCommand(recipesSyncCmd)
 	recipesCmd.AddCommand(recipesStatusCmd)
 	rootCmd.AddCommand(recipesCmd)
