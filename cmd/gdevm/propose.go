@@ -91,6 +91,14 @@ func doPost(endpoint, cwd, branch, reason, kind string) int {
 	}
 	respBody, _ := io.ReadAll(resp.Body)
 	switch resp.StatusCode {
+	case http.StatusOK:
+		// Daemon short-circuited (e.g. no changes since last approval);
+		// stream the human-readable body straight to stdout and exit 0.
+		fmt.Print(string(respBody))
+		return 0
+	case http.StatusForbidden:
+		fmt.Fprintf(os.Stderr, "gdevm propose: %s\n", strings.TrimSpace(string(respBody)))
+		return 3
 	case http.StatusNotFound:
 		fmt.Fprintln(os.Stderr, "gdevm propose: daemon does not support propose channel — upgrade the Mac side")
 		return 2

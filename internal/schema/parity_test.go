@@ -48,6 +48,7 @@ func TestOverrideMirrorsBase(t *testing.T) {
 				"Volumes":   "not overridable per environment; volume identity (name + guest path) is project-wide by design (docs/superpowers/specs/2026-08-01-persistent-volumes-design.md) — no cross-project sharing, no anonymous volumes, no per-dev variance",
 				"Repos":     "not overridable per environment; the project's repos are a project-wide identity decision, not a per-dev variance",
 				"Functions": "discovered from devm.sh + devm.me.sh and populated by Load; not loaded from devm.me.yaml and thus not overridable",
+				"Guest":     "guest-request gates are project-wide policy; a per-user override in devm.me.yaml could silently permit calls a co-owner disabled in devm.yaml. Single-user today but the gate lives on the shared file by design.",
 			},
 		},
 		{

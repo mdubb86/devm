@@ -22,6 +22,24 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `disk` | string | recreate | Override the guest's virtual disk size in GB (e.g. `"64GB"`). Defaults to 32 (baked into devm-base). tart's disk resize is grow-only, so values below 32 GB are rejected. |
 | `memory` | string | restart | Override the VM's RAM, e.g. `"8G"`, `"16G"`. Unset uses the base image default. Requires a G/GB suffix; the magnitude must be a positive integer. Removing this field from devm.yaml does not revert the running VM's tart config; the previously-set value persists across reconcile-restarts. Use `devm teardown` to fully reset to the base image default. Not overridable in `devm.me.yaml`. |
 | `cpu` | int | restart | Override the VM's virtual CPU count. Unset uses the base image default. Must be a positive integer. Removing this field from devm.yaml does not revert the running VM's tart config; the previously-set value persists across reconcile-restarts. Use `devm teardown` to fully reset to the base image default. Not overridable in `devm.me.yaml`. |
+| `guest` | object | live | Gates the requests `gdevm` (the guest-side dispatcher) may send to the daemon. Sub-fields `propose` and `passthrough` are booleans defaulting to `true`; set to `false` to refuse the corresponding request class with 403. Project-wide by design — not overridable in `devm.me.yaml`. |
+
+---
+
+## `guest`
+
+Two booleans gating what the in-VM `gdevm` binary may ask the daemon to do:
+
+- **`propose`**: `gdevm propose` records a devm.yaml / devm.sh (etc.) edit signal on the Mac side. Both fields default `true`. Set to `false` and the daemon refuses guest-source propose calls with 403; Mac-side `devm propose` is not affected.
+- **`passthrough`**: `gdevm passthrough --reason "..."` submits a request for a passthrough egress window awaiting Mac-side approval. Set to `false` and the daemon refuses with 403. Mac-side `devm passthrough open` is not affected — the host is always in control of its own egress.
+
+Example:
+
+```yaml
+guest:
+  propose: false        # human curates devm.yaml directly; guest cannot signal edits
+  passthrough: true     # guest may still ask for open-egress windows
+```
 
 ---
 

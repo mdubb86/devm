@@ -518,7 +518,7 @@ func (p Project) Validate() error {
 var topLevelKnownFields = []string{
 	"project", "base_image", "docker", "network", "env",
 	"services", "path", "packages", "disk", "memory", "cpu",
-	"volumes", "repos",
+	"volumes", "repos", "guest",
 }
 
 func CheckUnknownKeys(data []byte) error {
@@ -550,6 +550,11 @@ func CheckUnknownKeys(data []byte) error {
 	// per-project image config. Any child here is a typo.
 	if bi, ok := raw["base_image"].(map[string]any); ok {
 		if err := rejectUnknown(bi, nil, "base_image"); err != nil {
+			return err
+		}
+	}
+	if g, ok := raw["guest"].(map[string]any); ok {
+		if err := rejectUnknown(g, []string{"propose", "passthrough"}, "guest"); err != nil {
 			return err
 		}
 	}
@@ -788,6 +793,50 @@ type Config struct {
 	// names declared in devm.sh and devm.me.sh at the project root.
 	// Populated by config.Load; ignored on YAML (un)marshal via the "-" tag.
 	Functions []string `yaml:"-"`
+
+	// Guest gates the requests gdevm — the guest-side dispatcher —
+	// may send to the daemon. Both sub-fields default to true; set to
+	// false to block a request class entirely. The daemon rejects
+	// gdevm requests whose gate is off with 403 so a guest agent
+	// sees a real error, not a silent no-op.
+	Guest Guest `yaml:"guest,omitempty"`
+}
+
+// Guest gates capabilities exposed to gdevm (the guest-side
+// dispatcher). Each field is optional; a nil field means the default
+// (true). Only two request classes exist right now — propose and
+// passthrough — because those are the two things gdevm can ask the
+// daemon to do on the Mac side that a human would care about
+// authorizing.
+type Guest struct {
+	// Propose controls whether `gdevm propose` may signal devm.yaml /
+	// devm.sh / devm.me.yaml / devm.me.sh edits from the guest.
+	// Nil ⇒ true.
+	Propose *bool `yaml:"propose,omitempty"`
+
+	// Passthrough controls whether `gdevm passthrough --reason ...`
+	// may register a passthrough-window request pending human
+	// approval on the Mac side. Nil ⇒ true.
+	Passthrough *bool `yaml:"passthrough,omitempty"`
+}
+
+// GuestProposeAllowed reports whether `gdevm propose` is enabled for
+// this project. Defaults to true when Guest.Propose is unset.
+func (c *Config) GuestProposeAllowed() bool {
+	if c.Guest.Propose == nil {
+		return true
+	}
+	return *c.Guest.Propose
+}
+
+// GuestPassthroughAllowed reports whether `gdevm passthrough` is
+// enabled for this project. Defaults to true when Guest.Passthrough
+// is unset.
+func (c *Config) GuestPassthroughAllowed() bool {
+	if c.Guest.Passthrough == nil {
+		return true
+	}
+	return *c.Guest.Passthrough
 }
 
 // ParseDiskSize parses a `disk:` value like "64G" or "64GB" into an

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mdubb86/devm/internal/approve"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -483,4 +484,85 @@ func TestPropose_ListenerRegisteredOnStart(t *testing.T) {
 	closeProposeListener("proj")
 	_, ok = proposeListeners.Load("proj")
 	assert.False(t, ok, "closeProposeListener must delete entry")
+}
+
+// TestPropose_GuestGateDisabledReturns403 verifies the daemon refuses
+// guest-source propose signals when the on-disk devm.yaml declares
+// `guest.propose: false`. Mac-source signals ignore the gate.
+func TestPropose_GuestGateDisabledReturns403(t *testing.T) {
+	h, cfg, cache := buildProposeHandler(t)
+	dir := writeMacCwdFile(t, cache, "devm.yaml",
+		"project:\n  name: myproj\nguest:\n  propose: false\n")
+
+	// Guest source is blocked.
+	rr := postPropose(h, "/propose", map[string]any{
+		"kind":   "devm.yaml",
+		"source": "guest",
+		"reason": "add postgres",
+	})
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), "guest.propose is disabled")
+
+	// Metadata must NOT have been written.
+	_, err := os.Stat(filepath.Join(cfg.RuntimeDir(), "proj", "last-proposal.json"))
+	assert.True(t, os.IsNotExist(err), "gate refusal must not write attribution")
+
+	// Mac source is NOT gated — writes attribution as before.
+	rr = postPropose(h, "/propose", map[string]any{
+		"kind":   "devm.yaml",
+		"source": "mac",
+		"cwd":    dir,
+		"reason": "same edit, mac side",
+	})
+	assert.Equal(t, http.StatusNoContent, rr.Code)
+	_, err = os.Stat(filepath.Join(cfg.RuntimeDir(), "proj", "last-proposal.json"))
+	assert.NoError(t, err, "mac source ignores guest.propose gate")
+}
+
+// TestPropose_NoChangeShortCircuits verifies the daemon returns 200 +
+// human-readable body when the on-disk file is byte-identical to the
+// last-approved snapshot, and does NOT write attribution.
+func TestPropose_NoChangeShortCircuits(t *testing.T) {
+	h, cfg, cache := buildProposeHandler(t)
+	body := "project:\n  name: myproj\n"
+	writeMacCwdFile(t, cache, "devm.yaml", body)
+
+	// Seed an approved snapshot with the same bytes.
+	require.NoError(t, approve.NewStore(cfg).Write(
+		"proj", []byte(body), nil, nil, nil, "user",
+	))
+
+	rr := postPropose(h, "/propose", map[string]any{
+		"kind":   "devm.yaml",
+		"source": "guest",
+		"reason": "did nothing",
+	})
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "no changes since last approval")
+
+	// Attribution must NOT have been written.
+	_, err := os.Stat(filepath.Join(cfg.RuntimeDir(), "proj", "last-proposal.json"))
+	assert.True(t, os.IsNotExist(err), "no-change short-circuit must skip attribution write")
+}
+
+// TestPropose_ChangedFileStillWritesAttribution guards against the
+// short-circuit firing when the bytes actually differ from the
+// approved snapshot.
+func TestPropose_ChangedFileStillWritesAttribution(t *testing.T) {
+	h, cfg, cache := buildProposeHandler(t)
+	writeMacCwdFile(t, cache, "devm.yaml", "project:\n  name: myproj\n")
+
+	// Seed an approved snapshot with different bytes.
+	require.NoError(t, approve.NewStore(cfg).Write(
+		"proj", []byte("project:\n  name: oldproj\n"), nil, nil, nil, "user",
+	))
+
+	rr := postPropose(h, "/propose", map[string]any{
+		"kind":   "devm.yaml",
+		"source": "guest",
+		"reason": "renamed project",
+	})
+	assert.Equal(t, http.StatusNoContent, rr.Code)
+	_, err := os.Stat(filepath.Join(cfg.RuntimeDir(), "proj", "last-proposal.json"))
+	assert.NoError(t, err, "diff vs snapshot must record attribution as before")
 }

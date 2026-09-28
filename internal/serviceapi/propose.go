@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mdubb86/devm/internal/approve"
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
@@ -86,6 +87,28 @@ func recordProposal(cfg identity.Config, cache *StateCache, projectName string, 
 			nil
 	}
 
+	source := req.Source
+	if source == "" {
+		source = "guest"
+	}
+
+	// Guest-source propose is gated by devm.yaml's `guest.propose:`.
+	// Load the currently-in-effect devm.yaml (any Kind — the gate
+	// lives on the yaml regardless of what the guest is proposing to
+	// edit) and refuse with 403 if the gate is off.
+	if source == "guest" {
+		if yamlBytes, ferr := os.ReadFile(filepath.Join(macCwd, "devm.yaml")); ferr == nil {
+			var current schema.Config
+			if verr := yamlDecodeStrict(yamlBytes, &current); verr == nil {
+				if !current.GuestProposeAllowed() {
+					return http.StatusForbidden,
+						"propose: guest.propose is disabled in devm.yaml — the Mac side is not accepting proposal signals from the guest",
+						nil
+				}
+			}
+		}
+	}
+
 	// devm.me.yaml has no schema of its own (it's a partial merged
 	// into devm.yaml), and devm.sh/devm.me.sh are shell scripts, not
 	// YAML — none of them have anything to validate against.
@@ -113,9 +136,15 @@ func recordProposal(cfg identity.Config, cache *StateCache, projectName string, 
 			fmt.Errorf("propose: read on-disk %s for %s: %w", req.Kind, projectName, readErr)
 	}
 
-	source := req.Source
-	if source == "" {
-		source = "guest"
+	// No-change short-circuit: if the on-disk file is byte-identical
+	// to the last-approved snapshot for req.Kind, there is nothing
+	// for a human to review. Return 200 with a human-readable body
+	// (rather than 204 or an error) and skip the attribution write —
+	// last-proposal.json stays whatever it was.
+	if readErr == nil {
+		if same, err := onDiskMatchesApprovedSnapshot(cfg, projectName, req.Kind, onDisk); err == nil && same {
+			return http.StatusOK, "propose: no changes since last approval — nothing to review\n", nil
+		}
 	}
 
 	if werr := WriteLastProposal(cfg, projectName, ProposalMetadata{
@@ -131,6 +160,34 @@ func recordProposal(cfg identity.Config, cache *StateCache, projectName string, 
 	}
 
 	return http.StatusNoContent, "", nil
+}
+
+// onDiskMatchesApprovedSnapshot reports whether the on-disk bytes for
+// req.Kind match the same-kind bytes in the project's last-approved
+// snapshot. Returns false when no snapshot exists yet (first-run
+// projects always have "changes to review" until the first approve).
+func onDiskMatchesApprovedSnapshot(cfg identity.Config, projectName, kind string, onDisk []byte) (bool, error) {
+	snap, hasSnap, err := approve.NewStore(cfg).Read(projectName)
+	if err != nil {
+		return false, err
+	}
+	if !hasSnap {
+		return false, nil
+	}
+	var stored []byte
+	switch kind {
+	case "devm.yaml":
+		stored = snap.DevmYAML
+	case "devm.me.yaml":
+		stored = snap.MeYAML
+	case "devm.sh":
+		stored = snap.DevmSH
+	case "devm.me.sh":
+		stored = snap.DevmMeSH
+	default:
+		return false, nil
+	}
+	return bytes.Equal(onDisk, stored), nil
 }
 
 // yamlDecodeStrict runs yaml.v3 with KnownFields(true) so any unknown
@@ -162,11 +219,16 @@ func writeProposalResult(w http.ResponseWriter, statusCode int, body string, err
 	if err != nil {
 		daemonlog.Errorf("serviceapi: %v", err)
 	}
-	if statusCode != http.StatusNoContent {
+	switch statusCode {
+	case http.StatusNoContent:
+		w.WriteHeader(statusCode)
+	case http.StatusOK:
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(statusCode)
+		_, _ = w.Write([]byte(body))
+	default:
 		http.Error(w, body, statusCode)
-		return
 	}
-	w.WriteHeader(statusCode)
 }
 
 // handleProposeForProject returns the per-project POST /propose
