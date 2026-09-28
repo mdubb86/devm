@@ -9,6 +9,7 @@
 //	gdevm propose     [--reason <text>] [--kind devm.yaml|devm.me.yaml|devm.sh|devm.me.sh]
 //	gdevm run         <command>
 //	gdevm passthrough --reason <text> [--for <duration>]
+//	gdevm upgrade
 //
 // Each subcommand reaches the Mac-side daemon over softnet (pop,
 // propose, passthrough) or reads the local guest command manifest
@@ -38,6 +39,8 @@ func main() {
 		os.Exit(runMain(args))
 	case "passthrough":
 		os.Exit(passthroughMain(args))
+	case "upgrade":
+		os.Exit(upgradeMain(args))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -61,6 +64,9 @@ Subcommands:
   passthrough  Request a supervised egress passthrough window. The
                human on the Mac side runs `+"`devm passthrough approve`"+`
                to authorize it before it opens.
+  upgrade      Pull down the daemon's current gdevm binary,
+               GUEST.md, env template, and commands manifest into
+               this VM. No args.
 
 Every subcommand carries its own -h/--help.`)
 }
