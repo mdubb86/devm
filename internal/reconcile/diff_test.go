@@ -803,6 +803,30 @@ func TestComputeAllChanges_EmitsBundleRefreshWhenFingerprintDrifted(t *testing.T
 	assert.True(t, saw, "fingerprint drift must emit KindBundleRefresh")
 }
 
+func TestComputeAllChanges_EmptyStoredFingerprintEmitsBundleRefresh(t *testing.T) {
+	// A completely empty stored fingerprint (fresh cold-start seed missing,
+	// or an old daemon that never stamped one) must still emit KindBundleRefresh
+	// against a non-empty current — so the first reconcile after this batch
+	// stamps the fingerprint for the first time. Regression guard against a
+	// future "empty means unset, don't drift-detect" special-case.
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	changes, err := ComputeAllChanges(
+		cfg, cfg, "/tmp/repo", "/tmp/rt",
+		nil, nil, nil,
+		"",           // storedBundleFingerprint EMPTY
+		"current-fp", // currentBundleFingerprint non-empty
+	)
+	require.NoError(t, err)
+
+	saw := false
+	for _, c := range changes {
+		if c.Kind == KindBundleRefresh {
+			saw = true
+		}
+	}
+	assert.True(t, saw, "empty stored fingerprint must still emit KindBundleRefresh")
+}
+
 func TestComputeAllChanges_NoBundleRefreshWhenFingerprintsMatch(t *testing.T) {
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
 	changes, err := ComputeAllChanges(

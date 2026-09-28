@@ -29,14 +29,14 @@ type Server struct {
 // "-dirty" suffix when the working tree had uncommitted changes.
 // Date is the ISO8601 build timestamp.
 //
-// Fingerprint is a content-hash of os.Executable() computed at
-// startup — the same value from the CLI's `devm version --json` and
-// the daemon's `/version`. Two processes running byte-for-byte
-// identical binaries produce the same Fingerprint; a rebuild that
-// changes any bit produces a different one. Test infra uses this to
-// decide whether the daemon is up-to-date without paying for a
-// reinstall on every run: if CLI.Fingerprint == daemon.Fingerprint,
-// the daemon is running the code the CLI just built.
+// Fingerprint is a per-build random stamp injected via
+// `-ldflags "-X main.Fingerprint=<random>"` (empty or "dev" for a
+// local `go build`). Two processes that share a Fingerprint were
+// compiled from the same binary; different Fingerprints mean the
+// on-disk binary has been rebuilt since the daemon last started.
+// Used both for daemon↔CLI drift detection (`devm version --json`
+// vs `/version`) and as the guest bundle-refresh fingerprint that
+// reconcile stamps into state to detect a stale in-guest bundle.
 //
 // Commit drives release-build drift detection: a CLI whose embedded
 // Commit differs from the daemon's reported Commit knows the daemon
