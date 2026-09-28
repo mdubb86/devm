@@ -16,6 +16,25 @@ import (
 	"github.com/mdubb86/devm/internal/recipes"
 )
 
+// recipeListItem is the on-wire shape of one row from /recipes/list.
+// Handler-local so the shared recipes.Recipe struct — used for SQL
+// scans and for /recipes/get where content is loaded — stays free of
+// HTTP concerns.
+type recipeListItem struct {
+	Name        string `json:"name"`
+	Category    string `json:"category"`
+	DisplayName string `json:"display_name"`
+	Description string `json:"description"`
+}
+
+// assetListItem is the on-wire shape of one row from
+// /recipes/asset/ls. Same reasoning as recipeListItem.
+type assetListItem struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+	Mode uint32 `json:"mode"`
+}
+
 // registerRecipesRoutes wires the four /recipes/* endpoints onto mux.
 // openQuery is called per-request to obtain a fresh Query on the
 // daemon's cached recipes.db (or a fake in tests). The handler closes
@@ -47,14 +66,23 @@ func handleRecipesList(w http.ResponseWriter, r *http.Request, openQuery func() 
 		return
 	}
 	defer q.Close()
-	items, err := q.List("")
+	rows, err := q.List("")
 	if err != nil {
 		daemonlog.Errorf("recipes/list: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	log.Printf("recipes/list: %d rows", len(items))
+	items := make([]recipeListItem, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, recipeListItem{
+			Name:        r.Name,
+			Category:    r.Category,
+			DisplayName: r.DisplayName,
+			Description: r.Description,
+		})
+	}
 	writeJSON(w, items)
+	log.Printf("recipes/list: %d rows", len(items))
 }
 
 func handleRecipesGet(w http.ResponseWriter, r *http.Request, openQuery func() (*recipes.Query, error)) {
@@ -107,7 +135,7 @@ func handleRecipesAssetLs(w http.ResponseWriter, r *http.Request, openQuery func
 		return
 	}
 	defer q.Close()
-	list, err := q.ListAssets(r.Context(), name)
+	rows, err := q.ListAssets(r.Context(), name)
 	if errors.Is(err, recipes.ErrRecipeNotFound) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -117,8 +145,12 @@ func handleRecipesAssetLs(w http.ResponseWriter, r *http.Request, openQuery func
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	log.Printf("recipes/asset/ls: %s (%d entries)", name, len(list))
-	writeJSON(w, list)
+	items := make([]assetListItem, 0, len(rows))
+	for _, a := range rows {
+		items = append(items, assetListItem{Path: a.Path, Size: a.Size, Mode: a.Mode})
+	}
+	writeJSON(w, items)
+	log.Printf("recipes/asset/ls: %s (%d entries)", name, len(items))
 }
 
 func handleRecipesAssetGet(w http.ResponseWriter, r *http.Request, openQuery func() (*recipes.Query, error)) {

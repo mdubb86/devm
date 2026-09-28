@@ -100,16 +100,44 @@ func TestRecipesHandler_List_ReturnsMetadata(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	assert.Contains(t, rr.Header().Get("Content-Type"), "application/json")
 
-	var got []recipes.Recipe
+	var got []recipeListItem
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
 	require.Len(t, got, 3)
 	names := []string{got[0].Name, got[1].Name, got[2].Name}
 	assert.Contains(t, names, "tool/foo")
 	assert.Contains(t, names, "tool/bar")
 	assert.Contains(t, names, "tool/ai/claude")
-	for _, r := range got {
-		assert.Empty(t, r.Content, "list must not populate content")
-	}
+}
+
+// TestRecipesHandler_List_JSONShape inspects the raw on-wire JSON
+// keys (not Go struct decoding) to lock the documented shape: lowercase
+// name/category/display_name/description, and no content/keywords/since
+// leaks from the underlying Recipe row.
+func TestRecipesHandler_List_JSONShape(t *testing.T) {
+	mux := newRecipesMux(buildRecipesFixture(t))
+	rr := doGET(t, mux, "/recipes/list")
+
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var raw []map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &raw))
+	require.NotEmpty(t, raw)
+	first := raw[0]
+	// Present with documented keys.
+	assert.Contains(t, first, "name")
+	assert.Contains(t, first, "category")
+	assert.Contains(t, first, "display_name")
+	assert.Contains(t, first, "description")
+	// No PascalCase.
+	assert.NotContains(t, first, "Name")
+	assert.NotContains(t, first, "Category")
+	assert.NotContains(t, first, "DisplayName")
+	// No leaked fields from the underlying Recipe row.
+	assert.NotContains(t, first, "content")
+	assert.NotContains(t, first, "Content")
+	assert.NotContains(t, first, "keywords")
+	assert.NotContains(t, first, "Keywords")
+	assert.NotContains(t, first, "since")
+	assert.NotContains(t, first, "Since")
 }
 
 func TestRecipesHandler_Get_HappyPath(t *testing.T) {
@@ -140,7 +168,7 @@ func TestRecipesHandler_AssetLs_HappyPath(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	assert.Contains(t, rr.Header().Get("Content-Type"), "application/json")
 
-	var got []recipes.AssetListing
+	var got []assetListItem
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
 	require.Len(t, got, 5)
 	// Sorted by path ASC per Query.ListAssets contract.
@@ -153,6 +181,25 @@ func TestRecipesHandler_AssetLs_HappyPath(t *testing.T) {
 	assert.NotZero(t, got[0].Mode)
 }
 
+// TestRecipesHandler_AssetLs_JSONShape locks the documented on-wire
+// keys for asset listings: lowercase path/size/mode.
+func TestRecipesHandler_AssetLs_JSONShape(t *testing.T) {
+	mux := newRecipesMux(buildRecipesFixture(t))
+	rr := doGET(t, mux, "/recipes/asset/ls?name=tool/foo")
+
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	var raw []map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &raw))
+	require.NotEmpty(t, raw)
+	first := raw[0]
+	assert.Contains(t, first, "path")
+	assert.Contains(t, first, "size")
+	assert.Contains(t, first, "mode")
+	assert.NotContains(t, first, "Path")
+	assert.NotContains(t, first, "Size")
+	assert.NotContains(t, first, "Mode")
+}
+
 func TestRecipesHandler_AssetLs_ZeroAssetsReturnsEmptyArray(t *testing.T) {
 	mux := newRecipesMux(buildRecipesFixture(t))
 	rr := doGET(t, mux, "/recipes/asset/ls?name=tool/bar")
@@ -161,7 +208,7 @@ func TestRecipesHandler_AssetLs_ZeroAssetsReturnsEmptyArray(t *testing.T) {
 	// Empty JSON array, not "null" and not 404.
 	body := rr.Body.String()
 	assert.Contains(t, body, "[]")
-	var got []recipes.AssetListing
+	var got []assetListItem
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
 	assert.Empty(t, got)
 }
