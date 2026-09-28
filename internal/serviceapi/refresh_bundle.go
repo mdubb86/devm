@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -128,4 +130,42 @@ func handleRefreshBundleForProject(cfg identity.Config, cache *StateCache, tr *t
 		_, _ = fmt.Fprintf(w, "bundle refreshed for %s\n  old fingerprint: %s\n  new fingerprint: %s\n  gdevm bytes:     %d\n",
 			summary.ProjectID, summary.OldFingerprint, summary.NewFingerprint, summary.GdevmBytes)
 	})
+}
+
+// BundleDriftCatchup iterates the cache's known projects and refreshes
+// the bundle for every running project whose stored
+// StateSnapshot.BundleFingerprint differs from the daemon's current
+// Fingerprint. Best-effort: an error against one project logs and the
+// sweep continues to the next, so one broken project can't stall the
+// startup path.
+//
+// Called synchronously from RunService's startup path after
+// AdoptIronProxies and before SetProxyReady(true), so `devm status`
+// reflects the settled post-refresh state on the first query after the
+// daemon becomes healthy.
+func BundleDriftCatchup(cfg identity.Config, cache *StateCache, tr *tart.Tart) {
+	current := CurrentBundleFingerprint(cache)
+	if current == "" {
+		return
+	}
+	for projectID, row := range cache.AllProjectRows() {
+		if row.VMState != VMRunning {
+			continue
+		}
+		snap, err := ReadStateSnapshot(cfg, projectID)
+		if err != nil {
+			daemonlog.Errorf("refresh-bundle: startup catchup: read snapshot for %s: %v", projectID, err)
+			continue
+		}
+		if snap == nil || snap.BundleFingerprint == current {
+			continue
+		}
+		oldFP := snap.BundleFingerprint
+		if _, err := RefreshGuestBundle(cfg, cache, tr, projectID); err != nil {
+			daemonlog.Errorf("refresh-bundle: startup catchup: refresh %s: %v", projectID, err)
+			continue
+		}
+		log.Printf("refresh-bundle: startup catchup: refreshed %s (%s -> %s)",
+			projectID, oldFP, current)
+	}
 }

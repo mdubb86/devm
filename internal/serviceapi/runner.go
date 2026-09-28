@@ -394,6 +394,15 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// TCP-dialing 127.0.0.1:443 (which closes mid-handshake and spams
 	// "TLS handshake error … EOF" in the daemon log — the very bug this
 	// feedback loop caught).
+	//
+	// Bundle drift catchup: a VM that was left running while the daemon
+	// was upgraded still has the previous build's gdevm / GUEST.md /
+	// env-template bytes. Refresh every running project whose stored
+	// BundleFingerprint doesn't match the current one before the daemon
+	// announces itself ready, so the first `devm status` after boot
+	// reflects settled state.
+	BundleDriftCatchup(cfg, cache, tr)
+
 	server.SetProxyReady(true)
 
 	// Pop-session GC actor. Periodically sweeps expired pop sessions
