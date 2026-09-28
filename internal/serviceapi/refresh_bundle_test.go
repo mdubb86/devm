@@ -1,6 +1,8 @@
 package serviceapi
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,4 +91,52 @@ func TestRefreshGuestBundle_TartPipeFailureDoesNotStampFingerprint(t *testing.T)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, "old-fp", stored.BundleFingerprint, "failed refresh must NOT stamp new fingerprint")
+}
+
+func TestRefreshBundleHandler_HappyPathReturns200WithSummary(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := identity.Prod
+	cache := NewStateCache()
+	cache.SetBuild(Build{Fingerprint: "new-fp"})
+
+	require.NoError(t, WriteStateSnapshot(cfg, "proj", StateSnapshot{
+		Cfg:               schema.Config{Project: schema.Project{Name: "proj"}},
+		BundleFingerprint: "old-fp",
+	}))
+	tr := fakeExecStdinTart(t)
+
+	h := handleRefreshBundleForProject(cfg, cache, tr, NewProjectLocks(), "proj")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/refresh-bundle", nil)
+	h.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "bundle refreshed")
+	assert.Contains(t, rr.Body.String(), "old-fp")
+	assert.Contains(t, rr.Body.String(), "new-fp")
+}
+
+func TestRefreshBundleHandler_MethodNotPostReturns405(t *testing.T) {
+	h := handleRefreshBundleForProject(identity.Prod, NewStateCache(), &tart.Tart{}, NewProjectLocks(), "proj")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/refresh-bundle", nil)
+	h.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
+
+func TestRefreshBundleHandler_MissingSnapshotReturns412(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := identity.Prod
+	cache := NewStateCache()
+	cache.SetBuild(Build{Fingerprint: "new-fp"})
+	tr := fakeExecStdinTart(t)
+
+	h := handleRefreshBundleForProject(cfg, cache, tr, NewProjectLocks(), "no-such-proj")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/refresh-bundle", nil)
+	h.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	assert.Contains(t, rr.Body.String(), "VM must be started")
 }

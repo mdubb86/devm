@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
+	"strings"
 
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/identity"
@@ -87,4 +89,43 @@ func RefreshGuestBundle(cfg identity.Config, cache *StateCache, tr *tart.Tart, p
 		NewFingerprint: newFP,
 		GdevmBytes:     len(in.Gdevm),
 	}, nil
+}
+
+// handleRefreshBundleForProject returns the per-project
+// POST /refresh-bundle handler serving the guest side (softnet:82,
+// shared listener with /propose and /passthrough — see
+// serveProposeListener). Body is ignored (no metadata needed —
+// the refresh is not a request, it's a maintenance ping).
+//
+// Acquires locks.Lock(projectName) before invoking RefreshGuestBundle
+// so a concurrent /vm/reconcile can't race the StateSnapshot
+// read-modify-write on the same project.
+//
+// Response is a human-readable summary of the refresh, echoed to
+// gdevm upgrade's stdout.
+func handleRefreshBundleForProject(cfg identity.Config, cache *StateCache, tr *tart.Tart, locks *ProjectLocks, projectName string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "refresh-bundle: POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		unlock := locks.Lock(projectName)
+		defer unlock()
+		summary, err := RefreshGuestBundle(cfg, cache, tr, projectName)
+		if err != nil {
+			// Distinguish the missing-snapshot precondition from
+			// operational errors so callers get an actionable
+			// status code.
+			if strings.Contains(err.Error(), "no state snapshot") {
+				http.Error(w, err.Error(), http.StatusPreconditionFailed)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "bundle refreshed for %s\n  old fingerprint: %s\n  new fingerprint: %s\n  gdevm bytes:     %d\n",
+			summary.ProjectID, summary.OldFingerprint, summary.NewFingerprint, summary.GdevmBytes)
+	})
 }

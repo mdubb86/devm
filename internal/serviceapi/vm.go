@@ -750,7 +750,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// Register before spawning the serve goroutine — see the popLn
 		// comment above for why.
 		proposeListeners.Store(req.Name, proposeLn)
-		go serveProposeListener(proposeLn, cfg, cache, req.Name)
+		go serveProposeListener(proposeLn, cfg, cache, tr, locks, req.Name)
 
 		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read. Merge onto the existing
