@@ -158,7 +158,7 @@ const (
 	// KindBundleRefresh is a synthetic change: emitted when the stored
 	// snapshot's BundleFingerprint differs from the daemon's current
 	// Build.Fingerprint. Signals that the guest is executing bundle
-	// bytes (gdevm, GUEST.md, env template, commands manifest) from an
+	// bytes (gdevm, env template, commands manifest) from an
 	// earlier daemon build and routes through the same live bundle-pipe
 	// path a config-derived change would take.
 	KindBundleRefresh

@@ -68,8 +68,8 @@ Subcommands:
                human on the Mac side runs `+"`devm passthrough approve`"+`
                to authorize it before it opens.
   upgrade      Pull down the daemon's current gdevm binary,
-               GUEST.md, env template, and commands manifest into
-               this VM. No args.
+               env template, and commands manifest into this VM.
+               No args.
   recipes      Query the Mac-side recipes catalog:
                  recipes list
                  recipes get <name>

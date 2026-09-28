@@ -396,7 +396,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// feedback loop caught).
 	//
 	// Bundle drift catchup: a VM that was left running while the daemon
-	// was upgraded still has the previous build's gdevm / GUEST.md /
+	// was upgraded still has the previous build's gdevm /
 	// env-template bytes. Refresh every running project whose stored
 	// BundleFingerprint doesn't match the current one before the daemon
 	// announces itself ready, so the first `devm status` after boot

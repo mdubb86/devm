@@ -60,7 +60,7 @@ type StateSnapshot struct {
 	// project's guest. Compared against the running daemon's
 	// Fingerprint by reconcile drift detection and by the daemon-
 	// startup catchup sweep to decide whether the guest is running
-	// stale gdevm / GUEST.md / env-template bytes.
+	// stale gdevm / env-template bytes.
 	BundleFingerprint string `json:"bundle_fingerprint,omitempty"`
 
 	// ProjectIP is the project's allocated 127.42/16 loopback IP, mirrored

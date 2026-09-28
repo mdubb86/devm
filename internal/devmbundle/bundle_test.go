@@ -30,7 +30,6 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 		"scripts/with-devm-env":        0o755,
 		"scripts/install-templates.sh": 0o755,
 		"install.sh":                   0o755,
-		"GUEST.md":                     0o644,
 	}
 	for path, mode := range want {
 		e, ok := entries[path]
@@ -41,24 +40,18 @@ func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
 	}
 }
 
-// TestBuild_GuestDocContent pins that the guest-perspective doc is
-// bundled and includes the load-bearing content (mode-detect env var,
-// the mutagen sync model). Guest-side agents lean on this file to
-// distinguish host-only instructions from guest-safe ones — the
-// CLAUDE.md pointer in internal/skills/devm.md points at it
-// explicitly.
-func TestBuild_GuestDocContent(t *testing.T) {
+// TestBuild_DoesNotIncludeGuestMd guards that the bundle no longer
+// ships /opt/devm/GUEST.md — that content now lives under the
+// tool/ai/claude recipe assets and reaches guests via the recipe
+// asset flow, not the daemon-side bundle.
+func TestBuild_DoesNotIncludeGuestMd(t *testing.T) {
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
 	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo"})
 	require.NoError(t, err)
 
 	entries := readTar(t, body)
-	e, ok := entries["GUEST.md"]
-	require.True(t, ok, "bundle missing GUEST.md")
-	doc := string(e.body)
-	assert.Contains(t, doc, "IS_SANDBOX", "GUEST.md must document the mode-detect env")
-	assert.Contains(t, doc, "mutagen", "GUEST.md must explain the mutagen sync model")
-	assert.Contains(t, doc, "iron-proxy", "GUEST.md must explain the egress model")
+	_, ok := entries["GUEST.md"]
+	assert.False(t, ok, "bundle must not ship GUEST.md — content moved to tool/ai/claude recipe assets")
 }
 
 // TestBuild_InstallScriptSeedsNSSTrust pins that install.sh in the

@@ -90,7 +90,7 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange, KindCommandsChange:
 			bundleRebuildNeeded = true
 		case KindBundleRefresh:
-			// Daemon-side blob drift (gdevm, GUEST.md, env template,
+			// Daemon-side blob drift (gdevm, env template,
 			// commands manifest) detected by ComputeAllChanges. Route
 			// into the existing bundle-pipe path.
 			bundleRebuildNeeded = true
