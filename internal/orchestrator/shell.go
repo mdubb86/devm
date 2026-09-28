@@ -26,7 +26,6 @@ import (
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 	"github.com/mdubb86/devm/internal/status"
 	"golang.org/x/term"
-	"gopkg.in/yaml.v3"
 )
 
 // ShellDeps wires the orchestrator's collaborators. Production callers
@@ -435,21 +434,7 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 	}
 	log.Printf("shell: provisioning done: %s", vmName)
 
-	// Write initial guest snapshot so subsequent `devm reconcile` calls
-	// have a baseline to diff against. Without this, ReadSnapshot returns
-	// "" which reconcile treats as zero-diff (identity with the new
-	// config), masking any changes made between cold-start and the first
-	// reconcile.
-	provSnap, err := yaml.Marshal(cfg)
-	if err != nil {
-		return d.teardownOnFail(ctx, cfg, vmName, err, "marshal provision snapshot")
-	}
-	if err := WriteSnapshot(d.Tart, vmName, snapshotHeader+string(provSnap)); err != nil {
-		return d.teardownOnFail(ctx, cfg, vmName, err, "write provision snapshot")
-	}
-	log.Printf("shell: snapshot written: %s", vmName)
-
-	// Seed the daemon-side state snapshot too, now that provisioning is
+	// Seed the daemon-side state snapshot, now that provisioning is
 	// fully green (RunBundle, RunUser, egress enforcement, and RunEnforced
 	// all succeeded). Best-effort: log but don't fail — a missing snapshot
 	// only degrades to "full diff on next reconcile" (safe), and failing

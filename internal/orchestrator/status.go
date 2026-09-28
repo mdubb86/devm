@@ -11,7 +11,6 @@ import (
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
-	"gopkg.in/yaml.v3"
 )
 
 // RunStatus collects read-only state for `devm status`. ident is the
@@ -152,21 +151,13 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 	// Sessions (best-effort via tart exec).
 	res.Sessions = probeSessions(tr, vmName)
 
-	// Pending changes vs snapshot.
-	snapStr, err := ReadSnapshot(tr, vmName)
-	if err != nil {
-		return res, fmt.Errorf("read snapshot: %w", err)
-	}
-	var snapCfg schema.Config
-	if snapStr == "" {
-		snapCfg = cfg
-	} else {
-		if err := yaml.Unmarshal([]byte(snapStr), &snapCfg); err != nil {
-			return res, fmt.Errorf("parse snapshot: %w", err)
-		}
-	}
+	// Pending changes vs the daemon-side state snapshot. A missing or
+	// unreadable snapshot degrades to "current is the baseline" — same
+	// semantics reconcile itself uses on first apply.
+	snapCfg := cfg
 	var lastAppliedTemplates map[string]string
 	if stateSnap, sErr := serviceapi.ReadStateSnapshot(ident, cfg.Project.Name); sErr == nil && stateSnap != nil {
+		snapCfg = stateSnap.Cfg
 		lastAppliedTemplates = stateSnap.TemplateContents
 	}
 	statusChanges, err := reconcile.ComputeAllChanges(snapCfg, cfg, repoRoot, ident.RuntimeDir(), lastAppliedTemplates, nil, nil)

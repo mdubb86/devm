@@ -13,7 +13,6 @@ import (
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
 func statusMinimalCfg() schema.Config {
@@ -93,12 +92,27 @@ func TestRunStatus_Stopped(t *testing.T) {
 	assert.Empty(t, res.Sessions)
 }
 
+// seedStatusHome points $HOME at a temp dir so serviceapi.ReadStateSnapshot
+// resolves to it, and optionally seeds a StateSnapshot for projectID.
+// Returns the temp dir path. Cleanup is registered on t.
+func seedStatusHome(t *testing.T, projectID string, snap *serviceapi.StateSnapshot) string {
+	t.Helper()
+	home, err := os.MkdirTemp("/tmp", "devm-status-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	if snap != nil {
+		require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, projectID, *snap))
+	}
+	return home
+}
+
 func TestRunStatus_RunningInSync(t *testing.T) {
 	snapCfg := statusMinimalCfg()
-	snapYAML, _ := yaml.Marshal(snapCfg)
+	seedStatusHome(t, "x", &serviceapi.StateSnapshot{Cfg: snapCfg})
 	tr := makeFakeTartStatus(t,
 		`[{"Name":"x","State":"running"}]`,
-		string(snapYAML),
+		"",
 		"27 bash pts/1 agent\n",
 	)
 	res, err := RunStatus(identity.Prod, snapCfg, tr, "/tmp/fake", "test-fp")
@@ -112,10 +126,10 @@ func TestRunStatus_RunningInSync(t *testing.T) {
 func TestRunStatus_RunningPendingMixed(t *testing.T) {
 	snapCfg := statusMinimalCfg()
 	snapCfg.Docker = false
-	snapYAML, _ := yaml.Marshal(snapCfg)
+	seedStatusHome(t, "x", &serviceapi.StateSnapshot{Cfg: snapCfg})
 	tr := makeFakeTartStatus(t,
 		`[{"Name":"x","State":"running"}]`,
-		string(snapYAML),
+		"",
 		"",
 	)
 	newCfg := statusMinimalCfg()
@@ -127,8 +141,9 @@ func TestRunStatus_RunningPendingMixed(t *testing.T) {
 	assert.Equal(t, 1, res.PendingRecreate) // docker_toggle
 }
 
-func TestRunStatus_RunningEmptySnapshotIsInSync(t *testing.T) {
-	// Empty snapshot in VM → treat as identical to new cfg.
+func TestRunStatus_RunningNoSnapshotIsInSync(t *testing.T) {
+	// No daemon-side snapshot on disk → treat current cfg as the baseline.
+	seedStatusHome(t, "x", nil)
 	tr := makeFakeTartStatus(t,
 		`[{"Name":"x","State":"running"}]`,
 		"",
