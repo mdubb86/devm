@@ -15,13 +15,16 @@ pytestmark = pytest.mark.devm
 def test_gdevm_dispatcher(workspace: Workspace, devm: Devm) -> None:
     workspace.write_devmyaml()
     devm.approve()
-    devm.start()
+    r = subprocess.run(
+        [devm.path, "start"],
+        cwd=str(workspace.path), capture_output=True, timeout=180,
+    )
+    assert r.returncode == 0, f"devm start failed:\n{r.stderr.decode()}"
 
     # `gdevm --help` prints usage.
     r = subprocess.run(
         [devm.path, "exec", "gdevm", "--help"],
-        capture_output=True,
-        timeout=30,
+        cwd=str(workspace.path), capture_output=True, timeout=30,
     )
     assert r.returncode == 0, f"gdevm --help failed: {r.stderr.decode()}"
     assert b"guest-side devm dispatcher" in r.stdout + r.stderr
@@ -29,8 +32,7 @@ def test_gdevm_dispatcher(workspace: Workspace, devm: Devm) -> None:
     # Unknown subcommand exits 2.
     r = subprocess.run(
         [devm.path, "exec", "gdevm", "bogus-subcommand"],
-        capture_output=True,
-        timeout=30,
+        cwd=str(workspace.path), capture_output=True, timeout=30,
     )
     assert r.returncode == 2, f"unknown subcommand expected exit 2, got {r.returncode}"
 
@@ -41,8 +43,7 @@ def test_gdevm_dispatcher(workspace: Workspace, devm: Devm) -> None:
     for sub in ("pop", "propose", "run", "passthrough"):
         r = subprocess.run(
             [devm.path, "exec", "gdevm", sub],
-            capture_output=True,
-            timeout=30,
+            cwd=str(workspace.path), capture_output=True, timeout=30,
         )
         assert r.returncode == 2, (
             f"gdevm {sub} with no args expected exit 2 (usage), got {r.returncode} "
@@ -56,8 +57,7 @@ def test_gdevm_dispatcher(workspace: Workspace, devm: Devm) -> None:
     # exit code.
     r = subprocess.run(
         [devm.path, "exec", "gdevm", "upgrade"],
-        capture_output=True,
-        timeout=60,
+        cwd=str(workspace.path), capture_output=True, timeout=60,
     )
     assert r.returncode in (0, 1), (
         f"gdevm upgrade dispatch expected exit 0 or 1, got {r.returncode}"
