@@ -111,9 +111,9 @@ only standing allow, so open egress by hand when a pull is actually due:
 
 ```bash
 # on the Mac, from the project directory
-devm passthrough --for 15m
+devm passthrough open 15m
 # in the VM: supabase start   (pulls ~10 images)
-devm restrict                 # close early once the pull finishes
+devm passthrough close        # close early once the pull finishes
 ```
 
 The standing allowlist stays specific and the broad access is
@@ -318,7 +318,7 @@ Missing this means HMR / image loaders reject the hostnames.
 ## Verifying
 
 On a cold VM the image pull needs an egress window — open it on the Mac
-first (`devm passthrough --for 15m`), or use the standing-wildcard
+first (`devm passthrough open 15m`), or use the standing-wildcard
 alternative.
 
 ```

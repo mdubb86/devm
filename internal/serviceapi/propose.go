@@ -277,11 +277,15 @@ func handleProposeUnixSocket(cfg identity.Config, cache *StateCache) http.Handle
 // popListeners.
 var proposeListeners sync.Map // projectName -> net.Listener
 
-// serveProposeListener runs a minimal HTTP server on ln that dispatches
-// POST /propose to handleProposeForProject for the given project.
+// serveProposeListener runs a minimal HTTP server on ln that
+// dispatches the guest-facing gdevm HTTP API: POST /propose (edit
+// signal) and POST /passthrough (passthrough-window request pending
+// human approval). Softnet forwards guest TCP 192.168.127.1:82 to
+// this listener; the endpoint path selects the handler.
 func serveProposeListener(ln net.Listener, cfg identity.Config, cache *StateCache, projectName string) {
 	mux := http.NewServeMux()
 	mux.Handle("/propose", handleProposeForProject(cfg, cache, projectName))
+	mux.Handle("/passthrough", handlePassthroughRequestForProject(cfg, cache, projectName))
 	srv := &http.Server{Handler: mux}
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		daemonlog.Errorf("serviceapi: propose: listener for %s exited: %v", projectName, err)

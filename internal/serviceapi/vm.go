@@ -130,6 +130,44 @@ type VMEgressRestrictResponse struct {
 	WasOpen bool `json:"was_open"`
 }
 
+// VMEgressPassthroughApproveResponse is the response for POST
+// /vm/passthrough-approve. Same shape as VMEgressPassthroughResponse
+// plus the pending request's Reason (returned so the CLI can echo it
+// back verbatim as attribution for the operator).
+type VMEgressPassthroughApproveResponse struct {
+	WasOpen        bool   `json:"was_open"`
+	ExpiresSeconds int    `json:"expires_seconds"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+// VMEgressPassthroughDenyResponse is the response for POST
+// /vm/passthrough-deny. Reason is the denied request's Reason, echoed
+// so the operator sees what they just cleared.
+type VMEgressPassthroughDenyResponse struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+// openPassthroughWindow is the shared implementation for both the
+// direct /vm/passthrough-egress endpoint and /vm/passthrough-approve
+// (which consumes a pending guest request and then opens the window
+// with the request's duration). The caller must already hold
+// locks.Lock(name).
+//
+// requestedSeconds <= 0 substitutes defaultPassthroughSeconds. Returns
+// (wasOpen, actualExpiresSeconds).
+func openPassthroughWindow(locks *ProjectLocks, name string, requestedSeconds int) (wasOpen bool, expiresSeconds int) {
+	_, wasOpen = egressPassthroughState.get(name)
+	policyAuthority.SetMode(name, ModePassthrough)
+
+	dur := time.Duration(requestedSeconds) * time.Second
+	if dur <= 0 {
+		dur = defaultPassthroughSeconds * time.Second
+	}
+	egressPassthroughState.put(name, time.Now().Add(dur))
+	armPassthroughRestoreTimer(locks, name, dur)
+	return wasOpen, int(dur / time.Second)
+}
+
 // EgressStatus is the response for GET /vm/egress-status. Policy is
 // "restricted" (the default authority mode) or "passthrough" (an
 // active `devm passthrough` window). PassthroughExpiresAt is set
@@ -1115,20 +1153,89 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		unlock := locks.Lock(req.Name)
 		defer unlock()
 
-		_, wasOpen := egressPassthroughState.get(req.Name)
-		policyAuthority.SetMode(req.Name, ModePassthrough)
-
-		dur := time.Duration(req.DurationSeconds) * time.Second
-		if dur <= 0 {
-			dur = defaultPassthroughSeconds * time.Second
-		}
-		egressPassthroughState.put(req.Name, time.Now().Add(dur))
-		armPassthroughRestoreTimer(locks, req.Name, dur)
-
+		wasOpen, expiresSeconds := openPassthroughWindow(locks, req.Name, req.DurationSeconds)
 		writeJSON(w, VMEgressPassthroughResponse{
 			WasOpen:        wasOpen,
-			ExpiresSeconds: int(dur / time.Second),
+			ExpiresSeconds: expiresSeconds,
 		})
+	})
+
+	// /vm/passthrough-approve consumes the project's pending guest
+	// passthrough request (see gdevm passthrough → POST /passthrough)
+	// and opens the window using that request's duration. Returns 400
+	// when no pending request exists.
+	s.Register("/vm/passthrough-approve", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMProjectRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		pending, hasPending, err := ReadPendingPassthrough(cfg, req.Name)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("read pending: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if !hasPending {
+			http.Error(w, fmt.Sprintf("no pending passthrough request for %q", req.Name), http.StatusBadRequest)
+			return
+		}
+
+		wasOpen, expiresSeconds := openPassthroughWindow(locks, req.Name, pending.DurationSeconds)
+		if err := ClearPendingPassthrough(cfg, req.Name); err != nil {
+			daemonlog.Errorf("serviceapi: clear pending-passthrough for %s after approve: %v", req.Name, err)
+		}
+		writeJSON(w, VMEgressPassthroughApproveResponse{
+			WasOpen:        wasOpen,
+			ExpiresSeconds: expiresSeconds,
+			Reason:         pending.Reason,
+		})
+	})
+
+	// /vm/passthrough-deny clears the project's pending guest
+	// passthrough request without opening a window. Returns 400 when
+	// no pending request exists.
+	s.Register("/vm/passthrough-deny", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req VMProjectRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("bad json: %v", err), http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+		unlock := locks.Lock(req.Name)
+		defer unlock()
+
+		pending, hasPending, err := ReadPendingPassthrough(cfg, req.Name)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("read pending: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if !hasPending {
+			http.Error(w, fmt.Sprintf("no pending passthrough request for %q", req.Name), http.StatusBadRequest)
+			return
+		}
+		if err := ClearPendingPassthrough(cfg, req.Name); err != nil {
+			http.Error(w, fmt.Sprintf("clear pending: %v", err), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, VMEgressPassthroughDenyResponse{Reason: pending.Reason})
 	})
 
 	// /vm/restrict-egress closes an active passthrough window: flips

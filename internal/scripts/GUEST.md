@@ -86,6 +86,24 @@ devm.me.yaml / devm.sh / devm.me.sh work the same way; pass
 
 No commits, no push/pull. The file is not in your repo.
 
+## Requesting a passthrough egress window
+
+Some tasks need broader outbound access than the project's allowlist
+covers — a one-off `curl … | bash`, an npm install pulling from an
+unlisted registry, an ad-hoc apt-get from an unusual mirror. Ask for
+a supervised passthrough window instead of hunting for a workaround:
+
+    gdevm passthrough --reason "need to fetch xyz from unlisted mirror"
+    gdevm passthrough --reason "..." --for 15m   # if the default 30s is too short
+
+The daemon records the request as pending. The Mac reviewer runs
+`devm passthrough approve` (which honors your requested duration) or
+`devm passthrough deny`. Until they act, no window opens.
+
+If the response is `guest.passthrough is disabled`, the project has
+opted out (`guest.passthrough: false` in devm.yaml); the human is
+curating egress directly and will not accept guest-side requests.
+
 ## Lifecycle — what you CANNOT do
 
 - `devm reconcile`, `devm stop`, `devm start`, `devm teardown`,

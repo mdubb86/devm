@@ -124,6 +124,59 @@ func (c *Client) PassthroughEgress(ctx context.Context, name string, durationSec
 	return resp.WasOpen, resp.ExpiresSeconds, nil
 }
 
+// ApprovePassthroughRequest calls POST /vm/passthrough-approve,
+// consuming the project's pending guest-initiated passthrough request
+// (see gdevm passthrough → POST /passthrough) and opening the egress
+// window using that request's duration. Returns (wasOpen,
+// expiresSeconds, reason) — reason echoes the pending request's
+// justification back to the operator. Returns an error surfacing the
+// daemon's 400 body when no pending request exists.
+func (c *Client) ApprovePassthroughRequest(ctx context.Context, name string) (wasOpen bool, expiresSeconds int, reason string, err error) {
+	body, err := json.Marshal(VMProjectRequest{Name: name})
+	if err != nil {
+		return false, 0, "", err
+	}
+	r, err := c.post(ctx, "/vm/passthrough-approve", body)
+	if err != nil {
+		return false, 0, "", err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return false, 0, "", fmt.Errorf("vm/passthrough-approve: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp VMEgressPassthroughApproveResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return false, 0, "", err
+	}
+	return resp.WasOpen, resp.ExpiresSeconds, resp.Reason, nil
+}
+
+// DenyPassthroughRequest calls POST /vm/passthrough-deny, clearing
+// the project's pending passthrough request without opening a window.
+// Returns the denied request's reason. Errors when no pending request
+// exists.
+func (c *Client) DenyPassthroughRequest(ctx context.Context, name string) (reason string, err error) {
+	body, err := json.Marshal(VMProjectRequest{Name: name})
+	if err != nil {
+		return "", err
+	}
+	r, err := c.post(ctx, "/vm/passthrough-deny", body)
+	if err != nil {
+		return "", err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return "", fmt.Errorf("vm/passthrough-deny: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp VMEgressPassthroughDenyResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return "", err
+	}
+	return resp.Reason, nil
+}
+
 // RestrictEgress calls POST /vm/restrict-egress, restoring the
 // authority mode to restricted (softnet stays FORWARDING; iron-proxy
 // stays in the path) and cancelling any pending passthrough restore

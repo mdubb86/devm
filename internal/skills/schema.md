@@ -175,7 +175,7 @@ same pairing as `devm.me.yaml`.
 
 `[]string` — bucket: **live**.
 
-Apt package names installed via `apt-get install -y`. Adding or removing entries converges without a teardown: on a running VM, the daemon runs the apt diff under the project's current `network.allow` — no allowlist widening or restoring. Add `deb.debian.org` and `security.debian.org` (plus `download.docker.com` when `docker: true`) to `network.allow`, or open a `devm passthrough` window and re-run, if the diff 403s (`devm denials` shows the blocked mirrors). On a stopped VM, the same diff converges during the next boot's provisioning window, which runs under open egress regardless. Reordering the list is a no-op — only membership changes trigger a converge.
+Apt package names installed via `apt-get install -y`. Adding or removing entries converges without a teardown: on a running VM, the daemon runs the apt diff under the project's current `network.allow` — no allowlist widening or restoring. Add `deb.debian.org` and `security.debian.org` (plus `download.docker.com` when `docker: true`) to `network.allow`, or open a `devm passthrough open` window and re-run, if the diff 403s (`devm denials` shows the blocked mirrors). On a stopped VM, the same diff converges during the next boot's provisioning window, which runs under open egress regardless. Reordering the list is a no-op — only membership changes trigger a converge.
 
 ```yaml
 packages:

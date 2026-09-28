@@ -11,51 +11,74 @@ import (
 	"github.com/mdubb86/devm/internal/serviceapi"
 )
 
+// parsePassthroughDuration accepts a Go duration string ("30s", "5m",
+// "24h") and returns the whole-second count for the daemon. Zero
+// means "use daemon default (30s)". Rejects sub-second durations
+// with an actionable error.
+func parsePassthroughDuration(arg string) (int, error) {
+	if arg == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(arg)
+	if err != nil {
+		return 0, fmt.Errorf("duration: %w (e.g. 30s, 5m, 24h)", err)
+	}
+	if d < time.Second {
+		return 0, fmt.Errorf("duration must be at least 1s (got %s)", d)
+	}
+	return int(d.Round(time.Second) / time.Second), nil
+}
+
 var passthroughCmd = &cobra.Command{
 	Use:   "passthrough",
-	Short: "Temporarily open egress for a supervised window (default 30s)",
-	Long: `Flips this project's authority mode to passthrough for a bounded window
-so you can supervise a command that needs broader access than the
-project's allowlist covers (a one-off ` + "`curl … | bash`" + `, a plugin
-fetch, an ad-hoc apt-get from an unusual mirror). The window auto-restores
-after ` + "`--for`" + ` (default 30s); ` + "`devm restrict`" + ` closes it early.
+	Short: "Manage this project's egress passthrough window",
+	Long: `Manage the project's egress passthrough window.
 
-During the passthrough window, iron-proxy stays in the path (MITM + audit +
+Subcommands:
+  open [duration]   Open a passthrough window immediately (default 30s).
+                    Duration is a positional Go duration (e.g. 30s, 5m, 24h).
+  close             Close an active window immediately (was `+"`devm restrict`"+`).
+  approve           Open a window honoring a pending gdevm passthrough request.
+  deny              Clear a pending gdevm passthrough request without opening.
+
+During a passthrough window, iron-proxy stays in the path (MITM + audit +
 secret substitution) but the per-request allowlist check is bypassed for
-the window's duration. Meant for commands you supervise in real time. The
-timer is a safety net, not a substitute for supervision: anything
-exfiltrated during the window stays exfiltrated after it closes.`,
+the window's duration. The timer is a safety net, not a substitute for
+supervision: anything exfiltrated during the window stays exfiltrated
+after it closes.`,
+}
+
+var passthroughOpenCmd = &cobra.Command{
+	Use:   "open [duration]",
+	Short: "Open a passthrough window immediately (default 30s)",
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		ident := cfg // capture package identity cfg before it's shadowed below
+		ident := cfg
 		resolved, err := discoverProjectFn()
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(resolved.MacCwd)
+		projCfg, err := config.Load(resolved.MacCwd)
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
+		if err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
+			return err
+		}
+		durArg := ""
+		if len(args) == 1 {
+			durArg = args[0]
+		}
+		durationSeconds, err := parsePassthroughDuration(durArg)
+		if err != nil {
 			return err
 		}
 
 		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 		defer cancel()
 
-		forDur, err := cmd.Flags().GetDuration("for")
-		if err != nil {
-			return err
-		}
-		durationSeconds := 0
-		if cmd.Flags().Changed("for") {
-			if forDur < time.Second {
-				return fmt.Errorf("--for must be at least 1s (got %s); omit the flag entirely for the 30s default", forDur)
-			}
-			durationSeconds = int(forDur.Round(time.Second) / time.Second)
-		}
-
-		wasOpen, expiresSeconds, err := serviceapi.NewClient(ident).PassthroughEgress(ctx, cfg.Project.Name, durationSeconds)
+		wasOpen, expiresSeconds, err := serviceapi.NewClient(ident).PassthroughEgress(ctx, projCfg.Project.Name, durationSeconds)
 		if err != nil {
 			return fmt.Errorf("passthrough egress: %w", err)
 		}
@@ -63,37 +86,37 @@ exfiltrated during the window stays exfiltrated after it closes.`,
 		if wasOpen {
 			verb = "renewed"
 		}
-		fmt.Printf("egress PASSTHROUGH — %s for %s (auto-restores; run `devm restrict` to close early)\n",
+		fmt.Printf("egress PASSTHROUGH — %s for %s (auto-restores; run `devm passthrough close` to close early)\n",
 			verb, (time.Duration(expiresSeconds) * time.Second).String())
 		return nil
 	},
 }
 
-var restrictCmd = &cobra.Command{
-	Use:   "restrict",
-	Short: "Close an active `devm passthrough` window immediately",
-	Long: `Restores this project's egress policy to RESTRICTED, ending a
-` + "`devm passthrough`" + ` window before its timer fires. No-op if no
-window is active.`,
+var passthroughCloseCmd = &cobra.Command{
+	Use:   "close",
+	Short: "Close an active passthrough window immediately",
+	Long: `Restores this project's egress policy to RESTRICTED, ending an
+active ` + "`devm passthrough open`" + ` window before its timer fires.
+No-op if no window is active.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		ident := cfg // capture package identity cfg before it's shadowed below
+		ident := cfg
 		resolved, err := discoverProjectFn()
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(resolved.MacCwd)
+		projCfg, err := config.Load(resolved.MacCwd)
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
+		if err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
 			return err
 		}
 
 		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 		defer cancel()
 
-		wasOpen, err := serviceapi.NewClient(ident).RestrictEgress(ctx, cfg.Project.Name)
+		wasOpen, err := serviceapi.NewClient(ident).RestrictEgress(ctx, projCfg.Project.Name)
 		if err != nil {
 			return fmt.Errorf("restrict egress: %w", err)
 		}
@@ -106,8 +129,88 @@ window is active.`,
 	},
 }
 
+var passthroughApproveCmd = &cobra.Command{
+	Use:   "approve",
+	Short: "Approve a pending gdevm passthrough request",
+	Long: `Consumes the project's pending guest-initiated passthrough
+request (submitted by ` + "`gdevm passthrough --reason \"...\"`" + `)
+and opens the egress window using that request's duration.
+
+Errors if no pending request exists.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		ident := cfg
+		resolved, err := discoverProjectFn()
+		if err != nil {
+			return err
+		}
+		projCfg, err := config.Load(resolved.MacCwd)
+		if err != nil {
+			return err
+		}
+		if err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+		defer cancel()
+
+		wasOpen, expiresSeconds, reason, err := serviceapi.NewClient(ident).ApprovePassthroughRequest(ctx, projCfg.Project.Name)
+		if err != nil {
+			return fmt.Errorf("passthrough approve: %w", err)
+		}
+		verb := "opened"
+		if wasOpen {
+			verb = "renewed"
+		}
+		if reason != "" {
+			fmt.Printf("egress PASSTHROUGH — %s for %s (guest reason: %s)\n",
+				verb, (time.Duration(expiresSeconds) * time.Second).String(), reason)
+		} else {
+			fmt.Printf("egress PASSTHROUGH — %s for %s\n",
+				verb, (time.Duration(expiresSeconds) * time.Second).String())
+		}
+		return nil
+	},
+}
+
+var passthroughDenyCmd = &cobra.Command{
+	Use:   "deny",
+	Short: "Deny a pending gdevm passthrough request",
+	Long: `Clears the project's pending guest-initiated passthrough
+request without opening a window.
+
+Errors if no pending request exists.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		ident := cfg
+		resolved, err := discoverProjectFn()
+		if err != nil {
+			return err
+		}
+		projCfg, err := config.Load(resolved.MacCwd)
+		if err != nil {
+			return err
+		}
+		if err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+		defer cancel()
+
+		reason, err := serviceapi.NewClient(ident).DenyPassthroughRequest(ctx, projCfg.Project.Name)
+		if err != nil {
+			return fmt.Errorf("passthrough deny: %w", err)
+		}
+		if reason != "" {
+			fmt.Printf("passthrough request DENIED (guest reason: %s)\n", reason)
+		} else {
+			fmt.Println("passthrough request DENIED")
+		}
+		return nil
+	},
+}
+
 func init() {
-	passthroughCmd.Flags().Duration("for", 0,
-		"How long to keep egress open before it auto-restores (0 = daemon default, 30s)")
-	rootCmd.AddCommand(passthroughCmd, restrictCmd)
+	passthroughCmd.AddCommand(passthroughOpenCmd, passthroughCloseCmd, passthroughApproveCmd, passthroughDenyCmd)
+	rootCmd.AddCommand(passthroughCmd)
 }
