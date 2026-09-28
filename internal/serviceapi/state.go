@@ -55,6 +55,14 @@ type StateSnapshot struct {
 	// build) and should be respawned on the current binary.
 	ProxyVersion string `json:"proxy_version,omitempty"`
 
+	// BundleFingerprint is the daemon Build.Fingerprint recorded
+	// the last time a provisioning bundle was piped into this
+	// project's guest. Compared against the running daemon's
+	// Fingerprint by reconcile drift detection and by the daemon-
+	// startup catchup sweep to decide whether the guest is running
+	// stale gdevm / GUEST.md / env-template bytes.
+	BundleFingerprint string `json:"bundle_fingerprint,omitempty"`
+
 	// ProjectIP is the project's allocated 127.42/16 loopback IP, mirrored
 	// here from projectInfo so a daemon restart can recover it. Empty
 	// while the project is stopped; set at /vm/start, cleared at /vm/stop.
