@@ -39,7 +39,7 @@ failing to reach an upstream.`,
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
+		if _, err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
 			return err
 		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)

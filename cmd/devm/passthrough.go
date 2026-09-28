@@ -63,7 +63,7 @@ var passthroughOpenCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
+		if _, err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
 			return err
 		}
 		durArg := ""
@@ -109,7 +109,7 @@ No-op if no window is active.`,
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
+		if _, err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
 			return err
 		}
 
@@ -148,7 +148,7 @@ Errors if no pending request exists.`,
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
+		if _, err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
 			return err
 		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
@@ -191,7 +191,7 @@ Errors if no pending request exists.`,
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
+		if _, err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
 			return err
 		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)

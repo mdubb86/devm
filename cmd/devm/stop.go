@@ -33,7 +33,7 @@ discarded. Re-launch with devm start.`,
 		if err != nil {
 			return err
 		}
-		if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
+		if _, err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
 			return err
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)

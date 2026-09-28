@@ -44,15 +44,17 @@ approve gate refuses at the single point that reads devm.yaml, and
 		pcfg := schema.Config{Project: schema.Project{Name: resolved.Name}}
 		// daemonHandshake (fingerprint drift check + iron-proxy warning) is
 		// called explicitly here since RunAttach, unlike runShellFlow,
-		// never cold-starts and so never calls it on its own.
-		if err := daemonHandshake(cmd.Context(), ident, pcfg); err != nil {
+		// never cold-starts and so never calls it on its own. The returned
+		// fingerprint is unused here — RunAttach never seeds a snapshot,
+		// so it has no cold-start baseline to stamp.
+		if _, err := daemonHandshake(cmd.Context(), ident, pcfg); err != nil {
 			return err
 		}
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
 
-		deps := orchestrator.DefaultShellDeps(ident, resolved.MacCwd)
+		deps := orchestrator.DefaultShellDeps(ident, resolved.MacCwd, "")
 		rc, err := orchestrator.RunAttach(ctx, deps, pcfg.Project.Name, resolved.MacCwd, cmdName, cmdArgs, os.Stderr)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -197,7 +199,8 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	if err != nil {
 		return err
 	}
-	if err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
+	bundleFingerprint, err := daemonHandshake(cmd.Context(), ident, cfg)
+	if err != nil {
 		return err
 	}
 
@@ -254,7 +257,7 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 		}
 	}()
 
-	deps := orchestrator.DefaultShellDeps(ident, resolved.MacCwd)
+	deps := orchestrator.DefaultShellDeps(ident, resolved.MacCwd, bundleFingerprint)
 	rc, err := orchestrator.RunShell(ctx, deps, cfg, resolved.MacCwd, cfg.Project.Name, cmdName, cmdArgs)
 	if err != nil {
 		// SIGINT during cold start cancels ctx. Suppress the noisy

@@ -90,8 +90,9 @@ func TestDaemonHandshake_FingerprintMatch_NoError(t *testing.T) {
 	defer cleanup()
 
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	err := daemonHandshake(context.Background(), identity.Prod, cfg)
+	fp, err := daemonHandshake(context.Background(), identity.Prod, cfg)
 	assert.NoError(t, err)
+	assert.Equal(t, "fp-match", fp, "match path must return the daemon's fingerprint so cold-start can seed the snapshot")
 }
 
 func TestDaemonHandshake_FingerprintDrift_ReturnsActionableError(t *testing.T) {
@@ -103,7 +104,7 @@ func TestDaemonHandshake_FingerprintDrift_ReturnsActionableError(t *testing.T) {
 	defer cleanup()
 
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	err := daemonHandshake(context.Background(), identity.Prod, cfg)
+	_, err := daemonHandshake(context.Background(), identity.Prod, cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "devm daemon is out of sync with this CLI")
 	assert.Contains(t, err.Error(), "fp-daemon")
@@ -114,8 +115,9 @@ func TestDaemonHandshake_FingerprintDrift_ReturnsActionableError(t *testing.T) {
 func TestDaemonHandshake_DaemonUnreachable_ToleratedNoError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no daemon listening here
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
-	err := daemonHandshake(context.Background(), identity.Prod, cfg)
+	fp, err := daemonHandshake(context.Background(), identity.Prod, cfg)
 	assert.NoError(t, err)
+	assert.Empty(t, fp, "unreachable daemon must return empty fingerprint alongside a nil error")
 }
 
 // TestDaemonHandshake_ProxyDrift_WarnsAndDoesNotHeal covers the
@@ -140,7 +142,7 @@ func TestDaemonHandshake_ProxyDrift_WarnsAndDoesNotHeal(t *testing.T) {
 
 	var err error
 	stderr := captureStderr(t, func() {
-		err = daemonHandshake(context.Background(), identity.Prod, cfg)
+		_, err = daemonHandshake(context.Background(), identity.Prod, cfg)
 	})
 
 	assert.NoError(t, err, "drift must be reported, not surfaced as an error")
@@ -202,7 +204,7 @@ func TestDaemonHandshake_ProxyDrift_VMStopped_NoWarning(t *testing.T) {
 
 	var hsErr error
 	stderr := captureStderr(t, func() {
-		hsErr = daemonHandshake(context.Background(), identity.Prod, cfg)
+		_, hsErr = daemonHandshake(context.Background(), identity.Prod, cfg)
 	})
 
 	assert.NoError(t, hsErr)

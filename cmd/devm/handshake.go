@@ -16,19 +16,26 @@ import (
 // project's iron-proxy unhealthy, warns on stderr — reporting only, never
 // mutating. `devm reconcile` is the sole heal path.
 //
+// Returns the daemon's Build.Fingerprint alongside err. Cold-start callers
+// use it to stamp the seeded StateSnapshot's BundleFingerprint so the
+// very next reconcile doesn't observe an empty baseline as bundle drift.
+// Empty when the daemon is unreachable or hasn't stamped one; empty is
+// safe to propagate — cold start would fail on the next daemon call
+// anyway if the daemon is down.
+//
 // ident is the daemon identity (prod vs. e2e); named "ident" rather
 // than "cfg" here because cfg is the caller's project schema.Config —
 // this function's own parameter is also named cfg, shadowing the
 // package-level identity cfg, so callers must pass their own captured
 // ident explicitly.
-func daemonHandshake(ctx context.Context, ident identity.Config, cfg schema.Config) error {
+func daemonHandshake(ctx context.Context, ident identity.Config, cfg schema.Config) (string, error) {
 	client := serviceapi.NewClient(ident)
 	hs, err := client.Handshake(ctx, cfg.Project.Name)
 	if err != nil {
-		return nil // daemon down/unreachable — tolerated
+		return "", nil // daemon down/unreachable — tolerated
 	}
 	if hs.Build.Fingerprint != "" && Fingerprint != "" && hs.Build.Fingerprint != Fingerprint {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"devm daemon is out of sync with this CLI — API compatibility not guaranteed.\n"+
 				"  daemon: %s (fingerprint %s)\n"+
 				"  CLI:    %s (fingerprint %s)\n"+
@@ -44,7 +51,7 @@ func daemonHandshake(ctx context.Context, ident identity.Config, cfg schema.Conf
 		// warm-attach paths still surfaces.
 		fmt.Fprintf(os.Stderr, "warning: iron-proxy for %s is %s — run 'devm reconcile' to restore\n", cfg.Project.Name, hs.Proxy.Status)
 	}
-	return nil
+	return hs.Build.Fingerprint, nil
 }
 
 // vmIsRunning asks the daemon whether the project's VM is currently up.

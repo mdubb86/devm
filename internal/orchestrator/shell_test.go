@@ -358,10 +358,11 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	spawner := &stubSpawner{cmdQueue: []*stubCmd{userCmd}}
 
 	deps := ShellDeps{
-		Ident:            identity.Prod,
-		Tart:             tartBin,
-		ServiceAPIClient: admin,
-		UserSpawner:      spawner,
+		Ident:             identity.Prod,
+		Tart:              tartBin,
+		ServiceAPIClient:  admin,
+		UserSpawner:       spawner,
+		BundleFingerprint: "fp-cold-seed",
 	}
 
 	// Point caStorageDir at our temp dir by overriding HOME.
@@ -392,6 +393,12 @@ func TestRunShellColdPath_CallsStartVM(t *testing.T) {
 	// reconcile doesn't strand recoverProjectState with nothing to
 	// restore.
 	assert.Equal(t, "127.42.0.5", got.ProjectIP)
+	// Regression: the seed snapshot must carry BundleFingerprint (from
+	// the CLI's handshake with the daemon) so the very next reconcile
+	// doesn't observe the just-piped-in bundle as "drifted" (stored
+	// fingerprint empty vs current daemon Fingerprint) and re-pipe
+	// spuriously.
+	assert.Equal(t, "fp-cold-seed", got.BundleFingerprint)
 }
 
 // TestRunShellColdPath_FlipsEgressAroundProvision verifies the always-

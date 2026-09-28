@@ -40,6 +40,11 @@ type ShellDeps struct {
 	// operates under — threaded into every serviceapi/sshkeys call
 	// RunShell's methods make, instead of a hardcoded identity.Prod.
 	Ident identity.Config
+	// BundleFingerprint is the daemon's current Build.Fingerprint,
+	// captured by the CLI before dispatch and stamped into the
+	// cold-start StateSnapshot so the very next reconcile doesn't see
+	// spurious drift against an empty baseline.
+	BundleFingerprint string
 }
 
 // VMAdminClient is the subset of serviceapi.Client used by RunShell.
@@ -83,13 +88,18 @@ type VMAdminClient interface {
 	EndProvisioning(ctx context.Context, name string) error
 }
 
-// DefaultShellDeps returns deps wired for production.
-func DefaultShellDeps(cfg identity.Config, repoRoot string) ShellDeps {
+// DefaultShellDeps returns deps wired for production. bundleFingerprint
+// is the daemon's current Build.Fingerprint, fetched by the caller from
+// a prior handshake — cold-start stamps it into the seeded state
+// snapshot so the very next reconcile doesn't observe an empty baseline
+// as drift.
+func DefaultShellDeps(cfg identity.Config, repoRoot, bundleFingerprint string) ShellDeps {
 	return ShellDeps{
-		Tart:             tart.New(),
-		ServiceAPIClient: serviceapi.NewClient(cfg),
-		UserSpawner:      &ExecSpawner{Interactive: true},
-		Ident:            cfg,
+		Tart:              tart.New(),
+		ServiceAPIClient:  serviceapi.NewClient(cfg),
+		UserSpawner:       &ExecSpawner{Interactive: true},
+		Ident:             cfg,
+		BundleFingerprint: bundleFingerprint,
 	}
 }
 
@@ -444,12 +454,13 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		fmt.Fprintf(os.Stderr, "state: render templates for seed snapshot %s failed: %v\n", cfg.Project.Name, err)
 	}
 	snap := serviceapi.StateSnapshot{
-		Cfg:              cfg,
-		TemplateContents: templateContents,
-		SecretHashes:     SecretHashesFromBindings(bindings),
-		ProxyVersion:     ironproxy.EmbeddedSha256(), // stamp the version that just provisioned
-		ProjectIP:        projectIP,
-		MacCwd:           repoRoot,
+		Cfg:               cfg,
+		TemplateContents:  templateContents,
+		SecretHashes:      SecretHashesFromBindings(bindings),
+		ProxyVersion:      ironproxy.EmbeddedSha256(), // stamp the version that just provisioned
+		ProjectIP:         projectIP,
+		MacCwd:            repoRoot,
+		BundleFingerprint: d.BundleFingerprint,
 	}
 	if err := serviceapi.WriteStateSnapshot(d.Ident, cfg.Project.Name, snap); err != nil {
 		fmt.Fprintf(os.Stderr, "state: seed snapshot for %s failed: %v\n", cfg.Project.Name, err)
