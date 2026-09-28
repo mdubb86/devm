@@ -119,4 +119,34 @@ startup() {
 - If you also need Node for other reasons, install Node via the Node
   recipe — Claude Code's native installer doesn't depend on it.
 
+## Setup
+
+The recipe ships five assets: two `CLAUDE.local.md` stanzas (Mac and
+guest) that tell Claude Code it's running in a devm project, and three
+guest-side skills that teach the guest agent how devm's environment
+works. The recipe describes; the user pulls. Nothing is copied
+automatically — a user may have tweaked their local files, and stale
+copies must not be clobbered. Re-run the commands below when you want
+the latest recipe advice; the recipes DB refreshes daily via
+`devm recipes sync` (or the next `devm recipes list`).
+
+**Mac side** (project root):
+
+```bash
+echo CLAUDE.local.md >> .gitignore
+devm recipes asset get tool/ai/claude claude-local-mac.md >> CLAUDE.local.md
+```
+
+**Guest side** (project root inside the VM; `CLAUDE.local.md` is
+excluded from mutagen sync so Mac and guest carry independent copies):
+
+```bash
+echo CLAUDE.local.md >> .gitignore
+gdevm recipes asset get tool/ai/claude claude-local-guest.md >> CLAUDE.local.md
+mkdir -p ~/.claude/skills
+gdevm recipes asset get tool/ai/claude skills/gdevm-guest.md            > ~/.claude/skills/gdevm-guest.md
+gdevm recipes asset get tool/ai/claude skills/devm-guest-environment.md > ~/.claude/skills/devm-guest-environment.md
+gdevm recipes asset get tool/ai/claude skills/devm-guest-diagnostics.md > ~/.claude/skills/devm-guest-diagnostics.md
+```
+
 Upstream network docs: <https://code.claude.com/docs/en/network-config.md>
