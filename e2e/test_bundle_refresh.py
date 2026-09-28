@@ -16,6 +16,7 @@ Single VM, sequence:
 import json
 import os
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -40,7 +41,20 @@ def _read_snapshot(path: Path) -> dict:
 
 
 def _write_snapshot(path: Path, data: dict) -> None:
-    path.write_text(json.dumps(data))
+    """Atomic write to match internal/serviceapi/state.go's WriteStateSnapshot
+    pattern — the daemon watchdog reads this file every 60s from a background
+    goroutine, so torn writes would surface as a load failure."""
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(data))
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _current_daemon_fingerprint(devm_path: str, cwd: str) -> str:
@@ -120,24 +134,27 @@ def test_bundle_refresh_via_reconcile_gdevm_upgrade_and_startup(
         ["sudo", "-n", "launchctl", "kickstart", "-k", "system/com.devm.e2e.service"],
         check=True, timeout=15,
     )
-    # Wait for daemon to become healthy. Catchup runs synchronously
-    # inside RunService before SetProxyReady(true), so a clean
-    # `status --json` already implies the sweep committed the
-    # fingerprint to disk. The safety sleep below is belt-and-braces.
-    deadline = time.time() + 60
+    # Poll the snapshot fingerprint directly rather than status --json:
+    # `kickstart -k` is asynchronous, and status probes can succeed against
+    # the OLD daemon before it fully dies, leading to a false-early break.
+    # The catchup sweep (internal/serviceapi/runner.go:404) is the sole
+    # writer of this file during daemon startup, so watching for the flip
+    # is the only signal that survives the async restart.
+    deadline = time.time() + 90
+    last_seen = None
     while time.time() < deadline:
-        r = subprocess.run(
-            [devm.path, "status", "--json"],
-            cwd=str(workspace.path), capture_output=True, timeout=10,
-        )
-        if r.returncode == 0:
+        try:
+            last_seen = _read_snapshot(snap).get("bundle_fingerprint")
+        except (FileNotFoundError, json.JSONDecodeError):
+            last_seen = None
+        if last_seen == current:
             break
         time.sleep(1)
     else:
-        raise AssertionError("daemon did not come back healthy after kickstart")
-    # Belt-and-braces; the fingerprint is already on disk by the time
-    # status returns clean (catchup is synchronous before ready flip).
-    time.sleep(2)
+        raise AssertionError(
+            f"daemon-startup catchup did not restore fingerprint within 90s "
+            f"(last seen: {last_seen!r}, expected: {current!r})"
+        )
     stored = _read_snapshot(snap)
     assert stored["bundle_fingerprint"] == current, (
         "daemon-startup catchup must refresh the snapshot without user action"
