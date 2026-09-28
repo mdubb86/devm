@@ -496,6 +496,9 @@ func FormatStatusAllJSON(rows []serviceapi.ProjectStatus) string {
 // FormatReconcileText renders ReconcileResult for human terminals.
 func FormatReconcileText(r ReconcileResult) string {
 	var b strings.Builder
+	if len(r.Applied) == 0 && len(r.AppliedIronProxy) == 0 && len(r.RecreateRequired) == 0 {
+		return "Sandbox converged; no changes.\n"
+	}
 	if len(r.Applied) > 0 {
 		fmt.Fprintf(&b, "Applied %d live change(s):\n", len(r.Applied))
 		for _, c := range r.Applied {
@@ -860,6 +863,8 @@ func formatChange(c reconcile.Change) string {
 	switch c.Kind {
 	case reconcile.KindSSHEndpointHealed:
 		return fmt.Sprintf("~ ssh endpoint healed: %s:22 was answered by a foreign host key, project moved to %s", c.Old, c.New)
+	case reconcile.KindBundleRefresh:
+		return "~ bundle: refreshed (daemon fingerprint updated)"
 	case reconcile.KindPortAdd:
 		return fmt.Sprintf("+ port %s (%s)", c.New, c.Service)
 	case reconcile.KindPortRemove:
@@ -876,6 +881,8 @@ func formatChange(c reconcile.Change) string {
 		return fmt.Sprintf("- env: %s.%s", c.Service, c.Key)
 	case reconcile.KindEnvChange:
 		return fmt.Sprintf("~ env: %s.%s: %q → %q", c.Service, c.Key, c.Old, c.New)
+	case reconcile.KindPathChange:
+		return fmt.Sprintf("~ path: %q → %q", c.Old, c.New)
 	case reconcile.KindPackageAdd:
 		return fmt.Sprintf("+ package %s", c.Key)
 	case reconcile.KindPackageRemove:

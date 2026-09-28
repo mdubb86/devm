@@ -400,3 +400,34 @@ func startReconcileDaemonWithIronProxyCapture(t *testing.T, running bool) (clean
 
 	return func() { cancel(); <-errCh }, req
 }
+
+// TestFormatReconcileText_BundleRefreshRendersOneLine pins the
+// human-readable line the reconcile formatter emits for a
+// KindBundleRefresh entry: the synthetic bundle-drift change kind must
+// render as its own indented row alongside any other applied live
+// changes.
+func TestFormatReconcileText_BundleRefreshRendersOneLine(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		Applied: []reconcile.Change{{Kind: reconcile.KindBundleRefresh}},
+	})
+	assert.Contains(t, out, "~ bundle: refreshed (daemon fingerprint updated)")
+}
+
+// TestFormatReconcileText_PathChangeRendersOneLine pins the
+// human-readable line for KindPathChange, which the formatter now
+// covers explicitly instead of falling through to "(unknown change)".
+func TestFormatReconcileText_PathChangeRendersOneLine(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		Applied: []reconcile.Change{{Kind: reconcile.KindPathChange, Old: "/old", New: "/new"}},
+	})
+	assert.Contains(t, out, "~ path:")
+	assert.Contains(t, out, "/new")
+}
+
+// TestFormatReconcileText_NoChangesEmitsConvergedLine proves the
+// zero-change reconcile no longer renders as an empty string — the
+// user sees an explicit "converged" acknowledgement.
+func TestFormatReconcileText_NoChangesEmitsConvergedLine(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{})
+	assert.Contains(t, out, "Sandbox converged; no changes.")
+}
