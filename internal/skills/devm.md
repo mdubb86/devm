@@ -39,11 +39,9 @@ devm shell                                  # attaches, drops you in
 
 ## CLAUDE.md — host/guest split
 
-A project's `CLAUDE.md` is git-tracked, so both the Mac and the VM see the same content — each is its own clone of the same repo. Add this bullet to the project's `CLAUDE.md` when configuring devm, so a guest-side agent knows to consult the guest-specific reference first:
+A project's `CLAUDE.md` is git-tracked, so Mac and guest see the same content — each is its own clone of the same repo. Per-machine advice — anything Mac-only or guest-only — belongs in `CLAUDE.local.md` at the project root: Claude Code reads it alongside `CLAUDE.md`, and by convention it is gitignored per-user memory. devm's default mutagen sync excludes `CLAUDE.local.md`, so the Mac and guest carry independent copies.
 
-- **In devm guest (`$IS_SANDBOX=1`), read `/opt/devm/GUEST.md` first — commands here that name `devm`/`tart`/`just`/`brew`/`launchctl` are Mac-only.**
-
-`/opt/devm/GUEST.md` is installed on every guest by devm's bundle installer (no user action needed). It covers the guest's view of the network, filesystem quirks, lifecycle actions, and where to look when something breaks.
+Guest-specific setup — the `CLAUDE.local.md` stanza that tells Claude Code it is running in a devm guest, plus a set of guest-side skills that teach it how the environment works — ships as assets on the `tool/ai/claude` recipe. Run `devm recipes get tool/ai/claude` and follow its "Setup" section.
 
 ## `run <name>` — repo task dispatcher
 
@@ -57,6 +55,17 @@ that dispatches through `tart exec` (Tart's gRPC-over-vsock control
 channel). No sshd is involved in the sync path. sshd remains for
 interactive `ssh devm-<name>` and VS Code Remote-SSH.
 
+### `gdevm` — guest dispatcher
+
+`gdevm` is the only devm-owned binary inside the VM (the `devm` CLI never exists on the guest; `gdevm` never exists on the Mac). It reaches the Mac-side daemon over softnet.
+
+- `gdevm pop <path-or-url>` — open a file with its default Mac app; same behavior as `devm pop mac`/`vm` from the other side of the boundary.
+- `gdevm propose [--reason <text>] [--kind <file>]` — signal that a `devm.yaml` / `devm.me.yaml` / `devm.sh` / `devm.me.sh` edit is ready for Mac-side review.
+- `gdevm run <command>` — invoke a named function from the project's guest command manifest (same lookup as `run <name>`).
+- `gdevm passthrough --reason <text> [--for <duration>]` — request a supervised egress passthrough window; a human on the Mac authorizes it with `devm passthrough approve` (or `deny`).
+- `gdevm upgrade` — pull the daemon's current `gdevm` binary, env template, and commands manifest into this VM.
+- `gdevm recipes list | get <name> | asset ls <name> | asset get <name> <path>` — query the Mac-side recipes catalog from the guest.
+
 ## Propose channel
 
 **Propose channel.** `devm propose` runs on either the Mac or the
@@ -69,6 +78,17 @@ The approve gate refuses
 `devm reconcile`/`devm start` when any of the four has changed since
 the last approval, until the human approves the change.
 
+## Passthrough egress — Mac verbs
+
+Iron-proxy stays in the request path (MITM, audit, secret substitution) during a passthrough window; the allowlist check is what gets bypassed. The window auto-restores when its timer fires.
+
+- `devm passthrough open [duration]` — open a window immediately (default 30s); a Go duration argument extends or shortens it.
+- `devm passthrough close` — end an active window early and restore RESTRICTED egress.
+- `devm passthrough approve` — consume a pending `gdevm passthrough` request and open the window with that request's duration.
+- `devm passthrough deny` — clear a pending `gdevm passthrough` request without opening a window.
+
+The guest side of this flow (agent-authored `gdevm passthrough --reason "..."`) is covered by the `tool/ai/claude` recipe's guest skills.
+
 ## Where to look next
 
 - `devm skills get schema` — every `devm.yaml` field, its type, and which change bucket it falls in.
@@ -77,6 +97,6 @@ the last approval, until the human approves the change.
 - `devm skills get routing` — how port declarations, `devm route` commands, and `*.test` hostnames work on the Mac and inside the VM.
 - `devm skills get secrets` — storing credentials in the on-disk secret store and referencing them with `!secret` in `devm.yaml`.
 - `devm skills get errors` — reading supervision error blocks and where logs live.
-- `devm pop mac <path-or-url>` — open a Mac-native file with its default app; refuses paths that resolve into a devm-managed volume. An `http://` / `https://` URL routes straight to the default browser. Paths outside any mirror (e.g. `/tmp/site/index.html`, `/var/log/foo.log`) get a live-sync session into a Mac scratch dir under `<runtime-dir>/pop-tmp/<id>/`. Subsequent guest edits propagate; the session self-terminates after 1h of no propagated change. Session count and oldest age surface in `devm status`.
+- `devm pop mac <path-or-url>` — open a Mac-native file with its default app; refuses paths that resolve into a devm-managed volume. An `http://` / `https://` URL routes straight to the default browser. Paths outside any mirror (e.g. `/tmp/site/index.html`, `/var/log/foo.log`) get a live-sync session into a Mac scratch dir under `<runtime-dir>/pop-tmp/<id>/`. Subsequent guest edits propagate; the session self-terminates after 1h of no propagated change. Session count and oldest age surface in `devm status`. From the guest, `gdevm pop <path-or-url>` does the same thing from the other side of the boundary — see the `gdevm-guest` skill shipped by the `tool/ai/claude` recipe.
 - `devm pop vm <path-or-url>` — open a file from the project's guest workspace (a `$WORKSPACE`-anchored path) with its default app on the Mac. An `http://` / `https://` URL routes straight to the default browser. Paths outside any mirror get the same live-sync session behavior as `devm pop mac`.
 - `devm recipes get tool/service/docker` — docker is a built-in (`docker: true`), not a recipe you install, but the recipe covers the intricacies: the two egress paths (why `docker run` works with no config but `docker build` needs a Dockerfile RUN block), and the exact block to add for build-time HTTPS to survive iron-proxy's MITM.
