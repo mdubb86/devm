@@ -132,8 +132,8 @@ func (q *Query) Get(name string) (Recipe, error) {
 		`SELECT name, category, display_name, description, keywords, content, since
 		 FROM recipes WHERE name = ?`, name).
 		Scan(&r.Name, &r.Category, &r.DisplayName, &r.Description, &r.Keywords, &r.Content, &since)
-	if err == sql.ErrNoRows {
-		return Recipe{}, fmt.Errorf("recipes: unknown recipe %q", name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Recipe{}, fmt.Errorf("%w: %s", ErrRecipeNotFound, name)
 	}
 	if err != nil {
 		return Recipe{}, err

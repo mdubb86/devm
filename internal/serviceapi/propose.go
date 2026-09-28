@@ -36,6 +36,7 @@ import (
 	"github.com/mdubb86/devm/internal/approve"
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/recipes"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"gopkg.in/yaml.v3"
@@ -290,6 +291,9 @@ func serveProposeListener(ln net.Listener, cfg identity.Config, cache *StateCach
 	mux.Handle("/propose", handleProposeForProject(cfg, cache, projectName))
 	mux.Handle("/passthrough", handlePassthroughRequestForProject(cfg, cache, projectName))
 	mux.Handle("/refresh-bundle", handleRefreshBundleForProject(cfg, cache, tr, locks, projectName))
+	registerRecipesRoutes(mux, func() (*recipes.Query, error) {
+		return recipes.Open(filepath.Join(recipes.CacheDir(), "recipes.db"))
+	})
 	srv := &http.Server{Handler: mux}
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		daemonlog.Errorf("serviceapi: propose: listener for %s exited: %v", projectName, err)
