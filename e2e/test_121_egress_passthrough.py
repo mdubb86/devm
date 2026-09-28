@@ -1,16 +1,17 @@
-"""121: `devm passthrough` / `devm restrict` — time-bounded authority escape hatch.
+"""121: `devm passthrough open` / `devm passthrough close` — time-bounded
+authority escape hatch.
 
 Enforced-egress baseline: cold-start with `network.allow: [example.com]`
 and any curl to a non-allowlisted host (`example.org` here) is rejected
-by iron-proxy. `devm passthrough --for 5s` flips the authority mode to
+by iron-proxy. `devm passthrough open 5s` flips the authority mode to
 passthrough (iron-proxy remains in the traffic path, MITM'ing + audit-logging
-+ secret-substituting); `devm restrict` closes it early. Timer-driven
-restore closes it on expiry.
++ secret-substituting); `devm passthrough close` closes it early.
+Timer-driven restore closes it on expiry.
 
 What this pins:
   - passthrough opens: curl to a non-allowlisted host succeeds.
-  - restrict closes: curl fails again immediately after `devm restrict`.
-  - timer restores: curl fails again after `--for` window expires.
+  - close closes: curl fails again immediately after `devm passthrough close`.
+  - timer restores: curl fails again after the window expires.
   - status --json reports policy + passthrough_expires_at.
   - reconcile during the window does NOT close it.
 """
@@ -54,8 +55,8 @@ def _cold_start(devm, workspace, sandbox_name):
 
 @pytest.mark.slow
 @pytest.mark.timeout(600)
-def test_passthrough_open_and_restrict(workspace, devm, sandbox_name):
-    """Baseline denies example.org; passthrough allows it; restrict denies again."""
+def test_passthrough_open_and_close(workspace, devm, sandbox_name):
+    """Baseline denies example.org; passthrough opens it; close denies again."""
     workspace.write_devmyaml(
         # Opt out of the default repos.main (github.com/octocat/Hello-World):
         # this test's allowlist is deliberately narrow to example.com, and
@@ -74,10 +75,10 @@ def test_passthrough_open_and_restrict(workspace, devm, sandbox_name):
 
     # ---- Passthrough opens the window; example.org now reachable. ----
     r = subprocess.run(
-        [devm.path, "passthrough", "--for", "60s"],
+        [devm.path, "passthrough", "open", "60s"],
         cwd=str(workspace.path), capture_output=True, timeout=30,
     )
-    assert r.returncode == 0, f"devm passthrough failed:\n{r.stderr.decode()}"
+    assert r.returncode == 0, f"devm passthrough open failed:\n{r.stderr.decode()}"
 
     # Small poll window: setPolicy is async over a UDS.
     deadline = time.monotonic() + 5
@@ -89,25 +90,25 @@ def test_passthrough_open_and_restrict(workspace, devm, sandbox_name):
         time.sleep(0.5)
     assert got == 200, f"passthrough must let example.org through; got {got}"
 
-    # ---- Restrict closes early. ----
+    # ---- Close closes early. ----
     r = subprocess.run(
-        [devm.path, "restrict"],
+        [devm.path, "passthrough", "close"],
         cwd=str(workspace.path), capture_output=True, timeout=30,
     )
-    assert r.returncode == 0, f"devm restrict failed:\n{r.stderr.decode()}"
+    assert r.returncode == 0, f"devm passthrough close failed:\n{r.stderr.decode()}"
 
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         if _curl_status(sandbox, "https://example.org/") != 200:
             return
         time.sleep(0.5)
-    pytest.fail("devm restrict must re-block example.org")
+    pytest.fail("devm passthrough close must re-block example.org")
 
 
 @pytest.mark.slow
 @pytest.mark.timeout(600)
 def test_passthrough_timer_restores(workspace, devm, sandbox_name):
-    """After --for expires, egress is auto-restored to enforced."""
+    """After the window expires, egress is auto-restored to enforced."""
     workspace.write_devmyaml(
         no_repo=True,
         network={"allow": ["example.com"]},
@@ -116,10 +117,10 @@ def test_passthrough_timer_restores(workspace, devm, sandbox_name):
     sandbox = _cold_start(devm, workspace, sandbox_name)
 
     r = subprocess.run(
-        [devm.path, "passthrough", "--for", "3s"],
+        [devm.path, "passthrough", "open", "3s"],
         cwd=str(workspace.path), capture_output=True, timeout=30,
     )
-    assert r.returncode == 0, f"devm passthrough failed:\n{r.stderr.decode()}"
+    assert r.returncode == 0, f"devm passthrough open failed:\n{r.stderr.decode()}"
 
     # Wait past deadline + a small margin for timer + softnet write.
     time.sleep(5)
@@ -128,7 +129,7 @@ def test_passthrough_timer_restores(workspace, devm, sandbox_name):
         if _curl_status(sandbox, "https://example.org/") != 200:
             return
         time.sleep(0.5)
-    pytest.fail("timer-driven restore must re-block example.org after --for expires")
+    pytest.fail("timer-driven restore must re-block example.org after the window expires")
 
 
 @pytest.mark.slow
@@ -159,7 +160,7 @@ def test_passthrough_status_json_reports_state(workspace, devm, sandbox_name):
     )
 
     r = subprocess.run(
-        [devm.path, "passthrough", "--for", "60s"],
+        [devm.path, "passthrough", "open", "60s"],
         cwd=str(workspace.path), capture_output=True, timeout=30,
     )
     assert r.returncode == 0
@@ -173,9 +174,9 @@ def test_passthrough_status_json_reports_state(workspace, devm, sandbox_name):
         "passthrough_expires_at must be set while a window is open"
     )
 
-    # Clean up: restrict early so the timer doesn't fire post-teardown.
+    # Clean up: close the window early so the timer doesn't fire post-teardown.
     subprocess.run(
-        [devm.path, "restrict"],
+        [devm.path, "passthrough", "close"],
         cwd=str(workspace.path), capture_output=True, timeout=30,
     )
 
@@ -197,7 +198,7 @@ def test_passthrough_survives_reconcile(workspace, devm, sandbox_name):
     sandbox = _cold_start(devm, workspace, sandbox_name)
 
     r = subprocess.run(
-        [devm.path, "passthrough", "--for", "60s"],
+        [devm.path, "passthrough", "open", "60s"],
         cwd=str(workspace.path), capture_output=True, timeout=30,
     )
     assert r.returncode == 0
@@ -229,6 +230,6 @@ def test_passthrough_survives_reconcile(workspace, devm, sandbox_name):
 
     # Clean up.
     subprocess.run(
-        [devm.path, "restrict"],
+        [devm.path, "passthrough", "close"],
         cwd=str(workspace.path), capture_output=True, timeout=30,
     )

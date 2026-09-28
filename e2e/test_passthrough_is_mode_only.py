@@ -1,17 +1,18 @@
-"""Pin: `devm passthrough` flips only the daemon-side policy-authority
-mode; softnet stays FORWARDING throughout. Passthrough windows are
-strictly better than the surrounding restricted state — still MITM'd,
-still audited, still secret-substituted — not weaker.
+"""Pin: `devm passthrough open` flips only the daemon-side
+policy-authority mode; softnet stays FORWARDING throughout.
+Passthrough windows are strictly better than the surrounding
+restricted state — still MITM'd, still audited, still
+secret-substituted — not weaker.
 
 Assertion shape: hit a not-allowlisted host and get devm's own 403
 (`X-Devm-Blocked` header) — proof iron-proxy is in the path. Then
-`devm passthrough`, hit the same host, get through (200). Then `devm
-restrict`, hit the same host again, get devm's own 403 again. The
-pre- and post- 403s both carrying `X-Devm-Blocked` is the load-bearing
-evidence that softnet stayed FORWARDING the entire time — a softnet
-that had reverted to a direct-route bypass mode could never produce
-iron-proxy's own reject body; it would produce a raw connection
-failure with no marker header at all.
+`devm passthrough open`, hit the same host, get through (200). Then
+`devm passthrough close`, hit the same host again, get devm's own 403
+again. The pre- and post- 403s both carrying `X-Devm-Blocked` is the
+load-bearing evidence that softnet stayed FORWARDING the entire time —
+a softnet that had reverted to a direct-route bypass mode could never
+produce iron-proxy's own reject body; it would produce a raw
+connection failure with no marker header at all.
 """
 from __future__ import annotations
 
@@ -55,12 +56,12 @@ def test_passthrough_is_mode_only(devm, workspace, sandbox_name):
             f"X-Devm-Blocked; got:\n{r.stdout}"
         )
 
-        # ---- devm passthrough opens the window: same host now reaches. ----
+        # ---- devm passthrough open opens the window: same host now reaches. ----
         r = subprocess.run(
-            [devm.path, "passthrough", "--for", "30s"],
+            [devm.path, "passthrough", "open", "30s"],
             cwd=str(workspace.path), capture_output=True, timeout=30,
         )
-        assert r.returncode == 0, f"devm passthrough failed:\n{r.stderr.decode()}"
+        assert r.returncode == 0, f"devm passthrough open failed:\n{r.stderr.decode()}"
 
         deadline = time.monotonic() + 10
         ok = False
@@ -79,13 +80,13 @@ def test_passthrough_is_mode_only(devm, workspace, sandbox_name):
             f"{last_status!r}"
         )
 
-        # ---- devm restrict closes the window; iron-proxy's own 403
+        # ---- devm passthrough close closes the window; iron-proxy's own 403
         # ---- resumes — proof softnet never left FORWARDING. ----
         r = subprocess.run(
-            [devm.path, "restrict"],
+            [devm.path, "passthrough", "close"],
             cwd=str(workspace.path), capture_output=True, timeout=30,
         )
-        assert r.returncode == 0, f"devm restrict failed:\n{r.stderr.decode()}"
+        assert r.returncode == 0, f"devm passthrough close failed:\n{r.stderr.decode()}"
 
         deadline = time.monotonic() + 10
         blocked_again = False
@@ -98,14 +99,14 @@ def test_passthrough_is_mode_only(devm, workspace, sandbox_name):
                 break
             time.sleep(0.5)
         assert blocked_again, (
-            "post-restrict: httpbin.org must be blocked again with "
+            "post-close: httpbin.org must be blocked again with "
             "iron-proxy's own X-Devm-Blocked marker (a softnet that had "
             "reverted to a bypass mode could never produce this header); "
             "last response:\n" + last
         )
     finally:
         subprocess.run(
-            [devm.path, "restrict"],
+            [devm.path, "passthrough", "close"],
             cwd=str(workspace.path), capture_output=True, timeout=30,
         )
         subprocess.run(

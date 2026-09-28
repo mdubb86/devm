@@ -11,9 +11,9 @@ devm.yaml on the Mac side directly and waits for the sync tick to land
 it in the guest before signaling propose from there.
 
 Exercises the full path: internal/serviceapi/config_sync.go's
-bidirectional sync -> cmd/propose (guest binary) -> softnet
-192.168.127.1:82 -> internal/serviceapi's per-project /propose
-listener -> WriteLastProposal -> the approve-gate refusal in
+bidirectional sync -> cmd/gdevm's `propose` subcommand (guest binary)
+-> softnet 192.168.127.1:82 -> internal/serviceapi's per-project
+/propose listener -> WriteLastProposal -> the approve-gate refusal in
 internal/serviceapi/approve.go -> `devm approve` -> ClearLastProposal.
 """
 from __future__ import annotations
@@ -62,7 +62,7 @@ def test_propose_channel(workspace, devm, sandbox_name):
 
         # Guest-side propose: signal only, no config bytes in the call.
         propose = subprocess.run(
-            [devm.path, "exec", "/opt/devm/bin/propose", "--reason", "add env var"],
+            [devm.path, "exec", "gdevm", "propose", "--reason", "add env var"],
             cwd=str(workspace.path), capture_output=True, timeout=30,
         )
         assert propose.returncode == 0, (
