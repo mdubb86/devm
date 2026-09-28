@@ -104,8 +104,8 @@ func TestBundleDriftCatchup_HungGuestTimesOutAndSweepContinues(t *testing.T) {
 	cache.SetVMState("wedged", VMRunning)
 
 	// A tart stand-in that sleeps forever, ignoring stdin — models a
-	// guest agent that never returns. `sleep 300 & wait` shape so
-	// SIGKILL from exec.CommandContext ends the process on ctx expiry.
+	// guest agent that never returns. exec.CommandContext SIGKILLs the
+	// sleeping sh on ctx expiry, which unblocks cmd.Run().
 	bin := filepath.Join(t.TempDir(), "tart-hang")
 	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nsleep 300\n"), 0o755))
 	tr := tart.New()
