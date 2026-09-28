@@ -133,6 +133,7 @@ var recipesAssetLsCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		lazyEnsureCache(cmd.Context())
 		q, err := openCachedQuery()
 		if err != nil {
 			return err
@@ -158,6 +159,7 @@ var recipesAssetGetCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		lazyEnsureCache(cmd.Context())
 		q, err := openCachedQuery()
 		if err != nil {
 			return err

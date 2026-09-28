@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -20,6 +22,10 @@ import (
 // given recipes and their assets, points DEVM_RECIPES_CACHE_DIR at it,
 // and returns the directory path. Assets are stored with mode 0o644.
 // A nil fixtures map creates only the empty schema (no recipe rows).
+//
+// A fresh recipes.lastcheck timestamp is written so lazyEnsureCache's
+// 24-hour freshness guard short-circuits before any HTTP call — tests
+// stay hermetic without a fake releases server.
 func buildAssetFixture(t *testing.T, fixtures map[string]map[string][]byte) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -48,6 +54,12 @@ func buildAssetFixture(t *testing.T, fixtures map[string]map[string][]byte) stri
 		}
 	}
 	require.NoError(t, db.Close())
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "recipes.lastcheck"),
+		[]byte(time.Now().Format(time.RFC3339)),
+		0o644,
+	))
 
 	t.Setenv("DEVM_RECIPES_CACHE_DIR", dir)
 	return dir
