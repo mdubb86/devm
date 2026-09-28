@@ -10,6 +10,7 @@
 //	gdevm run         <command>
 //	gdevm passthrough --reason <text> [--for <duration>]
 //	gdevm upgrade
+//	gdevm recipes   list | get <name> | asset ls <name> | asset get <name> <path>
 //
 // Each subcommand reaches the Mac-side daemon over softnet (pop,
 // propose, passthrough) or reads the local guest command manifest
@@ -41,6 +42,8 @@ func main() {
 		os.Exit(passthroughMain(args))
 	case "upgrade":
 		os.Exit(upgradeMain(args))
+	case "recipes":
+		os.Exit(recipesMain(args))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -67,6 +70,11 @@ Subcommands:
   upgrade      Pull down the daemon's current gdevm binary,
                GUEST.md, env template, and commands manifest into
                this VM. No args.
+  recipes      Query the Mac-side recipes catalog:
+                 recipes list
+                 recipes get <name>
+                 recipes asset ls <name>
+                 recipes asset get <name> <path>
 
 Every subcommand carries its own -h/--help.`)
 }
