@@ -11,6 +11,7 @@ var DefaultIgnores = []string{
 	"**/__pycache__/",
 	"*.pyc",
 	"**/.DS_Store",
+	"**/CLAUDE.local.md",
 	"**/dist/", "**/build/",
 	"**/.next/cache/",
 	"**/.turbo/",

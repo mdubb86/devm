@@ -22,3 +22,15 @@ func TestDefaultIgnores_NoDuplicates(t *testing.T) {
 		seen[p] = true
 	}
 }
+
+func TestDefaultIgnores_IncludesClaudeLocal(t *testing.T) {
+	got := DefaultIgnores
+	found := false
+	for _, p := range got {
+		if p == "**/CLAUDE.local.md" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "DefaultIgnores must include **/CLAUDE.local.md so per-machine Claude memory doesn't sync between Mac and guest")
+}
