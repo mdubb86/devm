@@ -65,7 +65,7 @@ func TestRun_ReasonFlag(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code := run([]string{"--reason", "test reason"}, srv.URL, "/somewhere")
+	code := runPropose([]string{"--reason", "test reason"}, srv.URL, "/somewhere")
 	assert.Equal(t, 0, code)
 	assert.Equal(t, "test reason", got.Reason)
 	assert.Equal(t, "devm.yaml", got.Kind)
@@ -79,7 +79,7 @@ func TestRun_KindFlag(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code := run([]string{"--kind", "devm.me.yaml"}, srv.URL, "/somewhere")
+	code := runPropose([]string{"--kind", "devm.me.yaml"}, srv.URL, "/somewhere")
 	assert.Equal(t, 0, code)
 	assert.Equal(t, "devm.me.yaml", got.Kind)
 }
@@ -92,7 +92,7 @@ func TestRun_NoArgs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code := run([]string{}, srv.URL, "/somewhere")
+	code := runPropose([]string{}, srv.URL, "/somewhere")
 	assert.Equal(t, 0, code)
 	assert.Equal(t, "", got.Reason)
 	assert.Equal(t, "devm.yaml", got.Kind)
@@ -107,55 +107,53 @@ func TestRun_ReasonAndKindFlags(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code := run([]string{"--reason", "r", "--kind", "devm.me.yaml"}, srv.URL, "/somewhere")
+	code := runPropose([]string{"--reason", "r", "--kind", "devm.me.yaml"}, srv.URL, "/somewhere")
 	assert.Equal(t, 0, code)
 	assert.Equal(t, "r", got.Reason)
 	assert.Equal(t, "devm.me.yaml", got.Kind)
 }
 
-func TestRun_ReasonMissingValueExit2(t *testing.T) {
+func TestRun_ReasonMissingValue(t *testing.T) {
 	stderr := captureStderr(t, func() {
-		code := run([]string{"--reason"}, "http://127.0.0.1:1", "/somewhere")
+		code := runPropose([]string{"--reason"}, "http://ignored", "/x")
 		assert.Equal(t, 2, code)
 	})
-	assert.Contains(t, stderr, "propose: --reason requires a value")
+	assert.Contains(t, stderr, "--reason requires a value")
 }
 
-func TestRun_KindMissingValueExit2(t *testing.T) {
+func TestRun_KindMissingValue(t *testing.T) {
 	stderr := captureStderr(t, func() {
-		code := run([]string{"--kind"}, "http://127.0.0.1:1", "/somewhere")
+		code := runPropose([]string{"--kind"}, "http://ignored", "/x")
 		assert.Equal(t, 2, code)
 	})
-	assert.Contains(t, stderr, "propose: --kind requires a value")
+	assert.Contains(t, stderr, "--kind requires a value")
 }
 
-func TestRun_UnknownArgExit2(t *testing.T) {
+func TestRun_UnknownArg(t *testing.T) {
 	stderr := captureStderr(t, func() {
-		code := run([]string{"--unknown"}, "http://127.0.0.1:1", "/somewhere")
+		code := runPropose([]string{"--bogus"}, "http://ignored", "/x")
 		assert.Equal(t, 2, code)
 	})
-	assert.Contains(t, stderr, "propose: unknown arg")
+	assert.Contains(t, stderr, "unknown arg")
 }
 
+// captureStderr redirects os.Stderr for the duration of fn and returns
+// whatever it wrote.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	orig := os.Stderr
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+
+	done := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
 
 	fn()
-
-	require.NoError(t, w.Close())
-	os.Stderr = orig
-
-	out, err := io.ReadAll(r)
-	require.NoError(t, err)
-	return string(out)
-}
-
-func TestGitBranch_NotAGitRepo_ReturnsEmpty(t *testing.T) {
-	tmp := t.TempDir()
-	got := gitBranch(tmp)
-	assert.Equal(t, "", got, "must not error on non-git dir")
+	w.Close()
+	return <-done
 }

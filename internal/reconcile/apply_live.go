@@ -138,7 +138,7 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			SSHHostPriv:            sshHostPriv,
 			SSHHostPub:             sshHostPub,
 			CommandsManifest:       commandsManifest,
-			Run:                    guestbin.Run(),
+			Devmg:                  guestbin.Devmg(),
 			MutagenAgentLinuxArm64: mutagenAgent,
 			MutagenVersion:         strings.TrimPrefix(mutagen.EmbeddedVersion(), "v"),
 		}

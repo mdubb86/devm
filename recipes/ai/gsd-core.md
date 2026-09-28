@@ -75,7 +75,7 @@ GSD's surface while keeping hand-written `.claude/commands/*.md` and
 - **Runs under open egress** (`startup()` fires post-hydration, before
   the allowlist is enforced) — the automatic boot-time install has
   full network access. Both npm hosts stay in `network.allow:`
-  anyway, so a manual `run install-gsd-core` from an enforced-egress
+  anyway, so a manual `devmg run install-gsd-core` from an enforced-egress
   `devm shell` session still works.
 - **GSD's persistent state lives in `.planning/`** (workspace-tracked,
   committed). Because it's git-tracked, it survives `devm teardown` on

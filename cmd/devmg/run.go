@@ -1,7 +1,3 @@
-// run is the guest-side command dispatcher. Reads /opt/devm/commands.json,
-// walks up from $PWD to find its containing repo, verifies the requested
-// name is registered for that repo, then sources devm.sh (+devm.me.sh) and
-// invokes the named function from the repo's guest path.
 package main
 
 import (
@@ -21,12 +17,17 @@ type manifest struct {
 	} `json:"repos"`
 }
 
-func main() {
-	if len(os.Args) < 2 || os.Args[1] == "" {
-		fmt.Fprintln(os.Stderr, "run: usage: run <command>")
-		os.Exit(2)
+// runMain implements `devmg run`. Reads /opt/devm/commands.json, walks
+// up from $PWD to find its containing repo, verifies the requested
+// name is registered for that repo, then sources devm.sh (+devm.me.sh)
+// and syscall.Exec's bash to invoke the named function from the repo's
+// guest path. Never returns on success — bash replaces this process.
+func runMain(args []string) int {
+	if len(args) == 0 || args[0] == "" {
+		fmt.Fprintln(os.Stderr, "usage: devmg run <command>")
+		return 2
 	}
-	name := os.Args[1]
+	name := args[0]
 
 	manifestPath := os.Getenv("DEVM_COMMANDS_MANIFEST")
 	if manifestPath == "" {
@@ -34,19 +35,19 @@ func main() {
 	}
 	body, err := os.ReadFile(manifestPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "run: cannot read manifest %s: %v\n", manifestPath, err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "devmg run: cannot read manifest %s: %v\n", manifestPath, err)
+		return 1
 	}
 	var m manifest
 	if err := json.Unmarshal(body, &m); err != nil {
-		fmt.Fprintf(os.Stderr, "run: parse manifest: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "devmg run: parse manifest: %v\n", err)
+		return 1
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "run: getwd: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "devmg run: getwd: %v\n", err)
+		return 1
 	}
 	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
 		cwd = resolved
@@ -54,12 +55,12 @@ func main() {
 
 	repoName, guestPath, ok := findRepo(m, cwd)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "run: not inside a registered repo")
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, "devmg run: not inside a registered repo")
+		return 1
 	}
 	if !registered(m.Repos[repoName].Commands, name) {
-		fmt.Fprintf(os.Stderr, "run: command %s not registered in repo %s\n", name, repoName)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "devmg run: command %s not registered in repo %s\n", name, repoName)
+		return 1
 	}
 
 	scriptBody := fmt.Sprintf(`set -eo pipefail
@@ -69,9 +70,10 @@ cd "%s"
 %s`, guestPath, name)
 
 	if err := syscall.Exec("/bin/bash", []string{"bash", "-c", scriptBody}, os.Environ()); err != nil {
-		fmt.Fprintf(os.Stderr, "run: exec bash: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "devmg run: exec bash: %v\n", err)
+		return 1
 	}
+	return 0 // unreachable
 }
 
 // findRepo finds the repo whose guestPath is a prefix of cwd (walking up

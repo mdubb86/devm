@@ -39,21 +39,17 @@ type BuildInput struct {
 	DockerRuncShim []byte
 	DockerCLIShim  []byte
 
-	Pop []byte
-
-	// Propose is the compiled linux/arm64 propose binary (see cmd/propose).
-	// Written to /opt/devm/bin/propose. Nil in tests that don't need it.
-	Propose []byte
+	// Devmg is the compiled linux/arm64 devmg binary (see cmd/devmg) —
+	// the single guest-side dispatcher carrying pop / propose / run
+	// subcommands. Written to bin/devmg in the tar; install.sh's
+	// existing bin/* loop symlinks it to /usr/local/bin/devmg. Nil in
+	// tests that don't need it.
+	Devmg []byte
 
 	// CommandsManifest is the pre-rendered body of /opt/devm/commands.json
 	// (see internal/render/commands.go's RenderCommandsManifest). Empty ⇒
 	// no file emitted.
 	CommandsManifest []byte
-
-	// Run is the compiled linux/arm64 run binary (see cmd/run). Written
-	// to bin/run in the tar; install.sh's existing bin/* loop symlinks it
-	// to /usr/local/bin/run. Empty ⇒ no file emitted.
-	Run []byte
 
 	// MutagenAgentLinuxArm64 is the linux/arm64 mutagen-agent binary
 	// bytes. Pre-installed in the guest so mutagen's transport skips its
@@ -198,25 +194,14 @@ func Build(in BuildInput) ([]byte, error) {
 		}
 	}
 
-	if len(in.Pop) > 0 {
-		if err := writeEntry(tw, "bin/pop", 0o755, in.Pop); err != nil {
-			return nil, err
-		}
-	}
-
-	if len(in.Propose) > 0 {
-		if err := writeEntry(tw, "bin/propose", 0o755, in.Propose); err != nil {
-			return nil, fmt.Errorf("propose entry: %w", err)
+	if len(in.Devmg) > 0 {
+		if err := writeEntry(tw, "bin/devmg", 0o755, in.Devmg); err != nil {
+			return nil, fmt.Errorf("devmg entry: %w", err)
 		}
 	}
 
 	if len(in.CommandsManifest) > 0 {
 		if err := writeEntry(tw, "commands.json", 0o644, in.CommandsManifest); err != nil {
-			return nil, err
-		}
-	}
-	if len(in.Run) > 0 {
-		if err := writeEntry(tw, "bin/run", 0o755, in.Run); err != nil {
 			return nil, err
 		}
 	}

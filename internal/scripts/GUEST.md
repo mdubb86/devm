@@ -44,10 +44,10 @@ something breaks.
   NOT reach that file, and today the only way to get them there is a
   git commit + push + Mac-side pull.
 - **To open a specific guest-side file on the Mac** (e.g. a screenshot
-  or generated artifact you just wrote), run `pop <path>` from here —
-  it resolves a `$WORKSPACE`-anchored absolute or relative path,
-  translates it to the file's Mac-side mirror location, and opens it
-  there with its default app. No need to ask the Mac user.
+  or generated artifact you just wrote), run `devmg pop <path>` from
+  here — it resolves a `$WORKSPACE`-anchored absolute or relative
+  path, translates it to the file's Mac-side mirror location, and
+  opens it there with its default app. No need to ask the Mac user.
 - Other volumes (declared as `volumes:` in devm.yaml) work the same
   way: a devm-managed Mac-side mirror directory kept in sync with the
   guest path via mutagen, surviving `devm teardown` (which wipes
@@ -63,8 +63,8 @@ something breaks.
 - `sudo systemctl restart <svc>` — restart your own services.
 - Edit `devm.yaml` in `$WORKSPACE`. The edit does NOT reach the Mac
   project directory (which is what `devm reconcile` reads) — for
-  that, use `/opt/devm/bin/propose` (see below) or commit + push it
-  and have the Mac user pull.
+  that, use `devmg propose` (see below) or commit + push it and have
+  the Mac user pull.
 - Read your own logs: `journalctl -u <svc>`, `/var/log/…`, etc.
 
 ## devm.yaml lives on the Mac; you edit /home/devm/devm.yaml
@@ -75,13 +75,14 @@ and your change reaches the Mac automatically.
 
 When you're done editing, tell the daemon it's ready for review:
 
-    /opt/devm/bin/propose --reason "add postgres for feature-X"
+    devmg propose --reason "add postgres for feature-X"
 
 That records your attribution (branch, cwd, reason) as pending. The
 human approves via `devm approve` or the menu bar; `devm reconcile`
 then applies your change.
 
-devm.me.yaml works the same way; pass `--kind devm.me.yaml`.
+devm.me.yaml / devm.sh / devm.me.sh work the same way; pass
+`--kind devm.me.yaml` (or `devm.sh` / `devm.me.sh`).
 
 No commits, no push/pull. The file is not in your repo.
 

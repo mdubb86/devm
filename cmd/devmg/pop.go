@@ -1,18 +1,3 @@
-// pop is the guest-side binary that ships a "show this on the Mac"
-// request over to the daemon. It's installed at /opt/devm/bin/pop
-// via the provisioning bundle. The daemon (internal/serviceapi/pop.go)
-// either resolves a filesystem path (cwd-then-project-root) to its
-// Mac-side mirror and hands it to macOS `open`, or — when the arg is
-// an http:// / https:// URL — passes the URL straight to `open`
-// (which routes it to the Mac's default browser).
-//
-// Usage:
-//
-//	pop <path-or-url> [-- <open-args>...]
-//
-// Reaches the daemon over softnet: guest TCP 192.168.127.1:81 is
-// forwarded (softnet ForwardTargets.Pop, per project) to the daemon's
-// per-project pop HTTP listener.
 package main
 
 import (
@@ -28,11 +13,20 @@ import (
 
 const popEndpoint = "http://192.168.127.1:81/pop"
 
-func main() {
-	args := os.Args[1:]
+// popMain implements `devmg pop`. Returns the process exit code.
+//
+// The daemon (internal/serviceapi/pop.go) either resolves a filesystem
+// path (cwd-then-project-root) to its Mac-side mirror and hands it to
+// macOS `open`, or — when the arg is an http:// / https:// URL —
+// passes the URL straight to `open`.
+//
+// Reaches the daemon over softnet: guest TCP 192.168.127.1:81 is
+// forwarded (softnet ForwardTargets.Pop, per project) to the daemon's
+// per-project pop HTTP listener.
+func popMain(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: pop <path-or-url> [-- <open-args>...]")
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "usage: devmg pop <path-or-url> [-- <open-args>...]")
+		return 2
 	}
 
 	// Split "<path> [-- <open-args>...]" — everything before "--" is
@@ -40,10 +34,10 @@ func main() {
 	// open.
 	var pathArg string
 	var openArgs []string
-	if idx := indexOf(args, "--"); idx >= 0 {
+	if idx := indexOfString(args, "--"); idx >= 0 {
 		if idx == 0 {
-			fmt.Fprintln(os.Stderr, "pop: missing path before --")
-			os.Exit(2)
+			fmt.Fprintln(os.Stderr, "devmg pop: missing path before --")
+			return 2
 		}
 		pathArg = args[0]
 		openArgs = args[idx+1:]
@@ -53,8 +47,8 @@ func main() {
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pop: cannot resolve cwd: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "devmg pop: cannot resolve cwd: %v\n", err)
+		return 1
 	}
 
 	bodyMap := map[string]any{
@@ -71,25 +65,26 @@ func main() {
 	}
 	body, err := json.Marshal(bodyMap)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pop: marshal request: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "devmg pop: marshal request: %v\n", err)
+		return 1
 	}
 
 	resp, err := http.Post(popEndpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pop: could not reach devm daemon on 192.168.127.1:81 — is the VM properly started?\n%v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "devmg pop: could not reach devm daemon on 192.168.127.1:81 — is the VM properly started?\n%v\n", err)
+		return 1
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		io.Copy(os.Stderr, resp.Body)
-		os.Exit(1)
+		return 1
 	}
 	io.Copy(os.Stdout, resp.Body)
+	return 0
 }
 
-func indexOf(ss []string, s string) int {
+func indexOfString(ss []string, s string) int {
 	for i, v := range ss {
 		if v == s {
 			return i
