@@ -108,6 +108,11 @@ type ReconcileResult struct {
 	Applied          []reconcile.Change
 	AppliedIronProxy []reconcile.Change // BucketEgressRestart changes applied via /vm/apply-iron-proxy
 	IronProxyRevived bool               // true when iron-proxy was dead and this reconcile respawned it
+	// Pending carries live-bucket changes recorded but NOT applied
+	// because the VM was stopped. Rendered under a "will apply on next
+	// `devm start`" heading; the daemon populates it only in the
+	// stopped-VM branch of /vm/reconcile.
+	Pending          []reconcile.Change
 	RecreateRequired []reconcile.Change
 	Flavor           reconcile.FlavorKind
 	Sessions         []Session
@@ -496,12 +501,19 @@ func FormatStatusAllJSON(rows []serviceapi.ProjectStatus) string {
 // FormatReconcileText renders ReconcileResult for human terminals.
 func FormatReconcileText(r ReconcileResult) string {
 	var b strings.Builder
-	if len(r.Applied) == 0 && len(r.AppliedIronProxy) == 0 && len(r.RecreateRequired) == 0 {
+	if len(r.Applied) == 0 && len(r.AppliedIronProxy) == 0 && len(r.RecreateRequired) == 0 && len(r.Pending) == 0 {
 		return "Sandbox converged; no changes.\n"
 	}
 	if len(r.Applied) > 0 {
 		fmt.Fprintf(&b, "Applied %d live change(s):\n", len(r.Applied))
 		for _, c := range r.Applied {
+			fmt.Fprintln(&b, "  "+formatChange(c))
+		}
+		fmt.Fprintln(&b)
+	}
+	if len(r.Pending) > 0 {
+		fmt.Fprintf(&b, "%d change(s) will apply on next `devm start`:\n", len(r.Pending))
+		for _, c := range r.Pending {
 			fmt.Fprintln(&b, "  "+formatChange(c))
 		}
 		fmt.Fprintln(&b)
@@ -730,6 +742,7 @@ func FormatReconcileJSON(r ReconcileResult) string {
 		SandboxState     string       `json:"sandbox_state"`
 		Applied          []changeJSON `json:"applied"`
 		AppliedIronProxy []changeJSON `json:"applied_iron_proxy,omitempty"`
+		Pending          []changeJSON `json:"pending,omitempty"`
 		IronProxyRevived bool         `json:"iron_proxy_revived,omitempty"`
 		RestartRequired  *changeSet   `json:"restart_required,omitempty"`
 		RecreateRequired *changeSet   `json:"recreate_required,omitempty"`
@@ -753,9 +766,18 @@ func FormatReconcileJSON(r ReconcileResult) string {
 		ipRestart[i] = toJSON(c)
 	}
 
+	var pending []changeJSON
+	if len(r.Pending) > 0 {
+		pending = make([]changeJSON, len(r.Pending))
+		for i, c := range r.Pending {
+			pending[i] = toJSON(c)
+		}
+	}
+
 	out := body{
 		Rendered: r.Rendered, SandboxState: r.SandboxState,
 		Applied: applied, AppliedIronProxy: ipRestart,
+		Pending:          pending,
 		IronProxyRevived: r.IronProxyRevived,
 		NextAction:       r.NextAction,
 	}
@@ -854,6 +876,10 @@ func changeKindJSON(k reconcile.ChangeKind) string {
 		return "ssh_endpoint_healed"
 	case reconcile.KindCommandsChange:
 		return "commands_change"
+	case reconcile.KindBundleRefresh:
+		return "bundle_refresh"
+	case reconcile.KindPathChange:
+		return "path_change"
 	}
 	return "unknown"
 }

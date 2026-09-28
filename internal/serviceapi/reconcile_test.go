@@ -1124,3 +1124,87 @@ func newReconcileHandlerForTest(cfg identity.Config) http.Handler {
 	locks := NewProjectLocks()
 	return reconcileHandler(cfg, NewStateCache(), locks, &testApplyStub{}, &testPackagesStub{}, &testTartListStub{}, supervisor.New("/tmp"), nil, 0)
 }
+
+// TestVMReconcile_LiveApplyStampsBundleFingerprintOnSnapshot pins the
+// stamp at the tail of the live-apply branch (reconcile.go:353): a
+// running VM whose stored BundleFingerprint has drifted from
+// CurrentBundleFingerprint(cache) must, after a successful live-apply,
+// have the snapshot rewritten with the current fingerprint. Without the
+// stamp the drift re-emits KindBundleRefresh every reconcile forever.
+func TestVMReconcile_LiveApplyStampsBundleFingerprintOnSnapshot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	oldCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{
+		Cfg:               oldCfg,
+		BundleFingerprint: "old-fp",
+	}))
+
+	newCfg := oldCfg
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	registerFakeSoftnet(t, "p")
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nenv:\n  FOO: old\n", "")
+
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	cache := NewStateCache()
+	cache.SetBuild(Build{Fingerprint: "new-fp"})
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, cache, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "new-fp", got.BundleFingerprint,
+		"live-apply must stamp the current bundle fingerprint or drift re-emits forever")
+}
+
+// TestVMReconcile_StoppedVM_StaleFingerprint_ReturnsPending pins the
+// stopped-VM UX: a bundle-fingerprint drift on a stopped VM must
+// surface on the response's Pending field so the CLI can say the
+// refresh will apply on next start, instead of the misleading
+// "Sandbox converged; no changes." verdict.
+func TestVMReconcile_StoppedVM_StaleFingerprint_ReturnsPending(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{
+		Cfg:               cfg,
+		BundleFingerprint: "old-fp",
+	}))
+
+	projDir := setupProjectDirForCfg(t, "p", cfg)
+	req := VMReconcileRequest{Name: "p", Cfg: cfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	cache := NewStateCache()
+	cache.SetBuild(Build{Fingerprint: "new-fp"})
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, cache, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: false, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "stopped", resp.SandboxState)
+	assert.Empty(t, resp.Applied,
+		"stopped VM must not stamp anything as Applied")
+	assert.Contains(t, changeKinds(resp.Pending), reconcile.KindBundleRefresh,
+		"stopped-VM bundle drift must surface as Pending so the CLI can announce it")
+}

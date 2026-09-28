@@ -878,3 +878,45 @@ func TestFormatReconcileText_NoChangesEmitsConvergedLine(t *testing.T) {
 	out := FormatReconcileText(ReconcileResult{})
 	assert.Contains(t, out, "Sandbox converged; no changes.")
 }
+
+// TestChangeKindJSON_HandlesBundleRefreshAndPathChange pins that
+// changeKindJSON maps the newer kinds explicitly rather than falling
+// through to "unknown" — otherwise `devm reconcile --json` would
+// silently regress on any reconcile whose changes include one of these.
+func TestChangeKindJSON_HandlesBundleRefreshAndPathChange(t *testing.T) {
+	assert.Equal(t, "bundle_refresh", changeKindJSON(reconcile.KindBundleRefresh))
+	assert.Equal(t, "path_change", changeKindJSON(reconcile.KindPathChange))
+}
+
+// TestFormatReconcileText_PendingRendersWillApplyOnNextStart pins the
+// stopped-VM UX: a bundle-refresh recorded on a stopped VM must appear
+// under "will apply on next `devm start`" instead of being silently
+// dropped into a spurious "converged" verdict.
+func TestFormatReconcileText_PendingRendersWillApplyOnNextStart(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		SandboxState: "stopped",
+		Pending:      []reconcile.Change{{Kind: reconcile.KindBundleRefresh}},
+	})
+	assert.Contains(t, out, "1 change(s) will apply on next `devm start`:")
+	assert.Contains(t, out, "~ bundle: refreshed (daemon fingerprint updated)")
+	assert.NotContains(t, out, "Sandbox converged")
+}
+
+// TestFormatReconcileJSON_PendingSerialized proves the JSON output
+// carries the pending changes under a top-level "pending" array so a
+// JSON consumer can see the same drift the human formatter does.
+func TestFormatReconcileJSON_PendingSerialized(t *testing.T) {
+	out := FormatReconcileJSON(ReconcileResult{
+		Rendered:     true,
+		SandboxState: "stopped",
+		Pending:      []reconcile.Change{{Kind: reconcile.KindBundleRefresh}},
+	})
+	var parsed struct {
+		Pending []struct {
+			Kind string `json:"kind"`
+		} `json:"pending"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+	require.Len(t, parsed.Pending, 1)
+	assert.Equal(t, "bundle_refresh", parsed.Pending[0].Kind)
+}

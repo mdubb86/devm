@@ -109,6 +109,7 @@ func RunReconcile(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoR
 		Applied:          resp.Applied,
 		AppliedIronProxy: ipRestartApplied,
 		IronProxyRevived: ironProxyRevived,
+		Pending:          resp.Pending,
 		RecreateRequired: resp.TeardownRequired,
 	}
 

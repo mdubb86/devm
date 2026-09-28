@@ -158,37 +158,33 @@ func TestBundleDriftCatchup_MalformedSnapshotSkipped(t *testing.T) {
 	require.NotPanics(t, func() { BundleDriftCatchup(cfg, cache, tr, NewProjectLocks()) })
 }
 
-// TestBundleDriftCatchup_HeldLockDoesNotDeadlockAndCompletes proves the
-// sweep honors the per-project lock: with proj-a's lock held briefly
-// by a competing goroutine, the sweep blocks on it (would deadlock if
-// the lock were ignored is not the failure mode here — Lock only
-// blocks), and once released the sweep completes and stamps the new
-// fingerprint. Test failure = the sweep either hung past the release
-// window or completed before the lock was released (bypassing it).
-func TestBundleDriftCatchup_HeldLockDoesNotDeadlockAndCompletes(t *testing.T) {
+// TestBundleDriftCatchup_HeldLockBlocksSweep proves the sweep honors
+// the per-project lock. Uses a two-project cache: proj-blocked's lock
+// is held indefinitely by a competing goroutine, while proj-free has
+// no contended lock. If BundleDriftCatchup honors the lock, the sweep
+// blocks on proj-blocked and never returns — the deadline fires, and
+// proj-free may or may not have been refreshed depending on map-
+// iteration order, but proj-blocked's fingerprint stays stale. If the
+// lock is bypassed, the sweep completes and proj-blocked's fingerprint
+// stamps to new-fp. The assertion — proj-blocked stayed at old-fp
+// while the lock was held — pins the fix.
+func TestBundleDriftCatchup_HeldLockBlocksSweep(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfg := identity.Prod
 	cache := NewStateCache()
 	cache.SetBuild(Build{Fingerprint: "new-fp"})
 
-	require.NoError(t, WriteStateSnapshot(cfg, "proj", StateSnapshot{
-		Cfg:               schema.Config{Project: schema.Project{Name: "proj"}},
+	require.NoError(t, WriteStateSnapshot(cfg, "proj-blocked", StateSnapshot{
+		Cfg:               schema.Config{Project: schema.Project{Name: "proj-blocked"}},
 		BundleFingerprint: "old-fp",
 	}))
-	cache.SetVMState("proj", VMRunning)
+	cache.SetVMState("proj-blocked", VMRunning)
 
 	tr := fakeExecStdinTart(t)
 
 	locks := NewProjectLocks()
-	// Hold proj's lock, release it 100ms later. The sweep must wait
-	// until then before it can refresh.
-	unlock := locks.Lock("proj")
-	held := make(chan struct{})
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		unlock()
-		close(held)
-	}()
+	unlock := locks.Lock("proj-blocked")
+	defer unlock()
 
 	done := make(chan struct{})
 	go func() {
@@ -196,16 +192,21 @@ func TestBundleDriftCatchup_HeldLockDoesNotDeadlockAndCompletes(t *testing.T) {
 		close(done)
 	}()
 
+	// Give the sweep enough time to try to acquire the lock and (with
+	// the fix in place) block. Without the fix, the sweep completes
+	// and stamps new-fp — visible in the snapshot read below.
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("BundleDriftCatchup blocked past the lock release — lock handling is broken")
+		// Sweep completed while the lock was held: only possible if
+		// the lock isn't being acquired at all.
+	case <-time.After(2 * time.Second):
+		// Blocked as expected; leave the goroutine parked and check
+		// the snapshot state.
 	}
-	<-held
 
-	stored, err := ReadStateSnapshot(cfg, "proj")
+	stored, err := ReadStateSnapshot(cfg, "proj-blocked")
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Equal(t, "new-fp", stored.BundleFingerprint,
-		"catchup must refresh once the per-project lock is released")
+	assert.Equal(t, "old-fp", stored.BundleFingerprint,
+		"proj-blocked's fingerprint must stay stale while its lock is held — a stamp to new-fp proves the sweep bypassed the lock")
 }

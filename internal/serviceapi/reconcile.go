@@ -49,6 +49,12 @@ type VMReconcileResponse struct {
 	AppliedIronProxy []reconcile.Change `json:"applied_iron_proxy,omitempty"`
 	TeardownRequired []reconcile.Change `json:"teardown_required"`
 	SandboxState     string             `json:"sandbox_state"` // "running" or "stopped"
+	// Pending carries live-bucket changes recorded but NOT applied —
+	// the VM was stopped, so they'll take effect on the next
+	// `devm start`'s provisioner bundle pipe. Populated only in the
+	// stopped-VM branch; empty (omitted) for a running VM where the
+	// same changes appear in Applied.
+	Pending []reconcile.Change `json:"pending,omitempty"`
 }
 
 // ApplyLiver is the daemon-internal contract for applying live changes
@@ -264,11 +270,15 @@ func reconcileHandler(cfg identity.Config, cache *StateCache, locks *ProjectLock
 			// Skip apply + snapshot write; return classification only.
 			// Changes surface again at cold-start via the provisioner
 			// bundle pipe, which will see them via the same diff engine.
+			// live goes back on Pending so the CLI can surface "N
+			// change(s) will apply on next devm start" instead of the
+			// misleading "converged; no changes."
 			resp := VMReconcileResponse{
 				Applied:          nil,
 				AppliedIronProxy: ironProxy,
 				TeardownRequired: teardown,
 				SandboxState:     state,
+				Pending:          live,
 			}
 			body, _ := json.Marshal(resp)
 			w.Header().Set("Content-Type", "application/json")
