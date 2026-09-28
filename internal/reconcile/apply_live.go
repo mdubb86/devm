@@ -20,10 +20,8 @@ import (
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/devmbundle"
 	"github.com/mdubb86/devm/internal/docker"
-	"github.com/mdubb86/devm/internal/guestbin"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/mutagen"
-	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -91,6 +89,11 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 			templateChanges = append(templateChanges, c)
 		case KindEnvAdd, KindEnvRemove, KindEnvChange, KindPathChange, KindCommandsChange:
 			bundleRebuildNeeded = true
+		case KindBundleRefresh:
+			// Daemon-side blob drift (gdevm, GUEST.md, env template,
+			// commands manifest) detected by ComputeAllChanges. Route
+			// into the existing bundle-pipe path.
+			bundleRebuildNeeded = true
 		case KindServiceDirectChange:
 			// Ingress for direct services is pushed to softnet's
 			// declarative expose map by the daemon, not applied in-guest.
@@ -121,30 +124,9 @@ func ApplyLive(tr *tart.Tart, vmName string, changes []Change, cfg schema.Config
 		// /etc/environment on every subsequent exec, and (for template changes) the
 		// dispatcher below reads the freshly-piped installers. Running
 		// shells keep their old env until they re-exec — hence BucketLive.
-		commandsManifest, err := render.RenderCommandsManifest(cfg, repoRoot)
+		in, err := devmbundle.BuildInputFor(cfg, repoRoot, daemonRuntimeDir, caPEM, sshAuthPub, sshHostPriv, sshHostPub)
 		if err != nil {
-			return fmt.Errorf("render commands manifest: %w", err)
-		}
-		mutagenAgent, err := mutagen.LinuxArm64Agent()
-		if err != nil {
-			return fmt.Errorf("extract mutagen agent: %w", err)
-		}
-		in := devmbundle.BuildInput{
-			Cfg:                    cfg,
-			RepoRoot:               repoRoot,
-			DaemonRuntimeDir:       daemonRuntimeDir,
-			CARootPEM:              caPEM,
-			SSHAuthorizedPubkey:    sshAuthPub,
-			SSHHostPriv:            sshHostPriv,
-			SSHHostPub:             sshHostPub,
-			CommandsManifest:       commandsManifest,
-			Gdevm:                  guestbin.Gdevm(),
-			MutagenAgentLinuxArm64: mutagenAgent,
-			MutagenVersion:         strings.TrimPrefix(mutagen.EmbeddedVersion(), "v"),
-		}
-		if cfg.Docker {
-			in.DockerRuncShim = docker.Shim()
-			in.DockerCLIShim = docker.DockerShim()
+			return fmt.Errorf("apply_live: build bundle input: %w", err)
 		}
 		tar, err := devmbundle.Build(in)
 		if err != nil {

@@ -350,7 +350,7 @@ func reconcileHandler(cfg identity.Config, cache *StateCache, locks *ProjectLock
 				http.Error(w, fmt.Sprintf("push test hosts: %v", err), http.StatusInternalServerError)
 				return
 			}
-			if err := WriteStateSnapshot(cfg, req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, ProjectIP: projectIP, MacCwd: req.WorkspaceHostPath}); err != nil {
+			if err := WriteStateSnapshot(cfg, req.Name, StateSnapshot{Cfg: merged, TemplateContents: mergedTemplates, SecretHashes: oldSecretHashes, ProjectIP: projectIP, MacCwd: req.WorkspaceHostPath, BundleFingerprint: CurrentBundleFingerprint(cache)}); err != nil {
 				http.Error(w, fmt.Sprintf("write state: %v", err), http.StatusInternalServerError)
 				return
 			}
