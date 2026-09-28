@@ -6,6 +6,7 @@ package recipes
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	_ "modernc.org/sqlite"
@@ -139,6 +140,80 @@ func (q *Query) Get(name string) (Recipe, error) {
 	}
 	r.Since = since.String
 	return r, nil
+}
+
+// AssetListing is one row from the assets table with content omitted;
+// callers fetch bodies individually via GetAsset.
+type AssetListing struct {
+	Path string
+	Size int64
+	Mode uint32
+}
+
+// ListAssets returns all assets for recipeName, sorted by Path ascending.
+// Returns an empty slice with no error if the recipe exists but has no
+// assets. Returns ErrRecipeNotFound if no recipe row with that name
+// exists.
+func (q *Query) ListAssets(ctx context.Context, recipeName string) ([]AssetListing, error) {
+	if err := q.assertRecipeExists(ctx, recipeName); err != nil {
+		return nil, err
+	}
+	rows, err := q.db.QueryContext(ctx,
+		`SELECT path, size, mode FROM assets WHERE recipe_name = ? ORDER BY path ASC`,
+		recipeName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query assets for %q: %w", recipeName, err)
+	}
+	defer rows.Close()
+	out := []AssetListing{}
+	for rows.Next() {
+		var a AssetListing
+		if err := rows.Scan(&a.Path, &a.Size, &a.Mode); err != nil {
+			return nil, fmt.Errorf("scan asset row: %w", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetAsset returns the raw content bytes for one asset. Validates path
+// before touching the DB.
+func (q *Query) GetAsset(ctx context.Context, recipeName, path string) ([]byte, error) {
+	if err := validAssetPath(path); err != nil {
+		return nil, err
+	}
+	if err := q.assertRecipeExists(ctx, recipeName); err != nil {
+		return nil, err
+	}
+	var body []byte
+	err := q.db.QueryRowContext(ctx,
+		`SELECT content FROM assets WHERE recipe_name = ? AND path = ?`,
+		recipeName, path,
+	).Scan(&body)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, fmt.Errorf("%w: %s in %s", ErrAssetNotFound, path, recipeName)
+	case err != nil:
+		return nil, fmt.Errorf("query asset %s/%s: %w", recipeName, path, err)
+	}
+	return body, nil
+}
+
+func (q *Query) assertRecipeExists(ctx context.Context, name string) error {
+	var one int
+	err := q.db.QueryRowContext(ctx,
+		`SELECT 1 FROM recipes WHERE name = ? LIMIT 1`, name).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("%w: %s", ErrRecipeNotFound, name)
+	case err != nil:
+		return fmt.Errorf("check recipe %s: %w", name, err)
+	}
+	return nil
 }
 
 // Version returns the meta.version string ('recipes-vX.Y.Z').

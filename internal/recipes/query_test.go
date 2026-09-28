@@ -3,6 +3,7 @@ package recipes
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -142,6 +143,122 @@ func TestFixtureExists(t *testing.T) {
 	dbPath := makeFixtureDB(t)
 	_, err := os.Stat(dbPath)
 	require.NoError(t, err)
+}
+
+// openFixtureWithAssets creates a fresh recipes DB, inserts the given
+// recipes and their assets directly via SQL, and returns an open Query.
+// A nil map creates only meta + empty tables. An empty inner map creates
+// the recipe row with zero assets.
+func openFixtureWithAssets(t *testing.T, recipes map[string]map[string][]byte) *Query {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "recipes.db")
+	require.NoError(t, buildFixtureDB(dbPath))
+
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	for name, assets := range recipes {
+		_, err := db.ExecContext(ctx,
+			`INSERT INTO recipes(name, category, display_name, description, keywords, content, since, updated_at)
+			 VALUES (?, 'tool', ?, '', '', '', 'recipes-v2.0.0', 1)`,
+			name, name)
+		require.NoError(t, err)
+		for path, content := range assets {
+			_, err := db.ExecContext(ctx,
+				`INSERT INTO assets(recipe_name, path, content, size, mode)
+				 VALUES (?, ?, ?, ?, ?)`,
+				name, path, content, int64(len(content)), 0o644)
+			require.NoError(t, err)
+		}
+	}
+	require.NoError(t, db.Close())
+
+	q, err := Open(dbPath)
+	require.NoError(t, err)
+	return q
+}
+
+func TestListAssets_ReturnsSortedEmptyForNoAssets(t *testing.T) {
+	q := openFixtureWithAssets(t, map[string]map[string][]byte{
+		"tool/foo": {}, // recipe exists, zero assets
+	})
+	defer q.Close()
+
+	got, err := q.ListAssets(context.Background(), "tool/foo")
+	require.NoError(t, err)
+	assert.Empty(t, got, "recipe with no assets returns empty listing (not nil err)")
+}
+
+func TestListAssets_ReturnsSortedByPath(t *testing.T) {
+	q := openFixtureWithAssets(t, map[string]map[string][]byte{
+		"tool/bar": {
+			"z/last.md":   []byte("z"),
+			"a/first.md":  []byte("a"),
+			"m/middle.md": []byte("m"),
+		},
+	})
+	defer q.Close()
+
+	got, err := q.ListAssets(context.Background(), "tool/bar")
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, "a/first.md", got[0].Path)
+	assert.Equal(t, "m/middle.md", got[1].Path)
+	assert.Equal(t, "z/last.md", got[2].Path)
+	assert.Equal(t, int64(1), got[0].Size)
+	assert.NotZero(t, got[0].Mode)
+}
+
+func TestListAssets_MissingRecipe_Error(t *testing.T) {
+	q := openFixtureWithAssets(t, nil)
+	defer q.Close()
+
+	_, err := q.ListAssets(context.Background(), "tool/nonexistent")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrRecipeNotFound))
+}
+
+func TestGetAsset_HappyPath(t *testing.T) {
+	body := []byte("skill content")
+	q := openFixtureWithAssets(t, map[string]map[string][]byte{
+		"tool/foo": {"skills/x.md": body},
+	})
+	defer q.Close()
+
+	got, err := q.GetAsset(context.Background(), "tool/foo", "skills/x.md")
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
+}
+
+func TestGetAsset_MissingAsset_Error(t *testing.T) {
+	q := openFixtureWithAssets(t, map[string]map[string][]byte{
+		"tool/foo": {"skills/x.md": []byte("y")},
+	})
+	defer q.Close()
+
+	_, err := q.GetAsset(context.Background(), "tool/foo", "skills/other.md")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrAssetNotFound))
+}
+
+func TestGetAsset_MissingRecipe_Error(t *testing.T) {
+	q := openFixtureWithAssets(t, nil)
+	defer q.Close()
+
+	_, err := q.GetAsset(context.Background(), "tool/nope", "skills/x.md")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrRecipeNotFound))
+}
+
+func TestGetAsset_InvalidPath_Error(t *testing.T) {
+	q := openFixtureWithAssets(t, map[string]map[string][]byte{
+		"tool/foo": {"skills/x.md": []byte("y")},
+	})
+	defer q.Close()
+
+	_, err := q.GetAsset(context.Background(), "tool/foo", "../etc/passwd")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidAssetPath))
 }
 
 func TestOpen_HasAssetsTableAndV2Version(t *testing.T) {
