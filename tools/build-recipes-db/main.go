@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mdubb86/devm/internal/recipes"
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite"
 )
@@ -52,11 +53,11 @@ func build(srcDir, outPath, version string) error {
 	defer db.Close()
 
 	ctx := context.Background()
-	if err := initSchema(ctx, db); err != nil {
+	if err := recipes.InitSchema(ctx, db); err != nil {
 		return err
 	}
 
-	var recipes []recipe
+	var parsed []recipe
 	err = filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -74,7 +75,7 @@ func build(srcDir, outPath, version string) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
-		recipes = append(recipes, r)
+		parsed = append(parsed, r)
 		return nil
 	})
 	if err != nil {
@@ -92,12 +93,12 @@ func build(srcDir, outPath, version string) error {
 		"INSERT INTO meta (key, value) VALUES (?, ?), (?, ?), (?, ?)",
 		"version", version,
 		"built_at", fmt.Sprintf("%d", builtAt),
-		"recipe_count", fmt.Sprintf("%d", len(recipes)),
+		"recipe_count", fmt.Sprintf("%d", len(parsed)),
 	); err != nil {
 		return err
 	}
 
-	for _, r := range recipes {
+	for _, r := range parsed {
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO recipes
 			   (name, category, display_name, description, keywords, content, since, updated_at)
@@ -118,36 +119,6 @@ func build(srcDir, outPath, version string) error {
 		}
 	}
 	return tx.Commit()
-}
-
-func initSchema(ctx context.Context, db *sql.DB) error {
-	stmts := []string{
-		`CREATE TABLE meta (
-			key   TEXT PRIMARY KEY,
-			value TEXT NOT NULL
-		)`,
-		`CREATE TABLE recipes (
-			name         TEXT PRIMARY KEY,
-			category     TEXT NOT NULL,
-			display_name TEXT NOT NULL,
-			description  TEXT NOT NULL,
-			keywords     TEXT NOT NULL,
-			content      TEXT NOT NULL,
-			since        TEXT,
-			updated_at   INTEGER NOT NULL
-		)`,
-		`CREATE INDEX idx_recipes_category ON recipes(category)`,
-		`CREATE VIRTUAL TABLE recipes_fts USING fts5(
-			name, display_name, description, keywords, content,
-			tokenize = 'porter'
-		)`,
-	}
-	for _, s := range stmts {
-		if _, err := db.ExecContext(ctx, s); err != nil {
-			return fmt.Errorf("init schema (%s): %w", strings.SplitN(s, "\n", 2)[0], err)
-		}
-	}
-	return nil
 }
 
 func parseRecipe(srcDir, path string) (recipe, error) {

@@ -151,3 +151,45 @@ func (q *Query) Version() (string, error) {
 	}
 	return v, nil
 }
+
+// InitSchema installs the recipes.db schema on an empty database. The
+// build tool and fixture helpers share this so both produce byte-
+// identical shape; the meta.version stamp is the caller's job.
+func InitSchema(ctx context.Context, db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE meta (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
+		`CREATE TABLE recipes (
+			name         TEXT PRIMARY KEY,
+			category     TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			description  TEXT NOT NULL,
+			keywords     TEXT NOT NULL,
+			content      TEXT NOT NULL,
+			since        TEXT,
+			updated_at   INTEGER NOT NULL
+		)`,
+		`CREATE INDEX idx_recipes_category ON recipes(category)`,
+		`CREATE VIRTUAL TABLE recipes_fts USING fts5(
+			name, display_name, description, keywords, content,
+			tokenize = 'porter'
+		)`,
+		`CREATE TABLE assets (
+			recipe_name TEXT NOT NULL,
+			path        TEXT NOT NULL,
+			content     BLOB NOT NULL,
+			size        INTEGER NOT NULL,
+			mode        INTEGER NOT NULL,
+			PRIMARY KEY (recipe_name, path)
+		) WITHOUT ROWID`,
+		`CREATE INDEX assets_by_recipe ON assets(recipe_name)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("recipes: init schema: %w", err)
+		}
+	}
+	return nil
+}

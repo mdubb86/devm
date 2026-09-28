@@ -67,15 +67,15 @@ func fakeReleasesServer(t *testing.T, version, dbPath string) *httptest.Server {
 func TestSync_FreshDownloadsDB(t *testing.T) {
 	cacheDir := t.TempDir()
 	srcDB := filepath.Join(t.TempDir(), "remote-recipes.db")
-	buildTinyDB(t, srcDB, "recipes-v1.0.0")
+	buildTinyDB(t, srcDB, "recipes-v2.0.0")
 
-	srv := fakeReleasesServer(t, "recipes-v1.0.0", srcDB)
+	srv := fakeReleasesServer(t, "recipes-v2.0.0", srcDB)
 	defer srv.Close()
 
 	s := NewSyncer(cacheDir, srv.URL+"/releases")
 	res, err := s.Sync(context.Background(), false /*lazy*/)
 	require.NoError(t, err)
-	assert.Equal(t, "recipes-v1.0.0", res.Version)
+	assert.Equal(t, "recipes-v2.0.0", res.Version)
 	assert.True(t, res.Downloaded)
 
 	_, err = os.Stat(filepath.Join(cacheDir, "recipes.db"))
@@ -85,10 +85,10 @@ func TestSync_FreshDownloadsDB(t *testing.T) {
 func TestSync_LazySkipsWhenCacheFresh(t *testing.T) {
 	cacheDir := t.TempDir()
 	srcDB := filepath.Join(t.TempDir(), "remote-recipes.db")
-	buildTinyDB(t, srcDB, "recipes-v1.0.0")
+	buildTinyDB(t, srcDB, "recipes-v2.0.0")
 
 	// Pre-populate cache + lastcheck timestamp ~ now.
-	buildTinyDB(t, filepath.Join(cacheDir, "recipes.db"), "recipes-v1.0.0")
+	buildTinyDB(t, filepath.Join(cacheDir, "recipes.db"), "recipes-v2.0.0")
 	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "recipes.lastcheck"),
 		[]byte(time.Now().Format(time.RFC3339)), 0o644))
 
@@ -101,20 +101,20 @@ func TestSync_LazySkipsWhenCacheFresh(t *testing.T) {
 
 func TestSync_ExplicitForcesRemoteCheck(t *testing.T) {
 	cacheDir := t.TempDir()
-	buildTinyDB(t, filepath.Join(cacheDir, "recipes.db"), "recipes-v1.0.0")
+	buildTinyDB(t, filepath.Join(cacheDir, "recipes.db"), "recipes-v2.0.0")
 	// lastcheck very recent
 	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "recipes.lastcheck"),
 		[]byte(time.Now().Format(time.RFC3339)), 0o644))
 
 	srcDB := filepath.Join(t.TempDir(), "remote-recipes.db")
-	buildTinyDB(t, srcDB, "recipes-v1.1.0") // newer
-	srv := fakeReleasesServer(t, "recipes-v1.1.0", srcDB)
+	buildTinyDB(t, srcDB, "recipes-v2.1.0") // newer
+	srv := fakeReleasesServer(t, "recipes-v2.1.0", srcDB)
 	defer srv.Close()
 
 	s := NewSyncer(cacheDir, srv.URL+"/releases")
 	res, err := s.Sync(context.Background(), false /*explicit*/)
 	require.NoError(t, err)
-	assert.Equal(t, "recipes-v1.1.0", res.Version)
+	assert.Equal(t, "recipes-v2.1.0", res.Version)
 	assert.True(t, res.Downloaded)
 }
 

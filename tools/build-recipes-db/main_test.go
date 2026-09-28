@@ -48,7 +48,7 @@ func writeFixtures(t *testing.T) string {
 func TestBuild_ProducesDBWithExpectedRows(t *testing.T) {
 	src := writeFixtures(t)
 	out := filepath.Join(t.TempDir(), "recipes.db")
-	require.NoError(t, build(src, out, "recipes-v1.0.0"))
+	require.NoError(t, build(src, out, "recipes-v2.0.0"))
 
 	db, err := sql.Open("sqlite", out)
 	require.NoError(t, err)
@@ -68,7 +68,7 @@ func TestBuild_ProducesDBWithExpectedRows(t *testing.T) {
 func TestBuild_FTSIndexesContent(t *testing.T) {
 	src := writeFixtures(t)
 	out := filepath.Join(t.TempDir(), "recipes.db")
-	require.NoError(t, build(src, out, "recipes-v1.0.0"))
+	require.NoError(t, build(src, out, "recipes-v2.0.0"))
 
 	db, err := sql.Open("sqlite", out)
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestBuild_MissingNameErrors(t *testing.T) {
 func TestBuild_RecordsMeta(t *testing.T) {
 	src := writeFixtures(t)
 	out := filepath.Join(t.TempDir(), "recipes.db")
-	require.NoError(t, build(src, out, "recipes-v1.2.3"))
+	require.NoError(t, build(src, out, "recipes-v2.1.3"))
 
 	db, err := sql.Open("sqlite", out)
 	require.NoError(t, err)
@@ -107,5 +107,5 @@ func TestBuild_RecordsMeta(t *testing.T) {
 	var v string
 	require.NoError(t, db.QueryRowContext(context.Background(),
 		"SELECT value FROM meta WHERE key = 'version'").Scan(&v))
-	assert.Equal(t, "recipes-v1.2.3", v)
+	assert.Equal(t, "recipes-v2.1.3", v)
 }

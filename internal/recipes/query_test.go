@@ -3,6 +3,7 @@ package recipes
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,11 +14,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// buildFixtureDB writes a schema-only recipes DB via the production
+// InitSchema, stamps meta.version = recipes-v2.0.0, and closes.
+// Used by tests asserting the shape callers can rely on.
+func buildFixtureDB(dbPath string) error {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := InitSchema(ctx, db); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO meta VALUES ('version', 'recipes-v2.0.0')`); err != nil {
+		return fmt.Errorf("buildFixtureDB: stamp version: %w", err)
+	}
+	return nil
+}
+
 // makeFixtureDB writes a minimal SQLite DB with two recipes for the
-// query-layer tests. Mirrors the schema build-recipes-db produces.
+// query-layer tests. Uses the production InitSchema, then inserts the
+// fixture rows.
 func makeFixtureDB(t *testing.T) string {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "recipes.db")
+	require.NoError(t, buildFixtureDB(dbPath))
 
 	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
@@ -25,24 +49,11 @@ func makeFixtureDB(t *testing.T) string {
 
 	ctx := context.Background()
 	stmts := []string{
-		`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-		`CREATE TABLE recipes (
-			name TEXT PRIMARY KEY, category TEXT NOT NULL,
-			display_name TEXT NOT NULL, description TEXT NOT NULL,
-			keywords TEXT NOT NULL, content TEXT NOT NULL,
-			since TEXT, updated_at INTEGER NOT NULL
-		)`,
-		`CREATE INDEX idx_recipes_category ON recipes(category)`,
-		`CREATE VIRTUAL TABLE recipes_fts USING fts5(
-			name, display_name, description, keywords, content,
-			tokenize = 'porter'
-		)`,
-		`INSERT INTO meta VALUES ('version', 'recipes-v1.0.0')`,
 		`INSERT INTO recipes VALUES
 			('tool/lang/python', 'lang', 'Python (uv)', 'uv-managed Python',
-			 'python uv pyproject', '# Python content', 'recipes-v1.0.0', 1),
+			 'python uv pyproject', '# Python content', 'recipes-v2.0.0', 1),
 			('tool/db/postgres', 'db', 'PostgreSQL', 'Postgres service',
-			 'postgres psql db', '# Postgres content', 'recipes-v1.0.0', 1)`,
+			 'postgres psql db', '# Postgres content', 'recipes-v2.0.0', 1)`,
 		`INSERT INTO recipes_fts (name, display_name, description, keywords, content) VALUES
 			('tool/lang/python', 'Python (uv)', 'uv-managed Python', 'python uv pyproject', '# Python content'),
 			('tool/db/postgres', 'PostgreSQL', 'Postgres service', 'postgres psql db', '# Postgres content')`,
@@ -123,7 +134,7 @@ func TestMetaVersion(t *testing.T) {
 
 	v, err := q.Version()
 	require.NoError(t, err)
-	assert.Equal(t, "recipes-v1.0.0", v)
+	assert.Equal(t, "recipes-v2.0.0", v)
 }
 
 // Trivial smoke that the helper writes a real file.
@@ -131,4 +142,44 @@ func TestFixtureExists(t *testing.T) {
 	dbPath := makeFixtureDB(t)
 	_, err := os.Stat(dbPath)
 	require.NoError(t, err)
+}
+
+func TestOpen_HasAssetsTableAndV2Version(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "recipes.db")
+	require.NoError(t, buildFixtureDB(dbPath))
+
+	q, err := Open(dbPath)
+	require.NoError(t, err)
+	defer q.Close()
+
+	var version string
+	require.NoError(t, q.db.QueryRow("SELECT value FROM meta WHERE key = 'version'").Scan(&version))
+	assert.Equal(t, "recipes-v2.0.0", version)
+
+	var name string
+	require.NoError(t, q.db.QueryRow(
+		"SELECT name FROM sqlite_schema WHERE type='table' AND name='assets'").Scan(&name))
+	assert.Equal(t, "assets", name)
+
+	rows, err := q.db.Query("PRAGMA table_info(assets)")
+	require.NoError(t, err)
+	defer rows.Close()
+	cols := map[string]string{}
+	for rows.Next() {
+		var (
+			cid       int
+			cName     string
+			cType     string
+			notnull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		require.NoError(t, rows.Scan(&cid, &cName, &cType, &notnull, &dfltValue, &pk))
+		cols[cName] = cType
+	}
+	assert.Equal(t, "TEXT", cols["recipe_name"])
+	assert.Equal(t, "TEXT", cols["path"])
+	assert.Equal(t, "BLOB", cols["content"])
+	assert.Equal(t, "INTEGER", cols["size"])
+	assert.Equal(t, "INTEGER", cols["mode"])
 }
