@@ -1,6 +1,7 @@
 package serviceapi
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,7 +41,7 @@ func TestRefreshGuestBundle_UpdatesStateSnapshotFingerprint(t *testing.T) {
 	}))
 
 	tr := fakeExecStdinTart(t)
-	summary, err := RefreshGuestBundle(cfg, cache, tr, "proj")
+	summary, err := RefreshGuestBundle(context.Background(), cfg, cache, tr, "proj")
 	require.NoError(t, err)
 
 	assert.Equal(t, "proj", summary.ProjectID)
@@ -61,7 +62,7 @@ func TestRefreshGuestBundle_MissingSnapshotReturns412ish(t *testing.T) {
 	cache.SetBuild(Build{Fingerprint: "new-fp"})
 
 	tr := fakeExecStdinTart(t)
-	_, err := RefreshGuestBundle(cfg, cache, tr, "no-such-proj")
+	_, err := RefreshGuestBundle(context.Background(), cfg, cache, tr, "no-such-proj")
 	require.Error(t, err, "no snapshot → error (VM was never provisioned; cold-start writes the initial snapshot)")
 }
 
@@ -84,7 +85,7 @@ func TestRefreshGuestBundle_TartPipeFailureDoesNotStampFingerprint(t *testing.T)
 	tr := tart.New()
 	tr.Path = bin
 
-	_, err := RefreshGuestBundle(cfg, cache, tr, "proj")
+	_, err := RefreshGuestBundle(context.Background(), cfg, cache, tr, "proj")
 	require.Error(t, err, "tart failure must surface as an error")
 
 	stored, err := ReadStateSnapshot(cfg, "proj")
