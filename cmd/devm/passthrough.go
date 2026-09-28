@@ -37,7 +37,7 @@ var passthroughCmd = &cobra.Command{
 Subcommands:
   open [duration]   Open a passthrough window immediately (default 30s).
                     Duration is a positional Go duration (e.g. 30s, 5m, 24h).
-  close             Close an active window immediately (was `+"`devm restrict`"+`).
+  close             Close an active window immediately.
   approve           Open a window honoring a pending gdevm passthrough request.
   deny              Clear a pending gdevm passthrough request without opening.
 

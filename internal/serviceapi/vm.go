@@ -368,18 +368,18 @@ func vmRunning(vms []tart.VM, name string) bool {
 
 // armPassthroughRestoreTimer schedules the policy authority to be
 // restored to ModeRestricted after d, the bound
-// `devm passthrough --for <dur>` (or the default) puts on a
+// `devm passthrough open [dur]` (or the default) puts on a
 // supervised window. Installing it via egressPassthroughState.setTimer
 // stops+replaces whatever restore timer was already pending for name,
-// so repeated passthroughs (or a restrict in between) never leave two
+// so repeated passthroughs (or a close in between) never leave two
 // timers racing.
 //
 // The callback runs on its own goroutine (time.AfterFunc, not
 // inline), so taking locks.Lock(name) here is not nested under any
 // handler's lock. It re-checks egressPassthroughState right before
 // flipping the mode — by the time it fires, the project may have been
-// stopped, torn down, or restricted early by `devm restrict`, all of
-// which call del/stopTimer and so would have already cancelled this
+// stopped, torn down, or closed early by `devm passthrough close`, all
+// of which call del/stopTimer and so would have already cancelled this
 // timer; the re-check is therefore belt-and-suspenders against the
 // timer having fired the instant before a racing cancellation.
 func armPassthroughRestoreTimer(locks *ProjectLocks, name string, d time.Duration) {
@@ -1132,9 +1132,9 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 	// window: flips the policy authority to ModePassthrough for the
 	// duration, arms a timer to restore ModeRestricted on expiry.
 	// Repeat opens replace the existing timer. Reconcile does NOT
-	// close the window; only the timer, `devm restrict`, or /vm/stop
-	// do. Softnet and iron-proxy are untouched — the authority mode
-	// is the entire mechanism.
+	// close the window; only the timer, `devm passthrough close`, or
+	// /vm/stop do. Softnet and iron-proxy are untouched — the
+	// authority mode is the entire mechanism.
 	s.Register("/vm/passthrough-egress", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -1241,7 +1241,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 	// /vm/restrict-egress closes an active passthrough window: flips
 	// the policy authority back to ModeRestricted, cancels the
 	// restore timer, deletes state. No-op (was_open=false) if no
-	// window is active — matches `devm restrict` idempotency
+	// window is active — matches `devm passthrough close` idempotency
 	// contract from the spec. Softnet and iron-proxy are untouched.
 	s.Register("/vm/restrict-egress", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
