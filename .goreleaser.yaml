@@ -35,10 +35,10 @@ before:
     # identity.Profile ldflag — the shim is identity-agnostic, the same
     # binary works for prod + e2e.
     - sh -c 'mkdir -p internal/setsidshim/embed && raw="$(mktemp -t devm-setsid-shim-raw.XXXXXX)" && GOOS=darwin GOARCH=arm64 go build -o "$raw" ./cmd/devm-setsid-shim && gzip -c "$raw" > internal/setsidshim/embed/devm-setsid-shim.gz && rm "$raw"'
-    # Compile the guest-side devmg dispatcher for linux_arm64. Mirrors
-    # the just _build-devmg-embed recipe. Single binary, pop/propose/run
+    # Compile the guest-side gdevm dispatcher for linux_arm64. Mirrors
+    # the just _build-gdevm-embed recipe. Single binary, pop/propose/run
     # subcommands. Uncompressed embed, static (no cgo).
-    - sh -c 'mkdir -p internal/guestbin/embed && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o internal/guestbin/embed/devmg ./cmd/devmg'
+    - sh -c 'mkdir -p internal/guestbin/embed && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o internal/guestbin/embed/gdevm ./cmd/gdevm'
     # Compile the Mac-side tart-mutagen-ssh shim for darwin_arm64. Mirrors
     # the just _build-tart-mutagen-ssh-embed recipe. Static (no cgo).
     - sh -c 'mkdir -p internal/tartmutagenssh/embed && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o internal/tartmutagenssh/embed/tart-mutagen-ssh ./cmd/tart-mutagen-ssh'

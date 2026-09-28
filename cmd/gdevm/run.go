@@ -17,14 +17,14 @@ type manifest struct {
 	} `json:"repos"`
 }
 
-// runMain implements `devmg run`. Reads /opt/devm/commands.json, walks
+// runMain implements `gdevm run`. Reads /opt/devm/commands.json, walks
 // up from $PWD to find its containing repo, verifies the requested
 // name is registered for that repo, then sources devm.sh (+devm.me.sh)
 // and syscall.Exec's bash to invoke the named function from the repo's
 // guest path. Never returns on success — bash replaces this process.
 func runMain(args []string) int {
 	if len(args) == 0 || args[0] == "" {
-		fmt.Fprintln(os.Stderr, "usage: devmg run <command>")
+		fmt.Fprintln(os.Stderr, "usage: gdevm run <command>")
 		return 2
 	}
 	name := args[0]
@@ -35,18 +35,18 @@ func runMain(args []string) int {
 	}
 	body, err := os.ReadFile(manifestPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "devmg run: cannot read manifest %s: %v\n", manifestPath, err)
+		fmt.Fprintf(os.Stderr, "gdevm run: cannot read manifest %s: %v\n", manifestPath, err)
 		return 1
 	}
 	var m manifest
 	if err := json.Unmarshal(body, &m); err != nil {
-		fmt.Fprintf(os.Stderr, "devmg run: parse manifest: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm run: parse manifest: %v\n", err)
 		return 1
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "devmg run: getwd: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm run: getwd: %v\n", err)
 		return 1
 	}
 	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
@@ -55,11 +55,11 @@ func runMain(args []string) int {
 
 	repoName, guestPath, ok := findRepo(m, cwd)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "devmg run: not inside a registered repo")
+		fmt.Fprintln(os.Stderr, "gdevm run: not inside a registered repo")
 		return 1
 	}
 	if !registered(m.Repos[repoName].Commands, name) {
-		fmt.Fprintf(os.Stderr, "devmg run: command %s not registered in repo %s\n", name, repoName)
+		fmt.Fprintf(os.Stderr, "gdevm run: command %s not registered in repo %s\n", name, repoName)
 		return 1
 	}
 
@@ -70,7 +70,7 @@ cd "%s"
 %s`, guestPath, name)
 
 	if err := syscall.Exec("/bin/bash", []string{"bash", "-c", scriptBody}, os.Environ()); err != nil {
-		fmt.Fprintf(os.Stderr, "devmg run: exec bash: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm run: exec bash: %v\n", err)
 		return 1
 	}
 	return 0 // unreachable

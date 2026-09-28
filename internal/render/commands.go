@@ -8,15 +8,15 @@ import (
 )
 
 // commandsManifest is the JSON shape written to /opt/devm/commands.json.
-// The guest-side `devmg run` dispatcher reads it; the shape is a stable
-// contract with cmd/devmg/run.go.
+// The guest-side `gdevm run` dispatcher reads it; the shape is a stable
+// contract with cmd/gdevm/run.go.
 type commandsManifest struct {
 	Repos map[string]manifestRepo `json:"repos"`
 }
 
 type manifestRepo struct {
 	GuestPath string   `json:"guestPath"`
-	Commands  []string `json:"commands"` // function names allowed via `devmg run <name>`
+	Commands  []string `json:"commands"` // function names allowed via `gdevm run <name>`
 }
 
 // RenderCommandsManifest emits the deterministic JSON body of

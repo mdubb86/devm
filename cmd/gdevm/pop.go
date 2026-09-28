@@ -13,7 +13,7 @@ import (
 
 const popEndpoint = "http://192.168.127.1:81/pop"
 
-// popMain implements `devmg pop`. Returns the process exit code.
+// popMain implements `gdevm pop`. Returns the process exit code.
 //
 // The daemon (internal/serviceapi/pop.go) either resolves a filesystem
 // path (cwd-then-project-root) to its Mac-side mirror and hands it to
@@ -25,7 +25,7 @@ const popEndpoint = "http://192.168.127.1:81/pop"
 // per-project pop HTTP listener.
 func popMain(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: devmg pop <path-or-url> [-- <open-args>...]")
+		fmt.Fprintln(os.Stderr, "usage: gdevm pop <path-or-url> [-- <open-args>...]")
 		return 2
 	}
 
@@ -36,7 +36,7 @@ func popMain(args []string) int {
 	var openArgs []string
 	if idx := indexOfString(args, "--"); idx >= 0 {
 		if idx == 0 {
-			fmt.Fprintln(os.Stderr, "devmg pop: missing path before --")
+			fmt.Fprintln(os.Stderr, "gdevm pop: missing path before --")
 			return 2
 		}
 		pathArg = args[0]
@@ -47,7 +47,7 @@ func popMain(args []string) int {
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "devmg pop: cannot resolve cwd: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm pop: cannot resolve cwd: %v\n", err)
 		return 1
 	}
 
@@ -65,13 +65,13 @@ func popMain(args []string) int {
 	}
 	body, err := json.Marshal(bodyMap)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "devmg pop: marshal request: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm pop: marshal request: %v\n", err)
 		return 1
 	}
 
 	resp, err := http.Post(popEndpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "devmg pop: could not reach devm daemon on 192.168.127.1:81 — is the VM properly started?\n%v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm pop: could not reach devm daemon on 192.168.127.1:81 — is the VM properly started?\n%v\n", err)
 		return 1
 	}
 	defer resp.Body.Close()

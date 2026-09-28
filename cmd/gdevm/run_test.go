@@ -12,15 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// buildDevmg compiles cmd/devmg once per test binary, returning the path.
+// buildGdevm compiles cmd/gdevm once per test binary, returning the path.
 // Uses the current GOOS/GOARCH so tests run on the developer's Mac.
-func buildDevmg(t *testing.T) string {
+func buildGdevm(t *testing.T) string {
 	t.Helper()
-	out := filepath.Join(t.TempDir(), "devmg")
+	out := filepath.Join(t.TempDir(), "gdevm")
 	cmd := exec.Command("go", "build", "-o", out, ".")
 	cmd.Dir = "."
 	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build devmg: %v\n%s", err, b)
+		t.Fatalf("build gdevm: %v\n%s", err, b)
 	}
 	return out
 }
@@ -60,19 +60,19 @@ func prepareTree(t *testing.T) (string, string, string) {
 }
 
 func TestRun_ErrorNoArg(t *testing.T) {
-	bin := buildDevmg(t)
+	bin := buildGdevm(t)
 	manifest, mainDir, _ := prepareTree(t)
 	cmd := exec.Command(bin, "run")
 	cmd.Dir = mainDir
 	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
-	assert.Contains(t, string(out), "usage: devmg run <command>")
+	assert.Contains(t, string(out), "usage: gdevm run <command>")
 	assert.Equal(t, 2, cmd.ProcessState.ExitCode())
 }
 
 func TestRun_ErrorOutsideRepo(t *testing.T) {
-	bin := buildDevmg(t)
+	bin := buildGdevm(t)
 	manifest, _, _ := prepareTree(t)
 	stray := t.TempDir() // outside both repos
 	cmd := exec.Command(bin, "run", "install")
@@ -80,32 +80,32 @@ func TestRun_ErrorOutsideRepo(t *testing.T) {
 	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
-	assert.Contains(t, string(out), "devmg run: not inside a registered repo")
+	assert.Contains(t, string(out), "gdevm run: not inside a registered repo")
 }
 
 func TestRun_ErrorUnknownCommand(t *testing.T) {
-	bin := buildDevmg(t)
+	bin := buildGdevm(t)
 	manifest, mainDir, _ := prepareTree(t)
 	cmd := exec.Command(bin, "run", "bogus")
 	cmd.Dir = mainDir
 	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
-	assert.Contains(t, string(out), "devmg run: command bogus not registered in repo main")
+	assert.Contains(t, string(out), "gdevm run: command bogus not registered in repo main")
 }
 
 func TestRun_ErrorFromNestedCwd_StillResolvesRepo(t *testing.T) {
 	// The command is unregistered, but the error must still name "main" —
 	// proof that findRepo walked up from the nested cwd to the repo root
 	// before checking registration.
-	bin := buildDevmg(t)
+	bin := buildGdevm(t)
 	manifest, mainDir, _ := prepareTree(t)
 	cmd := exec.Command(bin, "run", "bogus")
 	cmd.Dir = filepath.Join(mainDir, "subdir")
 	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
-	assert.Contains(t, string(out), "devmg run: command bogus not registered in repo main")
+	assert.Contains(t, string(out), "gdevm run: command bogus not registered in repo main")
 }
 
 // TestRun_EmptyCommandsRepo_ErrorsNoCommand is a regression test:
@@ -116,7 +116,7 @@ func TestRun_ErrorFromNestedCwd_StillResolvesRepo(t *testing.T) {
 // []), the same lookup must instead report "not registered" against the
 // correct repo name.
 func TestRun_EmptyCommandsRepo_ErrorsNoCommand(t *testing.T) {
-	bin := buildDevmg(t)
+	bin := buildGdevm(t)
 	base := t.TempDir()
 	mainDir := filepath.Join(base, "main-repo")
 	require.NoError(t, os.MkdirAll(mainDir, 0o755))
@@ -134,7 +134,7 @@ func TestRun_EmptyCommandsRepo_ErrorsNoCommand(t *testing.T) {
 	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
-	assert.Contains(t, string(out), "devmg run: command install not registered in repo main")
+	assert.Contains(t, string(out), "gdevm run: command install not registered in repo main")
 }
 
 // ---------- pure-logic unit tests (no subprocess, no guest filesystem) ----------

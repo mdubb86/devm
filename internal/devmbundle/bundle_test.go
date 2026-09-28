@@ -430,20 +430,20 @@ func TestBuild_TarOmitsDockerShims_WhenDockerFalse(t *testing.T) {
 	assert.NotContains(t, names, "bin/docker")
 }
 
-func TestBuild_IncludesDevmgWhenPresent(t *testing.T) {
+func TestBuild_IncludesGdevmWhenPresent(t *testing.T) {
 	blob, err := Build(BuildInput{
 		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
 		RepoRoot:       "/tmp/repo",
 		MutagenVersion: "0.18.1",
-		Devmg:          []byte("devmg-elf-bytes"),
+		Gdevm:          []byte("gdevm-elf-bytes"),
 	})
 	require.NoError(t, err)
 	names := tarEntryNames(t, blob)
-	assert.Contains(t, names, "bin/devmg")
-	assert.Equal(t, []byte("devmg-elf-bytes"), readTarEntry(t, blob, "bin/devmg"))
+	assert.Contains(t, names, "bin/gdevm")
+	assert.Equal(t, []byte("gdevm-elf-bytes"), readTarEntry(t, blob, "bin/gdevm"))
 }
 
-func TestBuild_OmitsDevmgWhenAbsent(t *testing.T) {
+func TestBuild_OmitsGdevmWhenAbsent(t *testing.T) {
 	blob, err := Build(BuildInput{
 		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
 		RepoRoot:       "/tmp/repo",
@@ -451,7 +451,7 @@ func TestBuild_OmitsDevmgWhenAbsent(t *testing.T) {
 	})
 	require.NoError(t, err)
 	names := tarEntryNames(t, blob)
-	assert.NotContains(t, names, "bin/devmg")
+	assert.NotContains(t, names, "bin/gdevm")
 }
 
 func TestBuild_ServiceUnitJoinsDevmTarget(t *testing.T) {
@@ -570,14 +570,14 @@ func listTarEntries(t *testing.T, body []byte) map[string]struct {
 	return out
 }
 
-func TestBuild_IncludesCommandsManifestAndDevmgBinary(t *testing.T) {
+func TestBuild_IncludesCommandsManifestAndGdevmBinary(t *testing.T) {
 	in := BuildInput{
 		Cfg:              minimalCfg(t),
 		RepoRoot:         t.TempDir(),
 		DaemonRuntimeDir: t.TempDir(),
 		MutagenVersion:   "0.18.1",
 		CommandsManifest: []byte(`{"repos":{}}`),
-		Devmg:            []byte{0x7f, 'E', 'L', 'F'}, // sentinel; real bytes come from guestbin.Devmg()
+		Gdevm:            []byte{0x7f, 'E', 'L', 'F'}, // sentinel; real bytes come from guestbin.Gdevm()
 	}
 	body, err := Build(in)
 	require.NoError(t, err)
@@ -588,12 +588,12 @@ func TestBuild_IncludesCommandsManifestAndDevmgBinary(t *testing.T) {
 		"commands.json body must be shipped verbatim")
 	assert.Equal(t, int64(0o644), entries["commands.json"].mode)
 
-	require.Contains(t, entries, "bin/devmg")
-	assert.Equal(t, "\x7fELF", entries["bin/devmg"].body)
-	assert.Equal(t, int64(0o755), entries["bin/devmg"].mode)
+	require.Contains(t, entries, "bin/gdevm")
+	assert.Equal(t, "\x7fELF", entries["bin/gdevm"].body)
+	assert.Equal(t, int64(0o755), entries["bin/gdevm"].mode)
 }
 
-func TestBuild_OmitsDevmgAndManifestWhenEmpty(t *testing.T) {
+func TestBuild_OmitsGdevmAndManifestWhenEmpty(t *testing.T) {
 	in := BuildInput{
 		Cfg:              minimalCfg(t),
 		RepoRoot:         t.TempDir(),
@@ -605,7 +605,7 @@ func TestBuild_OmitsDevmgAndManifestWhenEmpty(t *testing.T) {
 	entries := listTarEntries(t, body)
 	assert.NotContains(t, entries, "commands.json",
 		"nothing to ship when caller passes no manifest")
-	assert.NotContains(t, entries, "bin/devmg")
+	assert.NotContains(t, entries, "bin/gdevm")
 }
 
 func TestBuild_TarContainsSSHMaterial(t *testing.T) {

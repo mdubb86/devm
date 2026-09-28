@@ -1,13 +1,13 @@
-// devmg is the guest-side devm dispatcher: the only devm-owned binary
-// installed inside the VM. `devm` never exists on the guest and `devmg`
+// gdevm is the guest-side devm dispatcher: the only devm-owned binary
+// installed inside the VM. `devm` never exists on the guest and `gdevm`
 // never exists on the Mac — an agent's PATH tells it which side it is
 // on without ambiguity.
 //
 // Subcommands:
 //
-//	devmg pop <path-or-url> [-- <open-args>...]
-//	devmg propose [--reason <text>] [--kind devm.yaml|devm.me.yaml|devm.sh|devm.me.sh]
-//	devmg run <command>
+//	gdevm pop <path-or-url> [-- <open-args>...]
+//	gdevm propose [--reason <text>] [--kind devm.yaml|devm.me.yaml|devm.sh|devm.me.sh]
+//	gdevm run <command>
 //
 // Each subcommand reaches the Mac-side daemon over softnet (pop, propose)
 // or reads the local guest command manifest and re-execs bash (run).
@@ -37,16 +37,16 @@ func main() {
 	case "-h", "--help", "help":
 		usage()
 	default:
-		fmt.Fprintf(os.Stderr, "devmg: unknown subcommand %q\n\n", sub)
+		fmt.Fprintf(os.Stderr, "gdevm: unknown subcommand %q\n\n", sub)
 		usage()
 		os.Exit(2)
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `devmg — guest-side devm dispatcher
+	fmt.Fprintln(os.Stderr, `gdevm — guest-side devm dispatcher
 
-Usage: devmg <subcommand> [args...]
+Usage: gdevm <subcommand> [args...]
 
 Subcommands:
   pop      Open a file with its default Mac app.

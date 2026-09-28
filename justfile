@@ -192,14 +192,14 @@ _build-docker-shims-embed:
     GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim   ./cmd/devm-runc-shim
     GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-docker-shim ./cmd/devm-docker-shim
 
-# Build the guest-side devmg dispatcher (linux-arm64) into the
+# Build the guest-side gdevm dispatcher (linux-arm64) into the
 # guestbin embed directory. `just embeds` and `build`/`build-e2e`
 # depend on this so //go:embed can compile. Single binary, three
-# subcommands (pop, propose, run) — see cmd/devmg.
-_build-devmg-embed:
+# subcommands (pop, propose, run) — see cmd/gdevm.
+_build-gdevm-embed:
     @mkdir -p internal/guestbin/embed
-    GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o internal/guestbin/embed/devmg ./cmd/devmg
-    @echo "devmg embedded at internal/guestbin/embed/devmg"
+    GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o internal/guestbin/embed/gdevm ./cmd/gdevm
+    @echo "gdevm embedded at internal/guestbin/embed/gdevm"
 
 # Build the Mac-side tart-mutagen-ssh binary (darwin-arm64) into the
 # tartmutagenssh embed dir. Shim replaces ssh in mutagen's transport path.
@@ -216,7 +216,7 @@ _build-tart-mutagen-ssh-embed:
 # (which runs `go test ./...` as a pre-tag guard). `_build-helper-embed`
 # uses the prod identity here; `build-e2e` overrides with an "e2e"
 # helper build afterwards for local e2e installs.
-embeds: fetch-iron-proxy fetch-mutagen (_build-helper-embed "prod") _build-setsid-shim-embed _build-docker-shims-embed _build-devmg-embed _build-tart-mutagen-ssh-embed
+embeds: fetch-iron-proxy fetch-mutagen (_build-helper-embed "prod") _build-setsid-shim-embed _build-docker-shims-embed _build-gdevm-embed _build-tart-mutagen-ssh-embed
 
 # Build the devm + devm-helper binaries into ./bin with prod identity,
 # and codesign with the local self-signed identity if available. The
@@ -226,12 +226,12 @@ embeds: fetch-iron-proxy fetch-mutagen (_build-helper-embed "prod") _build-setsi
 #
 # fetch-iron-proxy runs first: the ironproxy package's //go:embed
 # needs internal/ironproxy/embed/iron-proxy.gz to exist at compile time.
-build: fetch-iron-proxy (_build-helper-embed "prod") (_build-setsid-shim-embed) (_build-devmg-embed) (_build-tart-mutagen-ssh-embed) (_build "prod")
+build: fetch-iron-proxy (_build-helper-embed "prod") (_build-setsid-shim-embed) (_build-gdevm-embed) (_build-tart-mutagen-ssh-embed) (_build "prod")
 
 # Build the devm-e2e + devm-e2e-helper binaries into ./bin with e2e
 # identity, so they run alongside — not clobber — a live prod install
 # (separate runtime dir, socket, LaunchDaemon label; see internal/identity).
-build-e2e: fetch-iron-proxy (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build-devmg-embed) (_build-tart-mutagen-ssh-embed) (_build "e2e")
+build-e2e: fetch-iron-proxy (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build-gdevm-embed) (_build-tart-mutagen-ssh-embed) (_build "e2e")
 
 # Run Go unit tests.
 test:
@@ -334,7 +334,7 @@ e2e-install *NAMES: (_build-helper-embed "e2e") (_build-setsid-shim-embed) mac-b
 # ends in installed-and-running. First run prompts for TouchID (plist,
 # resolver file, keychain, lo0 aliases, group, base image build).
 # Doubles as the canonical single-scenario install test.
-e2e-bootstrap: (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build-devmg-embed) (_build-tart-mutagen-ssh-embed) mac-build-e2e (_build "e2e")
+e2e-bootstrap: (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build-gdevm-embed) (_build-tart-mutagen-ssh-embed) mac-build-e2e (_build "e2e")
     @sudo -v
     e2e/scripts/purge-leftovers.sh
     @sudo install -m 755 bin/devm-e2e /usr/local/bin/devm-e2e

@@ -39,12 +39,12 @@ type BuildInput struct {
 	DockerRuncShim []byte
 	DockerCLIShim  []byte
 
-	// Devmg is the compiled linux/arm64 devmg binary (see cmd/devmg) —
+	// Gdevm is the compiled linux/arm64 gdevm binary (see cmd/gdevm) —
 	// the single guest-side dispatcher carrying pop / propose / run
-	// subcommands. Written to bin/devmg in the tar; install.sh's
-	// existing bin/* loop symlinks it to /usr/local/bin/devmg. Nil in
+	// subcommands. Written to bin/gdevm in the tar; install.sh's
+	// existing bin/* loop symlinks it to /usr/local/bin/gdevm. Nil in
 	// tests that don't need it.
-	Devmg []byte
+	Gdevm []byte
 
 	// CommandsManifest is the pre-rendered body of /opt/devm/commands.json
 	// (see internal/render/commands.go's RenderCommandsManifest). Empty ⇒
@@ -194,9 +194,9 @@ func Build(in BuildInput) ([]byte, error) {
 		}
 	}
 
-	if len(in.Devmg) > 0 {
-		if err := writeEntry(tw, "bin/devmg", 0o755, in.Devmg); err != nil {
-			return nil, fmt.Errorf("devmg entry: %w", err)
+	if len(in.Gdevm) > 0 {
+		if err := writeEntry(tw, "bin/gdevm", 0o755, in.Gdevm); err != nil {
+			return nil, fmt.Errorf("gdevm entry: %w", err)
 		}
 	}
 

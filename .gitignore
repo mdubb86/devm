@@ -44,10 +44,10 @@ internal/helper/embed/devm-helper.gz
 # Populated by `just _build-setsid-shim-embed`.
 internal/setsidshim/embed/devm-setsid-shim.gz
 
-# devmg binary embedded (uncompressed) into devm at build time.
-# Populated by `just _build-devmg-embed`. Single guest-side
+# gdevm binary embedded (uncompressed) into devm at build time.
+# Populated by `just _build-gdevm-embed`. Single guest-side
 # dispatcher; subcommands pop / propose / run.
-internal/guestbin/embed/devmg
+internal/guestbin/embed/gdevm
 
 # mutagen binary embedded (gzipped) into devm at build time.
 # Populated by `just fetch-mutagen`.

@@ -22,7 +22,7 @@ type proposeBody struct {
 	Source string `json:"source"`
 }
 
-// proposeMain implements `devmg propose`. Returns the process exit
+// proposeMain implements `gdevm propose`. Returns the process exit
 // code. The binary sends only signal-and-attribution metadata — the
 // edited config's bytes reach the Mac via the mutagen sync session.
 //
@@ -32,7 +32,7 @@ type proposeBody struct {
 func proposeMain(args []string) int {
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "devmg propose: cwd: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm propose: cwd: %v\n", err)
 		return 1
 	}
 	return runPropose(args, proposeEndpoint, cwd)
@@ -45,20 +45,20 @@ func runPropose(args []string, endpoint, cwd string) int {
 		switch args[i] {
 		case "--reason":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "devmg propose: --reason requires a value")
+				fmt.Fprintln(os.Stderr, "gdevm propose: --reason requires a value")
 				return 2
 			}
 			reason = args[i+1]
 			i++
 		case "--kind":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "devmg propose: --kind requires a value")
+				fmt.Fprintln(os.Stderr, "gdevm propose: --kind requires a value")
 				return 2
 			}
 			kind = args[i+1]
 			i++
 		default:
-			fmt.Fprintf(os.Stderr, "devmg propose: unknown arg %q\n", args[i])
+			fmt.Fprintf(os.Stderr, "gdevm propose: unknown arg %q\n", args[i])
 			return 2
 		}
 	}
@@ -76,13 +76,13 @@ func doPost(endpoint, cwd, branch, reason, kind string) int {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "devmg propose: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm propose: %v\n", err)
 		return 1
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "devmg propose: cannot reach devm daemon on 192.168.127.1:82 — is the VM properly started?\n%v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm propose: cannot reach devm daemon on 192.168.127.1:82 — is the VM properly started?\n%v\n", err)
 		return 1
 	}
 	defer resp.Body.Close()
@@ -92,13 +92,13 @@ func doPost(endpoint, cwd, branch, reason, kind string) int {
 	respBody, _ := io.ReadAll(resp.Body)
 	switch resp.StatusCode {
 	case http.StatusNotFound:
-		fmt.Fprintln(os.Stderr, "devmg propose: daemon does not support propose channel — upgrade the Mac side")
+		fmt.Fprintln(os.Stderr, "gdevm propose: daemon does not support propose channel — upgrade the Mac side")
 		return 2
 	case http.StatusBadRequest:
-		fmt.Fprintf(os.Stderr, "devmg propose: %s\n", strings.TrimSpace(string(respBody)))
+		fmt.Fprintf(os.Stderr, "gdevm propose: %s\n", strings.TrimSpace(string(respBody)))
 		return 2
 	default:
-		fmt.Fprintf(os.Stderr, "devmg propose: daemon returned %d: %s\n", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		fmt.Fprintf(os.Stderr, "gdevm propose: daemon returned %d: %s\n", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		return 1
 	}
 }

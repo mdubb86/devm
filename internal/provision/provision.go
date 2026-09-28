@@ -395,7 +395,7 @@ func (p *Provisioner) buildBundle() ([]byte, error) {
 		SSHAuthorizedPubkey:    p.SSHAuthorizedPubkey,
 		SSHHostPriv:            p.SSHHostPriv,
 		SSHHostPub:             p.SSHHostPub,
-		Devmg:                  guestbin.Devmg(),
+		Gdevm:                  guestbin.Gdevm(),
 		CommandsManifest:       commandsManifest,
 		MutagenAgentLinuxArm64: mutagenAgent,
 		MutagenVersion:         strings.TrimPrefix(mutagen.EmbeddedVersion(), "v"),
