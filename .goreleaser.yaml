@@ -48,6 +48,15 @@ before:
     # Build the signed menu-bar app bundle at bin/devm.app so the
     # archives step below can package it alongside the daemon binary.
     - just mac-build
+    # Rename the app's inner executable + CFBundleExecutable so
+    # go-selfupdate's basename-only match in decompress.go's
+    # unarchiveTar doesn't grab the Swift Mac app binary as if it
+    # were the CLI on `devm upgrade`. macOS launches the .app via
+    # CFBundleExecutable, so the bundle still runs; the tarball's
+    # only basename `devm` is the top-level Go CLI.
+    # Re-sign after the rename because the mv invalidates the
+    # xcodebuild-time signature.
+    - sh -c 'mv bin/devm.app/Contents/MacOS/devm bin/devm.app/Contents/MacOS/devm-menubar && plutil -replace CFBundleExecutable -string devm-menubar bin/devm.app/Contents/Info.plist && codesign --force --sign devm-dev --options=runtime bin/devm.app'
 
 builds:
   # Tart requires Apple Silicon; amd64 macOS isn't a supported target.
