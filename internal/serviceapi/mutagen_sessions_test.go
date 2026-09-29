@@ -428,12 +428,29 @@ func TestSetupPhases_AlignedContentCreatesSession(t *testing.T) {
 	macDir, _, err := ensureMirrorDir(cfg, "myproj", "app")
 	require.NoError(t, err)
 	runGit := func(args ...string) {
-		cmd := exec.Command("git", append([]string{"-C", macDir}, args...)...)
-		// Isolate git from every system / user config source: a hosted CI
+		// Isolate git from every system / user config source AND
+		// disable every background side-effect that could touch .git/
+		// between the two ScanMac calls this test makes. A hosted CI
 		// runner's /etc/gitconfig may enable maintenance, hooks, or
-		// commit signing that would drop transient files under .git/
-		// between the test's initial scan and SetupVolumesPhase's
-		// re-scan and diverge their entry counts.
+		// commit signing; git's own defaults may auto-gc or run
+		// fsmonitor after a commit. Any of those drop transient files
+		// under .git/ between SetupVolumesPhase's initial ScanMac and
+		// the guest-side scan called back via guestExec, diverging
+		// their entry counts.
+		//
+		// The `-c` overrides here are POSITIONAL — must come before
+		// the subcommand — so we prepend them via git's own flag
+		// order rather than through cmd.Env.
+		globalFlags := []string{
+			"-C", macDir,
+			"-c", "gc.auto=0",
+			"-c", "gc.autoDetach=false",
+			"-c", "maintenance.auto=false",
+			"-c", "core.fsmonitor=false",
+			"-c", "commit.gpgsign=false",
+			"-c", "core.hooksPath=/dev/null",
+		}
+		cmd := exec.Command("git", append(globalFlags, args...)...)
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
