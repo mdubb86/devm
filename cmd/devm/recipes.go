@@ -145,7 +145,7 @@ var recipesAssetLsCmd = &cobra.Command{
 		}
 		out := cmd.OutOrStdout()
 		for _, a := range listing {
-			if _, err := fmt.Fprintf(out, "%d\t%o\t%s\n", a.Size, a.Mode, a.Path); err != nil {
+			if _, err := fmt.Fprintf(out, "%d\t%04o\t%s\n", a.Size, a.Mode, a.Path); err != nil {
 				return err
 			}
 		}

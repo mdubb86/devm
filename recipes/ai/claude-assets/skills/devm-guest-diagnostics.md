@@ -24,7 +24,9 @@ passthrough window with `gdevm passthrough --reason "..."` — see the
   and unit logs.
 - `getent hosts <host>` / `dig <host>` — DNS resolution.
 - `curl -v https://<host>` — outbound reachability.
-- `sudo systemctl restart <svc>` — restart your own service.
+
+Lifecycle actions (`sudo systemctl restart <svc>`, `sudo poweroff`)
+live in the `devm-guest-environment` skill.
 
 ## What only the Mac user can do
 

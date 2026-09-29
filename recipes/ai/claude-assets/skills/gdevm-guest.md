@@ -47,8 +47,8 @@ curating egress directly and will not accept guest-side requests.
 
 ## `gdevm upgrade`
 
-Pulls the daemon's current gdevm binary, guest-facing docs, env
-template, and commands manifest into this VM. No args:
+Pulls the daemon's current gdevm binary, guest-facing docs,
+environment file, and commands manifest into this VM. No args:
 
     gdevm upgrade
 

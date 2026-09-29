@@ -133,7 +133,7 @@ the latest recipe advice; the recipes DB refreshes daily via
 **Mac side** (project root):
 
 ```bash
-echo CLAUDE.local.md >> .gitignore
+grep -qxF CLAUDE.local.md .gitignore 2>/dev/null || echo CLAUDE.local.md >> .gitignore
 devm recipes asset get tool/ai/claude claude-local-mac.md >> CLAUDE.local.md
 ```
 
@@ -141,7 +141,7 @@ devm recipes asset get tool/ai/claude claude-local-mac.md >> CLAUDE.local.md
 excluded from mutagen sync so Mac and guest carry independent copies):
 
 ```bash
-echo CLAUDE.local.md >> .gitignore
+grep -qxF CLAUDE.local.md .gitignore 2>/dev/null || echo CLAUDE.local.md >> .gitignore
 gdevm recipes asset get tool/ai/claude claude-local-guest.md >> CLAUDE.local.md
 mkdir -p ~/.claude/skills
 gdevm recipes asset get tool/ai/claude skills/gdevm-guest.md            > ~/.claude/skills/gdevm-guest.md

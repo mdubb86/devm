@@ -121,7 +121,7 @@ func recipesGET(label, endpoint string) int {
 		return 2
 	case http.StatusNotFound:
 		body, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "gdevm recipes %s: not found: %s\n", label, strings.TrimSpace(string(body)))
+		fmt.Fprintf(os.Stderr, "gdevm recipes %s: %s\n", label, strings.TrimSpace(string(body)))
 		return 3
 	default:
 		body, _ := io.ReadAll(resp.Body)

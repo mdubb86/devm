@@ -98,9 +98,9 @@ func TestRecipesAssetLs_HappyPathSortedTabSeparated(t *testing.T) {
 
 	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
 	require.Len(t, lines, 3, "expected three asset lines, got: %q", stdout)
-	assert.Equal(t, "1\t644\ta/first.md", lines[0])
-	assert.Equal(t, "2\t644\tm/middle.md", lines[1])
-	assert.Equal(t, "3\t644\tz/last.md", lines[2])
+	assert.Equal(t, "1\t0644\ta/first.md", lines[0])
+	assert.Equal(t, "2\t0644\tm/middle.md", lines[1])
+	assert.Equal(t, "3\t0644\tz/last.md", lines[2])
 }
 
 func TestRecipesAssetLs_UnknownRecipe_Errors(t *testing.T) {

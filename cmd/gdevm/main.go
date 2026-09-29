@@ -10,7 +10,7 @@
 //	gdevm run         <command>
 //	gdevm passthrough --reason <text> [--for <duration>]
 //	gdevm upgrade
-//	gdevm recipes   list | get <name> | asset ls <name> | asset get <name> <path>
+//	gdevm recipes     list | get <name> | asset ls <name> | asset get <name> <path>
 //
 // Each subcommand reaches the Mac-side daemon over softnet (pop,
 // propose, passthrough) or reads the local guest command manifest
