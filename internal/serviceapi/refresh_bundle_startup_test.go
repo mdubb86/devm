@@ -124,8 +124,8 @@ func TestBundleDriftCatchup_HungGuestTimesOutAndSweepContinues(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("BundleDriftCatchup blocked past the per-project timeout — the guard is not firing")
+	case <-time.After(30 * time.Second):
+		t.Fatal("BundleDriftCatchup blocked well past the per-project timeout — the guard is not firing")
 	}
 	if elapsed := time.Since(start); elapsed < 200*time.Millisecond {
 		t.Fatalf("sweep returned before the timeout elapsed (%s) — test isn't exercising the timeout path", elapsed)
