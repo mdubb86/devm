@@ -10,7 +10,15 @@ fixture seeds the daemon's real cache path from source, backing up any
 pre-existing file and restoring it on teardown, so the assertions run
 against exactly the current source tree (immune to release lag) without
 polluting the shared cache.
+
+Backups live under ~/.cache/devm rather than pytest's tmp_path so a
+hard interrupt (SIGKILL of the runner, machine reboot) still lets us
+restore. An atexit handler runs the same restore path as the fixture's
+finally, and the fixture removes the backup files after a successful
+restore so a later run doesn't clobber a fresh cache.
 """
+import atexit
+import os
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -28,8 +36,53 @@ pytestmark = pytest.mark.devm
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+class _CacheBackup:
+    """Save/restore the daemon's shared recipes cache around a test.
+
+    The two files (recipes.db and recipes.lastcheck) are saved under
+    ~/.cache/devm as `<name>.testbackup.<pid>` so they survive a hard
+    kill of the pytest process. `restore()` is idempotent so it is safe
+    to call from both a `finally` block and an atexit handler.
+    """
+
+    def __init__(self, db_path: Path, lastcheck_path: Path) -> None:
+        self.db_path = db_path
+        self.lastcheck_path = lastcheck_path
+        pid = os.getpid()
+        self.backup_db = db_path.with_name(f"recipes.db.testbackup.{pid}")
+        self.backup_lc = lastcheck_path.with_name(
+            f"recipes.lastcheck.testbackup.{pid}"
+        )
+        self.had_db = db_path.exists()
+        self.had_lc = lastcheck_path.exists()
+
+    def save(self) -> None:
+        if self.had_db:
+            shutil.copy2(self.db_path, self.backup_db)
+        if self.had_lc:
+            shutil.copy2(self.lastcheck_path, self.backup_lc)
+
+    def restore(self) -> None:
+        # Restore db.
+        if self.had_db:
+            if self.backup_db.exists():
+                shutil.copy2(self.backup_db, self.db_path)
+                self.backup_db.unlink()
+        else:
+            self.db_path.unlink(missing_ok=True)
+            self.backup_db.unlink(missing_ok=True)
+        # Restore lastcheck.
+        if self.had_lc:
+            if self.backup_lc.exists():
+                shutil.copy2(self.backup_lc, self.lastcheck_path)
+                self.backup_lc.unlink()
+        else:
+            self.lastcheck_path.unlink(missing_ok=True)
+            self.backup_lc.unlink(missing_ok=True)
+
+
 @pytest.fixture
-def seed_daemon_recipes_db(tmp_path: Path) -> Iterator[None]:
+def seed_daemon_recipes_db() -> Iterator[None]:
     """Build recipes.db from the source tree into the daemon's real cache
     path (`~/.cache/devm/recipes.db`), stamp lastcheck fresh, run the
     test, then restore whatever was there before. The daemon opens the
@@ -40,14 +93,11 @@ def seed_daemon_recipes_db(tmp_path: Path) -> Iterator[None]:
     db_path = cache_dir / "recipes.db"
     lastcheck_path = cache_dir / "recipes.lastcheck"
 
-    backup_db = tmp_path / "recipes.db.backup"
-    backup_lc = tmp_path / "recipes.lastcheck.backup"
-    had_db = db_path.exists()
-    had_lc = lastcheck_path.exists()
-    if had_db:
-        shutil.copy2(db_path, backup_db)
-    if had_lc:
-        shutil.copy2(lastcheck_path, backup_lc)
+    backup = _CacheBackup(db_path, lastcheck_path)
+    backup.save()
+    # atexit fires even on SIGTERM / unhandled exception, covering the
+    # case where the fixture's finally block never runs.
+    atexit.register(backup.restore)
 
     r = subprocess.run(
         ["go", "run", "./tools/build-recipes-db",
@@ -68,14 +118,7 @@ def seed_daemon_recipes_db(tmp_path: Path) -> Iterator[None]:
     try:
         yield
     finally:
-        if had_db:
-            shutil.copy2(backup_db, db_path)
-        else:
-            db_path.unlink(missing_ok=True)
-        if had_lc:
-            shutil.copy2(backup_lc, lastcheck_path)
-        else:
-            lastcheck_path.unlink(missing_ok=True)
+        backup.restore()
 
 
 def test_gdevm_recipes(

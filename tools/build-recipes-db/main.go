@@ -154,6 +154,19 @@ func ingestAssets(ctx context.Context, tx *sql.Tx, r recipe, recipePath string) 
 	if err != nil {
 		return fmt.Errorf("assets dir %s: %w", assetsDir, err)
 	}
+	// Reject the assets dir itself being a symlink to somewhere outside
+	// the recipe tree — otherwise the walk enumerates the target and
+	// stores those files as assets, with per-entry Rel checks against
+	// the resolved target giving a false all-clear.
+	realRecipeDir, err := filepath.EvalSymlinks(filepath.Dir(recipePath))
+	if err != nil {
+		return fmt.Errorf("recipe dir %s: %w", recipePath, err)
+	}
+	if rel, err := filepath.Rel(realRecipeDir, realAssetsDir); err != nil ||
+		rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) ||
+		filepath.IsAbs(rel) {
+		return fmt.Errorf("asset dir %s resolves outside recipe dir (resolved: %s, rel: %s)", assetsDir, realAssetsDir, rel)
+	}
 
 	return filepath.WalkDir(realAssetsDir, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -172,7 +185,7 @@ func ingestAssets(ctx context.Context, tx *sql.Tx, r recipe, recipePath string) 
 		if err != nil {
 			return fmt.Errorf("rel %s: %w", real, err)
 		}
-		if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 			return fmt.Errorf("asset %s escapes recipe assets dir (resolved: %s)", p, real)
 		}
 		relSlash := filepath.ToSlash(rel)

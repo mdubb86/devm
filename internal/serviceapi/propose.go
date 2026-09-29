@@ -280,12 +280,19 @@ func handleProposeUnixSocket(cfg identity.Config, cache *StateCache) http.Handle
 var proposeListeners sync.Map // projectName -> net.Listener
 
 // serveProposeListener runs a minimal HTTP server on ln that
-// dispatches the guest-facing gdevm HTTP API: POST /propose (edit
-// signal), POST /passthrough (passthrough-window request pending
-// human approval), and POST /refresh-bundle (gdevm upgrade —
-// rebuild and re-ship the provisioning bundle). Softnet forwards
-// guest TCP 192.168.127.1:82 to this listener; the endpoint path
-// selects the handler.
+// dispatches the guest-facing gdevm HTTP API. Softnet forwards guest
+// TCP 192.168.127.1:82 to this listener; the endpoint path selects
+// the handler:
+//   - POST /propose             — edit signal.
+//   - POST /passthrough         — passthrough-window request pending
+//     human approval.
+//   - POST /refresh-bundle      — gdevm upgrade: rebuild and re-ship
+//     the provisioning bundle.
+//   - GET  /recipes/list        — list recipes from the daemon's
+//     cached recipes.db.
+//   - GET  /recipes/get         — fetch one recipe body by name.
+//   - GET  /recipes/asset/ls    — list a recipe's asset files.
+//   - GET  /recipes/asset/get   — fetch one asset's raw bytes.
 func serveProposeListener(ln net.Listener, cfg identity.Config, cache *StateCache, tr *tart.Tart, locks *ProjectLocks, projectName string) {
 	mux := http.NewServeMux()
 	mux.Handle("/propose", handleProposeForProject(cfg, cache, projectName))

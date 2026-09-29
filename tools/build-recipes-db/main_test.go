@@ -190,6 +190,54 @@ func TestBuild_RejectsSymlinkEscape(t *testing.T) {
 	assert.Contains(t, strings.ToLower(err.Error()), "escap")
 }
 
+func TestBuild_RejectsAssetsDirSymlinkEscape(t *testing.T) {
+	// The <recipe>-assets directory itself is a symlink pointing to a
+	// tree outside the recipe source. build() must reject before
+	// enumerating anything under the target.
+	src := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "tool"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "tool", "foo.md"),
+		validRecipeBytes("tool/foo"), 0o644))
+
+	outsideDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outsideDir, "leak.txt"),
+		[]byte("secret"), 0o600))
+	require.NoError(t, os.Symlink(outsideDir, filepath.Join(src, "tool", "foo-assets")))
+
+	out := filepath.Join(t.TempDir(), "recipes.db")
+	err := build(src, out, "recipes-v2.0.0")
+	require.Error(t, err)
+	assert.Contains(t, strings.ToLower(err.Error()), "outside recipe dir")
+}
+
+func TestBuild_AcceptsDotDotPrefixedFilename(t *testing.T) {
+	// A filesystem-legal filename that happens to start with ".." (e.g.
+	// "..README.md") does not traverse anywhere and must be accepted;
+	// the escape check keys on the ".." path segment, not the two-char
+	// prefix.
+	src := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "tool"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "tool", "foo.md"),
+		validRecipeBytes("tool/foo"), 0o644))
+	assetsDir := filepath.Join(src, "tool", "foo-assets")
+	require.NoError(t, os.MkdirAll(assetsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsDir, "..README.md"),
+		[]byte("hello"), 0o644))
+
+	out := filepath.Join(t.TempDir(), "recipes.db")
+	require.NoError(t, build(src, out, "recipes-v2.0.0"))
+
+	db, err := sql.Open("sqlite", out)
+	require.NoError(t, err)
+	defer db.Close()
+
+	var got string
+	require.NoError(t, db.QueryRow(
+		`SELECT path FROM assets WHERE recipe_name = ? AND path = ?`,
+		"tool/foo", "..README.md").Scan(&got))
+	assert.Equal(t, "..README.md", got)
+}
+
 func TestBuild_RejectsInvalidAssetPath(t *testing.T) {
 	// A file whose relative path would be rejected by validAssetPath —
 	// e.g. a file whose name contains a backslash (rare on unix but

@@ -259,7 +259,6 @@ func InitSchema(ctx context.Context, db *sql.DB) error {
 			mode        INTEGER NOT NULL,
 			PRIMARY KEY (recipe_name, path)
 		) WITHOUT ROWID`,
-		`CREATE INDEX assets_by_recipe ON assets(recipe_name)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.ExecContext(ctx, s); err != nil {
