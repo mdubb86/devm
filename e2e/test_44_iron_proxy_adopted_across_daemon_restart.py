@@ -11,6 +11,13 @@ What this pins:
     project_id (`<runtime_dir>/iron-proxy/<slug>.yaml`).
   - `devm service restart` does NOT kill iron-proxy (same PID before
     and after).
+  - Both softnet listeners (`:81` pop, `:82`
+    propose/passthrough/refresh-bundle/recipes) are reachable from
+    inside the running guest after the daemon restart — proves the
+    adopt path re-binds them and re-pushes softnet's forward-targets
+    so guest-initiated flows survive a restart. Without this, every
+    gdevm command from the guest hits `connection refused` on the
+    stale ports the pre-restart daemon had bound.
   - The post-restart daemon can `teardown` cleanly — the adopted
     process is stopped, not orphaned.
 
@@ -93,6 +100,28 @@ def test_iron_proxy_survives_daemon_restart(devm, workspace, sandbox_name, devm_
             f"iron-proxy PID changed across daemon restart: "
             f"before={pid_before} after={pid_after} — adoption failed"
         )
+
+        # Softnet-listener rebind on adopt. The softnet child process
+        # survived the daemon restart and still holds its last
+        # forward-target push from the OLD daemon — the ports it
+        # forwards :81/:82 to are the OLD daemon's popLn/proposeLn
+        # ports, which are now dead. The adopt path in runner.go must
+        # re-bind fresh listeners AND re-push softnet's forward map,
+        # or every gdevm-initiated call from the guest hits connection
+        # refused. Test /dev/tcp against both ports so the regression
+        # is caught for the pop AND propose surfaces (which serve
+        # /pop, /propose, /passthrough, /refresh-bundle, /recipes/*).
+        for port, name in [(81, "pop"), (82, "propose/passthrough/recipes")]:
+            probe = subprocess.run(
+                [devm.path, "exec", "bash", "-c", f"exec 3<>/dev/tcp/192.168.127.1/{port}"],
+                cwd=str(workspace.path), capture_output=True, timeout=15,
+            )
+            assert probe.returncode == 0, (
+                f"softnet :{port} ({name}) unreachable from guest after daemon restart:\n"
+                f"{probe.stderr.decode()}\n"
+                "The adopt path in internal/serviceapi/runner.go must re-bind "
+                "pop + propose listeners and re-push softnet's forward-target map."
+            )
 
         # Adopted process can be stopped via the regular teardown path.
         r = subprocess.run(
