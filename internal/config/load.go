@@ -58,7 +58,7 @@ func Load(dir string) (schema.Config, error) {
 	// Functions must be populated before any Validate call: Validate
 	// checks every repos.<name>.commands and services.<name>.exec
 	// function reference against this set.
-	funcs, err := loadFunctions(dir)
+	funcs, err := LoadFunctions(dir)
 	if err != nil {
 		return schema.Config{}, err
 	}
@@ -140,11 +140,17 @@ func ReadProjectName(dir string) (string, error) {
 	return probe.Project.Name, nil
 }
 
-// loadFunctions reads devm.sh and devm.me.sh from dir and returns the
+// LoadFunctions reads devm.sh and devm.me.sh from dir and returns the
 // sorted, deduplicated union of top-level function names parsed from both
 // files. Missing files are silently skipped (no error). Returns a sorted
 // slice; the slice is nil only if neither file exists.
-func loadFunctions(dir string) ([]string, error) {
+//
+// Also used by the daemon-side propose validator: a bare strictDecode +
+// Validate on devm.yaml leaves Config.Functions empty, which then trips
+// validateFunctionReferences on every function reference. Callers that
+// validate a devm.yaml against the on-disk .sh files populate
+// Config.Functions from here first.
+func LoadFunctions(dir string) ([]string, error) {
 	set := map[string]struct{}{}
 	for _, name := range []string{"devm.sh", "devm.me.sh"} {
 		body, err := os.ReadFile(filepath.Join(dir, name))

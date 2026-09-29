@@ -177,6 +177,88 @@ func TestPropose_InvalidOnDiskFileRejects(t *testing.T) {
 	assert.False(t, ok, "no metadata should be written when on-disk validation fails")
 }
 
+// TestPropose_LoadsFunctionsFromOnDiskShellScripts pins the fix for
+// the daemon-side propose validator populating Config.Functions from
+// devm.sh + devm.me.sh at macCwd before Validate. Without this, a
+// devm.yaml that references any function under repos.<name>.commands
+// or services.<name>.exec fails validation with "function ... is not
+// defined in devm.sh (or devm.me.sh)" — because the parsed Config's
+// Functions slice is empty regardless of what's on disk. Symptom
+// shipped to real users in v0.24.2: every guest-side `gdevm propose`
+// returned "propose: yaml validate: repos.<repo>.commands: function
+// \"<first-fn>\" is not defined in devm.sh", so proposal signals
+// became unusable the moment the yaml referenced any function at all.
+func TestPropose_LoadsFunctionsFromOnDiskShellScripts(t *testing.T) {
+	cfg := identity.Prod
+	t.Setenv("HOME", t.TempDir())
+	cache := NewStateCache()
+	macCwd := t.TempDir()
+	cache.SetMacCwd("proj", macCwd)
+
+	// devm.yaml references install-gsd-core under repos.main.commands,
+	// matching the shape the user hit. Any function name would trip
+	// the pre-fix bug; using a real one keeps the test grounded.
+	yamlBody := `project:
+  name: myproj
+repos:
+  main:
+    url: https://example.com/repo.git
+    primary: true
+    commands:
+      - install-gsd-core
+`
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte(yamlBody), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.sh"),
+		[]byte("install-gsd-core() {\n  true\n}\n"), 0o644))
+
+	h := handleProposeForProject(cfg, cache, "proj")
+	rr := postPropose(h, "/propose", map[string]any{
+		"kind":   "devm.yaml",
+		"source": "mac",
+		"reason": "regression pin",
+	})
+
+	require.Equal(t, http.StatusNoContent, rr.Code,
+		"validator must populate Functions from on-disk devm.sh — got %d, body: %s",
+		rr.Code, rr.Body.String())
+}
+
+// TestPropose_MissingFunctionInShellStillRejects pins the negative
+// side: a devm.yaml referencing a function NEITHER devm.sh nor
+// devm.me.sh defines still surfaces the real error, so the fix
+// doesn't accidentally suppress the intended validation.
+func TestPropose_MissingFunctionInShellStillRejects(t *testing.T) {
+	cfg := identity.Prod
+	t.Setenv("HOME", t.TempDir())
+	cache := NewStateCache()
+	macCwd := t.TempDir()
+	cache.SetMacCwd("proj", macCwd)
+
+	yamlBody := `project:
+  name: myproj
+repos:
+  main:
+    url: https://example.com/repo.git
+    primary: true
+    commands:
+      - never-defined
+`
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte(yamlBody), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.sh"),
+		[]byte("install-gsd-core() {\n  true\n}\n"), 0o644))
+
+	h := handleProposeForProject(cfg, cache, "proj")
+	rr := postPropose(h, "/propose", map[string]any{
+		"kind":   "devm.yaml",
+		"source": "mac",
+		"reason": "should still fail",
+	})
+
+	require.Equal(t, http.StatusBadRequest, rr.Code, "body: %s", rr.Body.String())
+	assert.Contains(t, rr.Body.String(), `"never-defined"`)
+	assert.Contains(t, rr.Body.String(), "not defined in devm.sh")
+}
+
 // invalidPartialMeYAML would fail schema.Config.Validate if it were
 // ever run against it (unknown top-level key, no project.name) — it
 // exists to prove the devm.me.yaml branch skips validation rather than

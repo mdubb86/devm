@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/approve"
+	"github.com/mdubb86/devm/internal/config"
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/recipes"
@@ -126,6 +127,17 @@ func recordProposal(cfg identity.Config, cache *StateCache, projectName string, 
 			if verr := yamlDecodeStrict(onDisk, &parsed); verr != nil {
 				return http.StatusBadRequest, fmt.Sprintf("propose: yaml parse: %v", verr), nil
 			}
+			// Populate Functions from the on-disk devm.sh + devm.me.sh
+			// before Validate — otherwise validateFunctionReferences
+			// sees an empty set and rejects every repos.<name>.commands
+			// / services.<name>.exec entry as "not defined in devm.sh".
+			// Matches config.Load's ordering (funcs then Validate).
+			funcs, ferr := config.LoadFunctions(macCwd)
+			if ferr != nil {
+				return http.StatusInternalServerError, fmt.Sprintf("propose: load functions: %v", ferr),
+					fmt.Errorf("propose: load functions for %s: %w", projectName, ferr)
+			}
+			parsed.Functions = funcs
 			if verr := parsed.Validate(); verr != nil {
 				return http.StatusBadRequest, fmt.Sprintf("propose: yaml validate: %v", verr), nil
 			}
