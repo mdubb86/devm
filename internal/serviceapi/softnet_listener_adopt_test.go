@@ -42,14 +42,16 @@ func TestBindSoftnetListenersForAdopt_BindsListenersAndUpdatesState(t *testing.T
 		context.Background(), cfg, cache, tr, locks,
 		"proj", nil, nil, 12345,
 	)
-	// setPolicy will fail (no real softnet socket), but the listener
-	// bind should have already happened. The function returns an error
-	// wrapping the setPolicy failure. Verify:
+	// bindSoftnetListenersForAdopt returns nil on success — the softnet
+	// setPolicy push happens asynchronously so a slow softnet child
+	// can't stall daemon startup on any one project. Verify the
+	// synchronous parts succeeded:
 	//   1. popListeners has an entry for "proj"
 	//   2. proposeListeners has an entry for "proj"
 	//   3. ironProxyState is updated with non-zero PopPort/ProposePort
-	// The error is expected and non-fatal per the caller in runner.go.
-	require.Error(t, err, "expected softnet setPolicy to fail without a real socket")
+	// The async setPolicy in a real environment logs on failure; the
+	// unit test doesn't wait on it.
+	require.NoError(t, err, "listener bind should succeed even without a softnet control socket (setPolicy is async)")
 
 	_, popBound := popListeners.Load("proj")
 	assert.True(t, popBound, "pop listener must be bound even if softnet push fails")

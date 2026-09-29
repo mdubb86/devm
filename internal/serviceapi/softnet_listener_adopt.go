@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -80,10 +81,17 @@ func bindSoftnetListenersForAdopt(
 	// Push softnet's forward-target map. On daemon restart softnet still
 	// holds the OLD daemon's Pop / Propose ports; without this push, the
 	// guest-initiated paths remain dead even though our listeners are
-	// bound and ready.
+	// bound and ready. Async — softnetClient.dial can retry for ~11s
+	// against a slow/unresponsive softnet child, and RunService can't
+	// block startup on any one project (see softnet_discover.go's
+	// discoverSoftnet, which fires the equivalent push in a goroutine
+	// for exactly this reason). Errors are logged inline.
 	sock := SoftnetControlSock(cfg, projectName)
-	if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(info, ntpPort)); err != nil {
-		return fmt.Errorf("softnet setPolicy for adopt: %w", err)
-	}
+	ep := endpointFrom(info, ntpPort)
+	go func() {
+		if err := newSoftnetClient(sock).setPolicy("FORWARDING", ep); err != nil {
+			daemonlog.Errorf("serviceapi: adopt-rebind softnet setPolicy for %s: %v", projectName, err)
+		}
+	}()
 	return nil
 }
