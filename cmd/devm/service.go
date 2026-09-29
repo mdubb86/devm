@@ -261,13 +261,26 @@ func runInstallFlow(ctx context.Context) error {
 		fmt.Fprintf(os.Stderr, "[devm] added ssh access include line to ~/.ssh/config\n")
 	}
 
+	// DEVM_INSTALL_APP_SRC is set by `devm upgrade` after it downloads
+	// and extracts the release tarball's devm.app bundle to a temp
+	// dir. On the upgrade path, a missing source is a fatal error —
+	// end users don't have a `just mac-build` fallback, and a stale
+	// menu-bar app is user-visible breakage.
+	if src := os.Getenv("DEVM_INSTALL_APP_SRC"); src != "" {
+		if err := installMenuAppOrRegisterAt(cfg, src, "/Applications"); err != nil {
+			return fmt.Errorf("install menu-bar app from %s: %w", src, err)
+		}
+		return nil
+	}
+
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
-	// Non-fatal: `just mac-build[-e2e]` is a separate build step from
-	// the daemon build. A caller who hasn't run it should still be
-	// able to install the daemon.
+	// Non-fatal on the dev path (repo checkout via `devm install`):
+	// `just mac-build[-e2e]` is a separate build step from the daemon
+	// build. A caller who hasn't run it should still be able to install
+	// the daemon.
 	if err := installMenuApp(cfg, repoRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "menu-bar app not installed: %v\n", err)
 	}
