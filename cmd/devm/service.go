@@ -263,12 +263,13 @@ func runInstallFlow(ctx context.Context) error {
 
 	// DEVM_INSTALL_APP_SRC is set by `devm upgrade` after it downloads
 	// and extracts the release tarball's devm.app bundle to a temp
-	// dir. On the upgrade path, a missing source is a fatal error —
-	// end users don't have a `just mac-build` fallback, and a stale
-	// menu-bar app is user-visible breakage.
-	if src := os.Getenv("DEVM_INSTALL_APP_SRC"); src != "" {
-		if err := installMenuAppOrRegisterAt(cfg, src, "/Applications"); err != nil {
-			return fmt.Errorf("install menu-bar app from %s: %w", src, err)
+	// dir. The bundle copy itself happened inside the sudo block above
+	// (root-owned, so the next upgrade can rm/replace cleanly); here
+	// we only register the user's LaunchAgent, which points at the
+	// installed bundle and runs as the user.
+	if os.Getenv("DEVM_INSTALL_APP_SRC") != "" {
+		if err := registerLaunchAgent(cfg); err != nil {
+			return fmt.Errorf("register menu-bar LaunchAgent: %w", err)
 		}
 		return nil
 	}
@@ -387,6 +388,18 @@ type installInputs struct {
 	// NeedsGroup is true when cfg.GroupName() doesn't exist yet in
 	// Directory Services.
 	NeedsGroup bool
+
+	// MenuAppSrcPath is the source .app bundle to copy into place. Set
+	// only on the `devm upgrade` path (populated from
+	// DEVM_INSTALL_APP_SRC) — the sudo block copies the bundle to
+	// MenuAppDstPath root-owned. Empty skips the whole .app block.
+	// Root-owning the .app means subsequent upgrades can `rm -rf` and
+	// replace it without a user-space permission-denied — matches macOS
+	// convention for /Applications entries.
+	MenuAppSrcPath string
+	// MenuAppDstPath is the destination path, e.g.
+	// /Applications/devm.app. Ignored when MenuAppSrcPath is empty.
+	MenuAppDstPath string
 }
 
 // buildInstallScript assembles the privileged install script from
@@ -474,6 +487,18 @@ func buildInstallScript(inputs installInputs) string {
 		sb.WriteString("launchctl bootout " + cfg.LaunchdTargetDaemon() + " 2>/dev/null || true\n")
 		fmt.Fprintf(&sb, "rm -f %s\n", shellQuote(cfg.LaunchdPlistDaemon()))
 		fmt.Fprintf(&sb, "%s _kardianos install\n", shellQuote(inputs.DevmExe))
+	}
+	if inputs.MenuAppSrcPath != "" {
+		// Root-own the .app so the next `devm upgrade` (also running
+		// under sudo here) can rm/replace it cleanly. A user-space
+		// copy leaves it user-owned, and a later root install would
+		// then hit permission-denied trying to remove _CodeSignature
+		// entries. ditto preserves the bundle's symlinks (Contents/
+		// MacOS, framework Versions/, etc.).
+		fmt.Fprintf(&sb, "rm -rf %s\n", shellQuote(inputs.MenuAppDstPath))
+		fmt.Fprintf(&sb, "ditto %s %s\n",
+			shellQuote(inputs.MenuAppSrcPath), shellQuote(inputs.MenuAppDstPath))
+		fmt.Fprintf(&sb, "chown -R root:wheel %s\n", shellQuote(inputs.MenuAppDstPath))
 	}
 
 	return sb.String()
@@ -578,7 +603,17 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 	needsAliases := aliasesNeedInstall(cfg)
 	needsGroup := !groupExists(cfg.GroupName())
 
-	if !needsDNS && !needsCA && !needsDaemon && !needsHelper && !needsAliases && !needsGroup {
+	// The upgrade path stages the release's devm.app bundle in a temp
+	// dir and points DEVM_INSTALL_APP_SRC at it. When set, the sudo
+	// block copies it into /Applications root-owned so later upgrades
+	// can replace it cleanly (a user-space copy leaves it user-owned,
+	// and subsequent root installs then hit permission-denied on
+	// _CodeSignature). Blank on the dev path — dev keeps the
+	// user-space installMenuApp fallback in runInstallFlow.
+	menuAppSrc := os.Getenv("DEVM_INSTALL_APP_SRC")
+	needsMenuApp := menuAppSrc != ""
+
+	if !needsDNS && !needsCA && !needsDaemon && !needsHelper && !needsAliases && !needsGroup && !needsMenuApp {
 		return false, nil
 	}
 
@@ -623,6 +658,10 @@ func runPrivilegedInstall(ctx context.Context, out io.Writer) (didWork bool, err
 		NeedsAliases:     needsAliases,
 		NeedsGroup:       needsGroup,
 		InstallUser:      installUser,
+	}
+	if needsMenuApp {
+		inputs.MenuAppSrcPath = menuAppSrc
+		inputs.MenuAppDstPath = filepath.Join("/Applications", menuAppBundleName(cfg)+".app")
 	}
 	if needsHelper {
 		// Extract the embedded helper to a tempfile in userland; the

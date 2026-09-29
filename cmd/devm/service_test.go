@@ -147,6 +147,47 @@ func TestBuildInstallScript_SkipsAliasesWhenNotNeeded(t *testing.T) {
 	assert.NotContains(t, script, "ifconfig lo0 alias")
 }
 
+// TestBuildInstallScript_InstallsMenuAppRootOwned pins that a
+// non-empty MenuAppSrcPath emits the rm/ditto/chown block that
+// root-owns /Applications/<name>.app. Without root ownership, the
+// next `devm upgrade` (also running under sudo) hits permission-denied
+// removing _CodeSignature entries — user-visible breakage. The block
+// runs regardless of NeedsDaemon: the upgrade path always sets
+// MenuAppSrcPath and the sudo prompt already fired for the daemon
+// swap anyway.
+func TestBuildInstallScript_InstallsMenuAppRootOwned(t *testing.T) {
+	script := buildInstallScript(installInputs{
+		DevmExe:        "/usr/local/bin/devm",
+		MenuAppSrcPath: "/var/folders/xyz/devm-app-stage/devm.app",
+		MenuAppDstPath: "/Applications/devm.app",
+	})
+	assert.Contains(t, script, "rm -rf '/Applications/devm.app'")
+	assert.Contains(t, script, "ditto '/var/folders/xyz/devm-app-stage/devm.app' '/Applications/devm.app'")
+	assert.Contains(t, script, "chown -R root:wheel '/Applications/devm.app'")
+
+	// Ordering: rm before ditto before chown. A chown that ran before
+	// ditto would chown an empty destination.
+	rmIdx := strings.Index(script, "rm -rf '/Applications/devm.app'")
+	dittoIdx := strings.Index(script, "ditto '/var/folders/xyz/devm-app-stage/devm.app'")
+	chownIdx := strings.Index(script, "chown -R root:wheel '/Applications/devm.app'")
+	require.Less(t, rmIdx, dittoIdx, "rm must come before ditto")
+	require.Less(t, dittoIdx, chownIdx, "ditto must come before chown")
+}
+
+// TestBuildInstallScript_SkipsMenuAppWhenSrcEmpty pins that the dev
+// path (no DEVM_INSTALL_APP_SRC) doesn't emit the .app block at all —
+// dev keeps the user-space installMenuApp fallback in runInstallFlow,
+// avoiding a sudo prompt just to refresh a locally-built .app.
+func TestBuildInstallScript_SkipsMenuAppWhenSrcEmpty(t *testing.T) {
+	script := buildInstallScript(installInputs{
+		DevmExe:     "/usr/local/bin/devm",
+		NeedsDaemon: true,
+	})
+	assert.NotContains(t, script, "/Applications/devm.app")
+	assert.NotContains(t, script, "ditto")
+	assert.NotContains(t, script, "chown -R root:wheel")
+}
+
 // TestHelperPlistContent_UsesResolvedProgramPathAndIdentity pins the
 // plist design: ProgramArguments points at the sibling helper binary
 // path (where install extracted it from the embed), and
