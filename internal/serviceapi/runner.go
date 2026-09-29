@@ -279,6 +279,14 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// /vm/reconcile; leaving it nil nil-derefs on first drift.
 	cache := NewStateCache()
 	cache.SetBuild(build)
+
+	// Rehydrate per-project cache fields that /vm/start writes once and
+	// no watchdog check reconciles. Currently only MacCwd — without
+	// this, running-VM projects survive daemon restart but every
+	// gdevm-initiated propose / passthrough call returns 412 "project
+	// not started" because the precondition check reads cache.MacCwd,
+	// which stays empty across the restart otherwise.
+	rehydrateCacheFromStateSnapshots(cfg, cache, ironProxyState.keys())
 	gt := &RealGroundTruth{
 		Cfg: cfg, Tart: tr, Sup: sup, Proxy: proxy,
 		MutagenCLI: popCLI,

@@ -18,6 +18,14 @@ What this pins:
     so guest-initiated flows survive a restart. Without this, every
     gdevm command from the guest hits `connection refused` on the
     stale ports the pre-restart daemon had bound.
+  - `gdevm propose` succeeds end-to-end from inside the guest after
+    the daemon restart — proves the adopt path rehydrates
+    `cache.MacCwd` from the persisted StateSnapshot. Without this,
+    every propose/passthrough/approve call returns 412 "project not
+    started" because the precondition check reads a cache field that
+    stays empty across the restart otherwise. Strictly stronger than
+    the /dev/tcp probe above (which only proves listeners are
+    reachable, not that request handlers can serve their preconditions).
   - The post-restart daemon can `teardown` cleanly — the adopted
     process is stopped, not orphaned.
 
@@ -122,6 +130,29 @@ def test_iron_proxy_survives_daemon_restart(devm, workspace, sandbox_name, devm_
                 "The adopt path in internal/serviceapi/runner.go must re-bind "
                 "pop + propose listeners and re-push softnet's forward-target map."
             )
+
+        # Cache-state rehydrate. `gdevm propose` hits /propose on the
+        # softnet :82 forward, whose handler reads cache.ProjectRow.MacCwd
+        # and rejects with 412 "project not started" if empty. MacCwd is
+        # stamped once at /vm/start and no watchdog check reconciles it,
+        # so a fresh-daemon cache keeps it empty across a restart unless
+        # rehydrateCacheFromStateSnapshots restores it from the persisted
+        # StateSnapshot. This is a strict superset of the /dev/tcp probe:
+        # the probe proves the port is reachable, this proves the handler
+        # can serve real requests with correct state.
+        propose = subprocess.run(
+            [devm.path, "exec", "gdevm", "propose", "--reason", "post-restart adopt smoke"],
+            cwd=str(workspace.path), capture_output=True, timeout=30,
+        )
+        assert propose.returncode == 0, (
+            f"gdevm propose failed after daemon restart (rc={propose.returncode}):\n"
+            f"stdout: {propose.stdout.decode()!r}\n"
+            f"stderr: {propose.stderr.decode()!r}\n"
+            "The adopt path must rehydrate cache.MacCwd from the persisted "
+            "StateSnapshot — otherwise every guest-initiated propose / "
+            "passthrough / approve call returns 412 until the user runs "
+            "`devm start` again."
+        )
 
         # Adopted process can be stopped via the regular teardown path.
         r = subprocess.run(
