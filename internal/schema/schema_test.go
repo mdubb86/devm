@@ -1173,6 +1173,32 @@ func TestSanitizeDerivedLabel(t *testing.T) {
 	assert.Equal(t, ".", SanitizeDerivedLabel(".."))
 }
 
+// TestVolumeResolveLabel_StripsLeadingDot pins the single-source-of-
+// truth method every label-derivation site now calls. A dotfile-rooted
+// volume path (/home/devm/.codex) MUST derive "codex", not ".codex" —
+// mutagen rejects ".codex" as an invalid session name, and the
+// Mac-side mirror would land at a hidden dir the operator can't see.
+// A drift-copy of this logic in v0.23.3's reconcile package used raw
+// filepath.Base and shipped a mis-mirrored .codex volume before
+// erroring; this test locks the canonical path.
+func TestVolumeResolveLabel_StripsLeadingDot(t *testing.T) {
+	cases := []struct {
+		name string
+		v    Volume
+		want string
+	}{
+		{"dotfile leaf", Volume{Path: "/home/devm/.codex"}, "codex"},
+		{"plain leaf", Volume{Path: "/home/devm/data"}, "data"},
+		{"explicit label overrides", Volume{Path: "/home/devm/.claude", Label: strPtr("override")}, "override"},
+		{"explicit label may keep dot", Volume{Path: "/x", Label: strPtr(".weird")}, ".weird"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.v.ResolveLabel())
+		})
+	}
+}
+
 // ---------- validateLabels: mutagen-name rejection ----------
 
 func TestValidateLabels_RejectsInvalidExplicit(t *testing.T) {

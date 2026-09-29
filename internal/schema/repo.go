@@ -2,6 +2,7 @@ package schema
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/mdubb86/devm/internal/scriptfile"
 	"gopkg.in/yaml.v3"
@@ -52,6 +53,26 @@ type Volume struct {
 }
 
 var volumeKnownFields = []string{"path", "label", "ignore"}
+
+// ResolveLabel returns the mutagen sync label for a volumes.<name>
+// entry: an explicit `label:` wins; else the leaf dir of Path, run
+// through SanitizeDerivedLabel so dotfile-rooted paths like
+// /home/devm/.claude produce a usable default ("claude", not
+// ".claude" — which mutagen rejects and which would also point the
+// Mac-side mirror at a hidden dir the operator can't see).
+//
+// Single source of truth for volume-label derivation: schema
+// validation, mutagen session setup, and live reconcile all call
+// this method. A second copy of the logic drifted between the
+// serviceapi and reconcile packages in v0.23.3 and shipped a
+// mis-mirrored .codex volume before erroring — this method exists
+// so that failure mode can't recur.
+func (v Volume) ResolveLabel() string {
+	if v.Label != nil {
+		return *v.Label
+	}
+	return SanitizeDerivedLabel(filepath.Base(v.Path))
+}
 
 // UnmarshalYAML decodes either the scalar shape (bare guest path) or the
 // mapping shape (`{path: ..., label: ..., ignore: ...}`). Rejects unknown

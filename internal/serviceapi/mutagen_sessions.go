@@ -96,16 +96,6 @@ func resolveRepoLabel(r schema.RepoConfig, macCwd string) string {
 	return schema.SanitizeDerivedLabel(filepath.Base(macCwd))
 }
 
-// resolveVolumeLabel resolves one volumes.<name> entry's mutagen sync
-// label: an explicit `label:` always wins; else the leaf dir of Path,
-// sanitized to strip a leading dot so dotfile-rooted paths like
-// /home/devm/.claude produce a usable default.
-func resolveVolumeLabel(v schema.Volume) string {
-	if v.Label != nil {
-		return *v.Label
-	}
-	return schema.SanitizeDerivedLabel(filepath.Base(v.Path))
-}
 
 // PrimaryGuestPath returns the guest-side path of cfg's primary
 // mirrored repo (e.g. "/home/devm/<label>"), or "" if cfg declares no
@@ -178,7 +168,7 @@ func BuildEntities(cfg *schema.Config, macCwd string) ([]SessionEntity, error) {
 	for _, name := range volNames {
 		v := cfg.Volumes[name]
 		entities = append(entities, SessionEntity{
-			Label:      resolveVolumeLabel(v),
+			Label:      v.ResolveLabel(),
 			GuestPath:  v.Path,
 			UserIgnore: v.Ignore,
 		})

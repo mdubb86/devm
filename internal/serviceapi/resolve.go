@@ -79,8 +79,8 @@ func listWorkspaces(cfg identity.Config) ([]WorkspaceEntry, error) {
 
 // projectWorkspaceEntries builds one WorkspaceEntry per mirrored repo
 // or volume declared in pcfg, for the given projectID. Label
-// resolution mirrors BuildEntities' resolveRepoLabel/
-// resolveVolumeLabel rules, with one deliberate divergence: a
+// resolution mirrors BuildEntities' resolveRepoLabel /
+// Volume.ResolveLabel rules, with one deliberate divergence: a
 // URL-nil, label-nil primary repo would normally fall back to the
 // basename of the Mac checkout dir (macCwd) — that value isn't
 // persisted on StateSnapshot, so this falls back to projectID
@@ -128,7 +128,7 @@ func projectWorkspaceEntries(cfg identity.Config, projectID string, pcfg *schema
 
 	for _, name := range volNames {
 		v := pcfg.Volumes[name]
-		label := resolveVolumeLabel(v)
+		label := v.ResolveLabel()
 		out = append(out, WorkspaceEntry{
 			ProjectName: projectID,
 			Label:       label,

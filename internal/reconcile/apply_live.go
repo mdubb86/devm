@@ -299,15 +299,6 @@ func guestGitCACertPath() string {
 	return ""
 }
 
-// resolveVolumeLabel resolves one volumes.<name> entry's mutagen sync
-// label — mirrors serviceapi.resolveVolumeLabel.
-func resolveVolumeLabel(v schema.Volume) string {
-	if v.Label != nil {
-		return *v.Label
-	}
-	return filepath.Base(v.Path)
-}
-
 // resolveRepoLabelForApply resolves one repos.<name> entry's mutagen
 // sync label for a live-apply change. Unlike
 // serviceapi.resolveRepoLabel, it never falls back to a Mac-cwd
@@ -826,7 +817,7 @@ func applyVolumeChange(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, pr
 			return fmt.Errorf("apply_live: volume add %q: missing new value", change.Key)
 		}
 		spec := sessionSpec{
-			Label: resolveVolumeLabel(vol), GuestPath: vol.Path, Ignore: vol.Ignore,
+			Label: vol.ResolveLabel(), GuestPath: vol.Path, Ignore: vol.Ignore,
 		}
 		if err := setupSingleSession(exec, cli, cfg, projectID, spec); err != nil {
 			return err
@@ -838,7 +829,7 @@ func applyVolumeChange(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, pr
 		if !ok {
 			return fmt.Errorf("apply_live: volume remove %q: missing old value", change.Key)
 		}
-		label := resolveVolumeLabel(vol)
+		label := vol.ResolveLabel()
 		if err := terminateSessionIfExists(cli, projectID, label); err != nil {
 			return err
 		}
@@ -855,7 +846,7 @@ func applyVolumeChange(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, pr
 		case "label":
 			return renameVolumeLabel(exec, cli, cfg, projectID, *before, *after)
 		case "ignore":
-			label := resolveVolumeLabel(*after)
+			label := (*after).ResolveLabel()
 			return recreateSessionWithIgnore(exec, cli, cfg, projectID, label, after.Path, after.Ignore, nil)
 		}
 	}
@@ -867,14 +858,14 @@ func applyVolumeChange(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, pr
 // the (usually unchanged) resolved label. The Mac mirror dir is keyed
 // by label, not path, so it never needs to move here.
 func moveVolumeGuestPath(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, projectID string, before, after schema.Volume) error {
-	oldLabel := resolveVolumeLabel(before)
+	oldLabel := before.ResolveLabel()
 	if err := terminateSessionIfExists(cli, projectID, oldLabel); err != nil {
 		return err
 	}
 	if err := moveGuestDir(exec, before.Path, after.Path); err != nil {
 		return fmt.Errorf("apply_live: volume path change %q: %w", oldLabel, err)
 	}
-	newLabel := resolveVolumeLabel(after)
+	newLabel := after.ResolveLabel()
 	spec := sessionSpec{
 		Label: newLabel, GuestPath: after.Path, Ignore: after.Ignore,
 	}
@@ -889,8 +880,8 @@ func moveVolumeGuestPath(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, 
 // untouched — a volume's guest Path is independent of its label), then
 // re-run the setup flow at the new label.
 func renameVolumeLabel(exec GuestExec, cli *mutagen.CLI, cfg identity.Config, projectID string, before, after schema.Volume) error {
-	oldLabel := resolveVolumeLabel(before)
-	newLabel := resolveVolumeLabel(after)
+	oldLabel := before.ResolveLabel()
+	newLabel := after.ResolveLabel()
 	if oldLabel == newLabel {
 		return nil
 	}

@@ -1112,15 +1112,8 @@ func (c *Config) validateLabels(macCwd string) error {
 	sort.Strings(volNames)
 	for _, name := range volNames {
 		v := c.Volumes[name]
-		var label string
-		explicit := false
-		if v.Label != nil {
-			label = *v.Label
-			explicit = true
-		} else {
-			label = SanitizeDerivedLabel(filepath.Base(v.Path))
-		}
-		owners = append(owners, labelOwner{"volumes", name, label, explicit})
+		explicit := v.Label != nil
+		owners = append(owners, labelOwner{"volumes", name, v.ResolveLabel(), explicit})
 	}
 
 	// Reject any label mutagen would refuse. Derived labels that still
