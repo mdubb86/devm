@@ -347,10 +347,19 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		if !ok || info.ProjectIP == "" {
 			continue
 		}
-		go rebindProjectListeners(ctx, proxy, cfg, id, info.ProjectIP, ntp.Port())
+		// Bind pop + propose listeners synchronously FIRST — that
+		// pins PopPort / ProposePort into ironProxyState before
+		// rebindProjectListeners' async goroutine gets a chance to
+		// do its own read-modify-write (guest-origin ports). Since
+		// projectInfoStore's get + modify + put is not atomic across
+		// callers, doing the fast synchronous write first eliminates
+		// the theoretical race where rebindProjectListeners' goroutine
+		// reads the store before my write and clobbers PopPort/
+		// ProposePort with zero when it writes back.
 		if err := bindSoftnetListenersForAdopt(ctx, cfg, cache, tr, locks, id, popStore, popCLI, ntp.Port()); err != nil {
 			daemonlog.Errorf("serviceapi: adopt-rebind softnet listeners for %s: %v", id, err)
 		}
+		go rebindProjectListeners(ctx, proxy, cfg, id, info.ProjectIP, ntp.Port())
 	}
 
 	server.SetStateCache(cache)
