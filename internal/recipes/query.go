@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 
 	_ "modernc.org/sqlite"
 )
@@ -183,7 +184,7 @@ func (q *Query) ListAssets(ctx context.Context, recipeName string) ([]AssetListi
 // GetAsset returns the raw content bytes for one asset. Validates path
 // before touching the DB.
 func (q *Query) GetAsset(ctx context.Context, recipeName, path string) ([]byte, error) {
-	if err := validAssetPath(path); err != nil {
+	if err := ValidAssetPath(path); err != nil {
 		return nil, err
 	}
 	if err := q.assertRecipeExists(ctx, recipeName); err != nil {
@@ -216,7 +217,10 @@ func (q *Query) assertRecipeExists(ctx context.Context, name string) error {
 	return nil
 }
 
-// Version returns the meta.version string ('recipes-vX.Y.Z').
+// Version returns the meta.version string. This is the RELEASE
+// identity (e.g. 'recipes-vX.Y.Z' locally, 'recipes-<git-sha>' in
+// production release artifacts). It does NOT encode the schema shape
+// — for that, see SchemaVersion.
 func (q *Query) Version() (string, error) {
 	var v string
 	err := q.db.QueryRowContext(context.Background(),
@@ -227,9 +231,40 @@ func (q *Query) Version() (string, error) {
 	return v, nil
 }
 
+// CurrentSchemaVersion is the schema-shape stamp InitSchema writes into
+// meta.schema_version. Bump this any time the schema (tables, columns,
+// indexes, meta keys with load-bearing semantics) changes in a way
+// consumers might care about, so callers can detect stale caches
+// deterministically instead of parsing a release-identity string.
+//
+//   1 — original recipes/meta/idx tables (recipes-v1 releases)
+//   2 — added assets table (recipes-v2, this batch)
+const CurrentSchemaVersion = 2
+
+// SchemaVersion returns the meta.schema_version integer written by
+// InitSchema. Missing key (pre-schema_version DBs) returns 0 without
+// error — callers can treat that as "older than schema 1".
+func (q *Query) SchemaVersion() (int, error) {
+	var s string
+	err := q.db.QueryRowContext(context.Background(),
+		`SELECT value FROM meta WHERE key = 'schema_version'`).Scan(&s)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("parse meta.schema_version %q: %w", s, err)
+	}
+	return n, nil
+}
+
 // InitSchema installs the recipes.db schema on an empty database. The
 // build tool and fixture helpers share this so both produce byte-
-// identical shape; the meta.version stamp is the caller's job.
+// identical shape; the caller-supplied meta.version stamp is separate
+// (release identity, not schema shape — see CurrentSchemaVersion).
 func InitSchema(ctx context.Context, db *sql.DB) error {
 	stmts := []string{
 		`CREATE TABLE meta (
@@ -264,6 +299,15 @@ func InitSchema(ctx context.Context, db *sql.DB) error {
 		if _, err := db.ExecContext(ctx, s); err != nil {
 			return fmt.Errorf("recipes: init schema: %w", err)
 		}
+	}
+	// Stamp the schema-shape version. Distinct from meta.version, which
+	// the build tool writes as the release identity — different concerns:
+	// a stale cache and a new release cut are both possible independently.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO meta (key, value) VALUES ('schema_version', ?)`,
+		strconv.Itoa(CurrentSchemaVersion),
+	); err != nil {
+		return fmt.Errorf("recipes: stamp schema_version: %w", err)
 	}
 	return nil
 }

@@ -257,6 +257,58 @@ func TestBuild_RejectsInvalidAssetPath(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid asset path")
 }
 
+// TestBuild_RejectsDuplicateAssetPaths pins that two files resolving
+// to the same relative asset path (e.g. via a symlink pointing at
+// an already-present sibling) fail loudly rather than silently
+// clobbering. The assets table's PRIMARY KEY (recipe_name, path)
+// enforces this at insert; the test simulates it via a symlink
+// pointing at a real file in the same dir under a duplicate name.
+func TestBuild_RejectsDuplicateAssetPaths(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "tool"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "tool", "foo.md"),
+		validRecipeBytes("tool/foo"), 0o644))
+	assetsDir := filepath.Join(src, "tool", "foo-assets")
+	require.NoError(t, os.MkdirAll(assetsDir, 0o755))
+	// Two files whose EvalSymlinks-resolved paths land at the same
+	// content but via different names. Since PK is (recipe_name, path)
+	// and path is filepath.Rel(assetsRoot, resolvedPath), a symlink
+	// pointing to a real sibling produces two entries with the SAME
+	// resolved relative path — insert #2 fails on the PK constraint.
+	require.NoError(t, os.WriteFile(filepath.Join(assetsDir, "real.md"), []byte("original"), 0o644))
+	require.NoError(t, os.Symlink("real.md", filepath.Join(assetsDir, "alias.md")))
+
+	out := filepath.Join(t.TempDir(), "recipes.db")
+	err := build(src, out, "recipes-v2.0.0")
+	require.Error(t, err, "duplicate resolved asset paths must fail the build")
+	assert.Contains(t, err.Error(), "insert asset")
+}
+
+// TestBuild_RejectsSymlinkedDirectoryInsideAssetsDir pins the behavior
+// of a directory-typed entry inside <name>-assets that's actually a
+// symlink to another directory. WalkDir walks the target's contents;
+// if the target is inside the assets tree, contents get ingested
+// normally; if outside, the per-entry escape check must catch it
+// exactly like a symlinked file would.
+func TestBuild_RejectsSymlinkedDirectoryInsideAssetsDir(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "tool"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "tool", "foo.md"),
+		validRecipeBytes("tool/foo"), 0o644))
+	assetsDir := filepath.Join(src, "tool", "foo-assets")
+	require.NoError(t, os.MkdirAll(assetsDir, 0o755))
+	// Plant a directory OUTSIDE the recipe tree with a file inside.
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "leak.md"), []byte("secret"), 0o600))
+	// Symlink the assets dir's "skills" entry to the outside directory.
+	require.NoError(t, os.Symlink(outside, filepath.Join(assetsDir, "skills")))
+
+	out := filepath.Join(t.TempDir(), "recipes.db")
+	err := build(src, out, "recipes-v2.0.0")
+	require.Error(t, err, "symlinked directory pointing outside the recipe tree must be rejected")
+	assert.Contains(t, strings.ToLower(err.Error()), "escap")
+}
+
 func TestBuild_RecordsMeta(t *testing.T) {
 	src := writeFixtures(t)
 	out := filepath.Join(t.TempDir(), "recipes.db")

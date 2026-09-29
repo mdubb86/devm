@@ -261,6 +261,33 @@ func TestGetAsset_InvalidPath_Error(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrInvalidAssetPath))
 }
 
+// TestSchemaVersion_MissingReturnsZero pins the pre-schema-version
+// backward-compat contract: a DB written before this key existed
+// returns 0 without error rather than blowing up. Simulates that by
+// initializing a bare meta+recipes schema without the InitSchema
+// stamp, then asserting SchemaVersion == 0.
+func TestSchemaVersion_MissingReturnsZero(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "recipes.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	// Minimal schema the Open() sanity check needs: meta table with
+	// version row (Open reads meta at startup for its sanity check).
+	_, err = db.ExecContext(ctx, `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO meta VALUES ('version', 'recipes-old')`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	q, err := Open(dbPath)
+	require.NoError(t, err)
+	defer q.Close()
+
+	sv, err := q.SchemaVersion()
+	require.NoError(t, err)
+	assert.Zero(t, sv, "missing schema_version key must return 0, not error")
+}
+
 func TestOpen_HasAssetsTableAndV2Version(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "recipes.db")
 	require.NoError(t, buildFixtureDB(dbPath))
@@ -273,12 +300,50 @@ func TestOpen_HasAssetsTableAndV2Version(t *testing.T) {
 	require.NoError(t, q.db.QueryRow("SELECT value FROM meta WHERE key = 'version'").Scan(&version))
 	assert.Equal(t, "recipes-v2.0.0", version)
 
+	// schema_version is stamped by InitSchema itself (distinct from
+	// meta.version, which is the caller-supplied release identity).
+	sv, err := q.SchemaVersion()
+	require.NoError(t, err)
+	assert.Equal(t, CurrentSchemaVersion, sv, "InitSchema must stamp schema_version")
+
 	var name string
 	require.NoError(t, q.db.QueryRow(
 		"SELECT name FROM sqlite_schema WHERE type='table' AND name='assets'").Scan(&name))
 	assert.Equal(t, "assets", name)
 
+	// assets is WITHOUT ROWID with a composite PK on (recipe_name, path).
+	// A future refactor that dropped either would silently regress
+	// insert semantics — no more automatic dedup on primary key —
+	// which this test pins.
+	var sqlText string
+	require.NoError(t, q.db.QueryRow(
+		"SELECT sql FROM sqlite_schema WHERE type='table' AND name='assets'").Scan(&sqlText))
+	assert.Contains(t, sqlText, "WITHOUT ROWID", "assets must be WITHOUT ROWID")
+	assert.Contains(t, sqlText, "PRIMARY KEY (recipe_name, path)", "assets PK must be (recipe_name, path)")
+
+	// PK column ordinals matching the composite key.
+	pkOrdinals := map[string]int{}
 	rows, err := q.db.Query("PRAGMA table_info(assets)")
+	require.NoError(t, err)
+	for rows.Next() {
+		var (
+			cid       int
+			cName     string
+			cType     string
+			notnull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		require.NoError(t, rows.Scan(&cid, &cName, &cType, &notnull, &dfltValue, &pk))
+		if pk > 0 {
+			pkOrdinals[cName] = pk
+		}
+	}
+	rows.Close()
+	assert.Equal(t, 1, pkOrdinals["recipe_name"], "recipe_name is PK column 1")
+	assert.Equal(t, 2, pkOrdinals["path"], "path is PK column 2")
+
+	rows, err = q.db.Query("PRAGMA table_info(assets)")
 	require.NoError(t, err)
 	defer rows.Close()
 	cols := map[string]string{}

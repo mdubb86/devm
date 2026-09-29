@@ -16,7 +16,7 @@ func TestValidAssetPath_Accepts(t *testing.T) {
 		"config/nested/deep/file.conf",
 		"claude-local-mac.md",
 	} {
-		assert.NoError(t, validAssetPath(p), "should accept: %q", p)
+		assert.NoError(t, ValidAssetPath(p), "should accept: %q", p)
 	}
 }
 
@@ -38,7 +38,7 @@ func TestValidAssetPath_Rejects(t *testing.T) {
 	}
 	for name, p := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := validAssetPath(p)
+			err := ValidAssetPath(p)
 			require.Error(t, err, "should reject: %q", p)
 			assert.True(t, errors.Is(err, ErrInvalidAssetPath),
 				"error must wrap ErrInvalidAssetPath, got %v", err)
