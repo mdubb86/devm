@@ -8,7 +8,7 @@
 //	gdevm pop         <path-or-url> [-- <open-args>...]
 //	gdevm propose     [--reason <text>] [--kind devm.yaml|devm.me.yaml|devm.sh|devm.me.sh]
 //	gdevm run         <command>
-//	gdevm passthrough --reason <text> [--for <duration>]
+//	gdevm passthrough <duration> --reason <text>
 //	gdevm upgrade
 //	gdevm recipes     list | get <name> | asset ls <name> | asset get <name> <path>
 //

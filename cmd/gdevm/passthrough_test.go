@@ -19,7 +19,7 @@ func TestPassthrough_HappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code := runPassthrough([]string{"--reason", "need to curl a mirror", "--for", "10m"}, srv.URL, "/home/devm/proj")
+	code := runPassthrough([]string{"10m", "--reason", "need to curl a mirror"}, srv.URL, "/home/devm/proj")
 	assert.Equal(t, 0, code)
 	assert.Equal(t, "need to curl a mirror", got.Reason)
 	assert.Equal(t, 600, got.DurationSeconds)
@@ -29,34 +29,63 @@ func TestPassthrough_HappyPath(t *testing.T) {
 
 func TestPassthrough_ReasonRequired(t *testing.T) {
 	stderr := captureStderr(t, func() {
-		code := runPassthrough([]string{}, "http://ignored", "/x")
+		code := runPassthrough([]string{"5m"}, "http://ignored", "/x")
 		assert.Equal(t, 2, code)
 	})
 	assert.Contains(t, stderr, "--reason is required")
 }
 
-func TestPassthrough_ForRequiresValue(t *testing.T) {
+// TestPassthrough_DurationRequired pins that omitting the positional
+// duration fails fast with an actionable message — not a silent
+// default. Silent defaults produced the "I ran approve but nothing
+// opened" report: a 30s window that had expired by the time the
+// operator got back to test.
+func TestPassthrough_DurationRequired(t *testing.T) {
 	stderr := captureStderr(t, func() {
-		code := runPassthrough([]string{"--reason", "x", "--for"}, "http://ignored", "/x")
+		code := runPassthrough([]string{"--reason", "x"}, "http://ignored", "/x")
 		assert.Equal(t, 2, code)
 	})
-	assert.Contains(t, stderr, "--for requires a value")
+	assert.Contains(t, stderr, "duration is required")
 }
 
-func TestPassthrough_ForRejectsSubsecond(t *testing.T) {
+func TestPassthrough_RejectsSubsecondDuration(t *testing.T) {
 	stderr := captureStderr(t, func() {
-		code := runPassthrough([]string{"--reason", "x", "--for", "500ms"}, "http://ignored", "/x")
+		code := runPassthrough([]string{"500ms", "--reason", "x"}, "http://ignored", "/x")
 		assert.Equal(t, 2, code)
 	})
 	assert.Contains(t, stderr, "at least 1s")
 }
 
-func TestPassthrough_UnknownArg(t *testing.T) {
+func TestPassthrough_UnknownFlag(t *testing.T) {
 	stderr := captureStderr(t, func() {
-		code := runPassthrough([]string{"--reason", "x", "--bogus"}, "http://ignored", "/x")
+		code := runPassthrough([]string{"5m", "--reason", "x", "--bogus"}, "http://ignored", "/x")
 		assert.Equal(t, 2, code)
 	})
-	assert.Contains(t, stderr, "unknown arg")
+	assert.Contains(t, stderr, "unknown flag")
+}
+
+// TestPassthrough_ExtraPositionalRejected pins that a second
+// non-flag arg is refused rather than silently discarded — the parser
+// is strict enough that a typo like `gdevm passthrough 5m --reason x extra`
+// surfaces the mistake.
+func TestPassthrough_ExtraPositionalRejected(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		code := runPassthrough([]string{"5m", "10m", "--reason", "x"}, "http://ignored", "/x")
+		assert.Equal(t, 2, code)
+	})
+	assert.Contains(t, stderr, "unexpected extra arg")
+}
+
+// TestPassthrough_HelpPrintsUsage pins the -h / --help affordance.
+// The user missed --for was the flag name because -h printed nothing;
+// now it prints the usage block covering the positional duration.
+func TestPassthrough_HelpPrintsUsage(t *testing.T) {
+	stdout := captureStdout(t, func() {
+		code := runPassthrough([]string{"--help"}, "http://ignored", "/x")
+		assert.Equal(t, 0, code)
+	})
+	assert.Contains(t, stdout, "usage: gdevm passthrough <duration>")
+	assert.Contains(t, stdout, "--reason")
 }
 
 func TestPassthrough_ForbiddenReturnsExit3(t *testing.T) {
@@ -66,13 +95,13 @@ func TestPassthrough_ForbiddenReturnsExit3(t *testing.T) {
 	defer srv.Close()
 
 	stderr := captureStderr(t, func() {
-		code := runPassthrough([]string{"--reason", "x"}, srv.URL, "/x")
+		code := runPassthrough([]string{"5m", "--reason", "x"}, srv.URL, "/x")
 		assert.Equal(t, 3, code)
 	})
 	assert.Contains(t, stderr, "guest.passthrough is disabled")
 }
 
 func TestPassthrough_TransportErrorExit1(t *testing.T) {
-	code := runPassthrough([]string{"--reason", "x"}, "http://127.0.0.1:1/passthrough", "/x")
+	code := runPassthrough([]string{"5m", "--reason", "x"}, "http://127.0.0.1:1/passthrough", "/x")
 	assert.Equal(t, 1, code)
 }

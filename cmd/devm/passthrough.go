@@ -12,12 +12,12 @@ import (
 )
 
 // parsePassthroughDuration accepts a Go duration string ("30s", "5m",
-// "24h") and returns the whole-second count for the daemon. Zero
-// means "use daemon default (30s)". Rejects sub-second durations
-// with an actionable error.
+// "24h") and returns the whole-second count for the daemon. Empty or
+// sub-second durations are rejected — there is no default and no
+// implicit floor beyond 1s.
 func parsePassthroughDuration(arg string) (int, error) {
 	if arg == "" {
-		return 0, nil
+		return 0, fmt.Errorf("duration is required (e.g. 30s, 5m, 24h) — pass it as the positional argument")
 	}
 	d, err := time.ParseDuration(arg)
 	if err != nil {
@@ -35,8 +35,9 @@ var passthroughCmd = &cobra.Command{
 	Long: `Manage the project's egress passthrough window.
 
 Subcommands:
-  open [duration]   Open a passthrough window immediately (default 30s).
-                    Duration is a positional Go duration (e.g. 30s, 5m, 24h).
+  open <duration>   Open a passthrough window immediately.
+                    Duration is a positional Go duration (e.g. 30s, 5m, 24h)
+                    and is required — there is no default.
   close             Close an active window immediately.
   approve           Open a window honoring a pending gdevm passthrough request.
   deny              Clear a pending gdevm passthrough request without opening.
@@ -49,9 +50,9 @@ after it closes.`,
 }
 
 var passthroughOpenCmd = &cobra.Command{
-	Use:   "open [duration]",
-	Short: "Open a passthrough window immediately (default 30s)",
-	Args:  cobra.MaximumNArgs(1),
+	Use:   "open <duration>",
+	Short: "Open a passthrough window immediately for the given duration",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		ident := cfg
@@ -66,11 +67,7 @@ var passthroughOpenCmd = &cobra.Command{
 		if _, err := daemonHandshake(cmd.Context(), ident, projCfg); err != nil {
 			return err
 		}
-		durArg := ""
-		if len(args) == 1 {
-			durArg = args[0]
-		}
-		durationSeconds, err := parsePassthroughDuration(durArg)
+		durationSeconds, err := parsePassthroughDuration(args[0])
 		if err != nil {
 			return err
 		}

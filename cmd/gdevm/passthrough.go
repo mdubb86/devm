@@ -38,11 +38,30 @@ func passthroughMain(args []string) int {
 	return runPassthrough(args, passthroughEndpoint, cwd)
 }
 
+const passthroughUsage = `usage: gdevm passthrough <duration> --reason "<why>"
+
+Request a Mac-approved egress passthrough window of the given duration.
+The Mac operator sees the reason and decides whether to open the window
+via ` + "`devm passthrough approve`" + `.
+
+Arguments:
+  <duration>          Go duration string, e.g. 30s, 5m, 24h. Required —
+                      there is no default. The Mac side opens the window
+                      for exactly this long.
+
+Flags:
+  --reason "<why>"    Short justification the Mac reviewer sees. Required.
+  -h, --help          Print this help.
+`
+
 func runPassthrough(args []string, endpoint, cwd string) int {
 	reason := ""
-	forArg := ""
+	durationArg := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "-h", "--help":
+			fmt.Print(passthroughUsage)
+			return 0
 		case "--reason":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, "gdevm passthrough: --reason requires a value")
@@ -50,35 +69,37 @@ func runPassthrough(args []string, endpoint, cwd string) int {
 			}
 			reason = args[i+1]
 			i++
-		case "--for":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "gdevm passthrough: --for requires a value (e.g. 5m, 24h)")
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(os.Stderr, "gdevm passthrough: unknown flag %q\n%s", args[i], passthroughUsage)
 				return 2
 			}
-			forArg = args[i+1]
-			i++
-		default:
-			fmt.Fprintf(os.Stderr, "gdevm passthrough: unknown arg %q\n", args[i])
-			return 2
+			if durationArg != "" {
+				fmt.Fprintf(os.Stderr, "gdevm passthrough: unexpected extra arg %q (duration already set to %q)\n%s", args[i], durationArg, passthroughUsage)
+				return 2
+			}
+			durationArg = args[i]
 		}
+	}
+	if durationArg == "" {
+		fmt.Fprintln(os.Stderr, "gdevm passthrough: duration is required (e.g. 5m, 24h) — pass it as the first positional argument")
+		fmt.Fprint(os.Stderr, passthroughUsage)
+		return 2
 	}
 	if reason == "" {
 		fmt.Fprintln(os.Stderr, "gdevm passthrough: --reason is required (short justification the Mac reviewer sees)")
 		return 2
 	}
-	durationSeconds := 0
-	if forArg != "" {
-		d, err := time.ParseDuration(forArg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "gdevm passthrough: --for: %v\n", err)
-			return 2
-		}
-		if d < time.Second {
-			fmt.Fprintf(os.Stderr, "gdevm passthrough: --for must be at least 1s (got %s)\n", d)
-			return 2
-		}
-		durationSeconds = int(d.Round(time.Second) / time.Second)
+	d, err := time.ParseDuration(durationArg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gdevm passthrough: duration: %v (e.g. 30s, 5m, 24h)\n", err)
+		return 2
 	}
+	if d < time.Second {
+		fmt.Fprintf(os.Stderr, "gdevm passthrough: duration must be at least 1s (got %s)\n", d)
+		return 2
+	}
+	durationSeconds := int(d.Round(time.Second) / time.Second)
 	return doPassthroughPost(endpoint, cwd, gitBranch(cwd), reason, durationSeconds)
 }
 

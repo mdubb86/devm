@@ -101,21 +101,21 @@ type VMStopRequest struct {
 }
 
 // VMEgressPassthroughRequest is the body shape for POST
-// /vm/passthrough-egress. DurationSeconds <= 0 lets the daemon apply
-// defaultPassthroughSeconds — the CLI passes 0 when the user did not
-// specify --for.
+// /vm/passthrough-egress. DurationSeconds must be positive — there is
+// no daemon-side default; the CLI requires the operator to pass one.
 type VMEgressPassthroughRequest struct {
 	Name            string `json:"name"`
-	DurationSeconds int    `json:"duration_seconds,omitempty"`
+	DurationSeconds int    `json:"duration_seconds"`
 }
 
 // VMEgressPassthroughResponse is the response for POST
 // /vm/passthrough-egress. WasOpen reports whether the project had an
 // active passthrough window at the moment of the request — the CLI
 // uses it to distinguish "opened fresh" from "renewed existing".
-// ExpiresSeconds is the duration the daemon actually armed (the
-// caller's value, or defaultPassthroughSeconds if the caller passed
-// <= 0), suitable for a "auto-restores in Xs" user message.
+// ExpiresSeconds is the duration the daemon actually armed (always
+// equal to the caller's requested value; the endpoint rejects
+// non-positive durations), suitable for a "auto-restores in Xs"
+// user message.
 type VMEgressPassthroughResponse struct {
 	WasOpen        bool `json:"was_open"`
 	ExpiresSeconds int  `json:"expires_seconds"`
@@ -153,16 +153,20 @@ type VMEgressPassthroughDenyResponse struct {
 // with the request's duration). The caller must already hold
 // locks.Lock(name).
 //
-// requestedSeconds <= 0 substitutes defaultPassthroughSeconds. Returns
-// (wasOpen, actualExpiresSeconds).
+// requestedSeconds must be positive — callers validate at their entry
+// point and refuse the request there. A non-positive value here is a
+// programmer error (a caller forgot the check), and panics: silently
+// substituting a default the operator did not authorize would let a
+// short surprise window fire — the class of bug this contract exists
+// to prevent.
 func openPassthroughWindow(locks *ProjectLocks, name string, requestedSeconds int) (wasOpen bool, expiresSeconds int) {
+	if requestedSeconds <= 0 {
+		panic(fmt.Sprintf("openPassthroughWindow: requestedSeconds must be positive, got %d — caller failed to validate", requestedSeconds))
+	}
 	_, wasOpen = egressPassthroughState.get(name)
 	policyAuthority.SetMode(name, ModePassthrough)
 
 	dur := time.Duration(requestedSeconds) * time.Second
-	if dur <= 0 {
-		dur = defaultPassthroughSeconds * time.Second
-	}
 	egressPassthroughState.put(name, time.Now().Add(dur))
 	armPassthroughRestoreTimer(locks, name, dur)
 	return wasOpen, int(dur / time.Second)
@@ -1149,6 +1153,10 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
+		if req.DurationSeconds <= 0 {
+			http.Error(w, "duration_seconds required and must be positive — pass a duration to `devm passthrough open <duration>` (no default)", http.StatusBadRequest)
+			return
+		}
 
 		unlock := locks.Lock(req.Name)
 		defer unlock()
@@ -1188,6 +1196,17 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 		if !hasPending {
 			http.Error(w, fmt.Sprintf("no pending passthrough request for %q", req.Name), http.StatusBadRequest)
+			return
+		}
+		// Defense-in-depth: gdevm now requires --for and the request
+		// handler rejects duration_seconds <= 0, so no fresh pending
+		// can have this value. Guard here in case an older gdevm's
+		// pending is still on disk from before the upgrade — refuse
+		// rather than open a 30s surprise window.
+		if pending.DurationSeconds <= 0 {
+			http.Error(w,
+				fmt.Sprintf("pending passthrough request for %q has no duration — resubmit from the guest with a duration (upgrade gdevm inside the VM: `gdevm upgrade`)", req.Name),
+				http.StatusBadRequest)
 			return
 		}
 

@@ -87,12 +87,6 @@ func TestEgressPassthroughStore_Del_StopsTimerAndRemovesEntry(t *testing.T) {
 	assert.EqualValues(t, 0, fired.Load(), "del must also cancel the pending timer")
 }
 
-func TestEgressPassthroughStore_DefaultDurationConst(t *testing.T) {
-	// Pin the spec's default: `devm passthrough` (no --for) opens a
-	// 30-second window. Longer defaults raise the security exposure;
-	// shorter ones make the user re-invoke mid-supervision.
-	assert.Equal(t, 30, defaultPassthroughSeconds)
-}
 
 // newFakeSoftnet stands up a temporary unix socket that captures the
 // last setPolicy JSON message sent to it. Returned sockPath is
@@ -174,7 +168,14 @@ func TestPassthroughEgress_FlipsAuthorityMode(t *testing.T) {
 	assert.WithinDuration(t, time.Now().Add(60*time.Second), entry.expiresAt, 2*time.Second)
 }
 
-func TestPassthroughEgress_ZeroDurationUsesDefault(t *testing.T) {
+// TestPassthroughEgress_RejectsZeroDuration pins that the daemon
+// refuses a passthrough-open request with duration_seconds <= 0
+// instead of silently substituting a default. A silent 30s window
+// was the source of the "I ran approve but nothing opened" report:
+// by the time the operator returned to test, the window had already
+// closed. The whole feature now requires the caller to name the
+// duration.
+func TestPassthroughEgress_RejectsZeroDuration(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	logDir := t.TempDir()
 	sup := supervisor.New(logDir)
@@ -186,7 +187,7 @@ func TestPassthroughEgress_ZeroDurationUsesDefault(t *testing.T) {
 	srv, _, cleanup := newTestServerWithVM(t, sup, tr)
 	defer cleanup()
 
-	const name = "passthrough-default-dur"
+	const name = "passthrough-reject-zero"
 	ironProxyState.put(name, projectInfo{HTTPPort: 1, HTTPSPort: 2, DNSPort: 3})
 	t.Cleanup(func() {
 		ironProxyState.del(name)
@@ -199,9 +200,16 @@ func TestPassthroughEgress_ZeroDurationUsesDefault(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	_, expires, err := c.PassthroughEgress(ctx, name, 0)
-	require.NoError(t, err)
-	assert.Equal(t, defaultPassthroughSeconds, expires, "duration <= 0 must fall back to defaultPassthroughSeconds")
+	_, _, err := c.PassthroughEgress(ctx, name, 0)
+	require.Error(t, err, "duration 0 must be refused, not silently defaulted")
+	assert.Contains(t, err.Error(), "duration_seconds required")
+
+	// And nothing must have flipped the authority — a refused request
+	// leaves the project in the restricted mode it started in.
+	assert.NotEqual(t, ModePassthrough, policyAuthority.modeFor(name),
+		"a refused open must NOT flip the authority to Passthrough")
+	_, ok := egressPassthroughState.get(name)
+	assert.False(t, ok, "a refused open must NOT record an entry")
 }
 
 func TestPassthroughEgress_ReplacesInFlightTimer(t *testing.T) {

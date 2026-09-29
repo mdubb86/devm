@@ -5,9 +5,6 @@ import (
 	"time"
 )
 
-// defaultPassthroughSeconds bounds how long `devm passthrough` opens egress for when the caller doesn't specify --for.
-const defaultPassthroughSeconds = 30
-
 // egressPassthroughEntry tracks one project's active passthrough
 // window: when it auto-restores and the timer that will fire the
 // restore. Empty (zero-valued expiresAt, nil restore) is a valid

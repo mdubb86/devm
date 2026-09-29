@@ -48,7 +48,10 @@ func TestPassthroughReq_MissingReasonReturns400(t *testing.T) {
 func TestPassthroughReq_ProjectNotStartedReturns412(t *testing.T) {
 	h, _, _ := buildPassthroughHandler(t)
 	// No cache.SetMacCwd — project not started.
-	rr := postPassthrough(h, map[string]any{"reason": "need to curl a thing"})
+	rr := postPassthrough(h, map[string]any{
+		"reason":           "need to curl a thing",
+		"duration_seconds": 300,
+	})
 	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
 	assert.Contains(t, rr.Body.String(), "not started")
 }
@@ -58,9 +61,27 @@ func TestPassthroughReq_GateOffReturns403(t *testing.T) {
 	writeMacCwdFile(t, cache, "devm.yaml",
 		"project:\n  name: myproj\nguest:\n  passthrough: false\n")
 
-	rr := postPassthrough(h, map[string]any{"reason": "need to curl a thing"})
+	rr := postPassthrough(h, map[string]any{
+		"reason":           "need to curl a thing",
+		"duration_seconds": 300,
+	})
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 	assert.Contains(t, rr.Body.String(), "guest.passthrough is disabled")
+}
+
+// TestPassthroughReq_MissingDurationReturns400 pins the duration-
+// required contract at the server boundary: even if a stale gdevm
+// binary skips the CLI-side validation, the daemon refuses to record
+// a pending with duration_seconds <= 0. The earlier 30s default was
+// the source of the "I ran approve, nothing opened" report — window
+// had expired by the time the operator got to test.
+func TestPassthroughReq_MissingDurationReturns400(t *testing.T) {
+	h, _, cache := buildPassthroughHandler(t)
+	writeMacCwdFile(t, cache, "devm.yaml", "project:\n  name: myproj\n")
+
+	rr := postPassthrough(h, map[string]any{"reason": "no duration set"})
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "duration required")
 }
 
 func TestPassthroughReq_HappyPathWritesPending(t *testing.T) {
@@ -90,9 +111,9 @@ func TestPassthroughReq_SecondRequestReplacesFirst(t *testing.T) {
 	h, cfg, cache := buildPassthroughHandler(t)
 	writeMacCwdFile(t, cache, "devm.yaml", "project:\n  name: myproj\n")
 
-	rr := postPassthrough(h, map[string]any{"reason": "first"})
+	rr := postPassthrough(h, map[string]any{"reason": "first", "duration_seconds": 60})
 	require.Equal(t, http.StatusAccepted, rr.Code)
-	rr = postPassthrough(h, map[string]any{"reason": "second"})
+	rr = postPassthrough(h, map[string]any{"reason": "second", "duration_seconds": 60})
 	require.Equal(t, http.StatusAccepted, rr.Code)
 
 	pending, ok, err := ReadPendingPassthrough(cfg, "proj")

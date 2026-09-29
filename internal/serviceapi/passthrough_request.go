@@ -57,6 +57,12 @@ func handlePassthroughRequestForProject(cfg identity.Config, cache *StateCache, 
 			http.Error(w, "passthrough: reason required — pass --reason \"why the window is needed\"", http.StatusBadRequest)
 			return
 		}
+		if req.DurationSeconds <= 0 {
+			http.Error(w,
+				"passthrough: duration required — the guest client must pass a positive duration_seconds (upgrade gdevm if the CLI still accepts requests without one)",
+				http.StatusBadRequest)
+			return
+		}
 
 		row, _ := cache.ProjectRow(projectName)
 		macCwd := row.MacCwd

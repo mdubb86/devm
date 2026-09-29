@@ -23,9 +23,11 @@ type PendingPassthroughRequest struct {
 	// Reason is the human-readable justification the guest supplied.
 	// The Mac reviewer sees this verbatim.
 	Reason string `json:"reason"`
-	// DurationSeconds is the window length the guest asked for. 0
-	// means "daemon default" (defaultPassthroughSeconds).
-	DurationSeconds int `json:"duration_seconds,omitempty"`
+	// DurationSeconds is the window length the guest asked for. The
+	// guest CLI requires this to be positive — a pending record with
+	// 0 here is either from a pre-required-duration gdevm binary
+	// still on disk, or malformed; the approve handler refuses it.
+	DurationSeconds int `json:"duration_seconds"`
 	// Cwd is the guest cwd at request time — attribution only.
 	Cwd string `json:"cwd,omitempty"`
 	// Branch is `git symbolic-ref --short HEAD` at request time —
