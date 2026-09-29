@@ -173,6 +173,14 @@ func TestUninstallMenuApp_IdempotentWhenNothingInstalled(t *testing.T) {
 	launchctlBootout = func(uid int, label string) error { return nil }
 	defer func() { launchctlBootout = defaultLaunchctlBootout }()
 
+	// Use uninstallMenuAppAt with an empty tempdir as appsDir, NOT
+	// uninstallMenuApp (which hardcodes /Applications). On a dev
+	// machine with a real /Applications/devm.app installed — e.g. a
+	// user cutting a release via `just release` — the wrong form
+	// silently deletes it as a side effect of running go test.
+	appsDir := filepath.Join(tmp, "Applications")
+	require.NoError(t, os.MkdirAll(appsDir, 0755))
+
 	// Nothing was ever installed; must not error.
-	assert.NoError(t, uninstallMenuApp(identity.Prod))
+	assert.NoError(t, uninstallMenuAppAt(identity.Prod, appsDir))
 }
