@@ -326,12 +326,23 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// for every project AdoptIronProxies just recovered. Per-project
 	// goroutines with a bounded retry — a transient helper hiccup
 	// won't strand :80/:443 for the daemon's lifetime.
+	//
+	// Alongside :80/:443, also re-bind the per-project pop + propose
+	// TCP listeners and re-push softnet's forward-target map so guest-
+	// initiated flows (gdevm pop / propose / passthrough / upgrade /
+	// recipes) survive a daemon restart. Softnet child processes stay
+	// alive with their old forward-target ports pointing at the dead
+	// daemon's listeners otherwise, and every guest call returns
+	// connection-refused until `devm stop && devm start` per project.
 	for _, id := range ids {
 		info, ok := ironProxyState.get(id)
 		if !ok || info.ProjectIP == "" {
 			continue
 		}
 		go rebindProjectListeners(ctx, proxy, cfg, id, info.ProjectIP, ntp.Port())
+		if err := bindSoftnetListenersForAdopt(ctx, cfg, cache, tr, locks, id, popStore, popCLI, ntp.Port()); err != nil {
+			daemonlog.Errorf("serviceapi: adopt-rebind softnet listeners for %s: %v", id, err)
+		}
 	}
 
 	server.SetStateCache(cache)
