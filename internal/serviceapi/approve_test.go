@@ -241,7 +241,7 @@ func TestApproveState_IncludesProposalWhenPresent(t *testing.T) {
 		Reason:    "test reason",
 		Timestamp: "2026-09-14T12:00:00Z",
 		Source:    "guest",
-		Kind:      "devm.yaml",
+		Kinds:     []string{"devm.yaml"},
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/vm/approve-state?project=proj", nil)
@@ -266,7 +266,7 @@ func TestApprove_ClearsProposalOnSuccess(t *testing.T) {
 		Reason:    "x",
 		Timestamp: "2026-09-14T00:00:00Z",
 		Source:    "guest",
-		Kind:      "devm.yaml",
+		Kinds:     []string{"devm.yaml"},
 	}))
 
 	req := httptest.NewRequest(http.MethodPost, "/vm/approve?project=proj", nil)

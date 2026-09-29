@@ -26,7 +26,6 @@ func TestPropose_SendsMetadataWithSource(t *testing.T) {
 	var captured struct {
 		Cwd    string `json:"cwd"`
 		Reason string `json:"reason"`
-		Kind   string `json:"kind"`
 		Source string `json:"source"`
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,11 +36,10 @@ func TestPropose_SendsMetadataWithSource(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code := runMacPropose(srv.URL, "add example.com", "devm.yaml")
+	code := runMacPropose(srv.URL, "add example.com")
 	assert.Equal(t, 0, code)
 	assert.Equal(t, "/Users/x/proj", captured.Cwd)
 	assert.Equal(t, "add example.com", captured.Reason)
-	assert.Equal(t, "devm.yaml", captured.Kind)
 	assert.Equal(t, "mac", captured.Source)
 }
 
@@ -57,7 +55,7 @@ func TestPropose_EmptyReasonOK(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code := runMacPropose(srv.URL, "", "devm.yaml")
+	code := runMacPropose(srv.URL, "")
 	assert.Equal(t, 0, code)
 }
 
@@ -69,7 +67,7 @@ func TestPropose_DiscoverFails_Returns2(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code := runMacPropose(srv.URL, "test", "devm.yaml")
+	code := runMacPropose(srv.URL, "test")
 	assert.Equal(t, 2, code)
 }
 
@@ -80,7 +78,7 @@ func TestPropose_DiscoverFails_Returns2(t *testing.T) {
 func TestPropose_TransportError_Returns1(t *testing.T) {
 	withDiscoverProject(t, LocalProject{MacCwd: "/Users/x/proj", Name: "p"}, nil)
 
-	code := runMacPropose("http://127.0.0.1:1", "test", "devm.yaml")
+	code := runMacPropose("http://127.0.0.1:1", "test")
 	assert.Equal(t, 1, code)
 }
 
@@ -89,11 +87,11 @@ func TestPropose_DaemonBadRequest_Returns2(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/vm/propose", r.URL.Path)
-		http.Error(w, "propose: invalid kind", http.StatusBadRequest)
+		http.Error(w, "propose: invalid yaml", http.StatusBadRequest)
 	}))
 	defer srv.Close()
 
-	code := runMacPropose(srv.URL, "test", "invalid.yaml")
+	code := runMacPropose(srv.URL, "test")
 	assert.Equal(t, 2, code)
 }
 
@@ -106,6 +104,6 @@ func TestPropose_DaemonError_Returns1(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code := runMacPropose(srv.URL, "test", "devm.yaml")
+	code := runMacPropose(srv.URL, "test")
 	assert.Equal(t, 1, code)
 }

@@ -19,7 +19,7 @@ func TestLastProposal_WriteReadRoundtrip(t *testing.T) {
 		Reason:    "added postgres client for the new schema",
 		Timestamp: "2026-09-14T14:30:00Z",
 		Source:    "guest",
-		Kind:      "devm.yaml",
+		Kinds:     []string{"devm.yaml", "devm.sh"},
 	}
 	require.NoError(t, WriteLastProposal(cfg, "proj", m))
 
@@ -53,7 +53,7 @@ func TestLastProposal_ClearRemovesFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	m := ProposalMetadata{Cwd: "/x", Timestamp: "2026-09-14T00:00:00Z", Source: "guest", Kind: "devm.yaml"}
+	m := ProposalMetadata{Cwd: "/x", Timestamp: "2026-09-14T00:00:00Z", Source: "guest", Kinds: []string{"devm.yaml"}}
 	require.NoError(t, WriteLastProposal(cfg, "proj", m))
 
 	_, ok, _ := ReadLastProposal(cfg, "proj")
@@ -69,8 +69,8 @@ func TestLastProposal_WriteOverwrites(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	first := ProposalMetadata{Cwd: "/first", Reason: "first", Timestamp: "2026-09-14T00:00:00Z", Source: "guest", Kind: "devm.yaml"}
-	second := ProposalMetadata{Cwd: "/second", Reason: "second", Timestamp: "2026-09-14T00:00:05Z", Source: "guest", Kind: "devm.yaml"}
+	first := ProposalMetadata{Cwd: "/first", Reason: "first", Timestamp: "2026-09-14T00:00:00Z", Source: "guest", Kinds: []string{"devm.yaml"}}
+	second := ProposalMetadata{Cwd: "/second", Reason: "second", Timestamp: "2026-09-14T00:00:05Z", Source: "guest", Kinds: []string{"devm.yaml", "devm.sh"}}
 	require.NoError(t, WriteLastProposal(cfg, "proj", first))
 	require.NoError(t, WriteLastProposal(cfg, "proj", second))
 

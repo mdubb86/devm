@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,27 +53,29 @@ type proposeRequest struct {
 	Cwd    string `json:"cwd"`
 	Branch string `json:"branch"`
 	Reason string `json:"reason"`
-	Kind   string `json:"kind"`
 	// Source identifies which side issued the signal: "guest" or
 	// "mac". Empty defaults to "guest" — the guest binary predates
 	// this field and won't send it until it's updated.
 	Source string `json:"source"`
 }
 
-// recordProposal validates the on-disk file for req.Kind under the
-// project's macCwd, resolved from cache (skipped when the file is
-// missing — sync may not have landed it yet, and a signal that
-// arrives ahead of its bytes still deserves attribution), then writes
-// req's attribution to last-proposal.json via WriteLastProposal.
-// Returns the HTTP status and body callers should write, and any
-// internal (non-4xx) error for the caller to log.
-func recordProposal(cfg identity.Config, cache *StateCache, projectName string, req proposeRequest) (statusCode int, body string, err error) {
-	switch req.Kind {
-	case "devm.yaml", "devm.me.yaml", "devm.sh", "devm.me.sh":
-	default:
-		return http.StatusBadRequest, fmt.Sprintf("propose: unsupported kind %q", req.Kind), nil
-	}
+// proposableKinds is the ordered list of files a proposal can attribute
+// to. The daemon scans every one against its last-approved snapshot on
+// each propose call — the caller does not name a file.
+var proposableKinds = []string{"devm.yaml", "devm.me.yaml", "devm.sh", "devm.me.sh"}
 
+// recordProposal scans every proposable file at the project's macCwd
+// (resolved from cache) against the last-approved snapshot. Files that
+// diverged are attributed on last-proposal.json via WriteLastProposal;
+// nothing to attribute means "no changes since last approval". If
+// devm.yaml is among the changed files it's validated first — a
+// malformed devm.yaml surfaces as a 400 that names the file and error,
+// even when other files also changed. Missing files (mutagen sync
+// hasn't landed them) are simply not in the changed set — the signal
+// still records for whatever HAS landed. Returns the HTTP status +
+// body callers should write, and any internal (non-4xx) error for the
+// caller to log.
+func recordProposal(cfg identity.Config, cache *StateCache, projectName string, req proposeRequest) (statusCode int, body string, err error) {
 	row, _ := cache.ProjectRow(projectName)
 	macCwd := row.MacCwd
 	if macCwd == "" && req.Source == "mac" && req.Cwd != "" {
@@ -96,9 +99,9 @@ func recordProposal(cfg identity.Config, cache *StateCache, projectName string, 
 	}
 
 	// Guest-source propose is gated by devm.yaml's `guest.propose:`.
-	// Load the currently-in-effect devm.yaml (any Kind — the gate
-	// lives on the yaml regardless of what the guest is proposing to
-	// edit) and refuse with 403 if the gate is off.
+	// Load the currently-in-effect devm.yaml and refuse with 403 if
+	// the gate is off — same behavior regardless of which files the
+	// scan below finds to be changed.
 	if source == "guest" {
 		if yamlBytes, ferr := os.ReadFile(filepath.Join(macCwd, "devm.yaml")); ferr == nil {
 			var current schema.Config
@@ -112,53 +115,73 @@ func recordProposal(cfg identity.Config, cache *StateCache, projectName string, 
 		}
 	}
 
-	// devm.me.yaml has no schema of its own (it's a partial merged
-	// into devm.yaml), and devm.sh/devm.me.sh are shell scripts, not
-	// YAML — none of them have anything to validate against.
-	configPath := filepath.Join(macCwd, req.Kind)
-	onDisk, readErr := os.ReadFile(configPath)
-	switch {
-	case readErr == nil:
-		if req.Kind == "devm.yaml" {
-			if verr := schema.CheckUnknownKeys(onDisk); verr != nil {
-				return http.StatusBadRequest, fmt.Sprintf("propose: yaml: %v", verr), nil
-			}
-			var parsed schema.Config
-			if verr := yamlDecodeStrict(onDisk, &parsed); verr != nil {
-				return http.StatusBadRequest, fmt.Sprintf("propose: yaml parse: %v", verr), nil
-			}
-			// Populate Functions from the on-disk devm.sh + devm.me.sh
-			// before Validate — otherwise validateFunctionReferences
-			// sees an empty set and rejects every repos.<name>.commands
-			// / services.<name>.exec entry as "not defined in devm.sh".
-			// Matches config.Load's ordering (funcs then Validate).
-			funcs, ferr := config.LoadFunctions(macCwd)
-			if ferr != nil {
-				return http.StatusInternalServerError, fmt.Sprintf("propose: load functions: %v", ferr),
-					fmt.Errorf("propose: load functions for %s: %w", projectName, ferr)
-			}
-			parsed.Functions = funcs
-			if verr := parsed.Validate(); verr != nil {
-				return http.StatusBadRequest, fmt.Sprintf("propose: yaml validate: %v", verr), nil
-			}
+	// Load the on-disk bytes for each kind once. A file missing from
+	// the sync isn't an error — it just can't be in the changed set.
+	onDisk := make(map[string][]byte, len(proposableKinds))
+	for _, kind := range proposableKinds {
+		b, readErr := os.ReadFile(filepath.Join(macCwd, kind))
+		switch {
+		case readErr == nil:
+			onDisk[kind] = b
+		case errors.Is(readErr, os.ErrNotExist):
+			// Not on disk yet — sync may not have landed. Skip it
+			// silently; the signal still records any other changes.
+		default:
+			return http.StatusInternalServerError,
+				fmt.Sprintf("propose: read on-disk %s: %v", kind, readErr),
+				fmt.Errorf("propose: read on-disk %s for %s: %w", kind, projectName, readErr)
 		}
-	case errors.Is(readErr, os.ErrNotExist):
-		// No on-disk file yet — sync may not have landed it. Validation
-		// is skipped; metadata still records the signal.
-	default:
-		return http.StatusInternalServerError, fmt.Sprintf("propose: read on-disk file: %v", readErr),
-			fmt.Errorf("propose: read on-disk %s for %s: %w", req.Kind, projectName, readErr)
 	}
 
-	// No-change short-circuit: if the on-disk file is byte-identical
-	// to the last-approved snapshot for req.Kind, there is nothing
-	// for a human to review. Return 200 with a human-readable body
-	// (rather than 204 or an error) and skip the attribution write —
-	// last-proposal.json stays whatever it was.
-	if readErr == nil {
-		if same, err := onDiskMatchesApprovedSnapshot(cfg, projectName, req.Kind, onDisk); err == nil && same {
-			return http.StatusOK, "propose: no changes since last approval — nothing to review\n", nil
+	// Validate devm.yaml eagerly if it's present, whether or not it
+	// ends up in the changed set. A schema-invalid devm.yaml is worth
+	// surfacing on every propose call — a change elsewhere doesn't
+	// excuse a broken yaml.
+	if yamlBytes, ok := onDisk["devm.yaml"]; ok {
+		if verr := schema.CheckUnknownKeys(yamlBytes); verr != nil {
+			return http.StatusBadRequest, fmt.Sprintf("propose: devm.yaml: %v", verr), nil
 		}
+		var parsed schema.Config
+		if verr := yamlDecodeStrict(yamlBytes, &parsed); verr != nil {
+			return http.StatusBadRequest, fmt.Sprintf("propose: devm.yaml parse: %v", verr), nil
+		}
+		// Populate Functions from on-disk devm.sh + devm.me.sh before
+		// Validate — otherwise validateFunctionReferences sees an
+		// empty set and rejects every repos.<name>.commands /
+		// services.<name>.exec entry as "not defined in devm.sh".
+		// Matches config.Load's ordering (funcs then Validate).
+		funcs, ferr := config.LoadFunctions(macCwd)
+		if ferr != nil {
+			return http.StatusInternalServerError, fmt.Sprintf("propose: load functions: %v", ferr),
+				fmt.Errorf("propose: load functions for %s: %w", projectName, ferr)
+		}
+		parsed.Functions = funcs
+		if verr := parsed.Validate(); verr != nil {
+			return http.StatusBadRequest, fmt.Sprintf("propose: devm.yaml validate: %v", verr), nil
+		}
+	}
+
+	// Diff each on-disk file against the approved snapshot. Kinds
+	// that diverged make up the attribution set.
+	changed := make([]string, 0, len(proposableKinds))
+	for _, kind := range proposableKinds {
+		bytesOnDisk, ok := onDisk[kind]
+		if !ok {
+			continue
+		}
+		same, err := onDiskMatchesApprovedSnapshot(cfg, projectName, kind, bytesOnDisk)
+		if err != nil {
+			return http.StatusInternalServerError,
+				fmt.Sprintf("propose: compare %s to approved snapshot: %v", kind, err),
+				fmt.Errorf("propose: compare %s for %s: %w", kind, projectName, err)
+		}
+		if !same {
+			changed = append(changed, kind)
+		}
+	}
+
+	if len(changed) == 0 {
+		return http.StatusOK, "propose: no changes since last approval — nothing to review\n", nil
 	}
 
 	if werr := WriteLastProposal(cfg, projectName, ProposalMetadata{
@@ -167,13 +190,13 @@ func recordProposal(cfg identity.Config, cache *StateCache, projectName string, 
 		Reason:    req.Reason,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Source:    source,
-		Kind:      req.Kind,
+		Kinds:     changed,
 	}); werr != nil {
 		return http.StatusInternalServerError, fmt.Sprintf("propose: metadata: %v", werr),
 			fmt.Errorf("propose: metadata for %s: %w", projectName, werr)
 	}
 
-	return http.StatusNoContent, "", nil
+	return http.StatusOK, fmt.Sprintf("propose: recorded — changed: %s\n", strings.Join(changed, ", ")), nil
 }
 
 // onDiskMatchesApprovedSnapshot reports whether the on-disk bytes for

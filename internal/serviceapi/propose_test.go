@@ -53,31 +53,14 @@ func writeMacCwdFile(t *testing.T, cache *StateCache, name, content string) stri
 	return dir
 }
 
-func TestPropose_UnsupportedKindReturns400(t *testing.T) {
-	h, _, _ := buildProposeHandler(t)
-
-	rr := postPropose(h, "/propose", map[string]any{
-		"cwd":    "/x",
-		"branch": "",
-		"reason": "",
-		"kind":   "not-a-real-kind",
-	})
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-	assert.Contains(t, rr.Body.String(), "kind")
-}
-
 func TestPropose_OversizedBodyRejected(t *testing.T) {
 	h, cfg, _ := buildProposeHandler(t)
 
-	// A reason field alone over 1 MiB — well past maxProposeBodyBytes
-	// once wrapped in the JSON envelope.
 	oversizedReason := strings.Repeat("a", maxProposeBodyBytes+1)
 	reqBody, err := json.Marshal(map[string]any{
 		"cwd":    "/x",
 		"branch": "",
 		"reason": oversizedReason,
-		"kind":   "devm.yaml",
 	})
 	require.NoError(t, err)
 
@@ -92,44 +75,43 @@ func TestPropose_OversizedBodyRejected(t *testing.T) {
 	assert.False(t, ok, "no metadata should be written for a rejected body")
 }
 
-func TestPropose_MissingProjectStateDirIgnoredWhenFileMissing(t *testing.T) {
+// TestPropose_NoFilesOnDiskMeansNoChanges pins that a proposal against
+// a macCwd holding none of the four proposable files returns "no
+// changes" and does NOT write attribution — the daemon reports what
+// it can see, not what the caller says it changed. Under the pre-scan
+// model this call would have written attribution for a phantom
+// devm.yaml change.
+func TestPropose_NoFilesOnDiskMeansNoChanges(t *testing.T) {
 	h, cfg, cache := buildProposeHandler(t)
 	cache.SetMacCwd("proj", t.TempDir())
-	// Deliberately do NOT write a devm.yaml into macCwd — the
-	// signal-only handler has nothing on disk to validate against yet.
 
 	rr := postPropose(h, "/propose", map[string]any{
 		"cwd":    "/home/devm/proj",
 		"branch": "main",
 		"reason": "adding foo",
-		"kind":   "devm.yaml",
 	})
 
-	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "no changes since last approval")
 
-	meta, ok, err := ReadLastProposal(cfg, "proj")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "/home/devm/proj", meta.Cwd)
-	assert.Equal(t, "main", meta.Branch)
-	assert.Equal(t, "adding foo", meta.Reason)
-	assert.Equal(t, "guest", meta.Source)
-	assert.Equal(t, "devm.yaml", meta.Kind)
-	assert.NotEmpty(t, meta.Timestamp)
+	_, ok, _ := ReadLastProposal(cfg, "proj")
+	assert.False(t, ok, "no metadata should be written when nothing on disk diverged from the snapshot")
 }
 
+// TestPropose_SecondProposalOverwritesMetadata pins that a subsequent
+// propose call with a fresh reason replaces the earlier attribution.
 func TestPropose_SecondProposalOverwritesMetadata(t *testing.T) {
 	h, cfg, cache := buildProposeHandler(t)
-	cache.SetMacCwd("proj", t.TempDir())
+	dir := t.TempDir()
+	cache.SetMacCwd("proj", dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"), []byte(validDevmYAML), 0o644))
 
 	post := func(reason string) {
 		rr := postPropose(h, "/propose", map[string]any{
 			"cwd":    "/x",
-			"branch": "",
 			"reason": reason,
-			"kind":   "devm.yaml",
 		})
-		require.Equal(t, http.StatusNoContent, rr.Code)
+		require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
 	}
 
 	post("first")
@@ -141,53 +123,112 @@ func TestPropose_SecondProposalOverwritesMetadata(t *testing.T) {
 	assert.Equal(t, "second", meta.Reason)
 }
 
-func TestPropose_ValidatesOnDiskFileWhenPresent(t *testing.T) {
+// TestPropose_ChangedDevmYAMLRecordsAttribution pins the happy path
+// for a devm.yaml that diverges from (empty) snapshot: 200 + Kinds
+// contains devm.yaml.
+func TestPropose_ChangedDevmYAMLRecordsAttribution(t *testing.T) {
 	h, cfg, cache := buildProposeHandler(t)
 	writeMacCwdFile(t, cache, "devm.yaml", validDevmYAML)
 
 	rr := postPropose(h, "/propose", map[string]any{
 		"cwd":    "/x",
 		"branch": "main",
-		"reason": "",
-		"kind":   "devm.yaml",
 	})
 
-	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
+	assert.Contains(t, rr.Body.String(), "devm.yaml")
 
 	meta, ok, err := ReadLastProposal(cfg, "proj")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "devm.yaml", meta.Kind)
+	assert.Equal(t, []string{"devm.yaml"}, meta.Kinds)
+	assert.NotEmpty(t, meta.Timestamp)
 }
 
-func TestPropose_InvalidOnDiskFileRejects(t *testing.T) {
+// TestPropose_ChangedNonYAMLFileAlsoRecords pins the fix for the
+// bug shelfmates hit: editing devm.sh (or any non-devm.yaml file)
+// must surface as a proposal. The old --kind=devm.yaml default meant
+// devm.sh changes were silently ignored — this test proves the
+// scan-all model catches them.
+func TestPropose_ChangedNonYAMLFileAlsoRecords(t *testing.T) {
+	h, cfg, cache := buildProposeHandler(t)
+	writeMacCwdFile(t, cache, "devm.sh", "install() {\n  true\n}\n")
+
+	rr := postPropose(h, "/propose", map[string]any{"cwd": "/x"})
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
+	assert.Contains(t, rr.Body.String(), "devm.sh")
+
+	meta, ok, err := ReadLastProposal(cfg, "proj")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, []string{"devm.sh"}, meta.Kinds)
+}
+
+// TestPropose_MultipleChangedFilesAllRecorded pins that when several
+// files diverged in one call, every diverged file lands in Kinds in
+// the daemon's canonical order.
+func TestPropose_MultipleChangedFilesAllRecorded(t *testing.T) {
+	h, cfg, cache := buildProposeHandler(t)
+	dir := t.TempDir()
+	cache.SetMacCwd("proj", dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"), []byte(validDevmYAML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.sh"), []byte("install() { true; }\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.me.sh"), []byte("startup() { true; }\n"), 0o644))
+
+	rr := postPropose(h, "/propose", map[string]any{"cwd": "/x"})
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
+
+	meta, ok, err := ReadLastProposal(cfg, "proj")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, []string{"devm.yaml", "devm.sh", "devm.me.sh"}, meta.Kinds,
+		"Kinds must follow proposableKinds order regardless of which files are present")
+}
+
+// TestPropose_OnlyChangedFilesInKinds pins that files whose bytes
+// match the approved snapshot do NOT appear in Kinds even when they
+// exist on disk — otherwise a single-file edit would look like a
+// full-repo change.
+func TestPropose_OnlyChangedFilesInKinds(t *testing.T) {
+	h, cfg, cache := buildProposeHandler(t)
+	dir := t.TempDir()
+	cache.SetMacCwd("proj", dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.yaml"), []byte(validDevmYAML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devm.sh"), []byte("install() { true; }\n"), 0o644))
+
+	// Seed the approved snapshot with the devm.yaml bytes but no
+	// devm.sh. Only devm.sh should count as changed.
+	require.NoError(t, approve.NewStore(cfg).Write(
+		"proj", []byte(validDevmYAML), nil, nil, nil, "user",
+	))
+
+	rr := postPropose(h, "/propose", map[string]any{"cwd": "/x"})
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
+
+	meta, ok, err := ReadLastProposal(cfg, "proj")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, []string{"devm.sh"}, meta.Kinds)
+}
+
+func TestPropose_InvalidOnDiskYAMLRejects(t *testing.T) {
 	h, cfg, cache := buildProposeHandler(t)
 	writeMacCwdFile(t, cache, "devm.yaml", invalidDevmYAML)
 
-	rr := postPropose(h, "/propose", map[string]any{
-		"cwd":    "/x",
-		"branch": "main",
-		"reason": "",
-		"kind":   "devm.yaml",
-	})
-
+	rr := postPropose(h, "/propose", map[string]any{"cwd": "/x"})
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 
 	_, ok, _ := ReadLastProposal(cfg, "proj")
 	assert.False(t, ok, "no metadata should be written when on-disk validation fails")
 }
 
-// TestPropose_LoadsFunctionsFromOnDiskShellScripts pins the fix for
-// the daemon-side propose validator populating Config.Functions from
-// devm.sh + devm.me.sh at macCwd before Validate. Without this, a
-// devm.yaml that references any function under repos.<name>.commands
-// or services.<name>.exec fails validation with "function ... is not
-// defined in devm.sh (or devm.me.sh)" — because the parsed Config's
-// Functions slice is empty regardless of what's on disk. Symptom
-// shipped to real users in v0.24.2: every guest-side `gdevm propose`
-// returned "propose: yaml validate: repos.<repo>.commands: function
-// \"<first-fn>\" is not defined in devm.sh", so proposal signals
-// became unusable the moment the yaml referenced any function at all.
+// TestPropose_LoadsFunctionsFromOnDiskShellScripts pins the fix that
+// populates Config.Functions from devm.sh + devm.me.sh at macCwd
+// before Validate. Without this, a devm.yaml that references any
+// function under repos.<name>.commands / services.<name>.exec fails
+// validation with "function ... is not defined in devm.sh (or
+// devm.me.sh)" because the parsed Config's Functions slice is empty
+// regardless of what's on disk.
 func TestPropose_LoadsFunctionsFromOnDiskShellScripts(t *testing.T) {
 	cfg := identity.Prod
 	t.Setenv("HOME", t.TempDir())
@@ -195,9 +236,6 @@ func TestPropose_LoadsFunctionsFromOnDiskShellScripts(t *testing.T) {
 	macCwd := t.TempDir()
 	cache.SetMacCwd("proj", macCwd)
 
-	// devm.yaml references install-gsd-core under repos.main.commands,
-	// matching the shape the user hit. Any function name would trip
-	// the pre-fix bug; using a real one keeps the test grounded.
 	yamlBody := `project:
   name: myproj
 repos:
@@ -213,20 +251,19 @@ repos:
 
 	h := handleProposeForProject(cfg, cache, "proj")
 	rr := postPropose(h, "/propose", map[string]any{
-		"kind":   "devm.yaml",
 		"source": "mac",
 		"reason": "regression pin",
 	})
 
-	require.Equal(t, http.StatusNoContent, rr.Code,
+	require.Equal(t, http.StatusOK, rr.Code,
 		"validator must populate Functions from on-disk devm.sh — got %d, body: %s",
 		rr.Code, rr.Body.String())
 }
 
 // TestPropose_MissingFunctionInShellStillRejects pins the negative
-// side: a devm.yaml referencing a function NEITHER devm.sh nor
-// devm.me.sh defines still surfaces the real error, so the fix
-// doesn't accidentally suppress the intended validation.
+// side: a devm.yaml referencing a function neither devm.sh nor
+// devm.me.sh defines still surfaces the real error, so the Functions
+// population fix doesn't accidentally suppress the intended validation.
 func TestPropose_MissingFunctionInShellStillRejects(t *testing.T) {
 	cfg := identity.Prod
 	t.Setenv("HOME", t.TempDir())
@@ -249,7 +286,6 @@ repos:
 
 	h := handleProposeForProject(cfg, cache, "proj")
 	rr := postPropose(h, "/propose", map[string]any{
-		"kind":   "devm.yaml",
 		"source": "mac",
 		"reason": "should still fail",
 	})
@@ -259,86 +295,17 @@ repos:
 	assert.Contains(t, rr.Body.String(), "not defined in devm.sh")
 }
 
-// invalidPartialMeYAML would fail schema.Config.Validate if it were
-// ever run against it (unknown top-level key, no project.name) — it
-// exists to prove the devm.me.yaml branch skips validation rather than
-// happening to pass it.
-const invalidPartialMeYAML = "not_a_real_top_level_key: true\n"
-
-func TestPropose_MeYamlAcceptedWithoutValidation(t *testing.T) {
-	h, cfg, cache := buildProposeHandler(t)
-	writeMacCwdFile(t, cache, "devm.me.yaml", invalidPartialMeYAML)
-
-	rr := postPropose(h, "/propose", map[string]any{
-		"cwd":    "/x",
-		"branch": "main",
-		"reason": "me override",
-		"kind":   "devm.me.yaml",
-	})
-
-	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
-
-	meta, ok, err := ReadLastProposal(cfg, "proj")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "devm.me.yaml", meta.Kind)
-}
-
-func TestPropose_DevmSHAccepted(t *testing.T) {
-	h, cfg, cache := buildProposeHandler(t)
-	writeMacCwdFile(t, cache, "devm.sh", "install() {\n  true\n}\n")
-
-	rr := postPropose(h, "/propose", map[string]any{
-		"cwd":    "/x",
-		"branch": "main",
-		"reason": "add install fn",
-		"kind":   "devm.sh",
-	})
-
-	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
-
-	meta, ok, err := ReadLastProposal(cfg, "proj")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "devm.sh", meta.Kind)
-}
-
-func TestPropose_DevmMeSHAccepted(t *testing.T) {
-	h, cfg, cache := buildProposeHandler(t)
-	writeMacCwdFile(t, cache, "devm.me.sh", "startup() {\n  true\n}\n")
-
-	rr := postPropose(h, "/propose", map[string]any{
-		"cwd":    "/x",
-		"branch": "main",
-		"reason": "override startup",
-		"kind":   "devm.me.sh",
-	})
-
-	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
-
-	meta, ok, err := ReadLastProposal(cfg, "proj")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "devm.me.sh", meta.Kind)
-}
-
 // TestPropose_UnreadableOnDiskFileReturns500 pins that a read failure
 // other than "file does not exist" is a loud 500, not a silently
-// skipped validation. A directory in place of the expected file
-// reproduces an EISDIR read error portably (no permission-mode /
-// root-user flakiness).
+// skipped file. A directory in place of devm.yaml reproduces EISDIR
+// portably (no permission-mode / root-user flakiness).
 func TestPropose_UnreadableOnDiskFileReturns500(t *testing.T) {
 	h, cfg, cache := buildProposeHandler(t)
 	macCwd := t.TempDir()
 	cache.SetMacCwd("proj", macCwd)
 	require.NoError(t, os.MkdirAll(filepath.Join(macCwd, "devm.yaml"), 0o755))
 
-	rr := postPropose(h, "/propose", map[string]any{
-		"cwd":    "/x",
-		"branch": "main",
-		"reason": "",
-		"kind":   "devm.yaml",
-	})
+	rr := postPropose(h, "/propose", map[string]any{"cwd": "/x"})
 
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 
@@ -348,15 +315,10 @@ func TestPropose_UnreadableOnDiskFileReturns500(t *testing.T) {
 
 func TestPropose_SourceDefaultsToGuestWhenEmpty(t *testing.T) {
 	h, cfg, cache := buildProposeHandler(t)
-	cache.SetMacCwd("proj", t.TempDir())
+	writeMacCwdFile(t, cache, "devm.yaml", validDevmYAML)
 
-	rr := postPropose(h, "/propose", map[string]any{
-		"cwd":    "/x",
-		"branch": "",
-		"reason": "",
-		"kind":   "devm.yaml",
-	})
-	require.Equal(t, http.StatusNoContent, rr.Code)
+	rr := postPropose(h, "/propose", map[string]any{"cwd": "/x"})
+	require.Equal(t, http.StatusOK, rr.Code)
 
 	meta, ok, err := ReadLastProposal(cfg, "proj")
 	require.NoError(t, err)
@@ -366,16 +328,13 @@ func TestPropose_SourceDefaultsToGuestWhenEmpty(t *testing.T) {
 
 func TestPropose_SourceMacIsPreserved(t *testing.T) {
 	h, cfg, cache := buildProposeHandler(t)
-	cache.SetMacCwd("proj", t.TempDir())
+	writeMacCwdFile(t, cache, "devm.yaml", validDevmYAML)
 
 	rr := postPropose(h, "/propose", map[string]any{
 		"cwd":    "/x",
-		"branch": "",
-		"reason": "",
-		"kind":   "devm.yaml",
 		"source": "mac",
 	})
-	require.Equal(t, http.StatusNoContent, rr.Code)
+	require.Equal(t, http.StatusOK, rr.Code)
 
 	meta, ok, err := ReadLastProposal(cfg, "proj")
 	require.NoError(t, err)
@@ -391,18 +350,19 @@ func TestPropose_UnixSocketHandlerRoutesByProjectQueryParam(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	require.NoError(t, os.MkdirAll(stateDirForProject(cfg, "proj"), 0o755))
 	cache := NewStateCache()
-	cache.SetMacCwd("proj", t.TempDir())
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte(validDevmYAML), 0o644))
+	cache.SetMacCwd("proj", macCwd)
 	h := handleProposeUnixSocket(cfg, cache)
 
 	rr := postPropose(h, "/vm/propose?project=proj", map[string]any{
 		"cwd":    "/Users/dev/proj",
 		"branch": "main",
 		"reason": "mac-side edit",
-		"kind":   "devm.yaml",
 		"source": "mac",
 	})
 
-	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
 
 	meta, ok, err := ReadLastProposal(cfg, "proj")
 	require.NoError(t, err)
@@ -411,12 +371,6 @@ func TestPropose_UnixSocketHandlerRoutesByProjectQueryParam(t *testing.T) {
 	assert.Equal(t, "mac-side edit", meta.Reason)
 }
 
-// TestPropose_UnixSocketUnknownProjectReturns404 pins I2: the Mac-side
-// /vm/propose?project=<name> handler must validate that project
-// against the registry before recording anything under its state
-// dir — unlike the softnet listener (bound per-project at start, so
-// trusted), this handler's project comes from an arbitrary query
-// param a caller could set to any name.
 // TestPropose_GuestSourceRequiresRunningProject pins that a guest-source
 // propose against a project not in the cache (VM not running) fails
 // precondition — the mac-side-cwd fallback only kicks in for source="mac".
@@ -427,9 +381,6 @@ func TestPropose_GuestSourceRequiresRunningProject(t *testing.T) {
 
 	rr := postPropose(h, "/vm/propose?project=nonexistent", map[string]any{
 		"cwd":    "/home/devm/proj",
-		"branch": "main",
-		"reason": "",
-		"kind":   "devm.yaml",
 		"source": "guest",
 	})
 
@@ -453,11 +404,10 @@ func TestPropose_MacSourceBeforeStartUsesRequestCwd(t *testing.T) {
 	rr := postPropose(h, "/vm/propose?project=p", map[string]any{
 		"cwd":    macCwd,
 		"reason": "t",
-		"kind":   "devm.yaml",
 		"source": "mac",
 	})
 
-	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
 
 	got, ok, err := ReadLastProposal(cfg, "p")
 	require.NoError(t, err)
@@ -470,10 +420,7 @@ func TestPropose_UnixSocketHandlerRequiresProjectParam(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	h := handleProposeUnixSocket(cfg, NewStateCache())
 
-	rr := postPropose(h, "/vm/propose", map[string]any{
-		"cwd":  "/x",
-		"kind": "devm.yaml",
-	})
+	rr := postPropose(h, "/vm/propose", map[string]any{"cwd": "/x"})
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 	assert.Contains(t, rr.Body.String(), "project")
@@ -522,11 +469,10 @@ func TestPropose_ValidatesAtMacCwd(t *testing.T) {
 	h := handleProposeUnixSocket(cfg, cache)
 	rr := postPropose(h, "/vm/propose?project=p", map[string]any{
 		"reason": "t",
-		"kind":   "devm.yaml",
 		"source": "mac",
 	})
 
-	require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
 }
 
 // TestPropose_NoMacCwdInCacheReturns412 pins that a project the cache
@@ -540,7 +486,6 @@ func TestPropose_NoMacCwdInCacheReturns412(t *testing.T) {
 
 	rr := postPropose(h, "/vm/propose?project=p", map[string]any{
 		"reason": "t",
-		"kind":   "devm.yaml",
 		"source": "mac",
 	})
 
@@ -576,53 +521,45 @@ func TestPropose_GuestGateDisabledReturns403(t *testing.T) {
 	dir := writeMacCwdFile(t, cache, "devm.yaml",
 		"project:\n  name: myproj\nguest:\n  propose: false\n")
 
-	// Guest source is blocked.
 	rr := postPropose(h, "/propose", map[string]any{
-		"kind":   "devm.yaml",
 		"source": "guest",
 		"reason": "add postgres",
 	})
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 	assert.Contains(t, rr.Body.String(), "guest.propose is disabled")
 
-	// Metadata must NOT have been written.
 	_, err := os.Stat(filepath.Join(cfg.RuntimeDir(), "proj", "last-proposal.json"))
 	assert.True(t, os.IsNotExist(err), "gate refusal must not write attribution")
 
-	// Mac source is NOT gated — writes attribution as before.
 	rr = postPropose(h, "/propose", map[string]any{
-		"kind":   "devm.yaml",
 		"source": "mac",
 		"cwd":    dir,
 		"reason": "same edit, mac side",
 	})
-	assert.Equal(t, http.StatusNoContent, rr.Code)
+	assert.Equal(t, http.StatusOK, rr.Code)
 	_, err = os.Stat(filepath.Join(cfg.RuntimeDir(), "proj", "last-proposal.json"))
 	assert.NoError(t, err, "mac source ignores guest.propose gate")
 }
 
 // TestPropose_NoChangeShortCircuits verifies the daemon returns 200 +
-// human-readable body when the on-disk file is byte-identical to the
-// last-approved snapshot, and does NOT write attribution.
+// human-readable body when every proposable file matches the last-
+// approved snapshot, and does NOT write attribution.
 func TestPropose_NoChangeShortCircuits(t *testing.T) {
 	h, cfg, cache := buildProposeHandler(t)
 	body := "project:\n  name: myproj\n"
 	writeMacCwdFile(t, cache, "devm.yaml", body)
 
-	// Seed an approved snapshot with the same bytes.
 	require.NoError(t, approve.NewStore(cfg).Write(
 		"proj", []byte(body), nil, nil, nil, "user",
 	))
 
 	rr := postPropose(h, "/propose", map[string]any{
-		"kind":   "devm.yaml",
 		"source": "guest",
 		"reason": "did nothing",
 	})
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Contains(t, rr.Body.String(), "no changes since last approval")
 
-	// Attribution must NOT have been written.
 	_, err := os.Stat(filepath.Join(cfg.RuntimeDir(), "proj", "last-proposal.json"))
 	assert.True(t, os.IsNotExist(err), "no-change short-circuit must skip attribution write")
 }
@@ -634,17 +571,15 @@ func TestPropose_ChangedFileStillWritesAttribution(t *testing.T) {
 	h, cfg, cache := buildProposeHandler(t)
 	writeMacCwdFile(t, cache, "devm.yaml", "project:\n  name: myproj\n")
 
-	// Seed an approved snapshot with different bytes.
 	require.NoError(t, approve.NewStore(cfg).Write(
 		"proj", []byte("project:\n  name: oldproj\n"), nil, nil, nil, "user",
 	))
 
 	rr := postPropose(h, "/propose", map[string]any{
-		"kind":   "devm.yaml",
 		"source": "guest",
 		"reason": "renamed project",
 	})
-	assert.Equal(t, http.StatusNoContent, rr.Code)
+	assert.Equal(t, http.StatusOK, rr.Code)
 	_, err := os.Stat(filepath.Join(cfg.RuntimeDir(), "proj", "last-proposal.json"))
 	assert.NoError(t, err, "diff vs snapshot must record attribution as before")
 }

@@ -18,10 +18,14 @@ import (
 
 var proposeCmd = &cobra.Command{
 	Use:   "propose",
-	Short: "Signal the daemon that devm.yaml, devm.me.yaml, devm.sh, or devm.me.sh has been edited and is ready for review.",
+	Short: "Signal that devm.yaml / devm.me.yaml / devm.sh / devm.me.sh have been edited and are ready for review.",
+	Long: `Signal to the daemon that one or more project config files were
+edited and are ready for review. The daemon scans every proposable
+file (devm.yaml, devm.me.yaml, devm.sh, devm.me.sh) against its
+last-approved snapshot and records every one that diverged — you
+never have to name which file you changed.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		reason, _ := cmd.Flags().GetString("reason")
-		kind, _ := cmd.Flags().GetString("kind")
 		socketPath := cfg.SocketPath()
 		httpc := &http.Client{
 			Transport: &http.Transport{
@@ -30,7 +34,7 @@ var proposeCmd = &cobra.Command{
 				},
 			},
 		}
-		code := runMacProposeWithClient("http://localhost", reason, kind, httpc)
+		code := runMacProposeWithClient("http://localhost", reason, httpc)
 		if code != 0 {
 			os.Exit(code)
 		}
@@ -41,13 +45,12 @@ var proposeCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(proposeCmd)
 	proposeCmd.Flags().String("reason", "", "Optional human-readable reason for the change.")
-	proposeCmd.Flags().String("kind", "devm.yaml", "Which config file this proposal targets: devm.yaml, devm.me.yaml, devm.sh, or devm.me.sh.")
 }
 
 // runMacPropose is the testable seam: uses http.DefaultClient for tests.
 // Real CLI callers use runMacProposeWithClient with a Unix-socket client.
-func runMacPropose(baseURL, reason, kind string) int {
-	return runMacProposeWithClient(baseURL, reason, kind, http.DefaultClient)
+func runMacPropose(baseURL, reason string) int {
+	return runMacProposeWithClient(baseURL, reason, http.DefaultClient)
 }
 
 // runMacProposeWithClient does the actual work with an injectable http.Client.
@@ -55,7 +58,7 @@ func runMacPropose(baseURL, reason, kind string) int {
 // response (reached the daemon, it rejected the request); 1 on a transport
 // error (couldn't reach the daemon at all, e.g. the socket is down) or a
 // daemon 5xx response.
-func runMacProposeWithClient(baseURL, reason, kind string, client *http.Client) int {
+func runMacProposeWithClient(baseURL, reason string, client *http.Client) int {
 	rp, err := discoverProjectFn()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
@@ -66,7 +69,6 @@ func runMacProposeWithClient(baseURL, reason, kind string, client *http.Client) 
 		"cwd":    rp.MacCwd,
 		"branch": gitBranchMac(rp.MacCwd),
 		"reason": reason,
-		"kind":   kind,
 		"source": "mac",
 	})
 

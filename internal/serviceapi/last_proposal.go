@@ -17,13 +17,19 @@ import (
 // propose call ships to the Mac side. It lives on disk at
 // <RuntimeDir>/<projectID>/last-proposal.json; consumers read it
 // through ReadLastProposal.
+//
+// Kinds is the set of proposable files (devm.yaml, devm.me.yaml,
+// devm.sh, devm.me.sh) that actually diverged from the last-approved
+// snapshot on this call. The daemon scans every proposable file each
+// time — the caller does not name one — so a single propose call can
+// attribute multiple changed files at once.
 type ProposalMetadata struct {
-	Cwd       string `json:"cwd"`
-	Branch    string `json:"branch"`
-	Reason    string `json:"reason"`
-	Timestamp string `json:"timestamp"`
-	Source    string `json:"source"`
-	Kind      string `json:"kind"`
+	Cwd       string   `json:"cwd"`
+	Branch    string   `json:"branch"`
+	Reason    string   `json:"reason"`
+	Timestamp string   `json:"timestamp"`
+	Source    string   `json:"source"`
+	Kinds     []string `json:"kinds"`
 }
 
 func lastProposalPath(cfg identity.Config, projectID string) string {

@@ -14,11 +14,18 @@ import (
 
 const proposeEndpoint = "http://192.168.127.1:82/propose"
 
+// proposeBody is the wire shape both `gdevm propose` and `devm propose`
+// send. It intentionally names no file: the daemon scans every
+// proposable file (devm.yaml, devm.me.yaml, devm.sh, devm.me.sh)
+// against its last-approved snapshot and includes every one that
+// diverged. Reporting a single file was error-prone — the operator
+// had to guess which file they'd edited most recently and often got
+// "no changes since last approval" when their real edit was in a
+// different file.
 type proposeBody struct {
 	Cwd    string `json:"cwd"`
 	Branch string `json:"branch"`
 	Reason string `json:"reason"`
-	Kind   string `json:"kind"`
 	Source string `json:"source"`
 }
 
@@ -38,11 +45,27 @@ func proposeMain(args []string) int {
 	return runPropose(args, proposeEndpoint, cwd)
 }
 
+const proposeUsage = `usage: gdevm propose [--reason "<why>"]
+
+Signal to the Mac side that one or more project config files
+(devm.yaml, devm.me.yaml, devm.sh, devm.me.sh) were edited from
+inside the guest. The daemon scans every proposable file against
+its last-approved snapshot and records every one that diverged —
+you never have to name which file you changed.
+
+Flags:
+  --reason "<why>"    Short description of the change for the reviewer.
+                      Optional but strongly encouraged.
+  -h, --help          Print this help.
+`
+
 func runPropose(args []string, endpoint, cwd string) int {
 	reason := ""
-	kind := "devm.yaml"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "-h", "--help":
+			fmt.Print(proposeUsage)
+			return 0
 		case "--reason":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, "gdevm propose: --reason requires a value")
@@ -50,27 +73,19 @@ func runPropose(args []string, endpoint, cwd string) int {
 			}
 			reason = args[i+1]
 			i++
-		case "--kind":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "gdevm propose: --kind requires a value")
-				return 2
-			}
-			kind = args[i+1]
-			i++
 		default:
-			fmt.Fprintf(os.Stderr, "gdevm propose: unknown arg %q\n", args[i])
+			fmt.Fprintf(os.Stderr, "gdevm propose: unknown arg %q\n%s", args[i], proposeUsage)
 			return 2
 		}
 	}
-	return doPost(endpoint, cwd, gitBranch(cwd), reason, kind)
+	return doPost(endpoint, cwd, gitBranch(cwd), reason)
 }
 
-func doPost(endpoint, cwd, branch, reason, kind string) int {
+func doPost(endpoint, cwd, branch, reason string) int {
 	body, _ := json.Marshal(proposeBody{
 		Cwd:    cwd,
 		Branch: branch,
 		Reason: reason,
-		Kind:   kind,
 		Source: "guest",
 	})
 	client := &http.Client{Timeout: 30 * time.Second}
