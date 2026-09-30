@@ -447,6 +447,24 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		})
 	}
 
+	// Mutagen monitor subscriber: streams `mutagen sync monitor` and
+	// reflects each session's real state into cache.MutagenHealth
+	// within its own redraw cadence (seconds), rather than waiting for
+	// the mutagen watchdog check's 60s tick — which, after this actor
+	// exists, only validates the daemon's own PID (see
+	// watchdog_check_mutagen.go). Reuses popMutagenBin (already
+	// extracted above for pop-session syncs) against the same data dir
+	// every other mutagen.CLI invocation in this package uses.
+	{
+		monitorCtx, cancel := context.WithCancel(ctx)
+		g.Add(func() error {
+			subscribeMutagenMonitor(monitorCtx, popMutagenBin, mutagenDataDir(cfg), cache)
+			return nil
+		}, func(error) {
+			cancel()
+		})
+	}
+
 	// Context-cancel actor: when ctx is cancelled (parent signal),
 	// the group returns. Also tears down every project's per-project
 	// HTTP/HTTPS proxy listeners so a graceful daemon exit doesn't leak

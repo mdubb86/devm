@@ -47,12 +47,22 @@ func (mutagenCheck) Run(ctx context.Context, cache *StateCache, gt GroundTruth) 
 	}
 
 	cache.SetMutagenDaemonPID(finalPID)
-	healthStatus := MutagenOK
+	// Per-project MutagenHealth is otherwise owned exclusively by the
+	// mutagen monitor subscriber (mutagen_monitor.go), which observes
+	// each session's real transport status within its own tick
+	// cadence (seconds) rather than this check's 60s poll. The one
+	// exception: when the daemon itself is confirmed gone (finalPID
+	// == 0, including a failed respawn), every project's session is
+	// definitionally disconnected too — the subscriber's own
+	// subprocess has nothing to connect to either — so that fact is
+	// still forced here rather than left stale until the subscriber's
+	// next reconnect attempt notices.
 	if finalPID == 0 {
-		healthStatus = MutagenDead
+		for _, p := range gt.KnownProjectNames() {
+			cache.SetMutagenHealth(p, MutagenHealth{Status: MutagenDead})
+		}
 	}
 	for _, p := range gt.KnownProjectNames() {
-		cache.SetMutagenHealth(p, MutagenHealth{Status: healthStatus})
 		cache.TouchProjectReconciled(p)
 	}
 	cache.TouchGlobalReconciled()
