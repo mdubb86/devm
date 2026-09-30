@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -21,30 +20,6 @@ func serveAddr() string {
 	return defaultServeAddr
 }
 
-var (
-	servedAddrMu sync.Mutex
-	servedAddr   string
-)
-
-// setServeAddrForTest records the actual bound address once the
-// listener starts. It's harmless in production (any caller could read
-// the current bound addr) but only tests care, since
-// DEVM_GDEVM_SERVE_ADDR=127.0.0.1:0 picks an ephemeral port whose
-// number isn't known until net.Listen returns.
-func setServeAddrForTest(addr string) {
-	servedAddrMu.Lock()
-	defer servedAddrMu.Unlock()
-	servedAddr = addr
-}
-
-// readServeAddrForTest returns the last address a running serveMain
-// bound, or "" if none is currently up.
-func readServeAddrForTest() string {
-	servedAddrMu.Lock()
-	defer servedAddrMu.Unlock()
-	return servedAddr
-}
-
 // serveMain starts gdevm's guest-side daemon: a long-running process
 // bound to a loopback address, serving the v1 HTTP API, until it
 // receives SIGTERM/SIGINT. Returns 0 on clean shutdown, 1 on bind
@@ -52,13 +27,22 @@ func readServeAddrForTest() string {
 func serveMain(args []string) int {
 	// Reject any args — this subcommand takes none in v1.
 	if len(args) > 0 {
-		fmt.Fprintln(os.Stderr, "gdevm serve: takes no arguments")
+		fmt.Fprintln(os.Stderr, "gdevm serve: no arguments accepted")
 		return 2
 	}
 
 	started := time.Now()
 	mux := http.NewServeMux()
 	mux.Handle("/v1/health", healthHandler(started))
+
+	// Register the shutdown signal handler before the listener binds,
+	// and therefore before the bound address becomes observable to
+	// tests or a watchdog. If Notify ran after net.Listen, a
+	// SIGTERM/SIGINT arriving in that window would hit OS-default
+	// disposition and kill the process outright instead of triggering
+	// graceful shutdown.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 
 	ln, err := net.Listen("tcp", serveAddr())
 	if err != nil {
@@ -67,18 +51,21 @@ func serveMain(args []string) int {
 	}
 	setServeAddrForTest(ln.Addr().String())
 	defer setServeAddrForTest("")
+	if addrPublishedHookForTest != nil {
+		addrPublishedHookForTest()
+	}
 
 	srv := &http.Server{Handler: mux}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	<-sig
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(ctx)
+	if err := srv.Shutdown(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "gdevm serve: shutdown: %v\n", err)
+	}
 	<-errCh
 	return 0
 }
