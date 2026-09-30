@@ -54,13 +54,15 @@ def test_reserved_health_route_stays_reachable(devm, workspace):
 
         # Reachable immediately after start. The route is VM-mode
         # (dial target 127.0.0.1:8940 inside the guest, per
-        # serviceapi.reservedHealthRoute) — probed from inside the
-        # guest, same side the Mac watchdog's own ProxyListenerHealth
-        # check ultimately exercises via the project's pool IP.
+        # serviceapi.reservedHealthRoute) — probed from the Mac side,
+        # same side the Mac watchdog's own ProxyListenerHealth check
+        # ultimately exercises: _devm.<project>.test resolves via
+        # /etc/resolver/test -> devm's DNS -> the project's pool IP ->
+        # the Mac reverse proxy -> softnet-exposed :8940 in the guest.
         hostname = f"_devm.{workspace.vm_name}.test"
         probe = subprocess.run(
-            [devm.path, "exec", "curl", "-sf", "-m", "5", f"http://{hostname}/v1/health"],
-            cwd=str(workspace.path), capture_output=True, timeout=15,
+            ["curl", "-sf", "-m", "5", f"http://{hostname}/v1/health"],
+            capture_output=True, timeout=15,
         )
         assert probe.returncode == 0, (
             f"reserved health route unreachable right after cold-start: "
@@ -93,8 +95,8 @@ def test_reserved_health_route_stays_reachable(devm, workspace):
         # And the health route itself is still reachable after riding
         # out several ticks.
         probe = subprocess.run(
-            [devm.path, "exec", "curl", "-sf", "-m", "5", f"http://{hostname}/v1/health"],
-            cwd=str(workspace.path), capture_output=True, timeout=15,
+            ["curl", "-sf", "-m", "5", f"http://{hostname}/v1/health"],
+            capture_output=True, timeout=15,
         )
         assert probe.returncode == 0, (
             f"reserved health route unreachable after riding out watchdog ticks: "
