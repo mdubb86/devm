@@ -173,3 +173,47 @@ func TestStart_SurfacesApproveRequired(t *testing.T) {
 	assert.Contains(t, err.Error(), "devm.yaml (or devm.me.yaml, devm.sh, devm.me.sh) has changed since it was last approved.")
 	assert.Contains(t, err.Error(), "devm approve")
 }
+
+// TestShouldSkipAutoInstall pins the Task 6 regression fix: the
+// cold-start auto-install goroutine in runShellFlow must not treat the
+// daemon's reserved `_devm.<project>.test` health route (registered at
+// /vm/start) as evidence the project's own routes are already
+// installed — or a project's real services would never get
+// auto-routed in vm mode.
+func TestShouldSkipAutoInstall(t *testing.T) {
+	t.Run("no routes at all — do not skip", func(t *testing.T) {
+		assert.False(t, shouldSkipAutoInstall(map[string][]serviceapi.Route{}, "proj"))
+	})
+
+	t.Run("only the reserved health route — do not skip", func(t *testing.T) {
+		existing := map[string][]serviceapi.Route{
+			"proj": {{Hostname: "_devm.proj.test", BackendPort: 8940, Mode: serviceapi.ModeVM, Project: "proj"}},
+		}
+		assert.False(t, shouldSkipAutoInstall(existing, "proj"),
+			"a reserved route alone must not block auto-install")
+	})
+
+	t.Run("a user route already installed — skip", func(t *testing.T) {
+		existing := map[string][]serviceapi.Route{
+			"proj": {{Hostname: "app.proj.test", BackendPort: 3000, Mode: serviceapi.ModeVM, Project: "proj"}},
+		}
+		assert.True(t, shouldSkipAutoInstall(existing, "proj"))
+	})
+
+	t.Run("reserved route plus a user route — skip", func(t *testing.T) {
+		existing := map[string][]serviceapi.Route{
+			"proj": {
+				{Hostname: "_devm.proj.test", BackendPort: 8940, Mode: serviceapi.ModeVM, Project: "proj"},
+				{Hostname: "app.proj.test", BackendPort: 3000, Mode: serviceapi.ModeVM, Project: "proj"},
+			},
+		}
+		assert.True(t, shouldSkipAutoInstall(existing, "proj"))
+	})
+
+	t.Run("routes exist for a different project only — do not skip", func(t *testing.T) {
+		existing := map[string][]serviceapi.Route{
+			"other": {{Hostname: "app.other.test", BackendPort: 3000, Mode: serviceapi.ModeVM, Project: "other"}},
+		}
+		assert.False(t, shouldSkipAutoInstall(existing, "proj"))
+	})
+}

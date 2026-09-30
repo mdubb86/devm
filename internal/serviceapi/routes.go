@@ -72,10 +72,34 @@ func NewRoutes() *Routes {
 	}
 }
 
-// Apply replaces the named project's routes with the given set. Returns
-// an error — without mutating any state — if any incoming hostname is
-// already owned by a different project.
+// reservedHostnamePrefix marks a route as daemon-managed rather than
+// user-declared (see reservedHealthRoute). User-declared hostnames must
+// match [a-z0-9-]+ and can never start with "_", so this prefix can
+// never collide with one.
+const reservedHostnamePrefix = "_devm."
+
+// Apply replaces the named project's user-declared route set with the
+// given items. Routes whose hostname is reserved (starts with
+// "_devm.") are managed by the daemon internally (see /vm/start's
+// reservedHealthRoute registration, installed via applyReservedRoute)
+// and survive Apply calls. Callers should not include reserved
+// hostnames in items — Apply rejects any batch that does, since only
+// server-internal callers register a reserved route, through that
+// other path.
+//
+// Returns an error — without mutating any state — if any incoming
+// hostname is already owned by a different project, or if items
+// contains a reserved hostname.
 func (r *Routes) Apply(projectID string, items []Route) error {
+	for _, item := range items {
+		if strings.HasPrefix(item.Hostname, reservedHostnamePrefix) {
+			return fmt.Errorf(
+				"hostname %q is reserved for daemon-internal routes (prefix %q) and cannot be set via Apply",
+				item.Hostname, reservedHostnamePrefix,
+			)
+		}
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -93,13 +117,25 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 		}
 	}
 
+	// Gather this project's currently-registered reserved routes so
+	// they survive the swap below — Apply only ever replaces the
+	// project's user-declared routes.
+	var reserved []Route
+	for _, h := range r.projectsToHostnames[projectID] {
+		if strings.HasPrefix(h, reservedHostnamePrefix) {
+			if rt, ok := r.hostnameToRoute[h]; ok {
+				reserved = append(reserved, rt)
+			}
+		}
+	}
+
 	// Clear this project's prior hostnames from both maps.
 	for _, h := range r.projectsToHostnames[projectID] {
 		delete(r.hostnameToRoute, h)
 		delete(r.lanHostnameToRoute, h)
 	}
 
-	hostnames := make([]string, 0, len(items))
+	hostnames := make([]string, 0, len(items)+len(reserved))
 	for _, item := range items {
 		r.hostnameToRoute[item.Hostname] = item
 		if item.ExposeHost {
@@ -107,7 +143,56 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 		}
 		hostnames = append(hostnames, item.Hostname)
 	}
+	// Re-add the reserved routes gathered above — they were never part
+	// of items (rejected above) and never cleared by a caller's batch.
+	for _, rt := range reserved {
+		r.hostnameToRoute[rt.Hostname] = rt
+		if rt.ExposeHost {
+			r.lanHostnameToRoute[rt.Hostname] = rt
+		}
+		hostnames = append(hostnames, rt.Hostname)
+	}
 	r.projectsToHostnames[projectID] = hostnames
+	return nil
+}
+
+// applyReservedRoute registers a single daemon-managed reserved route
+// (hostname must start with reservedHostnamePrefix) for projectID,
+// without touching the project's user-declared routes. This is the
+// "different path" reserved routes use instead of Apply — today the
+// only caller is /vm/start's reservedHealthRoute registration.
+// Re-registering the same hostname (e.g. a second /vm/start for a
+// project whose reserved route is already present) replaces it in
+// place rather than duplicating the projectsToHostnames entry.
+func (r *Routes) applyReservedRoute(projectID string, route Route) error {
+	if !strings.HasPrefix(route.Hostname, reservedHostnamePrefix) {
+		return fmt.Errorf(
+			"applyReservedRoute: hostname %q does not have the reserved prefix %q",
+			route.Hostname, reservedHostnamePrefix,
+		)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if existing, ok := r.hostnameToRoute[route.Hostname]; ok && existing.Project != projectID {
+		return fmt.Errorf(
+			"hostname %q already registered by project %q — cannot register under %q",
+			route.Hostname, existing.Project, projectID,
+		)
+	}
+
+	r.hostnameToRoute[route.Hostname] = route
+	if route.ExposeHost {
+		r.lanHostnameToRoute[route.Hostname] = route
+	}
+
+	for _, h := range r.projectsToHostnames[projectID] {
+		if h == route.Hostname {
+			return nil // already tracked; in-place replace above is enough
+		}
+	}
+	r.projectsToHostnames[projectID] = append(r.projectsToHostnames[projectID], route.Hostname)
 	return nil
 }
 

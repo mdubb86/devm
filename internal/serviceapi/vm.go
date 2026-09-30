@@ -819,12 +819,15 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 
 		// Register the reserved _devm.<project>.test → 127.0.0.1:8940
 		// health route so the Mac watchdog (Task 7) has a route to the
-		// guest's gdevm-serve /v1/health endpoint. A single Apply call —
-		// atomic with respect to Routes.Apply's collision check, since
-		// this is the only route this project owns at this point in the
-		// handler.
+		// guest's gdevm-serve /v1/health endpoint. Goes through
+		// applyReservedRoute, not Apply — Apply rejects reserved
+		// hostnames outright (they're server-internal, never part of a
+		// caller's user-declared batch) and preserves whatever this
+		// project's reserved routes already are across every
+		// /routes/apply call from `devm route`/`devm shell`/`devm
+		// reconcile`.
 		if routes != nil {
-			if err := routes.Apply(req.Name, []Route{reservedHealthRoute(req.Name)}); err != nil {
+			if err := routes.applyReservedRoute(req.Name, reservedHealthRoute(req.Name)); err != nil {
 				http.Error(w, fmt.Sprintf("register reserved health route: %v", err), http.StatusInternalServerError)
 				return
 			}

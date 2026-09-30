@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/mdubb86/devm/internal/config"
@@ -207,11 +208,16 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	// Auto-install routes in vm mode if the project doesn't have
-	// any yet. Best-effort: silent if the daemon is down. We don't
-	// overwrite an existing route set — the user may have explicitly
-	// chosen `devm route local`, and we respect that across stop/start
-	// cycles per the Ship 3 design.
+	// Auto-install routes in vm mode if the project doesn't have any
+	// user-declared ones yet. Best-effort: silent if the daemon is
+	// down. We don't overwrite an existing route set — the user may
+	// have explicitly chosen `devm route local`, and we respect that
+	// across stop/start cycles per the Ship 3 design. The daemon's
+	// reserved `_devm.<project>.test` health route (registered at
+	// /vm/start, see serviceapi.reservedHealthRoute) doesn't count as
+	// "already installed" here — shouldSkipAutoInstall ignores it, or
+	// this goroutine would always see a route present and never
+	// auto-install the user's own services.
 	//
 	// Races with orchestrator.RunShell below, which is what brings the
 	// VM up. Routes/apply on the daemon side needs the project's IP
@@ -236,7 +242,7 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 				// when the daemon has nothing for this project.
 				existing, listErr := c.ListRoutes(rctx)
 				if listErr == nil {
-					if _, present := existing[cfg.Project.Name]; present {
+					if shouldSkipAutoInstall(existing, cfg.Project.Name) {
 						rcancel()
 						return
 					}
@@ -272,6 +278,26 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 		os.Exit(rc)
 	}
 	return nil
+}
+
+// shouldSkipAutoInstall reports whether the cold-start auto-install
+// goroutine in runShellFlow should leave the daemon's route table
+// alone for project. existing is a /routes listing (ListRoutes).
+//
+// The daemon always carries a reserved `_devm.<project>.test` health
+// route for a running project (registered at /vm/start) — that alone
+// must not read as "the user already has routes installed," or
+// auto-install would skip on every cold start and a project's actual
+// services would never get routed in vm mode. Skip only when at least
+// one of the project's routes is user-declared (hostname doesn't start
+// with the reserved prefix).
+func shouldSkipAutoInstall(existing map[string][]serviceapi.Route, project string) bool {
+	for _, r := range existing[project] {
+		if !strings.HasPrefix(r.Hostname, "_devm.") {
+			return true
+		}
+	}
+	return false
 }
 
 func init() {

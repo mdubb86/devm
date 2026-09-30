@@ -430,6 +430,73 @@ func TestRemoveRoutes_ClearsSnapshotRoutes(t *testing.T) {
 	assert.Empty(t, snap.Routes, "remove must wipe snap.Routes so daemon restart replays nothing")
 }
 
+// TestRoutes_Apply_PreservesReservedRoutes pins the fix for the Task 6
+// regression: a reserved route registered outside Apply (the way
+// /vm/start registers _devm.<project>.test) must survive a later
+// Apply call for the same project — `devm route`/`devm shell`/`devm
+// reconcile` all call Apply with only the project's user-declared
+// routes, and none of them know about the reserved route.
+func TestRoutes_Apply_PreservesReservedRoutes(t *testing.T) {
+	r := NewRoutes()
+	require.NoError(t, r.applyReservedRoute("proj-a", Route{
+		Hostname:    "_devm.proj-a.test",
+		BackendHost: "127.0.0.1",
+		BackendPort: gdevmServePort,
+		Mode:        ModeVM,
+		Project:     "proj-a",
+	}))
+
+	// A caller's Apply — built purely from devm.yaml's services block,
+	// same as every real caller — must not wipe the reserved route.
+	require.NoError(t, r.Apply("proj-a", []Route{
+		{Hostname: "app.proj-a.test", BackendPort: 3000, Mode: ModeVM, Project: "proj-a"},
+	}))
+
+	reserved, ok := r.hostnameToRoute["_devm.proj-a.test"]
+	require.True(t, ok, "reserved route must survive Apply")
+	assert.Equal(t, "proj-a", reserved.Project)
+	assert.Equal(t, gdevmServePort, reserved.BackendPort)
+
+	// The user route landed too.
+	got, ok := r.Lookup("app.proj-a.test", "")
+	assert.True(t, ok)
+	assert.Equal(t, 3000, got.BackendPort)
+
+	// AllByProject reflects both.
+	all := r.AllByProject()
+	assert.Len(t, all["proj-a"], 2)
+
+	// A second Apply (simulating another `devm route`/`devm reconcile`
+	// call later in the VM's life) still preserves it.
+	require.NoError(t, r.Apply("proj-a", []Route{
+		{Hostname: "web.proj-a.test", BackendPort: 4000, Mode: ModeVM, Project: "proj-a"},
+	}))
+	reserved, ok = r.hostnameToRoute["_devm.proj-a.test"]
+	require.True(t, ok, "reserved route must survive a second Apply")
+	assert.Equal(t, "proj-a", reserved.Project)
+	_, ok = r.hostnameToRoute["app.proj-a.test"]
+	assert.False(t, ok, "the prior user route must still be replaced, not accumulated")
+}
+
+// TestRoutes_Apply_RejectsReservedHostnameInBatch pins that a caller
+// cannot smuggle a reserved hostname through the public Apply path —
+// only applyReservedRoute (server-internal, used by /vm/start) may set
+// one.
+func TestRoutes_Apply_RejectsReservedHostnameInBatch(t *testing.T) {
+	r := NewRoutes()
+	err := r.Apply("proj-a", []Route{
+		{Hostname: "_devm.foo.test", BackendPort: 8940, Mode: ModeVM, Project: "proj-a"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "_devm.foo.test")
+	assert.Contains(t, err.Error(), "reserved")
+
+	// Nothing was stored — the whole batch is rejected, not just the
+	// offending item.
+	_, ok := r.hostnameToRoute["_devm.foo.test"]
+	assert.False(t, ok)
+}
+
 // findRoute looks a hostname up across every project in the route
 // table. Tests use it to observe routes the proxy dial path
 // deliberately excludes (direct services), which Lookup won't return.
