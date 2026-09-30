@@ -17,6 +17,17 @@ type popTestOption func(*popTestConfig)
 type popTestConfig struct {
 	mirrorPaths []string
 	scratchHome string
+	label       string
+}
+
+// withLabel sets the primary repo's explicit `label:` to something
+// other than the project name, pinning that guest-workspace-root
+// resolution follows the label (serviceapi.PrimaryGuestPath), never
+// project.name. Without this option, setupTestProject's fixture sets
+// label == projectName, which would silently pass a test that used
+// project.name instead of the label.
+func withLabel(label string) popTestOption {
+	return func(c *popTestConfig) { c.label = label }
 }
 
 // withMirrorFile seeds the project's mirror table with an entry at
@@ -52,6 +63,11 @@ func setupTestProject(t *testing.T, projectName, tld string, opts ...popTestOpti
 		opt(c)
 	}
 
+	label := c.label
+	if label == "" {
+		label = projectName
+	}
+
 	home := c.scratchHome
 	if home == "" {
 		home = t.TempDir()
@@ -65,7 +81,7 @@ func setupTestProject(t *testing.T, projectName, tld string, opts ...popTestOpti
 		"  main:\n" +
 		"    url: https://example.com/repo.git\n" +
 		"    primary: true\n" +
-		"    label: " + projectName + "\n"
+		"    label: " + label + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte(yaml), 0o644))
 
 	discoverProjectFn = func() (LocalProject, error) {
@@ -73,15 +89,12 @@ func setupTestProject(t *testing.T, projectName, tld string, opts ...popTestOpti
 	}
 	t.Cleanup(func() { discoverProjectFn = discoverProject })
 
-	guestRoot := "/home/devm/" + projectName + "/"
+	guestRoot := "/home/devm/" + label + "/"
 	for _, guestPath := range c.mirrorPaths {
 		rel := strings.TrimPrefix(guestPath, guestRoot)
 		// mountPassthrough resolves a mirrored entry to
-		// <RuntimeDir>/<project>/<label>/<rel-to-entry-guest-path>;
-		// the primary repo's label is projectName here (set
-		// explicitly above), so its mirror dir is
-		// <RuntimeDir>/<project>/<project>/.
-		macPath := filepath.Join(cfg.RuntimeDir(), projectName, projectName, rel)
+		// <RuntimeDir>/<project>/<label>/<rel-to-entry-guest-path>.
+		macPath := filepath.Join(cfg.RuntimeDir(), projectName, label, rel)
 		if strings.HasSuffix(guestPath, "/") {
 			require.NoError(t, os.MkdirAll(macPath, 0o755))
 		} else {
@@ -118,6 +131,31 @@ func TestRunPop_DefaultBuildsFilestashURL(t *testing.T) {
 
 	assert.Equal(t,
 		"https://files.myproj.test/files/local/home/devm/myproj/foo.txt",
+		got,
+	)
+}
+
+// TestRunPop_DefaultBuildsFilestashURL_LabelDiffersFromProjectName pins
+// that the guest path is built from the primary repo's label, never
+// project.name — the two happen to be equal in most other tests'
+// fixtures, which would silently pass even if resolveGuestPath used
+// project.name by mistake (the regression this test reproduces: a
+// project named "myproj" whose primary repo's label is "Hello-World"
+// must pop under /home/devm/Hello-World/, not /home/devm/myproj/).
+func TestRunPop_DefaultBuildsFilestashURL_LabelDiffersFromProjectName(t *testing.T) {
+	var got string
+	popExecOpen = func(args ...string) error { got = args[0]; return nil }
+	t.Cleanup(func() { popExecOpen = defaultPopExecOpen })
+
+	setupTestProject(t, "myproj", "test",
+		withLabel("Hello-World"),
+		withMirrorFile("/home/devm/Hello-World/README"),
+	)
+	err := runPop(popCmd, []string{"README"})
+	require.NoError(t, err)
+
+	assert.Equal(t,
+		"https://files.myproj.test/files/local/home/devm/Hello-World/README",
 		got,
 	)
 }
@@ -229,4 +267,24 @@ func TestRunPop_DefaultOnDirectory_BuildsListingURL(t *testing.T) {
 		"https://files.myproj.test/files/local/home/devm/myproj/subdir/",
 		got,
 	)
+}
+
+// TestRunPop_LegacyMacOrVmArg_ReturnsMigrationError asserts that the
+// removed `pop mac` / `pop vm` subcommands return a clear migration
+// error instead of silently treating "mac"/"vm" as the path and
+// dropping the real path argument that followed it.
+func TestRunPop_LegacyMacOrVmArg_ReturnsMigrationError(t *testing.T) {
+	for _, first := range []string{"mac", "vm"} {
+		t.Run(first, func(t *testing.T) {
+			var opened bool
+			popExecOpen = func(args ...string) error { opened = true; return nil }
+			t.Cleanup(func() { popExecOpen = defaultPopExecOpen })
+
+			err := runPop(popCmd, []string{first, "README.md"})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "have been removed")
+			assert.Contains(t, err.Error(), "--native")
+			assert.False(t, opened, "must not attempt to open anything")
+		})
+	}
 }

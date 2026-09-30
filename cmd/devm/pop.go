@@ -68,8 +68,19 @@ func init() {
 	rootCmd.AddCommand(popCmd)
 }
 
+// errLegacyMacOrVmArg is returned when the first arg is the name of a
+// removed `pop mac` / `pop vm` subcommand, so users following stale
+// muscle memory get a clear migration error instead of devm silently
+// trying (and failing) to pop a file literally named "mac" or "vm".
+var errLegacyMacOrVmArg = errors.New(
+	"pop: `pop mac` and `pop vm` subcommands have been removed; " +
+		"use `devm pop [--native] <path>` instead")
+
 func runPop(cmd *cobra.Command, args []string) error {
 	cmd.SilenceUsage = true
+	if len(args) >= 2 && (args[0] == "mac" || args[0] == "vm") {
+		return errLegacyMacOrVmArg
+	}
 	pathArg, openArgs := splitPathAndOpenArgs(args)
 
 	// URL args pass through to `open` regardless of --native.
@@ -86,7 +97,7 @@ func runPop(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	guestPath := resolveGuestPath(pathArg, loaded)
+	guestPath := resolveGuestPath(pathArg, resolved.MacCwd, loaded)
 
 	if popNativeFlag {
 		return runPopNative(pathArg, guestPath, resolved, loaded, openArgs)
@@ -163,13 +174,22 @@ func scratchName(project, guestPath string) string {
 // Relative → <guest-workspace-root>/<rel>, preserving a trailing
 // slash so directory listing URLs stay directory-shaped. Absolute →
 // passthrough (e.g. a path printed by a guest process).
-func resolveGuestPath(pathArg string, loaded schema.Config) string {
+func resolveGuestPath(pathArg string, macCwd string, loaded schema.Config) string {
 	if filepath.IsAbs(pathArg) {
 		return pathArg
 	}
-	// Guest workspace root is /home/devm/<project-name> (shelfmates
-	// layout) — schema.GuestHomeDir + the project's primary label.
-	joined := filepath.Join(schema.GuestHomeDir, loaded.Project.Name, pathArg)
+	// Guest workspace root is /home/devm/<primary-repo-label> — NOT
+	// project.name. The label comes from the primary repo's explicit
+	// `label:`, or is derived from its `url:`, or (repo-less primary)
+	// the Mac cwd's basename — see serviceapi.PrimaryGuestPath, the
+	// same resolution resolvePopTarget uses for --native. A
+	// repo-less project (no repos at all) has no label; its guest
+	// workspace root is /home/devm itself.
+	root := serviceapi.PrimaryGuestPath(&loaded, macCwd)
+	if root == "" {
+		root = schema.GuestHomeDir
+	}
+	joined := filepath.Join(root, pathArg)
 	if strings.HasSuffix(pathArg, "/") && !strings.HasSuffix(joined, "/") {
 		joined += "/"
 	}
