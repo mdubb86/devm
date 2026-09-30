@@ -17,6 +17,9 @@ var EtcProfileDevm string
 //go:embed gdevm-serve.service
 var GdevmServeUnit string
 
+//go:embed filestash.service
+var EmbeddedFilestashSystemdUnit string
+
 //go:embed embed/filestash
 var EmbeddedFilestashBinary []byte
 

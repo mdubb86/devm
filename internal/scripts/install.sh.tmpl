@@ -147,6 +147,28 @@ if [ -f /etc/systemd/system/gdevm-serve.service ]; then
     systemctl restart gdevm-serve.service
 fi
 
+# --- Filestash: bundled binary + passthrough config, dropped in and
+# restarted on every cold-start/re-run so a binary bump lands
+# immediately, same rationale as gdevm-serve above. ---
+mkdir -p /home/devm/filestash/data/state/config
+base64 -d <<'FILESTASH_B64' > /home/devm/filestash/filestash
+{{.FilestashBinaryB64}}
+FILESTASH_B64
+chmod 755 /home/devm/filestash/filestash
+
+base64 -d <<'FILESTASH_CFG_B64' > /home/devm/filestash/data/state/config/config.json
+{{.FilestashConfigB64}}
+FILESTASH_CFG_B64
+chmod 600 /home/devm/filestash/data/state/config/config.json
+chown -R devm:devm /home/devm/filestash
+
+cat > /etc/systemd/system/filestash.service <<'FILESTASH_UNIT'
+{{.FilestashUnit}}
+FILESTASH_UNIT
+systemctl daemon-reload
+systemctl enable filestash.service
+systemctl restart filestash.service
+
 # --- Mutagen agent pre-install (mutagen looks under ~/.mutagen/agents/<version>/mutagen-agent). ---
 if [ -f /opt/devm/bin/mutagen-agent ]; then
     install -d -o devm -g devm -m 0755 /home/devm/.mutagen
