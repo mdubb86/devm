@@ -837,6 +837,13 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			cache.SetMacCwd(req.Name, req.MacCwd)
 			cache.SetVMState(req.Name, VMRunning)
 			cache.SetIronProxyHealth(req.Name, ProxyHealth{Status: ProxyOK})
+			// Seed optimistically, same as SetIronProxyHealth above: the
+			// listener bind above just succeeded (or failed non-fatally
+			// and logged), so assume healthy rather than leaving the zero
+			// value (false) until the next watchdog tick, up to 60s away.
+			// The watchdog's next probe corrects this if the optimism was
+			// wrong.
+			cache.SetProxyListenerHealth(req.Name, true)
 		}
 
 		writeJSON(w, VMStartResponse{ProjectIP: projectIP, TunnelPort: info.TunnelPort})

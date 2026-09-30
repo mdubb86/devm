@@ -293,3 +293,106 @@ exit 0
 	assert.Equal(t, project, route.Project)
 	assert.Equal(t, ModeVM, route.Mode)
 }
+
+// TestVMStart_SetsProxyListenerHealthOptimistically pins Task 8's review
+// follow-up: ProjectRow.ProxyListenerHealth is otherwise written from
+// exactly one call site, watchdog_check_proxy_listener.go's 60-second
+// tick, which left it at its Go zero value (false) for up to a minute
+// after every cold /vm/start — showing "proxy: UNHEALTHY" on the most
+// common path even though the listener bind just succeeded. /vm/start
+// must seed the cache optimistically, the same way it already does for
+// cache.SetIronProxyHealth right next to it, so devm status is accurate
+// immediately after start rather than only after the next watchdog tick.
+func TestVMStart_SetsProxyListenerHealthOptimistically(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const project = "proj-listener-health"
+
+	origMutagenStopPhaseFn := mutagenStopPhaseFn
+	mutagenStopPhaseFn = func(identity.Config, string) error { return nil }
+	t.Cleanup(func() { mutagenStopPhaseFn = origMutagenStopPhaseFn })
+
+	origSpawn := ironProxySpawn
+	ironProxySpawn = func(_ context.Context, _ *supervisor.Supervisor, _ supervisor.Key, _ *exec.Cmd, _ func(), _ ...io.Writer) error {
+		return nil
+	}
+	t.Cleanup(func() { ironProxySpawn = origSpawn })
+	t.Cleanup(func() { policyAuthority.StopServing(project) })
+
+	// Fake `tart` on $PATH: satisfies both tart.Tart's t.Path-based
+	// calls (List/Run) and waitVMExecReady's literal exec.Command("tart",
+	// "exec", ...), which shells out by bare name rather than through
+	// the *tart.Tart wrapper.
+	binDir := t.TempDir()
+	tartScript := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+  list) echo '[{"Name":%q,"State":"stopped"}]' ;;
+  exec) exit 0 ;;
+  run) sleep 30 ;;
+esac
+exit 0
+`, project)
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "tart"), []byte(tartScript), 0o755))
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	tr := tart.New()
+	tr.Path = "tart"
+
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	t.Cleanup(func() {
+		_ = sup.Stop(context.Background(), supervisor.Key{ProjectID: project, Role: supervisor.RoleVM})
+	})
+
+	t.Cleanup(func() {
+		ironProxyState.del(project)
+		softnetState.del(project)
+		exposeClaims.release(project)
+	})
+
+	// Fake softnet control socket: acks setExposeMap (fatal if unacked)
+	// and silently accepts setTestHosts (fire-and-forget, non-fatal).
+	require.NoError(t, ensureSoftnetSockDir(softnetSockDir()))
+	sockPath := SoftnetControlSock(identity.Prod, project)
+	_ = os.Remove(sockPath)
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				line, err := bufio.NewReader(c).ReadString('\n')
+				if err != nil {
+					return
+				}
+				if strings.Contains(line, `"op":"setExposeMap"`) {
+					_, _ = c.Write([]byte(`{"ok":true}` + "\n"))
+				}
+			}(c)
+		}
+	}()
+
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
+		[]byte("project:\n  name: "+project+"\n"), 0o644))
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	cache := NewStateCache()
+	routes := NewRoutes()
+	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, routes, NewPopSessionStore(), nil, cache)
+
+	body, err := json.Marshal(VMStartRequest{Name: project, MacCwd: macCwd, Cfg: schema.Config{}})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/vm/start", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	row, ok := cache.ProjectRow(project)
+	require.True(t, ok, "cache row must exist after /vm/start")
+	assert.True(t, row.ProxyListenerHealth,
+		"ProxyListenerHealth must be seeded true immediately after a successful /vm/start, not left at its zero value until the next watchdog tick")
+}
