@@ -517,9 +517,15 @@ func (d ShellDeps) waitForInitialSync(ctx context.Context, cfg schema.Config, vm
 	if err != nil {
 		return fmt.Errorf("mutagen: extract binary: %w", err)
 	}
+	// MUTAGEN_SSH_PATH matters even on the CLI side: if the daemon
+	// isn't running, mutagen auto-spawns one inheriting THIS process's
+	// env — and without the shim path the replacement falls through to
+	// system ssh and every later sync create fails on hostname
+	// resolution.
 	cli := &mutagen.CLI{
-		Binary:  mutagenBin,
-		DataDir: filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
+		Binary:   mutagenBin,
+		DataDir:  filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
+		ExtraEnv: []string{"MUTAGEN_SSH_PATH=" + serviceapi.MutagenSSHDir(d.Ident)},
 	}
 	return serviceapi.FlushAll(cli, vmName)
 }
@@ -619,9 +625,15 @@ func (d ShellDeps) flushMutagenOnTeardown(ctx context.Context, cfg schema.Config
 	if err != nil {
 		return fmt.Errorf("mutagen: extract binary: %w", err)
 	}
+	// MUTAGEN_SSH_PATH matters even on the CLI side: if the daemon
+	// isn't running, mutagen auto-spawns one inheriting THIS process's
+	// env — and without the shim path the replacement falls through to
+	// system ssh and every later sync create fails on hostname
+	// resolution.
 	cli := &mutagen.CLI{
-		Binary:  mutagenBin,
-		DataDir: filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
+		Binary:   mutagenBin,
+		DataDir:  filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
+		ExtraEnv: []string{"MUTAGEN_SSH_PATH=" + serviceapi.MutagenSSHDir(d.Ident)},
 	}
 	return serviceapi.FlushAll(cli, vmName)
 }

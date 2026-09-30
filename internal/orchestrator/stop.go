@@ -151,10 +151,16 @@ var mutagenTeardownFn = func(d StopDeps, name string) error {
 	if err != nil {
 		return fmt.Errorf("mutagen: extract binary: %w", err)
 	}
+	// MUTAGEN_SSH_PATH matters even on the CLI side: if the daemon is
+	// dead when this runs (e.g. crashed, killed by a test), mutagen
+	// auto-spawns a replacement inheriting THIS process's env. Without
+	// the shim path the replacement daemon falls through to system ssh
+	// and every later sync create fails on hostname resolution.
 	mutagenCLI := &mutagen.CLI{
-		Binary:  mutagenBin,
-		DataDir: filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
-		Exec:    mutagen.OSExec,
+		Binary:   mutagenBin,
+		DataDir:  filepath.Join(d.Ident.RuntimeDir(), "mutagen", "data"),
+		Exec:     mutagen.OSExec,
+		ExtraEnv: []string{"MUTAGEN_SSH_PATH=" + serviceapi.MutagenSSHDir(d.Ident)},
 	}
 	return serviceapi.TeardownPhase(mutagenCLI, name)
 }
