@@ -40,13 +40,16 @@ def test_repoless_project_gets_gdevm_serve(devm, workspace):
             f"stdout={active.stdout.decode()!r} stderr={active.stderr.decode()!r}"
         )
 
-        # The reserved health route is reachable — proves the Mac-side
-        # route registration and the guest-side listener both came up
-        # without a primary repo to key off of.
+        # The reserved health route is reachable from the Mac side —
+        # proves the Mac-side route registration and the guest-side
+        # listener both came up without a primary repo to key off of.
+        # _devm.<project>.test resolves via /etc/resolver/test -> devm's
+        # DNS -> the project's pool IP -> the Mac reverse proxy ->
+        # softnet-exposed :8940 in the guest.
         hostname = f"_devm.{workspace.vm_name}.test"
         probe = subprocess.run(
-            [devm.path, "exec", "curl", "-sf", "-m", "5", f"http://{hostname}/v1/health"],
-            cwd=str(workspace.path), capture_output=True, timeout=15,
+            ["curl", "-sf", "-m", "5", f"http://{hostname}/v1/health"],
+            capture_output=True, timeout=15,
         )
         assert probe.returncode == 0, (
             f"reserved health route unreachable on a repo-less project: "
