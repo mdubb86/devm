@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
@@ -203,35 +204,86 @@ func sessionNameToProject(cache *StateCache, sessionName string) (string, bool) 
 	return bestProject, true
 }
 
-// mutagenHealthyStatuses are the .Status values that mean "session is
-// connected and doing normal sync work". task-2-report.md's live
-// spike (18 real sessions, plus one controlled pause/resume) observed
-// exactly six values: Watching, Disconnected, ConnectingAlpha,
-// ConnectingBeta, Scanning, StagingBeta. Of those, everything but
-// Disconnected belongs here.
+// mutagenFailedStatuses are the .Status values that mean a session's
+// sync loop has stopped making progress — a genuine failure, not a
+// normal phase of the sync cycle. Sourced from the mutagen 0.18.1
+// embedded binary's synchronization.Status protobuf enum, extracted
+// directly out of internal/mutagen/embed/mutagen.gz (task-9-review.md
+// Finding 1 — the full, in-order 14-value enum):
 //
-// Anything not in this set — an unrecognized value, or any Halted*
-// variant mutagen may report under an error condition the spike never
-// exercised (task-2-report.md finding 6) — maps to unhealthy. Per
-// PRINCIPLES.md, an unproven state is not a handled state: "we can't
-// tell" surfaces as unhealthy rather than silently passing as fine.
-var mutagenHealthyStatuses = map[string]bool{
-	"Watching":        true,
-	"Scanning":        true,
-	"StagingBeta":     true,
-	"ConnectingAlpha": true,
-	"ConnectingBeta":  true,
+//	Disconnected, HaltedOnRootEmptied, HaltedOnRootDeletion,
+//	HaltedOnRootTypeChange, ConnectingAlpha, ConnectingBeta, Watching,
+//	Scanning, WaitingForRescan, Reconciling, StagingAlpha, StagingBeta,
+//	Transitioning, Saving
+//
+// Only the first four are real failures; every other value is an
+// ordinary phase of a normal sync cycle (connect → scan → reconcile →
+// stage → transition → save → watch) — a real file edit drives every
+// session through most of these on every cycle.
+//
+// This is a denylist of failures, not an allowlist of healthy values,
+// deliberately: Task 9's original allowlist omitted five of the ten
+// normal phases (StagingAlpha among them) and made ordinary syncing
+// flap MutagenDead — see Task 9's review. A denylist means a mutagen
+// version that adds an eleventh normal phase defaults to healthy
+// (matching mutagen's own intent for the value) instead of unhealthy
+// until someone updates this set. See statusToMutagenHealth for how
+// an unrecognized value is still surfaced, just not as unhealthy.
+var mutagenFailedStatuses = map[string]bool{
+	"Disconnected":           true,
+	"HaltedOnRootEmptied":    true,
+	"HaltedOnRootDeletion":   true,
+	"HaltedOnRootTypeChange": true,
 }
 
+// mutagenKnownHealthyStatuses are the remaining ten values of the same
+// enum. It plays no role in the health decision itself (that's
+// mutagenFailedStatuses, above) — it exists only so
+// statusToMutagenHealth can tell "a status we've confirmed is a
+// normal phase" apart from "a status outside both known sets", so the
+// latter can be logged once as a signal that mutagen's enum has
+// drifted and this file may need updating.
+var mutagenKnownHealthyStatuses = map[string]bool{
+	"ConnectingAlpha":  true,
+	"ConnectingBeta":   true,
+	"Watching":         true,
+	"Scanning":         true,
+	"WaitingForRescan": true,
+	"Reconciling":      true,
+	"StagingAlpha":     true,
+	"StagingBeta":      true,
+	"Transitioning":    true,
+	"Saving":           true,
+}
+
+// loggedUnknownStatuses dedupes the one-time warning in
+// statusToMutagenHealth by status value, so a status mutagen keeps
+// emitting (across many sessions, or many ticks) produces one log
+// line total, not one per occurrence.
+var loggedUnknownStatuses sync.Map
+
 // statusToMutagenHealth maps one session's .Status string to the
-// cache's MutagenHealth shape. The cache models daemon-wide health as
-// a binary OK/Dead (state_cache.go), not a richer per-session state,
-// so every non-healthy status — Disconnected, Halted*, unrecognized —
-// collapses to the same MutagenDead value the mutagen watchdog check
-// already uses for "the daemon itself is confirmed gone".
+// cache's MutagenHealth shape using mutagenFailedStatuses as a
+// denylist: a confirmed failure status maps to MutagenDead, and
+// everything else — including a value outside both
+// mutagenFailedStatuses and mutagenKnownHealthyStatuses — maps to
+// MutagenOK. A status outside both known sets is logged once via
+// daemonlog.Warnf (an "expected-but-noteworthy" event, not a failure
+// — see internal/daemonlog's Warnf doc) so an operator notices the
+// drift and can extend mutagenFailedStatuses or
+// mutagenKnownHealthyStatuses; it fails open to healthy rather than
+// unhealthy because a newly observed value is far more likely to be a
+// new normal phase than a new failure mode, and flapping every
+// session unhealthy on every enum addition is exactly the false-
+// positive failure mode this fix closes for the known statuses.
 func statusToMutagenHealth(status string) MutagenHealth {
-	if mutagenHealthyStatuses[status] {
-		return MutagenHealth{Status: MutagenOK}
+	if mutagenFailedStatuses[status] {
+		return MutagenHealth{Status: MutagenDead}
 	}
-	return MutagenHealth{Status: MutagenDead}
+	if !mutagenKnownHealthyStatuses[status] {
+		if _, seen := loggedUnknownStatuses.LoadOrStore(status, true); !seen {
+			daemonlog.Warnf("serviceapi: mutagen monitor: unrecognized session status %q, treating as healthy (denylist-based) — add to mutagenKnownHealthyStatuses or mutagenFailedStatuses if this is a real state", status)
+		}
+	}
+	return MutagenHealth{Status: MutagenOK}
 }

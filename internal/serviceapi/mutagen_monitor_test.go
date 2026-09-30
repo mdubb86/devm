@@ -1,9 +1,11 @@
 package serviceapi
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -54,15 +56,38 @@ func TestSessionNameToProject_UnknownProjectFails(t *testing.T) {
 
 // ---------- statusToMutagenHealth ----------
 
+// TestStatusToMutagenHealth_KnownHealthyStatuses covers all ten
+// non-failure values of the real synchronization.Status enum
+// (task-9-review.md Finding 1) — every ordinary phase of a sync
+// cycle, not just the five Task 9 originally allowlisted.
 func TestStatusToMutagenHealth_KnownHealthyStatuses(t *testing.T) {
-	for _, status := range []string{"Watching", "Scanning", "StagingBeta", "ConnectingAlpha", "ConnectingBeta"} {
+	for _, status := range []string{
+		"Watching", "Scanning", "StagingBeta", "ConnectingAlpha", "ConnectingBeta",
+		"StagingAlpha", "Reconciling", "Saving", "Transitioning", "WaitingForRescan",
+	} {
 		assert.Equal(t, MutagenOK, statusToMutagenHealth(status).Status, "status %q should be healthy", status)
 	}
 }
 
-func TestStatusToMutagenHealth_DisconnectedAndUnknownAreUnhealthy(t *testing.T) {
-	for _, status := range []string{"Disconnected", "HaltedOnConnectionError", "SomeFutureStatus", ""} {
+// TestStatusToMutagenHealth_FailedStatusesAreUnhealthy covers all
+// four genuine failure values in mutagenFailedStatuses.
+func TestStatusToMutagenHealth_FailedStatusesAreUnhealthy(t *testing.T) {
+	for _, status := range []string{
+		"Disconnected", "HaltedOnRootEmptied", "HaltedOnRootDeletion", "HaltedOnRootTypeChange",
+	} {
 		assert.Equal(t, MutagenDead, statusToMutagenHealth(status).Status, "status %q should be unhealthy", status)
+	}
+}
+
+// TestStatusToMutagenHealth_UnknownStatusFailsOpenToHealthy pins the
+// denylist's core behavior change from Task 9's original allowlist: a
+// status outside both mutagenFailedStatuses and
+// mutagenKnownHealthyStatuses maps to MutagenOK, not MutagenDead —
+// see TestSubscribeMutagenMonitor_UnknownStatusLoggedOnce for the
+// accompanying one-time warning.
+func TestStatusToMutagenHealth_UnknownStatusFailsOpenToHealthy(t *testing.T) {
+	for _, status := range []string{"HaltedOnConnectionError", "SomeFutureStatus", ""} {
+		assert.Equal(t, MutagenOK, statusToMutagenHealth(status).Status, "unrecognized status %q should fail open to healthy", status)
 	}
 }
 
@@ -138,13 +163,13 @@ func TestSubscribeMutagenMonitor_PerTickDiffUpdatesCache(t *testing.T) {
 	}
 }
 
-// TestSubscribeMutagenMonitor_UnknownStatusMapsToUnhealthy feeds a
-// status value outside the observed enum (task-2-report.md: only
-// Watching, Disconnected, ConnectingAlpha, ConnectingBeta, Scanning,
-// StagingBeta were confirmed live; HaltedOnConnectionError specifically
-// was never observed) and asserts it surfaces as unhealthy rather than
-// silently passing as fine.
-func TestSubscribeMutagenMonitor_UnknownStatusMapsToUnhealthy(t *testing.T) {
+// TestSubscribeMutagenMonitor_UnknownStatusMapsToHealthy feeds a
+// status value outside both mutagenFailedStatuses and
+// mutagenKnownHealthyStatuses through the full subscriber pipeline and
+// asserts it fails open to healthy (denylist semantics), not
+// unhealthy — see TestSubscribeMutagenMonitor_UnknownStatusLoggedOnce
+// for the accompanying one-time warning this should also produce.
+func TestSubscribeMutagenMonitor_UnknownStatusMapsToHealthy(t *testing.T) {
 	cache := NewStateCache()
 	cache.SetMacCwd("proj-a", "/a")
 
@@ -159,7 +184,7 @@ func TestSubscribeMutagenMonitor_UnknownStatusMapsToUnhealthy(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		row, _ := cache.ProjectRow("proj-a")
-		return row.MutagenHealth.Status == MutagenDead
+		return row.MutagenHealth.Status == MutagenOK
 	}, 2*time.Second, 10*time.Millisecond)
 
 	require.NoError(t, writer.Close())
@@ -168,6 +193,72 @@ func TestSubscribeMutagenMonitor_UnknownStatusMapsToUnhealthy(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("subscribeMutagenMonitorFromReader did not return after writer close")
 	}
+}
+
+// TestSubscribeMutagenMonitor_UnknownStatusLoggedOnce proves the
+// per-status dedupe in statusToMutagenHealth: the same unrecognized
+// status, observed by two different sessions and then again after an
+// intervening transition (three appearances total), produces exactly
+// one daemonlog.Warnf line — not one per occurrence, which would
+// flood the log if mutagen started emitting an unrecognized value on
+// every tick.
+func TestSubscribeMutagenMonitor_UnknownStatusLoggedOnce(t *testing.T) {
+	const unknownStatus = "TestUnknownStatusLoggedOnce_NeverARealMutagenStatus"
+
+	cache := NewStateCache()
+	cache.SetMacCwd("proj-a", "/a")
+	cache.SetMacCwd("proj-b", "/b")
+
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = origStderr })
+
+	reader, writer := io.Pipe()
+	done := make(chan struct{})
+	go func() {
+		subscribeMutagenMonitorFromReader(context.Background(), reader, cache)
+		close(done)
+	}()
+
+	// Tick 1: both sessions report the unknown status for the first
+	// time (previous is empty, so both trigger).
+	writeMutagenMonitorTick(t, writer,
+		SessionName("proj-a", "repo")+"|"+unknownStatus,
+		SessionName("proj-b", "repo")+"|"+unknownStatus,
+	)
+	// Tick 2: proj-a transitions away, proj-b stays (no re-trigger).
+	writeMutagenMonitorTick(t, writer,
+		SessionName("proj-a", "repo")+"|Watching",
+		SessionName("proj-b", "repo")+"|"+unknownStatus,
+	)
+	// Tick 3: proj-a transitions back into the unknown status — a
+	// third distinct occurrence of the same status value.
+	writeMutagenMonitorTick(t, writer,
+		SessionName("proj-a", "repo")+"|"+unknownStatus,
+		SessionName("proj-b", "repo")+"|"+unknownStatus,
+	)
+
+	require.Eventually(t, func() bool {
+		rowA, _ := cache.ProjectRow("proj-a")
+		return rowA.MutagenHealth.Status == MutagenOK
+	}, 2*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, writer.Close())
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscribeMutagenMonitorFromReader did not return after writer close")
+	}
+
+	require.NoError(t, w.Close())
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, strings.Count(buf.String(), unknownStatus),
+		"expected exactly one log line for the unrecognized status; got: %s", buf.String())
 }
 
 // TestSubscribeMutagenMonitor_HandlesReaderClose feeds a bounded
