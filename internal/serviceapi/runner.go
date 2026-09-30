@@ -123,6 +123,23 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		return fmt.Errorf("ensure runtime dir: %w", err)
 	}
 
+	// tart wrapper — daemon-scoped singleton, needed immediately below
+	// for orphan GC and later for VM lifecycle endpoints (Ship 4) and
+	// the adopt pass.
+	tr := tart.New()
+
+	// Orphan GC — before any adopt pass runs. AdoptIronProxies only
+	// stops orphaned processes it discovers via `ps`; a project whose
+	// iron-proxy process is already dead but whose state file survives
+	// is invisible to that pass and would otherwise sit in StateDir
+	// forever, rehydrated every boot and respawned by the watchdog every
+	// tick. See GCOrphanedProjects. Best-effort: a `tart list` failure
+	// here must never block daemon startup — GCOrphanedProjects already
+	// fails closed (does nothing) on that error, so this only logs it.
+	if err := GCOrphanedProjects(ctx, cfg, tr); err != nil {
+		daemonlog.Errorf("serviceapi: orphan gc: %v", err)
+	}
+
 	// CA — generates the root on first launch, persists, reloads later.
 	ca, err := LoadOrGenerate(cfg)
 	if err != nil {
@@ -144,10 +161,10 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	server := NewServer(cfg.SocketPath(), build)
 	RegisterRoutesHandlers(server, cfg, routes, proxy)
 
-	// VM lifecycle endpoints (Ship 4). Supervisor and tart wrapper are
-	// daemon-scoped singletons; the supervisor manages the per-project VM
-	// processes and survives across CLI invocations.
-	tr := tart.New()
+	// VM lifecycle endpoints (Ship 4). Supervisor and tart wrapper (tr,
+	// constructed above for orphan GC) are daemon-scoped singletons;
+	// the supervisor manages the per-project VM processes and survives
+	// across CLI invocations.
 	sup := supervisor.New(cfg.LogDir())
 	// Per-project mutex for every state-mutating VM endpoint (start,
 	// stop, teardown, reconcile). Serializes concurrent same-project
