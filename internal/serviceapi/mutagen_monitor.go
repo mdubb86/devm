@@ -73,6 +73,7 @@ func subscribeMutagenMonitor(ctx context.Context, mutagenBin, dataDir string, ca
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			daemonlog.Errorf("serviceapi: mutagen monitor: stdout pipe: %v", err)
+			markAllProjectsMutagenDead(cache)
 			if !sleepOrDone(ctx, mutagenMonitorReconnectBackoff) {
 				return
 			}
@@ -80,6 +81,7 @@ func subscribeMutagenMonitor(ctx context.Context, mutagenBin, dataDir string, ca
 		}
 		if err := cmd.Start(); err != nil {
 			daemonlog.Errorf("serviceapi: mutagen monitor: start: %v", err)
+			markAllProjectsMutagenDead(cache)
 			if !sleepOrDone(ctx, mutagenMonitorReconnectBackoff) {
 				return
 			}
@@ -87,12 +89,29 @@ func subscribeMutagenMonitor(ctx context.Context, mutagenBin, dataDir string, ca
 		}
 		subscribeMutagenMonitorFromReader(ctx, stdout, cache)
 		_ = cmd.Wait()
+		// The monitor subprocess exited — whether because the mutagen
+		// daemon it was watching died or because the reader hit EOF —
+		// so nothing is observing session health until the next
+		// iteration reconnects. Mark every known project dead now
+		// rather than leaving the cache on its last-observed value
+		// (typically "ok") until the watchdog's next 60s tick.
+		markAllProjectsMutagenDead(cache)
 		if ctx.Err() != nil {
 			return
 		}
 		if !sleepOrDone(ctx, mutagenMonitorReconnectBackoff) {
 			return
 		}
+	}
+}
+
+// markAllProjectsMutagenDead flips MutagenHealth to dead for every
+// project currently known to cache. Called whenever the `mutagen sync
+// monitor` subprocess is not running (failed to start, or exited) so
+// the cache never reports stale "ok" health during an outage.
+func markAllProjectsMutagenDead(cache *StateCache) {
+	for name := range cache.AllProjectRows() {
+		cache.SetMutagenHealth(name, MutagenHealth{Status: MutagenDead})
 	}
 }
 

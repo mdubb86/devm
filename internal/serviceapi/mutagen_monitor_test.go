@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -287,4 +288,52 @@ func TestSubscribeMutagenMonitor_HandlesReaderClose(t *testing.T) {
 
 	row, _ := cache.ProjectRow("proj-a")
 	assert.Equal(t, MutagenOK, row.MutagenHealth.Status)
+}
+
+// ---------- subscribeMutagenMonitor (outer loop) ----------
+
+// TestSubscribeMutagenMonitor_MarksDeadOnMonitorExit proves the fix for
+// the real gap this monitor had: when the `mutagen sync monitor`
+// subprocess exits — here, a fake mutagen binary that exits
+// immediately with no output, standing in for the Mac-side mutagen
+// daemon dying underneath it — nothing else writes to
+// cache.MutagenHealth until the outer loop reconnects and observes a
+// fresh tick. Without marking known projects dead on exit, a
+// previously-healthy project would keep reporting "ok" for up to the
+// watchdog's 60s tick, defeating the near-real-time signal. Seeds the
+// cache with two known-healthy projects so there is something for the
+// exit to flip.
+func TestSubscribeMutagenMonitor_MarksDeadOnMonitorExit(t *testing.T) {
+	cache := NewStateCache()
+	cache.SetMacCwd("proj-a", "/a")
+	cache.SetMacCwd("proj-b", "/b")
+	cache.SetMutagenHealth("proj-a", MutagenHealth{Status: MutagenOK})
+	cache.SetMutagenHealth("proj-b", MutagenHealth{Status: MutagenOK})
+
+	fakeMutagen := filepath.Join(t.TempDir(), "mutagen")
+	require.NoError(t, os.WriteFile(fakeMutagen, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		subscribeMutagenMonitor(ctx, fakeMutagen, t.TempDir(), cache)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		rowA, _ := cache.ProjectRow("proj-a")
+		rowB, _ := cache.ProjectRow("proj-b")
+		return rowA.MutagenHealth.Status == MutagenDead && rowB.MutagenHealth.Status == MutagenDead
+	}, 2*time.Second, 10*time.Millisecond, "expected both known projects marked dead once the monitor subprocess exited")
+
+	// Interrupt the reconnect backoff so the loop exits promptly
+	// instead of respawning the fake binary for up to
+	// mutagenMonitorReconnectBackoff.
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscribeMutagenMonitor did not return after ctx cancellation")
+	}
 }
