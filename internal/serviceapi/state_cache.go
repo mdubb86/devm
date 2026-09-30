@@ -51,13 +51,14 @@ type PopSessionSummary struct {
 }
 
 type ProjectRow struct {
-	MacCwd           string
-	VMState          VMState
-	IronProxyHealth  ProxyHealth
-	MutagenHealth    MutagenHealth
-	ApproveState     ApproveStateSummary
-	PopSessions      PopSessionSummary
-	LastReconciledAt time.Time
+	MacCwd              string
+	VMState             VMState
+	IronProxyHealth     ProxyHealth
+	MutagenHealth       MutagenHealth
+	ApproveState        ApproveStateSummary
+	PopSessions         PopSessionSummary
+	ProxyListenerHealth bool
+	LastReconciledAt    time.Time
 }
 
 type GlobalState struct {
@@ -173,6 +174,14 @@ func (c *StateCache) SetPopSessionSummary(name string, s PopSessionSummary) {
 	defer c.mu.Unlock()
 	row := c.rows[name]
 	row.PopSessions = s
+	c.rows[name] = row
+}
+
+func (c *StateCache) SetProxyListenerHealth(name string, healthy bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	row := c.rows[name]
+	row.ProxyListenerHealth = healthy
 	c.rows[name] = row
 }
 

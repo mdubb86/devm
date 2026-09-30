@@ -299,6 +299,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		NewVMCheck(),
 		NewApproveCheck(),
 		NewPopCheck(),
+		NewProxyListenerCheck(),
 	}
 	sw := NewStateWatchdog(cache, gt, checks, 60*time.Second)
 

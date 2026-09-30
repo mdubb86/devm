@@ -30,6 +30,9 @@ type fakeGroundTruth struct {
 	ReadSnapshotFn func(projectID string) (string, string, *time.Time, bool, error)
 
 	PopSummaryFn func(projectID string) PopSessionSummary
+
+	ProxyListenerHealthFn   func(ctx context.Context, projectID string) bool
+	RespawnProxyListenersFn func(ctx context.Context, projectID string) error
 }
 
 func (f *fakeGroundTruth) IronProxyHealth(ctx context.Context, projectID string) ProxyHealth {
@@ -90,6 +93,20 @@ func (f *fakeGroundTruth) PopSessionSummaryForProject(projectID string) PopSessi
 		panic("fake: PopSummaryFn not set")
 	}
 	return f.PopSummaryFn(projectID)
+}
+
+func (f *fakeGroundTruth) ProxyListenerHealth(ctx context.Context, projectID string) bool {
+	if f.ProxyListenerHealthFn == nil {
+		panic("fake: ProxyListenerHealthFn not set")
+	}
+	return f.ProxyListenerHealthFn(ctx, projectID)
+}
+
+func (f *fakeGroundTruth) RespawnProxyListeners(ctx context.Context, projectID string) error {
+	if f.RespawnProxyListenersFn == nil {
+		return errors.New("fake: RespawnProxyListenersFn not set")
+	}
+	return f.RespawnProxyListenersFn(ctx, projectID)
 }
 
 var _ GroundTruth = (*fakeGroundTruth)(nil)
