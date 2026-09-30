@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // ---------- parseMutagenMonitorLine ----------
@@ -317,7 +319,7 @@ func TestSubscribeMutagenMonitor_MarksDeadOnMonitorExit(t *testing.T) {
 	defer cancel()
 	done := make(chan struct{})
 	go func() {
-		subscribeMutagenMonitor(ctx, fakeMutagen, t.TempDir(), cache)
+		subscribeMutagenMonitor(ctx, fakeMutagen, identity.Config{Name: "devm-test"}, cache)
 		close(done)
 	}()
 

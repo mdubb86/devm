@@ -469,7 +469,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	{
 		monitorCtx, cancel := context.WithCancel(ctx)
 		g.Add(func() error {
-			subscribeMutagenMonitor(monitorCtx, popMutagenBin, mutagenDataDir(cfg), cache)
+			subscribeMutagenMonitor(monitorCtx, popMutagenBin, cfg, cache)
 			return nil
 		}, func(error) {
 			cancel()

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
+	"github.com/mdubb86/devm/internal/identity"
 )
 
 // mutagenMonitorTickMarker is a literal line emitted once per redraw
@@ -52,12 +53,14 @@ var mutagenMonitorReconnectBackoff = 5 * time.Second
 // transition per task-2-report.md finding 4), not the watchdog's 60s
 // tick. Blocks until ctx is cancelled.
 //
-// dataDir sets MUTAGEN_DATA_DIRECTORY for the subprocess. This is
-// required, not optional: the devm daemon process's own environment
-// does not carry it — every other mutagen.CLI invocation in this
-// package sets it per-call the same way (see internal/mutagen/cli.go
-// CLI.env()) — so without it the subprocess would monitor the wrong
-// (default, unrelated) mutagen data directory.
+// cfg drives the subprocess env: MUTAGEN_DATA_DIRECTORY (so the
+// subprocess monitors the right daemon, not the system default) AND
+// MUTAGEN_SSH_PATH (so if the daemon is dead when the monitor tries to
+// reconnect, mutagen's own auto-daemon-spawn inherits the
+// tart-mutagen-ssh shim rather than falling through to system ssh).
+// The env is shaped exactly like NewMutagenCLI's, but this actor uses
+// exec.Command directly rather than a mutagen.CLI because it needs
+// StdoutPipe and CommandContext.
 //
 // On the monitor process exiting — the mutagen daemon crashed, or was
 // never reachable — this loops and reconnects after
@@ -65,8 +68,11 @@ var mutagenMonitorReconnectBackoff = 5 * time.Second
 // daemon: that's the mutagen watchdog check's job
 // (watchdog_check_mutagen.go); this actor only resumes watching once
 // the daemon is back.
-func subscribeMutagenMonitor(ctx context.Context, mutagenBin, dataDir string, cache *StateCache) {
-	env := append(os.Environ(), "MUTAGEN_DATA_DIRECTORY="+dataDir)
+func subscribeMutagenMonitor(ctx context.Context, mutagenBin string, cfg identity.Config, cache *StateCache) {
+	env := append(os.Environ(),
+		"MUTAGEN_DATA_DIRECTORY="+mutagenDataDir(cfg),
+		"MUTAGEN_SSH_PATH="+MutagenSSHDir(cfg),
+	)
 	for ctx.Err() == nil {
 		cmd := exec.CommandContext(ctx, mutagenBin, "sync", "monitor", "--template", mutagenMonitorTemplate)
 		cmd.Env = env
