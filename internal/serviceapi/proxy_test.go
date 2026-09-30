@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -50,6 +51,25 @@ func startBackend(t *testing.T, msg string) (port int, cleanup func()) {
 func withLocalAddr(r *http.Request, ip string) *http.Request {
 	ctx := context.WithValue(r.Context(), ctxKeyLocalAddr, &net.TCPAddr{IP: net.ParseIP(ip)})
 	return r.WithContext(ctx)
+}
+
+// setGuestOriginListenersForTest stashes a guest-origin listener pair
+// directly into perProj, standing in for what StartGuestOriginListeners
+// used to do via the now-inlined recordGuestOriginListeners. White-box
+// (package serviceapi) so it can reach perProj/mu directly — tests use
+// it to construct partial/pre-existing perProj states StartGuestOriginListeners
+// itself wouldn't leave behind on a fresh call.
+func setGuestOriginListenersForTest(p *ProxyServer, projectID string, httpLn, httpsLn net.Listener, httpSrv, httpsSrv *http.Server, httpPort, httpsPort int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pl := p.perProj[projectID]
+	pl.guestHTTP = httpLn
+	pl.guestHTTPS = httpsLn
+	pl.guestHTTPSrv = httpSrv
+	pl.guestHTTPSSrv = httpsSrv
+	pl.guestHTTPPort = httpPort
+	pl.guestHTTPSPort = httpsPort
+	p.perProj[projectID] = pl
 }
 
 // registerProject stashes a project's ProjectIP in ironProxyState (the
@@ -280,6 +300,168 @@ func startMockHelperAt(t *testing.T, sockPath string) string {
 	return sockPath
 }
 
+// bindCounter counts helper bind requests per "ip:port" key. Used by
+// the concurrency test to prove StartProjectListeners issues exactly
+// one real bind per port even when many callers race it — a plain
+// success/failure check on StartProjectListeners can't see a
+// duplicate bind, since only one of the two duplicated listener pairs
+// ever survives into perProj; the other is silently orphaned.
+type bindCounter struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func (b *bindCounter) record(ip string, port int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.counts == nil {
+		b.counts = make(map[string]int)
+	}
+	b.counts[fmt.Sprintf("%s:%d", ip, port)]++
+}
+
+func (b *bindCounter) bindsFor(key string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.counts[key]
+}
+
+// startCountingMockHelper is startMockHelperAt plus a bindCounter: it
+// parses each request's ip/port before responding so a test can assert
+// how many times a given key was actually bound, not just whether the
+// overall call succeeded.
+func startCountingMockHelper(t *testing.T) (sockPath string, counts *bindCounter) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "pxyc")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "helper.sock")
+
+	counts = &bindCounter{}
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				uc := c.(*net.UnixConn)
+				line, err := bufio.NewReader(uc).ReadBytes('\n')
+				if err != nil {
+					return
+				}
+				var req struct {
+					IP   string `json:"ip"`
+					Port int    `json:"port"`
+				}
+				if err := json.Unmarshal(line, &req); err == nil {
+					counts.record(req.IP, req.Port)
+				}
+				fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+				if err != nil {
+					return
+				}
+				defer syscall.Close(fd)
+				addr := &syscall.SockaddrInet4{Port: 0}
+				copy(addr.Addr[:], []byte{127, 0, 0, 1})
+				if err := syscall.Bind(fd, addr); err != nil {
+					return
+				}
+				if err := syscall.Listen(fd, 8); err != nil {
+					return
+				}
+				resp, _ := json.Marshal(struct {
+					OK bool `json:"ok"`
+				}{OK: true})
+				oob := syscall.UnixRights(fd)
+				_, _, _ = uc.WriteMsgUnix(resp, oob, nil)
+			}(conn)
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		os.Remove(sock)
+	})
+	return sock, counts
+}
+
+// TestStartProjectListeners_ConcurrentCallsBindOnce pins that two
+// simultaneous StartProjectListeners calls for the same project result
+// in exactly ONE listener pair being bound and recorded — not two,
+// with one silently orphaned. The pre-fix code released p.mu between
+// the check and the record, letting both callers proceed to bind
+// fresh FDs and spawn duplicate Accept goroutines. Only one set was
+// recorded in perProj; the other leaked (goroutines + FDs) until
+// process exit. Root cause of the 2026-09-29 3.5-hour outage where
+// all four projects' Mac-side reverse-proxy listeners stopped serving
+// traffic silently.
+func TestStartProjectListeners_ConcurrentCallsBindOnce(t *testing.T) {
+	sock, counts := startCountingMockHelper(t)
+	cfg := identity.Config{Name: "test-concurrent-start", HelperSocketPath: sock}
+
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = proxy.StartProjectListeners(ctx, "proj-x", "127.42.0.9")
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, 1, counts.bindsFor("127.42.0.9:80"),
+		"concurrent StartProjectListeners must bind :80 exactly once")
+	assert.Equal(t, 1, counts.bindsFor("127.42.0.9:443"),
+		"concurrent StartProjectListeners must bind :443 exactly once")
+
+	t.Cleanup(func() { proxy.StopProjectListeners("proj-x") })
+}
+
+// TestStartGuestOriginListeners_ConcurrentCallsBindOnce is the same
+// race pinned against StartGuestOriginListeners, which binds real
+// ephemeral loopback listeners directly (no helper involved) rather
+// than going through helperClient. Each racing caller that slips past
+// the pre-fix check binds its own fresh ephemeral pair and returns its
+// own (different) port numbers before losing the record race — so
+// concurrent callers returning more than one distinct port pair is
+// the signal that more than one pair was actually bound.
+func TestStartGuestOriginListeners_ConcurrentCallsBindOnce(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+	t.Cleanup(func() { proxy.StopProjectListeners("proj-y") })
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	seen := make(map[string]int)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			httpPort, httpsPort, err := proxy.StartGuestOriginListeners(ctx, "proj-y", "127.0.0.1")
+			require.NoError(t, err)
+			mu.Lock()
+			seen[fmt.Sprintf("%d/%d", httpPort, httpsPort)]++
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	assert.Len(t, seen, 1,
+		"concurrent StartGuestOriginListeners must all observe the same bound pair, got %v", seen)
+}
+
 // TestProxyServer_DialsCfgHelperSocket_NotProdHardcoded is the C1
 // regression test: before the fix, helper.SocketPath was a
 // package-level var hardcoded to "/var/run/devm-helper.sock" and
@@ -308,7 +490,7 @@ func TestProxyServer_DialsCfgHelperSocket_NotProdHardcoded(t *testing.T) {
 // TestStartProjectListeners_NotSkippedByGuestOriginOnlyEntry pins the
 // task-5 review's Critical fix: StartProjectListeners's idempotency
 // guard used to key off mere presence of a perProj entry, but
-// recordGuestOriginListeners can populate that entry on its own —
+// StartGuestOriginListeners can populate that entry on its own —
 // StartGuestOriginListeners succeeding while a prior
 // StartProjectListeners call failed non-fatally (e.g. a transient
 // helper hiccup) leaves exactly this state. Before the fix, the next
@@ -327,7 +509,7 @@ func TestStartProjectListeners_NotSkippedByGuestOriginOnlyEntry(t *testing.T) {
 	// Simulate the guest-origin-only perProj entry a prior
 	// StartGuestOriginListeners success (with StartProjectListeners
 	// never having succeeded) leaves behind.
-	proxy.recordGuestOriginListeners("p1", nil, nil, &http.Server{}, &http.Server{}, 39101, 39102)
+	setGuestOriginListenersForTest(proxy, "p1", nil, nil, &http.Server{}, &http.Server{}, 39101, 39102)
 
 	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
 	require.NoError(t, err)
@@ -345,8 +527,8 @@ func TestStartProjectListeners_NotSkippedByGuestOriginOnlyEntry(t *testing.T) {
 }
 
 // TestStopProjectListeners_ClosesGuestListenerWithoutServer covers F10:
-// recordGuestOriginListeners stores the raw net.Listeners alongside the
-// *http.Servers, mirroring recordProjectListeners. When a listener is
+// perProj stores the raw net.Listeners alongside the *http.Servers for
+// both the ingress and guest-origin pairs. When a listener is
 // recorded but no server ever was (the partial-failure shape this
 // guards against — a listener bound successfully but its *http.Server
 // goroutine never got recorded), StopProjectListeners must close the
@@ -363,7 +545,7 @@ func TestStopProjectListeners_ClosesGuestListenerWithoutServer(t *testing.T) {
 	require.NoError(t, err)
 
 	// No *http.Server for either — simulates the fallback path.
-	proxy.recordGuestOriginListeners("p1", httpLn, httpsLn, nil, nil, 0, 0)
+	setGuestOriginListenersForTest(proxy, "p1", httpLn, httpsLn, nil, nil, 0, 0)
 
 	proxy.StopProjectListeners("p1")
 

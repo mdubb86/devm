@@ -734,7 +734,8 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// Register before spawning the serve goroutine — a fast /vm/stop
 		// racing the goroutine's own startup could otherwise call
 		// closePopListener before the listener is recorded, leaking the
-		// fd. Mirrors ProxyServer.recordProjectListeners in proxy.go.
+		// fd. Mirrors StartProjectListeners's record-before-return
+		// discipline in proxy.go.
 		popListeners.Store(req.Name, popLn)
 		go servePopListener(popLn, cfg, req.Name, popStore, popCLI, "devm-"+req.Name, cache)
 

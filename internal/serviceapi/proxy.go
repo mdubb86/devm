@@ -133,12 +133,19 @@ func NewProxyServer(cfg identity.Config, routes *Routes, ca *CA) *ProxyServer {
 // previously failed), and an entry-presence check would then skip the
 // ingress bind forever.
 func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, projectIP string) error {
+	// p.mu is held across the entire check + bind + record, not just
+	// the check: releasing it in between let two concurrent callers
+	// both pass the "already bound?" check and each bind a fresh FD
+	// pair, one of which never made it into perProj and leaked
+	// (goroutines + FDs) until process exit. Root cause of the
+	// 2026-09-29 outage where all four projects' Mac-side reverse-proxy
+	// listeners stopped serving traffic silently.
 	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if pl, ok := p.perProj[projectID]; ok && pl.httpSrv != nil {
-		p.mu.Unlock()
 		return nil
 	}
-	p.mu.Unlock()
 
 	httpLn, err := p.helperClient.BindTCP(projectIP, 80)
 	if err != nil {
@@ -190,7 +197,12 @@ func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, proj
 		}
 	}()
 
-	p.recordProjectListeners(projectID, httpLn, httpsLn, httpSrv, httpsSrv)
+	pl := p.perProj[projectID]
+	pl.http = httpLn
+	pl.https = httpsLn
+	pl.httpSrv = httpSrv
+	pl.httpsSrv = httpsSrv
+	p.perProj[projectID] = pl
 	return nil
 }
 
@@ -252,30 +264,6 @@ func (p *ProxyServer) StopAll() {
 	for _, id := range ids {
 		p.StopProjectListeners(id)
 	}
-}
-
-func (p *ProxyServer) recordProjectListeners(projectID string, httpLn, httpsLn net.Listener, httpSrv, httpsSrv *http.Server) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	pl := p.perProj[projectID]
-	pl.http = httpLn
-	pl.https = httpsLn
-	pl.httpSrv = httpSrv
-	pl.httpsSrv = httpsSrv
-	p.perProj[projectID] = pl
-}
-
-func (p *ProxyServer) recordGuestOriginListeners(projectID string, httpLn, httpsLn net.Listener, httpSrv, httpsSrv *http.Server, httpPort, httpsPort int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	pl := p.perProj[projectID]
-	pl.guestHTTP = httpLn
-	pl.guestHTTPS = httpsLn
-	pl.guestHTTPSrv = httpSrv
-	pl.guestHTTPSSrv = httpsSrv
-	pl.guestHTTPPort = httpPort
-	pl.guestHTTPSPort = httpsPort
-	p.perProj[projectID] = pl
 }
 
 func (p *ProxyServer) takeProjectListeners(projectID string) (projectListeners, bool) {
