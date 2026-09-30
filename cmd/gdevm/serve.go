@@ -56,8 +56,9 @@ func serveMain(args []string) int {
 		return 2
 	}
 
+	started := time.Now()
 	mux := http.NewServeMux()
-	// v1 endpoints registered in a later task; empty mux for now.
+	mux.Handle("/v1/health", healthHandler(started))
 
 	ln, err := net.Listen("tcp", serveAddr())
 	if err != nil {
