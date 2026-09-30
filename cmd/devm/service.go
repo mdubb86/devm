@@ -951,8 +951,20 @@ func runLaunchctl(args ...string) (string, error) {
 }
 
 // launchdBootstrapBackoff is the wait before each retry attempt (the
-// first attempt is immediate). Three attempts total.
-var launchdBootstrapBackoff = []time.Duration{0, 500 * time.Millisecond, 1500 * time.Millisecond}
+// first attempt is immediate). Six attempts totalling ~15s: the
+// transient EIO after a bootout can persist for that long when the
+// previous daemon's children (helper, subprocesses) are still
+// shutting down. The old three-attempt / ~2s schedule was observed
+// exhausting on real installs where the previous daemon had been
+// running for hours.
+var launchdBootstrapBackoff = []time.Duration{
+	0,
+	500 * time.Millisecond,
+	1500 * time.Millisecond,
+	3 * time.Second,
+	5 * time.Second,
+	5 * time.Second,
+}
 
 // isTransientLaunchdError reports whether launchctl's combined output
 // indicates the transient EIO race rather than a real failure.
