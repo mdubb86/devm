@@ -67,22 +67,6 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 		res.ApproveError = approveErr.Error()
 	}
 
-	// Pop-session summary — informational only, never blocks `devm
-	// status`. A 404 means the daemon predates this endpoint. Any other
-	// error doesn't fail status either, but is surfaced via
-	// res.PopSessionsError so the format layer can report it.
-	popCtx, popCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	count, age, popErr := c.PopSessionSummary(popCtx, cfg.Project.Name)
-	popCancel()
-	switch {
-	case popErr == nil:
-		res.PopSessions = &PopSessionSummary{Count: count, OldestAge: age}
-	case errors.Is(popErr, serviceapi.ErrPopSessionSummaryUnsupported):
-		// Old daemon — leave res.PopSessions and res.PopSessionsError unset.
-	default:
-		res.PopSessionsError = popErr.Error()
-	}
-
 	// Proxy health: aggregate across every running project's reverse-
 	// proxy listener pair, derived per-tick from the watchdog's cache
 	// (ProjectRow.ProxyListenerHealth, see watchdog_check_proxy_listener.go)

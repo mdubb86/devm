@@ -17,7 +17,6 @@ import (
 	"github.com/mdubb86/devm/internal/caenv"
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/softnet"
@@ -452,13 +451,11 @@ func shutdownSoftnet(projectID string) {
 // in that case. routes is the daemon's route table; on a successful
 // /vm/start it gets the project's reserved gdevm-serve health route
 // (see reservedHealthRoute) so the Mac watchdog has something to probe.
-// May be nil in tests that don't exercise routing. popStore and popCLI
-// back each project's pop HTTP listener (servePopListener) and the
-// /vm/stop teardown sweep. cache is the daemon's StateCache — /vm/start
-// and /vm/stop write the resulting VM/proxy state into it on success,
-// and the VM's supervised process writes it again on an unexpected
-// crash (see vmCrashCallback).
-func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, ntpPort int, locks *ProjectLocks, proxy *ProxyServer, routes *Routes, popStore *PopSessionStore, popCLI *mutagen.CLI, cache *StateCache) {
+// May be nil in tests that don't exercise routing. cache is the
+// daemon's StateCache — /vm/start and /vm/stop write the resulting
+// VM/proxy state into it on success, and the VM's supervised process
+// writes it again on an unexpected crash (see vmCrashCallback).
+func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, ntpPort int, locks *ProjectLocks, proxy *ProxyServer, routes *Routes, cache *StateCache) {
 	s.Register("/vm/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -722,27 +719,6 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			return
 		}
 
-		// Allocate a port and bind the per-project pop HTTP listener. The
-		// forward from guest 192.168.127.1:81 → this address is wired via
-		// ForwardTargets.Pop in endpointFrom below.
-		popPort, err := pickPort()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("pick pop port: %v", err), http.StatusInternalServerError)
-			return
-		}
-		popLn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", popPort))
-		if err != nil {
-			http.Error(w, fmt.Sprintf("bind pop listener: %v", err), http.StatusInternalServerError)
-			return
-		}
-		// Register before spawning the serve goroutine — a fast /vm/stop
-		// racing the goroutine's own startup could otherwise call
-		// closePopListener before the listener is recorded, leaking the
-		// fd. Mirrors StartProjectListeners's record-before-return
-		// discipline in proxy.go.
-		popListeners.Store(req.Name, popLn)
-		go servePopListener(popLn, cfg, req.Name, popStore, popCLI, "devm-"+req.Name, cache)
-
 		// Allocate a port and bind the per-project propose HTTP listener.
 		// Softnet forwards guest 192.168.127.1:82 → this port via
 		// ForwardTargets.Propose in endpointFrom below.
@@ -756,8 +732,11 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, fmt.Sprintf("bind propose listener: %v", err), http.StatusInternalServerError)
 			return
 		}
-		// Register before spawning the serve goroutine — see the popLn
-		// comment above for why.
+		// Register before spawning the serve goroutine — a fast /vm/stop
+		// racing the goroutine's own startup could otherwise call
+		// closeProposeListener before the listener is recorded, leaking
+		// the fd. Mirrors StartProjectListeners's record-before-return
+		// discipline in proxy.go.
 		proposeListeners.Store(req.Name, proposeLn)
 		go serveProposeListener(proposeLn, cfg, cache, tr, locks, req.Name)
 
@@ -771,7 +750,6 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info.HTTPSPort = httpsPort
 		info.TunnelPort = tunnelPort
 		info.DNSPort = dnsPort
-		info.PopPort = popPort
 		info.ProposePort = proposePort
 		ironProxyState.put(req.Name, info)
 
@@ -1097,13 +1075,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		if proxy != nil {
 			proxy.StopProjectListeners(req.Name)
 		}
-		// Close the pop listener before sweeping so a pop request
-		// landing mid-stop can't create a session the sweep just
-		// missed — reject new pops first, then drain what's already
-		// in the store.
-		closePopListener(req.Name)
 		closeProposeListener(req.Name)
-		SweepProjectPopSessions(popStore, popCLI, cfg, req.Name, cache)
 		if req.Destroy {
 			policyAuthority.PurgeProject(req.Name)
 		} else {
@@ -1536,9 +1508,13 @@ type projectInfo struct {
 	GuestHTTPPort  int
 	GuestHTTPSPort int
 
-	// PopPort is the daemon's per-project pop HTTP listener — where
-	// softnet forwards guest TCP 192.168.127.1:81. In-memory only, set
-	// at /vm/start and cleared at /vm/stop via closePopListener.
+	// PopPort is never set (the daemon's pop HTTP listener was retired
+	// with the temp-sync pop subsystem) — always zero, so endpointFrom
+	// never populates Endpoint.Pop and softnet's guest TCP
+	// 192.168.127.1:81 hairpin always RSTs. Kept, rather than deleted
+	// alongside its softnet-side counterpart (ForwardTargets.Pop), to
+	// avoid touching the softnet wire format/dispatch outside this
+	// change's scope.
 	PopPort int
 
 	// ProposePort is the daemon's per-project propose HTTP listener —

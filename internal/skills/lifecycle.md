@@ -19,18 +19,10 @@ description: devm VM lifecycle commands — shell, start, reconcile, stop, teard
 | `devm teardown` | Destroy the VM and delete its disk image. Required after teardown-bucket changes. |
 | `devm status` | Show VM state, active sessions, pending config diff, routing, DNS, CA trust, and proxy health. |
 | `devm validate` | Lint `devm.yaml` (and `devm.me.yaml` if present) without touching the VM. |
-| `devm pop mac <path-or-url>` | Open a Mac-native file with its default app; refuses paths that resolve into a devm-managed volume. An `http://` / `https://` URL routes straight to the default browser. Out-of-mirror paths get a live-sync session (see `devm status` for count). |
-| `devm pop vm <path-or-url>` | Open a file from the project's guest workspace with its default app on the Mac, translating it to its Mac-side volume storage location. An `http://` / `https://` URL routes straight to the default browser. Out-of-mirror paths get a live-sync session (see `devm status` for count). |
+| `devm pop <path> [--native]` | Open `<path>` — a browser tab on the project's bundled filestash service (`https://files.<project>.<tld>`) by default, or `--native` for the macOS default app (mirror-resolved; an out-of-mirror path is cp'd from the guest via `tart exec cat` first). An `http://` / `https://` URL routes straight to the default browser either way. |
 | `devm init <name>` | Register the current directory as a devm project. Creates the per-project state directory and seed devm.yaml. |
 | `devm propose` | Signal that devm.yaml, devm.me.yaml, devm.sh, or devm.me.sh (`--kind`) has been edited and is ready for review. |
 | `gdevm propose` | Guest-side signal-only endpoint. Same signal as `devm propose` — bytes reach the Mac via sync. |
-
-`devm pop` — test/tuning overrides (read once at daemon start):
-
-```
-  DEVM_POP_SESSION_TTL_SECONDS       default 3600
-  DEVM_POP_SESSION_GC_INTERVAL_SECONDS default 300
-```
 
 ---
 

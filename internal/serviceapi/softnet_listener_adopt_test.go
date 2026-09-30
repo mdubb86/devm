@@ -11,11 +11,11 @@ import (
 )
 
 // TestBindSoftnetListenersForAdopt_BindsListenersAndUpdatesState pins that
-// the adopt-path listener rehydrate actually binds new pop + propose
-// listeners and updates ironProxyState with the fresh ports. The softnet
+// the adopt-path listener rehydrate actually binds a new propose
+// listener and updates ironProxyState with the fresh port. The softnet
 // setPolicy push at the end will fail (no real softnet socket in the test
 // environment), but the bind should complete before that — proving that
-// a daemon restart re-establishes the guest-facing TCP endpoints even if
+// a daemon restart re-establishes the guest-facing TCP endpoint even if
 // the softnet control-socket push fails independently.
 func TestBindSoftnetListenersForAdopt_BindsListenersAndUpdatesState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -30,9 +30,6 @@ func TestBindSoftnetListenersForAdopt_BindsListenersAndUpdatesState(t *testing.T
 	ironProxyState.put("proj", projectInfo{ProjectIP: "127.42.0.42"})
 	t.Cleanup(func() {
 		ironProxyState.del("proj")
-		if v, ok := popListeners.LoadAndDelete("proj"); ok {
-			_ = v.(interface{ Close() error }).Close()
-		}
 		if v, ok := proposeListeners.LoadAndDelete("proj"); ok {
 			_ = v.(interface{ Close() error }).Close()
 		}
@@ -40,28 +37,22 @@ func TestBindSoftnetListenersForAdopt_BindsListenersAndUpdatesState(t *testing.T
 
 	err := bindSoftnetListenersForAdopt(
 		context.Background(), cfg, cache, tr, locks,
-		"proj", nil, nil, 12345,
+		"proj", 12345,
 	)
 	// bindSoftnetListenersForAdopt returns nil on success — the softnet
 	// setPolicy push happens asynchronously so a slow softnet child
 	// can't stall daemon startup on any one project. Verify the
 	// synchronous parts succeeded:
-	//   1. popListeners has an entry for "proj"
-	//   2. proposeListeners has an entry for "proj"
-	//   3. ironProxyState is updated with non-zero PopPort/ProposePort
+	//   1. proposeListeners has an entry for "proj"
+	//   2. ironProxyState is updated with a non-zero ProposePort
 	// The async setPolicy in a real environment logs on failure; the
 	// unit test doesn't wait on it.
 	require.NoError(t, err, "listener bind should succeed even without a softnet control socket (setPolicy is async)")
-
-	_, popBound := popListeners.Load("proj")
-	assert.True(t, popBound, "pop listener must be bound even if softnet push fails")
 
 	_, proposeBound := proposeListeners.Load("proj")
 	assert.True(t, proposeBound, "propose listener must be bound even if softnet push fails")
 
 	info, ok := ironProxyState.get("proj")
 	require.True(t, ok)
-	assert.NotZero(t, info.PopPort, "PopPort must be updated with the fresh listener port")
 	assert.NotZero(t, info.ProposePort, "ProposePort must be updated with the fresh listener port")
-	assert.NotEqual(t, info.PopPort, info.ProposePort, "pop and propose must not share a port")
 }

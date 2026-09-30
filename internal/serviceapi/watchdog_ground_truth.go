@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
@@ -30,8 +29,6 @@ type GroundTruth interface {
 	ApproveHash(projectID, macCwd string) (currentDevmSHA, currentMeSHA string, err error)
 	ReadApprovedSnapshot(projectID string) (devmSHA, meSHA string, since *time.Time, hasSnap bool, err error)
 
-	PopSessionSummaryForProject(projectID string) PopSessionSummary
-
 	ProxyListenerHealth(ctx context.Context, projectID string) bool
 	RespawnProxyListeners(ctx context.Context, projectID string) error
 }
@@ -43,13 +40,11 @@ type GroundTruth interface {
 // takes the per-project reconcile lock so a watchdog respawn can't
 // race a concurrent /vm/start or /vm/reconcile.
 type RealGroundTruth struct {
-	Cfg        identity.Config
-	Tart       *tart.Tart
-	Sup        *supervisor.Supervisor
-	Proxy      *ProxyServer
-	MutagenCLI *mutagen.CLI
-	PopStore   *PopSessionStore
-	Locks      *ProjectLocks
+	Cfg   identity.Config
+	Tart  *tart.Tart
+	Sup   *supervisor.Supervisor
+	Proxy *ProxyServer
+	Locks *ProjectLocks
 }
 
 func (g *RealGroundTruth) IronProxyHealth(ctx context.Context, projectID string) ProxyHealth {
@@ -86,10 +81,6 @@ func (g *RealGroundTruth) ApproveHash(projectID, macCwd string) (string, string,
 
 func (g *RealGroundTruth) ReadApprovedSnapshot(projectID string) (string, string, *time.Time, bool, error) {
 	return ReadApprovedSnapshotForWatchdog(g.Cfg, projectID)
-}
-
-func (g *RealGroundTruth) PopSessionSummaryForProject(projectID string) PopSessionSummary {
-	return PopSessionSummaryForProjectForWatchdog(g.PopStore, projectID)
 }
 
 // healthProbeClient is the watchdog's HTTP client for probing a

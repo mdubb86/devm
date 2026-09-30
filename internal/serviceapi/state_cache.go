@@ -42,21 +42,12 @@ type ApproveStateSummary struct {
 	ApprovedSince   *time.Time
 }
 
-// PopSessionSummary is what /pop-session-summary returns. Kept
-// identical to the JSON field shape so migration is a straight
-// copy-out.
-type PopSessionSummary struct {
-	Count            int
-	OldestAgeSeconds int64
-}
-
 type ProjectRow struct {
 	MacCwd              string
 	VMState             VMState
 	IronProxyHealth     ProxyHealth
 	MutagenHealth       MutagenHealth
 	ApproveState        ApproveStateSummary
-	PopSessions         PopSessionSummary
 	ProxyListenerHealth bool
 	LastReconciledAt    time.Time
 }
@@ -159,14 +150,6 @@ func (c *StateCache) SetApproveState(name string, s ApproveStateSummary) {
 	defer c.mu.Unlock()
 	row := c.rows[name]
 	row.ApproveState = s
-	c.rows[name] = row
-}
-
-func (c *StateCache) SetPopSessionSummary(name string, s PopSessionSummary) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	row := c.rows[name]
-	row.PopSessions = s
 	c.rows[name] = row
 }
 

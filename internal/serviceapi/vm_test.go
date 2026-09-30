@@ -78,7 +78,7 @@ exit 0
 	cache := NewStateCache()
 	cache.SetVMState("proj-stop", VMRunning)
 	cache.SetIronProxyHealth("proj-stop", ProxyHealth{Status: ProxyOK})
-	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, nil, NewPopSessionStore(), nil, cache)
+	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, nil, cache)
 
 	body, err := json.Marshal(VMStopRequest{Name: "proj-stop"})
 	require.NoError(t, err)
@@ -151,7 +151,7 @@ func TestVMStop_Destroy_RemovesCacheRow(t *testing.T) {
 	sup := supervisor.New(t.TempDir())
 	cache := NewStateCache()
 	cache.SetVMState("proj-destroy", VMRunning)
-	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, nil, NewPopSessionStore(), nil, cache)
+	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, nil, cache)
 
 	body, err := json.Marshal(VMStopRequest{Name: "proj-destroy", Destroy: true})
 	require.NoError(t, err)
@@ -287,7 +287,7 @@ exit 0
 	locks := NewProjectLocks()
 	cache := NewStateCache()
 	routes := NewRoutes(identity.Prod.TLD)
-	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, routes, NewPopSessionStore(), nil, cache)
+	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, routes, cache)
 
 	body, err := json.Marshal(VMStartRequest{Name: project, MacCwd: macCwd, Cfg: schema.Config{}})
 	require.NoError(t, err)
@@ -412,7 +412,7 @@ exit 0
 	locks := NewProjectLocks()
 	cache := NewStateCache()
 	routes := NewRoutes(identity.Prod.TLD)
-	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, routes, NewPopSessionStore(), nil, cache)
+	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, routes, cache)
 
 	body, err := json.Marshal(VMStartRequest{Name: project, MacCwd: macCwd, Cfg: schema.Config{}})
 	require.NoError(t, err)

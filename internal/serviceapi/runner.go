@@ -210,37 +210,20 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		fmt.Fprintf(os.Stderr, "mutagen adopt: %v\n", err)
 	}
 
-	// Pop-session store: daemon-lifetime singleton backing both the
-	// /pop-session UDS endpoint and each project's pop HTTP listener
-	// (servePopListener, wired via RegisterVMHandlers below). Wipe any
-	// scratch left by a prior daemon instance first — those sessions'
-	// mutagen agents died with the guest process tree, so there's
-	// nothing to adopt. Best-effort: a wipe failure shouldn't block
-	// daemon startup.
-	popStore := NewPopSessionStore()
+	// Wipe any pop scratch dir left by a prior daemon instance — its
+	// cp'd files are one-shot and not expected to survive a restart.
+	// Best-effort: a wipe failure shouldn't block daemon startup.
 	if err := WipePopScratchOnStartup(cfg); err != nil {
 		daemonlog.Errorf("serviceapi: wipe pop-tmp on startup: %v", err)
 	}
 
-	// mutagen CLI for pop-session create/tear-down. Calling
+	// mutagen binary for the mutagen-monitor subscriber below. Calling
 	// mutagenEnsureFn again here is cheap — it's idempotent and the
 	// adopt pass above may not have reached it if AdoptMutagenDaemon
 	// failed.
-	popMutagenBin, err := mutagenEnsureFn(cfg.RuntimeDir())
+	mutagenBin, err := mutagenEnsureFn(cfg.RuntimeDir())
 	if err != nil {
-		return fmt.Errorf("mutagen: extract binary for pop sessions: %w", err)
-	}
-	popCLI := NewMutagenCLI(cfg, popMutagenBin, nil)
-
-	// guestSSHTargetFor resolves a project's tart-mutagen-ssh transport
-	// target only while the project is actually running (ironProxyState
-	// populated by /vm/start) — a pop session created against a stopped
-	// project has nothing to sync to.
-	guestSSHTargetFor := func(projectName string) string {
-		if _, ok := ironProxyState.get(projectName); !ok {
-			return ""
-		}
-		return "devm-" + projectName
+		return fmt.Errorf("mutagen: extract binary for monitor: %w", err)
 	}
 
 	// Adopt iron-proxy processes left running by a prior daemon
@@ -282,9 +265,9 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 
 	// StateCache — the daemon's single authoritative in-memory model
 	// of every project's state. RealGroundTruth wraps the daemon's
-	// singletons (tart, supervisor, proxy, mutagen CLI, pop store) so
-	// each Check can observe reality without reaching for daemon
-	// globals directly. Locks must be set — RealGroundTruth.
+	// singletons (tart, supervisor, proxy) so each Check can observe
+	// reality without reaching for daemon globals directly. Locks
+	// must be set — RealGroundTruth.
 	// RespawnIronProxy takes the per-project reconcile lock so a
 	// watchdog-driven respawn can't race a concurrent /vm/start or
 	// /vm/reconcile; leaving it nil nil-derefs on first drift.
@@ -300,16 +283,13 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	rehydrateCacheFromStateSnapshots(cfg, cache, ironProxyState.keys())
 	gt := &RealGroundTruth{
 		Cfg: cfg, Tart: tr, Sup: sup, Proxy: proxy,
-		MutagenCLI: popCLI,
-		PopStore:   popStore,
-		Locks:      locks,
+		Locks: locks,
 	}
 	checks := []Check{
 		NewIronProxyCheck(),
 		NewMutagenCheck(),
 		NewVMCheck(),
 		NewApproveCheck(),
-		NewPopCheck(),
 		NewProxyListenerCheck(),
 	}
 	sw := NewStateWatchdog(cache, gt, checks, 60*time.Second)
@@ -347,9 +327,9 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// goroutines with a bounded retry — a transient helper hiccup
 	// won't strand :80/:443 for the daemon's lifetime.
 	//
-	// Alongside :80/:443, also re-bind the per-project pop + propose
-	// TCP listeners and re-push softnet's forward-target map so guest-
-	// initiated flows (gdevm pop / propose / passthrough / upgrade /
+	// Alongside :80/:443, also re-bind the per-project propose TCP
+	// listener and re-push softnet's forward-target map so guest-
+	// initiated flows (gdevm propose / passthrough / upgrade /
 	// recipes) survive a daemon restart. Softnet child processes stay
 	// alive with their old forward-target ports pointing at the dead
 	// daemon's listeners otherwise, and every guest call returns
@@ -359,29 +339,27 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		if !ok || info.ProjectIP == "" {
 			continue
 		}
-		// Bind pop + propose listeners synchronously FIRST — that
-		// pins PopPort / ProposePort into ironProxyState before
-		// rebindProjectListeners' async goroutine gets a chance to
-		// do its own read-modify-write (guest-origin ports). Since
-		// projectInfoStore's get + modify + put is not atomic across
-		// callers, doing the fast synchronous write first eliminates
-		// the theoretical race where rebindProjectListeners' goroutine
-		// reads the store before my write and clobbers PopPort/
-		// ProposePort with zero when it writes back.
-		if err := bindSoftnetListenersForAdopt(ctx, cfg, cache, tr, locks, id, popStore, popCLI, ntp.Port()); err != nil {
+		// Bind the propose listener synchronously FIRST — that pins
+		// ProposePort into ironProxyState before rebindProjectListeners'
+		// async goroutine gets a chance to do its own read-modify-write
+		// (guest-origin ports). Since projectInfoStore's get + modify +
+		// put is not atomic across callers, doing the fast synchronous
+		// write first eliminates the theoretical race where
+		// rebindProjectListeners' goroutine reads the store before my
+		// write and clobbers ProposePort with zero when it writes back.
+		if err := bindSoftnetListenersForAdopt(ctx, cfg, cache, tr, locks, id, ntp.Port()); err != nil {
 			daemonlog.Errorf("serviceapi: adopt-rebind softnet listeners for %s: %v", id, err)
 		}
 		go rebindProjectListeners(ctx, proxy, cfg, id, info.ProjectIP, ntp.Port())
 	}
 
 	server.SetStateCache(cache)
-	RegisterVMHandlers(server, cfg, sup, tr, ntp.Port(), locks, proxy, routes, popStore, popCLI, cache)
+	RegisterVMHandlers(server, cfg, sup, tr, ntp.Port(), locks, proxy, routes, cache)
 	RegisterReconcileHandler(server, cfg, cache, locks, &realApplyLiver{tr: tr}, &realPackagesApplier{tr: tr}, tr, sup, proxy, ntp.Port())
 	RegisterApplyIronProxyHandler(server, cfg, locks, sup, proxy)
 	RegisterHandshakeHandler(server, cache)
 	RegisterStatusAllHandler(server, cfg, tr, cache)
 	RegisterWorkspacesHandler(server, cfg)
-	RegisterPopSessionHandler(server, cfg, popStore, popCLI, guestSSHTargetFor, cache)
 
 	var g run.Group
 
@@ -432,20 +410,6 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// reflects settled state.
 	BundleDriftCatchup(cfg, cache, tr, locks)
 
-	// Pop-session GC actor. Periodically sweeps expired pop sessions
-	// across every project — see RunPopSessionGC. Without this actor,
-	// a pop session whose caller never explicitly tore it down (crash,
-	// forgotten cleanup) would hold its mutagen sync and scratch dir
-	// open indefinitely.
-	{
-		gcCtx, cancel := context.WithCancel(ctx)
-		g.Add(func() error {
-			return RunPopSessionGC(gcCtx, popStore, popCLI, cfg, PopSessionTTL(), PopSessionGCInterval(), cache)
-		}, func(error) {
-			cancel()
-		})
-	}
-
 	// State watchdog: reconciles the daemon's state cache against ground
 	// truth every 60s, respawning subsystems (iron-proxy, mutagen) whose
 	// repair policy calls for it. See watchdog_check_*.go for each check.
@@ -463,13 +427,11 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// within its own redraw cadence (seconds), rather than waiting for
 	// the mutagen watchdog check's 60s tick — which, after this actor
 	// exists, only validates the daemon's own PID (see
-	// watchdog_check_mutagen.go). Reuses popMutagenBin (already
-	// extracted above for pop-session syncs) against the same data dir
-	// every other mutagen.CLI invocation in this package uses.
+	// watchdog_check_mutagen.go).
 	{
 		monitorCtx, cancel := context.WithCancel(ctx)
 		g.Add(func() error {
-			subscribeMutagenMonitor(monitorCtx, popMutagenBin, cfg, cache)
+			subscribeMutagenMonitor(monitorCtx, mutagenBin, cfg, cache)
 			return nil
 		}, func(error) {
 			cancel()
@@ -480,10 +442,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// the group returns. Also tears down every project's per-project
 	// HTTP/HTTPS proxy listeners so a graceful daemon exit doesn't leak
 	// bound ports — there's no oklog/run actor for the proxy anymore to
-	// do this via its own interrupt func. Sweeps every live pop session
-	// too, so a daemon restart doesn't strand mutagen syncs and scratch
-	// dirs that WipePopScratchOnStartup would otherwise have to clean
-	// up blind on the next boot.
+	// do this via its own interrupt func.
 	{
 		ctxCancel := make(chan struct{})
 		g.Add(func() error {
@@ -496,7 +455,6 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		}, func(error) {
 			close(ctxCancel)
 			proxy.StopAll()
-			SweepAllPopSessions(popStore, popCLI, cfg)
 		})
 	}
 

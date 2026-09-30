@@ -310,8 +310,7 @@ func handleProposeUnixSocket(cfg identity.Config, cache *StateCache) http.Handle
 }
 
 // proposeListeners tracks each running project's propose HTTP listener
-// so /vm/stop can close it by project name. Mirrors pop.go's
-// popListeners.
+// so /vm/stop can close it by project name.
 var proposeListeners sync.Map // projectName -> net.Listener
 
 // serveProposeListener runs a minimal HTTP server on ln that

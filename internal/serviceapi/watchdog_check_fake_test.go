@@ -29,8 +29,6 @@ type fakeGroundTruth struct {
 	ApproveHashFn  func(projectID, macCwd string) (string, string, error)
 	ReadSnapshotFn func(projectID string) (string, string, *time.Time, bool, error)
 
-	PopSummaryFn func(projectID string) PopSessionSummary
-
 	ProxyListenerHealthFn   func(ctx context.Context, projectID string) bool
 	RespawnProxyListenersFn func(ctx context.Context, projectID string) error
 }
@@ -86,13 +84,6 @@ func (f *fakeGroundTruth) ReadApprovedSnapshot(projectID string) (string, string
 		panic("fake: ReadSnapshotFn not set")
 	}
 	return f.ReadSnapshotFn(projectID)
-}
-
-func (f *fakeGroundTruth) PopSessionSummaryForProject(projectID string) PopSessionSummary {
-	if f.PopSummaryFn == nil {
-		panic("fake: PopSummaryFn not set")
-	}
-	return f.PopSummaryFn(projectID)
 }
 
 func (f *fakeGroundTruth) ProxyListenerHealth(ctx context.Context, projectID string) bool {

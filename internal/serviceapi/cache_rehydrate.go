@@ -9,9 +9,8 @@ import (
 // from persisted StateSnapshot files on daemon-restart adopt. Only
 // fields that were written once at /vm/start and never re-derived by
 // the watchdog need this — everything the watchdog reconciles
-// (VMState, IronProxyHealth, MutagenHealth, ApproveState,
-// PopSessionSummary) gets refreshed on the next RunOnce and doesn't
-// belong here.
+// (VMState, IronProxyHealth, MutagenHealth, ApproveState) gets
+// refreshed on the next RunOnce and doesn't belong here.
 //
 // Currently that's just MacCwd. The propose/passthrough/approve
 // handlers reject requests with 412 "project not started" when
