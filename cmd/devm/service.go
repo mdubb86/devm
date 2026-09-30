@@ -967,11 +967,25 @@ func isTransientLaunchdError(output string) bool {
 		strings.Contains(output, "Bootstrap failed: 5")
 }
 
-// launchdBootstrapPlist loads plist via `launchctl bootstrap system`,
-// retrying on isTransientLaunchdError per launchdBootstrapBackoff.
-// Non-transient errors return immediately without retrying. run is
-// injectable for testing; nil uses runLaunchctl.
+// launchdBootstrapPlist loads plist into the system domain via
+// `launchctl bootstrap system`. Thin wrapper around
+// launchdBootstrapPlistInto — the menu-bar app's gui-domain bootstrap
+// uses the same helper with `gui/<uid>` as target.
 func launchdBootstrapPlist(plist string, run launchctlRunner) error {
+	return launchdBootstrapPlistInto("system", plist, run)
+}
+
+// launchdBootstrapPlistInto loads plist into the launchd `target`
+// domain (e.g. `system` for LaunchDaemons, `gui/<uid>` for
+// LaunchAgents), retrying on isTransientLaunchdError per
+// launchdBootstrapBackoff. Non-transient errors return immediately
+// without retrying. run is injectable for testing; nil uses
+// runLaunchctl.
+//
+// A single-shape retry-and-diagnostic policy for every domain: same
+// backoff, same transient-detection, same `stderr in the error`
+// wrapping. Adding a third target should just pass it here.
+func launchdBootstrapPlistInto(target, plist string, run launchctlRunner) error {
 	if run == nil {
 		run = runLaunchctl
 	}
@@ -980,11 +994,11 @@ func launchdBootstrapPlist(plist string, run launchctlRunner) error {
 		if i > 0 {
 			time.Sleep(backoff)
 		}
-		outStr, err := run("bootstrap", "system", plist)
+		outStr, err := run("bootstrap", target, plist)
 		if err == nil {
 			return nil
 		}
-		lastErr = fmt.Errorf("launchctl bootstrap system %s: %v: %s", plist, err, outStr)
+		lastErr = fmt.Errorf("launchctl bootstrap %s %s: %v: %s", target, plist, err, outStr)
 		if !isTransientLaunchdError(outStr) {
 			return lastErr
 		}

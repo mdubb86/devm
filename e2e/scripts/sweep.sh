@@ -41,6 +41,11 @@ sweep_registry() {
 #     match the prod slot (`.../devm/` vs `.../devm-e2e/`), the e2e
 #     daemon itself (argv `/usr/local/bin/devm-e2e`), or the root
 #     helper.
+#   - Descendants of the currently-running `devm-e2e serve` daemon are
+#     EXCLUDED — its `mutagen sync monitor` subprocess argv matches
+#     the runtime-dir pattern but isn't a leftover, it's an in-flight
+#     child. Reaping it would just make the daemon's own subscriber
+#     reconnect a moment later and inflate the "leftover count".
 #
 # Known residue: a proxy the still-running e2e daemon tracks in live
 # state gets respawned by its watchdog within ~30s of being killed
@@ -63,12 +68,53 @@ purge_e2e_leftovers() {
         done
     fi
 
-    if pgrep -f "$e2e_rundir/" >/dev/null 2>&1; then
-        echo "=== e2e: reaping $(pgrep -f "$e2e_rundir/" | wc -l | tr -d ' ') leftover e2e process(es) ===" >&2
-        pkill -TERM -f "$e2e_rundir/" 2>/dev/null || true
+    # candidate leftover pids: anything whose argv references the e2e
+    # runtime dir path.
+    local candidate_pids
+    candidate_pids=$(pgrep -f "$e2e_rundir/" 2>/dev/null || true)
+
+    # exclude descendants of the currently-running devm-e2e daemon: they
+    # aren't leftovers, they're its own children (mutagen sync monitor,
+    # subshells it forked, etc.). This is a POSIX ps-based ancestor
+    # walk so it works even when pgrep -P wouldn't help (multi-level
+    # descendants).
+    local daemon_pid
+    daemon_pid=$(pgrep -f "/usr/local/bin/devm-e2e serve" 2>/dev/null | head -1 || true)
+
+    local pids_to_kill=()
+    if [ -n "$candidate_pids" ]; then
+        local pid
+        for pid in $candidate_pids; do
+            if [ -n "$daemon_pid" ] && _is_descendant_of "$pid" "$daemon_pid"; then
+                continue
+            fi
+            pids_to_kill+=("$pid")
+        done
+    fi
+
+    if [ "${#pids_to_kill[@]}" -gt 0 ]; then
+        echo "=== e2e: reaping ${#pids_to_kill[@]} leftover e2e process(es) ===" >&2
+        kill -TERM "${pids_to_kill[@]}" 2>/dev/null || true
         sleep 1
-        pkill -KILL -f "$e2e_rundir/" 2>/dev/null || true
+        kill -KILL "${pids_to_kill[@]}" 2>/dev/null || true
     fi
 
     rm -rf /tmp/devm-e2e-* /private/tmp/devm-e2e-* 2>/dev/null || true
+}
+
+# _is_descendant_of returns 0 if $1's ancestor chain includes $2.
+# Walks up via `ps -o ppid=`. Stops at pid 1. Bounded by
+# process-tree depth so no unbounded loop risk.
+_is_descendant_of() {
+    local child="$1" ancestor="$2"
+    local cur="$child"
+    local depth=0
+    while [ "$cur" != "1" ] && [ "$cur" != "0" ] && [ -n "$cur" ] && [ "$depth" -lt 32 ]; do
+        if [ "$cur" = "$ancestor" ]; then
+            return 0
+        fi
+        cur=$(ps -o ppid= -p "$cur" 2>/dev/null | tr -d ' ')
+        depth=$((depth + 1))
+    done
+    return 1
 }

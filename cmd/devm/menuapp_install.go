@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -13,15 +12,29 @@ import (
 // launchctlBootstrap is a test seam; production uses the real launchctl.
 var launchctlBootstrap = defaultLaunchctlBootstrap
 
+// defaultLaunchctlBootstrap loads plistPath into the user's gui domain,
+// retrying on the transient EIO race that fires when registerLaunchAgent's
+// preceding launchctlBootout has flagged the label for teardown but its
+// prior process hasn't fully exited yet (see isTransientLaunchdError).
+// Delegates to launchdBootstrapPlistInto so retry/backoff behavior stays
+// identical to the system-daemon bootstrap in service.go and its stderr
+// is surfaced verbatim rather than reduced to "exit status 5".
 func defaultLaunchctlBootstrap(uid int, plistPath string) error {
-	return exec.Command("launchctl", "bootstrap", fmt.Sprintf("gui/%d", uid), plistPath).Run()
+	return launchdBootstrapPlistInto(fmt.Sprintf("gui/%d", uid), plistPath, nil)
 }
 
 // launchctlBootout is a test seam; production uses the real launchctl.
 var launchctlBootout = defaultLaunchctlBootout
 
+// defaultLaunchctlBootout unloads label from the user's gui domain,
+// capturing launchctl's stderr into the error so a diagnostic surfaces
+// instead of just an exit code.
 func defaultLaunchctlBootout(uid int, label string) error {
-	return exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, label)).Run()
+	out, err := runLaunchctl("bootout", fmt.Sprintf("gui/%d/%s", uid, label))
+	if err != nil {
+		return fmt.Errorf("launchctl bootout gui/%d/%s: %v: %s", uid, label, err, out)
+	}
+	return nil
 }
 
 // menuAppBundleName returns "devm" or "devm-e2e" — matches the
