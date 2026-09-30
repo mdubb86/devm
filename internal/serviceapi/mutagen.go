@@ -103,7 +103,16 @@ var mutagenStopPhaseFn = func(cfg identity.Config, projectID string) error {
 	if err != nil {
 		return fmt.Errorf("mutagen: extract binary: %w", err)
 	}
-	mutagenCLI := &mutagen.CLI{Binary: mutagenBin, DataDir: mutagenDataDir(cfg), Exec: mutagen.OSExec}
+	// Match SpawnMutagen's env so an auto-spawned daemon (mutagen CLI
+	// auto-starts one when it can't reach an existing daemon) still
+	// resolves the tart-mutagen-ssh shim rather than falling through to
+	// system ssh.
+	mutagenCLI := &mutagen.CLI{
+		Binary:   mutagenBin,
+		DataDir:  mutagenDataDir(cfg),
+		Exec:     mutagen.OSExec,
+		ExtraEnv: []string{"MUTAGEN_SSH_PATH=" + MutagenSSHDir(cfg)},
+	}
 	return StopPhase(mutagenCLI, projectID)
 }
 
