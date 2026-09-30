@@ -292,6 +292,42 @@ func TestSubscribeMutagenMonitor_HandlesReaderClose(t *testing.T) {
 	assert.Equal(t, MutagenOK, row.MutagenHealth.Status)
 }
 
+// TestSubscribeMutagenMonitorFromReader_ObservedTickSignal pins the
+// return-value contract that the outer loop's backoff-reset gate
+// depends on: a reader that emits at least one complete tick (session
+// line + marker) returns true; a reader that closes before the first
+// marker returns false. Without this signal, the outer loop's
+// "successful reconnect resets backoff" logic would reset even when
+// the subprocess died before ever serving state — a start-then-die
+// crash loop would stay at the initial 5s cadence forever, defeating
+// the exponential backoff.
+func TestSubscribeMutagenMonitorFromReader_ObservedTickSignal(t *testing.T) {
+	t.Run("full tick emitted", func(t *testing.T) {
+		cache := NewStateCache()
+		cache.SetMacCwd("proj-a", "/a")
+		body := SessionName("proj-a", "repo") + "|Watching\n" + mutagenMonitorTickMarker + "\n"
+		got := subscribeMutagenMonitorFromReader(context.Background(), strings.NewReader(body), cache)
+		assert.True(t, got, "reader with a complete tick must return true")
+	})
+
+	t.Run("no tick marker before EOF", func(t *testing.T) {
+		cache := NewStateCache()
+		got := subscribeMutagenMonitorFromReader(context.Background(), strings.NewReader(""), cache)
+		assert.False(t, got, "empty reader must return false — no tick observed")
+	})
+
+	t.Run("session lines but no marker", func(t *testing.T) {
+		cache := NewStateCache()
+		cache.SetMacCwd("proj-a", "/a")
+		// Session data arrived but the subprocess died before its
+		// first tick boundary — from the outer loop's perspective this
+		// is still a crash-before-first-full-observation.
+		body := SessionName("proj-a", "repo") + "|Watching\n"
+		got := subscribeMutagenMonitorFromReader(context.Background(), strings.NewReader(body), cache)
+		assert.False(t, got, "session lines without a tick marker must return false")
+	})
+}
+
 // ---------- subscribeMutagenMonitor (outer loop) ----------
 
 // TestSubscribeMutagenMonitor_MarksDeadOnMonitorExit proves the fix for

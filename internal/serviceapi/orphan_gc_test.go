@@ -74,6 +74,51 @@ func TestGCOrphanedProjects_RemovesStateForMissingVM(t *testing.T) {
 	assert.NoDirExists(t, sshDir)
 }
 
+// TestGCOrphanedProjects_RemovesSoftnetSocketAndLogFiles pins the fix
+// for I5: the pre-fix GC left the per-project softnet control socket
+// AND every log file under <LogDir>/<projectID>-*.log behind, causing
+// a slow accumulation of orphan artifacts across e2e sweeps and
+// user-facing project churn. Both are removed now; this test would
+// fail if either removal is dropped.
+func TestGCOrphanedProjects_RemovesSoftnetSocketAndLogFiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "orphaned", StateSnapshot{Cfg: schema.Config{}}))
+
+	// Softnet control socket file (real path is a hash under a
+	// per-user tmp dir; we create the parent + a stub file at the
+	// deterministic path so the removal can be observed).
+	softnetSock := SoftnetControlSock(identity.Prod, "orphaned")
+	require.NoError(t, os.MkdirAll(filepath.Dir(softnetSock), 0o755))
+	require.NoError(t, os.WriteFile(softnetSock, []byte("sock-stub"), 0o600))
+
+	// Log files: <LogDir>/<projectID>-<role>.log for a couple of roles.
+	require.NoError(t, os.MkdirAll(identity.Prod.LogDir(), 0o755))
+	orphanedIronLog := filepath.Join(identity.Prod.LogDir(), "orphaned-iron-proxy.log")
+	orphanedSoftnetLog := filepath.Join(identity.Prod.LogDir(), "orphaned-softnet.log")
+	require.NoError(t, os.WriteFile(orphanedIronLog, []byte("iron\n"), 0o644))
+	require.NoError(t, os.WriteFile(orphanedSoftnetLog, []byte("softnet\n"), 0o644))
+	// Unrelated log from a different project — must survive.
+	require.NoError(t, os.WriteFile(filepath.Join(identity.Prod.LogDir(), "kept-iron-proxy.log"), []byte("keep\n"), 0o644))
+	// A log file whose name starts with the orphaned prefix but doesn't
+	// end in .log — must survive (glob restrictor).
+	require.NoError(t, os.WriteFile(filepath.Join(identity.Prod.LogDir(), "orphaned-iron-proxy.log.1"), []byte("rot\n"), 0o644))
+
+	tr := staticTartList{vms: []tart.VM{}}
+	require.NoError(t, GCOrphanedProjects(context.Background(), identity.Prod, tr))
+
+	assert.NoFileExists(t, softnetSock,
+		"softnet control socket for the orphaned project must be removed")
+	assert.NoFileExists(t, orphanedIronLog,
+		"orphaned project's iron-proxy log must be removed")
+	assert.NoFileExists(t, orphanedSoftnetLog,
+		"orphaned project's softnet log must be removed")
+	assert.FileExists(t, filepath.Join(identity.Prod.LogDir(), "kept-iron-proxy.log"),
+		"unrelated project's logs must survive")
+	assert.FileExists(t, filepath.Join(identity.Prod.LogDir(), "orphaned-iron-proxy.log.1"),
+		"non-.log suffixes must survive — the glob is scoped to .log only")
+}
+
 func TestGCOrphanedProjects_LeavesLiveStateAloneWhenTartListFails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

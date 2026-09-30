@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
@@ -101,14 +102,22 @@ func removeOrphanedProjectArtifacts(cfg identity.Config, projectID string) {
 	removeIfExists(projectID, SoftnetControlSock(cfg, projectID))
 
 	// Log files the supervisor recorded for this project. Path pattern
-	// is <LogDir>/<projectID>-<role>.log (supervisor.go). Glob catches
-	// every role (iron-proxy, softnet, mutagen, etc.) without this GC
-	// having to enumerate them.
-	if matches, err := filepath.Glob(filepath.Join(cfg.LogDir(), projectID+"-*.log")); err != nil {
-		daemonlog.Errorf("orphan-gc: glob log files for %q: %v", projectID, err)
+	// is <LogDir>/<projectID>-<role>.log (supervisor.go). Directory
+	// listing + prefix match rather than filepath.Glob(projectID+"-*")
+	// because a projectID with a glob metacharacter (`*`, `?`, `[`,
+	// `\`) would let Glob match unrelated files or fail outright — the
+	// schema layer enforces project name shape today, but GC that
+	// touches disk gets to be paranoid about its inputs.
+	entries, err := os.ReadDir(cfg.LogDir())
+	if err != nil && !os.IsNotExist(err) {
+		daemonlog.Errorf("orphan-gc: list log dir for %q: %v", projectID, err)
 	} else {
-		for _, path := range matches {
-			removeIfExists(projectID, path)
+		prefix := projectID + "-"
+		for _, e := range entries {
+			name := e.Name()
+			if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".log") {
+				removeIfExists(projectID, filepath.Join(cfg.LogDir(), name))
+			}
 		}
 	}
 }

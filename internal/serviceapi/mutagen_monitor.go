@@ -104,17 +104,21 @@ func subscribeMutagenMonitor(ctx context.Context, mutagenBin string, cfg identit
 			backoff = nextMonitorBackoff(backoff)
 			continue
 		}
-		// A successful reconnect resets the backoff so the next outage
-		// starts fresh at the initial delay, not wherever the previous
-		// outage left it. Log the (re)connect at info: after a daemon
-		// outage this is the operator's cue that the subscriber is
-		// watching again, and paired with the exit line below it makes
-		// silent reconnect loops visible in the log.
-		backoff = mutagenMonitorReconnectBackoffInitial
 		log.Printf("mutagen monitor: subscribed (pid=%d)", cmd.Process.Pid)
-		subscribeMutagenMonitorFromReader(ctx, stdout, cache)
+		observedAnyTick := subscribeMutagenMonitorFromReader(ctx, stdout, cache)
 		_ = cmd.Wait()
-		log.Printf("mutagen monitor: subprocess exited, reconnecting after %s", backoff)
+		// Reset the backoff ONLY when this iteration actually saw at
+		// least one complete tick — a "started, exited before any
+		// output, respawned" tight loop must keep escalating so the
+		// operator log doesn't fill with per-5s retry lines forever.
+		// A single tick is proof the mutagen daemon was reachable long
+		// enough to serve real state, not just accept the connection.
+		if observedAnyTick {
+			backoff = mutagenMonitorReconnectBackoffInitial
+		} else {
+			backoff = nextMonitorBackoff(backoff)
+		}
+		log.Printf("mutagen monitor: subprocess exited (observed ticks=%v), reconnecting after %s", observedAnyTick, backoff)
 		// The monitor subprocess exited — whether because the mutagen
 		// daemon it was watching died or because the reader hit EOF —
 		// so nothing is observing session health until the next
@@ -187,23 +191,29 @@ func sleepOrDone(ctx context.Context, d time.Duration) bool {
 // table has no entry for it at all.
 //
 // Returns cleanly on EOF (r closed) or ctx cancellation — never
-// blocks past either.
-func subscribeMutagenMonitorFromReader(ctx context.Context, r io.Reader, cache *StateCache) {
+// blocks past either. Return value is whether at least one complete
+// tick was observed; the outer loop uses it to gate resetting the
+// reconnect backoff — a subprocess that starts and dies before
+// emitting anything must not clear the escalating backoff, or a
+// crash-loop stays at the initial delay forever.
+func subscribeMutagenMonitorFromReader(ctx context.Context, r io.Reader, cache *StateCache) bool {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20) // long session names, many sessions per tick
 
 	previous := map[string]string{}
 	tick := map[string]string{}
+	observedTick := false
 
 	for sc.Scan() {
 		if ctx.Err() != nil {
-			return
+			return observedTick
 		}
 		line := sc.Text()
 		if line == mutagenMonitorTickMarker {
 			applyMutagenMonitorTick(cache, previous, tick)
 			previous = tick
 			tick = map[string]string{}
+			observedTick = true
 			continue
 		}
 		name, status, ok := parseMutagenMonitorLine(line)
@@ -215,6 +225,7 @@ func subscribeMutagenMonitorFromReader(ctx context.Context, r io.Reader, cache *
 	if err := sc.Err(); err != nil {
 		daemonlog.Errorf("serviceapi: mutagen monitor: read: %v", err)
 	}
+	return observedTick
 }
 
 // applyMutagenMonitorTick writes cache.MutagenHealth for every session
