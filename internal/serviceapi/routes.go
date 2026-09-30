@@ -213,9 +213,14 @@ func (r *Routes) applyReservedRoute(projectID string, route Route) error {
 // gdevmServePort on it) — the same substitution VM-mode user routes get
 // from /routes/apply, baked in here directly since applyReservedRoute
 // bypasses that handler.
-func reservedHealthRoute(projectName, projectIP string) Route {
+//
+// tld is the daemon identity's TLD (identity.Config.TLD — "test" for
+// prod, "e2e.test" for the e2e slot): the reserved hostname must match
+// whatever TLD this daemon actually resolves, or the health probe
+// (RealGroundTruth.ProxyListenerHealth) never matches a route.
+func reservedHealthRoute(projectName, projectIP, tld string) Route {
 	return Route{
-		Hostname:    "_devm." + projectName + ".test",
+		Hostname:    "_devm." + projectName + "." + tld,
 		BackendHost: projectIP,
 		BackendPort: gdevmServePort,
 		Mode:        ModeVM,

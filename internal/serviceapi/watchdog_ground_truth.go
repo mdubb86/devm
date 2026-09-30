@@ -94,7 +94,7 @@ func (g *RealGroundTruth) PopSessionSummaryForProject(projectID string) PopSessi
 
 // healthProbeClient is the watchdog's HTTP client for probing a
 // project's reverse-proxy listener pair via its reserved
-// _devm.<project>.test route (see reservedHealthRoute in routes.go).
+// _devm.<project>.<tld> route (see reservedHealthRoute in routes.go).
 // Short timeout and no redirect following — nothing behind /v1/health
 // legitimately redirects, so a probe that can't complete in 2s or
 // that redirects is unhealthy. Shared across probes: Go's default
@@ -116,7 +116,7 @@ type proxyHealthProbeResponse struct {
 
 // ProxyListenerHealth probes projectID's reverse-proxy listener pair
 // by dialing its allocated project IP directly (not through DNS) and
-// setting the Host header to its reserved _devm.<project>.test
+// setting the Host header to its reserved _devm.<project>.<tld>
 // hostname, so the request exercises the same routing path a real
 // browser hit would. Any transport error, non-200 status, or a body
 // that doesn't decode to {"ok":true} counts as unhealthy.
@@ -129,7 +129,7 @@ func (g *RealGroundTruth) ProxyListenerHealth(ctx context.Context, projectID str
 	if err != nil {
 		return false
 	}
-	req.Host = "_devm." + projectID + ".test"
+	req.Host = "_devm." + projectID + "." + g.Cfg.TLD
 	resp, err := healthProbeClient.Do(req)
 	if err != nil {
 		return false

@@ -817,7 +817,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			ironProxyState.put(req.Name, info)
 		}
 
-		// Register the reserved _devm.<project>.test → projectIP:8940
+		// Register the reserved _devm.<project>.<cfg.TLD> → projectIP:8940
 		// health route so the Mac watchdog (Task 7) has a route to the
 		// guest's gdevm-serve /v1/health endpoint (softnet forwards
 		// projectIP:8940 to the guest's loopback-bound listener — see
@@ -829,7 +829,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// /routes/apply call from `devm route`/`devm shell`/`devm
 		// reconcile`.
 		if routes != nil {
-			if err := routes.applyReservedRoute(req.Name, reservedHealthRoute(req.Name, projectIP)); err != nil {
+			if err := routes.applyReservedRoute(req.Name, reservedHealthRoute(req.Name, projectIP, cfg.TLD)); err != nil {
 				http.Error(w, fmt.Sprintf("register reserved health route: %v", err), http.StatusInternalServerError)
 				return
 			}

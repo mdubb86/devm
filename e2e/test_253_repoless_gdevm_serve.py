@@ -1,6 +1,6 @@
 """253: cold-start a repo-less project (no_repo=True). Confirms
 gdevm-serve.service is running in the guest, the reserved
-_devm.<project>.test health route is reachable, and `devm status
+_devm.<project>.e2e.test health route is reachable, and `devm status
 --json` reports the proxy healthy.
 
 Pins that gdevm-serve installs and probes unconditionally — not gated
@@ -43,10 +43,10 @@ def test_repoless_project_gets_gdevm_serve(devm, workspace):
         # The reserved health route is reachable from the Mac side —
         # proves the Mac-side route registration and the guest-side
         # listener both came up without a primary repo to key off of.
-        # _devm.<project>.test resolves via /etc/resolver/test -> devm's
-        # DNS -> the project's pool IP -> the Mac reverse proxy ->
+        # _devm.<project>.e2e.test resolves via /etc/resolver/e2e.test ->
+        # devm's DNS -> the project's pool IP -> the Mac reverse proxy ->
         # softnet-exposed :8940 in the guest.
-        hostname = f"_devm.{workspace.vm_name}.test"
+        hostname = f"_devm.{workspace.vm_name}.e2e.test"
         probe = subprocess.run(
             ["curl", "-sf", "-m", "5", f"http://{hostname}/v1/health"],
             capture_output=True, timeout=15,

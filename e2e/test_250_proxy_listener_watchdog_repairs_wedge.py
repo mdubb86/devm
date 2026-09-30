@@ -1,4 +1,4 @@
-"""250: cold-start a project, confirm the reserved _devm.<project>.test
+"""250: cold-start a project, confirm the reserved _devm.<project>.e2e.test
 health route (Mac reverse-proxy -> guest gdevm-serve :8940) is
 registered and reachable, and `devm status --json`'s health.proxy_healthy
 stays true across multiple watchdog ticks.
@@ -56,10 +56,10 @@ def test_reserved_health_route_stays_reachable(devm, workspace):
         # (dial target 127.0.0.1:8940 inside the guest, per
         # serviceapi.reservedHealthRoute) — probed from the Mac side,
         # same side the Mac watchdog's own ProxyListenerHealth check
-        # ultimately exercises: _devm.<project>.test resolves via
-        # /etc/resolver/test -> devm's DNS -> the project's pool IP ->
+        # ultimately exercises: _devm.<project>.e2e.test resolves via
+        # /etc/resolver/e2e.test -> devm's DNS -> the project's pool IP ->
         # the Mac reverse proxy -> softnet-exposed :8940 in the guest.
-        hostname = f"_devm.{workspace.vm_name}.test"
+        hostname = f"_devm.{workspace.vm_name}.e2e.test"
         probe = subprocess.run(
             ["curl", "-sf", "-m", "5", f"http://{hostname}/v1/health"],
             capture_output=True, timeout=15,
