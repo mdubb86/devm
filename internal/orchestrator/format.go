@@ -281,6 +281,13 @@ func formatRouting(r serviceapi.RoutingStatus) string {
 	fmt.Fprintf(&b, "  mode:    %s\n", r.Mode)
 	b.WriteString("  routes:\n")
 	for _, route := range r.Routes {
+		// Reserved daemon-internal routes (the "_devm." health-probe
+		// hostname) aren't something the user declared and aren't
+		// actionable from this table — printing them here would just be
+		// clutter. They still round-trip through the JSON output.
+		if strings.HasPrefix(route.Hostname, serviceapi.ReservedRoutePrefix) {
+			continue
+		}
 		modeTag := ""
 		if r.Mode == "mixed (drift)" {
 			modeTag = fmt.Sprintf("  (%s)", route.Mode)

@@ -72,11 +72,11 @@ func NewRoutes() *Routes {
 	}
 }
 
-// reservedHostnamePrefix marks a route as daemon-managed rather than
+// ReservedRoutePrefix marks a route as daemon-managed rather than
 // user-declared (see reservedHealthRoute). User-declared hostnames must
 // match [a-z0-9-]+ and can never start with "_", so this prefix can
 // never collide with one.
-const reservedHostnamePrefix = "_devm."
+const ReservedRoutePrefix = "_devm."
 
 // Apply replaces the named project's user-declared route set with the
 // given items. Routes whose hostname is reserved (starts with
@@ -92,10 +92,10 @@ const reservedHostnamePrefix = "_devm."
 // contains a reserved hostname.
 func (r *Routes) Apply(projectID string, items []Route) error {
 	for _, item := range items {
-		if strings.HasPrefix(item.Hostname, reservedHostnamePrefix) {
+		if strings.HasPrefix(item.Hostname, ReservedRoutePrefix) {
 			return fmt.Errorf(
 				"hostname %q is reserved for daemon-internal routes (prefix %q) and cannot be set via Apply",
-				item.Hostname, reservedHostnamePrefix,
+				item.Hostname, ReservedRoutePrefix,
 			)
 		}
 	}
@@ -122,7 +122,7 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 	// project's user-declared routes.
 	var reserved []Route
 	for _, h := range r.projectsToHostnames[projectID] {
-		if strings.HasPrefix(h, reservedHostnamePrefix) {
+		if strings.HasPrefix(h, ReservedRoutePrefix) {
 			if rt, ok := r.hostnameToRoute[h]; ok {
 				reserved = append(reserved, rt)
 			}
@@ -157,7 +157,7 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 }
 
 // applyReservedRoute registers a single daemon-managed reserved route
-// (hostname must start with reservedHostnamePrefix) for projectID,
+// (hostname must start with ReservedRoutePrefix) for projectID,
 // without touching the project's user-declared routes. This is the
 // "different path" reserved routes use instead of Apply — today the
 // only caller is /vm/start's reservedHealthRoute registration.
@@ -165,10 +165,10 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 // project whose reserved route is already present) replaces it in
 // place rather than duplicating the projectsToHostnames entry.
 func (r *Routes) applyReservedRoute(projectID string, route Route) error {
-	if !strings.HasPrefix(route.Hostname, reservedHostnamePrefix) {
+	if !strings.HasPrefix(route.Hostname, ReservedRoutePrefix) {
 		return fmt.Errorf(
 			"applyReservedRoute: hostname %q does not have the reserved prefix %q",
-			route.Hostname, reservedHostnamePrefix,
+			route.Hostname, ReservedRoutePrefix,
 		)
 	}
 

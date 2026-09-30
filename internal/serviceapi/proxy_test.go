@@ -1059,3 +1059,32 @@ func TestNewProxyErrorLog_WritesToConfiguredSink(t *testing.T) {
 	assert.Contains(t, string(got), "serviceapi: proxy(http everstone):")
 	assert.Contains(t, string(got), "simulated panic-serving trace")
 }
+
+// TestBindLocks_DeletedAfterStopProjectListeners pins that
+// StopProjectListeners removes the project's entry from bindLocks —
+// without this, the map grows by one *sync.Mutex per project ever
+// started and never shrinks, since lockProjectBind only ever adds.
+func TestBindLocks_DeletedAfterStopProjectListeners(t *testing.T) {
+	sock := mockHelperServer(t)
+	cfg := identity.Config{Name: "test-bindlocks-cleanup", HelperSocketPath: sock}
+
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+
+	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
+	require.NoError(t, err)
+
+	proxy.bindLocksMu.Lock()
+	gotLen := len(proxy.bindLocks)
+	proxy.bindLocksMu.Unlock()
+	require.Equal(t, 1, gotLen, "bindLocks must hold exactly one entry for the started project")
+
+	proxy.StopProjectListeners("p1")
+
+	proxy.bindLocksMu.Lock()
+	gotLen = len(proxy.bindLocks)
+	proxy.bindLocksMu.Unlock()
+	assert.Equal(t, 0, gotLen, "bindLocks must be empty after StopProjectListeners")
+}

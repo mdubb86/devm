@@ -293,7 +293,7 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 // with the reserved prefix).
 func shouldSkipAutoInstall(existing map[string][]serviceapi.Route, project string) bool {
 	for _, r := range existing[project] {
-		if !strings.HasPrefix(r.Hostname, "_devm.") {
+		if !strings.HasPrefix(r.Hostname, serviceapi.ReservedRoutePrefix) {
 			return true
 		}
 	}

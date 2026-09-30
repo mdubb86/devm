@@ -283,6 +283,22 @@ func (p *ProxyServer) StopProjectListeners(projectID string) {
 	delete(p.rebindStatus, projectID)
 	p.rebindMu.Unlock()
 
+	// Drop the per-project bind lock now that the project is torn down
+	// (or was never fully started) — otherwise bindLocks grows by one
+	// entry per project ID ever attempted and never shrinks. Safe
+	// against a concurrent Start* call racing in: the
+	// Start*/lockProjectBind pattern is lookup-then-lock (fetch-or-
+	// create the *sync.Mutex under bindLocksMu, release bindLocksMu,
+	// then lock the mutex itself), so a Start* call that already holds
+	// a pointer to the mutex keeps working fine even after this delete
+	// removes it from the map — deleting a map entry doesn't invalidate
+	// a pointer a concurrent reader already holds. A subsequent Start*
+	// call for the same project just recreates the entry with a fresh
+	// mutex.
+	p.bindLocksMu.Lock()
+	delete(p.bindLocks, projectID)
+	p.bindLocksMu.Unlock()
+
 	if !ok {
 		return
 	}
