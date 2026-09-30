@@ -78,16 +78,7 @@ func (r *realApplyLiver) ApplyLive(changes []reconcile.Change, cfg schema.Config
 	if err != nil {
 		return fmt.Errorf("apply live: mutagen: extract binary: %w", err)
 	}
-	// MUTAGEN_SSH_PATH matches SpawnMutagen's own env — if the daemon
-	// is already up, this CLI just talks to it over IPC; if it has died,
-	// mutagen auto-spawns a replacement inheriting this env and needs the
-	// shim path to reach the guest via `tart exec` instead of system ssh.
-	mutagenCLI := &mutagen.CLI{
-		Binary:   mutagenBin,
-		DataDir:  mutagenDataDir(identCfg),
-		Exec:     mutagen.OSExec,
-		ExtraEnv: []string{"MUTAGEN_SSH_PATH=" + MutagenSSHDir(identCfg)},
-	}
+	mutagenCLI := NewMutagenCLI(identCfg, mutagenBin, mutagen.OSExec)
 	// A KindNetworkAdd/Remove change dispatches through the
 	// AllowlistSetter reconcile.ApplyLive is given. reconcile.ApplyLive
 	// can't construct one itself: internal/reconcile can't import

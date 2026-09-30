@@ -80,6 +80,31 @@ func mutagenDataDir(cfg identity.Config) string {
 	return filepath.Join(cfg.RuntimeDir(), "mutagen", "data")
 }
 
+// NewMutagenCLI is the ONLY authorized way to construct a mutagen.CLI
+// anywhere in devm — daemon-side and orchestrator-side both. Locked
+// down by TestMutagenCLIConstructionGoesThroughFactory in
+// mutagen_factory_conformance_test.go.
+//
+// The reason for centralization: mutagen's CLI auto-spawns a daemon
+// when it can't reach one, inheriting the CALLING process's env. A CLI
+// that omits MUTAGEN_SSH_PATH from that env auto-spawns a daemon whose
+// SSH transport falls through to the system ssh client, and every
+// later sync create fails on hostname resolution because the guest is
+// only reachable via the tart-mutagen-ssh shim (see
+// cmd/tart-mutagen-ssh). Making this a factory means the shim env, the
+// data dir, and the exec function are set together — a caller cannot
+// forget one.
+//
+// exec may be nil; the CLI falls back to mutagen.OSExec.
+func NewMutagenCLI(cfg identity.Config, bin string, exec mutagen.ExecFn) *mutagen.CLI {
+	return &mutagen.CLI{
+		Binary:   bin,
+		DataDir:  mutagenDataDir(cfg),
+		Exec:     exec,
+		ExtraEnv: []string{"MUTAGEN_SSH_PATH=" + MutagenSSHDir(cfg)},
+	}
+}
+
 // MutagenLockPIDForWatchdog exposes mutagenLockPID to the watchdog
 // package's mutagen check, which observes the daemon's PID directly
 // off the lock file rather than through a *mutagen.CLI instance.
@@ -103,17 +128,7 @@ var mutagenStopPhaseFn = func(cfg identity.Config, projectID string) error {
 	if err != nil {
 		return fmt.Errorf("mutagen: extract binary: %w", err)
 	}
-	// Match SpawnMutagen's env so an auto-spawned daemon (mutagen CLI
-	// auto-starts one when it can't reach an existing daemon) still
-	// resolves the tart-mutagen-ssh shim rather than falling through to
-	// system ssh.
-	mutagenCLI := &mutagen.CLI{
-		Binary:   mutagenBin,
-		DataDir:  mutagenDataDir(cfg),
-		Exec:     mutagen.OSExec,
-		ExtraEnv: []string{"MUTAGEN_SSH_PATH=" + MutagenSSHDir(cfg)},
-	}
-	return StopPhase(mutagenCLI, projectID)
+	return StopPhase(NewMutagenCLI(cfg, mutagenBin, mutagen.OSExec), projectID)
 }
 
 // SpawnMutagen extracts the embedded mutagen binary, starts its daemon
@@ -140,13 +155,7 @@ func SpawnMutagen(ctx context.Context, cfg identity.Config, sup *supervisor.Supe
 		return fmt.Errorf("mutagen: extract binary: %w", err)
 	}
 
-	cli := &mutagen.CLI{
-		Binary:  bin,
-		DataDir: dataDir,
-		ExtraEnv: []string{
-			"MUTAGEN_SSH_PATH=" + MutagenSSHDir(cfg),
-		},
-	}
+	cli := NewMutagenCLI(cfg, bin, nil)
 
 	pid, err := mutagenDaemonStartFn(cli)
 	if err != nil {

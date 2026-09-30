@@ -12,7 +12,6 @@ import (
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
@@ -223,8 +222,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		daemonlog.Errorf("serviceapi: wipe pop-tmp on startup: %v", err)
 	}
 
-	// mutagen CLI for pop-session create/tear-down, shaped like
-	// SpawnMutagen's own CLI (same MUTAGEN_SSH_PATH shim). Calling
+	// mutagen CLI for pop-session create/tear-down. Calling
 	// mutagenEnsureFn again here is cheap — it's idempotent and the
 	// adopt pass above may not have reached it if AdoptMutagenDaemon
 	// failed.
@@ -232,11 +230,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	if err != nil {
 		return fmt.Errorf("mutagen: extract binary for pop sessions: %w", err)
 	}
-	popCLI := &mutagen.CLI{
-		Binary:   popMutagenBin,
-		DataDir:  mutagenDataDir(cfg),
-		ExtraEnv: []string{"MUTAGEN_SSH_PATH=" + MutagenSSHDir(cfg)},
-	}
+	popCLI := NewMutagenCLI(cfg, popMutagenBin, nil)
 
 	// guestSSHTargetFor resolves a project's tart-mutagen-ssh transport
 	// target only while the project is actually running (ironProxyState

@@ -961,17 +961,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, fmt.Sprintf("mutagen: extract binary: %v", err), http.StatusInternalServerError)
 			return
 		}
-		// MUTAGEN_SSH_PATH must be set here even though the CLI is talking
-		// to an already-running daemon over IPC: if the daemon has died
-		// (e.g. crashed, killed by a test, oomed), mutagen auto-spawns a
-		// replacement inheriting THIS CLI's env — and a daemon without
-		// the shim env falls through to system ssh and fails on hostname
-		// resolution at first sync create.
-		mutagenCLI := &mutagen.CLI{
-			Binary:   mutagenBin,
-			DataDir:  mutagenDataDir(cfg),
-			ExtraEnv: []string{"MUTAGEN_SSH_PATH=" + MutagenSSHDir(cfg)},
-		}
+		mutagenCLI := NewMutagenCLI(cfg, mutagenBin, nil)
 
 		guestSSHTarget := "devm-" + req.Name
 		if err := SetupVolumesPhase(r.Context(), mutagenCLI, cfg, req.Name, req.RepoRoot, entities,
