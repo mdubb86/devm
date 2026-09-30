@@ -1,6 +1,6 @@
 ---
 name: gdevm-guest
-description: gdevm — the guest-side devm dispatcher. Use for propose (signal a devm.yaml edit is ready for review), passthrough (request a supervised egress window), upgrade (refresh the guest bundle), pop (open a file with its default Mac app), and run (invoke a named function from the project's commands manifest).
+description: gdevm — the guest-side devm dispatcher. Use for propose (signal a devm.yaml edit is ready for review), passthrough (request a supervised egress window), upgrade (refresh the guest bundle), and run (invoke a named function from the project's commands manifest).
 ---
 
 # gdevm — guest-side commands
@@ -54,25 +54,6 @@ environment file, and commands manifest into this VM. No args:
 
 Use it after the Mac side ships a new version and the guest bundle
 here is stale (e.g. an unknown subcommand, a missing skill file).
-
-## `gdevm pop`
-
-Opens a guest-side file on the Mac with its default app — a
-screenshot, a generated artifact, a log you want to eyeball. Resolves
-a `$WORKSPACE`-anchored absolute or relative path, translates it to
-the file's Mac-side mirror location, and hands it to macOS `open`:
-
-    gdevm pop ./screenshots/latest.png
-    gdevm pop /home/devm/myproj/report.html
-
-An `http://` / `https://` URL routes straight to the default
-browser. Extra `open` args pass through after `--`:
-
-    gdevm pop ./notes.md -- -a "Sublime Text"
-
-Paths outside any devm-managed mirror get a live-sync session into a
-Mac scratch dir; subsequent guest edits propagate until the session
-self-terminates.
 
 ## `gdevm run`
 

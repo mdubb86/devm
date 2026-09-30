@@ -5,7 +5,6 @@
 //
 // Subcommands:
 //
-//	gdevm pop         <path-or-url> [-- <open-args>...]
 //	gdevm propose     [--reason <text>] [--kind devm.yaml|devm.me.yaml|devm.sh|devm.me.sh]
 //	gdevm run         <command>
 //	gdevm passthrough <duration> --reason <text>
@@ -13,8 +12,8 @@
 //	gdevm recipes     list | get <name> | asset ls <name> | asset get <name> <path>
 //	gdevm serve
 //
-// Each subcommand reaches the Mac-side daemon over softnet (pop,
-// propose, passthrough) or reads the local guest command manifest
+// Each subcommand reaches the Mac-side daemon over softnet (propose,
+// passthrough) or reads the local guest command manifest
 // and re-execs bash (run). The per-subcommand main body is factored
 // into <sub>Main funcs so tests exercise them without spawning a
 // subprocess. `serve` is the exception: it's a long-running guest-side
@@ -34,8 +33,6 @@ func main() {
 	sub := os.Args[1]
 	args := os.Args[2:]
 	switch sub {
-	case "pop":
-		os.Exit(popMain(args))
 	case "propose":
 		os.Exit(proposeMain(args))
 	case "run":
@@ -63,7 +60,6 @@ func usage() {
 Usage: gdevm <subcommand> [args...]
 
 Subcommands:
-  pop          Open a file with its default Mac app.
   propose      Signal that a devm.yaml (or devm.me.yaml, devm.sh,
                devm.me.sh) edit is ready for the Mac-side reviewer.
   run          Invoke a named function from this project's command

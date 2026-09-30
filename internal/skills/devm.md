@@ -7,7 +7,7 @@ description: Configure and edit devm.yaml — a Mac+Tart-VM dev workspace tool w
 
 ## What devm is
 
-devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-project Tart VM as your development environment. The workspace inside the VM is hydrated via `git clone` from the repo(s) declared by `repos:` in `devm.yaml` — not a live bind mount of your Mac checkout. Its guest path mirrors the Mac cwd's absolute path string, kept in sync with the Mac side by a mutagen sync session; use `devm pop mac`/`devm pop vm` to open a file on the Mac side of that split. All outbound network traffic from the VM is gated through an iron-proxy daemon running on the Mac, so the VM cannot reach the internet except through an explicit allowlist. Configuration lives in `devm.yaml` at the project root.
+devm is a brew-installed CLI for macOS Apple Silicon that provisions a per-project Tart VM as your development environment. The workspace inside the VM is hydrated via `git clone` from the repo(s) declared by `repos:` in `devm.yaml` — not a live bind mount of your Mac checkout. Its guest path mirrors the Mac cwd's absolute path string, kept in sync with the Mac side by a mutagen sync session; use `devm pop <path>` to open a file from the guest workspace on the Mac side of that split. All outbound network traffic from the VM is gated through an iron-proxy daemon running on the Mac, so the VM cannot reach the internet except through an explicit allowlist. Configuration lives in `devm.yaml` at the project root.
 
 ## Three-process model
 
@@ -59,7 +59,6 @@ interactive `ssh devm-<name>` and VS Code Remote-SSH.
 
 `gdevm` is the only devm-owned binary inside the VM (the `devm` CLI never exists on the guest; `gdevm` never exists on the Mac). It reaches the Mac-side daemon over softnet.
 
-- `gdevm pop <path-or-url>` — open a file with its default Mac app; same behavior as `devm pop mac`/`vm` from the other side of the boundary.
 - `gdevm propose [--reason <text>] [--kind <file>]` — signal that a `devm.yaml` / `devm.me.yaml` / `devm.sh` / `devm.me.sh` edit is ready for Mac-side review.
 - `gdevm run <command>` — invoke a named function from the project's guest command manifest (same lookup as `run <name>`).
 - `gdevm passthrough --reason <text> [--for <duration>]` — request a supervised egress passthrough window; a human on the Mac authorizes it with `devm passthrough approve` (or `deny`).
@@ -97,6 +96,5 @@ The guest side of this flow (agent-authored `gdevm passthrough --reason "..."`) 
 - `devm skills get routing` — how port declarations, `devm route` commands, and `*.test` hostnames work on the Mac and inside the VM.
 - `devm skills get secrets` — storing credentials in the on-disk secret store and referencing them with `!secret` in `devm.yaml`.
 - `devm skills get errors` — reading supervision error blocks and where logs live.
-- `devm pop mac <path-or-url>` — open a Mac-native file with its default app; refuses paths that resolve into a devm-managed volume. An `http://` / `https://` URL routes straight to the default browser. Paths outside any mirror (e.g. `/tmp/site/index.html`, `/var/log/foo.log`) get a live-sync session into a Mac scratch dir under `<runtime-dir>/pop-tmp/<id>/`. Subsequent guest edits propagate; the session self-terminates after 1h of no propagated change. Session count and oldest age surface in `devm status`. From the guest, `gdevm pop <path-or-url>` does the same thing from the other side of the boundary — see the `gdevm-guest` skill shipped by the `tool/ai/claude` recipe.
-- `devm pop vm <path-or-url>` — open a file from the project's guest workspace (a `$WORKSPACE`-anchored path) with its default app on the Mac. An `http://` / `https://` URL routes straight to the default browser. Paths outside any mirror get the same live-sync session behavior as `devm pop mac`.
+- `devm pop <path> [-- <open-args>...]` — open `<path>` (resolved against the guest workspace) in a browser via the project's bundled filestash service (`https://files.<project>.<tld>/files/local<path>`). An `http://` / `https://` URL routes straight to the default browser regardless of `--native`. With `--native`, resolves `<path>` through the project's mirror table and opens it with the macOS default app instead (Preview, Xcode, …); a path outside any mirror is copied from the guest with `tart exec cat` into a scratch dir first. Directories aren't supported under `--native` — drop the flag to browse them in filestash.
 - `devm recipes get tool/service/docker` — docker is a built-in (`docker: true`), not a recipe you install, but the recipe covers the intricacies: the two egress paths (why `docker run` works with no config but `docker build` needs a Dockerfile RUN block), and the exact block to add for build-time HTTPS to survive iron-proxy's MITM.

@@ -11,7 +11,7 @@ user for help:
   — `$IS_SANDBOX`, `$WORKSPACE`, mutagen sync model, iron-proxy
   egress, `.test` hostnames, filesystem layout.
 - `gdevm recipes asset get tool/ai/claude skills/gdevm-guest.md` —
-  how to use `gdevm propose|passthrough|upgrade|pop|run`.
+  how to use `gdevm propose|passthrough|upgrade|run`.
 - `gdevm recipes asset get tool/ai/claude skills/devm-guest-diagnostics.md`
   — allowlist denial shape, guest-side diagnostic commands, what
   only the Mac user can do, which log tails to ask for.
