@@ -1,0 +1,111 @@
+{
+    "general": {
+        "name": null,
+        "port": 8941,
+        "host": "0.0.0.0",
+        "secret_key": "WN3UuL2qn3rNEjmz",
+        "force_ssl": null,
+        "editor": null,
+        "logout": null,
+        "display_hidden": null,
+        "refresh_after_upload": null,
+        "open_mode": null,
+        "upload_button": null,
+        "upload_pool_size": null,
+        "upload_chunk_size": null,
+        "buffer_size": null,
+        "filepage_default_view": null,
+        "filepage_default_sort": null,
+        "cookie_timeout": null,
+        "extended_session": null,
+        "custom_css": null,
+        "license": null
+    },
+    "features": {
+        "api": {
+            "enable": null
+        },
+        "share": {
+            "enable": null,
+            "default_access": null,
+            "redirect": null
+        },
+        "protection": {
+            "iframe": null,
+            "enable_chromecast": null,
+            "signature": null,
+            "zip_timeout": null,
+            "disable_csp": null,
+            "disable_svg": null,
+            "enable": null
+        },
+        "collaborative": {
+            "enable": null
+        },
+        "workflow": {
+            "enable": null,
+            "workers": null
+        },
+        "office": {
+            "office_server": null,
+            "filestash_server": null,
+            "rewrite_discovery_url": null,
+            "enable": null
+        },
+        "mcp": {
+            "enable": null
+        },
+        "site": {
+            "enable": null,
+            "autoindex": null,
+            "cors_allow_origins": null
+        },
+        "search": {
+            "explore_timeout": null
+        },
+        "video": {
+            "blacklist_format": null,
+            "encoder": null,
+            "enable_transcoder": null
+        },
+        "server": {
+            "console_enable": null
+        }
+    },
+    "log": {
+        "enable": null,
+        "level": null,
+        "telemetry": null
+    },
+    "email": {
+        "server": null,
+        "port": null,
+        "username": null,
+        "password": null,
+        "from": null
+    },
+    "auth": {
+        "admin": "$2a$10$/WF7Yd3BJt1bt9WIgCtlDuWTGSVNcKP.ICnEu323yBrHd8byuX552"
+    },
+    "middleware": {
+        "identity_provider": {
+            "type": "passthrough",
+            "params": "kbG_jYH_EKeykTFWPDZhYOtnX6HFY365mOmxl3mfJ2yJl6SEqBwmy8FyuE8CNdZbJiOSSk9iKjOmGmbhug=="
+        },
+        "attribute_mapping": {
+            "related_backend": "",
+            "params": "kbG_jYH_EKeykTFXp40oCne15m2l-QwvexXnnrZvNT16r4-EQSYFsozG"
+        }
+    },
+    "constant": {
+        "user": "devm",
+        "license": "agpl"
+    },
+    "connections": [
+        {
+            "type": "local",
+            "label": "local",
+            "path": "/"
+        }
+    ]
+}

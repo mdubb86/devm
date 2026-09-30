@@ -423,3 +423,9 @@ fetch-mutagen:
     chmod +x bin/mutagen
     cp "$tmp/mutagen-agents.tar.gz" bin/mutagen-agents.tar.gz
     echo "wrote bin/mutagen + bin/mutagen-agents.tar.gz for contract tests"
+
+# Regenerate the pre-baked filestash config + binary. Run only when
+# bumping the filestash version. Commits internal/scripts/embed/filestash*
+# for every downstream devm build to pick up.
+regen-filestash-config:
+    ./internal/scripts/regen-filestash-config.sh
