@@ -1,105 +1,184 @@
 package main
 
 import (
-	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/mdubb86/devm/internal/config"
-	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/spf13/cobra"
 )
 
-// popExecOpen is the exec seam for tests to override macOS `open`.
-var popExecOpen = func(args ...string) error {
+// popNativeFlag is the --native mode switch. When set, runPop uses
+// the mirror-open + tart-exec-cp path instead of building a filestash
+// URL. Package-level for test injection.
+var popNativeFlag bool
+
+// popExecOpen is the exec seam for macOS `open`. Tests override.
+var popExecOpen = defaultPopExecOpen
+
+func defaultPopExecOpen(args ...string) error {
 	return exec.Command("open", args...).Run()
 }
 
-// createPopSessionFn is the injection seam for cmd/devm/pop_test.go to
-// intercept the daemon call.
-var createPopSessionFn = func(ctx context.Context, ident identity.Config, projectName, guestPath string, isDir bool) (string, error) {
-	return serviceapi.NewClient(ident).CreatePopSession(ctx, projectName, guestPath, isDir)
+// tartExecCatFn is the seam for `tart exec <vm> cat <guest-path>`,
+// output redirected to macDest. Tests override.
+var tartExecCatFn = defaultTartExecCat
+
+func defaultTartExecCat(vm, guestPath, macDest string) error {
+	f, err := os.Create(macDest)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", macDest, err)
+	}
+	defer f.Close()
+	cmd := exec.Command("tart", "exec", vm, "cat", guestPath)
+	cmd.Stdout = f
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		os.Remove(macDest)
+		return fmt.Errorf("tart exec cat %s: %w", guestPath, err)
+	}
+	return nil
 }
 
 var popCmd = &cobra.Command{
-	Use:   "pop",
-	Short: "Open a file with its default Mac app",
-	Long: `devm pop resolves <path> through the project's label→mirror
-table and opens the resulting Mac-side file with macOS 'open'. <path>
-may be an absolute guest path (e.g. one printed by a guest process, or
-a project-root-relative path).
-
-The 'mac' and 'vm' subcommands are equivalent — both resolve the same
-way.`,
+	Use:   "pop <path>",
+	Short: "Open a file — filestash by default, --native for the macOS app",
+	Long: `devm pop <path> opens <path> in a browser via the project's
+bundled filestash service (https://files.<project>.<tld>). With
+--native, it resolves <path> through the project's mirror table and
+opens it in the macOS default app (Preview / Xcode / etc.); an
+out-of-mirror <path> is cp'd from the guest via 'tart exec cat' first,
+then opened.`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: runPop,
 }
 
-var popMacCmd = &cobra.Command{
-	Use:   "mac <path> [-- <open-args>...]",
-	Short: "Open a file, resolving it through the project's mirror table",
-	Args:  cobra.MinimumNArgs(1),
-	RunE:  runPop,
-}
-
-var popVMCmd = &cobra.Command{
-	Use:   "vm <path> [-- <open-args>...]",
-	Short: "Open a file, resolving it through the project's mirror table",
-	Args:  cobra.MinimumNArgs(1),
-	RunE:  runPop,
+func init() {
+	popCmd.Flags().BoolVar(&popNativeFlag, "native", false,
+		"open in macOS default app (Preview, Xcode, etc.) instead of the browser")
+	rootCmd.AddCommand(popCmd)
 }
 
 func runPop(cmd *cobra.Command, args []string) error {
 	cmd.SilenceUsage = true
 	pathArg, openArgs := splitPathAndOpenArgs(args)
 
-	// URL arg: pass straight to `open`, which routes it to the default
-	// browser (or the appropriate handler for the scheme). No config
-	// load, no mirror-table walk — the URL IS the resource.
+	// URL args pass through to `open` regardless of --native.
 	if strings.HasPrefix(pathArg, "http://") || strings.HasPrefix(pathArg, "https://") {
 		return popExecOpen(append([]string{pathArg}, openArgs...)...)
 	}
 
-	resolvedProject, err := discoverProjectFn()
+	resolved, err := discoverProjectFn()
 	if err != nil {
 		return err
 	}
-	loaded, err := config.Load(resolvedProject.MacCwd)
+	loaded, err := config.Load(resolved.MacCwd)
 	if err != nil {
 		return err
 	}
 
-	resolvedPath, err := resolvePopTarget(pathArg, resolvedProject.MacCwd, loaded)
+	guestPath := resolveGuestPath(pathArg, loaded)
+
+	if popNativeFlag {
+		return runPopNative(pathArg, guestPath, resolved, loaded, openArgs)
+	}
+	return runPopDefault(guestPath, loaded, openArgs)
+}
+
+// runPopDefault builds the filestash URL for guestPath and opens it.
+func runPopDefault(guestPath string, loaded schema.Config, openArgs []string) error {
+	filestashURL := (&url.URL{
+		Scheme: "https",
+		Host:   "files." + loaded.Project.Name + "." + cfg.TLD,
+		Path:   "/files/local" + guestPath,
+	}).String()
+	return popExecOpen(append([]string{filestashURL}, openArgs...)...)
+}
+
+// errNativeDir is returned whenever --native is asked to open a
+// directory — tart exec cat is per-file, so the error names the
+// default flow (filestash) as the working alternative.
+var errNativeDir = errors.New(
+	"pop: directories not supported under --native (tart exec cat is per-file); " +
+		"drop --native to browse the directory in filestash's default flow")
+
+// runPopNative implements the --native path: mirror-open for in-mirror
+// paths, tart-exec-cp for out-of-mirror paths. Directories are refused
+// with a clear error naming the alternative (default flow).
+func runPopNative(userInput, guestPath string, resolved LocalProject, loaded schema.Config, openArgs []string) error {
+	if strings.HasSuffix(userInput, "/") || strings.HasSuffix(guestPath, "/") {
+		return errNativeDir
+	}
+
+	// Try the mirror-table resolution first.
+	macPath, err := resolvePopTarget(userInput, resolved.MacCwd, loaded)
 	if err == nil {
-		return popExecOpen(append([]string{resolvedPath}, openArgs...)...)
+		if info, statErr := os.Stat(macPath); statErr == nil && info.IsDir() {
+			return errNativeDir
+		}
+		return popExecOpen(append([]string{macPath}, openArgs...)...)
 	}
-
 	if !isOutOfMirrorErr(err) {
 		return err
 	}
 
-	// Fallback: not in any mirror — ask the daemon for a temp sync
-	// session. pathArg is treated as an absolute guest path.
-	if !filepath.IsAbs(pathArg) {
-		return fmt.Errorf("pop: %q is not inside any mirrored repo/volume and is not an absolute guest path — pass an absolute guest path to pop out-of-mirror files", pathArg)
+	// Out-of-mirror: cp guest→scratch, then open the scratch file.
+	scratchRoot := serviceapi.PopScratchRoot(cfg)
+	if err := os.MkdirAll(scratchRoot, 0o755); err != nil {
+		return fmt.Errorf("pop --native: create scratch root %s: %w", scratchRoot, err)
 	}
-	isDir := strings.HasSuffix(pathArg, "/")
-	ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
-	defer cancel()
-	macPath, err := createPopSessionFn(ctx, cfg, loaded.Project.Name, pathArg, isDir)
-	if err != nil {
-		return err
+	dest := filepath.Join(scratchRoot, scratchName(loaded.Project.Name, guestPath))
+	if err := tartExecCatFn(resolved.Name, guestPath, dest); err != nil {
+		// tart exec cat on a directory fails with something like
+		// "cat: <path>: Is a directory" — translate that into the
+		// same clear, alternative-naming error as the other two
+		// directory-detection paths above, rather than surfacing
+		// cat's raw stderr.
+		if strings.Contains(strings.ToLower(err.Error()), "is a directory") {
+			return errNativeDir
+		}
+		return fmt.Errorf("pop --native: %w", err)
 	}
-	return popExecOpen(append([]string{macPath}, openArgs...)...)
+	return popExecOpen(append([]string{dest}, openArgs...)...)
+}
+
+// scratchName is a stable name for the cp target — hash(project+path)
+// so pops across different projects with the same basename don't
+// collide, and repeated pops of the same path reuse the same file.
+func scratchName(project, guestPath string) string {
+	sum := sha256.Sum256([]byte(project + "\x00" + guestPath))
+	return hex.EncodeToString(sum[:])[:20] + filepath.Ext(guestPath)
+}
+
+// resolveGuestPath maps a user's pathArg to an absolute guest path.
+// Relative → <guest-workspace-root>/<rel>, preserving a trailing
+// slash so directory listing URLs stay directory-shaped. Absolute →
+// passthrough (e.g. a path printed by a guest process).
+func resolveGuestPath(pathArg string, loaded schema.Config) string {
+	if filepath.IsAbs(pathArg) {
+		return pathArg
+	}
+	// Guest workspace root is /home/devm/<project-name> (shelfmates
+	// layout) — schema.GuestHomeDir + the project's primary label.
+	joined := filepath.Join(schema.GuestHomeDir, loaded.Project.Name, pathArg)
+	if strings.HasSuffix(pathArg, "/") && !strings.HasSuffix(joined, "/") {
+		joined += "/"
+	}
+	return joined
 }
 
 // isOutOfMirrorErr reports whether err is resolvePopTarget's
-// not-in-any-mirror error, the one case runPop falls back to the
-// daemon's pop temp-session instead of failing outright.
+// not-in-any-mirror error, the one case runPopNative falls back to
+// the tart-exec-cat scratch path instead of failing outright.
 func isOutOfMirrorErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "is not inside any mirrored repo/volume")
 }
@@ -146,10 +225,4 @@ func resolvePopTarget(pathArg, repoRoot string, pcfg schema.Config) (string, err
 		return "", fmt.Errorf("pop: no such file %q in project mirror", pathArg)
 	}
 	return storagePath, nil
-}
-
-func init() {
-	popCmd.AddCommand(popMacCmd)
-	popCmd.AddCommand(popVMCmd)
-	rootCmd.AddCommand(popCmd)
 }

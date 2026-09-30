@@ -1,177 +1,100 @@
 package main
 
 import (
-	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/mdubb86/devm/internal/identity"
-	"github.com/mdubb86/devm/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestResolvePopTarget_ProjectRootRelative — a relative path resolves
-// through the label→mirror table to the primary repo's mirror dir,
-// with no `.vm`-suffixed indirection.
-func TestResolvePopTarget_ProjectRootRelative(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate cfg.RuntimeDir() from the real HOME
-	repoRoot := t.TempDir()
-	url := "https://example.com/repo.git"
-	primary := true
-	pcfg := schema.Config{
-		Project: schema.Project{Name: "t"},
-		Repos: map[string]schema.RepoConfig{
-			"main": {URL: &url, Primary: &primary},
-		},
-	}
+// popTestOption configures setupTestProject.
+type popTestOption func(*popTestConfig)
 
-	mirrorDir := filepath.Join(cfg.RuntimeDir(), "t", "repo")
-	require.NoError(t, os.MkdirAll(mirrorDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(mirrorDir, "vm-file.png"), []byte("x"), 0o644))
-
-	got, err := resolvePopTarget("vm-file.png", repoRoot, pcfg)
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(mirrorDir, "vm-file.png"), got)
-	assert.NotContains(t, got, ".vm/")
+type popTestConfig struct {
+	mirrorPaths []string
+	scratchHome string
 }
 
-// TestResolvePopTarget_NestedRelativePath — a relative path with
-// subdirectories resolves the same way.
-func TestResolvePopTarget_NestedRelativePath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate cfg.RuntimeDir() from the real HOME
-	repoRoot := t.TempDir()
-	url := "https://example.com/repo.git"
-	primary := true
-	pcfg := schema.Config{
-		Project: schema.Project{Name: "t3"},
-		Repos: map[string]schema.RepoConfig{
-			"main": {URL: &url, Primary: &primary},
-		},
-	}
-
-	mirrorDir := filepath.Join(cfg.RuntimeDir(), "t3", "repo")
-	require.NoError(t, os.MkdirAll(filepath.Join(mirrorDir, "sub"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(mirrorDir, "sub", "near.png"), []byte("x"), 0o644))
-
-	got, err := resolvePopTarget("sub/near.png", repoRoot, pcfg)
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(mirrorDir, "sub", "near.png"), got)
+// withMirrorFile seeds the project's mirror table with an entry at
+// guestPath (an absolute guest path under /home/devm/<project>/), so
+// resolvePopTarget resolves it through the mirror table. A trailing
+// "/" creates a directory instead of a file.
+func withMirrorFile(guestPath string) popTestOption {
+	return func(c *popTestConfig) { c.mirrorPaths = append(c.mirrorPaths, guestPath) }
 }
 
-// TestResolvePopTarget_AbsoluteGuestPath — an absolute guest-side path
-// (e.g. pasted from guest output) resolves directly, regardless of
-// repoRoot.
-func TestResolvePopTarget_AbsoluteGuestPath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate cfg.RuntimeDir() from the real HOME
-	repoRoot := t.TempDir()
-	url := "https://example.com/repo.git"
-	primary := true
-	pcfg := schema.Config{
-		Project: schema.Project{Name: "t2"},
-		Repos: map[string]schema.RepoConfig{
-			"main": {URL: &url, Primary: &primary},
-		},
-	}
-
-	mirrorDir := filepath.Join(cfg.RuntimeDir(), "t2", "repo")
-	require.NoError(t, os.MkdirAll(filepath.Join(mirrorDir, "src"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(mirrorDir, "src", "abs.png"), []byte("x"), 0o644))
-
-	got, err := resolvePopTarget("/home/devm/repo/src/abs.png", repoRoot, pcfg)
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(mirrorDir, "src", "abs.png"), got)
+// withScratchRoot points cfg.RuntimeDir() — and therefore
+// serviceapi.PopScratchRoot — under dir, by setting HOME for the
+// duration of the test. dir is a valid prefix of the resulting
+// scratch path (RuntimeDir nests "Library/Application Support/<name>"
+// under HOME).
+func withScratchRoot(dir string) popTestOption {
+	return func(c *popTestConfig) { c.scratchHome = dir }
 }
 
-// TestResolvePopTarget_NotFound — resolving to a mirror path whose
-// file doesn't exist is an error, not a silent open of a missing file.
-func TestResolvePopTarget_NotFound(t *testing.T) {
-	repoRoot := t.TempDir()
-	url := "https://example.com/repo.git"
-	primary := true
-	pcfg := schema.Config{
-		Project: schema.Project{Name: "t4"},
-		Repos: map[string]schema.RepoConfig{
-			"main": {URL: &url, Primary: &primary},
-		},
-	}
-
-	_, err := resolvePopTarget("nope.png", repoRoot, pcfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no such file")
-}
-
-// TestResolvePopTarget_NoMirroredEntries — a project with no repos at
-// all has no primary tree to resolve a relative path against.
-func TestResolvePopTarget_NoMirroredEntries(t *testing.T) {
-	repoRoot := t.TempDir()
-	pcfg := schema.Config{Project: schema.Project{Name: "t5"}}
-
-	_, err := resolvePopTarget("anything.png", repoRoot, pcfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no primary repo")
-}
-
-// TestRunPop_URL_PassedStraightToOpen — a URL arg bypasses cwd /
-// config load / mirror table and lands in `open` verbatim.
-func TestRunPop_URL_PassedStraightToOpen(t *testing.T) {
-	var captured []string
-	orig := popExecOpen
-	popExecOpen = func(args ...string) error { captured = args; return nil }
-	t.Cleanup(func() { popExecOpen = orig })
-
-	err := runPop(popMacCmd, []string{"https://example.com/thing"})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"https://example.com/thing"}, captured)
-}
-
-// TestRunPop_URL_ForwardsOpenArgs — `-a Firefox` etc. after `--` reach
-// the `open` invocation alongside the URL.
-func TestRunPop_URL_ForwardsOpenArgs(t *testing.T) {
-	var captured []string
-	orig := popExecOpen
-	popExecOpen = func(args ...string) error { captured = args; return nil }
-	t.Cleanup(func() { popExecOpen = orig })
-
-	err := runPop(popMacCmd, []string{"http://localhost:3000", "--", "-a", "Firefox"})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"http://localhost:3000", "-a", "Firefox"}, captured)
-}
-
-// TestResolvePopTarget_AbsolutePathOutsideAnyEntry — an absolute path
-// that doesn't fall under any mirrored repo/volume is an error.
-func TestResolvePopTarget_AbsolutePathOutsideAnyEntry(t *testing.T) {
-	repoRoot := t.TempDir()
-	url := "https://example.com/repo.git"
-	primary := true
-	pcfg := schema.Config{
-		Project: schema.Project{Name: "t6"},
-		Repos: map[string]schema.RepoConfig{
-			"main": {URL: &url, Primary: &primary},
-		},
-	}
-
-	_, err := resolvePopTarget("/etc/passwd", repoRoot, pcfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not inside any mirrored")
-}
-
-// writePopWorkspace writes a minimal valid devm.yaml (project name +
-// a url-nil primary repo, so config.Load succeeds without touching a
-// real git remote) into a fresh temp dir and returns its path. Callers
-// point discoverProjectFn's fake MacCwd at this directory.
-func writePopWorkspace(t *testing.T, projectName string) string {
+// setupTestProject wires discoverProjectFn to a fresh temp project
+// named projectName, with an explicit URL + explicit label on its
+// primary repo so BuildEntities never shells out to git or derives a
+// label from a real checkout. tld documents the TLD the test expects
+// (a `go test`-built binary always runs under identity.Prod, so it's
+// always "test" — identity.Profile is a build-time ldflag, not
+// something a unit test can override).
+func setupTestProject(t *testing.T, projectName, tld string, opts ...popTestOption) {
 	t.Helper()
-	workspace := t.TempDir()
-	yaml := "project:\n  name: " + projectName + "\nrepos:\n  primary: {}\n"
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "devm.yaml"), []byte(yaml), 0o644))
-	return workspace
+	_ = tld
+
+	c := &popTestConfig{}
+	for _, opt := range opts {
+		opt(c)
+	}
+
+	home := c.scratchHome
+	if home == "" {
+		home = t.TempDir()
+	}
+	t.Setenv("HOME", home)
+
+	macCwd := t.TempDir()
+	yaml := "project:\n" +
+		"  name: " + projectName + "\n" +
+		"repos:\n" +
+		"  main:\n" +
+		"    url: https://example.com/repo.git\n" +
+		"    primary: true\n" +
+		"    label: " + projectName + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"), []byte(yaml), 0o644))
+
+	discoverProjectFn = func() (LocalProject, error) {
+		return LocalProject{Name: projectName, MacCwd: macCwd}, nil
+	}
+	t.Cleanup(func() { discoverProjectFn = discoverProject })
+
+	guestRoot := "/home/devm/" + projectName + "/"
+	for _, guestPath := range c.mirrorPaths {
+		rel := strings.TrimPrefix(guestPath, guestRoot)
+		// mountPassthrough resolves a mirrored entry to
+		// <RuntimeDir>/<project>/<label>/<rel-to-entry-guest-path>;
+		// the primary repo's label is projectName here (set
+		// explicitly above), so its mirror dir is
+		// <RuntimeDir>/<project>/<project>/.
+		macPath := filepath.Join(cfg.RuntimeDir(), projectName, projectName, rel)
+		if strings.HasSuffix(guestPath, "/") {
+			require.NoError(t, os.MkdirAll(macPath, 0o755))
+		} else {
+			require.NoError(t, os.MkdirAll(filepath.Dir(macPath), 0o755))
+			require.NoError(t, os.WriteFile(macPath, []byte("x"), 0o644))
+		}
+	}
 }
 
 // stubResolveProjectFn overrides discoverProjectFn for the duration of
 // the test to bypass the filesystem walk, returning name/macCwd as the
-// discovered project.
+// discovered project. Shared by other cmd/devm test files
+// (status_test.go, volume_test.go), not just pop's own tests.
 func stubResolveProjectFn(t *testing.T, name, macCwd string) {
 	t.Helper()
 	orig := discoverProjectFn
@@ -181,105 +104,129 @@ func stubResolveProjectFn(t *testing.T, name, macCwd string) {
 	t.Cleanup(func() { discoverProjectFn = orig })
 }
 
-// TestRunPop_FallbackToCreateSession_FileArg — an absolute, out-of-mirror
-// guest path with no trailing slash falls through resolvePopTarget's
-// error into createPopSessionFn with is_dir=false, and opens whatever
-// Mac path the daemon hands back.
-func TestRunPop_FallbackToCreateSession_FileArg(t *testing.T) {
-	workspace := writePopWorkspace(t, "myproj")
-	stubResolveProjectFn(t, "myproj", workspace)
+// TestRunPop_DefaultBuildsFilestashURL asserts the default flow
+// (no --native flag) opens https://files.<project>.<tld>/files/local<abs-path>.
+func TestRunPop_DefaultBuildsFilestashURL(t *testing.T) {
+	var got string
+	popExecOpen = func(args ...string) error { got = args[0]; return nil }
+	t.Cleanup(func() { popExecOpen = defaultPopExecOpen })
 
-	origOpen := popExecOpen
-	origCreate := createPopSessionFn
-	t.Cleanup(func() { popExecOpen = origOpen; createPopSessionFn = origCreate })
-
-	var openArgs []string
-	popExecOpen = func(args ...string) error { openArgs = args; return nil }
-
-	var gotProject, gotPath string
-	var gotIsDir bool
-	createPopSessionFn = func(ctx context.Context, ident identity.Config, projectName, guestPath string, isDir bool) (string, error) {
-		gotProject = projectName
-		gotPath = guestPath
-		gotIsDir = isDir
-		return "/scratch/xyz/index.html", nil
-	}
-
-	cmd := popMacCmd
-	cmd.SetContext(context.Background())
-	t.Chdir(workspace)
-
-	err := runPop(cmd, []string{"/tmp/site/index.html"})
+	// A path resolvable through the mirror table.
+	setupTestProject(t, "myproj", "test", withMirrorFile("/home/devm/myproj/foo.txt"))
+	err := runPop(popCmd, []string{"foo.txt"})
 	require.NoError(t, err)
-	assert.Equal(t, "myproj", gotProject)
-	assert.Equal(t, "/tmp/site/index.html", gotPath)
-	assert.False(t, gotIsDir)
-	assert.Equal(t, []string{"/scratch/xyz/index.html"}, openArgs)
+
+	assert.Equal(t,
+		"https://files.myproj.test/files/local/home/devm/myproj/foo.txt",
+		got,
+	)
 }
 
-// TestRunPop_FallbackToCreateSession_DirArgWithTrailingSlash — a
-// trailing slash on the out-of-mirror arg signals is_dir=true, and the
-// slash-terminated arg is forwarded to the daemon unchanged.
-func TestRunPop_FallbackToCreateSession_DirArgWithTrailingSlash(t *testing.T) {
-	workspace := writePopWorkspace(t, "myproj2")
-	stubResolveProjectFn(t, "myproj2", workspace)
+// TestRunPop_NativeInMirror asserts --native + in-mirror path calls
+// open with the Mac-side mirror path, not a URL.
+func TestRunPop_NativeInMirror(t *testing.T) {
+	var got []string
+	popExecOpen = func(args ...string) error { got = args; return nil }
+	t.Cleanup(func() { popExecOpen = defaultPopExecOpen })
 
-	origOpen := popExecOpen
-	origCreate := createPopSessionFn
-	t.Cleanup(func() { popExecOpen = origOpen; createPopSessionFn = origCreate })
+	setupTestProject(t, "myproj", "test", withMirrorFile("/home/devm/myproj/foo.txt"))
+	popNativeFlag = true
+	t.Cleanup(func() { popNativeFlag = false })
 
-	var openArgs []string
-	popExecOpen = func(args ...string) error { openArgs = args; return nil }
-
-	var gotProject, gotPath string
-	var gotIsDir bool
-	createPopSessionFn = func(ctx context.Context, ident identity.Config, projectName, guestPath string, isDir bool) (string, error) {
-		gotProject = projectName
-		gotPath = guestPath
-		gotIsDir = isDir
-		return "/scratch/abc", nil
-	}
-
-	cmd := popMacCmd
-	cmd.SetContext(context.Background())
-	t.Chdir(workspace)
-
-	err := runPop(cmd, []string{"/tmp/site/"})
+	err := runPop(popCmd, []string{"foo.txt"})
 	require.NoError(t, err)
-	assert.Equal(t, "myproj2", gotProject)
-	assert.Equal(t, "/tmp/site/", gotPath)
-	assert.True(t, gotIsDir)
-	assert.Equal(t, []string{"/scratch/abc"}, openArgs)
+	require.NotEmpty(t, got)
+	assert.NotContains(t, got[0], "https://", "must open mac path, not URL")
+	assert.Contains(t, got[0], "myproj/foo.txt")
 }
 
-// TestRunPop_FallbackRefusesRelativeArgOutOfMirror — a relative arg
-// that also isn't in any mirror can't be forwarded to the daemon (it
-// has no cwd on the guest to resolve against), so runPop refuses
-// before ever calling createPopSessionFn.
-func TestRunPop_FallbackRefusesRelativeArgOutOfMirror(t *testing.T) {
-	workspace := writePopWorkspace(t, "myproj3")
-	stubResolveProjectFn(t, "myproj3", workspace)
-
-	origOpen := popExecOpen
-	origCreate := createPopSessionFn
-	t.Cleanup(func() { popExecOpen = origOpen; createPopSessionFn = origCreate })
-
-	popExecOpen = func(args ...string) error {
-		t.Fatal("popExecOpen should not be called")
-		return nil
+// TestRunPop_NativeOutOfMirror_CopiesToScratch asserts --native + out-of-mirror
+// runs tart exec cat and opens the scratch file.
+func TestRunPop_NativeOutOfMirror_CopiesToScratch(t *testing.T) {
+	scratchDir := t.TempDir()
+	var catCalled bool
+	var openArg string
+	tartExecCatFn = func(vm, guestPath, macDest string) error {
+		catCalled = true
+		assert.Equal(t, "/etc/motd", guestPath)
+		return os.WriteFile(macDest, []byte("motd bytes\n"), 0o644)
 	}
-	createCalled := false
-	createPopSessionFn = func(ctx context.Context, ident identity.Config, projectName, guestPath string, isDir bool) (string, error) {
-		createCalled = true
-		return "", nil
+	popExecOpen = func(args ...string) error { openArg = args[0]; return nil }
+	t.Cleanup(func() {
+		tartExecCatFn = defaultTartExecCat
+		popExecOpen = defaultPopExecOpen
+	})
+
+	setupTestProject(t, "myproj", "test", withScratchRoot(scratchDir))
+	popNativeFlag = true
+	t.Cleanup(func() { popNativeFlag = false })
+
+	err := runPop(popCmd, []string{"/etc/motd"})
+	require.NoError(t, err)
+	assert.True(t, catCalled)
+	assert.True(t, strings.HasPrefix(openArg, scratchDir), "open with scratch file, got %q", openArg)
+	body, _ := os.ReadFile(openArg)
+	assert.Equal(t, "motd bytes\n", string(body))
+}
+
+// TestRunPop_NativeOutOfMirror_SymlinkResolves — Review Focus #4:
+// a symlink target has its bytes cp'd, not the symlink metadata.
+func TestRunPop_NativeOutOfMirror_SymlinkResolves(t *testing.T) {
+	// tart exec cat naturally follows symlinks (cat reads the file it
+	// resolves to); this test pins that we don't accidentally use
+	// something like tar or cp -P that preserves the symlink.
+	var caughtPath string
+	tartExecCatFn = func(vm, guestPath, macDest string) error {
+		caughtPath = guestPath
+		return os.WriteFile(macDest, []byte("target\n"), 0o644)
 	}
+	popExecOpen = func(args ...string) error { return nil }
+	t.Cleanup(func() {
+		tartExecCatFn = defaultTartExecCat
+		popExecOpen = defaultPopExecOpen
+	})
+	setupTestProject(t, "myproj", "test", withScratchRoot(t.TempDir()))
+	popNativeFlag = true
+	t.Cleanup(func() { popNativeFlag = false })
 
-	cmd := popMacCmd
-	cmd.SetContext(context.Background())
-	t.Chdir(workspace)
+	err := runPop(popCmd, []string{"/tmp/some-symlink"})
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/some-symlink", caughtPath,
+		"guest path is passed to tart exec cat verbatim; cat resolves the symlink")
+}
 
-	err := runPop(cmd, []string{"somefile.html"})
+// TestRunPop_NativeOnDirectory_Errors — Review Focus #5:
+// --native + a directory returns a clear error, not a cryptic cat failure.
+func TestRunPop_NativeOnDirectory_Errors(t *testing.T) {
+	tartExecCatFn = func(vm, guestPath, macDest string) error {
+		// Real cat on a directory: 'cat: /some/dir: Is a directory' → non-zero exit.
+		return errors.New("cat: /some/dir: Is a directory")
+	}
+	t.Cleanup(func() { tartExecCatFn = defaultTartExecCat })
+	setupTestProject(t, "myproj", "test", withScratchRoot(t.TempDir()))
+	popNativeFlag = true
+	t.Cleanup(func() { popNativeFlag = false })
+
+	err := runPop(popCmd, []string{"/some/dir"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not an absolute guest path")
-	assert.False(t, createCalled)
+	assert.Contains(t, err.Error(), "directories not supported under --native",
+		"error must name the constraint AND the alternative")
+	assert.Contains(t, err.Error(), "default flow",
+		"error must mention default flow works for directories")
+}
+
+// TestRunPop_DefaultOnDirectory_BuildsListingURL — Review Focus #5 opposite:
+// default flow works for directories (filestash renders the listing).
+func TestRunPop_DefaultOnDirectory_BuildsListingURL(t *testing.T) {
+	var got string
+	popExecOpen = func(args ...string) error { got = args[0]; return nil }
+	t.Cleanup(func() { popExecOpen = defaultPopExecOpen })
+	setupTestProject(t, "myproj", "test", withMirrorFile("/home/devm/myproj/subdir/"))
+
+	err := runPop(popCmd, []string{"subdir/"})
+	require.NoError(t, err)
+	assert.Equal(t,
+		"https://files.myproj.test/files/local/home/devm/myproj/subdir/",
+		got,
+	)
 }
