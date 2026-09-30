@@ -116,6 +116,35 @@ func TestProxyListenerCheck_SkipsNonRunningProjects(t *testing.T) {
 	assert.False(t, stoppedRow.ProxyListenerHealth, "non-running project must not be probed or updated")
 }
 
+func TestProxyListenerCheck_RespawnFollowedByHealthProbeUpdatesCache(t *testing.T) {
+	withNoProxyListenerRetryDelay(t)
+	cache := NewStateCache()
+	cache.SetVMState("proj-a", VMRunning)
+	calls := 0
+	respawnCalls := 0
+	fake := &fakeGroundTruth{
+		Projects: []string{"proj-a"},
+		ProxyListenerHealthFn: func(ctx context.Context, projectID string) bool {
+			calls++
+			// 1: initial probe, 2: retry probe — both unhealthy.
+			// 3: post-respawn re-probe — healthy, listener self-healed.
+			return calls >= 3
+		},
+		RespawnProxyListenersFn: func(ctx context.Context, projectID string) error {
+			respawnCalls++
+			return nil
+		},
+	}
+	check := NewProxyListenerCheck()
+	drifted, err := check.Run(context.Background(), cache, fake)
+	require.NoError(t, err)
+	assert.True(t, drifted, "a respawn happened this tick, so drift is still reported")
+	assert.Equal(t, 1, respawnCalls)
+	assert.Equal(t, 3, calls, "expected initial probe, retry probe, and post-respawn re-probe")
+	row, _ := cache.ProjectRow("proj-a")
+	assert.True(t, row.ProxyListenerHealth, "cache must reflect the post-respawn healthy re-probe")
+}
+
 func TestProxyListenerCheck_RespawnFailureReturnsErrorButCacheReflectsObserved(t *testing.T) {
 	withNoProxyListenerRetryDelay(t)
 	cache := NewStateCache()

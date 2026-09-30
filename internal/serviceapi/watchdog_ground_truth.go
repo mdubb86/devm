@@ -3,7 +3,7 @@ package serviceapi
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -98,7 +98,9 @@ func (g *RealGroundTruth) PopSessionSummaryForProject(projectID string) PopSessi
 // Short timeout and no redirect following — nothing behind /v1/health
 // legitimately redirects, so a probe that can't complete in 2s or
 // that redirects is unhealthy. Shared across probes: Go's default
-// transport pools connections per host, so reuse is fine here.
+// transport pools connections per host, and ProxyListenerHealth drains
+// each response body before closing it so the connection is eligible
+// for reuse.
 var healthProbeClient = &http.Client{
 	Timeout: 2 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -132,7 +134,12 @@ func (g *RealGroundTruth) ProxyListenerHealth(ctx context.Context, projectID str
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// Drain to EOF before Close so the transport can reuse the
+		// underlying connection instead of opening a fresh one per probe.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
@@ -146,12 +153,25 @@ func (g *RealGroundTruth) ProxyListenerHealth(ctx context.Context, projectID str
 // RespawnProxyListeners tears down and rebinds projectID's :80/:443
 // listener pair. Used by ProxyListenerCheck when a health probe fails
 // twice in a row (see watchdog_check_proxy_listener.go).
+//
+// Takes the per-project reconcile lock so a watchdog respawn can't
+// race a concurrent /vm/stop: /vm/stop holds the same lock across its
+// whole teardown sequence (StopProjectListeners, IP release, and
+// ironProxyState.del — vm.go), so re-checking ironProxyState under
+// this lock is guaranteed to observe either the pre-stop state or the
+// fully-torn-down state, never a state in between.
 func (g *RealGroundTruth) RespawnProxyListeners(ctx context.Context, projectID string) error {
-	g.Proxy.StopProjectListeners(projectID)
+	unlock := g.Locks.Lock(projectID)
+	defer unlock()
+
 	info, ok := ironProxyState.get(projectID)
 	if !ok || info.ProjectIP == "" {
-		return fmt.Errorf("respawn proxy listeners for %s: no project IP recorded", projectID)
+		// The project was torn down (or never had a claimed IP) while
+		// we waited for the lock — nothing to respawn.
+		return nil
 	}
+
+	g.Proxy.StopProjectListeners(projectID)
 	return g.Proxy.StartProjectListeners(ctx, projectID, info.ProjectIP)
 }
 
