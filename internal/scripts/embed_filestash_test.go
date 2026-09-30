@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -20,8 +21,8 @@ import (
 // Runs on linux/arm64 only (filestash binary is arm64 Linux); on
 // other platforms it skips.
 func TestFilestashEmbeddedConfigStarts(t *testing.T) {
-	if _, err := os.Stat("/proc/version"); err != nil {
-		t.Skip("filestash binary is linux/arm64-only; skipping on non-Linux")
+	if runtime.GOOS != "linux" || runtime.GOARCH != "arm64" {
+		t.Skip("filestash binary is linux/arm64-only; skipping on this platform")
 	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "filestash")
