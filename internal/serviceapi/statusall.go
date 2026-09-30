@@ -27,6 +27,13 @@ type ProjectStatus struct {
 	// aggregates this across every running project into the top-level
 	// proxy_healthy field.
 	ProxyListenerHealth bool `json:"proxy_listener_health"`
+	// MutagenHealth mirrors ProjectRow.MutagenHealth.Status — the
+	// mutagen-monitor subscriber's real-time verdict on this project's
+	// sync sessions (see mutagen_monitor.go). MutagenStatus's
+	// underlying type is string, so this serializes as "ok"/"dead" on
+	// the wire, not a numeric enum. Empty when no verdict has been
+	// recorded yet for this project (no sync sessions ever observed).
+	MutagenHealth MutagenStatus `json:"mutagen_health,omitempty"`
 	// Orphaned marks a running VM that carries devm sidecar artifacts
 	// but no state snapshot — devm-created, daemon lost track of it
 	// (see detectOrphanVMs). Such rows have no meaningful Proxy or
@@ -77,6 +84,7 @@ func projectStatusesFromCache(ctx context.Context, cfg identity.Config, tr TartL
 			MacCwd:              row.MacCwd,
 			ApproveState:        approve,
 			ProxyListenerHealth: row.ProxyListenerHealth,
+			MutagenHealth:       row.MutagenHealth.Status,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

@@ -333,6 +333,40 @@ func TestStatus_ProxyHealthyTrueWhenAllRunningHealthy(t *testing.T) {
 	assert.Empty(t, res.ProxyError)
 }
 
+// TestRunStatus_MutagenHealthPropagatesForCurrentProject proves
+// RunStatus picks this project's own MutagenHealth verdict out of
+// /status/all's cross-project rows (matching statusMinimalCfg's
+// project name "x"), ignoring other projects' rows.
+func TestRunStatus_MutagenHealthPropagatesForCurrentProject(t *testing.T) {
+	cache := serviceapi.NewStateCache()
+	cache.SetVMState("x", serviceapi.VMRunning)
+	cache.SetMutagenHealth("x", serviceapi.MutagenHealth{Status: serviceapi.MutagenDead})
+	cache.SetVMState("other-proj", serviceapi.VMRunning)
+	cache.SetMutagenHealth("other-proj", serviceapi.MutagenHealth{Status: serviceapi.MutagenOK})
+	cleanup := startStatusAllDaemon(t, cache)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.Equal(t, "dead", res.MutagenHealth)
+}
+
+// TestRunStatus_MutagenHealthEmptyWhenUntracked proves res.MutagenHealth
+// stays "" rather than claiming a verdict when the cache has never
+// recorded one for this project.
+func TestRunStatus_MutagenHealthEmptyWhenUntracked(t *testing.T) {
+	cache := serviceapi.NewStateCache()
+	cache.SetVMState("x", serviceapi.VMRunning)
+	cleanup := startStatusAllDaemon(t, cache)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.Empty(t, res.MutagenHealth)
+}
+
 func TestRunStatus_RoutingZeroWhenDaemonUnreachable(t *testing.T) {
 	// When the daemon is not running, RoutingStatusFromDaemon fails and
 	// RunStatus leaves Routing zero-valued. RunStatus must not error out

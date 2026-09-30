@@ -53,6 +53,13 @@ type StatusResult struct {
 	ProxyHealthy bool
 	ProxyError   string
 
+	// MutagenHealth is this project's current mutagen-sync verdict
+	// ("ok"/"dead"), sourced from ProjectRow.MutagenHealth via
+	// /status/all — the same call ProxyHealthy aggregates from. Empty
+	// when the daemon has never recorded a verdict for this project
+	// (no sync sessions, or /status/all was unreachable).
+	MutagenHealth string
+
 	// ProxyHealth is the daemon's per-project iron-proxy verdict (from
 	// /handshake): missing, stale, or ok. Nil when the daemon was
 	// unreachable — the format layer omits the line entirely rather
@@ -643,6 +650,7 @@ func FormatStatusJSON(r StatusResult) string {
 		Routing        serviceapi.RoutingStatus `json:"routing"`
 		Egress         *serviceapi.EgressStatus `json:"egress,omitempty"`
 		IronProxy      *ironProxy               `json:"iron_proxy,omitempty"`
+		MutagenHealth  string                   `json:"mutagen_health,omitempty"`
 		ApproveState   *approveState            `json:"approve_state"`
 		PopSessions    *popSessions             `json:"pop_sessions"`
 	}
@@ -691,6 +699,7 @@ func FormatStatusJSON(r StatusResult) string {
 			Drift:          drifts,
 			Routing:        r.Routing,
 			Egress:         r.Egress,
+			MutagenHealth:  r.MutagenHealth,
 		}
 		if r.ProxyHealth != nil {
 			b.Project.IronProxy = &ironProxy{

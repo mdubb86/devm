@@ -114,6 +114,18 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 			sort.Strings(unhealthy)
 			res.ProxyError = fmt.Sprintf("proxy listener unhealthy for: %s", strings.Join(unhealthy, ", "))
 		}
+
+		// Mutagen health, this project only — Task 9's mutagen-monitor
+		// subscriber writes ProjectRow.MutagenHealth in near-real-time
+		// (see mutagen_monitor.go), and /status/all is already fetched
+		// above for the proxy aggregate, so reuse it rather than a
+		// second round trip.
+		for _, row := range rows {
+			if row.Name == vmName {
+				res.MutagenHealth = string(row.MutagenHealth)
+				break
+			}
+		}
 	} else {
 		res.ProxyError = rowsErr.Error()
 	}

@@ -182,6 +182,30 @@ func TestFormatStatusJSON_IronProxyNilOmitted(t *testing.T) {
 	assert.NotContains(t, proj, "iron_proxy")
 }
 
+// TestFormatStatusJSON_MutagenHealth proves the single-project
+// `devm status --json` output carries mutagen_health under project
+// when RunStatus populated StatusResult.MutagenHealth.
+func TestFormatStatusJSON_MutagenHealth(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true,
+		Sandbox: "x", State: "running", MutagenHealth: "dead",
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	assert.Equal(t, "dead", proj["mutagen_health"])
+}
+
+// TestFormatStatusJSON_MutagenHealthOmittedWhenEmpty proves the field
+// is omitted (not emitted as "") when no verdict has been recorded,
+// matching the omitempty behavior of the other optional health fields.
+func TestFormatStatusJSON_MutagenHealthOmittedWhenEmpty(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running"})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	assert.NotContains(t, proj, "mutagen_health")
+}
+
 // TestFormatStatusJSON_RebindPresentWhenSet proves the single-project
 // `devm status --json` output carries the rebind report — /status/all's
 // JSON already did, but /status's local `ironProxy` struct dropped it,

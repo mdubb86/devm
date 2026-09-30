@@ -65,6 +65,44 @@ func TestStatusAll_RunningWithMissingProxyAndStopped(t *testing.T) {
 	assert.False(t, stopped.VMRunning)
 }
 
+// TestStatusAll_MutagenHealthPopulatedFromCache proves the wire
+// builder copies row.MutagenHealth.Status onto ProjectStatus, and that
+// it serializes as a JSON string ("ok"), not a numeric enum — a
+// project with no recorded verdict yet gets the field omitted.
+func TestStatusAll_MutagenHealthPopulatedFromCache(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	cache := NewStateCache()
+	cache.SetVMState("synced-proj", VMRunning)
+	cache.SetMutagenHealth("synced-proj", MutagenHealth{Status: MutagenOK})
+	cache.SetVMState("dead-proj", VMRunning)
+	cache.SetMutagenHealth("dead-proj", MutagenHealth{Status: MutagenDead})
+	cache.SetVMState("untracked-proj", VMRunning)
+
+	srv := NewServer(identity.Prod.SocketPath(), Build{Version: "dev"})
+	tr := &fakeStatusAllTart{running: map[string]bool{}}
+	RegisterStatusAllHandler(srv, identity.Prod, tr, cache)
+
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/status/all", nil))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	// Assert against the raw JSON, not just the unmarshaled struct, to
+	// pin that MutagenStatus serializes as a string on the wire.
+	require.Contains(t, rec.Body.String(), `"mutagen_health":"ok"`)
+	require.Contains(t, rec.Body.String(), `"mutagen_health":"dead"`)
+
+	var rows []ProjectStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rows))
+	byID := map[string]ProjectStatus{}
+	for _, r := range rows {
+		byID[r.Name] = r
+	}
+	assert.Equal(t, MutagenOK, byID["synced-proj"].MutagenHealth)
+	assert.Equal(t, MutagenDead, byID["dead-proj"].MutagenHealth)
+	assert.Equal(t, MutagenStatus(""), byID["untracked-proj"].MutagenHealth)
+}
+
 func TestStatusAll_NoCacheRows_EmptyList(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
