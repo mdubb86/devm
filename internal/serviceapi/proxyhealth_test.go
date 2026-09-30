@@ -45,7 +45,7 @@ func TestComputeProxyHealth_IncludesRebindStatus(t *testing.T) {
 	caDir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, caDir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
 	proxy.RecordRebindStatus("p", RebindStatus{
 		State:     RebindFailed,
 		Attempts:  3,
@@ -67,7 +67,7 @@ func TestComputeProxyHealth_RebindNilWhenNoAttempt(t *testing.T) {
 	caDir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, caDir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
 
 	h := ComputeProxyHealth(identity.Prod, sup, proxy, "p")
 	assert.Nil(t, h.Rebind)

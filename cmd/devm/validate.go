@@ -17,11 +17,14 @@ var validateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		cfg, err := config.Load(resolved.MacCwd)
+		pcfg, err := config.Load(resolved.MacCwd)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("OK — %d service(s) configured\n", len(cfg.Services))
+		if err := rejectReservedFilesHostname(pcfg, cfg); err != nil {
+			return err
+		}
+		fmt.Printf("OK — %d service(s) configured\n", len(pcfg.Services))
 		return nil
 	},
 }

@@ -286,7 +286,7 @@ exit 0
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	cache := NewStateCache()
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, routes, NewPopSessionStore(), nil, cache)
 
 	body, err := json.Marshal(VMStartRequest{Name: project, MacCwd: macCwd, Cfg: schema.Config{}})
@@ -411,7 +411,7 @@ exit 0
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	locks := NewProjectLocks()
 	cache := NewStateCache()
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, routes, NewPopSessionStore(), nil, cache)
 
 	body, err := json.Marshal(VMStartRequest{Name: project, MacCwd: macCwd, Cfg: schema.Config{}})

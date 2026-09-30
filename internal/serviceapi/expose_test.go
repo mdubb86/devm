@@ -21,15 +21,15 @@ func TestComputeExposeMap_ServicesAndSSH(t *testing.T) {
 	got := computeExposeMap(cfg, "127.42.0.1")
 
 	// Expect one entry per service with hostname+port (direct or not),
-	// plus SSH and gdevm-serve's always-on health port. "noport" and
-	// "nohost" don't participate in devm's routing model, so they must
-	// NOT appear.
+	// plus SSH, gdevm-serve's always-on health port, and filestash's
+	// always-on port. "noport" and "nohost" don't participate in
+	// devm's routing model, so they must NOT appear.
 	byGuest := map[int]softnet.ExposePort{}
 	for _, p := range got {
 		byGuest[p.GuestPort] = p
 	}
-	if len(got) != 4 {
-		t.Fatalf("want 4 expose ports (db, web, ssh, gdevm-serve), got %d: %+v", len(got), got)
+	if len(got) != 5 {
+		t.Fatalf("want 5 expose ports (db, web, ssh, gdevm-serve, filestash), got %d: %+v", len(got), got)
 	}
 	if p := byGuest[5432]; p.HostPort != 5432 || p.BindIP != "127.42.0.1" {
 		t.Errorf("db: want host 5432 bind 127.42.0.1, got %+v", p)
@@ -46,6 +46,9 @@ func TestComputeExposeMap_ServicesAndSSH(t *testing.T) {
 	if p := byGuest[gdevmServePort]; p.HostPort != gdevmServePort || p.BindIP != "127.42.0.1" {
 		t.Errorf("gdevm-serve: want host %d bind 127.42.0.1, got %+v", gdevmServePort, p)
 	}
+	if p := byGuest[filestashServePort]; p.HostPort != filestashServePort || p.BindIP != "127.42.0.1" {
+		t.Errorf("filestash: want host %d bind 127.42.0.1, got %+v", filestashServePort, p)
+	}
 }
 
 // TestComputeExposeMap_AllServicesWithHostnameAndPortExposed pins the M6
@@ -59,8 +62,8 @@ func TestComputeExposeMap_AllServicesWithHostnameAndPortExposed(t *testing.T) {
 		"api": {Port: 4000, Hostname: "api.test"},
 	}}
 	got := computeExposeMap(cfg, "127.42.0.9")
-	if len(got) != 4 {
-		t.Fatalf("want web, api, ssh, and gdevm-serve exposed, got %d: %+v", len(got), got)
+	if len(got) != 5 {
+		t.Fatalf("want web, api, ssh, gdevm-serve, and filestash exposed, got %d: %+v", len(got), got)
 	}
 	byGuest := map[int]softnet.ExposePort{}
 	for _, p := range got {
@@ -78,6 +81,9 @@ func TestComputeExposeMap_AllServicesWithHostnameAndPortExposed(t *testing.T) {
 	if p := byGuest[gdevmServePort]; p.HostPort != gdevmServePort || p.BindIP != "127.42.0.9" {
 		t.Errorf("gdevm-serve: want host %d bind 127.42.0.9, got %+v", gdevmServePort, p)
 	}
+	if p := byGuest[filestashServePort]; p.HostPort != filestashServePort || p.BindIP != "127.42.0.9" {
+		t.Errorf("filestash: want host %d bind 127.42.0.9, got %+v", filestashServePort, p)
+	}
 }
 
 // TestComputeExposeMap_NonDirectServiceWithHostnameIsExposed pins the M6
@@ -94,6 +100,7 @@ func TestComputeExposeMap_NonDirectServiceWithHostnameIsExposed(t *testing.T) {
 		{GuestPort: 22, BindIP: "127.42.0.5", HostPort: 22},
 		{GuestPort: 8080, BindIP: "127.42.0.5", HostPort: 8080},
 		{GuestPort: gdevmServePort, BindIP: "127.42.0.5", HostPort: gdevmServePort},
+		{GuestPort: filestashServePort, BindIP: "127.42.0.5", HostPort: filestashServePort},
 	}
 	assert.Equal(t, want, got)
 }
@@ -115,8 +122,8 @@ func TestComputeExposeMap_SSHAlwaysPresent(t *testing.T) {
 	if !haveSSH {
 		t.Fatalf("ssh must always be present, got %+v", got)
 	}
-	if len(got) != 3 {
-		t.Fatalf("want 3 (db + ssh + gdevm-serve), got %d: %+v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("want 4 (db + ssh + gdevm-serve + filestash), got %d: %+v", len(got), got)
 	}
 }
 
@@ -129,7 +136,7 @@ func TestComputeExposeMap_BindsProjectIP(t *testing.T) {
 		},
 	}
 	ports := computeExposeMap(cfg, "127.42.0.1")
-	require.Len(t, ports, 4) // api, db, ssh, gdevm-serve
+	require.Len(t, ports, 5) // api, db, ssh, gdevm-serve, filestash
 	for _, p := range ports {
 		assert.Equal(t, "127.42.0.1", p.BindIP, "bind IP for %d", p.GuestPort)
 	}

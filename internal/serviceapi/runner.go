@@ -146,7 +146,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	}
 
 	// Routes table — empty on startup; CLI populates via admin API.
-	routes := NewRoutes()
+	routes := NewRoutes(cfg.TLD)
 
 	// Reverse proxy (Ship 3, per-project since B3). Binds one HTTP +
 	// one HTTPS listener per active project's ProjectIP, lazily via

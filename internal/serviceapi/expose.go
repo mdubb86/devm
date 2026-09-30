@@ -45,6 +45,17 @@ func computeExposeMap(cfg schema.Config, projectIP string) []softnet.ExposePort 
 		BindIP:    projectIP,
 		HostPort:  gdevmServePort,
 	})
+	// filestash is always exposed, same as gdevm-serve — the Mac
+	// daemon's reserved files.<project>.<tld> route (see
+	// reservedFilestashRoute) dials projectIP:filestashServePort
+	// expecting softnet to forward it into the guest's bundled
+	// filestash service; without this the route dials nothing on the
+	// Mac side.
+	ports = append(ports, softnet.ExposePort{
+		GuestPort: filestashServePort,
+		BindIP:    projectIP,
+		HostPort:  filestashServePort,
+	})
 	sort.Slice(ports, func(i, j int) bool { return ports[i].GuestPort < ports[j].GuestPort })
 	return ports
 }

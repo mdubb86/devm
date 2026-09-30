@@ -16,7 +16,7 @@ import (
 )
 
 func TestRoutes_Apply_AddsEntries(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.Apply("p1", []Route{
 		{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM},
 	}))
@@ -27,7 +27,7 @@ func TestRoutes_Apply_AddsEntries(t *testing.T) {
 }
 
 func TestRoutes_Apply_ReplacesProjectEntries(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.Apply("p1", []Route{
 		{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM, Project: "p1"},
 		{Hostname: "api.test", BackendPort: 51002, Mode: ModeVM, Project: "p1"},
@@ -43,7 +43,7 @@ func TestRoutes_Apply_ReplacesProjectEntries(t *testing.T) {
 }
 
 func TestRoutes_Apply_DoesNotTouchOtherProjects(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.Apply("p1", []Route{{Hostname: "p1.test", BackendPort: 51001, Mode: ModeVM}}))
 	require.NoError(t, r.Apply("p2", []Route{{Hostname: "p2.test", BackendPort: 51002, Mode: ModeVM}}))
 	require.NoError(t, r.Apply("p1", []Route{{Hostname: "p1-new.test", BackendPort: 51003, Mode: ModeVM}}))
@@ -53,7 +53,7 @@ func TestRoutes_Apply_DoesNotTouchOtherProjects(t *testing.T) {
 }
 
 func TestRoutes_Remove_DropsProjectEntries(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM}}))
 	require.NoError(t, r.Apply("p2", []Route{{Hostname: "other.test", BackendPort: 51002, Mode: ModeVM}}))
 	r.Remove("p1")
@@ -64,7 +64,7 @@ func TestRoutes_Remove_DropsProjectEntries(t *testing.T) {
 }
 
 func TestRoutes_BackendHost_PreservedInLookup(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.Apply("p1", []Route{
 		{Hostname: "app.test", BackendHost: "192.168.64.5", BackendPort: 3000, Mode: ModeVM},
 	}))
@@ -75,7 +75,7 @@ func TestRoutes_BackendHost_PreservedInLookup(t *testing.T) {
 }
 
 func TestRoutesLookupExcludesDirect(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.Apply("proj", []Route{
 		{Hostname: "web.test", BackendPort: 8080, Mode: ModeVM, Project: "proj"},
 		{Hostname: "db.test", BackendPort: 54322, Direct: true, Project: "proj"},
@@ -104,7 +104,7 @@ func TestRoutesLookupExcludesDirect(t *testing.T) {
 }
 
 func TestRoutes_Lookup_ScopedByProject(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.Apply("p1", []Route{
 		{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM, Project: "p1"},
 	}))
@@ -126,7 +126,7 @@ func TestRoutes_Lookup_ScopedByProject(t *testing.T) {
 }
 
 func TestRoutes_ConcurrentReadWrite_NoRace(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.Apply("p1", []Route{{Hostname: "app.test", BackendPort: 51001, Mode: ModeVM, Project: "p1"}}))
 
 	var wg sync.WaitGroup
@@ -147,7 +147,7 @@ func TestApplyRoutes_SubstitutesProjectIP_ForVMNonDirect(t *testing.T) {
 	ironProxyState.put("proj-a", projectInfo{ProjectIP: "127.42.0.7"})
 	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	srv := &Server{mux: http.NewServeMux()}
 	proxy := NewProxyServer(identity.Prod, routes, nil)
 	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
@@ -182,7 +182,7 @@ func TestApplyRoutes_ErrorsWhenProjectIPUnallocated(t *testing.T) {
 	ironProxyState = newIronProxyStore()
 	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	srv := &Server{mux: http.NewServeMux()}
 	proxy := NewProxyServer(identity.Prod, routes, nil)
 	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
@@ -213,7 +213,7 @@ func TestApplyRoutes_LocalModePassthrough(t *testing.T) {
 	ironProxyState = newIronProxyStore()
 	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	srv := &Server{mux: http.NewServeMux()}
 	proxy := NewProxyServer(identity.Prod, routes, nil)
 	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
@@ -239,7 +239,7 @@ func TestApplyRoutes_DirectVMPassthrough(t *testing.T) {
 	ironProxyState.put("proj-d", projectInfo{ProjectIP: "127.42.0.9"})
 	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	srv := &Server{mux: http.NewServeMux()}
 	proxy := NewProxyServer(identity.Prod, routes, nil)
 	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
@@ -262,7 +262,7 @@ func TestApplyRoutes_DirectVMPassthrough(t *testing.T) {
 }
 
 func TestRoutes_Apply_CollisionRejectsSecondProject(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	err := r.Apply("alpha", []Route{{Hostname: "api.shared.test", Project: "alpha"}})
 	require.NoError(t, err)
 
@@ -279,7 +279,7 @@ func TestRoutes_Apply_CollisionRejectsSecondProject(t *testing.T) {
 }
 
 func TestRoutes_Apply_SameProjectReapplyAllowed(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.Apply("alpha", []Route{{Hostname: "api.alpha.test", Project: "alpha"}}))
 	// Reapply with a different set — allowed.
 	require.NoError(t, r.Apply("alpha", []Route{{Hostname: "web.alpha.test", Project: "alpha"}}))
@@ -290,7 +290,7 @@ func TestRoutes_Apply_SameProjectReapplyAllowed(t *testing.T) {
 }
 
 func TestRoutes_Apply_LANMapPopulatedForExposeHost(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.Apply("alpha", []Route{
 		{Hostname: "public.alpha.test", Project: "alpha", ExposeHost: true},
 		{Hostname: "private.alpha.test", Project: "alpha", ExposeHost: false},
@@ -303,7 +303,7 @@ func TestRoutes_Apply_LANMapPopulatedForExposeHost(t *testing.T) {
 }
 
 func TestRoutes_Remove_ClearsLANMap(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.Apply("alpha", []Route{{Hostname: "x.alpha.test", Project: "alpha", ExposeHost: true}}))
 	assert.Equal(t, 1, r.CountLANRoutes())
 	r.Remove("alpha")
@@ -330,7 +330,7 @@ func TestApplyRoutes_MirrorsResolvedToSnapshot(t *testing.T) {
 		ProjectIP: "127.42.0.7",
 	}))
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	srv := &Server{mux: http.NewServeMux()}
 	proxy := NewProxyServer(identity.Prod, routes, nil)
 	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
@@ -374,7 +374,7 @@ func TestApplyRoutes_MirrorSurvivesMissingSnapshot(t *testing.T) {
 	ironProxyState.put("no-snap-proj", projectInfo{ProjectIP: "127.42.0.8"})
 	t.Cleanup(func() { ironProxyState = newIronProxyStore() })
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	srv := &Server{mux: http.NewServeMux()}
 	proxy := NewProxyServer(identity.Prod, routes, nil)
 	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
@@ -411,7 +411,7 @@ func TestRemoveRoutes_ClearsSnapshotRoutes(t *testing.T) {
 		},
 	}))
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, routes.Apply("clear-proj", []Route{
 		{Hostname: "api.clear-proj.test", BackendHost: "127.42.0.9", BackendPort: 8080, Mode: ModeVM, Project: "clear-proj"},
 	}))
@@ -437,7 +437,7 @@ func TestRemoveRoutes_ClearsSnapshotRoutes(t *testing.T) {
 // reconcile` all call Apply with only the project's user-declared
 // routes, and none of them know about the reserved route.
 func TestRoutes_Apply_PreservesReservedRoutes(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, r.applyReservedRoute("proj-a", Route{
 		Hostname:    "_devm.proj-a.test",
 		BackendHost: "127.0.0.1",
@@ -483,7 +483,7 @@ func TestRoutes_Apply_PreservesReservedRoutes(t *testing.T) {
 // only applyReservedRoute (server-internal, used by /vm/start) may set
 // one.
 func TestRoutes_Apply_RejectsReservedHostnameInBatch(t *testing.T) {
-	r := NewRoutes()
+	r := NewRoutes(identity.Prod.TLD)
 	err := r.Apply("proj-a", []Route{
 		{Hostname: "_devm.foo.test", BackendPort: 8940, Mode: ModeVM, Project: "proj-a"},
 	})

@@ -86,7 +86,7 @@ func TestProxy_HTTP_RoutesByHostWithinProject(t *testing.T) {
 	backPort, cleanup := startBackend(t, "hello from backend")
 	defer cleanup()
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, routes.Apply("p1", []Route{
 		{Hostname: "app.test", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
 	}))
@@ -110,7 +110,7 @@ func TestProxy_HTTP_RoutesByHostWithinProject(t *testing.T) {
 }
 
 func TestProxy_NoLocalAddrInContext_502(t *testing.T) {
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
@@ -128,7 +128,7 @@ func TestProxy_NoLocalAddrInContext_502(t *testing.T) {
 }
 
 func TestProxy_DestIPWithNoProject_502NoProject(t *testing.T) {
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestProxy_HostMismatchAcrossProjects_502NotFallthrough(t *testing.T) {
 	backPort, cleanup := startBackend(t, "p1's backend")
 	defer cleanup()
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, routes.Apply("p1", []Route{
 		{Hostname: "app.test", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
 	}))
@@ -182,7 +182,7 @@ func TestProxy_HostMismatchAcrossProjects_502NotFallthrough(t *testing.T) {
 }
 
 func TestProxy_BackendUnreachable_502WithDiagnostic(t *testing.T) {
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, routes.Apply("p1", []Route{
 		// Port unlikely to be in use — high in the dynamic range.
 		{Hostname: "down.test", BackendPort: 59999, Mode: ModeVM, Project: "p1"},
@@ -208,7 +208,7 @@ func TestProxy_BackendHost_ExplicitLocalhost(t *testing.T) {
 	backPort, cleanup := startBackend(t, "from backend")
 	defer cleanup()
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	require.NoError(t, routes.Apply("p1", []Route{
 		{Hostname: "app.test", BackendHost: "127.0.0.1", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
 	}))
@@ -527,7 +527,7 @@ func TestStartProjectListeners_DifferentProjectsDontBlockEachOther(t *testing.T)
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
 
 	const ipA = "127.42.0.20"
 	const ipB = "127.42.0.21"
@@ -593,7 +593,7 @@ func TestStartProjectListeners_ConcurrentCallsBindOnce(t *testing.T) {
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
 
 	ctx := context.Background()
 	var wg sync.WaitGroup
@@ -626,7 +626,7 @@ func TestStartGuestOriginListeners_ConcurrentCallsBindOnce(t *testing.T) {
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
 	t.Cleanup(func() { proxy.StopProjectListeners("proj-y") })
 
 	ctx := context.Background()
@@ -669,7 +669,7 @@ func TestProxyServer_DialsCfgHelperSocket_NotProdHardcoded(t *testing.T) {
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
 
-	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
 	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
 	require.NoError(t, err, "StartProjectListeners must dial cfg.HelperSocketPath, not a hardcoded prod path")
 	t.Cleanup(func() { proxy.StopProjectListeners("p1") })
@@ -692,7 +692,7 @@ func TestStartProjectListeners_NotSkippedByGuestOriginOnlyEntry(t *testing.T) {
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
 
 	// Simulate the guest-origin-only perProj entry a prior
 	// StartGuestOriginListeners success (with StartProjectListeners
@@ -725,7 +725,7 @@ func TestStopProjectListeners_ClosesGuestListenerWithoutServer(t *testing.T) {
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
 
 	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -753,7 +753,7 @@ func TestStartGuestOriginListeners_IdempotentOnRetry(t *testing.T) {
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
 	t.Cleanup(func() { proxy.StopProjectListeners("p1") })
 
 	httpPort1, httpsPort1, err := proxy.StartGuestOriginListeners(context.Background(), "p1", "127.0.0.1")
@@ -786,7 +786,7 @@ func TestRebindProjectListeners_RetriesUntilHelperReady(t *testing.T) {
 	caDir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, caDir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
 
 	// Start helper after 800ms — inside the 3-attempt window
 	// (0/500ms/1500ms) but after the first attempt.
@@ -813,7 +813,7 @@ func TestStopProjectListeners_ClearsRebindStatus(t *testing.T) {
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
 
 	proxy.RecordRebindStatus("p1", RebindStatus{State: RebindOK, Attempts: 1})
 	_, ok := proxy.RebindStatus("p1")
@@ -838,7 +838,7 @@ func TestStopProjectListeners_ClearsRebindStatus_WithLiveListeners(t *testing.T)
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
 
 	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
 	require.NoError(t, err, "sanity: StartProjectListeners must succeed via the mock helper")
@@ -872,7 +872,7 @@ func TestStopProjectListeners_PreservesBindLockMutex(t *testing.T) {
 	dir := t.TempDir()
 	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
 	require.NoError(t, err)
-	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
 
 	unlock := proxy.lockProjectBind("p1")
 	unlock()
@@ -892,7 +892,7 @@ func TestStopProjectListeners_PreservesBindLockMutex(t *testing.T) {
 }
 
 func TestProxyServer_StartLANListener_BindsAndServes(t *testing.T) {
-	proxy := NewProxyServer(identity.Prod, NewRoutes(), nil)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), nil)
 	// Ephemeral port to avoid collisions in test env.
 	port := freeTCPPort(t)
 	require.NoError(t, proxy.StartLANListener(context.Background(), port))
@@ -908,7 +908,7 @@ func TestProxyServer_StartLANListener_BindsAndServes(t *testing.T) {
 }
 
 func TestProxyServer_StopLANListener_ReleasesPort(t *testing.T) {
-	proxy := NewProxyServer(identity.Prod, NewRoutes(), nil)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), nil)
 	port := freeTCPPort(t)
 	require.NoError(t, proxy.StartLANListener(context.Background(), port))
 	proxy.StopLANListener()
@@ -933,7 +933,7 @@ func TestProxyServer_StopLANListener_ReleasesPort(t *testing.T) {
 }
 
 func TestProxyServer_ServeLAN_ReturnsNoRouteFor502(t *testing.T) {
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	proxy := NewProxyServer(identity.Prod, routes, nil)
 	port := freeTCPPort(t)
 	require.NoError(t, proxy.StartLANListener(context.Background(), port))
@@ -975,7 +975,7 @@ func TestProxy_ServeHTTP_LogsEveryOutcome(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("no-local-addr", func(t *testing.T) {
-		routes := NewRoutes()
+		routes := NewRoutes(identity.Prod.TLD)
 		proxy := NewProxyServer(identity.Prod, routes, ca)
 		buf := captureStdlibLog(t)
 
@@ -990,7 +990,7 @@ func TestProxy_ServeHTTP_LogsEveryOutcome(t *testing.T) {
 	})
 
 	t.Run("no-project", func(t *testing.T) {
-		routes := NewRoutes()
+		routes := NewRoutes(identity.Prod.TLD)
 		proxy := NewProxyServer(identity.Prod, routes, ca)
 		buf := captureStdlibLog(t)
 
@@ -1006,7 +1006,7 @@ func TestProxy_ServeHTTP_LogsEveryOutcome(t *testing.T) {
 	})
 
 	t.Run("no-route", func(t *testing.T) {
-		routes := NewRoutes()
+		routes := NewRoutes(identity.Prod.TLD)
 		registerProject(t, "px", "127.42.0.97")
 		proxy := NewProxyServer(identity.Prod, routes, ca)
 		buf := captureStdlibLog(t)
@@ -1026,7 +1026,7 @@ func TestProxy_ServeHTTP_LogsEveryOutcome(t *testing.T) {
 	t.Run("dispatched", func(t *testing.T) {
 		backPort, cleanup := startBackend(t, "ok")
 		defer cleanup()
-		routes := NewRoutes()
+		routes := NewRoutes(identity.Prod.TLD)
 		require.NoError(t, routes.Apply("py", []Route{
 			{Hostname: "a.test", BackendPort: backPort, Mode: ModeLocal, Project: "py"},
 		}))
@@ -1046,7 +1046,7 @@ func TestProxy_ServeHTTP_LogsEveryOutcome(t *testing.T) {
 	})
 
 	t.Run("backend-down", func(t *testing.T) {
-		routes := NewRoutes()
+		routes := NewRoutes(identity.Prod.TLD)
 		require.NoError(t, routes.Apply("pz", []Route{
 			{Hostname: "down.test", BackendPort: 59991, Mode: ModeVM, Project: "pz"},
 		}))

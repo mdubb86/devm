@@ -24,7 +24,7 @@ func newTestServerWithRoutes(t *testing.T) (*Server, *Routes, func()) {
 
 	socket := filepath.Join(dir, "s.sock")
 	srv := NewServer(socket, Build{Version: "test-version"})
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	proxy := NewProxyServer(identity.Prod, routes, nil)
 	RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
 

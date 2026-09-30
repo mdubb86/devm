@@ -217,3 +217,41 @@ func TestShouldSkipAutoInstall(t *testing.T) {
 		assert.False(t, shouldSkipAutoInstall(existing, "proj"))
 	})
 }
+
+// TestRejectReservedFilesHostname pins the synchronous, exit-code-visible
+// half of the files.<project>.<tld> collision rule: serviceapi.Routes.Apply
+// only rejects it inside a best-effort background goroutine (see
+// runShellFlow) whose error never reaches the CLI's exit code, so
+// `devm start`/`devm validate` need this separate, synchronous gate.
+func TestRejectReservedFilesHostname(t *testing.T) {
+	ident := identity.Config{TLD: "test"}
+
+	t.Run("declared hostname matches the reserved name — rejected", func(t *testing.T) {
+		pcfg := schema.Config{
+			Project: schema.Project{Name: "myproj"},
+			Services: map[string]schema.Service{
+				"fileserver": {Port: 9999, Hostname: "files.myproj.test"},
+			},
+		}
+		err := rejectReservedFilesHostname(pcfg, ident)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "files.myproj.test")
+		assert.Contains(t, err.Error(), "reserved")
+		assert.Contains(t, err.Error(), "fileserver", "error should name the offending service")
+	})
+
+	t.Run("user-owned domain starting with files. is not reserved", func(t *testing.T) {
+		pcfg := schema.Config{
+			Project: schema.Project{Name: "myproj"},
+			Services: map[string]schema.Service{
+				"web": {Port: 3000, Hostname: "files.mysite.com"},
+			},
+		}
+		assert.NoError(t, rejectReservedFilesHostname(pcfg, ident))
+	})
+
+	t.Run("no services — accepted", func(t *testing.T) {
+		pcfg := schema.Config{Project: schema.Project{Name: "myproj"}}
+		assert.NoError(t, rejectReservedFilesHostname(pcfg, ident))
+	})
+}

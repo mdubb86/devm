@@ -11,7 +11,7 @@ import (
 )
 
 func TestGuestOriginBackendPinsToGuest(t *testing.T) {
-	routes := NewRoutes()
+	routes := NewRoutes("test")
 	if err := routes.Apply("proj", []Route{
 		{Hostname: "api.test", BackendPort: 3000, Mode: ModeVM, Project: "proj"},
 	}); err != nil {
@@ -28,7 +28,7 @@ func TestGuestOriginBackendPinsToGuest(t *testing.T) {
 // `devm route local` mode must NOT expose the Mac's localhost services to the
 // guest. The backend is pinned to the guest regardless of route mode.
 func TestGuestOriginBackendIgnoresLocalMode(t *testing.T) {
-	routes := NewRoutes()
+	routes := NewRoutes("test")
 	if err := routes.Apply("proj", []Route{
 		{Hostname: "api.test", BackendHost: "localhost", BackendPort: 3000,
 			Mode: ModeLocal, Project: "proj"},
@@ -46,7 +46,7 @@ func TestGuestOriginBackendIgnoresLocalMode(t *testing.T) {
 }
 
 func TestGuestOriginBackendRejects(t *testing.T) {
-	routes := NewRoutes()
+	routes := NewRoutes("test")
 	if err := routes.Apply("proj", []Route{
 		{Hostname: "api.test", BackendPort: 3000, Mode: ModeVM, Project: "proj"},
 		{Hostname: "db.test", BackendPort: 5432, Mode: ModeVM, Project: "proj", Direct: true},
@@ -112,7 +112,7 @@ func TestGuestOriginHandlerDispatch(t *testing.T) {
 		t.Fatalf("parse backend port: %v", err)
 	}
 
-	routes := NewRoutes()
+	routes := NewRoutes("test")
 	if err := routes.Apply("proj", []Route{
 		{Hostname: "api.test", BackendPort: port, Mode: ModeVM, Project: "proj"},
 	}); err != nil {

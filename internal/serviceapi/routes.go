@@ -62,13 +62,19 @@ type Routes struct {
 	// lanHostnameToRoute is the parallel opt-in map read by the LAN
 	// dispatcher. Populated in Apply for routes with ExposeHost=true.
 	lanHostnameToRoute map[string]Route
+	// tld is this daemon identity's TLD ("test" for prod, "e2e.test"
+	// for the e2e slot). Used by Apply to recognize the reserved
+	// files.<project>.<tld> hostname regardless of which identity
+	// slot the daemon is running as.
+	tld string
 }
 
-func NewRoutes() *Routes {
+func NewRoutes(tld string) *Routes {
 	return &Routes{
 		projectsToHostnames: make(map[string][]string),
 		hostnameToRoute:     make(map[string]Route),
 		lanHostnameToRoute:  make(map[string]Route),
+		tld:                 tld,
 	}
 }
 
@@ -77,6 +83,19 @@ func NewRoutes() *Routes {
 // match [a-z0-9-]+ and can never start with "_", so this prefix can
 // never collide with one.
 const ReservedRoutePrefix = "_devm."
+
+// isDaemonReservedHostname reports whether hostname belongs to either
+// family of daemon-managed reserved route: the underscore-prefixed
+// synthetic routes (reservedHealthRoute) or the exact
+// files.<project>.<tld> route (reservedFilestashRoute) — the latter
+// deliberately has no underscore prefix, since it must be a normal
+// hostname a browser can reach. Apply's "carry reserved routes across
+// the swap" step and applyReservedRoute's own guard both need to
+// recognize both families, or the files route would get silently
+// dropped on the next `devm route`/`devm reconcile` call.
+func isDaemonReservedHostname(hostname, projectID, tld string) bool {
+	return strings.HasPrefix(hostname, ReservedRoutePrefix) || IsReservedFilesHostname(hostname, projectID, tld)
+}
 
 // Apply replaces the named project's user-declared route set with the
 // given items. Routes whose hostname is reserved (starts with
@@ -96,6 +115,21 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 			return fmt.Errorf(
 				"hostname %q is reserved for daemon-internal routes (prefix %q) and cannot be set via Apply",
 				item.Hostname, ReservedRoutePrefix,
+			)
+		}
+	}
+
+	// Reject any incoming item whose hostname matches the reserved
+	// filestash-route name for THIS project. Exact-match (not prefix),
+	// so user-owned hostnames like files.mysite.com stay valid.
+	// Migration: a shelfmates-style devm.yaml that predates this rule
+	// hits this error and must be updated — see spec §Review Focus #1.
+	for _, item := range items {
+		if IsReservedFilesHostname(item.Hostname, projectID, r.tld) {
+			return fmt.Errorf(
+				"hostname %q is reserved for devm's bundled filestash service — "+
+					"remove this entry from devm.yaml; the file browser is auto-served at https://%s",
+				item.Hostname, item.Hostname,
 			)
 		}
 	}
@@ -122,7 +156,7 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 	// project's user-declared routes.
 	var reserved []Route
 	for _, h := range r.projectsToHostnames[projectID] {
-		if strings.HasPrefix(h, ReservedRoutePrefix) {
+		if isDaemonReservedHostname(h, projectID, r.tld) {
 			if rt, ok := r.hostnameToRoute[h]; ok {
 				reserved = append(reserved, rt)
 			}
@@ -160,18 +194,21 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 }
 
 // applyReservedRoute registers a single daemon-managed reserved route
-// (hostname must start with ReservedRoutePrefix) for projectID,
-// without touching the project's user-declared routes. This is the
-// "different path" reserved routes use instead of Apply — today the
-// only caller is /vm/start's reservedHealthRoute registration.
+// for projectID, without touching the project's user-declared routes.
+// hostname must belong to one of the two reserved-route families (see
+// isDaemonReservedHostname): the underscore-prefixed synthetic routes
+// (reservedHealthRoute) or the exact files.<project>.<tld> route
+// (reservedFilestashRoute). This is the "different path" reserved
+// routes use instead of Apply — callers are /vm/start's
+// reservedHealthRoute and reservedFilestashRoute registration.
 // Re-registering the same hostname (e.g. a second /vm/start for a
 // project whose reserved route is already present) replaces it in
 // place rather than duplicating the projectsToHostnames entry.
 func (r *Routes) applyReservedRoute(projectID string, route Route) error {
-	if !strings.HasPrefix(route.Hostname, ReservedRoutePrefix) {
+	if !isDaemonReservedHostname(route.Hostname, projectID, r.tld) {
 		return fmt.Errorf(
-			"applyReservedRoute: hostname %q does not have the reserved prefix %q",
-			route.Hostname, ReservedRoutePrefix,
+			"applyReservedRoute: hostname %q is not a recognized daemon-reserved route for project %q",
+			route.Hostname, projectID,
 		)
 	}
 

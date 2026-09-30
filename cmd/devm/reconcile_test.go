@@ -116,7 +116,7 @@ func startRoutesDaemon(t *testing.T) func() {
 	require.NoError(t, err)
 	socket := identity.Prod.SocketPath()
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "dev"})
-	routes := serviceapi.NewRoutes()
+	routes := serviceapi.NewRoutes(identity.Prod.TLD)
 	proxy := serviceapi.NewProxyServer(identity.Prod, routes, nil)
 	serviceapi.RegisterRoutesHandlers(srv, identity.Prod, routes, proxy)
 

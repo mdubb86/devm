@@ -528,7 +528,7 @@ func TestApplyIronProxy_AdoptInPlace_StartsGuestOriginListeners(t *testing.T) {
 
 	ca, err := loadOrGenerateCAAt(identity.Prod, t.TempDir())
 	require.NoError(t, err)
-	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
 	t.Cleanup(proxy.StopAll)
 
 	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, proxy)

@@ -833,6 +833,18 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				http.Error(w, fmt.Sprintf("register reserved health route: %v", err), http.StatusInternalServerError)
 				return
 			}
+
+			// Register the reserved files.<project>.<cfg.TLD> →
+			// projectIP:8941 route so browsers reach the guest's
+			// bundled filestash service (softnet forwards
+			// projectIP:filestashServePort into the guest — see
+			// reservedFilestashRoute). Same failure mode as the
+			// health route: log and continue. A missing reserved
+			// route makes filestash unreachable but doesn't prevent
+			// the VM from serving other traffic.
+			if err := routes.applyReservedRoute(req.Name, reservedFilestashRoute(req.Name, projectIP, cfg.TLD)); err != nil {
+				daemonlog.Errorf("routes: apply filestash reserved route for %s: %v (continuing)", req.Name, err)
+			}
 		}
 
 		if cache != nil {

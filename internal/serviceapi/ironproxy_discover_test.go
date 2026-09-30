@@ -166,7 +166,7 @@ func TestRecoverProjectState_ReplaysSnapshotRoutes(t *testing.T) {
 		},
 	}))
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	recoverProjectState(identity.Prod, routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
@@ -213,7 +213,7 @@ func TestRecoverProjectState_RestoresReservedHealthRoute(t *testing.T) {
 		ProjectIP: "127.42.0.17",
 	}))
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	recoverProjectState(identity.Prod, routes, projectID)
 
 	reservedHost := "_devm." + projectID + "." + identity.Prod.TLD
@@ -221,6 +221,12 @@ func TestRecoverProjectState_RestoresReservedHealthRoute(t *testing.T) {
 	require.True(t, ok, "recoverProjectState must install the reserved health route %q", reservedHost)
 	assert.Equal(t, "127.42.0.17", r.BackendHost, "reserved route must target the recovered project IP")
 	assert.Equal(t, gdevmServePort, r.BackendPort, "reserved route must target gdevm serve's port")
+
+	reservedFilesHost := "files." + projectID + "." + identity.Prod.TLD
+	rf, ok := routes.Lookup(reservedFilesHost, projectID)
+	require.True(t, ok, "recoverProjectState must install the reserved filestash route %q", reservedFilesHost)
+	assert.Equal(t, "127.42.0.17", rf.BackendHost)
+	assert.Equal(t, filestashServePort, rf.BackendPort)
 }
 
 // After a daemon restart, recoverProjectState must re-serve the adopted
@@ -240,7 +246,7 @@ func TestRecoverProjectState_ServesSnapshotAllowlist(t *testing.T) {
 		},
 	}))
 
-	recoverProjectState(identity.Prod, NewRoutes(), projectID)
+	recoverProjectState(identity.Prod, NewRoutes(identity.Prod.TLD), projectID)
 
 	sockPath, err := IronPolicySocketPath(identity.Prod, projectID)
 	require.NoError(t, err)
@@ -292,7 +298,7 @@ func TestAdoptOneIronProxy_StopsProxyWithNoVM(t *testing.T) {
 
 	sup := supervisor.New(t.TempDir())
 	vmNames := map[string]bool{"some-other-project": true}
-	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: stand.Process.Pid, ProjectID: projectID}, vmNames)
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(identity.Prod.TLD), DiscoveredIronProxy{PID: stand.Process.Pid, ProjectID: projectID}, vmNames)
 
 	select {
 	case err := <-waitCh:
@@ -352,7 +358,7 @@ func TestAdoptOneIronProxy_ServesRecordedPolicyTarget(t *testing.T) {
 	}))
 
 	sup := supervisor.New(t.TempDir())
-	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424243, ProjectID: projectID}, map[string]bool{projectID: true})
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(identity.Prod.TLD), DiscoveredIronProxy{PID: 424243, ProjectID: projectID}, map[string]bool{projectID: true})
 
 	client := dialPolicy(t, recPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -387,7 +393,7 @@ func TestAdoptOneIronProxy_UnreadableConfig_StillServesPolicy(t *testing.T) {
 	}))
 
 	sup := supervisor.New(t.TempDir())
-	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424242, ProjectID: projectID}, map[string]bool{projectID: true})
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(identity.Prod.TLD), DiscoveredIronProxy{PID: 424242, ProjectID: projectID}, map[string]bool{projectID: true})
 
 	// With no prior ironProxyState entry, an unreadable config, and no
 	// ProjectIP in the snapshot to restore, no entry must be created at
@@ -430,7 +436,7 @@ func TestAdoptOneIronProxy_UnreadableConfig_ProjectIPStillRestored(t *testing.T)
 	}))
 
 	sup := supervisor.New(t.TempDir())
-	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(), DiscoveredIronProxy{PID: 424243, ProjectID: projectID}, map[string]bool{projectID: true})
+	adoptOneIronProxy(context.Background(), identity.Prod, sup, tart.New(), NewRoutes(identity.Prod.TLD), DiscoveredIronProxy{PID: 424243, ProjectID: projectID}, map[string]bool{projectID: true})
 
 	info, ok := ironProxyState.get(projectID)
 	require.True(t, ok, "an entry must be created to carry the restored ProjectIP")
@@ -458,7 +464,7 @@ func TestRecoverProjectState_PreservesRouteModeAcrossRestart(t *testing.T) {
 		},
 	}))
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	recoverProjectState(identity.Prod, routes, projectID)
 
 	rt, ok := routes.Lookup("api.recover-mode-proj.test", projectID)
@@ -483,7 +489,7 @@ func TestRecoverProjectState_MissingSnapshot_LeavesStateUntouched(t *testing.T) 
 	seeded := projectInfo{HTTPPort: 111, HTTPSPort: 222, DNSPort: 333}
 	ironProxyState.put(projectID, seeded)
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	recoverProjectState(identity.Prod, routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
@@ -514,7 +520,7 @@ func TestRecoverProjectState_NoPriorEntry_SnapshotStillAppliesRoutes(t *testing.
 		},
 	}))
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	recoverProjectState(identity.Prod, routes, projectID)
 
 	_, ok := ironProxyState.get(projectID)
@@ -547,7 +553,7 @@ func TestRecoverProjectState_RestoresProjectIP(t *testing.T) {
 		ProjectIP: "127.42.0.7",
 	}))
 
-	routes := NewRoutes()
+	routes := NewRoutes(identity.Prod.TLD)
 	recoverProjectState(identity.Prod, routes, projectID)
 
 	info, ok := ironProxyState.get(projectID)
@@ -602,7 +608,7 @@ func TestRecoverProjectState_SetsRestrictedMode(t *testing.T) {
 		},
 	}))
 
-	recoverProjectState(identity.Prod, NewRoutes(), projectID)
+	recoverProjectState(identity.Prod, NewRoutes(identity.Prod.TLD), projectID)
 
 	if got := policyAuthority.modeFor(projectID); got != ModeRestricted {
 		t.Fatalf("recovery should force mode=restricted; got %v", got)

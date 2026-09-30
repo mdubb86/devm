@@ -270,6 +270,17 @@ func recoverProjectState(cfg identity.Config, routes *Routes, projectID string) 
 			daemonlog.Errorf("routes: recover reserved health route for %s: %v (continuing)", projectID, err)
 		}
 	}
+
+	// Re-install the reserved filestash route (files.<project>.<tld>)
+	// that /vm/start's applyReservedRoute registers on a cold start —
+	// same rationale as the health route above: without this, an
+	// adopted project loses its file-browser route across a daemon
+	// restart.
+	if snap.ProjectIP != "" {
+		if err := routes.applyReservedRoute(projectID, reservedFilestashRoute(projectID, snap.ProjectIP, cfg.TLD)); err != nil {
+			daemonlog.Errorf("routes: recover filestash reserved route for %s: %v (continuing)", projectID, err)
+		}
+	}
 }
 
 // parseIronProxyProcesses extracts iron-proxy entries from `ps -axo
