@@ -11,7 +11,14 @@ import (
 	"time"
 )
 
-const defaultServeAddr = "127.0.0.1:8940"
+// defaultServeAddr binds every interface, not just loopback: softnet
+// forwards the Mac-side reserved health probe (see internal/serviceapi's
+// computeExposeMap for port 8940) to the guest's external interface, so
+// loopback-only would accept the TCP handshake at the kernel and then
+// EOF because gdevm serve isn't listening there. Guest isolation is
+// provided by softnet's egress firewall — the port never leaves the
+// per-project sandbox.
+const defaultServeAddr = "0.0.0.0:8940"
 
 func serveAddr() string {
 	if a := os.Getenv("DEVM_GDEVM_SERVE_ADDR"); a != "" {
