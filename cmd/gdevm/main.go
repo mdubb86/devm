@@ -11,12 +11,14 @@
 //	gdevm passthrough <duration> --reason <text>
 //	gdevm upgrade
 //	gdevm recipes     list | get <name> | asset ls <name> | asset get <name> <path>
+//	gdevm serve
 //
 // Each subcommand reaches the Mac-side daemon over softnet (pop,
 // propose, passthrough) or reads the local guest command manifest
 // and re-execs bash (run). The per-subcommand main body is factored
 // into <sub>Main funcs so tests exercise them without spawning a
-// subprocess.
+// subprocess. `serve` is the exception: it's a long-running guest-side
+// daemon rather than a one-shot command.
 package main
 
 import (
@@ -44,6 +46,8 @@ func main() {
 		os.Exit(upgradeMain(args))
 	case "recipes":
 		os.Exit(recipesMain(args))
+	case "serve":
+		os.Exit(serveMain(args))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -75,6 +79,8 @@ Subcommands:
                  recipes get <name>
                  recipes asset ls <name>
                  recipes asset get <name> <path>
+  serve        Run the guest-side state daemon in the foreground.
+               Long-running; exits on SIGTERM/SIGINT. No args.
 
 Every subcommand carries its own -h/--help.`)
 }
