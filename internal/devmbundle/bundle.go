@@ -119,6 +119,16 @@ func Build(in BuildInput) ([]byte, error) {
 		return nil, err
 	}
 
+	// gdevm-serve: devm's own guest-side state daemon. Unlike the
+	// user-declared units below, this one ships in every bundle
+	// unconditionally — it isn't gated on Cfg.Services, so a
+	// repo-less project still gets it. install.sh installs the unit
+	// file and (re)starts the service on every run, cold-start or
+	// bundle refresh alike.
+	if err := writeEntry(tw, "systemd/gdevm-serve.service", 0o644, render.RenderGdevmServeUnit()); err != nil {
+		return nil, fmt.Errorf("gdevm-serve unit entry: %w", err)
+	}
+
 	// One systemd unit per service that will actually run in-guest.
 	// Routing-only services (no Exec, no Systemd) contribute proxy config
 	// only and don't get a unit; matches enableStartServices' skip logic.

@@ -84,7 +84,8 @@ if [ -f /opt/devm/profile.d/devm.sh ] && ! cmp -s /opt/devm/profile.d/devm.sh /e
         /etc/profile.d/devm.sh
 fi
 
-# --- systemd unit files: one per user-declared service with Exec or Systemd. ---
+# --- systemd unit files: one per user-declared service with Exec or Systemd,
+# plus devm's own gdevm-serve.service (shipped unconditionally, below). ---
 if [ -d /opt/devm/systemd ]; then
     for f in /opt/devm/systemd/*.service; do
         [ -e "$f" ] || continue
@@ -93,6 +94,20 @@ if [ -d /opt/devm/systemd ]; then
             install -o root -g root -m 0644 "$f" "$dest"
         fi
     done
+fi
+
+# --- gdevm-serve: enable at cold-start, restart on every re-run of this
+# script (bundle refresh / gdevm upgrade / reconcile) so it always runs
+# the binary that was just installed alongside it — a stale in-memory
+# gdevm-serve process would otherwise keep running the old binary
+# indefinitely, since restart isn't implied by the unit/binary file
+# just changing on disk. Unconditional: cheap, and the brief guest-side
+# blip this causes is a known, tolerated cost (see e2e coverage for the
+# watchdog probe window around a bundle refresh).
+if [ -f /etc/systemd/system/gdevm-serve.service ]; then
+    systemctl daemon-reload
+    systemctl enable gdevm-serve.service
+    systemctl restart gdevm-serve.service
 fi
 
 # --- SSH material (bundle-carried) ---

@@ -1,0 +1,14 @@
+[Unit]
+Description=devm guest-side state daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gdevm serve
+Restart=always
+RestartSec=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

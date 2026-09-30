@@ -282,6 +282,23 @@ func TestBuild_TarContainsDnsmasqDropIn(t *testing.T) {
 	assert.NotEmpty(t, body)
 }
 
+// TestBuild_TarContainsGdevmServeUnit pins that gdevm-serve.service
+// ships in every bundle unconditionally — no Cfg.Services entry
+// required (a repo-less project still gets it) and no Gdevm binary
+// bytes required (mirrors production, where BuildInputFor always
+// sets Gdevm, but the unit itself doesn't depend on that field).
+func TestBuild_TarContainsGdevmServeUnit(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+	})
+	require.NoError(t, err)
+	unit := readTarEntry(t, blob, "systemd/gdevm-serve.service")
+	assert.Contains(t, string(unit), "ExecStart=/usr/local/bin/gdevm serve")
+	assert.Contains(t, string(unit), "WantedBy=multi-user.target")
+}
+
 func TestBuild_TarContainsServiceUnits(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},

@@ -13,3 +13,6 @@ var InstallTemplate string
 
 //go:embed etc-profile-devm.sh
 var EtcProfileDevm string
+
+//go:embed gdevm-serve.service
+var GdevmServeUnit string

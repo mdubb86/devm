@@ -30,6 +30,19 @@ func TestRenderInstallScript_PreservesLiterals(t *testing.T) {
 		"ssh unmask must survive templating")
 }
 
+func TestRenderInstallScript_EnablesAndRestartsGdevmServe(t *testing.T) {
+	// Pins that a cold-start (and any re-run of install.sh, which is
+	// also the bundle-refresh / reconcile path — see
+	// devmbundle.GuestInstallScript) reloads systemd, enables
+	// gdevm-serve, and restarts it so a refreshed binary is picked up.
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	assert.Contains(t, s, "systemctl daemon-reload")
+	assert.Contains(t, s, "systemctl enable gdevm-serve.service")
+	assert.Contains(t, s, "systemctl restart gdevm-serve.service")
+}
+
 func TestRenderInstallScript_RejectsEmptyVersion(t *testing.T) {
 	_, err := RenderInstallScript("")
 	require.Error(t, err)
