@@ -1,6 +1,7 @@
 package render
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -41,6 +42,27 @@ func TestRenderInstallScript_EnablesAndRestartsGdevmServe(t *testing.T) {
 	assert.Contains(t, s, "systemctl daemon-reload")
 	assert.Contains(t, s, "systemctl enable gdevm-serve.service")
 	assert.Contains(t, s, "systemctl restart gdevm-serve.service")
+}
+
+func TestRenderInstallScript_RestartsGdevmServeAfterBinInstalled(t *testing.T) {
+	// gdevm-serve's ExecStart points at /usr/local/bin/gdevm, which the
+	// "for f in /opt/devm/bin/*" loop is what installs. On a cold VM
+	// boot nothing else puts a binary there first, so the restart must
+	// come strictly after that loop — restarting before it exists makes
+	// systemctl fail and, under `set -e`, aborts the rest of install.sh
+	// (SSH material, Docker shims, Mutagen agent pre-install).
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+
+	binLoopIdx := strings.Index(s, "for f in /opt/devm/bin/*")
+	require.NotEqual(t, -1, binLoopIdx, "bin install loop must be present")
+
+	restartIdx := strings.Index(s, "systemctl restart gdevm-serve.service")
+	require.NotEqual(t, -1, restartIdx, "gdevm-serve restart must be present")
+
+	assert.Less(t, binLoopIdx, restartIdx,
+		"gdevm-serve restart must run after the /opt/devm/bin/* install loop, not before")
 }
 
 func TestRenderInstallScript_RejectsEmptyVersion(t *testing.T) {

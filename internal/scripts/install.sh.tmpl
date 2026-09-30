@@ -96,20 +96,6 @@ if [ -d /opt/devm/systemd ]; then
     done
 fi
 
-# --- gdevm-serve: enable at cold-start, restart on every re-run of this
-# script (bundle refresh / gdevm upgrade / reconcile) so it always runs
-# the binary that was just installed alongside it — a stale in-memory
-# gdevm-serve process would otherwise keep running the old binary
-# indefinitely, since restart isn't implied by the unit/binary file
-# just changing on disk. Unconditional: cheap, and the brief guest-side
-# blip this causes is a known, tolerated cost (see e2e coverage for the
-# watchdog probe window around a bundle refresh).
-if [ -f /etc/systemd/system/gdevm-serve.service ]; then
-    systemctl daemon-reload
-    systemctl enable gdevm-serve.service
-    systemctl restart gdevm-serve.service
-fi
-
 # --- SSH material (bundle-carried) ---
 if [ -f /opt/devm/ssh/ssh_host_ed25519_key ]; then
     install -d -o devm -g devm -m 0700 /home/devm/.ssh
@@ -131,7 +117,9 @@ if [ -f /opt/devm/ssh/ssh_host_ed25519_key ]; then
     systemctl unmask ssh
 fi
 
-# --- Docker shims: devm-runc-shim + docker CLI shim. Present only when Cfg.Docker. ---
+# --- Docker shims: devm-runc-shim + docker CLI shim. Present only when Cfg.Docker.
+# Also the only place bin/gdevm lands at /usr/local/bin/gdevm, which is why the
+# gdevm-serve enable/restart block below must run after this loop, not before. ---
 if [ -d /opt/devm/bin ]; then
     for f in /opt/devm/bin/*; do
         [ -e "$f" ] || continue
@@ -140,6 +128,23 @@ if [ -d /opt/devm/bin ]; then
             install -o root -g root -m 0755 "$f" "$dest"
         fi
     done
+fi
+
+# --- gdevm-serve: enable at cold-start, restart on every re-run of this
+# script (bundle refresh / gdevm upgrade / reconcile) so it always runs
+# the binary that was just installed alongside it — a stale in-memory
+# gdevm-serve process would otherwise keep running the old binary
+# indefinitely, since restart isn't implied by the unit/binary file
+# just changing on disk. Unconditional: cheap, and the brief guest-side
+# blip this causes is a known, tolerated cost (see e2e coverage for the
+# watchdog probe window around a bundle refresh). Must run after the
+# /opt/devm/bin/* loop above, which is what lands the gdevm binary this
+# unit's ExecStart points at — on cold-start there is nothing at
+# /usr/local/bin/gdevm until that loop runs.
+if [ -f /etc/systemd/system/gdevm-serve.service ]; then
+    systemctl daemon-reload
+    systemctl enable gdevm-serve.service
+    systemctl restart gdevm-serve.service
 fi
 
 # --- Mutagen agent pre-install (mutagen looks under ~/.mutagen/agents/<version>/mutagen-agent). ---
