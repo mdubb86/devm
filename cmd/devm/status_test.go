@@ -187,7 +187,7 @@ func startApproveStatusDaemon(t *testing.T) (*serviceapi.StateCache, func()) {
 	tr := tart.New()
 	tr.Path = "false"
 	cache := serviceapi.NewStateCache()
-	serviceapi.RegisterVMHandlers(srv, identity.Prod, sup, tr, 0, serviceapi.NewProjectLocks(), nil, serviceapi.NewPopSessionStore(), nil, cache)
+	serviceapi.RegisterVMHandlers(srv, identity.Prod, sup, tr, 0, serviceapi.NewProjectLocks(), nil, nil, serviceapi.NewPopSessionStore(), nil, cache)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

@@ -449,12 +449,16 @@ func shutdownSoftnet(projectID string) {
 // per-project listeners once the project IP is allocated, and /vm/stop
 // tears them down. May be nil in tests that don't exercise the proxy
 // lifecycle — StartProjectListeners/StopProjectListeners are skipped
-// in that case. popStore and popCLI back each project's pop HTTP
-// listener (servePopListener) and the /vm/stop teardown sweep. cache
-// is the daemon's StateCache — /vm/start and /vm/stop write the
-// resulting VM/proxy state into it on success, and the VM's supervised
-// process writes it again on an unexpected crash (see vmCrashCallback).
-func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, ntpPort int, locks *ProjectLocks, proxy *ProxyServer, popStore *PopSessionStore, popCLI *mutagen.CLI, cache *StateCache) {
+// in that case. routes is the daemon's route table; on a successful
+// /vm/start it gets the project's reserved gdevm-serve health route
+// (see reservedHealthRoute) so the Mac watchdog has something to probe.
+// May be nil in tests that don't exercise routing. popStore and popCLI
+// back each project's pop HTTP listener (servePopListener) and the
+// /vm/stop teardown sweep. cache is the daemon's StateCache — /vm/start
+// and /vm/stop write the resulting VM/proxy state into it on success,
+// and the VM's supervised process writes it again on an unexpected
+// crash (see vmCrashCallback).
+func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervisor, tr *tart.Tart, ntpPort int, locks *ProjectLocks, proxy *ProxyServer, routes *Routes, popStore *PopSessionStore, popCLI *mutagen.CLI, cache *StateCache) {
 	s.Register("/vm/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -811,6 +815,19 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			info.GuestHTTPPort = guestHTTPPort
 			info.GuestHTTPSPort = guestHTTPSPort
 			ironProxyState.put(req.Name, info)
+		}
+
+		// Register the reserved _devm.<project>.test → 127.0.0.1:8940
+		// health route so the Mac watchdog (Task 7) has a route to the
+		// guest's gdevm-serve /v1/health endpoint. A single Apply call —
+		// atomic with respect to Routes.Apply's collision check, since
+		// this is the only route this project owns at this point in the
+		// handler.
+		if routes != nil {
+			if err := routes.Apply(req.Name, []Route{reservedHealthRoute(req.Name)}); err != nil {
+				http.Error(w, fmt.Sprintf("register reserved health route: %v", err), http.StatusInternalServerError)
+				return
+			}
 		}
 
 		if cache != nil {

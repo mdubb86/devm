@@ -144,7 +144,7 @@ func TestStart_SurfacesApproveRequired(t *testing.T) {
 
 	socket := filepath.Join(t.TempDir(), "s.sock")
 	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
-	serviceapi.RegisterVMHandlers(srv, identity.Prod, supervisor.New(t.TempDir()), tr, 0, serviceapi.NewProjectLocks(), nil, serviceapi.NewPopSessionStore(), nil, serviceapi.NewStateCache())
+	serviceapi.RegisterVMHandlers(srv, identity.Prod, supervisor.New(t.TempDir()), tr, 0, serviceapi.NewProjectLocks(), nil, nil, serviceapi.NewPopSessionStore(), nil, serviceapi.NewStateCache())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

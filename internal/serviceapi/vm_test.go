@@ -1,18 +1,24 @@
 package serviceapi
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,7 +78,7 @@ exit 0
 	cache := NewStateCache()
 	cache.SetVMState("proj-stop", VMRunning)
 	cache.SetIronProxyHealth("proj-stop", ProxyHealth{Status: ProxyOK})
-	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, NewPopSessionStore(), nil, cache)
+	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, nil, NewPopSessionStore(), nil, cache)
 
 	body, err := json.Marshal(VMStopRequest{Name: "proj-stop"})
 	require.NoError(t, err)
@@ -145,7 +151,7 @@ func TestVMStop_Destroy_RemovesCacheRow(t *testing.T) {
 	sup := supervisor.New(t.TempDir())
 	cache := NewStateCache()
 	cache.SetVMState("proj-destroy", VMRunning)
-	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, NewPopSessionStore(), nil, cache)
+	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, nil, NewPopSessionStore(), nil, cache)
 
 	body, err := json.Marshal(VMStopRequest{Name: "proj-destroy", Destroy: true})
 	require.NoError(t, err)
@@ -181,4 +187,109 @@ func TestEndpointFrom_MapsAllFieldsToLoopback(t *testing.T) {
 	assert.Equal(t, "127.0.0.1:5005", ep.GuestHTTP)
 	assert.Equal(t, "127.0.0.1:5006", ep.GuestHTTPS)
 	assert.Equal(t, "127.0.0.1:5007", ep.Pop)
+}
+
+// TestVMStart_RegistersReservedHealthRoute pins that after a successful
+// /vm/start, the routes table has an entry for _devm.<project>.test
+// pointing at 127.0.0.1:gdevmServePort inside the guest — the route the
+// Mac watchdog (Task 7) probes to reach gdevm-serve's /v1/health. This
+// drives /vm/start's handler end to end: fake tart (VM reported
+// pre-existing so Clone is skipped, `tart exec ... true` satisfies
+// waitVMExecReady), a fake softnet control-socket listener acking
+// setExposeMap, and a stubbed ironProxySpawn so no real iron-proxy
+// process is started.
+func TestVMStart_RegistersReservedHealthRoute(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const project = "proj-route-health"
+
+	origMutagenStopPhaseFn := mutagenStopPhaseFn
+	mutagenStopPhaseFn = func(identity.Config, string) error { return nil }
+	t.Cleanup(func() { mutagenStopPhaseFn = origMutagenStopPhaseFn })
+
+	origSpawn := ironProxySpawn
+	ironProxySpawn = func(_ context.Context, _ *supervisor.Supervisor, _ supervisor.Key, _ *exec.Cmd, _ func(), _ ...io.Writer) error {
+		return nil
+	}
+	t.Cleanup(func() { ironProxySpawn = origSpawn })
+	t.Cleanup(func() { policyAuthority.StopServing(project) })
+
+	// Fake `tart` on $PATH: satisfies both tart.Tart's t.Path-based
+	// calls (List/Run) and waitVMExecReady's literal exec.Command("tart",
+	// "exec", ...), which shells out by bare name rather than through
+	// the *tart.Tart wrapper.
+	binDir := t.TempDir()
+	tartScript := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+  list) echo '[{"Name":%q,"State":"stopped"}]' ;;
+  exec) exit 0 ;;
+  run) sleep 30 ;;
+esac
+exit 0
+`, project)
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "tart"), []byte(tartScript), 0o755))
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	tr := tart.New()
+	tr.Path = "tart"
+
+	logDir := t.TempDir()
+	sup := supervisor.New(logDir)
+	t.Cleanup(func() {
+		_ = sup.Stop(context.Background(), supervisor.Key{ProjectID: project, Role: supervisor.RoleVM})
+	})
+
+	t.Cleanup(func() {
+		ironProxyState.del(project)
+		softnetState.del(project)
+		exposeClaims.release(project)
+	})
+
+	// Fake softnet control socket: acks setExposeMap (fatal if unacked)
+	// and silently accepts setTestHosts (fire-and-forget, non-fatal).
+	require.NoError(t, ensureSoftnetSockDir(softnetSockDir()))
+	sockPath := SoftnetControlSock(identity.Prod, project)
+	_ = os.Remove(sockPath)
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				line, err := bufio.NewReader(c).ReadString('\n')
+				if err != nil {
+					return
+				}
+				if strings.Contains(line, `"op":"setExposeMap"`) {
+					_, _ = c.Write([]byte(`{"ok":true}` + "\n"))
+				}
+			}(c)
+		}
+	}()
+
+	macCwd := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(macCwd, "devm.yaml"),
+		[]byte("project:\n  name: "+project+"\n"), 0o644))
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	cache := NewStateCache()
+	routes := NewRoutes()
+	RegisterVMHandlers(server, identity.Prod, sup, tr, 0, locks, nil, routes, NewPopSessionStore(), nil, cache)
+
+	body, err := json.Marshal(VMStartRequest{Name: project, MacCwd: macCwd, Cfg: schema.Config{}})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/vm/start", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	route, ok := routes.Lookup("_devm."+project+".test", project)
+	require.True(t, ok, "reserved health route must be registered after /vm/start")
+	assert.Equal(t, gdevmServePort, route.BackendPort)
+	assert.Equal(t, "127.0.0.1", route.BackendHost)
+	assert.Equal(t, project, route.Project)
+	assert.Equal(t, ModeVM, route.Mode)
 }

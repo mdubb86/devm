@@ -11,6 +11,11 @@ import (
 	"github.com/mdubb86/devm/internal/identity"
 )
 
+// gdevmServePort is the fixed loopback port `gdevm serve` binds to
+// inside every guest (see cmd/gdevm/serve.go's defaultServeAddr). Not
+// configurable — Global Constraint in the gdevm-serve plan.
+const gdevmServePort = 8940
+
 // RouteMode is what the proxy dials to reach the backend.
 type RouteMode int
 
@@ -104,6 +109,24 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 	}
 	r.projectsToHostnames[projectID] = hostnames
 	return nil
+}
+
+// reservedHealthRoute builds the synthetic route that lets the Mac
+// watchdog (see docs/superpowers/plans/2026-09-29-gdevm-serve-guest-daemon.md
+// Task 7) probe a project's gdevm-serve /v1/health endpoint through the
+// same reverse-proxy path a browser takes. The underscore prefix keeps
+// it outside the user-hostname grammar ([a-z0-9-]+), so it can never
+// collide with a user-declared hostname. Not Direct — the probe must
+// exercise the proxy, not bypass it — and not ExposeHost — this is a
+// loopback-only health check, never LAN-exposed.
+func reservedHealthRoute(projectName string) Route {
+	return Route{
+		Hostname:    "_devm." + projectName + ".test",
+		BackendHost: "127.0.0.1",
+		BackendPort: gdevmServePort,
+		Mode:        ModeVM,
+		Project:     projectName,
+	}
 }
 
 // Remove drops all routes for the project.

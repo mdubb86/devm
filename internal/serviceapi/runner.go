@@ -363,7 +363,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	}
 
 	server.SetStateCache(cache)
-	RegisterVMHandlers(server, cfg, sup, tr, ntp.Port(), locks, proxy, popStore, popCLI, cache)
+	RegisterVMHandlers(server, cfg, sup, tr, ntp.Port(), locks, proxy, routes, popStore, popCLI, cache)
 	RegisterReconcileHandler(server, cfg, cache, locks, &realApplyLiver{tr: tr}, &realPackagesApplier{tr: tr}, tr, sup, proxy, ntp.Port())
 	RegisterApplyIronProxyHandler(server, cfg, locks, sup, proxy)
 	RegisterHandshakeHandler(server, cache)
