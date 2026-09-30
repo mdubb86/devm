@@ -45,10 +45,11 @@ type StatusResult struct {
 	// warnings (devm install fixes this).
 	CATrusted bool
 
-	// ProxyHealthy is true when something is listening on :443.
-	// Populated by a 500ms TCP dial. False means the daemon isn't
-	// running or launchd's socket activation didn't hand off the
-	// listeners properly.
+	// ProxyHealthy is true when every running project's reverse-proxy
+	// listener pair is up, per the watchdog's latest per-tick check
+	// (ProjectRow.ProxyListenerHealth). True vacuously when no project
+	// is running. ProxyError names the unhealthy projects, or reports
+	// the daemon as unreachable, when false.
 	ProxyHealthy bool
 	ProxyError   string
 
@@ -309,8 +310,8 @@ func formatProxyHealth(r StatusResult) string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "\nproxy: NOT LISTENING (port 443) — %s\n", r.ProxyError)
-	b.WriteString("       Run `devm install` to register launchd's port binding,\n")
+	fmt.Fprintf(&b, "\nproxy: UNHEALTHY — %s\n", r.ProxyError)
+	b.WriteString("       Run `devm reconcile` to respawn the affected project's listeners,\n")
 	b.WriteString("       or `devm restart` if the daemon isn't responding.\n")
 	return b.String()
 }

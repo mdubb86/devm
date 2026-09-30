@@ -381,7 +381,7 @@ func TestFormatStatusText_ProxyLine_SilentWhenHealthy(t *testing.T) {
 		Sandbox: "x", State: "running",
 		DNSHealthy: true, CATrusted: true, ProxyHealthy: true,
 	}
-	assert.NotContains(t, FormatStatusText(res), "proxy: NOT LISTENING")
+	assert.NotContains(t, FormatStatusText(res), "proxy: UNHEALTHY")
 }
 
 func TestFormatStatusText_ProxyLine_RedWhenDown(t *testing.T) {
@@ -389,11 +389,11 @@ func TestFormatStatusText_ProxyLine_RedWhenDown(t *testing.T) {
 		Sandbox: "x", State: "running",
 		DNSHealthy: true, CATrusted: true,
 		ProxyHealthy: false,
-		ProxyError:   "dial tcp 127.0.0.1:443: connect: connection refused",
+		ProxyError:   "proxy listener unhealthy for: x",
 	}
 	out := FormatStatusText(res)
-	assert.Contains(t, out, "proxy: NOT LISTENING")
-	assert.Contains(t, out, "connection refused")
+	assert.Contains(t, out, "proxy: UNHEALTHY")
+	assert.Contains(t, out, "proxy listener unhealthy for: x")
 }
 
 func TestFormatStatusText_IronProxyHealth_OK(t *testing.T) {

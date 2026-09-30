@@ -413,17 +413,6 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		})
 	}
 
-	// Reverse proxy readiness (Ship 3). There's no longer a single
-	// daemon-wide proxy actor to add to the run group — listeners are
-	// per-project and bound lazily by /vm/start (StartProjectListeners)
-	// via the helper, not launchd-inherited sockets. The
-	// proxy object itself always exists (constructed above), so
-	// SetProxyReady lets `devm status`'s /proxy-status probe report
-	// "the daemon can serve a proxy" unconditionally instead of
-	// TCP-dialing 127.0.0.1:443 (which closes mid-handshake and spams
-	// "TLS handshake error … EOF" in the daemon log — the very bug this
-	// feedback loop caught).
-	//
 	// Bundle drift catchup: a VM that was left running while the daemon
 	// was upgraded still has the previous build's gdevm /
 	// env-template bytes. Refresh every running project whose stored
@@ -431,8 +420,6 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// announces itself ready, so the first `devm status` after boot
 	// reflects settled state.
 	BundleDriftCatchup(cfg, cache, tr, locks)
-
-	server.SetProxyReady(true)
 
 	// Pop-session GC actor. Periodically sweeps expired pop sessions
 	// across every project — see RunPopSessionGC. Without this actor,

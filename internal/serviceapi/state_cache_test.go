@@ -14,7 +14,6 @@ func TestStateCache_NewIsEmpty(t *testing.T) {
 	assert.Empty(t, c.AllProjectRows())
 	g := c.Global()
 	assert.Equal(t, 0, g.MutagenDaemonPID)
-	assert.False(t, g.ProxyReady)
 }
 
 func TestStateCache_SetMacCwd_ThenGet(t *testing.T) {
@@ -69,15 +68,13 @@ func TestStateCache_TouchProjectReconciled_UpdatesTimestamp(t *testing.T) {
 	assert.False(t, row.LastReconciledAt.Before(before))
 }
 
-func TestStateCache_Global_SetBuildAndProxyReady(t *testing.T) {
+func TestStateCache_Global_SetBuildAndMutagenPID(t *testing.T) {
 	c := NewStateCache()
 	b := Build{Version: "0.99.0", Commit: "abc", Date: "2026-09-08"}
 	c.SetBuild(b)
-	c.SetProxyReady(true)
 	c.SetMutagenDaemonPID(4242)
 	g := c.Global()
 	assert.Equal(t, b, g.Build)
-	assert.True(t, g.ProxyReady)
 	assert.Equal(t, 4242, g.MutagenDaemonPID)
 }
 

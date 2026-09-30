@@ -21,9 +21,16 @@ type ProjectStatus struct {
 	// ApproveState is nil when the cache has no approve-gate signal
 	// tracked for the project yet.
 	ApproveState *ApproveStateJSON `json:"approve_state,omitempty"`
+	// ProxyListenerHealth mirrors ProjectRow.ProxyListenerHealth — the
+	// watchdog's most recent per-tick verdict on whether this
+	// project's :80/:443 listener pair is actually up. `devm status`
+	// aggregates this across every running project into the top-level
+	// proxy_healthy field.
+	ProxyListenerHealth bool `json:"proxy_listener_health"`
 	// Orphaned marks a running VM that carries devm sidecar artifacts
 	// but no state snapshot — devm-created, daemon lost track of it
-	// (see detectOrphanVMs). Such rows have no meaningful Proxy value.
+	// (see detectOrphanVMs). Such rows have no meaningful Proxy or
+	// ProxyListenerHealth value.
 	Orphaned bool `json:"orphaned,omitempty"`
 }
 
@@ -64,11 +71,12 @@ func projectStatusesFromCache(ctx context.Context, cfg identity.Config, tr TartL
 			approve = &ApproveStateJSON{Diverged: row.ApproveState.Diverged}
 		}
 		out = append(out, ProjectStatus{
-			Name:         name,
-			VMRunning:    row.VMState == VMRunning,
-			Proxy:        row.IronProxyHealth,
-			MacCwd:       row.MacCwd,
-			ApproveState: approve,
+			Name:                name,
+			VMRunning:           row.VMState == VMRunning,
+			Proxy:               row.IronProxyHealth,
+			MacCwd:              row.MacCwd,
+			ApproveState:        approve,
+			ProxyListenerHealth: row.ProxyListenerHealth,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

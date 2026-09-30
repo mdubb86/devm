@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/mdubb86/devm/internal/identity"
@@ -81,21 +83,39 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 		res.PopSessionsError = popErr.Error()
 	}
 
-	// Proxy health: ask the daemon over the unix socket. Previously
-	// this was a TCP dial to 127.0.0.1:443 with immediate close — but
-	// every call dropped mid-TLS-handshake and each one spammed a
-	// "TLS handshake error … EOF" line into the daemon log, which
-	// masked real errors. The unix-socket probe has zero on-wire
-	// footprint for the reverse-proxy actor.
+	// Proxy health: aggregate across every running project's reverse-
+	// proxy listener pair, derived per-tick from the watchdog's cache
+	// (ProjectRow.ProxyListenerHealth, see watchdog_check_proxy_listener.go)
+	// via /status/all. Previously this asked a single boot-time flag
+	// ("did launchd hand off :80/:443 at daemon startup") that stayed
+	// true even after a listener died mid-run — it could never catch
+	// the drift the watchdog now detects and repairs. No running
+	// projects is vacuously healthy: nothing to be unhealthy about.
 	proxyCtx, proxyCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer proxyCancel()
-	if ready, err := c.ProxyReady(proxyCtx); err == nil {
-		res.ProxyHealthy = ready
-		if !ready {
-			res.ProxyError = "reverse-proxy actor not started (launchd sockets not handed off)"
+	rows, rowsErr := c.StatusAll(proxyCtx)
+	proxyCancel()
+	if rowsErr == nil {
+		allHealthy := true
+		var unhealthy []string
+		for _, row := range rows {
+			// Stopped/absent projects have nothing to probe; orphaned
+			// rows carry no cache-backed listener signal at all (see
+			// ProjectStatus.Orphaned).
+			if !row.VMRunning || row.Orphaned {
+				continue
+			}
+			if !row.ProxyListenerHealth {
+				allHealthy = false
+				unhealthy = append(unhealthy, row.Name)
+			}
+		}
+		res.ProxyHealthy = allHealthy
+		if !allHealthy {
+			sort.Strings(unhealthy)
+			res.ProxyError = fmt.Sprintf("proxy listener unhealthy for: %s", strings.Join(unhealthy, ", "))
 		}
 	} else {
-		res.ProxyError = err.Error()
+		res.ProxyError = rowsErr.Error()
 	}
 
 	vms, err := tr.List(context.Background())

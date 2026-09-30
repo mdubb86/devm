@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sync/atomic"
 	"time"
 )
 
@@ -19,7 +18,6 @@ type Server struct {
 	socketPath string
 	build      Build
 	mux        *http.ServeMux
-	proxyReady atomic.Bool
 	cache      *StateCache
 }
 
@@ -69,44 +67,14 @@ func NewServer(socketPath string, build Build) *Server {
 	}
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/version", s.handleVersion)
-	s.mux.HandleFunc("/proxy-status", s.handleProxyStatus)
 	return s
 }
 
-// SetProxyReady toggles the reverse-proxy actor's ready state. Called
-// by runner.go once launchd's :80/:443 listeners have been handed off
-// and the actor is serving. Cleared on daemon shutdown by process
-// exit; no explicit unset — a running daemon whose proxy actor
-// crashed intentionally keeps the flag true so the CLI still surfaces
-// the crash instead of pretending nothing was ever running.
-func (s *Server) SetProxyReady(ready bool) {
-	s.proxyReady.Store(ready)
-	if s.cache != nil {
-		s.cache.SetProxyReady(ready)
-	}
-}
-
 // SetStateCache wires the daemon's StateCache into the server so
-// handleVersion and handleProxyStatus can read it. Called by
-// runner.go once the cache is constructed and warmed.
+// handleVersion can read it. Called by runner.go once the cache is
+// constructed and warmed.
 func (s *Server) SetStateCache(cache *StateCache) {
 	s.cache = cache
-}
-
-// handleProxyStatus returns {"ready":bool} — was the reverse-proxy
-// actor started this daemon's lifetime. Used by `devm status` in place
-// of a raw TCP dial to 127.0.0.1:443 (which drops the connection
-// mid-TLS handshake and spams the daemon log with "TLS handshake
-// error … EOF"). Served from cache; falls back to the atomic flag
-// directly if the cache hasn't been wired yet (SetStateCache runs
-// before the server accepts requests, so this is defensive only).
-func (s *Server) handleProxyStatus(w http.ResponseWriter, _ *http.Request) {
-	ready := s.proxyReady.Load()
-	if s.cache != nil {
-		ready = s.cache.Global().ProxyReady
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]bool{"ready": ready})
 }
 
 // Register adds a handler at the given pattern. Used by later ships

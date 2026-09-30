@@ -237,6 +237,102 @@ func TestRunStatus_RunningVM_MissingProxySet(t *testing.T) {
 	assert.Equal(t, serviceapi.ProxyMissing, res.ProxyHealth.Status)
 }
 
+// fakeStatusTartLister satisfies serviceapi.TartLister for tests that
+// only need /status/all's orphan-detection dependency satisfied — no
+// projects report as devm-orphaned.
+type fakeStatusTartLister struct{}
+
+func (fakeStatusTartLister) List(context.Context) ([]tart.VM, error) { return nil, nil }
+
+// startStatusAllDaemon spins up a real serviceapi.Server with
+// /status/all registered against cache, on identity.Prod's socket
+// path (so RunStatus's internal serviceapi.NewClient() finds it).
+// Mirrors startHandshakeDaemon's pattern. Returns a cleanup func.
+func startStatusAllDaemon(t *testing.T, cache *serviceapi.StateCache) func() {
+	t.Helper()
+	rtDir, err := os.MkdirTemp("/tmp", "devm-rt-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(rtDir) })
+	t.Setenv("HOME", rtDir)
+
+	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
+	require.NoError(t, err)
+	socket := identity.Prod.SocketPath()
+	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
+	serviceapi.RegisterStatusAllHandler(srv, identity.Prod, fakeStatusTartLister{}, cache)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, socket)
+
+	return func() { cancel(); <-errCh }
+}
+
+// TestStatus_ProxyHealthyReflectsPerProjectListenerHealth pins that
+// the aggregate proxy_healthy is derived from the per-project
+// ProxyListenerHealth signals, not the old boot-time boolean: one
+// running project healthy, one running project unhealthy → overall
+// false, naming the unhealthy one.
+func TestStatus_ProxyHealthyReflectsPerProjectListenerHealth(t *testing.T) {
+	cache := serviceapi.NewStateCache()
+	cache.SetVMState("proj-a", serviceapi.VMRunning)
+	cache.SetProxyListenerHealth("proj-a", true)
+	cache.SetVMState("proj-b", serviceapi.VMRunning)
+	cache.SetProxyListenerHealth("proj-b", false)
+	cleanup := startStatusAllDaemon(t, cache)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.False(t, res.ProxyHealthy)
+	assert.Contains(t, res.ProxyError, "proj-b")
+}
+
+// TestStatus_ProxyHealthyTrueWhenNoRunningProjects proves the
+// aggregate is vacuously true when the cache has no running projects
+// — nothing to be unhealthy about.
+func TestStatus_ProxyHealthyTrueWhenNoRunningProjects(t *testing.T) {
+	cache := serviceapi.NewStateCache()
+	cache.SetVMState("proj-a", serviceapi.VMStopped)
+	cleanup := startStatusAllDaemon(t, cache)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.True(t, res.ProxyHealthy)
+	assert.Empty(t, res.ProxyError)
+}
+
+// TestStatus_ProxyHealthyTrueWhenAllRunningHealthy proves the
+// aggregate is true, with no error, when every running project's
+// listener pair is healthy.
+func TestStatus_ProxyHealthyTrueWhenAllRunningHealthy(t *testing.T) {
+	cache := serviceapi.NewStateCache()
+	cache.SetVMState("proj-a", serviceapi.VMRunning)
+	cache.SetProxyListenerHealth("proj-a", true)
+	cache.SetVMState("proj-b", serviceapi.VMRunning)
+	cache.SetProxyListenerHealth("proj-b", true)
+	cleanup := startStatusAllDaemon(t, cache)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.True(t, res.ProxyHealthy)
+	assert.Empty(t, res.ProxyError)
+}
+
 func TestRunStatus_RoutingZeroWhenDaemonUnreachable(t *testing.T) {
 	// When the daemon is not running, RoutingStatusFromDaemon fails and
 	// RunStatus leaves Routing zero-valued. RunStatus must not error out

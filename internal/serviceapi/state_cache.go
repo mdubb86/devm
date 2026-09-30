@@ -64,7 +64,6 @@ type ProjectRow struct {
 type GlobalState struct {
 	Build            Build
 	MutagenDaemonPID int
-	ProxyReady       bool
 	LastReconciledAt time.Time
 }
 
@@ -115,12 +114,6 @@ func (c *StateCache) SetMutagenDaemonPID(pid int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.global.MutagenDaemonPID = pid
-}
-
-func (c *StateCache) SetProxyReady(ready bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.global.ProxyReady = ready
 }
 
 func (c *StateCache) TouchGlobalReconciled() {

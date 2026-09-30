@@ -178,9 +178,8 @@ func handleRefreshBundleForProject(cfg identity.Config, cache *StateCache, tr *t
 // write without this lock.
 //
 // Called synchronously from RunService's startup path after
-// AdoptIronProxies and before SetProxyReady(true), so `devm status`
-// reflects the settled post-refresh state on the first query after the
-// daemon becomes healthy.
+// AdoptIronProxies, so `devm status` reflects the settled post-refresh
+// state on the first query after the daemon becomes healthy.
 func BundleDriftCatchup(cfg identity.Config, cache *StateCache, tr *tart.Tart, locks *ProjectLocks) {
 	current := CurrentBundleFingerprint(cache)
 	if current == "" {
