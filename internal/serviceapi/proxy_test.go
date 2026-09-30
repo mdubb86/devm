@@ -388,6 +388,196 @@ func startCountingMockHelper(t *testing.T) (sockPath string, counts *bindCounter
 	return sock, counts
 }
 
+// ipGate lets a test control exactly when a gatedMockHelper's response
+// to a bind request for one ip is released, and observe the instant a
+// request for that ip was first received (i.e. the caller is now
+// blocked inside the mock, past whatever lock it needed to acquire to
+// get there).
+type ipGate struct {
+	hitOnce     sync.Once
+	unblockOnce sync.Once
+	hit         chan struct{}
+	gate        chan struct{}
+}
+
+// gatedMockHelper is a mock helper (same wire protocol as
+// startCountingMockHelper) whose response to a bind request for a
+// given ip blocks until the test unblocks that ip. Used to prove
+// StartProjectListeners's per-project lock doesn't serialize unrelated
+// projects: a test can park one project mid-bind and prove a second,
+// different project completes independently.
+type gatedMockHelper struct {
+	mu  sync.Mutex
+	ips map[string]*ipGate
+}
+
+func newGatedMockHelper() *gatedMockHelper {
+	return &gatedMockHelper{ips: make(map[string]*ipGate)}
+}
+
+func (g *gatedMockHelper) entry(ip string) *ipGate {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	e, ok := g.ips[ip]
+	if !ok {
+		e = &ipGate{hit: make(chan struct{}), gate: make(chan struct{})}
+		g.ips[ip] = e
+	}
+	return e
+}
+
+// waitUntilBlocked blocks until the mock has received a bind request
+// for ip and is itself now blocked waiting for that ip to be
+// unblocked — proof the caller made it past whatever lock guards the
+// call, not just that it was scheduled.
+func (g *gatedMockHelper) waitUntilBlocked(ip string) {
+	<-g.entry(ip).hit
+}
+
+// unblock releases every pending and future bind request for ip.
+// Safe to call more than once for the same ip.
+func (g *gatedMockHelper) unblock(ip string) {
+	e := g.entry(ip)
+	e.unblockOnce.Do(func() { close(e.gate) })
+}
+
+// startGatedMockHelper starts a UDS helper mock using gm to gate each
+// ip's response. Protocol mirrors startCountingMockHelper.
+func startGatedMockHelper(t *testing.T, gm *gatedMockHelper) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "pxyg")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "helper.sock")
+
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				uc := c.(*net.UnixConn)
+				line, err := bufio.NewReader(uc).ReadBytes('\n')
+				if err != nil {
+					return
+				}
+				var req struct {
+					IP   string `json:"ip"`
+					Port int    `json:"port"`
+				}
+				if err := json.Unmarshal(line, &req); err != nil {
+					return
+				}
+				e := gm.entry(req.IP)
+				e.hitOnce.Do(func() { close(e.hit) })
+				<-e.gate
+
+				fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+				if err != nil {
+					return
+				}
+				defer syscall.Close(fd)
+				addr := &syscall.SockaddrInet4{Port: 0}
+				copy(addr.Addr[:], []byte{127, 0, 0, 1})
+				if err := syscall.Bind(fd, addr); err != nil {
+					return
+				}
+				if err := syscall.Listen(fd, 8); err != nil {
+					return
+				}
+				resp, _ := json.Marshal(struct {
+					OK bool `json:"ok"`
+				}{OK: true})
+				oob := syscall.UnixRights(fd)
+				_, _, _ = uc.WriteMsgUnix(resp, oob, nil)
+			}(conn)
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		os.Remove(sock)
+	})
+	return sock
+}
+
+// TestStartProjectListeners_DifferentProjectsDontBlockEachOther proves
+// the per-project bind lock doesn't collapse into a daemon-wide one:
+// runner.go's rebindProjectListeners deliberately fans out one
+// goroutine per project on daemon startup, and a lock granularity
+// broader than "one project" would serialize that fan-out behind
+// whichever project's helper round-trip is slowest.
+//
+// Project B's call is started first and the test waits for its bind
+// request to actually reach the mock (proof B has passed whatever lock
+// guards the critical section) before starting project A's call. B's
+// gate is left closed. Project A's gate is then opened: if the lock is
+// per-project, A proceeds and returns without waiting on B; if the fix
+// regressed to a single lock spanning the bind (e.g. p.mu held across
+// the whole function again), A can't even acquire it — B holds it for
+// the duration of its still-blocked bind — and A never returns.
+func TestStartProjectListeners_DifferentProjectsDontBlockEachOther(t *testing.T) {
+	gm := newGatedMockHelper()
+	sock := startGatedMockHelper(t, gm)
+	cfg := identity.Config{Name: "test-parallel-start", HelperSocketPath: sock}
+
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(cfg, NewRoutes(), ca)
+
+	const ipA = "127.42.0.20"
+	const ipB = "127.42.0.21"
+	t.Cleanup(func() {
+		gm.unblock(ipA)
+		gm.unblock(ipB)
+		proxy.StopProjectListeners("proj-a")
+		proxy.StopProjectListeners("proj-b")
+	})
+
+	ctx := context.Background()
+
+	bDone := make(chan error, 1)
+	go func() {
+		bDone <- proxy.StartProjectListeners(ctx, "proj-b", ipB)
+	}()
+	gm.waitUntilBlocked(ipB)
+
+	aDone := make(chan error, 1)
+	go func() {
+		aDone <- proxy.StartProjectListeners(ctx, "proj-a", ipA)
+	}()
+	gm.unblock(ipA)
+
+	select {
+	case err := <-aDone:
+		assert.NoError(t, err, "project A's StartProjectListeners")
+	case <-time.After(5 * time.Second):
+		t.Fatal("project A's StartProjectListeners did not return while project B was still blocked — " +
+			"the bind lock is serializing unrelated projects instead of being per-project")
+	}
+
+	// Confirm B really was still stuck at that point — otherwise this
+	// test would pass even with no locking at all.
+	select {
+	case <-bDone:
+		t.Fatal("project B's StartProjectListeners returned before its gate was unblocked — " +
+			"test didn't actually exercise the scenario it claims to")
+	default:
+	}
+
+	gm.unblock(ipB)
+	select {
+	case err := <-bDone:
+		assert.NoError(t, err, "project B's StartProjectListeners")
+	case <-time.After(5 * time.Second):
+		t.Fatal("project B's StartProjectListeners did not return after unblocking")
+	}
+}
+
 // TestStartProjectListeners_ConcurrentCallsBindOnce pins that two
 // simultaneous StartProjectListeners calls for the same project result
 // in exactly ONE listener pair being bound and recorded — not two,
@@ -395,9 +585,7 @@ func startCountingMockHelper(t *testing.T) (sockPath string, counts *bindCounter
 // the check and the record, letting both callers proceed to bind
 // fresh FDs and spawn duplicate Accept goroutines. Only one set was
 // recorded in perProj; the other leaked (goroutines + FDs) until
-// process exit. Root cause of the 2026-09-29 3.5-hour outage where
-// all four projects' Mac-side reverse-proxy listeners stopped serving
-// traffic silently.
+// process exit.
 func TestStartProjectListeners_ConcurrentCallsBindOnce(t *testing.T) {
 	sock, counts := startCountingMockHelper(t)
 	cfg := identity.Config{Name: "test-concurrent-start", HelperSocketPath: sock}

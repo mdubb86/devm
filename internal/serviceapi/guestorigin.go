@@ -86,15 +86,22 @@ func (h *guestOriginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // fresh pair and orphan the previous *http.Server goroutines and fds, since
 // nothing ever closes a pair that isn't reachable through perProj anymore.
 func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, projectIP string) (int, int, error) {
-	// p.mu is held across the entire check + bind + record, mirroring
-	// StartProjectListeners's fix: releasing it in between let two
-	// concurrent callers both pass the "already bound?" check and each
-	// bind a fresh ephemeral pair, one of which never made it into
-	// perProj and leaked (goroutines + fds) until process exit.
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// The per-project bind lock (shared with StartProjectListeners —
+	// see bindLocks's doc comment on ProxyServer) is held across the
+	// entire check + bind + record for THIS project: releasing it in
+	// between let two concurrent callers both pass the "already bound?"
+	// check and each bind a fresh ephemeral pair, one of which never
+	// made it into perProj and leaked (goroutines + fds) until process
+	// exit. Per-project rather than p.mu itself so an unrelated
+	// project's Start*Listeners call isn't serialized behind this one's
+	// bind.
+	unlock := p.lockProjectBind(projectID)
+	defer unlock()
 
-	if pl, ok := p.perProj[projectID]; ok && pl.guestHTTPSrv != nil {
+	p.mu.Lock()
+	pl, ok := p.perProj[projectID]
+	p.mu.Unlock()
+	if ok && pl.guestHTTPSrv != nil {
 		return pl.guestHTTPPort, pl.guestHTTPSPort, nil
 	}
 
@@ -132,7 +139,12 @@ func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, 
 		}
 	}()
 
-	pl := p.perProj[projectID]
+	// Re-read the current entry rather than reusing the pl checked
+	// above, mirroring StartProjectListeners: cheap insurance that the
+	// merge stays correct even if a future caller ever reaches perProj
+	// without going through bindLocks.
+	p.mu.Lock()
+	pl = p.perProj[projectID]
 	pl.guestHTTP = httpLn
 	pl.guestHTTPS = httpsLn
 	pl.guestHTTPSrv = httpSrv
@@ -140,6 +152,7 @@ func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, 
 	pl.guestHTTPPort = httpPort
 	pl.guestHTTPSPort = httpsPort
 	p.perProj[projectID] = pl
+	p.mu.Unlock()
 	log.Printf("serviceapi: guest-origin listening on %s/%s (project %s)",
 		httpLn.Addr(), httpsLn.Addr(), projectID)
 	return httpPort, httpsPort, nil

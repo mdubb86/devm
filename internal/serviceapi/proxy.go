@@ -58,6 +58,25 @@ type ProxyServer struct {
 	mu      sync.Mutex
 	perProj map[string]projectListeners
 
+	// bindLocksMu guards bindLocks, a per-project mutex map for the
+	// check+bind+record critical section in StartProjectListeners and
+	// StartGuestOriginListeners. This is deliberately NOT the same
+	// mutex as p.mu: p.mu only ever needs to be held for brief map
+	// reads/writes, while the bind itself (a helper round-trip for
+	// StartProjectListeners, a net.Listen for StartGuestOriginListeners)
+	// can be slow. Serializing that under p.mu would serialize every
+	// project's listener startup behind whichever one is mid-bind —
+	// runner.go's rebindProjectListeners deliberately fans out one
+	// goroutine per project on daemon startup and depends on different
+	// projects proceeding in parallel. A per-project lock closes the
+	// TOCTOU race (two callers for the SAME project) without imposing
+	// that cross-project serialization. Same shape as ProjectLocks in
+	// projectlock.go, but a distinct instance: that one serializes the
+	// daemon's state-mutating endpoints (start/stop/teardown/...), this
+	// one only the listener-bind critical section here.
+	bindLocksMu sync.Mutex
+	bindLocks   map[string]*sync.Mutex
+
 	// lanMu guards lanListener + lanSrv. Separate from mu because
 	// /status calls that read rebindStatus also read from ProxyServer;
 	// keeping lifecycle mutexes disjoint prevents accidental
@@ -118,8 +137,30 @@ func NewProxyServer(cfg identity.Config, routes *Routes, ca *CA) *ProxyServer {
 		ca:           ca,
 		helperClient: helper.NewClient(cfg),
 		perProj:      make(map[string]projectListeners),
+		bindLocks:    make(map[string]*sync.Mutex),
 		rebindStatus: make(map[string]RebindStatus),
 	}
+}
+
+// lockProjectBind blocks until the calling goroutine owns the bind lock
+// for projectID and returns an unlock closure — use with defer:
+//
+//	unlock := p.lockProjectBind(projectID)
+//	defer unlock()
+//
+// Fetching (or creating) the per-project mutex is a brief bindLocksMu
+// hold; the returned lock itself may be held across slow I/O without
+// blocking any other project's caller.
+func (p *ProxyServer) lockProjectBind(projectID string) func() {
+	p.bindLocksMu.Lock()
+	m, ok := p.bindLocks[projectID]
+	if !ok {
+		m = &sync.Mutex{}
+		p.bindLocks[projectID] = m
+	}
+	p.bindLocksMu.Unlock()
+	m.Lock()
+	return m.Unlock
 }
 
 // StartProjectListeners opens :80 and :443 listeners on projectIP via
@@ -133,17 +174,22 @@ func NewProxyServer(cfg identity.Config, routes *Routes, ca *CA) *ProxyServer {
 // previously failed), and an entry-presence check would then skip the
 // ingress bind forever.
 func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, projectIP string) error {
-	// p.mu is held across the entire check + bind + record, not just
-	// the check: releasing it in between let two concurrent callers
-	// both pass the "already bound?" check and each bind a fresh FD
-	// pair, one of which never made it into perProj and leaked
-	// (goroutines + FDs) until process exit. Root cause of the
-	// 2026-09-29 outage where all four projects' Mac-side reverse-proxy
-	// listeners stopped serving traffic silently.
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// The per-project bind lock is held across the entire check + bind
+	// + record for THIS project: releasing it in between let two
+	// concurrent callers for the same project both pass the "already
+	// bound?" check and each bind a fresh FD pair, one of which never
+	// made it into perProj and leaked (goroutines + FDs) until process
+	// exit. It's per-project rather than p.mu itself so an unrelated
+	// project's StartProjectListeners/StartGuestOriginListeners call
+	// isn't serialized behind this one's helper round-trip — see
+	// bindLocks's doc comment.
+	unlock := p.lockProjectBind(projectID)
+	defer unlock()
 
-	if pl, ok := p.perProj[projectID]; ok && pl.httpSrv != nil {
+	p.mu.Lock()
+	pl, ok := p.perProj[projectID]
+	p.mu.Unlock()
+	if ok && pl.httpSrv != nil {
 		return nil
 	}
 
@@ -197,18 +243,33 @@ func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, proj
 		}
 	}()
 
-	pl := p.perProj[projectID]
+	// Re-read the current entry rather than reusing the pl checked
+	// above: StartGuestOriginListeners shares this same bindLocks
+	// entry, so it can't run for this project while we hold it, but
+	// re-reading immediately before the merge (instead of trusting a
+	// pl captured before the bind) keeps this resilient to any future
+	// caller of perProj that doesn't go through bindLocks.
+	p.mu.Lock()
+	pl = p.perProj[projectID]
 	pl.http = httpLn
 	pl.https = httpsLn
 	pl.httpSrv = httpSrv
 	pl.httpsSrv = httpsSrv
 	p.perProj[projectID] = pl
+	p.mu.Unlock()
 	return nil
 }
 
 // StopProjectListeners closes the given project's HTTP/HTTPS listeners
 // (if any). Idempotent — a project with no registered listeners is a
 // no-op.
+//
+// Deliberately asymmetric with Start*Listeners above: Stop keeps I/O
+// (the Shutdown calls below) outside p.mu. The map delete via
+// takeProjectListeners is the load-bearing critical section — once a
+// project's entry is taken, no other caller can observe or re-take it —
+// and Shutdown blocking under a lock would let a slow-draining
+// connection stall unrelated map reads/writes for every other project.
 func (p *ProxyServer) StopProjectListeners(projectID string) {
 	pl, ok := p.takeProjectListeners(projectID)
 
