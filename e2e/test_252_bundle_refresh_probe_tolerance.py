@@ -124,10 +124,14 @@ def test_bundle_refresh_does_not_flip_proxy_unhealthy(devm, workspace):
             f"stdout={active.stdout.decode()!r} stderr={active.stderr.decode()!r}"
         )
 
-        hostname = f"_devm.{workspace.vm_name}.test"
+        # Mac-side probe: devm-e2e's DNS resolves _devm.<project>.e2e.test
+        # to the project's Mac loopback alias; the daemon's proxy dispatches
+        # to softnet-exposed :8940, which forwards into the guest to
+        # gdevm serve. Guest-side DNS doesn't know this hostname.
+        hostname = f"_devm.{workspace.vm_name}.e2e.test"
         probe = subprocess.run(
-            [devm.path, "exec", "curl", "-sf", "-m", "5", f"http://{hostname}/v1/health"],
-            cwd=str(workspace.path), capture_output=True, timeout=15,
+            ["curl", "-sf", "-m", "5", f"http://{hostname}/v1/health"],
+            capture_output=True, timeout=15,
         )
         assert probe.returncode == 0, (
             f"reserved health route unreachable after refresh settled: "
