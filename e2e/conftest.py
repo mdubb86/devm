@@ -22,6 +22,34 @@ from helpers import Devm, Workspace, registry
 from helpers.tart import TartSandbox
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _playwright_chromium_installed():
+    """Fail loudly on first collect if Playwright's Chromium is missing.
+
+    Without this, tests that import helpers.playwright die on
+    playwright.sync_api.Error at browser launch — an unactionable
+    stacktrace. Here we surface the exact remedy up front.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as e:
+        pytest.exit(
+            f"playwright not installed: {e}\n"
+            "run: pip install -e e2e && playwright install chromium",
+            returncode=2,
+        )
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            browser.close()
+    except Exception as e:
+        pytest.exit(
+            f"playwright chromium not usable: {e}\n"
+            "run: playwright install chromium",
+            returncode=2,
+        )
+
+
 def pytest_collection_modifyitems(config, items):
     """Auto-mark tests that must NOT run under pytest-xdist parallelism:
 
