@@ -245,12 +245,17 @@ exit 0
 
 	// Fake softnet control socket: acks setExposeMap (fatal if unacked)
 	// and silently accepts setTestHosts (fire-and-forget, non-fatal).
+	// The setExposeMap line is captured so the test can assert its
+	// contents below — this is the wire evidence that gdevmServePort
+	// (8940) was auto-exposed alongside :22, not just that some line
+	// arrived.
 	require.NoError(t, ensureSoftnetSockDir(softnetSockDir()))
 	sockPath := SoftnetControlSock(identity.Prod, project)
 	_ = os.Remove(sockPath)
 	ln, err := net.Listen("unix", sockPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { ln.Close() })
+	exposeLines := make(chan string, 1)
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -264,6 +269,10 @@ exit 0
 					return
 				}
 				if strings.Contains(line, `"op":"setExposeMap"`) {
+					select {
+					case exposeLines <- line:
+					default:
+					}
 					_, _ = c.Write([]byte(`{"ok":true}` + "\n"))
 				}
 			}(c)
@@ -286,12 +295,32 @@ exit 0
 	server.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/vm/start", bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 
+	var startResp VMStartResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &startResp))
+	require.NotEmpty(t, startResp.ProjectIP, "vm/start response must carry the allocated projectIP")
+
 	route, ok := routes.Lookup("_devm."+project+".test", project)
 	require.True(t, ok, "reserved health route must be registered after /vm/start")
 	assert.Equal(t, gdevmServePort, route.BackendPort)
-	assert.Equal(t, "127.0.0.1", route.BackendHost)
+	// BackendHost must be the guest-reachable projectIP, not the Mac's
+	// own loopback — 127.0.0.1 on the Mac daemon's side is the Mac
+	// itself, not softnet's forward-to-guest alias, so a route baked
+	// with it dials nothing.
+	assert.Equal(t, startResp.ProjectIP, route.BackendHost)
+	assert.NotEqual(t, "127.0.0.1", route.BackendHost)
 	assert.Equal(t, project, route.Project)
 	assert.Equal(t, ModeVM, route.Mode)
+
+	select {
+	case line := <-exposeLines:
+		// gdevm-serve's health port must be auto-exposed on projectIP
+		// alongside :22 — this is what makes the reserved route's
+		// projectIP:8940 dial above actually reach the guest.
+		assert.Contains(t, line, fmt.Sprintf(`"guest_port":%d`, gdevmServePort))
+		assert.Contains(t, line, fmt.Sprintf(`"bind_ip":%q`, startResp.ProjectIP))
+	default:
+		t.Fatal("no setExposeMap line captured from fake softnet control socket")
+	}
 }
 
 // TestVMStart_SetsProxyListenerHealthOptimistically pins Task 8's review

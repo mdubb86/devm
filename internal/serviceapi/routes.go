@@ -204,10 +204,19 @@ func (r *Routes) applyReservedRoute(projectID string, route Route) error {
 // collide with a user-declared hostname. Not Direct — the probe must
 // exercise the proxy, not bypass it — and not ExposeHost — this is a
 // loopback-only health check, never LAN-exposed.
-func reservedHealthRoute(projectName string) Route {
+//
+// BackendHost is projectIP, not "127.0.0.1": `gdevm serve` binds guest
+// loopback:gdevmServePort inside the VM, and this route is dialed by
+// the Mac daemon's own proxy process, whose loopback is a different
+// machine entirely. projectIP is the Mac-side loopback alias softnet
+// forwards to the guest (see computeExposeMap, which exposes
+// gdevmServePort on it) — the same substitution VM-mode user routes get
+// from /routes/apply, baked in here directly since applyReservedRoute
+// bypasses that handler.
+func reservedHealthRoute(projectName, projectIP string) Route {
 	return Route{
 		Hostname:    "_devm." + projectName + ".test",
-		BackendHost: "127.0.0.1",
+		BackendHost: projectIP,
 		BackendPort: gdevmServePort,
 		Mode:        ModeVM,
 		Project:     projectName,

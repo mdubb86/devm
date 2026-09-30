@@ -35,6 +35,16 @@ func computeExposeMap(cfg schema.Config, projectIP string) []softnet.ExposePort 
 		BindIP:    projectIP,
 		HostPort:  22,
 	})
+	// gdevm-serve's health endpoint is always exposed, same as SSH — the
+	// Mac daemon's reserved _devm.<project>.test route (see
+	// reservedHealthRoute) dials projectIP:gdevmServePort expecting
+	// softnet to forward it into the guest's loopback-bound `gdevm
+	// serve`; without this the route dials nothing on the Mac side.
+	ports = append(ports, softnet.ExposePort{
+		GuestPort: gdevmServePort,
+		BindIP:    projectIP,
+		HostPort:  gdevmServePort,
+	})
 	sort.Slice(ports, func(i, j int) bool { return ports[i].GuestPort < ports[j].GuestPort })
 	return ports
 }
