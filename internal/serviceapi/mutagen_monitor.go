@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -38,13 +39,19 @@ const mutagenMonitorTickMarker = "===devm-tick==="
 // every redraw newline-terminated, unlike -l/--long's spinner.
 var mutagenMonitorTemplate = "{{range .}}{{.Name}}|{{.Status}}\n{{end}}" + mutagenMonitorTickMarker + "\n"
 
-// mutagenMonitorReconnectBackoff is how long subscribeMutagenMonitor
-// waits before retrying after a failed process start, or after the
-// monitor process exits (daemon unreachable or mid-restart). Without
-// it, a persistently-dead mutagen daemon would make this actor spin
-// in a tight respawn loop until the separate mutagen watchdog check
-// (up to 60s) repairs it — see watchdog_check_mutagen.go.
-var mutagenMonitorReconnectBackoff = 5 * time.Second
+// mutagenMonitorReconnectBackoff{Initial,Max} bound the exponential
+// backoff subscribeMutagenMonitor uses between reconnect attempts. A
+// transient daemon restart (mutagen watchdog respawns within one 60s
+// tick) recovers on the first or second retry at the initial delay;
+// a persistent outage (mutagen unavailable for minutes) stops filling
+// the stderr log with per-5s retry lines and settles into a per-60s
+// cadence. Values chosen so the fastest reconnect still gives the
+// mutagen watchdog check one tick to repair the daemon before this
+// actor tries again.
+var (
+	mutagenMonitorReconnectBackoffInitial = 5 * time.Second
+	mutagenMonitorReconnectBackoffMax     = 60 * time.Second
+)
 
 // subscribeMutagenMonitor runs `mutagen sync monitor --template
 // mutagenMonitorTemplate` and reflects every session's health into
@@ -63,8 +70,9 @@ var mutagenMonitorReconnectBackoff = 5 * time.Second
 // StdoutPipe and CommandContext.
 //
 // On the monitor process exiting — the mutagen daemon crashed, or was
-// never reachable — this loops and reconnects after
-// mutagenMonitorReconnectBackoff. It does not itself repair the
+// never reachable — this loops and reconnects with an exponential
+// backoff (mutagenMonitorReconnectBackoff{Initial,Max}). It does not
+// itself repair the
 // daemon: that's the mutagen watchdog check's job
 // (watchdog_check_mutagen.go); this actor only resumes watching once
 // the daemon is back.
@@ -73,6 +81,7 @@ func subscribeMutagenMonitor(ctx context.Context, mutagenBin string, cfg identit
 		"MUTAGEN_DATA_DIRECTORY="+mutagenDataDir(cfg),
 		"MUTAGEN_SSH_PATH="+MutagenSSHDir(cfg),
 	)
+	backoff := mutagenMonitorReconnectBackoffInitial
 	for ctx.Err() == nil {
 		cmd := exec.CommandContext(ctx, mutagenBin, "sync", "monitor", "--template", mutagenMonitorTemplate)
 		cmd.Env = env
@@ -80,21 +89,32 @@ func subscribeMutagenMonitor(ctx context.Context, mutagenBin string, cfg identit
 		if err != nil {
 			daemonlog.Errorf("serviceapi: mutagen monitor: stdout pipe: %v", err)
 			markAllProjectsMutagenDead(cache)
-			if !sleepOrDone(ctx, mutagenMonitorReconnectBackoff) {
+			if !sleepOrDone(ctx, backoff) {
 				return
 			}
+			backoff = nextMonitorBackoff(backoff)
 			continue
 		}
 		if err := cmd.Start(); err != nil {
 			daemonlog.Errorf("serviceapi: mutagen monitor: start: %v", err)
 			markAllProjectsMutagenDead(cache)
-			if !sleepOrDone(ctx, mutagenMonitorReconnectBackoff) {
+			if !sleepOrDone(ctx, backoff) {
 				return
 			}
+			backoff = nextMonitorBackoff(backoff)
 			continue
 		}
+		// A successful reconnect resets the backoff so the next outage
+		// starts fresh at the initial delay, not wherever the previous
+		// outage left it. Log the (re)connect at info: after a daemon
+		// outage this is the operator's cue that the subscriber is
+		// watching again, and paired with the exit line below it makes
+		// silent reconnect loops visible in the log.
+		backoff = mutagenMonitorReconnectBackoffInitial
+		log.Printf("mutagen monitor: subscribed (pid=%d)", cmd.Process.Pid)
 		subscribeMutagenMonitorFromReader(ctx, stdout, cache)
 		_ = cmd.Wait()
+		log.Printf("mutagen monitor: subprocess exited, reconnecting after %s", backoff)
 		// The monitor subprocess exited — whether because the mutagen
 		// daemon it was watching died or because the reader hit EOF —
 		// so nothing is observing session health until the next
@@ -105,18 +125,37 @@ func subscribeMutagenMonitor(ctx context.Context, mutagenBin string, cfg identit
 		if ctx.Err() != nil {
 			return
 		}
-		if !sleepOrDone(ctx, mutagenMonitorReconnectBackoff) {
+		if !sleepOrDone(ctx, backoff) {
 			return
 		}
+		backoff = nextMonitorBackoff(backoff)
 	}
 }
 
+// nextMonitorBackoff doubles current up to mutagenMonitorReconnectBackoffMax.
+func nextMonitorBackoff(current time.Duration) time.Duration {
+	next := current * 2
+	if next > mutagenMonitorReconnectBackoffMax {
+		return mutagenMonitorReconnectBackoffMax
+	}
+	return next
+}
+
 // markAllProjectsMutagenDead flips MutagenHealth to dead for every
-// project currently known to cache. Called whenever the `mutagen sync
-// monitor` subprocess is not running (failed to start, or exited) so
-// the cache never reports stale "ok" health during an outage.
+// RUNNING project currently known to cache. Called whenever the
+// `mutagen sync monitor` subprocess is not running (failed to start,
+// or exited) so the cache never reports stale "ok" health during an
+// outage.
+//
+// Stopped/absent projects are skipped: they have no sync sessions
+// mutagen could be observing, so reporting them dead would be a lie
+// (`devm stop myapp` then a subscriber crash on some other project
+// should not make `myapp` show mutagen_health: dead).
 func markAllProjectsMutagenDead(cache *StateCache) {
-	for name := range cache.AllProjectRows() {
+	for name, row := range cache.AllProjectRows() {
+		if row.VMState != VMRunning {
+			continue
+		}
 		cache.SetMutagenHealth(name, MutagenHealth{Status: MutagenDead})
 	}
 }

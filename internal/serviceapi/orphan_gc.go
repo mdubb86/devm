@@ -62,13 +62,15 @@ func GCOrphanedProjects(ctx context.Context, cfg identity.Config, tr TartLister)
 }
 
 // removeOrphanedProjectArtifacts deletes every on-disk artifact for
-// projectID that would otherwise drive a future adopt attempt: the
-// state snapshot itself, its iron-proxy config and policy socket, its
-// pending-passthrough and last-proposal requests, its approved-config
-// snapshot, and its ssh project dir. Each removal is independently
-// best-effort (a missing file is not an error) so one absent artifact
-// doesn't stop the rest from being cleaned up; failures are logged,
-// never swallowed silently.
+// projectID that would otherwise drive a future adopt attempt or
+// leave stale files behind: the state snapshot, iron-proxy config +
+// policy socket, per-project pending/proposal/approved snapshots, ssh
+// project dir, softnet control socket, and every log file the
+// supervisor recorded under LogDir for this project (naming pattern
+// <projectID>-<role>.log). Each removal is independently best-effort
+// (a missing file is not an error) so one absent artifact doesn't
+// stop the rest from being cleaned up; failures are logged, never
+// swallowed silently.
 func removeOrphanedProjectArtifacts(cfg identity.Config, projectID string) {
 	removeIfExists(projectID, filepath.Join(StateDir(cfg), projectID+".json"))
 
@@ -90,11 +92,31 @@ func removeOrphanedProjectArtifacts(cfg identity.Config, projectID string) {
 	removeIfExists(projectID, filepath.Join(projectDir, "approved-snapshot"))
 
 	removeIfExists(projectID, sshkeys.ProjectDir(cfg, projectID))
+
+	// Softnet control socket: a per-project UDS the daemon uses to push
+	// expose-map / test-hosts / policy changes to the softnet process.
+	// The file lives under softnetSockDir() with a name derived from
+	// hash(cfg.RuntimeDir()+projectID) — SoftnetControlSock recomputes
+	// it deterministically.
+	removeIfExists(projectID, SoftnetControlSock(cfg, projectID))
+
+	// Log files the supervisor recorded for this project. Path pattern
+	// is <LogDir>/<projectID>-<role>.log (supervisor.go). Glob catches
+	// every role (iron-proxy, softnet, mutagen, etc.) without this GC
+	// having to enumerate them.
+	if matches, err := filepath.Glob(filepath.Join(cfg.LogDir(), projectID+"-*.log")); err != nil {
+		daemonlog.Errorf("orphan-gc: glob log files for %q: %v", projectID, err)
+	} else {
+		for _, path := range matches {
+			removeIfExists(projectID, path)
+		}
+	}
 }
 
 // removeIfExists removes path (file or directory tree), logging any
-// failure other than the path already being absent. projectID is
-// carried through purely for the log line's context.
+// error RemoveAll returns. RemoveAll already treats a missing path as
+// success — this wrapper's only job is the log line, carrying projectID
+// for context.
 func removeIfExists(projectID, path string) {
 	if err := os.RemoveAll(path); err != nil {
 		daemonlog.Errorf("orphan-gc: remove %s (project %q): %v", path, projectID, err)

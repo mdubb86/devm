@@ -97,14 +97,22 @@ func (g *RealGroundTruth) PopSessionSummaryForProject(projectID string) PopSessi
 // _devm.<project>.<tld> route (see reservedHealthRoute in routes.go).
 // Short timeout and no redirect following — nothing behind /v1/health
 // legitimately redirects, so a probe that can't complete in 2s or
-// that redirects is unhealthy. Shared across probes: Go's default
-// transport pools connections per host, and ProxyListenerHealth drains
-// each response body before closing it so the connection is eligible
-// for reuse.
+// that redirects is unhealthy.
+//
+// Its own Transport (not http.DefaultTransport) with a per-host idle
+// pool of 1 and a 30s idle timeout keeps a growing project count from
+// piling up long-lived idle connections in the shared default pool.
+// ProxyListenerHealth drains each response body before Close so the
+// one pooled connection is eligible for reuse.
 var healthProbeClient = &http.Client{
 	Timeout: 2 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
+	},
+	Transport: &http.Transport{
+		MaxIdleConns:        16,
+		MaxIdleConnsPerHost: 1,
+		IdleConnTimeout:     30 * time.Second,
 	},
 }
 

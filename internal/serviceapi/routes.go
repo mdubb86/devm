@@ -143,8 +143,11 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 		}
 		hostnames = append(hostnames, item.Hostname)
 	}
-	// Re-add the reserved routes gathered above — they were never part
-	// of items (rejected above) and never cleared by a caller's batch.
+	// Re-add the reserved routes gathered above. They cannot arrive in
+	// `items` (the reservation check at the top of Apply rejects any
+	// reserved hostname in the input), and the clear loop above just
+	// dropped them from the maps, so this loop is what carries them
+	// across an Apply.
 	for _, rt := range reserved {
 		r.hostnameToRoute[rt.Hostname] = rt
 		if rt.ExposeHost {
@@ -218,6 +221,16 @@ func (r *Routes) applyReservedRoute(projectID string, route Route) error {
 // prod, "e2e.test" for the e2e slot): the reserved hostname must match
 // whatever TLD this daemon actually resolves, or the health probe
 // (RealGroundTruth.ProxyListenerHealth) never matches a route.
+//
+// The "_devm." underscore prefix is what makes the hostname synthetic
+// and un-collide-able with user hostnames (user hostnames must match
+// [a-z0-9]). RFC 1035's strict hostname grammar rejects underscores in
+// labels, but every resolver in devm's path — the daemon's own DNS
+// server, softnet's DNS shim, and Go's net.Dial with an explicit Host
+// header — accepts them without normalization. Middleware or logging
+// systems outside devm that run this hostname through a strict
+// validator will drop it; keep that in mind if the reserved route is
+// ever exposed anywhere outside the daemon's own probe path.
 func reservedHealthRoute(projectName, projectIP, tld string) Route {
 	return Route{
 		Hostname:    "_devm." + projectName + "." + tld,

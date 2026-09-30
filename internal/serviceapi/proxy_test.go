@@ -859,6 +859,38 @@ func TestStopProjectListeners_ClearsRebindStatus_WithLiveListeners(t *testing.T)
 		"StopProjectListeners must be idempotent-safe on an already-stopped project")
 }
 
+// TestStopProjectListeners_PreservesBindLockMutex pins that StopProjectListeners
+// does NOT delete the project's entry from bindLocks — the mutex is the
+// rendezvous that serializes Start* calls for THIS project, and dropping
+// it while a slow Start* still holds it lets the next Start* create a
+// fresh mutex, defeating the mutual exclusion that Task 1's fix put in
+// place. Concrete regression: a Stop between a rebind goroutine's slow
+// StartProjectListeners and a user's /vm/start would leave both binding
+// :80/:443 in parallel. Test asserts pointer identity so a re-added
+// delete is caught even without racing.
+func TestStopProjectListeners_PreservesBindLockMutex(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(), ca)
+
+	unlock := proxy.lockProjectBind("p1")
+	unlock()
+
+	proxy.bindLocksMu.Lock()
+	before := proxy.bindLocks["p1"]
+	proxy.bindLocksMu.Unlock()
+	require.NotNil(t, before, "sanity: lockProjectBind should have inserted p1's mutex")
+
+	proxy.StopProjectListeners("p1")
+
+	proxy.bindLocksMu.Lock()
+	after := proxy.bindLocks["p1"]
+	proxy.bindLocksMu.Unlock()
+	assert.Same(t, before, after,
+		"StopProjectListeners must preserve the per-project bind mutex: dropping it lets a concurrent Start* create a fresh mutex and stop excluding an in-flight Start* — the exact leak Task 1 closed")
+}
+
 func TestProxyServer_StartLANListener_BindsAndServes(t *testing.T) {
 	proxy := NewProxyServer(identity.Prod, NewRoutes(), nil)
 	// Ephemeral port to avoid collisions in test env.
@@ -1060,31 +1092,3 @@ func TestNewProxyErrorLog_WritesToConfiguredSink(t *testing.T) {
 	assert.Contains(t, string(got), "simulated panic-serving trace")
 }
 
-// TestBindLocks_DeletedAfterStopProjectListeners pins that
-// StopProjectListeners removes the project's entry from bindLocks —
-// without this, the map grows by one *sync.Mutex per project ever
-// started and never shrinks, since lockProjectBind only ever adds.
-func TestBindLocks_DeletedAfterStopProjectListeners(t *testing.T) {
-	sock := mockHelperServer(t)
-	cfg := identity.Config{Name: "test-bindlocks-cleanup", HelperSocketPath: sock}
-
-	dir := t.TempDir()
-	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
-	require.NoError(t, err)
-
-	proxy := NewProxyServer(cfg, NewRoutes(), ca)
-	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
-	require.NoError(t, err)
-
-	proxy.bindLocksMu.Lock()
-	gotLen := len(proxy.bindLocks)
-	proxy.bindLocksMu.Unlock()
-	require.Equal(t, 1, gotLen, "bindLocks must hold exactly one entry for the started project")
-
-	proxy.StopProjectListeners("p1")
-
-	proxy.bindLocksMu.Lock()
-	gotLen = len(proxy.bindLocks)
-	proxy.bindLocksMu.Unlock()
-	assert.Equal(t, 0, gotLen, "bindLocks must be empty after StopProjectListeners")
-}

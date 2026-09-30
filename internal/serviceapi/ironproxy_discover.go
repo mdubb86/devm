@@ -255,6 +255,21 @@ func recoverProjectState(cfg identity.Config, routes *Routes, projectID string) 
 			daemonlog.Errorf("routes: recover routes for %s: %v (continuing)", projectID, err)
 		}
 	}
+
+	// Re-install the reserved health route (_devm.<project>.<tld>) that
+	// /vm/start's applyReservedRoute registers on a cold start. Without
+	// this, an adopted project loses the route across a daemon restart
+	// (devm install, launchd crash-restart, `just release`): the mac
+	// proxy-listener watchdog probes it every 60s, sees 502 no-route,
+	// declares drift, and Stop+Start-respawns :80/:443 on every tick —
+	// forever, and each respawn briefly drops real browser traffic. The
+	// snapshot's Routes never carries the reserved route because Apply
+	// rejects reserved hostnames from user input.
+	if snap.ProjectIP != "" {
+		if err := routes.applyReservedRoute(projectID, reservedHealthRoute(projectID, snap.ProjectIP, cfg.TLD)); err != nil {
+			daemonlog.Errorf("routes: recover reserved health route for %s: %v (continuing)", projectID, err)
+		}
+	}
 }
 
 // parseIronProxyProcesses extracts iron-proxy entries from `ps -axo

@@ -26,7 +26,11 @@ import (
 // keeps any new caller from bypassing it.
 func TestMutagenCLIConstructionGoesThroughFactory(t *testing.T) {
 	root := repoRootFromCWD(t)
-	pattern := regexp.MustCompile(`&mutagen\.CLI\{`)
+	// Both pointer form (&mutagen.CLI{...}) and value form (mutagen.CLI{...})
+	// bypass the factory equivalently — methods on *CLI are callable on
+	// any addressable value. The regex accepts optional whitespace after
+	// CLI so future gofmt tweaks don't break it.
+	pattern := regexp.MustCompile(`(?:^|[^\w])mutagen\.CLI\s*\{`)
 
 	// The one authorized site — the factory itself.
 	authorized := map[string]bool{
@@ -69,7 +73,7 @@ func TestMutagenCLIConstructionGoesThroughFactory(t *testing.T) {
 	}
 	if len(offenders) > 0 {
 		t.Fatalf(
-			"direct `&mutagen.CLI{...}` construction found in %d file(s): %v — "+
+			"direct `mutagen.CLI{...}` construction (pointer or value form) found in %d file(s): %v — "+
 				"use serviceapi.NewMutagenCLI(cfg, bin, exec) instead; it sets "+
 				"MUTAGEN_SSH_PATH so an auto-spawned mutagen daemon inherits "+
 				"the tart-mutagen-ssh shim env",

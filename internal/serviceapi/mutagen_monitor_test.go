@@ -309,6 +309,11 @@ func TestSubscribeMutagenMonitor_MarksDeadOnMonitorExit(t *testing.T) {
 	cache := NewStateCache()
 	cache.SetMacCwd("proj-a", "/a")
 	cache.SetMacCwd("proj-b", "/b")
+	// markAllProjectsMutagenDead skips non-running projects (a stopped
+	// project has no sync sessions to report dead about); mark both
+	// running so the loop actually flips them.
+	cache.SetVMState("proj-a", VMRunning)
+	cache.SetVMState("proj-b", VMRunning)
 	cache.SetMutagenHealth("proj-a", MutagenHealth{Status: MutagenOK})
 	cache.SetMutagenHealth("proj-b", MutagenHealth{Status: MutagenOK})
 
@@ -331,11 +336,110 @@ func TestSubscribeMutagenMonitor_MarksDeadOnMonitorExit(t *testing.T) {
 
 	// Interrupt the reconnect backoff so the loop exits promptly
 	// instead of respawning the fake binary for up to
-	// mutagenMonitorReconnectBackoff.
+	// mutagenMonitorReconnectBackoffInitial.
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("subscribeMutagenMonitor did not return after ctx cancellation")
 	}
+}
+
+// TestSubscribeMutagenMonitor_PropagatesShimEnvToSubprocess pins the
+// design assumption that motivated commit 49987f6: if the mutagen
+// daemon dies mid-flight, the monitor's reconnect can trigger mutagen's
+// own auto-daemon-spawn, which inherits the calling process's env. The
+// spawned daemon MUST see MUTAGEN_SSH_PATH — without it, its SSH
+// transport falls through to the system ssh client and every later
+// `sync create` fails on hostname resolution.
+//
+// This test uses a fake `mutagen` shim that captures its own env to a
+// file rather than executing the real binary. The assertion is on the
+// captured env: it contains MUTAGEN_SSH_PATH set to the identity's
+// mutagen-ssh-dir. If a future refactor drops the shim env from the
+// monitor's exec.Command, this fails.
+func TestSubscribeMutagenMonitor_PropagatesShimEnvToSubprocess(t *testing.T) {
+	tmp := t.TempDir()
+	envDump := filepath.Join(tmp, "env-dump")
+	fakeMutagen := filepath.Join(tmp, "mutagen")
+	// Shell script that writes MUTAGEN_SSH_PATH (via a "key=val" line
+	// that's easy to grep) then exits. The exit causes
+	// subscribeMutagenMonitor's outer loop to iterate; the ctx cancel
+	// below stops the loop before the reconnect backoff elapses.
+	// `printf` is used explicitly rather than relying on `env` being
+	// found via $PATH — a test-provided fake $PATH could omit it.
+	require.NoError(t, os.WriteFile(
+		fakeMutagen,
+		[]byte(`#!/bin/sh
+printf 'MUTAGEN_SSH_PATH=%s\n' "$MUTAGEN_SSH_PATH" > `+envDump+`
+exit 0
+`),
+		0o755,
+	))
+
+	// Use a Config whose Name is deterministic so MutagenSSHDir(cfg) is
+	// a predictable string to assert against.
+	cfg := identity.Config{Name: "devm-test-shim-env"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		subscribeMutagenMonitor(ctx, fakeMutagen, cfg, NewStateCache())
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(envDump)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond, "fake mutagen shim never ran or never dumped env")
+
+	body, err := os.ReadFile(envDump)
+	require.NoError(t, err)
+	want := "MUTAGEN_SSH_PATH=" + MutagenSSHDir(cfg)
+	assert.Contains(t, string(body), want,
+		"monitor subprocess env must carry the shim path — otherwise mutagen's auto-daemon-spawn inherits a bare env and its SSH transport falls through to system ssh")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscribeMutagenMonitor did not return after ctx cancellation")
+	}
+}
+
+// TestMarkAllProjectsMutagenDead_SkipsStoppedProjects pins that a
+// stopped/absent project is NOT flipped to MutagenDead when the
+// monitor subprocess exits: a stopped project has no sync sessions to
+// report dead about, and `devm stop myapp` should not make `myapp`
+// show mutagen_health: dead the next time some OTHER project's
+// monitor hiccups.
+func TestMarkAllProjectsMutagenDead_SkipsStoppedProjects(t *testing.T) {
+	cache := NewStateCache()
+
+	cache.SetMacCwd("running-proj", "/r")
+	cache.SetVMState("running-proj", VMRunning)
+	cache.SetMutagenHealth("running-proj", MutagenHealth{Status: MutagenOK})
+
+	cache.SetMacCwd("stopped-proj", "/s")
+	cache.SetVMState("stopped-proj", VMStopped)
+	cache.SetMutagenHealth("stopped-proj", MutagenHealth{Status: MutagenOK})
+
+	cache.SetMacCwd("absent-proj", "/a")
+	cache.SetVMState("absent-proj", VMAbsent)
+	cache.SetMutagenHealth("absent-proj", MutagenHealth{Status: MutagenOK})
+
+	markAllProjectsMutagenDead(cache)
+
+	running, _ := cache.ProjectRow("running-proj")
+	assert.Equal(t, MutagenDead, running.MutagenHealth.Status,
+		"running project must flip to dead when the monitor exits")
+
+	stopped, _ := cache.ProjectRow("stopped-proj")
+	assert.Equal(t, MutagenOK, stopped.MutagenHealth.Status,
+		"stopped project must NOT flip to dead — no sessions to report dead about")
+
+	absent, _ := cache.ProjectRow("absent-proj")
+	assert.Equal(t, MutagenOK, absent.MutagenHealth.Status,
+		"absent project must NOT flip to dead — no sessions to report dead about")
 }

@@ -190,6 +190,39 @@ func TestRecoverProjectState_ReplaysSnapshotRoutes(t *testing.T) {
 	assert.Equal(t, 3000, web.BackendPort)
 }
 
+// TestRecoverProjectState_RestoresReservedHealthRoute pins that
+// recoverProjectState re-installs the _devm.<project>.<tld> reserved
+// route on daemon restart. Without this, an adopted project's mac
+// proxy-listener watchdog probes 502 no-route on every 60s tick,
+// declares drift, and Stop+Start-respawns :80/:443 forever — each
+// respawn briefly drops real browser traffic. The snapshot's Routes
+// never carries the reserved route (Apply rejects reserved
+// hostnames from user input), so recover has to install it separately.
+func TestRecoverProjectState_RestoresReservedHealthRoute(t *testing.T) {
+	const projectID = "recover-reserved-proj"
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() {
+		ironProxyState.del(projectID)
+		policyAuthority.PurgeProject(projectID)
+	})
+
+	ironProxyState.put(projectID, projectInfo{HTTPPort: 40001, HTTPSPort: 40002, DNSPort: 40003})
+
+	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{
+		Cfg:       schema.Config{Project: schema.Project{Name: projectID}},
+		ProjectIP: "127.42.0.17",
+	}))
+
+	routes := NewRoutes()
+	recoverProjectState(identity.Prod, routes, projectID)
+
+	reservedHost := "_devm." + projectID + "." + identity.Prod.TLD
+	r, ok := routes.Lookup(reservedHost, projectID)
+	require.True(t, ok, "recoverProjectState must install the reserved health route %q", reservedHost)
+	assert.Equal(t, "127.42.0.17", r.BackendHost, "reserved route must target the recovered project IP")
+	assert.Equal(t, gdevmServePort, r.BackendPort, "reserved route must target gdevm serve's port")
+}
+
 // After a daemon restart, recoverProjectState must re-serve the adopted
 // project's policy socket with the allowlist recomputed from the state
 // snapshot — until it runs, every guest request fail-closes with a 502.

@@ -283,21 +283,27 @@ func (p *ProxyServer) StopProjectListeners(projectID string) {
 	delete(p.rebindStatus, projectID)
 	p.rebindMu.Unlock()
 
-	// Drop the per-project bind lock now that the project is torn down
-	// (or was never fully started) — otherwise bindLocks grows by one
-	// entry per project ID ever attempted and never shrinks. Safe
-	// against a concurrent Start* call racing in: the
-	// Start*/lockProjectBind pattern is lookup-then-lock (fetch-or-
-	// create the *sync.Mutex under bindLocksMu, release bindLocksMu,
-	// then lock the mutex itself), so a Start* call that already holds
-	// a pointer to the mutex keeps working fine even after this delete
-	// removes it from the map — deleting a map entry doesn't invalidate
-	// a pointer a concurrent reader already holds. A subsequent Start*
-	// call for the same project just recreates the entry with a fresh
-	// mutex.
-	p.bindLocksMu.Lock()
-	delete(p.bindLocks, projectID)
-	p.bindLocksMu.Unlock()
+	// Deliberately do NOT delete p.bindLocks[projectID] here. The mutex
+	// is the rendezvous that serializes Start* calls for THIS project;
+	// deleting it while a slow Start* still holds it means the next
+	// Start* creates a fresh mutex, and the two callers stop excluding
+	// each other — the exact leak Task 1 closed. Concrete sequence:
+	//
+	//   1. rebindProjectListeners goroutine calls StartProjectListeners,
+	//      creates M1, locks it, waits on the helper's BindTCP.
+	//   2. /vm/stop takes its per-project reconcile lock, calls
+	//      StopProjectListeners (this function), a delete here would
+	//      remove M1 while (1) still holds it.
+	//   3. /vm/start takes the reconcile lock next, calls
+	//      StartProjectListeners; lockProjectBind sees no entry, creates
+	//      M2, locks M2.
+	//   4. (1) and (3) now bind :80/:443 for the same project in
+	//      parallel — the exact duplicate-listener leak the map exists
+	//      to prevent.
+	//
+	// The map is one *sync.Mutex per project name ever attempted, on a
+	// single-user tool with a handful of projects. Memory footprint is
+	// trivial; the correctness of the mutual exclusion is not.
 
 	if !ok {
 		return

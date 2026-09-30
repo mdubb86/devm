@@ -23,7 +23,18 @@ func (mutagenCheck) Run(ctx context.Context, cache *StateCache, gt GroundTruth) 
 	}
 	if observed == expectedPID && observed != 0 {
 		cache.TouchGlobalReconciled()
+		// Seed MutagenOK for every known project so devm status --json
+		// never reports an empty mutagen_health field during the gap
+		// between daemon boot and the subscriber's first tick (~5s of
+		// reconnect backoff + subprocess start + first template
+		// render). The subscriber overwrites per-project state within
+		// seconds; this is the coarse floor. Only touched when the
+		// daemon PID confirms alive — if the daemon is dead the
+		// respawn/repair branch below owns the write instead.
 		for _, p := range gt.KnownProjectNames() {
+			if row, ok := cache.ProjectRow(p); !ok || row.MutagenHealth.Status == "" {
+				cache.SetMutagenHealth(p, MutagenHealth{Status: MutagenOK})
+			}
 			cache.TouchProjectReconciled(p)
 		}
 		return false, nil
