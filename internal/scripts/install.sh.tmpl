@@ -165,6 +165,15 @@ chown -R devm:devm /home/devm/filestash
 cat > /etc/systemd/system/filestash.service <<'FILESTASH_UNIT'
 {{.FilestashUnit}}
 FILESTASH_UNIT
+
+# --- Filestash runtime deps: the bundled binary dynamically links against
+# ffmpeg's shared libs (libavformat/libavcodec/libavfilter/libavutil), which
+# are not statically linked in and not present on a fresh guest. Installed
+# on every cold-start/re-run alongside the binary above; apt-get install is
+# a no-op once the packages are present. ---
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    libavformat61 libavcodec61 libavfilter10 libavutil59
+
 systemctl daemon-reload
 systemctl enable filestash.service
 systemctl restart filestash.service
