@@ -40,8 +40,10 @@ def test_filestash_serves_workspace(devm, workspace):
         # with default (ignore_https_errors=False) — devm's local CA
         # trust is what makes the page load without a warning.
         # Visit filestash's root; the preset's SPA shows a password
-        # prompt first (admin password "devm"), then navigates on its
-        # own to the local backend's root listing.
+        # prompt first (admin password "devm"), then the local backend
+        # defaults to /home/devm so the seeded sentinel is in the first
+        # listing the SPA renders after login — no second navigation
+        # needed.
         url = f"https://files.{workspace.vm_name}.e2e.test/"
         with open_page(url) as page:
             pw_input = page.locator('input[type="password"]')
@@ -49,18 +51,11 @@ def test_filestash_serves_workspace(devm, workspace):
             pw_input.fill("devm")
             page.get_by_role("button", name="CONNECT").click()
 
-            # Navigate to /home/devm so the seeded sentinel is in view.
-            # Done after login so the session cookie is set.
-            page.goto(
-                f"https://files.{workspace.vm_name}.e2e.test/files/local/home/devm/",
-                wait_until="networkidle", timeout=15000,
-            )
-
             listing = page.locator("text=SENTINEL_FILE.txt")
             listing.wait_for(timeout=15000)
             assert listing.count() > 0, (
-                f"filestash didn't render our seeded file in the workspace "
-                f"listing at {url} after login."
+                f"filestash didn't render our seeded file in the listing "
+                f"at {url} after login."
             )
     finally:
         subprocess.run([devm.path, "teardown", "--yes"], cwd=str(workspace.path),
