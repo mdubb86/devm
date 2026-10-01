@@ -179,9 +179,10 @@ func RenderProvisionUserScript(in ProvisionScriptInput) []byte {
 			// install.sh (stage:bundle runs before softnet opens egress, so
 			// apt couldn't reach deb.debian.org there). Now that the open
 			// window is up, install its ffmpeg shared-lib deps and start it.
-			// restart (not start) on first boot only. On bundle refresh of
-			// an already-provisioned VM, install.sh rewrites the binary
-			// safely but does not restart filestash — acknowledged limitation.
+			// restart (not start) covers the retry path where filestash
+			// somehow got left running from a half-provisioned prior boot.
+			// Warm-boot bundle refreshes don't come through here: install.sh
+			// does the try-restart in stage:bundle, before FirstBoot is false.
 			p("echo ::devm:stage:filestash-deps::")
 			p("apt_run install -y --no-install-recommends libavformat61 libavcodec61 libavfilter10 libavutil59")
 			p("sudo systemctl restart filestash.service")

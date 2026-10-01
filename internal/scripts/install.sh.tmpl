@@ -148,10 +148,7 @@ if [ -f /etc/systemd/system/gdevm-serve.service ]; then
 fi
 
 # --- Filestash: bundled binary + passthrough config, dropped in fresh
-# on every cold-start/re-run (same rationale as gdevm-serve above). The
-# service itself is enabled but not restarted here — see the comment
-# below — so a binary bump lands only once RenderProvisionUserScript's
-# filestash-deps stage restarts it. ---
+# on every cold-start/re-run (same rationale as gdevm-serve above). ---
 mkdir -p /home/devm/filestash/data/state/config
 # install's rename-after-write is required here, not a bare `> file`
 # redirect: a bundle refresh (devm reconcile) runs this script while
@@ -172,17 +169,18 @@ cat > /etc/systemd/system/filestash.service <<'FILESTASH_UNIT'
 {{.FilestashUnit}}
 FILESTASH_UNIT
 
-# --- Filestash is enabled but NOT (re)started here: this script runs in
-# ::devm:stage:bundle::, before softnet opens guest egress, so apt can't
-# reach deb.debian.org yet to install the ffmpeg shared libs the bundled
-# binary dynamically links against (libavformat/libavcodec/libavfilter/
-# libavutil). Those libs are installed and the service (re)started in
-# ::devm:stage:filestash-deps::, once the open-egress window is up — see
-# RenderProvisionUserScript in internal/render/provision.go. Restart
-# (not start) there so a binary bump written above lands even when the
-# service was already running from a prior boot. ---
+# --- Filestash is enabled here, and `try-restart` cycles it onto the
+# binary we just dropped IF the service is already running — i.e. on a
+# warm-boot bundle refresh. `try-restart` is a no-op on first boot
+# (service was never started), and ffmpeg shared libs (libavformat/
+# libavcodec/libavfilter/libavutil) are already installed on a warm boot
+# because the FirstBoot filestash-deps stage apt-installed them, so a
+# restart here needs no network. The initial start on first boot is done
+# by RenderProvisionUserScript's filestash-deps stage, once the open-
+# egress window is up and the libs are installed. ---
 systemctl daemon-reload
 systemctl enable filestash.service
+systemctl try-restart filestash.service
 
 # --- Mutagen agent pre-install (mutagen looks under ~/.mutagen/agents/<version>/mutagen-agent). ---
 if [ -f /opt/devm/bin/mutagen-agent ]; then
