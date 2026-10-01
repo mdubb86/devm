@@ -13,10 +13,11 @@ pytestmark = pytest.mark.devm
 
 
 # Filestash with the pinned preset ("Local files - just for me") shows a
-# one-field password prompt on first visit; admin password is "devm"
-# (documented, baked into internal/scripts/embed/filestash-config.json).
-# After entering, filestash navigates to the file listing and remembers
-# the session via cookie for subsequent requests.
+# one-field password prompt on first visit; the admin password is the
+# project name — bcrypt-hashed per-project at bundle-render time by
+# render.RenderInstallScript. After entering, filestash navigates to the
+# file listing and remembers the session via cookie for subsequent
+# requests.
 @pytest.mark.timeout(240)
 def test_filestash_serves_workspace(devm, workspace):
     workspace.write_devmyaml(no_repo=True)
@@ -48,7 +49,7 @@ def test_filestash_serves_workspace(devm, workspace):
         with open_page(url) as page:
             pw_input = page.locator('input[type="password"]')
             pw_input.wait_for(timeout=10000)
-            pw_input.fill("devm")
+            pw_input.fill(workspace.vm_name)
             page.get_by_role("button", name="CONNECT").click()
 
             listing = page.locator("text=SENTINEL_FILE.txt")

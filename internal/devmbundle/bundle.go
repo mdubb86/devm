@@ -101,7 +101,7 @@ func Build(in BuildInput) ([]byte, error) {
 		}
 	}
 
-	installBody, err := render.RenderInstallScript(in.MutagenVersion)
+	installBody, err := render.RenderInstallScript(in.MutagenVersion, in.Cfg.Project.Name)
 	if err != nil {
 		return nil, fmt.Errorf("render install.sh: %w", err)
 	}

@@ -4,9 +4,11 @@
 # whose admin console has already been walked through the preset
 # "Local files - just for me". Writes both artifacts to
 # internal/scripts/embed/. The committed config carries:
-#   - auth.admin: bcrypt of the plaintext password "devm" (documented
-#     fact; users type "devm" when their browser prompts for the
-#     filestash password on first visit per session).
+#   - auth.admin: a placeholder bcrypt hash. At bundle-render time
+#     (render.RenderInstallScript) devm swaps this for bcrypt of the
+#     project's own name, so each guest's filestash accepts its own
+#     project name at the password prompt — users type their project
+#     name on first visit per browser session.
 #   - middleware.identity_provider.type = passthrough with the "just
 #     for me" preset's encrypted params (encrypted with the pinned
 #     SECRET_KEY so the blob is portable across every devm guest).
@@ -29,13 +31,6 @@
 #      "Local files - just for me" configuration-wizard preset.
 #   2. Re-point SHELFMATES_* below at the project you clicked
 #      through in, then rerun this script.
-#
-# TODO: find a filestash config path that's TRULY anonymous (no
-# password at all). The current preset is a one-password-per-session
-# UX which matches shelfmates's actual UX but isn't the "no login,
-# just works" the plan originally envisioned. Candidates to explore:
-# share-link bake-in, custom overrides JS that auto-fills the
-# password, or a filestash version with a no-auth site mode.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
