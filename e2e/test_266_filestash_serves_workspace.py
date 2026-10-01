@@ -15,19 +15,25 @@ pytestmark = pytest.mark.devm
 @pytest.mark.timeout(240)
 def test_filestash_serves_workspace(devm, workspace):
     workspace.write_devmyaml(no_repo=True)
-    (workspace.path / "SENTINEL_FILE.txt").write_text("hello from e2e\n")
     try:
         r = subprocess.run([devm.path, "start"], cwd=str(workspace.path),
                            capture_output=True, timeout=180)
         assert r.returncode == 0, f"cold-start failed: {r.stderr.decode()!r}"
 
+        # Seed the sentinel INSIDE the guest. A no_repo project has no
+        # Mac→guest mutagen sync of arbitrary workspace files (devm.yaml
+        # is the only auto-synced bit); writing SENTINEL on the Mac
+        # would never show up at /home/devm/. `devm exec` with a shell
+        # fragment is the simplest way to drop a file at a known path.
+        r = subprocess.run(
+            [devm.path, "exec", "bash", "-c", "echo 'hello from e2e' > /home/devm/SENTINEL_FILE.txt"],
+            cwd=str(workspace.path), capture_output=True, timeout=15,
+        )
+        assert r.returncode == 0, f"seed sentinel failed: {r.stderr.decode()!r}"
+
         # Mac-side reserved route (Task 4). Playwright follows HTTPS
         # with default (ignore_https_errors=False) — devm's local CA
         # trust is what makes the page load without a warning.
-        #
-        # no_repo=True syncs the Mac workspace straight to the guest's
-        # home directory (mutagen), not into a <vm_name> subdirectory,
-        # so the seeded file lands at /home/devm/SENTINEL_FILE.txt.
         url = f"https://files.{workspace.vm_name}.e2e.test/files/local/home/devm/"
         with open_page(url) as page:
             # Filestash's passthrough middleware still renders its SPA
