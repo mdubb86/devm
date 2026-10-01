@@ -20,7 +20,10 @@ def open_page(url: str, *, ignore_https_errors: bool = False) -> Iterator[Page]:
     HTTPS path works.
     """
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-features=AsyncDns"],
+        )
         context = browser.new_context(ignore_https_errors=ignore_https_errors)
         page = context.new_page()
         page.goto(url, wait_until="networkidle", timeout=15000)

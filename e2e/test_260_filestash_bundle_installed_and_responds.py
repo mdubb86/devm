@@ -27,7 +27,7 @@ def test_filestash_bundle_installed_and_responds(devm, workspace):
 
         # In-guest curl to the filestash port succeeds
         r = subprocess.run(
-            [devm.path, "exec", "curl", "-sfI", "-m", "5", "http://127.0.0.1:8941/"],
+            [devm.path, "exec", "curl", "-sf", "-m", "5", "-o", "/dev/null", "http://127.0.0.1:8941/"],
             cwd=str(workspace.path), capture_output=True, timeout=15,
         )
         assert r.returncode == 0, (
