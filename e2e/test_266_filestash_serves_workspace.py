@@ -12,17 +12,11 @@ from helpers.playwright import open_page
 pytestmark = pytest.mark.devm
 
 
-# Filestash's current passthrough-middleware config still presents a
-# CONNECT login UI; clicking CONNECT with empty creds does NOT advance
-# (verified with agent-browser against both this build and shelfmates'
-# running filestash). Reaching the file listing from a browser requires
-# knowing the admin bcrypt plaintext — a per-install secret we don't
-# retain. The core guarantees — bundled binary, systemd service up,
-# reserved route reachable, HTTPS via devm CA — are covered by
-# test_260_filestash_bundle_installed_and_responds + test_265. True
-# anonymous mode is a filestash-config follow-up (see the plan's
-# "come back to it" note in SDD ledger task-5 Fix round 3).
-@pytest.mark.skip(reason="filestash requires login; anonymous-access config is a follow-up (see test_260/265 for core verification)")
+# Filestash with the pinned preset ("Local files - just for me") shows a
+# one-field password prompt on first visit; admin password is "devm"
+# (documented, baked into internal/scripts/embed/filestash-config.json).
+# After entering, filestash navigates to the file listing and remembers
+# the session via cookie for subsequent requests.
 @pytest.mark.timeout(240)
 def test_filestash_serves_workspace(devm, workspace):
     workspace.write_devmyaml(no_repo=True)
@@ -45,20 +39,28 @@ def test_filestash_serves_workspace(devm, workspace):
         # Mac-side reserved route (Task 4). Playwright follows HTTPS
         # with default (ignore_https_errors=False) — devm's local CA
         # trust is what makes the page load without a warning.
-        url = f"https://files.{workspace.vm_name}.e2e.test/files/local/home/devm/"
+        # Visit filestash's root; the preset's SPA shows a password
+        # prompt first (admin password "devm"), then navigates on its
+        # own to the local backend's root listing.
+        url = f"https://files.{workspace.vm_name}.e2e.test/"
         with open_page(url) as page:
-            # Filestash's passthrough middleware still renders its SPA
-            # login shell first; the file listing only hydrates after
-            # the one-click CONNECT button is clicked.
-            connect = page.get_by_role("button", name="CONNECT")
-            connect.wait_for(timeout=10000)
-            connect.click()
+            pw_input = page.locator('input[type="password"]')
+            pw_input.wait_for(timeout=10000)
+            pw_input.fill("devm")
+            page.get_by_role("button", name="CONNECT").click()
+
+            # Navigate to /home/devm so the seeded sentinel is in view.
+            # Done after login so the session cookie is set.
+            page.goto(
+                f"https://files.{workspace.vm_name}.e2e.test/files/local/home/devm/",
+                wait_until="networkidle", timeout=15000,
+            )
 
             listing = page.locator("text=SENTINEL_FILE.txt")
             listing.wait_for(timeout=15000)
             assert listing.count() > 0, (
                 f"filestash didn't render our seeded file in the workspace "
-                f"listing at {url} after clicking CONNECT."
+                f"listing at {url} after login."
             )
     finally:
         subprocess.run([devm.path, "teardown", "--yes"], cwd=str(workspace.path),
