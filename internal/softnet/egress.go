@@ -126,6 +126,18 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 		return "", false
 	}
 
+	// The daemon's per-project pop listener is reached at the gateway
+	// IP's dedicated port. Under PolicyForwarding this hairpin fires before
+	// the FORWARDING dispatch switch below; under PolicyLocked the whole
+	// target() function already returned above, so the hairpin never runs
+	// during boot lock.
+	if dstIP == GatewayIP && dport == 81 {
+		if ft == nil {
+			return "", false
+		}
+		return ft.Pop, ft.Pop != ""
+	}
+
 	// The daemon's per-project propose listener is reached at the gateway
 	// IP's dedicated port. Under PolicyForwarding this hairpin fires before
 	// the FORWARDING dispatch switch below; under PolicyLocked the whole

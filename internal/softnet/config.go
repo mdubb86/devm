@@ -68,6 +68,13 @@ type ForwardTargets struct {
 	GuestHTTP  string `json:"guest_http,omitempty"`
 	GuestHTTPS string `json:"guest_https,omitempty"`
 
+	// Pop is the Mac-side host:port where softnet forwards guest TCP
+	// traffic destined for 192.168.127.1:81. Serves the daemon's per-
+	// project pop HTTP listener (internal/serviceapi/pop.go), which the
+	// in-guest `gdevm pop` CLI dials to open files on the Mac — through
+	// filestash by default, or the macOS `open` command with --native.
+	Pop string `json:"pop,omitempty"`
+
 	// Propose is the Mac-side host:port where softnet forwards guest TCP
 	// traffic destined for 192.168.127.1:82. Serves the daemon's per-
 	// project propose HTTP listener (internal/serviceapi/propose.go).

@@ -25,6 +25,10 @@ type Endpoint struct {
 	GuestHTTP  string `json:"guest_http,omitempty"`
 	GuestHTTPS string `json:"guest_https,omitempty"`
 
+	// Pop is the Mac-side host:port softnet forwards guest TCP destined
+	// for 192.168.127.1:81 to — the daemon's per-project pop listener.
+	Pop string `json:"pop,omitempty"`
+
 	// Propose is the Mac-side host:port softnet forwards guest TCP
 	// destined for 192.168.127.1:82 to — the daemon's per-project
 	// propose listener.

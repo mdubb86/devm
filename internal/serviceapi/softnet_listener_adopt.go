@@ -42,6 +42,17 @@ func bindSoftnetListenersForAdopt(
 	projectName string,
 	ntpPort int,
 ) error {
+	popPort, err := pickPort()
+	if err != nil {
+		return fmt.Errorf("pick pop port: %w", err)
+	}
+	popLn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", popPort))
+	if err != nil {
+		return fmt.Errorf("bind pop listener: %w", err)
+	}
+	popListeners.Store(projectName, popLn)
+	go servePopListener(popLn, cfg, projectName)
+
 	proposePort, err := pickPort()
 	if err != nil {
 		return fmt.Errorf("pick propose port: %w", err)
@@ -53,9 +64,10 @@ func bindSoftnetListenersForAdopt(
 	proposeListeners.Store(projectName, proposeLn)
 	go serveProposeListener(proposeLn, cfg, cache, tr, locks, projectName)
 
-	// Update ironProxyState with the fresh port so endpointFrom picks
-	// it up when we push softnet's forwarding table below.
+	// Update ironProxyState with the fresh ports so endpointFrom picks
+	// them up when we push softnet's forwarding table below.
 	info, _ := ironProxyState.get(projectName)
+	info.PopPort = popPort
 	info.ProposePort = proposePort
 	ironProxyState.put(projectName, info)
 

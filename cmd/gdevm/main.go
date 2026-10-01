@@ -33,6 +33,8 @@ func main() {
 	sub := os.Args[1]
 	args := os.Args[2:]
 	switch sub {
+	case "pop":
+		os.Exit(popMain(args))
 	case "propose":
 		os.Exit(proposeMain(args))
 	case "run":
@@ -60,6 +62,9 @@ func usage() {
 Usage: gdevm <subcommand> [args...]
 
 Subcommands:
+  pop          Open a file on the Mac. Default: filestash URL in the
+               Mac's browser. --native: macOS `+"`open`"+` on the mirrored
+               Mac file (or a scratch cp when the file is out of mirror).
   propose      Signal that a devm.yaml (or devm.me.yaml, devm.sh,
                devm.me.sh) edit is ready for the Mac-side reviewer.
   run          Invoke a named function from this project's command

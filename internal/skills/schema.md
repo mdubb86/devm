@@ -317,7 +317,7 @@ Accepted for YAML compatibility; has no active fields. Tart VM images are config
 
 ## See also
 
-- `devm skills get devm` — `devm pop <path>` for navigating between a guest-side path and its Mac-side volume storage.
+- `devm skills get devm` — `gdevm pop <path>` for opening a guest file on the Mac side from inside the VM.
 - `devm skills get lifecycle` — how `devm reconcile` applies each bucket.
 
 ---
