@@ -80,55 +80,6 @@ func TestEgressTargetInterceptedTest(t *testing.T) {
 	}
 }
 
-// TestLEGACY_Egress_ForwardsPopPortToPopEndpoint pins that a guest TCP
-// flow to the gateway's pop port (192.168.127.1:81) routes to
-// ForwardTargets.Pop when set. Serves the daemon's per-project pop
-// HTTP listener; see internal/serviceapi/pop.go for the handler.
-//
-// LEGACY: Pop/PopPort are inert dead fields; no producer sets them
-// anywhere in the codebase after Task 7. This test pins the on-wire
-// shape so a cleanup pass that removes them is intentional, not
-// accidental.
-func TestLEGACY_Egress_ForwardsPopPortToPopEndpoint(t *testing.T) {
-	ft := &ForwardTargets{
-		HTTP: "127.0.0.1:8080", HTTPS: "127.0.0.1:8443",
-		DNS: "127.0.0.1:8053", NTP: "127.0.0.1:8123",
-		Pop: "127.0.0.1:65431",
-	}
-	e := newEgress(nil)
-	e.setPolicy(PolicyForwarding, ft)
-
-	got, ok := e.target(GatewayIP, 81)
-	if !ok {
-		t.Fatal("TCP:81 to gateway must forward under FORWARDING with Pop set")
-	}
-	if got != "127.0.0.1:65431" {
-		t.Fatalf("target(gateway, 81) = %q, want 127.0.0.1:65431", got)
-	}
-}
-
-// TestLEGACY_Egress_DoesNotForwardPopPortWhenPopUnset pins that the
-// gateway's pop port is denied, not silently forwarded elsewhere, when
-// Pop hasn't been configured.
-//
-// LEGACY: Pop/PopPort are inert dead fields; no producer sets them
-// anywhere in the codebase after Task 7. This test pins the on-wire
-// shape so a cleanup pass that removes them is intentional, not
-// accidental.
-func TestLEGACY_Egress_DoesNotForwardPopPortWhenPopUnset(t *testing.T) {
-	ft := &ForwardTargets{
-		HTTP: "127.0.0.1:8080", HTTPS: "127.0.0.1:8443",
-		DNS: "127.0.0.1:8053", NTP: "127.0.0.1:8123",
-		// Pop deliberately omitted
-	}
-	e := newEgress(nil)
-	e.setPolicy(PolicyForwarding, ft)
-
-	if _, ok := e.target(GatewayIP, 81); ok {
-		t.Fatal("TCP:81 must NOT forward when Pop is unset")
-	}
-}
-
 // TestEgress_ForwardsProposePortToTarget pins that TCP to
 // 192.168.127.1:82 routes to ForwardTargets.Propose when set.
 func TestEgress_ForwardsProposePortToTarget(t *testing.T) {

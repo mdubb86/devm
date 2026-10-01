@@ -167,10 +167,6 @@ func TestVMStop_Destroy_RemovesCacheRow(t *testing.T) {
 // single builder behind every setPolicy push — wires each projectInfo port
 // to its own 127.0.0.1:<port> field on the returned Endpoint, with no
 // cross-field swaps (e.g. HTTPS getting the DNS port).
-//
-// Pop/PopPort is deliberately excluded here — see
-// TestLEGACY_EndpointFrom_MapsPopPortToLoopback below — so this test's
-// name stays accurate: every field it covers is live wiring.
 func TestEndpointFrom_MapsAllFieldsToLoopback(t *testing.T) {
 	info := projectInfo{
 		HTTPPort:       5001,
@@ -189,20 +185,6 @@ func TestEndpointFrom_MapsAllFieldsToLoopback(t *testing.T) {
 	assert.Equal(t, "127.0.0.1:5004", ep.NTP)
 	assert.Equal(t, "127.0.0.1:5005", ep.GuestHTTP)
 	assert.Equal(t, "127.0.0.1:5006", ep.GuestHTTPS)
-}
-
-// TestLEGACY_EndpointFrom_MapsPopPortToLoopback pins endpointFrom's
-// PopPort -> Endpoint.Pop mapping, split out of
-// TestEndpointFrom_MapsAllFieldsToLoopback above so that test's name
-// doesn't claim coverage of a dead field.
-//
-// LEGACY: Pop/PopPort are inert dead fields; no producer sets them
-// anywhere in the codebase after Task 7. This test pins the on-wire
-// shape so a cleanup pass that removes them is intentional, not
-// accidental.
-func TestLEGACY_EndpointFrom_MapsPopPortToLoopback(t *testing.T) {
-	ep := endpointFrom(projectInfo{PopPort: 5007}, 0)
-	assert.Equal(t, "127.0.0.1:5007", ep.Pop)
 }
 
 // TestVMStart_RegistersReservedHealthRoute pins that after a successful

@@ -29,58 +29,6 @@ func TestParsePolicy(t *testing.T) {
 	}
 }
 
-// TestLEGACY_ForwardTargets_PopField_JSONRoundtrip pins that Pop
-// round-trips through JSON with the "pop" tag so the daemon can push
-// it via setPolicy.
-//
-// LEGACY: Pop/PopPort are inert dead fields; no producer sets them
-// anywhere in the codebase after Task 7. This test pins the on-wire
-// shape so a cleanup pass that removes them is intentional, not
-// accidental.
-func TestLEGACY_ForwardTargets_PopField_JSONRoundtrip(t *testing.T) {
-	orig := ForwardTargets{
-		HTTP:  "127.0.0.1:1000",
-		HTTPS: "127.0.0.1:1001",
-		DNS:   "127.0.0.1:1002",
-		NTP:   "127.0.0.1:1003",
-		Pop:   "127.0.0.1:1004",
-	}
-	blob, err := json.Marshal(orig)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	if !strings.Contains(string(blob), `"pop":"127.0.0.1:1004"`) {
-		t.Fatalf("marshaled JSON missing pop field: %s", blob)
-	}
-
-	var back ForwardTargets
-	if err := json.Unmarshal(blob, &back); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if back != orig {
-		t.Fatalf("round-trip mismatch: got %+v, want %+v", back, orig)
-	}
-}
-
-// TestLEGACY_ForwardTargets_PopOmittedWhenEmpty pins that Pop is
-// optional — an unset field must not appear in the JSON, so callers
-// that haven't been updated still send a valid setPolicy payload.
-//
-// LEGACY: Pop/PopPort are inert dead fields; no producer sets them
-// anywhere in the codebase after Task 7. This test pins the on-wire
-// shape so a cleanup pass that removes them is intentional, not
-// accidental.
-func TestLEGACY_ForwardTargets_PopOmittedWhenEmpty(t *testing.T) {
-	minimal := ForwardTargets{HTTP: "127.0.0.1:1", HTTPS: "127.0.0.1:2", DNS: "127.0.0.1:3", NTP: "127.0.0.1:4"}
-	blob, err := json.Marshal(minimal)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	if strings.Contains(string(blob), "pop") {
-		t.Fatalf("marshaled JSON should omit unset pop field: %s", blob)
-	}
-}
-
 // TestForwardTargets_ProposeField_JSONRoundtrip pins that Propose
 // round-trips through JSON when set.
 func TestForwardTargets_ProposeField_JSONRoundtrip(t *testing.T) {
@@ -89,7 +37,6 @@ func TestForwardTargets_ProposeField_JSONRoundtrip(t *testing.T) {
 		HTTPS:   "127.0.0.1:1001",
 		DNS:     "127.0.0.1:1002",
 		NTP:     "127.0.0.1:1003",
-		Pop:     "127.0.0.1:1004",
 		Propose: "127.0.0.1:1005",
 	}
 	b, err := json.Marshal(in)

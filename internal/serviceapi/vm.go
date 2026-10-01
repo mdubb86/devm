@@ -1475,9 +1475,6 @@ func endpointFrom(info projectInfo, ntpPort int) *Endpoint {
 	if info.GuestHTTPSPort != 0 {
 		e.GuestHTTPS = ironProxyListenAddr(info.GuestHTTPSPort)
 	}
-	if info.PopPort != 0 {
-		e.Pop = ironProxyListenAddr(info.PopPort)
-	}
 	if info.ProposePort != 0 {
 		e.Propose = ironProxyListenAddr(info.ProposePort)
 	}
@@ -1508,15 +1505,6 @@ type projectInfo struct {
 	// rebinds a fresh pair and re-pushes it (see rebindProjectListeners).
 	GuestHTTPPort  int
 	GuestHTTPSPort int
-
-	// PopPort is never set (the daemon's pop HTTP listener was retired
-	// with the temp-sync pop subsystem) — always zero, so endpointFrom
-	// never populates Endpoint.Pop and softnet's guest TCP
-	// 192.168.127.1:81 hairpin always RSTs. Kept, rather than deleted
-	// alongside its softnet-side counterpart (ForwardTargets.Pop), to
-	// avoid touching the softnet wire format/dispatch outside this
-	// change's scope.
-	PopPort int
 
 	// ProposePort is the daemon's per-project propose HTTP listener —
 	// where softnet forwards guest TCP 192.168.127.1:82. In-memory only,
