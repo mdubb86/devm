@@ -257,12 +257,9 @@ func readTarEntry(t *testing.T, blob []byte, name string) []byte {
 // daemon's guest-origin listener, so no Caddyfile should ever enter the
 // bundle.
 func TestBuild_TarHasNoCaddy(t *testing.T) {
-	cfg := schema.Config{
-		Project: schema.Project{Name: "p"},
-		Services: map[string]schema.Service{
-			"api": {Hostname: "api.test", Port: 3000},
-		},
-	}
+	cfg := schema.Config{Services: map[string]schema.Service{
+		"api": {Hostname: "api.test", Port: 3000},
+	}}
 	b, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg})
 	if err != nil {
 		t.Fatalf("build: %v", err)

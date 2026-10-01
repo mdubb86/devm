@@ -1,76 +1,148 @@
 #!/usr/bin/env bash
 # regen-filestash-config.sh — dev-machine one-off. Extracts the
-# filestash binary + config.json from a RUNNING filestash guest
-# whose admin console has already been walked through the preset
-# "Local files - just for me". Writes both artifacts to
-# internal/scripts/embed/. The committed config carries:
-#   - auth.admin: a placeholder bcrypt hash. At bundle-render time
-#     (render.RenderInstallScript) devm swaps this for bcrypt of the
-#     project's own name, so each guest's filestash accepts its own
-#     project name at the password prompt — users type their project
-#     name on first visit per browser session.
-#   - middleware.identity_provider.type = passthrough with the "just
-#     for me" preset's encrypted params (encrypted with the pinned
-#     SECRET_KEY so the blob is portable across every devm guest).
-#   - connections[0] = {type: local, label: local} (no `path:` — the
-#     preset leaves it unset; the SPA prompts the user through the
-#     login flow).
+# filestash binary + config.json from a RUNNING devm guest. Writes both
+# to internal/scripts/embed/.
+#
+# What the committed config carries:
+#   - middleware.identity_provider = passthrough with strategy=direct
+#     (encrypted under general.secret_key). The direct strategy makes
+#     filestash serve a zero-field self-posting form instead of a
+#     password prompt, so a cold-browser visit to `/` auto-authenticates
+#     and lands on the file listing.
+#   - middleware.attribute_mapping = { related_backend: local, params
+#     carries a literal admin password that the local backend bcrypt-
+#     compares against auth.admin. Both MUST agree, so the baked
+#     literal and the bcrypt of auth.admin's plaintext stay in sync.
+#   - auth.admin = bcrypt of "devm". Only gates /admin; the main flow
+#     bypasses it entirely under direct strategy.
+#   - connections[0] = {type: local, label: local, path: "/"}.
 #   - general.port = 8941, general.host = null (bind defaults to all
-#     interfaces; filestash's advertised URL comes from the request's
-#     Host header).
+#     interfaces; filestash uses the request's Host header to decide
+#     its advertised URL).
 #
-# Why the preset over hand-crafting: filestash's `identity_provider`
-# params are AES-encrypted blobs tied to SECRET_KEY. Only the running
-# filestash can produce a valid blob. The "just for me" preset gives
-# the simplest shipping UX (one password field, no connection setup
-# form).
+# Why the signed blobs: filestash's identity_provider / attribute_mapping
+# params are AES-encrypted under general.secret_key. Only a running
+# filestash can emit a valid blob — devm can't re-sign them at bundle-
+# build time without reimplementing filestash's crypto. The committed
+# SECRET_KEY ("WN3UuL2qn3rNEjmz") is deliberately shared across all devm
+# guests so one guest's signed blob verifies in every other.
 #
-# Regenerate manually (click-through):
-#   1. In a running devm guest, visit filestash's admin console
-#      (`/admin`), log in with the admin password, apply the
-#      "Local files - just for me" configuration-wizard preset.
-#   2. Re-point SHELFMATES_* below at the project you clicked
-#      through in, then rerun this script.
+# This script re-flips the source guest's config to direct-strategy
+# before extracting (idempotent — a guest already running direct stays
+# direct), so a guest whose preset was walked through manually with a
+# different strategy gets upgraded in place.
+#
+# Regenerate:
+#   1. Spin up (or already have) a devm guest to extract from.
+#   2. Re-point SOURCE_DEVM / SOURCE_DIR / SOURCE_TLD below at it.
+#   3. Rerun this script.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 EMBED_DIR="$REPO_ROOT/internal/scripts/embed"
-SHELFMATES_DEVM="/Users/michael/.local/bin/devm"
-SHELFMATES_DIR="/Users/michael/workspace/shelfmates"
+
+# Source guest. Shelfmates (prod devm, TLD "test") is the historical
+# source; override to extract from an e2e-slot guest instead.
+SOURCE_DEVM="${SOURCE_DEVM:-/Users/michael/.local/bin/devm}"
+SOURCE_DIR="${SOURCE_DIR:-/Users/michael/workspace/shelfmates}"
+SOURCE_TLD="${SOURCE_TLD:-test}"
+PROJECT_NAME="$(basename "$SOURCE_DIR")"
+FS_HOST="files.${PROJECT_NAME}.${SOURCE_TLD}"
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 
-echo "==> Extracting filestash binary + config from shelfmates guest"
-cd "$SHELFMATES_DIR"
-"$SHELFMATES_DEVM" exec -- cat /home/devm/filestash/filestash > "$SCRATCH/filestash"
-chmod +x "$SCRATCH/filestash"
-"$SHELFMATES_DEVM" exec -- cat /home/devm/filestash/data/state/config/config.json > "$SCRATCH/config.json"
+echo "==> Flipping running filestash at https://${FS_HOST}/ to strategy=direct"
+PY_FS_HOST="$FS_HOST" python3 - <<'FLIP'
+import json
+import os
+import ssl
+import sys
+import urllib.request
 
-echo "==> Patching config: connection root=/ + listen 0.0.0.0:8941"
+HOST = "https://" + os.environ["PY_FS_HOST"]
+PWD = "devm"  # must match the bcrypt plaintext we bake into auth.admin
+ctx = ssl.create_default_context()  # devm's local CA is in the trust store
+
+
+def _parse_set_cookie(header):
+    out = {}
+    if not header:
+        return out
+    name, _, rest = header.partition("=")
+    val = rest.split(";", 1)[0]
+    out[name] = val
+    return out
+
+
+def req(url, method="GET", data=None, cookies=None):
+    headers = {"X-Requested-With": "XmlHttpRequest"}
+    body = None
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+        body = json.dumps(data).encode()
+    if cookies:
+        headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
+    r = urllib.request.Request(url, data=body, method=method, headers=headers)
+    resp = urllib.request.urlopen(r, context=ctx)
+    return resp.status, resp.read().decode(), _parse_set_cookie(resp.getheader("Set-Cookie"))
+
+
+# Login.
+status, body, cookies = req(f"{HOST}/admin/api/session", method="POST", data={"password": PWD})
+assert status == 200 and json.loads(body).get("result") is True, f"login failed: {body}"
+assert "admin" in cookies, f"no admin cookie in response: {cookies}"
+
+# Fetch current config (plaintext — server decrypts params on read).
+status, body, _ = req(f"{HOST}/admin/api/config", cookies=cookies)
+assert status == 200, f"get config failed: {body}"
+cfg = json.loads(body)["result"]
+
+# Overwrite the two middleware blocks with the direct-strategy preset.
+cfg["middleware"]["identity_provider"] = {
+    "type": "passthrough",
+    "params": json.dumps({"strategy": "direct"}),
+}
+cfg["middleware"]["attribute_mapping"] = {
+    "related_backend": "local",
+    "params": json.dumps({"local": {"type": "local", "password": PWD}}),
+}
+
+# POST modified config; server encrypts both params fields before writing.
+status, body, _ = req(f"{HOST}/admin/api/config", method="POST", data=cfg, cookies=cookies)
+assert status == 200 and json.loads(body).get("status") == "ok", f"save config failed: {body}"
+print("    direct-strategy preset applied on the live guest")
+FLIP
+
+echo "==> Extracting filestash binary + (now-flipped) config"
+cd "$SOURCE_DIR"
+"$SOURCE_DEVM" exec -- bash -c 'cat /home/devm/filestash/filestash' > "$SCRATCH/filestash"
+chmod +x "$SCRATCH/filestash"
+"$SOURCE_DEVM" exec -- bash -c 'cat /home/devm/filestash/data/state/config/config.json' > "$SCRATCH/config.json"
+
+echo "==> Patching connection path=/ and listen 0.0.0.0:8941"
 python3 - <<PATCH
-import json, sys
+import json
 p = "$SCRATCH/config.json"
 c = json.load(open(p))
-# Force the connection root to / so filestash serves the whole guest fs.
-assert c["connections"], "shelfmates config has no connections — reconfigure filestash there first"
+assert c["connections"], "extracted config has no connections"
 c["connections"][0]["path"] = "/"
 c["connections"][0]["type"] = "local"
 c["connections"][0]["label"] = "local"
-# Force our fixed bind (0.0.0.0:8941).
 c.setdefault("general", {})
-c["general"]["host"] = None  # null = filestash uses the request's Host header for its advertised URL; must NOT be set to "0.0.0.0" (bind addr), which would render as the SPA's "Redirecting to http://0.0.0.0" bootscreen
+c["general"]["host"] = None  # null = filestash uses request Host for its advertised URL; NEVER "0.0.0.0"
 c["general"]["port"] = 8941
 json.dump(c, open(p, "w"), indent=4)
 PATCH
 
-echo "==> Verifying patched config still has passthrough middleware"
+echo "==> Verifying extracted config"
 python3 -c "
 import json
 c = json.load(open('$SCRATCH/config.json'))
-assert c['middleware']['identity_provider']['type'] == 'passthrough', \
-    'shelfmates config lost passthrough middleware — reconfigure there first'
-assert c['connections'][0]['path'] == '/'
-print('config validated')
+assert c['middleware']['identity_provider']['type'] == 'passthrough', 'identity_provider is not passthrough'
+assert c['middleware']['attribute_mapping']['related_backend'] == 'local', 'attribute_mapping not bound to local'
+assert c['connections'][0]['path'] == '/', 'connection path not patched'
+assert c['general']['secret_key'] == 'WN3UuL2qn3rNEjmz', 'secret_key diverged from pinned value'
+print('    config validated')
 "
 
 echo "==> Writing embed artifacts"

@@ -2,7 +2,13 @@
 systemd unit + reserved route + Mac-side TLS termination + JS render.
 Server-side HTTP fetch would only see the shell HTML; the DOM assertion
 after Playwright loads the page proves filestash's JS actually executes
-and hydrates the file listing."""
+and hydrates the file listing.
+
+Also pins the baked identity-provider setup: the preset uses passthrough
+with `strategy: "direct"`, so a cold-browser visit to `/` auto-authenticates
+through filestash's self-posting form, no password prompt, no CONNECT
+click — if an upstream filestash bump changes that behavior, the password
+input appearing in the DOM will fail this test loud."""
 from __future__ import annotations
 import subprocess
 import pytest
@@ -12,12 +18,6 @@ from helpers.playwright import open_page
 pytestmark = pytest.mark.devm
 
 
-# Filestash with the pinned preset ("Local files - just for me") shows a
-# one-field password prompt on first visit; the admin password is the
-# project name — bcrypt-hashed per-project at bundle-render time by
-# render.RenderInstallScript. After entering, filestash navigates to the
-# file listing and remembers the session via cookie for subsequent
-# requests.
 @pytest.mark.timeout(240)
 def test_filestash_serves_workspace(devm, workspace):
     workspace.write_devmyaml(no_repo=True)
@@ -37,26 +37,27 @@ def test_filestash_serves_workspace(devm, workspace):
         )
         assert r.returncode == 0, f"seed sentinel failed: {r.stderr.decode()!r}"
 
-        # Mac-side reserved route (Task 4). Playwright follows HTTPS
-        # with default (ignore_https_errors=False) — devm's local CA
-        # trust is what makes the page load without a warning.
-        # Visit filestash's root; the preset's SPA shows a password
-        # prompt first (admin password "devm"), then the local backend
-        # defaults to /home/devm so the seeded sentinel is in the first
-        # listing the SPA renders after login — no second navigation
-        # needed.
+        # Mac-side reserved route. Playwright follows HTTPS with default
+        # (ignore_https_errors=False) — devm's local CA trust is what
+        # makes the page load without a warning. The direct-strategy
+        # preset auto-authenticates the viewer during initial load, so
+        # the sentinel in /home/devm/ shows up in the first listing with
+        # no interaction required.
         url = f"https://files.{workspace.vm_name}.e2e.test/"
         with open_page(url) as page:
-            pw_input = page.locator('input[type="password"]')
-            pw_input.wait_for(timeout=10000)
-            pw_input.fill(workspace.vm_name)
-            page.get_by_role("button", name="CONNECT").click()
+            # First: fail loud if filestash shows ANY password prompt —
+            # that means the direct-strategy preset regressed to the
+            # one-password-per-session UX.
+            assert page.locator('input[type="password"]').count() == 0, (
+                "filestash showed a password prompt — direct-strategy "
+                "preset regressed; see internal/scripts/embed/filestash-config.json."
+            )
 
             listing = page.locator("text=SENTINEL_FILE.txt")
             listing.wait_for(timeout=15000)
             assert listing.count() > 0, (
                 f"filestash didn't render our seeded file in the listing "
-                f"at {url} after login."
+                f"at {url}."
             )
     finally:
         subprocess.run([devm.path, "teardown", "--yes"], cwd=str(workspace.path),
