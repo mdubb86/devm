@@ -211,6 +211,16 @@ func TestVMStart_RegistersReservedHealthRoute(t *testing.T) {
 	t.Cleanup(func() { ironProxySpawn = origSpawn })
 	t.Cleanup(func() { policyAuthority.StopServing(project) })
 
+	// AllocateProjectIP's live-machine probe dials ip:22 on every pool
+	// address. On CI runners (ubuntu with sshd listening on 0.0.0.0:22)
+	// every 127.42.0.x succeeds, so every allocation is probe-skipped
+	// and the pool reports exhausted. Stub to "free" and clean up the
+	// pool entry so neighbouring tests don't see a leaked projectInfo.
+	origProbe := probeIPInUse
+	probeIPInUse = func(string) bool { return false }
+	t.Cleanup(func() { probeIPInUse = origProbe })
+	t.Cleanup(func() { ironProxyState.del(project) })
+
 	// Fake `tart` on $PATH: satisfies both tart.Tart's t.Path-based
 	// calls (List/Run) and waitVMExecReady's literal exec.Command("tart",
 	// "exec", ...), which shells out by bare name rather than through
@@ -344,6 +354,15 @@ func TestVMStart_SetsProxyListenerHealthOptimistically(t *testing.T) {
 	}
 	t.Cleanup(func() { ironProxySpawn = origSpawn })
 	t.Cleanup(func() { policyAuthority.StopServing(project) })
+
+	// See TestVMStart_RegistersReservedHealthRoute for why probeIPInUse
+	// has to be stubbed on CI (sshd on 0.0.0.0:22 makes every pool IP
+	// look held). ironProxyState.del releases the allocated entry so
+	// later tests in this package start from a clean pool.
+	origProbe := probeIPInUse
+	probeIPInUse = func(string) bool { return false }
+	t.Cleanup(func() { probeIPInUse = origProbe })
+	t.Cleanup(func() { ironProxyState.del(project) })
 
 	// Fake `tart` on $PATH: satisfies both tart.Tart's t.Path-based
 	// calls (List/Run) and waitVMExecReady's literal exec.Command("tart",
