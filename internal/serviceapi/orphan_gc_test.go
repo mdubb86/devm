@@ -87,9 +87,13 @@ func TestGCOrphanedProjects_RemovesSoftnetSocketAndLogFiles(t *testing.T) {
 
 	// Softnet control socket file (real path is a hash under a
 	// per-user tmp dir; we create the parent + a stub file at the
-	// deterministic path so the removal can be observed).
+	// deterministic path so the removal can be observed). Mode 0700
+	// matches what ensureSoftnetSockDir uses and keeps the shared
+	// /tmp/devm-softnet-<uid>/ dir compatible with every other test
+	// in this package that opens it (go test runs them in one process,
+	// so a 0755 pollution here broke later tests' mode guards on CI).
 	softnetSock := SoftnetControlSock(identity.Prod, "orphaned")
-	require.NoError(t, os.MkdirAll(filepath.Dir(softnetSock), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(softnetSock), 0o700))
 	require.NoError(t, os.WriteFile(softnetSock, []byte("sock-stub"), 0o600))
 
 	// Log files: <LogDir>/<projectID>-<role>.log for a couple of roles.
