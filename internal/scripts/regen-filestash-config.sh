@@ -36,7 +36,7 @@ c["connections"][0]["type"] = "local"
 c["connections"][0]["label"] = "local"
 # Force our fixed bind (0.0.0.0:8941).
 c.setdefault("general", {})
-c["general"]["host"] = "0.0.0.0"
+c["general"]["host"] = None  # null = filestash uses the request's Host header for its advertised URL; must NOT be set to "0.0.0.0" (bind addr), which would render as the SPA's "Redirecting to http://0.0.0.0" bootscreen
 c["general"]["port"] = 8941
 json.dump(c, open(p, "w"), indent=4)
 PATCH

@@ -2,7 +2,7 @@
     "general": {
         "name": null,
         "port": 8941,
-        "host": "0.0.0.0",
+        "host": null,
         "secret_key": "WN3UuL2qn3rNEjmz",
         "force_ssl": null,
         "editor": null,
