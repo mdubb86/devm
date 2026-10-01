@@ -81,6 +81,13 @@ def test_gdevm_pop_default_opens_filestash_url(devm, workspace):
             f"want: {want_line}\n"
             f"got (new log tail):\n{new_log[-2000:]}"
         )
+
+        # Hold off teardown long enough for the browser tab the daemon's
+        # `open` call spawned to land its HTTPS request on the proxy
+        # while the project's reserved files.* route still exists.
+        # Without this the browser races teardown and the viewer sees a
+        # "no route configured" error page even though the test passed.
+        time.sleep(2.5)
     finally:
         subprocess.run([devm.path, "teardown", "--yes"], cwd=str(workspace.path),
                        capture_output=True, timeout=60)

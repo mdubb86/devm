@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -538,6 +539,19 @@ func write502NoRoute(w http.ResponseWriter, host string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusBadGateway)
 	fmt.Fprintf(w, "devm: no route configured for %s\n\n", host)
+	// `files.<project>.<tld>` is reserved for the bundled filestash
+	// service — the daemon registers it automatically at /vm/start,
+	// so a bare "no route" for a files.* host almost always means
+	// the project is stopped (or was just torn down). Steer users
+	// there rather than at a devm.yaml edit that would collide with
+	// the reserved route.
+	if strings.HasPrefix(host, "files.") {
+		fmt.Fprintf(w, "`files.<project>.<tld>` is reserved for the bundled filestash\n")
+		fmt.Fprintf(w, "service — the daemon registers it automatically at /vm/start.\n")
+		fmt.Fprintf(w, "If you see this error, the project is likely stopped:\n")
+		fmt.Fprintf(w, "  - run `devm start` in the project directory\n")
+		return
+	}
 	fmt.Fprintf(w, "to add one:\n")
 	fmt.Fprintf(w, "  - declare service.hostname: %s in devm.yaml\n", host)
 	fmt.Fprintf(w, "  - run `devm route local` or `devm route vm`\n")
