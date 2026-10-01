@@ -171,6 +171,7 @@ FILESTASH_UNIT
 # are not statically linked in and not present on a fresh guest. Installed
 # on every cold-start/re-run alongside the binary above; apt-get install is
 # a no-op once the packages are present. ---
+DEBIAN_FRONTEND=noninteractive apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libavformat61 libavcodec61 libavfilter10 libavutil59
 
