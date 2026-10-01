@@ -28,6 +28,13 @@ type StatusResult struct {
 	Drift           []DriftItem
 	Routing         serviceapi.RoutingStatus
 
+	// TLD is the daemon identity's top-level domain ("test" for prod,
+	// "e2e.test" for the e2e slot). Needed by formatRouting to
+	// recognize the reserved files.<project>.<tld> filestash route
+	// (serviceapi.IsReservedFilesHostname) so it's filtered out of the
+	// routes table the same way the `_devm.` prefix family is.
+	TLD string
+
 	// Egress is the project's current egress policy state (restricted
 	// vs. passthrough). Populated only when the VM is running; nil
 	// otherwise. Rendered under the Routing section — a highlighted
@@ -145,7 +152,7 @@ func FormatStatusText(r StatusResult) string {
 	for _, d := range r.Drift {
 		fmt.Fprintf(&b, "Drift: %s — %s\n", d.Kind, d.Detail)
 	}
-	b.WriteString(formatRouting(r.Routing))
+	b.WriteString(formatRouting(r.Routing, r.TLD))
 	b.WriteString(formatEgress(r.Egress))
 	b.WriteString(formatDNSHealth(r))
 	b.WriteString(formatCAHealth(r))
@@ -227,7 +234,7 @@ func formatEgress(eg *serviceapi.EgressStatus) string {
 	return fmt.Sprintf("  egress:  PASSTHROUGH — auto-restores in %s\n", remaining)
 }
 
-func formatRouting(r serviceapi.RoutingStatus) string {
+func formatRouting(r serviceapi.RoutingStatus, tld string) string {
 	var b strings.Builder
 	b.WriteString("\nRouting:\n")
 	if !r.ProxyReachable {
@@ -243,10 +250,14 @@ func formatRouting(r serviceapi.RoutingStatus) string {
 	b.WriteString("  routes:\n")
 	for _, route := range r.Routes {
 		// Reserved daemon-internal routes (the "_devm." health-probe
-		// hostname) aren't something the user declared and aren't
-		// actionable from this table — printing them here would just be
-		// clutter. They still round-trip through the JSON output.
+		// hostname, and the files.<project>.<tld> filestash route)
+		// aren't something the user declared and aren't actionable
+		// from this table — printing them here would just be clutter.
+		// They still round-trip through the JSON output.
 		if strings.HasPrefix(route.Hostname, serviceapi.ReservedRoutePrefix) {
+			continue
+		}
+		if serviceapi.IsReservedFilesHostname(route.Hostname, route.Project, tld) {
 			continue
 		}
 		modeTag := ""

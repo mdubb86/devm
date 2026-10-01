@@ -179,9 +179,13 @@ func RenderProvisionUserScript(in ProvisionScriptInput) []byte {
 			// install.sh (stage:bundle runs before softnet opens egress, so
 			// apt couldn't reach deb.debian.org there). Now that the open
 			// window is up, install its ffmpeg shared-lib deps and start it.
+			// restart (not start): install.sh rewrites the binary on every
+			// cold-start/re-run, including a bundle refresh where the
+			// service may already be running from a prior boot — restart
+			// is what makes a binary bump land.
 			p("echo ::devm:stage:filestash-deps::")
 			p("apt_run install -y --no-install-recommends libavformat61 libavcodec61 libavfilter10 libavutil59")
-			p("sudo systemctl start filestash.service")
+			p("sudo systemctl restart filestash.service")
 
 			if len(in.Packages) > 0 {
 				p("echo ::devm:stage:packages::")

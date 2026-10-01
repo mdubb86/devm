@@ -407,6 +407,11 @@ type RouteStatus struct {
 	Hostname string `json:"hostname"`
 	Dial     string `json:"dial"`
 	Mode     string `json:"mode"` // "local" | "vm" | "unknown"
+	// Project is the owning project ID. Needed by the format layer to
+	// recognize the reserved files.<project>.<tld> filestash route
+	// (IsReservedFilesHostname), which — unlike the `_devm.` prefix
+	// family — can't be identified from the hostname alone.
+	Project string `json:"project,omitempty"`
 }
 
 // RegisterRoutesHandlers adds the three /routes endpoints to the

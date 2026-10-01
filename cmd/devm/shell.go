@@ -272,7 +272,7 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 				// when the daemon has nothing for this project.
 				existing, listErr := c.ListRoutes(rctx)
 				if listErr == nil {
-					if shouldSkipAutoInstall(existing, cfg.Project.Name) {
+					if shouldSkipAutoInstall(existing, cfg.Project.Name, ident.TLD) {
 						rcancel()
 						return
 					}
@@ -315,17 +315,22 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 // alone for project. existing is a /routes listing (ListRoutes).
 //
 // The daemon always carries a reserved `_devm.<project>.test` health
-// route for a running project (registered at /vm/start) — that alone
-// must not read as "the user already has routes installed," or
-// auto-install would skip on every cold start and a project's actual
-// services would never get routed in vm mode. Skip only when at least
-// one of the project's routes is user-declared (hostname doesn't start
-// with the reserved prefix).
-func shouldSkipAutoInstall(existing map[string][]serviceapi.Route, project string) bool {
+// route and a reserved `files.<project>.<tld>` filestash route for a
+// running project (both registered at /vm/start) — neither alone must
+// read as "the user already has routes installed," or auto-install
+// would skip on every cold start and a project's actual services
+// would never get routed in vm mode. Skip only when at least one of
+// the project's routes is user-declared (not the `_devm.` prefix and
+// not the reserved filestash hostname).
+func shouldSkipAutoInstall(existing map[string][]serviceapi.Route, project, tld string) bool {
 	for _, r := range existing[project] {
-		if !strings.HasPrefix(r.Hostname, serviceapi.ReservedRoutePrefix) {
-			return true
+		if strings.HasPrefix(r.Hostname, serviceapi.ReservedRoutePrefix) {
+			continue
 		}
+		if serviceapi.IsReservedFilesHostname(r.Hostname, project, tld) {
+			continue
+		}
+		return true
 	}
 	return false
 }

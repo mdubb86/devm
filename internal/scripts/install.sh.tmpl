@@ -147,14 +147,20 @@ if [ -f /etc/systemd/system/gdevm-serve.service ]; then
     systemctl restart gdevm-serve.service
 fi
 
-# --- Filestash: bundled binary + passthrough config, dropped in and
-# restarted on every cold-start/re-run so a binary bump lands
-# immediately, same rationale as gdevm-serve above. ---
+# --- Filestash: bundled binary + passthrough config, dropped in fresh
+# on every cold-start/re-run (same rationale as gdevm-serve above). The
+# service itself is enabled but not restarted here — see the comment
+# below — so a binary bump lands only once RenderProvisionUserScript's
+# filestash-deps stage restarts it. ---
 mkdir -p /home/devm/filestash/data/state/config
-base64 -d <<'FILESTASH_B64' > /home/devm/filestash/filestash
+# install's rename-after-write is required here, not a bare `> file`
+# redirect: a bundle refresh (devm reconcile) runs this script while
+# filestash.service may already be running, and overwriting a running
+# executable's inode in place fails with ETXTBSY. install writes to a
+# temp file in the same directory and renames it over the target.
+base64 -d <<'FILESTASH_B64' | install -o devm -g devm -m 0755 /dev/stdin /home/devm/filestash/filestash
 {{.FilestashBinaryB64}}
 FILESTASH_B64
-chmod 755 /home/devm/filestash/filestash
 
 base64 -d <<'FILESTASH_CFG_B64' > /home/devm/filestash/data/state/config/config.json
 {{.FilestashConfigB64}}
@@ -166,13 +172,15 @@ cat > /etc/systemd/system/filestash.service <<'FILESTASH_UNIT'
 {{.FilestashUnit}}
 FILESTASH_UNIT
 
-# --- Filestash is enabled but NOT started here: this script runs in
+# --- Filestash is enabled but NOT (re)started here: this script runs in
 # ::devm:stage:bundle::, before softnet opens guest egress, so apt can't
 # reach deb.debian.org yet to install the ffmpeg shared libs the bundled
 # binary dynamically links against (libavformat/libavcodec/libavfilter/
-# libavutil). Those libs are installed and the service started in
+# libavutil). Those libs are installed and the service (re)started in
 # ::devm:stage:filestash-deps::, once the open-egress window is up — see
-# RenderProvisionUserScript in internal/render/provision.go. ---
+# RenderProvisionUserScript in internal/render/provision.go. Restart
+# (not start) there so a binary bump written above lands even when the
+# service was already running from a prior boot. ---
 systemctl daemon-reload
 systemctl enable filestash.service
 

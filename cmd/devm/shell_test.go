@@ -182,22 +182,35 @@ func TestStart_SurfacesApproveRequired(t *testing.T) {
 // auto-routed in vm mode.
 func TestShouldSkipAutoInstall(t *testing.T) {
 	t.Run("no routes at all — do not skip", func(t *testing.T) {
-		assert.False(t, shouldSkipAutoInstall(map[string][]serviceapi.Route{}, "proj"))
+		assert.False(t, shouldSkipAutoInstall(map[string][]serviceapi.Route{}, "proj", "test"))
 	})
 
 	t.Run("only the reserved health route — do not skip", func(t *testing.T) {
 		existing := map[string][]serviceapi.Route{
 			"proj": {{Hostname: "_devm.proj.test", BackendPort: 8940, Mode: serviceapi.ModeVM, Project: "proj"}},
 		}
-		assert.False(t, shouldSkipAutoInstall(existing, "proj"),
+		assert.False(t, shouldSkipAutoInstall(existing, "proj", "test"),
 			"a reserved route alone must not block auto-install")
+	})
+
+	t.Run("only the reserved filestash route — do not skip", func(t *testing.T) {
+		// Registered at /vm/start alongside the health route (see
+		// serviceapi.reservedFilestashRoute). It carries no `_devm.`
+		// prefix, so it must be recognized by hostname shape, not
+		// prefix, or the cold-start auto-install race described in
+		// the Finding 1 regression would reintroduce itself.
+		existing := map[string][]serviceapi.Route{
+			"proj": {{Hostname: "files.proj.test", BackendPort: 8941, Mode: serviceapi.ModeVM, Project: "proj"}},
+		}
+		assert.False(t, shouldSkipAutoInstall(existing, "proj", "test"),
+			"the reserved filestash route alone must not block auto-install")
 	})
 
 	t.Run("a user route already installed — skip", func(t *testing.T) {
 		existing := map[string][]serviceapi.Route{
 			"proj": {{Hostname: "app.proj.test", BackendPort: 3000, Mode: serviceapi.ModeVM, Project: "proj"}},
 		}
-		assert.True(t, shouldSkipAutoInstall(existing, "proj"))
+		assert.True(t, shouldSkipAutoInstall(existing, "proj", "test"))
 	})
 
 	t.Run("reserved route plus a user route — skip", func(t *testing.T) {
@@ -207,14 +220,34 @@ func TestShouldSkipAutoInstall(t *testing.T) {
 				{Hostname: "app.proj.test", BackendPort: 3000, Mode: serviceapi.ModeVM, Project: "proj"},
 			},
 		}
-		assert.True(t, shouldSkipAutoInstall(existing, "proj"))
+		assert.True(t, shouldSkipAutoInstall(existing, "proj", "test"))
+	})
+
+	t.Run("reserved health and filestash routes plus a user route — skip", func(t *testing.T) {
+		existing := map[string][]serviceapi.Route{
+			"proj": {
+				{Hostname: "_devm.proj.test", BackendPort: 8940, Mode: serviceapi.ModeVM, Project: "proj"},
+				{Hostname: "files.proj.test", BackendPort: 8941, Mode: serviceapi.ModeVM, Project: "proj"},
+				{Hostname: "app.proj.test", BackendPort: 3000, Mode: serviceapi.ModeVM, Project: "proj"},
+			},
+		}
+		assert.True(t, shouldSkipAutoInstall(existing, "proj", "test"))
 	})
 
 	t.Run("routes exist for a different project only — do not skip", func(t *testing.T) {
 		existing := map[string][]serviceapi.Route{
 			"other": {{Hostname: "app.other.test", BackendPort: 3000, Mode: serviceapi.ModeVM, Project: "other"}},
 		}
-		assert.False(t, shouldSkipAutoInstall(existing, "proj"))
+		assert.False(t, shouldSkipAutoInstall(existing, "proj", "test"))
+	})
+
+	t.Run("filestash hostname for a different project is not the reserved route — skip", func(t *testing.T) {
+		// files.other.test does not match IsReservedFilesHostname for
+		// project "proj", so it must count as a user-declared route.
+		existing := map[string][]serviceapi.Route{
+			"proj": {{Hostname: "files.other.test", BackendPort: 3000, Mode: serviceapi.ModeVM, Project: "proj"}},
+		}
+		assert.True(t, shouldSkipAutoInstall(existing, "proj", "test"))
 	})
 }
 

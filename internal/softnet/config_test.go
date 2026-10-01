@@ -29,9 +29,15 @@ func TestParsePolicy(t *testing.T) {
 	}
 }
 
-// TestForwardTargets_PopField_JSONRoundtrip pins that Pop round-trips
-// through JSON with the "pop" tag so the daemon can push it via setPolicy.
-func TestForwardTargets_PopField_JSONRoundtrip(t *testing.T) {
+// TestLEGACY_ForwardTargets_PopField_JSONRoundtrip pins that Pop
+// round-trips through JSON with the "pop" tag so the daemon can push
+// it via setPolicy.
+//
+// LEGACY: Pop/PopPort are inert dead fields; no producer sets them
+// anywhere in the codebase after Task 7. This test pins the on-wire
+// shape so a cleanup pass that removes them is intentional, not
+// accidental.
+func TestLEGACY_ForwardTargets_PopField_JSONRoundtrip(t *testing.T) {
 	orig := ForwardTargets{
 		HTTP:  "127.0.0.1:1000",
 		HTTPS: "127.0.0.1:1001",
@@ -56,10 +62,15 @@ func TestForwardTargets_PopField_JSONRoundtrip(t *testing.T) {
 	}
 }
 
-// TestForwardTargets_PopOmittedWhenEmpty pins that Pop is optional — an
-// unset field must not appear in the JSON, so callers that haven't been
-// updated still send a valid setPolicy payload.
-func TestForwardTargets_PopOmittedWhenEmpty(t *testing.T) {
+// TestLEGACY_ForwardTargets_PopOmittedWhenEmpty pins that Pop is
+// optional — an unset field must not appear in the JSON, so callers
+// that haven't been updated still send a valid setPolicy payload.
+//
+// LEGACY: Pop/PopPort are inert dead fields; no producer sets them
+// anywhere in the codebase after Task 7. This test pins the on-wire
+// shape so a cleanup pass that removes them is intentional, not
+// accidental.
+func TestLEGACY_ForwardTargets_PopOmittedWhenEmpty(t *testing.T) {
 	minimal := ForwardTargets{HTTP: "127.0.0.1:1", HTTPS: "127.0.0.1:2", DNS: "127.0.0.1:3", NTP: "127.0.0.1:4"}
 	blob, err := json.Marshal(minimal)
 	if err != nil {

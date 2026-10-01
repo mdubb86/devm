@@ -27,6 +27,7 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 		HasProject: true,
 		Sandbox:    vmName,
 		Daemon:     ProbeDaemon(context.Background(), ident, cliFingerprint),
+		TLD:        ident.TLD,
 	}
 
 	// Routing status — query the daemon's /routes endpoint. Runs

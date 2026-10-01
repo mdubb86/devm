@@ -100,6 +100,7 @@ func (c *Client) RoutingStatusFromDaemon(ctx context.Context) (RoutingStatus, er
 				Hostname: r.Hostname,
 				Dial:     dialFromRoute(r),
 				Mode:     r.Mode.String(),
+				Project:  projID,
 			})
 			if r.ExposeHost {
 				out.LANExposedCount++

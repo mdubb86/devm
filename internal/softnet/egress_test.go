@@ -80,11 +80,16 @@ func TestEgressTargetInterceptedTest(t *testing.T) {
 	}
 }
 
-// TestEgress_ForwardsPopPortToPopEndpoint pins that a guest TCP flow to
-// the gateway's pop port (192.168.127.1:81) routes to ForwardTargets.Pop
-// when set. Serves the daemon's per-project pop HTTP listener; see
-// internal/serviceapi/pop.go for the handler.
-func TestEgress_ForwardsPopPortToPopEndpoint(t *testing.T) {
+// TestLEGACY_Egress_ForwardsPopPortToPopEndpoint pins that a guest TCP
+// flow to the gateway's pop port (192.168.127.1:81) routes to
+// ForwardTargets.Pop when set. Serves the daemon's per-project pop
+// HTTP listener; see internal/serviceapi/pop.go for the handler.
+//
+// LEGACY: Pop/PopPort are inert dead fields; no producer sets them
+// anywhere in the codebase after Task 7. This test pins the on-wire
+// shape so a cleanup pass that removes them is intentional, not
+// accidental.
+func TestLEGACY_Egress_ForwardsPopPortToPopEndpoint(t *testing.T) {
 	ft := &ForwardTargets{
 		HTTP: "127.0.0.1:8080", HTTPS: "127.0.0.1:8443",
 		DNS: "127.0.0.1:8053", NTP: "127.0.0.1:8123",
@@ -102,10 +107,15 @@ func TestEgress_ForwardsPopPortToPopEndpoint(t *testing.T) {
 	}
 }
 
-// TestEgress_DoesNotForwardPopPortWhenPopUnset pins that the gateway's
-// pop port is denied, not silently forwarded elsewhere, when Pop hasn't
-// been configured.
-func TestEgress_DoesNotForwardPopPortWhenPopUnset(t *testing.T) {
+// TestLEGACY_Egress_DoesNotForwardPopPortWhenPopUnset pins that the
+// gateway's pop port is denied, not silently forwarded elsewhere, when
+// Pop hasn't been configured.
+//
+// LEGACY: Pop/PopPort are inert dead fields; no producer sets them
+// anywhere in the codebase after Task 7. This test pins the on-wire
+// shape so a cleanup pass that removes them is intentional, not
+// accidental.
+func TestLEGACY_Egress_DoesNotForwardPopPortWhenPopUnset(t *testing.T) {
 	ft := &ForwardTargets{
 		HTTP: "127.0.0.1:8080", HTTPS: "127.0.0.1:8443",
 		DNS: "127.0.0.1:8053", NTP: "127.0.0.1:8123",
