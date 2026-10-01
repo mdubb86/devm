@@ -216,7 +216,7 @@ func TestApplyIronProxy_RunningRestartSucceeds(t *testing.T) {
 		return nil
 	}
 
-	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID) })
+	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID); exposeClaims.release(projectID) })
 	RegisterApplyIronProxyHandler(srv, identity.Prod, NewProjectLocks(), sup, nil)
 
 	reqBody, _ := json.Marshal(VMApplyIronProxyRequest{
@@ -269,7 +269,7 @@ func TestApplyIronProxy_PreservesProjectIP(t *testing.T) {
 	sup := supervisor.New(t.TempDir())
 
 	const projectID = "p-preserve-ip"
-	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID) })
+	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID); exposeClaims.release(projectID) })
 
 	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg, ProjectIP: "127.42.0.9"}))
@@ -344,6 +344,7 @@ func TestApplyIronProxy_AllocatesProjectIPWhenUnset(t *testing.T) {
 	t.Cleanup(func() {
 		ironProxyState.del(projectID)
 		ReleaseProjectIP(identity.Prod, projectID)
+		exposeClaims.release(projectID)
 	})
 
 	seededCfg := schema.Config{
@@ -417,7 +418,7 @@ func TestApplyIronProxy_PreservesGuestOriginPorts(t *testing.T) {
 	sup := supervisor.New(t.TempDir())
 
 	const projectID = "p-preserve-guest-ports"
-	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID) })
+	t.Cleanup(func() { ironProxyState.del(projectID); ReleaseProjectIP(identity.Prod, projectID); exposeClaims.release(projectID) })
 
 	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
 	require.NoError(t, WriteStateSnapshot(identity.Prod, projectID, StateSnapshot{Cfg: seededCfg, ProjectIP: "127.42.0.9"}))
@@ -496,6 +497,7 @@ func TestApplyIronProxy_AdoptInPlace_StartsGuestOriginListeners(t *testing.T) {
 	t.Cleanup(func() {
 		ironProxyState.del(projectID)
 		ReleaseProjectIP(identity.Prod, projectID)
+		exposeClaims.release(projectID)
 	})
 
 	seededCfg := schema.Config{Project: schema.Project{Name: projectID}}
