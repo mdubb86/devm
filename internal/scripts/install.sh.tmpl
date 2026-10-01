@@ -166,18 +166,15 @@ cat > /etc/systemd/system/filestash.service <<'FILESTASH_UNIT'
 {{.FilestashUnit}}
 FILESTASH_UNIT
 
-# --- Filestash runtime deps: the bundled binary dynamically links against
-# ffmpeg's shared libs (libavformat/libavcodec/libavfilter/libavutil), which
-# are not statically linked in and not present on a fresh guest. Installed
-# on every cold-start/re-run alongside the binary above; apt-get install is
-# a no-op once the packages are present. ---
-DEBIAN_FRONTEND=noninteractive apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    libavformat61 libavcodec61 libavfilter10 libavutil59
-
+# --- Filestash is enabled but NOT started here: this script runs in
+# ::devm:stage:bundle::, before softnet opens guest egress, so apt can't
+# reach deb.debian.org yet to install the ffmpeg shared libs the bundled
+# binary dynamically links against (libavformat/libavcodec/libavfilter/
+# libavutil). Those libs are installed and the service started in
+# ::devm:stage:filestash-deps::, once the open-egress window is up — see
+# RenderProvisionUserScript in internal/render/provision.go. ---
 systemctl daemon-reload
 systemctl enable filestash.service
-systemctl restart filestash.service
 
 # --- Mutagen agent pre-install (mutagen looks under ~/.mutagen/agents/<version>/mutagen-agent). ---
 if [ -f /opt/devm/bin/mutagen-agent ]; then

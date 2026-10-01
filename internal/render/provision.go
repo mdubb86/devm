@@ -170,9 +170,21 @@ func RenderProvisionUserScript(in ProvisionScriptInput) []byte {
 	if in.hasOpenWork() {
 		p("echo ::devm:stage:open::")
 		if in.FirstBoot {
+			// apt indexes are refreshed once here, up front — filestash-deps
+			// below and the packages stage (if any) both need fresh indexes,
+			// and a cold guest has never run `apt-get update`.
+			p("apt_run update -y")
+
+			// Filestash's unit was installed+enabled but left unstarted by
+			// install.sh (stage:bundle runs before softnet opens egress, so
+			// apt couldn't reach deb.debian.org there). Now that the open
+			// window is up, install its ffmpeg shared-lib deps and start it.
+			p("echo ::devm:stage:filestash-deps::")
+			p("apt_run install -y --no-install-recommends libavformat61 libavcodec61 libavfilter10 libavutil59")
+			p("sudo systemctl start filestash.service")
+
 			if len(in.Packages) > 0 {
 				p("echo ::devm:stage:packages::")
-				p("apt_run update -y")
 				quoted := make([]string, len(in.Packages))
 				for i, pkg := range in.Packages {
 					quoted[i] = shellSingleQuoted(pkg)
