@@ -194,11 +194,7 @@ func requireRunningVM(ctx context.Context, ident identity.Config, cfg schema.Con
 func rejectReservedFilesHostname(pcfg schema.Config, ident identity.Config) error {
 	for name, svc := range pcfg.Services {
 		if svc.Hostname != "" && serviceapi.IsReservedFilesHostname(svc.Hostname, pcfg.Project.Name, ident.TLD) {
-			return fmt.Errorf(
-				"service %q: hostname %q is reserved for devm's bundled filestash service — "+
-					"remove this entry from devm.yaml; the file browser is auto-served at https://%s",
-				name, svc.Hostname, svc.Hostname,
-			)
+			return fmt.Errorf("service %q: %w", name, serviceapi.FormatReservedFilesCollisionError(svc.Hostname))
 		}
 	}
 	return nil

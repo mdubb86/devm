@@ -126,11 +126,7 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 	// hits this error and must be updated — see spec §Review Focus #1.
 	for _, item := range items {
 		if IsReservedFilesHostname(item.Hostname, projectID, r.tld) {
-			return fmt.Errorf(
-				"hostname %q is reserved for devm's bundled filestash service — "+
-					"remove this entry from devm.yaml; the file browser is auto-served at https://%s",
-				item.Hostname, item.Hostname,
-			)
+			return FormatReservedFilesCollisionError(item.Hostname)
 		}
 	}
 

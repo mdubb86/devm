@@ -1,5 +1,7 @@
 package serviceapi
 
+import "fmt"
+
 // filestashServePort is the static port every devm guest's bundled
 // filestash service listens on. Referenced by computeExposeMap (Mac
 // softnet forward), reservedFilestashRoute (Mac-side reverse-proxy
@@ -32,4 +34,20 @@ func reservedFilestashRoute(projectName, projectIP, tld string) Route {
 // — the filestash bundle owns it exclusively.
 func IsReservedFilesHostname(hostname, projectID, tld string) bool {
 	return hostname == "files."+projectID+"."+tld
+}
+
+// FormatReservedFilesCollisionError builds the user-facing error returned
+// whenever a devm.yaml declares a service at the reserved
+// files.<project>.<tld> hostname. The two sites that enforce the rule —
+// Routes.Apply (daemon-side route-registration guard) and
+// cmd/devm/shell.go's rejectReservedFilesHostname (CLI-side pre-flight,
+// hit by `devm validate` and `devm start`/`shell`/`reconcile`) — share
+// this one phrasing so the error reads identically regardless of which
+// gate caught it.
+func FormatReservedFilesCollisionError(hostname string) error {
+	return fmt.Errorf(
+		"hostname %q is reserved for devm's bundled filestash service — "+
+			"remove this entry from devm.yaml; the file browser is auto-served at https://%s",
+		hostname, hostname,
+	)
 }
