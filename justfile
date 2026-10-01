@@ -363,8 +363,10 @@ e2e-clean:
 # tests + gh CI-green check, tags + pushes. CI takes over from there.
 # `just e2e` is a manual pre-release step — it needs sudo/Touch
 # ID and can't run under the release script's shell.
-release:
-    @scripts/release.sh
+# Pass VERSION (e.g. `just release v0.25.0`) with NONINTERACTIVE=1
+# in the environment to skip the picker and go straight to that tag.
+release VERSION="":
+    @scripts/release.sh {{VERSION}}
 
 # Run goreleaser locally in dry-run mode against the current commit.
 # Useful for validating .goreleaser.yaml without cutting a real release.
