@@ -1,14 +1,41 @@
 #!/usr/bin/env bash
 # regen-filestash-config.sh — dev-machine one-off. Extracts the
-# working filestash config + binary from the shelfmates project's
-# running guest (which uses filestash's passthrough middleware, set
-# up manually there), patches the connection root to "/" and the
-# listen host/port to devm's fixed values, and writes both artifacts
-# to internal/scripts/embed/.
+# filestash binary + config.json from a RUNNING filestash guest
+# whose admin console has already been walked through the preset
+# "Local files - just for me". Writes both artifacts to
+# internal/scripts/embed/. The committed config carries:
+#   - auth.admin: bcrypt of the plaintext password "devm" (documented
+#     fact; users type "devm" when their browser prompts for the
+#     filestash password on first visit per session).
+#   - middleware.identity_provider.type = passthrough with the "just
+#     for me" preset's encrypted params (encrypted with the pinned
+#     SECRET_KEY so the blob is portable across every devm guest).
+#   - connections[0] = {type: local, label: local} (no `path:` — the
+#     preset leaves it unset; the SPA prompts the user through the
+#     login flow).
+#   - general.port = 8941, general.host = null (bind defaults to all
+#     interfaces; filestash's advertised URL comes from the request's
+#     Host header).
 #
-# Rerun when bumping filestash: reconfigure shelfmates' filestash
-# first (via its admin UI), then rerun this. Committed outputs are
-# the sole shipped artifacts.
+# Why the preset over hand-crafting: filestash's `identity_provider`
+# params are AES-encrypted blobs tied to SECRET_KEY. Only the running
+# filestash can produce a valid blob. The "just for me" preset gives
+# the simplest shipping UX (one password field, no connection setup
+# form).
+#
+# Regenerate manually (click-through):
+#   1. In a running devm guest, visit filestash's admin console
+#      (`/admin`), log in with the admin password, apply the
+#      "Local files - just for me" configuration-wizard preset.
+#   2. Re-point SHELFMATES_* below at the project you clicked
+#      through in, then rerun this script.
+#
+# TODO: find a filestash config path that's TRULY anonymous (no
+# password at all). The current preset is a one-password-per-session
+# UX which matches shelfmates's actual UX but isn't the "no login,
+# just works" the plan originally envisioned. Candidates to explore:
+# share-link bake-in, custom overrides JS that auto-fills the
+# password, or a filestash version with a no-auth site mode.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

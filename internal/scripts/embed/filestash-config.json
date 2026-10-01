@@ -35,38 +35,38 @@
             "enable_chromecast": null,
             "signature": null,
             "zip_timeout": null,
-            "disable_csp": null,
-            "disable_svg": null,
-            "enable": null
-        },
-        "collaborative": {
-            "enable": null
-        },
-        "workflow": {
             "enable": null,
-            "workers": null
+            "disable_svg": null,
+            "disable_csp": null
+        },
+        "video": {
+            "blacklist_format": null,
+            "enable_transcoder": null,
+            "encoder": null
         },
         "office": {
-            "office_server": null,
             "filestash_server": null,
-            "rewrite_discovery_url": null,
+            "office_server": null,
+            "enable": null,
+            "rewrite_discovery_url": null
+        },
+        "search": {
+            "explore_timeout": null
+        },
+        "site": {
+            "cors_allow_origins": null,
+            "enable": null,
+            "autoindex": null
+        },
+        "workflow": {
+            "workers": null,
             "enable": null
         },
         "mcp": {
             "enable": null
         },
-        "site": {
-            "enable": null,
-            "autoindex": null,
-            "cors_allow_origins": null
-        },
-        "search": {
-            "explore_timeout": null
-        },
-        "video": {
-            "blacklist_format": null,
-            "encoder": null,
-            "enable_transcoder": null
+        "collaborative": {
+            "enable": null
         },
         "server": {
             "console_enable": null
@@ -85,16 +85,16 @@
         "from": null
     },
     "auth": {
-        "admin": "$2a$10$/WF7Yd3BJt1bt9WIgCtlDuWTGSVNcKP.ICnEu323yBrHd8byuX552"
+        "admin": "$2b$10$onQ58vnAGWCzuG/QJm0Lm.5zLzF4id9nr83uiGxsJs2brBxL8Jhl2"
     },
     "middleware": {
+        "attribute_mapping": {
+            "related_backend": "local",
+            "params": "EbiAkThoFN2Zgm-9SMgYJuNcN9x5EZn-R8CpGPgmCtqv39pwpYYp0IYrbfGKUH41JlHYt5CWrsFJsNA-GoqPeBka2CJBdWjweQfAX0ASXSmQqpu0"
+        },
         "identity_provider": {
             "type": "passthrough",
-            "params": "kbG_jYH_EKeykTFWPDZhYOtnX6HFY365mOmxl3mfJ2yJl6SEqBwmy8FyuE8CNdZbJiOSSk9iKjOmGmbhug=="
-        },
-        "attribute_mapping": {
-            "related_backend": "",
-            "params": "kbG_jYH_EKeykTFXp40oCne15m2l-QwvexXnnrZvNT16r4-EQSYFsozG"
+            "params": "EbiAkThoFN2Zgm-8STZHCufuk49V-w4nAH21YAaNUVI7gtBnJqC101Fb5S_9BMGE2RQ2UDhPDn8Sd3i9r69E9JGARqU="
         }
     },
     "constant": {
@@ -104,8 +104,7 @@
     "connections": [
         {
             "type": "local",
-            "label": "local",
-            "path": "/"
+            "label": "local"
         }
     ]
 }
