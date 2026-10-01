@@ -48,8 +48,8 @@ func TestHandlePop_Default_OpensFilestashURL(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 	require.Len(t, *captured, 1, "default opens exactly one arg (URL)")
-	assert.Equal(t, "https://files.myproj.test/files/local/home/devm/foo.html", (*captured)[0])
-	assert.Equal(t, "https://files.myproj.test/files/local/home/devm/foo.html\n", rec.Body.String())
+	assert.Equal(t, "https://files.myproj.test/files/home/devm/foo.html", (*captured)[0])
+	assert.Equal(t, "https://files.myproj.test/files/home/devm/foo.html\n", rec.Body.String())
 }
 
 func TestHandlePop_Default_WithOpenArgs(t *testing.T) {
@@ -64,7 +64,7 @@ func TestHandlePop_Default_WithOpenArgs(t *testing.T) {
 	handlePop(rec, req, identity.Prod, "myproj")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Equal(t, []string{
-		"https://files.myproj.test/files/local/home/devm/foo.html",
+		"https://files.myproj.test/files/home/devm/foo.html",
 		"-a", "Google Chrome",
 	}, *captured)
 }
@@ -98,12 +98,12 @@ func TestHandlePop_RejectsMissingPath(t *testing.T) {
 func TestResolvePopTarget_Default_BuildsFilestashURL(t *testing.T) {
 	got, err := resolvePopTarget(context.Background(), identity.Prod, "proj", "/home/devm/path/with spaces.txt", false)
 	require.NoError(t, err)
-	assert.Equal(t, "https://files.proj.test/files/local/home/devm/path/with%20spaces.txt", got)
+	assert.Equal(t, "https://files.proj.test/files/home/devm/path/with%20spaces.txt", got)
 }
 
 func TestFilestashURL_UsesTLDFromIdentity(t *testing.T) {
-	assert.Equal(t, "https://files.proj.e2e.test/files/local/a/b", filestashURL(identity.E2E, "proj", "/a/b"))
-	assert.Equal(t, "https://files.proj.test/files/local/a/b", filestashURL(identity.Prod, "proj", "/a/b"))
+	assert.Equal(t, "https://files.proj.e2e.test/files/a/b", filestashURL(identity.E2E, "proj", "/a/b"))
+	assert.Equal(t, "https://files.proj.test/files/a/b", filestashURL(identity.Prod, "proj", "/a/b"))
 }
 
 func TestPopScratchName_StablePerProjectAndPath(t *testing.T) {

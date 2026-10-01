@@ -26,25 +26,29 @@ def open_page(url: str, *, ignore_https_errors: bool = False) -> Iterator[Page]:
         )
         context = browser.new_context(ignore_https_errors=ignore_https_errors)
         page = context.new_page()
-        # Retry page.goto once on ERR_CONNECTION_RESET: Chromium's first
-        # HTTPS handshake against devm's proxy is intermittently reset
-        # (observed with --disable-features=AsyncDns in place; curl against
-        # the same URL from the same shell works). A single retry after
-        # 500ms clears it. `domcontentloaded` instead of `networkidle`
-        # because filestash's SPA keeps polling, so networkidle can hang
-        # on a healthy page.
+        # Retry page.goto a few times on ERR_CONNECTION_RESET /
+        # ERR_CONNECTION_CLOSED: Chromium's first HTTPS handshake
+        # against devm's proxy is intermittently reset or closed
+        # (observed with --disable-features=AsyncDns in place; curl
+        # against the same URL from the same shell works). Both are
+        # the same class of early-TLS flake — retry on either. A short
+        # wait between attempts gives filestash's cold-SPA load time to
+        # settle. `domcontentloaded` instead of `networkidle` because
+        # filestash's SPA keeps polling, so networkidle can hang on a
+        # healthy page.
+        import time
+        _retryable = ("ERR_CONNECTION_RESET", "ERR_CONNECTION_CLOSED")
         last_err = None
-        for _ in range(2):
+        for attempt in range(4):
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 last_err = None
                 break
             except Exception as e:
                 last_err = e
-                if "ERR_CONNECTION_RESET" not in str(e):
+                if not any(sig in str(e) for sig in _retryable):
                     raise
-                import time
-                time.sleep(0.5)
+                time.sleep(0.5 * (attempt + 1))
         if last_err is not None:
             raise last_err
         try:

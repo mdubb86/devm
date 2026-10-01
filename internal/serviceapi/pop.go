@@ -168,14 +168,16 @@ func resolvePopTarget(ctx context.Context, cfg identity.Config, projectName, gue
 	return dest, nil
 }
 
-// filestashURL builds the viewer URL for guestPath. filestash is
-// mounted at /files/local/ with path=/ (full guest fs), so a guest
-// path /home/devm/foo.html → /files/local/home/devm/foo.html.
+// filestashURL builds the viewer URL for guestPath. filestash's SPA
+// serves file-browser routes at /files<path>; the backend label does
+// not appear in URLs because the direct-strategy preset configures a
+// single `local` connection and filestash's router omits the label
+// in that case. A guest path /home/devm/foo.html → /files/home/devm/foo.html.
 func filestashURL(cfg identity.Config, projectName, guestPath string) string {
 	u := url.URL{
 		Scheme: "https",
 		Host:   "files." + projectName + "." + cfg.TLD,
-		Path:   "/files/local" + guestPath,
+		Path:   "/files" + guestPath,
 	}
 	return u.String()
 }
