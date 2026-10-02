@@ -339,14 +339,14 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 		if !ok || info.ProjectIP == "" {
 			continue
 		}
-		// Bind the propose listener synchronously FIRST — that pins
-		// ProposePort into ironProxyState before rebindProjectListeners'
+		// Bind the guest-API listener synchronously FIRST — that pins
+		// GuestAPIPort into ironProxyState before rebindProjectListeners'
 		// async goroutine gets a chance to do its own read-modify-write
 		// (guest-origin ports). Since projectInfoStore's get + modify +
 		// put is not atomic across callers, doing the fast synchronous
 		// write first eliminates the theoretical race where
 		// rebindProjectListeners' goroutine reads the store before my
-		// write and clobbers ProposePort with zero when it writes back.
+		// write and clobbers GuestAPIPort with zero when it writes back.
 		if err := bindSoftnetListenersForAdopt(ctx, cfg, cache, tr, locks, id, ntp.Port()); err != nil {
 			daemonlog.Errorf("serviceapi: adopt-rebind softnet listeners for %s: %v", id, err)
 		}

@@ -15,7 +15,7 @@
 //
 //   - A per-project HTTP listener (spawned at /vm/start) serves
 //     POST /propose for the guest. Softnet forwards guest TCP
-//     192.168.127.1:82 to this listener — see internal/softnet/egress.go's
+//     192.168.127.1:81 to this listener — see internal/softnet/egress.go's
 //     Propose branch and this package's vm.go /vm/start wiring.
 //   - The daemon's main Unix-socket mux serves
 //     POST /vm/propose?project=<name> for the Mac CLI.
@@ -309,14 +309,16 @@ func handleProposeUnixSocket(cfg identity.Config, cache *StateCache) http.Handle
 	})
 }
 
-// proposeListeners tracks each running project's propose HTTP listener
-// so /vm/stop can close it by project name.
-var proposeListeners sync.Map // projectName -> net.Listener
+// guestAPIListeners tracks each running project's per-project guest-API
+// HTTP listener so /vm/stop can close it by project name.
+var guestAPIListeners sync.Map // projectName -> net.Listener
 
-// serveProposeListener runs a minimal HTTP server on ln that
-// dispatches the guest-facing gdevm HTTP API. Softnet forwards guest
-// TCP 192.168.127.1:82 to this listener; the endpoint path selects
-// the handler:
+// serveGuestAPIListener runs a minimal HTTP server on ln that
+// dispatches every guest-originated gdevm → Mac call. Softnet forwards
+// guest TCP 192.168.127.1:81 to this listener; the endpoint path
+// selects the handler:
+//   - POST /pop                 — open a file on the Mac (filestash
+//     URL by default; `--native` goes through the mirror table).
 //   - POST /propose             — edit signal.
 //   - POST /passthrough         — passthrough-window request pending
 //     human approval.
@@ -327,8 +329,11 @@ var proposeListeners sync.Map // projectName -> net.Listener
 //   - GET  /recipes/get         — fetch one recipe body by name.
 //   - GET  /recipes/asset/ls    — list a recipe's asset files.
 //   - GET  /recipes/asset/get   — fetch one asset's raw bytes.
-func serveProposeListener(ln net.Listener, cfg identity.Config, cache *StateCache, tr *tart.Tart, locks *ProjectLocks, projectName string) {
+func serveGuestAPIListener(ln net.Listener, cfg identity.Config, cache *StateCache, tr *tart.Tart, locks *ProjectLocks, projectName string) {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/pop", func(w http.ResponseWriter, r *http.Request) {
+		handlePop(w, r, cfg, projectName)
+	})
 	mux.Handle("/propose", handleProposeForProject(cfg, cache, projectName))
 	mux.Handle("/passthrough", handlePassthroughRequestForProject(cfg, cache, projectName))
 	mux.Handle("/refresh-bundle", handleRefreshBundleForProject(cfg, cache, tr, locks, projectName))
@@ -337,14 +342,14 @@ func serveProposeListener(ln net.Listener, cfg identity.Config, cache *StateCach
 	})
 	srv := &http.Server{Handler: mux}
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-		daemonlog.Errorf("serviceapi: propose: listener for %s exited: %v", projectName, err)
+		daemonlog.Errorf("serviceapi: guest-api: listener for %s exited: %v", projectName, err)
 	}
 }
 
-// closeProposeListener closes and forgets projectName's propose
+// closeGuestAPIListener closes and forgets projectName's guest-API
 // listener, if any. Called from /vm/stop teardown.
-func closeProposeListener(projectName string) {
-	if v, ok := proposeListeners.LoadAndDelete(projectName); ok {
+func closeGuestAPIListener(projectName string) {
+	if v, ok := guestAPIListeners.LoadAndDelete(projectName); ok {
 		if ln, ok := v.(net.Listener); ok {
 			ln.Close()
 		}

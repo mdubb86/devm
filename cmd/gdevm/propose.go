@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const proposeEndpoint = "http://192.168.127.1:82/propose"
+const proposeEndpoint = "http://192.168.127.1:81/propose"
 
 // proposeBody is the wire shape both `gdevm propose` and `devm propose`
 // send. It intentionally names no file: the daemon scans every
@@ -33,9 +33,10 @@ type proposeBody struct {
 // code. The binary sends only signal-and-attribution metadata — the
 // edited config's bytes reach the Mac via the mutagen sync session.
 //
-// Reaches the daemon over softnet: guest TCP 192.168.127.1:82 is
-// forwarded (softnet ForwardTargets.Propose, per project) to the
-// daemon's per-project propose HTTP listener.
+// Reaches the daemon over softnet: guest TCP 192.168.127.1:81 is
+// forwarded (softnet ForwardTargets.GuestAPI, per project) to the
+// daemon's per-project guest-API HTTP listener, where /propose is
+// one route among several.
 func proposeMain(args []string) int {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -97,7 +98,7 @@ func doPost(endpoint, cwd, branch, reason string) int {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gdevm propose: cannot reach devm daemon on 192.168.127.1:82 — is the VM properly started?\n%v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm propose: cannot reach devm daemon on 192.168.127.1:81 — is the VM properly started?\n%v\n", err)
 		return 1
 	}
 	defer resp.Body.Close()

@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const passthroughEndpoint = "http://192.168.127.1:82/passthrough"
+const passthroughEndpoint = "http://192.168.127.1:81/passthrough"
 
 type passthroughRequestBody struct {
 	Reason          string `json:"reason"`
@@ -26,8 +26,8 @@ type passthroughRequestBody struct {
 // NOT open the window itself — a human runs `devm passthrough
 // approve` on the Mac side to authorize it.
 //
-// Reaches the daemon over softnet: guest TCP 192.168.127.1:82 is
-// forwarded (softnet ForwardTargets.Propose, per project) to the
+// Reaches the daemon over softnet: guest TCP 192.168.127.1:81 is
+// forwarded (softnet ForwardTargets.GuestAPI, per project) to the
 // daemon's per-project gdevm-API listener (shared with propose).
 func passthroughMain(args []string) int {
 	cwd, err := os.Getwd()
@@ -120,7 +120,7 @@ func doPassthroughPost(endpoint, cwd, branch, reason string, durationSeconds int
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gdevm passthrough: cannot reach devm daemon on 192.168.127.1:82 — is the VM properly started?\n%v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm passthrough: cannot reach devm daemon on 192.168.127.1:81 — is the VM properly started?\n%v\n", err)
 		return 1
 	}
 	defer resp.Body.Close()

@@ -4,8 +4,8 @@
 // when a human runs `devm passthrough approve`.
 //
 // Route: POST /passthrough, shared with the propose handler on the
-// per-project TCP listener softnet forwards guest 192.168.127.1:82 to.
-// See serveProposeListener in propose.go.
+// per-project TCP listener softnet forwards guest 192.168.127.1:81 to.
+// See serveGuestAPIListener in propose.go.
 package serviceapi
 
 import (

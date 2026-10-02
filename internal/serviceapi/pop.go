@@ -1,6 +1,6 @@
 // Pop is the daemon-side entry point for guest "gdevm pop <path>"
-// requests. A per-project HTTP listener (spawned at /vm/start) serves
-// POST /pop:
+// requests. Mounted on the per-project guest-API listener (see
+// serveGuestAPIListener in propose.go) as POST /pop:
 //
 //	Body: {"project": "<name>", "guest_path": "<abs guest path>",
 //	       "native": false, "open_args": ["-a", "Preview"]}
@@ -16,9 +16,9 @@
 // the pre-removal cmd/devm/pop.go --native path, now server-side so
 // in-guest `gdevm pop --native` works too.
 //
-// Softnet forwards guest TCP 192.168.127.1:81 to this listener — see
-// internal/softnet/egress.go's Pop branch and internal/serviceapi/
-// vm.go's /vm/start.
+// Softnet forwards guest TCP 192.168.127.1:81 to the guest-API
+// listener — see internal/softnet/egress.go's GuestAPI branch and
+// internal/serviceapi/vm.go's /vm/start.
 package serviceapi
 
 import (
@@ -29,13 +29,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
@@ -204,32 +202,3 @@ func toPopPathEntries(reg []WorkspaceEntry) []repohelpers.WorkspacePathEntry {
 	return out
 }
 
-// popListeners tracks each running project's pop HTTP listener so
-// /vm/stop can close it by project name. Mirrors proposeListeners.
-var popListeners sync.Map // projectName -> net.Listener
-
-// servePopListener runs a minimal HTTP server on ln that dispatches
-// POST /pop to handlePop for the given project. Softnet forwards guest
-// TCP 192.168.127.1:81 to this listener.
-func servePopListener(ln net.Listener, cfg identity.Config, projectName string) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/pop", func(w http.ResponseWriter, r *http.Request) {
-		handlePop(w, r, cfg, projectName)
-	})
-	srv := &http.Server{Handler: mux}
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-		daemonlog.Errorf("serviceapi: pop: listener for %s exited: %v", projectName, err)
-	}
-}
-
-// closePopListener closes and forgets projectName's pop listener.
-// Called from /vm/stop teardown and from adopt-rebind on daemon
-// restart (where the old listener is a stale fd before the new one
-// goes down).
-func closePopListener(projectName string) {
-	if v, ok := popListeners.LoadAndDelete(projectName); ok {
-		if ln, ok := v.(net.Listener); ok {
-			ln.Close()
-		}
-	}
-}

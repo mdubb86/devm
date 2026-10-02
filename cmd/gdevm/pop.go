@@ -12,10 +12,11 @@ import (
 	"time"
 )
 
-// popEndpoint is the Mac-side daemon's per-project pop HTTP listener.
-// Softnet forwards guest TCP 192.168.127.1:81 to the per-project
-// listener on the Mac (ForwardTargets.Pop), so every project's gdevm
-// pop lands in its own listener without a port negotiation here.
+// popEndpoint is one route on the Mac-side daemon's per-project
+// guest-API HTTP listener. Softnet forwards guest TCP 192.168.127.1:81
+// to the per-project listener on the Mac (ForwardTargets.GuestAPI),
+// which serves /pop alongside /propose, /passthrough, /refresh-bundle,
+// and /recipes/* under one mux.
 const popEndpoint = "http://192.168.127.1:81/pop"
 
 // popBody is the on-wire shape POST /pop expects. Mirrors

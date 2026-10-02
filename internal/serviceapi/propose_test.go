@@ -495,22 +495,22 @@ func TestPropose_NoMacCwdInCacheReturns412(t *testing.T) {
 	assert.False(t, ok, "no metadata should be written when the project has no MacCwd")
 }
 
-// TestPropose_ListenerRegisteredOnStart pins that serveProposeListener
-// records the listener in proposeListeners and closeProposeListener
+// TestGuestAPI_ListenerRegisteredOnStart pins that serveGuestAPIListener
+// records the listener in guestAPIListeners and closeGuestAPIListener
 // removes it.
-func TestPropose_ListenerRegisteredOnStart(t *testing.T) {
+func TestGuestAPI_ListenerRegisteredOnStart(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer ln.Close()
 
-	proposeListeners.Store("proj", ln)
-	got, ok := proposeListeners.Load("proj")
+	guestAPIListeners.Store("proj", ln)
+	got, ok := guestAPIListeners.Load("proj")
 	require.True(t, ok)
 	assert.Equal(t, ln, got.(net.Listener))
 
-	closeProposeListener("proj")
-	_, ok = proposeListeners.Load("proj")
-	assert.False(t, ok, "closeProposeListener must delete entry")
+	closeGuestAPIListener("proj")
+	_, ok = guestAPIListeners.Load("proj")
+	assert.False(t, ok, "closeGuestAPIListener must delete entry")
 }
 
 // TestPropose_GuestGateDisabledReturns403 verifies the daemon refuses

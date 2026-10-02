@@ -126,7 +126,7 @@ func RefreshGuestBundle(ctx context.Context, cfg identity.Config, cache *StateCa
 // handleRefreshBundleForProject returns the per-project
 // POST /refresh-bundle handler serving the guest side (softnet:82,
 // shared listener with /propose and /passthrough — see
-// serveProposeListener). Body is ignored (no metadata needed —
+// serveGuestAPIListener). Body is ignored (no metadata needed —
 // the refresh is not a request, it's a maintenance ping).
 //
 // Acquires locks.Lock(projectName) before invoking RefreshGuestBundle

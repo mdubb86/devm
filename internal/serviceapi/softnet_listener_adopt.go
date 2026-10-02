@@ -24,9 +24,9 @@ import (
 // proposeLn setup exactly: same registration-before-goroutine ordering
 // so a fast /vm/stop can't leak an fd; same handler wiring.
 //
-// Updates ironProxyState with the fresh ProposePort, then pushes
+// Updates ironProxyState with the fresh GuestAPIPort, then pushes
 // setPolicy("FORWARDING", endpointFrom(...)) so softnet routes
-// 192.168.127.1:82 to this daemon's new port.
+// 192.168.127.1:81 to this daemon's new port.
 //
 // Best-effort — a failure on one project logs and doesn't block the
 // startup rehydrate loop for other projects. If binding fails the
@@ -42,33 +42,21 @@ func bindSoftnetListenersForAdopt(
 	projectName string,
 	ntpPort int,
 ) error {
-	popPort, err := pickPort()
+	guestAPIPort, err := pickPort()
 	if err != nil {
-		return fmt.Errorf("pick pop port: %w", err)
+		return fmt.Errorf("pick guest-api port: %w", err)
 	}
-	popLn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", popPort))
+	guestAPILn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", guestAPIPort))
 	if err != nil {
-		return fmt.Errorf("bind pop listener: %w", err)
+		return fmt.Errorf("bind guest-api listener: %w", err)
 	}
-	popListeners.Store(projectName, popLn)
-	go servePopListener(popLn, cfg, projectName)
+	guestAPIListeners.Store(projectName, guestAPILn)
+	go serveGuestAPIListener(guestAPILn, cfg, cache, tr, locks, projectName)
 
-	proposePort, err := pickPort()
-	if err != nil {
-		return fmt.Errorf("pick propose port: %w", err)
-	}
-	proposeLn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", proposePort))
-	if err != nil {
-		return fmt.Errorf("bind propose listener: %w", err)
-	}
-	proposeListeners.Store(projectName, proposeLn)
-	go serveProposeListener(proposeLn, cfg, cache, tr, locks, projectName)
-
-	// Update ironProxyState with the fresh ports so endpointFrom picks
-	// them up when we push softnet's forwarding table below.
+	// Update ironProxyState with the fresh port so endpointFrom picks
+	// it up when we push softnet's forwarding table below.
 	info, _ := ironProxyState.get(projectName)
-	info.PopPort = popPort
-	info.ProposePort = proposePort
+	info.GuestAPIPort = guestAPIPort
 	ironProxyState.put(projectName, info)
 
 	// Push softnet's forward-target map. On daemon restart softnet still

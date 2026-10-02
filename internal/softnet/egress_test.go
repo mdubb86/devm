@@ -80,31 +80,32 @@ func TestEgressTargetInterceptedTest(t *testing.T) {
 	}
 }
 
-// TestEgress_ForwardsPopPortToPopEndpoint pins that a guest TCP flow
-// to the gateway's pop port (192.168.127.1:81) routes to
-// ForwardTargets.Pop when set. The daemon's per-project pop HTTP
-// listener sits behind that mapping (internal/serviceapi/pop.go).
-func TestEgress_ForwardsPopPortToPopEndpoint(t *testing.T) {
+// TestEgress_ForwardsGuestAPIPortToTarget pins that a guest TCP flow
+// to the gateway's guest-API port (192.168.127.1:81) routes to
+// ForwardTargets.GuestAPI when set. One daemon-side listener sits
+// behind that mapping and serves /pop, /propose, /passthrough,
+// /refresh-bundle, /recipes/* under one mux.
+func TestEgress_ForwardsGuestAPIPortToTarget(t *testing.T) {
 	ft := &ForwardTargets{
 		HTTP: "127.0.0.1:8080", HTTPS: "127.0.0.1:8443",
 		DNS: "127.0.0.1:8053", NTP: "127.0.0.1:8123",
-		Pop: "127.0.0.1:65431",
+		GuestAPI: "127.0.0.1:65431",
 	}
 	e := newEgress(nil)
 	e.setPolicy(PolicyForwarding, ft)
 	got, ok := e.target(GatewayIP, 81)
 	if !ok {
-		t.Fatal("TCP:81 to gateway must forward under FORWARDING with Pop set")
+		t.Fatal("TCP:81 to gateway must forward under FORWARDING with GuestAPI set")
 	}
 	if got != "127.0.0.1:65431" {
 		t.Fatalf("target(gateway, 81) = %q, want 127.0.0.1:65431", got)
 	}
 }
 
-// TestEgress_DoesNotForwardPopPortWhenPopUnset pins that the gateway's
-// pop port is denied — not silently forwarded elsewhere — when Pop
-// hasn't been configured.
-func TestEgress_DoesNotForwardPopPortWhenPopUnset(t *testing.T) {
+// TestEgress_DoesNotForwardGuestAPIPortWhenGuestAPIUnset pins that :81
+// is denied — not silently forwarded elsewhere — when GuestAPI hasn't
+// been configured.
+func TestEgress_DoesNotForwardGuestAPIPortWhenGuestAPIUnset(t *testing.T) {
 	ft := &ForwardTargets{
 		HTTP: "127.0.0.1:8080", HTTPS: "127.0.0.1:8443",
 		DNS: "127.0.0.1:8053", NTP: "127.0.0.1:8123",
@@ -112,37 +113,21 @@ func TestEgress_DoesNotForwardPopPortWhenPopUnset(t *testing.T) {
 	e := newEgress(nil)
 	e.setPolicy(PolicyForwarding, ft)
 	if _, ok := e.target(GatewayIP, 81); ok {
-		t.Fatal("TCP:81 must NOT forward when Pop is unset")
+		t.Fatal("TCP:81 must NOT forward when GuestAPI is unset")
 	}
 }
 
-// TestEgress_ForwardsProposePortToTarget pins that TCP to
-// 192.168.127.1:82 routes to ForwardTargets.Propose when set.
-func TestEgress_ForwardsProposePortToTarget(t *testing.T) {
-	e := newEgress(nil)
-	e.setPolicy(PolicyForwarding, &ForwardTargets{
-		Propose: "127.0.0.1:65432",
-	})
-	target, ok := e.target(GatewayIP, 82)
-	if !ok {
-		t.Fatal("TCP:82 to gateway must forward under FORWARDING with Propose set")
-	}
-	if target != "127.0.0.1:65432" {
-		t.Fatalf("target = %q, want %q", target, "127.0.0.1:65432")
-	}
-}
-
-// TestEgress_ProposePortDeniedWhenPropoeUnset pins that :82 is
-// denied — not silently forwarded elsewhere — when Propose hasn't
-// been set.
-func TestEgress_ProposePortDeniedWhenProposeUnset(t *testing.T) {
+// TestEgress_DeniesLegacyPort82 pins that the legacy propose port (82)
+// is denied under FORWARDING — the listener collapsed into GuestAPI
+// on 81, and nothing should silently handle 82.
+func TestEgress_DeniesLegacyPort82(t *testing.T) {
 	e := newEgress(nil)
 	e.setPolicy(PolicyForwarding, &ForwardTargets{
 		HTTP:  "127.0.0.1:1000",
 		HTTPS: "127.0.0.1:1001",
 	})
 	if _, ok := e.target(GatewayIP, 82); ok {
-		t.Fatal("TCP:82 must be denied when Propose is unset")
+		t.Fatal("TCP:82 must be denied — the per-project API listener now lives on :81")
 	}
 }
 

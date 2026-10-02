@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const refreshBundleEndpoint = "http://192.168.127.1:82/refresh-bundle"
+const refreshBundleEndpoint = "http://192.168.127.1:81/refresh-bundle"
 
 // upgradeMain implements `gdevm upgrade`. POSTs to the daemon's
 // per-project /refresh-bundle endpoint (softnet:82 shared listener),
@@ -34,7 +34,7 @@ func runUpgrade(endpoint string) int {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gdevm upgrade: cannot reach devm daemon on 192.168.127.1:82 — is the VM properly started?\n%v\n", err)
+		fmt.Fprintf(os.Stderr, "gdevm upgrade: cannot reach devm daemon on 192.168.127.1:81 — is the VM properly started?\n%v\n", err)
 		return 1
 	}
 	defer resp.Body.Close()

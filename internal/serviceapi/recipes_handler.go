@@ -1,8 +1,8 @@
 // recipes_handler wires the guest-facing /recipes/* HTTP API on the
-// per-project softnet listener at 192.168.127.1:82. Handlers are thin:
+// per-project guest-API listener at 192.168.127.1:81. Handlers are thin:
 // they parse query params, open a fresh Query on the cached recipes.db,
 // dispatch to the recipes package, and translate its typed sentinels to
-// HTTP status codes. Registered from serveProposeListener.
+// HTTP status codes. Registered from serveGuestAPIListener.
 package serviceapi
 
 import (

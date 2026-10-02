@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const recipesEndpoint = "http://192.168.127.1:82/recipes"
+const recipesEndpoint = "http://192.168.127.1:81/recipes"
 
 // recipesMain implements `gdevm recipes <sub> [args...]`. Dispatches to
 // runRecipes with the softnet base endpoint; runRecipes is the
@@ -104,7 +104,7 @@ func recipesGET(label, endpoint string) int {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gdevm recipes %s: cannot reach devm daemon on 192.168.127.1:82 — is the VM properly started?\n%v\n", label, err)
+		fmt.Fprintf(os.Stderr, "gdevm recipes %s: cannot reach devm daemon on 192.168.127.1:81 — is the VM properly started?\n%v\n", label, err)
 		return 1
 	}
 	defer resp.Body.Close()

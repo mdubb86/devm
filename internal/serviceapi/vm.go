@@ -719,43 +719,28 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			return
 		}
 
-		// Allocate a port and bind the per-project pop HTTP listener.
-		// Softnet forwards guest 192.168.127.1:81 → this port via
-		// ForwardTargets.Pop in endpointFrom below. The listener is
-		// what in-guest `gdevm pop` dials.
-		popPort, err := pickPort()
+		// Allocate a port and bind the per-project guest-API HTTP
+		// listener. Softnet forwards guest 192.168.127.1:81 → this
+		// port via ForwardTargets.GuestAPI in endpointFrom below. One
+		// mux serves every gdevm → Mac call (/pop, /propose,
+		// /passthrough, /refresh-bundle, /recipes/*).
+		guestAPIPort, err := pickPort()
 		if err != nil {
-			http.Error(w, fmt.Sprintf("pick pop port: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("pick guest-api port: %v", err), http.StatusInternalServerError)
 			return
 		}
-		popLn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", popPort))
+		guestAPILn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", guestAPIPort))
 		if err != nil {
-			http.Error(w, fmt.Sprintf("bind pop listener: %v", err), http.StatusInternalServerError)
-			return
-		}
-		popListeners.Store(req.Name, popLn)
-		go servePopListener(popLn, cfg, req.Name)
-
-		// Allocate a port and bind the per-project propose HTTP listener.
-		// Softnet forwards guest 192.168.127.1:82 → this port via
-		// ForwardTargets.Propose in endpointFrom below.
-		proposePort, err := pickPort()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("pick propose port: %v", err), http.StatusInternalServerError)
-			return
-		}
-		proposeLn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", proposePort))
-		if err != nil {
-			http.Error(w, fmt.Sprintf("bind propose listener: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("bind guest-api listener: %v", err), http.StatusInternalServerError)
 			return
 		}
 		// Register before spawning the serve goroutine — a fast /vm/stop
 		// racing the goroutine's own startup could otherwise call
-		// closeProposeListener before the listener is recorded, leaking
+		// closeGuestAPIListener before the listener is recorded, leaking
 		// the fd. Mirrors StartProjectListeners's record-before-return
 		// discipline in proxy.go.
-		proposeListeners.Store(req.Name, proposeLn)
-		go serveProposeListener(proposeLn, cfg, cache, tr, locks, req.Name)
+		guestAPIListeners.Store(req.Name, guestAPILn)
+		go serveGuestAPIListener(guestAPILn, cfg, cache, tr, locks, req.Name)
 
 		// Stash port info for VM env injection and the deferred
 		// egress-enforcement inject to read. Merge onto the existing
@@ -767,8 +752,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info.HTTPSPort = httpsPort
 		info.TunnelPort = tunnelPort
 		info.DNSPort = dnsPort
-		info.PopPort = popPort
-		info.ProposePort = proposePort
+		info.GuestAPIPort = guestAPIPort
 		ironProxyState.put(req.Name, info)
 
 		// Apply VM-side config via tart exec. timesyncd's NTP config is
@@ -1094,8 +1078,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		if proxy != nil {
 			proxy.StopProjectListeners(req.Name)
 		}
-		closePopListener(req.Name)
-		closeProposeListener(req.Name)
+		closeGuestAPIListener(req.Name)
 		if req.Destroy {
 			policyAuthority.PurgeProject(req.Name)
 		} else {
@@ -1494,11 +1477,8 @@ func endpointFrom(info projectInfo, ntpPort int) *Endpoint {
 	if info.GuestHTTPSPort != 0 {
 		e.GuestHTTPS = ironProxyListenAddr(info.GuestHTTPSPort)
 	}
-	if info.PopPort != 0 {
-		e.Pop = ironProxyListenAddr(info.PopPort)
-	}
-	if info.ProposePort != 0 {
-		e.Propose = ironProxyListenAddr(info.ProposePort)
+	if info.GuestAPIPort != 0 {
+		e.GuestAPI = ironProxyListenAddr(info.GuestAPIPort)
 	}
 	return e
 }
@@ -1528,16 +1508,12 @@ type projectInfo struct {
 	GuestHTTPPort  int
 	GuestHTTPSPort int
 
-	// PopPort is the daemon's per-project pop HTTP listener — where
-	// softnet forwards guest TCP 192.168.127.1:81. In-memory only, set
-	// at /vm/start and cleared at /vm/stop via closePopListener; the
-	// pop listener itself is bound in cmd/vm/start.go's handler.
-	PopPort int
-
-	// ProposePort is the daemon's per-project propose HTTP listener —
-	// where softnet forwards guest TCP 192.168.127.1:82. In-memory only,
-	// set at /vm/start and cleared at /vm/stop via closeProposeListener.
-	ProposePort int
+	// GuestAPIPort is the daemon's per-project guest-API HTTP listener
+	// — where softnet forwards guest TCP 192.168.127.1:81. One mux
+	// serves every gdevm → Mac call: /pop, /propose, /passthrough,
+	// /refresh-bundle, /recipes/*. In-memory only, set at /vm/start
+	// and cleared at /vm/stop via closeGuestAPIListener.
+	GuestAPIPort int
 
 	// ProjectIP is the project's allocated 127.42/16 loopback IP. All
 	// ingress listeners (softnet direct ports, softnet SSH, daemon HTTP
