@@ -25,7 +25,17 @@ jobs:
       # because devm-setsid-shim was in justfile but not CI).
       - run: just embeds
       - run: go vet ./...
-      - run: go test -race ./...
+      # Diagnostic hardening after repeated SIGTERM (exit 143) kills at
+      # ~3 min of silence during the orchestrator + serviceapi parallel
+      # grind. -v names the test currently running, -timeout 10m makes
+      # Go dump all goroutine stacks if any single test hangs, -p 1
+      # serializes packages so the two heavies don't share a runner
+      # at the same time (ubuntu-latest = 2 CPUs, 7GB RAM; -race
+      # doubles memory, two heavies concurrent is likely what triggered
+      # the kills). timeout-minutes caps the step so an infinite hang
+      # fails cleanly rather than running the job timeout out.
+      - run: go test -race -v -p 1 -timeout 10m ./...
+        timeout-minutes: 25
       - run: go build ./...
 
   shellcheck:
