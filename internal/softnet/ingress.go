@@ -91,7 +91,11 @@ func (ing *ingress) apply(ports []ExposePort) []ExposeResult {
 		}
 		el := &exposeListener{ln: ln, guestPort: uint16(p.GuestPort), bindIP: p.BindIP}
 		ing.listeners[hp] = el
-		logf("ingress open %s:%d -> guest:%d", p.BindIP, hp, p.GuestPort)
+		bindMode := "direct"
+		if hp < 1024 {
+			bindMode = "fd-passed"
+		}
+		logf("ingress open %s:%d -> guest:%d (%s)", p.BindIP, hp, p.GuestPort, bindMode)
 		go ing.accept(el)
 		results = append(results, res)
 	}
@@ -114,27 +118,44 @@ func (ing *ingress) forward(hc net.Conn, guestPort uint16) {
 		_ = hc.Close()
 		return
 	}
+	hostAddr := hc.RemoteAddr().String()
+	tAccept := time.Now()
+	// FIONREAD at accept proves whether client bytes had already
+	// arrived in the kernel receive buffer by the time this goroutine
+	// started. If splice later reports h2g=0 with no error AND pending
+	// was >0 here, the bytes were race-dropped between the host
+	// kernel and io.Copy's first Read.
+	pending := hostRecvQueueBytes(hc)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	tDial := time.Now()
 	gc, err := gonet.DialContextTCP(ctx, ing.n.stack, tcpip.FullAddress{
 		NIC:  1,
 		Addr: tcpip.AddrFrom4Slice(net.ParseIP(GuestLeaseIP).To4()),
 		Port: guestPort,
 	}, ipv4.ProtocolNumber)
 	if err != nil {
-		logf("ingress dial guest:%d: %v", guestPort, err)
+		logf("ingress dial guest:%d: %v (accept->fail=%s)", guestPort, err, time.Since(tDial))
 		_ = hc.Close()
 		return
 	}
-	hostAddr := hc.RemoteAddr().String()
+	dialDur := time.Since(tDial)
+
+	tSplice := time.Now()
 	h2g, g2h, hErr, gErr := splice(hc, gc)
-	// Ingress is low-volume: log every splice end. Byte counts and
-	// per-direction errors are the only signal that a splice
-	// established but failed to forward data. Clean-close errors
-	// (io.EOF, net.ErrClosed) are filtered so a normal disconnect
-	// doesn't drown out the 0-byte signal.
-	logf("ingress %s -> guest:%d ended h2g=%d g2h=%d h2g_err=%v g2h_err=%v",
-		hostAddr, guestPort, h2g, g2h, realErr(hErr), realErr(gErr))
+	spliceDur := time.Since(tSplice)
+
+	// Race alarm: client wrote bytes that reached the kernel before we
+	// started forwarding, yet splice saw zero host->guest bytes and no
+	// error. This is the exact SSH "connection reset at kex" shape.
+	if pending > 0 && h2g == 0 && realErr(hErr) == nil {
+		logf("ALERT ingress race %s -> guest:%d: %d bytes pending at accept, splice h2g=0 clean EOF",
+			hostAddr, guestPort, pending)
+	}
+
+	logf("ingress %s -> guest:%d ended h2g=%d g2h=%d pending=%d dial=%s splice=%s total=%s h2g_err=%v g2h_err=%v",
+		hostAddr, guestPort, h2g, g2h, pending, dialDur, spliceDur, time.Since(tAccept), realErr(hErr), realErr(gErr))
 }
 
 func (ing *ingress) close() {
