@@ -81,7 +81,7 @@ func RefreshGuestBundle(ctx context.Context, cfg identity.Config, cache *StateCa
 	// re-generate the CA — the running guest already trusts them
 	// and they haven't changed. Pass nil; devmbundle.Build's writers
 	// skip empty entries.
-	in, err := devmbundle.BuildInputFor(snap.Cfg, "", daemonRuntimeDir, nil, nil, nil, nil)
+	in, err := devmbundle.BuildInputFor(snap.Cfg, "", daemonRuntimeDir, cfg.TLD, nil, nil, nil, nil)
 	if err != nil {
 		return RefreshSummary{}, fmt.Errorf("refresh-bundle: build input: %w", err)
 	}

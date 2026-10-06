@@ -23,7 +23,7 @@ import (
 // that is the caller's responsibility.
 func BuildInputFor(
 	cfg schema.Config,
-	repoRoot, daemonRuntimeDir string,
+	repoRoot, daemonRuntimeDir, tld string,
 	caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte,
 ) (BuildInput, error) {
 	commandsManifest, err := render.RenderCommandsManifest(cfg, repoRoot)
@@ -38,6 +38,7 @@ func BuildInputFor(
 		Cfg:                    cfg,
 		RepoRoot:               repoRoot,
 		DaemonRuntimeDir:       daemonRuntimeDir,
+		TLD:                    tld,
 		CARootPEM:              caPEM,
 		SSHAuthorizedPubkey:    sshAuthPub,
 		SSHHostPriv:            sshHostPriv,

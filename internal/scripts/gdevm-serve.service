@@ -4,6 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
+Environment=DEVM_TLD={{.TLD}}
 ExecStart=/usr/local/bin/gdevm serve
 Restart=always
 RestartSec=1

@@ -10,7 +10,7 @@ import (
 // rendered unit file has the shape systemd expects and points at the
 // gdevm binary path we expect inside the guest.
 func TestRenderGdevmServeUnit_ProducesSystemdService(t *testing.T) {
-	got := string(RenderGdevmServeUnit())
+	got := string(RenderGdevmServeUnit("e2e.test"))
 	assert.Contains(t, got, "[Unit]")
 	assert.Contains(t, got, "[Service]")
 	assert.Contains(t, got, "ExecStart=/usr/local/bin/gdevm serve")
@@ -25,7 +25,22 @@ func TestRenderGdevmServeUnit_ProducesSystemdService(t *testing.T) {
 // bundle fingerprinting relies on being stable across builds of the
 // same source.
 func TestRenderGdevmServeUnit_Deterministic(t *testing.T) {
-	a := RenderGdevmServeUnit()
-	b := RenderGdevmServeUnit()
+	a := RenderGdevmServeUnit("e2e.test")
+	b := RenderGdevmServeUnit("e2e.test")
 	assert.Equal(t, a, b)
+}
+
+// TestRenderGdevmServeUnit_CarriesTLD pins that the identity TLD lands
+// in the unit's environment for gdevm serve to read.
+func TestRenderGdevmServeUnit_CarriesTLD(t *testing.T) {
+	got := string(RenderGdevmServeUnit("e2e.test"))
+	assert.Contains(t, got, "Environment=DEVM_TLD=e2e.test")
+	assert.Contains(t, got, "ExecStart=/usr/local/bin/gdevm serve")
+}
+
+// TestRenderGdevmServeUnit_EmptyTLDRendersEmptyEnv pins that the
+// Environment line is still emitted for an empty TLD.
+func TestRenderGdevmServeUnit_EmptyTLDRendersEmptyEnv(t *testing.T) {
+	got := string(RenderGdevmServeUnit(""))
+	assert.Contains(t, got, "Environment=DEVM_TLD=\n")
 }

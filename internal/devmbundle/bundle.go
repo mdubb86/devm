@@ -30,6 +30,11 @@ type BuildInput struct {
 	// map.
 	DaemonRuntimeDir string
 
+	// TLD is the daemon's identity TLD (identity.Config.TLD). Threaded
+	// into gdevm-serve.service via RenderGdevmServeUnit so the in-guest
+	// handler can match preview.<project>.<tld>.
+	TLD string
+
 	CARootPEM []byte
 
 	SSHAuthorizedPubkey []byte
@@ -125,7 +130,7 @@ func Build(in BuildInput) ([]byte, error) {
 	// repo-less project still gets it. install.sh installs the unit
 	// file and (re)starts the service on every run, cold-start or
 	// bundle refresh alike.
-	if err := writeEntry(tw, "systemd/gdevm-serve.service", 0o644, render.RenderGdevmServeUnit()); err != nil {
+	if err := writeEntry(tw, "systemd/gdevm-serve.service", 0o644, render.RenderGdevmServeUnit(in.TLD)); err != nil {
 		return nil, fmt.Errorf("gdevm-serve unit entry: %w", err)
 	}
 

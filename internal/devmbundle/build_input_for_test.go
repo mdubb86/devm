@@ -12,7 +12,7 @@ func TestBuildInputFor_PopulatesGdevmAndCommandsManifest(t *testing.T) {
 	cfg := schema.Config{Project: schema.Project{Name: "p"}}
 
 	in, err := BuildInputFor(
-		cfg, "/tmp/repo", "/tmp/rt",
+		cfg, "/tmp/repo", "/tmp/rt", "e2e.test",
 		[]byte("ca"), []byte("ssh-pub"), []byte("ssh-priv"), []byte("host-pub"),
 	)
 	require.NoError(t, err)
@@ -20,6 +20,7 @@ func TestBuildInputFor_PopulatesGdevmAndCommandsManifest(t *testing.T) {
 	assert.Equal(t, cfg, in.Cfg)
 	assert.Equal(t, "/tmp/repo", in.RepoRoot)
 	assert.Equal(t, "/tmp/rt", in.DaemonRuntimeDir)
+	assert.Equal(t, "e2e.test", in.TLD)
 	assert.Equal(t, []byte("ca"), in.CARootPEM)
 	assert.Equal(t, []byte("ssh-pub"), in.SSHAuthorizedPubkey)
 	assert.NotEmpty(t, in.Gdevm, "must include gdevm bytes")
@@ -36,7 +37,7 @@ func TestBuildInputFor_IncludesDockerShimsWhenEnabled(t *testing.T) {
 	}
 
 	in, err := BuildInputFor(
-		cfg, "/tmp/repo", "/tmp/rt",
+		cfg, "/tmp/repo", "/tmp/rt", "e2e.test",
 		nil, nil, nil, nil,
 	)
 	require.NoError(t, err)
