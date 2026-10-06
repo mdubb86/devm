@@ -24,6 +24,8 @@ const popEndpoint = "http://192.168.127.1:81/pop"
 type popBody struct {
 	GuestPath string   `json:"guest_path"`
 	Native    bool     `json:"native,omitempty"`
+	IsDir     bool     `json:"is_dir,omitempty"`
+	IsHTML    bool     `json:"is_html,omitempty"`
 	OpenArgs  []string `json:"open_args,omitempty"`
 }
 
@@ -89,7 +91,13 @@ func popMain(args []string) int {
 		return 1
 	}
 
-	return doPopPost(popEndpoint, absPath, native, openArgs)
+	isDir, isHTML, err := classifyPopTarget(absPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gdevm pop: %v\n", err)
+		return 1
+	}
+
+	return doPopPost(popEndpoint, absPath, native, isDir, isHTML, openArgs)
 }
 
 // absolutizeGuestPath turns path into an absolute guest-side path.
@@ -106,13 +114,34 @@ func absolutizeGuestPath(path string) (string, error) {
 	return filepath.Clean(filepath.Join(cwd, path)), nil
 }
 
+// classifyPopTarget inspects a resolved absolute path and returns the
+// classification the daemon needs to pick a pop URL. A missing path
+// returns an error ("no such file: <path>") so pop stops before any
+// HTTP call.
+func classifyPopTarget(absPath string) (isDir bool, isHTML bool, err error) {
+	st, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, false, fmt.Errorf("no such file: %s", absPath)
+		}
+		return false, false, fmt.Errorf("stat %s: %w", absPath, err)
+	}
+	if st.IsDir() {
+		return true, false, nil
+	}
+	ext := strings.ToLower(filepath.Ext(absPath))
+	return false, ext == ".html" || ext == ".htm", nil
+}
+
 // doPopPost sends the pop request and translates the daemon's response
 // into a process exit code. The daemon returns 200 with the opened
 // target on stdout; non-2xx surfaces as stderr with a non-zero exit.
-func doPopPost(endpoint, guestPath string, native bool, openArgs []string) int {
+func doPopPost(endpoint, guestPath string, native, isDir, isHTML bool, openArgs []string) int {
 	body, _ := json.Marshal(popBody{
 		GuestPath: guestPath,
 		Native:    native,
+		IsDir:     isDir,
+		IsHTML:    isHTML,
 		OpenArgs:  openArgs,
 	})
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))

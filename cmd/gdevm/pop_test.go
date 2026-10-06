@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,7 +23,7 @@ func TestDoPopPost_SendsBodyAndStreamsResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code := doPopPost(srv.URL, "/home/devm/foo.html", false, nil)
+	code := doPopPost(srv.URL, "/home/devm/foo.html", false, false, false, nil)
 	assert.Equal(t, 0, code)
 	assert.Equal(t, "/home/devm/foo.html", got.GuestPath)
 	assert.False(t, got.Native)
@@ -37,14 +38,16 @@ func TestDoPopPost_PassesNativeAndOpenArgs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	code := doPopPost(srv.URL, "/home/devm/foo.html", true, []string{"-a", "Preview"})
+	code := doPopPost(srv.URL, "/home/devm/foo.html", true, true, true, []string{"-a", "Preview"})
 	assert.Equal(t, 0, code)
 	assert.True(t, got.Native)
+	assert.True(t, got.IsDir)
+	assert.True(t, got.IsHTML)
 	assert.Equal(t, []string{"-a", "Preview"}, got.OpenArgs)
 }
 
 func TestDoPopPost_TransportErrorExit1(t *testing.T) {
-	code := doPopPost("http://127.0.0.1:1/pop", "/x/y", false, nil)
+	code := doPopPost("http://127.0.0.1:1/pop", "/x/y", false, false, false, nil)
 	assert.Equal(t, 1, code)
 }
 
@@ -53,7 +56,7 @@ func TestDoPopPost_404Exit2(t *testing.T) {
 		http.Error(w, "no such file", http.StatusNotFound)
 	}))
 	defer srv.Close()
-	assert.Equal(t, 2, doPopPost(srv.URL, "/x/y", false, nil))
+	assert.Equal(t, 2, doPopPost(srv.URL, "/x/y", false, false, false, nil))
 }
 
 func TestAbsolutizeGuestPath_Absolute(t *testing.T) {
@@ -90,4 +93,38 @@ func TestPopMain_RequiresPath(t *testing.T) {
 	})
 	code := popMain(nil)
 	assert.Equal(t, 2, code)
+}
+
+func TestClassifyPopTarget_HTMLByExtension(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.html", "b.HTML", "c.htm", "d.Htm"} {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, []byte("<p>x</p>"), 0o644))
+		isDir, isHTML, err := classifyPopTarget(path)
+		require.NoError(t, err, name)
+		assert.False(t, isDir, name)
+		assert.True(t, isHTML, name)
+	}
+}
+
+func TestClassifyPopTarget_DirIsDirNotHTML(t *testing.T) {
+	isDir, isHTML, err := classifyPopTarget(t.TempDir())
+	require.NoError(t, err)
+	assert.True(t, isDir)
+	assert.False(t, isHTML)
+}
+
+func TestClassifyPopTarget_PlainFileNeitherDirNorHTML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.txt")
+	require.NoError(t, os.WriteFile(path, []byte("y"), 0o644))
+	isDir, isHTML, err := classifyPopTarget(path)
+	require.NoError(t, err)
+	assert.False(t, isDir)
+	assert.False(t, isHTML)
+}
+
+func TestClassifyPopTarget_MissingErrors(t *testing.T) {
+	_, _, err := classifyPopTarget("/no/such/path.html")
+	require.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "no such file"), err.Error())
 }

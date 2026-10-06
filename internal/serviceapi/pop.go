@@ -73,6 +73,8 @@ var popTartExecCat = func(ctx context.Context, vmName, guestPath, macDest string
 type PopRequest struct {
 	GuestPath string   `json:"guest_path"`
 	Native    bool     `json:"native,omitempty"`
+	IsDir     bool     `json:"is_dir,omitempty"`
+	IsHTML    bool     `json:"is_html,omitempty"`
 	OpenArgs  []string `json:"open_args,omitempty"`
 }
 
