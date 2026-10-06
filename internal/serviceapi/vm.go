@@ -826,6 +826,14 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 				http.Error(w, fmt.Sprintf("register reserved filestash route: %v", err), http.StatusInternalServerError)
 				return
 			}
+
+			// Register preview.<project>.<cfg.TLD> → projectIP:8940 so
+			// browsers reach the guest's gdevm preview server. Same
+			// hard-fail rationale as the filestash route above.
+			if err := routes.applyReservedRoute(req.Name, reservedPreviewRoute(req.Name, projectIP, cfg.TLD)); err != nil {
+				http.Error(w, fmt.Sprintf("register reserved preview route: %v", err), http.StatusInternalServerError)
+				return
+			}
 		}
 
 		if cache != nil {

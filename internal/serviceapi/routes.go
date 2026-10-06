@@ -87,14 +87,16 @@ const ReservedRoutePrefix = "_devm."
 // isDaemonReservedHostname reports whether hostname belongs to either
 // family of daemon-managed reserved route: the underscore-prefixed
 // synthetic routes (reservedHealthRoute) or the exact
-// files.<project>.<tld> route (reservedFilestashRoute) — the latter
-// deliberately has no underscore prefix, since it must be a normal
-// hostname a browser can reach. Apply's "carry reserved routes across
+// files.<project>.<tld> / preview.<project>.<tld> routes
+// (reservedFilestashRoute, reservedPreviewRoute) — the latter
+// deliberately have no underscore prefix, since they must be normal
+// hostnames a browser can reach. Apply's "carry reserved routes across
 // the swap" step and applyReservedRoute's own guard both need to
 // recognize both families, or the files route would get silently
 // dropped on the next `devm route`/`devm reconcile` call.
 func isDaemonReservedHostname(hostname, projectID, tld string) bool {
-	return strings.HasPrefix(hostname, ReservedRoutePrefix) || IsReservedFilesHostname(hostname, projectID, tld)
+	return strings.HasPrefix(hostname, ReservedRoutePrefix) || IsReservedFilesHostname(hostname, projectID, tld) ||
+		IsReservedPreviewHostname(hostname, projectID, tld)
 }
 
 // Apply replaces the named project's user-declared route set with the
@@ -127,6 +129,9 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 	for _, item := range items {
 		if IsReservedFilesHostname(item.Hostname, projectID, r.tld) {
 			return FormatReservedFilesCollisionError(item.Hostname)
+		}
+		if IsReservedPreviewHostname(item.Hostname, projectID, r.tld) {
+			return FormatReservedPreviewCollisionError(item.Hostname)
 		}
 	}
 

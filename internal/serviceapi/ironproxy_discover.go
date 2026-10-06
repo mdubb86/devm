@@ -281,6 +281,14 @@ func recoverProjectState(cfg identity.Config, routes *Routes, projectID string) 
 			daemonlog.Errorf("routes: recover filestash reserved route for %s: %v (continuing)", projectID, err)
 		}
 	}
+
+	// Re-install the reserved preview route (preview.<project>.<tld>)
+	// for the same reason as the filestash route above.
+	if snap.ProjectIP != "" {
+		if err := routes.applyReservedRoute(projectID, reservedPreviewRoute(projectID, snap.ProjectIP, cfg.TLD)); err != nil {
+			daemonlog.Errorf("routes: recover preview reserved route for %s: %v (continuing)", projectID, err)
+		}
+	}
 }
 
 // parseIronProxyProcesses extracts iron-proxy entries from `ps -axo

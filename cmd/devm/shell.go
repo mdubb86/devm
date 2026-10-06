@@ -196,6 +196,9 @@ func rejectReservedFilesHostname(pcfg schema.Config, ident identity.Config) erro
 		if svc.Hostname != "" && serviceapi.IsReservedFilesHostname(svc.Hostname, pcfg.Project.Name, ident.TLD) {
 			return fmt.Errorf("service %q: %w", name, serviceapi.FormatReservedFilesCollisionError(svc.Hostname))
 		}
+		if svc.Hostname != "" && serviceapi.IsReservedPreviewHostname(svc.Hostname, pcfg.Project.Name, ident.TLD) {
+			return fmt.Errorf("service %q: %w", name, serviceapi.FormatReservedPreviewCollisionError(svc.Hostname))
+		}
 	}
 	return nil
 }
@@ -324,6 +327,9 @@ func shouldSkipAutoInstall(existing map[string][]serviceapi.Route, project, tld 
 			continue
 		}
 		if serviceapi.IsReservedFilesHostname(r.Hostname, project, tld) {
+			continue
+		}
+		if serviceapi.IsReservedPreviewHostname(r.Hostname, project, tld) {
 			continue
 		}
 		return true

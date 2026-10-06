@@ -249,6 +249,13 @@ func TestShouldSkipAutoInstall(t *testing.T) {
 		}
 		assert.True(t, shouldSkipAutoInstall(existing, "proj", "test"))
 	})
+
+	t.Run("only reserved preview route — do not skip", func(t *testing.T) {
+		existing := map[string][]serviceapi.Route{
+			"proj": {{Hostname: "preview.proj.test", BackendPort: 8940, Mode: serviceapi.ModeVM, Project: "proj"}},
+		}
+		assert.False(t, shouldSkipAutoInstall(existing, "proj", "test"))
+	})
 }
 
 // TestRejectReservedFilesHostname pins the synchronous, exit-code-visible
@@ -285,6 +292,30 @@ func TestRejectReservedFilesHostname(t *testing.T) {
 
 	t.Run("no services — accepted", func(t *testing.T) {
 		pcfg := schema.Config{Project: schema.Project{Name: "myproj"}}
+		assert.NoError(t, rejectReservedFilesHostname(pcfg, ident))
+	})
+
+	t.Run("declared hostname matches the reserved preview name — rejected", func(t *testing.T) {
+		pcfg := schema.Config{
+			Project: schema.Project{Name: "myproj"},
+			Services: map[string]schema.Service{
+				"previewer": {Port: 9999, Hostname: "preview.myproj.test"},
+			},
+		}
+		err := rejectReservedFilesHostname(pcfg, ident)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "preview.myproj.test")
+		assert.Contains(t, err.Error(), "reserved for devm's bundled preview server")
+		assert.Contains(t, err.Error(), "previewer")
+	})
+
+	t.Run("user-owned domain starting with preview. is not reserved", func(t *testing.T) {
+		pcfg := schema.Config{
+			Project: schema.Project{Name: "myproj"},
+			Services: map[string]schema.Service{
+				"web": {Port: 3000, Hostname: "preview.mysite.com"},
+			},
+		}
 		assert.NoError(t, rejectReservedFilesHostname(pcfg, ident))
 	})
 }

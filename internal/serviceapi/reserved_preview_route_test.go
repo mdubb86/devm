@@ -55,3 +55,24 @@ func TestFormatReservedPreviewCollisionError_MessageHints(t *testing.T) {
 		t.Fatalf("err must mention the preview service: %q", msg)
 	}
 }
+
+// TestRoutes_Apply_RejectsPreviewReservedName mirrors the files.* guard:
+// declaring preview.<project>.<tld> must fail Apply loud.
+func TestRoutes_Apply_RejectsPreviewReservedName(t *testing.T) {
+	r := NewRoutes("test")
+	err := r.Apply("myproj", []Route{
+		{Hostname: "preview.myproj.test", BackendHost: "127.0.0.1", BackendPort: 8080, Project: "myproj"},
+	})
+	if err == nil {
+		t.Fatal("expected rejection of preview.* hostname")
+	}
+	if !strings.Contains(err.Error(), "reserved for devm's bundled preview server") {
+		t.Fatalf("wrong error: %v", err)
+	}
+
+	if err := r.Apply("myproj", []Route{
+		{Hostname: "preview.mysite.com", BackendHost: "127.0.0.1", BackendPort: 8080, Project: "myproj"},
+	}); err != nil {
+		t.Fatalf("user-owned preview.* domain must stay accepted: %v", err)
+	}
+}

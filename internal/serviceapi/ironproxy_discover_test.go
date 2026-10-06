@@ -227,6 +227,12 @@ func TestRecoverProjectState_RestoresReservedHealthRoute(t *testing.T) {
 	require.True(t, ok, "recoverProjectState must install the reserved filestash route %q", reservedFilesHost)
 	assert.Equal(t, "127.42.0.17", rf.BackendHost)
 	assert.Equal(t, filestashServePort, rf.BackendPort)
+
+	reservedPreviewHost := "preview." + projectID + "." + identity.Prod.TLD
+	rp, ok := routes.Lookup(reservedPreviewHost, projectID)
+	require.True(t, ok, "recoverProjectState must install the reserved preview route %q", reservedPreviewHost)
+	assert.Equal(t, "127.42.0.17", rp.BackendHost)
+	assert.Equal(t, previewServePort, rp.BackendPort)
 }
 
 // After a daemon restart, recoverProjectState must re-serve the adopted
