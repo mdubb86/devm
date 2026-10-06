@@ -37,7 +37,7 @@ func stubPopExecOpen(t *testing.T) *[]string {
 	return &captured
 }
 
-func TestHandlePop_Default_OpensFilestashURL(t *testing.T) {
+func TestHandlePop_Default_OpensFilestashViewURL(t *testing.T) {
 	captured := stubPopExecOpen(t)
 
 	body, err := json.Marshal(PopRequest{GuestPath: "/home/devm/foo.html"})
@@ -50,6 +50,28 @@ func TestHandlePop_Default_OpensFilestashURL(t *testing.T) {
 	require.Len(t, *captured, 1, "default opens exactly one arg (URL)")
 	assert.Equal(t, "https://files.myproj.test/view/home/devm/foo.html", (*captured)[0])
 	assert.Equal(t, "https://files.myproj.test/view/home/devm/foo.html\n", rec.Body.String())
+}
+
+func TestHandlePop_IsHTML_RoutesToPreview(t *testing.T) {
+	captured := stubPopExecOpen(t)
+	body, err := json.Marshal(PopRequest{GuestPath: "/home/devm/x.html", IsHTML: true})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/pop", strings.NewReader(string(body)))
+	handlePop(rec, req, identity.Prod, "myproj")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, []string{"https://preview.myproj.test/home/devm/x.html"}, *captured)
+}
+
+func TestHandlePop_IsDir_RoutesToFilestashListing(t *testing.T) {
+	captured := stubPopExecOpen(t)
+	body, err := json.Marshal(PopRequest{GuestPath: "/home/devm/dir", IsDir: true})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/pop", strings.NewReader(string(body)))
+	handlePop(rec, req, identity.Prod, "myproj")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, []string{"https://files.myproj.test/files/home/devm/dir/"}, *captured)
 }
 
 func TestHandlePop_Default_WithOpenArgs(t *testing.T) {
@@ -95,7 +117,7 @@ func TestHandlePop_RejectsMissingPath(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-func TestResolvePopTarget_Default_BuildsFilestashURL(t *testing.T) {
+func TestResolvePopTarget_Default_BuildsFilestashViewURL(t *testing.T) {
 	got, err := resolvePopTarget(context.Background(), identity.Prod, "proj", "/home/devm/path/with spaces.txt", false, false, false)
 	require.NoError(t, err)
 	assert.Equal(t, "https://files.proj.test/view/home/devm/path/with%20spaces.txt", got)

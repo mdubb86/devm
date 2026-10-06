@@ -129,9 +129,9 @@ var errPopNoSuchMirror = errors.New("pop: guest path not in any mirror and tart-
 
 // resolvePopTarget returns the Mac-side argument to pass to `open`:
 //
-//   - native=false: the project's filestash URL for guestPath.
-//     Filestash serves the whole guest fs at /files/local/, so no
-//     mirror lookup is needed.
+//   - native=false: the dispatched URL from popTargetURL — the preview
+//     server for HTML, filestash's listing for a directory, filestash's
+//     single-file view otherwise. No mirror lookup is needed.
 //   - native=true + guest path in-mirror: the live Mac mirror path.
 //     Edits sync back to the guest via the usual mutagen loop.
 //   - native=true + out-of-mirror: a scratch copy under PopScratchRoot
