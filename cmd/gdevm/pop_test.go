@@ -46,6 +46,31 @@ func TestDoPopPost_PassesNativeAndOpenArgs(t *testing.T) {
 	assert.Equal(t, []string{"-a", "Preview"}, got.OpenArgs)
 }
 
+func TestDoPopPost_SingleFlagNotSwapped(t *testing.T) {
+	cases := []struct {
+		name          string
+		isDir, isHTML bool
+	}{
+		{"dir only", true, false},
+		{"html only", false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got popBody
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			code := doPopPost(srv.URL, "/home/devm/x", false, c.isDir, c.isHTML, nil)
+			assert.Equal(t, 0, code)
+			assert.Equal(t, c.isDir, got.IsDir)
+			assert.Equal(t, c.isHTML, got.IsHTML)
+		})
+	}
+}
+
 func TestDoPopPost_TransportErrorExit1(t *testing.T) {
 	code := doPopPost("http://127.0.0.1:1/pop", "/x/y", false, false, false, nil)
 	assert.Equal(t, 1, code)
@@ -124,7 +149,20 @@ func TestClassifyPopTarget_PlainFileNeitherDirNorHTML(t *testing.T) {
 }
 
 func TestClassifyPopTarget_MissingErrors(t *testing.T) {
-	_, _, err := classifyPopTarget("/no/such/path.html")
+	missing := filepath.Join(t.TempDir(), "missing.html")
+	_, _, err := classifyPopTarget(missing)
 	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "no such file"), err.Error())
+	assert.ErrorContains(t, err, "no such file")
+}
+
+func TestClassifyPopTarget_StatErrorWrapped(t *testing.T) {
+	reg := filepath.Join(t.TempDir(), "regular.txt")
+	require.NoError(t, os.WriteFile(reg, []byte("x"), 0o644))
+	// A regular file used as a parent directory makes stat fail with
+	// ENOTDIR on Linux and macOS: a non-ENOENT error, no chmod or
+	// non-root uid needed.
+	_, _, err := classifyPopTarget(filepath.Join(reg, "child.html"))
+	require.Error(t, err)
+	assert.True(t, strings.HasPrefix(err.Error(), "stat "), err.Error())
+	assert.NotContains(t, err.Error(), "no such file")
 }
