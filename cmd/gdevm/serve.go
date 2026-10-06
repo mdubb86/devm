@@ -27,6 +27,33 @@ func serveAddr() string {
 	return defaultServeAddr
 }
 
+// buildServeHandler composes the gdevm serve top-level handler. When
+// tld is empty the preview route is disabled: every request goes to the
+// health mux, which only answers /v1/health.
+func buildServeHandler(started time.Time, tld string) http.Handler {
+	return buildServeHandlerWithRoot(started, tld, "/")
+}
+
+// buildServeHandlerWithRoot is buildServeHandler with the preview file
+// root injectable, so tests don't depend on the real guest filesystem.
+func buildServeHandlerWithRoot(started time.Time, tld, root string) http.Handler {
+	healthMux := http.NewServeMux()
+	healthMux.Handle("/v1/health", healthHandler(started))
+
+	if tld == "" {
+		return healthMux
+	}
+
+	preview := previewFileServerFromRoot(root)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isPreviewHost(r.Host, tld) {
+			preview.ServeHTTP(w, r)
+			return
+		}
+		healthMux.ServeHTTP(w, r)
+	})
+}
+
 // serveMain starts gdevm's guest-side daemon: a long-running process
 // bound to a loopback address, serving the v1 HTTP API, until it
 // receives SIGTERM/SIGINT. Returns 0 on clean shutdown, 1 on bind
@@ -39,8 +66,6 @@ func serveMain(args []string) int {
 	}
 
 	started := time.Now()
-	mux := http.NewServeMux()
-	mux.Handle("/v1/health", healthHandler(started))
 
 	// Register the shutdown signal handler before the listener binds,
 	// and therefore before the bound address becomes observable to
@@ -62,7 +87,7 @@ func serveMain(args []string) int {
 		addrPublishedHookForTest()
 	}
 
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{Handler: buildServeHandler(started, os.Getenv("DEVM_TLD"))}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
 

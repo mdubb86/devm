@@ -1,8 +1,10 @@
 package main
 
 import (
+	"net/http/httptest"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -101,4 +103,58 @@ func TestServeMain_SignalRegisteredBeforeListenerBinds(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("serve did not exit within 3s of the signal sent at address-publish time")
 	}
+}
+
+func TestBuildHandler_HealthStillWorksWithoutTLD(t *testing.T) {
+	h := buildServeHandler(time.Now(), "")
+
+	r := httptest.NewRequest("GET", "/v1/health", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	require.Equal(t, 200, w.Code)
+}
+
+func TestBuildHandler_PreviewRequests404WhenTLDEmpty(t *testing.T) {
+	h := buildServeHandler(time.Now(), "")
+
+	r := httptest.NewRequest("GET", "/some/file", nil)
+	r.Host = "preview.sewtrue.test"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	require.Equal(t, 404, w.Code)
+}
+
+func TestBuildHandler_DirectHealthProbeStillWorksWhenTLDSet(t *testing.T) {
+	h := buildServeHandler(time.Now(), "test")
+
+	// Direct health probe arrives with Host = IP:port, not a preview name.
+	r := httptest.NewRequest("GET", "/v1/health", nil)
+	r.Host = "192.168.127.5:8940"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	require.Equal(t, 200, w.Code)
+}
+
+func TestBuildHandler_PreviewHostServesFile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644))
+
+	h := buildServeHandlerWithRoot(time.Now(), "test", dir)
+
+	r := httptest.NewRequest("GET", "/a.txt", nil)
+	r.Host = "preview.sewtrue.test"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	require.Equal(t, 200, w.Code)
+	require.Equal(t, "x", w.Body.String())
+}
+
+func TestBuildHandler_NonPreviewHostFallsThroughToHealthMux(t *testing.T) {
+	h := buildServeHandler(time.Now(), "test")
+
+	r := httptest.NewRequest("GET", "/anything", nil)
+	r.Host = "files.sewtrue.test"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	require.Equal(t, 404, w.Code)
 }
