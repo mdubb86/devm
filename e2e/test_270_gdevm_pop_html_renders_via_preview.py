@@ -116,6 +116,8 @@ HTML
         # stylesheets loaded via computed styles.
         with open_page(expected_url) as page:
             page.wait_for_selector("h1#headline", timeout=15000)
+            # open_page only waits for domcontentloaded; stylesheets must finish loading before reading computed styles.
+            page.wait_for_load_state("load")
             styles = page.evaluate("""() => {
                 const body = document.body;
                 const h1 = document.querySelector('h1');
