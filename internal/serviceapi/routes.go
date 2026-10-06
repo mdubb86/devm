@@ -121,8 +121,9 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 		}
 	}
 
-	// Reject any incoming item whose hostname matches the reserved
-	// filestash-route name for THIS project. Exact-match (not prefix),
+	// Reject any incoming item whose hostname matches a reserved
+	// route name (filestash files.<project>.<tld> or preview
+	// preview.<project>.<tld>) for THIS project. Exact-match (not prefix),
 	// so user-owned hostnames like files.mysite.com stay valid.
 	// Migration: a shelfmates-style devm.yaml that predates this rule
 	// hits this error and must be updated — see spec §Review Focus #1.

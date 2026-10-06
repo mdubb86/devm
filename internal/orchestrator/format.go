@@ -30,9 +30,10 @@ type StatusResult struct {
 
 	// TLD is the daemon identity's top-level domain ("test" for prod,
 	// "e2e.test" for the e2e slot). Needed by formatRouting to
-	// recognize the reserved files.<project>.<tld> filestash route
-	// (serviceapi.IsReservedFilesHostname) so it's filtered out of the
-	// routes table the same way the `_devm.` prefix family is.
+	// recognize the reserved files.<project>.<tld> filestash and
+	// preview.<project>.<tld> routes (serviceapi.IsReservedFilesHostname,
+	// serviceapi.IsReservedPreviewHostname) so they're filtered out of
+	// the routes table the same way the `_devm.` prefix family is.
 	TLD string
 
 	// Egress is the project's current egress policy state (restricted
@@ -250,7 +251,8 @@ func formatRouting(r serviceapi.RoutingStatus, tld string) string {
 	b.WriteString("  routes:\n")
 	for _, route := range r.Routes {
 		// Reserved daemon-internal routes (the "_devm." health-probe
-		// hostname, and the files.<project>.<tld> filestash route)
+		// hostname, the files.<project>.<tld> filestash route, and the
+		// preview.<project>.<tld> preview route)
 		// aren't something the user declared and aren't actionable
 		// from this table — printing them here would just be clutter.
 		// They still round-trip through the JSON output.
@@ -258,6 +260,9 @@ func formatRouting(r serviceapi.RoutingStatus, tld string) string {
 			continue
 		}
 		if serviceapi.IsReservedFilesHostname(route.Hostname, route.Project, tld) {
+			continue
+		}
+		if serviceapi.IsReservedPreviewHostname(route.Hostname, route.Project, tld) {
 			continue
 		}
 		modeTag := ""

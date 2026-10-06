@@ -346,9 +346,10 @@ func TestFormatStatusText_VMMode_WithRoutes(t *testing.T) {
 }
 
 func TestFormatStatusText_FiltersReservedRoutes(t *testing.T) {
-	// Both reserved route families — the `_devm.` prefix health route
-	// and the files.<project>.<tld> filestash route (no underscore
-	// prefix, identified by exact hostname shape instead) — must be
+	// All reserved route families — the `_devm.` prefix health route,
+	// the files.<project>.<tld> filestash route and the
+	// preview.<project>.<tld> preview route (no underscore prefix,
+	// identified by exact hostname shape instead) — must be
 	// hidden from the routes table; only the user-declared route
 	// should render.
 	res := StatusResult{HasProject: true,
@@ -358,12 +359,14 @@ func TestFormatStatusText_FiltersReservedRoutes(t *testing.T) {
 			Routes: []serviceapi.RouteStatus{
 				{Hostname: "_devm.foo.test", Dial: "127.42.0.1:8940", Mode: "vm", Project: "foo"},
 				{Hostname: "files.foo.test", Dial: "127.42.0.1:8941", Mode: "vm", Project: "foo"},
+				{Hostname: "preview.foo.test", Dial: "127.42.0.1:8940", Mode: "vm", Project: "foo"},
 				{Hostname: "app.foo.test", Dial: "localhost:3000", Mode: "vm", Project: "foo"},
 			},
 		},
 	}
 	text := FormatStatusText(res)
 	assert.Contains(t, text, "app.foo.test")
+	assert.NotContains(t, text, "preview.foo.test")
 	assert.NotContains(t, text, "_devm.foo.test")
 	assert.NotContains(t, text, "files.foo.test")
 }

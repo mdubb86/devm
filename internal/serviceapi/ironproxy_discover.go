@@ -269,22 +269,17 @@ func recoverProjectState(cfg identity.Config, routes *Routes, projectID string) 
 		if err := routes.applyReservedRoute(projectID, reservedHealthRoute(projectID, snap.ProjectIP, cfg.TLD)); err != nil {
 			daemonlog.Errorf("routes: recover reserved health route for %s: %v (continuing)", projectID, err)
 		}
-	}
 
-	// Re-install the reserved filestash route (files.<project>.<tld>)
-	// that /vm/start's applyReservedRoute registers on a cold start —
-	// same rationale as the health route above: without this, an
-	// adopted project loses its file-browser route across a daemon
-	// restart.
-	if snap.ProjectIP != "" {
+		// Re-install the reserved filestash route
+		// (files.<project>.<tld>) for the same reason: without this,
+		// an adopted project loses its file-browser route across a
+		// daemon restart.
 		if err := routes.applyReservedRoute(projectID, reservedFilestashRoute(projectID, snap.ProjectIP, cfg.TLD)); err != nil {
 			daemonlog.Errorf("routes: recover filestash reserved route for %s: %v (continuing)", projectID, err)
 		}
-	}
 
-	// Re-install the reserved preview route (preview.<project>.<tld>)
-	// for the same reason as the filestash route above.
-	if snap.ProjectIP != "" {
+		// Re-install the reserved preview route
+		// (preview.<project>.<tld>), same rationale.
 		if err := routes.applyReservedRoute(projectID, reservedPreviewRoute(projectID, snap.ProjectIP, cfg.TLD)); err != nil {
 			daemonlog.Errorf("routes: recover preview reserved route for %s: %v (continuing)", projectID, err)
 		}

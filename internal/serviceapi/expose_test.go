@@ -46,6 +46,9 @@ func TestComputeExposeMap_ServicesAndSSH(t *testing.T) {
 	if p := byGuest[gdevmServePort]; p.HostPort != gdevmServePort || p.BindIP != "127.42.0.1" {
 		t.Errorf("gdevm-serve: want host %d bind 127.42.0.1, got %+v", gdevmServePort, p)
 	}
+	if p := byGuest[previewServePort]; p.HostPort != previewServePort || p.BindIP != "127.42.0.1" {
+		t.Errorf("preview: want host %d bind 127.42.0.1 (shares gdevm-serve's port), got %+v", previewServePort, p)
+	}
 	if p := byGuest[filestashServePort]; p.HostPort != filestashServePort || p.BindIP != "127.42.0.1" {
 		t.Errorf("filestash: want host %d bind 127.42.0.1, got %+v", filestashServePort, p)
 	}

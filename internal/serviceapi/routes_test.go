@@ -478,6 +478,26 @@ func TestRoutes_Apply_PreservesReservedRoutes(t *testing.T) {
 	assert.False(t, ok, "the prior user route must still be replaced, not accumulated")
 }
 
+// TestRoutes_Apply_PreservesReservedPreviewRoute pins that the
+// preview.<project>.<tld> reservation, installed outside Apply, survives
+// a later Apply of user routes (isDaemonReservedHostname carry-over).
+func TestRoutes_Apply_PreservesReservedPreviewRoute(t *testing.T) {
+	r := NewRoutes(identity.Prod.TLD)
+	require.NoError(t, r.applyReservedRoute("proj-a", reservedPreviewRoute("proj-a", "127.42.0.1", identity.Prod.TLD)))
+	host := "preview.proj-a." + identity.Prod.TLD
+
+	require.NoError(t, r.Apply("proj-a", []Route{
+		{Hostname: "app.proj-a.test", BackendPort: 3000, Mode: ModeVM, Project: "proj-a"},
+	}))
+
+	reserved, ok := r.hostnameToRoute[host]
+	require.True(t, ok, "reserved preview route must survive Apply")
+	assert.Equal(t, previewServePort, reserved.BackendPort)
+	assert.Equal(t, "127.42.0.1", reserved.BackendHost)
+	_, ok = r.hostnameToRoute["app.proj-a.test"]
+	assert.True(t, ok, "user route must land alongside the reserved route")
+}
+
 // TestRoutes_Apply_RejectsReservedHostnameInBatch pins that a caller
 // cannot smuggle a reserved hostname through the public Apply path —
 // only applyReservedRoute (server-internal, used by /vm/start) may set

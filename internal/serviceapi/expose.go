@@ -45,6 +45,11 @@ func computeExposeMap(cfg schema.Config, projectIP string) []softnet.ExposePort 
 		BindIP:    projectIP,
 		HostPort:  gdevmServePort,
 	})
+	// The reserved preview.<project>.<tld> route dials
+	// projectIP:previewServePort, which is the same port as
+	// gdevmServePort (the preview file server is served by `gdevm
+	// serve`), so the entry above already forwards it; a second entry
+	// for the same guest port would be a duplicate.
 	// filestash is always exposed, same as gdevm-serve — the Mac
 	// daemon's reserved files.<project>.<tld> route (see
 	// reservedFilestashRoute) dials projectIP:filestashServePort

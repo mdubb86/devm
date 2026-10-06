@@ -185,9 +185,11 @@ func requireRunningVM(ctx context.Context, ident identity.Config, cfg schema.Con
 }
 
 // rejectReservedFilesHostname returns a loud error if any service in
-// cfg declares the reserved files.<project>.<tld> hostname — that
-// name is owned exclusively by devm's bundled filestash service (see
-// serviceapi.reservedFilestashRoute). Shared by `devm validate` (pure
+// cfg declares a reserved hostname: files.<project>.<tld> (owned by
+// devm's bundled filestash service, see
+// serviceapi.reservedFilestashRoute) or preview.<project>.<tld>
+// (owned by the gdevm preview server, see
+// serviceapi.reservedPreviewRoute). Shared by `devm validate` (pure
 // config check) and runShellFlow (`devm start`/`devm shell`/`devm
 // reconcile`, the cold-start path) so the rule is enforced identically
 // whether or not a VM is involved.
@@ -219,9 +221,10 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	if err != nil {
 		return err
 	}
-	// Reject a devm.yaml declaring the reserved files.<project>.<tld>
-	// hostname before any cold-start work begins — the route-apply
-	// collision check (see serviceapi.IsReservedFilesHostname) only
+	// Reject a devm.yaml declaring a reserved files.<project>.<tld> or
+	// preview.<project>.<tld> hostname before any cold-start work
+	// begins — the route-apply collision check (see
+	// serviceapi.IsReservedFilesHostname) only
 	// runs in a best-effort background goroutine below, whose result
 	// never reaches this command's exit code, so without this
 	// synchronous gate the collision would silently leave the user's
@@ -314,13 +317,14 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 // alone for project. existing is a /routes listing (ListRoutes).
 //
 // The daemon always carries a reserved `_devm.<project>.test` health
-// route and a reserved `files.<project>.<tld>` filestash route for a
-// running project (both registered at /vm/start) — neither alone must
-// read as "the user already has routes installed," or auto-install
-// would skip on every cold start and a project's actual services
-// would never get routed in vm mode. Skip only when at least one of
-// the project's routes is user-declared (not the `_devm.` prefix and
-// not the reserved filestash hostname).
+// route, a reserved `files.<project>.<tld>` filestash route and a
+// reserved `preview.<project>.<tld>` preview route for a running
+// project (all registered at /vm/start) — none of them must read as
+// "the user already has routes installed," or auto-install would skip
+// on every cold start and a project's actual services would never get
+// routed in vm mode. Skip only when at least one of the project's
+// routes is user-declared (not the `_devm.` prefix and not a reserved
+// filestash or preview hostname).
 func shouldSkipAutoInstall(existing map[string][]serviceapi.Route, project, tld string) bool {
 	for _, r := range existing[project] {
 		if strings.HasPrefix(r.Hostname, serviceapi.ReservedRoutePrefix) {
