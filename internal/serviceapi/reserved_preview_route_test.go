@@ -51,7 +51,7 @@ func TestFormatReservedPreviewCollisionError_MessageHints(t *testing.T) {
 	if !strings.Contains(msg, `"preview.sewtrue.test"`) {
 		t.Fatalf("err must name the colliding hostname: %q", msg)
 	}
-	if !strings.Contains(msg, "preview") {
+	if !strings.Contains(msg, "reserved for devm's bundled preview server") {
 		t.Fatalf("err must mention the preview service: %q", msg)
 	}
 }
