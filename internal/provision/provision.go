@@ -75,6 +75,13 @@ type Provisioner struct {
 	// Empty ⇒ no identity read is attempted (see gitIdentity).
 	MacCwd string
 
+	// TLD is the daemon's identity TLD (identity.Config.TLD). Threaded
+	// into devmbundle.BuildInput so RenderGdevmServeUnit stamps it into
+	// the guest's gdevm-serve.service as Environment=DEVM_TLD=<tld> — the
+	// signal the guest-side preview mux reads via os.Getenv to decide
+	// whether to enable the preview.<project>.<tld> file-serving route.
+	TLD string
+
 	// DaemonRuntimeDir is the daemon's runtime directory (identity.
 	// Config.RuntimeDir()), threaded into devmbundle.Build's BuildInput
 	// as the root of RenderTemplates' scratch namespace.
@@ -391,6 +398,7 @@ func (p *Provisioner) buildBundle() ([]byte, error) {
 		Cfg:                    p.Cfg,
 		RepoRoot:               p.WorkspaceVMPath,
 		DaemonRuntimeDir:       p.DaemonRuntimeDir,
+		TLD:                    p.TLD,
 		CARootPEM:              p.CARootPEM,
 		SSHAuthorizedPubkey:    p.SSHAuthorizedPubkey,
 		SSHHostPriv:            p.SSHHostPriv,

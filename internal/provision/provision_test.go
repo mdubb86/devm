@@ -336,6 +336,37 @@ func TestRunEnforced_RoutingOnlyServiceOmittedButProcessServicesStarted(t *testi
 	assert.NotContains(t, script, "routing-only.service")
 }
 
+func TestBuildBundle_StampsTLDIntoGdevmServeUnit(t *testing.T) {
+	// Pin the TLD→Provisioner→BuildInput→RenderGdevmServeUnit chain:
+	// without this test, a regression that drops `TLD: p.TLD` from
+	// buildBundle's BuildInput literal passes every other suite silently,
+	// because the gdevm-serve unit still ships (just with an empty env),
+	// and the preview-mux degradation to health-only only shows up at
+	// e2e time.
+	f := &fakeStreamTart{}
+	p := baseProvisioner(f, schema.Config{Project: schema.Project{Name: "x"}})
+	p.TLD = "e2e.test"
+	body, err := p.buildBundle()
+	require.NoError(t, err)
+
+	tr := tar.NewReader(bytes.NewReader(body))
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			t.Fatal("systemd/gdevm-serve.service not found in bundle tar")
+		}
+		require.NoError(t, err)
+		if hdr.Name != "systemd/gdevm-serve.service" {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		require.NoError(t, err)
+		require.Contains(t, string(data), "Environment=DEVM_TLD=e2e.test",
+			"gdevm-serve.service in bundle tar must carry the TLD")
+		return
+	}
+}
+
 func TestRunBundle_SucceedsWithTemplatesDeclared(t *testing.T) {
 	// devmbundle.Build (called by buildBundle, inside RunBundle) renders
 	// declared templates from a real source file under the repo root, so
