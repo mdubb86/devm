@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -54,7 +55,8 @@ func previewFileServerFromRoot(root string) http.Handler {
 // http.FileServer's default would render a listing; the preview server
 // returns 404 so filestash remains the one answer for browsing.
 func isDirRequestWithoutIndex(root, urlPath string) bool {
-	full := filepath.Join(root, filepath.FromSlash(urlPath))
+	cleaned := path.Clean("/" + urlPath)
+	full := filepath.Join(root, filepath.FromSlash(cleaned))
 	st, err := os.Stat(full)
 	if err != nil || !st.IsDir() {
 		return false

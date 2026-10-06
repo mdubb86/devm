@@ -23,6 +23,7 @@ func TestIsPreviewHost(t *testing.T) {
 		{"preview.sewtrue.other", "test", false},
 		{"preview.sewtrue.test", "", false}, // empty TLD disables matching
 		{"", "test", false},
+		{"preview.foo/bar.test", "test", false}, // slash in project segment
 	}
 	for _, c := range cases {
 		got := isPreviewHost(c.host, c.tld)
@@ -50,7 +51,10 @@ func TestPreviewFileServer_ServesFile(t *testing.T) {
 	if r.StatusCode != 200 {
 		t.Fatalf("status = %d, want 200", r.StatusCode)
 	}
-	body, _ := io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(body) != "world" {
 		t.Fatalf("body = %q, want %q", body, "world")
 	}
@@ -73,8 +77,12 @@ func TestPreviewFileServer_404sMissingFile(t *testing.T) {
 func TestPreviewFileServer_ServesIndexHTML(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "sub")
-	_ = os.Mkdir(sub, 0o755)
-	_ = os.WriteFile(filepath.Join(sub, "index.html"), []byte("<p>home</p>"), 0o644)
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "index.html"), []byte("<p>home</p>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	srv := httptest.NewServer(previewFileServerFromRoot(dir))
 	defer srv.Close()
@@ -87,7 +95,10 @@ func TestPreviewFileServer_ServesIndexHTML(t *testing.T) {
 	if r.StatusCode != 200 {
 		t.Fatalf("status = %d, want 200", r.StatusCode)
 	}
-	body, _ := io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(string(body), "<p>home</p>") {
 		t.Fatalf("expected index.html body, got %q", body)
 	}
@@ -96,8 +107,12 @@ func TestPreviewFileServer_ServesIndexHTML(t *testing.T) {
 func TestPreviewFileServer_404sDirWithoutIndex(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "nope")
-	_ = os.Mkdir(sub, 0o755)
-	_ = os.WriteFile(filepath.Join(sub, "a.txt"), []byte("a"), 0o644)
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	srv := httptest.NewServer(previewFileServerFromRoot(dir))
 	defer srv.Close()
@@ -115,31 +130,49 @@ func TestPreviewFileServer_404sDirWithoutIndex(t *testing.T) {
 func TestPreviewFileServer_PathTraversalIsChrooted(t *testing.T) {
 	outside := t.TempDir()
 	secret := filepath.Join(outside, "secret.txt")
-	_ = os.WriteFile(secret, []byte("nope"), 0o644)
-
-	dir := t.TempDir()
-
-	srv := httptest.NewServer(previewFileServerFromRoot(dir))
-	defer srv.Close()
-
-	// http.FileServer normalises away leading "../" segments, so this
-	// becomes a request for /secret.txt relative to dir — expect 404.
-	r, err := http.Get(srv.URL + "/../" + filepath.Base(outside) + "/secret.txt")
-	if err != nil {
+	if err := os.WriteFile(secret, []byte("nope"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	defer r.Body.Close()
-	if r.StatusCode == 200 {
-		t.Fatalf("path traversal served a file (status 200) — chroot escaped")
+
+	dir := t.TempDir()
+	h := previewFileServerFromRoot(dir)
+
+	// Call the handler directly: http.Client would clean "/../" before
+	// the server ever saw it.
+	r := httptest.NewRequest("GET", "http://preview.test/anything", nil)
+	r.URL.Path = "/../" + filepath.Base(outside) + "/secret.txt"
+	r.URL.RawPath = r.URL.Path
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code == 200 {
+		t.Fatalf("path traversal served a file (status 200)")
+	}
+
+	// Control: a legitimate file is served, so the above isn't passing
+	// merely because the handler is broken.
+	if err := os.WriteFile(filepath.Join(dir, "ok.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r2 := httptest.NewRequest("GET", "http://preview.test/ok.txt", nil)
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, r2)
+	if w2.Code != 200 || w2.Body.String() != "ok" {
+		t.Fatalf("control request failed: status=%d body=%q", w2.Code, w2.Body.String())
 	}
 }
 
 func TestPreviewFileServer_SymlinkFollowed(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real")
-	_ = os.Mkdir(real, 0o755)
-	_ = os.WriteFile(filepath.Join(real, "style.css"), []byte("body{color:red}"), 0o644)
-	_ = os.Symlink(real, filepath.Join(dir, "link"))
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "style.css"), []byte("body{color:red}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
 
 	srv := httptest.NewServer(previewFileServerFromRoot(dir))
 	defer srv.Close()
@@ -151,5 +184,12 @@ func TestPreviewFileServer_SymlinkFollowed(t *testing.T) {
 	defer r.Body.Close()
 	if r.StatusCode != 200 {
 		t.Fatalf("symlinked path status = %d, want 200 (relative asset paths through symlink'd dirs must resolve)", r.StatusCode)
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "body{color:red}" {
+		t.Fatalf("symlinked body = %q, want %q", body, "body{color:red}")
 	}
 }
