@@ -299,6 +299,20 @@ func TestBuild_TarContainsGdevmServeUnit(t *testing.T) {
 	assert.Contains(t, string(unit), "WantedBy=multi-user.target")
 }
 
+// TestBuild_PropagatesTLDIntoGdevmServeUnit pins that Build hands
+// BuildInput.TLD to the gdevm-serve unit renderer.
+func TestBuild_PropagatesTLDIntoGdevmServeUnit(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		TLD:            "e2e.test",
+	})
+	require.NoError(t, err)
+	unit := readTarEntry(t, blob, "systemd/gdevm-serve.service")
+	assert.Contains(t, string(unit), "Environment=DEVM_TLD=e2e.test")
+}
+
 func TestBuild_TarContainsServiceUnits(t *testing.T) {
 	cfg := schema.Config{
 		Project: schema.Project{Name: "p"},
