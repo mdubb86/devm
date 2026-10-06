@@ -115,13 +115,16 @@ func TestBuildHandler_HealthStillWorksWithoutTLD(t *testing.T) {
 }
 
 func TestBuildHandler_PreviewRequests404WhenTLDEmpty(t *testing.T) {
-	h := buildServeHandler(time.Now(), "")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "exists.txt"), []byte("hi"), 0o644))
+	h := buildServeHandlerWithRoot(time.Now(), "", dir)
 
-	r := httptest.NewRequest("GET", "/some/file", nil)
+	r := httptest.NewRequest("GET", "/exists.txt", nil)
 	r.Host = "preview.sewtrue.test"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	require.Equal(t, 404, w.Code)
+	require.Equal(t, 404, w.Code,
+		"preview route must be disabled when tld empty — a real file was served instead")
 }
 
 func TestBuildHandler_DirectHealthProbeStillWorksWhenTLDSet(t *testing.T) {
@@ -152,9 +155,10 @@ func TestBuildHandler_PreviewHostServesFile(t *testing.T) {
 func TestBuildHandler_NonPreviewHostFallsThroughToHealthMux(t *testing.T) {
 	h := buildServeHandler(time.Now(), "test")
 
-	r := httptest.NewRequest("GET", "/anything", nil)
+	r := httptest.NewRequest("GET", "/v1/health", nil)
 	r.Host = "files.sewtrue.test"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	require.Equal(t, 404, w.Code)
+	require.Equal(t, 200, w.Code,
+		"non-preview Host must hit health mux — /v1/health returned non-200")
 }
