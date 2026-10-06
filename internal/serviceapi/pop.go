@@ -100,7 +100,7 @@ func handlePop(w http.ResponseWriter, r *http.Request, cfg identity.Config, proj
 		return
 	}
 
-	target, err := resolvePopTarget(r.Context(), cfg, projectName, req.GuestPath, req.Native)
+	target, err := resolvePopTarget(r.Context(), cfg, projectName, req.GuestPath, req.Native, req.IsDir, req.IsHTML)
 	if err != nil {
 		if errors.Is(err, errPopNoSuchMirror) {
 			http.Error(w, err.Error(), http.StatusNotFound)
@@ -136,9 +136,9 @@ var errPopNoSuchMirror = errors.New("pop: guest path not in any mirror and tart-
 //     Edits sync back to the guest via the usual mutagen loop.
 //   - native=true + out-of-mirror: a scratch copy under PopScratchRoot
 //     populated via `tart exec cat`. One file per pop.
-func resolvePopTarget(ctx context.Context, cfg identity.Config, projectName, guestPath string, native bool) (string, error) {
+func resolvePopTarget(ctx context.Context, cfg identity.Config, projectName, guestPath string, native, isDir, isHTML bool) (string, error) {
 	if !native {
-		return filestashURL(cfg, projectName, guestPath), nil
+		return popTargetURL(cfg, projectName, guestPath, isDir, isHTML), nil
 	}
 
 	reg, err := listWorkspaces(cfg)
@@ -168,16 +168,24 @@ func resolvePopTarget(ctx context.Context, cfg identity.Config, projectName, gue
 	return dest, nil
 }
 
-// filestashURL builds the viewer URL for guestPath. filestash's SPA
-// serves file-browser routes at /files<path>; the backend label does
-// not appear in URLs because the direct-strategy preset configures a
-// single `local` connection and filestash's router omits the label
-// in that case. A guest path /home/devm/foo.html → /files/home/devm/foo.html.
-func filestashURL(cfg identity.Config, projectName, guestPath string) string {
-	u := url.URL{
-		Scheme: "https",
-		Host:   "files." + projectName + "." + cfg.TLD,
-		Path:   "/files" + guestPath,
+// popTargetURL builds the Mac-side URL a pop opens. HTML files go to the
+// preview server so relative and absolute asset paths resolve. Directories
+// go to filestash's listing route; other files to its single-file view
+// (filestash's /files route treats a file path as a listing and fails).
+// filestash omits the backend label from URLs because the direct-strategy
+// preset configures a single `local` connection. IsHTML wins over IsDir.
+func popTargetURL(cfg identity.Config, projectName, guestPath string, isDir, isHTML bool) string {
+	u := url.URL{Scheme: "https"}
+	switch {
+	case isHTML:
+		u.Host = "preview." + projectName + "." + cfg.TLD
+		u.Path = guestPath
+	case isDir:
+		u.Host = "files." + projectName + "." + cfg.TLD
+		u.Path = "/files" + guestPath + "/"
+	default:
+		u.Host = "files." + projectName + "." + cfg.TLD
+		u.Path = "/view" + guestPath
 	}
 	return u.String()
 }
@@ -203,4 +211,3 @@ func toPopPathEntries(reg []WorkspaceEntry) []repohelpers.WorkspacePathEntry {
 	}
 	return out
 }
-
