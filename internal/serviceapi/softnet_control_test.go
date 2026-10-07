@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -250,5 +251,82 @@ func TestSoftnetStore(t *testing.T) {
 	s.del("proj1")
 	if _, ok := s.get("proj1"); ok {
 		t.Fatal("expected not-ok after del")
+	}
+}
+
+func TestSoftnetClient_GetContract_ReturnsReportedSHA(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "sn-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "softnet.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	const expected = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		br := bufio.NewReader(c)
+		_, _ = br.ReadBytes('\n')
+		_, _ = c.Write([]byte(`{"ok":true,"sha":"` + expected + `"}` + "\n"))
+	}()
+
+	cli := newSoftnetClient(sock)
+	got, err := cli.getContract()
+	if err != nil {
+		t.Fatalf("getContract: %v", err)
+	}
+	if got != expected {
+		t.Fatalf("got %q want %q", got, expected)
+	}
+}
+
+func TestSoftnetClient_GetContract_DialFailureReturnsError(t *testing.T) {
+	cli := newSoftnetClient("/no/such/socket")
+	_, err := cli.getContract()
+	if err == nil {
+		t.Fatal("expected error dialing non-existent socket")
+	}
+}
+
+func TestSoftnetClient_GetContract_SilentPeerHitsDeadline(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "sn-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "softnet.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		buf := make([]byte, 1)
+		for {
+			if _, err := c.Read(buf); err != nil {
+				c.Close()
+				return
+			}
+		}
+	}()
+
+	cli := newSoftnetClient(sock)
+	start := time.Now()
+	_, err = cli.getContract()
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("deadline must be ~500ms, took %s", elapsed)
 	}
 }

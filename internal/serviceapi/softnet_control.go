@@ -157,6 +157,40 @@ func (c *softnetClient) setTestHosts(hosts []string) error {
 	return nil
 }
 
+// getContract queries softnet for its ContractSHA. A 500 ms read
+// deadline prevents a silent / dead subprocess from hanging the caller;
+// an older softnet that doesn't know the op will not reply at all and
+// trips the deadline. Either way, drift detection in the caller treats
+// a non-nil error the same as a sha mismatch.
+func (c *softnetClient) getContract() (string, error) {
+	conn, err := c.dial()
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	b, err := json.Marshal(map[string]any{"op": "getContract"})
+	if err != nil {
+		return "", fmt.Errorf("marshal control message: %w", err)
+	}
+	if _, err := conn.Write(append(b, '\n')); err != nil {
+		return "", fmt.Errorf("write softnet control message: %w", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return "", fmt.Errorf("getContract ack (sock=%s): %w", c.sock, err)
+	}
+	var ack struct {
+		OK  bool   `json:"ok"`
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(line, &ack); err != nil {
+		return "", fmt.Errorf("decode getContract ack: %w", err)
+	}
+	return ack.SHA, nil
+}
+
 // shutdown asks softnet to exit now. softnet is a child process `tart run
 // --net-softnet` forks internally (see /vm/start's ensureSoftnetSymlink
 // comment) — the daemon's supervisor only manages the `tart run` process
