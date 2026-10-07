@@ -528,6 +528,23 @@ func TestFormatStatusText_ApproveGate_SilentWhenNil(t *testing.T) {
 	assert.NotContains(t, out, "Approve gate")
 }
 
+func TestFormatStatusText_SoftnetDrift_PrintsMessage(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		SoftnetDrift: &serviceapi.SoftnetDriftInfo{
+			LocalSHA: "aaaa", RemoteSHA: "bbbb",
+			Message: "softnet(sewtrue): subprocess is running an older contract (sha=bbbb, build=aaaa).\nRestart the VM to pick up the current code:\n    cd /workspace/sewtrue && devm stop && devm start",
+		},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "softnet(sewtrue)")
+	assert.Contains(t, out, "devm stop && devm start")
+}
+
+func TestFormatStatusText_SoftnetDrift_SilentWhenNil(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running"}
+	assert.NotContains(t, FormatStatusText(res), "softnet(")
+}
+
 func TestFormatStatusText_ApproveGate_CheckFailed(t *testing.T) {
 	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
 		ApproveError: "dial daemon: connection refused",

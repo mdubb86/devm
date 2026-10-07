@@ -86,6 +86,11 @@ type StatusResult struct {
 	// gate is informational only, so `devm status` never fails because
 	// of it — this just lets the format layer report the failure.
 	ApproveError string
+
+	// SoftnetDrift is the daemon's report that the running softnet
+	// subprocess speaks an older contract than the current build (from
+	// /vm/status). Nil when there is no drift or the VM isn't running.
+	SoftnetDrift *serviceapi.SoftnetDriftInfo
 }
 
 // DriftItem is one piece of mismatch between snapshot and live VM state.
@@ -161,7 +166,17 @@ func FormatStatusText(r StatusResult) string {
 	b.WriteString(formatIronProxyHealth(r))
 	b.WriteString(formatLANListener(r.Routing))
 	b.WriteString(formatApproveState(r))
+	b.WriteString(formatSoftnetDrift(r))
 	return b.String()
+}
+
+// formatSoftnetDrift renders the daemon's multi-line drift message
+// verbatim; silent when there is no drift.
+func formatSoftnetDrift(r StatusResult) string {
+	if r.SoftnetDrift == nil {
+		return ""
+	}
+	return "\n" + r.SoftnetDrift.Message + "\n"
 }
 
 // formatApproveState renders the approve-gate divergence line. Never

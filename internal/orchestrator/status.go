@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -159,6 +160,15 @@ func RunStatus(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoRoot
 			res.Egress = eg
 		}
 		egCancel()
+
+		vmCtx, vmCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		vmResp, vmErr := c.VMStatus(vmCtx, cfg.Project.Name)
+		vmCancel()
+		if vmErr != nil {
+			log.Printf("status: softnet drift check failed: %v", vmErr)
+		} else {
+			res.SoftnetDrift = vmResp.SoftnetDrift
+		}
 	}
 
 	if state != "running" {
