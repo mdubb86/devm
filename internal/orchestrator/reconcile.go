@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/mdubb86/devm/internal/docker"
 	"github.com/mdubb86/devm/internal/identity"
@@ -111,6 +113,15 @@ func RunReconcile(ident identity.Config, cfg schema.Config, tr *tart.Tart, repoR
 		IronProxyRevived: ironProxyRevived,
 		Pending:          resp.Pending,
 		RecreateRequired: resp.TeardownRequired,
+	}
+
+	vmCtx, vmCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	vmResp, vmErr := client.VMStatus(vmCtx, cfg.Project.Name)
+	vmCancel()
+	if vmErr != nil {
+		log.Printf("reconcile: softnet drift check failed: %v", vmErr)
+	} else {
+		res.SoftnetDrift = vmResp.SoftnetDrift
 	}
 
 	if len(res.RecreateRequired) == 0 {

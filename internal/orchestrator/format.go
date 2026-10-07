@@ -116,6 +116,11 @@ type ReconcileResult struct {
 	Flavor           reconcile.FlavorKind
 	Sessions         []Session
 	NextAction       string // "applied" | "needs_approval" | "user_refused" | "nothing_to_do"
+	// SoftnetDrift is the daemon's report that the running softnet
+	// subprocess speaks an older contract than the current build (from
+	// /vm/status). A warning only: it never changes reconcile's exit
+	// code. Nil when there is no drift.
+	SoftnetDrift *serviceapi.SoftnetDriftInfo
 }
 
 // UseColor gates ANSI escapes emitted by the formatters (currently
@@ -173,10 +178,14 @@ func FormatStatusText(r StatusResult) string {
 // formatSoftnetDrift renders the daemon's multi-line drift message
 // verbatim; silent when there is no drift.
 func formatSoftnetDrift(r StatusResult) string {
-	if r.SoftnetDrift == nil {
+	return formatSoftnetDriftInfo(r.SoftnetDrift)
+}
+
+func formatSoftnetDriftInfo(d *serviceapi.SoftnetDriftInfo) string {
+	if d == nil {
 		return ""
 	}
-	return "\n" + r.SoftnetDrift.Message + "\n"
+	return "\n" + d.Message + "\n"
 }
 
 // formatApproveState renders the approve-gate divergence line. Never
@@ -509,7 +518,7 @@ func FormatStatusAllJSON(rows []serviceapi.ProjectStatus) string {
 func FormatReconcileText(r ReconcileResult) string {
 	var b strings.Builder
 	if len(r.Applied) == 0 && len(r.AppliedIronProxy) == 0 && len(r.RecreateRequired) == 0 && len(r.Pending) == 0 {
-		return "Sandbox converged; no changes.\n"
+		return "Sandbox converged; no changes.\n" + formatSoftnetDriftInfo(r.SoftnetDrift)
 	}
 	if len(r.Applied) > 0 {
 		fmt.Fprintf(&b, "Applied %d live change(s):\n", len(r.Applied))
@@ -572,6 +581,7 @@ func FormatReconcileText(r ReconcileResult) string {
 			}
 		}
 	}
+	b.WriteString(formatSoftnetDriftInfo(r.SoftnetDrift))
 	return b.String()
 }
 
@@ -738,15 +748,16 @@ func FormatReconcileJSON(r ReconcileResult) string {
 		Sessions []sess       `json:"sessions"`
 	}
 	type body struct {
-		Rendered         bool         `json:"rendered"`
-		SandboxState     string       `json:"sandbox_state"`
-		Applied          []changeJSON `json:"applied"`
-		AppliedIronProxy []changeJSON `json:"applied_iron_proxy,omitempty"`
-		Pending          []changeJSON `json:"pending,omitempty"`
-		IronProxyRevived bool         `json:"iron_proxy_revived,omitempty"`
-		RestartRequired  *changeSet   `json:"restart_required,omitempty"`
-		RecreateRequired *changeSet   `json:"recreate_required,omitempty"`
-		NextAction       string       `json:"next_action"`
+		Rendered         bool                         `json:"rendered"`
+		SandboxState     string                       `json:"sandbox_state"`
+		Applied          []changeJSON                 `json:"applied"`
+		AppliedIronProxy []changeJSON                 `json:"applied_iron_proxy,omitempty"`
+		Pending          []changeJSON                 `json:"pending,omitempty"`
+		IronProxyRevived bool                         `json:"iron_proxy_revived,omitempty"`
+		RestartRequired  *changeSet                   `json:"restart_required,omitempty"`
+		RecreateRequired *changeSet                   `json:"recreate_required,omitempty"`
+		NextAction       string                       `json:"next_action"`
+		SoftnetDrift     *serviceapi.SoftnetDriftInfo `json:"softnet_drift,omitempty"`
 	}
 
 	toJSON := func(c reconcile.Change) changeJSON {
@@ -780,6 +791,7 @@ func FormatReconcileJSON(r ReconcileResult) string {
 		Pending:          pending,
 		IronProxyRevived: r.IronProxyRevived,
 		NextAction:       r.NextAction,
+		SoftnetDrift:     r.SoftnetDrift,
 	}
 
 	if len(r.RecreateRequired) > 0 {

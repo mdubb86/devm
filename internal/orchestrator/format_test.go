@@ -969,3 +969,32 @@ func TestFormatReconcileJSON_PendingSerialized(t *testing.T) {
 	require.Len(t, parsed.Pending, 1)
 	assert.Equal(t, "bundle_refresh", parsed.Pending[0].Kind)
 }
+
+func TestFormatReconcileText_SoftnetDrift_PrintsWhenConverged(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		SoftnetDrift: &serviceapi.SoftnetDriftInfo{Message: "softnet(sewtrue): drifted"}})
+	assert.Contains(t, out, "Sandbox converged; no changes.")
+	assert.Contains(t, out, "softnet(sewtrue): drifted")
+}
+
+func TestFormatReconcileText_SoftnetDrift_PrintsAfterChanges(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		Applied:      []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
+		SoftnetDrift: &serviceapi.SoftnetDriftInfo{Message: "softnet(sewtrue): drifted"}})
+	assert.Contains(t, out, "Applied 1 live change")
+	assert.Contains(t, out, "softnet(sewtrue): drifted")
+}
+
+func TestFormatReconcileText_SoftnetDrift_SilentWhenNil(t *testing.T) {
+	assert.NotContains(t, FormatReconcileText(ReconcileResult{}), "softnet")
+}
+
+func TestFormatReconcileJSON_SoftnetDrift(t *testing.T) {
+	js := FormatReconcileJSON(ReconcileResult{
+		SoftnetDrift: &serviceapi.SoftnetDriftInfo{LocalSHA: "aaaa", RemoteSHA: "bbbb", Message: "m"}})
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	d := parsed["softnet_drift"].(map[string]any)
+	assert.Equal(t, "aaaa", d["local_sha"])
+	assert.NotContains(t, FormatReconcileJSON(ReconcileResult{}), "softnet_drift")
+}
