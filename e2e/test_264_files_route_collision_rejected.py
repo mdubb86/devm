@@ -2,7 +2,7 @@
 must fail loud on the first cold-start — that's Review Focus #1 in the
 bundled-filestash-and-pop-rework spec.
 
-The rejection is synchronous (cmd/devm's rejectReservedFilesHostname,
+The rejection is synchronous (cmd/devm's rejectReservedHostname,
 called from runShellFlow before any cold-start work begins), not the
 daemon-side serviceapi.Routes.Apply check alone — Apply's collision
 check runs inside `devm start`'s best-effort background route-install
