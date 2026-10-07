@@ -224,10 +224,11 @@ type VMRepoCloneRequest struct {
 
 // VMStatusResponse is the body shape for GET /vm/status.
 type VMStatusResponse struct {
-	Present bool   `json:"present"`
-	Running bool   `json:"running"`
-	PID     int    `json:"pid"`
-	IP      string `json:"ip,omitempty"`
+	Present      bool              `json:"present"`
+	Running      bool              `json:"running"`
+	PID          int               `json:"pid"`
+	IP           string            `json:"ip,omitempty"`
+	SoftnetDrift *SoftnetDriftInfo `json:"softnet_drift,omitempty"`
 }
 
 // waitVMExecReady polls `tart exec <name> true` until exit 0 or timeout.
@@ -1378,6 +1379,15 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		if resp.Running {
 			ip, _ := tr.IP(r.Context(), name)
 			resp.IP = ip
+		}
+
+		if sock, ok := softnetState.get(name); ok {
+			projectDir := ""
+			if snap, err := ReadStateSnapshot(cfg, name); err == nil && snap != nil {
+				projectDir = snap.MacCwd
+			}
+			remoteSHA, probeErr := probeSoftnetContract(sock)
+			resp.SoftnetDrift = newSoftnetDriftInfo(name, projectDir, softnet.ContractSHA, remoteSHA, probeErr)
 		}
 
 		w.Header().Set("Content-Type", "application/json")

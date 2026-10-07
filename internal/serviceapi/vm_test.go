@@ -19,6 +19,7 @@ import (
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/softnet"
 	"github.com/mdubb86/devm/internal/supervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -441,4 +442,48 @@ exit 0
 	require.True(t, ok, "cache row must exist after /vm/start")
 	assert.True(t, row.ProxyListenerHealth,
 		"ProxyListenerHealth must be seeded true immediately after a successful /vm/start, not left at its zero value until the next watchdog tick")
+}
+
+func callVMStatusForTest(t *testing.T, name string) VMStatusResponse {
+	t.Helper()
+	tr := tart.New()
+	tr.Path = filepath.Join(t.TempDir(), "no-tart")
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	RegisterVMHandlers(server, identity.Prod, supervisor.New(t.TempDir()), tr, 0, NewProjectLocks(), nil, nil, NewStateCache())
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/vm/status?name="+name, nil))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	var resp VMStatusResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	return resp
+}
+
+func TestVMStatus_SoftnetDrift_NilWhenInSync(t *testing.T) {
+	sock := fakeSoftnetSock(t, func(_ []byte) []byte {
+		return []byte(`{"ok":true,"sha":"` + softnet.ContractSHA + `"}` + "\n")
+	})
+	softnetState.put("sewtrue", sock)
+	t.Cleanup(func() { softnetState.del("sewtrue") })
+
+	resp := callVMStatusForTest(t, "sewtrue")
+	assert.Nil(t, resp.SoftnetDrift, "in-sync VM must have nil SoftnetDrift")
+}
+
+func TestVMStatus_SoftnetDrift_SetWhenDrifted(t *testing.T) {
+	remote := strings.Repeat("f", 64)
+	sock := fakeSoftnetSock(t, func(_ []byte) []byte {
+		return []byte(`{"ok":true,"sha":"` + remote + `"}` + "\n")
+	})
+	softnetState.put("sewtrue", sock)
+	t.Cleanup(func() { softnetState.del("sewtrue") })
+
+	resp := callVMStatusForTest(t, "sewtrue")
+	require.NotNil(t, resp.SoftnetDrift, "drift must be reported in /vm/status")
+	assert.Equal(t, remote, resp.SoftnetDrift.RemoteSHA)
+	assert.Contains(t, resp.SoftnetDrift.Message, "sewtrue")
+}
+
+func TestVMStatus_SoftnetDrift_NilWithoutSoftnet(t *testing.T) {
+	resp := callVMStatusForTest(t, "no-softnet-proj")
+	assert.Nil(t, resp.SoftnetDrift)
 }
