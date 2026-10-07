@@ -160,8 +160,7 @@ func (c *softnetClient) setTestHosts(hosts []string) error {
 // getContract queries softnet for its ContractSHA. A 500 ms read
 // deadline prevents a silent / dead subprocess from hanging the caller;
 // an older softnet that doesn't know the op will not reply at all and
-// trips the deadline. Either way, drift detection in the caller treats
-// a non-nil error the same as a sha mismatch.
+// trips the deadline. The caller decides how to interpret non-nil errors.
 func (c *softnetClient) getContract() (string, error) {
 	conn, err := c.dial()
 	if err != nil {

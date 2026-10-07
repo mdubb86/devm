@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -326,7 +327,18 @@ func TestSoftnetClient_GetContract_SilentPeerHitsDeadline(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
-	if elapsed > 2*time.Second {
-		t.Fatalf("deadline must be ~500ms, took %s", elapsed)
+	require.GreaterOrEqual(t, elapsed, 400*time.Millisecond,
+		"deadline must fire near 500ms, fired at %s", elapsed)
+	require.Less(t, elapsed, 1500*time.Millisecond,
+		"deadline fired too late, took %s", elapsed)
+
+	// The error must actually be a timeout, not some other failure that
+	// looked timely.
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		require.True(t, netErr.Timeout(), "err must be net.Error.Timeout(), got %v", err)
+	} else {
+		require.ErrorIs(t, err, os.ErrDeadlineExceeded,
+			"err must be a deadline-exceeded, got %v", err)
 	}
 }
