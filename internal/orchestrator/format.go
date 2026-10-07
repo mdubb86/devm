@@ -171,16 +171,12 @@ func FormatStatusText(r StatusResult) string {
 	b.WriteString(formatIronProxyHealth(r))
 	b.WriteString(formatLANListener(r.Routing))
 	b.WriteString(formatApproveState(r))
-	b.WriteString(formatSoftnetDrift(r))
+	b.WriteString(formatSoftnetDriftInfo(r.SoftnetDrift))
 	return b.String()
 }
 
-// formatSoftnetDrift renders the daemon's multi-line drift message
-// verbatim; silent when there is no drift.
-func formatSoftnetDrift(r StatusResult) string {
-	return formatSoftnetDriftInfo(r.SoftnetDrift)
-}
-
+// formatSoftnetDriftInfo renders the daemon's multi-line drift message
+// verbatim; returns "" when there is no drift (d is nil).
 func formatSoftnetDriftInfo(d *serviceapi.SoftnetDriftInfo) string {
 	if d == nil {
 		return ""
