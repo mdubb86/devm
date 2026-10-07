@@ -17,7 +17,12 @@ func TestComputeContractSHA_ChangesWhenBytesChange(t *testing.T) {
 	if a == b {
 		t.Fatalf("hash must change when input bytes change: a=%q b=%q", a, b)
 	}
-	if len(a) != 64 || len(b) != 64 {
-		t.Fatalf("hashes must be 64 chars: len(a)=%d len(b)=%d", len(a), len(b))
+}
+
+func TestComputeContractSHA_EmptyInputMatchesSHA256(t *testing.T) {
+	const expected = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	got := computeContractSHA(nil)
+	if got != expected {
+		t.Fatalf("computeContractSHA(nil) = %q, want SHA-256 empty-string hash %q", got, expected)
 	}
 }
