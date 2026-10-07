@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/softnet"
 )
 
 // TestDiscoverSoftnet_RebuildsStateForRehydratedProjects covers the
@@ -44,14 +46,21 @@ func TestDiscoverSoftnet_RebuildsStateForRehydratedProjects(t *testing.T) {
 	defer ln.Close()
 	got := make(chan string, 1)
 	go func() {
-		c, err := ln.Accept()
-		if err != nil {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			line, _ := bufio.NewReader(c).ReadString('\n')
+			if strings.Contains(line, `"op":"getContract"`) {
+				_, _ = c.Write([]byte(`{"ok":true,"sha":"` + softnet.ContractSHA + `"}` + "\n"))
+				c.Close()
+				continue
+			}
+			got <- line
+			c.Close()
 			return
 		}
-		defer c.Close()
-		r := bufio.NewReader(c)
-		line, _ := r.ReadString('\n')
-		got <- line
 	}()
 
 	discoverSoftnet(context.Background(), identity.Prod, 51234)

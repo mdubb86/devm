@@ -2,7 +2,10 @@ package serviceapi
 
 import (
 	"fmt"
+	"log"
 	"regexp"
+
+	"github.com/mdubb86/devm/internal/softnet"
 )
 
 // SoftnetDriftInfo is the drift-report shape surfaced in /vm/status and
@@ -66,4 +69,20 @@ func formatDriftMessage(projectName, projectDir, localSHA, remoteSHA string) str
 			"    cd %s && devm stop && devm start",
 		projectName, short(remoteSHA), short(localSHA), dir,
 	)
+}
+
+// logDriftIfAny probes softnet via sock and emits exactly one log line
+// when drift is detected; nothing when subprocess and daemon agree.
+func logDriftIfAny(projectID, projectDir, sock string) {
+	remoteSHA, probeErr := probeSoftnetContract(sock)
+	info := newSoftnetDriftInfo(projectID, projectDir, softnet.ContractSHA, remoteSHA, probeErr)
+	if info == nil {
+		return
+	}
+	dir := projectDir
+	if dir == "" {
+		dir = "<your project directory>"
+	}
+	log.Printf("softnet-drift: %s: subprocess sha=%q daemon sha=%s (restart: cd %s && devm stop && devm start)",
+		projectID, info.RemoteSHA, info.LocalSHA, dir)
 }

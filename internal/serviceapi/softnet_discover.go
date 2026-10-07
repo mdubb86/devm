@@ -66,12 +66,18 @@ func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
 		}
 		needsForwardingPush := info.ProjectIP == ""
 		go func(id, sock string, info projectInfo) {
+			snap, snapErr := ReadStateSnapshot(cfg, id)
+			projectDir := ""
+			if snapErr == nil && snap != nil {
+				projectDir = snap.MacCwd
+			}
+			logDriftIfAny(id, projectDir, sock)
 			if needsForwardingPush {
 				if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(info, ntpPort)); err != nil {
 					daemonlog.Errorf("serviceapi: discoverSoftnet: setPolicy FORWARDING for %s: %v", id, err)
 				}
 			}
-			if snap, err := ReadStateSnapshot(cfg, id); err == nil && snap != nil {
+			if snapErr == nil && snap != nil {
 				if err := pushExposeMap(id, computeExposeMap(snap.Cfg, info.ProjectIP)); err != nil {
 					daemonlog.Errorf("serviceapi: discoverSoftnet: pushExposeMap for %s: %v", id, err)
 				}

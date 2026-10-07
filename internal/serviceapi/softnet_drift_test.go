@@ -2,7 +2,9 @@ package serviceapi
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -182,3 +184,41 @@ func TestFormatDriftMessage_TruncationAndFallbacks(t *testing.T) {
 type errFake struct{}
 
 func (errFake) Error() string { return "fake probe error" }
+
+func TestLogDriftIfAny_SilentWhenInSync(t *testing.T) {
+	sha := softnet.ContractSHA
+	sock := fakeSoftnetSock(t, func(_ []byte) []byte {
+		return []byte(`{"ok":true,"sha":"` + sha + `"}` + "\n")
+	})
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(old)
+
+	logDriftIfAny("sewtrue", "/workspace/sewtrue", sock)
+
+	if strings.Contains(buf.String(), "softnet-drift") {
+		t.Fatalf("in-sync VM must not log drift, got %q", buf.String())
+	}
+}
+
+func TestLogDriftIfAny_WritesOneLineWhenDrifted(t *testing.T) {
+	remote := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	sock := fakeSoftnetSock(t, func(_ []byte) []byte {
+		return []byte(`{"ok":true,"sha":"` + remote + `"}` + "\n")
+	})
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(old)
+
+	logDriftIfAny("sewtrue", "/workspace/sewtrue", sock)
+
+	out := buf.String()
+	if !strings.Contains(out, "softnet-drift") || !strings.Contains(out, "sewtrue") {
+		t.Fatalf("drift log missing project name / tag: %q", out)
+	}
+	if strings.Count(out, "softnet-drift") != 1 || strings.Count(out, "\n") != 1 {
+		t.Fatalf("drift log must be exactly one line, got %q", out)
+	}
+}
