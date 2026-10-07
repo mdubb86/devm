@@ -444,10 +444,19 @@ exit 0
 		"ProxyListenerHealth must be seeded true immediately after a successful /vm/start, not left at its zero value until the next watchdog tick")
 }
 
-func callVMStatusForTest(t *testing.T, name string) VMStatusResponse {
+// callVMStatusForTest drives /vm/status against a fake tart whose `list`
+// reports the VM as running or stopped.
+func callVMStatusForTest(t *testing.T, name string, running bool) VMStatusResponse {
 	t.Helper()
+	state := "stopped"
+	if running {
+		state = "running"
+	}
+	binPath := filepath.Join(t.TempDir(), "tart-fake")
+	script := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in\n  list) echo '[{\"Name\":\"%s\",\"State\":\"%s\"}]' ;;\nesac\nexit 0\n", name, state)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
 	tr := tart.New()
-	tr.Path = filepath.Join(t.TempDir(), "no-tart")
+	tr.Path = binPath
 	server := NewServer(identity.Prod.SocketPath(), Build{})
 	RegisterVMHandlers(server, identity.Prod, supervisor.New(t.TempDir()), tr, 0, NewProjectLocks(), nil, nil, NewStateCache())
 	rec := httptest.NewRecorder()
@@ -465,7 +474,7 @@ func TestVMStatus_SoftnetDrift_NilWhenInSync(t *testing.T) {
 	softnetState.put("sewtrue", sock)
 	t.Cleanup(func() { softnetState.del("sewtrue") })
 
-	resp := callVMStatusForTest(t, "sewtrue")
+	resp := callVMStatusForTest(t, "sewtrue", true)
 	assert.Nil(t, resp.SoftnetDrift, "in-sync VM must have nil SoftnetDrift")
 }
 
@@ -477,13 +486,25 @@ func TestVMStatus_SoftnetDrift_SetWhenDrifted(t *testing.T) {
 	softnetState.put("sewtrue", sock)
 	t.Cleanup(func() { softnetState.del("sewtrue") })
 
-	resp := callVMStatusForTest(t, "sewtrue")
+	resp := callVMStatusForTest(t, "sewtrue", true)
 	require.NotNil(t, resp.SoftnetDrift, "drift must be reported in /vm/status")
 	assert.Equal(t, remote, resp.SoftnetDrift.RemoteSHA)
 	assert.Contains(t, resp.SoftnetDrift.Message, "sewtrue")
 }
 
+func TestVMStatus_SoftnetDrift_NilWhenVMNotRunning(t *testing.T) {
+	sock := fakeSoftnetSock(t, func(_ []byte) []byte {
+		return []byte(`{"ok":true,"sha":"` + strings.Repeat("f", 64) + `"}` + "\n")
+	})
+	softnetState.put("sewtrue", sock)
+	t.Cleanup(func() { softnetState.del("sewtrue") })
+
+	resp := callVMStatusForTest(t, "sewtrue", false)
+	assert.False(t, resp.Running)
+	assert.Nil(t, resp.SoftnetDrift, "stopped VM must not report drift")
+}
+
 func TestVMStatus_SoftnetDrift_NilWithoutSoftnet(t *testing.T) {
-	resp := callVMStatusForTest(t, "no-softnet-proj")
+	resp := callVMStatusForTest(t, "no-softnet-proj", true)
 	assert.Nil(t, resp.SoftnetDrift)
 }

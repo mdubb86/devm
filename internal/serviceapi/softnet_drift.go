@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/softnet"
 )
 
@@ -82,5 +83,9 @@ func logDriftIfAny(projectID, projectDir, sock string) {
 	}
 	// Collapse the multi-line message to one log line.
 	oneLine := strings.ReplaceAll(info.Message, "\n", " | ")
-	log.Printf("softnet-drift: %s", oneLine)
+	if probeErr != nil {
+		daemonlog.Errorf("softnet-drift: %s: probe failed: %v | %s", projectID, probeErr, oneLine)
+	} else {
+		log.Printf("softnet-drift: %s", oneLine)
+	}
 }

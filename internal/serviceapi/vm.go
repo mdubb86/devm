@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -1381,13 +1382,18 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			resp.IP = ip
 		}
 
-		if sock, ok := softnetState.get(name); ok {
-			projectDir := ""
-			if snap, err := ReadStateSnapshot(cfg, name); err == nil && snap != nil {
-				projectDir = snap.MacCwd
+		if resp.Running {
+			if sock, ok := softnetState.get(name); ok {
+				projectDir := ""
+				snap, err := ReadStateSnapshot(cfg, name)
+				if err != nil {
+					log.Printf("vm/status: snapshot read for %s: %v", name, err)
+				} else if snap != nil {
+					projectDir = snap.MacCwd
+				}
+				remoteSHA, probeErr := probeSoftnetContract(sock)
+				resp.SoftnetDrift = newSoftnetDriftInfo(name, projectDir, softnet.ContractSHA, remoteSHA, probeErr)
 			}
-			remoteSHA, probeErr := probeSoftnetContract(sock)
-			resp.SoftnetDrift = newSoftnetDriftInfo(name, projectDir, softnet.ContractSHA, remoteSHA, probeErr)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
