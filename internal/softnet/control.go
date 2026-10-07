@@ -16,7 +16,8 @@ import (
 // process supervisor, so this control message — not a process signal — is
 // the reliable way the daemon reaches it at teardown.
 // applyControl returns a reply payload for ops that ack (setExposeMap
-// answers with an ExposeAck line; every other op replies nil — their
+// answers with an ExposeAck line, getContract with the ContractSHA; every
+// other op replies nil — their
 // senders close the connection without reading).
 func applyControl(e *egress, ing *ingress, m ControlMsg, shutdown func()) ([]byte, error) {
 	switch m.Op {
@@ -41,6 +42,16 @@ func applyControl(e *egress, ing *ingress, m ControlMsg, shutdown func()) ([]byt
 		if err != nil {
 			return nil, err
 		}
+		return reply, nil
+	case "getContract":
+		reply, err := json.Marshal(struct {
+			OK  bool   `json:"ok"`
+			SHA string `json:"sha"`
+		}{OK: true, SHA: ContractSHA})
+		if err != nil {
+			return nil, err
+		}
+		logf("control getContract sha=%s", ContractSHA[:12])
 		return reply, nil
 	case "setTestHosts":
 		e.setDirectTestHosts(m.DirectTestHosts)

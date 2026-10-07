@@ -108,3 +108,26 @@ func TestApplyControlShutdownNilCallbackDoesNotPanic(t *testing.T) {
 		t.Fatalf("applyControl shutdown with nil callback: %v", err)
 	}
 }
+
+func TestApplyControl_GetContract_AcksWithContractSHA(t *testing.T) {
+	reply, err := applyControl(nil, nil, ControlMsg{Op: "getContract"}, nil)
+	if err != nil {
+		t.Fatalf("applyControl returned err: %v", err)
+	}
+	if reply == nil {
+		t.Fatal("getContract must return a reply payload, got nil")
+	}
+	var ack struct {
+		OK  bool   `json:"ok"`
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(reply, &ack); err != nil {
+		t.Fatalf("unmarshal ack: %v", err)
+	}
+	if !ack.OK {
+		t.Fatalf("ack.OK must be true, got %+v", ack)
+	}
+	if ack.SHA != ContractSHA {
+		t.Fatalf("ack.SHA=%q want %q", ack.SHA, ContractSHA)
+	}
+}
