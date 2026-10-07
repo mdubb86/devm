@@ -1,4 +1,4 @@
-// internal/softnet/config.go
+// internal/softnet/contract.go
 package softnet
 
 import "fmt"

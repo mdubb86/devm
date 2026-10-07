@@ -16,7 +16,7 @@ package render
 //     answers `.test` itself from its own resolver — loopback for
 //     direct services, the hairpin address otherwise. The guest
 //     carries no `.test` knowledge of its own. Must stay in sync
-//     with softnet.GatewayIP (internal/softnet/config.go).
+//     with softnet.GatewayIP (internal/softnet/contract.go).
 func DnsmasqConfig() []byte {
 	return []byte("no-resolv\nserver=192.168.127.1\n")
 }
