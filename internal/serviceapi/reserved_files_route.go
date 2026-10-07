@@ -40,7 +40,7 @@ func IsReservedFilesHostname(hostname, projectID, tld string) bool {
 // whenever a devm.yaml declares a service at the reserved
 // files.<project>.<tld> hostname. The two sites that enforce the rule —
 // Routes.Apply (daemon-side route-registration guard) and
-// cmd/devm/shell.go's rejectReservedFilesHostname (CLI-side pre-flight,
+// cmd/devm/shell.go's rejectReservedHostname (CLI-side pre-flight,
 // hit by `devm validate` and `devm start`/`shell`/`reconcile`) — share
 // this one phrasing so the error reads identically regardless of which
 // gate caught it.

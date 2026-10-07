@@ -184,7 +184,7 @@ func requireRunningVM(ctx context.Context, ident identity.Config, cfg schema.Con
 	return nil
 }
 
-// rejectReservedFilesHostname returns a loud error if any service in
+// rejectReservedHostname returns a loud error if any service in
 // cfg declares a reserved hostname: files.<project>.<tld> (owned by
 // devm's bundled filestash service, see
 // serviceapi.reservedFilestashRoute) or preview.<project>.<tld>
@@ -193,7 +193,7 @@ func requireRunningVM(ctx context.Context, ident identity.Config, cfg schema.Con
 // config check) and runShellFlow (`devm start`/`devm shell`/`devm
 // reconcile`, the cold-start path) so the rule is enforced identically
 // whether or not a VM is involved.
-func rejectReservedFilesHostname(pcfg schema.Config, ident identity.Config) error {
+func rejectReservedHostname(pcfg schema.Config, ident identity.Config) error {
 	for name, svc := range pcfg.Services {
 		if svc.Hostname != "" && serviceapi.IsReservedFilesHostname(svc.Hostname, pcfg.Project.Name, ident.TLD) {
 			return fmt.Errorf("service %q: %w", name, serviceapi.FormatReservedFilesCollisionError(svc.Hostname))
@@ -224,12 +224,13 @@ func runShellFlow(cmd *cobra.Command, cmdName string, cmdArgs []string) error {
 	// Reject a devm.yaml declaring a reserved files.<project>.<tld> or
 	// preview.<project>.<tld> hostname before any cold-start work
 	// begins — the route-apply collision check (see
-	// serviceapi.IsReservedFilesHostname) only
+	// serviceapi.IsReservedFilesHostname and
+	// serviceapi.IsReservedPreviewHostname) only
 	// runs in a best-effort background goroutine below, whose result
 	// never reaches this command's exit code, so without this
 	// synchronous gate the collision would silently leave the user's
 	// service unroutable instead of failing loud.
-	if err := rejectReservedFilesHostname(cfg, ident); err != nil {
+	if err := rejectReservedHostname(cfg, ident); err != nil {
 		return err
 	}
 	bundleFingerprint, err := daemonHandshake(cmd.Context(), ident, cfg)

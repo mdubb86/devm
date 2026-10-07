@@ -125,8 +125,6 @@ func (r *Routes) Apply(projectID string, items []Route) error {
 	// route name (filestash files.<project>.<tld> or preview
 	// preview.<project>.<tld>) for THIS project. Exact-match (not prefix),
 	// so user-owned hostnames like files.mysite.com stay valid.
-	// Migration: a shelfmates-style devm.yaml that predates this rule
-	// hits this error and must be updated — see spec §Review Focus #1.
 	for _, item := range items {
 		if IsReservedFilesHostname(item.Hostname, projectID, r.tld) {
 			return FormatReservedFilesCollisionError(item.Hostname)

@@ -21,7 +21,7 @@ var validateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := rejectReservedFilesHostname(pcfg, cfg); err != nil {
+		if err := rejectReservedHostname(pcfg, cfg); err != nil {
 			return err
 		}
 		fmt.Printf("OK — %d service(s) configured\n", len(pcfg.Services))
