@@ -181,6 +181,22 @@ func TestFormatStatusJSON_IronProxyNilOmitted(t *testing.T) {
 	assert.NotContains(t, proj, "iron_proxy")
 }
 
+func TestFormatStatusJSON_SoftnetDrift_PresentWhenSet(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		SoftnetDrift: &serviceapi.SoftnetDriftInfo{LocalSHA: "aaaa", RemoteSHA: "bbbb", Message: "softnet(sewtrue): drifted"}})
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	d := parsed["project"].(map[string]any)["softnet_drift"].(map[string]any)
+	assert.Equal(t, "aaaa", d["local_sha"])
+	assert.Equal(t, "bbbb", d["remote_sha"])
+	assert.Equal(t, "softnet(sewtrue): drifted", d["message"])
+}
+
+func TestFormatStatusJSON_SoftnetDrift_OmittedWhenNil(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running"})
+	assert.NotContains(t, js, "softnet_drift")
+}
+
 // TestFormatStatusJSON_MutagenHealth proves the single-project
 // `devm status --json` output carries mutagen_health under project
 // when RunStatus populated StatusResult.MutagenHealth.

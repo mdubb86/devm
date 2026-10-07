@@ -637,16 +637,17 @@ func FormatStatusJSON(r StatusResult) string {
 		ApprovedSince *string `json:"approved_since"`
 	}
 	type project struct {
-		Sandbox        string                   `json:"sandbox"`
-		State          string                   `json:"state"`
-		Sessions       []sess                   `json:"sessions"`
-		PendingChanges pending                  `json:"pending_changes"`
-		Drift          []drift                  `json:"drift"`
-		Routing        serviceapi.RoutingStatus `json:"routing"`
-		Egress         *serviceapi.EgressStatus `json:"egress,omitempty"`
-		IronProxy      *ironProxy               `json:"iron_proxy,omitempty"`
-		MutagenHealth  string                   `json:"mutagen_health,omitempty"`
-		ApproveState   *approveState            `json:"approve_state"`
+		Sandbox        string                       `json:"sandbox"`
+		State          string                       `json:"state"`
+		Sessions       []sess                       `json:"sessions"`
+		PendingChanges pending                      `json:"pending_changes"`
+		Drift          []drift                      `json:"drift"`
+		Routing        serviceapi.RoutingStatus     `json:"routing"`
+		Egress         *serviceapi.EgressStatus     `json:"egress,omitempty"`
+		IronProxy      *ironProxy                   `json:"iron_proxy,omitempty"`
+		MutagenHealth  string                       `json:"mutagen_health,omitempty"`
+		ApproveState   *approveState                `json:"approve_state"`
+		SoftnetDrift   *serviceapi.SoftnetDriftInfo `json:"softnet_drift,omitempty"`
 	}
 	type body struct {
 		Daemon  daemon   `json:"daemon"`
@@ -694,6 +695,7 @@ func FormatStatusJSON(r StatusResult) string {
 			Routing:        r.Routing,
 			Egress:         r.Egress,
 			MutagenHealth:  r.MutagenHealth,
+			SoftnetDrift:   r.SoftnetDrift,
 		}
 		if r.ProxyHealth != nil {
 			b.Project.IronProxy = &ironProxy{
