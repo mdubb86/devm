@@ -3,8 +3,6 @@ package serviceapi
 import (
 	"fmt"
 	"regexp"
-
-	"github.com/mdubb86/devm/internal/softnet"
 )
 
 // SoftnetDriftInfo is the drift-report shape surfaced in /vm/status and
@@ -54,6 +52,9 @@ func formatDriftMessage(projectName, projectDir, localSHA, remoteSHA string) str
 		dir = "<your project directory>"
 	}
 	short := func(s string) string {
+		if s == "" {
+			return "unreachable"
+		}
 		if len(s) < 12 {
 			return s
 		}
@@ -66,8 +67,3 @@ func formatDriftMessage(projectName, projectDir, localSHA, remoteSHA string) str
 		projectName, short(remoteSHA), short(localSHA), dir,
 	)
 }
-
-// localContractSHA exists so callers reference ContractSHA via one
-// stable name even if a future refactor splits the softnet contract
-// across more files.
-func localContractSHA() string { return softnet.ContractSHA }

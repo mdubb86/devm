@@ -2,12 +2,15 @@ package serviceapi
 
 import (
 	"bufio"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/mdubb86/devm/internal/softnet"
 )
@@ -74,9 +77,8 @@ func TestProbeSoftnetContract_RejectsMalformedSHA(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for malformed sha")
 	}
-	if !strings.Contains(err.Error(), "malformed") && !strings.Contains(err.Error(), "sha") {
-		t.Fatalf("err must mention the shape problem: %v", err)
-	}
+	require.Contains(t, err.Error(), "malformed",
+		"err must identify the shape rejection: %v", err)
 }
 
 func TestProbeSoftnetContract_DeadSocketIsError(t *testing.T) {
@@ -94,11 +96,18 @@ func TestProbeSoftnetContract_SilentPeerTimesOutQuickly(t *testing.T) {
 	start := time.Now()
 	_, err := probeSoftnetContract(sock)
 	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("expected deadline error")
-	}
-	if elapsed > 1500*time.Millisecond {
-		t.Fatalf("probe should return within ~500ms, took %s", elapsed)
+	require.Error(t, err, "expected deadline error")
+	require.GreaterOrEqual(t, elapsed, 400*time.Millisecond,
+		"probe must wait near 500ms, returned at %s", elapsed)
+	require.Less(t, elapsed, 1*time.Second,
+		"probe took too long: %s", elapsed)
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		require.True(t, netErr.Timeout(), "err must be timeout, got %v", err)
+	} else {
+		require.ErrorIs(t, err, os.ErrDeadlineExceeded,
+			"err must be deadline-exceeded, got %v", err)
 	}
 }
 
@@ -131,6 +140,43 @@ func TestNewSoftnetDriftInfo_ProbeErrorIsDrift(t *testing.T) {
 	if info.RemoteSHA != "" {
 		t.Fatalf("probe-error drift should have empty RemoteSHA, got %q", info.RemoteSHA)
 	}
+}
+
+func TestNewSoftnetDriftInfo_ProbeErrorWithMatchingSHAIsDrift(t *testing.T) {
+	// A probe error means we did not learn the sha from softnet, so a
+	// matching value is coincidence.
+	info := newSoftnetDriftInfo("sewtrue", "/workspace/sewtrue",
+		softnet.ContractSHA, softnet.ContractSHA, errFake{})
+	require.NotNil(t, info, "probe error must be surfaced as drift even when SHAs happen to match")
+}
+
+func TestFormatDriftMessage_TruncationAndFallbacks(t *testing.T) {
+	cases := []struct {
+		name, projectName, projectDir, localSHA, remoteSHA string
+		wants                                              []string
+	}{
+		{"happy path truncation", "sewtrue", "/workspace/sewtrue",
+			"aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb", "ffffffffffffffffcccccccccccccccc",
+			[]string{"sewtrue", "aaaaaaaaaaaa", "ffffffffffff", "/workspace/sewtrue", "devm stop && devm start"}},
+		{"empty projectDir", "sewtrue", "", "aaaaaaaaaaaa", "ffffffffffff",
+			[]string{"<your project directory>"}},
+		{"empty remoteSHA probe-error", "sewtrue", "/workspace/sewtrue", "aaaaaaaaaaaabbbbbbbbbbbb", "",
+			[]string{"unreachable"}},
+		{"short SHA stays whole", "sewtrue", "/d", "abc", "def",
+			[]string{"abc", "def"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			msg := formatDriftMessage(c.projectName, c.projectDir, c.localSHA, c.remoteSHA)
+			for _, want := range c.wants {
+				require.Contains(t, msg, want, "message missing %q: %q", want, msg)
+			}
+		})
+	}
+	// Truncation must actually cut.
+	msg := formatDriftMessage("p", "/d", "aaaaaaaaaaaaaaaabbbb", "ffffffffffffffffcccc")
+	require.NotContains(t, msg, "aaaaaaaaaaaaa")
+	require.NotContains(t, msg, "fffffffffffff")
 }
 
 type errFake struct{}
