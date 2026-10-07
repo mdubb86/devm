@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strings"
 
 	"github.com/mdubb86/devm/internal/softnet"
 )
@@ -79,10 +80,7 @@ func logDriftIfAny(projectID, projectDir, sock string) {
 	if info == nil {
 		return
 	}
-	dir := projectDir
-	if dir == "" {
-		dir = "<your project directory>"
-	}
-	log.Printf("softnet-drift: %s: subprocess sha=%q daemon sha=%s (restart: cd %s && devm stop && devm start)",
-		projectID, info.RemoteSHA, info.LocalSHA, dir)
+	// Collapse the multi-line message to one log line.
+	oneLine := strings.ReplaceAll(info.Message, "\n", " | ")
+	log.Printf("softnet-drift: %s", oneLine)
 }

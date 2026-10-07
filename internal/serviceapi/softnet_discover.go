@@ -71,7 +71,6 @@ func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
 			if snapErr == nil && snap != nil {
 				projectDir = snap.MacCwd
 			}
-			logDriftIfAny(id, projectDir, sock)
 			if needsForwardingPush {
 				if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(info, ntpPort)); err != nil {
 					daemonlog.Errorf("serviceapi: discoverSoftnet: setPolicy FORWARDING for %s: %v", id, err)
@@ -85,6 +84,8 @@ func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
 					daemonlog.Errorf("serviceapi: discoverSoftnet: pushTestHosts for %s: %v", id, err)
 				}
 			}
+			// Last, so a hung softnet never delays the policy pushes above.
+			logDriftIfAny(id, projectDir, sock)
 		}(id, sock, info)
 	}
 }

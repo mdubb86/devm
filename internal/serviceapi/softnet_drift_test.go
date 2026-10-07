@@ -218,6 +218,9 @@ func TestLogDriftIfAny_WritesOneLineWhenDrifted(t *testing.T) {
 	if !strings.Contains(out, "softnet-drift") || !strings.Contains(out, "sewtrue") {
 		t.Fatalf("drift log missing project name / tag: %q", out)
 	}
+	if !strings.Contains(out, "devm stop && devm start") || !strings.Contains(out, "/workspace/sewtrue") {
+		t.Fatalf("drift log missing restart hint / project dir: %q", out)
+	}
 	if strings.Count(out, "softnet-drift") != 1 || strings.Count(out, "\n") != 1 {
 		t.Fatalf("drift log must be exactly one line, got %q", out)
 	}
