@@ -4,8 +4,11 @@ Walks the real failure mode we built the drift feature for: a daemon
 upgrade left a running VM's softnet subprocess on the previous build.
 Steps:
 
-  1. Build bin/devm-e2e-drift (one comment appended to contract.go →
-     different softnet.ContractSHA).
+  1. Build the drift variant in-process: append one comment to
+     internal/softnet/contract.go (different bytes → different
+     softnet.ContractSHA), `go build` as bin/devm-e2e-drift, restore
+     contract.go. The whole mutate/build/restore lives in this test
+     because it is the only caller.
   2. Install the drift variant over /usr/local/bin/devm-e2e; restart
      the LaunchDaemon so it loads the drift binary.
   3. `devm start` a scratch VM — softnet is spawned by the drift
@@ -26,6 +29,8 @@ LaunchDaemon between, same class of global-state churn as test_204 /
 test_205.
 """
 from __future__ import annotations
+import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -35,11 +40,52 @@ import pytest
 pytestmark = pytest.mark.install
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+CONTRACT_GO = REPO_ROOT / "internal" / "softnet" / "contract.go"
 DEVM_E2E_BIN = REPO_ROOT / "bin" / "devm-e2e"
 DRIFT_VARIANT_BIN = REPO_ROOT / "bin" / "devm-e2e-drift"
 INSTALLED_BIN = Path("/usr/local/bin/devm-e2e")
 DAEMON_OUT_LOG = Path.home() / "Library" / "Logs" / "com.devm.e2e.service.out.log"
 DAEMON_SOCK = Path.home() / "Library" / "Application Support" / "devm-e2e" / "devm.sock"
+
+# One comment appended to contract.go — enough to shift the sha256.
+# Lives inline here because this test is the ONLY caller that builds
+# a drift variant; a shared recipe would imply reuse that doesn't exist.
+DRIFT_MARKER = b"\n// e2e-drift-variant: forces a distinct ContractSHA for test_272.\n"
+
+
+def _build_drift_variant() -> None:
+    """Append DRIFT_MARKER to contract.go, build bin/devm-e2e-drift,
+    restore contract.go. The restore runs in a finally so a failed
+    build never leaves the source tree mutated. Embed artifacts are
+    assumed present (just e2e-install's `_build "e2e"` prereq runs
+    first and populates them).
+    """
+    original = CONTRACT_GO.read_bytes()
+    try:
+        CONTRACT_GO.write_bytes(original + DRIFT_MARKER)
+        commit = subprocess.check_output(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--short=12", "HEAD"],
+            text=True,
+        ).strip()
+        # Random per-build fingerprint, same pattern as justfile's
+        # DEV_LDFLAGS. Not re-used anywhere; just needs to be non-empty.
+        fingerprint = os.urandom(4).hex()
+        ldflags = (
+            f"-X main.Commit={commit}-drift "
+            f"-X main.Fingerprint={fingerprint} "
+            f"-X github.com/mdubb86/devm/internal/identity.Profile=e2e"
+        )
+        subprocess.run(
+            ["go", "build", "-ldflags", ldflags, "-o", str(DRIFT_VARIANT_BIN), "./cmd/devm"],
+            cwd=str(REPO_ROOT), check=True, timeout=180,
+        )
+        subprocess.run(
+            ["codesign", "--sign", "-", "--force", "--options=runtime",
+             "--identifier", "com.mdubb86.devm", str(DRIFT_VARIANT_BIN)],
+            check=True, timeout=30,
+        )
+    finally:
+        CONTRACT_GO.write_bytes(original)
 
 
 def _wait_daemon_socket(timeout: float = 30.0) -> None:
@@ -66,19 +112,12 @@ def _tail_log(path: Path, start_offset: int) -> str:
 def test_softnet_drift_surfaces_in_status(devm, workspace):
     assert DEVM_E2E_BIN.exists(), (
         f"bin/devm-e2e missing — run `just e2e-install test_272_softnet_contract_drift_surfaces` "
-        f"(the just recipe builds it) rather than invoking pytest directly."
+        f"rather than invoking pytest directly; e2e-install's prereq builds it."
     )
     assert DAEMON_OUT_LOG.exists(), f"daemon out log missing at {DAEMON_OUT_LOG}"
 
-    # 1. Build the drift variant.
-    r = subprocess.run(
-        ["just", "e2e-build-drift-variant"],
-        cwd=str(REPO_ROOT), capture_output=True, timeout=300,
-    )
-    assert r.returncode == 0, (
-        f"e2e-build-drift-variant failed:\n"
-        f"stdout={r.stdout.decode()!r}\nstderr={r.stderr.decode()!r}"
-    )
+    # 1. Build the drift variant (inline — only this test needs it).
+    _build_drift_variant()
     assert DRIFT_VARIANT_BIN.exists(), f"drift variant missing at {DRIFT_VARIANT_BIN}"
 
     try:
