@@ -233,6 +233,22 @@ build: fetch-iron-proxy (_build-helper-embed "prod") (_build-setsid-shim-embed) 
 # (separate runtime dir, socket, LaunchDaemon label; see internal/identity).
 build-e2e: fetch-iron-proxy (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build-gdevm-embed) (_build-tart-mutagen-ssh-embed) (_build "e2e")
 
+# Produce bin/devm-e2e-drift: identical to bin/devm-e2e except for a
+# single comment appended to internal/softnet/contract.go that forces
+# a distinct softnet.ContractSHA. Used by the e2e drift test
+# (test_272) to simulate "softnet subprocess is still running the
+# previous build" without needing a time machine. Not shipped; built
+# on demand by the test, deleted on test teardown.
+e2e-build-drift-variant: fetch-iron-proxy fetch-mutagen (_build-helper-embed "e2e") (_build-setsid-shim-embed) (_build-docker-shims-embed) (_build-gdevm-embed) (_build-tart-mutagen-ssh-embed)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cp internal/softnet/contract.go internal/softnet/contract.go.orig
+    trap 'mv internal/softnet/contract.go.orig internal/softnet/contract.go' EXIT
+    printf '\n// e2e-drift-variant: forces a distinct ContractSHA for test_272.\n' >> internal/softnet/contract.go
+    ldflags="{{DEV_LDFLAGS}} -X github.com/mdubb86/devm/internal/identity.Profile=e2e"
+    go build -ldflags "$ldflags" -o bin/devm-e2e-drift ./cmd/devm
+    codesign --sign - --force --options=runtime --identifier com.mdubb86.devm bin/devm-e2e-drift
+
 # Run Go unit tests.
 test:
     go test ./...
