@@ -238,9 +238,14 @@ func TestShim_ChildSurvivesParentStdoutClose(t *testing.T) {
 	_ = w.Close()
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
-	// Locate the `yes` child of the shim.
+	// Locate the `yes` child of the shim. Under `go test ./...` peak
+	// fork storm, macOS deprioritises freshly-forked processes and the
+	// shim can take several seconds just to run Go's runtime init before
+	// it ever reaches its own fork/exec of the yes child; the siblings
+	// (TestShim_ChildSurvivesShimDeath, TestShim_IgnoresSIGTERM) use
+	// the same 10s budget for the same reason.
 	var childPID int
-	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
 		childPID = findNamedChildOf(t, cmd.Process.Pid, "yes")
 		if childPID != 0 {
 			break
