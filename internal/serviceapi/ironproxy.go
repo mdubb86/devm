@@ -196,15 +196,22 @@ func (c IronProxyConfig) YAML() ([]byte, error) {
 				// substitution, so a secret containing &, =, + or / can't
 				// break out of its parameter.
 				//
-				// match_path is deliberately NOT set: path substitution
-				// writes through url.URL.Path, which does not escape "/",
-				// so a secret containing a slash would silently become an
-				// extra path segment. match_body is off too — it forces
-				// the proxy to buffer request bodies.
+				// match_path is on because the policy-authority gate
+				// (internal/serviceapi/policyauthority.go: secretGateReject)
+				// scans each request path before this transform runs and
+				// rejects any substitution whose bound value contains '/'
+				// — the one char Go's url.URL.Path serializer does not
+				// escape, and the only one that would silently restructure
+				// the URL. All other candidate chars (?, #, \, %, space,
+				// control bytes) are percent-encoded on the wire.
+				//
+				// match_body is off — it forces the proxy to buffer
+				// request bodies, which we never want.
 				"replace": map[string]any{
 					"proxy_value":   secretToken(s.Name),
 					"match_headers": []string{}, // [] = scan all request headers (incl. cookies)
 					"match_query":   true,
+					"match_path":    true,
 				},
 				"rules": rules,
 			})
