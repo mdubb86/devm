@@ -13,6 +13,7 @@ import (
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
 
@@ -144,6 +145,13 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	if err != nil {
 		return fmt.Errorf("ca: %w", err)
 	}
+
+	// Wire the daemon-wide policy authority to the on-disk secret
+	// store so the egress gate can check path-substituted secret
+	// values. One backend per daemon; it is read-only from the
+	// gate's point of view (the CLI's `devm secret set` writes).
+	policyAuthority.UseSecretBackend(secret.NewFileBackend(cfg.SecretsDir()))
+	log.Printf("policy: secret backend wired (%s)", cfg.SecretsDir())
 
 	// Routes table — empty on startup; CLI populates via admin API.
 	routes := NewRoutes(cfg.TLD)

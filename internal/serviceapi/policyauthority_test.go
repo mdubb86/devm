@@ -10,11 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	transformv1 "github.com/mdubb86/devm/internal/ironproxy/transformv1"
+	"github.com/mdubb86/devm/internal/secret"
 )
 
 // dialPolicy connects a TransformService client to a unix socket.
@@ -401,4 +403,16 @@ func TestPolicyAuthorityDecisionAndRecordAreAtomic(t *testing.T) {
 		}
 		pa.SetAllowlist(proj, []string{"allowed.example"})
 	}
+}
+
+func TestPolicyAuthority_UseSecretBackend_SetsAndClears(t *testing.T) {
+	pa := NewPolicyAuthority()
+	assert.Nil(t, pa.secretBackend(), "zero-value authority has no backend")
+
+	fake := secret.NewFake()
+	pa.UseSecretBackend(fake)
+	assert.Same(t, fake, pa.secretBackend(), "setter stores the backend")
+
+	pa.UseSecretBackend(nil)
+	assert.Nil(t, pa.secretBackend(), "nil clears the wiring")
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/mdubb86/devm/internal/ironproxy/transformv1"
 	"github.com/mdubb86/devm/internal/policymatch"
+	"github.com/mdubb86/devm/internal/secret"
 )
 
 // Mode is the per-project egress response variant. Passthrough lets
@@ -77,6 +78,7 @@ type PolicyAuthority struct {
 	modes     map[string]Mode
 	listeners map[string]*policyListener
 	denials   *Denials
+	secrets   secret.Backend
 }
 
 type policyListener struct {
@@ -208,6 +210,24 @@ func (p *PolicyAuthority) PurgeProject(projectID string) {
 	delete(p.allow, projectID)
 	delete(p.modes, projectID)
 	p.denials.clearProject(projectID)
+}
+
+// UseSecretBackend sets or replaces the backend the egress gate reads
+// secret values from. Called once at daemon startup from RunService;
+// tests exercising the gate call it after NewPolicyAuthority. A nil
+// backend disables the gate (unwired state).
+func (p *PolicyAuthority) UseSecretBackend(b secret.Backend) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.secrets = b
+}
+
+// secretBackend returns the currently wired backend, or nil when
+// unwired. Private so callers go through decide() / the gate check.
+func (p *PolicyAuthority) secretBackend() secret.Backend {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.secrets
 }
 
 // allowlistFor returns projectID's current allowlist — an observation
