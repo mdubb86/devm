@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -415,4 +416,215 @@ func TestPolicyAuthority_UseSecretBackend_SetsAndClears(t *testing.T) {
 
 	pa.UseSecretBackend(nil)
 	assert.Nil(t, pa.secretBackend(), "nil clears the wiring")
+}
+
+func TestPolicyGate_PathWithSlashBoundSecret_Rejects400(t *testing.T) {
+	pa := NewPolicyAuthority()
+	be := secret.NewFake()
+	// Secret bound for project "p1", name "TOKEN", value with a slash.
+	assert.NoError(t, be.Set("p1/TOKEN", "ab/cd"))
+	pa.UseSecretBackend(be)
+	pa.SetAllowlist("p1", []string{"api.example.com"}) // allowlist allows the host
+	s := &policyService{authority: pa, projectID: "p1"}
+
+	resp, err := s.TransformRequest(context.Background(), &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Method: "GET",
+			Host:   "api.example.com",
+			Url:    "/v1/__DEVM_SECRET_TOKEN__/resource",
+		},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.Action)
+	assert.NotNil(t, resp.Response)
+	assert.Equal(t, int32(http.StatusBadRequest), resp.Response.StatusCode)
+	assert.Equal(t, []string{"path-unsafe"}, resp.Response.Headers["X-Devm-Secret-Reject"].Values)
+	assert.Equal(t, []string{"TOKEN"}, resp.Response.Headers["X-Devm-Secret-Name"].Values)
+	assert.Equal(t, []string{"text/plain; charset=utf-8"}, resp.Response.Headers["Content-Type"].Values)
+	assert.Contains(t, string(resp.Response.Body), `devm proxy refused to substitute secret "TOKEN" into URL path`)
+	assert.Contains(t, string(resp.Response.Body), "misroute the request to a\ndifferent endpoint")
+}
+
+func TestPolicyGate_SafeSecretValue_FallsThroughToAllowlist(t *testing.T) {
+	pa := NewPolicyAuthority()
+	be := secret.NewFake()
+	assert.NoError(t, be.Set("p1/TOKEN", "safe-value-no-slash"))
+	pa.UseSecretBackend(be)
+	pa.SetAllowlist("p1", []string{"api.example.com"})
+	s := &policyService{authority: pa, projectID: "p1"}
+
+	resp, err := s.TransformRequest(context.Background(), &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Method: "GET", Host: "api.example.com",
+			Url: "/v1/__DEVM_SECRET_TOKEN__/resource",
+		},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.Action)
+}
+
+func TestPolicyGate_UnboundSecretPlaceholder_FallsThrough(t *testing.T) {
+	pa := NewPolicyAuthority()
+	pa.UseSecretBackend(secret.NewFake()) // empty backend — no secrets set
+	pa.SetAllowlist("p1", []string{"api.example.com"})
+	s := &policyService{authority: pa, projectID: "p1"}
+
+	resp, err := s.TransformRequest(context.Background(), &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Method: "GET", Host: "api.example.com",
+			Url: "/v1/__DEVM_SECRET_UNBOUND__/x",
+		},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.Action)
+}
+
+func TestPolicyGate_NoPlaceholder_FallsThroughFast(t *testing.T) {
+	pa := NewPolicyAuthority()
+	pa.UseSecretBackend(secret.NewFake())
+	pa.SetAllowlist("p1", []string{"api.example.com"})
+	s := &policyService{authority: pa, projectID: "p1"}
+
+	resp, err := s.TransformRequest(context.Background(), &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Method: "GET", Host: "api.example.com",
+			Url: "/v1/no/placeholders/here",
+		},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.Action)
+}
+
+func TestPolicyGate_MultiplePlaceholders_FirstPositionUnsafeWins(t *testing.T) {
+	// A has NO slash, B has one. In position-order B comes later, so A
+	// should NOT trigger reject but B should: the reject names B.
+	pa := NewPolicyAuthority()
+	be := secret.NewFake()
+	assert.NoError(t, be.Set("p1/A", "safe"))
+	assert.NoError(t, be.Set("p1/B", "bad/value"))
+	pa.UseSecretBackend(be)
+	pa.SetAllowlist("p1", []string{"api.example.com"})
+	s := &policyService{authority: pa, projectID: "p1"}
+
+	resp, err := s.TransformRequest(context.Background(), &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Method: "GET", Host: "api.example.com",
+			Url: "/__DEVM_SECRET_A__/x/__DEVM_SECRET_B__",
+		},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.Action)
+	assert.Equal(t, []string{"B"}, resp.Response.Headers["X-Devm-Secret-Name"].Values)
+}
+
+func TestPolicyGate_MultipleUnsafePlaceholders_FirstPositionWins(t *testing.T) {
+	// Both unsafe. The one earliest in the path (A) is named.
+	pa := NewPolicyAuthority()
+	be := secret.NewFake()
+	assert.NoError(t, be.Set("p1/A", "a/bad"))
+	assert.NoError(t, be.Set("p1/B", "b/bad"))
+	pa.UseSecretBackend(be)
+	pa.SetAllowlist("p1", []string{"api.example.com"})
+	s := &policyService{authority: pa, projectID: "p1"}
+
+	resp, err := s.TransformRequest(context.Background(), &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Method: "GET", Host: "api.example.com",
+			Url: "/__DEVM_SECRET_A__/x/__DEVM_SECRET_B__",
+		},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.Action)
+	assert.Equal(t, []string{"A"}, resp.Response.Headers["X-Devm-Secret-Name"].Values)
+}
+
+func TestPolicyGate_RunsBeforeAllowlist(t *testing.T) {
+	// Destination NOT on allowlist, placeholder unsafe. Expect 400 (gate),
+	// not 403 (allowlist).
+	pa := NewPolicyAuthority()
+	be := secret.NewFake()
+	assert.NoError(t, be.Set("p1/TOKEN", "bad/value"))
+	pa.UseSecretBackend(be)
+	// NO allowlist entry — the host is not allowed.
+	s := &policyService{authority: pa, projectID: "p1"}
+
+	resp, err := s.TransformRequest(context.Background(), &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Method: "GET", Host: "api.example.com",
+			Url: "/v1/__DEVM_SECRET_TOKEN__/x",
+		},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_REJECT, resp.Action)
+	assert.Equal(t, int32(http.StatusBadRequest), resp.Response.StatusCode,
+		"gate must run before allowlist — status should be 400, not 403")
+	assert.Equal(t, []string{"path-unsafe"}, resp.Response.Headers["X-Devm-Secret-Reject"].Values)
+}
+
+func TestPolicyGate_ConnectRequestEmptyURL_FallsThrough(t *testing.T) {
+	// For CONNECT, iron-proxy sends r.Url="". The gate must not panic
+	// or reject; it must fall through to the allowlist decision on Host.
+	pa := NewPolicyAuthority()
+	pa.UseSecretBackend(secret.NewFake())
+	pa.SetAllowlist("p1", []string{"api.example.com"})
+	s := &policyService{authority: pa, projectID: "p1"}
+
+	resp, err := s.TransformRequest(context.Background(), &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Method: "CONNECT", Host: "api.example.com:443", Url: "",
+		},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.Action)
+}
+
+func TestPolicyGate_NilBackend_FallsThrough(t *testing.T) {
+	// A test context that didn't wire a backend — gate inert.
+	pa := NewPolicyAuthority()
+	// NOTE: no UseSecretBackend call.
+	pa.SetAllowlist("p1", []string{"api.example.com"})
+	s := &policyService{authority: pa, projectID: "p1"}
+
+	resp, err := s.TransformRequest(context.Background(), &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Method: "GET", Host: "api.example.com",
+			Url: "/__DEVM_SECRET_FOO__/x",
+		},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.Action)
+}
+
+// listErrorBackend wraps a Backend and overrides List to return a
+// chosen error. Used to prove the gate falls through on a non-ENOENT
+// read failure (never turns a transient store error into a 400).
+type listErrorBackend struct {
+	secret.Backend
+	listErr error
+}
+
+func (b *listErrorBackend) List(projectID string) ([]string, error) {
+	return nil, b.listErr
+}
+
+func TestPolicyGate_BackendListError_FallsThrough(t *testing.T) {
+	pa := NewPolicyAuthority()
+	pa.UseSecretBackend(&listErrorBackend{
+		Backend: secret.NewFake(),
+		listErr: errors.New("permission denied"),
+	})
+	pa.SetAllowlist("p1", []string{"api.example.com"})
+	s := &policyService{authority: pa, projectID: "p1"}
+
+	resp, err := s.TransformRequest(context.Background(), &transformv1.TransformRequestRequest{
+		Request: &transformv1.HttpRequest{
+			Method: "GET", Host: "api.example.com",
+			Url: "/__DEVM_SECRET_FOO__/x",
+		},
+	})
+	// Gate did NOT reject — the request falls through to the allowlist
+	// decision (CONTINUE because the host is on the allowlist). A
+	// transient backend error must never become a 400 the user sees.
+	assert.NoError(t, err)
+	assert.Equal(t, transformv1.TransformAction_TRANSFORM_ACTION_CONTINUE, resp.Action)
 }

@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -10,11 +11,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/ironproxy/transformv1"
 	"github.com/mdubb86/devm/internal/policymatch"
 	"github.com/mdubb86/devm/internal/secret"
@@ -258,12 +261,106 @@ func (p *PolicyAuthority) decide(projectID, host, path, method string) (allowed 
 	return false
 }
 
+// Secret-placeholder tokens live in requests as `__DEVM_SECRET_<name>__`.
+// iron-proxy's secrets transform does a literal find-and-replace per
+// bound secret; the gate below mirrors that: it tests, per bound secret,
+// whether the token appears in the request path.
+const (
+	secretTokenPrefix = "__DEVM_SECRET_"
+	secretTokenSuffix = "__"
+)
+
+// secretPathRejectBody is the body returned on a path-unsafe reject.
+// The format uses one placeholder (%q), the secret name. The leading
+// text and the "misroute the request to a different endpoint" clause
+// are frozen — tests pin substring matches on them.
+const secretPathRejectBody = `devm proxy refused to substitute secret %q into URL path:
+characters in the stored value would misroute the request to a
+different endpoint. Pass the secret in an Authorization header or a
+query parameter instead.
+`
+
+// secretPathUnsafeResponse returns the devm-authored 400 for a request
+// whose path contains a bound-secret placeholder whose value contains
+// U+002F ('/'). Only the secret NAME ends up in the response — never
+// the value.
+func secretPathUnsafeResponse(name string) *transformv1.HttpResponse {
+	body := fmt.Sprintf(secretPathRejectBody, name)
+	return &transformv1.HttpResponse{
+		StatusCode: http.StatusBadRequest,
+		Headers: map[string]*transformv1.HeaderValues{
+			"X-Devm-Secret-Reject": {Values: []string{"path-unsafe"}},
+			"X-Devm-Secret-Name":   {Values: []string{name}},
+			"Content-Type":         {Values: []string{"text/plain; charset=utf-8"}},
+		},
+		Body: []byte(body),
+	}
+}
+
 // policyService implements transformv1.TransformServiceServer for one
 // project.
 type policyService struct {
 	transformv1.UnimplementedTransformServiceServer
 	authority *PolicyAuthority
 	projectID string
+}
+
+// secretGateReject scans path for __DEVM_SECRET_<name>__ tokens whose
+// bound values contain '/', the only char iron-proxy's path writer
+// does not escape. Returns the earliest-in-path offending secret name
+// and true, or ("", false) if nothing in path is unsafe.
+//
+// Fast path: when path has no `__DEVM_SECRET_` substring at all, no
+// backend reads happen. For requests that do carry a placeholder, one
+// backend.List is issued, then one backend.Get per name whose token
+// appears in path — the typical N is a handful of bound secrets.
+//
+// A nil backend (test contexts that did not wire one) returns
+// ("", false) — gate inert. A backend List or Get error other than
+// ErrNotFound is logged via daemonlog.Errorf and treated as fall-through:
+// a transient read failure must not become a 400 the user has to debug.
+func (s *policyService) secretGateReject(path string) (name string, rejected bool) {
+	if path == "" || !strings.Contains(path, secretTokenPrefix) {
+		return "", false
+	}
+	be := s.authority.secretBackend()
+	if be == nil {
+		return "", false
+	}
+	names, err := be.List(s.projectID)
+	if err != nil {
+		daemonlog.Errorf("policy: secret backend List(%s): %v", s.projectID, err)
+		return "", false
+	}
+	bestName := ""
+	bestPos := -1
+	for _, n := range names {
+		token := secretTokenPrefix + n + secretTokenSuffix
+		pos := strings.Index(path, token)
+		if pos < 0 {
+			continue
+		}
+		v, err := be.Get(s.projectID + "/" + n)
+		if err != nil {
+			if errors.Is(err, secret.ErrNotFound) {
+				// Listed but gone between List and Get — treat as unbound.
+				continue
+			}
+			daemonlog.Errorf("policy: secret backend Get(%s/%s): %v", s.projectID, n, err)
+			continue
+		}
+		if !strings.ContainsRune(v, '/') {
+			continue
+		}
+		if bestPos < 0 || pos < bestPos {
+			bestPos = pos
+			bestName = n
+		}
+	}
+	if bestPos < 0 {
+		return "", false
+	}
+	return bestName, true
 }
 
 func (s *policyService) TransformRequest(ctx context.Context, req *transformv1.TransformRequestRequest) (*transformv1.TransformRequestResponse, error) {
@@ -276,6 +373,16 @@ func (s *policyService) TransformRequest(ctx context.Context, req *transformv1.T
 	reqPath := ""
 	if u, err := url.Parse(r.GetUrl()); err == nil {
 		reqPath = u.Path
+	}
+	// Gate: a placeholder in the path whose bound value contains '/'
+	// would silently misroute. Reject with a devm-authored 400 before the
+	// allowlist check so the user sees the authoring bug even when the
+	// destination host is allowed.
+	if name, rejected := s.secretGateReject(reqPath); rejected {
+		return &transformv1.TransformRequestResponse{
+			Action:   transformv1.TransformAction_TRANSFORM_ACTION_REJECT,
+			Response: secretPathUnsafeResponse(name),
+		}, nil
 	}
 	if s.authority.decide(s.projectID, host, reqPath, r.GetMethod()) {
 		return &transformv1.TransformRequestResponse{
