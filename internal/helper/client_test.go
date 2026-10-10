@@ -60,10 +60,17 @@ func mockHelper(t *testing.T) string {
 		copy(addr.Addr[:], []byte{127, 0, 0, 1})
 		require.NoError(t, syscall.Bind(fd, addr))
 		require.NoError(t, syscall.Listen(fd, 8))
-		defer syscall.Close(fd)
 		resp := []byte(`{"ok":true}`)
 		oob := syscall.UnixRights(fd)
 		_, _, _ = uc.WriteMsgUnix(resp, oob, nil)
+		// Wait for the client to close the unix socket before closing
+		// our fd copy. On macOS, closing the sender's fd before the
+		// client's recvmsg has consumed the SCM_RIGHTS message leaves
+		// the dup'd fd in a broken state where its first Accept returns
+		// a connection whose Read sees EOF with no data. Reading-to-EOF
+		// here (returns when the client closes) serializes the close.
+		_, _ = uc.Read(make([]byte, 1))
+		syscall.Close(fd)
 	}()
 	t.Cleanup(func() {
 		ln.Close()
@@ -106,10 +113,13 @@ func mockHelperNewlineDelimited(t *testing.T) string {
 		copy(addr.Addr[:], []byte{127, 0, 0, 1})
 		require.NoError(t, syscall.Bind(fd, addr))
 		require.NoError(t, syscall.Listen(fd, 8))
-		defer syscall.Close(fd)
 		resp := []byte(`{"ok":true}`)
 		oob := syscall.UnixRights(fd)
 		_, _, _ = uc.WriteMsgUnix(resp, oob, nil)
+		// Serialize the close with the client's recvmsg — see the
+		// comment in mockHelper for the macOS SCM_RIGHTS race details.
+		_, _ = uc.Read(make([]byte, 1))
+		syscall.Close(fd)
 	}()
 	t.Cleanup(func() {
 		ln.Close()

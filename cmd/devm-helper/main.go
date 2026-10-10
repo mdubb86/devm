@@ -166,14 +166,24 @@ func handle(conn net.Conn) {
 		writeErr(uc, err.Error())
 		return
 	}
-	defer syscall.Close(fd)
 
 	// Reply payload = JSON status; FD rides SCM_RIGHTS on the same write.
 	resp, _ := json.Marshal(response{OK: true})
 	oob := syscall.UnixRights(fd)
 	if _, _, err := uc.WriteMsgUnix(resp, oob, nil); err != nil {
 		log.Printf("write reply: %v", err)
+		syscall.Close(fd)
+		return
 	}
+	// Wait for the client to close the unix socket before closing our
+	// fd copy. On macOS, closing the sender's fd before the client's
+	// recvmsg has consumed the SCM_RIGHTS message leaves the client's
+	// dup'd fd in a broken state where its first Accept returns a
+	// connection whose Read sees EOF with no data. Read-to-EOF here
+	// (returns when the client closes its end of the unix socket)
+	// serializes the close.
+	_, _ = uc.Read(make([]byte, 1))
+	syscall.Close(fd)
 }
 
 func writeErr(uc *net.UnixConn, msg string) {
