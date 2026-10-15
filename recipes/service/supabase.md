@@ -106,8 +106,30 @@ valid. This is only hit on `docker pull`: the first `supabase start`
 after a `devm teardown` (empty `/var/lib/docker`) and the occasional CLI
 image-version bump. Never at runtime once the images are cached.
 
-**The default above — a supervised window.** `public.ecr.aws` is the
-only standing allow, so open egress by hand when a pull is actually due:
+**The simplest answer — pull from Docker Hub instead.** The supabase CLI
+reads `SUPABASE_INTERNAL_IMAGE_REGISTRY` and routes every service's image
+pull through that registry (`apps/cli/src/command-internal/docker-registry.ts`
+in supabase/cli). Setting it to `docker.io` moves the whole supabase stack
+onto Docker Hub, which `docker: true` already handles — the daemon's
+implicit allowlist (`internal/docker/allowlist.go`) covers Docker's own
+registry and blob CDN hosts.
+
+```yaml
+# devm.yaml — in the env: block above
+env:
+  SUPABASE_INTERNAL_IMAGE_REGISTRY: docker.io
+```
+
+Then drop `public.ecr.aws` from `network.allow` and the two alternatives
+below are moot: pulls go through `docker: true`'s standing allowlist, no
+interactive window and no permanent CloudFront hole. Cost: Docker Hub's
+anonymous pull-rate limits, which bite only under heavy image churn and
+are rarely a problem for a dev loop that pulls once per cold VM. (Does
+not apply to `SUPABASE_USE_SLIM_IMAGES` — those are hardcoded to
+`ghcr.io/supabase/cli` and need `ghcr.io` on the allowlist instead.)
+
+**Alternative A — a supervised ECR window.** Keep `public.ecr.aws` as the
+only standing allow and open egress by hand when a pull is actually due:
 
 ```bash
 # on the Mac, from the project directory
@@ -120,7 +142,7 @@ The standing allowlist stays specific and the broad access is
 deliberate, time-boxed, and watched. Cost: on a cold VM `supabase start`
 403s on the first layer fetch until you remember to open the window.
 
-**The alternative — a standing `*.cloudfront.net`.** Add it to
+**Alternative B — a standing `*.cloudfront.net`.** Add it to
 `network.allow` and pulls just work, no interaction. Understand what
 that grants: CloudFront distributions are self-service. Anyone with an
 AWS account can create one in minutes pointing at any origin they
