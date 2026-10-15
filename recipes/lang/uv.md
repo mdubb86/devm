@@ -128,6 +128,21 @@ env:
   `preseed-python: no .python-version in <workspace> — pin the interpreter version in that file before devm start`
   rather than silently seeding a stale default. Pin the version the project
   actually needs.
+- **Bumping `.python-version` under an old lockfile.** When a project
+  has sdist-only transitive deps that lack a wheel for the new
+  interpreter (common on the datascience stack — `pyiceberg` was the
+  one that bit here), `uv sync` falls back to building from source and
+  dies on `cc: No such file`. Two mitigations worth knowing:
+  - For projects likely to pull sdists at all, add
+    `packages: [build-essential]` so a system compiler is present.
+  - For a Python version bump specifically, run `uv lock --upgrade` on
+    the Mac before bumping the interpreter inside the VM, so the lock
+    picks newer wheels before the guest tries to install them.
+- **A Python bump needs a restart under `UV_PYTHON_DOWNLOADS=manual`.**
+  `uv lock` itself requires the interpreter — the new one has to be
+  seeded by `preseed-python` before `uv sync`/`uv lock` sees it, which
+  means stop + start (not `devm reconcile`): `startup()` runs on cold-
+  start, and that is when the new interpreter lands.
 - **Not in scope: telemetry noise.** The `DO_NOT_TRACK=1` / `SUPABASE_TELEMETRY=0`
   suggestion (to silence the posthog 403 stacktrace) is tool-agnostic and belongs
   in a devm-global default or the supabase recipe, not here.
