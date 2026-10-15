@@ -55,6 +55,12 @@ won't load.
   read the same binary but hold their own user-data dirs, so
   Chromium's ProcessSingleton lock never collides. Rule: reuse the
   binary, never share a `--profile`/user-data-dir.
+- **npm 11 `allowScripts` warning is benign.** `npm install -g
+  agent-browser` prints `1 package has install scripts not yet covered
+  by allowScripts: agent-browser@<ver> (postinstall)` and skips the
+  postinstall. The CLI still works end-to-end afterwards (`open`,
+  `snapshot`, click/fill against a page) — the postinstall is not on
+  the critical path.
 - **Rehydration.** No extra step — `install()` re-runs on the next
   fresh VM after teardown; Playwright's own recipe re-runs `playwright
   install chromium` alongside.
