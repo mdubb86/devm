@@ -30,12 +30,18 @@ network:
   allow:
     - cdn.playwright.dev                      # browser-binary CDN
     - playwright.download.prss.microsoft.com  # Microsoft mirror fallback
+    # @playwright/test ≥ 1.63 fetches the Chromium binary from
+    # Chrome for Testing; keep this path-scoped — the bare bucket
+    # host carries unrelated Google content.
+    - storage.googleapis.com/chrome-for-testing-public/*
 ```
 
-Both hosts are required: `playwright install` tries the primary CDN, then the
-mirror — allow one and the other still 403s (`devm denials` shows them).
-`network.allow` is a live bucket (`devm reconcile`, no restart); `packages:`
-is live too — devm apt-installs under the project's current `network.allow`.
+All three hosts are required for `@playwright/test` 1.63+: `playwright
+install` tries the Playwright CDN, then the Microsoft mirror, and the
+Chromium binary itself comes from Chrome for Testing. Allow one and the
+others still 403 (`devm denials` shows them). `network.allow` is a live
+bucket (`devm reconcile`, no restart); `packages:` is live too — devm
+apt-installs under the project's current `network.allow`.
 
 ## Project side: pin `@playwright/test`, install browser-only
 
@@ -80,8 +86,12 @@ node -e "const {chromium} = require('@playwright/test'); chromium.launch().then(
 ```
 
 Verified live on devm 0.11.0 / Debian trixie arm64, `@playwright/test` 1.62.1
-(Chrome for Testing 151.0.7922.34): both CDN hosts confirmed via `devm
-denials`; `packages: [chromium]` supplied every runtime lib (a subsequent
-`playwright install-deps` was a no-op); headless launch smoke passed.
+(Chrome for Testing 151.0.7922.34): the two Playwright hosts confirmed via
+`devm denials`; `packages: [chromium]` supplied every runtime lib (a
+subsequent `playwright install-deps` was a no-op); headless launch smoke
+passed. The `storage.googleapis.com/chrome-for-testing-public/*` entry is
+required from 1.63 onward: the Chromium binary itself moved to Chrome for
+Testing, so a 1.63+ project missing that entry sees `playwright install
+chromium` 403 on the browser download.
 
 Upstream: <https://playwright.dev/docs/browsers>
