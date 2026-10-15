@@ -37,12 +37,16 @@ it here instead of using a classic PAT.
 
 ## Store in devm's secret backend
 
-    devm secret set GH_TOKEN
+    devm secret set gh_token
 
-Prompts for the value; stores it under `<project>/GH_TOKEN` in the
-macOS login keychain. Never touches disk on the guest.
+Prompts for the value; stores it under `<project>/gh_token` in the
+macOS login keychain. Never touches disk on the guest. The secret
+*name* is lowercase by convention — it's a devm-side identifier, not
+the env var `gh` reads. If the same token also authenticates
+`repos.*` clones, point `repos.<name>.secret: gh_token` at it so there
+is exactly one stored token.
 
-To rotate later, re-run `devm secret set GH_TOKEN` and
+To rotate later, re-run `devm secret set gh_token` and
 `devm reconcile` — iron-proxy picks up the new value; no VM restart.
 
 ## devm.yaml
@@ -50,13 +54,13 @@ To rotate later, re-run `devm secret set GH_TOKEN` and
 ```yaml
 # devm.yaml
 env:
-  GH_TOKEN: !secret GH_TOKEN
+  GH_TOKEN: !secret gh_token   # gh reads env var GH_TOKEN; secret store key is gh_token
 
 network:
   allow:
     - cli.github.com          # install-time: apt repo + keyring
     - host: api.github.com
-      secrets: [GH_TOKEN]     # runtime: iron-proxy substitutes
+      secrets: [gh_token]     # runtime: iron-proxy substitutes
     - github.com              # only if you'll clone/push over HTTPS
 ```
 ```bash
@@ -81,7 +85,7 @@ Notes on the shape:
   GitHub's install docs is dead weight here.
 - `gh` reads `GH_TOKEN` from env and sends it as the bearer token on
   every `gh api ...` call. Iron-proxy sees
-  `Authorization: Bearer __DEVM_SECRET_GH_TOKEN__` on the wire and
+  `Authorization: Bearer __DEVM_SECRET_gh_token__` on the wire and
   swaps in the real value from the keychain. The workload's env holds
   only the opaque placeholder.
 - Use GitHub's official apt repo (this recipe). Community `gh`
@@ -105,11 +109,11 @@ $ gh api /repos/OWNER/OTHER-REPO              # 404 → fine-grained scope worki
   `cli.github.com` not in `network.allow` → wget can't fetch the
   keyring.
 - **`gh api /user` → 401 Bad credentials**: keychain value is wrong or
-  expired. `devm secret set GH_TOKEN` to update, then `devm reconcile`
+  expired. `devm secret set gh_token` to update, then `devm reconcile`
   so iron-proxy picks up the new value.
 - **`gh api /user` → 401 in a fresh sandbox, secret is correct**:
   iron-proxy substitution didn't fire. Verify the `api.github.com`
-  allow entry has `secrets: [GH_TOKEN]` (not the bare host form).
+  allow entry has `secrets: [gh_token]` (not the bare host form).
 - **`git clone https://github.com/...` fails**: `github.com` (bare
   host, no `secrets:`) missing from `network.allow`. Note: gh's API
   host is `api.github.com`; clone/push over HTTPS goes to `github.com`.
