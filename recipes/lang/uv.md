@@ -54,6 +54,10 @@ install() {
 # silently-substituted 3.12 that surfaces later as a confusing `uv
 # sync` mismatch.
 preseed-python() {
+  if [ ! -f .python-version ]; then
+    echo "preseed-python: no .python-version in $PWD — pin the interpreter version in that file before devm start" >&2
+    return 1
+  fi
   uv python install "$(cat .python-version)"
 }
 
@@ -120,9 +124,10 @@ env:
   add `python3` to `packages:` if the project needs a *system* python for other
   reasons.
 - **`.python-version` is required.** No fallback in the recipe: a missing
-  file fails loud (`cat: .python-version: No such file` → `uv python install
-  ""` errors) rather than silently seeding a stale default. Pin the version
-  the project actually needs.
+  file fails loud with
+  `preseed-python: no .python-version in <workspace> — pin the interpreter version in that file before devm start`
+  rather than silently seeding a stale default. Pin the version the project
+  actually needs.
 - **Not in scope: telemetry noise.** The `DO_NOT_TRACK=1` / `SUPABASE_TELEMETRY=0`
   suggestion (to silence the posthog 403 stacktrace) is tool-agnostic and belongs
   in a devm-global default or the supabase recipe, not here.
