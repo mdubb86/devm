@@ -46,10 +46,18 @@ install() {
   # Copy the user-owned binary to system PATH so `fnm` works from
   # every user + non-login shell + service unit.
   sudo install -m 755 /home/devm/.local/share/fnm/fnm /usr/local/bin/fnm
-  # Install the current LTS + mark it as default. The default alias
+  # Install the pinned Node + mark it as default. The default alias
   # is a stable symlinked bin dir — the `path:` entry above tracks it.
-  fnm install --lts
-  fnm default lts-latest
+  # Honour `.nvmrc` at the workspace root if present (fnm reads
+  # `.nvmrc`/`.node-version` natively), else fall back to current LTS.
+  if [ -f "$WORKSPACE/.nvmrc" ]; then
+    ver="$(tr -d '[:space:]' < "$WORKSPACE/.nvmrc")"
+    fnm install "$ver"
+    fnm default "$ver"
+  else
+    fnm install --lts
+    fnm default lts-latest
+  fi
 }
 ```
 
