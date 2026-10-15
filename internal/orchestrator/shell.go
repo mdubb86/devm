@@ -594,6 +594,15 @@ func (d ShellDeps) teardownOnFail(ctx context.Context, cfg schema.Config, vmName
 		log.Printf("shell: teardown flush mutagen failed (continuing): %v", ferr)
 	}
 
+	// Terminate the sessions before the VM disk goes away. Session names
+	// are deterministic (serviceapi.SessionName); without this, the next
+	// `devm start` warm-attaches to these records, mutagen tries to
+	// reconnect to an SSH endpoint whose VM no longer exists, and the
+	// cold-start loops on "session is not currently able to synchronize".
+	if terr := terminateMutagenOnTeardownFn(d, ctx, cfg, vmName); terr != nil {
+		log.Printf("shell: teardown terminate mutagen failed (continuing): %v", terr)
+	}
+
 	if terr := d.teardownVM(ctx, cfg, vmName); terr != nil {
 		fmt.Fprintf(os.Stderr, "teardown-on-fail: %v\n", terr)
 	}
@@ -608,6 +617,15 @@ var flushMutagenOnTeardownFn = func(d ShellDeps, ctx context.Context, cfg schema
 	return d.flushMutagenOnTeardown(ctx, cfg, vmName)
 }
 
+// terminateMutagenOnTeardownFn is the test-injection seam for
+// teardownOnFail's session termination step. Mirrors
+// orchestrator.mutagenTeardownFn (stop.go) — the user-driven
+// `devm stop --destroy` path uses the same termination, so auto-teardown
+// matches it rather than leaving stale sessions behind.
+var terminateMutagenOnTeardownFn = func(d ShellDeps, ctx context.Context, cfg schema.Config, vmName string) error {
+	return d.terminateMutagenOnTeardown(ctx, cfg, vmName)
+}
+
 // flushMutagenOnTeardown builds the mutagen CLI the same way
 // waitForInitialSync does and flushes all of vmName's sync sessions. See
 // teardownOnFail for why this runs before the VM is destroyed.
@@ -617,6 +635,16 @@ func (d ShellDeps) flushMutagenOnTeardown(ctx context.Context, cfg schema.Config
 		return fmt.Errorf("mutagen: extract binary: %w", err)
 	}
 	return serviceapi.FlushAll(serviceapi.NewMutagenCLI(d.Ident, mutagenBin, nil), vmName)
+}
+
+// terminateMutagenOnTeardown terminates every mutagen session for vmName,
+// matching what RunStop does on StopDestroy (stop.go's mutagenTeardownFn).
+func (d ShellDeps) terminateMutagenOnTeardown(ctx context.Context, cfg schema.Config, vmName string) error {
+	mutagenBin, err := mutagen.Ensure(d.Ident.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("mutagen: extract binary: %w", err)
+	}
+	return serviceapi.TeardownPhase(serviceapi.NewMutagenCLI(d.Ident, mutagenBin, mutagen.OSExec), vmName)
 }
 
 // attachShell attaches an interactive shell inside the VM via `tart exec`.
