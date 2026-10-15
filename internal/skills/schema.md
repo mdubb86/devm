@@ -159,7 +159,7 @@ and the VM is torn down.
 Every other function name is only called where something references it:
 
 - `repos.<name>.commands` — function names runnable against that repo
-  via `run <name>` from the guest shell.
+  via `gdevm run <name>` from the guest shell.
 - `services.<name>.exec` (string form) — the function backing that
   service's process; devm renders a wrapper unit that invokes it.
 - from inside `devm.sh` itself — functions can call each other like any
@@ -277,11 +277,11 @@ repos:
 | `volume` | bool | no | When true, backs this repo with a devm-managed volume instead of a plain bind mount. Defaults `true` for the primary, `false` for secondaries. The primary cannot set `volume: false`. |
 | `primary` | bool | no | Marks this entry as the project's primary workspace repo. |
 | `ignore` | []string | no | Mutagen sync ignore patterns. |
-| `commands` | []string | no | Function names (from `devm.sh`/`devm.me.sh`) runnable against this repo via `run <name>`. |
+| `commands` | []string | no | Function names (from `devm.sh`/`devm.me.sh`) runnable against this repo via `gdevm run <name>`. |
 
 ##### `commands:` (optional)
 
-A list of function names, defined in the project's `devm.sh` (or `devm.me.sh`), runnable against this repo via `run <name>` from the guest. Names must match `/^[a-z][a-z0-9-]*$/`. Uniqueness is per-repo; two repos can both list a `test` function — the guest-side `run <name>` dispatcher picks the right one from `$PWD`.
+A list of function names, defined in the project's `devm.sh` (or `devm.me.sh`), runnable against this repo via `gdevm run <name>` from the guest. Names must match `/^[a-z][a-z0-9-]*$/`. Uniqueness is per-repo; two repos can both list a `test` function — the guest-side `gdevm run <name>` dispatcher picks the right one from `$PWD`.
 
 Example:
 

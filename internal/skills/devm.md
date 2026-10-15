@@ -43,9 +43,9 @@ A project's `CLAUDE.md` is git-tracked, so Mac and guest see the same content �
 
 Guest-specific setup — the `CLAUDE.local.md` stanza that tells Claude Code it is running in a devm guest, plus a set of guest-side skills that teach it how the environment works — ships as assets on the `tool/ai/claude` recipe. Run `devm recipes get tool/ai/claude` and follow its "Setup" section.
 
-## `run <name>` — repo task dispatcher
+## `gdevm run <name>` — repo task dispatcher
 
-Inside the guest, `run <name>` looks up `<name>` in the containing repo's `commands:` block (walks up from `$PWD` to find its repo) and runs it from the repo root. Two repos can define the same name; cwd picks the right one. `commands:` is just a list of function names, defined in the project's `devm.sh` (or `devm.me.sh`) — nothing fires automatically at cold-start on its own. To run something at cold-start, call it from `startup()` (every boot that opens the provisioning window) or `install()` (first boot only) in `devm.sh`.
+Inside the guest, `gdevm run <name>` looks up `<name>` in the containing repo's `commands:` block (walks up from `$PWD` to find its repo) and runs it from the repo root. Two repos can define the same name; cwd picks the right one. `commands:` is just a list of function names, defined in the project's `devm.sh` (or `devm.me.sh`) — nothing fires automatically at cold-start on its own. To run something at cold-start, call it from `startup()` (every boot that opens the provisioning window) or `install()` (first boot only) in `devm.sh`.
 
 ### Mutagen transport
 
@@ -60,7 +60,7 @@ interactive `ssh devm-<name>` and VS Code Remote-SSH.
 `gdevm` is the only devm-owned binary inside the VM (the `devm` CLI never exists on the guest; `gdevm` never exists on the Mac). It reaches the Mac-side daemon over softnet.
 
 - `gdevm propose [--reason <text>] [--kind <file>]` — signal that a `devm.yaml` / `devm.me.yaml` / `devm.sh` / `devm.me.sh` edit is ready for Mac-side review.
-- `gdevm run <command>` — invoke a named function from the project's guest command manifest (same lookup as `run <name>`).
+- `gdevm run <name>` — invoke a named function from the project's guest command manifest (see the dispatcher section above).
 - `gdevm passthrough --reason <text> [--for <duration>]` — request a supervised egress passthrough window; a human on the Mac authorizes it with `devm passthrough approve` (or `deny`).
 - `gdevm upgrade` — pull the daemon's current `gdevm` binary, env template, and commands manifest into this VM.
 - `gdevm recipes list | get <name> | asset ls <name> | asset get <name> <path>` — query the Mac-side recipes catalog from the guest.
