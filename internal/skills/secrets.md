@@ -113,9 +113,9 @@ Token format: `__DEVM_SECRET_<name>__` (e.g. `__DEVM_SECRET_anthropic_key__`). D
 
 ## Where the token is substituted
 
-Request **headers** (all of them, including cookies) and **query parameters**. A token that reaches an API as `?api_key=__DEVM_SECRET_foo__` is swapped just like one in `Authorization`, and the substituted value is re-encoded, so a credential containing `&`, `=`, `+` or `/` can't break out of its parameter.
+Request **headers** (all of them, including cookies), **query parameters**, and **URL path segments**. A token that reaches an API as `?api_key=__DEVM_SECRET_foo__` is swapped just like one in `Authorization`, and the substituted value is re-encoded so a credential containing `&`, `=`, `+` or `/` can't break out of its parameter. A token in a path segment — e.g. `/apis/v2/fans/__DEVM_SECRET_swid__` — is swapped the same way; the one restriction is that path substitution rejects a secret whose value contains `/`. Iron-proxy returns `400 Bad Request` with headers `X-Devm-Secret-Reject: path-unsafe` and `X-Devm-Secret-Name: <name>` rather than let the slash cross a path segment and change routing. Store a path-bound secret (an account GUID, a tenant id) as the bare value with no slashes.
 
-Request **paths and bodies are not** substituted. A token embedded in a URL path segment reaches the upstream unchanged.
+Request **bodies are not** substituted.
 
 Real credential values are never written to disk; they live only in iron-proxy's process memory.
 
