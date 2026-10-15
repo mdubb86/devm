@@ -5,7 +5,6 @@ package mutagen
 // list at session-create time (defaults first, user last, so user can
 // un-ignore any of these via mutagen's `!pattern` negation).
 var DefaultIgnores = []string{
-	".git/objects/pack/", // root-only; only one .git at sync root
 	"**/node_modules/",
 	"**/.venv/", "**/venv/",
 	"**/__pycache__/",

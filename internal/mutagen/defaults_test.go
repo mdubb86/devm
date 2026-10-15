@@ -12,7 +12,6 @@ func TestDefaultIgnores_ContainsCommonNoise(t *testing.T) {
 	assert.Contains(t, got, "**/node_modules/")
 	assert.Contains(t, got, "**/.DS_Store")
 	assert.Contains(t, got, "*.pyc")
-	assert.Contains(t, got, ".git/objects/pack/")
 }
 
 func TestDefaultIgnores_NoDuplicates(t *testing.T) {
