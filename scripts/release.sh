@@ -79,8 +79,8 @@ fi
 log "prepping //go:embed blobs (just embeds)"
 just embeds >&2
 
-log "running go test ./..."
-go test ./...
+log "running go test ./... under taskpolicy background QoS"
+taskpolicy -c background go test -p 2 -parallel 2 ./...
 
 if [ "${SKIP_CI_CHECK:-}" = "1" ]; then
     log "SKIP_CI_CHECK=1 — skipping gh CI check"
