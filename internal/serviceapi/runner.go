@@ -291,7 +291,7 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	rehydrateCacheFromStateSnapshots(cfg, cache, ironProxyState.keys())
 	gt := &RealGroundTruth{
 		Cfg: cfg, Tart: tr, Sup: sup, Proxy: proxy,
-		Locks: locks,
+		Locks: locks, NtpPort: ntp.Port(),
 	}
 	checks := []Check{
 		NewIronProxyCheck(),

@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -38,13 +39,17 @@ type GroundTruth interface {
 // so a wiring mistake surfaces immediately in dev. Locks must be set
 // to the daemon's shared *ProjectLocks (runner.go) — RespawnIronProxy
 // takes the per-project reconcile lock so a watchdog respawn can't
-// race a concurrent /vm/start or /vm/reconcile.
+// race a concurrent /vm/start or /vm/reconcile. NtpPort is the
+// daemon's embedded NTP server port, needed by RespawnProxyListeners
+// to re-build softnet's forward-targets endpoint when it re-pushes
+// FORWARDING after rebinding the guest-origin pair.
 type RealGroundTruth struct {
-	Cfg   identity.Config
-	Tart  *tart.Tart
-	Sup   *supervisor.Supervisor
-	Proxy *ProxyServer
-	Locks *ProjectLocks
+	Cfg     identity.Config
+	Tart    *tart.Tart
+	Sup     *supervisor.Supervisor
+	Proxy   *ProxyServer
+	Locks   *ProjectLocks
+	NtpPort int
 }
 
 func (g *RealGroundTruth) IronProxyHealth(ctx context.Context, projectID string) ProxyHealth {
@@ -150,8 +155,21 @@ func (g *RealGroundTruth) ProxyListenerHealth(ctx context.Context, projectID str
 }
 
 // RespawnProxyListeners tears down and rebinds projectID's :80/:443
-// listener pair. Used by ProxyListenerCheck when a health probe fails
-// twice in a row (see watchdog_check_proxy_listener.go).
+// listener pair AND its guest-origin ephemeral pair. Used by
+// ProxyListenerCheck when a health probe fails twice in a row (see
+// watchdog_check_proxy_listener.go).
+//
+// StopProjectListeners closes BOTH the project :80/:443 listeners and
+// the guest-origin pair as part of its tear-down (see proxy.go), so a
+// respawn that only called StartProjectListeners afterwards would
+// leave softnet still pointing at the pre-respawn guest-origin ports
+// — ports the daemon no longer accepts on. The in-guest hairpin
+// (DNS → 192.0.2.2 → softnet → vsock → Mac-side guest-origin) then
+// stays broken until the next /vm/start, even though the project
+// listener itself is healthy again. This rebinds the guest-origin
+// pair and re-pushes FORWARDING to softnet with its fresh ports —
+// mirroring the full sequence rebindProjectListeners runs on the
+// daemon-restart recovery path (runner.go:67).
 //
 // Takes the per-project reconcile lock so a watchdog respawn can't
 // race a concurrent /vm/stop: /vm/stop holds the same lock across its
@@ -171,7 +189,30 @@ func (g *RealGroundTruth) RespawnProxyListeners(ctx context.Context, projectID s
 	}
 
 	g.Proxy.StopProjectListeners(projectID)
-	return g.Proxy.StartProjectListeners(ctx, projectID, info.ProjectIP)
+	if err := g.Proxy.StartProjectListeners(ctx, projectID, info.ProjectIP); err != nil {
+		return err
+	}
+
+	guestHTTPPort, guestHTTPSPort, err := g.Proxy.StartGuestOriginListeners(ctx, projectID, info.ProjectIP)
+	if err != nil {
+		return fmt.Errorf("guest-origin rebind: %w", err)
+	}
+	info.GuestHTTPPort = guestHTTPPort
+	info.GuestHTTPSPort = guestHTTPSPort
+	ironProxyState.put(projectID, info)
+
+	sock, ok := softnetState.get(projectID)
+	if !ok {
+		// Project has guest-origin listeners rebuilt but no softnet
+		// control socket on record — the Mac-side state is consistent
+		// (the next softnet discover will push the fresh targets); the
+		// watchdog pass can move on.
+		return nil
+	}
+	if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(info, g.NtpPort)); err != nil {
+		return fmt.Errorf("softnet forwarding re-push: %w", err)
+	}
+	return nil
 }
 
 var _ GroundTruth = (*RealGroundTruth)(nil)
