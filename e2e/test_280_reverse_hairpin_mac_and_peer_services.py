@@ -42,7 +42,12 @@ from helpers.workspace import Workspace
 pytestmark = pytest.mark.devm
 
 MAC_BANNER = b"mac-service-ok\n"
-PEER_BANNER = b"peer-service-ok\n"
+# PEER_BANNER has no trailing newline on purpose. The guest-side service
+# embeds this byte-for-byte inside the systemd ExecStart= argument via a
+# printf shell command; a literal LF in that argument would terminate the
+# ExecStart directive and systemd would reject the unit as a bad setting.
+# Keep this a single line of printable ASCII.
+PEER_BANNER = b"peer-service-ok"
 
 
 class _MacHandler(http.server.BaseHTTPRequestHandler):
