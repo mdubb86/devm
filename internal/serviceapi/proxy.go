@@ -49,12 +49,25 @@ const LANDispatchPort = 42000
 // by destination IP first (which project owns this connection), then
 // by Host: header (which route within that project) — see ServeHTTP.
 type ProxyServer struct {
+	// cfg is the daemon identity. The hairpin's SNI mux reads cfg.TLD
+	// to compute own-project and peer-project suffixes against the
+	// right zone ("test" for prod, "e2e.test" for the e2e install).
+	cfg    identity.Config
 	routes *Routes
 	ca     *CA
 	// helperClient dials this daemon's own identity's helper socket
 	// (cfg.HelperSocketPath) — never a hardcoded prod path, so an e2e
 	// daemon binds through the e2e helper, not prod's.
 	helperClient *helper.Client
+
+	// peerHairpinsFor returns the declared peer-hostname-suffix →
+	// Mac-side host:port map for projectID at the moment the hairpin
+	// dispatches a connection. One accessor on the server, not an
+	// argument threaded through every call site, so tests can swap it
+	// without touching StartGuestOriginListeners. Returns nil (treated
+	// as empty map) when the project has no declared peers or state
+	// hasn't been wired yet.
+	peerHairpinsFor func(projectID string) map[string]string
 
 	mu      sync.Mutex
 	perProj map[string]projectListeners
@@ -134,12 +147,16 @@ type RebindStatus struct {
 
 func NewProxyServer(cfg identity.Config, routes *Routes, ca *CA) *ProxyServer {
 	return &ProxyServer{
+		cfg:          cfg,
 		routes:       routes,
 		ca:           ca,
 		helperClient: helper.NewClient(cfg),
 		perProj:      make(map[string]projectListeners),
 		bindLocks:    make(map[string]*sync.Mutex),
 		rebindStatus: make(map[string]RebindStatus),
+		// Stub by default: no declared peers. Task 9 replaces this with
+		// a reader of live ironProxyState filtered by peer_services.
+		peerHairpinsFor: func(string) map[string]string { return nil },
 	}
 }
 
@@ -329,9 +346,19 @@ func (p *ProxyServer) StopProjectListeners(projectID string) {
 	} else if pl.guestHTTP != nil {
 		_ = pl.guestHTTP.Close()
 	}
+	// guestHTTPS carries the hairpin's SNI mux, whose accept loop
+	// drives http.Server.Serve on short-lived one-shot listeners per
+	// own-project connection rather than calling httpsSrv.ServeTLS on
+	// the long-lived listener. httpsSrv therefore never owns the raw
+	// listener; closing it here is what unblocks the accept loop and
+	// releases the port — not Shutdown. Shutdown is still called when
+	// an *http.Server is recorded (so a future refactor that does
+	// Serve on the raw listener drains gracefully), but the raw Close
+	// is the load-bearing step.
 	if pl.guestHTTPSSrv != nil {
 		_ = pl.guestHTTPSSrv.Shutdown(shutdownCtx)
-	} else if pl.guestHTTPS != nil {
+	}
+	if pl.guestHTTPS != nil {
 		_ = pl.guestHTTPS.Close()
 	}
 }

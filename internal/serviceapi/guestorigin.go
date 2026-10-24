@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -133,9 +134,23 @@ func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, 
 			daemonlog.Errorf("serviceapi: guest-origin HTTP serve for %s exited: %v", projectID, err)
 		}
 	}()
+	// The HTTPS loop no longer delegates to http.Server.ServeTLS: the
+	// hairpin's SNI mux needs to peek the ClientHello before deciding
+	// whether to terminate TLS (own-project path) or splice raw bytes
+	// to a declared peer's own listener (peer path). hairpinDispatchHTTPS
+	// owns the full three-way dispatch and the ClientHello peek
+	// deadline; httpsSrv's TLSConfig is reused for the own-project
+	// termination so cert signing stays routed through p.ca.
 	go func() {
-		if err := httpsSrv.ServeTLS(httpsLn, "", ""); err != nil && err != http.ErrServerClosed {
-			daemonlog.Errorf("serviceapi: guest-origin HTTPS serve for %s exited: %v", projectID, err)
+		for {
+			raw, err := httpsLn.Accept()
+			if err != nil {
+				if err != http.ErrServerClosed && !errors.Is(err, net.ErrClosed) {
+					daemonlog.Errorf("serviceapi: guest-origin HTTPS accept for %s exited: %v", projectID, err)
+				}
+				return
+			}
+			go p.hairpinDispatchHTTPS(raw, h, httpsSrv, httpsLn.Addr(), projectID)
 		}
 	}()
 
