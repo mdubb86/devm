@@ -9,12 +9,15 @@ import (
 // parseSNI reads a TLS record from the start of record, parses the
 // ClientHello handshake message, and returns the server_name
 // extension's host_name value. Returns "" with nil error if the
-// ClientHello carried no SNI extension (treated by callers as
-// "unknown-SNI" fail-closed, same as a mismatched one).
+// ClientHello carried no SNI extension, or if its server_name list
+// contained only non-hostname entries, or if a host_name entry was
+// empty — callers treat empty-SNI as "unknown-SNI" fail-closed, same
+// as a mismatched one. Returned names are not normalised; callers
+// handle case and any trailing dot.
 //
 // Errors are structural: not a TLS record, truncated, non-ClientHello
-// handshake. Rolled by hand (no new dependency), ~50 lines; see RFC
-// 5246 §7.4.1.2 and RFC 6066 §3 for the wire format.
+// handshake. Rolled by hand (no new dependency); see RFC 5246 §7.4.1.2
+// and RFC 6066 §3 for the wire format.
 func parseSNI(record []byte) (string, error) {
 	if len(record) < 5 {
 		return "", errors.New("sni: truncated record header")
@@ -54,8 +57,14 @@ func parseSNI(record []byte) (string, error) {
 	}
 	compLen := int(h[off])
 	off += 1 + compLen
+	if len(h) < off {
+		return "", errors.New("sni: truncated compression")
+	}
+	if len(h) == off {
+		return "", nil // valid ClientHello with no extensions block
+	}
 	if len(h) < off+2 {
-		return "", nil // no extensions = no SNI
+		return "", errors.New("sni: truncated extensions header")
 	}
 	extTotal := int(binary.BigEndian.Uint16(h[off : off+2]))
 	off += 2
@@ -63,7 +72,10 @@ func parseSNI(record []byte) (string, error) {
 		return "", errors.New("sni: truncated extensions")
 	}
 	exts := h[off : off+extTotal]
-	for len(exts) >= 4 {
+	for len(exts) > 0 {
+		if len(exts) < 4 {
+			return "", errors.New("sni: truncated extension header")
+		}
 		extType := binary.BigEndian.Uint16(exts[0:2])
 		extLen := int(binary.BigEndian.Uint16(exts[2:4]))
 		if len(exts) < 4+extLen {
@@ -102,8 +114,12 @@ func parseSNI(record []byte) (string, error) {
 // prefixConn wraps net.Conn with a bytes slice already read from the
 // stream, so a caller that peeked bytes (via a bufio.Reader) can hand
 // the connection to a consumer (e.g. tls.Server) that will read from
-// the start. Read returns the prefix first, then falls through to the
-// underlying Conn. Write, Close, deadlines, and addrs pass through.
+// the start. Read returns the prefix first (short reads leave the
+// remainder for the next call), then falls through to the underlying
+// Conn; once the prefix is drained an empty-prefix Read is a direct
+// passthrough. Prefix bytes are served even after the underlying Conn
+// is closed, until exhausted. Write, Close, deadlines, and addrs pass
+// through.
 type prefixConn struct {
 	prefix []byte
 	net.Conn
