@@ -30,6 +30,19 @@ type Endpoint struct {
 	// listener. One listener serves /pop, /propose, /passthrough,
 	// /refresh-bundle, /recipes/* under one mux.
 	GuestAPI string `json:"guest_api,omitempty"`
+
+	// MacPorts is the set of Mac loopback ports this VM is allowed to
+	// reach. Guest TCP to NATAliasIP:<port> for port in MacPorts dials
+	// 127.0.0.1:<port> on the Mac. Replaces the current drop for a
+	// declared port; undeclared ports still RST.
+	MacPorts []int `json:"mac_ports,omitempty"`
+
+	// PeerHairpins maps a peer project's hostname suffix (e.g.
+	// "sibling.test", no leading dot) to the Mac-side host:port of
+	// that peer's own guest-origin HTTPS listener. The hairpin's SNI
+	// mux reads this; softnet never does. Kept on the wire envelope
+	// for symmetry with the other per-VM state.
+	PeerHairpins map[string]string `json:"peer_hairpins,omitempty"`
 }
 
 // softnetClient is the daemon-side handle to one VM's softnet control

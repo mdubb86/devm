@@ -3,6 +3,7 @@ package softnet
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -51,7 +52,7 @@ func TestForwardTargets_GuestAPIField_JSONRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(blob, &back); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if back != orig {
+	if !reflect.DeepEqual(back, orig) {
 		t.Fatalf("round-trip mismatch: got %+v, want %+v", back, orig)
 	}
 }
@@ -66,5 +67,42 @@ func TestForwardTargets_GuestAPIOmittedWhenEmpty(t *testing.T) {
 	}
 	if strings.Contains(string(blob), "guest_api") {
 		t.Fatalf("marshaled JSON should omit unset guest_api field: %s", blob)
+	}
+}
+
+func TestForwardTargets_Roundtrip_MacPortsAndPeerHairpins(t *testing.T) {
+	in := ControlMsg{
+		Op:     "setPolicy",
+		Policy: "FORWARDING",
+		ForwardTargets: &ForwardTargets{
+			HTTP: "127.0.0.1:1", HTTPS: "127.0.0.1:2", DNS: "127.0.0.1:3", NTP: "127.0.0.1:4",
+			MacPorts:     []int{3000, 5432},
+			PeerHairpins: map[string]string{"sibling.test": "127.0.0.1:60001"},
+		},
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out ControlMsg
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(out.ForwardTargets.MacPorts, in.ForwardTargets.MacPorts) {
+		t.Fatalf("MacPorts roundtrip: want %v got %v", in.ForwardTargets.MacPorts, out.ForwardTargets.MacPorts)
+	}
+	if !reflect.DeepEqual(out.ForwardTargets.PeerHairpins, in.ForwardTargets.PeerHairpins) {
+		t.Fatalf("PeerHairpins roundtrip: want %v got %v", in.ForwardTargets.PeerHairpins, out.ForwardTargets.PeerHairpins)
+	}
+}
+
+func TestForwardTargets_OmitEmpty(t *testing.T) {
+	in := ControlMsg{Op: "setPolicy", Policy: "LOCKED"}
+	b, _ := json.Marshal(in)
+	s := string(b)
+	for _, k := range []string{"mac_ports", "peer_hairpins"} {
+		if strings.Contains(s, k) {
+			t.Fatalf("expected %q omitted, got %s", k, s)
+		}
 	}
 }
