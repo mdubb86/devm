@@ -5,12 +5,14 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
 )
@@ -51,19 +53,48 @@ func guestOriginBackend(routes *Routes, host, projectID, projectIP string) (stri
 // guestOriginHandler serves guest-originated `.test` traffic for one project.
 // Unlike ProxyServer.ServeHTTP it needs no destination-IP dispatch: the
 // listener is per-project, so the project is fixed at construction.
+//
+// Three-way dispatch mirrors the HTTPS SNI mux in hairpin_sni.go:
+//   - Own project Host → serveOwn (existing reverse-proxy path).
+//   - Declared peer Host → hijack and splice to the peer's own
+//     GuestHTTPPort on Mac loopback. The peer's listener parses the
+//     request and dispatches it as its own guest would.
+//   - Unknown Host → 421 Misdirected Request.
 type guestOriginHandler struct {
-	routes    *Routes
-	projectID string
-	projectIP string
+	routes              *Routes
+	projectID           string
+	projectIP           string
+	tld                 string
+	peerHairpinsHTTPFor func() map[string]string
 }
+
+// hairpinHTTPSpliceTimeout bounds the peer-backend dial so a dead
+// peer's host-mux attempt fails fast instead of hanging the client.
+// Matches hairpinPeekTimeout in hairpin_sni.go.
+const hairpinHTTPSpliceTimeout = 5 * time.Second
 
 func (h *guestOriginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host := stripPort(r.Host)
-	backend, ok := guestOriginBackend(h.routes, r.Host, h.projectID, h.projectIP)
-	if !ok {
-		write502NoRoute(w, host)
+	if _, ok := guestOriginBackend(h.routes, r.Host, h.projectID, h.projectIP); ok {
+		h.serveOwn(w, r)
 		return
 	}
+	if peer, ok := h.peerHairpinsHTTPFor()[peerSuffix(host, h.tld)]; ok && peer != "" {
+		h.spliceToPeer(w, r, peer)
+		return
+	}
+	log.Printf("hairpin: host mux reject host=%q project=%s", host, h.projectID)
+	http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
+}
+
+func (h *guestOriginHandler) serveOwn(w http.ResponseWriter, r *http.Request) {
+	host := stripPort(r.Host)
+	// guestOriginBackend is re-run here even though the dispatcher
+	// already called it: ok is guaranteed, but we need the backend
+	// address itself, and the second call is cheap compared to
+	// threading the value through a dispatcher that otherwise ignores
+	// it.
+	backend, _ := guestOriginBackend(h.routes, r.Host, h.projectID, h.projectIP)
 	target, _ := url.Parse("http://" + backend)
 	rev := httputil.NewSingleHostReverseProxy(target)
 	rev.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
@@ -73,6 +104,51 @@ func (h *guestOriginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "is the service running inside the VM?\n\n(%v)\n", err)
 	}
 	rev.ServeHTTP(w, r)
+}
+
+// spliceToPeer hijacks the client conn, replays the already-parsed
+// request to the peer's HTTP listener, and splices the two halves
+// together. The peer's listener handles the request as if the guest
+// had dialed it directly; TLS is not involved on either side.
+func (h *guestOriginHandler) spliceToPeer(w http.ResponseWriter, r *http.Request, peerAddr string) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "server does not support hijacking", http.StatusInternalServerError)
+		return
+	}
+	clientConn, buf, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+	defer clientConn.Close()
+
+	backend, err := net.DialTimeout("tcp", peerAddr, hairpinHTTPSpliceTimeout)
+	if err != nil {
+		log.Printf("hairpin: host mux peer dial failed project=%s peer=%s: %v",
+			h.projectID, peerAddr, err)
+		return
+	}
+	defer backend.Close()
+
+	// Replay the request we already parsed so the peer's listener sees
+	// a well-formed HTTP/1.1 request on its first read. r.Write handles
+	// the request line, headers, and (streaming) body up to
+	// Content-Length — anything beyond that is picked up by spliceConns.
+	if err := r.Write(backend); err != nil {
+		return
+	}
+	// Any client bytes buffered by the hijacker (unlikely for HTTP/1.1
+	// non-pipelined, possible otherwise) must be forwarded before the
+	// bidirectional splice starts — otherwise they'd never reach the
+	// peer. buf.Reader surfaces exactly what http.Server already read
+	// from clientConn.
+	if n := buf.Reader.Buffered(); n > 0 {
+		b, _ := io.ReadAll(buf.Reader)
+		if _, err := backend.Write(b); err != nil {
+			return
+		}
+	}
+	spliceConns(clientConn, backend)
 }
 
 // StartGuestOriginListeners binds this project's guest-origin HTTP and HTTPS
@@ -106,7 +182,13 @@ func (p *ProxyServer) StartGuestOriginListeners(ctx context.Context, projectID, 
 		return pl.guestHTTPPort, pl.guestHTTPSPort, nil
 	}
 
-	h := &guestOriginHandler{routes: p.routes, projectID: projectID, projectIP: projectIP}
+	h := &guestOriginHandler{
+		routes:              p.routes,
+		projectID:           projectID,
+		projectIP:           projectIP,
+		tld:                 p.cfg.TLD,
+		peerHairpinsHTTPFor: func() map[string]string { return p.peerHairpinsHTTPFor(projectID) },
+	}
 
 	httpLn, err := net.Listen("tcp", ironProxyListenAddr(0))
 	if err != nil {

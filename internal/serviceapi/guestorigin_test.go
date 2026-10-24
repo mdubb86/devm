@@ -95,8 +95,9 @@ func TestGuestOriginBackendRejects(t *testing.T) {
 }
 
 // TestGuestOriginHandlerDispatch drives the guest-origin HTTP handler directly
-// against a stub backend, confirming it reaches the guest and reports a clean
-// 502 for an unknown host.
+// against a stub backend. The own-project route serves the backend; an
+// unknown host that isn't a declared peer surfaces as 421 Misdirected
+// Request through the host mux.
 func TestGuestOriginHandlerDispatch(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "hello from the guest")
@@ -119,7 +120,13 @@ func TestGuestOriginHandlerDispatch(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 
-	h := &guestOriginHandler{routes: routes, projectID: "proj", projectIP: "127.0.0.1"}
+	h := &guestOriginHandler{
+		routes:              routes,
+		projectID:           "proj",
+		projectIP:           "127.0.0.1",
+		tld:                 "test",
+		peerHairpinsHTTPFor: func() map[string]string { return nil },
+	}
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "http://api.test/", nil)
@@ -136,7 +143,7 @@ func TestGuestOriginHandlerDispatch(t *testing.T) {
 	req2 := httptest.NewRequest("GET", "http://nope.test/", nil)
 	req2.Host = "nope.test"
 	h.ServeHTTP(rec2, req2)
-	if rec2.Code != http.StatusBadGateway {
-		t.Fatalf("unknown host status = %d want 502", rec2.Code)
+	if rec2.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("unknown host status = %d want 421", rec2.Code)
 	}
 }

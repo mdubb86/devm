@@ -69,6 +69,14 @@ type ProxyServer struct {
 	// hasn't been wired yet.
 	peerHairpinsFor func(projectID string) map[string]string
 
+	// peerHairpinsHTTPFor is the plain-HTTP sibling of peerHairpinsFor:
+	// same key shape (peer `<project>.<tld>` suffix), but values point
+	// at each peer's GuestHTTPPort on Mac loopback instead of the
+	// GuestHTTPSPort. The Host-header mux in guestOriginHandler uses
+	// this when a non-own-project Host matches a declared peer and
+	// hijack-splices the connection there.
+	peerHairpinsHTTPFor func(projectID string) map[string]string
+
 	mu      sync.Mutex
 	perProj map[string]projectListeners
 
@@ -156,7 +164,8 @@ func NewProxyServer(cfg identity.Config, routes *Routes, ca *CA) *ProxyServer {
 		rebindStatus: make(map[string]RebindStatus),
 		// Stub by default: no declared peers. Task 9 replaces this with
 		// a reader of live ironProxyState filtered by peer_services.
-		peerHairpinsFor: func(string) map[string]string { return nil },
+		peerHairpinsFor:     func(string) map[string]string { return nil },
+		peerHairpinsHTTPFor: func(string) map[string]string { return nil },
 	}
 }
 
