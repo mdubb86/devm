@@ -99,6 +99,10 @@ func (e *egress) testAnswer(fqdn string) (net.IP, bool) {
 // LOCKED drops everything before either hairpin below is ever reached;
 // FORWARDING additionally routes :80/:443 to iron-proxy. ok=false => RST the
 // flow. Pure; unit-tested.
+//
+// The MacPorts arm sits above the PolicyLocked drop and is gated on
+// PolicyForwarding so a boot-locked guest still can't reach a declared
+// Mac port — only the FORWARDING policy opens the allowlist.
 func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 	pol, ft := e.snapshot()
 	if dstIP == NATAliasIP {
@@ -106,7 +110,7 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 	}
 	if pol == PolicyForwarding && dstIP == HostLoopIP && ft != nil {
 		for _, p := range ft.MacPorts {
-			if uint16(p) == dport {
+			if int(dport) == p {
 				return fmt.Sprintf("%s:%d", HostLoopIP, dport), true
 			}
 		}
