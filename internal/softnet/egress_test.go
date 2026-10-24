@@ -131,6 +131,111 @@ func TestEgress_DeniesLegacyPort82(t *testing.T) {
 	}
 }
 
+func TestTarget_MacPorts(t *testing.T) {
+	cases := []struct {
+		name    string
+		pol     Policy
+		ft      *ForwardTargets
+		dstIP   string
+		dport   uint16
+		wantTgt string
+		wantOK  bool
+	}{
+		{"locked_drops_even_declared", PolicyLocked, &ForwardTargets{MacPorts: []int{3000}}, NATAliasIP, 3000, "", false},
+		{"declared_natalias", PolicyForwarding, &ForwardTargets{HTTP: "x:1", HTTPS: "x:2", MacPorts: []int{3000}}, NATAliasIP, 3000, HostLoopIP + ":3000", true},
+		{"declared_loop_direct", PolicyForwarding, &ForwardTargets{HTTP: "x:1", HTTPS: "x:2", MacPorts: []int{3000}}, HostLoopIP, 3000, HostLoopIP + ":3000", true},
+		{"undeclared_rst", PolicyForwarding, &ForwardTargets{HTTP: "x:1", HTTPS: "x:2", MacPorts: []int{3000}}, NATAliasIP, 4000, "", false},
+		{"empty_allowlist_rst", PolicyForwarding, &ForwardTargets{HTTP: "x:1", HTTPS: "x:2"}, NATAliasIP, 3000, "", false},
+		{"port_80_still_goes_to_http", PolicyForwarding, &ForwardTargets{HTTP: "x:1", HTTPS: "x:2", MacPorts: []int{3000}}, NATAliasIP, 80, "x:1", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &egress{}
+			e.setPolicy(tc.pol, tc.ft)
+			tgt, ok := e.target(tc.dstIP, tc.dport)
+			if ok != tc.wantOK || tgt != tc.wantTgt {
+				t.Fatalf("target(%s,%d) = (%q,%v); want (%q,%v)", tc.dstIP, tc.dport, tgt, ok, tc.wantTgt, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestEgress_MacPortDial_RealForwarder(t *testing.T) {
+	// Start a tiny TCP echo on an ephemeral Mac port.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) { defer c.Close(); io.Copy(c, c) }(c)
+		}
+	}()
+	macPort := ln.Addr().(*net.TCPAddr).Port
+
+	// Build egress targeting that port, confirm target() dials it.
+	e := &egress{}
+	e.setPolicy(PolicyForwarding, &ForwardTargets{
+		HTTP: "127.0.0.1:1", HTTPS: "127.0.0.1:2",
+		MacPorts: []int{macPort},
+	})
+
+	tgt, ok := e.target(NATAliasIP, uint16(macPort))
+	if !ok {
+		t.Fatalf("target not ok for allowlisted port")
+	}
+	conn, err := net.DialTimeout("tcp", tgt, time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_, _ = conn.Write([]byte("hello"))
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != "hello" {
+		t.Fatalf("echo: want hello got %q", buf)
+	}
+}
+
+func TestEgress_MacPort_UndeclaredRSTs(t *testing.T) {
+	e := &egress{}
+	e.setPolicy(PolicyForwarding, &ForwardTargets{
+		HTTP: "127.0.0.1:1", HTTPS: "127.0.0.1:2",
+		MacPorts: []int{3000},
+	})
+	_, ok := e.target(NATAliasIP, 4000)
+	if ok {
+		t.Fatalf("undeclared port 4000 must RST, target returned ok")
+	}
+}
+
+func TestEgress_MacPort_DialFailure_Logged(t *testing.T) {
+	// Allowlist a port that has no listener; target() returns the
+	// dial address, but a real DialTimeout fails fast — the forwarder
+	// deduplicates and RSTs the flow, not our concern here. Confirm
+	// the policy says 'go' and the dial fails loudly, not silently.
+	e := &egress{}
+	e.setPolicy(PolicyForwarding, &ForwardTargets{
+		HTTP: "127.0.0.1:1", HTTPS: "127.0.0.1:2",
+		MacPorts: []int{54777}, // unlikely to be bound
+	})
+	tgt, ok := e.target(NATAliasIP, 54777)
+	if !ok {
+		t.Fatalf("declared port must pass policy, got !ok")
+	}
+	_, err := net.DialTimeout("tcp", tgt, 200*time.Millisecond)
+	if err == nil {
+		t.Fatalf("dial to unbound Mac port should fail; got nil error")
+	}
+}
+
 // TestSpliceReturnsByteCounts pins that splice reports how many bytes
 // flowed each direction — the counts callers log to detect splices
 // that established but never carried data.

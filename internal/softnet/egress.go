@@ -104,6 +104,13 @@ func (e *egress) target(dstIP string, dport uint16) (string, bool) {
 	if dstIP == NATAliasIP {
 		dstIP = HostLoopIP
 	}
+	if pol == PolicyForwarding && dstIP == HostLoopIP && ft != nil {
+		for _, p := range ft.MacPorts {
+			if uint16(p) == dport {
+				return fmt.Sprintf("%s:%d", HostLoopIP, dport), true
+			}
+		}
+	}
 	if pol == PolicyLocked {
 		return "", false
 	}
