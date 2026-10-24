@@ -3,6 +3,7 @@ package schema
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1337,4 +1338,92 @@ func TestValidate_ServiceExecArgv_NeverChecksAgainstFunctions(t *testing.T) {
 		},
 	}
 	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidateMacServices_Shape(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      []*MacService
+		wantErr string // substring; "" means success
+	}{
+		{"empty_ok", nil, ""},
+		{"happy", []*MacService{{Name: "studio", Port: 3000}}, ""},
+		{"two_distinct", []*MacService{{Name: "a", Port: 3000}, {Name: "b", Port: 4000}}, ""},
+		{"bad_name_uppercase", []*MacService{{Name: "Studio", Port: 3000}}, "mac_services[0].name"},
+		{"bad_name_dot", []*MacService{{Name: "api.v2", Port: 3000}}, "mac_services[0].name"},
+		{"bad_name_too_long", []*MacService{{Name: strings.Repeat("a", 64), Port: 3000}}, "mac_services[0].name"},
+		{"port_reserved_80", []*MacService{{Name: "a", Port: 80}}, "reserved"},
+		{"port_reserved_443", []*MacService{{Name: "a", Port: 443}}, "reserved"},
+		{"port_reserved_53", []*MacService{{Name: "a", Port: 53}}, "reserved"},
+		{"port_reserved_123", []*MacService{{Name: "a", Port: 123}}, "reserved"},
+		{"port_zero", []*MacService{{Name: "a", Port: 0}}, "port"},
+		{"port_too_high", []*MacService{{Name: "a", Port: 70000}}, "port"},
+		{"dup_name", []*MacService{{Name: "a", Port: 3000}, {Name: "a", Port: 4000}}, "duplicate"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Config{MacServices: tc.in}
+			err := c.validateMacServices()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want nil, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidate_HostTest_Reserved(t *testing.T) {
+	c := Config{
+		Project: Project{Name: "p"},
+		Services: map[string]Service{
+			"api": {Port: 3000, Hostname: "api.host.test"},
+		},
+	}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "host.test") {
+		t.Fatalf("want host.test reservation error, got %v", err)
+	}
+	// Bare "host.test" is rejected too.
+	c2 := Config{
+		Project: Project{Name: "p"},
+		Services: map[string]Service{
+			"api": {Port: 3000, Hostname: "host.test"},
+		},
+	}
+	if err := c2.Validate(); err == nil || !strings.Contains(err.Error(), "host.test") {
+		t.Fatalf("want host.test reservation error, got %v", err)
+	}
+}
+
+func TestValidatePeerServices_Shape(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      []*PeerService
+		wantErr string
+	}{
+		{"empty_ok", nil, ""},
+		{"happy", []*PeerService{{Project: "sibling"}}, ""},
+		{"bad_name_uppercase", []*PeerService{{Project: "Sibling"}}, "peer_services[0].project"},
+		{"bad_name_empty", []*PeerService{{Project: ""}}, "peer_services[0].project"},
+		{"dup", []*PeerService{{Project: "a"}, {Project: "a"}}, "duplicate"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Config{PeerServices: tc.in}
+			err := c.validatePeerServicesShape()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want nil, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
 }

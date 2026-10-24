@@ -446,6 +446,9 @@ func (s Service) Validate() error {
 	if s.Hostname != "" && !strings.HasSuffix(s.Hostname, ".test") {
 		return fmt.Errorf("service.hostname: must end in .test (got %q)", s.Hostname)
 	}
+	if s.Hostname == "host.test" || strings.HasSuffix(s.Hostname, ".host.test") {
+		return fmt.Errorf("service.hostname %q: host.test is reserved for mac_services", s.Hostname)
+	}
 	if s.Direct && s.Hostname == "" {
 		return fmt.Errorf("direct: true requires a hostname")
 	}
@@ -518,7 +521,7 @@ func (p Project) Validate() error {
 var topLevelKnownFields = []string{
 	"project", "base_image", "docker", "network", "env",
 	"services", "path", "packages", "disk", "memory", "cpu",
-	"volumes", "repos", "guest",
+	"volumes", "repos", "guest", "mac_services", "peer_services",
 }
 
 func CheckUnknownKeys(data []byte) error {
@@ -800,6 +803,18 @@ type Config struct {
 	// gdevm requests whose gate is off with 403 so a guest agent
 	// sees a real error, not a silent no-op.
 	Guest Guest `yaml:"guest,omitempty"`
+
+	// MacServices declares Mac loopback ports this project's VM may
+	// reach. Guest URL shape: <name>.host.test:<port>. Each name is a
+	// DNS label used only for logs and URLs; the port is the
+	// authorization. nil = none declared.
+	MacServices []*MacService `yaml:"mac_services,omitempty"`
+
+	// PeerServices declares cooperating devm projects this VM may
+	// reach by their native hostnames (*.<project>.test). Grants
+	// reach to every hostname that peer project declares; finer-grained
+	// scoping is out of scope. nil = none declared.
+	PeerServices []*PeerService `yaml:"peer_services,omitempty"`
 }
 
 // Guest gates capabilities exposed to gdevm (the guest-side
@@ -837,6 +852,22 @@ func (c *Config) GuestPassthroughAllowed() bool {
 		return true
 	}
 	return *c.Guest.Passthrough
+}
+
+// MacService declares a Mac loopback port this project's VM may
+// reach. Guest URL shape: <Name>.host.test:<Port>. Name is a DNS
+// label used only for logs / URLs; Port is the authorization.
+type MacService struct {
+	Name string `yaml:"name"`
+	Port int    `yaml:"port"`
+}
+
+// PeerService declares another devm project this VM may reach by
+// its native hostname (*.<Project>.test). Grants reach to every
+// hostname that project declares; finer-grained scoping is out of
+// scope (see spec).
+type PeerService struct {
+	Project string `yaml:"project"`
 }
 
 // ParseDiskSize parses a `disk:` value like "64G" or "64GB" into an
@@ -901,6 +932,54 @@ func (c *Config) validateProjectIDReserved() error {
 	name := c.Project.Name
 	if ReservedProjectIDs[name] {
 		return fmt.Errorf("project.name %q collides with a devm-internal storage dir — pick another name", name)
+	}
+	return nil
+}
+
+// reservedMacPorts are ports mac_services may not declare — softnet
+// already forwards these for DNS/HTTP/NTP/HTTPS from the guest.
+var reservedMacPorts = map[int]struct{}{53: {}, 80: {}, 123: {}, 443: {}}
+
+// dnsLabelRe matches a lowercase DNS label (RFC 1123 subset): starts
+// with [a-z0-9], up to 63 chars of [a-z0-9-].
+var dnsLabelRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
+func (c Config) validateMacServices() error {
+	seen := map[string]struct{}{}
+	for i, m := range c.MacServices {
+		if m == nil {
+			return fmt.Errorf("mac_services[%d]: nil entry", i)
+		}
+		if !dnsLabelRe.MatchString(m.Name) {
+			return fmt.Errorf("mac_services[%d].name %q: must match %s", i, m.Name, dnsLabelRe.String())
+		}
+		if _, dup := seen[m.Name]; dup {
+			return fmt.Errorf("mac_services[%d].name %q: duplicate", i, m.Name)
+		}
+		seen[m.Name] = struct{}{}
+		if m.Port < 1 || m.Port > 65535 {
+			return fmt.Errorf("mac_services[%d].port %d: out of range 1..65535", i, m.Port)
+		}
+		if _, bad := reservedMacPorts[m.Port]; bad {
+			return fmt.Errorf("mac_services[%d].port %d: reserved by softnet", i, m.Port)
+		}
+	}
+	return nil
+}
+
+func (c Config) validatePeerServicesShape() error {
+	seen := map[string]struct{}{}
+	for i, p := range c.PeerServices {
+		if p == nil {
+			return fmt.Errorf("peer_services[%d]: nil entry", i)
+		}
+		if !dnsLabelRe.MatchString(p.Project) {
+			return fmt.Errorf("peer_services[%d].project %q: must match %s", i, p.Project, dnsLabelRe.String())
+		}
+		if _, dup := seen[p.Project]; dup {
+			return fmt.Errorf("peer_services[%d].project %q: duplicate", i, p.Project)
+		}
+		seen[p.Project] = struct{}{}
 	}
 	return nil
 }
@@ -1258,6 +1337,12 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validateProjectIDReserved(); err != nil {
+		return err
+	}
+	if err := c.validateMacServices(); err != nil {
+		return err
+	}
+	if err := c.validatePeerServicesShape(); err != nil {
 		return err
 	}
 	if err := c.validateLabels(""); err != nil {
