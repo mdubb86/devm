@@ -55,6 +55,25 @@ func TestPeersIndex_SetPeersReplacesOldEdges(t *testing.T) {
 	}
 }
 
+// TestPeersIndex_RemoveKeepsDepsToMe pins the documented asymmetry:
+// remove(projectID) drops projectID's outgoing peer declarations
+// (peersOf) but leaves the inverse edges where projectID appears as
+// someone else's peer. Dependents still need to learn when projectID
+// comes back up.
+func TestPeersIndex_RemoveKeepsDepsToMe(t *testing.T) {
+	p := newPeersIndex()
+	p.setPeers("A", []string{"B"})
+
+	// B is torn down; A's listing of B must survive so A gets a fresh
+	// setPolicy when B rebinds later.
+	p.remove("B")
+
+	got := p.dependentsOf("B")
+	if !reflect.DeepEqual(got, []string{"A"}) {
+		t.Fatalf("dependentsOf B after remove(B): %v (want [A])", got)
+	}
+}
+
 func TestPeersIndex_HairpinsFor_LivePorts(t *testing.T) {
 	p := newPeersIndex()
 	p.setPeers("A", []string{"B"})
@@ -62,12 +81,35 @@ func TestPeersIndex_HairpinsFor_LivePorts(t *testing.T) {
 	s := newIronProxyStore()
 	s.put("B", projectInfo{GuestHTTPSPort: 61234, GuestHTTPPort: 61235})
 
-	hs := p.peerHairpinsFor("A", s)
+	hs := p.peerHairpinsFor("A", s, "test")
 	if hs["B.test"] != "127.0.0.1:61234" {
 		t.Fatalf("https: %v", hs)
 	}
-	hh := p.peerHairpinsHTTPFor("A", s)
+	hh := p.peerHairpinsHTTPFor("A", s, "test")
 	if hh["B.test"] != "127.0.0.1:61235" {
+		t.Fatalf("http: %v", hh)
+	}
+}
+
+// TestPeersIndex_HairpinsFor_TLD proves the tld is threaded through:
+// the e2e daemon's TLD is "e2e.test", so the map keys must use that
+// suffix, not a hardcoded ".test".
+func TestPeersIndex_HairpinsFor_TLD(t *testing.T) {
+	p := newPeersIndex()
+	p.setPeers("A", []string{"B"})
+
+	s := newIronProxyStore()
+	s.put("B", projectInfo{GuestHTTPSPort: 61234, GuestHTTPPort: 61235})
+
+	hs := p.peerHairpinsFor("A", s, "e2e.test")
+	if hs["B.e2e.test"] != "127.0.0.1:61234" {
+		t.Fatalf("https: %v", hs)
+	}
+	if _, ok := hs["B.test"]; ok {
+		t.Fatalf("hardcoded .test suffix leaked: %v", hs)
+	}
+	hh := p.peerHairpinsHTTPFor("A", s, "e2e.test")
+	if hh["B.e2e.test"] != "127.0.0.1:61235" {
 		t.Fatalf("http: %v", hh)
 	}
 }
@@ -78,10 +120,10 @@ func TestPeersIndex_HairpinsFor_PeerDown_OmittedNotZero(t *testing.T) {
 
 	// B not registered in projectInfoStore — simulates its VM being down.
 	s := newIronProxyStore()
-	if hs := p.peerHairpinsFor("A", s); len(hs) != 0 {
+	if hs := p.peerHairpinsFor("A", s, "test"); len(hs) != 0 {
 		t.Fatalf("peer-down must be omitted, got %v", hs)
 	}
-	if hh := p.peerHairpinsHTTPFor("A", s); len(hh) != 0 {
+	if hh := p.peerHairpinsHTTPFor("A", s, "test"); len(hh) != 0 {
 		t.Fatalf("peer-down must be omitted, got %v", hh)
 	}
 }
@@ -95,11 +137,38 @@ func TestPeersIndex_HairpinsFor_ZeroPort_OmittedNotZero(t *testing.T) {
 	// 127.0.0.1:0 that dials nothing.
 	s := newIronProxyStore()
 	s.put("B", projectInfo{GuestHTTPSPort: 0, GuestHTTPPort: 0})
-	if hs := p.peerHairpinsFor("A", s); len(hs) != 0 {
+	if hs := p.peerHairpinsFor("A", s, "test"); len(hs) != 0 {
 		t.Fatalf("zero HTTPS port must be omitted, got %v", hs)
 	}
-	if hh := p.peerHairpinsHTTPFor("A", s); len(hh) != 0 {
+	if hh := p.peerHairpinsHTTPFor("A", s, "test"); len(hh) != 0 {
 		t.Fatalf("zero HTTP port must be omitted, got %v", hh)
+	}
+}
+
+// TestPeersIndex_HairpinsFor_MixedZeroPort covers the independent-port
+// case: a peer may have bound its HTTPS listener but not its HTTP one
+// (or vice versa). Each accessor must decide on its own port field.
+func TestPeersIndex_HairpinsFor_MixedZeroPort(t *testing.T) {
+	p := newPeersIndex()
+	p.setPeers("A", []string{"B"})
+	s := newIronProxyStore()
+
+	// Only the HTTPS port is bound: HTTPS accessor includes B, HTTP omits.
+	s.put("B", projectInfo{GuestHTTPSPort: 61234, GuestHTTPPort: 0})
+	if hs := p.peerHairpinsFor("A", s, "test"); hs["B.test"] != "127.0.0.1:61234" {
+		t.Fatalf("https: %v", hs)
+	}
+	if hh := p.peerHairpinsHTTPFor("A", s, "test"); len(hh) != 0 {
+		t.Fatalf("http must be omitted when HTTP port is zero: %v", hh)
+	}
+
+	// Only the HTTP port is bound: HTTP includes B, HTTPS omits.
+	s.put("B", projectInfo{GuestHTTPSPort: 0, GuestHTTPPort: 61235})
+	if hs := p.peerHairpinsFor("A", s, "test"); len(hs) != 0 {
+		t.Fatalf("https must be omitted when HTTPS port is zero: %v", hs)
+	}
+	if hh := p.peerHairpinsHTTPFor("A", s, "test"); hh["B.test"] != "127.0.0.1:61235" {
+		t.Fatalf("http: %v", hh)
 	}
 }
 
@@ -172,8 +241,10 @@ func TestPropagatePeerRebind_PushesSetPolicyToDependents(t *testing.T) {
 }
 
 // TestPropagatePeerRebind_SkipsDependentWithNoSoftnetSock covers a
-// dependent whose VM isn't running: ironProxyState has no entry, so the
-// fanout silently skips rather than dialing a nonexistent socket.
+// dependent that has a projectInfo entry but no softnet control
+// socket — e.g. the dependent's VM was torn down between setPeers and
+// the rebind that triggers this fanout. The push must silently skip,
+// never dial a nonexistent socket.
 func TestPropagatePeerRebind_SkipsDependentWithNoSoftnetSock(t *testing.T) {
 	origIron := ironProxyState
 	origSoftnet := softnetState
@@ -187,8 +258,8 @@ func TestPropagatePeerRebind_SkipsDependentWithNoSoftnetSock(t *testing.T) {
 		peersState = origPeers
 	})
 
-	// A declares B as a peer but has no softnetState entry — propagate
-	// must not panic or hang.
+	// A declares B as a peer and has an ironProxyState entry but no
+	// softnetState entry — propagate must not panic or hang.
 	peersState.setPeers("A", []string{"B"})
 	ironProxyState.put("A", projectInfo{HTTPPort: 11080})
 

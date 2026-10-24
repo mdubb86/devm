@@ -88,16 +88,14 @@ func (p *peersIndex) dependentsOf(peerID string) []string {
 	return out
 }
 
-// peerHairpinsFor returns the live HTTPS backend map for projectID:
-// `<peer>.<tld>-stripped hostname → "127.0.0.1:<GuestHTTPSPort>"`,
-// one entry per declared peer whose guest-origin listener pair is
-// currently bound. Keys use the bare `<peer>.test` suffix; the
-// guest-origin SNI mux already strips its TLD before lookup.
-//
-// Peers whose VM isn't registered OR whose GuestHTTPSPort is zero are
-// omitted — a missing entry fails closed in the SNI mux (unrecognized
-// name) rather than dialing a known-bad target.
-func (p *peersIndex) peerHairpinsFor(projectID string, s *projectInfoStore) map[string]string {
+// peerBackends is the shared body of peerHairpinsFor and
+// peerHairpinsHTTPFor: build `<peer>.<tld> → "127.0.0.1:<port>"` from
+// projectID's declared peers, reading each peer's port via portOf
+// against the live projectInfoStore. A peer not registered in the
+// store OR whose portOf returns zero is omitted — the SNI/Host mux
+// treats a missing entry as fail-closed (unrecognized name) rather
+// than dialing a known-bad target.
+func (p *peersIndex) peerBackends(projectID string, s *projectInfoStore, tld string, portOf func(projectInfo) int) map[string]string {
 	p.mu.Lock()
 	peers := make([]string, 0, len(p.peersOf[projectID]))
 	for peer := range p.peersOf[projectID] {
@@ -107,48 +105,43 @@ func (p *peersIndex) peerHairpinsFor(projectID string, s *projectInfoStore) map[
 	out := map[string]string{}
 	for _, peer := range peers {
 		info, ok := s.get(peer)
-		if !ok || info.GuestHTTPSPort == 0 {
+		if !ok {
 			continue
 		}
-		out[peer+".test"] = fmt.Sprintf("127.0.0.1:%d", info.GuestHTTPSPort)
+		port := portOf(info)
+		if port == 0 {
+			continue
+		}
+		out[peer+"."+tld] = fmt.Sprintf("127.0.0.1:%d", port)
 	}
 	return out
 }
 
+// peerHairpinsFor returns the live HTTPS backend map for projectID:
+// `<peer>.<tld> → "127.0.0.1:<GuestHTTPSPort>"`, one entry per
+// declared peer whose guest-origin listener pair is currently bound.
+// tld is the daemon's TLD (prod: "test"; e2e: "e2e.test") — hardcoding
+// it would produce wrong keys in the e2e slot.
+func (p *peersIndex) peerHairpinsFor(projectID string, s *projectInfoStore, tld string) map[string]string {
+	return p.peerBackends(projectID, s, tld, func(i projectInfo) int { return i.GuestHTTPSPort })
+}
+
 // peerHairpinsHTTPFor is the plain-HTTP sibling of peerHairpinsFor:
-// same keys, values pointing at each peer's GuestHTTPPort. Consumed
-// by the guest-origin HTTP mux's Host-header dispatch.
-func (p *peersIndex) peerHairpinsHTTPFor(projectID string, s *projectInfoStore) map[string]string {
-	p.mu.Lock()
-	peers := make([]string, 0, len(p.peersOf[projectID]))
-	for peer := range p.peersOf[projectID] {
-		peers = append(peers, peer)
-	}
-	p.mu.Unlock()
-	out := map[string]string{}
-	for _, peer := range peers {
-		info, ok := s.get(peer)
-		if !ok || info.GuestHTTPPort == 0 {
-			continue
-		}
-		out[peer+".test"] = fmt.Sprintf("127.0.0.1:%d", info.GuestHTTPPort)
-	}
-	return out
+// same keys, values pointing at each peer's GuestHTTPPort.
+func (p *peersIndex) peerHairpinsHTTPFor(projectID string, s *projectInfoStore, tld string) map[string]string {
+	return p.peerBackends(projectID, s, tld, func(i projectInfo) int { return i.GuestHTTPPort })
 }
 
 var peersState = newPeersIndex()
 
-// propagatePeerRebind re-pushes setPolicy(FORWARDING) to every
-// project that lists projectID as a peer. Called from
-// rebindProjectListeners after a successful self-push, so the fresh
-// GuestHTTP(S)Port a rebind just claimed reaches each dependent's
-// softnet — the peer-hairpins map in setPolicy's envelope is built
-// from live ironProxyState, which the dependent's setPolicy sees via
-// endpointFrom at push time.
+// propagatePeerRebind re-pushes each dependent's current setPolicy
+// envelope to its softnet so softnet learns the fresh ports a rebind
+// of projectID just claimed. Does not yet carry per-dependent
+// peer-hairpins — endpointFrom gains that in Task 9; this fan-out is
+// the trigger it needs.
 //
 // A dependent with no projectInfo entry OR no softnet socket is
-// skipped: the dependent's own VM isn't running, so there is nothing
-// to push to. A push failure is logged but does not fail the caller —
+// skipped. A push failure is logged but does not fail the caller —
 // the project whose rebind triggered this fanout still succeeded, and
 // a dead dependent is a separate problem.
 func propagatePeerRebind(projectID string, ntpPort int) {
