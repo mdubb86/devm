@@ -95,6 +95,11 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 							daemonlog.Errorf("serviceapi: guest-origin re-push for %s: %v", projectID, err)
 						}
 					}
+					// Fan the fresh ports out to every project that lists
+					// me as a peer: their softnet pulls peer-hairpin
+					// targets from endpointFrom, which reads the just-
+					// updated GuestHTTP(S)Port out of ironProxyState.
+					propagatePeerRebind(projectID, ntpPort)
 				}
 			}
 			s := RebindStatus{State: RebindOK, Attempts: attempts}
