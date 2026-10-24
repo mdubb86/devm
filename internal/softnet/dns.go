@@ -13,9 +13,28 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 )
 
-// dnsZoneName is the zone startDNS answers locally regardless of policy,
-// resolving every <name>.test to NATAliasIP (the host loopback NAT alias).
-const dnsZoneName = "devm.test."
+// dnsZoneName and hostTestZoneName are the two zones startDNS answers
+// locally regardless of policy; every <name>.devm.test and
+// <name>.host.test resolves to NATAliasIP, the host loopback NAT alias.
+// host.test. is the reserved zone for mac_services — gvproxy NATs
+// NATAliasIP to 127.0.0.1 on the Mac, and the port allowlist pushed via
+// setPolicy decides whether the packet reaches a Mac service or hits the
+// forwarder's RST.
+const (
+	dnsZoneName      = "devm.test."
+	hostTestZoneName = "host.test."
+)
+
+// dnsZones returns the local DNS zones startDNS answers regardless of
+// policy. Kept as a function so tests can bind the same slice to a
+// loopback DNS server and prove the mapping without standing up the full
+// gvisor stack.
+func dnsZones() []types.Zone {
+	return []types.Zone{
+		{Name: dnsZoneName, DefaultIP: net.ParseIP(NATAliasIP)},
+		{Name: hostTestZoneName, DefaultIP: net.ParseIP(NATAliasIP)},
+	}
+}
 
 // upstreamFor picks the DNS upstream for the current policy. LOCKED drops;
 // FORWARDING dials addr (iron-proxy's DNS). ok=false => drop.
@@ -126,13 +145,10 @@ func (r *policyResolver) LookupTXT(ctx context.Context, name string) ([]string, 
 	return res.LookupTXT(ctx, name)
 }
 
-// startDNS binds gateway:53 (UDP and TCP) and serves DNS for the guest. The
-// devm.test zone is answered locally (-> NATAliasIP) regardless of policy;
-// every other name resolves through a policyResolver that re-consults e's
-// live policy per query. Ported from the fixture's startDNS
-// (e2e/contract/softnet/main.go): newNetwork's types.Configuration carries no
-// DNS zones (dropped in Task 3, nothing consumed them then), so the zone is
-// built here instead of read off n's config.
+// startDNS binds gateway:53 (UDP and TCP) and serves DNS for the guest.
+// Names under dnsZones() are answered locally (-> NATAliasIP) regardless
+// of policy; every other name resolves through a policyResolver that
+// re-consults e's live policy per query.
 func (n *network) startDNS(e *egress) error {
 	gatewayAddr := tcpip.AddrFrom4Slice(net.ParseIP(GatewayIP).To4())
 
@@ -149,11 +165,7 @@ func (n *network) startDNS(e *egress) error {
 		return err
 	}
 
-	zones := []types.Zone{{
-		Name:      dnsZoneName,
-		DefaultIP: net.ParseIP(NATAliasIP),
-	}}
-	server, err := dns.NewWithUpstreamResolver(udpConn, tcpLn, zones, &policyResolver{e: e})
+	server, err := dns.NewWithUpstreamResolver(udpConn, tcpLn, dnsZones(), &policyResolver{e: e})
 	if err != nil {
 		return err
 	}

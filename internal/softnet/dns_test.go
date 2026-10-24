@@ -4,6 +4,10 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
+
+	dnssvc "github.com/containers/gvisor-tap-vsock/pkg/services/dns"
+	mdns "github.com/miekg/dns"
 )
 
 // TestPolicyResolverPerQuery exercises policyResolver.resolver(), the
@@ -122,6 +126,61 @@ func TestPolicyResolverAnswersTestUnderAnyPolicy(t *testing.T) {
 			t.Fatalf("%s db.test = %v,%v want [%s]", pol, addrs, err, HostLoopIP)
 		}
 	}
+}
+
+// TestStartDNS_HostTestZone pins that every <anything>.host.test resolves
+// locally to NATAliasIP, so a guest TCP flow to a Mac service name routes
+// to the loopback NAT alias rather than leaking out to the policy
+// upstream. Builds the real DNS server off the same dnsZones() startDNS
+// uses, bound to a loopback UDP socket so the gvisor stack is not needed
+// to exercise the name path.
+func TestStartDNS_HostTestZone(t *testing.T) {
+	udpConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	defer udpConn.Close()
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp: %v", err)
+	}
+	defer tcpLn.Close()
+
+	e := newEgress(nil)
+	e.setPolicy(PolicyForwarding, &ForwardTargets{DNS: "127.0.0.1:0"})
+	server, err := dnssvc.NewWithUpstreamResolver(udpConn, tcpLn, dnsZones(), &policyResolver{e: e})
+	if err != nil {
+		t.Fatalf("dns server: %v", err)
+	}
+	go func() { _ = server.Serve() }()
+
+	for _, host := range []string{"api.host.test.", "foo.bar.host.test."} {
+		if got := dnsLookupA(t, udpConn.LocalAddr().String(), host); got.String() != NATAliasIP {
+			t.Fatalf("%s: want %s, got %s", host, NATAliasIP, got)
+		}
+	}
+}
+
+// dnsLookupA sends a type-A query for host to the UDP DNS server at
+// serverAddr and returns the first A answer, failing the test with
+// context on any transport or decode error.
+func dnsLookupA(t *testing.T, serverAddr, host string) net.IP {
+	t.Helper()
+	c := &mdns.Client{Net: "udp", Timeout: 2 * time.Second}
+	m := new(mdns.Msg)
+	m.SetQuestion(host, mdns.TypeA)
+	resp, _, err := c.Exchange(m, serverAddr)
+	if err != nil {
+		t.Fatalf("%s: exchange: %v", host, err)
+	}
+	if len(resp.Answer) == 0 {
+		t.Fatalf("%s: no answers (rcode=%d)", host, resp.Rcode)
+	}
+	a, ok := resp.Answer[0].(*mdns.A)
+	if !ok {
+		t.Fatalf("%s: want *dns.A, got %T", host, resp.Answer[0])
+	}
+	return a.A
 }
 
 // TestSetDirectTestHostsReplaces pins replace (not merge) semantics so a
