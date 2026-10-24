@@ -97,8 +97,20 @@ func TestForwardTargets_Roundtrip_MacPortsAndPeerHairpins(t *testing.T) {
 }
 
 func TestForwardTargets_OmitEmpty(t *testing.T) {
-	in := ControlMsg{Op: "setPolicy", Policy: "LOCKED"}
-	b, _ := json.Marshal(in)
+	in := ControlMsg{
+		Op:     "setPolicy",
+		Policy: "FORWARDING",
+		ForwardTargets: &ForwardTargets{
+			HTTP:  "127.0.0.1:1",
+			HTTPS: "127.0.0.1:2",
+			DNS:   "127.0.0.1:3",
+			NTP:   "127.0.0.1:4",
+		},
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := string(b)
 	for _, k := range []string{"mac_ports", "peer_hairpins"} {
 		if strings.Contains(s, k) {

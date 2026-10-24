@@ -79,16 +79,16 @@ type ForwardTargets struct {
 	GuestAPI string `json:"guest_api,omitempty"`
 
 	// MacPorts is the set of Mac loopback ports this VM is allowed to
-	// reach. Guest TCP to NATAliasIP:<port> for port in MacPorts dials
-	// 127.0.0.1:<port> on the Mac. Replaces the current drop for a
-	// declared port; undeclared ports still RST.
+	// reach. Consumed by softnet's egress forwarder; absent / empty
+	// means no mac_services declared.
 	MacPorts []int `json:"mac_ports,omitempty"`
 
 	// PeerHairpins maps a peer project's hostname suffix (e.g.
-	// "sibling.test", no leading dot) to the Mac-side host:port of
-	// that peer's own guest-origin HTTPS listener. The hairpin's SNI
-	// mux reads this; softnet never does. Kept on the wire envelope
-	// for symmetry with the other per-VM state.
+	// `sibling.test`, no leading dot) to the Mac-side host:port of
+	// that peer's own guest-origin HTTPS listener. softnet does not
+	// read this field; it is consumed only by the daemon-side
+	// hairpin's SNI mux. Carried on the setPolicy envelope because
+	// that is the single push path for per-VM state.
 	PeerHairpins map[string]string `json:"peer_hairpins,omitempty"`
 }
 
