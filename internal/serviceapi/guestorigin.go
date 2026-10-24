@@ -1,6 +1,7 @@
 package serviceapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -68,10 +69,21 @@ type guestOriginHandler struct {
 	peerHairpinsHTTPFor func() map[string]string
 }
 
-// hairpinHTTPSpliceTimeout bounds the peer-backend dial so a dead
-// peer's host-mux attempt fails fast instead of hanging the client.
-// Matches hairpinPeekTimeout in hairpin_sni.go.
-const hairpinHTTPSpliceTimeout = 5 * time.Second
+const (
+	// hairpinHTTPSpliceTimeout bounds the peer-backend dial so a dead
+	// peer's host-mux attempt fails fast instead of hanging the
+	// client. Matches hairpinPeekTimeout in hairpin_sni.go.
+	hairpinHTTPSpliceTimeout = 5 * time.Second
+
+	// hairpinHTTPMaxBodyBytes caps the request body captured before
+	// the Hijack. Beyond this the handler returns 413 — a dev-tool
+	// ceiling for peer-splice bodies, chosen above typical POST
+	// payloads (JSON APIs, multipart uploads) but well under memory
+	// that would meaningfully pressure the daemon. Streaming the
+	// body post-hijack is not an option: the http.Hijacker contract
+	// forbids reading r.Body after Hijack returns.
+	hairpinHTTPMaxBodyBytes = 32 << 20
+)
 
 func (h *guestOriginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host := stripPort(r.Host)
@@ -83,7 +95,8 @@ func (h *guestOriginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.spliceToPeer(w, r, peer)
 		return
 	}
-	log.Printf("hairpin: host mux reject host=%q project=%s", host, h.projectID)
+	hairpinSNILog.Logf(h.projectID+"|"+host+"|reject",
+		"hairpin: host mux reject host=%q project=%s", host, h.projectID)
 	http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
 }
 
@@ -106,11 +119,73 @@ func (h *guestOriginHandler) serveOwn(w http.ResponseWriter, r *http.Request) {
 	rev.ServeHTTP(w, r)
 }
 
-// spliceToPeer hijacks the client conn, replays the already-parsed
-// request to the peer's HTTP listener, and splices the two halves
-// together. The peer's listener handles the request as if the guest
-// had dialed it directly; TLS is not involved on either side.
+// spliceToPeer proxies one HTTP request to the peer's own listener
+// by replaying the parsed request and splicing the response plus any
+// subsequent bytes. The order of operations here is load-bearing:
+//
+//  1. Read the request body before Hijack. The http.Hijacker contract
+//     explicitly forbids using r.Body after Hijack returns — the
+//     server has released the conn and no longer manages the body
+//     reader. Reading it here also triggers an auto-100-Continue
+//     when the client used Expect: 100-continue.
+//  2. Dial the peer before Hijack. A dial failure here can still
+//     surface as a plain 502 through the response writer; after
+//     Hijack we would only be able to RST the client with no
+//     diagnostic.
+//  3. Set r.Close = true. Once the conn is spliced, the client is
+//     pinned to this peer — a keep-alive next request on the same
+//     conn with a different Host would land here regardless and be
+//     421'd by the peer. Connection: close propagates through so
+//     the client naturally closes after the response.
+//  4. Hijack, write the replayed request, forward any bytes bufio
+//     had already read from the client (pipelined request not yet
+//     consumed), then bidirectional splice.
 func (h *guestOriginHandler) spliceToPeer(w http.ResponseWriter, r *http.Request, peerAddr string) {
+	host := stripPort(r.Host)
+
+	// 1. Capture the body before Hijack. A GET with no body reads
+	//    zero bytes immediately; a POST / PUT / chunked body drains
+	//    into the buffer. The 1-byte overread sentinel is how we
+	//    distinguish "exactly 32MB" from "bigger than 32MB".
+	body, err := io.ReadAll(io.LimitReader(r.Body, hairpinHTTPMaxBodyBytes+1))
+	if err != nil {
+		hairpinSNILog.Logf(h.projectID+"|"+host+"|readbody",
+			"hairpin: host mux body read failed project=%s host=%s: %v",
+			h.projectID, host, err)
+		http.Error(w, "read body", http.StatusBadGateway)
+		return
+	}
+	if len(body) > hairpinHTTPMaxBodyBytes {
+		http.Error(w, "request entity too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	// Chunked framing is unneeded once the body is a fixed buffer.
+	// Leaving TransferEncoding set would make r.Write re-chunk the
+	// output; clearing it serializes with Content-Length instead.
+	r.TransferEncoding = nil
+	// Expect: 100-continue was already resolved by reading r.Body
+	// above. Forwarding it would make the peer send a stray 100
+	// response that bridges back to a client that doesn't expect one.
+	r.Header.Del("Expect")
+
+	// 2. Dial the peer before Hijack so we can still 502 cleanly.
+	backend, err := net.DialTimeout("tcp", peerAddr, hairpinHTTPSpliceTimeout)
+	if err != nil {
+		hairpinSNILog.Logf(h.projectID+"|"+host+"|dial",
+			"hairpin: host mux peer dial failed project=%s host=%s peer=%s: %v",
+			h.projectID, host, peerAddr, err)
+		http.Error(w, "peer unreachable", http.StatusBadGateway)
+		return
+	}
+	defer backend.Close()
+
+	// 3. Pin the client to this single request/response. See the
+	//    function-level comment above (step 3) for why.
+	r.Close = true
+
+	// 4. Hijack and replay.
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "server does not support hijacking", http.StatusInternalServerError)
@@ -118,33 +193,35 @@ func (h *guestOriginHandler) spliceToPeer(w http.ResponseWriter, r *http.Request
 	}
 	clientConn, buf, err := hj.Hijack()
 	if err != nil {
+		hairpinSNILog.Logf(h.projectID+"|"+host+"|hijack",
+			"hairpin: host mux hijack failed project=%s host=%s: %v",
+			h.projectID, host, err)
 		return
 	}
 	defer clientConn.Close()
 
-	backend, err := net.DialTimeout("tcp", peerAddr, hairpinHTTPSpliceTimeout)
-	if err != nil {
-		log.Printf("hairpin: host mux peer dial failed project=%s peer=%s: %v",
-			h.projectID, peerAddr, err)
-		return
-	}
-	defer backend.Close()
-
-	// Replay the request we already parsed so the peer's listener sees
-	// a well-formed HTTP/1.1 request on its first read. r.Write handles
-	// the request line, headers, and (streaming) body up to
-	// Content-Length — anything beyond that is picked up by spliceConns.
 	if err := r.Write(backend); err != nil {
+		hairpinSNILog.Logf(h.projectID+"|"+host+"|rwrite",
+			"hairpin: host mux r.Write failed project=%s host=%s: %v",
+			h.projectID, host, err)
 		return
 	}
 	// Any client bytes buffered by the hijacker (unlikely for HTTP/1.1
-	// non-pipelined, possible otherwise) must be forwarded before the
-	// bidirectional splice starts — otherwise they'd never reach the
-	// peer. buf.Reader surfaces exactly what http.Server already read
-	// from clientConn.
+	// non-pipelined, possible for a client that coalesced a follow-up
+	// into the same TCP write) must be forwarded before the splice
+	// starts — otherwise they'd be stranded in buf.Reader forever.
 	if n := buf.Reader.Buffered(); n > 0 {
-		b, _ := io.ReadAll(buf.Reader)
-		if _, err := backend.Write(b); err != nil {
+		b, rerr := io.ReadAll(buf.Reader)
+		if rerr != nil {
+			hairpinSNILog.Logf(h.projectID+"|"+host+"|readpipe",
+				"hairpin: host mux read-pipelined failed project=%s host=%s: %v",
+				h.projectID, host, rerr)
+			return
+		}
+		if _, werr := backend.Write(b); werr != nil {
+			hairpinSNILog.Logf(h.projectID+"|"+host+"|writepipe",
+				"hairpin: host mux write-pipelined failed project=%s host=%s: %v",
+				h.projectID, host, werr)
 			return
 		}
 	}

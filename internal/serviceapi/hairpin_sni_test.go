@@ -445,3 +445,170 @@ func TestGuestOriginHTTP_HostMux_UnknownHost_421(t *testing.T) {
 	assert.Equal(t, http.StatusMisdirectedRequest, resp.StatusCode,
 		"unknown host must surface as 421 Misdirected Request")
 }
+
+// TestGuestOriginHTTP_HostMux_EmptyPeerAddr_421 fires the `peer != ""`
+// guard in the dispatcher. A declared peer with an empty address
+// (vestigial map entry, misconfiguration) must fall through to the
+// unknown-host 421 path, not attempt a dial on "".
+func TestGuestOriginHTTP_HostMux_EmptyPeerAddr_421(t *testing.T) {
+	cfg := identity.Prod
+	proxyA, httpPortA, _, cleanupA := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanupA()
+
+	peerBSuffix := "projB." + cfg.TLD
+	proxyA.peerHairpinsHTTPFor = func(string) map[string]string {
+		return map[string]string{peerBSuffix: ""}
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/", httpPortA)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Host = "api." + peerBSuffix
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusMisdirectedRequest, resp.StatusCode,
+		"empty peer address must fall through to 421, not panic on dial")
+}
+
+// TestGuestOriginHTTP_HostMux_PeerDies_DialFailure_502 asserts that
+// a dial failure during the peer-splice path surfaces as 502 Bad
+// Gateway through the normal response path, not as a hijacked RST
+// with no diagnostic. The dial happens before the Hijack specifically
+// to make this possible.
+func TestGuestOriginHTTP_HostMux_PeerDies_DialFailure_502(t *testing.T) {
+	cfg := identity.Prod
+	proxyA, httpPortA, _, cleanupA := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanupA()
+
+	// Bind + close an ephemeral port to get a reliable dead address
+	// (connection-refused on dial) rather than guessing one.
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	deadAddr := deadLn.Addr().String()
+	require.NoError(t, deadLn.Close())
+
+	peerBSuffix := "projB." + cfg.TLD
+	proxyA.peerHairpinsHTTPFor = func(string) map[string]string {
+		return map[string]string{peerBSuffix: deadAddr}
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/", httpPortA)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Host = "api." + peerBSuffix
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode,
+		"dead peer must surface as 502 Bad Gateway, not a hijacked RST")
+}
+
+// TestGuestOriginHTTP_HostMux_PeerSplice_POST proves the mux handles
+// request bodies correctly. The handler reads r.Body BEFORE Hijack
+// (per the http.Hijacker contract) and replays it to the peer via
+// r.Write — the old reverse of that order would misbehave on POST.
+// An echo backend on B returns whatever body it was sent, so a
+// successful round-trip of the payload is proof the body survived.
+func TestGuestOriginHTTP_HostMux_PeerSplice_POST(t *testing.T) {
+	cfg := identity.Prod
+
+	// Echo backend: respond with whatever body the request carried.
+	echoSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_, _ = w.Write(b)
+	}))
+	defer echoSrv.Close()
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(echoSrv.URL, "http://"))
+	require.NoError(t, err)
+	echoPort, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+
+	// Build B manually so its backend is the echo server, not the
+	// static-body fixture buildHairpinPair uses.
+	routesB := NewRoutes(cfg.TLD)
+	require.NoError(t, routesB.Apply("projB", []Route{
+		{Hostname: "api.projB." + cfg.TLD, BackendPort: echoPort, Mode: ModeVM, Project: "projB"},
+	}))
+	caDirB := t.TempDir()
+	caB, err := loadOrGenerateCAAt(cfg, caDirB)
+	require.NoError(t, err)
+	proxyB := NewProxyServer(cfg, routesB, caB)
+	httpPortB, _, err := proxyB.StartGuestOriginListeners(context.Background(), "projB", "127.0.0.1")
+	require.NoError(t, err)
+	defer proxyB.StopProjectListeners("projB")
+
+	proxyA, httpPortA, _, cleanupA := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanupA()
+
+	peerBSuffix := "projB." + cfg.TLD
+	addrB := fmt.Sprintf("127.0.0.1:%d", httpPortB)
+	proxyA.peerHairpinsHTTPFor = func(string) map[string]string {
+		return map[string]string{peerBSuffix: addrB}
+	}
+
+	host := "api." + peerBSuffix
+	url := fmt.Sprintf("http://127.0.0.1:%d/", httpPortA)
+	payload := "hello-peer-splice-post"
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(payload))
+	require.NoError(t, err)
+	req.Host = host
+	req.ContentLength = int64(len(payload))
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, payload, string(body),
+		"POST body must round-trip through the splice intact — "+
+			"proves body is captured BEFORE the Hijack")
+}
+
+// TestGuestOriginHTTP_HostMux_PeerSplice_ClosesConnection pins that
+// after a peer-splice response the client's TCP conn is closed. The
+// mux sets r.Close = true before replaying the request so the peer's
+// response carries Connection: close — without this a keep-alive
+// client would pin the conn to this one peer and 421 on any later
+// different-Host request.
+func TestGuestOriginHTTP_HostMux_PeerSplice_ClosesConnection(t *testing.T) {
+	cfg := identity.Prod
+	proxyA, httpPortA, _, cleanupA := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanupA()
+	_, httpPortB, _, cleanupB := buildHairpinPair(t, cfg, "projB", "bodyB")
+	defer cleanupB()
+
+	peerBSuffix := "projB." + cfg.TLD
+	addrB := fmt.Sprintf("127.0.0.1:%d", httpPortB)
+	addrA := fmt.Sprintf("127.0.0.1:%d", httpPortA)
+	proxyA.peerHairpinsHTTPFor = func(string) map[string]string {
+		return map[string]string{peerBSuffix: addrB}
+	}
+
+	// Raw TCP so we own the conn and can prove the server closed it.
+	raw, err := net.Dial("tcp", addrA)
+	require.NoError(t, err)
+	defer raw.Close()
+
+	host := "api." + peerBSuffix
+	req, err := http.NewRequest(http.MethodGet, "http://"+addrA+"/", nil)
+	require.NoError(t, err)
+	req.Host = host
+	require.NoError(t, req.Write(raw))
+
+	resp, err := http.ReadResponse(bufio.NewReader(raw), req)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	// Next read must EOF — peer propagated Connection: close through
+	// the splice and tore down its side; the splice's half-close
+	// landed on our end.
+	_ = raw.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, err = raw.Read(make([]byte, 1))
+	assert.ErrorIs(t, err, io.EOF,
+		"peer-splice response must close the client's TCP conn (r.Close=true)")
+}
