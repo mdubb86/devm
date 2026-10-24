@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"log"
@@ -60,22 +61,26 @@ type ProxyServer struct {
 	// daemon binds through the e2e helper, not prod's.
 	helperClient *helper.Client
 
-	// peerHairpinsFor returns the declared peer-hostname-suffix →
-	// Mac-side host:port map for projectID at the moment the hairpin
-	// dispatches a connection. One accessor on the server, not an
-	// argument threaded through every call site, so tests can swap it
-	// without touching StartGuestOriginListeners. Returns nil (treated
-	// as empty map) when the project has no declared peers or state
-	// hasn't been wired yet.
-	peerHairpinsFor func(projectID string) map[string]string
+	// peerHairpinsForPtr backs peerHairpinsFor — the method the
+	// hairpin's SNI mux calls at connection-dispatch time to resolve a
+	// declared peer suffix (`<project>.<tld>`) to its Mac-side guest-
+	// origin HTTPS host:port. Stored under atomic.Pointer so the hairpin
+	// accept loop can read it concurrently with any swap: in production
+	// NewProxyServer stores a single closure over peersState +
+	// ironProxyState + cfg.TLD and never swaps again; tests inject
+	// per-pair maps via SetPeerHairpinsForTest. A nil Load (never
+	// stored) resolves to a nil map — same shape as "no declared
+	// peers," so the mux's fail-closed path (unrecognized SNI) fires
+	// naturally.
+	peerHairpinsForPtr atomic.Pointer[peerHairpinsFunc]
 
-	// peerHairpinsHTTPFor is the plain-HTTP sibling of peerHairpinsFor:
-	// same key shape (peer `<project>.<tld>` suffix), but values point
-	// at each peer's GuestHTTPPort on Mac loopback instead of the
-	// GuestHTTPSPort. The Host-header mux in guestOriginHandler uses
-	// this when a non-own-project Host matches a declared peer and
-	// hijack-splices the connection there.
-	peerHairpinsHTTPFor func(projectID string) map[string]string
+	// peerHairpinsHTTPForPtr is the plain-HTTP sibling of
+	// peerHairpinsForPtr: same key shape (peer `<project>.<tld>`
+	// suffix) and same atomic-pointer discipline, but values point at
+	// each peer's GuestHTTPPort on Mac loopback. The Host-header mux
+	// in guestOriginHandler uses it when a non-own-project Host
+	// matches a declared peer and hijack-splices the connection there.
+	peerHairpinsHTTPForPtr atomic.Pointer[peerHairpinsFunc]
 
 	mu      sync.Mutex
 	perProj map[string]projectListeners
@@ -153,8 +158,14 @@ type RebindStatus struct {
 	LastError string
 }
 
+// peerHairpinsFunc is the signature of a peer-hairpin resolver — the
+// callback shape stored in ProxyServer.peerHairpins{,HTTP}ForPtr.
+// Named here so atomic.Pointer[peerHairpinsFunc] has a stable element
+// type across package code and tests.
+type peerHairpinsFunc func(projectID string) map[string]string
+
 func NewProxyServer(cfg identity.Config, routes *Routes, ca *CA) *ProxyServer {
-	return &ProxyServer{
+	p := &ProxyServer{
 		cfg:          cfg,
 		routes:       routes,
 		ca:           ca,
@@ -162,11 +173,64 @@ func NewProxyServer(cfg identity.Config, routes *Routes, ca *CA) *ProxyServer {
 		perProj:      make(map[string]projectListeners),
 		bindLocks:    make(map[string]*sync.Mutex),
 		rebindStatus: make(map[string]RebindStatus),
-		// Stub by default: no declared peers. Task 9 replaces this with
-		// a reader of live ironProxyState filtered by peer_services.
-		peerHairpinsFor:     func(string) map[string]string { return nil },
-		peerHairpinsHTTPFor: func(string) map[string]string { return nil },
 	}
+	// Set the hairpin resolvers exactly once, at construction, so the
+	// SNI/Host mux accept loops never race a production swap. Both
+	// closures capture the daemon's live globals (peersState,
+	// ironProxyState, cfg.TLD) so a /vm/apply-iron-proxy /
+	// /vm/start / /vm/stop that mutates those is picked up without a
+	// re-store here. Tests swap via SetPeerHairpins{,HTTP}ForTest,
+	// which calls Store() — never a direct field assignment, so the
+	// atomic discipline holds across the whole package.
+	https := peerHairpinsFunc(func(projectID string) map[string]string {
+		return peersState.peerHairpinsFor(projectID, ironProxyState, cfg.TLD)
+	})
+	http := peerHairpinsFunc(func(projectID string) map[string]string {
+		return peersState.peerHairpinsHTTPFor(projectID, ironProxyState, cfg.TLD)
+	})
+	p.peerHairpinsForPtr.Store(&https)
+	p.peerHairpinsHTTPForPtr.Store(&http)
+	return p
+}
+
+// peerHairpinsFor returns the declared peer-hostname-suffix →
+// Mac-side guest-origin HTTPS host:port map for projectID at the
+// moment the hairpin dispatches a connection. Backed by
+// peerHairpinsForPtr; see that field's doc comment. A nil pointer
+// (test setup forgot to seed one, or the field was never stored)
+// surfaces as a nil map — the mux's fail-closed path reads that as
+// "no matching peer" and sends the unrecognized_name alert.
+func (p *ProxyServer) peerHairpinsFor(projectID string) map[string]string {
+	fn := p.peerHairpinsForPtr.Load()
+	if fn == nil || *fn == nil {
+		return nil
+	}
+	return (*fn)(projectID)
+}
+
+// peerHairpinsHTTPFor is the plain-HTTP sibling of peerHairpinsFor;
+// see that method and peerHairpinsHTTPForPtr for the contract.
+func (p *ProxyServer) peerHairpinsHTTPFor(projectID string) map[string]string {
+	fn := p.peerHairpinsHTTPForPtr.Load()
+	if fn == nil || *fn == nil {
+		return nil
+	}
+	return (*fn)(projectID)
+}
+
+// SetPeerHairpinsForTest overrides the HTTPS peer-hairpin resolver.
+// Test-only seam: in production the closure is set once in
+// NewProxyServer and never swapped. The underlying atomic.Pointer.Store
+// means a concurrent hairpin dispatch sees either the old or the new
+// closure, never a torn read.
+func (p *ProxyServer) SetPeerHairpinsForTest(fn peerHairpinsFunc) {
+	p.peerHairpinsForPtr.Store(&fn)
+}
+
+// SetPeerHairpinsHTTPForTest is the plain-HTTP sibling of
+// SetPeerHairpinsForTest.
+func (p *ProxyServer) SetPeerHairpinsHTTPForTest(fn peerHairpinsFunc) {
+	p.peerHairpinsHTTPForPtr.Store(&fn)
 }
 
 // lockProjectBind blocks until the calling goroutine owns the bind lock

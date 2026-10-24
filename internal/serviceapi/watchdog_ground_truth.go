@@ -209,7 +209,7 @@ func (g *RealGroundTruth) RespawnProxyListeners(ctx context.Context, projectID s
 		// watchdog pass can move on.
 		return nil
 	}
-	if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(info, g.NtpPort)); err != nil {
+	if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(projectID, info, g.NtpPort, g.Cfg.TLD)); err != nil {
 		return fmt.Errorf("softnet forwarding re-push: %w", err)
 	}
 	return nil

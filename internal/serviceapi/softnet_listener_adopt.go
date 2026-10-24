@@ -68,7 +68,7 @@ func bindSoftnetListenersForAdopt(
 	// discoverSoftnet, which fires the equivalent push in a goroutine
 	// for exactly this reason). Errors are logged inline.
 	sock := SoftnetControlSock(cfg, projectName)
-	ep := endpointFrom(info, ntpPort)
+	ep := endpointFrom(projectName, info, ntpPort, cfg.TLD)
 	go func() {
 		if err := newSoftnetClient(sock).setPolicy("FORWARDING", ep); err != nil {
 			daemonlog.Errorf("serviceapi: adopt-rebind softnet setPolicy for %s: %v", projectName, err)

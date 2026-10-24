@@ -178,7 +178,7 @@ func TestEndpointFrom_MapsAllFieldsToLoopback(t *testing.T) {
 	}
 	const ntpPort = 5004
 
-	ep := endpointFrom(info, ntpPort)
+	ep := endpointFrom("proj", info, ntpPort, "test")
 
 	assert.Equal(t, "127.0.0.1:5001", ep.HTTP)
 	assert.Equal(t, "127.0.0.1:5002", ep.HTTPS)
@@ -186,6 +186,45 @@ func TestEndpointFrom_MapsAllFieldsToLoopback(t *testing.T) {
 	assert.Equal(t, "127.0.0.1:5004", ep.NTP)
 	assert.Equal(t, "127.0.0.1:5005", ep.GuestHTTP)
 	assert.Equal(t, "127.0.0.1:5006", ep.GuestHTTPS)
+}
+
+// TestEndpointFrom_IncludesMacPortsAndPeerHairpins proves the two
+// reverse-hairpin fields land on the pushed envelope:
+//
+//   - MacPorts is read straight off projectInfo (set at config-apply
+//     from cfg.MacServices).
+//   - PeerHairpins is resolved live against peersState +
+//     ironProxyState — once a peer's guest-origin HTTPS listener
+//     binds, the map carries its port even though the pushing
+//     project's own projectInfo never saw it.
+func TestEndpointFrom_IncludesMacPortsAndPeerHairpins(t *testing.T) {
+	origIron := ironProxyState
+	origPeers := peersState
+	ironProxyState = newIronProxyStore()
+	peersState = newPeersIndex()
+	t.Cleanup(func() {
+		ironProxyState = origIron
+		peersState = origPeers
+	})
+
+	// Peer B has its guest-origin HTTPS listener bound at 61234.
+	ironProxyState.put("B", projectInfo{GuestHTTPSPort: 61234})
+	// Pushing project A declares a mac_service (port 3000, 5432) and
+	// peer B.
+	peersState.setPeers("A", []string{"B"})
+	infoA := projectInfo{
+		HTTPPort:  11080,
+		HTTPSPort: 11443,
+		DNSPort:   11053,
+		MacPorts:  []int{3000, 5432},
+	}
+
+	ep := endpointFrom("A", infoA, 51234, "test")
+
+	assert.Equal(t, []int{3000, 5432}, ep.MacPorts)
+	require.Len(t, ep.PeerHairpins, 1)
+	assert.Equal(t, "127.0.0.1:61234", ep.PeerHairpins["B.test"],
+		"peer-hairpin map must use <peer>.<tld> keys and the peer's live GuestHTTPSPort")
 }
 
 // TestVMStart_RegistersReservedHealthRoute pins that after a successful

@@ -72,7 +72,7 @@ func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
 				projectDir = snap.MacCwd
 			}
 			if needsForwardingPush {
-				if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(info, ntpPort)); err != nil {
+				if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(id, info, ntpPort, cfg.TLD)); err != nil {
 					daemonlog.Errorf("serviceapi: discoverSoftnet: setPolicy FORWARDING for %s: %v", id, err)
 				}
 			}

@@ -169,7 +169,7 @@ func adoptOneIronProxy(ctx context.Context, cfg identity.Config, sup *supervisor
 		// (ProjectIP) worth keeping — restores the pre-adoption "no
 		// entry on unreadable config" property while still letting
 		// policy re-serve happen above.
-		if after, ok := ironProxyState.get(p.ProjectID); ok && after == (projectInfo{}) {
+		if after, ok := ironProxyState.get(p.ProjectID); ok && isZeroProjectInfo(after) {
 			ironProxyState.del(p.ProjectID)
 		}
 	}
@@ -248,7 +248,15 @@ func recoverProjectState(cfg identity.Config, routes *Routes, projectID string) 
 	if snap.ProjectIP != "" {
 		info.ProjectIP = snap.ProjectIP
 	}
+	// MacPorts and the peers index both live only in daemon memory —
+	// rehydrate them from the snapshot's schema.Config the same way
+	// ProjectIP does, so an adopted project's softnet still sees the
+	// authorized Mac-side ports and declared peers after a daemon
+	// restart, instead of silently dropping those forwards until the
+	// next /vm/start.
+	info.MacPorts = macPortsFromServices(snap.Cfg.MacServices)
 	ironProxyState.put(projectID, info)
+	peersState.setPeers(projectID, projectIDsFromPeerServices(snap.Cfg.PeerServices))
 
 	if len(snap.Routes) > 0 {
 		if err := routes.Apply(projectID, snap.Routes); err != nil {

@@ -262,6 +262,25 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 
 		snap, _ := ReadStateSnapshot(cfg, req.Name)
 
+		// Fold the reverse-hairpin surface into the live registry +
+		// peers index from the persisted snapshot: snap.Cfg is the
+		// source of truth here (adopt-in-place and reconcile-driven
+		// drift both land in this handler, and neither sends a fresh
+		// schema.Config in the request body). The cross-project
+		// validator fires loud before any mutation so a snapshot whose
+		// peer_services reference an unknown or self-named project
+		// never reaches setPeers.
+		if snap != nil {
+			if err := validatePeerServicesCrossProject(req.Name, snap.Cfg.PeerServices, KnownProjectNamesForWatchdog(cfg)); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			info, _ = ironProxyState.get(req.Name)
+			info.MacPorts = macPortsFromServices(snap.Cfg.MacServices)
+			ironProxyState.put(req.Name, info)
+			peersState.setPeers(req.Name, projectIDsFromPeerServices(snap.Cfg.PeerServices))
+		}
+
 		// Adopt-in-place (internal/orchestrator/shell.go's "pristine:
 		// running but never provisioned" branch — raw `tart run`
 		// adoption, or first-time adoption) calls this handler directly

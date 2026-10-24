@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 func TestPeersIndex_Basic(t *testing.T) {
@@ -218,7 +220,7 @@ func TestPropagatePeerRebind_PushesSetPolicyToDependents(t *testing.T) {
 	softnetState.put("U", filepath.Join(dir, "u.sock"))
 
 	const ntpPort = 51234
-	propagatePeerRebind("B", ntpPort)
+	propagatePeerRebind("B", ntpPort, "test")
 
 	lineA := mustRecv(t, gotA, "A")
 	assert.Contains(t, lineA, `"op":"setPolicy"`)
@@ -264,7 +266,7 @@ func TestPropagatePeerRebind_SkipsDependentWithNoSoftnetSock(t *testing.T) {
 	ironProxyState.put("A", projectInfo{HTTPPort: 11080})
 
 	assert.NotPanics(t, func() {
-		propagatePeerRebind("B", 51234)
+		propagatePeerRebind("B", 51234, "test")
 	})
 }
 
@@ -299,4 +301,64 @@ func mustRecv(t *testing.T, ch chan string, name string) string {
 		t.Fatalf("%s: no setPolicy received within 2s", name)
 	}
 	return ""
+}
+
+// TestConfigLoad_UnknownPeer_RejectsLoud proves the daemon-side
+// cross-project validator catches a peer_services entry naming a
+// project the daemon doesn't know about (never started, torn down).
+// Schema-level validation can't see this because it has no visibility
+// into the project registry.
+func TestConfigLoad_UnknownPeer_RejectsLoud(t *testing.T) {
+	ps := []*schema.PeerService{{Project: "ghost"}}
+	err := validatePeerServicesCrossProject("A", ps, []string{"A"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown peer")
+	assert.Contains(t, err.Error(), `"ghost"`)
+}
+
+// TestConfigLoad_SelfPeer_RejectsLoud proves the self-peer trap:
+// peer_services[].project == self.ProjectID is a copy-paste error
+// with no useful semantic (a project would hairpin into its own
+// zone), so the validator refuses it even when the "self" ID is
+// present in the known-projects set.
+func TestConfigLoad_SelfPeer_RejectsLoud(t *testing.T) {
+	ps := []*schema.PeerService{{Project: "A"}}
+	err := validatePeerServicesCrossProject("A", ps, []string{"A", "B"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "self-peer")
+}
+
+// TestConfigLoad_KnownPeer_Accepts pins the happy path so a change
+// that makes the validator overly strict trips a test, not a
+// production handler.
+func TestConfigLoad_KnownPeer_Accepts(t *testing.T) {
+	ps := []*schema.PeerService{{Project: "B"}}
+	require.NoError(t, validatePeerServicesCrossProject("A", ps, []string{"A", "B"}))
+}
+
+// TestConfigLoad_NoPeers_Accepts covers the common case where a
+// project declares no peer_services at all — the validator must
+// short-circuit without consulting the known set.
+func TestConfigLoad_NoPeers_Accepts(t *testing.T) {
+	require.NoError(t, validatePeerServicesCrossProject("A", nil, nil))
+}
+
+func TestProjectIDsFromPeerServices(t *testing.T) {
+	got := projectIDsFromPeerServices([]*schema.PeerService{
+		{Project: "B"},
+		nil,
+		{Project: ""},
+		{Project: "C"},
+	})
+	assert.Equal(t, []string{"B", "C"}, got)
+}
+
+func TestMacPortsFromServices(t *testing.T) {
+	got := macPortsFromServices([]*schema.MacService{
+		{Name: "api", Port: 3000},
+		nil,
+		{Name: "zero", Port: 0},
+		{Name: "db", Port: 5432},
+	})
+	assert.Equal(t, []int{3000, 5432}, got)
 }

@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // peersIndex tracks the directed declared-peer graph between projects:
@@ -136,15 +137,15 @@ var peersState = newPeersIndex()
 
 // propagatePeerRebind re-pushes each dependent's current setPolicy
 // envelope to its softnet so softnet learns the fresh ports a rebind
-// of projectID just claimed. Does not yet carry per-dependent
-// peer-hairpins — endpointFrom gains that in Task 9; this fan-out is
-// the trigger it needs.
+// of projectID just claimed. endpointFrom resolves each dependent's
+// PeerHairpins live from the peers index, so the new ports show up
+// in the dependent's forward targets automatically.
 //
 // A dependent with no projectInfo entry OR no softnet socket is
 // skipped. A push failure is logged but does not fail the caller —
 // the project whose rebind triggered this fanout still succeeded, and
 // a dead dependent is a separate problem.
-func propagatePeerRebind(projectID string, ntpPort int) {
+func propagatePeerRebind(projectID string, ntpPort int, tld string) {
 	for _, dep := range peersState.dependentsOf(projectID) {
 		depInfo, ok := ironProxyState.get(dep)
 		if !ok {
@@ -154,8 +155,86 @@ func propagatePeerRebind(projectID string, ntpPort int) {
 		if !ok {
 			continue
 		}
-		if err := newSoftnetClient(depSock).setPolicy("FORWARDING", endpointFrom(depInfo, ntpPort)); err != nil {
+		if err := newSoftnetClient(depSock).setPolicy("FORWARDING", endpointFrom(dep, depInfo, ntpPort, tld)); err != nil {
 			daemonlog.Errorf("serviceapi: peer-rebind re-push for %s (dep of %s): %v", dep, projectID, err)
 		}
 	}
+}
+
+// projectIDsFromPeerServices extracts the Project field from each
+// declared peer_service entry. Nil / zero entries are skipped — the
+// schema validator rejects those at config load, but this helper runs
+// defensively on the daemon side too.
+func projectIDsFromPeerServices(ps []*schema.PeerService) []string {
+	if len(ps) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		if p == nil || p.Project == "" {
+			continue
+		}
+		out = append(out, p.Project)
+	}
+	return out
+}
+
+// macPortsFromServices extracts the Port field from each declared
+// mac_service entry — the set softnet's egress forwarder will
+// authorize for this VM via ForwardTargets.MacPorts. Nil / zero entries
+// are skipped (same defensive stance as projectIDsFromPeerServices).
+func macPortsFromServices(ms []*schema.MacService) []int {
+	if len(ms) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(ms))
+	for _, m := range ms {
+		if m == nil || m.Port == 0 {
+			continue
+		}
+		out = append(out, m.Port)
+	}
+	return out
+}
+
+// validatePeerServicesCrossProject fails loud on two conditions the
+// schema-level shape validator can't catch (it has no visibility into
+// the set of registered projects):
+//
+//   - A self-peer (peer_services[].project equals the declaring
+//     project's own name): a projectwide alias to itself with no
+//     meaning, almost always a copy-paste error.
+//   - An unknown peer (peer_services[].project not in known): the
+//     reverse-hairpin would route to a `.test` zone no project owns.
+//
+// knownProjects is the daemon's current set of registered project IDs
+// (whatever listing the orchestrator uses — KnownProjectNamesForWatchdog
+// at /vm/start, same list via snap.Cfg at /vm/apply-iron-proxy). Nil /
+// empty peer_services returns nil immediately so a project with no
+// peers declared never trips the known-set check.
+func validatePeerServicesCrossProject(selfProjectID string, ps []*schema.PeerService, knownProjects []string) error {
+	if len(ps) == 0 {
+		return nil
+	}
+	known := make(map[string]struct{}, len(knownProjects))
+	for _, k := range knownProjects {
+		known[k] = struct{}{}
+	}
+	// selfProjectID is always a legitimate target of the known-set check
+	// (a project declaring itself exists even if its state snapshot was
+	// written mid-start). Insert it so the only remaining rejection path
+	// is the self-peer case below.
+	known[selfProjectID] = struct{}{}
+	for i, p := range ps {
+		if p == nil || p.Project == "" {
+			continue
+		}
+		if p.Project == selfProjectID {
+			return fmt.Errorf("peer_services[%d].project %q: self-peer (a project cannot peer with itself)", i, p.Project)
+		}
+		if _, ok := known[p.Project]; !ok {
+			return fmt.Errorf("peer_services[%d].project %q: unknown peer (no project with that name is registered on this daemon)", i, p.Project)
+		}
+	}
+	return nil
 }

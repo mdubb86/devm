@@ -152,12 +152,12 @@ func TestGuestOriginHTTPS_SNIMux_PeerSplice(t *testing.T) {
 	addrB := fmt.Sprintf("127.0.0.1:%d", httpsPortB)
 	addrA := fmt.Sprintf("127.0.0.1:%d", httpsPortA)
 
-	proxyA.peerHairpinsFor = func(string) map[string]string {
+	proxyA.SetPeerHairpinsForTest(func(string) map[string]string {
 		return map[string]string{peerBSuffix: addrB}
-	}
-	proxyB.peerHairpinsFor = func(string) map[string]string {
+	})
+	proxyB.SetPeerHairpinsForTest(func(string) map[string]string {
 		return map[string]string{peerASuffix: addrA}
-	}
+	})
 
 	// Client dials A but asks for B's hostname.
 	sni := "api." + peerBSuffix
@@ -332,9 +332,9 @@ func TestGuestOriginHTTPS_SNIMux_PeerDies_SpliceDialFails_AlertNotHang(t *testin
 	require.NoError(t, deadLn.Close())
 
 	peerBSuffix := "projB." + cfg.TLD
-	proxyA.peerHairpinsFor = func(string) map[string]string {
+	proxyA.SetPeerHairpinsForTest(func(string) map[string]string {
 		return map[string]string{peerBSuffix: deadAddr}
-	}
+	})
 
 	addrA := fmt.Sprintf("127.0.0.1:%d", httpsPortA)
 	raw, err := net.Dial("tcp", addrA)
@@ -400,12 +400,12 @@ func TestGuestOriginHTTP_HostMux_PeerSplice(t *testing.T) {
 	addrB := fmt.Sprintf("127.0.0.1:%d", httpPortB)
 	addrA := fmt.Sprintf("127.0.0.1:%d", httpPortA)
 
-	proxyA.peerHairpinsHTTPFor = func(string) map[string]string {
+	proxyA.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
 		return map[string]string{peerBSuffix: addrB}
-	}
-	proxyB.peerHairpinsHTTPFor = func(string) map[string]string {
+	})
+	proxyB.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
 		return map[string]string{peerASuffix: addrA}
-	}
+	})
 
 	// Client dials A but asks for B's hostname. The round-trip proves
 	// A hijacked, replayed the request to B, received B's response,
@@ -456,9 +456,9 @@ func TestGuestOriginHTTP_HostMux_EmptyPeerAddr_421(t *testing.T) {
 	defer cleanupA()
 
 	peerBSuffix := "projB." + cfg.TLD
-	proxyA.peerHairpinsHTTPFor = func(string) map[string]string {
+	proxyA.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
 		return map[string]string{peerBSuffix: ""}
-	}
+	})
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/", httpPortA)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -490,9 +490,9 @@ func TestGuestOriginHTTP_HostMux_PeerDies_DialFailure_502(t *testing.T) {
 	require.NoError(t, deadLn.Close())
 
 	peerBSuffix := "projB." + cfg.TLD
-	proxyA.peerHairpinsHTTPFor = func(string) map[string]string {
+	proxyA.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
 		return map[string]string{peerBSuffix: deadAddr}
-	}
+	})
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/", httpPortA)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -545,9 +545,9 @@ func TestGuestOriginHTTP_HostMux_PeerSplice_POST(t *testing.T) {
 
 	peerBSuffix := "projB." + cfg.TLD
 	addrB := fmt.Sprintf("127.0.0.1:%d", httpPortB)
-	proxyA.peerHairpinsHTTPFor = func(string) map[string]string {
+	proxyA.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
 		return map[string]string{peerBSuffix: addrB}
-	}
+	})
 
 	host := "api." + peerBSuffix
 	url := fmt.Sprintf("http://127.0.0.1:%d/", httpPortA)
@@ -584,9 +584,9 @@ func TestGuestOriginHTTP_HostMux_PeerSplice_ClosesConnection(t *testing.T) {
 	peerBSuffix := "projB." + cfg.TLD
 	addrB := fmt.Sprintf("127.0.0.1:%d", httpPortB)
 	addrA := fmt.Sprintf("127.0.0.1:%d", httpPortA)
-	proxyA.peerHairpinsHTTPFor = func(string) map[string]string {
+	proxyA.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
 		return map[string]string{peerBSuffix: addrB}
-	}
+	})
 
 	// Raw TCP so we own the conn and can prove the server closed it.
 	raw, err := net.Dial("tcp", addrA)

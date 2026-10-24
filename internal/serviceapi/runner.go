@@ -91,7 +91,7 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 					info.GuestHTTPSPort = guestHTTPSPort
 					ironProxyState.put(projectID, info)
 					if sock, ok := softnetState.get(projectID); ok {
-						if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(info, ntpPort)); err != nil {
+						if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(projectID, info, ntpPort, cfg.TLD)); err != nil {
 							daemonlog.Errorf("serviceapi: guest-origin re-push for %s: %v", projectID, err)
 						}
 					}
@@ -99,7 +99,7 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 					// me as a peer: their softnet pulls peer-hairpin
 					// targets from endpointFrom, which reads the just-
 					// updated GuestHTTP(S)Port out of ironProxyState.
-					propagatePeerRebind(projectID, ntpPort)
+					propagatePeerRebind(projectID, ntpPort, cfg.TLD)
 				}
 			}
 			s := RebindStatus{State: RebindOK, Attempts: attempts}

@@ -476,6 +476,10 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			http.Error(w, "mac_cwd required", http.StatusBadRequest)
 			return
 		}
+		if err := validatePeerServicesCrossProject(req.Name, req.Cfg.PeerServices, KnownProjectNamesForWatchdog(cfg)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
 		unlock := locks.Lock(req.Name)
 		defer unlock()
@@ -755,7 +759,17 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info.TunnelPort = tunnelPort
 		info.DNSPort = dnsPort
 		info.GuestAPIPort = guestAPIPort
+		info.MacPorts = macPortsFromServices(req.Cfg.MacServices)
 		ironProxyState.put(req.Name, info)
+
+		// Register this project's declared peers in the peers index so
+		// a subsequent /vm/begin-provisioning push resolves PeerHairpins
+		// via endpointFrom + peersState. Replace semantic: setPeers
+		// overwrites the previous list so a withdrawn peer stops
+		// receiving propagation pushes on the next rebind. The
+		// cross-project validator fired at the top of this handler
+		// guarantees every peer in the list names a known project.
+		peersState.setPeers(req.Name, projectIDsFromPeerServices(req.Cfg.PeerServices))
 
 		// Apply VM-side config via tart exec. timesyncd's NTP config is
 		// baked into the base image (image/provision-base.sh), not
@@ -924,7 +938,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// Full ForwardTargets on every push — setPolicy keeps the previous
 		// endpoint on nil, so a partial push would silently clobber fields.
 		openInfo, _ := ironProxyState.get(req.Name)
-		if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(openInfo, ntpPort)); err != nil {
+		if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(req.Name, openInfo, ntpPort, cfg.TLD)); err != nil {
 			http.Error(w, fmt.Sprintf("flip softnet enforced: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -1096,6 +1110,11 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		}
 		ReleaseProjectIP(cfg, req.Name)
 		ironProxyState.del(req.Name)
+		// Drop this project's outgoing peer declarations. Inverse edges
+		// (where other projects list me as a peer) stay — they still
+		// need to be told when I come back, which propagatePeerRebind
+		// will handle at the next /vm/start.
+		peersState.remove(req.Name)
 		// A stopped project frees its claimed host ports for other
 		// projects to take.
 		exposeClaims.release(req.Name)
@@ -1488,7 +1507,7 @@ func guestGitCACertPath() string {
 // softnet's ft.GuestHTTP != "" deny guard can never fire on it. An
 // empty string is unambiguous: softnet denies guest-originated `.test`
 // traffic cleanly instead of the guest hanging on a dial to :0.
-func endpointFrom(info projectInfo, ntpPort int) *Endpoint {
+func endpointFrom(projectID string, info projectInfo, ntpPort int, tld string) *Endpoint {
 	e := &Endpoint{
 		HTTP:  ironProxyListenAddr(info.HTTPPort),
 		HTTPS: ironProxyListenAddr(info.HTTPSPort),
@@ -1503,6 +1522,18 @@ func endpointFrom(info projectInfo, ntpPort int) *Endpoint {
 	}
 	if info.GuestAPIPort != 0 {
 		e.GuestAPI = ironProxyListenAddr(info.GuestAPIPort)
+	}
+	// MacPorts and PeerHairpins are the two reverse-hairpin fields:
+	// MacPorts rides on info (set at config-apply from
+	// cfg.MacServices), and PeerHairpins is resolved live against the
+	// peers index + ironProxyState so a dependent's rebind picks up
+	// the fresh guest-origin ports without a stale map in-flight.
+	// Empty maps / nil slices are omitempty on the wire.
+	if len(info.MacPorts) > 0 {
+		e.MacPorts = append([]int(nil), info.MacPorts...)
+	}
+	if ph := peersState.peerHairpinsFor(projectID, ironProxyState, tld); len(ph) > 0 {
+		e.PeerHairpins = ph
 	}
 	return e
 }
@@ -1545,6 +1576,14 @@ type projectInfo struct {
 	// AllocateProjectIP; released at /vm/stop via ReleaseProjectIP.
 	// Empty when the project is stopped.
 	ProjectIP string
+
+	// MacPorts is the set of Mac loopback ports this project's VM is
+	// allowed to reach, extracted from the project's declared
+	// mac_services at config-apply. Softnet's egress forwarder consults
+	// this via ForwardTargets.MacPorts (threaded through endpointFrom)
+	// to permit traffic to <name>.host.test:<port>. Nil / empty when the
+	// project declares none.
+	MacPorts []int
 }
 
 type projectInfoStore struct {
@@ -1589,3 +1628,14 @@ func (s *projectInfoStore) keys() []string {
 }
 
 var ironProxyState = newIronProxyStore()
+
+// isZeroProjectInfo reports whether info is the structural zero value.
+// A hand-written check is required because projectInfo now carries a
+// MacPorts []int slice, and slices aren't comparable with ==.
+func isZeroProjectInfo(info projectInfo) bool {
+	return info.HTTPPort == 0 && info.HTTPSPort == 0 && info.TunnelPort == 0 &&
+		info.DNSPort == 0 && info.PolicySocket == "" &&
+		info.GuestHTTPPort == 0 && info.GuestHTTPSPort == 0 &&
+		info.GuestAPIPort == 0 && info.ProjectIP == "" &&
+		len(info.MacPorts) == 0
+}
