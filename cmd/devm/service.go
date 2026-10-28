@@ -21,6 +21,7 @@ import (
 	"github.com/mdubb86/devm/internal/helper"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/image"
+	"github.com/mdubb86/devm/internal/orchestrator"
 	"github.com/mdubb86/devm/internal/serviceapi"
 	"github.com/mdubb86/devm/internal/serviceapi/sshconfig"
 	"github.com/mdubb86/devm/internal/status"
@@ -136,7 +137,11 @@ func newKardianosService() (service.Service, error) {
 		Arguments:   []string{"serve"},
 		Option: service.KeyValue{
 			"LaunchdConfig": plistText,
-			"UserService":   false, // Force LaunchDaemon path; Status() reads /Library/LaunchDaemons/ from any euid.
+			// LaunchDaemon (system domain) not LaunchAgent — the
+			// daemon must be reachable from any euid, and the
+			// install flow writes the plist to
+			// /Library/LaunchDaemons/.
+			"UserService": false,
 		},
 	}
 	return service.New(prog, svcCfg)
@@ -883,23 +888,23 @@ var serviceCmd = &cobra.Command{
 var serviceStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show whether the devm service is running",
+	// kardianos's Status() shells to `launchctl list <label>` with no
+	// domain prefix, which queries the current user's domain. The
+	// devm daemon lives in system/ (LaunchDaemon in
+	// /Library/LaunchDaemons/), so that lookup always fails and
+	// Status returns StatusStopped against a live daemon — the exact
+	// bug the field report caught. orchestrator.ProbeDaemon does the
+	// right thing: /health over the unix socket for Running, then
+	// `launchctl print system/<label>` for Installed. Delegate.
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
-		svc, err := newKardianosService()
-		if err != nil {
-			return err
-		}
-		st, err := svc.Status()
-		if err != nil {
-			fmt.Println("not installed")
-			return nil
-		}
-		switch st {
-		case service.StatusRunning:
+		d := orchestrator.ProbeDaemon(cmd.Context(), cfg, Fingerprint)
+		switch {
+		case d.Running:
 			fmt.Println("running")
-		case service.StatusStopped:
+		case d.Installed:
 			fmt.Println("stopped")
-		case service.StatusUnknown:
+		default:
 			fmt.Println("not installed")
 		}
 		return nil
