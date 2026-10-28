@@ -68,7 +68,7 @@ Repo hydration (`git clone` inside the guest, for `repos:` entries) runs at the 
 
 ## Provisioner failures
 
-After the VM starts, provisioning walks a series of stages. Each stage emits a marker (`::devm:stage:<name>::`) that drives the `devm start` spinner. Iron-proxy runs in `passthrough` authority mode through the `open`→`commands` stages (MITM'd, audited, secret-substituted, but not allowlist-gated) and flips to `restricted` before `enforce`/`services`, so user services always come up under the enforced allowlist. Softnet stays in `FORWARDING` throughout — iron-proxy is the authority.
+After the VM starts, provisioning walks a series of stages. Each stage emits a marker (`::devm:stage:<name>::`) that drives the `devm start` spinner. Iron-proxy runs in `passthrough` authority mode through the `open`→`startup` stages (MITM'd, audited, secret-substituted, but not allowlist-gated) and flips to `restricted` at `enforce`, so user services always come up under the enforced allowlist. Softnet stays in `FORWARDING` throughout — iron-proxy is the authority.
 
 Any failing command aborts provisioning immediately. On failure the error line is:
 
@@ -83,7 +83,7 @@ provision: provision stage "<name>": provisioning script exited <N>
 | Stage | What it does | Common failure | Fix |
 |---|---|---|---|
 | `open` | Marker for the start of the provisioning window (iron-proxy is in the path under `passthrough` authority mode — MITM'd, audited, secret-substituted, but not allowlist-gated). Runs whenever there's provisioning-window work to do (first boot, a `startup()` function, or templates); skipped on a warm restart with nothing to run. | Rare | n/a |
-| `packages` | `apt-get update` + `apt-get install -y <packages>` on first boot; on a later boot, converges only the added/removed packages if `packages:` changed while stopped. Skipped if there's nothing to do | Package name not found, or `deb.debian.org` not in `network.allow` | Add `deb.debian.org` to `network.allow` in `devm.yaml`; verify package names |
+| `packages` | `apt-get update` + `apt-get install -y <packages>` on first boot; on a later boot, converges only the added/removed packages if `packages:` changed while stopped. Skipped if there's nothing to do. Runs under `passthrough` authority — `network.allow` is NOT gating here. | Package name typo, or apt mirror hiccup (iron-proxy still MITMs and logs the reach, so denial counters won't fire — this is a package-level failure, not a network one) | Verify package names in `devm.yaml`; read the captured output for the exact apt line that failed |
 | `install` | Runs the `install()` function's body from `devm.sh` (if defined), with `$WORKSPACE`, `cfg.env`, and `path:` in scope (first boot only). Has a 600s timeout, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | The function exits non-zero, or exceeds its timeout (exit 124) | Read the captured output above the error; fix the failing command. For long installs, raise `DEVM_INSTALL_STEP_TIMEOUT_S`. |
 | `docker` | Installs the Docker engine + shim (only when `docker: true`; first boot only) | Docker install failure | Read the captured output; if `network.allow` is missing a Docker registry host, add it |
 | `templates` | Renders every `services[*].templates` entry into its declared output path. Runs on ANY boot that has templates declared. | Template output path unwritable (e.g. `/etc/foo` without `sudo: true` on the template) or template source render error | Add `sudo: true` to the template if the output is under a root-owned dir; otherwise fix the template source |

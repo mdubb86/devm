@@ -47,7 +47,10 @@ type Entry struct {
 // share this string.
 func header(cfg identity.Config) string {
 	return fmt.Sprintf(`# Managed by devm. Regenerated on VM lifecycle events; hand edits will be
-# overwritten. Include from ~/.ssh/config as:
+# overwritten. If you need to re-add the Include, put it NEAR THE TOP of
+# ~/.ssh/config — before any Host or Match block — otherwise ssh_config
+# scoping ties the Include to the preceding block and devm's Host entries
+# won't resolve.
 #     Include "%s"
 
 `, Path(cfg))
