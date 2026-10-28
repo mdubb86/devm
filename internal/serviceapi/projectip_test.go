@@ -1,8 +1,8 @@
 package serviceapi
 
 import (
+	"errors"
 	"fmt"
-	"net"
 	"sync"
 	"testing"
 
@@ -129,6 +129,36 @@ func TestAllocateProjectIP_AllSquattedExhaustsPool(t *testing.T) {
 	_, err := AllocateProjectIP(identity.Prod, "a")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pool exhausted")
+	assert.Contains(t, err.Error(), "127.42.0.1", "error must enumerate the blocked slots")
+	assert.Contains(t, err.Error(), "specific LISTEN on :22", "error must name the cause")
+}
+
+// TestAllocateProjectIP_ExhaustionErrorNamesMixedCauses pins the
+// shape of the exhaustion error: when some slots are held by tracked
+// projects and others by foreign specific listeners, the error must
+// name both causes with the specific IPs — otherwise an operator
+// cannot tell whether to free a project or a listener.
+func TestAllocateProjectIP_ExhaustionErrorNamesMixedCauses(t *testing.T) {
+	resetIronProxyState(t)
+	// Fill 127.42.0.1..3 via tracked projects.
+	_, err := AllocateProjectIP(identity.Prod, "famfolio")
+	require.NoError(t, err)
+	_, err = AllocateProjectIP(identity.Prod, "everstone")
+	require.NoError(t, err)
+	_, err = AllocateProjectIP(identity.Prod, "ffbot")
+	require.NoError(t, err)
+	// Block the rest of the pool via the probe.
+	probeIPInUse = func(string) bool { return true }
+	_, err = AllocateProjectIP(identity.Prod, "newproj")
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "127.42.0.1=famfolio")
+	assert.Contains(t, msg, "127.42.0.2=everstone")
+	assert.Contains(t, msg, "127.42.0.3=ffbot")
+	assert.Contains(t, msg, "127.42.0.4")
+	assert.Contains(t, msg, "127.42.0.20")
+	assert.Contains(t, msg, "specific LISTEN on :22")
+	assert.Contains(t, msg, "Remote Login", "error must explicitly disclaim the wildcard *:22 case")
 }
 
 // TestAllocateProjectIP_ExistingAssignmentNotProbed pins that the
@@ -145,13 +175,41 @@ func TestAllocateProjectIP_ExistingAssignmentNotProbed(t *testing.T) {
 	assert.Equal(t, first, second)
 }
 
-func TestListenerActive(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := ln.Addr().String()
-	assert.True(t, listenerActive(addr), "live listener must probe as active")
-	require.NoError(t, ln.Close())
-	assert.False(t, listenerActive(addr), "closed listener must probe as free")
+// TestProbeIPInUse_SpecificBindBusy pins that a specific-address
+// LISTEN on ip:22 marks the slot occupied.
+func TestProbeIPInUse_SpecificBindBusy(t *testing.T) {
+	old := listenersBoundTo
+	t.Cleanup(func() { listenersBoundTo = old })
+	listenersBoundTo = func(ip string) ([]int, error) {
+		if ip == "127.42.0.5" {
+			return []int{22, 80, 443}, nil
+		}
+		return nil, nil
+	}
+	assert.True(t, probeIPInUse("127.42.0.5"))
+	assert.False(t, probeIPInUse("127.42.0.6"))
+}
+
+// TestProbeIPInUse_WildcardListenerIsFree is the regression test for
+// the Remote-Login-enabled scenario: host sshd on *:22 accepts on
+// every lo0 alias but is NOT a specific bind, so listenersBoundTo
+// returns [] and the slot must probe as free.
+func TestProbeIPInUse_WildcardListenerIsFree(t *testing.T) {
+	old := listenersBoundTo
+	t.Cleanup(func() { listenersBoundTo = old })
+	listenersBoundTo = func(string) ([]int, error) { return nil, nil }
+	assert.False(t, probeIPInUse("127.42.0.5"), "wildcard listener must not count as occupied")
+}
+
+// TestProbeIPInUse_QueryErrorFailsClosed pins the fail-closed
+// behavior: if listenersBoundTo errors, probeIPInUse must treat the
+// slot as occupied — handing out an IP whose listener state we
+// cannot verify risks cross-wiring an orphan.
+func TestProbeIPInUse_QueryErrorFailsClosed(t *testing.T) {
+	old := listenersBoundTo
+	t.Cleanup(func() { listenersBoundTo = old })
+	listenersBoundTo = func(string) ([]int, error) { return nil, errors.New("netstat broke") }
+	assert.True(t, probeIPInUse("127.42.0.5"))
 }
 
 // resetIronProxyState clears the package-level ironProxyState between
