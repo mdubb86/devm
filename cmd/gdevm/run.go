@@ -20,14 +20,15 @@ type manifest struct {
 // runMain implements `gdevm run`. Reads /opt/devm/commands.json, walks
 // up from $PWD to find its containing repo, verifies the requested
 // name is registered for that repo, then sources devm.sh (+devm.me.sh)
-// and syscall.Exec's bash to invoke the named function from the repo's
-// guest path. Never returns on success — bash replaces this process.
+// and syscall.Exec's bash to invoke the named function with args from
+// the repo's guest path. Never returns on success — bash replaces
+// this process.
 func runMain(args []string) int {
 	if len(args) == 0 || args[0] == "" {
-		fmt.Fprintln(os.Stderr, "usage: gdevm run <command>")
+		fmt.Fprintln(os.Stderr, "usage: gdevm run <command> [args...]")
 		return 2
 	}
-	name := args[0]
+	name, cmdArgs := args[0], args[1:]
 
 	manifestPath := os.Getenv("DEVM_COMMANDS_MANIFEST")
 	if manifestPath == "" {
@@ -63,17 +64,31 @@ func runMain(args []string) int {
 		return 1
 	}
 
-	scriptBody := fmt.Sprintf(`set -eo pipefail
-source /home/devm/devm.sh
-[ -f /home/devm/devm.me.sh ] && source /home/devm/devm.me.sh
-cd "%s"
-%s`, guestPath, name)
+	scriptBody := buildRunScript(guestPath, name)
 
-	if err := syscall.Exec("/bin/bash", []string{"bash", "-c", scriptBody}, os.Environ()); err != nil {
+	// bash -c "<script>" <$0> <$1> <$2> … — the fourth argv element
+	// onwards becomes $1..$N inside the script, which the embedded
+	// `"$@"` forwards into the user's function. Without this, extra
+	// args after the command name silently vanished before reaching
+	// the guest-side function.
+	bashArgv := append([]string{"bash", "-c", scriptBody, "gdevm-run"}, cmdArgs...)
+	if err := syscall.Exec("/bin/bash", bashArgv, os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "gdevm run: exec bash: %v\n", err)
 		return 1
 	}
 	return 0 // unreachable
+}
+
+// buildRunScript returns the bash -c body that sources devm.sh (+
+// devm.me.sh if present), changes to the repo's guestPath, and
+// invokes the named function with `"$@"` so caller args reach it.
+// Pure function so arg-forwarding can be unit-tested without exec.
+func buildRunScript(guestPath, name string) string {
+	return fmt.Sprintf(`set -eo pipefail
+source /home/devm/devm.sh
+[ -f /home/devm/devm.me.sh ] && source /home/devm/devm.me.sh
+cd "%s"
+%s "$@"`, guestPath, name)
 }
 
 // findRepo finds the repo whose guestPath is a prefix of cwd (walking up
