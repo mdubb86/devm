@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/identity"
@@ -24,6 +27,35 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestIsSoftnetAlreadyGone_BenignErrors pins the field-report fix: a
+// softnet control dial that fails with ENOENT (socket file never
+// created, or already cleaned up) or ECONNREFUSED (socket inode
+// lingering but listener dead) means softnet is not running — the
+// shutdown goal is already met and the vm/stop path must NOT log a
+// scary daemon error for it. Any other dial failure (I/O error,
+// timeout) stays a real error.
+func TestIsSoftnetAlreadyGone_BenignErrors(t *testing.T) {
+	t.Run("ENOENT direct", func(t *testing.T) {
+		assert.True(t, isSoftnetAlreadyGone(fs.ErrNotExist))
+	})
+	t.Run("ENOENT wrapped by net.OpError (what DialTimeout returns)", func(t *testing.T) {
+		err := &net.OpError{Op: "dial", Net: "unix", Err: fs.ErrNotExist}
+		wrapped := fmt.Errorf("dial softnet control socket /tmp/x.sock: %w", err)
+		assert.True(t, isSoftnetAlreadyGone(wrapped))
+	})
+	t.Run("ECONNREFUSED wrapped", func(t *testing.T) {
+		err := &net.OpError{Op: "dial", Net: "unix", Err: syscall.ECONNREFUSED}
+		wrapped := fmt.Errorf("dial softnet control socket /tmp/x.sock: %w", err)
+		assert.True(t, isSoftnetAlreadyGone(wrapped))
+	})
+	t.Run("other I/O error", func(t *testing.T) {
+		assert.False(t, isSoftnetAlreadyGone(errors.New("permission denied")))
+	})
+	t.Run("timeout", func(t *testing.T) {
+		assert.False(t, isSoftnetAlreadyGone(context.DeadlineExceeded))
+	})
+}
 
 // TestVMStop_CallsMutagenStopPhaseBeforeGracefulStop verifies Task 18:
 // the /vm/stop handler flushes+pauses the project's mutagen sessions

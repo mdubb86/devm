@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/mdubb86/devm/internal/caenv"
@@ -428,9 +430,25 @@ func shutdownSoftnet(projectID string) {
 	if !ok {
 		return
 	}
-	if err := newSoftnetClient(sock).shutdown(); err != nil {
-		daemonlog.Errorf("serviceapi: vm/stop: softnet shutdown for %s: %v", projectID, err)
+	err := newSoftnetClient(sock).shutdown()
+	if err == nil {
+		return
 	}
+	if isSoftnetAlreadyGone(err) {
+		log.Printf("serviceapi: vm/stop: softnet for %s already gone (control socket unreachable: %v) — nothing to shut down", projectID, err)
+		return
+	}
+	daemonlog.Errorf("serviceapi: vm/stop: softnet shutdown for %s: %v", projectID, err)
+}
+
+// isSoftnetAlreadyGone reports whether err from a softnet control
+// shutdown means softnet is not running — a missing control socket
+// (softnet never finished starting, or already cleaned up on exit)
+// or a refused connection (socket inode lingering but listener dead).
+// Either case means "the shutdown goal is already met"; the caller
+// treats it as benign instead of a daemon error.
+func isSoftnetAlreadyGone(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // RegisterVMHandlers wires /vm/start, /vm/stop, /vm/status, and
