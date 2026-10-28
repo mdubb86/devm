@@ -349,14 +349,23 @@ func gracefulStopVM(ctx context.Context, tr vmStopper, name string) {
 	}
 }
 
-// vmCrashCallback builds the supervisor.Spawn onUnexpectedExit hook for
-// a project's VM: the instant the tart-run process dies without
+// vmCrashCallback builds the supervisor.Spawn onUnexpectedExit hook
+// for a project's VM: the instant the tart-run process dies without
 // DisableRestart having been called first (a real crash, not the
 // graceful poweroff path in /vm/stop), the cache's VMState flips to
-// stopped — no need to wait for the next watchdog tick to notice.
+// stopped AND the daemon err log gets a loud note.
+//
+// The log line is the diagnostic trail a field report asked for: a
+// macOS-OOM-killed VM leaves no entry in the GUEST journal (the
+// journal just stops mid-command), and no entry in `tart list`
+// output — the VM simply disappears. The operator's only
+// recoverable signal is a timestamped host-side note recorded
+// *before* the daemon has a chance to lose it on its own restart.
+//
 // cache may be nil (tests that don't wire one).
 func vmCrashCallback(cache *StateCache, name string) func() {
 	return func() {
+		daemonlog.Errorf("serviceapi: VM %s exited unexpectedly (not via /vm/stop) — likely a host-side kill (OOM?) or tart crash; the guest's own journal will typically not record this", name)
 		if cache != nil {
 			cache.SetVMState(name, VMStopped)
 		}
