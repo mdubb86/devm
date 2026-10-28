@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/schema"
 )
@@ -87,14 +89,22 @@ type StateSnapshot struct {
 	MacCwd string `json:"mac_cwd,omitempty"`
 }
 
-// ReadStateSnapshot loads the persisted snapshot for a project. Returns
-// (nil, nil) only when the file is absent — a fresh project. A file
-// that exists but fails to parse is returned as an error: silently
-// treating a malformed snapshot as missing loses every adopted
-// iron-proxy PID, project IP, and workspace path on every reconcile
-// for the lifetime of the daemon. Fail loud so the operator sees it,
-// with the path in the message so the fix (deleting the stale file)
-// is obvious.
+// ReadStateSnapshot loads the persisted snapshot for a project.
+// Returns (nil, nil) when the file is absent — a fresh project, or
+// one whose state file we just quarantined (see below).
+//
+// An unparseable snapshot — typical cause: state file written by an
+// older schema the current daemon can't decode — is renamed to
+// `<path>.corrupt-<unixnano>` and treated as absent. The daemon then
+// rebuilds state on the next reconcile. Pre-fix, the parse error was
+// returned so callers could log it; in practice every caller just
+// logged-and-continued (one line in the daemon err log, once at
+// boot), while `devm status` kept reporting an unexplained
+// `proxy: UNHEALTHY` for the rest of the day. Self-healing with
+// forensic quarantine beats degraded silence.
+//
+// A read-permission or other I/O error is still returned loudly —
+// those shouldn't be auto-recovered.
 func ReadStateSnapshot(cfg identity.Config, projectID string) (*StateSnapshot, error) {
 	if err := validProjectID(projectID); err != nil {
 		return nil, err
@@ -108,10 +118,21 @@ func ReadStateSnapshot(cfg identity.Config, projectID string) (*StateSnapshot, e
 		return nil, fmt.Errorf("read state %s: %w", path, err)
 	}
 	var snap StateSnapshot
-	if err := json.Unmarshal(body, &snap); err != nil {
-		return nil, fmt.Errorf(
-			"parse state %s: %w (delete this file to recover; the daemon "+
-				"will rebuild state on the next reconcile)", path, err)
+	if parseErr := json.Unmarshal(body, &snap); parseErr != nil {
+		quarantine := fmt.Sprintf("%s.corrupt-%d", path, time.Now().UnixNano())
+		renameErr := os.Rename(path, quarantine)
+		if renameErr != nil {
+			// Can't quarantine (permissions? disk full?). Return a
+			// loud error so this doesn't silently keep failing every
+			// read.
+			return nil, fmt.Errorf(
+				"parse state %s: %v (quarantine to %s also failed: %v)",
+				path, parseErr, quarantine, renameErr)
+		}
+		daemonlog.Errorf(
+			"serviceapi: state snapshot %s was unparseable (likely written by an older devm schema): %v — quarantined to %s and rebuilding on next reconcile",
+			path, parseErr, quarantine)
+		return nil, nil
 	}
 	return &snap, nil
 }

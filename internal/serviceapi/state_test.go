@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mdubb86/devm/internal/identity"
@@ -31,21 +32,43 @@ func TestReadStateSnapshot_Missing_ReturnsNilNil(t *testing.T) {
 	assert.Nil(t, got)
 }
 
-func TestReadStateSnapshot_Malformed_ReturnsError(t *testing.T) {
-	// A snapshot file that exists but fails to parse must fail loud —
-	// the alternative (treating it as missing) silently loses every
-	// adopted iron-proxy PID, project IP, and workspace path on every
-	// reconcile for the lifetime of the daemon. The error carries the
-	// file path so the operator can act on it directly.
+// TestReadStateSnapshot_Malformed_QuarantinesAndSelfHeals pins the
+// Finding-5 fix: a snapshot that can't parse (typical cause: schema
+// change in a newer daemon) is renamed to a `.corrupt-<nanos>`
+// forensic file and reported as absent, so the daemon rebuilds state
+// on the next reconcile instead of degrading silently for the rest
+// of the day. Pre-fix, the parse error bubbled up, every caller
+// logged-and-continued, and `devm status` reported an unexplained
+// `proxy: UNHEALTHY` with no connection back to the boot-time log.
+func TestReadStateSnapshot_Malformed_QuarantinesAndSelfHeals(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	require.NoError(t, os.MkdirAll(StateDir(identity.Prod), 0o700))
 	junkPath := filepath.Join(StateDir(identity.Prod), "junk.json")
 	require.NoError(t, os.WriteFile(junkPath, []byte("{oh no"), 0o600))
+
 	got, err := ReadStateSnapshot(identity.Prod, "junk")
-	require.Error(t, err)
-	assert.Nil(t, got)
-	assert.Contains(t, err.Error(), junkPath,
-		"error must name the malformed file so the operator can find and delete it")
+	require.NoError(t, err, "parse failure must self-heal, not propagate")
+	assert.Nil(t, got, "unparseable file is treated as absent — daemon will rebuild")
+
+	_, statErr := os.Stat(junkPath)
+	assert.True(t, os.IsNotExist(statErr), "original file must have been moved aside")
+
+	entries, err := os.ReadDir(StateDir(identity.Prod))
+	require.NoError(t, err)
+	var quarantined string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "junk.json.corrupt-") {
+			quarantined = e.Name()
+			break
+		}
+	}
+	require.NotEmpty(t, quarantined, "a .corrupt-<nanos> forensic copy must be left in StateDir")
+
+	// Second call sees no file and returns (nil, nil) — self-heal
+	// is a one-shot per corrupt file, not an infinite rename loop.
+	got2, err2 := ReadStateSnapshot(identity.Prod, "junk")
+	require.NoError(t, err2)
+	assert.Nil(t, got2)
 }
 
 func TestRemoveStateCfg_Idempotent(t *testing.T) {
