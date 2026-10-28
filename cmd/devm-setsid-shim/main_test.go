@@ -298,11 +298,18 @@ func findNamedChildOf(t *testing.T, parentPID int, name string) int {
 	return pid
 }
 
-// findSleepChildOf returns the PID of the sleep process that's a direct
-// child of parentPID. Uses `pgrep -P <parent> sleep`. Returns 0 if none.
+// findSleepChildOf returns the PID of the direct child of parentPID.
+// The shim performs exactly one fork + exec (of sleep), so filtering
+// by PPID alone is unambiguous. Deliberately does NOT filter by comm:
+// pgrep's comm filter matches on the child's post-exec name, but
+// there is a brief fork→execve window where the child exists under
+// parentPID with comm still "devm-setsid-shim" (or similar). Under
+// `go test ./...` load that window has been observed to stretch past
+// the test's poll budget, flaking the test. Matching by PPID alone
+// catches the child the instant fork completes.
 func findSleepChildOf(t *testing.T, parentPID int) int {
 	t.Helper()
-	out, err := exec.Command("pgrep", "-P", strconv.Itoa(parentPID), "sleep").CombinedOutput()
+	out, err := exec.Command("pgrep", "-P", strconv.Itoa(parentPID)).CombinedOutput()
 	if err != nil {
 		// pgrep returns exit 1 when no match; treat as zero rather than error
 		return 0
