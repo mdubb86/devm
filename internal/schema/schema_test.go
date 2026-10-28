@@ -392,6 +392,46 @@ volumez:
 	assert.Contains(t, err.Error(), `services`)
 }
 
+// TestCheckUnknownKeys_BatchesAllUnknownsInOnePass pins the
+// Finding-11h fix: a cross-version migration surfaces its full
+// delta on one `devm validate` run instead of one key per re-run.
+func TestCheckUnknownKeys_BatchesAllUnknownsInOnePass(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  name: foo
+scripts:
+  - echo hi
+startup:
+  - true
+mounts:
+  - /tmp
+`)
+	err := CheckUnknownKeys(yamlBlob)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, `"scripts"`, "scripts must be surfaced")
+	assert.Contains(t, msg, `"startup"`, "startup must be surfaced")
+	assert.Contains(t, msg, `"mounts"`, "mounts must be surfaced")
+}
+
+// TestCheckUnknownKeys_RemovedKeyNamesReplacement pins the migration
+// hint: a removed top-level key tells the operator where the
+// functionality moved to.
+func TestCheckUnknownKeys_RemovedKeyNamesReplacement(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  name: foo
+mounts:
+  - /tmp
+`)
+	err := CheckUnknownKeys(yamlBlob)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, `"mounts"`)
+	assert.Contains(t, msg, `was removed`)
+	assert.Contains(t, msg, `repos`, "the hint must name the replacement")
+}
+
 func TestCheckUnknownKeys_ProjectLevel_Rejected(t *testing.T) {
 	yamlBlob := []byte(`
 project:

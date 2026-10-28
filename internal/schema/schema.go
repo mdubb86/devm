@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -535,17 +536,20 @@ func CheckUnknownKeys(data []byte) error {
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil // typed unmarshal will surface the parse error
 	}
+	// Collect errors from every scope — don't return on the first.
+	// A cross-version migration surfaces its full delta in one run.
+	var errs []error
 	if err := rejectUnknown(raw, topLevelKnownFields, "top-level"); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 	if proj, ok := raw["project"].(map[string]any); ok {
 		if err := rejectUnknown(proj, knownProject, "project"); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 	if net, ok := raw["network"].(map[string]any); ok {
 		if err := rejectUnknown(net, knownNetwork, "network"); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 	// base_image: is retained as a top-level key for YAML compatibility
@@ -553,34 +557,70 @@ func CheckUnknownKeys(data []byte) error {
 	// per-project image config. Any child here is a typo.
 	if bi, ok := raw["base_image"].(map[string]any); ok {
 		if err := rejectUnknown(bi, nil, "base_image"); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 	if g, ok := raw["guest"].(map[string]any); ok {
 		if err := rejectUnknown(g, []string{"propose", "passthrough"}, "guest"); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
+// removedTopLevelKeys names top-level keys that existed in older
+// devm schemas and were removed. Pre-fix, migrating a devm.yaml
+// across versions meant one error-per-run of `devm validate`: fix
+// one key, re-run, discover the next. Hinting at the replacement
+// here collapses that iteration.
+var removedTopLevelKeys = map[string]string{
+	"install":     "`install:` was removed — provision from `devm.sh` (sourced by `repos`) instead",
+	"startup":     "`startup:` was removed — provision from `devm.sh` (sourced by `repos`) instead",
+	"scripts":     "`scripts:` was removed — inline into `devm.sh` instead",
+	"mounts":      "`mounts:` was removed — use `repos:` for workspace sync and `volumes:` for named caches",
+	"masks":       "`masks:` was removed — mutagen-backed `repos:` eliminates the Mac/guest file collisions it papered over",
+	"config_lock": "`config_lock:` was removed — the `devm approve` gate (see `devm approve --help`) replaces it",
+}
+
+// rejectUnknown returns an error listing every unknown key in m —
+// not just the first — so a migration surfaces its full delta on
+// one pass instead of forcing one error-per-fix iteration. Returns
+// nil when every key is known. scope names the containing block in
+// error messages (e.g. "top-level", "project").
 func rejectUnknown(m map[string]any, known []string, scope string) error {
 	knownSet := make(map[string]bool, len(known))
 	for _, k := range known {
 		knownSet[k] = true
 	}
+	// Deterministic order so repeated runs produce stable output
+	// and tests can assert on fixed strings.
+	unknown := make([]string, 0, len(m))
 	for k := range m {
 		if !knownSet[k] {
-			if len(known) == 0 {
-				return fmt.Errorf(
-					"unknown field %q at %s — this block accepts no fields",
-					k, scope)
-			}
-			return fmt.Errorf("unknown field %q at %s — valid: %s",
-				k, scope, strings.Join(known, ", "))
+			unknown = append(unknown, k)
 		}
 	}
-	return nil
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	var errs []error
+	for _, k := range unknown {
+		// Removed-key hints only apply at the top-level scope,
+		// where the removal happened.
+		if scope == "top-level" {
+			if hint, ok := removedTopLevelKeys[k]; ok {
+				errs = append(errs, fmt.Errorf("unknown field %q at %s — %s", k, scope, hint))
+				continue
+			}
+		}
+		if len(known) == 0 {
+			errs = append(errs, fmt.Errorf("unknown field %q at %s — this block accepts no fields", k, scope))
+		} else {
+			errs = append(errs, fmt.Errorf("unknown field %q at %s — valid: %s", k, scope, strings.Join(known, ", ")))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // BaseImage is kept for YAML compatibility (the base_image: key is still
