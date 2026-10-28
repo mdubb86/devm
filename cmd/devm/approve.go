@@ -27,6 +27,12 @@ type approveOpts struct {
 	stdin      io.Reader
 	stdout     io.Writer
 	stderr     io.Writer
+	// isTTY reports whether approval input is coming from an
+	// interactive terminal. nil means "query os.Stdin" (production).
+	// Tests set this explicitly so the TTY refusal can be exercised
+	// without rigging a pty — the whole point of the gate is that an
+	// agent with shell access cannot self-approve its own changes.
+	isTTY func() bool
 }
 
 var approveCmd = &cobra.Command{
@@ -65,6 +71,7 @@ the terminal to answer. Scripts cannot approve.`,
 			stdin:      os.Stdin,
 			stdout:     os.Stdout,
 			stderr:     os.Stderr,
+			isTTY:      func() bool { return isTerminal(os.Stdin) },
 		})
 	},
 }
@@ -118,6 +125,14 @@ func runApprove(o approveOpts) error {
 	printDiffSection(o.stdout, "devm.me.yaml", decodeOrNil(state.ApprovedMeBytes), decodeOrNil(state.CurrentMeBytes))
 	printDiffSection(o.stdout, "devm.sh", decodeOrNil(state.ApprovedScriptBytes), decodeOrNil(state.CurrentScriptBytes))
 	printDiffSection(o.stdout, "devm.me.sh", decodeOrNil(state.ApprovedMeScriptBytes), decodeOrNil(state.CurrentMeScriptBytes))
+	// The approve gate exists to require a human-in-the-loop review
+	// of agent-authored config changes. The --help text promises
+	// "scripts cannot approve"; enforce it here. Diff above was
+	// already printed so an operator inspecting an agent's attempt
+	// still sees what the agent tried to approve.
+	if o.isTTY == nil || !o.isTTY() {
+		return errors.New("stdin is not a terminal; approve requires an interactive terminal (scripts and piped input cannot approve)")
+	}
 	fmt.Fprint(o.stdout, "\nApprove these changes? [y/N] ")
 	reader := bufio.NewReader(o.stdin)
 	line, err := reader.ReadString('\n')
