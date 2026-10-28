@@ -258,9 +258,11 @@ func TestRunStopPreserve_DoesNotCallMutagenTeardown(t *testing.T) {
 }
 
 // fakeTartBinDeleteAbsent's `delete` prints tart's stable
-// "does not exist" stderr and exits 1. RunStop treats this as
-// "already absent" and continues; the cleanup pass must still fire
-// so v0.10.0-format leftovers get reaped.
+// "does not exist" stderr and exits 1 — and its `list` returns the
+// matching empty JSON (`[]`), so RunStop's cross-check agrees "the
+// VM really is gone." RunStop treats this as "already absent" and
+// continues; the cleanup pass must still fire so v0.10.0-format
+// leftovers get reaped.
 func fakeTartBinDeleteAbsent(t *testing.T, dir string) *tart.Tart {
 	t.Helper()
 	bin := filepath.Join(dir, "tart-fake-absent")
@@ -268,6 +270,35 @@ func fakeTartBinDeleteAbsent(t *testing.T, dir string) *tart.Tart {
 if [ "$1" = "delete" ]; then
   echo 'the specified VM "'"$2"'" does not exist' >&2
   exit 1
+fi
+if [ "$1" = "list" ]; then
+  echo '[]'
+  exit 0
+fi
+exec true
+`
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+	return tr
+}
+
+// fakeTartBinDeleteAbsentButListsVM reproduces the field-report
+// scenario: `tart delete` reports "does not exist" and exits 1, but
+// `tart list --format json` still shows the VM. RunStop must refuse
+// to report "already absent" against this disagreement — otherwise
+// the operator believes they're on a clean slate when they aren't.
+func fakeTartBinDeleteAbsentButListsVM(t *testing.T, dir, name string) *tart.Tart {
+	t.Helper()
+	bin := filepath.Join(dir, "tart-fake-absent-listed")
+	script := `#!/bin/sh
+if [ "$1" = "delete" ]; then
+  echo 'the specified VM "'"$2"'" does not exist' >&2
+  exit 1
+fi
+if [ "$1" = "list" ]; then
+  printf '[{"Name":"` + name + `","State":"running"}]\n'
+  exit 0
 fi
 exec true
 `
@@ -363,6 +394,32 @@ func TestRunStopDestroy_ReapsStraysOnAbsentPath(t *testing.T) {
 		assert.True(t, os.IsNotExist(err),
 			"jirav-class residue at %s must be reaped even when tart said 'already absent': %v", p, err)
 	}
+}
+
+// TestRunStopDestroy_DeleteLiesListDisagrees pins the field-report
+// fix: when tart delete returns "does not exist" but tart list still
+// shows the VM, RunStop must surface a loud error instead of
+// reporting "already absent". Without this cross-check the operator
+// believes teardown succeeded and reaches for "cold start" against
+// a VM that's still there.
+func TestRunStopDestroy_DeleteLiesListDisagrees(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoRoot := t.TempDir()
+	tr := fakeTartBinDeleteAbsentButListsVM(t, repoRoot, "proj-stuck")
+	out := &bytes.Buffer{}
+	deps := StopDeps{
+		Ident:            identity.Prod,
+		Tart:             tr,
+		ServiceAPIClient: &fakeStopClient{},
+		Out:              out,
+	}
+	rc, err := RunStop(context.Background(), deps, "proj-stuck", StopDestroy)
+	require.Error(t, err)
+	assert.NotEqual(t, 0, rc)
+	assert.Contains(t, err.Error(), "does not exist")
+	assert.Contains(t, err.Error(), "`tart list` still shows this VM")
+	assert.NotContains(t, out.String(), "already absent",
+		"must not report 'already absent' when the VM is still listed")
 }
 
 // TestRunStopDestroy_ReapsWhenArtifactsAbsent pins that a missing

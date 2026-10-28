@@ -16,6 +16,27 @@ import (
 	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
 )
 
+// vmPresentInList asks `tart list` whether name is still registered,
+// used by RunStop to cross-check tart's "does not exist" delete
+// error. A field report caught the delete branch firing against a
+// VM that `tart list` still showed as present and running; without
+// this cross-check we'd report "already absent" to the operator and
+// leave the VM in place. Returns (present, err): err non-nil means
+// we couldn't determine the state (list failed), present=true means
+// the VM is still registered under this name.
+var vmPresentInList = func(ctx context.Context, tr *tart.Tart, name string) (bool, error) {
+	vms, err := tr.List(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, vm := range vms {
+		if vm.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Destructiveness selects between preserving the VM (stop) and
 // destroying it (teardown).
 type Destructiveness int
@@ -94,13 +115,28 @@ func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness)
 		}
 
 		if err := d.Tart.Delete(ctx, name); err != nil {
-			// "VM does not exist" is the desired end state; treat
-			// as success. tart's stderr for absent VMs is stable:
-			// "the specified VM \"<name>\" does not exist".
-			if strings.Contains(err.Error(), "does not exist") {
-				fmt.Fprintf(d.Out, "VM %s already absent.\n", name)
-			} else {
+			// "VM does not exist" is the desired end state. tart's
+			// stderr for absent VMs is stable: "the specified VM
+			// \"<name>\" does not exist".
+			//
+			// Cross-check with `tart list` before swallowing: a
+			// field report caught the "does not exist" branch
+			// firing against a VM that `tart list` still showed as
+			// present and running, which convinced the operator
+			// they were on a clean slate when they weren't. If list
+			// disagrees with delete, surface the discrepancy as a
+			// real failure instead of pretending the VM is gone.
+			if !strings.Contains(err.Error(), "does not exist") {
 				return -1, fmt.Errorf("tart delete %s: %w", name, err)
+			}
+			present, listErr := vmPresentInList(ctx, d.Tart, name)
+			if listErr == nil && present {
+				return -1, fmt.Errorf("tart delete %s said %q but `tart list` still shows this VM — refusing to pretend it's gone", name, err.Error())
+			}
+			if listErr != nil {
+				fmt.Fprintf(d.Out, "VM %s already absent (list verify failed: %v).\n", name, listErr)
+			} else {
+				fmt.Fprintf(d.Out, "VM %s already absent.\n", name)
 			}
 		} else {
 			fmt.Fprintf(d.Out, "Deleted VM %s.\n", name)
