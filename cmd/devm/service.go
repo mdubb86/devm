@@ -204,16 +204,21 @@ var installCmd = &cobra.Command{
 }
 
 // runInstallFlow is the shared install pipeline used by `devm install`
-// directly and by `devm upgrade` after the binary swap. It checks
-// tart is present, runs the (conditionally-sudo) install script,
-// rebuilds the base image if needed, and reports "ready" or "already
-// up to date". Idempotent on every step — a second call in-sync is
-// silent and does not fire a Touch ID prompt.
+// directly and by `devm upgrade` after the binary swap. It runs the
+// (conditionally-sudo) install script, rebuilds the base image if
+// needed, and reports "ready" or "already up to date". Idempotent on
+// every step — a second call in-sync is silent and does not fire a
+// Touch ID prompt.
+//
+// Tart is a precondition only for the base-image build; the plist
+// bootout+bootstrap must not depend on it. Homebrew cask postflights
+// invoke this with a stripped PATH that excludes /opt/homebrew/bin,
+// so a top-level `exec.LookPath("tart")` would skip the daemon
+// bootstrap after a cask upgrade and leave the user running an
+// unlinked inode. The tart check is scoped to the base-image step
+// instead; without tart that step is skipped with a warning and the
+// install still completes.
 func runInstallFlow(ctx context.Context) error {
-	if _, err := exec.LookPath("tart"); err != nil {
-		return fmt.Errorf("tart not found on PATH. Install it first:\n\n  brew install cirruslabs/cli/tart\n")
-	}
-
 	reporter := status.New(os.Stderr)
 	defer reporter.Stop()
 
@@ -240,13 +245,26 @@ func runInstallFlow(ctx context.Context) error {
 	// log). Spinner has the terminal to itself. The provisioning
 	// script is embedded in the binary via //go:embed, so no
 	// on-disk image/ directory is needed.
-	needs, _, _ := image.NeedsBuild(cfg)
-	if needs {
-		reporter.Step("building "+cfg.BaseImageName(), false)
-		if err := image.BuildBaseImage(ctx, cfg, logFile); err != nil {
-			reporter.Fail()
-			tailLog(logPath, 30)
-			return fmt.Errorf("base image build failed; see %s", logPath)
+	//
+	// Scoped tart check: NeedsBuild shells to `tart list`, and
+	// BuildBaseImage needs the tart CLI. If tart is missing we skip
+	// this step with a warning rather than fail the whole install
+	// — the daemon bootstrap above (plists, DNS, CA, lo0 aliases)
+	// is the critical path and must land regardless. The user can
+	// install tart and re-run `devm install` later; `devm start`
+	// surfaces the missing base image on its own.
+	if _, err := exec.LookPath("tart"); err != nil {
+		fmt.Fprintln(os.Stderr, "[devm] tart not found on PATH — skipping base image build")
+		fmt.Fprintln(os.Stderr, "       install tart (`brew install cirruslabs/cli/tart`) and re-run `devm install` to build it")
+	} else {
+		needs, _, _ := image.NeedsBuild(cfg)
+		if needs {
+			reporter.Step("building "+cfg.BaseImageName(), false)
+			if err := image.BuildBaseImage(ctx, cfg, logFile); err != nil {
+				reporter.Fail()
+				tailLog(logPath, 30)
+				return fmt.Errorf("base image build failed; see %s", logPath)
+			}
 		}
 	}
 
