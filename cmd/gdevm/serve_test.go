@@ -117,7 +117,7 @@ func TestBuildHandler_HealthStillWorksWithoutTLD(t *testing.T) {
 func TestBuildHandler_PreviewRequests404WhenTLDEmpty(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "exists.txt"), []byte("hi"), 0o644))
-	h := buildServeHandlerWithRoot(time.Now(), "", dir)
+	h := buildServeHandlerWithRoot(time.Now(), "", dir, newRunRegistry())
 
 	r := httptest.NewRequest("GET", "/exists.txt", nil)
 	r.Host = "preview.sewtrue.test"
@@ -142,7 +142,7 @@ func TestBuildHandler_PreviewHostServesFile(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644))
 
-	h := buildServeHandlerWithRoot(time.Now(), "test", dir)
+	h := buildServeHandlerWithRoot(time.Now(), "test", dir, newRunRegistry())
 
 	r := httptest.NewRequest("GET", "/a.txt", nil)
 	r.Host = "preview.sewtrue.test"

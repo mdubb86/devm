@@ -10,6 +10,19 @@ Restart=always
 RestartSec=1
 StandardOutput=journal
 StandardError=journal
+# KillMode=mixed sends SIGTERM only to the main gdevm process on
+# `systemctl restart` / `stop`, leaving bash children spawned by
+# /v1/run alone. Detached `gdevm run -d <name>` services survive a
+# daemon upgrade or crash restart; the daemon rediscovers them on
+# next boot (TODO: not implemented in v1, see docs/superpowers/notes).
+# `systemctl stop` sends SIGKILL to the whole cgroup after the main
+# process exits, which is the right behavior for a deliberate stop.
+KillMode=mixed
+# Create /var/log/gdevm with correct permissions. Each run writes
+# its merged stdout+stderr here; `gdevm logs <name>` serves these
+# files back.
+LogsDirectory=gdevm
+LogsDirectoryMode=0755
 
 [Install]
 WantedBy=multi-user.target

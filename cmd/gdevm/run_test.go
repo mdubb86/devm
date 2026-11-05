@@ -59,82 +59,17 @@ func prepareTree(t *testing.T) (string, string, string) {
 	return writeManifest(t, base, body), mainDir, v1Dir
 }
 
-func TestRun_ErrorNoArg(t *testing.T) {
+// TestRun_UsageOnNoArg pins the usage shape. The full "no args in a
+// repo" validation now runs server-side (see serve_run_test.go's
+// TestRun_UnknownNameReturns400 / TestRun_CwdOutsideRepoReturns400).
+func TestRun_UsageOnNoArg(t *testing.T) {
 	bin := buildGdevm(t)
-	manifest, mainDir, _ := prepareTree(t)
 	cmd := exec.Command(bin, "run")
-	cmd.Dir = mainDir
-	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
-	assert.Contains(t, string(out), "usage: gdevm run <command>")
+	assert.Contains(t, string(out), "usage: gdevm run")
+	assert.Contains(t, string(out), "[-d|--detach]")
 	assert.Equal(t, 2, cmd.ProcessState.ExitCode())
-}
-
-func TestRun_ErrorOutsideRepo(t *testing.T) {
-	bin := buildGdevm(t)
-	manifest, _, _ := prepareTree(t)
-	stray := t.TempDir() // outside both repos
-	cmd := exec.Command(bin, "run", "install")
-	cmd.Dir = stray
-	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err)
-	assert.Contains(t, string(out), "gdevm run: not inside a registered repo")
-}
-
-func TestRun_ErrorUnknownCommand(t *testing.T) {
-	bin := buildGdevm(t)
-	manifest, mainDir, _ := prepareTree(t)
-	cmd := exec.Command(bin, "run", "bogus")
-	cmd.Dir = mainDir
-	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err)
-	assert.Contains(t, string(out), "gdevm run: command bogus not registered in repo main")
-}
-
-func TestRun_ErrorFromNestedCwd_StillResolvesRepo(t *testing.T) {
-	// The command is unregistered, but the error must still name "main" —
-	// proof that findRepo walked up from the nested cwd to the repo root
-	// before checking registration.
-	bin := buildGdevm(t)
-	manifest, mainDir, _ := prepareTree(t)
-	cmd := exec.Command(bin, "run", "bogus")
-	cmd.Dir = filepath.Join(mainDir, "subdir")
-	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err)
-	assert.Contains(t, string(out), "gdevm run: command bogus not registered in repo main")
-}
-
-// TestRun_EmptyCommandsRepo_ErrorsNoCommand is a regression test:
-// render.RenderCommandsManifest used to omit a repo with zero declared
-// commands from the manifest entirely, so a cwd inside such a repo hit
-// the "not inside a registered repo" branch — misleading, since the cwd
-// IS in a devm repo. With the repo present in the manifest (commands:
-// []), the same lookup must instead report "not registered" against the
-// correct repo name.
-func TestRun_EmptyCommandsRepo_ErrorsNoCommand(t *testing.T) {
-	bin := buildGdevm(t)
-	base := t.TempDir()
-	mainDir := filepath.Join(base, "main-repo")
-	require.NoError(t, os.MkdirAll(mainDir, 0o755))
-	manifest := writeManifest(t, base, strings.NewReplacer("MAIN", mainDir).Replace(`{
-	  "repos": {
-	    "main": {
-	      "guestPath": "MAIN",
-	      "commands": []
-	    }
-	  }
-	}`))
-
-	cmd := exec.Command(bin, "run", "install")
-	cmd.Dir = mainDir
-	cmd.Env = append(os.Environ(), "DEVM_COMMANDS_MANIFEST="+manifest)
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err)
-	assert.Contains(t, string(out), "gdevm run: command install not registered in repo main")
 }
 
 // ---------- pure-logic unit tests (no subprocess, no guest filesystem) ----------

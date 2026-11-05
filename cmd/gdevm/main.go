@@ -39,6 +39,12 @@ func main() {
 		os.Exit(proposeMain(args))
 	case "run":
 		os.Exit(runMain(args))
+	case "stop":
+		os.Exit(stopMain(args))
+	case "runs":
+		os.Exit(runsMain(args))
+	case "logs":
+		os.Exit(logsMain(args))
 	case "passthrough":
 		os.Exit(passthroughMain(args))
 	case "upgrade":
@@ -68,7 +74,16 @@ Subcommands:
   propose      Signal that a devm.yaml (or devm.me.yaml, devm.sh,
                devm.me.sh) edit is ready for the Mac-side reviewer.
   run          Invoke a named function from this project's command
-               manifest.
+               manifest. The function runs as a child of gdevm serve
+               so its lifetime is independent of your shell. Flags:
+               -d/--detach returns immediately after start. Without
+               -d, output streams back and the client's exit code
+               tracks the function's.
+  stop         Stop a named run: SIGTERM its process group, 5s
+               grace, SIGKILL.
+  runs         List active (or recently exited) runs.
+  logs         Print a run's merged stdout+stderr log. -f/--follow
+               tails as new output arrives.
   passthrough  Request a supervised egress passthrough window. The
                human on the Mac side runs `+"`devm passthrough approve`"+`
                to authorize it before it opens.

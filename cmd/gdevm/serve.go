@@ -31,14 +31,19 @@ func serveAddr() string {
 // tld is empty the preview route is disabled: every request goes to the
 // health mux, which only answers /v1/health.
 func buildServeHandler(started time.Time, tld string) http.Handler {
-	return buildServeHandlerWithRoot(started, tld, "/")
+	return buildServeHandlerWithRoot(started, tld, "/", newRunRegistry())
 }
 
 // buildServeHandlerWithRoot is buildServeHandler with the preview file
-// root injectable, so tests don't depend on the real guest filesystem.
-func buildServeHandlerWithRoot(started time.Time, tld, root string) http.Handler {
+// root AND run registry injectable, so tests don't depend on the real
+// guest filesystem or share state across test cases.
+func buildServeHandlerWithRoot(started time.Time, tld, root string, reg *runRegistry) http.Handler {
 	healthMux := http.NewServeMux()
 	healthMux.Handle("/v1/health", healthHandler(started))
+	healthMux.Handle("/v1/run", handleRun(reg))
+	healthMux.Handle("/v1/stop", handleStop(reg))
+	healthMux.Handle("/v1/runs", handleListRuns(reg))
+	healthMux.Handle("/v1/logs", handleLogs(reg))
 
 	if tld == "" {
 		return healthMux
