@@ -36,12 +36,16 @@ func handleStop(reg *runRegistry) http.HandlerFunc {
 // runSummary is one row of GET /v1/runs. ExitCode is zero-valued
 // while the run is still live; Exited reports whether the row is
 // post-exit (so a zero code is distinguishable from "still running").
+// Orphan means the row was rediscovered after a gdevm serve restart
+// — we're not the parent, so ExitCode of an exited orphan is -1
+// ("unknown") rather than the real exit status.
 type runSummary struct {
 	Name      string    `json:"name"`
 	Pid       int       `json:"pid"`
 	Pgid      int       `json:"pgid"`
 	StartedAt time.Time `json:"started_at"`
 	Detach    bool      `json:"detach"`
+	Orphan    bool      `json:"orphan,omitempty"`
 	Exited    bool      `json:"exited"`
 	ExitCode  int       `json:"exit_code,omitempty"`
 }
@@ -58,10 +62,11 @@ func handleListRuns(reg *runRegistry) http.HandlerFunc {
 		for _, r1 := range runs {
 			s := runSummary{
 				Name:      r1.name,
-				Pid:       r1.cmd.Process.Pid,
+				Pid:       leaderPid(r1),
 				Pgid:      r1.pgid,
 				StartedAt: r1.startedAt,
 				Detach:    r1.detach,
+				Orphan:    isOrphan(r1),
 			}
 			select {
 			case <-r1.exitDone:

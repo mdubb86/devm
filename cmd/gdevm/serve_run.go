@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -206,7 +207,7 @@ func handleRun(reg *runRegistry) http.HandlerFunc {
 			exitDone:  make(chan struct{}),
 		}
 		if existing, ok := reg.startExclusive(req.Name, r1); !ok {
-			http.Error(w, fmt.Sprintf("a run named %q is already active (pid %d)", existing.name, existing.cmd.Process.Pid), http.StatusConflict)
+			http.Error(w, fmt.Sprintf("a run named %q is already active (pid %d)", existing.name, leaderPid(existing)), http.StatusConflict)
 			return
 		}
 
@@ -255,6 +256,15 @@ func handleRun(reg *runRegistry) http.HandlerFunc {
 		r1.cmd = cmd
 		r1.pgid = cmd.Process.Pid // first process in the pgroup is its own leader
 
+		// Persist rediscovery state right after Start+pgid so a
+		// crash between here and the handler returning still leaves
+		// a usable state file. Non-fatal: if the write fails the
+		// run proceeds, we just lose the ability to rediscover it
+		// after a restart.
+		if err := writeRunState(r1); err != nil {
+			log.Printf("writeRunState %q: %v (rediscovery after restart will miss this run)", r1.name, err)
+		}
+
 		// Output forwarder: fan-out from pipeR to log file (always)
 		// and to r1.attachedCh (if set, non-blocking drop on full).
 		go func() {
@@ -301,6 +311,12 @@ func handleRun(reg *runRegistry) http.HandlerFunc {
 			}
 			r1.exitCode = code
 			close(r1.exitDone)
+			// Clean up the rediscovery state file now that the run
+			// has settled — otherwise a future gdevm serve would
+			// see the stale file, check the pgid (ESRCH), and
+			// remove it anyway. Doing it here keeps the state dir
+			// honest while this daemon is up.
+			removeRunState(r1.name)
 			// Leave r1 in the registry briefly so `gdevm runs`
 			// right after exit can still report the final state;
 			// startExclusive will reap on the next run with the

@@ -10,14 +10,17 @@ Restart=always
 RestartSec=1
 StandardOutput=journal
 StandardError=journal
-# KillMode=mixed sends SIGTERM only to the main gdevm process on
-# `systemctl restart` / `stop`, leaving bash children spawned by
-# /v1/run alone. Detached `gdevm run -d <name>` services survive a
-# daemon upgrade or crash restart; the daemon rediscovers them on
-# next boot (TODO: not implemented in v1, see docs/superpowers/notes).
-# `systemctl stop` sends SIGKILL to the whole cgroup after the main
-# process exits, which is the right behavior for a deliberate stop.
-KillMode=mixed
+# KillMode=process is deliberate (systemd calls it "not recommended",
+# but that caveat is for the general case of leaked children). We
+# want those children to survive: `gdevm run -d <name>` detached
+# services keep running across `systemctl restart gdevm-serve` and
+# across a crash restart. On the next boot gdevm serve walks
+# /var/log/gdevm/*.state, checks each pgroup with Kill(pgid, 0),
+# and rediscovers the live ones so `gdevm runs` / `gdevm stop` see
+# them again. `KillMode=mixed` would SIGKILL every bash child in the
+# cgroup after the main process exits — which would make rediscovery
+# meaningless.
+KillMode=process
 # Create /var/log/gdevm with correct permissions. Each run writes
 # its merged stdout+stderr here; `gdevm logs <name>` serves these
 # files back.

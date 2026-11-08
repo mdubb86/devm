@@ -81,6 +81,17 @@ func serveMain(args []string) int {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 
+	// Rediscover orphaned runs left by a prior gdevm serve BEFORE
+	// Listen: so `gdevm runs` / `gdevm stop` see them immediately
+	// once the listener is up, with no window where an operator's
+	// stop request races against startup. MkdirAll is harmless when
+	// the LogsDirectory= drop-in already created /var/log/gdevm.
+	reg := newRunRegistry()
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "gdevm serve: mkdir %s: %v\n", logsDir, err)
+	}
+	rediscoverRuns(reg)
+
 	ln, err := net.Listen("tcp", serveAddr())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gdevm serve: bind %s: %v\n", serveAddr(), err)
@@ -92,7 +103,7 @@ func serveMain(args []string) int {
 		addrPublishedHookForTest()
 	}
 
-	srv := &http.Server{Handler: buildServeHandler(started, os.Getenv("DEVM_TLD"))}
+	srv := &http.Server{Handler: buildServeHandlerWithRoot(started, os.Getenv("DEVM_TLD"), "/", reg)}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
 

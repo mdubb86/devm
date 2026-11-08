@@ -53,9 +53,18 @@ func runsMain(args []string) int {
 		if r.Detach {
 			mode = "detached"
 		}
+		if r.Orphan {
+			mode = "orphan"
+		}
 		status := "running"
 		if r.Exited {
-			status = fmt.Sprintf("exit %d", r.ExitCode)
+			if r.Orphan {
+				// Exit code is unknowable for a rediscovered run —
+				// we weren't the parent, so wait() never ran.
+				status = "exit ?"
+			} else {
+				status = fmt.Sprintf("exit %d", r.ExitCode)
+			}
 		}
 		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\n", r.Name, r.Pid, r.StartedAt.Format(time.RFC3339), mode, status)
 	}
