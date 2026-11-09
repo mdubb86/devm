@@ -62,10 +62,10 @@ def _parse_runs_pid(runs_stdout: str, name: str) -> int | None:
 
 
 def _cold_start_with_sleeper(devm, workspace, extra_commands=()):
-    """Shared setup: devm.yaml + devm.sh with a `long_sleeper` function
+    """Shared setup: devm.yaml + devm.sh with a `sleeper` function
     the test can run detached, then cold-start the project. Returns the
     guest-side repo path."""
-    cmds = ["long_sleeper", *extra_commands]
+    cmds = ["sleeper", *extra_commands]
     workspace.write_devmyaml(
         repos={
             "main": {
@@ -78,8 +78,8 @@ def _cold_start_with_sleeper(devm, workspace, extra_commands=()):
     workspace.write_devm_sh(
         "#!/usr/bin/env bash\n"
         "set -eo pipefail\n"
-        "long_sleeper() {\n"
-        "  echo \"long_sleeper up pid=$$\"\n"
+        "sleeper() {\n"
+        "  echo \"sleeper up pid=$$\"\n"
         "  sleep 600\n"
         "}\n"
     )
@@ -117,14 +117,14 @@ def test_gdevm_run_rediscovery_happy_stop(workspace, devm):
     stop kills it cleanly."""
     try:
         guest_repo = _cold_start_with_sleeper(devm, workspace)
-        pid_before = _start_detached_run(devm, workspace, guest_repo, "long_sleeper")
+        pid_before = _start_detached_run(devm, workspace, guest_repo, "sleeper")
 
         # Baseline: gdevm runs sees it, pre-restart.
         r = _ggexec(devm.path, workspace.path, ["gdevm", "runs"], timeout=15)
         assert r.returncode == 0, r.stderr.decode()
         pre = r.stdout.decode()
-        assert "long_sleeper" in pre, f"expected long_sleeper in pre-restart runs:\n{pre}"
-        assert _parse_runs_pid(pre, "long_sleeper") == pid_before, pre
+        assert "sleeper" in pre, f"expected sleeper in pre-restart runs:\n{pre}"
+        assert _parse_runs_pid(pre, "sleeper") == pid_before, pre
 
         # Restart gdevm-serve.service. KillMode=process keeps the bash
         # child alive; rediscovery picks it up on startup.
@@ -140,27 +140,29 @@ def test_gdevm_run_rediscovery_happy_stop(workspace, devm):
         status = _wait_for_serve_active(devm.path, workspace.path)
         assert status == "active", f"gdevm-serve never became active: {status!r}"
 
-        # Child is still alive under its pre-restart pid.
+        # Child is still alive under its pre-restart pid. /proc check is
+        # unprivileged — kill -0 from the devm user can't signal the
+        # root-owned bash child (EPERM) and is useless as a liveness probe.
         r = _ggexec(
             devm.path, workspace.path,
-            ["bash", "-c", f"kill -0 {pid_before}"],
+            ["bash", "-c", f"test -d /proc/{pid_before}"],
             timeout=10,
         )
         assert r.returncode == 0, (
             f"bash child (pid {pid_before}) did not survive gdevm-serve restart — "
             f"KillMode=process is not keeping children alive as intended. "
-            f"stderr={r.stderr.decode()!r}"
+            f"stdout={r.stdout.decode()!r} stderr={r.stderr.decode()!r}"
         )
 
         # Rediscovery: gdevm runs lists it with the SAME pid, marked orphan.
         r = _ggexec(devm.path, workspace.path, ["gdevm", "runs"], timeout=15)
         assert r.returncode == 0, r.stderr.decode()
         post = r.stdout.decode()
-        assert "long_sleeper" in post, (
+        assert "sleeper" in post, (
             f"rediscovery failed: `gdevm runs` after restart does not list "
-            f"long_sleeper:\n{post}"
+            f"sleeper:\n{post}"
         )
-        assert _parse_runs_pid(post, "long_sleeper") == pid_before, (
+        assert _parse_runs_pid(post, "sleeper") == pid_before, (
             f"rediscovered run's pid differs from pre-restart "
             f"({pid_before} vs. observed):\n{post}"
         )
@@ -171,7 +173,7 @@ def test_gdevm_run_rediscovery_happy_stop(workspace, devm):
         # Happy stop path: gdevm stop kills the orphan via its pgroup.
         r = _ggexec(
             devm.path, workspace.path,
-            ["gdevm", "stop", "long_sleeper"],
+            ["gdevm", "stop", "sleeper"],
             timeout=30,
         )
         assert r.returncode == 0, (
@@ -179,12 +181,13 @@ def test_gdevm_run_rediscovery_happy_stop(workspace, devm):
             f"stderr={r.stderr.decode()!r}"
         )
 
-        # Child gone from the guest pid table.
+        # Child gone from the guest pid table (/proc check works
+        # regardless of ownership).
         deadline = time.time() + 10
         while time.time() < deadline:
             r = _ggexec(
                 devm.path, workspace.path,
-                ["bash", "-c", f"kill -0 {pid_before} 2>/dev/null"],
+                ["bash", "-c", f"test -d /proc/{pid_before}"],
                 timeout=10,
             )
             if r.returncode != 0:
@@ -192,7 +195,7 @@ def test_gdevm_run_rediscovery_happy_stop(workspace, devm):
             time.sleep(0.5)
         else:
             raise AssertionError(
-                f"pid {pid_before} still alive after gdevm stop long_sleeper"
+                f"pid {pid_before} still alive after gdevm stop sleeper"
             )
     finally:
         subprocess.run(
@@ -208,7 +211,7 @@ def test_gdevm_run_rediscovery_kill_path(workspace, devm):
     poller detects ESRCH and `gdevm runs` eventually reports exit."""
     try:
         guest_repo = _cold_start_with_sleeper(devm, workspace)
-        pid_before = _start_detached_run(devm, workspace, guest_repo, "long_sleeper")
+        pid_before = _start_detached_run(devm, workspace, guest_repo, "sleeper")
 
         r = _ggexec(
             devm.path, workspace.path,
@@ -222,26 +225,30 @@ def test_gdevm_run_rediscovery_kill_path(workspace, devm):
         # Confirm rediscovery picked it up — otherwise the kill-path
         # test is testing nothing.
         r = _ggexec(devm.path, workspace.path, ["gdevm", "runs"], timeout=15)
-        assert "long_sleeper" in r.stdout.decode(), (
-            f"rediscovery did not register long_sleeper:\n{r.stdout.decode()!r}"
+        assert "sleeper" in r.stdout.decode(), (
+            f"rediscovery did not register sleeper:\n{r.stdout.decode()!r}"
         )
 
-        # External SIGKILL on the pgroup. Negative pid = pgroup.
+        # External SIGKILL on the pgroup. Negative pid = pgroup;
+        # `--` terminates options so util-linux kill parses the leading
+        # `-` as pid, not as a signal name.
         r = _ggexec(
             devm.path, workspace.path,
-            ["sudo", "kill", "-KILL", f"-{pid_before}"],
+            ["sudo", "kill", "-9", "--", f"-{pid_before}"],
             timeout=10,
         )
         assert r.returncode == 0, (
-            f"external SIGKILL on pgroup failed: stderr={r.stderr.decode()!r}"
+            f"external SIGKILL on pgroup failed: "
+            f"stdout={r.stdout.decode()!r} stderr={r.stderr.decode()!r}"
         )
 
-        # Confirm child gone from the pid table.
+        # Confirm child gone from the pid table (/proc check is
+        # unprivileged and does not depend on process ownership).
         deadline = time.time() + 5
         while time.time() < deadline:
             r = _ggexec(
                 devm.path, workspace.path,
-                ["bash", "-c", f"kill -0 {pid_before} 2>/dev/null"],
+                ["bash", "-c", f"test -d /proc/{pid_before}"],
                 timeout=10,
             )
             if r.returncode != 0:
@@ -262,11 +269,11 @@ def test_gdevm_run_rediscovery_kill_path(workspace, devm):
             r = _ggexec(devm.path, workspace.path, ["gdevm", "runs"], timeout=15)
             out = r.stdout.decode()
             last_out = out
-            if "long_sleeper" not in out:
+            if "sleeper" not in out:
                 saw_exit = True
                 break
             for line in out.splitlines():
-                if line.startswith("long_sleeper") and ("exit" in line):
+                if line.startswith("sleeper") and ("exit" in line):
                     saw_exit = True
                     break
             if saw_exit:
