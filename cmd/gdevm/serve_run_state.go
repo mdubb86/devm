@@ -161,9 +161,10 @@ func rediscoverRuns(reg *runRegistry) {
 			// Attached is impossible after a daemon restart — the
 			// TCP pipe is gone — so a rediscovered run is always
 			// detached from the new daemon's perspective.
-			detach:   true,
-			logPath:  logFileForName(s.Name),
-			exitDone: make(chan struct{}),
+			detach:     true,
+			logPath:    logFileForName(s.Name),
+			exitDone:   make(chan struct{}),
+			pollerDone: make(chan struct{}),
 		}
 		if _, ok := reg.startExclusive(s.Name, r); !ok {
 			// Startup is single-threaded; collision would mean two
@@ -181,6 +182,7 @@ func rediscoverRuns(reg *runRegistry) {
 // ESRCH as the group being empty. Exit code is -1 ("unknown"),
 // reflected in `gdevm runs` as `exit ?`.
 func pollOrphanExit(r *run) {
+	defer close(r.pollerDone)
 	ticker := time.NewTicker(orphanPollInterval)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -190,8 +192,12 @@ func pollOrphanExit(r *run) {
 		}
 		if errors.Is(err, syscall.ESRCH) {
 			r.exitCode = -1
-			close(r.exitDone)
+			// State-file cleanup BEFORE signaling exitDone so a
+			// waiter that unblocks on exitDone never observes a
+			// still-present state file — important for tests that
+			// restore logsDir after exitDone fires.
 			removeRunState(r.name)
+			close(r.exitDone)
 			return
 		}
 		// EPERM would mean the pgroup still exists but we can't

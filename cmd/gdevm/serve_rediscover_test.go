@@ -18,14 +18,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// shortenOrphanPollForTest cranks orphanPollInterval down so the
-// poller's death detection is observable within a test's 5s deadline.
-// Returns a cleanup that restores the prior value.
-func shortenOrphanPollForTest(t *testing.T) func() {
+// newOrphanTestEnv sets up globals so orphan rediscovery can be
+// exercised safely under `go test -race`:
+//
+//   - logsDir → a per-test temp dir, so writes don't touch
+//     production /var/log/gdevm;
+//   - orphanPollInterval → 20ms, so the poller's death detection
+//     lands inside a test deadline.
+//
+// Returns a fresh registry. The helper registers t.Cleanup that waits
+// for every pollerDone / reaperDone in the registry to close BEFORE
+// restoring the globals — those goroutines read logsDir and
+// orphanPollInterval via removeRunState and the ticker respectively,
+// so restoring first would race. t.Cleanup runs after the test
+// body's defers, so tests use `defer kill()` on their spawned
+// pgroups; by the time the drain runs, the pgroups are gone, the
+// pollers have seen ESRCH, and the drain is a no-op.
+func newOrphanTestEnv(t *testing.T) *runRegistry {
 	t.Helper()
-	orig := orphanPollInterval
+	base := t.TempDir()
+	origLogsDir := logsDir
+	logsDir = filepath.Join(base, "logs")
+	origPoll := orphanPollInterval
 	orphanPollInterval = 20 * time.Millisecond
-	return func() { orphanPollInterval = orig }
+	reg := newRunRegistry()
+	t.Cleanup(func() {
+		for _, r := range reg.list() {
+			if r.pollerDone != nil {
+				<-r.pollerDone
+			}
+			if r.reaperDone != nil {
+				<-r.reaperDone
+			}
+		}
+		logsDir = origLogsDir
+		orphanPollInterval = origPoll
+	})
+	return reg
 }
 
 // spawnPgroupChild starts a long-lived child in its own process group
@@ -78,19 +107,13 @@ func writeTestState(t *testing.T, name string, pgid int) {
 // pgroup produces an orphan row in the registry, with cmd=nil and the
 // pgid preserved.
 func TestRediscover_LivePgidRegisters(t *testing.T) {
-	base := t.TempDir()
-	origLogsDir := logsDir
-	logsDir = filepath.Join(base, "logs")
-	defer func() { logsDir = origLogsDir }()
-	restorePoll := shortenOrphanPollForTest(t)
-	defer restorePoll()
+	reg := newOrphanTestEnv(t)
 
 	pgid, kill := spawnPgroupChild(t, 30)
 	defer kill()
 
 	writeTestState(t, "livesleeper", pgid)
 
-	reg := newRunRegistry()
 	rediscoverRuns(reg)
 
 	r := reg.lookup("livesleeper")
@@ -108,10 +131,7 @@ func TestRediscover_LivePgidRegisters(t *testing.T) {
 // TestRediscover_DeadPgidCleansState: a state file whose pgid is
 // already gone leaves nothing in the registry and removes the file.
 func TestRediscover_DeadPgidCleansState(t *testing.T) {
-	base := t.TempDir()
-	origLogsDir := logsDir
-	logsDir = filepath.Join(base, "logs")
-	defer func() { logsDir = origLogsDir }()
+	reg := newOrphanTestEnv(t)
 
 	// Spawn and reap a child so we have a pgid that is guaranteed to
 	// have existed and now be gone (safer than picking a random int
@@ -128,7 +148,6 @@ func TestRediscover_DeadPgidCleansState(t *testing.T) {
 
 	writeTestState(t, "ghost", deadPgid)
 
-	reg := newRunRegistry()
 	rediscoverRuns(reg)
 
 	assert.Nil(t, reg.lookup("ghost"))
@@ -139,15 +158,11 @@ func TestRediscover_DeadPgidCleansState(t *testing.T) {
 // TestRediscover_InvalidJSONRemovesFile: a corrupted state file is
 // removed (otherwise it would fail every rediscovery pass forever).
 func TestRediscover_InvalidJSONRemovesFile(t *testing.T) {
-	base := t.TempDir()
-	origLogsDir := logsDir
-	logsDir = filepath.Join(base, "logs")
-	defer func() { logsDir = origLogsDir }()
+	reg := newOrphanTestEnv(t)
 
 	require.NoError(t, os.MkdirAll(logsDir, 0o755))
 	require.NoError(t, os.WriteFile(stateFileForName("broken"), []byte("not json {{"), 0o644))
 
-	reg := newRunRegistry()
 	rediscoverRuns(reg)
 
 	assert.Nil(t, reg.lookup("broken"))
@@ -160,10 +175,7 @@ func TestRediscover_InvalidJSONRemovesFile(t *testing.T) {
 // started before the bump, which is explicit and self-healing on the
 // next run.
 func TestRediscover_VersionMismatchRemovesFile(t *testing.T) {
-	base := t.TempDir()
-	origLogsDir := logsDir
-	logsDir = filepath.Join(base, "logs")
-	defer func() { logsDir = origLogsDir }()
+	reg := newOrphanTestEnv(t)
 
 	require.NoError(t, os.MkdirAll(logsDir, 0o755))
 	body, _ := json.Marshal(map[string]any{
@@ -174,7 +186,6 @@ func TestRediscover_VersionMismatchRemovesFile(t *testing.T) {
 	})
 	require.NoError(t, os.WriteFile(stateFileForName("future"), body, 0o644))
 
-	reg := newRunRegistry()
 	rediscoverRuns(reg)
 
 	assert.Nil(t, reg.lookup("future"))
@@ -186,19 +197,13 @@ func TestRediscover_VersionMismatchRemovesFile(t *testing.T) {
 // stopped via /v1/stop; stopRun terminates the pgroup and the poller
 // signals exitDone within orphanPollInterval.
 func TestRediscover_StopKillsOrphan(t *testing.T) {
-	base := t.TempDir()
-	origLogsDir := logsDir
-	logsDir = filepath.Join(base, "logs")
-	defer func() { logsDir = origLogsDir }()
-	restorePoll := shortenOrphanPollForTest(t)
-	defer restorePoll()
+	reg := newOrphanTestEnv(t)
 
 	pgid, kill := spawnPgroupChild(t, 30)
 	defer kill() // belt-and-suspenders if the test fails before stop
 
 	writeTestState(t, "stoppable", pgid)
 
-	reg := newRunRegistry()
 	rediscoverRuns(reg)
 	require.NotNil(t, reg.lookup("stoppable"))
 
@@ -225,17 +230,11 @@ func TestRediscover_StopKillsOrphan(t *testing.T) {
 // pgroup out-of-band (not via /v1/stop) is detected by pollOrphanExit
 // within one orphanPollInterval tick and exitDone is signaled.
 func TestRediscover_PollerMarksExitedOnExternalDeath(t *testing.T) {
-	base := t.TempDir()
-	origLogsDir := logsDir
-	logsDir = filepath.Join(base, "logs")
-	defer func() { logsDir = origLogsDir }()
-	restorePoll := shortenOrphanPollForTest(t)
-	defer restorePoll()
+	reg := newOrphanTestEnv(t)
 
 	pgid, kill := spawnPgroupChild(t, 30)
 	writeTestState(t, "external", pgid)
 
-	reg := newRunRegistry()
 	rediscoverRuns(reg)
 	r := reg.lookup("external")
 	require.NotNil(t, r)
@@ -310,17 +309,11 @@ func TestRunExit_RemovesStateFile(t *testing.T) {
 // rediscovered orphan with orphan=true, and after its pgroup dies
 // externally the row reports exit_code=-1.
 func TestListRuns_MarksOrphanAndExitUnknown(t *testing.T) {
-	base := t.TempDir()
-	origLogsDir := logsDir
-	logsDir = filepath.Join(base, "logs")
-	defer func() { logsDir = origLogsDir }()
-	restorePoll := shortenOrphanPollForTest(t)
-	defer restorePoll()
+	reg := newOrphanTestEnv(t)
 
 	pgid, kill := spawnPgroupChild(t, 30)
 	writeTestState(t, "visible", pgid)
 
-	reg := newRunRegistry()
 	rediscoverRuns(reg)
 	srv := httptest.NewServer(buildServeHandlerWithRoot(time.Now(), "", "/", reg))
 	defer srv.Close()
@@ -359,16 +352,12 @@ func TestListRuns_MarksOrphanAndExitUnknown(t *testing.T) {
 // TestRediscover_IgnoresNonStateFiles: unrelated files in logsDir
 // (log files, in-flight .tmp) are not treated as state.
 func TestRediscover_IgnoresNonStateFiles(t *testing.T) {
-	base := t.TempDir()
-	origLogsDir := logsDir
-	logsDir = filepath.Join(base, "logs")
-	defer func() { logsDir = origLogsDir }()
+	reg := newOrphanTestEnv(t)
 
 	require.NoError(t, os.MkdirAll(logsDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(logsDir, "foo.log"), []byte("output"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(logsDir, "foo.state.tmp"), []byte("{}"), 0o644))
 
-	reg := newRunRegistry()
 	rediscoverRuns(reg)
 	assert.Empty(t, reg.list())
 
@@ -383,18 +372,12 @@ func TestRediscover_IgnoresNonStateFiles(t *testing.T) {
 // leaves one row, not two — the second pass sees the registry already
 // has the name and skips cleanly.
 func TestRediscover_Idempotent(t *testing.T) {
-	base := t.TempDir()
-	origLogsDir := logsDir
-	logsDir = filepath.Join(base, "logs")
-	defer func() { logsDir = origLogsDir }()
-	restorePoll := shortenOrphanPollForTest(t)
-	defer restorePoll()
+	reg := newOrphanTestEnv(t)
 
 	pgid, kill := spawnPgroupChild(t, 30)
 	defer kill()
 	writeTestState(t, "stable", pgid)
 
-	reg := newRunRegistry()
 	rediscoverRuns(reg)
 	rediscoverRuns(reg)
 	assert.Len(t, reg.list(), 1)

@@ -73,6 +73,16 @@ type run struct {
 	// Readers of exitCode must wait on this channel first.
 	exitDone chan struct{}
 	exitCode int
+
+	// reaperDone is closed once the reaper goroutine (first-party
+	// runs) has fully returned, including state-file cleanup. Nil
+	// for orphan runs that had no reaper. Tests wait on it before
+	// restoring globals the reaper reads.
+	reaperDone chan struct{}
+	// pollerDone is closed once pollOrphanExit returns, including
+	// state-file cleanup. Nil for first-party runs. Tests wait on it
+	// before restoring globals the poller reads.
+	pollerDone chan struct{}
 }
 
 // runRegistry tracks the in-flight runs by name. Mutex-guarded map,
@@ -200,11 +210,12 @@ func handleRun(reg *runRegistry) http.HandlerFunc {
 		// Prepare run state before spawning so a collision rejects
 		// without leaving a process behind.
 		r1 := &run{
-			name:      req.Name,
-			startedAt: time.Now().UTC(),
-			detach:    req.Detach,
-			logPath:   filepath.Join(logsDir, req.Name+".log"),
-			exitDone:  make(chan struct{}),
+			name:       req.Name,
+			startedAt:  time.Now().UTC(),
+			detach:     req.Detach,
+			logPath:    filepath.Join(logsDir, req.Name+".log"),
+			exitDone:   make(chan struct{}),
+			reaperDone: make(chan struct{}),
 		}
 		if existing, ok := reg.startExclusive(req.Name, r1); !ok {
 			http.Error(w, fmt.Sprintf("a run named %q is already active (pid %d)", existing.name, leaderPid(existing)), http.StatusConflict)
@@ -299,6 +310,7 @@ func handleRun(reg *runRegistry) http.HandlerFunc {
 		// exitDone. Starts immediately so even detached runs settle
 		// their exit code when the process ends.
 		go func() {
+			defer close(r1.reaperDone)
 			err := cmd.Wait()
 			code := 0
 			if err != nil {
@@ -310,13 +322,15 @@ func handleRun(reg *runRegistry) http.HandlerFunc {
 				}
 			}
 			r1.exitCode = code
-			close(r1.exitDone)
-			// Clean up the rediscovery state file now that the run
-			// has settled — otherwise a future gdevm serve would
-			// see the stale file, check the pgid (ESRCH), and
-			// remove it anyway. Doing it here keeps the state dir
-			// honest while this daemon is up.
+			// Clean up the rediscovery state file BEFORE signaling
+			// exitDone — otherwise a waiter unblocking on exitDone
+			// might read logsDir after a test has restored it to a
+			// different value, and removeRunState would target the
+			// wrong directory. Prod effect is identical (we are not
+			// racing anything there); test observability is what
+			// requires the ordering.
 			removeRunState(r1.name)
+			close(r1.exitDone)
 			// Leave r1 in the registry briefly so `gdevm runs`
 			// right after exit can still report the final state;
 			// startExclusive will reap on the next run with the

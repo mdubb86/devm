@@ -71,6 +71,23 @@ exit_seven() {
 	srv := httptest.NewServer(buildServeHandlerWithRoot(time.Now(), "", "/", reg))
 	cleanup := func() {
 		srv.Close()
+		// SIGKILL any run processes still alive so their reapers
+		// unblock, then wait for every reaper/poller in reg to finish
+		// — the reaper reads logsDir via removeRunState and would
+		// race the restore below otherwise.
+		for _, r := range reg.list() {
+			if r.cmd != nil && r.cmd.Process != nil {
+				_ = syscall.Kill(-r.pgid, syscall.SIGKILL)
+			}
+		}
+		for _, r := range reg.list() {
+			if r.reaperDone != nil {
+				<-r.reaperDone
+			}
+			if r.pollerDone != nil {
+				<-r.pollerDone
+			}
+		}
 		guestDevmShPath = origDevmSh
 		guestDevmMeShPath = origDevmMeSh
 		logsDir = origLogsDir
