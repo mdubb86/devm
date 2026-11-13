@@ -847,7 +847,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			// endpointFrom. Fail loud on a user config error: there's
 			// no retry at this layer, and a silent miss would leave
 			// the guest unable to ssh out.
-			if req.Cfg.Project.SSH != nil && len(*req.Cfg.Project.SSH) > 0 {
+			if req.Cfg.SSH != nil && len(*req.Cfg.SSH) > 0 {
 				if err := applySSHJumpBind(ctx, proxy, cfg.RuntimeDir(), req.Cfg, &info); err != nil {
 					http.Error(w, fmt.Sprintf("ssh cold-start: %v", err), http.StatusInternalServerError)
 					return

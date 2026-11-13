@@ -260,7 +260,7 @@ func TestEndpointFrom_IncludesMacPortsAndPeerHairpins(t *testing.T) {
 }
 
 // TestMacPortsForProject_AppendsSSHPortsWhenEnabled pins the
-// config-apply-side rule: when cfg.project.ssh is non-empty and the
+// config-apply-side rule: when cfg.ssh is non-empty and the
 // per-project devm-jump + agent-bridge listeners are bound,
 // macPortsForProject returns the user-declared mac_services ports PLUS
 // those two auto-added ports. Without both conditions it returns just
@@ -284,7 +284,8 @@ func TestMacPortsForProject_AppendsSSHPortsWhenEnabled(t *testing.T) {
 
 	ssh := []string{"a"}
 	cfgWithSSH := schema.Config{
-		Project: schema.Project{Name: "projX", SSH: &ssh},
+		Project: schema.Project{Name: "projX"},
+		SSH:     &ssh,
 		MacServices: []*schema.MacService{
 			{Name: "api", Port: 3000},
 			{Name: "db", Port: 5432},
@@ -310,7 +311,7 @@ func TestMacPortsForProject_AppendsSSHPortsWhenEnabled(t *testing.T) {
 	// SSH empty slice → no auto-added ports (feature off).
 	empty := []string{}
 	cfgEmptySSH := cfgWithSSH
-	cfgEmptySSH.Project.SSH = &empty
+	cfgEmptySSH.SSH = &empty
 	gotEmptySSH := macPortsForProject(cfgEmptySSH, "projX", proxy)
 	assert.Equal(t, []int{3000, 5432}, gotEmptySSH)
 
@@ -329,7 +330,7 @@ func TestMacPortsForProject_AppendsSSHPortsWhenEnabled(t *testing.T) {
 // TestEndpointFrom_IncludesSSHPortsWhenSet pins that endpointFrom
 // plumbs every entry of info.MacPorts through — including the
 // auto-added devm-jump + agent-bridge ports a config-apply pass stores
-// there when cfg.project.ssh is non-empty. No filtering, no ordering
+// there when cfg.ssh is non-empty. No filtering, no ordering
 // assumption: softnet treats every entry the same (NATAliasIP admit
 // pin in the softnet contract tests). The config-apply side owns
 // deciding which ports land in the slice; endpointFrom's job here is

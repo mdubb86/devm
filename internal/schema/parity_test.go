@@ -51,15 +51,14 @@ func TestOverrideMirrorsBase(t *testing.T) {
 				"Guest":        "guest-request gates are project-wide policy; a per-user override in devm.me.yaml could silently permit calls a co-owner disabled in devm.yaml. Single-user today but the gate lives on the shared file by design.",
 				"MacServices":  "reach authorizations to Mac loopback ports — project-wide trust, same character as Guest; a per-user override would silently widen the Mac-side attack surface.",
 				"PeerServices": "reach authorizations to cooperating project VMs — project-wide trust, same character as Guest and MacServices.",
+				"SSH":          "reach authorizations to Mac ssh aliases — project-wide trust, same character as Guest/MacServices/PeerServices; a per-user override would silently widen the guest's ssh reach past what the project agrees on.",
 			},
 		},
 		{
 			name:     "Project",
 			base:     reflect.TypeOf(schema.Project{}),
 			override: reflect.TypeOf(schema.ProjectOverride{}),
-			denylist: map[string]string{
-				"SSH": "reach authorizations to Mac ssh aliases — project-wide trust, same character as Guest/MacServices/PeerServices; a per-user override would silently widen the guest's ssh reach past what the project agrees on.",
-			},
+			denylist: nil,
 		},
 		{
 			name:     "Network",
