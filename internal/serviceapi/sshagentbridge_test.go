@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -111,6 +112,83 @@ func TestAgentBridge_RejectsAddIdentity(t *testing.T) {
 
 	// Verify fake agent did NOT see the message — we close and verify
 	// nothing exploded.
+	guest.Close()
+	<-done
+}
+
+// yieldConn wraps a net.Conn so every Write yields the scheduler
+// before the underlying Write. WriteAgentMessage issues three Writes
+// (header / type / payload); under this wrapper another goroutine can
+// slip its own Write in between — the exact window a missing lock
+// around the whole frame would leave open.
+type yieldConn struct {
+	net.Conn
+}
+
+func (y yieldConn) Write(p []byte) (int, error) {
+	runtime.Gosched()
+	return y.Conn.Write(p)
+}
+
+// TestAgentBridge_ConcurrentWritesSerialized spams REQUEST_IDENTITIES
+// (forward -> mac response arrives via io.Copy path) alternating with
+// ADD_IDENTITY (reject -> filter writes AgentFailure to guest). Both
+// bridge-side writers hit guestConn concurrently, and the yieldConn
+// wrapper maximizes interleaving. Every frame the guest reads must
+// still parse as a valid, type-correct message; a missing lock around
+// the full frame interleaves bytes and corrupts the wire.
+func TestAgentBridge_ConcurrentWritesSerialized(t *testing.T) {
+	sock := startFakeAgent(t)
+	b := NewAgentBridge("projX", func() string { return sock })
+
+	guest, bridge := net.Pipe()
+	defer guest.Close()
+	done := make(chan struct{})
+	go func() { b.ServeConn(yieldConn{Conn: bridge}); close(done) }()
+
+	const N = 50
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+		for i := 0; i < N; i++ {
+			if err := WriteAgentMessage(guest, AgentRequestIdentities, nil); err != nil {
+				return
+			}
+			if err := WriteAgentMessage(guest, 17, nil); err != nil {
+				return
+			}
+		}
+	}()
+
+	_ = guest.SetReadDeadline(time.Now().Add(10 * time.Second))
+	forward, reject := 0, 0
+	for i := 0; i < 2*N; i++ {
+		typ, payload, err := ReadAgentMessage(guest)
+		if err != nil {
+			t.Fatalf("frame %d: read err: %v (forward=%d reject=%d) — wire corrupted?", i, err, forward, reject)
+		}
+		switch typ {
+		case 12:
+			if !bytes.Equal(payload, []byte{0, 0, 0, 0}) {
+				t.Fatalf("frame %d: forward response payload corrupted: %v", i, payload)
+			}
+			forward++
+		case AgentFailure:
+			if len(payload) != 0 {
+				t.Fatalf("frame %d: reject response had payload: %v", i, payload)
+			}
+			reject++
+		default:
+			t.Fatalf("frame %d: unexpected type %d (wire interleaved?)", i, typ)
+		}
+	}
+	<-writeDone
+	if forward != N {
+		t.Errorf("forward: got %d, want %d", forward, N)
+	}
+	if reject != N {
+		t.Errorf("reject: got %d, want %d", reject, N)
+	}
 	guest.Close()
 	<-done
 }

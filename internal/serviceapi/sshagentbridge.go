@@ -1,7 +1,6 @@
 package serviceapi
 
 import (
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -53,6 +52,18 @@ func (b *AgentBridge) ServeConn(guestConn net.Conn) {
 	}
 	defer macConn.Close()
 
+	// guestMu serializes frame writes to guestConn across both
+	// directions: the filter goroutine's AgentFailure rejects and the
+	// mac->guest relay of Mac's responses. WriteAgentMessage issues
+	// three sequential Writes per frame, so holding mu across the whole
+	// call is what makes the wire atomic at the frame boundary.
+	var guestMu sync.Mutex
+	writeGuestFrame := func(typ byte, payload []byte) error {
+		guestMu.Lock()
+		defer guestMu.Unlock()
+		return WriteAgentMessage(guestConn, typ, payload)
+	}
+
 	var once sync.Once
 	stop := make(chan struct{})
 	closeStop := func() { once.Do(func() { close(stop) }) }
@@ -73,16 +84,33 @@ func (b *AgentBridge) ServeConn(guestConn net.Conn) {
 			case AgentReject:
 				agentBridgeLog.Logf(b.projectID+"|reject|"+strconv.Itoa(int(typ)),
 					"agent-bridge: rejected type=%d project=%s", typ, b.projectID)
-				if err := WriteAgentMessage(guestConn, AgentFailure, nil); err != nil {
+				if err := writeGuestFrame(AgentFailure, nil); err != nil {
 					return
 				}
+			default:
+				// AgentFilterVerdictFor returns only Forward/Reject. A new
+				// verdict added without updating this switch is an
+				// invariant violation; fail loudly instead of hanging the
+				// guest waiting for a response that never comes.
+				panic("agent-bridge: unhandled filter verdict")
 			}
 		}
 	}()
-	// mac -> guest: pass-through.
+	// mac -> guest: re-frame each response under the same lock as
+	// rejects. A raw io.Copy would split frames across Writes whenever
+	// macConn.Read returns partial bytes, and the filter's AgentFailure
+	// could slip in between those Writes and corrupt the wire.
 	go func() {
 		defer closeStop()
-		_, _ = io.Copy(guestConn, macConn)
+		for {
+			typ, payload, err := ReadAgentMessage(macConn)
+			if err != nil {
+				return
+			}
+			if err := writeGuestFrame(typ, payload); err != nil {
+				return
+			}
+		}
 	}()
 	// Wait for either direction to finish; the defers then close both
 	// conns, which unblocks whichever goroutine is still parked on a
@@ -93,21 +121,15 @@ func (b *AgentBridge) ServeConn(guestConn net.Conn) {
 // DefaultSSHAuthSockResolver returns a resolver that runs
 // `launchctl asuser <uid> launchctl getenv SSH_AUTH_SOCK`.
 // LaunchDaemons don't inherit the user's GUI-session env; this is the
-// standard discovery path. Empty on any error.
+// standard discovery path. Empty on any error — ServeConn logs the
+// unresolvable case with project context.
 func DefaultSSHAuthSockResolver() func() string {
 	uid := strconv.Itoa(os.Getuid())
 	return func() string {
 		out, err := exec.Command("launchctl", "asuser", uid, "launchctl", "getenv", "SSH_AUTH_SOCK").Output()
 		if err != nil {
-			agentBridgeLog.Logf("default-resolver|err",
-				"agent-bridge: SSH_AUTH_SOCK unresolvable: %v", err)
 			return ""
 		}
-		sock := strings.TrimSpace(string(out))
-		if sock == "" {
-			agentBridgeLog.Logf("default-resolver|empty",
-				"agent-bridge: SSH_AUTH_SOCK unresolvable (empty)")
-		}
-		return sock
+		return strings.TrimSpace(string(out))
 	}
 }
