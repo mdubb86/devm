@@ -21,11 +21,11 @@ var sshAliasPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}$`)
 // Does NOT run `ssh -G` or probe the Mac — that happens at apply time
 // (see ResolveSSHTargets); here we only reject malformed YAML.
 func (c Config) validateSSHTargets() error {
-	if c.Project.SSH == nil {
+	if c.SSH == nil {
 		return nil
 	}
-	seen := make(map[string]struct{}, len(*c.Project.SSH))
-	for i, a := range *c.Project.SSH {
+	seen := make(map[string]struct{}, len(*c.SSH))
+	for i, a := range *c.SSH {
 		if a == "" {
 			return fmt.Errorf("ssh[%d]: empty alias", i)
 		}

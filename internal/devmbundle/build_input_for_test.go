@@ -57,8 +57,8 @@ func TestBuildInputFor_FailsLoudlyWhenSSHConfiguredButEnricherUnbound(t *testing
 	cfg := schema.Config{
 		Project: schema.Project{
 			Name: "p",
-			SSH:  &ssh,
 		},
+		SSH: &ssh,
 	}
 
 	_, err := BuildInputFor(

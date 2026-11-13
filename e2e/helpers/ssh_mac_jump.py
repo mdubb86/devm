@@ -73,17 +73,13 @@ class Project:
         return _RUNTIME_DIR / "ssh" / f"{self.vm_name}.jump.priv"
 
     def set_devm_yaml(self, patch: dict[str, Any]) -> None:
-        """Patch devm.yaml. The `ssh` key routes into project.ssh since
-        the schema nests it under project (internal/schema/schema.go
-        Project.SSH); every other key is a top-level section."""
+        """Patch devm.yaml. Every key in `patch` is written as a
+        top-level section (including `ssh:`, which lives on Config —
+        see internal/schema/schema.go Config.SSH)."""
         yaml_path = self._workspace.devm_yaml_path
         cfg = yaml.safe_load(yaml_path.read_text()) or {}
         for k, v in patch.items():
-            if k == "ssh":
-                project = cfg.setdefault("project", {"name": self.vm_name})
-                project["ssh"] = v
-            else:
-                cfg[k] = v
+            cfg[k] = v
         yaml_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
     def start(self, timeout: float = 480.0) -> None:

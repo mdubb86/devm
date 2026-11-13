@@ -14,14 +14,14 @@ import (
 	"github.com/mdubb86/devm/internal/softnet"
 )
 
-// applySSHJumpBind resolves cfg.Project.SSH, verifies every target has
+// applySSHJumpBind resolves cfg.SSH, verifies every target has
 // a Mac known_hosts entry, and binds this project's devm-jump +
 // agent-bridge listeners on the ProxyServer. On success, refreshes
 // info.MacPorts via macPortsForProject so the caller's softnet
 // FORWARDING push (which reads info.MacPorts via endpointFrom) admits
 // the auto-added jump + bridge ports.
 //
-// cfg.Project.SSH MUST be non-empty — callers gate on that. info may
+// cfg.SSH MUST be non-empty — callers gate on that. info may
 // be nil (the SSH listener bind + state update happens regardless;
 // macPorts refresh is skipped).
 //
@@ -30,7 +30,7 @@ import (
 // RespawnProxyListeners (watchdog-driven proxy respawn).
 func applySSHJumpBind(ctx context.Context, proxy *ProxyServer, runtimeDir string, cfg schema.Config, info *projectInfo) error {
 	projectID := cfg.Project.Name
-	resolved, err := schema.ResolveSSHTargets(*cfg.Project.SSH, schema.DefaultExec)
+	resolved, err := schema.ResolveSSHTargets(*cfg.SSH, schema.DefaultExec)
 	if err != nil {
 		return fmt.Errorf("resolve: %w", err)
 	}
@@ -54,9 +54,9 @@ const guestSSHAgentSock = "/run/devm/ssh-agent.sock"
 // BindSSHBundleEnricher wires devmbundle.SSHEnricher to a function
 // closed over proxy. RunService calls this once after creating the
 // ProxyServer so every downstream BuildInputFor invocation can pick
-// up SSH bundle bytes for a project whose cfg.project.ssh is non-
-// empty, without having to thread a *ProxyServer through packages
-// that don't own one.
+// up SSH bundle bytes for a project whose cfg.ssh is non-empty,
+// without having to thread a *ProxyServer through packages that
+// don't own one.
 func BindSSHBundleEnricher(proxy *ProxyServer) {
 	devmbundle.SSHEnricher = func(cfg schema.Config, runtimeDir string) (devmbundle.SSHBundleFields, error) {
 		return computeSSHBundleFields(cfg, runtimeDir, proxy)
@@ -66,11 +66,11 @@ func BindSSHBundleEnricher(proxy *ProxyServer) {
 // computeSSHBundleFields resolves this project's ssh targets, loads
 // the per-project jump key material, reads this project's jump +
 // bridge ports from proxy, and renders the four SSH bundle bytes.
-// cfg.project.ssh MUST be non-empty when this is called — the caller
+// cfg.ssh MUST be non-empty when this is called — the caller
 // (BuildInputFor via SSHEnricher) gates on that.
 func computeSSHBundleFields(cfg schema.Config, runtimeDir string, proxy *ProxyServer) (devmbundle.SSHBundleFields, error) {
 	projectID := cfg.Project.Name
-	resolved, err := schema.ResolveSSHTargets(*cfg.Project.SSH, schema.DefaultExec)
+	resolved, err := schema.ResolveSSHTargets(*cfg.SSH, schema.DefaultExec)
 	if err != nil {
 		return devmbundle.SSHBundleFields{}, fmt.Errorf("resolve ssh: %w", err)
 	}

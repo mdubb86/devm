@@ -34,7 +34,7 @@ import (
 //     rebind).
 //  2. devmbundle.BuildInputFor, with the daemon's SSHEnricher wired via
 //     BindSSHBundleEnricher, populates all four SSH* fields of the
-//     BuildInput. A control case with cfg.Project.SSH == nil leaves all
+//     BuildInput. A control case with cfg.SSH == nil leaves all
 //     four fields nil.
 func TestRebind_StartsSSHListenersAndPopulatesBundle(t *testing.T) {
 	home := t.TempDir()
@@ -88,15 +88,16 @@ func TestRebind_StartsSSHListenersAndPopulatesBundle(t *testing.T) {
 		return nil, fmt.Errorf("unexpected exec %q %v", name, args)
 	}
 
-	// ========== Case 1: cfg.Project.SSH non-empty ==========
+	// ========== Case 1: cfg.SSH non-empty ==========
 	projectID := "proj-with-ssh"
 	projectIP := "127.0.0.1"
 	sshList := []string{"alias"}
 	withSSHCfg := schema.Config{
-		Project: schema.Project{Name: projectID, SSH: &sshList},
+		Project: schema.Project{Name: projectID},
+		SSH:     &sshList,
 	}
 	// Seed the snapshot rebindProjectListeners reads via ReadStateSnapshot
-	// to learn whether cfg.project.ssh is non-empty.
+	// to learn whether cfg.ssh is non-empty.
 	require.NoError(t, WriteStateSnapshot(cfg, projectID, StateSnapshot{Cfg: withSSHCfg}))
 	// Seed ironProxyState with a non-empty entry so the rebind's
 	// "if ok" branch (where the SSH wiring lives) actually runs.
@@ -137,7 +138,7 @@ func TestRebind_StartsSSHListenersAndPopulatesBundle(t *testing.T) {
 	assert.True(t, strings.HasPrefix(string(in.SSHKnownHostsAppend), "["),
 		"known_hosts body first line must be a [host]:port form for devm-jump")
 
-	// ========== Case 2: cfg.Project.SSH == nil ==========
+	// ========== Case 2: cfg.SSH == nil ==========
 	noSSHCfg := schema.Config{Project: schema.Project{Name: "proj-no-ssh"}}
 	in2, err := devmbundle.BuildInputFor(
 		noSSHCfg, "", cfg.RuntimeDir(), cfg.TLD,
@@ -233,7 +234,8 @@ func TestColdStart_ApplySSHJumpBindBindsAndRefreshesMacPorts(t *testing.T) {
 	projectID := "proj-cold-ssh"
 	sshList := []string{"alias"}
 	coldCfg := schema.Config{
-		Project: schema.Project{Name: projectID, SSH: &sshList},
+		Project: schema.Project{Name: projectID},
+		SSH:     &sshList,
 	}
 	info := projectInfo{ProjectIP: "127.0.0.1"}
 	t.Cleanup(func() { proxy.StopSSHJumpListeners(projectID) })
@@ -272,7 +274,8 @@ func TestApplySSHJumpBind_PropagatesResolveFailure(t *testing.T) {
 
 	sshList := []string{"bad-alias"}
 	badCfg := schema.Config{
-		Project: schema.Project{Name: "proj-cold-err", SSH: &sshList},
+		Project: schema.Project{Name: "proj-cold-err"},
+		SSH:     &sshList,
 	}
 	var info projectInfo
 	err = applySSHJumpBind(context.Background(), proxy, cfg.RuntimeDir(), badCfg, &info)
@@ -283,7 +286,7 @@ func TestApplySSHJumpBind_PropagatesResolveFailure(t *testing.T) {
 
 // TestVMStart_BindsSSHJumpOnColdStart drives /vm/start end-to-end
 // against a real ProxyServer (not nil like the sibling /vm/start
-// tests) with cfg.project.ssh non-empty, and proves the handler's
+// tests) with cfg.ssh non-empty, and proves the handler's
 // cold-start wiring landed: proxy.ProjectSnapshot reports non-zero
 // jumpPort + bridgePort after the handler returns 200.
 func TestVMStart_BindsSSHJumpOnColdStart(t *testing.T) {
@@ -402,7 +405,8 @@ exit 0
 
 	sshList := []string{"alias"}
 	reqCfg := schema.Config{
-		Project: schema.Project{Name: project, SSH: &sshList},
+		Project: schema.Project{Name: project},
+		SSH:     &sshList,
 	}
 	body, err := json.Marshal(VMStartRequest{Name: project, MacCwd: macCwd, Cfg: reqCfg})
 	require.NoError(t, err)
@@ -458,7 +462,8 @@ func TestRespawnProxyListeners_RebindsSSHJump(t *testing.T) {
 	projectIP := "127.0.0.1"
 	sshList := []string{"alias"}
 	respCfg := schema.Config{
-		Project: schema.Project{Name: projectID, SSH: &sshList},
+		Project: schema.Project{Name: projectID},
+		SSH:     &sshList,
 	}
 	require.NoError(t, WriteStateSnapshot(cfg, projectID, StateSnapshot{Cfg: respCfg}))
 	ironProxyState.put(projectID, projectInfo{ProjectIP: projectIP})

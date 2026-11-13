@@ -25,7 +25,7 @@ func TestSSHTargets_PatternAndUniqueness(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			list := append([]string(nil), tc.in...)
-			cfg := Config{Project: Project{Name: "p", SSH: &list}}
+			cfg := Config{Project: Project{Name: "p"}, SSH: &list}
 			err := cfg.validateSSHTargets()
 			if tc.wantErr == "" {
 				if err != nil {

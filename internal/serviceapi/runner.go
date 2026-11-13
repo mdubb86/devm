@@ -131,7 +131,7 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 }
 
 // rebindSSHJump reads this project's state snapshot, and if its
-// cfg.project.ssh list is non-empty, re-resolves the ssh targets,
+// cfg.ssh list is non-empty, re-resolves the ssh targets,
 // re-verifies known_hosts, and re-binds the devm-jump + agent-bridge
 // listeners via applySSHJumpBind. On success, refreshes info.MacPorts
 // so the caller's upcoming ironProxyState.put carries the newly bound
@@ -147,7 +147,7 @@ func rebindSSHJump(ctx context.Context, proxy *ProxyServer, cfg identity.Config,
 	if err != nil {
 		return fmt.Errorf("ssh rebind: read snapshot: %w", err)
 	}
-	if snap == nil || snap.Cfg.Project.SSH == nil || len(*snap.Cfg.Project.SSH) == 0 {
+	if snap == nil || snap.Cfg.SSH == nil || len(*snap.Cfg.SSH) == 0 {
 		return nil
 	}
 	if err := applySSHJumpBind(ctx, proxy, cfg.RuntimeDir(), snap.Cfg, info); err != nil {
@@ -212,10 +212,10 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 
 	// Wire devmbundle.SSHEnricher so every BuildInputFor call picks up
 	// SSH client config, jump key, known_hosts and agent-bridge unit
-	// bytes for projects whose cfg.project.ssh is non-empty. The
-	// closure captures proxy — BuildInputFor itself lives in a package
-	// that can't import serviceapi, so passing a *ProxyServer would
-	// create a cycle.
+	// bytes for projects whose cfg.ssh is non-empty. The closure
+	// captures proxy — BuildInputFor itself lives in a package that
+	// can't import serviceapi, so passing a *ProxyServer would create
+	// a cycle.
 	BindSSHBundleEnricher(proxy)
 
 	// HTTP API server (Ship 1) with the /routes/* admin endpoints

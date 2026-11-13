@@ -202,7 +202,7 @@ func (g *RealGroundTruth) RespawnProxyListeners(ctx context.Context, projectID s
 	info.GuestHTTPPort = guestHTTPPort
 	info.GuestHTTPSPort = guestHTTPSPort
 
-	// If cfg.project.ssh is non-empty, re-bind devm-jump + agent-
+	// If cfg.ssh is non-empty, re-bind devm-jump + agent-
 	// bridge too and refresh info.MacPorts so the softnet FORWARDING
 	// re-push below admits the fresh ports. Unlike the rebind path
 	// (which fails loud), a resolve / known_hosts failure here only
@@ -211,7 +211,7 @@ func (g *RealGroundTruth) RespawnProxyListeners(ctx context.Context, projectID s
 	// the proxy pair.
 	if snap, serr := ReadStateSnapshot(g.Cfg, projectID); serr != nil {
 		daemonlog.Errorf("serviceapi: sshjump respawn: read snapshot for %s: %v", projectID, serr)
-	} else if snap != nil && snap.Cfg.Project.SSH != nil && len(*snap.Cfg.Project.SSH) > 0 {
+	} else if snap != nil && snap.Cfg.SSH != nil && len(*snap.Cfg.SSH) > 0 {
 		if err := applySSHJumpBind(ctx, g.Proxy, g.Cfg.RuntimeDir(), snap.Cfg, &info); err != nil {
 			daemonlog.Errorf("serviceapi: sshjump respawn: project %s: %v", projectID, err)
 		}

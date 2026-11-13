@@ -2,8 +2,8 @@
 
 No agent-bridge service, no guest ~/.ssh/config, no Mac loopback
 jump listener, no softnet NAT entry for a jump port. Pins the
-"opt-in via project.ssh" contract: a project that doesn't ask for
-the feature doesn't pay any of its costs.
+"opt-in via top-level ssh:" contract: a project that doesn't ask
+for the feature doesn't pay any of its costs.
 """
 from __future__ import annotations
 

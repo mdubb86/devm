@@ -200,8 +200,8 @@ func macPortsFromServices(ms []*schema.MacService) []int {
 // macPortsForProject assembles the full ForwardTargets.MacPorts set
 // softnet should authorize from this project's guest: user-declared
 // mac_services ports, plus the per-project devm-jump + agent-bridge
-// ports when cfg.project.ssh is non-empty and those listeners are
-// bound. proxy may be nil (daemon-restart adoption rehydrates MacPorts
+// ports when cfg.ssh is non-empty and those listeners are bound.
+// proxy may be nil (daemon-restart adoption rehydrates MacPorts
 // before any SSH-jump listener has been rebound); in that case only
 // the mac_services ports are returned and the post-rebind policy push
 // adds the auto-added ports once the listeners are up.
@@ -210,7 +210,7 @@ func macPortsForProject(cfg schema.Config, projectID string, proxy *ProxyServer)
 	if proxy == nil {
 		return ports
 	}
-	if cfg.Project.SSH == nil || len(*cfg.Project.SSH) == 0 {
+	if cfg.SSH == nil || len(*cfg.SSH) == 0 {
 		return ports
 	}
 	snap := proxy.ProjectSnapshot(projectID)

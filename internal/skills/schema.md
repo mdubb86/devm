@@ -25,6 +25,7 @@ description: devm.yaml schema reference — every top-level field, type, and buc
 | `guest` | object | live | Gates the requests `gdevm` (the guest-side dispatcher) may send to the daemon. Sub-fields `propose` and `passthrough` are booleans defaulting to `true`; set to `false` to refuse the corresponding request class with 403. Project-wide by design — not overridable in `devm.me.yaml`. |
 | `mac_services` | []{name, port} | live | Mac loopback ports this VM may reach. Guest URL: `<name>.host.test:<port>`. Each `name` is a DNS label (used in the URL only); `port` is the authorization. Reserved ports 53/80/123/443 are refused at load. `host.test` is a reserved zone — no route hostname may fall under it. Project-wide trust; not overridable in `devm.me.yaml`. |
 | `peer_services` | []{project} | live | Cooperating devm projects this VM may reach by their native hostnames (`*.<project>.test`). Grants reach to every hostname the peer project declares. The peer's own TLS cert is presented (both VMs install the devm CA). Unknown or self peers are refused at load. Project-wide trust; not overridable in `devm.me.yaml`. |
+| `ssh` | []string | recreate | Mac ssh config aliases the guest may reach through a per-project SSH jump. Each alias is resolved via `ssh -G` on the Mac at apply time; `ProxyJump` chains are rejected (no multi-hop in v1). The guest's ssh client config ships with one `Host <alias>` block per entry and `PreferredAuthentications publickey` on every target. |
 
 ---
 
@@ -52,7 +53,6 @@ Required. Identifies the project.
 | Field | Type | Required | Purpose |
 |---|---|---|---|
 | `name` | string | yes | Project name. Serves as both the devm-owned identity namespace (secrets, routes, state, iron-proxy, ssh keys) and the literal Tart VM instance name. Must contain no whitespace, `/`, `\`, or `..`. |
-| `ssh` | []string | no | Mac ssh config aliases the guest may reach through a per-project SSH jump. Each alias is resolved via `ssh -G` on the Mac at apply time; `ProxyJump` chains are rejected (no multi-hop in v1). The guest's ssh client config ships with one `Host <alias>` block per entry and `PreferredAuthentications publickey` on every target. |
 
 Validation: `name` is required.
 

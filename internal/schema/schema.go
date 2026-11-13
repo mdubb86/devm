@@ -486,12 +486,6 @@ func (s Service) Validate() error {
 
 type Project struct {
 	Name string `yaml:"name"`
-
-	// SSH lists Mac ssh config aliases the guest may reach through the
-	// per-project devm-jump. Each alias is resolved via `ssh -G` on the
-	// Mac at apply time; the resolved HostName/Port/User is what the
-	// guest's ssh config carries. Nil = feature disabled for this project.
-	SSH *[]string `yaml:"ssh,omitempty"`
 }
 
 func (p Project) Validate() error {
@@ -861,6 +855,12 @@ type Config struct {
 	// reach to every hostname that peer project declares; finer-grained
 	// scoping is out of scope. nil = none declared.
 	PeerServices []*PeerService `yaml:"peer_services,omitempty"`
+
+	// SSH lists Mac ssh config aliases the guest may reach through the
+	// per-project devm-jump. Each alias is resolved via `ssh -G` on the
+	// Mac at apply time; the resolved HostName/Port/User is what the
+	// guest's ssh config carries. Nil = feature disabled for this project.
+	SSH *[]string `yaml:"ssh,omitempty"`
 }
 
 // Guest gates capabilities exposed to gdevm (the guest-side
