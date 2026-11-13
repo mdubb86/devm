@@ -7,8 +7,10 @@ ssh transport — same ProxyJump + IdentityAgent path as a plain `ssh`.
 from __future__ import annotations
 
 import pytest
+import tempfile
+from pathlib import Path
 
-from helpers import e2e_project, ssh_add_and_cleanup
+from helpers import e2e_project, local_sshd_target
 
 pytestmark = pytest.mark.devm
 
@@ -16,28 +18,29 @@ pytestmark = pytest.mark.devm
 @pytest.mark.slow
 @pytest.mark.timeout(900)
 def test_rsync_over_ssh():
-    with e2e_project("ssh-rsync") as p:
-        vm_alias = f"devm-{p.vm_name}"
-        # rsync isn't in the base guest image; declare it so the guest
-        # installs it during provision. network.allow pattern mirrors
-        # test_72_systemd_service.py:44-45 — apt needs the Debian
-        # mirror hosts reachable.
+    # The fixture sshd runs the current user's login shell and inherits
+    # its PATH, so rsync on the Mac side is already on PATH. The guest
+    # needs rsync installed via packages.
+    with tempfile.TemporaryDirectory(prefix="devm-e2e-rsync-") as sink, \
+            e2e_project("ssh-rsync") as p, \
+            local_sshd_target() as alias:
+        dest = Path(sink) / "hostname-copy"
         p.set_devm_yaml({
-            "ssh": [vm_alias],
+            "ssh": [alias],
             "packages": ["rsync"],
             "network": {"allow": ["deb.debian.org", "security.debian.org"]},
         })
         p.start()
-        with ssh_add_and_cleanup(p.client_key_path):
-            res = p.run_in_guest(
-                ["rsync", "-e", "ssh",
-                 f"{vm_alias}:/etc/hostname", "/tmp/hostname-copy"],
-                check=False,
-            )
-            assert res.returncode == 0, (
-                f"rsync failed: stdout={res.stdout!r} stderr={res.stderr!r}"
-            )
-            out = p.run_in_guest(["cat", "/tmp/hostname-copy"]).stdout.strip()
-            assert out == p.vm_name, (
-                f"unexpected hostname: want {p.vm_name!r}, got {out!r}"
-            )
+        res = p.run_in_guest(
+            ["rsync", "-e", "ssh", "/etc/hostname",
+             f"{alias}:{dest}"],
+            check=False,
+        )
+        assert res.returncode == 0, (
+            f"rsync failed: stdout={res.stdout!r} stderr={res.stderr!r}"
+        )
+        assert dest.exists(), f"rsync target {dest} missing after transfer"
+        got = dest.read_text().strip()
+        assert got == p.vm_name, (
+            f"unexpected transferred hostname: want {p.vm_name!r}, got {got!r}"
+        )

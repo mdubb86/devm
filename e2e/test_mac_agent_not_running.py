@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import e2e_project, mac_env_unset
+from helpers import e2e_project, local_sshd_target, mac_env_unset
 
 pytestmark = pytest.mark.devm
 
@@ -52,9 +52,8 @@ def _count_needle_in_delta(pre_size: int, needle: str) -> tuple[int, str]:
 @pytest.mark.slow
 @pytest.mark.timeout(900)
 def test_mac_agent_missing():
-    with e2e_project("ssh-no-agent") as p:
-        vm_alias = f"devm-{p.vm_name}"
-        p.set_devm_yaml({"ssh": [vm_alias]})
+    with e2e_project("ssh-no-agent") as p, local_sshd_target() as alias:
+        p.set_devm_yaml({"ssh": [alias]})
         p.start()
 
         needle = f"agent-bridge: SSH_AUTH_SOCK unresolvable project={p.vm_name}"
@@ -62,7 +61,7 @@ def test_mac_agent_missing():
 
         with mac_env_unset("SSH_AUTH_SOCK"):
             res = p.run_in_guest(
-                ["ssh", "-o", "ConnectTimeout=5", vm_alias, "true"],
+                ["ssh", "-o", "ConnectTimeout=5", alias, "true"],
                 check=False,
             )
             assert res.returncode != 0, "ssh must fail when agent unreachable"

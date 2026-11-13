@@ -23,6 +23,27 @@ from helpers.tart import TartSandbox
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _ensure_ssh_config_include():
+    """Ensure `~/.ssh/config` includes the devm-e2e fragments dir so the
+    per-test `local_sshd_target` fixture's Host block is resolvable by
+    `ssh -G <alias>` (which the daemon invokes at precondition time).
+
+    Additive and idempotent: we prepend the Include once if missing and
+    leave the file alone otherwise. No teardown — the directive is
+    harmless when no fragment files exist.
+    """
+    cfg_dir = Path.home() / ".ssh" / "config.d"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    cfg_dir.chmod(0o700)
+    main = Path.home() / ".ssh" / "config"
+    include = "Include ~/.ssh/config.d/devm-e2e-*.conf"
+    body = main.read_text() if main.exists() else ""
+    if include not in body:
+        main.write_text(include + "\n" + body)
+        main.chmod(0o600)
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _playwright_chromium_installed():
     """Fail loudly on first collect if Playwright's Chromium is missing.
 

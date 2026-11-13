@@ -6,15 +6,10 @@ cold-start, run commands in the guest, and run commands on the Mac
 side without rewiring the pytest fixture graph for every scenario
 (the stock `workspace`/`devm` fixtures are scoped to one project
 per test; the deny test wants two live projects at once).
-
-Per-project jump client key path (identity.E2E.RuntimeDir()):
-  ~/Library/Application Support/devm-e2e/ssh/<projectID>.jump.priv
-See internal/serviceapi/sshjump_key.go's LoadOrCreateProjectJumpKey.
 """
 from __future__ import annotations
 
 import contextlib
-import os
 import secrets
 import shutil
 import subprocess
@@ -31,7 +26,6 @@ from .devm import Devm
 from .tart import TartSandbox
 from .workspace import Workspace
 
-_RUNTIME_DIR = Path.home() / "Library" / "Application Support" / "devm-e2e"
 _DEVM_E2E_BIN = "/usr/local/bin/devm-e2e"
 
 
@@ -63,14 +57,6 @@ class Project:
     @property
     def path(self) -> Path:
         return self._path
-
-    @property
-    def client_key_path(self) -> Path:
-        """Mac-side path to this project's per-project devm-jump client
-        private key, the key Mac's ssh-agent needs to serve so the guest's
-        IdentityAgent bridge has something to return. Written by the
-        daemon on first start (internal/serviceapi/sshjump_key.go)."""
-        return _RUNTIME_DIR / "ssh" / f"{self.vm_name}.jump.priv"
 
     def set_devm_yaml(self, patch: dict[str, Any]) -> None:
         """Patch devm.yaml. Every key in `patch` is written as a
@@ -174,33 +160,6 @@ def e2e_project(label: str) -> Iterator[Project]:
         yield p
     finally:
         p.teardown()
-
-
-@contextlib.contextmanager
-def ssh_add_and_cleanup(key_path: Path | str) -> Iterator[None]:
-    """Load a key into Mac's ssh-agent for the test, remove on exit.
-
-    Uses `ssh-add -d <pubkey-file>` on exit, writing the derived public
-    key to a tempfile first (ssh-add -d takes the pubkey path, not the
-    privkey). cleanup is best-effort — a leftover identity in a
-    persistent agent is a small leak, not a test failure."""
-    key_path = str(key_path)
-    subprocess.run(["ssh-add", key_path], check=True, capture_output=True)
-    pub = subprocess.run(
-        ["ssh-keygen", "-y", "-f", key_path],
-        check=True, capture_output=True,
-    ).stdout
-    try:
-        yield
-    finally:
-        pub_file = tempfile.NamedTemporaryFile("wb", delete=False, suffix=".pub")
-        try:
-            pub_file.write(pub)
-            pub_file.close()
-            subprocess.run(["ssh-add", "-d", pub_file.name],
-                           check=False, capture_output=True)
-        finally:
-            os.unlink(pub_file.name)
 
 
 @contextlib.contextmanager
