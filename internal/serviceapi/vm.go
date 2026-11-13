@@ -1465,6 +1465,11 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 
 	s.mux.Handle("/vm/propose", handleProposeUnixSocket(cfg, cache))
 
+	// SSH bundle fields for the CLI-side provisioner. applySSHJumpBind
+	// has already run as part of /vm/start, so the per-project jump key
+	// and listener ports are ready to be baked into the bundle.
+	s.mux.Handle("/vm/ssh-bundle-fields", handleSSHBundleFields(cfg, proxy))
+
 	// /denials — read-only view of policy-authority allow-list rejects
 	// for a project. Sorted by count desc. Empty array is a normal state
 	// (no rejects yet, or the project's allow-list was just replaced).

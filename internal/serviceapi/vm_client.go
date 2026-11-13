@@ -477,6 +477,32 @@ func (c *Client) ApproveState(ctx context.Context, projectID string) (ApproveSta
 	return resp, nil
 }
 
+// SSHBundleFields calls POST /vm/ssh-bundle-fields and returns the four
+// SSH bytes the CLI-side provisioner needs to splat into its BuildInput.
+// Caller must have already invoked /vm/start — the daemon reads ports
+// from the ProjectSnapshot applySSHJumpBind populated there. Returns an
+// error (status 400) when cfg.SSH is empty; caller must gate on that.
+func (c *Client) SSHBundleFields(ctx context.Context, name string, cfg schema.Config) (VMSSHBundleFieldsResponse, error) {
+	body, err := json.Marshal(VMSSHBundleFieldsRequest{Name: name, Cfg: cfg})
+	if err != nil {
+		return VMSSHBundleFieldsResponse{}, err
+	}
+	r, err := c.post(ctx, "/vm/ssh-bundle-fields", body)
+	if err != nil {
+		return VMSSHBundleFieldsResponse{}, err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(r.Body)
+		return VMSSHBundleFieldsResponse{}, fmt.Errorf("vm/ssh-bundle-fields: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	var resp VMSSHBundleFieldsResponse
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		return VMSSHBundleFieldsResponse{}, err
+	}
+	return resp, nil
+}
+
 // post sends a JSON-body POST to the given path on the daemon socket.
 func (c *Client) post(ctx context.Context, path string, body []byte) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost"+path, bytes.NewReader(body))

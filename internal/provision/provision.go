@@ -107,6 +107,18 @@ type Provisioner struct {
 	// at UTC. See internal/hostinfo.ResolveMacTimezone.
 	MacTimezone string
 
+	// SSHClientConfig / SSHJumpClientPriv / SSHKnownHostsAppend /
+	// SSHAgentBridgeUnit are the four blobs install.sh stages under
+	// /opt/devm/ssh-client/ when the project's cfg.SSH is non-empty.
+	// The CLI fetches them from the daemon (POST /vm/ssh-bundle-fields)
+	// after /vm/start so the daemon's single SSH producer (serviceapi's
+	// computeSSHBundleFields) stays the one write path. All four are
+	// nil when cfg.SSH is empty; the bundle writers skip each nil entry.
+	SSHClientConfig     []byte
+	SSHJumpClientPriv   []byte
+	SSHKnownHostsAppend []byte
+	SSHAgentBridgeUnit  []byte
+
 	// firstBoot is true when /var/lib/devm/provisioned is absent — i.e.
 	// this VM has not completed provisioning. Set at the top of Run.
 	firstBoot bool
@@ -411,6 +423,15 @@ func (p *Provisioner) buildBundle() ([]byte, error) {
 	if p.Cfg.Docker {
 		in.DockerRuncShim = docker.Shim()
 		in.DockerCLIShim = docker.DockerShim()
+	}
+	if p.Cfg.SSH != nil && len(*p.Cfg.SSH) > 0 {
+		if p.SSHClientConfig == nil {
+			return nil, fmt.Errorf("ssh bundle fields: cfg.SSH is non-empty but SSHClientConfig is nil — caller must POST /vm/ssh-bundle-fields after /vm/start and splat the response into the Provisioner")
+		}
+		in.SSHClientConfig = p.SSHClientConfig
+		in.SSHJumpClientPriv = p.SSHJumpClientPriv
+		in.SSHKnownHostsAppend = p.SSHKnownHostsAppend
+		in.SSHAgentBridgeUnit = p.SSHAgentBridgeUnit
 	}
 	body, err := devmbundle.Build(in)
 	if err != nil {

@@ -86,6 +86,11 @@ type VMAdminClient interface {
 	// defense-in-depth re-assertion before attaching to an already-warm
 	// VM.
 	EndProvisioning(ctx context.Context, name string) error
+	// SSHBundleFields fetches the four SSH blobs install.sh stages in
+	// the guest. Only invoked when cfg.SSH is non-empty — the daemon
+	// is the single producer (computeSSHBundleFields) so the CLI-side
+	// bundle writer agrees with every daemon-side writer.
+	SSHBundleFields(ctx context.Context, name string, cfg schema.Config) (serviceapi.VMSSHBundleFieldsResponse, error)
 }
 
 // DefaultShellDeps returns deps wired for production. bundleFingerprint
@@ -357,6 +362,19 @@ func (d ShellDeps) provisionAndAttach(ctx context.Context, cfg schema.Config, vm
 		PackageAdds:         pkgAdds,
 		PackageRemoves:      pkgRemoves,
 		MacTimezone:         macTz,
+	}
+	// SSH bundle fields: the daemon's ProxyServer is the only producer of
+	// these four blobs (see computeSSHBundleFields). /vm/start has already
+	// run applySSHJumpBind for us, so JumpPort/BridgePort are ready.
+	if cfg.SSH != nil && len(*cfg.SSH) > 0 {
+		f, err := d.ServiceAPIClient.SSHBundleFields(ctx, cfg.Project.Name, cfg)
+		if err != nil {
+			return d.teardownOnFail(ctx, cfg, vmName, err, "fetch ssh bundle fields")
+		}
+		prov.SSHClientConfig = f.ClientConfig
+		prov.SSHJumpClientPriv = f.JumpClientPriv
+		prov.SSHKnownHostsAppend = f.KnownHostsAppend
+		prov.SSHAgentBridgeUnit = f.AgentBridgeUnit
 	}
 	log.Printf("shell: provisioning %s", vmName)
 	reporter.Step("provisioning", false)
