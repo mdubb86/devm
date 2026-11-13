@@ -837,6 +837,22 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 			}
 			info.GuestHTTPPort = guestHTTPPort
 			info.GuestHTTPSPort = guestHTTPSPort
+
+			// Cold-start SSH-jump bind for projects with ssh:. MacPorts
+			// at line 789 captured only cfg.MacServices (the jump +
+			// bridge listeners don't exist yet). applySSHJumpBind binds
+			// them now and refreshes info.MacPorts so the put below
+			// carries the auto-added ports — the softnet FORWARDING
+			// push (/vm/begin-provisioning) reads info.MacPorts via
+			// endpointFrom. Fail loud on a user config error: there's
+			// no retry at this layer, and a silent miss would leave
+			// the guest unable to ssh out.
+			if req.Cfg.Project.SSH != nil && len(*req.Cfg.Project.SSH) > 0 {
+				if err := applySSHJumpBind(ctx, proxy, cfg.RuntimeDir(), req.Cfg, &info); err != nil {
+					http.Error(w, fmt.Sprintf("ssh cold-start: %v", err), http.StatusInternalServerError)
+					return
+				}
+			}
 			ironProxyState.put(req.Name, info)
 		}
 

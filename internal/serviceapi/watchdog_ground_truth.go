@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
 	"github.com/mdubb86/devm/internal/supervisor"
@@ -200,6 +201,22 @@ func (g *RealGroundTruth) RespawnProxyListeners(ctx context.Context, projectID s
 	}
 	info.GuestHTTPPort = guestHTTPPort
 	info.GuestHTTPSPort = guestHTTPSPort
+
+	// If cfg.project.ssh is non-empty, re-bind devm-jump + agent-
+	// bridge too and refresh info.MacPorts so the softnet FORWARDING
+	// re-push below admits the fresh ports. Unlike the rebind path
+	// (which fails loud), a resolve / known_hosts failure here only
+	// logs — Mac ssh state may have drifted since the project was
+	// configured, and a watchdog respawn must not strand the rest of
+	// the proxy pair.
+	if snap, serr := ReadStateSnapshot(g.Cfg, projectID); serr != nil {
+		daemonlog.Errorf("serviceapi: sshjump respawn: read snapshot for %s: %v", projectID, serr)
+	} else if snap != nil && snap.Cfg.Project.SSH != nil && len(*snap.Cfg.Project.SSH) > 0 {
+		if err := applySSHJumpBind(ctx, g.Proxy, g.Cfg.RuntimeDir(), snap.Cfg, &info); err != nil {
+			daemonlog.Errorf("serviceapi: sshjump respawn: project %s: %v", projectID, err)
+		}
+	}
+
 	ironProxyState.put(projectID, info)
 
 	sock, ok := softnetState.get(projectID)
