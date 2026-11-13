@@ -11,6 +11,7 @@
 //	gdevm upgrade
 //	gdevm recipes     list | get <name> | asset ls <name> | asset get <name> <path>
 //	gdevm serve
+//	gdevm ssh-agent-bridge --sock <path> --mac-host <ip> --mac-port <int>
 //
 // Each subcommand reaches the Mac-side daemon over softnet (propose,
 // passthrough) or reads the local guest command manifest
@@ -53,6 +54,8 @@ func main() {
 		os.Exit(recipesMain(args))
 	case "serve":
 		os.Exit(serveMain(args))
+	case "ssh-agent-bridge":
+		os.Exit(sshAgentBridgeMain(args))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -97,6 +100,9 @@ Subcommands:
                  recipes asset get <name> <path>
   serve        Run the guest-side state daemon in the foreground.
                Long-running; exits on SIGTERM/SIGINT. No args.
+  ssh-agent-bridge   Guest-side ssh-agent proxy. Listens on --sock,
+                     forwards each connection to --mac-host:--mac-port.
+                     Long-running; managed by systemd. No user-facing.
 
 Every subcommand carries its own -h/--help.`)
 }
