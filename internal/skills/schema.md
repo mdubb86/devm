@@ -52,6 +52,7 @@ Required. Identifies the project.
 | Field | Type | Required | Purpose |
 |---|---|---|---|
 | `name` | string | yes | Project name. Serves as both the devm-owned identity namespace (secrets, routes, state, iron-proxy, ssh keys) and the literal Tart VM instance name. Must contain no whitespace, `/`, `\`, or `..`. |
+| `ssh` | []string | no | Mac ssh config aliases the guest may reach through a per-project SSH jump. Each alias is resolved via `ssh -G` on the Mac at apply time; `ProxyJump` chains are rejected (no multi-hop in v1). The guest's ssh client config ships with one `Host <alias>` block per entry and `PreferredAuthentications publickey` on every target. |
 
 Validation: `name` is required.
 

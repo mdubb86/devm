@@ -2,10 +2,18 @@ package schema
 
 import (
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 )
+
+// DefaultExec runs an external command and returns stdout; the
+// production default for ResolveSSHTargets and CheckKnownHosts.
+// Tests swap this to inject fixtures.
+var DefaultExec = func(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
 
 var sshAliasPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}$`)
 

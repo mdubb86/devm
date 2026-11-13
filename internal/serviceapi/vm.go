@@ -1128,6 +1128,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		// listening on it.
 		if proxy != nil {
 			proxy.StopProjectListeners(req.Name)
+			proxy.StopSSHJumpListeners(req.Name)
 		}
 		closeGuestAPIListener(req.Name)
 		if req.Destroy {

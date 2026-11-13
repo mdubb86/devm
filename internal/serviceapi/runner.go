@@ -13,6 +13,7 @@ import (
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
@@ -89,6 +90,22 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 				if ok {
 					info.GuestHTTPPort = guestHTTPPort
 					info.GuestHTTPSPort = guestHTTPSPort
+
+					// Rebind this project's devm-jump + agent-bridge
+					// listeners for ssh-enabled projects. Must land
+					// BEFORE the setPolicy push below so endpointFrom's
+					// info.MacPorts read (via macPortsForProject in
+					// peers.go) picks up the fresh jump + bridge ports.
+					// Failures bail this attempt loud — a bad or missing
+					// ssh config is a user config error the retry loop
+					// won't resolve.
+					if sshErr := rebindSSHJump(ctx, proxy, cfg, projectID, &info); sshErr != nil {
+						s := RebindStatus{State: RebindFailed, Attempts: attempts, LastError: sshErr.Error()}
+						proxy.RecordRebindStatus(projectID, s)
+						daemonlog.Errorf("serviceapi: sshjump rebind: project %s FAILED: %v", projectID, sshErr)
+						return s
+					}
+
 					ironProxyState.put(projectID, info)
 					if sock, ok := softnetState.get(projectID); ok {
 						if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(projectID, info, ntpPort, cfg.TLD)); err != nil {
@@ -112,6 +129,40 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 	proxy.RecordRebindStatus(projectID, s)
 	daemonlog.Errorf("serviceapi: rebind: project %s FAILED after %d attempts: %v", projectID, len(rebindBackoff), lastErr)
 	return s
+}
+
+// rebindSSHJump reads this project's state snapshot, and if its
+// cfg.project.ssh list is non-empty, re-resolves the ssh targets,
+// re-verifies known_hosts, and re-binds the devm-jump + agent-bridge
+// listeners via proxy.StartSSHJumpListeners. On success, refreshes
+// info.MacPorts so the caller's upcoming ironProxyState.put carries
+// the newly bound jump + bridge ports into the softnet FORWARDING
+// push that follows (endpointFrom reads info.MacPorts).
+//
+// A missing or nil-SSH snapshot is a no-op. A bad `ssh -G` resolution,
+// a missing known_hosts entry, or a bind failure returns the error
+// unchanged — the brief's plan says loud-fail at rebind for a user
+// config error since the retry loop above can't repair it.
+func rebindSSHJump(ctx context.Context, proxy *ProxyServer, cfg identity.Config, projectID string, info *projectInfo) error {
+	snap, err := ReadStateSnapshot(cfg, projectID)
+	if err != nil {
+		return fmt.Errorf("ssh rebind: read snapshot: %w", err)
+	}
+	if snap == nil || snap.Cfg.Project.SSH == nil || len(*snap.Cfg.Project.SSH) == 0 {
+		return nil
+	}
+	resolved, err := schema.ResolveSSHTargets(*snap.Cfg.Project.SSH, schema.DefaultExec)
+	if err != nil {
+		return fmt.Errorf("ssh rebind: resolve: %w", err)
+	}
+	if err := schema.CheckKnownHosts(resolved, schema.DefaultExec); err != nil {
+		return fmt.Errorf("ssh rebind: known hosts: %w", err)
+	}
+	if _, _, err := proxy.StartSSHJumpListeners(ctx, projectID, cfg.RuntimeDir(), resolved); err != nil {
+		return fmt.Errorf("ssh rebind: bind: %w", err)
+	}
+	info.MacPorts = macPortsForProject(snap.Cfg, projectID, proxy)
+	return nil
 }
 
 // RunService composes the service's goroutines into an oklog/run
@@ -167,6 +218,14 @@ func RunService(ctx context.Context, cfg identity.Config, build Build) error {
 	// sockets and no listeners at daemon startup for a project that
 	// isn't running.
 	proxy := NewProxyServer(cfg, routes, ca)
+
+	// Wire devmbundle.SSHEnricher so every BuildInputFor call picks up
+	// SSH client config, jump key, known_hosts and agent-bridge unit
+	// bytes for projects whose cfg.project.ssh is non-empty. The
+	// closure captures proxy — BuildInputFor itself lives in a package
+	// that can't import serviceapi, so passing a *ProxyServer would
+	// create a cycle.
+	BindSSHBundleEnricher(proxy)
 
 	// HTTP API server (Ship 1) with the /routes/* admin endpoints
 	// registered on top.

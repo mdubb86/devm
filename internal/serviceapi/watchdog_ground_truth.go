@@ -189,6 +189,7 @@ func (g *RealGroundTruth) RespawnProxyListeners(ctx context.Context, projectID s
 	}
 
 	g.Proxy.StopProjectListeners(projectID)
+	g.Proxy.StopSSHJumpListeners(projectID)
 	if err := g.Proxy.StartProjectListeners(ctx, projectID, info.ProjectIP); err != nil {
 		return err
 	}
