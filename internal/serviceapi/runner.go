@@ -13,7 +13,6 @@ import (
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/identity"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
-	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/secret"
 	"github.com/mdubb86/devm/internal/supervisor"
 )
@@ -134,10 +133,10 @@ func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identit
 // rebindSSHJump reads this project's state snapshot, and if its
 // cfg.project.ssh list is non-empty, re-resolves the ssh targets,
 // re-verifies known_hosts, and re-binds the devm-jump + agent-bridge
-// listeners via proxy.StartSSHJumpListeners. On success, refreshes
-// info.MacPorts so the caller's upcoming ironProxyState.put carries
-// the newly bound jump + bridge ports into the softnet FORWARDING
-// push that follows (endpointFrom reads info.MacPorts).
+// listeners via applySSHJumpBind. On success, refreshes info.MacPorts
+// so the caller's upcoming ironProxyState.put carries the newly bound
+// jump + bridge ports into the softnet FORWARDING push that follows
+// (endpointFrom reads info.MacPorts).
 //
 // A missing or nil-SSH snapshot is a no-op. A bad `ssh -G` resolution,
 // a missing known_hosts entry, or a bind failure returns the error
@@ -151,17 +150,9 @@ func rebindSSHJump(ctx context.Context, proxy *ProxyServer, cfg identity.Config,
 	if snap == nil || snap.Cfg.Project.SSH == nil || len(*snap.Cfg.Project.SSH) == 0 {
 		return nil
 	}
-	resolved, err := schema.ResolveSSHTargets(*snap.Cfg.Project.SSH, schema.DefaultExec)
-	if err != nil {
-		return fmt.Errorf("ssh rebind: resolve: %w", err)
+	if err := applySSHJumpBind(ctx, proxy, cfg.RuntimeDir(), snap.Cfg, info); err != nil {
+		return fmt.Errorf("ssh rebind: %w", err)
 	}
-	if err := schema.CheckKnownHosts(resolved, schema.DefaultExec); err != nil {
-		return fmt.Errorf("ssh rebind: known hosts: %w", err)
-	}
-	if _, _, err := proxy.StartSSHJumpListeners(ctx, projectID, cfg.RuntimeDir(), resolved); err != nil {
-		return fmt.Errorf("ssh rebind: bind: %w", err)
-	}
-	info.MacPorts = macPortsForProject(snap.Cfg, projectID, proxy)
 	return nil
 }
 

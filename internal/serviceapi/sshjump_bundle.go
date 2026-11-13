@@ -2,6 +2,7 @@ package serviceapi
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,38 @@ import (
 	"github.com/mdubb86/devm/internal/schema"
 	"github.com/mdubb86/devm/internal/softnet"
 )
+
+// applySSHJumpBind resolves cfg.Project.SSH, verifies every target has
+// a Mac known_hosts entry, and binds this project's devm-jump +
+// agent-bridge listeners on the ProxyServer. On success, refreshes
+// info.MacPorts via macPortsForProject so the caller's softnet
+// FORWARDING push (which reads info.MacPorts via endpointFrom) admits
+// the auto-added jump + bridge ports.
+//
+// cfg.Project.SSH MUST be non-empty — callers gate on that. info may
+// be nil (the SSH listener bind + state update happens regardless;
+// macPorts refresh is skipped).
+//
+// Shared by the three lifecycle entry points: /vm/start (cold-start),
+// rebindProjectListeners (daemon-restart recovery), and
+// RespawnProxyListeners (watchdog-driven proxy respawn).
+func applySSHJumpBind(ctx context.Context, proxy *ProxyServer, runtimeDir string, cfg schema.Config, info *projectInfo) error {
+	projectID := cfg.Project.Name
+	resolved, err := schema.ResolveSSHTargets(*cfg.Project.SSH, schema.DefaultExec)
+	if err != nil {
+		return fmt.Errorf("resolve: %w", err)
+	}
+	if err := schema.CheckKnownHosts(resolved, schema.DefaultExec); err != nil {
+		return fmt.Errorf("known hosts: %w", err)
+	}
+	if _, _, err := proxy.StartSSHJumpListeners(ctx, projectID, runtimeDir, resolved); err != nil {
+		return fmt.Errorf("bind: %w", err)
+	}
+	if info != nil {
+		info.MacPorts = macPortsForProject(cfg, projectID, proxy)
+	}
+	return nil
+}
 
 // guestSSHAgentSock is the path the guest-side ssh-agent bridge binds
 // and that every target's IdentityAgent in the rendered ssh-client
