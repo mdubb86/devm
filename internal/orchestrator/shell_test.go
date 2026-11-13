@@ -145,6 +145,10 @@ func (f *fakeVMAdmin) EndProvisioning(_ context.Context, _ string) error {
 	return f.endProvisioningErr
 }
 
+func (f *fakeVMAdmin) SSHBundleFields(_ context.Context, _ string, _ schema.Config) (serviceapi.VMSSHBundleFieldsResponse, error) {
+	return serviceapi.VMSSHBundleFieldsResponse{}, nil
+}
+
 // appendLog writes a marker line into f.logPath, if set, interleaving with
 // the fake tart binary's own invocation log so a test can read one ordered
 // timeline across both fakes. Caller must hold f.mu.
