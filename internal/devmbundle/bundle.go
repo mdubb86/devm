@@ -41,6 +41,27 @@ type BuildInput struct {
 	SSHHostPriv         []byte
 	SSHHostPub          []byte
 
+	// SSHClientConfig is the body of /home/devm/.ssh/config. Nil = ssh:
+	// list empty/absent for this project — install.sh then removes the
+	// file and disables the agent-bridge unit.
+	SSHClientConfig []byte
+
+	// SSHJumpClientPriv is the PEM-encoded per-project ed25519 private
+	// key the guest uses to authenticate to this project's devm-jump.
+	// Nil when SSHClientConfig is nil.
+	SSHJumpClientPriv []byte
+
+	// SSHKnownHostsAppend is lines appended to /home/devm/.ssh/known_hosts
+	// (never overwritten). First line is the devm-jump server's host key;
+	// subsequent lines are each resolved target's known_hosts entry
+	// pulled from the Mac's ~/.ssh/known_hosts. Nil when SSHClientConfig
+	// is nil.
+	SSHKnownHostsAppend []byte
+
+	// SSHAgentBridgeUnit is the systemd unit body for gdevm
+	// ssh-agent-bridge. Nil when SSHClientConfig is nil.
+	SSHAgentBridgeUnit []byte
+
 	DockerRuncShim []byte
 	DockerCLIShim  []byte
 
@@ -186,6 +207,21 @@ func Build(in BuildInput) ([]byte, error) {
 	if len(in.SSHHostPub) > 0 {
 		if err := writeEntry(tw, "ssh/ssh_host_ed25519_key.pub", 0o644, in.SSHHostPub); err != nil {
 			return nil, err
+		}
+	}
+
+	if in.SSHClientConfig != nil {
+		if err := writeEntry(tw, "ssh-client/config", 0o600, in.SSHClientConfig); err != nil {
+			return nil, fmt.Errorf("write ssh-client/config: %w", err)
+		}
+		if err := writeEntry(tw, "ssh-client/devm-jump-id", 0o600, in.SSHJumpClientPriv); err != nil {
+			return nil, fmt.Errorf("write ssh-client/devm-jump-id: %w", err)
+		}
+		if err := writeEntry(tw, "ssh-client/known_hosts", 0o600, in.SSHKnownHostsAppend); err != nil {
+			return nil, fmt.Errorf("write ssh-client/known_hosts: %w", err)
+		}
+		if err := writeEntry(tw, "ssh-client/devm-ssh-agent-bridge.service", 0o644, in.SSHAgentBridgeUnit); err != nil {
+			return nil, fmt.Errorf("write ssh-client/devm-ssh-agent-bridge.service: %w", err)
 		}
 	}
 

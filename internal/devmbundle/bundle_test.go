@@ -678,6 +678,59 @@ func TestBuild_OmitsMutagenAgentWhenEmpty(t *testing.T) {
 	assert.NotContains(t, entries, "bin/mutagen-agent")
 }
 
+func TestBuild_EmitsSSHClientWhenPopulated(t *testing.T) {
+	in := BuildInput{
+		Cfg:                 schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:            "/tmp/repo",
+		MutagenVersion:      "0.18.1",
+		SSHClientConfig:     []byte("# ssh config body\n"),
+		SSHJumpClientPriv:   []byte("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"),
+		SSHKnownHostsAppend: []byte("ops.example.com ssh-ed25519 AAAA...\n"),
+		SSHAgentBridgeUnit:  []byte("[Unit]\nDescription=devm-ssh-agent-bridge\n"),
+	}
+	blob, err := Build(in)
+	require.NoError(t, err)
+	entries := readTar(t, blob)
+
+	want := []string{
+		"ssh-client/config",
+		"ssh-client/devm-jump-id",
+		"ssh-client/known_hosts",
+		"ssh-client/devm-ssh-agent-bridge.service",
+	}
+	for _, w := range want {
+		_, ok := entries[w]
+		assert.Truef(t, ok, "missing tar entry %s", w)
+	}
+	assert.Equal(t, int64(0o600), entries["ssh-client/devm-jump-id"].mode&0o777,
+		"devm-jump-id must be 0600")
+	assert.Equal(t, int64(0o600), entries["ssh-client/config"].mode&0o777,
+		"config must be 0600")
+	assert.Equal(t, int64(0o600), entries["ssh-client/known_hosts"].mode&0o777,
+		"known_hosts must be 0600")
+	assert.Equal(t, int64(0o644), entries["ssh-client/devm-ssh-agent-bridge.service"].mode&0o777,
+		"unit file must be 0644")
+}
+
+func TestBuild_OmitsSSHClientWhenNil(t *testing.T) {
+	in := BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		// leave SSHClient* fields nil
+	}
+	blob, err := Build(in)
+	require.NoError(t, err)
+	entries := readTar(t, blob)
+	for _, name := range []string{
+		"ssh-client/config", "ssh-client/devm-jump-id",
+		"ssh-client/known_hosts", "ssh-client/devm-ssh-agent-bridge.service",
+	} {
+		_, ok := entries[name]
+		assert.Falsef(t, ok, "entry %s must NOT appear when SSHClient* fields nil", name)
+	}
+}
+
 func TestBuild_RendersInstallShWithMutagenVersion(t *testing.T) {
 	in := BuildInput{
 		Cfg:              minimalCfg(t),

@@ -71,6 +71,21 @@ func TestRenderInstallScript_RejectsEmptyVersion(t *testing.T) {
 	assert.Contains(t, err.Error(), "mutagen version")
 }
 
+func TestRenderInstallScript_HasClientSSHSection(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	for _, want := range []string{
+		"client-SSH material",
+		"install -m 0600 -o devm -g devm /opt/devm/ssh-client/config /home/devm/.ssh/config",
+		"install -m 0600 -o devm -g devm /opt/devm/ssh-client/devm-jump-id /home/devm/.ssh/devm-jump-id",
+		"systemctl enable --now devm-ssh-agent-bridge.service",
+		"systemctl disable --now devm-ssh-agent-bridge.service",
+	} {
+		assert.Contains(t, s, want, "install.sh missing %q", want)
+	}
+}
+
 func TestRenderInstallScript_DifferentVersionsProduceDifferentOutput(t *testing.T) {
 	a, err := RenderInstallScript("0.18.1")
 	require.NoError(t, err)
