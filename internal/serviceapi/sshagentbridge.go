@@ -126,10 +126,18 @@ func (b *AgentBridge) ServeConn(guestConn net.Conn) {
 func DefaultSSHAuthSockResolver() func() string {
 	uid := strconv.Itoa(os.Getuid())
 	return func() string {
-		out, err := exec.Command("launchctl", "asuser", uid, "launchctl", "getenv", "SSH_AUTH_SOCK").Output()
+		cmd := exec.Command("launchctl", "asuser", uid, "launchctl", "getenv", "SSH_AUTH_SOCK")
+		out, err := cmd.CombinedOutput()
 		if err != nil {
+			daemonlog.Errorf("agent-bridge: launchctl asuser %s: rc=%v output=%q",
+				uid, err, string(out))
 			return ""
 		}
-		return strings.TrimSpace(string(out))
+		s := strings.TrimSpace(string(out))
+		if s == "" {
+			daemonlog.Errorf("agent-bridge: launchctl asuser %s returned empty (combined=%q)",
+				uid, string(out))
+		}
+		return s
 	}
 }
