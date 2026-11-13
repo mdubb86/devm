@@ -276,7 +276,7 @@ func RegisterApplyIronProxyHandler(s *Server, cfg identity.Config, locks *Projec
 				return
 			}
 			info, _ = ironProxyState.get(req.Name)
-			info.MacPorts = macPortsFromServices(snap.Cfg.MacServices)
+			info.MacPorts = macPortsForProject(snap.Cfg, req.Name, proxy)
 			ironProxyState.put(req.Name, info)
 			peersState.setPeers(req.Name, projectIDsFromPeerServices(snap.Cfg.PeerServices))
 		}

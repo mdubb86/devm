@@ -259,6 +259,120 @@ func TestEndpointFrom_IncludesMacPortsAndPeerHairpins(t *testing.T) {
 		"peer-hairpin map must use <peer>.<tld> keys and the peer's live GuestHTTPSPort")
 }
 
+// TestMacPortsForProject_AppendsSSHPortsWhenEnabled pins the
+// config-apply-side rule: when cfg.project.ssh is non-empty and the
+// per-project devm-jump + agent-bridge listeners are bound,
+// macPortsForProject returns the user-declared mac_services ports PLUS
+// those two auto-added ports. Without both conditions it returns just
+// the mac_services ports — nothing silently appends when ssh is unset,
+// and zero-port snapshots (listeners not yet bound) are skipped.
+func TestMacPortsForProject_AppendsSSHPortsWhenEnabled(t *testing.T) {
+	runtimeDir := t.TempDir()
+	caDir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, caDir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
+
+	jumpPort, bridgePort, err := proxy.StartSSHJumpListeners(
+		context.Background(), "projX", runtimeDir,
+		[]schema.ResolvedSSHTarget{{Alias: "a", HostName: "127.0.0.1", Port: 22}},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { proxy.StopSSHJumpListeners("projX") })
+	require.NotZero(t, jumpPort)
+	require.NotZero(t, bridgePort)
+
+	ssh := []string{"a"}
+	cfgWithSSH := schema.Config{
+		Project: schema.Project{Name: "projX", SSH: &ssh},
+		MacServices: []*schema.MacService{
+			{Name: "api", Port: 3000},
+			{Name: "db", Port: 5432},
+		},
+	}
+
+	gotWithSSH := macPortsForProject(cfgWithSSH, "projX", proxy)
+	assert.Contains(t, gotWithSSH, 3000)
+	assert.Contains(t, gotWithSSH, 5432)
+	assert.Contains(t, gotWithSSH, jumpPort,
+		"macPortsForProject must include the bound jump port when ssh is set")
+	assert.Contains(t, gotWithSSH, bridgePort,
+		"macPortsForProject must include the bound agent-bridge port when ssh is set")
+
+	// SSH nil → no auto-added ports.
+	cfgNoSSH := schema.Config{
+		Project:     schema.Project{Name: "projX"},
+		MacServices: cfgWithSSH.MacServices,
+	}
+	gotNoSSH := macPortsForProject(cfgNoSSH, "projX", proxy)
+	assert.Equal(t, []int{3000, 5432}, gotNoSSH)
+
+	// SSH empty slice → no auto-added ports (feature off).
+	empty := []string{}
+	cfgEmptySSH := cfgWithSSH
+	cfgEmptySSH.Project.SSH = &empty
+	gotEmptySSH := macPortsForProject(cfgEmptySSH, "projX", proxy)
+	assert.Equal(t, []int{3000, 5432}, gotEmptySSH)
+
+	// SSH set but listeners not bound (fresh project id) → skip the
+	// zero snapshot entirely, no zero ports leak into the slice.
+	gotUnbound := macPortsForProject(cfgWithSSH, "projY-unbound", proxy)
+	assert.Equal(t, []int{3000, 5432}, gotUnbound)
+
+	// proxy == nil (adoption rehydrates MacPorts before any SSH-jump
+	// listener has been rebound) → just the mac_services ports; the
+	// post-rebind push adds the auto-added ports.
+	gotNilProxy := macPortsForProject(cfgWithSSH, "projX", nil)
+	assert.Equal(t, []int{3000, 5432}, gotNilProxy)
+}
+
+// TestEndpointFrom_IncludesSSHPortsWhenSet pins that endpointFrom
+// plumbs every entry of info.MacPorts through — including the
+// auto-added devm-jump + agent-bridge ports a config-apply pass stores
+// there when cfg.project.ssh is non-empty. No filtering, no ordering
+// assumption: softnet treats every entry the same (NATAliasIP admit
+// pin in the softnet contract tests). The config-apply side owns
+// deciding which ports land in the slice; endpointFrom's job here is
+// just the passthrough.
+func TestEndpointFrom_IncludesSSHPortsWhenSet(t *testing.T) {
+	origIron := ironProxyState
+	origPeers := peersState
+	ironProxyState = newIronProxyStore()
+	peersState = newPeersIndex()
+	t.Cleanup(func() {
+		ironProxyState = origIron
+		peersState = origPeers
+	})
+
+	info := projectInfo{
+		HTTPPort:  1,
+		HTTPSPort: 2,
+		DNSPort:   3,
+		// 123 stands in for jumpPort, 456 for agentBridgePort, 3000
+		// for a user-declared mac_services entry.
+		MacPorts: []int{123, 456, 3000},
+	}
+	ep := endpointFrom("projX", info, 51234, "test")
+
+	gotHas := func(p int) bool {
+		for _, mp := range ep.MacPorts {
+			if mp == p {
+				return true
+			}
+		}
+		return false
+	}
+	if !gotHas(123) {
+		t.Errorf("endpoint MacPorts missing jump port 123, got %v", ep.MacPorts)
+	}
+	if !gotHas(456) {
+		t.Errorf("endpoint MacPorts missing bridge port 456, got %v", ep.MacPorts)
+	}
+	if !gotHas(3000) {
+		t.Errorf("endpoint MacPorts missing user-declared mac_services 3000, got %v", ep.MacPorts)
+	}
+}
+
 // TestVMStart_RegistersReservedHealthRoute pins that after a successful
 // /vm/start, the routes table has an entry for _devm.<project>.test
 // pointing at 127.0.0.1:gdevmServePort inside the guest — the route the

@@ -254,7 +254,10 @@ func recoverProjectState(cfg identity.Config, routes *Routes, projectID string) 
 	// authorized Mac-side ports and declared peers after a daemon
 	// restart, instead of silently dropping those forwards until the
 	// next /vm/start.
-	info.MacPorts = macPortsFromServices(snap.Cfg.MacServices)
+	// proxy is nil here: adoption runs before the SSH-jump listener
+	// rebind pass, so no live snapshot would carry non-zero jump /
+	// bridge ports anyway. The post-rebind policy push lands them.
+	info.MacPorts = macPortsForProject(snap.Cfg, projectID, nil)
 	ironProxyState.put(projectID, info)
 	peersState.setPeers(projectID, projectIDsFromPeerServices(snap.Cfg.PeerServices))
 

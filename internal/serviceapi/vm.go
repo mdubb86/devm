@@ -786,7 +786,7 @@ func RegisterVMHandlers(s *Server, cfg identity.Config, sup *supervisor.Supervis
 		info.TunnelPort = tunnelPort
 		info.DNSPort = dnsPort
 		info.GuestAPIPort = guestAPIPort
-		info.MacPorts = macPortsFromServices(req.Cfg.MacServices)
+		info.MacPorts = macPortsForProject(req.Cfg, req.Name, proxy)
 		ironProxyState.put(req.Name, info)
 
 		// Register this project's declared peers in the peers index so
