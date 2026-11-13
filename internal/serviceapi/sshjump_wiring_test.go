@@ -2,9 +2,6 @@ package serviceapi
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/pem"
 	"net"
 	"strconv"
 	"testing"
@@ -71,7 +68,6 @@ func TestStartSSHJumpListeners_AllowsConnectionWithProjectKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = privBytes // keep the signer path in sync if we change encoding
 	signer, err := ssh.ParsePrivateKey(privBytes)
 	if err != nil {
 		t.Fatal(err)
@@ -100,10 +96,3 @@ func TestStartSSHJumpListeners_AllowsConnectionWithProjectKey(t *testing.T) {
 	}
 	conn.Close()
 }
-
-// Suppress unused imports in alternative builds.
-var (
-	_ = ed25519.PublicKey{}
-	_ = rand.Reader
-	_ = pem.EncodeToMemory
-)

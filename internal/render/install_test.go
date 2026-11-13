@@ -84,6 +84,30 @@ func TestRenderInstallScript_HasClientSSHSection(t *testing.T) {
 	} {
 		assert.Contains(t, s, want, "install.sh missing %q", want)
 	}
+
+	// The if-branch installs the unit and then enables it — systemd must
+	// have reloaded first or `enable` picks up the old path. The else-
+	// branch removes the unit file and must reload after to drop the
+	// cached path reference, or `systemctl status` keeps pointing at a
+	// file that no longer exists.
+	installUnitIdx := strings.Index(s, "install -m 0644 /opt/devm/ssh-client/devm-ssh-agent-bridge.service /etc/systemd/system/")
+	require.NotEqual(t, -1, installUnitIdx, "unit install step must be present")
+	enableIdx := strings.Index(s, "systemctl enable --now devm-ssh-agent-bridge.service")
+	require.NotEqual(t, -1, enableIdx, "enable step must be present")
+	reloadBeforeEnable := strings.Index(s[installUnitIdx:enableIdx], "systemctl daemon-reload")
+	assert.NotEqual(t, -1, reloadBeforeEnable,
+		"daemon-reload must run between install and enable (if-branch)")
+
+	rmIdx := strings.Index(s, "rm -f /etc/systemd/system/devm-ssh-agent-bridge.service")
+	require.NotEqual(t, -1, rmIdx, "else-branch rm step must be present")
+	// Pin the reload to the else-branch itself (before the closing `fi`
+	// of the client-SSH block) so we don't silently match a later
+	// daemon-reload from the gdevm-serve or filestash sections.
+	elseEnd := strings.Index(s[rmIdx:], "\nfi\n")
+	require.NotEqual(t, -1, elseEnd, "else-branch close must follow the rm")
+	elseBranch := s[rmIdx : rmIdx+elseEnd]
+	assert.Contains(t, elseBranch, "systemctl daemon-reload",
+		"daemon-reload must run inside the else-branch, after rm -f")
 }
 
 func TestRenderInstallScript_DifferentVersionsProduceDifferentOutput(t *testing.T) {

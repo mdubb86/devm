@@ -45,3 +45,27 @@ func TestBuildInputFor_IncludesDockerShimsWhenEnabled(t *testing.T) {
 	assert.NotEmpty(t, in.DockerRuncShim, "docker: true → runc shim populated")
 	assert.NotEmpty(t, in.DockerCLIShim, "docker: true → cli shim populated")
 }
+
+func TestBuildInputFor_FailsLoudlyWhenSSHConfiguredButEnricherUnbound(t *testing.T) {
+	// SSHEnricher is a package var bound by RunService at daemon start.
+	// Save and restore so other tests aren't affected.
+	prev := SSHEnricher
+	SSHEnricher = nil
+	t.Cleanup(func() { SSHEnricher = prev })
+
+	ssh := []string{"host1"}
+	cfg := schema.Config{
+		Project: schema.Project{
+			Name: "p",
+			SSH:  &ssh,
+		},
+	}
+
+	_, err := BuildInputFor(
+		cfg, "/tmp/repo", "/tmp/rt", "e2e.test",
+		nil, nil, nil, nil,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SSHEnricher not bound",
+		"missing enricher must be a loud failure, not a silent empty bundle")
+}
