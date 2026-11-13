@@ -26,9 +26,6 @@ import (
 	"sync"
 
 	"github.com/mdubb86/devm/internal/devmbundle"
-	"github.com/mdubb86/devm/internal/docker"
-	"github.com/mdubb86/devm/internal/guestbin"
-	"github.com/mdubb86/devm/internal/mutagen"
 	"github.com/mdubb86/devm/internal/render"
 	"github.com/mdubb86/devm/internal/repohelpers"
 	"github.com/mdubb86/devm/internal/sandbox/tart"
@@ -381,36 +378,23 @@ func (p *Provisioner) repoBindings() []render.RepoBinding {
 	return bindings
 }
 
-// buildBundle builds the devm-owned artifact bundle tar (env file,
-// with-devm-env wrapper, install-templates.sh dispatcher, per-template
-// installers, systemd units, ssh material, CA, docker shims when declared,
-// install.sh). The guest's install.sh extracts it to /opt/devm.
+// buildBundle builds the devm-owned artifact bundle tar via the
+// shared devmbundle.BuildInputFor so the SSH enricher, docker shims,
+// and every future BuildInput field flow through one path instead
+// of a provisioning-only copy.
 func (p *Provisioner) buildBundle() ([]byte, error) {
-	commandsManifest, err := render.RenderCommandsManifest(p.Cfg, p.MacCwd)
+	in, err := devmbundle.BuildInputFor(
+		p.Cfg,
+		p.WorkspaceVMPath,
+		p.DaemonRuntimeDir,
+		p.TLD,
+		p.CARootPEM,
+		p.SSHAuthorizedPubkey,
+		p.SSHHostPriv,
+		p.SSHHostPub,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("render commands manifest: %w", err)
-	}
-	mutagenAgent, err := mutagen.LinuxArm64Agent()
-	if err != nil {
-		return nil, fmt.Errorf("extract mutagen agent: %w", err)
-	}
-	in := devmbundle.BuildInput{
-		Cfg:                    p.Cfg,
-		RepoRoot:               p.WorkspaceVMPath,
-		DaemonRuntimeDir:       p.DaemonRuntimeDir,
-		TLD:                    p.TLD,
-		CARootPEM:              p.CARootPEM,
-		SSHAuthorizedPubkey:    p.SSHAuthorizedPubkey,
-		SSHHostPriv:            p.SSHHostPriv,
-		SSHHostPub:             p.SSHHostPub,
-		Gdevm:                  guestbin.Gdevm(),
-		CommandsManifest:       commandsManifest,
-		MutagenAgentLinuxArm64: mutagenAgent,
-		MutagenVersion:         strings.TrimPrefix(mutagen.EmbeddedVersion(), "v"),
-	}
-	if p.Cfg.Docker {
-		in.DockerRuncShim = docker.Shim()
-		in.DockerCLIShim = docker.DockerShim()
+		return nil, fmt.Errorf("build input: %w", err)
 	}
 	body, err := devmbundle.Build(in)
 	if err != nil {
