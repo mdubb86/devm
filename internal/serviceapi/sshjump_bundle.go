@@ -85,10 +85,10 @@ func computeSSHBundleFields(cfg schema.Config, runtimeDir string, proxy *ProxySe
 	}
 
 	// Build known_hosts body: devm-jump host-key line first, then one
-	// line per resolved target pulled from the Mac's ~/.ssh/known_hosts
-	// via ssh-keygen -F. CheckKnownHosts has already verified each
-	// target has at least one entry, but a transient ssh-keygen error
-	// on an individual target just gets skipped — the guest will
+	// line per resolved target pulled from the Mac via `ssh-keygen -F
+	// <key> -f <file>`. CheckKnownHosts has already verified each
+	// target matches somewhere, but a transient ssh-keygen error on an
+	// individual target just gets skipped — the guest will
 	// StrictHostKeyChecking=ask on first reach, which is the same
 	// behavior a Mac terminal would show.
 	var khBuf bytes.Buffer
@@ -97,17 +97,27 @@ func computeSSHBundleFields(cfg schema.Config, runtimeDir string, proxy *ProxySe
 		softnet.NATAliasIP, snap.JumpPort,
 		ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))
 	for _, r := range resolved {
-		out, err := schema.DefaultExec("ssh-keygen", "-F", r.HostName)
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
+		key, files := schema.LookupKeyAndFiles(r)
+		for _, f := range files {
+			out, err := schema.DefaultExec("ssh-keygen", "-F", key, "-f", f)
+			if err != nil {
 				continue
 			}
-			khBuf.WriteString(line)
-			khBuf.WriteByte('\n')
+			for _, line := range strings.Split(string(out), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				// The guest's ssh is configured with the same
+				// HostKeyAlias we probe under, so the line must be
+				// keyed by `key`. ssh-keygen -F returns the hostnames
+				// field verbatim; rewrite the first field to `key` if
+				// `key` is not already one of its comma-separated
+				// entries.
+				khBuf.WriteString(rekeyKnownHostsLine(line, key))
+				khBuf.WriteByte('\n')
+			}
+			break
 		}
 	}
 
@@ -117,4 +127,24 @@ func computeSSHBundleFields(cfg schema.Config, runtimeDir string, proxy *ProxySe
 		KnownHostsAppend: khBuf.Bytes(),
 		AgentBridgeUnit:  render.SSHAgentBridgeUnit(softnet.NATAliasIP, snap.BridgePort, guestSSHAgentSock),
 	}, nil
+}
+
+// rekeyKnownHostsLine rewrites the hostnames field of a known_hosts
+// line to `key` when `key` isn't already one of its comma-separated
+// entries. A known_hosts line's first field is comma-separated
+// hostnames/patterns; the rest (key type + blob [+ comment]) is
+// untouched.
+func rekeyKnownHostsLine(line, key string) string {
+	sp := strings.IndexByte(line, ' ')
+	if sp <= 0 {
+		return line
+	}
+	hostsField := line[:sp]
+	rest := line[sp:]
+	for _, h := range strings.Split(hostsField, ",") {
+		if h == key {
+			return line
+		}
+	}
+	return key + rest
 }
