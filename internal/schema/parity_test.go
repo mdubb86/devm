@@ -57,7 +57,9 @@ func TestOverrideMirrorsBase(t *testing.T) {
 			name:     "Project",
 			base:     reflect.TypeOf(schema.Project{}),
 			override: reflect.TypeOf(schema.ProjectOverride{}),
-			denylist: nil,
+			denylist: map[string]string{
+				"SSH": "reach authorizations to Mac ssh aliases — project-wide trust, same character as Guest/MacServices/PeerServices; a per-user override would silently widen the guest's ssh reach past what the project agrees on.",
+			},
 		},
 		{
 			name:     "Network",

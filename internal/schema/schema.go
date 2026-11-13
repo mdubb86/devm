@@ -486,6 +486,12 @@ func (s Service) Validate() error {
 
 type Project struct {
 	Name string `yaml:"name"`
+
+	// SSH lists Mac ssh config aliases the guest may reach through the
+	// per-project devm-jump. Each alias is resolved via `ssh -G` on the
+	// Mac at apply time; the resolved HostName/Port/User is what the
+	// guest's ssh config carries. Nil = feature disabled for this project.
+	SSH *[]string `yaml:"ssh,omitempty"`
 }
 
 func (p Project) Validate() error {
@@ -1383,6 +1389,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validatePeerServicesShape(); err != nil {
+		return err
+	}
+	if err := c.validateSSHTargets(); err != nil {
 		return err
 	}
 	if err := c.validateLabels(""); err != nil {
