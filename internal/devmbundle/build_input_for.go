@@ -52,7 +52,10 @@ func BuildInputFor(
 		in.DockerRuncShim = docker.Shim()
 		in.DockerCLIShim = docker.DockerShim()
 	}
-	if cfg.Project.SSH != nil && len(*cfg.Project.SSH) > 0 && SSHEnricher != nil {
+	if cfg.Project.SSH != nil && len(*cfg.Project.SSH) > 0 {
+		if SSHEnricher == nil {
+			return BuildInput{}, fmt.Errorf("ssh bundle fields: SSHEnricher not bound (daemon wiring bug)")
+		}
 		f, err := SSHEnricher(cfg, daemonRuntimeDir)
 		if err != nil {
 			return BuildInput{}, fmt.Errorf("ssh bundle fields: %w", err)

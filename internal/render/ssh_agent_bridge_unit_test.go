@@ -17,6 +17,7 @@ func TestSSHAgentBridgeUnit_HasKeyDirectives(t *testing.T) {
 		"Restart=on-failure",
 		"User=devm",
 		"Group=devm",
+		"RuntimeDirectory=devm",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q", want)

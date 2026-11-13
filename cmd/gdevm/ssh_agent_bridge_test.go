@@ -59,6 +59,14 @@ func TestSSHAgentBridgeMain_SplicesBytes(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	fi, err := os.Stat(sock)
+	if err != nil {
+		t.Fatalf("socket never appeared: %v", err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("socket mode %o, want 0600", fi.Mode().Perm())
+	}
+
 	c, err := net.Dial("unix", sock)
 	if err != nil {
 		t.Fatal(err)

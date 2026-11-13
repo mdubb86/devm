@@ -3,6 +3,7 @@ package serviceapi
 import (
 	"bytes"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -67,6 +68,21 @@ func TestReadAgentMessage_RejectsZeroLength(t *testing.T) {
 	_, _, err := ReadAgentMessage(bytes.NewReader(raw))
 	if err == nil {
 		t.Fatal("want error on zero-length frame")
+	}
+}
+
+func TestReadAgentMessage_RejectsOversizedLength(t *testing.T) {
+	// length=262145 (one past AGENT_MAX_LEN) must be rejected at the
+	// length check before any body allocation. We deliberately write
+	// only 5 bytes (header + type) — if the reader allocated first it
+	// would block or EOF instead of returning our length error.
+	raw := []byte{0x00, 0x04, 0x00, 0x01, AgentSignRequest}
+	_, _, err := ReadAgentMessage(bytes.NewReader(raw))
+	if err == nil {
+		t.Fatal("want error on oversized length")
+	}
+	if !strings.Contains(err.Error(), "exceeds max") {
+		t.Fatalf("want error containing %q, got %v", "exceeds max", err)
 	}
 }
 

@@ -14,6 +14,12 @@ const (
 	AgentSignRequest       byte = 13
 )
 
+// agentMaxMessageLen is OpenSSH's AGENT_MAX_LEN. A compromised guest
+// can otherwise send any uint32 and force an unbounded allocation per
+// stream before any read of the body — enough to OOM the daemon in
+// parallel.
+const agentMaxMessageLen = 262144
+
 // AgentFilterVerdict is what the Mac-side bridge does with a message
 // read from the guest.
 type AgentFilterVerdict int
@@ -51,6 +57,9 @@ func ReadAgentMessage(r io.Reader) (byte, []byte, error) {
 	}
 	if ln == 0 {
 		return 0, nil, fmt.Errorf("agent frame: zero length")
+	}
+	if ln > agentMaxMessageLen {
+		return 0, nil, fmt.Errorf("agent frame: length %d exceeds max %d", ln, agentMaxMessageLen)
 	}
 	buf := make([]byte, ln)
 	if _, err := io.ReadFull(r, buf); err != nil {

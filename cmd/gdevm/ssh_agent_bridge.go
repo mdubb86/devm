@@ -59,6 +59,7 @@ func spliceToMac(guest net.Conn, macHost string, macPort int) {
 	defer guest.Close()
 	mac, err := net.Dial("tcp", net.JoinHostPort(macHost, strconv.Itoa(macPort)))
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "ssh-agent-bridge: dial %s:%d: %v\n", macHost, macPort, err)
 		return
 	}
 	defer mac.Close()

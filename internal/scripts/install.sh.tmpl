@@ -141,6 +141,7 @@ if [ -f /opt/devm/ssh-client/config ]; then
 else
     systemctl disable --now devm-ssh-agent-bridge.service 2>/dev/null || true
     rm -f /etc/systemd/system/devm-ssh-agent-bridge.service
+    systemctl daemon-reload
     rm -f /home/devm/.ssh/config /home/devm/.ssh/devm-jump-id
 fi
 
