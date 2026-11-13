@@ -197,6 +197,32 @@ func macPortsFromServices(ms []*schema.MacService) []int {
 	return out
 }
 
+// macPortsForProject assembles the full ForwardTargets.MacPorts set
+// softnet should authorize from this project's guest: user-declared
+// mac_services ports, plus the per-project devm-jump + agent-bridge
+// ports when cfg.project.ssh is non-empty and those listeners are
+// bound. proxy may be nil (daemon-restart adoption rehydrates MacPorts
+// before any SSH-jump listener has been rebound); in that case only
+// the mac_services ports are returned and the post-rebind policy push
+// adds the auto-added ports once the listeners are up.
+func macPortsForProject(cfg schema.Config, projectID string, proxy *ProxyServer) []int {
+	ports := macPortsFromServices(cfg.MacServices)
+	if proxy == nil {
+		return ports
+	}
+	if cfg.Project.SSH == nil || len(*cfg.Project.SSH) == 0 {
+		return ports
+	}
+	snap := proxy.ProjectSnapshot(projectID)
+	if snap.JumpPort > 0 {
+		ports = append(ports, snap.JumpPort)
+	}
+	if snap.BridgePort > 0 {
+		ports = append(ports, snap.BridgePort)
+	}
+	return ports
+}
+
 // validatePeerServicesCrossProject fails loud on two conditions the
 // schema-level shape validator can't catch (it has no visibility into
 // the set of registered projects):
