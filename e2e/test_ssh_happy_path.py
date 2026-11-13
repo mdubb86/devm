@@ -1,17 +1,16 @@
 """ssh: feature — happy path through a real VM.
 
-Guest SSHes to itself via the Mac loopback, reusing the inbound-SSH
-spec's existing `Host devm-<vm-name>` alias as the target. No new Mac
-ssh config mutation — the alias already exists.
-
-Setup only needs the per-project client key in Mac's ssh-agent so the
-IdentityAgent path has something to serve.
+Guest SSHes to a per-test fixture sshd on Mac loopback via the
+project's jump. The fixture pre-primes Mac's ssh_config + known_hosts
+for the alias, so CheckKnownHosts passes at cold-start precondition
+time (the self-loopback `devm-<vm>` cold-start chicken-and-egg is
+side-stepped).
 """
 from __future__ import annotations
 
 import pytest
 
-from helpers import e2e_project, ssh_add_and_cleanup
+from helpers import e2e_project, local_sshd_target
 
 pytestmark = pytest.mark.devm
 
@@ -19,21 +18,16 @@ pytestmark = pytest.mark.devm
 @pytest.mark.slow
 @pytest.mark.timeout(900)
 def test_ssh_happy_path():
-    with e2e_project("ssh-happy") as p:
-        vm_alias = f"devm-{p.vm_name}"
-        # Project declares the inbound-SSH alias as its ssh: list entry.
-        p.set_devm_yaml({"ssh": [vm_alias]})
+    with e2e_project("ssh-happy") as p, local_sshd_target() as alias:
+        p.set_devm_yaml({"ssh": [alias]})
         p.start()
-        # Load the per-project client key into Mac's ssh-agent for the
-        # duration of this test.
-        with ssh_add_and_cleanup(p.client_key_path):
-            out = p.run_in_guest(
-                ["ssh", vm_alias, "echo", "hello-from-ssh-target"],
-            )
-            assert "hello-from-ssh-target" in out.stdout, (
-                f"ssh output missing marker: stdout={out.stdout!r} "
-                f"stderr={out.stderr!r}"
-            )
+        out = p.run_in_guest(
+            ["ssh", alias, "echo", "hello-from-ssh-target"],
+        )
+        assert "hello-from-ssh-target" in out.stdout, (
+            f"ssh output missing marker: stdout={out.stdout!r} "
+            f"stderr={out.stderr!r}"
+        )
         # Global Constraint: guest holds exactly one key — the per-
         # project devm-jump-id. Reject any other private-key file in
         # the guest's ~/.ssh.

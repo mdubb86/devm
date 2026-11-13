@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 
-from helpers import e2e_project, ssh_add_and_cleanup
+from helpers import e2e_project, local_sshd_target
 
 pytestmark = pytest.mark.devm
 
@@ -83,13 +83,11 @@ print("SIGNATURE_OK", len(sig_blob))
 @pytest.mark.slow
 @pytest.mark.timeout(900)
 def test_signing_oracle_pinned():
-    with e2e_project("ssh-signing-oracle") as p:
-        vm_alias = f"devm-{p.vm_name}"
-        p.set_devm_yaml({"ssh": [vm_alias]})
+    with e2e_project("ssh-signing-oracle") as p, local_sshd_target() as alias:
+        p.set_devm_yaml({"ssh": [alias]})
         p.start()
-        with ssh_add_and_cleanup(p.client_key_path):
-            res = p.run_in_guest(["python3", "-c", _GUEST_SIGN_PROBE])
-            assert res.stdout.startswith("SIGNATURE_OK "), (
-                "signing oracle broken — see pin comment at top of file.\n"
-                f"stdout={res.stdout!r} stderr={res.stderr!r}"
-            )
+        res = p.run_in_guest(["python3", "-c", _GUEST_SIGN_PROBE])
+        assert res.stdout.startswith("SIGNATURE_OK "), (
+            "signing oracle broken — see pin comment at top of file.\n"
+            f"stdout={res.stdout!r} stderr={res.stderr!r}"
+        )
