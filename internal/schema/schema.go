@@ -523,6 +523,7 @@ var topLevelKnownFields = []string{
 	"project", "base_image", "docker", "network", "env",
 	"services", "path", "packages", "disk", "memory", "cpu",
 	"volumes", "repos", "guest", "mac_services", "peer_services",
+	"ssh",
 }
 
 func CheckUnknownKeys(data []byte) error {
