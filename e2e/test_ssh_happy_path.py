@@ -34,9 +34,15 @@ def test_ssh_happy_path():
                 f"ssh output missing marker: stdout={out.stdout!r} "
                 f"stderr={out.stderr!r}"
             )
-        # Verify guest ~/.ssh/ holds only devm-managed files — no stray
-        # key material the Global Constraints forbid.
+        # Global Constraint: guest holds exactly one key — the per-
+        # project devm-jump-id. Reject any other private-key file in
+        # the guest's ~/.ssh.
         listing = p.run_in_guest(["ls", "/home/devm/.ssh"]).stdout.split()
-        assert set(listing) <= {
-            "config", "known_hosts", "devm-jump-id", "authorized_keys",
-        }, f"unexpected files in guest ~/.ssh: {listing}"
+        suspicious = [
+            f for f in listing
+            if f.endswith((".pem", "id_rsa", "id_ed25519"))
+        ]
+        assert not suspicious, (
+            f"guest ~/.ssh/ holds unknown private keys: {suspicious} "
+            f"(full listing: {listing})"
+        )

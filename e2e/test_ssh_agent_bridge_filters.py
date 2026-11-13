@@ -8,6 +8,8 @@ ADD_IDENTITY and must bounce.
 """
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from helpers import e2e_project, ssh_add_and_cleanup
@@ -22,17 +24,25 @@ def test_agent_bridge_filters():
         vm_alias = f"devm-{p.vm_name}"
         p.set_devm_yaml({"ssh": [vm_alias]})
         p.start()
+        # Derive the exact pubkey line the Mac's agent will return for
+        # this project — asserting its presence is stronger than just
+        # matching any ed25519 key in the user's Mac agent (which may
+        # hold unrelated identities).
+        project_pub = subprocess.run(
+            ["ssh-keygen", "-y", "-f", str(p.client_key_path)],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
         with ssh_add_and_cleanup(p.client_key_path):
             # ssh-add -L issues REQUEST_IDENTITIES — must succeed and
-            # list the Mac's pubkey (the per-project jump key we just
-            # loaded).
+            # include THIS project's pubkey in the output.
             res = p.run_in_guest(
                 ["ssh-add", "-L"],
                 env={"SSH_AUTH_SOCK": "/run/devm/ssh-agent.sock"},
             )
-            assert "ssh-ed25519" in res.stdout or "ssh-rsa" in res.stdout, (
-                f"ssh-add -L must list Mac agent keys: "
-                f"stdout={res.stdout!r} stderr={res.stderr!r}"
+            assert project_pub in res.stdout, (
+                f"ssh-add -L must include this project's pubkey "
+                f"{project_pub!r}; stdout={res.stdout!r} "
+                f"stderr={res.stderr!r}"
             )
             # ssh-add <keyfile> issues ADD_IDENTITY — must fail.
             p.run_in_guest(
