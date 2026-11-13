@@ -52,5 +52,15 @@ func BuildInputFor(
 		in.DockerRuncShim = docker.Shim()
 		in.DockerCLIShim = docker.DockerShim()
 	}
+	if cfg.Project.SSH != nil && len(*cfg.Project.SSH) > 0 && SSHEnricher != nil {
+		f, err := SSHEnricher(cfg, daemonRuntimeDir)
+		if err != nil {
+			return BuildInput{}, fmt.Errorf("ssh bundle fields: %w", err)
+		}
+		in.SSHClientConfig = f.ClientConfig
+		in.SSHJumpClientPriv = f.JumpClientPriv
+		in.SSHKnownHostsAppend = f.KnownHostsAppend
+		in.SSHAgentBridgeUnit = f.AgentBridgeUnit
+	}
 	return in, nil
 }
