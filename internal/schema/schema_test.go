@@ -464,6 +464,8 @@ packages:
   - jq
 volumes:
   data: /var/data
+ssh:
+  - myhost
 `)
 	require.NoError(t, CheckUnknownKeys(yamlBlob))
 }
