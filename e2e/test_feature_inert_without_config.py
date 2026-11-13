@@ -32,6 +32,13 @@ _SENTINEL_PORTS = (49222, 51717, 55123, 58777, 61321, 64501)
 def test_feature_inert():
     with e2e_project("ssh-inert") as p:
         # No ssh: key in devm.yaml — the helper's default write omits it.
+        # netcat-openbsd + Debian mirror allow is needed for the (c)+(d)
+        # from-guest probe; the base image doesn't ship nc. Pattern
+        # mirrors test_72_systemd_service.py:44-45.
+        p.set_devm_yaml({
+            "packages": ["netcat-openbsd"],
+            "network": {"allow": ["deb.debian.org", "security.debian.org"]},
+        })
         p.start()
 
         # (a) Guest-side agent-bridge unit NOT enabled.
@@ -55,6 +62,17 @@ def test_feature_inert():
         # no NAT entry for one. From the guest, probe the NAT alias on
         # a handful of ports across the ephemeral range. If either (c)
         # or (d) were violated, at least one probe would succeed.
+        #
+        # Preflight: fail loud if `nc` isn't actually installed. Without
+        # it, `timeout nc …` returns 127, the loop's `exit=0 not in
+        # stdout` is trivially true, and the test passes silently
+        # even with the feature live.
+        pre = p.run_in_guest(["which", "nc"], check=False)
+        assert pre.returncode == 0 and pre.stdout.strip(), (
+            f"nc missing in guest — packages install failed or the "
+            f"base image dropped netcat-openbsd. probe would silently "
+            f"pass; aborting. stdout={pre.stdout!r} stderr={pre.stderr!r}"
+        )
         for port in _SENTINEL_PORTS:
             res = p.run_in_guest(
                 ["sh", "-c",

@@ -19,8 +19,14 @@ def test_rsync_over_ssh():
     with e2e_project("ssh-rsync") as p:
         vm_alias = f"devm-{p.vm_name}"
         # rsync isn't in the base guest image; declare it so the guest
-        # installs it during provision.
-        p.set_devm_yaml({"ssh": [vm_alias], "packages": ["rsync"]})
+        # installs it during provision. network.allow pattern mirrors
+        # test_72_systemd_service.py:44-45 — apt needs the Debian
+        # mirror hosts reachable.
+        p.set_devm_yaml({
+            "ssh": [vm_alias],
+            "packages": ["rsync"],
+            "network": {"allow": ["deb.debian.org", "security.debian.org"]},
+        })
         p.start()
         with ssh_add_and_cleanup(p.client_key_path):
             res = p.run_in_guest(
