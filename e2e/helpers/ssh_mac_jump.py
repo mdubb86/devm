@@ -18,6 +18,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -141,18 +142,28 @@ class Project:
     def teardown(self) -> None:
         """Stop the VM, remove its state, and drop registry entries.
         Best-effort — if the daemon is down or the sandbox is already
-        absent, teardown noops."""
+        absent, teardown noops. Exceptions are logged to stderr (not
+        swallowed silently) so a wedged teardown surfaces in the test
+        output."""
         try:
             subprocess.run(
                 [self._devm.path, "teardown", "--yes"],
                 cwd=str(self._path), capture_output=True, timeout=120,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(
+                f"ssh_mac_jump teardown: devm teardown {self.vm_name} "
+                f"failed: {e!r}",
+                file=sys.stderr,
+            )
         try:
             self._workspace.teardown()
-        except Exception:
-            pass
+        except Exception as e:
+            print(
+                f"ssh_mac_jump teardown: workspace.teardown "
+                f"{self.vm_name} failed: {e!r}",
+                file=sys.stderr,
+            )
         shutil.rmtree(self._path, ignore_errors=True)
         registry.remove("sandbox", self.vm_name)
         registry.remove("workspace", str(self._path))

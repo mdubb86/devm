@@ -32,6 +32,6 @@ def test_rsync_over_ssh():
                 f"rsync failed: stdout={res.stdout!r} stderr={res.stderr!r}"
             )
             out = p.run_in_guest(["cat", "/tmp/hostname-copy"]).stdout.strip()
-            assert out == p.vm_name or out == "localhost", (
-                f"unexpected hostname: {out!r}"
+            assert out == p.vm_name, (
+                f"unexpected hostname: want {p.vm_name!r}, got {out!r}"
             )
