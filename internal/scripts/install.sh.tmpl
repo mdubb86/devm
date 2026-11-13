@@ -117,6 +117,33 @@ if [ -f /opt/devm/ssh/ssh_host_ed25519_key ]; then
     systemctl unmask ssh
 fi
 
+# --- client-SSH material (bundle-carried, ssh: feature) ---
+if [ -f /opt/devm/ssh-client/config ]; then
+    install -d -o devm -g devm -m 0700 /home/devm/.ssh
+    install -m 0600 -o devm -g devm /opt/devm/ssh-client/config /home/devm/.ssh/config
+    install -m 0600 -o devm -g devm /opt/devm/ssh-client/devm-jump-id /home/devm/.ssh/devm-jump-id
+    # known_hosts: append-write bundle entries while keeping any existing
+    # lines (e.g. localhost pin from the inbound-SSH section above).
+    touch /home/devm/.ssh/known_hosts
+    chown devm:devm /home/devm/.ssh/known_hosts
+    chmod 0600 /home/devm/.ssh/known_hosts
+    # Dedupe by host key prefix (field 1,3) so a re-run doesn't duplicate.
+    cat /home/devm/.ssh/known_hosts /opt/devm/ssh-client/known_hosts \
+        | awk '!seen[$1" "$3]++' \
+        > /home/devm/.ssh/known_hosts.new
+    mv /home/devm/.ssh/known_hosts.new /home/devm/.ssh/known_hosts
+    chown devm:devm /home/devm/.ssh/known_hosts
+    chmod 0600 /home/devm/.ssh/known_hosts
+
+    install -m 0644 /opt/devm/ssh-client/devm-ssh-agent-bridge.service /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now devm-ssh-agent-bridge.service
+else
+    systemctl disable --now devm-ssh-agent-bridge.service 2>/dev/null || true
+    rm -f /etc/systemd/system/devm-ssh-agent-bridge.service
+    rm -f /home/devm/.ssh/config /home/devm/.ssh/devm-jump-id
+fi
+
 # --- Docker shims: devm-runc-shim + docker CLI shim. Present only when Cfg.Docker.
 # Also the only place bin/gdevm lands at /usr/local/bin/gdevm, which is why the
 # gdevm-serve enable/restart block below must run after this loop, not before. ---
