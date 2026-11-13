@@ -20,6 +20,7 @@ import (
 	"github.com/mdubb86/devm/internal/daemonlog"
 	"github.com/mdubb86/devm/internal/helper"
 	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/schema"
 )
 
 // proxyErrorLogOut is where newProxyErrorLog writes; tests redirect
@@ -134,6 +135,13 @@ type projectListeners struct {
 	guestHTTPSSrv  *http.Server
 	guestHTTPPort  int
 	guestHTTPSPort int
+
+	jumpListener    net.Listener
+	jumpPort        int
+	jumpSrv         *JumpServer
+	agentBridgeLn   net.Listener
+	agentBridgePort int
+	agentBridgeSrv  *AgentBridge
 }
 
 // RebindState is one of the outcomes of the daemon-startup rebind pass
@@ -672,4 +680,130 @@ func write502BackendDown(w http.ResponseWriter, host, backendHost string, port i
 	fmt.Fprintf(w, "  vm mode:    `devm start` to bring the sandbox up\n")
 	fmt.Fprintf(w, "  local mode: start the process this hostname targets\n\n")
 	fmt.Fprintf(w, "(%v)\n", err)
+}
+
+// ProjectSnapshotInfo is the read-only view of this project's
+// jump/bridge port assignment, consumed by softnet when rebuilding
+// the guest's iptables snapshot.
+type ProjectSnapshotInfo struct {
+	JumpPort   int
+	BridgePort int
+}
+
+// ProjectSnapshot returns the current jump/bridge ports for projectID.
+// Zero values when no SSH-jump listeners are bound.
+func (p *ProxyServer) ProjectSnapshot(projectID string) ProjectSnapshotInfo {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pl := p.perProj[projectID]
+	return ProjectSnapshotInfo{JumpPort: pl.jumpPort, BridgePort: pl.agentBridgePort}
+}
+
+// StartSSHJumpListeners binds this project's devm-jump + agent-bridge
+// listeners on Mac loopback. Reuses the ProxyServer.bindLocksMu
+// per-project lock so a retried /vm/start can't orphan listeners (same
+// pattern as StartProjectListeners and StartGuestOriginListeners —
+// see those for the full rationale).
+//
+// Idempotent: a repeat call for a project whose listeners are already
+// bound returns the existing ports without rebinding.
+func (p *ProxyServer) StartSSHJumpListeners(
+	ctx context.Context,
+	projectID, runtimeDir string,
+	targets []schema.ResolvedSSHTarget,
+) (jumpPort, bridgePort int, err error) {
+	unlock := p.lockProjectBind(projectID)
+	defer unlock()
+
+	p.mu.Lock()
+	pl, ok := p.perProj[projectID]
+	p.mu.Unlock()
+	if ok && pl.jumpListener != nil {
+		return pl.jumpPort, pl.agentBridgePort, nil
+	}
+
+	hostKey, err := LoadOrCreateJumpHostKey(runtimeDir)
+	if err != nil {
+		return 0, 0, fmt.Errorf("sshjump host key: %w", err)
+	}
+	_, clientPub, err := LoadOrCreateProjectJumpKey(runtimeDir, projectID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("sshjump client key: %w", err)
+	}
+	allow := NewJumpAllowlist(targets)
+	js := NewJumpServer(hostKey, clientPub, allow, projectID)
+	jumpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, 0, fmt.Errorf("bind sshjump: %w", err)
+	}
+
+	bridge := NewAgentBridge(projectID, DefaultSSHAuthSockResolver())
+	bridgeLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		jumpLn.Close()
+		return 0, 0, fmt.Errorf("bind agentbridge: %w", err)
+	}
+
+	go func() {
+		for {
+			c, err := jumpLn.Accept()
+			if err != nil {
+				return
+			}
+			go js.ServeConn(c)
+		}
+	}()
+	go func() {
+		for {
+			c, err := bridgeLn.Accept()
+			if err != nil {
+				return
+			}
+			go bridge.ServeConn(c)
+		}
+	}()
+
+	p.mu.Lock()
+	pl = p.perProj[projectID]
+	pl.jumpListener = jumpLn
+	pl.jumpPort = jumpLn.Addr().(*net.TCPAddr).Port
+	pl.jumpSrv = js
+	pl.agentBridgeLn = bridgeLn
+	pl.agentBridgePort = bridgeLn.Addr().(*net.TCPAddr).Port
+	pl.agentBridgeSrv = bridge
+	p.perProj[projectID] = pl
+	p.mu.Unlock()
+
+	log.Printf("serviceapi: sshjump listening on %s, agent-bridge on %s (project %s)",
+		jumpLn.Addr(), bridgeLn.Addr(), projectID)
+	return pl.jumpPort, pl.agentBridgePort, nil
+}
+
+// StopSSHJumpListeners closes the devm-jump + agent-bridge listeners
+// for this project. Idempotent.
+func (p *ProxyServer) StopSSHJumpListeners(projectID string) {
+	unlock := p.lockProjectBind(projectID)
+	defer unlock()
+	p.mu.Lock()
+	pl, ok := p.perProj[projectID]
+	if !ok {
+		p.mu.Unlock()
+		return
+	}
+	jumpLn := pl.jumpListener
+	bridgeLn := pl.agentBridgeLn
+	pl.jumpListener = nil
+	pl.jumpPort = 0
+	pl.jumpSrv = nil
+	pl.agentBridgeLn = nil
+	pl.agentBridgePort = 0
+	pl.agentBridgeSrv = nil
+	p.perProj[projectID] = pl
+	p.mu.Unlock()
+	if jumpLn != nil {
+		_ = jumpLn.Close()
+	}
+	if bridgeLn != nil {
+		_ = bridgeLn.Close()
+	}
 }
