@@ -29,6 +29,9 @@ func SSHClientConfig(jumpPort int, bridgeSockPath string, targets []schema.Resol
 		fmt.Fprintf(&b, "  HostName %s\n", t.HostName)
 		fmt.Fprintf(&b, "  Port %d\n", t.Port)
 		fmt.Fprintf(&b, "  User %s\n", t.User)
+		if t.HostKeyAlias != "" {
+			fmt.Fprintf(&b, "  HostKeyAlias %s\n", t.HostKeyAlias)
+		}
 		fmt.Fprintf(&b, "  ProxyJump devm-jump\n")
 		fmt.Fprintf(&b, "  IdentityAgent %s\n", bridgeSockPath)
 		fmt.Fprintf(&b, "  PreferredAuthentications publickey\n")

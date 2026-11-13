@@ -2,6 +2,9 @@ package schema
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -108,16 +111,126 @@ func TestResolveSSHTargets_SurfacesExecError(t *testing.T) {
 	}
 }
 
-func TestCheckKnownHosts_Allows(t *testing.T) {
-	run := func(name string, args ...string) ([]byte, error) {
-		if name == "ssh-keygen" && len(args) == 2 && args[0] == "-F" && args[1] == "ops.example.com" {
-			return []byte("# Host ops.example.com found: line 1\nops.example.com ssh-ed25519 AAAA...\n"), nil
-		}
-		return nil, fmt.Errorf("not in known_hosts")
+func TestResolveSSHTargets_ParsesHostKeyAlias(t *testing.T) {
+	run := func(_ string, _ ...string) ([]byte, error) {
+		return []byte(
+			"hostname 127.0.0.1\n" +
+				"port 22\n" +
+				"user me\n" +
+				"hostkeyalias devm-foo\n",
+		), nil
 	}
-	err := CheckKnownHosts([]ResolvedSSHTarget{
-		{Alias: "prod", HostName: "ops.example.com", Port: 22, User: "deploy"},
-	}, run)
+	got, err := ResolveSSHTargets([]string{"devm-foo"}, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].HostKeyAlias != "devm-foo" {
+		t.Fatalf("HostKeyAlias = %q, want devm-foo", got[0].HostKeyAlias)
+	}
+}
+
+func TestResolveSSHTargets_ParsesUserKnownHostsFile(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(_ string, _ ...string) ([]byte, error) {
+		return []byte(
+			"hostname 127.0.0.1\n" +
+				"port 22\n" +
+				"user me\n" +
+				`userknownhostsfile "/a/b" ~/known_hosts` + "\n",
+		), nil
+	}
+	got, err := ResolveSSHTargets([]string{"x"}, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/a/b", filepath.Join(home, "known_hosts")}
+	if !reflect.DeepEqual(got[0].UserKnownHostsFiles, want) {
+		t.Fatalf("UserKnownHostsFiles = %+v, want %+v", got[0].UserKnownHostsFiles, want)
+	}
+}
+
+// TestCheckKnownHosts_HitsByHostKeyAlias exercises the full lookup
+// path end-to-end: write a real known_hosts file keyed by an alias,
+// point the target at that file via UserKnownHostsFiles + HostKeyAlias,
+// and dispatch to the real `ssh-keygen` binary.
+func TestCheckKnownHosts_HitsByHostKeyAlias(t *testing.T) {
+	dir := t.TempDir()
+	kh := filepath.Join(dir, "known_hosts")
+	// A synthetic ed25519 line is fine — ssh-keygen -F only parses
+	// the first field for the lookup match.
+	line := "devm-foo ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKE_ED25519_KEY\n"
+	if err := os.WriteFile(kh, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(name string, args ...string) ([]byte, error) {
+		return exec.Command(name, args...).Output()
+	}
+	err := CheckKnownHosts([]ResolvedSSHTarget{{
+		Alias:               "foo",
+		HostName:            "127.0.0.1",
+		Port:                22,
+		User:                "me",
+		HostKeyAlias:        "devm-foo",
+		UserKnownHostsFiles: []string{kh},
+	}}, run)
+	if err != nil {
+		t.Fatalf("want ok, got %v", err)
+	}
+}
+
+func TestCheckKnownHosts_NoFileHitsErrorsLoudly(t *testing.T) {
+	dir := t.TempDir()
+	kh := filepath.Join(dir, "known_hosts")
+	if err := os.WriteFile(kh, []byte("# empty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(name string, args ...string) ([]byte, error) {
+		return exec.Command(name, args...).Output()
+	}
+	err := CheckKnownHosts([]ResolvedSSHTarget{{
+		Alias:               "foo",
+		HostName:            "127.0.0.1",
+		HostKeyAlias:        "devm-missing",
+		UserKnownHostsFiles: []string{kh},
+	}}, run)
+	if err == nil {
+		t.Fatal("want error")
+	}
+	for _, want := range []string{"foo", "devm-missing", "ssh foo", kh} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("want error containing %q, got %v", want, err)
+		}
+	}
+}
+
+// TestCheckKnownHosts_FallsBackToDefaultFilesWhenUnset pins that an
+// empty UserKnownHostsFiles probes the default `~/.ssh/known_hosts` +
+// `~/.ssh/known_hosts2` pair (with $HOME pointed at a tempdir so the
+// real user's files don't leak in).
+func TestCheckKnownHosts_FallsBackToDefaultFilesWhenUnset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kh := filepath.Join(sshDir, "known_hosts")
+	line := "ops.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKE_ED25519_KEY\n"
+	if err := os.WriteFile(kh, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(name string, args ...string) ([]byte, error) {
+		return exec.Command(name, args...).Output()
+	}
+	err := CheckKnownHosts([]ResolvedSSHTarget{{
+		Alias:    "prod",
+		HostName: "ops.example.com",
+		Port:     22,
+		User:     "deploy",
+	}}, run)
 	if err != nil {
 		t.Fatalf("want ok, got %v", err)
 	}
@@ -128,7 +241,8 @@ func TestCheckKnownHosts_RejectsMissingWithHelpfulMessage(t *testing.T) {
 		return nil, fmt.Errorf("exit status 1")
 	}
 	err := CheckKnownHosts([]ResolvedSSHTarget{
-		{Alias: "prod", HostName: "ops.example.com", Port: 22, User: "deploy"},
+		{Alias: "prod", HostName: "ops.example.com", Port: 22, User: "deploy",
+			UserKnownHostsFiles: []string{"/nonexistent/known_hosts"}},
 	}, run)
 	if err == nil {
 		t.Fatal("want error")
@@ -137,5 +251,51 @@ func TestCheckKnownHosts_RejectsMissingWithHelpfulMessage(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("want error containing %q, got %v", want, err)
 		}
+	}
+}
+
+func TestLookupKeyAndFiles(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name      string
+		in        ResolvedSSHTarget
+		wantKey   string
+		wantFiles []string
+	}{
+		{
+			"alias_and_files_set",
+			ResolvedSSHTarget{HostName: "h", HostKeyAlias: "a", UserKnownHostsFiles: []string{"/a", "/b"}},
+			"a", []string{"/a", "/b"},
+		},
+		{
+			"alias_set_files_default",
+			ResolvedSSHTarget{HostName: "h", HostKeyAlias: "a"},
+			"a", []string{
+				filepath.Join(home, ".ssh", "known_hosts"),
+				filepath.Join(home, ".ssh", "known_hosts2"),
+			},
+		},
+		{
+			"no_alias_falls_back_to_host",
+			ResolvedSSHTarget{HostName: "h"},
+			"h", []string{
+				filepath.Join(home, ".ssh", "known_hosts"),
+				filepath.Join(home, ".ssh", "known_hosts2"),
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k, f := LookupKeyAndFiles(tc.in)
+			if k != tc.wantKey {
+				t.Fatalf("key = %q, want %q", k, tc.wantKey)
+			}
+			if !reflect.DeepEqual(f, tc.wantFiles) {
+				t.Fatalf("files = %+v, want %+v", f, tc.wantFiles)
+			}
+		})
 	}
 }
