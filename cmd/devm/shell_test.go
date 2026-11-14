@@ -52,6 +52,10 @@ func (f *fakeVMAdminClient) RepoClone(context.Context, string, schema.Config, st
 }
 func (f *fakeVMAdminClient) BeginProvisioning(context.Context, string) error { return nil }
 func (f *fakeVMAdminClient) EndProvisioning(context.Context, string) error   { return nil }
+func (f *fakeVMAdminClient) SSHBundleFields(context.Context, string, schema.Config) (serviceapi.VMSSHBundleFieldsResponse, error) {
+	return serviceapi.VMSSHBundleFieldsResponse{}, nil
+}
+func (f *fakeVMAdminClient) SetUserSSHAuthSock(context.Context, string) error { return nil }
 
 // fakeTartBinary writes a shell script standing in for the `tart`
 // binary, reporting `systemctl is-active devm.target` as active or

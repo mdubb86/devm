@@ -503,6 +503,28 @@ func (c *Client) SSHBundleFields(ctx context.Context, name string, cfg schema.Co
 	return resp, nil
 }
 
+// SetUserSSHAuthSock publishes the Mac-side SSH_AUTH_SOCK path to the
+// daemon. The agent-bridge reads this at ServeConn time; an unpublished
+// (or cleared) value answers every guest REQUEST_IDENTITIES with
+// AGENT_FAILURE. Callers must invoke this before any VM start that
+// relies on SSH.
+func (c *Client) SetUserSSHAuthSock(ctx context.Context, path string) error {
+	body, err := json.Marshal(UserSSHAuthSockRequest{Path: path})
+	if err != nil {
+		return err
+	}
+	r, err := c.post(ctx, "/env/ssh-auth-sock", body)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusNoContent {
+		msg, _ := io.ReadAll(r.Body)
+		return fmt.Errorf("env/ssh-auth-sock: status %d: %s", r.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
 // post sends a JSON-body POST to the given path on the daemon socket.
 func (c *Client) post(ctx context.Context, path string, body []byte) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost"+path, bytes.NewReader(body))
