@@ -31,6 +31,12 @@ def test_rsync_over_ssh():
             "network": {"allow": ["deb.debian.org", "security.debian.org"]},
         })
         p.start()
+        # Capture the guest's actual /etc/hostname — in a Tart Debian
+        # base image this is "debian", not the VM name, and devm does
+        # not override it. The test proves rsync-over-ssh delivers
+        # byte-identical content; the content itself is incidental.
+        want = p.run_in_guest(["cat", "/etc/hostname"]).stdout.strip()
+        assert want, "guest /etc/hostname empty — rsync source would be meaningless"
         res = p.run_in_guest(
             ["rsync", "-e", "ssh", "/etc/hostname",
              f"{alias}:{dest}"],
@@ -41,6 +47,6 @@ def test_rsync_over_ssh():
         )
         assert dest.exists(), f"rsync target {dest} missing after transfer"
         got = dest.read_text().strip()
-        assert got == p.vm_name, (
-            f"unexpected transferred hostname: want {p.vm_name!r}, got {got!r}"
+        assert got == want, (
+            f"rsync delivered wrong content: want {want!r}, got {got!r}"
         )

@@ -1,6 +1,6 @@
-"""Bridge resilience: when Mac has no reachable SSH_AUTH_SOCK, guest
-ssh fails cleanly, the daemon dedupe-logger emits exactly one line,
-and the daemon itself keeps running.
+"""Bridge resilience: when the daemon's cached SSH_AUTH_SOCK is
+empty, guest ssh fails cleanly, the daemon dedupe-logger emits
+exactly one line, and the daemon itself keeps running.
 
 Pins the "logs once per hour, no hot loop" guarantee from the
 design's Review Focus — a hot log loop here would pass a crash-only
@@ -12,6 +12,13 @@ launchd routes to ~/Library/Logs/com.devm.e2e.service.out.log (not
 .err.log). Exact message is defined in
 internal/serviceapi/sshagentbridge.go:43:
     "agent-bridge: SSH_AUTH_SOCK unresolvable project=<projectID>"
+
+Why we clear the daemon cache rather than unset Mac's env: the
+system-domain daemon never reads Mac's launchd env (it can't —
+`launchctl asuser` needs root). The CLI publishes SSH_AUTH_SOCK on
+every `devm start`; clearing the cache via /env/ssh-auth-sock is
+the direct way to reproduce the "resolver returned empty" state
+tested here.
 """
 from __future__ import annotations
 
@@ -20,7 +27,11 @@ from pathlib import Path
 
 import pytest
 
-from helpers import e2e_project, local_sshd_target, mac_env_unset
+from helpers import (
+    clear_daemon_ssh_auth_sock,
+    e2e_project,
+    local_sshd_target,
+)
 
 pytestmark = pytest.mark.devm
 
@@ -59,12 +70,12 @@ def test_mac_agent_missing():
         needle = f"agent-bridge: SSH_AUTH_SOCK unresolvable project={p.vm_name}"
         pre_size = _log_size()
 
-        with mac_env_unset("SSH_AUTH_SOCK"):
-            res = p.run_in_guest(
-                ["ssh", "-o", "ConnectTimeout=5", alias, "true"],
-                check=False,
-            )
-            assert res.returncode != 0, "ssh must fail when agent unreachable"
+        clear_daemon_ssh_auth_sock()
+        res = p.run_in_guest(
+            ["ssh", "-o", "ConnectTimeout=5", alias, "true"],
+            check=False,
+        )
+        assert res.returncode != 0, "ssh must fail when agent unreachable"
 
         # launchd may buffer stdout; poll briefly for the line to land.
         deadline = time.time() + 5.0
