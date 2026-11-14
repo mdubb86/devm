@@ -162,22 +162,42 @@ def e2e_project(label: str) -> Iterator[Project]:
         p.teardown()
 
 
-@contextlib.contextmanager
-def mac_env_unset(var: str) -> Iterator[None]:
-    """Temporarily unset a variable in the Mac user's launchd env.
+def clear_daemon_ssh_auth_sock() -> None:
+    """Clear the devm-e2e daemon's cached SSH_AUTH_SOCK via its
+    /env/ssh-auth-sock endpoint. The agent-bridge then treats every
+    guest connection as "unresolvable" until the next `devm` CLI
+    invocation republishes a path — exactly the state the agent-
+    missing test needs to probe the dedupe log + no-crash guarantees.
+    """
+    import http.client as _http
+    import json as _json
+    import os as _os
+    import socket as _socket
 
-    Used by the agent-missing test to make Mac's ssh-agent unreachable
-    for the duration of a single `ssh` attempt without disturbing the
-    user's shell env or the agent itself."""
-    prev = subprocess.run(
-        ["launchctl", "getenv", var],
-        capture_output=True, text=True, timeout=5,
-    ).stdout.strip()
-    subprocess.run(["launchctl", "unsetenv", var],
-                   check=False, capture_output=True, timeout=5)
-    try:
-        yield
-    finally:
-        if prev:
-            subprocess.run(["launchctl", "setenv", var, prev],
-                           check=False, capture_output=True, timeout=5)
+    sock_path = _os.path.join(
+        _os.path.expanduser("~/Library/Application Support/devm-e2e"),
+        "devm.sock",
+    )
+
+    class _UnixHTTP(_http.HTTPConnection):
+        def __init__(self, p: str):
+            super().__init__("localhost")
+            self._p = p
+
+        def connect(self) -> None:
+            self.sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            self.sock.connect(self._p)
+
+    conn = _UnixHTTP(sock_path)
+    conn.request(
+        "POST", "/env/ssh-auth-sock",
+        body=_json.dumps({"path": ""}),
+        headers={"Content-Type": "application/json"},
+    )
+    resp = conn.getresponse()
+    body = resp.read()
+    if resp.status != 204:
+        raise AssertionError(
+            f"clear_daemon_ssh_auth_sock: POST /env/ssh-auth-sock "
+            f"returned {resp.status}: {body!r}"
+        )

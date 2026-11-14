@@ -8,7 +8,7 @@ from .shell import Shell, ShellEofError, ShellTimeoutError  # noqa: F401
 from .local_sshd import local_sshd_target  # noqa: F401
 from .ssh_mac_jump import (  # noqa: F401
     Project,
+    clear_daemon_ssh_auth_sock,
     e2e_project,
-    mac_env_unset,
 )
 from .workspace import Workspace  # noqa: F401
