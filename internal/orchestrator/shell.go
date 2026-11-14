@@ -120,6 +120,18 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	defer reporter.Stop()
 	reporter.Start("starting up")
 
+	// Publish the aqua-session SSH_AUTH_SOCK to the daemon up front so
+	// whichever branch below (cold-start, adopt-in-place, warm attach)
+	// ends up serving a guest-side ssh-agent connection has the sock
+	// cached. The system-domain daemon can't reach the aqua bootstrap
+	// itself (launchctl asuser needs root); the CLI inherits the sock
+	// naturally and is the one who knows.
+	if cfg.SSH != nil && len(*cfg.SSH) > 0 {
+		if err := d.ServiceAPIClient.SetUserSSHAuthSock(ctx, os.Getenv("SSH_AUTH_SOCK")); err != nil {
+			return -1, fmt.Errorf("publish SSH_AUTH_SOCK: %w", err)
+		}
+	}
+
 	// Check VM state via daemon admin.
 	vmStatus, err := d.ServiceAPIClient.VMStatus(ctx, cfg.Project.Name)
 	if err != nil {
@@ -203,17 +215,6 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// Cold start: the VM was stopped, or we just tore down a dirty one above.
 	reporter.Step("starting vm", false)
 	log.Printf("shell: cold-start: sending StartVM to daemon")
-
-	// Publish the aqua-session SSH_AUTH_SOCK before /vm/start so the
-	// agent-bridge listener spawned by applySSHJumpBind has it ready
-	// for the first guest connection. Only when this project uses SSH;
-	// an empty env var pushes "" (equivalent to clearing), which is
-	// what we want for projects that never wire up the feature.
-	if cfg.SSH != nil && len(*cfg.SSH) > 0 {
-		if err := d.ServiceAPIClient.SetUserSSHAuthSock(ctx, os.Getenv("SSH_AUTH_SOCK")); err != nil {
-			return -1, fmt.Errorf("publish SSH_AUTH_SOCK: %w", err)
-		}
-	}
 
 	bindings, err := serviceapi.ResolveSecretBindings(cfg, secret.NewFileBackend(d.Ident.SecretsDir()), repoRoot)
 	if err != nil {
