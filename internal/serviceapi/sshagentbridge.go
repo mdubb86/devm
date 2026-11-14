@@ -2,10 +2,7 @@ package serviceapi
 
 import (
 	"net"
-	"os"
-	"os/exec"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/mdubb86/devm/internal/daemonlog"
@@ -118,26 +115,13 @@ func (b *AgentBridge) ServeConn(guestConn net.Conn) {
 	<-stop
 }
 
-// DefaultSSHAuthSockResolver returns a resolver that runs
-// `launchctl asuser <uid> launchctl getenv SSH_AUTH_SOCK`.
-// LaunchDaemons don't inherit the user's GUI-session env; this is the
-// standard discovery path. Empty on any error — ServeConn logs the
-// unresolvable case with project context.
-func DefaultSSHAuthSockResolver() func() string {
-	uid := strconv.Itoa(os.Getuid())
-	return func() string {
-		cmd := exec.Command("launchctl", "asuser", uid, "launchctl", "getenv", "SSH_AUTH_SOCK")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			daemonlog.Errorf("agent-bridge: launchctl asuser %s: rc=%v output=%q",
-				uid, err, string(out))
-			return ""
-		}
-		s := strings.TrimSpace(string(out))
-		if s == "" {
-			daemonlog.Errorf("agent-bridge: launchctl asuser %s returned empty (combined=%q)",
-				uid, string(out))
-		}
-		return s
-	}
+// ProxySSHAuthSockResolver returns a resolver bound to the ProxyServer's
+// CLI-published SSH_AUTH_SOCK cache. The spec's `launchctl asuser` path
+// is unusable from a non-root LaunchDaemon in the system domain
+// (crossing into the aqua bootstrap requires root); the CLI runs in
+// aqua and pushes the value via POST /env/ssh-auth-sock before any
+// guest SSH operation. Empty return means nothing has been pushed yet,
+// which ServeConn treats the same as an unresolvable sock.
+func ProxySSHAuthSockResolver(p *ProxyServer) func() string {
+	return p.UserSSHAuthSock
 }

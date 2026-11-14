@@ -119,6 +119,32 @@ type ProxyServer struct {
 	// behind StartProjectListeners.
 	rebindMu     sync.Mutex
 	rebindStatus map[string]RebindStatus
+
+	// userEnvMu guards userSSHAuthSock, a path published by the CLI via
+	// POST /env/ssh-auth-sock. The CLI runs in the user's aqua session
+	// and inherits SSH_AUTH_SOCK naturally; the system-domain daemon
+	// cannot reach the aqua bootstrap (launchctl asuser needs root),
+	// so the CLI is the one who knows. Agent-bridge ServeConn reads
+	// this to dial Mac's ssh-agent.
+	userEnvMu       sync.Mutex
+	userSSHAuthSock string
+}
+
+// SetUserSSHAuthSock stores the Mac-side SSH_AUTH_SOCK path pushed by
+// the CLI. Empty path clears it. See the userEnvMu block for why this
+// must come from the CLI rather than from the daemon's own environment.
+func (p *ProxyServer) SetUserSSHAuthSock(path string) {
+	p.userEnvMu.Lock()
+	defer p.userEnvMu.Unlock()
+	p.userSSHAuthSock = path
+}
+
+// UserSSHAuthSock returns the last path published via
+// SetUserSSHAuthSock, or "" if none has been pushed.
+func (p *ProxyServer) UserSSHAuthSock() string {
+	p.userEnvMu.Lock()
+	defer p.userEnvMu.Unlock()
+	return p.userSSHAuthSock
 }
 
 // projectListeners is the pair of listeners (and their http.Servers,
@@ -737,7 +763,7 @@ func (p *ProxyServer) StartSSHJumpListeners(
 		return 0, 0, fmt.Errorf("bind sshjump: %w", err)
 	}
 
-	bridge := NewAgentBridge(projectID, DefaultSSHAuthSockResolver())
+	bridge := NewAgentBridge(projectID, ProxySSHAuthSockResolver(p))
 	bridgeLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		jumpLn.Close()

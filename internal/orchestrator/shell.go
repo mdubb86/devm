@@ -91,6 +91,11 @@ type VMAdminClient interface {
 	// is the single producer (computeSSHBundleFields) so the CLI-side
 	// bundle writer agrees with every daemon-side writer.
 	SSHBundleFields(ctx context.Context, name string, cfg schema.Config) (serviceapi.VMSSHBundleFieldsResponse, error)
+	// SetUserSSHAuthSock publishes the Mac-side SSH_AUTH_SOCK path to
+	// the daemon so the agent-bridge can dial Mac's ssh-agent. The CLI
+	// inherits SSH_AUTH_SOCK from the user's aqua shell; the system-
+	// domain daemon can't reach the aqua bootstrap on its own.
+	SetUserSSHAuthSock(ctx context.Context, path string) error
 }
 
 // DefaultShellDeps returns deps wired for production. bundleFingerprint
@@ -198,6 +203,17 @@ func RunShell(ctx context.Context, d ShellDeps, cfg schema.Config, repoRoot, vmN
 	// Cold start: the VM was stopped, or we just tore down a dirty one above.
 	reporter.Step("starting vm", false)
 	log.Printf("shell: cold-start: sending StartVM to daemon")
+
+	// Publish the aqua-session SSH_AUTH_SOCK before /vm/start so the
+	// agent-bridge listener spawned by applySSHJumpBind has it ready
+	// for the first guest connection. Only when this project uses SSH;
+	// an empty env var pushes "" (equivalent to clearing), which is
+	// what we want for projects that never wire up the feature.
+	if cfg.SSH != nil && len(*cfg.SSH) > 0 {
+		if err := d.ServiceAPIClient.SetUserSSHAuthSock(ctx, os.Getenv("SSH_AUTH_SOCK")); err != nil {
+			return -1, fmt.Errorf("publish SSH_AUTH_SOCK: %w", err)
+		}
+	}
 
 	bindings, err := serviceapi.ResolveSecretBindings(cfg, secret.NewFileBackend(d.Ident.SecretsDir()), repoRoot)
 	if err != nil {
